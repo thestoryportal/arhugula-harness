@@ -2238,6 +2238,31 @@ def _standard_memory_tools_context(
     `memory_runtime`-bound path recomposes per attempt
     (`automatic_memory.compose_for_dispatch`) and therefore always matches —
     this conjunct is inert there.
+
+    U-MEM-26 — the provider-FAMILY conjunct is the C-MEM-13 cross-family
+    withholding rule (`Spec_Memory_Substrate_v1.md:509`, `:523`;
+    `Implementation_Plan_Memory_Substrate_v1.md:881`): when the dispatched
+    candidate's family differs from `MemoryScope.provider_family`, NEITHER the
+    tool schemas NOR the scope reference may be exposed for that dispatch. The
+    identity conjunct alone does not cover it — the `memory_runtime` path
+    RECOMPOSES for the current candidate on a cross-family fallback, so identity
+    passes while `record_scope.provider_family` still carries the chain
+    PRIMARY's family (`automatic_memory.py:199-209`). Exposing the tools there
+    would hand the model a `scope_ref`/`policy_ref` naming a partition this
+    dispatch was never proven to belong to.
+
+    It is deliberately the SAME predicate `_degraded_serve_disposition` reads
+    (`_packet_scope_matches_dispatch_family`), verbatim rather than a second
+    cross-family test. A divergent test would let a cross-family dispatch fail
+    THIS guard, fall through to `_degraded_serve_for_unservable_arm`, PASS
+    disposition conjunct 2, and land on the `arm_unservable` REPAIR branch —
+    serving the cross-family packet as prompt text, which is the exact
+    disclosure leak the withholding exists to stop. One predicate, one answer.
+
+    Harness-authored capture is unaffected by construction: it fires outside
+    this branch, keyed on `memory_context` + `memory_runtime` only
+    (`:1873-1890`), per C-MEM-13's "capture is a different authorship class"
+    (`Spec_Memory_Substrate_v1.md:509`, plan `:891`).
     """
 
     if memory_context is None:
@@ -2249,6 +2274,8 @@ def _standard_memory_tools_context(
     if memory_context.selection.selected_provider != provider_name:
         return None
     if provider_name not in _STANDARD_MEMORY_TOOL_ARMS:
+        return None
+    if not _packet_scope_matches_dispatch_family(memory_context, provider_name):
         return None
     return memory_context
 
@@ -4136,10 +4163,15 @@ async def _dispatch_ollama_with_standard_memory_tools(
             # The SAME repair-vs-report authority the arm-selection
             # serve-check uses. Provider IDENTITY always matches here (this
             # function is only reached through `_standard_memory_tools_context`)
-            # but the FAMILY conjunct is live: on the `memory_runtime` path a
-            # cross-family fallback recomposes for the current candidate while
-            # the packet keeps the chain PRIMARY's family scope (B-83 [P1-c]),
-            # so a primary-family packet must NOT be rendered here.
+            # and, since U-MEM-26 added the C-MEM-13 family conjunct to that
+            # same authority, so does the FAMILY — a cross-family dispatch is
+            # now withheld at the arm guard and never reaches this loop at all.
+            # Both conjuncts are retained as defence in depth rather than
+            # short-circuited: the guard is the reason they hold here, not a
+            # property of this function, and B-83 [P1-c] (a `memory_runtime`
+            # cross-family fallback recomposing for the current candidate while
+            # the packet keeps the chain PRIMARY's family scope) is exactly the
+            # shape that would return if that guard were ever relaxed.
             # "ollama" is this arm's provider key by construction — the same
             # literal `_ollama_prepared_memory_tool_calls` already passes.
             degraded = _degraded_serve_disposition("ollama", memory_context)

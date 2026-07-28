@@ -33,7 +33,11 @@ from harness_is.memory_record_envelope import (
     compute_memory_content_hash,
     derive_memory_id,
 )
-from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
+from harness_is.memory_retrieval import MemoryPacketAccessMode, MemoryRetrievalRequest
+from harness_is.memory_retrieval_index import (
+    DerivedRetrievalIndexQuery,
+    DerivedRetrievalIndexStore,
+)
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.automatic_memory import materialize_automatic_memory_runtime
@@ -171,10 +175,22 @@ def _memory_store(root: Path) -> CanonicalMemoryStore:
     )
 
 
-def _seed_preference(root: Path) -> MemoryStoreRecord:
+def _seed_preference(
+    root: Path,
+    *,
+    provider_family: str = ProviderFamily.OPENAI.value,
+    statement: str = "Use concise operator-facing memory summaries.",
+    rebuild_index: bool = True,
+) -> MemoryStoreRecord:
+    """Seed one active preference record and (by default) rebuild the index.
+
+    `provider_family` is a raw string rather than a `ProviderFamily` so a
+    U-MEM-26 witness can seed a LEGACY record persisted with a provider KEY —
+    the pre-v1.1 shape the forward-only residual leaves in place.
+    """
     content: dict[str, object] = {
         "semantic_kind": "preference",
-        "statement": "Use concise operator-facing memory summaries.",
+        "statement": statement,
         "confidence": "high",
         "source_authority": "operator_direct",
         "status": "active",
@@ -200,7 +216,7 @@ def _seed_preference(root: Path) -> MemoryStoreRecord:
                 project=root.name,
                 workflow="workflow-memory",
                 workload_class=WorkloadClass.PIPELINE_AUTOMATION.value,
-                provider_family=ProviderFamily.OPENAI.value,
+                provider_family=provider_family,
                 cli_profile="profile:generic",
                 visibility=MemoryVisibility.PROJECT,
             ),
@@ -212,11 +228,16 @@ def _seed_preference(root: Path) -> MemoryStoreRecord:
     )
     store = _memory_store(root)
     store.write_record(record)
+    if rebuild_index:
+        _rebuild_index(root)
+    return record
+
+
+def _rebuild_index(root: Path) -> None:
     DerivedRetrievalIndexStore(
         root_binding=MemoryRootBinding(default_root=root / ".harness" / "memory"),
         deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
     ).rebuild(indexed_at=_NOW)
-    return record
 
 
 def _binding(provider: str = "openai", model: str = "gpt-5") -> StepEffectiveBinding:
@@ -456,3 +477,218 @@ async def test_default_local_init_normal_inference_exposes_and_persists_memory(
         run_id="run-memory-step-0",
     )
     assert captured.content["capture_mode"] == "summarized"
+
+
+# ---------------------------------------------------------------------------
+# U-MEM-26 — the two obligations that only bind through the PRODUCTION wiring.
+#
+# `LocalAutomaticMemoryRuntime` is the composition root that injects
+# `canonical_scope_family` into the retriever and the derived-index store
+# (`automatic_memory.py:146-158`). `harness-is` declares that authority as an
+# OPTIONAL seam because the IS axis has zero outbound cross-axis edges, so a
+# unit test constructing its own retriever proves nothing about whether the
+# real run wires it. These two witnesses drive the real runtime.
+# ---------------------------------------------------------------------------
+
+
+def _cross_family_chain() -> FallbackChain:
+    """An ANTHROPIC-family primary for an OPENAI-family dispatch candidate.
+
+    `compose_for_dispatch` derives `record_scope.provider_family` from
+    `fallback_chain.primary.family` (`automatic_memory.py:205`), so this is the
+    real shape of a cross-family fallback: the access-mode selection recomposes
+    for the CURRENT candidate (openai, tool-capable → `standard_memory_tools`)
+    while the retrieval scope stays on the chain primary's family.
+    """
+    return FallbackChain(
+        primary=ProviderCandidate(
+            provider="anthropic",
+            model="claude-opus-4-7",
+            family=ProviderFamily.ANTHROPIC,
+        ),
+        same_family=(),
+        cross_family=(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_u_mem_26_capture_is_unaffected_by_the_cross_family_withholding(
+    tmp_path: Path,
+) -> None:
+    """U-MEM-26 (:891 / :907) — harness-authored capture survives the withhold.
+
+    C-MEM-13 (`Spec_Memory_Substrate_v1.md:509`): "Harness-authored memory
+    capture is unaffected: capture is a different authorship class and crosses
+    no boundary the harness does not already hold." The dispatch here is
+    cross-family, so the tool schemas and the scope reference are withheld — and
+    the capture must still write, under the run's COMPOSED scope.
+
+    The captured `provider_family` is the discriminating assertion: it must be
+    the chain primary's `anthropic` (the composed `record_scope`, `B-89`), NOT
+    the dispatched candidate's `openai` provider key. Both halves fail on the
+    pre-repair writer, and the first half additionally fails on any guard that
+    short-circuits the dispatch instead of merely withholding memory access.
+    """
+    runtime = materialize_automatic_memory_runtime(
+        _config(tmp_path),
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+    )
+    assert runtime is not None
+    _seed_preference(tmp_path)
+
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl-withheld",
+            usage=_Usage(prompt_tokens=11, completion_tokens=4),
+            _dump={
+                "id": "cmpl-withheld",
+                "choices": [{"message": {"role": "assistant", "content": "answered"}}],
+            },
+        )
+    ]
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=TracerProvider(),
+        memory_runtime=runtime,
+        fallback_chain=_cross_family_chain(),
+    )
+
+    await dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+
+    # The withholding itself, end-to-end through the real composer.
+    assert len(client.chat.completions.calls) == 1, "no tool loop — nothing to serve"
+    assert "tools" not in client.chat.completions.calls[0], (
+        "an anthropic-family-scoped context must not arm the tools for an openai dispatch"
+    )
+
+    # ...and the capture ran anyway, on the same dispatch.
+    store = _memory_store(tmp_path)
+    captured_refs = [
+        ref
+        for entry in store.read_memory_operations()
+        if entry.operation_kind is MemoryOperationKind.CAPTURE
+        for ref in entry.memory_refs
+    ]
+    assert captured_refs, "capture is a different authorship class and is NOT withheld (:891)"
+    captured = store.read_record(
+        captured_refs[-1],
+        MemoryRecordKind.EPISODIC_TURN,
+        run_id="run-memory-step-0",
+    )
+    assert captured.envelope.scope.provider_family == ProviderFamily.ANTHROPIC.value, (
+        "the captured record carries the run's COMPOSED family value, not the "
+        "dispatched candidate's provider key (`B-89`)"
+    )
+    assert captured.envelope.scope.workload_class == WorkloadClass.PIPELINE_AUTOMATION.value
+
+
+def _crafted_scope(root: Path, provider_family: str) -> MemoryScope:
+    """The seeded records' scope with `provider_family` swapped VERBATIM.
+
+    Every other field mirrors the record so the C-MEM-09 policy leg (which
+    denies a request BROADER than the record) cannot mask the family decision:
+    `provider_family` is then the only dimension in play.
+
+    `compose_for_dispatch` can only ever emit a `ProviderFamily` VALUE here (it
+    reads `fallback_chain.primary.family.value`), so a raw-key request is by
+    construction a CRAFTED one — which is exactly why the value domain has to
+    bind at the read layer rather than at the composer.
+    """
+    return MemoryScope(
+        project=root.name,
+        workflow="workflow-memory",
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION.value,
+        provider_family=provider_family,
+        cli_profile="profile:generic",
+        visibility=MemoryVisibility.PROJECT,
+    )
+
+
+def _retrieval_request(root: Path, provider_family: str) -> MemoryRetrievalRequest:
+    return MemoryRetrievalRequest(
+        run_id="run-memory-step-0",
+        workflow_id="workflow-memory",
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION.value,
+        cli_profile="profile:generic",
+        provider="openai",
+        model="gpt-5",
+        query_summary="operator memory summary preference",
+        scope=_crafted_scope(root, provider_family),
+        token_budget=400,
+        allowed_kinds=(MemoryRecordKind.PREFERENCE,),
+    )
+
+
+def test_u_mem_26_request_boundary_binds_through_the_production_wiring(
+    tmp_path: Path,
+) -> None:
+    """U-MEM-26 (:897 / :916) — both halves, end-to-end, at BOTH read layers.
+
+    `codex` is a REGISTERED provider key whose family is `openai`
+    (`cross_family_cost_tag.py:65`), and it is NOT value-equal to that family —
+    so a request naming it discriminates canonicalization from a no-op, which a
+    request naming `openai` (key and value at once) could not.
+
+    Positive half: the crafted `codex` request canonicalizes to `openai` and
+    reaches the `openai`-VALUE record.
+
+    Negative half, asserted at both layers because a single composite witness
+    passes OVER whichever layer is still leaking: the LEGACY record persisted
+    with the raw key `codex` stays unreachable by that same request. The request
+    side canonicalizes; the record side does not (forward-only, no rewrite, no
+    migration, `:885` / `:900`), so `openai != codex` denies it. Without the
+    production injection at `automatic_memory.py:146-158` the raw strings would
+    compare EQUAL and the crafted request would resurrect it.
+    """
+    runtime = materialize_automatic_memory_runtime(
+        _config(tmp_path),
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+    )
+    assert runtime is not None
+    canonical = _seed_preference(tmp_path, rebuild_index=False)
+    legacy = _seed_preference(
+        tmp_path,
+        provider_family="codex",
+        statement="Legacy record persisted under a raw provider key.",
+        rebuild_index=False,
+    )
+    _rebuild_index(tmp_path)
+    assert canonical.envelope.memory_id != legacy.envelope.memory_id
+
+    # The PRODUCTION-wired collaborators, reached through the runtime rather
+    # than reconstructed — the whole point is that this run injects the
+    # canonicalizer. Reconstructing them locally would assert the seam works,
+    # never that the composition root binds it.
+    retriever = runtime._composer._retriever
+    index_store = retriever._index_store
+
+    result = retriever.retrieve(
+        _retrieval_request(tmp_path, "codex"),
+        timestamp=_NOW,
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id="codex"),
+        access_mode=MemoryPacketAccessMode.STANDARD_MEMORY_TOOLS,
+    )
+    assert canonical.envelope.memory_id in result.selected_refs, (
+        "a registered raw provider key canonicalizes to its family value and "
+        "reaches the family-value records (:916 positive half)"
+    )
+    assert legacy.envelope.memory_id not in result.selected_refs, (
+        "the crafted raw-key request must NOT resurrect the legacy raw-key "
+        "record through the retriever (:916 negative half, layer 1)"
+    )
+
+    index_result = index_store.retrieve(
+        DerivedRetrievalIndexQuery(
+            query_summary="operator memory summary preference",
+            allowed_kinds=(MemoryRecordKind.PREFERENCE,),
+            scope=_crafted_scope(tmp_path, "codex"),
+        )
+    )
+    assert canonical.envelope.memory_id in index_result.selected_refs
+    assert legacy.envelope.memory_id not in index_result.selected_refs, (
+        "nor through the derived index (:916 negative half, layer 2)"
+    )
+    assert all(entry.memory_id != legacy.envelope.memory_id for entry in index_result.entries), (
+        "neither the ref NOR the entry metadata may leak"
+    )

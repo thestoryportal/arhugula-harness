@@ -492,30 +492,38 @@ async def test_r300_deterministic_cross_family_fallback_through_production_path(
         int((s.attributes or {}).get("fallback.chain_length", 0)) >= 2 for s in fallback_spans
     ), "expected the outer fallback span to carry fallback.chain_length ≥ 2"
 
-    # --- OpenAI wire-name witness -------------------------------------------
-    # The automatic memory substrate (default-on) injects the five C-MEM-14
-    # standard memory tools into every OpenAI dispatch. Their provider-neutral
-    # identities are dotted (`memory.search` ...) and OpenAI rejects a dotted
-    # `tools[].function.name` with an HTTP 400 — so EVERY emitted function name
-    # must be the adapter-owned wire encoding. Asserting on the recorded kwargs
-    # is what makes this deterministic test able to catch the 400 class at all.
+    # --- C-MEM-13 cross-family withholding witness ---------------------------
+    # UPDATED at U-MEM-26. This block previously asserted the OPPOSITE — that
+    # the default-on C-MEM-14 standard memory tools reach this OpenAI dispatch —
+    # and it was green because the pre-U-MEM-26 arm guard checked provider
+    # IDENTITY but not provider FAMILY. This leg is definitionally cross-family:
+    # `compose_for_dispatch` derives `record_scope.provider_family` from the
+    # chain PRIMARY (anthropic, `automatic_memory.py:205`) while the candidate
+    # that actually dispatches is openai. C-MEM-13
+    # (`Spec_Memory_Substrate_v1.md:509`, `:523`) forbids exposing the schemas
+    # OR the scope reference there — the tools would carry a `scope_ref` naming
+    # an anthropic-family partition this dispatch was never policy-checked for.
+    # So the old expectation pinned the defect, and the assertion is inverted.
+    #
+    # The wire-name / HTTP-400 coverage this block used to carry is preserved
+    # elsewhere, on paths where the tools legitimately ARE injected:
+    # `test_automatic_memory_runtime.py::test_default_local_init_normal_
+    # inference_exposes_and_persists_memory` (real composer, same-family openai
+    # primary) and `test_lifecycle_llm_dispatch.py` (the full five-name set plus
+    # the `^[a-zA-Z0-9_-]{1,64}$` conformance check at `:1584-1607`).
     openai_client = providers["openai"].client
     assert isinstance(openai_client, _SucceedingOpenAIClient)
     calls = openai_client.chat.completions.calls
     assert calls, "expected ≥1 recorded openai chat.completions.create call"
     function_names = _openai_tool_function_names(calls)
-    assert function_names, (
-        "expected the openai dispatch to carry tools[] (the default-on standard "
-        f"memory tools); recorded call keys: {[sorted(c) for c in calls]!r}"
-    )
     offenders = [n for n in function_names if _OPENAI_FUNCTION_NAME_PATTERN.match(n) is None]
     assert not offenders, (
         "every tools[].function.name must match ^[a-zA-Z0-9_-]{1,64}$ or OpenAI "
         f"rejects the request with HTTP 400; offenders: {offenders!r}"
     )
-    assert _EXPECTED_MEMORY_TOOL_WIRE_NAMES <= set(function_names), (
-        "expected the five C-MEM-14 memory tools serialized under their OpenAI "
-        f"wire names; observed function names: {sorted(set(function_names))!r}"
+    assert not (_EXPECTED_MEMORY_TOOL_WIRE_NAMES & set(function_names)), (
+        "C-MEM-13: NO memory tool schema may reach a cross-family fallback leg "
+        f"(chain primary is anthropic-family); observed: {sorted(set(function_names))!r}"
     )
 
 
