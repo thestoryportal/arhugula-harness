@@ -1958,12 +1958,59 @@ async def test_openai_memory_read_executes_without_a_scope_ref_argument() -> Non
     assert "scope_ref" not in executor.requests[0].arguments
 
 
+# ---------------------------------------------------------------------------
+# B-85 — the unserved-mixed-batch telemetry span.
+#
+# Both standard-tools loops hand a MIXED batch (memory call + caller call) back
+# to the caller WHOLE, executing nothing from it, so batch atomicity holds. The
+# return semantics are deliberately unchanged at B-85 posture (3) — the only
+# defect closed is that nothing recorded the memory call going unserved. The
+# span says exactly that, and NOT that memory was denied or unavailable.
+# ---------------------------------------------------------------------------
+
+
+def _unserved_tool_call_spans(exporter: InMemorySpanExporter) -> list[Any]:
+    return [
+        span
+        for span in exporter.get_finished_spans()
+        if span.name == "memory.operation"
+        and "memory.unserved_tool_call.count" in dict(span.attributes or {})
+    ]
+
+
+def _assert_unserved_span_shape(attrs: dict[str, Any], *, provider: str, count: int) -> None:
+    """The FULL B-85 attribute contract, asserted identically on every witness.
+
+    The negative half is the load-bearing half: this span must not be mistaken
+    for a B-83 degraded serve (`memory.degraded_serve`), must not claim a
+    packet it never rendered (`memory.packet_hash` — the B-87 defect class),
+    and must not name a failure class, since no resolver failed or denied.
+    """
+    assert attrs["memory.operation.name"] == "standard_tool_call"
+    assert attrs["memory.operation.kind"] == "standard_tool_call"
+    assert attrs["memory.access_mode"] == "standard_memory_tools", (
+        "the SELECTED mode WAS served by this arm — no_memory_access would be false"
+    )
+    assert attrs["memory.record_count"] == 0
+    assert attrs["memory.provider"] == provider
+    assert attrs["memory.model"] == "test-model-1"
+    assert attrs["memory.unserved_tool_call.count"] == count
+    assert attrs["memory.unserved_tool_call.reason"] == "mixed_batch_caller_owned"
+    assert attrs["memory.unserved_tool_call.dispatch_outcome"] == "completed"
+    assert "memory.packet_hash" not in attrs, "no packet was rendered — a hash would lie"
+    assert "memory.degraded_serve" not in attrs, "this is not a B-83 degraded serve"
+    assert "memory.failure_class" not in attrs, "nothing failed and nothing was denied"
+
+
 @pytest.mark.asyncio
 async def test_openai_mixed_memory_and_caller_tool_batch_returns_to_caller() -> None:
     """A batch containing a caller-advertised tool goes back to the caller whole.
 
     Auto-injected memory tools must not break ordinary tool workflows, and no
     memory call from a mixed batch may execute before control returns.
+
+    B-85 — the return is byte-identical to pre-B-85 (this test's original
+    assertions, unchanged) AND the unserved memory call is now reported.
     """
     memory_call = _openai_tool_call(
         "call_search",
@@ -1982,9 +2029,10 @@ async def test_openai_mixed_memory_and_caller_tool_batch_returns_to_caller() -> 
         )
     ]
     executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
         providers={"openai": _OpenAIFakeAdapter(client)},
-        tracer_provider=_tracer_provider_with_exporter()[0],
+        tracer_provider=tp,
         memory_context=_standard_tools_memory_context(),
         standard_memory_tool_executor=executor,
     )
@@ -2010,6 +2058,121 @@ async def test_openai_mixed_memory_and_caller_tool_batch_returns_to_caller() -> 
     assert len(client.chat.completions.calls) == 1, "the loop must not continue"
     assert result["choices"][0]["message"]["tool_calls"] == [memory_call, caller_call]
 
+    # B-85 — exactly one report, and it says what actually happened.
+    [span] = _unserved_tool_call_spans(exporter)
+    _assert_unserved_span_shape(dict(span.attributes or {}), provider="openai", count=1)
+
+
+@pytest.mark.asyncio
+async def test_b85_openai_mixed_batch_after_a_served_round_still_reports_tools_mode() -> None:
+    """k>0 — the loop ALREADY served a round of memory calls before the mixed one.
+
+    This is precisely where a `no_memory_access` / `denial` regression would
+    lie: by the time the mixed batch arrives, `memory.read` has been executed
+    and its result fed back, so the selected mode was unambiguously SERVED.
+    The span must still report `standard_memory_tools`.
+    """
+    served_call = _openai_tool_call(
+        "call_read",
+        "memory_read",
+        memory_ref="mem:semantic:preference:" + ("a" * 64),
+        policy_ref="policy:u-mem-16",
+    )
+    memory_call = _openai_tool_call(
+        "call_search",
+        "memory_search",
+        query="x",
+        scope_ref="scope:u-mem-16",
+        policy_ref="policy:u-mem-16",
+    )
+    caller_call = _openai_tool_call("call_weather", "weather_lookup", city="lisbon")
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_served",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump("cmpl_served", served_call),
+        ),
+        _ProviderResponse(
+            id="cmpl_mixed",
+            usage=_Usage(prompt_tokens=11, completion_tokens=5),
+            _dump=_openai_tool_call_dump("cmpl_mixed", memory_call, caller_call),
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("openai"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "weather_lookup", "parameters": {"type": "object"}},
+                    }
+                ],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert [r.tool_name for r in executor.requests] == [MemoryToolName.READ], (
+        "round 1 must still be served, and NOTHING from the mixed round 2"
+    )
+    assert len(client.chat.completions.calls) == 2
+    assert result["choices"][0]["message"]["tool_calls"] == [memory_call, caller_call]
+
+    [span] = _unserved_tool_call_spans(exporter)
+    _assert_unserved_span_shape(dict(span.attributes or {}), provider="openai", count=1)
+
+
+@pytest.mark.asyncio
+async def test_b85_openai_two_unserved_memory_calls_are_counted() -> None:
+    """The count is QUANTITATIVE — two memory calls in one mixed batch report 2."""
+    first = _openai_tool_call(
+        "call_search",
+        "memory_search",
+        query="x",
+        scope_ref="scope:u-mem-16",
+        policy_ref="policy:u-mem-16",
+    )
+    second = _openai_tool_call(
+        "call_read",
+        "memory_read",
+        memory_ref="mem:semantic:preference:" + ("a" * 64),
+        policy_ref="policy:u-mem-16",
+    )
+    caller_call = _openai_tool_call("call_weather", "weather_lookup", city="lisbon")
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_mixed2",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump("cmpl_mixed2", first, second, caller_call),
+        )
+    ]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    [span] = _unserved_tool_call_spans(exporter)
+    _assert_unserved_span_shape(dict(span.attributes or {}), provider="openai", count=2)
+
 
 @pytest.mark.asyncio
 async def test_openai_caller_only_tool_batch_matches_bare_path_semantics() -> None:
@@ -2029,9 +2192,10 @@ async def test_openai_caller_only_tool_batch_matches_bare_path_semantics() -> No
         )
     ]
     executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
         providers={"openai": _OpenAIFakeAdapter(client)},
-        tracer_provider=_tracer_provider_with_exporter()[0],
+        tracer_provider=tp,
         memory_context=_standard_tools_memory_context(),
         standard_memory_tool_executor=executor,
     )
@@ -2040,6 +2204,9 @@ async def test_openai_caller_only_tool_batch_matches_bare_path_semantics() -> No
 
     assert executor.requests == []
     assert result["choices"][0]["message"]["tool_calls"] == [hallucinated]
+    # B-85 — NOTHING memory-related went unserved in a purely caller-owned
+    # batch, so reporting one would be a false claim about this dispatch.
+    assert _unserved_tool_call_spans(exporter) == []
 
 
 # ---------------------------------------------------------------------------
@@ -2575,7 +2742,13 @@ async def test_ollama_memory_read_executes_without_a_scope_ref_argument() -> Non
 
 @pytest.mark.asyncio
 async def test_ollama_mixed_memory_and_caller_tool_batch_returns_to_caller() -> None:
-    """Ollama mirror — a mixed batch goes back to the caller, executing nothing."""
+    """Ollama mirror — a mixed batch goes back to the caller, executing nothing.
+
+    B-85 mirror too: the return is byte-identical and the unserved memory call
+    is reported. The R5 tools-unsupported fallback returns at `iteration == 0`
+    before any `tool_calls` are inspected, so it can never co-occur with this
+    exit — the separate sink keeps that structurally true.
+    """
     memory_call = {
         "function": {
             "name": "memory.search",
@@ -2598,9 +2771,10 @@ async def test_ollama_mixed_memory_and_caller_tool_batch_returns_to_caller() -> 
         )
     ]
     executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
         providers={"ollama": _OllamaFakeAdapter(client)},
-        tracer_provider=_tracer_provider_with_exporter()[0],
+        tracer_provider=tp,
         memory_context=_ollama_memory_context(),
         standard_memory_tool_executor=executor,
     )
@@ -2625,6 +2799,13 @@ async def test_ollama_mixed_memory_and_caller_tool_batch_returns_to_caller() -> 
     assert executor.requests == [], "no memory call may execute from a caller-owned batch"
     assert len(client.calls) == 1, "the loop must not continue"
     assert result["message"]["tool_calls"] == [memory_call, caller_call]
+
+    [span] = _unserved_tool_call_spans(exporter)
+    _assert_unserved_span_shape(dict(span.attributes or {}), provider="ollama", count=1)
+    attrs = dict(span.attributes or {})
+    assert "memory.degraded_serve.reason" not in attrs, (
+        "the R5 fallback did not run — its sink must be untouched"
+    )
 
 
 @pytest.mark.asyncio
@@ -3204,6 +3385,53 @@ async def test_b83_arm_site_family_mismatch_is_reported_but_never_served() -> No
 
     spans = _degraded_serve_spans(exporter)
     assert len(spans) == 1, "still reported, just not served"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "provider_family_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert "memory.packet_hash" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_b86_unregistered_provider_key_fails_closed_against_local_scope() -> None:
+    """B-86 item (3) — an UNREGISTERED provider key must not inherit a family.
+
+    `provider_family_for_provider` falls back to `LOCAL_OPEN_WEIGHT` for an
+    unknown key — correct for cost attribution, a live leak here: the unknown
+    key then compared EQUAL to a `local_open_weight`-scoped packet and the
+    packet was REPAIRED onto the wire, disclosing records this dispatch was
+    never proven to be in scope for. `_packet_scope_matches_dispatch_family`
+    now reads the fail-closed sibling and withholds on its `None`.
+
+    An external-CLI adapter under an unregistered key is the reachable shape:
+    it is a real arm (no `LLMDispatchProviderUnreachableError`) and it never
+    injects the C-MEM-14 tools, so the serve-check runs and the packet would
+    otherwise be repairable — the other two conjuncts (identity, prompt-packet
+    authorization) both PASS here, isolating the family conjunct.
+    """
+    adapter = _ExternalCLIFakeAdapter(calls=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"mystery_cli": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(
+            provider="mystery_cli",
+            family=ProviderFamily.LOCAL_OPEN_WEIGHT,
+        ),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("mystery_cli"), _step(), step_context=_step_context())
+
+    assert len(adapter.calls) == 1
+    _, prompt = adapter.calls[0]
+    assert _B83_SECTION_TEXT not in prompt, (
+        "an unregistered provider key must not inherit local_open_weight scope"
+    )
+    assert "read-only memory packet" not in prompt
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "the withholding must still be reported"
     attrs = dict(spans[0].attributes or {})
     assert attrs["memory.degraded_serve.reason"] == "provider_family_scope_mismatch"
     assert attrs["memory.operation.name"] == "denial"
