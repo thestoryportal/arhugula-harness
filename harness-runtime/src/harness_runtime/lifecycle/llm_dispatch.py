@@ -92,6 +92,11 @@ from harness_cp.routing_layer import RoutingLayer
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryState
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
+from harness_is.memory_observability import (
+    MemoryTelemetryOperationName,
+    memory_telemetry_span,
+)
+from harness_is.memory_operation_ledger import MemoryOperationKind
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
 from harness_runtime.lifecycle.audit_offload import (
@@ -116,8 +121,11 @@ from harness_runtime.lifecycle.memory_tool_dispatch import (
     step_has_memory_tool,
 )
 from harness_runtime.memory_context import (
+    RenderedMemoryPromptPacket,
     RuntimeMemoryContext,
+    append_rendered_memory_packet,
     compose_system_prompt_with_memory_packet,
+    render_packet_for_degraded_dispatch,
 )
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionContext,
@@ -1583,6 +1591,31 @@ class RuntimeLLMDispatcher:
                 else f"{_eff_trace.layer}:{_eff_trace.candidate}",
             )
 
+            # --- Step 2b (B-83): dispatch-time memory serve-check --------
+            # `select_memory_access_mode` chose the access mode from DECLARED
+            # capabilities, one layer out; the arm about to run is resolved
+            # HERE. When STANDARD_MEMORY_TOOLS was selected but this dispatch
+            # will not inject the C-MEM-14 tools — the anthropic arm (which
+            # branches only on `step_has_memory_tool`/`hitl_tool_loop`, never
+            # on access mode), the text-only external-CLI arm, an
+            # openai/ollama dispatch with no bound executor, or ANY arm whose
+            # provider differs from the one the context was composed for —
+            # repair to the C-MEM-13 packet instead of silently serving zero
+            # memory. `compose_system_prompt_with_memory_packet` already ran at
+            # `dispatch()` and returned the prompt UNCHANGED (its gate is
+            # `PROMPT_EXTENSION_PACKET`), so this adds the packet text that
+            # earlier call declined to add.
+            degraded_memory_serve = _degraded_serve_for_unservable_arm(
+                provider_name,
+                memory_context=memory_context,
+                standard_memory_tool_executor=standard_memory_tool_executor,
+            )
+            if degraded_memory_serve is not None:
+                effective_system_prompt = append_rendered_memory_packet(
+                    effective_system_prompt,
+                    degraded_memory_serve.rendered,
+                )
+
             # --- Step 3: per-provider dispatch --------------------------
             cache_attrs: _AnthropicCacheAttrs | None
             request_attrs: _AnthropicRequestAttrs | None
@@ -1681,16 +1714,20 @@ class RuntimeLLMDispatcher:
                         cache_ttl=self.cache_ttl,
                     )
             elif provider_name == "openai":
-                if (
-                    standard_memory_tool_executor is not None
-                    and memory_context is not None
-                    and memory_context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
-                ):
+                # B-83 — the arm guard and the serve-check read the SAME
+                # authority (`_standard_memory_tools_context`), so "the tools
+                # were injected" and "the serve-check passed" cannot disagree.
+                openai_tools_context = _standard_memory_tools_context(
+                    provider_name,
+                    memory_context=memory_context,
+                    standard_memory_tool_executor=standard_memory_tool_executor,
+                )
+                if openai_tools_context is not None:
                     response, usage_attrs = await _dispatch_openai_with_standard_memory_tools(
                         adapter,
                         model,
                         payload,
-                        memory_context=memory_context,
+                        memory_context=openai_tools_context,
                         standard_memory_tool_executor=standard_memory_tool_executor,
                         step_context=step_context,
                         step_id=step_id,
@@ -1708,16 +1745,25 @@ class RuntimeLLMDispatcher:
                 cache_attrs = None
                 request_attrs = None
             elif provider_name == "ollama":
-                if (
-                    standard_memory_tool_executor is not None
-                    and memory_context is not None
-                    and memory_context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
-                ):
-                    response, usage_attrs = await _dispatch_ollama_with_standard_memory_tools(
+                ollama_tools_context = _standard_memory_tools_context(
+                    provider_name,
+                    memory_context=memory_context,
+                    standard_memory_tool_executor=standard_memory_tool_executor,
+                )
+                if ollama_tools_context is not None:
+                    # B-83 (c) — the ollama arm can discover mid-dispatch that
+                    # the daemon refuses tools for this model; it then repairs
+                    # to the packet itself and reports the repair back on the
+                    # third element, so the ONE emitter below covers it too.
+                    (
+                        response,
+                        usage_attrs,
+                        degraded_memory_serve,
+                    ) = await _dispatch_ollama_with_standard_memory_tools(
                         adapter,
                         model,
                         payload,
-                        memory_context=memory_context,
+                        memory_context=ollama_tools_context,
                         standard_memory_tool_executor=standard_memory_tool_executor,
                         step_context=step_context,
                         step_id=step_id,
@@ -1747,6 +1793,18 @@ class RuntimeLLMDispatcher:
                 request_attrs = None
             else:
                 raise LLMDispatchProviderUnreachableError(provider_name)
+
+            # B-83 — ONE degraded-serve emission site for all three
+            # reachabilities (unservable arm / provider-rebound context /
+            # daemon-refused ollama tools). Emitted post-dispatch so the
+            # mid-dispatch ollama repair is included.
+            if degraded_memory_serve is not None:
+                _emit_degraded_memory_serve_span(
+                    self.tracer_provider,
+                    degraded_memory_serve,
+                    provider=provider_name,
+                    model=model,
+                )
 
             if memory_context is not None and self.memory_runtime is not None:
                 capture_turn_completion = getattr(
@@ -2008,6 +2066,148 @@ class _AnthropicRequestAttrs:
 class _ExternalCLIAttrs:
     exit_code: int
     kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DegradedMemoryServe:
+    """B-83 — a dispatch that could NOT serve its selected access mode.
+
+    Carries the mode that was SELECTED plus the packet actually served in its
+    place, so the one telemetry emitter (`_emit_degraded_memory_serve_span`)
+    reports the same shape for every reachability. Constructed at exactly two
+    sites: the arm-selection serve-check (an arm that will not inject the
+    tools) and the ollama tools-unsupported fallback (an arm that tried and
+    was refused by the daemon).
+    """
+
+    selected_access_mode: MemoryAccessMode
+    rendered: RenderedMemoryPromptPacket
+
+
+#: The provider arms that own a standard-memory-tools sibling dispatch fn.
+_STANDARD_MEMORY_TOOL_ARMS: Final[frozenset[str]] = frozenset({"openai", "ollama"})
+
+
+def _standard_memory_tools_context(
+    provider_name: str,
+    *,
+    memory_context: RuntimeMemoryContext | None,
+    standard_memory_tool_executor: Any,
+) -> RuntimeMemoryContext | None:
+    """The context THIS dispatch will serve the C-MEM-14 tools with, else None.
+
+    The single authority for the question "does the arm about to run serve
+    `STANDARD_MEMORY_TOOLS`?" — read by the two arm guards that take the
+    standard-tools path AND by the B-83 serve-check, so the check and the
+    branch can never disagree.
+
+    The provider-identity conjunct closes B-83 reachability (b): a STATICALLY
+    injected `RuntimeLLMDispatcher.memory_context` is composed ONCE, and
+    `RetryBreakerFallbackDispatcher` rebinds the provider per attempt
+    (`retry_breaker_fallback.py:185-192`), so the context on the wire can have
+    been composed for a DIFFERENT provider than the one being dispatched.
+    `MemoryAccessModeSelection.selected_provider` is
+    `request.model_binding.provider` verbatim
+    (`harness-cp/src/harness_cp/memory_access_mode.py:372`), the same string
+    that reaches `provider_name` here, so the comparison is exact. The
+    `memory_runtime`-bound path recomposes per attempt
+    (`automatic_memory.compose_for_dispatch`) and therefore always matches —
+    this conjunct is inert there.
+    """
+
+    if memory_context is None:
+        return None
+    if memory_context.access_mode is not MemoryAccessMode.STANDARD_MEMORY_TOOLS:
+        return None
+    if standard_memory_tool_executor is None:
+        return None
+    if memory_context.selection.selected_provider != provider_name:
+        return None
+    if provider_name not in _STANDARD_MEMORY_TOOL_ARMS:
+        return None
+    return memory_context
+
+
+def _degraded_serve_for_unservable_arm(
+    provider_name: str,
+    *,
+    memory_context: RuntimeMemoryContext | None,
+    standard_memory_tool_executor: Any,
+) -> _DegradedMemoryServe | None:
+    """B-83 — the dispatch-time serve-check at the arm-selection site.
+
+    `select_memory_access_mode` picks a mode from DECLARED capabilities; the
+    arm reached may not serve it. When `STANDARD_MEMORY_TOOLS` was selected and
+    this dispatch will not inject the tools, the model would otherwise receive
+    ZERO memory while a fully-retrieved, policy-checked packet sits unused on
+    the context. C-MEM-14 (`Spec_Memory_Substrate_v1.md:489`) states the
+    exposure as a present-tense obligation, and C-MEM-13 (`:460`) authorizes
+    the prompt-extension packet for providers without usable tool support — so
+    the repair is to serve the packet as read-only prompt text.
+
+    Returns None (zero behavior change) on every servable dispatch and on every
+    non-`STANDARD_MEMORY_TOOLS` context.
+    """
+
+    if memory_context is None:
+        return None
+    if memory_context.access_mode is not MemoryAccessMode.STANDARD_MEMORY_TOOLS:
+        return None
+    if (
+        _standard_memory_tools_context(
+            provider_name,
+            memory_context=memory_context,
+            standard_memory_tool_executor=standard_memory_tool_executor,
+        )
+        is not None
+    ):
+        return None
+    return _DegradedMemoryServe(
+        selected_access_mode=memory_context.access_mode,
+        rendered=render_packet_for_degraded_dispatch(memory_context),
+    )
+
+
+def _emit_degraded_memory_serve_span(
+    tracer_provider: Any,
+    degraded: _DegradedMemoryServe,
+    *,
+    provider: str,
+    model: str,
+) -> None:
+    """Emit the ONE `memory.operation` span for a B-83 degraded-serve repair.
+
+    A successful INJECTION of the packet — not a failure — so no
+    `failure_class` is set: the packet really did reach the model, just through
+    the prompt seam instead of the selected tool surface. `access_mode` reports
+    what was SERVED; the two `memory.degraded_serve*` attributes report that a
+    repair happened and which mode was displaced. Attributes land on the memory
+    tracer's own span, never on the `gen_ai` span (C-OD-04 §4.3 namespace
+    discipline).
+
+    Uses only existing closed-enum members (`MemoryTelemetryOperationName.
+    INJECTION`, `MemoryOperationKind.INJECT`) — adding a member to either would
+    be an X-AL-3 design extension.
+    """
+
+    with memory_telemetry_span(
+        tracer_provider,
+        tracer_name="harness.runtime.llm_dispatch",
+        operation_name=MemoryTelemetryOperationName.INJECTION,
+        operation_kind=MemoryOperationKind.INJECT.value,
+        access_mode=MemoryAccessMode.PROMPT_EXTENSION_PACKET.value,
+        provider=provider,
+        model=model,
+        policy_decision="allowed",
+        packet_hash=degraded.rendered.packet_hash,
+        record_count=len(degraded.rendered.selected_refs),
+    ) as span:
+        if span is not None:
+            span.set_attribute("memory.degraded_serve", True)
+            span.set_attribute(
+                "memory.degraded_serve.selected_access_mode",
+                degraded.selected_access_mode.value,
+            )
 
 
 def _derive_tokenizer_version(model: str) -> str:
@@ -2846,6 +3046,11 @@ async def _dispatch_openai_with_standard_memory_tools(
             # The batch is the CALLER's — hand the whole response back
             # unprocessed (bare-path parity) and execute NOTHING from it, so a
             # mixed batch cannot half-commit memory before control returns.
+            # B-85: the memory call inside a MIXED batch therefore goes
+            # unserved AND un-ledgered. Not repairable at this site — the
+            # response is already composed and the packet cannot retroactively
+            # answer a tool call — so it is a posture decision registered
+            # separately rather than absorbed here.
             return (response_mapping, usage)
         # Validate the batch BEFORE the bound check: a malformed memory call is
         # a fail-fast payload-shape error, and letting the generic (retryable)
@@ -3263,7 +3468,7 @@ async def _dispatch_ollama_with_standard_memory_tools(
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     max_iterations: int = 16,
-) -> tuple[Mapping[str, Any], _UsageAttrs]:
+) -> tuple[Mapping[str, Any], _UsageAttrs, _DegradedMemoryServe | None]:
     """Ollama provider branch with C-MEM-14 standard memory tool continuation.
 
     B-82 — `select_memory_access_mode` selects `STANDARD_MEMORY_TOOLS` for
@@ -3272,6 +3477,10 @@ async def _dispatch_ollama_with_standard_memory_tools(
     ollama's ``/api/chat`` accepts the dotted C-MEM-14 provider-neutral
     identities (``memory.search`` ...) verbatim and echoes them back in
     ``message.tool_calls[].function.name``.
+
+    The third return element is the B-83 degraded-serve report — non-None ONLY
+    on the tools-unsupported fallback below. The caller owns the telemetry
+    emission so all three B-83 reachabilities report through one emitter.
     """
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     kwargs["tools"] = _ollama_tools_with_standard_memory(kwargs.get("tools"), memory_context)
@@ -3287,32 +3496,50 @@ async def _dispatch_ollama_with_standard_memory_tools(
                 raise
             # This model carries no tool template, so the memory tools we
             # auto-injected turned a previously-working TEXT dispatch into a
-            # 400. Byte-restore the pre-B-82 behavior for exactly these models
-            # by re-dispatching bare — the daemon, not a capability table, is
-            # the authority on which models take tools.
+            # 400. The daemon, not a capability table, is the authority on
+            # which models take tools — so the retry drops the tools.
+            #
+            # BEHAVIOR CHANGE at B-83 (deliberate; this fallback previously
+            # BYTE-RESTORED the pre-B-82 bare dispatch): re-dispatching bare
+            # left the model with ZERO memory on a plain default-reflection
+            # path, with no trace of the degradation — B-83's shape on the
+            # commonest configuration. The retry now carries the C-MEM-12
+            # packet as read-only prompt text (C-MEM-13,
+            # `Spec_Memory_Substrate_v1.md:460`) and reports the repair back
+            # for telemetry. The TOOLS are still dropped, so the daemon
+            # rejection is still resolved; only the prompt differs from
+            # pre-B-82.
             #
             # FIRST call only: a mid-loop rejection would mean the model changed
             # identity between continuation turns, which is not a case to paper
             # over, so it stays fail-loud.
-            return await _dispatch_ollama(
+            degraded = _DegradedMemoryServe(
+                selected_access_mode=memory_context.access_mode,
+                rendered=render_packet_for_degraded_dispatch(memory_context),
+            )
+            bare_response, bare_usage = await _dispatch_ollama(
                 adapter,
                 model,
                 payload,
-                system=system,
+                system=append_rendered_memory_packet(system, degraded.rendered),
                 upstream=upstream,
             )
+            return (bare_response, bare_usage, degraded)
         # See the OpenAI arm — every turn's usage is folded in before exit.
         usage = _accumulated_usage(usage, _ollama_usage_attrs(response))
         response_mapping = _response_to_mapping(response)
         tool_calls = _ollama_tool_calls(response_mapping)
         if not tool_calls:
-            return (response_mapping, usage)
+            return (response_mapping, usage, None)
         if not _all_calls_are_memory_tools(
             [_function_tool_name(call) for call in tool_calls],
             _MEMORY_TOOL_NAMES,
         ):
             # Caller-owned batch — see the OpenAI arm's matching comment.
-            return (response_mapping, usage)
+            # B-85: the memory call inside a MIXED batch goes unserved and
+            # un-ledgered here; unrepairable at this site (the response is
+            # handed back whole for batch atomicity), registered separately.
+            return (response_mapping, usage, None)
         # Validate first, then check the bound, then execute — see the OpenAI
         # arm's matching comments; the ordering rationale is identical.
         prepared = _ollama_prepared_memory_tool_calls(

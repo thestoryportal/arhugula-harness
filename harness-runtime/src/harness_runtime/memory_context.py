@@ -349,8 +349,36 @@ def render_prompt_extension_packet(
         return None
     if context.packet is None:
         raise ValueError("prompt-extension memory context must carry a packet")
+    return _render_packet(context.packet)
 
-    packet = context.packet
+
+def render_packet_for_degraded_dispatch(
+    context: RuntimeMemoryContext,
+) -> RenderedMemoryPromptPacket:
+    """Render a memory-bearing context's packet for a degraded-serve repair.
+
+    Sibling of `render_prompt_extension_packet` with the access-mode gate
+    dropped and nothing else changed — both share `_render_packet`, so the
+    read-only framing, the per-section body and every packet-derived field are
+    identical. C-MEM-13 (`Spec_Memory_Substrate_v1.md:460` — "Providers without
+    usable tool support may receive prompt-extension packets") authorizes
+    serving an already-retrieved, already-policy-checked packet as prompt text
+    when the dispatch arm reached cannot serve the mode that was SELECTED
+    (B-83).
+
+    Existing callers are untouched — the mode gate still lives in
+    `render_prompt_extension_packet`, so the default composition path is
+    byte-identical.
+    """
+
+    if context.access_mode is MemoryAccessMode.NO_MEMORY_ACCESS:
+        raise ValueError("no-memory contexts carry no packet to degrade to")
+    if context.packet is None:
+        raise ValueError("memory-enabled context must carry a packet")
+    return _render_packet(context.packet)
+
+
+def _render_packet(packet: MemoryPacket) -> RenderedMemoryPromptPacket:
     lines = [
         "read-only memory packet",
         f"packet_hash: {packet.packet_hash}",
@@ -392,6 +420,20 @@ def compose_system_prompt_with_memory_packet(
     rendered = render_prompt_extension_packet(context)
     if rendered is None:
         return system_prompt
+    return append_rendered_memory_packet(system_prompt, rendered)
+
+
+def append_rendered_memory_packet(
+    system_prompt: str | None,
+    rendered: RenderedMemoryPromptPacket,
+) -> str:
+    """Attach an already-rendered packet to the existing system-prompt seam.
+
+    The single composition authority for BOTH the selected-mode
+    prompt-extension path and the B-83 degraded-serve repair, so the two can
+    never drift on separator or ordering semantics.
+    """
+
     if system_prompt:
         return f"{system_prompt.rstrip()}\n\n{rendered.content}"
     return rendered.content
@@ -483,7 +525,9 @@ __all__ = [
     "RenderedMemoryPromptPacket",
     "RuntimeMemoryContext",
     "RuntimeMemoryContextComposer",
+    "append_rendered_memory_packet",
     "compose_system_prompt_with_memory_packet",
     "memory_scope_ref",
+    "render_packet_for_degraded_dispatch",
     "render_prompt_extension_packet",
 ]
