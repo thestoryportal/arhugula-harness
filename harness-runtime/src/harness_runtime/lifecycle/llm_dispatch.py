@@ -56,6 +56,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from copy import deepcopy
@@ -2816,7 +2817,9 @@ def _openai_memory_tool_result_message(
     return {
         "role": "tool",
         "tool_call_id": tool_call_id,
-        "name": tool_name.value,
+        # Same wire boundary as the tools[] array — the tool-result turn echoes
+        # the function name the provider called, so it carries the wire name.
+        "name": _OPENAI_MEMORY_TOOL_WIRE_NAMES[tool_name],
         "content": json.dumps(result, sort_keys=True, separators=(",", ":"), default=str),
     }
 
@@ -2831,12 +2834,17 @@ def _openai_memory_tool_name_and_arguments(
     name = function_mapping.get("name")
     if not isinstance(name, str) or not name:
         raise LLMDispatchPayloadShapeError("OpenAI memory tool_call.function.name missing")
-    try:
-        tool_name = MemoryToolName(name)
-    except ValueError as exc:
-        raise LLMDispatchPayloadShapeError(
-            f"OpenAI standard memory loop received non-memory tool {name!r}"
-        ) from exc
+    # The model can only call a name we advertised, i.e. a wire name; the dotted
+    # provider-neutral identity is still accepted as a tolerant second reading so
+    # the resolve path stays byte-compatible with pre-wire-name callers.
+    tool_name = _OPENAI_MEMORY_TOOL_FROM_WIRE.get(name)
+    if tool_name is None:
+        try:
+            tool_name = MemoryToolName(name)
+        except ValueError as exc:
+            raise LLMDispatchPayloadShapeError(
+                f"OpenAI standard memory loop received non-memory tool {name!r}"
+            ) from exc
     raw_arguments = function_mapping.get("arguments")
     if isinstance(raw_arguments, str):
         try:
@@ -2895,11 +2903,68 @@ def _standard_memory_tool_context(
     )
 
 
+# --- OpenAI memory-tool wire names ------------------------------------------
+# OpenAI's Chat Completions API constrains ``tools[].function.name`` to
+# ``^[a-zA-Z0-9_-]{1,64}$``; a dot is rejected with an HTTP 400 before the model
+# is ever reached. The C-MEM-14 tool identities (`Spec_Memory_Substrate_v1.md`
+# §485-497) are PROVIDER-NEUTRAL and dotted (``memory.search`` ...), so the
+# dot -> underscore encoding is owned by this OpenAI adapter boundary and NOT by
+# the `MemoryToolName` enum (renaming the enum would leak a provider constraint
+# into the provider-neutral contract).
+#
+# The map is an EXPLICIT table rather than a computed transform: a computed
+# ``value.replace(".", "_")`` is not provably injective against future enum
+# members, whereas an explicit table plus the import-time guard below fails loud
+# the moment a new `MemoryToolName` lands without a wire name, two wire names
+# collide, or a wire name violates the provider's name grammar.
+_OPENAI_MEMORY_TOOL_WIRE_NAMES: Final[dict[MemoryToolName, str]] = {
+    MemoryToolName.SEARCH: "memory_search",
+    MemoryToolName.READ: "memory_read",
+    MemoryToolName.WRITE_NOTE: "memory_write_note",
+    MemoryToolName.PROPOSE_PROMOTION: "memory_propose_promotion",
+    MemoryToolName.REQUEST_REDACTION: "memory_request_redaction",
+}
+
+_OPENAI_TOOL_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def _invert_openai_memory_tool_wire_names() -> dict[str, MemoryToolName]:
+    """Invert the wire-name table, failing loud at import on an unusable table."""
+    missing = [tool for tool in MemoryToolName if tool not in _OPENAI_MEMORY_TOOL_WIRE_NAMES]
+    if missing:
+        raise LLMDispatchBindError(
+            f"OpenAI memory tool wire name missing for {[tool.value for tool in missing]!r}"
+        )
+    inverted: dict[str, MemoryToolName] = {}
+    for tool, wire in _OPENAI_MEMORY_TOOL_WIRE_NAMES.items():
+        if _OPENAI_TOOL_NAME_PATTERN.match(wire) is None:
+            raise LLMDispatchBindError(
+                f"OpenAI memory tool wire name {wire!r} for {tool.value!r} violates "
+                r"^[a-zA-Z0-9_-]{1,64}$"
+            )
+        if wire in inverted:
+            raise LLMDispatchBindError(f"OpenAI memory tool wire name {wire!r} is not unique")
+        inverted[wire] = tool
+    return inverted
+
+
+_OPENAI_MEMORY_TOOL_FROM_WIRE: Final[dict[str, MemoryToolName]] = (
+    _invert_openai_memory_tool_wire_names()
+)
+
+
 def _openai_tools_with_standard_memory(
     existing_tools: object,
     memory_context: RuntimeMemoryContext,
 ) -> list[dict[str, Any]]:
-    memory_tool_names = {entry.tool.value for entry in MEMORY_TOOL_CONTRACTS}
+    # Drop a caller-supplied tool that names one of the injected memory tools
+    # under EITHER spelling: the wire name (which would be a genuine duplicate
+    # ``function.name`` in the emitted array) or the provider-neutral dotted
+    # identity (which names the same tool AND would itself trip OpenAI's
+    # name grammar if forwarded).
+    memory_tool_names = {entry.tool.value for entry in MEMORY_TOOL_CONTRACTS} | set(
+        _OPENAI_MEMORY_TOOL_FROM_WIRE
+    )
     preserved: list[dict[str, Any]] = []
     if isinstance(existing_tools, Sequence) and not isinstance(existing_tools, str | bytes):
         for tool in cast(Sequence[object], existing_tools):
@@ -2930,7 +2995,7 @@ def _openai_standard_memory_tools(memory_context: RuntimeMemoryContext) -> list[
             {
                 "type": "function",
                 "function": {
-                    "name": entry.contract.name,
+                    "name": _OPENAI_MEMORY_TOOL_WIRE_NAMES[entry.tool],
                     "description": entry.contract.description,
                     "parameters": parameters,
                 },

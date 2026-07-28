@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -30,6 +31,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from harness_as.memory_tool_contracts import MemoryToolName
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
 from harness_core import PersonaTier
@@ -1395,7 +1397,9 @@ async def test_openai_standard_memory_tool_loop_executes_provider_neutral_tool()
         "id": "call_memory_search",
         "type": "function",
         "function": {
-            "name": "memory.search",
+            # The provider can only call a name we advertised — the OpenAI WIRE
+            # name, not the dotted C-MEM-14 provider-neutral identity.
+            "name": "memory_search",
             "arguments": json.dumps(
                 {
                     "query": "codex memory",
@@ -1463,9 +1467,17 @@ async def test_openai_standard_memory_tool_loop_executes_provider_neutral_tool()
     )
 
     assert len(executor.requests) == 1
+    # Harness-internal identity — the executor receives the provider-neutral
+    # `MemoryToolName`, unchanged by the OpenAI wire encoding.
     assert executor.requests[0].tool_name == "memory.search"
     assert executor.requests[0].context.policy_ref == "policy:u-mem-16"
     assert len(client.chat.completions.calls) == 2
+    # The caller-supplied `memory.search` tool in the payload was deduped, and
+    # the injected memory tools carry their wire names.
+    emitted = client.chat.completions.calls[0]["tools"]
+    assert {tool["function"]["name"] for tool in emitted} == set(
+        llm_dispatch_module._OPENAI_MEMORY_TOOL_FROM_WIRE
+    )
     continuation = client.chat.completions.calls[1]["messages"]
     assert continuation[-2] == {
         "role": "assistant",
@@ -1474,8 +1486,88 @@ async def test_openai_standard_memory_tool_loop_executes_provider_neutral_tool()
     }
     assert continuation[-1]["role"] == "tool"
     assert continuation[-1]["tool_call_id"] == "call_memory_search"
-    assert continuation[-1]["name"] == "memory.search"
+    assert continuation[-1]["name"] == "memory_search"
     assert json.loads(continuation[-1]["content"])["results"][0]["record_kind"] == "preference"
+
+
+@pytest.mark.asyncio
+async def test_openai_standard_memory_tools_serialize_provider_safe_wire_names() -> None:
+    """Every emitted ``tools[].function.name`` satisfies OpenAI's name grammar.
+
+    OpenAI rejects ``tools[].function.name`` outside ``^[a-zA-Z0-9_-]{1,64}$``
+    with an HTTP 400 *before* the model is reached, so the dotted C-MEM-14
+    provider-neutral identities (``memory.search`` ...) cannot go on the wire.
+    This asserts the serialized array directly — the only shape that catches the
+    400 class without a live call.
+    """
+    client = _OpenAIClient()
+    adapter = _OpenAIFakeAdapter(client)
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": adapter},
+        tracer_provider=tp,
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=object(),
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    emitted = client.chat.completions.calls[0]["tools"]
+    names = [tool["function"]["name"] for tool in emitted]
+    pattern = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+    offenders = [name for name in names if pattern.match(name) is None]
+    assert not offenders, (
+        "every tools[].function.name must match ^[a-zA-Z0-9_-]{1,64}$ or OpenAI "
+        f"rejects the request with HTTP 400; offenders: {offenders!r}"
+    )
+    assert set(names) == {
+        "memory_search",
+        "memory_read",
+        "memory_write_note",
+        "memory_propose_promotion",
+        "memory_request_redaction",
+    }, f"unexpected serialized memory tool names: {sorted(names)!r}"
+    # The provider-neutral identities are unchanged — only the wire form differs.
+    assert {tool.value for tool in MemoryToolName} == {
+        "memory.search",
+        "memory.read",
+        "memory.write_note",
+        "memory.propose_promotion",
+        "memory.request_redaction",
+    }
+
+
+def test_openai_memory_tool_wire_name_resolves_back_to_provider_neutral_identity() -> None:
+    """The inbound wire name round-trips to its `MemoryToolName`; junk fails loud."""
+    resolve = llm_dispatch_module._openai_memory_tool_name_and_arguments
+
+    for wire, expected in (
+        ("memory_search", MemoryToolName.SEARCH),
+        ("memory_read", MemoryToolName.READ),
+        ("memory_write_note", MemoryToolName.WRITE_NOTE),
+        ("memory_propose_promotion", MemoryToolName.PROPOSE_PROMOTION),
+        ("memory_request_redaction", MemoryToolName.REQUEST_REDACTION),
+    ):
+        tool_name, arguments = resolve(
+            {
+                "id": f"call_{wire}",
+                "type": "function",
+                "function": {"name": wire, "arguments": json.dumps({"scope_ref": "scope:x"})},
+            }
+        )
+        assert tool_name is expected
+        assert arguments == {"scope_ref": "scope:x"}
+
+    # An unknown name still raises the pre-existing typed error.
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        resolve(
+            {
+                "id": "call_bogus",
+                "type": "function",
+                "function": {"name": "memory_not_a_tool", "arguments": "{}"},
+            }
+        )
+    assert "non-memory tool" in str(excinfo.value)
 
 
 @pytest.mark.asyncio

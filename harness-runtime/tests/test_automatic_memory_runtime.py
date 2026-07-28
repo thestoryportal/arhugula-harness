@@ -87,9 +87,14 @@ class _OpenAIFakeAdapter:
     client: _OpenAIClient
 
 
+# The OpenAI wire encoding of the C-MEM-14 provider-neutral `memory.search`
+# identity (OpenAI rejects a dotted `tools[].function.name` with an HTTP 400).
+_MEMORY_SEARCH_WIRE_NAME = "memory_search"
+
+
 def _fill_memory_tool_call_refs(response: dict[str, Any], tools: object) -> None:
-    scope_ref = _memory_tool_schema_const(tools, "memory.search", "scope_ref")
-    policy_ref = _memory_tool_schema_const(tools, "memory.search", "policy_ref")
+    scope_ref = _memory_tool_schema_const(tools, _MEMORY_SEARCH_WIRE_NAME, "scope_ref")
+    policy_ref = _memory_tool_schema_const(tools, _MEMORY_SEARCH_WIRE_NAME, "policy_ref")
     if scope_ref is None or policy_ref is None:
         return
     for choice in response.get("choices", []):
@@ -102,7 +107,7 @@ def _fill_memory_tool_call_refs(response: dict[str, Any], tools: object) -> None
             if not isinstance(tool_call, dict):
                 continue
             function = tool_call.get("function")
-            if not isinstance(function, dict) or function.get("name") != "memory.search":
+            if not isinstance(function, dict) or function.get("name") != _MEMORY_SEARCH_WIRE_NAME:
                 continue
             raw_arguments = function.get("arguments")
             if not isinstance(raw_arguments, str):
@@ -389,7 +394,9 @@ async def test_default_local_init_normal_inference_exposes_and_persists_memory(
                                     "id": "call_memory_search",
                                     "type": "function",
                                     "function": {
-                                        "name": "memory.search",
+                                        # The provider echoes the WIRE name it
+                                        # was advertised, not the dotted identity.
+                                        "name": _MEMORY_SEARCH_WIRE_NAME,
                                         "arguments": json.dumps(
                                             {
                                                 "query": "operator memory summary preference",
@@ -427,8 +434,8 @@ async def test_default_local_init_normal_inference_exposes_and_persists_memory(
     first_call = client.chat.completions.calls[0]
     assert "tools" in first_call
     assert {tool["function"]["name"] for tool in first_call["tools"]} >= {
-        "memory.search",
-        "memory.read",
+        "memory_search",
+        "memory_read",
     }
     tool_content = json.loads(client.chat.completions.calls[1]["messages"][-1]["content"])
     assert tool_content["results"][0]["memory_ref"] == str(seed.envelope.memory_id)
