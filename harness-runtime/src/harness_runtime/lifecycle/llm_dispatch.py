@@ -2759,6 +2759,43 @@ def _all_calls_are_memory_tools(
     return all(name is not None and name in memory_names for name in names)
 
 
+def _add_optional_tokens(running: int | None, turn: int | None) -> int | None:
+    """Sum two optional token counts, treating ``None`` as ABSENT — not zero.
+
+    A turn the provider reported nothing for must neither invent a ``0`` total
+    nor erase counts already accumulated.
+    """
+    if running is None:
+        return turn
+    if turn is None:
+        return running
+    return running + turn
+
+
+def _accumulated_usage(running: _UsageAttrs, turn: _UsageAttrs) -> _UsageAttrs:
+    """Fold one continuation turn's usage into a memory tool loop's totals.
+
+    Every provider call in the loop consumes tokens, so bundling only the FINAL
+    response's usage silently dropped every continuation turn from turn capture,
+    ``gen_ai.usage.*`` and cost attribution. ``response_id`` is NOT accumulated —
+    it identifies ONE provider response, so the bundle keeps the final turn's
+    (unchanged semantics; ollama has none either way).
+    """
+    return _UsageAttrs(
+        input_tokens=_add_optional_tokens(running.input_tokens, turn.input_tokens),
+        output_tokens=_add_optional_tokens(running.output_tokens, turn.output_tokens),
+        response_id=turn.response_id,
+    )
+
+
+#: A loop's usage accumulator before any provider call — all-absent, not zero.
+_NO_USAGE: Final[_UsageAttrs] = _UsageAttrs(
+    input_tokens=None,
+    output_tokens=None,
+    response_id=None,
+)
+
+
 def _memory_tool_loop_exhausted(provider_label: str, max_iterations: int) -> RuntimeError:
     """The C-MEM-14 continuation-loop bound error, shared by both provider loops.
 
@@ -2792,12 +2829,16 @@ async def _dispatch_openai_with_standard_memory_tools(
     messages = list(kwargs["messages"])
     kwargs["messages"] = messages
 
+    usage = _NO_USAGE
     for iteration in range(max_iterations):
         response = await adapter.client.chat.completions.create(model=model, **kwargs)
+        # Every call in the loop consumes tokens — fold each turn in before
+        # any exit, so a continuation turn is never dropped from usage.
+        usage = _accumulated_usage(usage, _openai_usage_attrs(response))
         response_mapping = _response_to_mapping(response)
         tool_calls = _openai_tool_calls(response_mapping)
         if not tool_calls:
-            return _openai_response_bundle(response)
+            return (response_mapping, usage)
         if not _all_calls_are_memory_tools(
             [_function_tool_name(call) for call in tool_calls],
             _OPENAI_MEMORY_TOOL_CALL_NAMES,
@@ -2805,7 +2846,7 @@ async def _dispatch_openai_with_standard_memory_tools(
             # The batch is the CALLER's — hand the whole response back
             # unprocessed (bare-path parity) and execute NOTHING from it, so a
             # mixed batch cannot half-commit memory before control returns.
-            return _openai_response_bundle(response)
+            return (response_mapping, usage)
         # Validate the batch BEFORE the bound check: a malformed memory call is
         # a fail-fast payload-shape error, and letting the generic (retryable)
         # exhaustion error mask it on the terminal turn would replay up to
@@ -2837,14 +2878,17 @@ async def _dispatch_openai_with_standard_memory_tools(
     raise _memory_tool_loop_exhausted("OpenAI", max_iterations)
 
 
-def _openai_response_bundle(response: Any) -> tuple[Mapping[str, Any], _UsageAttrs]:
+def _openai_usage_attrs(response: Any) -> _UsageAttrs:
     usage = getattr(response, "usage", None)
-    usage_attrs = _UsageAttrs(
+    return _UsageAttrs(
         input_tokens=getattr(usage, "prompt_tokens", None),
         output_tokens=getattr(usage, "completion_tokens", None),
         response_id=getattr(response, "id", None),
     )
-    return (_response_to_mapping(response), usage_attrs)
+
+
+def _openai_response_bundle(response: Any) -> tuple[Mapping[str, Any], _UsageAttrs]:
+    return (_response_to_mapping(response), _openai_usage_attrs(response))
 
 
 def _openai_assistant_message(response: Mapping[str, Any]) -> dict[str, Any]:
@@ -3234,18 +3278,21 @@ async def _dispatch_ollama_with_standard_memory_tools(
     messages = list(kwargs["messages"])
     kwargs["messages"] = messages
 
+    usage = _NO_USAGE
     for iteration in range(max_iterations):
         response = await adapter.client.chat(model=model, **kwargs)
+        # See the OpenAI arm — every turn's usage is folded in before exit.
+        usage = _accumulated_usage(usage, _ollama_usage_attrs(response))
         response_mapping = _response_to_mapping(response)
         tool_calls = _ollama_tool_calls(response_mapping)
         if not tool_calls:
-            return _ollama_response_bundle(response)
+            return (response_mapping, usage)
         if not _all_calls_are_memory_tools(
             [_function_tool_name(call) for call in tool_calls],
             _MEMORY_TOOL_NAMES,
         ):
             # Caller-owned batch — see the OpenAI arm's matching comment.
-            return _ollama_response_bundle(response)
+            return (response_mapping, usage)
         # Validate first, then check the bound, then execute — see the OpenAI
         # arm's matching comments; the ordering rationale is identical.
         prepared = _ollama_prepared_memory_tool_calls(
@@ -3269,13 +3316,16 @@ async def _dispatch_ollama_with_standard_memory_tools(
     raise _memory_tool_loop_exhausted("Ollama", max_iterations)
 
 
-def _ollama_response_bundle(response: Any) -> tuple[Mapping[str, Any], _UsageAttrs]:
-    usage_attrs = _UsageAttrs(
+def _ollama_usage_attrs(response: Any) -> _UsageAttrs:
+    return _UsageAttrs(
         input_tokens=getattr(response, "prompt_eval_count", None),
         output_tokens=getattr(response, "eval_count", None),
         response_id=None,
     )
-    return (_response_to_mapping(response), usage_attrs)
+
+
+def _ollama_response_bundle(response: Any) -> tuple[Mapping[str, Any], _UsageAttrs]:
+    return (_response_to_mapping(response), _ollama_usage_attrs(response))
 
 
 def _ollama_message(response: Mapping[str, Any]) -> Mapping[str, Any]:

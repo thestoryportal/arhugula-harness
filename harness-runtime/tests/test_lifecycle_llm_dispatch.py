@@ -1467,7 +1467,7 @@ async def test_openai_standard_memory_tool_loop_executes_provider_neutral_tool()
     ]
     executor = _FakeStandardMemoryToolExecutor()
     adapter = _OpenAIFakeAdapter(client)
-    tp, _ = _tracer_provider_with_exporter()
+    tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
         providers={"openai": adapter},
         tracer_provider=tp,
@@ -1527,6 +1527,15 @@ async def test_openai_standard_memory_tool_loop_executes_provider_neutral_tool()
     assert continuation[-1]["tool_call_id"] == "call_memory_search"
     assert continuation[-1]["name"] == "memory_search"
     assert json.loads(continuation[-1]["content"])["results"][0]["record_kind"] == "preference"
+
+    # Usage is ACCUMULATED across every provider call in the loop. The two calls
+    # carry distinct counts (10/4 then 12/5), so the sums 22/9 are discriminating:
+    # a final-turn-only bundle reads 12/5, a first-turn-only bundle reads 10/4.
+    attrs = exporter.get_finished_spans()[0].attributes or {}
+    assert attrs["gen_ai.usage.input_tokens"] == 10 + 12
+    assert attrs["gen_ai.usage.output_tokens"] == 4 + 5
+    # `response_id` is NOT accumulated — it identifies ONE response, the final one.
+    assert attrs["gen_ai.response.id"] == "cmpl_final_001"
 
 
 @pytest.mark.asyncio
@@ -2161,11 +2170,14 @@ async def test_ollama_standard_memory_tool_loop_executes_provider_neutral_tool()
     assert json.loads(continuation[-1]["content"])["results"][0]["record_kind"] == "preference"
 
     # The final bundle is the bare path's shape — top-level `message`, and usage
-    # read off the FINAL turn's eval counts (no `response_id`).
+    # ACCUMULATED across every provider call in the loop (no `response_id`).
+    # Both calls carry distinct counts (20/8 then 31/9), so the sums 51/17 are
+    # discriminating: a final-turn-only bundle reads 31/9, a first-turn-only
+    # bundle reads 20/8.
     assert result["message"]["content"] == "done"
     attrs = exporter.get_finished_spans()[0].attributes or {}
-    assert attrs["gen_ai.usage.input_tokens"] == 31
-    assert attrs["gen_ai.usage.output_tokens"] == 9
+    assert attrs["gen_ai.usage.input_tokens"] == 20 + 31
+    assert attrs["gen_ai.usage.output_tokens"] == 8 + 9
     assert "gen_ai.response.id" not in attrs
 
 
