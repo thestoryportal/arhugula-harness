@@ -8,10 +8,11 @@ import unicodedata
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from datetime import datetime
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from harness_as.memory_tool_contracts import MemoryToolName, memory_tool_contract
 from harness_is.memory_observability import (
+    MemoryTelemetryFailureClass,
     MemoryTelemetryOperationName,
     classify_memory_failure,
     set_memory_telemetry_attributes,
@@ -78,15 +79,61 @@ _MAX_TOOL_TEXT_CHARS = 2_000
 
 
 class MemoryToolExecutionError(Exception):
-    """Base class for standard memory tool execution failures."""
+    """Base class for standard memory tool execution failures.
+
+    B-88: the family declares its own C-MEM-19 failure class so
+    `classify_memory_failure` keys on the TYPE rather than on message wording.
+    The base carries no information about the nature of the failure - its one
+    raise site re-raises a capture result whose `failure_reason` is an
+    arbitrary string, and that result can also be a non-exception non-capture -
+    so it declares the residual class. A subclass that knows better overrides
+    it; a future subclass that declares nothing inherits the residual, never a
+    confidently wrong class.
+    """
+
+    memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+        MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
+    )
 
 
 class MemoryToolExecutionDeniedError(MemoryToolExecutionError):
-    """Raised when policy denies a standard memory tool call."""
+    """Raised when policy denies a standard memory tool call.
+
+    B-88: `policy_denial` by construction. Before the declaration, four denial
+    raise sites emitted `io_failure` purely because their wording missed the
+    message rules - `:308` "memory promotion review is forbidden", `:433`
+    "memory ref X is superseded", `:435` "memory ref X is not retrievable",
+    and `:485` "memory tool scope_ref does not match context".
+    """
+
+    memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+        MemoryTelemetryFailureClass.POLICY_DENIAL
+    )
 
 
 class MemoryToolExecutionInputError(MemoryToolExecutionError, ValueError):
-    """Raised when a standard memory tool call has invalid arguments."""
+    """Raised when a standard memory tool call has invalid arguments.
+
+    B-88 (impl half), LEAST-WRONG STOPGAP - the flip site when the spec half
+    lands. The closed C-MEM-19 vocabulary has no input-validation class, so a
+    malformed model-supplied argument has nowhere truthful to go; adding a
+    member is a Class 1 back-flow to `Spec_Memory_Substrate_v1.md` C-MEM-19
+    and is NOT absorbable at Phase 7 per X-AL-3. `provider_adapter_failure` is
+    chosen because (i) the fault originates in a provider/model-emitted tool
+    call arriving through the adapter, not in the memory substrate's own IO or
+    record codecs; (ii) `retry_breaker_fallback._classify_provider_exception`
+    already groups this class with `LLMDispatchPayloadShapeError`, the
+    provider-payload-shape family; (iii) it restores the value this population
+    emitted before B-84 typed the `_allowed_kinds` site (a bare `ValueError`
+    fell to the same residual), so B-84's incidental telemetry shift is
+    reverted rather than entrenched; and (iv) `serialization_failure` is
+    reserved for record-codec faults and would poison that bucket for triage.
+    Declared explicitly - not inherited - so this stays the flip site.
+    """
+
+    memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+        MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
+    )
 
 
 class MemoryToolExecutionContext(BaseModel):

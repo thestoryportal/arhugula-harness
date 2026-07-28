@@ -1086,6 +1086,91 @@ async def test_memory_tool_input_error_single_candidate_dispatches_exactly_once(
 
 
 @pytest.mark.asyncio
+async def test_memory_tool_input_error_fail_fast_trip_carries_no_breaker_cause() -> None:
+    """B-88 (lens-3 half): the fail-fast exit's breaker bookkeeping must NOT
+    assert a trip cause it cannot know.
+
+    The fail-fast branch calls `breaker.record_failure(cause=
+    _classify_breaker_cause(exc))`, and `_classify_breaker_cause` duck-types on
+    `.status_code` - which a `MemoryToolExecutionInputError` does not carry, so
+    the correct cause is `None` and `harness.breaker.cause` is correctly
+    omitted from the `breaker.tripped` event (C-OD-07 §7.1: the attribute is
+    populated only on a real classified trip). That correctness was UNWITNESSED
+    - a mutation hardcoding `BreakerCause.AUTH_FAILURE` at the fail-fast
+    `record_failure` call survived every B-84 witness, since they assert
+    control flow (which candidate, how many dispatches) and never the emitted
+    classification. Same defect family as B-88's classifier half: a failure
+    emitting a confidently wrong classification.
+
+    `fail_threshold=1` so the single fail-fast failure trips the breaker and a
+    transition is actually emitted - without it the assertion would be vacuous,
+    which is why the emission count is asserted first."""
+    breaker = RuntimeRetryBreaker(
+        retry_policies={
+            RESERVED_LLM_DISPATCH_KEY: RetryPolicy(
+                max_attempts=3, backoff="full_jitter", jitter="full_jitter"
+            )
+        },
+        default_policy=DEFAULT_RETRY_POLICY,
+        fail_threshold=1,
+        base_delay_seconds=0.0,
+        delay_cap_seconds=0.01,
+    )
+
+    emissions: list[BreakerTransition] = []
+
+    @dataclass
+    class _SpyingRegistry:
+        inner: RuntimeRetryBreaker
+
+        def get_policy(self, tool_name: str) -> RetryPolicy:
+            return self.inner.get_policy(tool_name)
+
+        def get_breaker(self, scope: BreakerScope, identifier: str) -> BreakerStateMachine:
+            return self.inner.get_breaker(scope, identifier)
+
+        def compute_delay_seconds(self, attempt: int, rng: Any | None = None) -> float:
+            return self.inner.compute_delay_seconds(attempt, rng)
+
+        def advance_staircase(self, current: Any, cause: Any, attempt: int) -> Any:
+            return self.inner.advance_staircase(current, cause, attempt)
+
+        def emit_breaker_transition_event(
+            self, transition: Any, parent_span_ref: Any, **kwargs: Any
+        ) -> Any:
+            emissions.append(transition)
+            return self.inner.emit_breaker_transition_event(transition, parent_span_ref, **kwargs)
+
+    spying = _SpyingRegistry(inner=breaker)
+
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            MemoryToolExecutionInputError("memory tool argument 'memory_ref' must be a string"),
+            {"result": "candidate-1-ok"},
+        ]
+    )
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=spying,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert result == {"result": "candidate-1-ok"}
+    # Positive control: the fail-fast exit really did trip a breaker, so the
+    # cause assertion below is about an emitted transition, not about silence.
+    assert len(emissions) == 1
+    assert emissions[0].to_state.value == "open"
+    assert emissions[0].cause is None
+
+
+@pytest.mark.asyncio
 async def test_memory_tool_denied_error_still_retries() -> None:
     """B-84 scope guard: the reclassification covers `MemoryToolExecutionInputError`
     ONLY, not its `MemoryToolExecutionError` base. `MemoryToolExecutionDeniedError`
