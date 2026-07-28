@@ -55,7 +55,11 @@ from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS, LayerBudget
 from harness_cp.layered_routing_strategy import LayerDecisionFn
-from harness_cp.memory_access_mode import MemoryAccessMode, MemoryAccessModeSelection
+from harness_cp.memory_access_mode import (
+    MemoryAccessMode,
+    MemoryAccessModeDenialReason,
+    MemoryAccessModeSelection,
+)
 from harness_cp.per_role_catalog import (
     derive_agent_role,
     derive_fanout_roles,
@@ -114,6 +118,7 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionResult,
     AskUserQuestionSurface,
 )
+from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_provider
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
@@ -144,7 +149,10 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
     RetryBreakerFallbackDispatcher,
 )
 from harness_runtime.lifecycle.sync_dispatcher_facade import SyncDispatcherFacade
-from harness_runtime.memory_context import RuntimeMemoryContext
+from harness_runtime.memory_context import (
+    PROMPT_PACKET_FALLBACK_NOT_DERIVED,
+    RuntimeMemoryContext,
+)
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionInputError,
     StandardMemoryToolExecutor,
@@ -942,14 +950,32 @@ def _standard_tools_memory_context(
     provider: str = "openai",
     model: str = "test-model-1",
     family: ProviderFamily = ProviderFamily.OPENAI,
+    packet_sections: tuple[MemoryPacketSection, ...] = (),
+    prompt_packet_fallback_denial: str | None = None,
 ) -> RuntimeMemoryContext:
+    """A STANDARD_MEMORY_TOOLS context.
+
+    `packet_sections` defaults to `()` — the tool path never renders the packet,
+    so every pre-B-83 caller keeps the empty packet it always had. The B-83
+    degraded-serve repair DOES render it, so those witnesses pass real sections
+    and assert their text on the wire.
+
+    `prompt_packet_fallback_denial` models the C-MEM-13 answer the composer
+    settles (B-83 [P1-e] / [P2-e]): would `PROMPT_EXTENSION_PACKET` have been
+    selected for this same request? `None` (the default) means yes — these
+    fixtures model a policy with `injection_access=PROMPT_PACKET` AND a
+    non-empty token budget, made EXPLICIT because the earlier fixtures were
+    silently relying on the repair not checking. Pass the selector's own denial
+    value (`"no_supported_mode"` for a denying `injection_access` or an absent
+    capability, `"token_budget_empty"` for the budget gate) to model a denial.
+    """
     packet = MemoryPacket(
         packet_id="memory-packet:" + ("c" * 32),
         packet_hash="c" * 64,
         token_budget=80,
         access_mode=MemoryPacketAccessMode.STANDARD_MEMORY_TOOLS,
-        sections=(),
-        selected_refs=(),
+        sections=packet_sections,
+        selected_refs=tuple(section.memory_ref for section in packet_sections),
         policy_ref="policy:u-mem-16",
     )
     return RuntimeMemoryContext(
@@ -965,7 +991,7 @@ def _standard_tools_memory_context(
             decision_trace=("standard_tools_policy_allowed",),
         ),
         policy_ref="policy:u-mem-16",
-        selected_refs=(),
+        selected_refs=packet.selected_refs,
         packet=packet,
         packet_hash=packet.packet_hash,
         retrieval_request_hash="d" * 64,
@@ -973,7 +999,12 @@ def _standard_tools_memory_context(
             project="arhugula-v2",
             workflow="memory-substrate",
             workload_class="coding-arc",
-            provider_family=ProviderFamily.OPENAI.value,
+            # B-83 [P1-c] — tracks `family` rather than being hardcoded OPENAI.
+            # `compose_for_dispatch` derives this from the fallback chain, and
+            # the dispatch-side serve-check compares it against the dispatched
+            # provider's family, so a fixture that claims OPENAI scope for an
+            # anthropic/ollama context is a lie the serve-check now catches.
+            provider_family=family.value,
             cli_profile="codex",
             visibility=MemoryVisibility.WORKFLOW,
         ),
@@ -983,6 +1014,7 @@ def _standard_tools_memory_context(
         ledgerable_denial=False,
         injection_action_id=Identifier("memory-injection:cccccccccccccccccccccccccccccccc"),
         injection_operation_result=MemoryOperationWriteResult.APPENDED,
+        prompt_packet_fallback_denial=prompt_packet_fallback_denial,
     )
 
 
@@ -2774,14 +2806,22 @@ async def test_ollama_malformed_terminal_batch_raises_shape_error_not_exhaustion
 
 
 @pytest.mark.asyncio
-async def test_ollama_tool_unsupported_model_falls_back_to_the_bare_text_path() -> None:
-    """A model with no tool template must keep working, exactly as pre-B-82.
+async def test_ollama_tool_unsupported_model_falls_back_to_the_tool_free_path() -> None:
+    """A model with no tool template must keep working, tools dropped.
 
     `reflect_provider_capabilities` reports `supports_tools=True` for EVERY
     ollama model string (`harness-cp/src/harness_cp/provider_capabilities.py:127`),
     so the memory tools get injected even for e.g. `llava-llama3`, and the daemon
     400s what used to be a working TEXT dispatch. The daemon — not a capability
-    table — is the authority, so the first call's rejection re-dispatches bare.
+    table — is the authority, so the first call's rejection re-dispatches with
+    the tools removed.
+
+    B-83 AMENDED this witness. It previously asserted the retry BYTE-RESTORED
+    the pre-B-82 bare dispatch. That restoration was itself B-83's defect on the
+    commonest path: the model got zero memory with no trace. The retry now
+    still drops the TOOLS (which is what the daemon rejected) but carries the
+    C-MEM-12 packet as read-only prompt text; the tool-free assertion below is
+    the part that guards the daemon fix and is preserved verbatim.
 
     The error shape is the REAL `ollama.ResponseError`, probed live against
     ollama 0.6.2: `.error` is the daemon's message, `.status_code` is 400.
@@ -2810,10 +2850,10 @@ async def test_ollama_tool_unsupported_model_falls_back_to_the_bare_text_path() 
     assert result["message"]["content"] == "ok"
     assert executor.requests == []
     assert len(client.calls) == 2
-    # Call 1 carried the injected memory tools; the bare retry carries none.
+    # Call 1 carried the injected memory tools; the retry carries none.
     assert len(client.calls[0]["tools"]) == len(MEMORY_TOOL_CONTRACTS)
     assert "tools" not in client.calls[1], (
-        "the fallback must byte-restore the pre-B-82 bare dispatch — no tools at all"
+        "the fallback must resolve the daemon rejection — no tools at all"
     )
 
 
@@ -2910,6 +2950,1002 @@ async def test_ollama_without_standard_memory_tools_stays_on_the_bare_path() -> 
 
     assert len(client.calls) == 1
     assert "tools" not in client.calls[0]
+
+
+# ---------------------------------------------------------------------------
+# B-83 — dispatch-time serve-check + repair-to-packet.
+#
+# `select_memory_access_mode` picks an access mode from DECLARED capabilities
+# one layer out; the provider arm is resolved at dispatch. When
+# STANDARD_MEMORY_TOOLS was selected but the arm reached will not inject the
+# C-MEM-14 tools, the model used to receive ZERO memory while a fully
+# retrieved, policy-checked packet sat unused on the context. The repair serves
+# that packet as read-only prompt text (C-MEM-13,
+# `Spec_Memory_Substrate_v1.md:460`) and emits one degraded-serve span.
+# ---------------------------------------------------------------------------
+
+_B83_MEMORY_REF = MemoryID("mem:b-83:degraded-serve")
+_B83_SECTION_TEXT = f"[{_B83_MEMORY_REF}] The operator prefers terse status lines."
+
+
+def _b83_memory_context(
+    *,
+    provider: str,
+    model: str = "test-model-1",
+    family: ProviderFamily | None = None,
+    prompt_packet_fallback_denial: str | None = None,
+) -> RuntimeMemoryContext:
+    """A STANDARD_MEMORY_TOOLS context whose packet carries assertable text.
+
+    `family` defaults to the provider's OWN family via the same authority the
+    dispatch-side serve-check uses, so a witness cannot accidentally assert a
+    scope its provider does not have. Pass it explicitly only to build the
+    deliberately-mismatched cross-family case (B-83 [P1-c]).
+    """
+    return _standard_tools_memory_context(
+        provider=provider,
+        model=model,
+        family=family if family is not None else provider_family_for_provider(provider),
+        prompt_packet_fallback_denial=prompt_packet_fallback_denial,
+        packet_sections=(
+            MemoryPacketSection(
+                section_id="active_operator_project_preferences",
+                memory_ref=_B83_MEMORY_REF,
+                record_kind=MemoryRecordKind.PREFERENCE,
+                text=_B83_SECTION_TEXT,
+                token_estimate=12,
+            ),
+        ),
+    )
+
+
+def _degraded_serve_spans(exporter: InMemorySpanExporter) -> list[Any]:
+    return [
+        span
+        for span in exporter.get_finished_spans()
+        if span.name == "memory.operation"
+        and dict(span.attributes or {}).get("memory.degraded_serve") is True
+    ]
+
+
+@pytest.mark.asyncio
+async def test_b83_anthropic_arm_repairs_unservable_standard_tools_to_packet() -> None:
+    """(a) — an explicit capability override can select STANDARD_MEMORY_TOOLS
+    for anthropic, whose arm never consults the access mode. The packet must
+    reach the wire as the `system=` kwarg, with one degraded-serve span."""
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert client.messages.last_kwargs is not None
+    system = client.messages.last_kwargs["system"]
+    assert _B83_SECTION_TEXT in system
+    assert "read-only memory packet" in system
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "exactly one degraded-serve span per repaired dispatch"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.operation.kind"] == "inject"
+    assert attrs["memory.access_mode"] == "prompt_extension_packet"
+    assert attrs["memory.degraded_serve.reason"] == "arm_unservable"
+    assert attrs["memory.degraded_serve.selected_access_mode"] == "standard_memory_tools"
+    assert attrs["memory.provider"] == "anthropic"
+    assert attrs["memory.packet_hash"] == "c" * 64
+    assert attrs["memory.record_count"] == 1
+    assert "memory.failure_class" not in attrs, (
+        "a degraded serve is a successful injection, not a failure"
+    )
+
+
+@pytest.mark.asyncio
+async def test_b83_external_cli_arm_repairs_unservable_standard_tools_to_packet() -> None:
+    """(a) — the external-CLI arm is text-only by contract and is not even
+    handed the memory context, so it can never serve the selected mode."""
+    adapter = _ExternalCLIFakeAdapter(calls=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("claude_code"), _step(), step_context=_step_context())
+
+    assert len(adapter.calls) == 1
+    assert _B83_SECTION_TEXT in adapter.calls[0][1]
+    assert len(_degraded_serve_spans(exporter)) == 1
+
+
+@pytest.mark.asyncio
+async def test_b83_provider_rebound_context_is_reported_but_never_served() -> None:
+    """(b) — a STATICALLY injected context composed for provider X, dispatched
+    against provider Y after a fallback rebinding. REPORT-ONLY.
+
+    Neither the tools NOR the packet may reach Y. The tools are withheld
+    because X's `scope_ref`/`policy_ref` would attribute Y's writes to a scope
+    Y was never policy-checked for; the PACKET is withheld because retrieval
+    and injection enforce provider-family scope before ranking
+    (`Spec_Memory_Substrate_v1.md:481`) and the packet was assembled under X's
+    `MemoryScope.provider_family` — forwarding its text to a Y-family provider
+    is a disclosure leak that read-only framing does not fix. Recomposition is
+    impossible on this path (it is definitionally the `memory_runtime`-unbound
+    configuration) and fail-closed would turn a silent degradation into a run
+    failure, so the degradation is made VISIBLE instead of silent.
+    """
+    client = _OpenAIClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        # Composed for anthropic; the fallback chain rebound the dispatch to openai.
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    call = client.chat.completions.calls[0]
+    assert "tools" not in call, "a context composed for another provider must not arm the tools"
+    assert all(message["role"] != "system" for message in call["messages"]), (
+        "no system message at all — the cross-provider packet must not be composed"
+    )
+    serialized = json.dumps(call["messages"])
+    assert _B83_SECTION_TEXT not in serialized, "cross-family packet text must never reach the wire"
+    assert "read-only memory packet" not in serialized
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "the degradation must still be reported, just not repaired"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "provider_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert attrs["memory.record_count"] == 0
+    assert "memory.packet_hash" not in attrs, "nothing was served — claiming a hash would lie"
+    assert attrs["memory.degraded_serve.selected_access_mode"] == "standard_memory_tools"
+
+
+@pytest.mark.asyncio
+async def test_b83_cross_family_recomposed_context_is_reported_but_never_rendered() -> None:
+    """P1-c — provider IDENTITY matches, provider FAMILY does not.
+
+    The `memory_runtime` path recomposes per attempt, so on a cross-family
+    fallback `selection.selected_provider` becomes the CURRENT candidate and
+    the identity conjunct passes. But `compose_for_dispatch` derives
+    `record_scope.provider_family` from the fallback chain's PRIMARY
+    (`automatic_memory.py:191-199`) and `MemoryRetriever` filters records on
+    exactly that field (`memory_retrieval.py:371-384`), so the packet holds
+    OpenAI-family records while the dispatch is ollama. Rendering it is the
+    same disclosure leak one layer down, so this must be report-only — proven
+    through the R5 path, where the packet would otherwise be rendered.
+    """
+    client = _OllamaClient()
+    client.errors = [
+        OllamaResponseError("llava-llama3:latest does not support tools", 400),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        # Recomposed FOR ollama (identity matches) but scoped to the chain
+        # primary's OpenAI family — exactly what compose_for_dispatch produces
+        # on a cross-family fallback.
+        memory_context=_b83_memory_context(
+            provider="ollama",
+            model="llava-llama3:latest",
+            family=ProviderFamily.OPENAI,
+        ),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"),
+        _step(),
+        step_context=_step_context(),
+    )
+
+    assert result["message"]["content"] == "ok", "the tool-free retry must still succeed"
+    assert len(client.calls) == 2
+    retry = client.calls[1]
+    assert "tools" not in retry
+    serialized = json.dumps(retry["messages"])
+    assert _B83_SECTION_TEXT not in serialized, (
+        "an OpenAI-family-scoped packet must never be rendered for an ollama dispatch"
+    )
+    assert "read-only memory packet" not in serialized
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "still reported, just not rendered"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "provider_family_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert "memory.packet_hash" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_b83_arm_site_family_mismatch_is_reported_but_never_served() -> None:
+    """Merge-gate Gap A — the FAMILY conjunct must bind at the ARM-SELECTION
+    site, not only the R5 ollama path.
+
+    Identity matches (context composed for anthropic, dispatched to
+    anthropic) but the scope carries the chain-primary's OpenAI family —
+    the shape a `memory_runtime` cross-family fallback produces when the
+    rebound candidate is an unservable NON-ollama arm. A mutation scoping
+    the family check to the R5 path would repair here; this witness kills it.
+    """
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(
+            provider="anthropic",
+            family=ProviderFamily.OPENAI,
+        ),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert client.messages.last_kwargs is not None
+    assert "system" not in client.messages.last_kwargs, (
+        "an OpenAI-family-scoped packet must never be composed for an anthropic dispatch"
+    )
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "still reported, just not served"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "provider_family_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert "memory.packet_hash" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_b83_absent_record_scope_fails_closed_to_report_only() -> None:
+    """Merge-gate Gap B — an UNVERIFIABLE scope must read as not-matching.
+
+    A hand-built statically-injected context with `record_scope=None`
+    (reachability (b)'s own configuration — `RuntimeMemoryContext.record_scope`
+    defaults to None) cannot prove which family its packet was assembled
+    under. `_packet_scope_matches_dispatch_family` deliberately returns False
+    there ("unverifiable is not the same as safe"); a mutation returning True
+    would render the packet across an unverifiable family boundary and every
+    other witness would stay green — this one kills it.
+    """
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    context = _b83_memory_context(provider="anthropic").model_copy(update={"record_scope": None})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=context,
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert client.messages.last_kwargs is not None
+    assert "system" not in client.messages.last_kwargs, (
+        "a packet with no provable scope must never be composed"
+    )
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "the fail-closed withholding must still be reported"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "provider_family_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert "memory.packet_hash" not in attrs
+
+
+class _RaisingOllamaClient(_OllamaClient):
+    """Raises on EVERY chat call, including the tools-unsupported retry."""
+
+    def __init__(self, first: BaseException, rest: BaseException) -> None:
+        super().__init__()
+        self._first = first
+        self._rest = rest
+
+    async def chat(self, **kwargs: Any) -> _OllamaResponse:
+        self.calls.append({**kwargs, "messages": list(kwargs.get("messages", []))})
+        raise self._first if len(self.calls) == 1 else self._rest
+
+
+@pytest.mark.asyncio
+async def test_b83_degraded_span_survives_a_failing_provider_call() -> None:
+    """P2-d — a repair that was SENT and then failed still disclosed.
+
+    Emitting after the dispatch lost the only B-83-specific signal whenever the
+    provider call raised, even though the packet had already gone to the
+    provider. The span must still be emitted, marked `provider_error`.
+    """
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+
+    async def _boom(**_kwargs: Any) -> Any:
+        raise TimeoutError("provider timed out after the request was sent")
+
+    adapter.client.messages.create = _boom  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TimeoutError):
+        await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "the degradation must be reported even though the call failed"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+    assert attrs["memory.degraded_serve.provider_error_type"] == "TimeoutError"
+    assert attrs["memory.degraded_serve.reason"] == "arm_unservable"
+    assert attrs["memory.operation.name"] == "injection", "the packet WAS sent before the failure"
+
+
+@pytest.mark.asyncio
+async def test_b83_report_only_span_survives_a_failing_provider_call() -> None:
+    """P2-d — a report-only WITHHOLDING is equally real when the call fails."""
+    client = _OpenAIClient()
+
+    async def _boom(**_kwargs: Any) -> Any:
+        raise RuntimeError("adapter exploded")
+
+    client.chat.completions.create = _boom  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        # Composed for anthropic → report-only on the openai arm.
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(RuntimeError):
+        await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+    assert attrs["memory.degraded_serve.reason"] == "provider_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+
+
+@pytest.mark.asyncio
+async def test_b83_r5_retry_failure_still_reports_the_degradation() -> None:
+    """P2-d — the sink, not a return tuple, is what makes this reachable.
+
+    The ollama fallback decides its degradation INSIDE the arm call and its
+    retry can itself fail. A return-tuple element travels only on success, so
+    the decision (and the packet already sent on the retry) would vanish.
+    """
+    client = _RaisingOllamaClient(
+        OllamaResponseError("llava-llama3:latest does not support tools", 400),
+        OllamaResponseError("daemon died mid-retry", 500),
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="ollama", model="llava-llama3:latest"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(OllamaResponseError):
+        await dispatcher.dispatch(
+            _binding("ollama", model="llava-llama3:latest"),
+            _step(),
+            step_context=_step_context(),
+        )
+
+    assert len(client.calls) == 2, "the tools-unsupported retry did fire, and then failed"
+    assert _B83_SECTION_TEXT in json.dumps(client.calls[1]["messages"]), (
+        "the packet reached the provider on the retry — the disclosure really happened"
+    )
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "a return-tuple report would have been lost here"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+    assert attrs["memory.degraded_serve.reason"] == "arm_unservable"
+
+
+@pytest.mark.asyncio
+async def test_b83_degraded_span_survives_cancellation() -> None:
+    """P2-d residual — `CancelledError` passes through `finally`, so the span
+    is still emitted, labelled `cancelled` rather than blamed on the provider."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+
+    async def _cancel(**_kwargs: Any) -> Any:
+        raise asyncio.CancelledError
+
+    adapter.client.messages.create = _cancel  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "cancelled"
+    assert "memory.degraded_serve.provider_error_type" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_b83_successful_dispatch_marks_the_outcome_completed() -> None:
+    """The success path carries the same attribute, so `completed` vs
+    `provider_error` is a real discriminator rather than presence-vs-absence."""
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "completed"
+    assert "memory.degraded_serve.provider_error_type" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_b83_packet_mode_denied_context_is_reported_with_its_own_reason() -> None:
+    """P1-e — scope is fine, but the prompt-packet MODE is not authorized.
+
+    `select_memory_access_mode` returns at the first mode whose gates pass, so a
+    `STANDARD_MEMORY_TOOLS` selection says nothing about the packet mode — its
+    branch was never evaluated. A policy allowing `standard_tool_access` while
+    `injection_access` denies prompt packets is legal and expressible (DENY is
+    the default), and rendering the packet IS the prompt-packet mode. Without
+    this conjunct the degradation discloses memory through a mode the operator
+    switched off.
+    """
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(
+            provider="anthropic",
+            prompt_packet_fallback_denial="no_supported_mode",
+        ),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert "system" not in client.messages.calls[0], (
+        "a packet the packet-policy denies must never reach the wire"
+    )
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "still reported, just not rendered"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "no_supported_mode", (
+        "the selector's own reason, never a blanket policy accusation"
+    )
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert attrs["memory.record_count"] == 0
+    assert "memory.packet_hash" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_b83_packet_budget_denied_withholds_on_the_r5_path_with_its_own_reason() -> None:
+    """P1-e reaches the ollama tools-unsupported fallback too.
+
+    The R5 site shares `_degraded_serve_disposition`, so the authorization
+    conjunct binds there as well — the retry drops the tools and carries NO
+    packet.
+    """
+    client = _OllamaClient()
+    client.errors = [
+        OllamaResponseError("llava-llama3:latest does not support tools", 400),
+    ]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(
+            provider="ollama",
+            model="llava-llama3:latest",
+            prompt_packet_fallback_denial="token_budget_empty",
+        ),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"),
+        _step(),
+        step_context=_step_context(),
+    )
+
+    assert result["message"]["content"] == "ok", "the tool-free retry must still succeed"
+    assert _B83_SECTION_TEXT not in json.dumps(client.calls[1]["messages"])
+    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "token_budget_empty", (
+        "an empty BUDGET must never be reported as a policy denial"
+    )
+
+
+@pytest.mark.asyncio
+async def test_b83_undervied_eligibility_reports_not_derived_not_a_gate_denial() -> None:
+    """P2-e — an unproven context must not be blamed on a gate nobody observed.
+
+    A hand-built context (the static-injection seam) never ran the composer's
+    counterfactual, so it is withheld — but reported as `not_derived`, which is
+    distinct from every `MemoryAccessModeDenialReason` value and so cannot be
+    mistaken for an operator's policy, an empty budget, or a capability gap.
+    """
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        # The RuntimeMemoryContext default, i.e. nobody derived eligibility.
+        memory_context=_b83_memory_context(
+            provider="anthropic",
+            prompt_packet_fallback_denial="not_derived",
+        ),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert "system" not in client.messages.calls[0]
+    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "not_derived"
+
+
+def test_b83_the_default_context_carries_the_not_derived_sentinel() -> None:
+    """The fail-safe default is the sentinel, not a fabricated gate reason."""
+    context = _standard_tools_memory_context().model_copy()
+    assert RuntimeMemoryContext.model_fields["prompt_packet_fallback_denial"].default == (
+        PROMPT_PACKET_FALLBACK_NOT_DERIVED
+    )
+    assert PROMPT_PACKET_FALLBACK_NOT_DERIVED not in {
+        reason.value for reason in MemoryAccessModeDenialReason
+    }, "the sentinel must not collide with any real selector reason"
+    assert context.prompt_packet_fallback_denial is None
+
+
+@pytest.mark.asyncio
+async def test_b83_arm_repair_merges_into_a_payload_carried_system_message() -> None:
+    """P1-d — the ARM-SELECTION repair must not become a second system source.
+
+    Sibling of the R5 fix: an unservable-arm repair on a payload that already
+    leads with `{"role":"system"}` used to raise `PromptInjectionConflictError`
+    across the openai/ollama/external-CLI translators, breaking a dispatch that
+    worked before B-83. Exercised on the openai bare arm (no executor bound →
+    unservable) since it is the shortest path to the leading-system-message
+    translator.
+    """
+    client = _OpenAIClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="openai"),
+        # No executor → the openai arm cannot serve the selected mode.
+        standard_memory_tool_executor=None,
+    )
+
+    await dispatcher.dispatch(
+        _binding("openai"),
+        _step(
+            {
+                "messages": [
+                    {"role": "system", "content": "STEP-OWNED SYSTEM"},
+                    {"role": "user", "content": "hi"},
+                ],
+                "tools": None,
+                "params": {},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    messages = client.chat.completions.calls[0]["messages"]
+    system_messages = [m for m in messages if m["role"] == "system"]
+    assert len(system_messages) == 1, "exactly one system source"
+    assert messages[0] is system_messages[0], "and it stays leading"
+    assert system_messages[0]["content"].startswith("STEP-OWNED SYSTEM\n\nread-only memory packet")
+    assert _B83_SECTION_TEXT in system_messages[0]["content"]
+    assert len(_degraded_serve_spans(exporter)) == 1
+
+
+@pytest.mark.asyncio
+async def test_b83_openai_repair_preserves_a_content_part_array_system_message() -> None:
+    """P2-a — OpenAI accepts a system `content` as a content-part ARRAY.
+
+    Coercing it through `str()` before appending would put a Python repr on the
+    wire and destroy the parts. The packet must arrive as one ADDITIONAL text
+    part with every original part preserved in order.
+    """
+    client = _OpenAIClient()
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="openai"),
+        standard_memory_tool_executor=None,  # unservable → repair fires
+    )
+
+    original_parts = [
+        {"type": "text", "text": "STEP PART ONE"},
+        {"type": "text", "text": "STEP PART TWO"},
+    ]
+    await dispatcher.dispatch(
+        _binding("openai"),
+        _step(
+            {
+                "messages": [
+                    {"role": "system", "content": original_parts},
+                    {"role": "user", "content": "hi"},
+                ],
+                "tools": None,
+                "params": {},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    content = client.chat.completions.calls[0]["messages"][0]["content"]
+    assert isinstance(content, list), "the content-part array must survive as an array"
+    assert content[:2] == original_parts, "original parts preserved, in order"
+    assert len(content) == 3
+    assert content[2]["type"] == "text"
+    assert content[2]["text"].startswith("read-only memory packet")
+    assert _B83_SECTION_TEXT in content[2]["text"]
+    assert "'type': 'text'" not in json.dumps(content), "no Python repr anywhere on the wire"
+
+
+@pytest.mark.asyncio
+async def test_b83_external_cli_repair_preserves_mapping_content_system_message() -> None:
+    """P2-b — a non-string system `content` must be SERIALIZED, not discarded.
+
+    The external-CLI arm is text-only, so it ALWAYS degrades
+    `standard_memory_tools` — this is the common path there, not an edge case.
+    Passing `None` to the append helper replaced the step's own system
+    instructions with the packet alone.
+    """
+    adapter = _ExternalCLIFakeAdapter(calls=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    system_content = {"instructions": "STEP-OWNED DIRECTIVE", "priority": "high"}
+    await dispatcher.dispatch(
+        _binding("claude_code"),
+        _step(
+            {
+                "messages": [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": "hi"},
+                ],
+                "tools": None,
+                "params": {},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    prompt = adapter.calls[0][1]
+    # Serialized exactly as the renderer's own loop would have done it.
+    assert json.dumps(system_content, sort_keys=True, default=str) in prompt, (
+        "the step's own system instructions must survive the repair, not be replaced"
+    )
+    assert "STEP-OWNED DIRECTIVE" in prompt
+    assert _B83_SECTION_TEXT in prompt
+    assert prompt.index("STEP-OWNED DIRECTIVE") < prompt.index(_B83_SECTION_TEXT), (
+        "packet is APPENDED after the original content"
+    )
+    assert len(_degraded_serve_spans(exporter)) == 1
+
+
+@pytest.mark.asyncio
+async def test_b83_arm_repair_merges_into_anthropic_params_system() -> None:
+    """P1-d, anthropic arm — its single source is `params["system"]` when present.
+
+    Folding must happen at THAT source, not as the competing `system=` kwarg,
+    which would raise the pre-existing `params["system"]` conflict.
+    """
+    client = _AnthropicClient()
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": None,
+                "params": {"max_tokens": 100, "system": "PAYLOAD-OWNED SYSTEM"},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert client.messages.last_kwargs is not None
+    system = client.messages.last_kwargs["system"]
+    assert system.startswith("PAYLOAD-OWNED SYSTEM\n\nread-only memory packet")
+    assert _B83_SECTION_TEXT in system
+
+
+@pytest.mark.asyncio
+async def test_b83_anthropic_repair_preserves_a_params_system_block_array() -> None:
+    """P2-c — Anthropic's `params["system"]` may be the SDK's content-block ARRAY.
+
+    That is the same `[{"type": "text", ...}]` form `_anthropic_system_cache_block`
+    itself emits, so it is unambiguously valid. Keying the fold on truthiness
+    instead of PRESENCE sent it down the `system`-variable branch, where the
+    still-present `params["system"]` then collided and raised — the repair
+    turning a working dispatch into a failure.
+    """
+    client = _AnthropicClient()
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    original_blocks = [
+        {"type": "text", "text": "BLOCK ONE"},
+        {"type": "text", "text": "BLOCK TWO"},
+    ]
+    await dispatcher.dispatch(
+        _binding("anthropic"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": None,
+                "params": {"max_tokens": 100, "system": original_blocks},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert client.messages.last_kwargs is not None
+    system = client.messages.last_kwargs["system"]
+    assert isinstance(system, list), "the block array must survive as an array"
+    assert system[:2] == original_blocks, "original blocks preserved, in order"
+    assert len(system) == 3
+    assert system[2]["type"] == "text"
+    assert system[2]["text"].startswith("read-only memory packet")
+    assert _B83_SECTION_TEXT in system[2]["text"]
+
+
+@pytest.mark.asyncio
+async def test_b83_anthropic_repair_handles_empty_string_params_system() -> None:
+    """P2-c — an EMPTY `params["system"]` is present-but-empty, not absent.
+
+    `"system" in kwargs` (the conflict check) is True for `""`, so the fold has
+    to treat it as the existing source too; folding elsewhere raised.
+    """
+    client = _AnthropicClient()
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": None,
+                "params": {"max_tokens": 100, "system": ""},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert client.messages.last_kwargs is not None
+    system = client.messages.last_kwargs["system"]
+    assert isinstance(system, str)
+    assert system.startswith("read-only memory packet"), (
+        "an empty existing source contributes nothing, so the packet stands alone"
+    )
+    assert _B83_SECTION_TEXT in system
+
+
+@pytest.mark.asyncio
+async def test_b83_two_base_system_sources_still_fail_loud_through_the_repair() -> None:
+    """The repair folds; it never MASKS a genuine two-BASE-prompt collision.
+
+    An active prompt AND a payload-carried system source remain the
+    detect-then-refuse case (R-PM-1), packet or no packet.
+    """
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+        active_system_prompt="ACTIVE PROMPT",
+    )
+
+    with pytest.raises(PromptInjectionConflictError):
+        await dispatcher.dispatch(
+            _binding("anthropic"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": None,
+                    "params": {"max_tokens": 100, "system": "PAYLOAD-OWNED SYSTEM"},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_b83_r5_retry_merges_the_packet_into_a_payload_carried_system_message() -> None:
+    """P1-b — the R5 retry must never create a SECOND system source.
+
+    A step that supplies its own leading `{"role":"system"}` message is the
+    idiomatic Ollama shape. Handing the packet to the translate seam as its
+    `system` argument would collide with it and raise
+    `PromptInjectionConflictError`, breaking a tool-free dispatch that worked
+    before B-83. The packet is folded into the existing system message instead:
+    one system source, original text first, packet appended.
+    """
+    client = _OllamaClient()
+    client.errors = [
+        OllamaResponseError("llava-llama3:latest does not support tools", 400),
+    ]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="ollama", model="llava-llama3:latest"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"),
+        _step(
+            {
+                "messages": [
+                    {"role": "system", "content": "STEP-OWNED SYSTEM"},
+                    {"role": "user", "content": "hi"},
+                ],
+                "tools": None,
+                "params": {},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert result["message"]["content"] == "ok", "the tool-free dispatch must still succeed"
+    retry_messages = client.calls[1]["messages"]
+    system_messages = [m for m in retry_messages if m["role"] == "system"]
+    assert len(system_messages) == 1, "exactly one system source on the retry"
+    assert retry_messages[0] is system_messages[0], "and it stays leading"
+    content = system_messages[0]["content"]
+    assert content.startswith("STEP-OWNED SYSTEM\n\nread-only memory packet"), (
+        "the step's own system text is preserved and the packet is appended after it"
+    )
+    assert _B83_SECTION_TEXT in content
+    assert len(_degraded_serve_spans(exporter)) == 1
+
+
+@pytest.mark.asyncio
+async def test_b83_ollama_tools_unsupported_retry_carries_the_packet() -> None:
+    """(c) — the DEFAULT-reachable path: a model with no tool template.
+
+    The daemon rejects the injected tools, the retry drops them, and B-83
+    requires the retry carry the packet instead of leaving the model with no
+    memory at all. The executor must stay untouched — no memory operation ran.
+    """
+    client = _OllamaClient()
+    client.errors = [
+        OllamaResponseError(
+            "registry.ollama.ai/library/llava-llama3:latest does not support tools",
+            400,
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="ollama", model="llava-llama3:latest"),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"),
+        _step(),
+        step_context=_step_context(),
+    )
+
+    assert len(client.calls) == 2
+    assert "tools" not in client.calls[1]
+    retry_system = client.calls[1]["messages"][0]
+    assert retry_system["role"] == "system"
+    assert _B83_SECTION_TEXT in retry_system["content"]
+    assert executor.requests == [], "no memory tool call was ever executed"
+    assert len(_degraded_serve_spans(exporter)) == 1
+
+
+@pytest.mark.asyncio
+async def test_b83_servable_ollama_arm_emits_no_degraded_span_and_no_packet() -> None:
+    """Over-fire guard — a servable dispatch is untouched.
+
+    Same context and executor as the (c) witness, minus the daemon rejection:
+    the tools ARE injected, so no packet is composed and no degraded span is
+    emitted.
+    """
+    client = _OllamaClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="ollama"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert len(client.calls) == 1
+    assert len(client.calls[0]["tools"]) == len(MEMORY_TOOL_CONTRACTS)
+    assert all(message["role"] != "system" for message in client.calls[0]["messages"])
+    assert _degraded_serve_spans(exporter) == []
+
+
+@pytest.mark.asyncio
+async def test_b83_repair_composes_after_an_active_system_prompt() -> None:
+    """The repair reuses the ONE composition seam — packet appended after the
+    active prompt, never replacing it."""
+    client = _AnthropicClient()
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+        active_system_prompt="ACTIVE PROMPT",
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert client.messages.last_kwargs is not None
+    system = client.messages.last_kwargs["system"]
+    assert system.startswith("ACTIVE PROMPT\n\nread-only memory packet")
+    assert _B83_SECTION_TEXT in system
 
 
 @pytest.mark.asyncio

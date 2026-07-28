@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Protocol, Self, cast
+from typing import Final, Protocol, Self, cast
 
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain
@@ -17,6 +17,7 @@ from harness_cp.memory_access_mode import (
     MemoryAccessModeRequest,
     MemoryAccessModeSelection,
     MemoryProviderCapabilities,
+    reflect_memory_provider_capabilities,
     select_memory_access_mode,
 )
 from harness_is.cli_profile import CliProfile
@@ -43,6 +44,12 @@ from harness_is.memory_retrieval import (
 )
 from harness_is.state_ledger_entry_schema import Actor, Identifier
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+#: `RuntimeMemoryContext.prompt_packet_fallback_denial` sentinels, distinct from
+#: every `MemoryAccessModeDenialReason` value so a carried reason is never
+#: confused with an underived one. Span-attribute VALUES, not enum members.
+PROMPT_PACKET_FALLBACK_NOT_DERIVED: Final[str] = "not_derived"
+PROMPT_PACKET_FALLBACK_UNDETERMINED: Final[str] = "prompt_packet_denial_undetermined"
 
 
 class MemoryInjectionOperationStore(Protocol):
@@ -106,6 +113,34 @@ class RuntimeMemoryContext(BaseModel):
     ledgerable_denial: bool
     injection_action_id: Identifier
     injection_operation_result: MemoryOperationWriteResult
+    #: B-83 [P1-e] — would C-MEM-13 have selected `PROMPT_EXTENSION_PACKET` for
+    #: the SAME request, had the higher-precedence modes been unavailable?
+    #: `None` means yes (the repair is authorized); any string is the REASON it
+    #: would not have been, and the repair is withheld.
+    #:
+    #: The dispatch-side degraded-serve repair renders this packet as prompt
+    #: text, which is the prompt-packet mode's own surface, so it must be
+    #: authorized by the prompt-packet mode's own gates — policy
+    #: `injection_access`, provider capability, and a non-empty token budget —
+    #: not merely by the standard-tools selection that actually won. Those
+    #: inputs (`workflow_policy` / `step_policy` / `token_budget` /
+    #: `provider_capabilities`) live on the COMPOSITION request and are absent
+    #: from both this context and `MemoryAccessModeSelection`, so the answer is
+    #: settled HERE, where they are in scope, and carried forward.
+    #:
+    #: [P2-e] carries the counterfactual selector's OWN
+    #: `MemoryAccessModeDenialReason` value rather than a boolean, because a
+    #: boolean forced every denial to be reported as one cause. Two values are
+    #: reachable in practice (verified against the selector): `token_budget_empty`
+    #: for the budget gate, and `no_supported_mode` for BOTH a denying
+    #: `injection_access` and an absent `supports_prompt_extension_packet` —
+    #: the selector does not distinguish those two once past its packet branch,
+    #: and this field does not invent a distinction it cannot observe.
+    #:
+    #: Defaults to `not_derived`: a context assembled anywhere but
+    #: `compose_run_start` has not proven eligibility, and unproven must read as
+    #: withheld — distinguishable from a real gate denial.
+    prompt_packet_fallback_denial: str | None = PROMPT_PACKET_FALLBACK_NOT_DERIVED
 
     @model_validator(mode="after")
     def _packet_matches_mode(self) -> Self:
@@ -245,6 +280,9 @@ class RuntimeMemoryContextComposer:
             packet_hash=retrieval_result.packet_hash,
             record_count=len(retrieval_result.packet.sections),
         )
+        # B-83 [P1-e] — settled here, where the policy + budget inputs are in
+        # scope, and carried on the context for the dispatch-side repair.
+        prompt_packet_denial = _prompt_packet_fallback_denial(request)
         with memory_telemetry_span(
             self._tracer_provider,
             tracer_name="harness.runtime.memory_context",
@@ -280,6 +318,7 @@ class RuntimeMemoryContextComposer:
             ledgerable_denial=False,
             injection_action_id=action_id,
             injection_operation_result=operation_result,
+            prompt_packet_fallback_denial=prompt_packet_denial,
         )
 
     def _write_injection_decision(
@@ -349,8 +388,36 @@ def render_prompt_extension_packet(
         return None
     if context.packet is None:
         raise ValueError("prompt-extension memory context must carry a packet")
+    return _render_packet(context.packet)
 
-    packet = context.packet
+
+def render_packet_for_degraded_dispatch(
+    context: RuntimeMemoryContext,
+) -> RenderedMemoryPromptPacket:
+    """Render a memory-bearing context's packet for a degraded-serve repair.
+
+    Sibling of `render_prompt_extension_packet` with the access-mode gate
+    dropped and nothing else changed — both share `_render_packet`, so the
+    read-only framing, the per-section body and every packet-derived field are
+    identical. C-MEM-13 (`Spec_Memory_Substrate_v1.md:460` — "Providers without
+    usable tool support may receive prompt-extension packets") authorizes
+    serving an already-retrieved, already-policy-checked packet as prompt text
+    when the dispatch arm reached cannot serve the mode that was SELECTED
+    (B-83).
+
+    Existing callers are untouched — the mode gate still lives in
+    `render_prompt_extension_packet`, so the default composition path is
+    byte-identical.
+    """
+
+    if context.access_mode is MemoryAccessMode.NO_MEMORY_ACCESS:
+        raise ValueError("no-memory contexts carry no packet to degrade to")
+    if context.packet is None:
+        raise ValueError("memory-enabled context must carry a packet")
+    return _render_packet(context.packet)
+
+
+def _render_packet(packet: MemoryPacket) -> RenderedMemoryPromptPacket:
     lines = [
         "read-only memory packet",
         f"packet_hash: {packet.packet_hash}",
@@ -392,6 +459,20 @@ def compose_system_prompt_with_memory_packet(
     rendered = render_prompt_extension_packet(context)
     if rendered is None:
         return system_prompt
+    return append_rendered_memory_packet(system_prompt, rendered)
+
+
+def append_rendered_memory_packet(
+    system_prompt: str | None,
+    rendered: RenderedMemoryPromptPacket,
+) -> str:
+    """Attach an already-rendered packet to the existing system-prompt seam.
+
+    The single composition authority for BOTH the selected-mode
+    prompt-extension path and the B-83 degraded-serve repair, so the two can
+    never drift on separator or ordering semantics.
+    """
+
     if system_prompt:
         return f"{system_prompt.rstrip()}\n\n{rendered.content}"
     return rendered.content
@@ -411,6 +492,66 @@ def _access_mode_request(
         provider_capabilities=request.provider_capabilities,
         external_cli_route=request.external_cli_route,
     )
+
+
+def _prompt_packet_fallback_denial(request: MemoryContextCompositionRequest) -> str | None:
+    """Why would C-MEM-13 NOT select `PROMPT_EXTENSION_PACKET` for this request?
+
+    `None` means it WOULD have — the degraded-serve repair is authorized.
+
+    B-83 [P1-e]. `select_memory_access_mode` returns at the FIRST mode whose
+    gates pass, so a `STANDARD_MEMORY_TOOLS` selection proves nothing about the
+    prompt-packet mode: its branch was never evaluated. A policy may perfectly
+    well allow `standard_tool_access` while `injection_access` denies prompt
+    packets (the default is DENY), and the packet branch additionally requires a
+    non-empty `token_budget`, which the tools branch does not. The dispatch-side
+    degraded-serve repair renders the packet as prompt text — the prompt-packet
+    mode's own surface — so it needs the prompt-packet mode's own authorization.
+
+    Answered by RE-RUNNING the real selector with only the higher-precedence
+    capabilities masked off, never by re-implementing its policy predicates.
+    `select_memory_access_mode` is pure ("without touching credentials"), so the
+    probe is side-effect-free, and it composes the WHOLE decision tree in
+    canonical order — external-CLI route denial, `_policy_denies`,
+    `supports_prompt_extension_packet`, `_policy_allows_prompt_packet`, and the
+    `token_budget <= 0` gate — with zero duplicated logic to drift.
+
+    Masking native + standard-tools is exactly the counterfactual the repair
+    faces: the arm reached cannot serve those modes, so the question is what
+    C-MEM-13 would have chosen without them.
+
+    [P2-e] returns the selector's OWN denial-reason value verbatim instead of a
+    boolean, so telemetry can say WHICH gate closed. A boolean collapsed a
+    budget denial and a capability gap into whatever single label the reader
+    assumed — reporting a `token_budget_empty` run as policy-denied is a false
+    accusation about an operator's configuration.
+    """
+
+    base = _access_mode_request(request)
+    capabilities = base.provider_capabilities or reflect_memory_provider_capabilities(
+        request.model_binding,
+        is_external_cli=request.external_cli_route is not None,
+    )
+    probe = base.model_copy(
+        update={
+            "provider_capabilities": capabilities.model_copy(
+                update={
+                    "supports_native_memory": False,
+                    "supports_standard_memory_tools": False,
+                }
+            )
+        }
+    )
+    probe_selection = select_memory_access_mode(probe)
+    if probe_selection.access_mode is MemoryAccessMode.PROMPT_EXTENSION_PACKET:
+        return None
+    if probe_selection.denial_reason is not None:
+        return probe_selection.denial_reason.value
+    # Unreachable by construction: with native + standard tools masked off the
+    # only selectable mode is PROMPT_EXTENSION_PACKET, and every other outcome
+    # leaves through `_denied`, which always sets a reason. Reported honestly as
+    # undetermined rather than blamed on a gate that was never observed.
+    return PROMPT_PACKET_FALLBACK_UNDETERMINED
 
 
 def _retrieval_request(
@@ -478,12 +619,16 @@ def _hash_json(payload: dict[str, object]) -> str:
 
 
 __all__ = [
+    "PROMPT_PACKET_FALLBACK_NOT_DERIVED",
+    "PROMPT_PACKET_FALLBACK_UNDETERMINED",
     "MemoryContextCompositionRequest",
     "MemoryInjectionOperationStore",
     "RenderedMemoryPromptPacket",
     "RuntimeMemoryContext",
     "RuntimeMemoryContextComposer",
+    "append_rendered_memory_packet",
     "compose_system_prompt_with_memory_packet",
     "memory_scope_ref",
+    "render_packet_for_degraded_dispatch",
     "render_prompt_extension_packet",
 ]

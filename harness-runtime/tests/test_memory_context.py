@@ -468,6 +468,93 @@ def test_external_cli_route_metadata_composes_with_standard_tool_context(
     assert operations[-1].cli_profile == "codex-cli"
 
 
+def test_b83_prompt_packet_eligibility_is_derived_from_the_real_selector(
+    tmp_path: Path,
+) -> None:
+    """B-83 [P1-e] — the flag answers C-MEM-13's own prompt-packet question.
+
+    Composed through the REAL composer and the REAL `select_memory_access_mode`,
+    across the three gates the packet branch applies. The eligible case is a
+    genuine `STANDARD_MEMORY_TOOLS` selection (so the packet branch was never
+    reached during the real decision) that would nonetheless have qualified.
+    """
+    record = _record(statement="Operator prefers terse status lines.")
+
+    # (1) tools allowed AND packets allowed, budget non-empty -> eligible.
+    allowed = _enabled_policy(
+        injection_access=AccessDecision.PROMPT_PACKET,
+        standard_tool_access=AccessDecision.STANDARD_TOOLS,
+    )
+    _, composer = _composer(tmp_path / "allow", policy=allowed, record=record)
+    context = composer.compose_run_start(
+        _request(
+            workflow_policy=allowed,
+            provider_capabilities=_capabilities(tools=True, prompt=True),
+        )
+    )
+    assert context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
+    assert context.prompt_packet_fallback_denial is None
+
+    # (2) tools allowed, packets DENIED -> ineligible (the legal, expressible
+    #     configuration the repair used to disclose through).
+    denied = _enabled_policy(
+        injection_access=AccessDecision.DENY,
+        standard_tool_access=AccessDecision.STANDARD_TOOLS,
+    )
+    _, composer = _composer(tmp_path / "deny", policy=denied, record=record)
+    context = composer.compose_run_start(
+        _request(
+            workflow_policy=denied,
+            provider_capabilities=_capabilities(tools=True, prompt=True),
+        )
+    )
+    assert context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
+    assert context.prompt_packet_fallback_denial == "no_supported_mode"
+
+    # (3) packets allowed but the provider cannot serve the mode -> ineligible.
+    _, composer = _composer(tmp_path / "nocap", policy=allowed, record=record)
+    context = composer.compose_run_start(
+        _request(
+            workflow_policy=allowed,
+            provider_capabilities=_capabilities(tools=True, prompt=False),
+        )
+    )
+    assert context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
+    assert context.prompt_packet_fallback_denial == "no_supported_mode", (
+        "the selector does not distinguish a denying injection_access from an "
+        "absent capability once past its packet branch, and this must not "
+        "invent a distinction it cannot observe"
+    )
+
+
+def test_b83_prompt_packet_eligibility_is_false_when_the_token_budget_is_empty(
+    tmp_path: Path,
+) -> None:
+    """B-83 [P1-e] — the budget gate is the packet branch's, not the tools'.
+
+    `token_budget <= 0` denies `PROMPT_EXTENSION_PACKET`
+    (`TOKEN_BUDGET_EMPTY`) while the standard-tools branch has no budget gate at
+    all, so a zero-budget run can still select tools — and the repair must not
+    then render an unbudgeted packet.
+    """
+    policy = _enabled_policy(
+        injection_access=AccessDecision.PROMPT_PACKET,
+        standard_tool_access=AccessDecision.STANDARD_TOOLS,
+    )
+    _, composer = _composer(tmp_path, policy=policy, record=_record(statement="terse."))
+    request = _request(
+        workflow_policy=policy,
+        provider_capabilities=_capabilities(tools=True, prompt=True),
+    ).model_copy(update={"token_budget": 0})
+
+    context = composer.compose_run_start(request)
+
+    assert context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
+    assert context.prompt_packet_fallback_denial == "token_budget_empty", (
+        "the BUDGET gate must be named as itself, not folded into a policy denial"
+    )
+
+
 def test_prompt_extension_packet_rendering_is_bounded_cited_and_stable(
     tmp_path: Path,
 ) -> None:

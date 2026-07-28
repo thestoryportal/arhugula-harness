@@ -53,6 +53,7 @@ L5..L8 stage shape established at U-RT-21..U-RT-41.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -92,6 +93,11 @@ from harness_cp.routing_layer import RoutingLayer
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryState
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
+from harness_is.memory_observability import (
+    MemoryTelemetryOperationName,
+    memory_telemetry_span,
+)
+from harness_is.memory_operation_ledger import MemoryOperationKind
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
 from harness_runtime.lifecycle.audit_offload import (
@@ -105,6 +111,7 @@ from harness_runtime.lifecycle.audit_signing_errors import (
 )
 from harness_runtime.lifecycle.cacheable_epoch import DEFAULT_CACHE_TTL, CacheTTL
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
+from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_provider
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLToolLoopContext,
     ModelToolCall,
@@ -116,8 +123,11 @@ from harness_runtime.lifecycle.memory_tool_dispatch import (
     step_has_memory_tool,
 )
 from harness_runtime.memory_context import (
+    RenderedMemoryPromptPacket,
     RuntimeMemoryContext,
+    append_rendered_memory_packet,
     compose_system_prompt_with_memory_packet,
+    render_packet_for_degraded_dispatch,
 )
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionContext,
@@ -1583,6 +1593,45 @@ class RuntimeLLMDispatcher:
                 else f"{_eff_trace.layer}:{_eff_trace.candidate}",
             )
 
+            # --- Step 2b (B-83): dispatch-time memory serve-check --------
+            # `select_memory_access_mode` chose the access mode from DECLARED
+            # capabilities, one layer out; the arm about to run is resolved
+            # HERE. When STANDARD_MEMORY_TOOLS was selected but this dispatch
+            # will not inject the C-MEM-14 tools — the anthropic arm (which
+            # branches only on `step_has_memory_tool`/`hitl_tool_loop`, never
+            # on access mode), the text-only external-CLI arm, an
+            # openai/ollama dispatch with no bound executor, or a context whose
+            # provider/family scope does not match this dispatch —
+            # repair to the C-MEM-13 packet instead of silently serving zero
+            # memory. `compose_system_prompt_with_memory_packet` already ran at
+            # `dispatch()` and returned the prompt UNCHANGED (its gate is
+            # `PROMPT_EXTENSION_PACKET`), so this adds the packet text that
+            # earlier call declined to add.
+            #
+            # A scope-MISMATCHED context is the case that is NOT repaired — its
+            # packet was retrieved under another provider/family scope, so it is
+            # reported and withheld (`rendered is None`). See
+            # `_degraded_serve_disposition`.
+            #
+            # B-83 [P1-d]: the packet travels as `memory_packet` rather than
+            # being appended to `effective_system_prompt` here. Each translator
+            # folds it into ITS OWN single effective system source — Anthropic's
+            # `params["system"]`-or-kwarg, OpenAI/Ollama's leading
+            # `role:"system"` message post-`params`-merge, the external CLI's
+            # system section. Appending here instead produced a SECOND system
+            # source and hard-failed `PromptInjectionConflictError` for any
+            # payload that carries its own system prompt.
+            degraded_sink = _DegradedMemoryServeSink(
+                value=_degraded_serve_for_unservable_arm(
+                    provider_name,
+                    memory_context=memory_context,
+                    standard_memory_tool_executor=standard_memory_tool_executor,
+                )
+            )
+            repair_packet = (
+                degraded_sink.value.rendered if degraded_sink.value is not None else None
+            )
+
             # --- Step 3: per-provider dispatch --------------------------
             cache_attrs: _AnthropicCacheAttrs | None
             request_attrs: _AnthropicRequestAttrs | None
@@ -1610,143 +1659,195 @@ class RuntimeLLMDispatcher:
                 # tools at all (`frozen_tool_superset is None` → child superset also
                 # None → the legacy `payload.tools` path; nothing to downgrade).
                 _effective_frozen_tool_superset = self.frozen_tool_superset
-            if provider_name == "anthropic":
-                # U-RT-81 (C-RT-15 §14.5.1) — Memory tool callback-injection
-                # composer-step. If `step.step_payload.tools` contains the
-                # Anthropic Memory tool definition AND the registry + surface
-                # are bound, route through the harness-authored inner loop
-                # (mechanism β). Otherwise the existing §14.5 step 4 path
-                # preserves verbatim. The branch detection is intentionally
-                # cheap (single `step_has_memory_tool` predicate over the
-                # `payload.tools` sequence) so non-memory dispatches see
-                # zero overhead.
-                if (
-                    self.memory_tool_registry is not None
-                    and self.deployment_surface is not None
-                    and step_has_memory_tool(payload.tools)
-                ):
-                    (
-                        response,
-                        usage_attrs,
-                        cache_attrs,
-                        request_attrs,
-                    ) = await _dispatch_anthropic_with_memory(
-                        adapter,
-                        model,
-                        payload,
-                        registry=self.memory_tool_registry,
-                        deployment_surface=self.deployment_surface,
-                        tracer=tracer,
-                        system=effective_system_prompt,
-                        upstream=upstream_output,
-                        frozen_tool_superset=_effective_frozen_tool_superset,
-                        cache_ttl=self.cache_ttl,
-                    )
-                elif (
-                    self.hitl_tool_loop is not None
-                    and payload.tools is not None
-                    and not step_has_memory_tool(payload.tools)
-                ):
-                    (
-                        response,
-                        usage_attrs,
-                        cache_attrs,
-                        request_attrs,
-                    ) = await _dispatch_anthropic_with_hitl_tool_loop(
-                        adapter,
-                        model,
-                        payload,
-                        hitl_tool_loop=self.hitl_tool_loop,
-                        step_context=step_context,
-                        step_id=step_id,
-                        persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
-                        system=effective_system_prompt,
-                        upstream=upstream_output,
-                        frozen_tool_superset=_effective_frozen_tool_superset,
-                        cache_ttl=self.cache_ttl,
-                    )
-                else:
-                    (
-                        response,
-                        usage_attrs,
-                        cache_attrs,
-                        request_attrs,
-                    ) = await _dispatch_anthropic(
-                        adapter,
-                        model,
-                        payload,
-                        system=effective_system_prompt,
-                        upstream=upstream_output,
-                        frozen_tool_superset=_effective_frozen_tool_superset,
-                        cache_ttl=self.cache_ttl,
-                    )
-            elif provider_name == "openai":
-                if (
-                    standard_memory_tool_executor is not None
-                    and memory_context is not None
-                    and memory_context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
-                ):
-                    response, usage_attrs = await _dispatch_openai_with_standard_memory_tools(
-                        adapter,
-                        model,
-                        payload,
+            dispatch_outcome = _DISPATCH_OUTCOME_PROVIDER_ERROR
+            dispatch_error_type: str | None = None
+            try:
+                if provider_name == "anthropic":
+                    # U-RT-81 (C-RT-15 §14.5.1) — Memory tool callback-injection
+                    # composer-step. If `step.step_payload.tools` contains the
+                    # Anthropic Memory tool definition AND the registry + surface
+                    # are bound, route through the harness-authored inner loop
+                    # (mechanism β). Otherwise the existing §14.5 step 4 path
+                    # preserves verbatim. The branch detection is intentionally
+                    # cheap (single `step_has_memory_tool` predicate over the
+                    # `payload.tools` sequence) so non-memory dispatches see
+                    # zero overhead.
+                    if (
+                        self.memory_tool_registry is not None
+                        and self.deployment_surface is not None
+                        and step_has_memory_tool(payload.tools)
+                    ):
+                        (
+                            response,
+                            usage_attrs,
+                            cache_attrs,
+                            request_attrs,
+                        ) = await _dispatch_anthropic_with_memory(
+                            adapter,
+                            model,
+                            payload,
+                            registry=self.memory_tool_registry,
+                            deployment_surface=self.deployment_surface,
+                            tracer=tracer,
+                            system=effective_system_prompt,
+                            upstream=upstream_output,
+                            frozen_tool_superset=_effective_frozen_tool_superset,
+                            cache_ttl=self.cache_ttl,
+                            memory_packet=repair_packet,
+                        )
+                    elif (
+                        self.hitl_tool_loop is not None
+                        and payload.tools is not None
+                        and not step_has_memory_tool(payload.tools)
+                    ):
+                        (
+                            response,
+                            usage_attrs,
+                            cache_attrs,
+                            request_attrs,
+                        ) = await _dispatch_anthropic_with_hitl_tool_loop(
+                            adapter,
+                            model,
+                            payload,
+                            hitl_tool_loop=self.hitl_tool_loop,
+                            step_context=step_context,
+                            step_id=step_id,
+                            persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
+                            system=effective_system_prompt,
+                            upstream=upstream_output,
+                            frozen_tool_superset=_effective_frozen_tool_superset,
+                            cache_ttl=self.cache_ttl,
+                            memory_packet=repair_packet,
+                        )
+                    else:
+                        (
+                            response,
+                            usage_attrs,
+                            cache_attrs,
+                            request_attrs,
+                        ) = await _dispatch_anthropic(
+                            adapter,
+                            model,
+                            payload,
+                            system=effective_system_prompt,
+                            upstream=upstream_output,
+                            frozen_tool_superset=_effective_frozen_tool_superset,
+                            cache_ttl=self.cache_ttl,
+                            memory_packet=repair_packet,
+                        )
+                elif provider_name == "openai":
+                    # B-83 — the arm guard and the serve-check read the SAME
+                    # authority (`_standard_memory_tools_context`), so "the tools
+                    # were injected" and "the serve-check passed" cannot disagree.
+                    openai_tools_context = _standard_memory_tools_context(
+                        provider_name,
                         memory_context=memory_context,
                         standard_memory_tool_executor=standard_memory_tool_executor,
-                        step_context=step_context,
-                        step_id=step_id,
-                        system=effective_system_prompt,
-                        upstream=upstream_output,
                     )
-                else:
-                    response, usage_attrs = await _dispatch_openai(
-                        adapter,
-                        model,
-                        payload,
-                        system=effective_system_prompt,
-                        upstream=upstream_output,
-                    )
-                cache_attrs = None
-                request_attrs = None
-            elif provider_name == "ollama":
-                if (
-                    standard_memory_tool_executor is not None
-                    and memory_context is not None
-                    and memory_context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
-                ):
-                    response, usage_attrs = await _dispatch_ollama_with_standard_memory_tools(
-                        adapter,
-                        model,
-                        payload,
+                    if openai_tools_context is not None:
+                        response, usage_attrs = await _dispatch_openai_with_standard_memory_tools(
+                            adapter,
+                            model,
+                            payload,
+                            memory_context=openai_tools_context,
+                            standard_memory_tool_executor=standard_memory_tool_executor,
+                            step_context=step_context,
+                            step_id=step_id,
+                            system=effective_system_prompt,
+                            upstream=upstream_output,
+                        )
+                    else:
+                        response, usage_attrs = await _dispatch_openai(
+                            adapter,
+                            model,
+                            payload,
+                            system=effective_system_prompt,
+                            upstream=upstream_output,
+                            memory_packet=repair_packet,
+                        )
+                    cache_attrs = None
+                    request_attrs = None
+                elif provider_name == "ollama":
+                    ollama_tools_context = _standard_memory_tools_context(
+                        provider_name,
                         memory_context=memory_context,
                         standard_memory_tool_executor=standard_memory_tool_executor,
-                        step_context=step_context,
-                        step_id=step_id,
-                        system=effective_system_prompt,
-                        upstream=upstream_output,
                     )
-                else:
-                    response, usage_attrs = await _dispatch_ollama(
+                    if ollama_tools_context is not None:
+                        # B-83 (c) — the ollama arm can discover mid-dispatch that
+                        # the daemon refuses tools for this model; it then repairs
+                        # to the packet itself and publishes the decision into the
+                        # SINK before its retry, so the `finally` emitter covers
+                        # it even when that retry raises.
+                        (
+                            response,
+                            usage_attrs,
+                        ) = await _dispatch_ollama_with_standard_memory_tools(
+                            adapter,
+                            model,
+                            payload,
+                            memory_context=ollama_tools_context,
+                            standard_memory_tool_executor=standard_memory_tool_executor,
+                            step_context=step_context,
+                            step_id=step_id,
+                            degraded_sink=degraded_sink,
+                            system=effective_system_prompt,
+                            upstream=upstream_output,
+                        )
+                    else:
+                        response, usage_attrs = await _dispatch_ollama(
+                            adapter,
+                            model,
+                            payload,
+                            system=effective_system_prompt,
+                            upstream=upstream_output,
+                            memory_packet=repair_packet,
+                        )
+                    cache_attrs = None
+                    request_attrs = None
+                elif isinstance(adapter, _ExternalCLIProviderLike):
+                    response, usage_attrs, external_cli_attrs = await _dispatch_external_cli(
                         adapter,
+                        provider_name,
                         model,
                         payload,
                         system=effective_system_prompt,
                         upstream=upstream_output,
+                        memory_packet=repair_packet,
                     )
-                cache_attrs = None
-                request_attrs = None
-            elif isinstance(adapter, _ExternalCLIProviderLike):
-                response, usage_attrs, external_cli_attrs = await _dispatch_external_cli(
-                    adapter,
-                    provider_name,
-                    model,
-                    payload,
-                    system=effective_system_prompt,
-                    upstream=upstream_output,
-                )
-                cache_attrs = None
-                request_attrs = None
+                    cache_attrs = None
+                    request_attrs = None
+                else:
+                    raise LLMDispatchProviderUnreachableError(provider_name)
+            except asyncio.CancelledError:
+                # Cancellation is not a provider fault; label it honestly. It
+                # still passes through `finally`, so the span is still emitted.
+                dispatch_outcome = _DISPATCH_OUTCOME_CANCELLED
+                raise
+            except BaseException as exc:
+                dispatch_error_type = type(exc).__name__
+                raise
             else:
-                raise LLMDispatchProviderUnreachableError(provider_name)
+                dispatch_outcome = _DISPATCH_OUTCOME_COMPLETED
+            finally:
+                # B-83 [P2-d] — ONE degraded-serve emission site, in `finally`,
+                # for every reachability (unservable arm / scope-mismatched
+                # context / daemon-refused ollama tools). Emitting AFTER the
+                # dispatch instead lost the only B-83-specific signal whenever
+                # the provider call raised — even though by then the packet had
+                # already been sent (the disclosure happened) or already been
+                # withheld (the denial happened). The sink is read rather than a
+                # local, so a degradation decided INSIDE a failing arm call is
+                # reported too.
+                if degraded_sink.value is not None:
+                    _emit_degraded_memory_serve_span(
+                        self.tracer_provider,
+                        degraded_sink.value,
+                        provider=provider_name,
+                        model=model,
+                        outcome=dispatch_outcome,
+                        error_type=dispatch_error_type,
+                    )
 
             if memory_context is not None and self.memory_runtime is not None:
                 capture_turn_completion = getattr(
@@ -2010,6 +2111,363 @@ class _ExternalCLIAttrs:
     kind: str
 
 
+#: B-83 degraded-serve reasons. Span-attribute VALUES, deliberately not enum
+#: members — `MemoryTelemetryOperationName` / `MemoryTelemetryFailureClass` /
+#: `MemoryOperationKind` are CLOSED per C-MEM-19, and extending one would be an
+#: X-AL-3 design extension.
+#:
+#: `arm_unservable` — the arm reached will not inject the C-MEM-14 tools, but
+#: the context was composed FOR THIS provider, so its packet is
+#: provider-matched by construction and can be served as prompt text
+#: (C-MEM-13, `Spec_Memory_Substrate_v1.md:460`). REPAIRED.
+_DEGRADED_REASON_ARM_UNSERVABLE: Final[str] = "arm_unservable"
+#: `provider_scope_mismatch` — the context was composed for a DIFFERENT
+#: provider than the one being dispatched. REPORT-ONLY: see
+#: `_degraded_serve_for_unservable_arm` for why the packet must NOT be served.
+_DEGRADED_REASON_PROVIDER_SCOPE_MISMATCH: Final[str] = "provider_scope_mismatch"
+#: `provider_family_scope_mismatch` — provider IDENTITY matches, but the packet
+#: was RETRIEVED under a different provider-FAMILY scope than the family this
+#: dispatch belongs to. REPORT-ONLY. See `_packet_scope_matches_dispatch_family`.
+_DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH: Final[str] = "provider_family_scope_mismatch"
+#: Packet-mode denials do NOT get a constant here. Scope is fine, but C-MEM-13
+#: would not have selected `PROMPT_EXTENSION_PACKET` for this request, and the
+#: reason is carried verbatim from the counterfactual selector on
+#: `RuntimeMemoryContext.prompt_packet_fallback_denial` — its own
+#: `MemoryAccessModeDenialReason` value (`token_budget_empty` /
+#: `no_supported_mode`), or the `not_derived` sentinel. [P2-e]: a single
+#: `packet_policy_denied` constant collapsed all of those into one label and
+#: reported a budget denial as an operator policy decision, which is a false
+#: accusation about a configuration the operator did not make.
+
+
+@dataclass(frozen=True, slots=True)
+class _DegradedMemoryServe:
+    """B-83 — a dispatch that could NOT serve its selected access mode.
+
+    Carries the mode that was SELECTED, WHY the dispatch could not serve it,
+    and the packet served in its place — or `None` when the degradation is
+    REPORT-ONLY and nothing was served. One carrier for both dispositions, so
+    the single telemetry emitter (`_emit_degraded_memory_serve_span`) reports
+    the same attribute shape for every reachability.
+
+    Constructed at exactly two sites: the arm-selection serve-check (an arm
+    that will not inject the tools, or a provider-mismatched context) and the
+    ollama tools-unsupported fallback (an arm that tried and was refused by
+    the daemon).
+    """
+
+    selected_access_mode: MemoryAccessMode
+    reason: str
+    #: None ⇒ report-only: nothing was served to the model.
+    rendered: RenderedMemoryPromptPacket | None
+
+
+@dataclass(slots=True)
+class _DegradedMemoryServeSink:
+    """Mutable single-slot carrier for a degradation decided mid-dispatch.
+
+    B-83 [P2-d]. The ollama tools-unsupported fallback decides its degradation
+    INSIDE the arm call, and the arm site must still be able to report it when
+    that call RAISES. A return-tuple element cannot do that — it only travels on
+    success — so the decision is PUBLISHED into this sink the moment it is made,
+    before the retry that may fail. The arm site's ``finally`` reads the sink,
+    so a decision that was reached is always reported, whether or not the
+    provider call that followed it completed.
+
+    One instance per dispatch, created at the arm-selection site: never shared
+    across concurrent branches.
+    """
+
+    value: _DegradedMemoryServe | None = None
+
+
+#: Terminal disposition of the provider call a degraded serve rode on. Span
+#: attribute VALUES, not enum members (the C-MEM-19 enums are closed).
+_DISPATCH_OUTCOME_COMPLETED: Final[str] = "completed"
+_DISPATCH_OUTCOME_PROVIDER_ERROR: Final[str] = "provider_error"
+_DISPATCH_OUTCOME_CANCELLED: Final[str] = "cancelled"
+
+
+#: The provider arms that own a standard-memory-tools sibling dispatch fn.
+_STANDARD_MEMORY_TOOL_ARMS: Final[frozenset[str]] = frozenset({"openai", "ollama"})
+
+
+def _standard_memory_tools_context(
+    provider_name: str,
+    *,
+    memory_context: RuntimeMemoryContext | None,
+    standard_memory_tool_executor: Any,
+) -> RuntimeMemoryContext | None:
+    """The context THIS dispatch will serve the C-MEM-14 tools with, else None.
+
+    The single authority for the question "does the arm about to run serve
+    `STANDARD_MEMORY_TOOLS`?" — read by the two arm guards that take the
+    standard-tools path AND by the B-83 serve-check, so the check and the
+    branch can never disagree.
+
+    The provider-identity conjunct closes B-83 reachability (b): a STATICALLY
+    injected `RuntimeLLMDispatcher.memory_context` is composed ONCE, and
+    `RetryBreakerFallbackDispatcher` rebinds the provider per attempt
+    (`retry_breaker_fallback.py:185-192`), so the context on the wire can have
+    been composed for a DIFFERENT provider than the one being dispatched.
+    `MemoryAccessModeSelection.selected_provider` is
+    `request.model_binding.provider` verbatim
+    (`harness-cp/src/harness_cp/memory_access_mode.py:372`), the same string
+    that reaches `provider_name` here, so the comparison is exact. The
+    `memory_runtime`-bound path recomposes per attempt
+    (`automatic_memory.compose_for_dispatch`) and therefore always matches —
+    this conjunct is inert there.
+    """
+
+    if memory_context is None:
+        return None
+    if memory_context.access_mode is not MemoryAccessMode.STANDARD_MEMORY_TOOLS:
+        return None
+    if standard_memory_tool_executor is None:
+        return None
+    if memory_context.selection.selected_provider != provider_name:
+        return None
+    if provider_name not in _STANDARD_MEMORY_TOOL_ARMS:
+        return None
+    return memory_context
+
+
+def _packet_scope_matches_dispatch_family(
+    memory_context: RuntimeMemoryContext,
+    provider_name: str,
+) -> bool:
+    """True iff the packet's RETRIEVAL scope belongs to this dispatch's family.
+
+    B-83 [P1-c]. Provider IDENTITY is not sufficient. On the `memory_runtime`
+    path a cross-family fallback RECOMPOSES the context for the current
+    candidate — so `selection.selected_provider` equals the dispatched provider
+    and the identity conjunct passes — but
+    `automatic_memory.compose_for_dispatch` builds
+    `record_scope.provider_family` from `fallback_chain.primary.family`
+    (`automatic_memory.py:191-199`), i.e. the PRIMARY's family, not the
+    candidate's. `MemoryRetriever` filters records on exactly that field
+    (`memory_retrieval.py:371-384` `_scope_mismatch`), so the assembled packet
+    holds PRIMARY-family records. Rendering it for a different-family candidate
+    is the same disclosure leak the identity conjunct was meant to stop, one
+    layer down. (`selection.selected_family` is derived from the same primary,
+    so it agrees with the scope and cannot serve as the discriminator either.)
+
+    `provider_family_for_provider` is the workspace's existing provider→family
+    authority (`cross_family_cost_tag.py:82`, also used by the C-RT-16 wrapper);
+    a second mapping here would be the mirror-copy drift class. NOTE its
+    unknown-provider fallback is `LOCAL_OPEN_WEIGHT`, so an unregistered
+    provider key compares equal to an ollama-scoped packet — conservative for
+    cost attribution, but a residual for THIS use; registered on `B-86`.
+
+    An absent scope or an absent `provider_family` is treated as NOT matching:
+    `_scope_mismatch` treats a `None` request family as "no constraint", so the
+    packet may hold records of ANY family and nothing here can prove otherwise.
+    Unverifiable is not the same as safe.
+    """
+
+    scope = memory_context.record_scope
+    if scope is None or scope.provider_family is None:
+        return False
+    return scope.provider_family == provider_family_for_provider(provider_name).value
+
+
+def _degraded_serve_disposition(
+    provider_name: str,
+    memory_context: RuntimeMemoryContext,
+) -> _DegradedMemoryServe:
+    """Given that this dispatch CANNOT serve the selected mode, decide how.
+
+    The single authority for repair-vs-report, shared by the arm-selection
+    serve-check and the ollama tools-unsupported fallback, so the two sites can
+    never disagree about whether a packet is safe to render.
+
+    Repair requires THREE conjuncts, covering the two questions a degraded
+    serve raises — *may these records go to this destination* (scope) and *is
+    this delivery mode authorized at all* (policy):
+
+    1. provider IDENTITY — the context was composed for this provider;
+    2. provider FAMILY — the packet was RETRIEVED under this dispatch's family
+       scope (`_packet_scope_matches_dispatch_family`);
+    3. prompt-packet AUTHORIZATION — C-MEM-13 would itself have selected
+       `PROMPT_EXTENSION_PACKET` for the same request
+       (`prompt_packet_fallback_denial is None`, settled at composition where
+       the policy + budget inputs are in scope; when it is NOT None its value
+       is the selector's own denial reason, reported verbatim so telemetry
+       names the gate that actually closed). Rendering the packet IS the
+       prompt-packet mode, so the standard-tools selection that actually won
+       does not authorize it; a policy allowing `standard_tool_access` while
+       `injection_access` denies prompt packets is a legal, expressible
+       configuration, and the packet mode additionally requires a non-empty
+       token budget that the tools mode does not.
+
+    Any conjunct failing is report-only: the degradation becomes visible in
+    telemetry, and nothing is disclosed out of scope or through a mode the
+    operator disabled.
+    """
+
+    if memory_context.selection.selected_provider != provider_name:
+        return _DegradedMemoryServe(
+            selected_access_mode=memory_context.access_mode,
+            reason=_DEGRADED_REASON_PROVIDER_SCOPE_MISMATCH,
+            rendered=None,
+        )
+    if not _packet_scope_matches_dispatch_family(memory_context, provider_name):
+        return _DegradedMemoryServe(
+            selected_access_mode=memory_context.access_mode,
+            reason=_DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH,
+            rendered=None,
+        )
+    packet_denial = memory_context.prompt_packet_fallback_denial
+    if packet_denial is not None:
+        return _DegradedMemoryServe(
+            selected_access_mode=memory_context.access_mode,
+            reason=packet_denial,
+            rendered=None,
+        )
+    return _DegradedMemoryServe(
+        selected_access_mode=memory_context.access_mode,
+        reason=_DEGRADED_REASON_ARM_UNSERVABLE,
+        rendered=render_packet_for_degraded_dispatch(memory_context),
+    )
+
+
+def _degraded_serve_for_unservable_arm(
+    provider_name: str,
+    *,
+    memory_context: RuntimeMemoryContext | None,
+    standard_memory_tool_executor: Any,
+) -> _DegradedMemoryServe | None:
+    """B-83 — the dispatch-time serve-check at the arm-selection site.
+
+    `select_memory_access_mode` picks a mode from DECLARED capabilities; the
+    arm reached may not serve it. When `STANDARD_MEMORY_TOOLS` was selected and
+    this dispatch will not inject the tools, the model would otherwise receive
+    ZERO memory while a fully-retrieved, policy-checked packet sits unused on
+    the context. C-MEM-14 (`Spec_Memory_Substrate_v1.md:489`) states the
+    exposure as a present-tense obligation, and C-MEM-13 (`:460`) authorizes
+    the prompt-extension packet for providers without usable tool support — so
+    the repair is to serve the packet as read-only prompt text.
+
+    TWO DISPOSITIONS, and the discriminator is provider identity:
+
+    * `arm_unservable` → REPAIR. The context was composed for THIS provider,
+      so the packet already cleared retrieval + policy for exactly this
+      provider and provider-family scope. Serving it as prompt text discloses
+      nothing the selection did not already clear.
+
+    * `provider_scope_mismatch` / `provider_family_scope_mismatch` →
+      REPORT-ONLY, no packet, no memory. Retrieval and injection enforce
+      PROVIDER-FAMILY scope before ranking (memory threat model,
+      `Spec_Memory_Substrate_v1.md:481`), and the packet was assembled under
+      the composing binding's `MemoryScope.provider_family`. Forwarding its
+      TEXT across that boundary is a DISCLOSURE leak, which no amount of
+      read-only framing fixes. Recomposition cannot rescue either case —
+      the statically-injected path is definitionally `memory_runtime`-UNBOUND,
+      and the bound path DOES recompose yet still carries the PRIMARY's family
+      scope — and fail-closed would convert a silent degradation into a run
+      failure. So the honest and only safe action is to REPORT: the degradation
+      becomes visible in telemetry, and no cross-scope record is disclosed.
+      `_degraded_serve_disposition` owns the two-conjunct split.
+
+    Returns None (zero behavior change) on every servable dispatch and on every
+    non-`STANDARD_MEMORY_TOOLS` context.
+    """
+
+    if memory_context is None:
+        return None
+    if memory_context.access_mode is not MemoryAccessMode.STANDARD_MEMORY_TOOLS:
+        return None
+    if (
+        _standard_memory_tools_context(
+            provider_name,
+            memory_context=memory_context,
+            standard_memory_tool_executor=standard_memory_tool_executor,
+        )
+        is not None
+    ):
+        return None
+    return _degraded_serve_disposition(provider_name, memory_context)
+
+
+def _emit_degraded_memory_serve_span(
+    tracer_provider: Any,
+    degraded: _DegradedMemoryServe,
+    *,
+    provider: str,
+    model: str,
+    outcome: str = _DISPATCH_OUTCOME_COMPLETED,
+    error_type: str | None = None,
+) -> None:
+    """Emit the ONE `memory.operation` span for a B-83 degraded serve.
+
+    Every attribute reports what ACTUALLY happened, so the two dispositions are
+    distinguishable without reading the reason string:
+
+    * REPAIRED (`degraded.rendered` present) — `INJECTION` /
+      `access_mode=prompt_extension_packet` / the served packet's hash and
+      record count. A successful injection through a different seam, not a
+      failure, so no `failure_class` is set.
+    * REPORT-ONLY (`degraded.rendered is None`) — `DENIAL` /
+      `access_mode=no_memory_access` / `record_count=0` / NO `packet_hash`
+      (nothing was served, so claiming a served packet hash would be a lie).
+      Mirrors `RuntimeMemoryContextComposer.compose_run_start`'s own
+      DENIAL+INJECT shape for the no-memory outcome. `failure_class` is
+      deliberately UNSET: no member of the closed `MemoryTelemetryFailureClass`
+      describes a provider-scope mismatch, and reusing `POLICY_DENIAL` would
+      assert a policy decision no resolver made.
+
+    `memory.degraded_serve` + `.reason` + `.selected_access_mode` carry the
+    B-83-specific detail. All of it lands on the memory tracer's own span,
+    never on the `gen_ai` span (C-OD-04 §4.3 namespace discipline).
+
+    Uses only existing closed-enum members (`MemoryTelemetryOperationName.
+    INJECTION` / `.DENIAL`, `MemoryOperationKind.INJECT`) — adding a member to
+    any of the three closed memory enums would be an X-AL-3 design extension,
+    which is why the reason is a span-attribute VALUE.
+    """
+
+    served = degraded.rendered
+    with memory_telemetry_span(
+        tracer_provider,
+        tracer_name="harness.runtime.llm_dispatch",
+        operation_name=(
+            MemoryTelemetryOperationName.INJECTION
+            if served is not None
+            else MemoryTelemetryOperationName.DENIAL
+        ),
+        operation_kind=MemoryOperationKind.INJECT.value,
+        access_mode=(
+            MemoryAccessMode.PROMPT_EXTENSION_PACKET.value
+            if served is not None
+            else MemoryAccessMode.NO_MEMORY_ACCESS.value
+        ),
+        provider=provider,
+        model=model,
+        packet_hash=served.packet_hash if served is not None else None,
+        record_count=len(served.selected_refs) if served is not None else 0,
+    ) as span:
+        if span is not None:
+            span.set_attribute("memory.degraded_serve", True)
+            span.set_attribute("memory.degraded_serve.reason", degraded.reason)
+            span.set_attribute(
+                "memory.degraded_serve.selected_access_mode",
+                degraded.selected_access_mode.value,
+            )
+            # B-83 [P2-d] — how the provider call this degradation rode on
+            # ENDED. A repair that was sent and then timed out still disclosed;
+            # a report-only denial still withheld. Both must stay visible, so
+            # the span is emitted from a `finally` and says which happened.
+            # The enclosing `gen_ai` span records the exception itself (OTel
+            # `start_as_current_span` defaults `record_exception=True` /
+            # `set_status_on_exception=True`, which this module relies on
+            # everywhere rather than calling them explicitly); no exception is
+            # raised INSIDE this short span, so the class is carried as an
+            # attribute instead.
+            span.set_attribute("memory.degraded_serve.dispatch_outcome", outcome)
+            if error_type is not None:
+                span.set_attribute("memory.degraded_serve.provider_error_type", error_type)
+
+
 def _derive_tokenizer_version(model: str) -> str:
     """Per spec §14.2 row 9 — strict reading: `v2` for Opus 4.7+; else `v1`.
 
@@ -2193,6 +2651,7 @@ def _payload_to_anthropic_kwargs(
     upstream: Mapping[str, Any] | None = None,
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
+    memory_packet: RenderedMemoryPromptPacket | None = None,
 ) -> dict[str, Any]:
     """Translate `ProviderAgnosticPayload` → ``messages.create`` kwargs.
 
@@ -2243,6 +2702,38 @@ def _payload_to_anthropic_kwargs(
         isinstance(thinking_cfg, Mapping)
         and cast(Mapping[str, Any], thinking_cfg).get("type") == "enabled"
     )
+    # --- B-83 [P1-d]: fold the degraded-serve packet into the SINGLE source ---
+    # Anthropic's single system source is `params["system"]` when present, else
+    # the `system` kwarg. The packet is additive read-only context, NOT a
+    # competing base prompt, so it must merge into whichever source exists
+    # rather than become a second one — otherwise the repair hard-fails every
+    # dispatch whose payload carries `params["system"]`. Folded BEFORE the
+    # `place_on_system` decision so the cache block covers the merged text.
+    # A genuine TWO-BASE collision (dispatch `system` AND `params["system"]`)
+    # is left alone and still raises below, verbatim.
+    #
+    # B-83 [P2-c]: "is there an existing source?" is keyed on PRESENCE
+    # (`"system" in payload.params`), because that is exactly what the conflict
+    # check below keys on (`"system" in kwargs`). Keying on truthiness instead
+    # let two VALID shapes slip past — the SDK's content-block ARRAY (the same
+    # `[{"type": "text", ...}]` form `_anthropic_system_cache_block` itself
+    # emits) and the empty string — into the `system`-variable branch, where the
+    # unrecognized-but-present `params["system"]` then collided and turned a
+    # working dispatch into `PromptInjectionConflictError`. The fold predicate
+    # and the conflict predicate MUST agree on what "present" means.
+    # `_content_with_appended_packet` covers every value shape and its sequence
+    # branch appends a `{"type": "text", ...}` block — a valid Anthropic
+    # `TextBlockParam` (`cache_control` is optional) — so no divergent
+    # serialization is introduced here.
+    params_system_present = "system" in payload.params
+    folded_params_system: str | list[Any] | None = None
+    if memory_packet is not None and not (system and params_system_present):
+        if params_system_present:
+            folded_params_system = _content_with_appended_packet(
+                payload.params.get("system"), memory_packet
+            )
+        else:
+            system = append_rendered_memory_packet(system, memory_packet)
     # U-1 slice 2 — decide ONCE where the single breakpoint lands, so the tools
     # branch and the system branch never each mark independently (double-marking).
     # The system position is used iff a system prompt is present AND the stable
@@ -2269,6 +2760,13 @@ def _payload_to_anthropic_kwargs(
     elif payload.tools is not None:
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
+    if folded_params_system is not None:
+        # The payload-owned system source, with the packet merged in — a string
+        # when it arrived as one, a block array (originals preserved, one text
+        # block appended) when it arrived as one. Never wrapped in the OQ-1
+        # cache block: a `params["system"]` was never breakpointed before B-83
+        # either, so its caching posture is unchanged.
+        kwargs["system"] = folded_params_system
     if system:
         if "system" in kwargs:
             raise PromptInjectionConflictError("anthropic", 'params["system"]')
@@ -2354,11 +2852,17 @@ def _payload_to_external_cli_prompt(
     provider: str,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
+    memory_packet: RenderedMemoryPromptPacket | None = None,
 ) -> str:
     """Translate provider-neutral messages to one text prompt for local CLIs.
 
     R-CLI-1 v1 is text-only. Non-empty tools are rejected before the subprocess
     boundary so a local CLI cannot execute or negotiate tools accidentally.
+
+    ``memory_packet`` (B-83 [P1-d]) folds a degraded-serve packet into the ONE
+    effective system source — the payload's leading ``role:"system"`` message
+    when it has one, else the ``system`` argument — so the repair can never
+    become a second source and trip the conflict check below.
     """
     if payload.tools:
         raise LLMDispatchPayloadShapeError(
@@ -2366,6 +2870,25 @@ def _payload_to_external_cli_prompt(
         )
 
     messages = list(payload.messages)
+    leading_system = messages[0] if (messages and messages[0].get("role") == "system") else None
+    if memory_packet is not None and not (system and leading_system is not None):
+        if leading_system is not None:
+            # B-83 [P2-b] — serialize the existing content EXACTLY as the render
+            # loop below would (`_external_cli_message_content`, the shared
+            # authority), then append. Passing None for a non-string content
+            # would REPLACE the step's own system instructions with the packet
+            # alone — and since the external-CLI arm is text-only it ALWAYS
+            # degrades `standard_memory_tools`, making that the common path here,
+            # not an edge case.
+            messages[0] = {
+                **leading_system,
+                "content": append_rendered_memory_packet(
+                    _external_cli_message_content(leading_system.get("content", "")),
+                    memory_packet,
+                ),
+            }
+        else:
+            system = append_rendered_memory_packet(system, memory_packet)
     if system and messages and messages[0].get("role") == "system":
         raise PromptInjectionConflictError(provider, 'messages[0] role:"system"')
 
@@ -2379,13 +2902,21 @@ def _payload_to_external_cli_prompt(
         role = message.get("role", "user")
         if not isinstance(role, str) or not role:
             role = "user"
-        content = message.get("content", "")
-        if isinstance(content, str):
-            rendered_content = content
-        else:
-            rendered_content = json.dumps(content, sort_keys=True, default=str)
-        parts.append(f"{role}:\n{rendered_content}")
+        parts.append(f"{role}:\n{_external_cli_message_content(message.get('content', ''))}")
     return "\n\n".join(parts)
+
+
+def _external_cli_message_content(content: object) -> str:
+    """Render one message ``content`` to the external-CLI prompt's text form.
+
+    The single authority for that serialization, read by the render loop above
+    AND by the B-83 [P2-b] packet fold, so a repaired dispatch can never
+    represent the same content differently from an unrepaired one.
+    """
+
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, sort_keys=True, default=str)
 
 
 _ANTHROPIC_HITL_MAX_TOOL_TURNS = 16
@@ -2562,6 +3093,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     upstream: Mapping[str, Any] | None = None,
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
+    memory_packet: RenderedMemoryPromptPacket | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with generic R-CXA-2 HITL tool continuation.
 
@@ -2575,7 +3107,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     kwarg).
     """
     kwargs = _payload_to_anthropic_kwargs(
-        payload, system, upstream, frozen_tool_superset, cache_ttl
+        payload, system, upstream, frozen_tool_superset, cache_ttl, memory_packet
     )
     # Seed the per-turn mutable loop list from the TRANSLATED `kwargs["messages"]`
     # (NOT `payload.messages`) so it carries the `params["messages"]` merge result
@@ -2648,6 +3180,7 @@ async def _dispatch_anthropic_with_memory(
     upstream: Mapping[str, Any] | None = None,
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
+    memory_packet: RenderedMemoryPromptPacket | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with Memory tool inner loop (U-RT-81).
 
@@ -2665,7 +3198,7 @@ async def _dispatch_anthropic_with_memory(
     configured_backend = registry.configured_backend
     context_editing_active = derive_context_editing_active(payload.params)
     kwargs = _payload_to_anthropic_kwargs(
-        payload, system, upstream, frozen_tool_superset, cache_ttl
+        payload, system, upstream, frozen_tool_superset, cache_ttl, memory_packet
     )
 
     response = await execute_with_memory_callbacks(
@@ -2690,10 +3223,16 @@ async def _dispatch_anthropic(
     upstream: Mapping[str, Any] | None = None,
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
+    memory_packet: RenderedMemoryPromptPacket | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
-    """Anthropic provider branch — ``client.messages.create(...)``."""
+    """Anthropic provider branch — ``client.messages.create(...)``.
+
+    ``memory_packet`` (B-83 [P1-d]) is the degraded-serve repair packet, folded
+    into the SINGLE effective system source by the translator. ``None`` — every
+    caller but a repaired dispatch — is byte-identical to pre-B-83.
+    """
     kwargs = _payload_to_anthropic_kwargs(
-        payload, system, upstream, frozen_tool_superset, cache_ttl
+        payload, system, upstream, frozen_tool_superset, cache_ttl, memory_packet
     )
     response = await adapter.client.messages.create(model=model, **kwargs)
 
@@ -2707,9 +3246,17 @@ async def _dispatch_openai(
     *,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
+    memory_packet: RenderedMemoryPromptPacket | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
-    """OpenAI provider branch — ``client.chat.completions.create(...)``."""
+    """OpenAI provider branch — ``client.chat.completions.create(...)``.
+
+    ``memory_packet`` (B-83 [P1-d]) is the degraded-serve repair packet, folded
+    into the SINGLE effective system source by the translator. ``None`` — every
+    caller but a repaired dispatch — is byte-identical to pre-B-83.
+    """
     kwargs = _payload_to_openai_kwargs(payload, system, upstream)
+    if memory_packet is not None:
+        _fold_memory_packet_into_system(kwargs, memory_packet)
     response = await adapter.client.chat.completions.create(model=model, **kwargs)
     return _openai_response_bundle(response)
 
@@ -2846,6 +3393,11 @@ async def _dispatch_openai_with_standard_memory_tools(
             # The batch is the CALLER's — hand the whole response back
             # unprocessed (bare-path parity) and execute NOTHING from it, so a
             # mixed batch cannot half-commit memory before control returns.
+            # B-85: the memory call inside a MIXED batch therefore goes
+            # unserved AND un-ledgered. Not repairable at this site — the
+            # response is already composed and the packet cannot retroactively
+            # answer a tool call — so it is a posture decision registered
+            # separately rather than absorbed here.
             return (response_mapping, usage)
         # Validate the batch BEFORE the bound check: a malformed memory call is
         # a fail-fast payload-shape error, and letting the generic (retryable)
@@ -3233,6 +3785,77 @@ def _function_tool_name(tool: Mapping[str, Any]) -> str | None:
     return name if isinstance(name, str) else None
 
 
+def _fold_memory_packet_into_system(
+    kwargs: dict[str, Any],
+    rendered: RenderedMemoryPromptPacket,
+) -> None:
+    """Merge a packet into the ONE effective system source, post-params-merge.
+
+    B-83 [P1-b]. The naive repair — handing the packet to
+    `_payload_to_ollama_kwargs` as its ``system`` argument — creates a SECOND
+    system source whenever the payload already leads with a
+    ``{"role":"system"}`` message, and `_inject_leading_system_message` then
+    raises `PromptInjectionConflictError` by design. That would break a
+    previously-working tool-free dispatch for every step that supplies its own
+    system prompt (the idiomatic OpenAI/Ollama shape).
+
+    So the packet is folded into whatever system text the dispatch ALREADY
+    resolved — appended through `append_rendered_memory_packet`, the same seam
+    the selected-mode path uses, so separator and ordering semantics cannot
+    drift. Exactly one leading system message either way.
+
+    Operates on the FINISHED kwargs (post-`params` merge) for the same reason
+    `_inject_leading_system_message` does: a ``params["messages"]`` override can
+    replace the message list wholesale, so a payload-level merge could miss the
+    real leading system message and reintroduce the two-source collision.
+    """
+
+    messages: list[Mapping[str, Any]] = list(kwargs.get("messages", ()))
+    if messages and messages[0].get("role") == "system":
+        head = messages[0]
+        kwargs["messages"] = [
+            {**head, "content": _content_with_appended_packet(head.get("content"), rendered)},
+            *messages[1:],
+        ]
+        return
+    kwargs["messages"] = [{"role": "system", "content": rendered.content}, *messages]
+
+
+def _content_with_appended_packet(
+    content: object,
+    rendered: RenderedMemoryPromptPacket,
+) -> str | list[Any]:
+    """Append a packet to a message ``content``, PRESERVING its representation.
+
+    B-83 [P2-a]. OpenAI accepts a system message's ``content`` as either a
+    plain string or a content-part ARRAY. Coercing the array through ``str()``
+    before appending would put a Python repr on the wire — the structure is
+    silently destroyed and the parts stop being parts. So each shape is folded
+    in its own terms:
+
+    * ``str`` / ``None`` — string append through the shared seam.
+    * a parts SEQUENCE — the packet becomes one ADDITIONAL
+      ``{"type": "text", "text": ...}`` part (the same part shape this module
+      already emits at the Anthropic system block and the external-CLI
+      response), with every original part preserved in order.
+    * anything else — JSON-serialized first (``sort_keys`` + ``default=str``,
+      matching `_inject_upstream_context_message` and the external-CLI
+      renderer), then string-appended. Lossy-free and never a raise: an
+      unexpected shape is not this repair's problem to adjudicate.
+
+    Ollama shares this helper but can only ever take the string branch:
+    `ollama._types.Message.content` is `Optional[str]` (`ollama/_types.py:312`),
+    so a parts array could not reach the daemon through the typed client.
+    """
+
+    if content is None or isinstance(content, str):
+        return append_rendered_memory_packet(content, rendered)
+    if isinstance(content, Sequence) and not isinstance(content, str | bytes):
+        parts = list(cast(Sequence[Any], content))
+        return [*parts, {"type": "text", "text": rendered.content}]
+    return append_rendered_memory_packet(json.dumps(content, sort_keys=True, default=str), rendered)
+
+
 async def _dispatch_ollama(
     adapter: Any,
     model: str,
@@ -3240,13 +3863,21 @@ async def _dispatch_ollama(
     *,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
+    memory_packet: RenderedMemoryPromptPacket | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
     """Ollama provider branch — ``client.chat(...)``.
 
     Ollama's ``ChatResponse`` exposes ``prompt_eval_count`` / ``eval_count``
     instead of a nested ``usage`` object; no ``response_id``.
+
+    ``memory_packet`` (B-83) folds a rendered C-MEM-12 packet into the single
+    effective system source AFTER the normal translate, so it can never collide
+    with a payload-carried system message. `None` — every caller but the
+    tools-unsupported fallback — is byte-identical to pre-B-83.
     """
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
+    if memory_packet is not None:
+        _fold_memory_packet_into_system(kwargs, memory_packet)
     response = await adapter.client.chat(model=model, **kwargs)
     return _ollama_response_bundle(response)
 
@@ -3260,6 +3891,7 @@ async def _dispatch_ollama_with_standard_memory_tools(
     standard_memory_tool_executor: Any,
     step_context: StepExecutionContext,
     step_id: str,
+    degraded_sink: _DegradedMemoryServeSink,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     max_iterations: int = 16,
@@ -3272,6 +3904,12 @@ async def _dispatch_ollama_with_standard_memory_tools(
     ollama's ``/api/chat`` accepts the dotted C-MEM-14 provider-neutral
     identities (``memory.search`` ...) verbatim and echoes them back in
     ``message.tool_calls[].function.name``.
+
+    ``degraded_sink`` receives the B-83 degraded-serve report — written ONLY on
+    the tools-unsupported fallback below, and written BEFORE the retry it
+    describes, so the report survives a retry that raises ([P2-d]). The caller
+    owns the telemetry emission so every B-83 reachability reports through one
+    emitter.
     """
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     kwargs["tools"] = _ollama_tools_with_standard_memory(kwargs.get("tools"), memory_context)
@@ -3287,20 +3925,51 @@ async def _dispatch_ollama_with_standard_memory_tools(
                 raise
             # This model carries no tool template, so the memory tools we
             # auto-injected turned a previously-working TEXT dispatch into a
-            # 400. Byte-restore the pre-B-82 behavior for exactly these models
-            # by re-dispatching bare — the daemon, not a capability table, is
-            # the authority on which models take tools.
+            # 400. The daemon, not a capability table, is the authority on
+            # which models take tools — so the retry drops the tools.
+            #
+            # BEHAVIOR CHANGE at B-83 (deliberate; this fallback previously
+            # BYTE-RESTORED the pre-B-82 bare dispatch): re-dispatching bare
+            # left the model with ZERO memory on a plain default-reflection
+            # path, with no trace of the degradation — B-83's shape on the
+            # commonest configuration. The retry now carries the C-MEM-12
+            # packet as read-only prompt text (C-MEM-13,
+            # `Spec_Memory_Substrate_v1.md:460`) and reports the repair back
+            # for telemetry. The TOOLS are still dropped, so the daemon
+            # rejection is still resolved; only the prompt differs from
+            # pre-B-82.
             #
             # FIRST call only: a mid-loop rejection would mean the model changed
             # identity between continuation turns, which is not a case to paper
             # over, so it stays fail-loud.
-            return await _dispatch_ollama(
+            # The SAME repair-vs-report authority the arm-selection
+            # serve-check uses. Provider IDENTITY always matches here (this
+            # function is only reached through `_standard_memory_tools_context`)
+            # but the FAMILY conjunct is live: on the `memory_runtime` path a
+            # cross-family fallback recomposes for the current candidate while
+            # the packet keeps the chain PRIMARY's family scope (B-83 [P1-c]),
+            # so a primary-family packet must NOT be rendered here.
+            # "ollama" is this arm's provider key by construction — the same
+            # literal `_ollama_prepared_memory_tool_calls` already passes.
+            degraded = _degraded_serve_disposition("ollama", memory_context)
+            # PUBLISH BEFORE the retry ([P2-d]). By this point the disposition
+            # is settled — a repair authorizes disclosure, a report-only
+            # withholds — and the retry itself can raise. Publishing first means
+            # the caller's `finally` reports what was decided either way.
+            degraded_sink.value = degraded
+            # `system=system` reproduces the pre-B-83 retry EXACTLY (including
+            # its pre-existing conflict semantics); the packet — when the
+            # disposition allows one at all — is then folded into whichever
+            # single system source that produced, so the retry never carries two.
+            bare_response, bare_usage = await _dispatch_ollama(
                 adapter,
                 model,
                 payload,
                 system=system,
                 upstream=upstream,
+                memory_packet=degraded.rendered,
             )
+            return (bare_response, bare_usage)
         # See the OpenAI arm — every turn's usage is folded in before exit.
         usage = _accumulated_usage(usage, _ollama_usage_attrs(response))
         response_mapping = _response_to_mapping(response)
@@ -3312,6 +3981,9 @@ async def _dispatch_ollama_with_standard_memory_tools(
             _MEMORY_TOOL_NAMES,
         ):
             # Caller-owned batch — see the OpenAI arm's matching comment.
+            # B-85: the memory call inside a MIXED batch goes unserved and
+            # un-ledgered here; unrepairable at this site (the response is
+            # handed back whole for batch atomicity), registered separately.
             return (response_mapping, usage)
         # Validate first, then check the bound, then execute — see the OpenAI
         # arm's matching comments; the ordering rationale is identical.
@@ -3572,13 +4244,20 @@ async def _dispatch_external_cli(
     *,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
+    memory_packet: RenderedMemoryPromptPacket | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _ExternalCLIAttrs]:
-    """External CLI provider branch — one text prompt, one text response."""
+    """External CLI provider branch — one text prompt, one text response.
+
+    ``memory_packet`` (B-83 [P1-d]) is the degraded-serve repair packet, folded
+    into the SINGLE effective system source by the translator. ``None`` — every
+    caller but a repaired dispatch — is byte-identical to pre-B-83.
+    """
     prompt = _payload_to_external_cli_prompt(
         payload,
         provider=provider,
         system=system,
         upstream=upstream,
+        memory_packet=memory_packet,
     )
     result = await adapter.dispatch_text(model=model, prompt=prompt)
     text = getattr(result, "text", None)
