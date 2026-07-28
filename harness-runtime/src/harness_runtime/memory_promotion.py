@@ -50,6 +50,11 @@ from harness_is.memory_store import MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, Identifier
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from harness_runtime.memory_scope_family import (
+    resolve_scope_family,
+    scope_family_out_of_domain_message,
+)
+
 
 class PromotionCandidateKind(StrEnum):
     """Candidate kinds declared by C-MEM-10."""
@@ -144,6 +149,22 @@ class PromotionReviewRequiredError(ValueError):
 
 class PreferencePromotionValidationError(ValueError):
     """Raised when a preference candidate lacks C-MEM-06 required metadata."""
+
+
+class PromotionScopeValueDomainError(ValueError):
+    """Raised when a candidate scope's `provider_family` is out of the value domain.
+
+    U-MEM-26 / C-MEM-03 v1.1. The suggested scope of a promotion candidate is
+    UNTRUSTED - it arrives from a caller- or model-supplied hint, or from a
+    statically-supplied tool-execution context - and it is persisted VERBATIM
+    into the promoted record's envelope. C-MEM-09 already requires promotion to
+    deny on failed policy resolution; an identifier that names no provider
+    family this substrate knows is the same class of failure, so it is denied
+    rather than stored.
+
+    A ValueError sibling of the two validation refusals above, deliberately:
+    the refusal is about the candidate's own contents, not about the store.
+    """
 
 
 def _empty_source_refs() -> tuple[SourceRef, ...]:
@@ -447,6 +468,7 @@ class PromotionDecisionService:
             injection_policy=injection_policy,
             preference_details=preference_details,
         )
+        _require_canonical_candidate_scope(candidate)
         record = _promotion_record(
             candidate,
             status=status,
@@ -544,11 +566,59 @@ def _json_candidate_hint(value: str) -> Mapping[str, object]:
     return cast("Mapping[str, object]", parsed)
 
 
+def _require_canonical_candidate_scope(candidate: PromotionCandidate) -> None:
+    """Refuse to persist a candidate whose scope was never canonicalized.
+
+    The write-side backstop for candidates built outside `_candidate_from_hint`
+    (the tool-executor path builds its own, and a caller may hand-build one). It
+    REFUSES rather than canonicalizing in place: canonicalizing here would fix
+    the persisted scope while leaving `candidate_id` and `risk_flags` derived
+    from the raw identifier - exactly the split the U-MEM-26 ordering rule
+    exists to prevent. Canonicalization belongs ahead of those derivations, so a
+    non-canonical scope arriving at the write is a bypass, not something to
+    quietly repair.
+    """
+    resolution = resolve_scope_family(candidate.suggested_scope)
+    if resolution.family_out_of_domain:
+        raise PromotionScopeValueDomainError(
+            scope_family_out_of_domain_message(candidate.suggested_scope)
+        )
+    if resolution.scope != candidate.suggested_scope:
+        raise PromotionScopeValueDomainError(
+            "promotion candidate scope provider_family "
+            f"{candidate.suggested_scope.provider_family!r} reached the record write "
+            "un-canonicalized; canonicalize it before candidate identity and risk "
+            "flags are derived (U-MEM-26 write-boundary ordering)"
+        )
+
+
+def canonical_candidate_scope(scope: MemoryScope) -> MemoryScope:
+    """Canonicalize a candidate scope's `provider_family`, or deny it.
+
+    U-MEM-26 write-boundary ORDERING rule for the promotion surface: this must
+    run BEFORE risk-flag and candidate-identity derivation, not merely before
+    the record write. `_scope_escapes_source` compares `provider_family` as a
+    raw string and `_candidate_id` hashes the whole suggested scope, so
+    canonicalizing at the write would leave two observable defects intact -
+    key-vs-value-equivalent inputs receiving DIFFERENT candidate identities, and
+    a registered alias of the record's own family being FALSELY flagged
+    `CROSS_SCOPE`.
+    """
+    resolution = resolve_scope_family(scope)
+    if resolution.family_out_of_domain:
+        raise PromotionScopeValueDomainError(scope_family_out_of_domain_message(scope))
+    return resolution.scope
+
+
 def _candidate_from_hint(
     record: MemoryStoreRecord,
     hint: PromotionCandidateHint,
     resolution: MemoryPromotionResolution,
 ) -> PromotionCandidate:
+    # Ahead of EVERY derivation below, per the U-MEM-26 ordering rule.
+    hint = hint.model_copy(
+        update={"suggested_scope": canonical_candidate_scope(hint.suggested_scope)}
+    )
     source_refs = _merge_source_refs(record.envelope.source_refs, hint.source_refs)
     risk_flags = _risk_flags(
         hint,
@@ -954,6 +1024,8 @@ __all__ = [
     "PromotionDecisionStore",
     "PromotionReviewRequiredError",
     "PromotionRiskFlag",
+    "PromotionScopeValueDomainError",
     "SemanticInjectionPolicy",
     "SemanticRecordStatus",
+    "canonical_candidate_scope",
 ]

@@ -34,6 +34,10 @@ from harness_is.state_ledger_entry_schema import Actor, Identifier
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness_runtime.memory_promotion import PromotionCandidate, PromotionCandidateExtractor
+from harness_runtime.memory_scope_family import (
+    resolve_scope_family,
+    scope_family_out_of_domain_message,
+)
 
 
 class CompactionCandidateDisposition(StrEnum):
@@ -51,6 +55,22 @@ class CompactionDispositionRequiredError(ValueError):
 
 class CompactionDispositionWriteError(RuntimeError):
     """Raised when the durable compaction disposition cannot be written."""
+
+
+class CompactionScopeValueDomainError(ValueError):
+    """Raised when the compaction event scope's `provider_family` is out of domain.
+
+    U-MEM-26 / C-MEM-03 v1.1. The compaction-decision record is an authoring
+    write: its scope is either an explicit caller-supplied `scope` keyword or
+    `candidates[0].suggested_scope`, which inherits the untrusted origin of a
+    promotion hint verbatim. Neither is discharged by construction, so the
+    obligation attaches here rather than to an assumed-safe caller.
+
+    A `ValueError` sibling of `CompactionDispositionRequiredError` - both refuse
+    a malformed call before anything is written - rather than a
+    `CompactionDispositionWriteError`, which reports that a well-formed write
+    FAILED.
+    """
 
 
 class CompactionCandidateDispositionRecord(BaseModel):
@@ -154,7 +174,7 @@ class CompactionSafetyHook:
         if not summary.strip():
             raise ValueError("compaction summary cannot be empty")
         ordered_dispositions = _validate_dispositions(candidates, dispositions)
-        event_scope = scope or _scope_from_candidates(candidates)
+        event_scope = _canonical_event_scope(scope or _scope_from_candidates(candidates))
         record = _compaction_event_record(
             compaction_id=compaction_id,
             run_id=self._run_id,
@@ -236,6 +256,15 @@ def _validate_dispositions(
             f"missing dispositions for candidates: {missing!r}"
         )
     return tuple(disposition_by_id[candidate_id] for candidate_id in candidate_ids)
+
+
+def _canonical_event_scope(scope: MemoryScope) -> MemoryScope:
+    """Canonicalize the compaction event scope, or deny the write (U-MEM-26)."""
+
+    resolution = resolve_scope_family(scope)
+    if resolution.family_out_of_domain:
+        raise CompactionScopeValueDomainError(scope_family_out_of_domain_message(scope))
+    return resolution.scope
 
 
 def _scope_from_candidates(candidates: Sequence[PromotionCandidate]) -> MemoryScope:
@@ -335,4 +364,5 @@ __all__ = [
     "CompactionDispositionRequiredError",
     "CompactionDispositionWriteError",
     "CompactionSafetyHook",
+    "CompactionScopeValueDomainError",
 ]

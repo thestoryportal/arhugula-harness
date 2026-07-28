@@ -13,7 +13,7 @@ import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol, Self
+from typing import ClassVar, Protocol, Self
 
 from harness_is.memory_observability import (
     MemoryTelemetryFailureClass,
@@ -43,6 +43,11 @@ from harness_is.memory_record_envelope import (
 from harness_is.memory_store import MemoryStoreRecord, MemoryStoreWriteResult
 from harness_is.state_ledger_entry_schema import Actor, Identifier
 from pydantic import BaseModel, ConfigDict, model_validator
+
+from harness_runtime.memory_scope_family import (
+    resolve_scope_family,
+    scope_family_out_of_domain_message,
+)
 
 _REDACTED_SUMMARY = "[redacted]"
 _SCHEMA_VERSION = "episodic-capture/v1"
@@ -112,6 +117,25 @@ class MemoryCaptureStore(Protocol):
     ) -> MemoryOperationWriteResult: ...
 
 
+class MemoryCaptureScopeValueDomainError(ValueError):
+    """Raised when a capture scope's `provider_family` is out of the value domain.
+
+    U-MEM-26 / C-MEM-03 v1.1. Reached only on the RESIDUAL construction path
+    below (no `record_scope` supplied), where the scope is still derived from a
+    per-dispatch provider key. A run that supplies its composed `record_scope`
+    cannot reach it: that scope's `provider_family` is by construction a
+    `ProviderFamily` value derived once from the chain primary.
+
+    It is a refusal, not a substrate fault, so it declares `policy_denial`
+    rather than inheriting the message-heuristic residual - the same
+    by-construction discipline `B-88` applied to the tool-executor family.
+    """
+
+    memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+        MemoryTelemetryFailureClass.POLICY_DENIAL
+    )
+
+
 class EpisodicMemoryCapture:
     """Automatic capture API for runtime episodic events."""
 
@@ -124,13 +148,30 @@ class EpisodicMemoryCapture:
         visibility: MemoryVisibility = MemoryVisibility.PROJECT,
         capture_mode: MemoryCaptureMode = MemoryCaptureMode.SUMMARIZED,
         tracer_provider: object | None = None,
+        record_scope: MemoryScope | None = None,
     ) -> None:
+        """Bind the capture collaborators.
+
+        `record_scope` is the `B-89` writer-side repair: the run's COMPOSED
+        record scope, used verbatim for every record this instance writes. The
+        composed scope is the single authority for what a run captures, so what
+        a run captures and what a run can retrieve share one partition by
+        construction (C-MEM-03 v1.1, "The paired writer-side obligation").
+
+        It defaults to `None` so the residual construction below stays
+        available to callers that have no composed scope; that path is bound by
+        the value domain instead (`_scope_for_record`). The `provider` argument
+        the capture methods take is UNAFFECTED either way - it still feeds the
+        C-MEM-08 operation payload and the C-MEM-19 span as the raw per-dispatch
+        key it is. Only the RECORD scope stops deriving from it.
+        """
         self._store = store
         self._actor = actor
         self._project = project
         self._visibility = visibility
         self._capture_mode = capture_mode
         self._tracer_provider = tracer_provider
+        self._record_scope = record_scope
 
     def capture_run_start(
         self,
@@ -582,17 +623,53 @@ class EpisodicMemoryCapture:
                 created_at=timestamp,
                 updated_at=None,
                 source_refs=(source_ref,),
-                scope=MemoryScope(
-                    project=self._project,
-                    workflow=workflow_id,
-                    provider_family=provider,
+                scope=self._scope_for_record(
+                    workflow_id=workflow_id,
                     cli_profile=cli_profile,
-                    visibility=self._visibility,
+                    provider=provider,
                 ),
                 content_hash=content_hash,
             ),
             content=content,
         )
+
+    def _scope_for_record(
+        self,
+        *,
+        workflow_id: str | None,
+        cli_profile: str | None,
+        provider: str | None,
+    ) -> MemoryScope:
+        """Return the scope this capture writes under (`B-89` / `B-90`).
+
+        The run's composed `record_scope` wins VERBATIM when it was supplied -
+        it already carries the `ProviderFamily` value plus the `tenant` and
+        `workload_class` fields the independently-constructed scope below omits
+        (`B-90`), and re-deriving any of them per turn is precisely the defect
+        `B-89` names.
+
+        The residual construction is kept for callers with no composed scope,
+        but it no longer stores the raw per-dispatch provider key: a registered
+        key is canonicalized to its family value, and an out-of-domain
+        identifier is REFUSED rather than stored or degraded to `null` (`null`
+        is the unpartitioned wildcard, so degrading would widen the record's
+        reach - C-MEM-03 v1.1).
+        """
+        if self._record_scope is not None:
+            return self._record_scope
+        constructed = MemoryScope(
+            project=self._project,
+            workflow=workflow_id,
+            provider_family=provider,
+            cli_profile=cli_profile,
+            visibility=self._visibility,
+        )
+        resolution = resolve_scope_family(constructed)
+        if resolution.family_out_of_domain:
+            raise MemoryCaptureScopeValueDomainError(
+                scope_family_out_of_domain_message(constructed)
+            )
+        return resolution.scope
 
 
 def _captured_text(value: str, mode: MemoryCaptureMode) -> str:
@@ -646,6 +723,7 @@ __all__ = [
     "EpisodicMemoryCapture",
     "MemoryCaptureMode",
     "MemoryCaptureResult",
+    "MemoryCaptureScopeValueDomainError",
     "MemoryCaptureStatus",
     "MemoryCaptureStore",
     "SummaryProvenance",

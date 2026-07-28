@@ -57,6 +57,7 @@ from harness_runtime.memory_context import (
     RuntimeMemoryContext,
     RuntimeMemoryContextComposer,
 )
+from harness_runtime.memory_scope_family import canonical_scope_family
 from harness_runtime.memory_tool_executor import StandardMemoryToolExecutor
 from harness_runtime.types import RuntimeConfig
 
@@ -137,9 +138,15 @@ class LocalAutomaticMemoryRuntime:
             deployment_surface=self._surface,
         )
         self._store = store
+        # U-MEM-26: `harness-is` declares the C-MEM-03 request-side value domain
+        # as an injectable seam because the IS axis has zero outbound cross-axis
+        # edges. This is its composition root - absent the injection the read
+        # layers compare `provider_family` as the raw string it arrived as, and
+        # a crafted raw-key request reaches a legacy raw-key record.
         index_store = AutoRefreshingDerivedRetrievalIndexStore(
             root_binding=binding,
             deployment_surface=self._surface,
+            family_canonicalizer=canonical_scope_family,
         )
         index_store.read_current()
         retriever = MemoryRetriever(
@@ -147,6 +154,7 @@ class LocalAutomaticMemoryRuntime:
             index_store=index_store,
             policy_resolver=self._policy_resolver,
             policy_ref=self._policy.policy_id,
+            family_canonicalizer=canonical_scope_family,
         )
         self._composer = RuntimeMemoryContextComposer(
             retriever=retriever,
@@ -305,6 +313,13 @@ class LocalAutomaticMemoryRuntime:
         scope: MemoryScope | None,
         capture_mode: MemoryCaptureMode,
     ) -> EpisodicMemoryCapture:
+        """Bind a capture API to the run's COMPOSED record scope (`B-89`).
+
+        `record_scope` is what the written records carry; `project` and
+        `visibility` remain as the inputs to the residual construction the
+        capture API falls back to when no composed scope exists (`scope is
+        None`), so the no-scope caller is unchanged.
+        """
         return EpisodicMemoryCapture(
             store=self._store,
             actor=cast("Any", actor),
@@ -312,6 +327,7 @@ class LocalAutomaticMemoryRuntime:
             visibility=scope.visibility if scope is not None else MemoryVisibility.PROJECT,
             capture_mode=capture_mode,
             tracer_provider=self._tracer_provider,
+            record_scope=scope,
         )
 
 

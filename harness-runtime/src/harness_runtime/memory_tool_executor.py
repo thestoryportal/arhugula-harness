@@ -72,6 +72,10 @@ from harness_runtime.memory_promotion import (
     SemanticInjectionPolicy,
     SemanticRecordStatus,
 )
+from harness_runtime.memory_scope_family import (
+    resolve_scope_family,
+    scope_family_out_of_domain_message,
+)
 
 type MemoryToolJSON = str | int | bool | None | list["MemoryToolJSON"] | dict[str, "MemoryToolJSON"]
 
@@ -280,7 +284,7 @@ class StandardMemoryToolExecutor:
                 provider=context.provider,
                 model=context.model,
                 query_summary=_string_arg(args, "query"),
-                scope=context.scope,
+                scope=self._resolved_scope(context),
                 token_budget=context.token_budget,
                 allowed_kinds=allowed_kinds,
             ),
@@ -348,6 +352,10 @@ class StandardMemoryToolExecutor:
             project=context.scope.project,
             visibility=context.scope.visibility,
             capture_mode=capture_mode,
+            # `B-89` / `B-90`: the note lands under the CONTEXT's record scope -
+            # tenant and workload_class included - not under a scope
+            # re-derived from the per-dispatch provider key.
+            record_scope=self._resolved_scope(context),
         )
         tool_event_id = _tool_event_id(note, _optional_string_arg(args, "idempotency_key"))
         result = capture_api.capture_tool_event(
@@ -402,14 +410,18 @@ class StandardMemoryToolExecutor:
             context,
         )
         target_kind = _promotion_kind(_string_arg(args, "target_kind"))
+        # U-MEM-26 ordering rule: resolved BEFORE candidate identity is derived
+        # from it, not at the record write, so key-vs-value-equivalent contexts
+        # produce the same `candidate_id`.
+        suggested_scope = self._resolved_scope(context)
         candidate = PromotionCandidate(
-            candidate_id=_candidate_id(source, target_kind, context, args),
+            candidate_id=_candidate_id(source, target_kind, suggested_scope, args),
             source_refs=_source_refs(source, _optional_string_arg(args, "evidence_ref")),
             source_memory_refs=(source.envelope.memory_id,),
             proposed_kind=target_kind,
             statement=_promotion_statement(source),
             confidence=PromotionCandidateConfidence.HIGH,
-            suggested_scope=context.scope,
+            suggested_scope=suggested_scope,
             risk_flags=_promotion_risk_flags(source),
             preference_source=(
                 PreferenceCandidateSource.INFERRED
@@ -508,7 +520,7 @@ class StandardMemoryToolExecutor:
             access = self._policy_resolver.resolve_retrieval(
                 record_kind=entry.record_kind,
                 record_scope=entry.scope,
-                requested_scope=context.scope,
+                requested_scope=self._resolved_scope(context),
             )
             if access.access_decision is AccessDecision.DENY:
                 raise MemoryToolExecutionDeniedError(f"memory ref {memory_ref!s} denied by policy")
@@ -548,11 +560,32 @@ class StandardMemoryToolExecutor:
         access = self._policy_resolver.resolve_retrieval(
             record_kind=record.envelope.kind,
             record_scope=record.envelope.scope,
-            requested_scope=context.scope,
+            requested_scope=self._resolved_scope(context),
         )
         if access.access_decision is AccessDecision.DENY:
             raise MemoryToolExecutionDeniedError(f"memory ref {memory_ref!s} denied by policy")
         return record
+
+    def _resolved_scope(self, context: MemoryToolExecutionContext) -> MemoryScope:
+        """Return `context.scope` with its `provider_family` canonicalized, or deny.
+
+        U-MEM-26. `MemoryToolExecutionContext.scope` is caller-supplied - on the
+        statically-supplied-context path it is whatever the wiring hands over -
+        so it is bound by the C-MEM-03 value domain on BOTH sides of this
+        executor: as an authored record scope (`write_note` capture, promotion
+        `suggested_scope` and candidate identity) and as a request scope
+        (`search`, and the two by-reference direct-reader lookups).
+
+        It is applied per call site rather than once at `execute`, so each site
+        is independently correct: the by-reference lookups reach a scope
+        predicate without constructing either request model, and a canonicalize
+        step that lived only at the entry point would leave them bypassable by a
+        direct call.
+        """
+        resolution = resolve_scope_family(context.scope)
+        if resolution.family_out_of_domain:
+            raise MemoryToolExecutionDeniedError(scope_family_out_of_domain_message(context.scope))
+        return resolution.scope
 
     def _require_standard_tool_access(self) -> None:
         access = self._policy_resolver.resolve_standard_tools()
@@ -763,15 +796,22 @@ def _promotion_kind(value: str) -> PromotionCandidateKind:
 def _candidate_id(
     source: MemoryStoreRecord,
     target_kind: PromotionCandidateKind,
-    context: MemoryToolExecutionContext,
+    scope: MemoryScope,
     args: Mapping[str, object],
 ) -> str:
+    """Derive the candidate identity from the CANONICALIZED scope (U-MEM-26).
+
+    Takes the resolved scope rather than the raw `MemoryToolExecutionContext`
+    so the ordering rule is visible in the signature: an identity hashed from a
+    raw provider key would differ from the identity of the value-equivalent
+    input naming the same family.
+    """
     return "promocand:" + _hash_json(
         {
             "source_memory_ref": str(source.envelope.memory_id),
             "target_kind": target_kind.value,
             "statement": _promotion_statement(source),
-            "scope": context.scope.model_dump(mode="json"),
+            "scope": scope.model_dump(mode="json"),
             "evidence_ref": _optional_string_arg(args, "evidence_ref"),
         }
     )
