@@ -133,6 +133,7 @@ from harness_is.memory_retrieval_index import (
     DerivedRetrievalIndexStore,
     DerivedRetrievalSearchAccelerator,
 )
+from harness_is.memory_scope_value_domain import ScopeFamilyCanonicalizer
 from harness_is.memory_store import (
     CanonicalMemoryStore,
     DerivedIndexInvalidation,
@@ -272,6 +273,7 @@ __all__ = [
     "RetentionDecision",
     "RetrievalExclusionReason",
     "ReviewMode",
+    "ScopeFamilyCanonicalizer",
     "SourceRef",
     "SourceRefType",
     "StabilityInvariant",

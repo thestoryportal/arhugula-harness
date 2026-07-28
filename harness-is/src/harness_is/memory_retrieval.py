@@ -25,6 +25,14 @@ from harness_is.memory_retrieval_index import (
     DerivedRetrievalIndexEntry,
     DerivedRetrievalIndexStore,
 )
+from harness_is.memory_scope_value_domain import (
+    RequestScopeResolution,
+    ScopeFamilyCanonicalizer,
+    record_is_family_scoped,
+    resolve_request_scope,
+    scope_intersection_denied,
+    scope_partition_denied,
+)
 from harness_is.memory_store import (
     CanonicalMemoryStore,
     MemoryStoreRecord,
@@ -184,11 +192,21 @@ class MemoryRetriever:
         index_store: DerivedRetrievalIndexStore,
         policy_resolver: MemoryPolicyResolver,
         policy_ref: str,
+        family_canonicalizer: ScopeFamilyCanonicalizer | None = None,
     ) -> None:
+        """Bind the retrieval collaborators.
+
+        `family_canonicalizer` is the C-MEM-03 request-side value-domain
+        authority (U-MEM-26). It is optional so the IS axis keeps zero outbound
+        cross-axis edges; production composition MUST inject it - absent, a
+        requested `provider_family` is compared as the raw string it arrived
+        as. See `memory_scope_value_domain`.
+        """
         self._store = store
         self._index_store = index_store
         self._policy_resolver = policy_resolver
         self._policy_ref = policy_ref
+        self._family_canonicalizer = family_canonicalizer
 
     def retrieve(
         self,
@@ -206,7 +224,8 @@ class MemoryRetriever:
             index=index,
             policy_ref=self._policy_ref,
         )
-        eligible, excluded = self._eligible_records(request, index)
+        resolution = resolve_request_scope(request.scope, self._family_canonicalizer)
+        eligible, excluded = self._eligible_records(request, index, resolution)
         ordered_for_packet = tuple(sorted(eligible, key=_packet_candidate_sort_key))
         sections, selected, budget_excluded = _assemble_sections(
             ordered_for_packet,
@@ -246,19 +265,20 @@ class MemoryRetriever:
         self,
         request: MemoryRetrievalRequest,
         index: DerivedRetrievalIndex,
+        resolution: RequestScopeResolution,
     ) -> tuple[tuple[_EligibleRecord, ...], tuple[ExcludedMemoryRef, ...]]:
         query_terms = set(_tokenize(request.query_summary))
         eligible: list[_EligibleRecord] = []
         excluded: list[ExcludedMemoryRef] = []
         for entry in index.entries:
-            reason = _static_exclusion_reason(entry, request)
+            reason = _static_exclusion_reason(entry, request, resolution)
             if reason is not None:
                 excluded.append(_excluded(entry, reason))
                 continue
             policy = self._policy_resolver.resolve_retrieval(
                 record_kind=entry.record_kind,
                 record_scope=entry.scope,
-                requested_scope=request.scope,
+                requested_scope=resolution.scope,
             )
             if policy.access_decision is AccessDecision.DENY:
                 excluded.append(_excluded(entry, RetrievalExclusionReason.POLICY_DENIED))
@@ -351,6 +371,7 @@ def _excluded(
 def _static_exclusion_reason(
     entry: DerivedRetrievalIndexEntry,
     request: MemoryRetrievalRequest,
+    resolution: RequestScopeResolution,
 ) -> RetrievalExclusionReason | None:
     if request.allowed_kinds and entry.record_kind not in request.allowed_kinds:
         return RetrievalExclusionReason.KIND_NOT_ALLOWED
@@ -363,25 +384,26 @@ def _static_exclusion_reason(
         return _INACTIVE_STATUS_REASONS[status]
     if entry.superseded_by:
         return RetrievalExclusionReason.SUPERSEDED
-    if _scope_mismatch(entry.scope, request.scope):
+    if resolution.family_out_of_domain and record_is_family_scoped(entry.scope):
+        return RetrievalExclusionReason.SCOPE_MISMATCH
+    if _scope_mismatch(entry.scope, resolution.scope):
         return RetrievalExclusionReason.SCOPE_MISMATCH
     return None
 
 
 def _scope_mismatch(record_scope: MemoryScope, request_scope: MemoryScope) -> bool:
-    for field_name in (
-        "project",
-        "workflow",
-        "workload_class",
-        "provider_family",
-        "cli_profile",
-        "tenant",
-    ):
-        record_value = getattr(record_scope, field_name)
-        request_value = getattr(request_scope, field_name)
-        if record_value is not None and request_value is not None and record_value != request_value:
-            return True
-    return False
+    """True when the record's scope denies this request (C-MEM-03, U-MEM-26).
+
+    The scope-partition fields (`provider_family`, `tenant`) carry the
+    asymmetric-`null` semantics: a `null` RECORD value is the unpartitioned
+    wildcard, but a `null` REQUEST value does NOT widen access past a
+    partitioned record. The remaining fields keep the either-side-`null`-skips
+    semantics. Both rules live at `memory_scope_value_domain`, shared with the
+    derived-index predicate, per the per-layer independence U-MEM-26 requires.
+    """
+    return scope_partition_denied(record_scope, request_scope) or scope_intersection_denied(
+        record_scope, request_scope
+    )
 
 
 def _score_record(
