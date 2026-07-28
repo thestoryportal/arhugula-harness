@@ -149,6 +149,12 @@ default_sandbox_tier = "tier-1-process"
 # tier-1 `"host-process"` / `"host"` pair in place, or the `sandbox.enter`
 # span will report host execution for a container that ran under runsc.
 #
+# NOTE: the sed-based runner below is a DEMO echo scoped to the r420 e2e's
+# fixed ASCII value — it does not handle escaped quotes (a value like
+# `say \"hi\"` yields malformed JSON and the driver raises
+# ToolInvocationProtocolError). For real workloads substitute an image with a
+# JSON-capable runner (e.g. python) instead of extending the sed pattern.
+#
 # [runtime.mcp_clients.sandbox_driver]
 # image = "alpine:3.20"                                    # must be pre-pulled inside the VM
 # command = [

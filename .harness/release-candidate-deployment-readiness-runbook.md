@@ -231,7 +231,8 @@ Preconditions:
   `r820-managed-agents-live-e2e` therefore needs only the token-creator grant re-applied
   (operator-gated privileged IAM mutation — never apply unilaterally), then revoked again at close.
 - **AWS session for `r830` expires.** `just r830-s3-live-e2e` fails on an expired session; the
-  operator re-runs **`aws login`** first. *(Corrected 2026-07-28 — `aws sso login --profile r830`,
+  operator re-runs **`aws login --profile r830`** first (the bare command refreshes the
+  default profile, not the `r830` profile boto3 consumes). *(Corrected 2026-07-28 — `aws sso login --profile r830`,
   as the 2026-06-10 pass used, is stale on this host: the `r830` profile carries only
   `login_session` and no `sso_*` keys, and AWS CLI v2.34's own error text says "reauthenticate
   using `aws login`"; the r830 test docstring already documents `aws login`.)* **Fallback that
