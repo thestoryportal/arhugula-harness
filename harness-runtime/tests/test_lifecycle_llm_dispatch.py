@@ -26,6 +26,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -38,7 +39,7 @@ from harness_as.memory_tool_contracts import (
 )
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
-from harness_core import PersonaTier
+from harness_core import DeploymentSurface, PersonaTier
 from harness_core.identity import StepID
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import AgentRole, ModelBinding, RouterResolution
@@ -83,6 +84,15 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
 from harness_is.memory_operation_ledger import MemoryOperationWriteResult
+from harness_is.memory_path_registry import MemoryRootBinding
+from harness_is.memory_policy import (
+    AccessDecision,
+    CaptureDecision,
+    MemoryPolicyDocument,
+    MemoryPolicyResolver,
+    PromotionDecision,
+    ReviewMode,
+)
 from harness_is.memory_record_envelope import (
     MemoryID,
     MemoryRecordKind,
@@ -93,7 +103,10 @@ from harness_is.memory_retrieval import (
     MemoryPacket,
     MemoryPacketAccessMode,
     MemoryPacketSection,
+    MemoryRetriever,
 )
+from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
+from harness_is.memory_store import CanonicalMemoryStore
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_runtime.lifecycle import llm_dispatch as llm_dispatch_module
@@ -132,7 +145,10 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
 )
 from harness_runtime.lifecycle.sync_dispatcher_facade import SyncDispatcherFacade
 from harness_runtime.memory_context import RuntimeMemoryContext
-from harness_runtime.memory_tool_executor import MemoryToolExecutionInputError
+from harness_runtime.memory_tool_executor import (
+    MemoryToolExecutionInputError,
+    StandardMemoryToolExecutor,
+)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -1655,7 +1671,7 @@ async def test_openai_memory_tool_batch_is_validated_before_any_call_executes() 
                 _openai_tool_call(
                     "call_write",
                     "memory_write_note",
-                    text="durable",
+                    note="durable",
                     scope_ref="scope:u-mem-16",
                     policy_ref="policy:u-mem-16",
                 ),
@@ -1704,7 +1720,7 @@ async def test_openai_memory_tool_loop_raises_exhaustion_before_executing_final_
             _openai_tool_call(
                 "call_write",
                 "memory_write_note",
-                text="durable",
+                note="durable",
                 scope_ref="scope:u-mem-16",
                 policy_ref="policy:u-mem-16",
             ),
@@ -1729,6 +1745,59 @@ async def test_openai_memory_tool_loop_raises_exhaustion_before_executing_final_
         "the final iteration's batch must not execute — nothing can carry its "
         f"results back; got {len(executor.requests)} executions"
     )
+
+
+@pytest.mark.asyncio
+async def test_openai_malformed_terminal_batch_raises_shape_error_not_exhaustion() -> None:
+    """OpenAI mirror — validation precedes the bound check, so a malformed
+    memory call fails fast instead of being masked by retryable exhaustion."""
+    client = _OpenAIClient()
+    good = _ProviderResponse(
+        id="cmpl_ok",
+        usage=_Usage(prompt_tokens=10, completion_tokens=4),
+        _dump=_openai_tool_call_dump(
+            "cmpl_ok",
+            _openai_tool_call(
+                "call_search",
+                "memory_search",
+                query="x",
+                scope_ref="scope:u-mem-16",
+                policy_ref="policy:u-mem-16",
+            ),
+        ),
+    )
+    # 15 well-formed turns, then a MALFORMED one exactly at the bound.
+    client.chat.completions.responses = [good] * 15 + [
+        _ProviderResponse(
+            id="cmpl_bad",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump(
+                "cmpl_bad",
+                {
+                    "id": "call_bad_args",
+                    "type": "function",
+                    "function": {"name": "memory_search", "arguments": "not json at all"},
+                },
+            ),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert "continuation turns" not in str(excinfo.value), (
+        "the malformed terminal batch must surface as a fail-fast payload-shape "
+        "error, not be masked by the retryable exhaustion RuntimeError"
+    )
+    assert len(client.chat.completions.calls) == 16
+    assert len(executor.requests) == 15
 
 
 @pytest.mark.asyncio
@@ -1898,6 +1967,56 @@ def _ollama_memory_context() -> RuntimeMemoryContext:
         provider="ollama",
         model="llama3.2:3b",
         family=ProviderFamily.LOCAL_OPEN_WEIGHT,
+    )
+
+
+def _real_memory_tool_executor(tmp_path: Path) -> StandardMemoryToolExecutor:
+    """A REAL `StandardMemoryToolExecutor` over a filesystem store under tmp_path.
+
+    Built exactly the way `tests/test_memory_tool_executor.py::_executor` builds
+    it, and pinned to the same `policy:u-mem-16` / `scope:u-mem-16` refs the
+    dispatch fixtures use, so a dispatch-composed context is accepted verbatim.
+    Needed because the `_FakeStandardMemoryToolExecutor` validates NOTHING —
+    required-argument-key enforcement lives in the executor
+    (`memory_tool_executor.py:266` -> `_string_arg` at `:549-553`), not at the
+    dispatch layer, so only a real executor can witness it.
+    """
+    binding = MemoryRootBinding(default_root=tmp_path / "memory")
+    surface = DeploymentSurface.LOCAL_DEVELOPMENT
+    store = CanonicalMemoryStore(root_binding=binding, deployment_surface=surface)
+    index_store = DerivedRetrievalIndexStore(root_binding=binding, deployment_surface=surface)
+    index_store.rebuild(indexed_at=datetime(2026, 7, 2, 18, 0, 0, tzinfo=UTC))
+    resolver = MemoryPolicyResolver(
+        MemoryPolicyDocument(
+            policy_id="policy:u-mem-16",
+            enabled=True,
+            capture_decision=CaptureDecision.CAPTURE_FULL,
+            promotion_decision=PromotionDecision.PROPOSE_SEMANTIC,
+            retrieval_access=AccessDecision.RETRIEVAL_ONLY,
+            standard_tool_access=AccessDecision.STANDARD_TOOLS,
+            review_mode=ReviewMode.OPERATOR_REQUIRED,
+        )
+    )
+    return StandardMemoryToolExecutor(
+        store=store,
+        index_store=index_store,
+        retriever=MemoryRetriever(
+            store=store,
+            index_store=index_store,
+            policy_resolver=resolver,
+            policy_ref="policy:u-mem-16",
+        ),
+        policy_resolver=resolver,
+    )
+
+
+def _ollama_write_note_dump(**arguments: Any) -> dict[str, Any]:
+    return _ollama_dump(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"function": {"name": "memory.write_note", "arguments": arguments}}],
+        }
     )
 
 
@@ -2152,7 +2271,7 @@ async def test_ollama_memory_tool_batch_is_validated_before_any_call_executes() 
                             "function": {
                                 "name": "memory.write_note",
                                 "arguments": {
-                                    "text": "durable",
+                                    "note": "durable",
                                     "scope_ref": "scope:u-mem-16",
                                     "policy_ref": "policy:u-mem-16",
                                 },
@@ -2197,7 +2316,7 @@ async def test_ollama_memory_tool_loop_raises_exhaustion_before_executing_final_
                         "function": {
                             "name": "memory.write_note",
                             "arguments": {
-                                "text": "durable",
+                                "note": "durable",
                                 "scope_ref": "scope:u-mem-16",
                                 "policy_ref": "policy:u-mem-16",
                             },
@@ -2357,6 +2476,153 @@ async def test_ollama_caller_only_tool_batch_matches_bare_path_semantics() -> No
 
     assert executor.requests == []
     assert result["message"]["tool_calls"] == [hallucinated]
+
+
+@pytest.mark.asyncio
+async def test_ollama_write_note_round_trips_through_the_real_executor(tmp_path: Path) -> None:
+    """One witness through the REAL contract-validation boundary.
+
+    `_FakeStandardMemoryToolExecutor` accepts any arguments, so it cannot catch
+    a wrong required key. The real executor's `_write_note` reads the contract's
+    `note` via `_string_arg` (`memory_tool_executor.py:266` -> `:549-553`) —
+    that is where required-key enforcement actually lives (NOT at the dispatch
+    layer, which validates only `scope_ref`/`policy_ref`).
+    """
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_write_note_dump(
+                note="durable",
+                scope_ref="scope:u-mem-16",
+                policy_ref="policy:u-mem-16",
+            ),
+        ),
+        _OllamaResponse(
+            prompt_eval_count=31,
+            eval_count=9,
+            _dump=_ollama_dump({"role": "assistant", "content": "noted"}),
+        ),
+    ]
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_real_memory_tool_executor(tmp_path),
+    )
+
+    result = await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    tool_turn = client.calls[1]["messages"][-1]
+    assert tool_turn["tool_name"] == "memory.write_note"
+    # The real executor's contract output — proof the write actually committed.
+    written = json.loads(tool_turn["content"])
+    assert written["memory_ref"]
+    assert written["operation_ref"]
+    assert written["policy_ref"] == "policy:u-mem-16"
+    assert result["message"]["content"] == "noted"
+
+
+@pytest.mark.asyncio
+async def test_ollama_write_note_with_the_wrong_required_key_fails_at_the_real_executor(
+    tmp_path: Path,
+) -> None:
+    """`text` is NOT the contract's key — `memory.write_note` requires `note`.
+
+    Guards the fixture bug the fake was hiding: with `_FakeStandardMemoryToolExecutor`
+    this call "succeeds"; against the real executor it fails loud.
+    """
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_write_note_dump(
+                text="durable",
+                scope_ref="scope:u-mem-16",
+                policy_ref="policy:u-mem-16",
+            ),
+        )
+    ]
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_real_memory_tool_executor(tmp_path),
+    )
+
+    with pytest.raises(MemoryToolExecutionInputError) as excinfo:
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert "'note'" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_ollama_malformed_terminal_batch_raises_shape_error_not_exhaustion() -> None:
+    """At the bound, a MALFORMED memory call must still fail fast.
+
+    Exhaustion is a bare `RuntimeError` → `TRANSIENT_RETRY`
+    (`retry_breaker_fallback.py:299-304`), so letting it mask a payload-shape
+    error would replay up to 16 provider calls for a request that can never
+    succeed. Validation therefore runs before the bound check.
+    """
+    client = _OllamaClient()
+    good = _OllamaResponse(
+        prompt_eval_count=20,
+        eval_count=8,
+        _dump=_ollama_dump(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "memory.search",
+                            "arguments": {
+                                "query": "x",
+                                "scope_ref": "scope:u-mem-16",
+                                "policy_ref": "policy:u-mem-16",
+                            },
+                        }
+                    }
+                ],
+            }
+        ),
+    )
+    # 15 well-formed turns, then a MALFORMED one exactly at the bound.
+    client.responses = [good] * 15 + [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"function": {"name": "memory.read", "arguments": "not json at all"}}
+                    ],
+                }
+            ),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert "continuation turns" not in str(excinfo.value), (
+        "the malformed terminal batch must surface as a fail-fast payload-shape "
+        "error, not be masked by the retryable exhaustion RuntimeError"
+    )
+    assert len(client.calls) == 16
+    assert len(executor.requests) == 15
 
 
 @pytest.mark.asyncio

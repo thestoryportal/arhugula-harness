@@ -2806,15 +2806,10 @@ async def _dispatch_openai_with_standard_memory_tools(
             # unprocessed (bare-path parity) and execute NOTHING from it, so a
             # mixed batch cannot half-commit memory before control returns.
             return _openai_response_bundle(response)
-        if iteration + 1 >= max_iterations:
-            # No iteration budget remains to send these results back, so the
-            # dispatch fails no matter what this batch returns. Raise BEFORE
-            # executing it — otherwise a terminal `memory.write_note` /
-            # `memory.propose_promotion` / `memory.request_redaction` commits
-            # for a dispatch that reports failure, and the failure is retryable
-            # (see `_PreparedMemoryToolCall`), so the sequence can repeat.
-            raise _memory_tool_loop_exhausted("OpenAI", max_iterations)
-
+        # Validate the batch BEFORE the bound check: a malformed memory call is
+        # a fail-fast payload-shape error, and letting the generic (retryable)
+        # exhaustion error mask it on the terminal turn would replay up to
+        # `max_iterations` provider calls for a request that can never succeed.
         prepared = _openai_prepared_memory_tool_calls(
             tool_calls,
             memory_context=memory_context,
@@ -2822,6 +2817,15 @@ async def _dispatch_openai_with_standard_memory_tools(
             step_id=step_id,
             model=model,
         )
+        if iteration + 1 >= max_iterations:
+            # The batch is valid but no iteration budget remains to send its
+            # results back, so the dispatch fails whatever it returns. Raise
+            # BEFORE executing — otherwise a terminal `memory.write_note` /
+            # `memory.propose_promotion` / `memory.request_redaction` commits
+            # for a dispatch that reports failure, and the failure is retryable
+            # (see `_PreparedMemoryToolCall`), so the sequence can repeat.
+            raise _memory_tool_loop_exhausted("OpenAI", max_iterations)
+
         messages.append(_openai_assistant_message(response_mapping))
         messages.extend(
             _openai_memory_tool_result_messages(
@@ -3242,11 +3246,8 @@ async def _dispatch_ollama_with_standard_memory_tools(
         ):
             # Caller-owned batch — see the OpenAI arm's matching comment.
             return _ollama_response_bundle(response)
-        if iteration + 1 >= max_iterations:
-            # Bound reached — raise BEFORE executing. See the OpenAI arm's
-            # matching comment; the defect and the fix are identical.
-            raise _memory_tool_loop_exhausted("Ollama", max_iterations)
-
+        # Validate first, then check the bound, then execute — see the OpenAI
+        # arm's matching comments; the ordering rationale is identical.
         prepared = _ollama_prepared_memory_tool_calls(
             tool_calls,
             memory_context=memory_context,
@@ -3254,6 +3255,9 @@ async def _dispatch_ollama_with_standard_memory_tools(
             step_id=step_id,
             model=model,
         )
+        if iteration + 1 >= max_iterations:
+            raise _memory_tool_loop_exhausted("Ollama", max_iterations)
+
         messages.append(dict(_ollama_message(response_mapping)))
         messages.extend(
             _ollama_memory_tool_result_messages(
