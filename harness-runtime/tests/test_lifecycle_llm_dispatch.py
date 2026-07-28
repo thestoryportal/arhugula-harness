@@ -1458,7 +1458,14 @@ async def test_openai_standard_memory_tool_loop_executes_provider_neutral_tool()
                             "name": "memory.search",
                             "parameters": {"type": "object"},
                         },
-                    }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "memory_search",
+                            "parameters": {"type": "object"},
+                        },
+                    },
                 ],
                 "params": {"max_tokens": 100},
             }
@@ -1472,9 +1479,12 @@ async def test_openai_standard_memory_tool_loop_executes_provider_neutral_tool()
     assert executor.requests[0].tool_name == "memory.search"
     assert executor.requests[0].context.policy_ref == "policy:u-mem-16"
     assert len(client.chat.completions.calls) == 2
-    # The caller-supplied `memory.search` tool in the payload was deduped, and
-    # the injected memory tools carry their wire names.
+    # BOTH caller-supplied spellings (`memory.search` dotted identity and
+    # `memory_search` wire form) were deduped, and the injected memory tools
+    # carry their wire names. The length check matters: a set comparison alone
+    # cannot see a surviving caller duplicate of an injected wire name.
     emitted = client.chat.completions.calls[0]["tools"]
+    assert len(emitted) == len(llm_dispatch_module._OPENAI_MEMORY_TOOL_FROM_WIRE)
     assert {tool["function"]["name"] for tool in emitted} == set(
         llm_dispatch_module._OPENAI_MEMORY_TOOL_FROM_WIRE
     )
@@ -1557,6 +1567,23 @@ def test_openai_memory_tool_wire_name_resolves_back_to_provider_neutral_identity
         )
         assert tool_name is expected
         assert arguments == {"scope_ref": "scope:x"}
+
+    # The dotted provider-neutral identities remain tolerated inbound (the
+    # pre-wire-name byte-compat branch), even though no advertised tool now
+    # carries them on the wire.
+    for dotted, expected in (
+        ("memory.search", MemoryToolName.SEARCH),
+        ("memory.read", MemoryToolName.READ),
+    ):
+        tool_name, arguments = resolve(
+            {
+                "id": "call_dotted",
+                "type": "function",
+                "function": {"name": dotted, "arguments": "{}"},
+            }
+        )
+        assert tool_name is expected
+        assert arguments == {}
 
     # An unknown name still raises the pre-existing typed error.
     with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
