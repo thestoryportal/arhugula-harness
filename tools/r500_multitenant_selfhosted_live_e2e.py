@@ -365,7 +365,7 @@ def _make_audit_entry(seed: str, prior_hash: str = "0" * 64) -> Any:
 
 
 def _prove_audit_ledger_separation() -> tuple[int, int]:
-    from harness_core import DeploymentSurface
+    from harness_core import DeploymentSurface, PersonaTier
     from harness_core.workload_class import WorkloadClass
     from harness_cp.topology_pattern import TopologyPattern
     from harness_is.chain_verification import VerificationStatus, verify_chain
@@ -373,6 +373,12 @@ def _prove_audit_ledger_separation() -> tuple[int, int]:
     from harness_is.path_resolver import PathResolver
     from harness_is.state_ledger_entry_schema import Actor, ActorClass
     from harness_is.state_ledger_write import WriteResult, read_ledger
+    from harness_od.audit_ledger_types import AuditLedger
+    from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
+        HashChainBreach,
+        verify_hash_chain_integrity,
+    )
+    from harness_od.observability_matrix import CellID
     from harness_runtime.config.path_bindings import build_path_binding
     from harness_runtime.lifecycle.audit_writer import materialize_audit_writer_stage
     from harness_runtime.lifecycle.state_ledger import materialize_state_ledger
@@ -425,11 +431,21 @@ def _prove_audit_ledger_separation() -> tuple[int, int]:
             time_source=_tick,
         ).writer
 
-        if writer.append(TENANT_A, _make_audit_entry("1" * 64)) is not WriteResult.APPENDED:
+        # Build the entries BEFORE appending so tenant A's second entry can
+        # chain onto the first. Both A-entries previously took the default
+        # genesis `prior_hash`, so tenant A's audit chain was genesis→genesis:
+        # a real broken link was indistinguishable from the intended shape, and
+        # the verification below would have accepted either. `compute_entry_hash`
+        # is pure, so entry 1's hash is available before entry 2 is built.
+        entry_a1 = _make_audit_entry("1" * 64)
+        entry_a2 = _make_audit_entry("2" * 64, prior_hash=entry_a1.entry_hash)
+        entry_b1 = _make_audit_entry("3" * 64)
+
+        if writer.append(TENANT_A, entry_a1) is not WriteResult.APPENDED:
             raise R500LiveE2EError("tenant A first audit append failed")
-        if writer.append(TENANT_A, _make_audit_entry("2" * 64)) is not WriteResult.APPENDED:
+        if writer.append(TENANT_A, entry_a2) is not WriteResult.APPENDED:
             raise R500LiveE2EError("tenant A second audit append failed")
-        if writer.append(TENANT_B, _make_audit_entry("3" * 64)) is not WriteResult.APPENDED:
+        if writer.append(TENANT_B, entry_b1) is not WriteResult.APPENDED:
             raise R500LiveE2EError("tenant B audit append failed")
 
         a_view = writer.read_for_tenant(TENANT_A)
@@ -444,6 +460,37 @@ def _prove_audit_ledger_separation() -> tuple[int, int]:
             raise R500LiveE2EError("tenant A audit entry leaked into tenant B reader")
         if writer.read_for_tenant("r500-tenant-missing"):
             raise R500LiveE2EError("unknown tenant audit reader returned entries")
+
+        # Verify the per-tenant OD audit chain, not just the IS wrapper chain
+        # below. `read_for_tenant` returns ref-only IS entries; the OD
+        # `AuditLedgerEntry` chain lives in the writer's sidecar and is
+        # rehydrated by `read_full_entries_for_tenant` (audit_writer.py) —
+        # without this, "audit-ledger-separated" proved separation but never
+        # proved the separated chains were themselves intact.
+        #
+        # That reader's docstring warns the raw per-tenant sequence is NOT one
+        # verifiable chain once INDEPENDENT producer families interleave
+        # (families are discriminated by the CXA §0.3 action-id prefix on
+        # `payload.entry_core`). This proof appends a single family — every
+        # entry's `entry_core` is `r500-entry-ref-*` — so each tenant's
+        # sequence is exactly one chain and needs no partitioning.
+        cell = CellID(
+            persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+            deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
+        )
+        for tenant_id, expected_len in ((TENANT_A, 2), (TENANT_B, 1)):
+            rehydrated = writer.read_full_entries_for_tenant(tenant_id)
+            if len(rehydrated) != expected_len:
+                raise R500LiveE2EError(
+                    f"tenant {tenant_id} rehydrated {len(rehydrated)} full audit "
+                    f"entries, expected {expected_len}"
+                )
+            try:
+                verify_hash_chain_integrity(AuditLedger(entries=tuple(rehydrated), cell_id=cell))
+            except HashChainBreach as exc:
+                raise R500LiveE2EError(
+                    f"tenant {tenant_id} OD audit chain failed verification: {exc}"
+                ) from exc
 
         chain = verify_chain(read_ledger(writer.ledger_writer.handle))
         if chain.status is not VerificationStatus.VALID:

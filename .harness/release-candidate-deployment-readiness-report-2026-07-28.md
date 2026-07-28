@@ -45,7 +45,7 @@ deploy-template surface and a harness invariant that was tightened after the 202
 | Command | Outcome |
 |---|---|
 | `just r430-tail-keep-live-e2e harness.selfhosted.local.toml` | ✅ **PASS, unchanged.** Trigger trace preserved (including the `sandbox.violation` span); non-triggering trace dropped. `cost=0`, hosted-provider-calls=0. No drift. |
-| `just r500-multitenant-live-e2e` | ❌ **FAILED first** → **FIXED** → ✅ **PASS.** See finding #1. Post-fix: tenant-resource-separated, content-redacted, audit-ledger-separated, hash chain **VALID**, `cost=0`. |
+| `just r500-multitenant-live-e2e` | ❌ **FAILED first** → **FIXED + STRENGTHENED** → ✅ **PASS.** See finding #1. Post-fix: `tenant-resource-separated=true content-redacted=true audit-ledger-separated=true cost=0 hosted-provider-calls=0`, `tenant_a_audit_entries=2 tenant_b_audit_entries=1`; the IS wrapper chain **and** (newly) each tenant's OD audit chain verified. |
 | `just r420-self-hosted-live-e2e harness.selfhosted.local.toml` | ❌ **FAILED first** → **UNBLOCKED (config-only)** → ✅ **PASS.** See finding #2. Post-unblock: `workflow=r420-self-hosted-tool-echo status=success cost=0`. |
 | `just r411-gvisor-live-e2e` (with `R411_GVISOR_DOCKER_COMMAND`) | ✅ **PASS — 1 passed in 7.87s.** See R-411 note. |
 
@@ -68,15 +68,58 @@ entry whose stored hash does not match its payload (because such an entry would 
 post-restart append when the fold rescans it). **The harness is correct; the live-e2e script was
 stale.**
 
-**Fix (the uncommitted change shipping in this PR).** `_make_audit_entry` now takes a `seed`
-(used only for the entry ref + signature label, preserving per-entry distinctness) and computes
-`entry_hash=compute_entry_hash(payload)` from
-`harness_od.audit_ledger_types` (`audit_ledger_types.py:139`). Re-run **PASSED** end to end with a
-`VALID` chain.
+**Fix, part 1 — real content hashes.** `_make_audit_entry` now takes a `seed` (used only for the
+entry ref + signature label, preserving per-entry distinctness) and computes
+`entry_hash=compute_entry_hash(payload)` from `harness_od.audit_ledger_types`
+(`audit_ledger_types.py:139`). Re-run **PASSED** end to end.
 
-**Classification: harness-adjacent tooling defect, fixed. Not a harness regression** — the
-production write path was already correct and in fact caught the bad entry loudly, exactly as
-designed.
+**Fix, part 2 — the proof was still overclaiming (out-of-family review, codex round 1).** With
+part 1 alone the script printed `audit-ledger-separated=true` and a `VALID` chain, but **neither
+claim was backed where it mattered**:
+
+- Both TENANT_A appends took `_make_audit_entry`'s default genesis `prior_hash`, so tenant A's
+  audit chain was **genesis→genesis** — a genuinely broken link was indistinguishable from the
+  intended shape.
+- The only chain verification present (`verify_chain(read_ledger(...))`) verifies the **IS state
+  ledger wrapper** chain. The per-tenant **OD `AuditLedgerEntry`** chain — the thing
+  "audit-ledger-separated" is about — was **never verified at all**.
+
+Both closed:
+
+1. Entries are now built before appending so TENANT_A's second entry chains onto the first
+   (`prior_hash=entry_a1.entry_hash`; `compute_entry_hash` is pure, so entry 1's hash is available
+   in time).
+2. Added per-tenant OD chain verification over the writer's rehydration surface,
+   `read_full_entries_for_tenant`
+   (`harness-runtime/src/harness_runtime/lifecycle/audit_writer.py:1256`) → `AuditLedger` →
+   `verify_hash_chain_integrity` (`harness-od/.../multi_tenant_trace_separation_and_audit_ledger.py:466`,
+   the C-OD-21 §21.2 walk). TENANT_A's 2-entry chain and TENANT_B's 1-entry chain are both checked.
+   *Grounding note:* that reader's own docstring warns the raw per-tenant sequence is **not** one
+   verifiable chain once independent producer families interleave (families discriminate on the CXA
+   §0.3 action-id prefix). This proof appends a **single** family (`r500-entry-ref-*`), so each
+   tenant's sequence is exactly one chain and needs no partitioning — recorded in-code so a future
+   reader does not generalize the call incorrectly.
+
+**Live re-run (2026-07-28, stack up, free/local, `cost=0`):**
+
+```
+[r500-live] completed: tenant_a_trace_id=4f2e6d2582af704cdb75a6bf4de31dc3 tenant_b_trace_id=e1102f16e9c2474ddbcbb4cf51861cf3 base_rate_a=0.2 base_rate_b=0.2 tenant_a_audit_entries=2 tenant_b_audit_entries=1 tenant-resource-separated=true content-redacted=true audit-ledger-separated=true cost=0 hosted-provider-calls=0
+```
+
+**Mutation probe (load-bearing witness).** Green alone does not prove the new check does anything,
+so the chaining was deliberately reverted (`entry_a2` back to genesis) and the e2e re-run. It
+**FAILED loudly**, as it must:
+
+```
+R-500 live e2e failed: tenant r500-tenant-a OD audit chain failed verification: audit-ledger hash chain broken at entry 1: prior_entry_hash='0000…0000' != predecessor entry_hash='f6fbbf902ba8a50976dadcb6a3c616405c0098521441caba8b16fbd9f62ce93e' (C-OD-21 §21.2 / C-IS-10 §10.3)
+```
+
+That is exactly the state the **pre-fix** script shipped and reported as `VALID`. The probe was
+reverted and the e2e re-run green (output above); no probe residue remains in the tree.
+
+**Classification: harness-adjacent tooling defect, fixed and strengthened. Not a harness
+regression** — the production write path was already correct and caught the bad entry loudly,
+exactly as designed. The overclaim was in the *proof*, not the product.
 
 ### Finding #2 — the self-hosted deploy template's stdio MCP echo server is foreclosed at its declared tier-1 (template drift; UNBLOCKED config-only)
 
@@ -216,7 +259,8 @@ merely narrated:
   AWS `aws login`, the R-411 volume current-state note, the Phase-B stdio-floor requirement,
   the placeholder-substitution warning at the copy steps, and a note that the R-500 script now
   computes real entry hashes. The GO-closed banner is preserved byte-exact.
-- `tools/r500_multitenant_selfhosted_live_e2e.py` — the finding-#1 fix.
+- `tools/r500_multitenant_selfhosted_live_e2e.py` — the finding-#1 fix: real content hashes, the
+  chained TENANT_A entries, and the new per-tenant OD audit-chain verification.
 
 ## Live calls made + cost class
 
@@ -242,8 +286,9 @@ stack (grafana / otel-collector / tempo); local Ollama daemon.
 
 ## Cleanup performed
 
-- **Docker self-hosted stack**: brought up and taken **DOWN cleanly, twice** (guaranteed EXIT
-  trap; all containers + network removed each time).
+- **Docker self-hosted stack**: brought up and taken **DOWN cleanly, three times** (twice during
+  the Phase-B runs, once more for the finding-#1 re-validation + mutation probe). Final teardown
+  confirmed all three containers and the network `Removed`.
 - **E2B sandboxes**: context-manager teardown + server-side auto-expiry — none persist.
 - **Neon/PG**: r830 deleted its unique path.
 - **S3**: r830 deleted its unique object key.
@@ -318,10 +363,28 @@ was changed.**
 The single residual is the three GCP OTLP e2es, blocked on an operator-owned IAM re-grant. They
 passed at the 2026-06-10 GO close, the `run.invoker` half of their auth is still in place, and
 nothing in this pass indicates regression — but they are **unproven at this HEAD** and the verdict
-says so rather than claiming coverage it does not have. Re-run them after the re-grant using the
-retained `harness.selfhosted.local.toml`-adjacent managed config and the runbook §5 command block
-(both `--cloud-run-auth-*` flags are required), then revoke the grant again per the 2026-06-10
-disposition.
+says so rather than claiming coverage it does not have.
+
+**Resume recipe for the residual.** This pass **deleted** `harness.managed-cloud.e2b.toml` (see the
+scratch-file disposition above), so the follow-up run must recreate it first — mirroring the
+runbook §5 copy step:
+
+```bash
+cp deploy/managed-cloud/harness.managed-cloud.e2b.example.toml harness.managed-cloud.e2b.toml
+```
+
+Then substitute the template's three placeholders:
+
+| Placeholder | Value used this pass |
+|---|---|
+| `/absolute/path/to/arhugula-v2` (`repository_root`) | `/Users/robertrhu/Projects/arhugula-v2` |
+| `your-gcp-project-id-or-number` (`gcp_project_id`) | `project-ba535aa4-f08d-46b2-ba6` |
+| `https://collector.vendor.example` (`otlp_endpoint`) | `https://arhugula-r421-otel-collector-qsqt4j4y3a-uc.a.run.app` |
+
+With the config recreated and the IAM re-grant applied, run the three e2es from the runbook §5
+command block (**both `--cloud-run-auth-*` flags are required** — omit them and the run burns the
+paid provider + sandbox work before failing at Cloud Trace polling), then revoke the token-creator
+grant again per the 2026-06-10 disposition and delete the recreated config (it is not gitignored).
 
 **Verdict: deploy-ready, with the 3 OTLP e2es carried as a named operator-gated residual.**
 

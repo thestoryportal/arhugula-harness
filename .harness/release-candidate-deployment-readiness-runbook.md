@@ -201,7 +201,10 @@ Acceptance criteria:
 *(2026-07-28) `tools/r500_multitenant_selfhosted_live_e2e.py` now computes real
 `compute_entry_hash(payload)` values for its fabricated audit entries — its former placeholder
 hashes are refused by the write-side content-integrity check at
-`harness-runtime/src/harness_runtime/lifecycle/audit_writer.py`.*
+`harness-runtime/src/harness_runtime/lifecycle/audit_writer.py` — AND verifies each tenant's OD
+audit chain (`read_full_entries_for_tenant` → `AuditLedger` → `verify_hash_chain_integrity`), not
+just the IS wrapper chain, with the TENANT_A entries genuinely chained. `audit-ledger-separated=true`
+is therefore now a claim about intact per-tenant chains, not only about read separation.*
 
 ## 5. Phase C: Managed-Cloud Deployment Smoke
 
@@ -241,6 +244,12 @@ Prepare or verify managed config, normally from:
 ```bash
 cp deploy/managed-cloud/harness.managed-cloud.e2b.example.toml harness.managed-cloud.e2b.toml
 ```
+
+**Substitute the three placeholders** after copying (same discipline as the §4 self-hosted copy
+step; confirmed 2026-07-28): `/absolute/path/to/arhugula-v2` → the real workspace root,
+`your-gcp-project-id-or-number` → `project-ba535aa4-f08d-46b2-ba6`, and the
+`https://collector.vendor.example` OTLP endpoint → the real Cloud Run collector URL below. Note
+this copy is **not gitignored** (unlike `harness.selfhosted.local.toml`) — delete it at close.
 
 Non-mutating readiness:
 
