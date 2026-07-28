@@ -493,7 +493,7 @@ def test_b83_prompt_packet_eligibility_is_derived_from_the_real_selector(
         )
     )
     assert context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
-    assert context.prompt_packet_fallback_eligible is True
+    assert context.prompt_packet_fallback_denial is None
 
     # (2) tools allowed, packets DENIED -> ineligible (the legal, expressible
     #     configuration the repair used to disclose through).
@@ -509,7 +509,7 @@ def test_b83_prompt_packet_eligibility_is_derived_from_the_real_selector(
         )
     )
     assert context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
-    assert context.prompt_packet_fallback_eligible is False
+    assert context.prompt_packet_fallback_denial == "no_supported_mode"
 
     # (3) packets allowed but the provider cannot serve the mode -> ineligible.
     _, composer = _composer(tmp_path / "nocap", policy=allowed, record=record)
@@ -520,7 +520,11 @@ def test_b83_prompt_packet_eligibility_is_derived_from_the_real_selector(
         )
     )
     assert context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
-    assert context.prompt_packet_fallback_eligible is False
+    assert context.prompt_packet_fallback_denial == "no_supported_mode", (
+        "the selector does not distinguish a denying injection_access from an "
+        "absent capability once past its packet branch, and this must not "
+        "invent a distinction it cannot observe"
+    )
 
 
 def test_b83_prompt_packet_eligibility_is_false_when_the_token_budget_is_empty(
@@ -546,7 +550,9 @@ def test_b83_prompt_packet_eligibility_is_false_when_the_token_budget_is_empty(
     context = composer.compose_run_start(request)
 
     assert context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
-    assert context.prompt_packet_fallback_eligible is False
+    assert context.prompt_packet_fallback_denial == "token_budget_empty", (
+        "the BUDGET gate must be named as itself, not folded into a policy denial"
+    )
 
 
 def test_prompt_extension_packet_rendering_is_bounded_cited_and_stable(

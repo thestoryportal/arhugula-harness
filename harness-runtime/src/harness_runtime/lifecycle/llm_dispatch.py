@@ -2129,12 +2129,15 @@ _DEGRADED_REASON_PROVIDER_SCOPE_MISMATCH: Final[str] = "provider_scope_mismatch"
 #: was RETRIEVED under a different provider-FAMILY scope than the family this
 #: dispatch belongs to. REPORT-ONLY. See `_packet_scope_matches_dispatch_family`.
 _DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH: Final[str] = "provider_family_scope_mismatch"
-#: `packet_policy_denied` — scope is fine, but C-MEM-13 would NOT have selected
-#: `PROMPT_EXTENSION_PACKET` for this request: policy `injection_access` denies
-#: prompt packets, or the token budget is empty, or the provider does not
-#: support the mode. REPORT-ONLY — see
-#: `RuntimeMemoryContext.prompt_packet_fallback_eligible`.
-_DEGRADED_REASON_PACKET_POLICY_DENIED: Final[str] = "packet_policy_denied"
+#: Packet-mode denials do NOT get a constant here. Scope is fine, but C-MEM-13
+#: would not have selected `PROMPT_EXTENSION_PACKET` for this request, and the
+#: reason is carried verbatim from the counterfactual selector on
+#: `RuntimeMemoryContext.prompt_packet_fallback_denial` — its own
+#: `MemoryAccessModeDenialReason` value (`token_budget_empty` /
+#: `no_supported_mode`), or the `not_derived` sentinel. [P2-e]: a single
+#: `packet_policy_denied` constant collapsed all of those into one label and
+#: reported a budget denial as an operator policy decision, which is a false
+#: accusation about a configuration the operator did not make.
 
 
 @dataclass(frozen=True, slots=True)
@@ -2287,8 +2290,10 @@ def _degraded_serve_disposition(
        scope (`_packet_scope_matches_dispatch_family`);
     3. prompt-packet AUTHORIZATION — C-MEM-13 would itself have selected
        `PROMPT_EXTENSION_PACKET` for the same request
-       (`prompt_packet_fallback_eligible`, settled at composition where the
-       policy + budget inputs are in scope). Rendering the packet IS the
+       (`prompt_packet_fallback_denial is None`, settled at composition where
+       the policy + budget inputs are in scope; when it is NOT None its value
+       is the selector's own denial reason, reported verbatim so telemetry
+       names the gate that actually closed). Rendering the packet IS the
        prompt-packet mode, so the standard-tools selection that actually won
        does not authorize it; a policy allowing `standard_tool_access` while
        `injection_access` denies prompt packets is a legal, expressible
@@ -2312,10 +2317,11 @@ def _degraded_serve_disposition(
             reason=_DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH,
             rendered=None,
         )
-    if not memory_context.prompt_packet_fallback_eligible:
+    packet_denial = memory_context.prompt_packet_fallback_denial
+    if packet_denial is not None:
         return _DegradedMemoryServe(
             selected_access_mode=memory_context.access_mode,
-            reason=_DEGRADED_REASON_PACKET_POLICY_DENIED,
+            reason=packet_denial,
             rendered=None,
         )
     return _DegradedMemoryServe(

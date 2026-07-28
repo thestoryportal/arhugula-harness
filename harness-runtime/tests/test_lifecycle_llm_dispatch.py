@@ -55,7 +55,11 @@ from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS, LayerBudget
 from harness_cp.layered_routing_strategy import LayerDecisionFn
-from harness_cp.memory_access_mode import MemoryAccessMode, MemoryAccessModeSelection
+from harness_cp.memory_access_mode import (
+    MemoryAccessMode,
+    MemoryAccessModeDenialReason,
+    MemoryAccessModeSelection,
+)
 from harness_cp.per_role_catalog import (
     derive_agent_role,
     derive_fanout_roles,
@@ -145,7 +149,10 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
     RetryBreakerFallbackDispatcher,
 )
 from harness_runtime.lifecycle.sync_dispatcher_facade import SyncDispatcherFacade
-from harness_runtime.memory_context import RuntimeMemoryContext
+from harness_runtime.memory_context import (
+    PROMPT_PACKET_FALLBACK_NOT_DERIVED,
+    RuntimeMemoryContext,
+)
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionInputError,
     StandardMemoryToolExecutor,
@@ -944,7 +951,7 @@ def _standard_tools_memory_context(
     model: str = "test-model-1",
     family: ProviderFamily = ProviderFamily.OPENAI,
     packet_sections: tuple[MemoryPacketSection, ...] = (),
-    prompt_packet_fallback_eligible: bool = True,
+    prompt_packet_fallback_denial: str | None = None,
 ) -> RuntimeMemoryContext:
     """A STANDARD_MEMORY_TOOLS context.
 
@@ -953,13 +960,14 @@ def _standard_tools_memory_context(
     degraded-serve repair DOES render it, so those witnesses pass real sections
     and assert their text on the wire.
 
-    `prompt_packet_fallback_eligible` models the C-MEM-13 answer the composer
-    settles (B-83 [P1-e]): would `PROMPT_EXTENSION_PACKET` have been selected
-    for this same request? It defaults True here, i.e. these fixtures model a
-    policy with `injection_access=PROMPT_PACKET` AND a non-empty token budget —
-    made EXPLICIT because the earlier fixtures were silently relying on the
-    repair not checking. Pass False to model the equally legal
-    tools-allowed / packets-denied policy.
+    `prompt_packet_fallback_denial` models the C-MEM-13 answer the composer
+    settles (B-83 [P1-e] / [P2-e]): would `PROMPT_EXTENSION_PACKET` have been
+    selected for this same request? `None` (the default) means yes — these
+    fixtures model a policy with `injection_access=PROMPT_PACKET` AND a
+    non-empty token budget, made EXPLICIT because the earlier fixtures were
+    silently relying on the repair not checking. Pass the selector's own denial
+    value (`"no_supported_mode"` for a denying `injection_access` or an absent
+    capability, `"token_budget_empty"` for the budget gate) to model a denial.
     """
     packet = MemoryPacket(
         packet_id="memory-packet:" + ("c" * 32),
@@ -1006,7 +1014,7 @@ def _standard_tools_memory_context(
         ledgerable_denial=False,
         injection_action_id=Identifier("memory-injection:cccccccccccccccccccccccccccccccc"),
         injection_operation_result=MemoryOperationWriteResult.APPENDED,
-        prompt_packet_fallback_eligible=prompt_packet_fallback_eligible,
+        prompt_packet_fallback_denial=prompt_packet_fallback_denial,
     )
 
 
@@ -2965,7 +2973,7 @@ def _b83_memory_context(
     provider: str,
     model: str = "test-model-1",
     family: ProviderFamily | None = None,
-    prompt_packet_fallback_eligible: bool = True,
+    prompt_packet_fallback_denial: str | None = None,
 ) -> RuntimeMemoryContext:
     """A STANDARD_MEMORY_TOOLS context whose packet carries assertable text.
 
@@ -2978,7 +2986,7 @@ def _b83_memory_context(
         provider=provider,
         model=model,
         family=family if family is not None else provider_family_for_provider(provider),
-        prompt_packet_fallback_eligible=prompt_packet_fallback_eligible,
+        prompt_packet_fallback_denial=prompt_packet_fallback_denial,
         packet_sections=(
             MemoryPacketSection(
                 section_id="active_operator_project_preferences",
@@ -3323,7 +3331,7 @@ async def test_b83_successful_dispatch_marks_the_outcome_completed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_b83_packet_policy_denied_context_is_reported_but_never_rendered() -> None:
+async def test_b83_packet_mode_denied_context_is_reported_with_its_own_reason() -> None:
     """P1-e — scope is fine, but the prompt-packet MODE is not authorized.
 
     `select_memory_access_mode` returns at the first mode whose gates pass, so a
@@ -3341,7 +3349,7 @@ async def test_b83_packet_policy_denied_context_is_reported_but_never_rendered()
         tracer_provider=tp,
         memory_context=_b83_memory_context(
             provider="anthropic",
-            prompt_packet_fallback_eligible=False,
+            prompt_packet_fallback_denial="no_supported_mode",
         ),
         standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
     )
@@ -3354,7 +3362,9 @@ async def test_b83_packet_policy_denied_context_is_reported_but_never_rendered()
     spans = _degraded_serve_spans(exporter)
     assert len(spans) == 1, "still reported, just not rendered"
     attrs = dict(spans[0].attributes or {})
-    assert attrs["memory.degraded_serve.reason"] == "packet_policy_denied"
+    assert attrs["memory.degraded_serve.reason"] == "no_supported_mode", (
+        "the selector's own reason, never a blanket policy accusation"
+    )
     assert attrs["memory.operation.name"] == "denial"
     assert attrs["memory.access_mode"] == "no_memory_access"
     assert attrs["memory.record_count"] == 0
@@ -3362,7 +3372,7 @@ async def test_b83_packet_policy_denied_context_is_reported_but_never_rendered()
 
 
 @pytest.mark.asyncio
-async def test_b83_packet_policy_denied_also_withholds_on_the_r5_path() -> None:
+async def test_b83_packet_budget_denied_withholds_on_the_r5_path_with_its_own_reason() -> None:
     """P1-e reaches the ollama tools-unsupported fallback too.
 
     The R5 site shares `_degraded_serve_disposition`, so the authorization
@@ -3380,7 +3390,7 @@ async def test_b83_packet_policy_denied_also_withholds_on_the_r5_path() -> None:
         memory_context=_b83_memory_context(
             provider="ollama",
             model="llava-llama3:latest",
-            prompt_packet_fallback_eligible=False,
+            prompt_packet_fallback_denial="token_budget_empty",
         ),
         standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
     )
@@ -3394,7 +3404,50 @@ async def test_b83_packet_policy_denied_also_withholds_on_the_r5_path() -> None:
     assert result["message"]["content"] == "ok", "the tool-free retry must still succeed"
     assert _B83_SECTION_TEXT not in json.dumps(client.calls[1]["messages"])
     attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
-    assert attrs["memory.degraded_serve.reason"] == "packet_policy_denied"
+    assert attrs["memory.degraded_serve.reason"] == "token_budget_empty", (
+        "an empty BUDGET must never be reported as a policy denial"
+    )
+
+
+@pytest.mark.asyncio
+async def test_b83_undervied_eligibility_reports_not_derived_not_a_gate_denial() -> None:
+    """P2-e — an unproven context must not be blamed on a gate nobody observed.
+
+    A hand-built context (the static-injection seam) never ran the composer's
+    counterfactual, so it is withheld — but reported as `not_derived`, which is
+    distinct from every `MemoryAccessModeDenialReason` value and so cannot be
+    mistaken for an operator's policy, an empty budget, or a capability gap.
+    """
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        # The RuntimeMemoryContext default, i.e. nobody derived eligibility.
+        memory_context=_b83_memory_context(
+            provider="anthropic",
+            prompt_packet_fallback_denial="not_derived",
+        ),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert "system" not in client.messages.calls[0]
+    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "not_derived"
+
+
+def test_b83_the_default_context_carries_the_not_derived_sentinel() -> None:
+    """The fail-safe default is the sentinel, not a fabricated gate reason."""
+    context = _standard_tools_memory_context().model_copy()
+    assert RuntimeMemoryContext.model_fields["prompt_packet_fallback_denial"].default == (
+        PROMPT_PACKET_FALLBACK_NOT_DERIVED
+    )
+    assert PROMPT_PACKET_FALLBACK_NOT_DERIVED not in {
+        reason.value for reason in MemoryAccessModeDenialReason
+    }, "the sentinel must not collide with any real selector reason"
+    assert context.prompt_packet_fallback_denial is None
 
 
 @pytest.mark.asyncio
