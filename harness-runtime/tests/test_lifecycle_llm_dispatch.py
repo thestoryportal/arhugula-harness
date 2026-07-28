@@ -3198,6 +3198,99 @@ async def test_b83_arm_repair_merges_into_a_payload_carried_system_message() -> 
 
 
 @pytest.mark.asyncio
+async def test_b83_openai_repair_preserves_a_content_part_array_system_message() -> None:
+    """P2-a — OpenAI accepts a system `content` as a content-part ARRAY.
+
+    Coercing it through `str()` before appending would put a Python repr on the
+    wire and destroy the parts. The packet must arrive as one ADDITIONAL text
+    part with every original part preserved in order.
+    """
+    client = _OpenAIClient()
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="openai"),
+        standard_memory_tool_executor=None,  # unservable → repair fires
+    )
+
+    original_parts = [
+        {"type": "text", "text": "STEP PART ONE"},
+        {"type": "text", "text": "STEP PART TWO"},
+    ]
+    await dispatcher.dispatch(
+        _binding("openai"),
+        _step(
+            {
+                "messages": [
+                    {"role": "system", "content": original_parts},
+                    {"role": "user", "content": "hi"},
+                ],
+                "tools": None,
+                "params": {},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    content = client.chat.completions.calls[0]["messages"][0]["content"]
+    assert isinstance(content, list), "the content-part array must survive as an array"
+    assert content[:2] == original_parts, "original parts preserved, in order"
+    assert len(content) == 3
+    assert content[2]["type"] == "text"
+    assert content[2]["text"].startswith("read-only memory packet")
+    assert _B83_SECTION_TEXT in content[2]["text"]
+    assert "'type': 'text'" not in json.dumps(content), "no Python repr anywhere on the wire"
+
+
+@pytest.mark.asyncio
+async def test_b83_external_cli_repair_preserves_mapping_content_system_message() -> None:
+    """P2-b — a non-string system `content` must be SERIALIZED, not discarded.
+
+    The external-CLI arm is text-only, so it ALWAYS degrades
+    `standard_memory_tools` — this is the common path there, not an edge case.
+    Passing `None` to the append helper replaced the step's own system
+    instructions with the packet alone.
+    """
+    adapter = _ExternalCLIFakeAdapter(calls=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    system_content = {"instructions": "STEP-OWNED DIRECTIVE", "priority": "high"}
+    await dispatcher.dispatch(
+        _binding("claude_code"),
+        _step(
+            {
+                "messages": [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": "hi"},
+                ],
+                "tools": None,
+                "params": {},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    prompt = adapter.calls[0][1]
+    # Serialized exactly as the renderer's own loop would have done it.
+    assert json.dumps(system_content, sort_keys=True, default=str) in prompt, (
+        "the step's own system instructions must survive the repair, not be replaced"
+    )
+    assert "STEP-OWNED DIRECTIVE" in prompt
+    assert _B83_SECTION_TEXT in prompt
+    assert prompt.index("STEP-OWNED DIRECTIVE") < prompt.index(_B83_SECTION_TEXT), (
+        "packet is APPENDED after the original content"
+    )
+    assert len(_degraded_serve_spans(exporter)) == 1
+
+
+@pytest.mark.asyncio
 async def test_b83_arm_repair_merges_into_anthropic_params_system() -> None:
     """P1-d, anthropic arm — its single source is `params["system"]` when present.
 

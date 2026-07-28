@@ -2756,11 +2756,18 @@ def _payload_to_external_cli_prompt(
     leading_system = messages[0] if (messages and messages[0].get("role") == "system") else None
     if memory_packet is not None and not (system and leading_system is not None):
         if leading_system is not None:
-            content = leading_system.get("content")
+            # B-83 [P2-b] — serialize the existing content EXACTLY as the render
+            # loop below would (`_external_cli_message_content`, the shared
+            # authority), then append. Passing None for a non-string content
+            # would REPLACE the step's own system instructions with the packet
+            # alone — and since the external-CLI arm is text-only it ALWAYS
+            # degrades `standard_memory_tools`, making that the common path here,
+            # not an edge case.
             messages[0] = {
                 **leading_system,
                 "content": append_rendered_memory_packet(
-                    content if isinstance(content, str) else None, memory_packet
+                    _external_cli_message_content(leading_system.get("content", "")),
+                    memory_packet,
                 ),
             }
         else:
@@ -2778,13 +2785,21 @@ def _payload_to_external_cli_prompt(
         role = message.get("role", "user")
         if not isinstance(role, str) or not role:
             role = "user"
-        content = message.get("content", "")
-        if isinstance(content, str):
-            rendered_content = content
-        else:
-            rendered_content = json.dumps(content, sort_keys=True, default=str)
-        parts.append(f"{role}:\n{rendered_content}")
+        parts.append(f"{role}:\n{_external_cli_message_content(message.get('content', ''))}")
     return "\n\n".join(parts)
+
+
+def _external_cli_message_content(content: object) -> str:
+    """Render one message ``content`` to the external-CLI prompt's text form.
+
+    The single authority for that serialization, read by the render loop above
+    AND by the B-83 [P2-b] packet fold, so a repaired dispatch can never
+    represent the same content differently from an unrepaired one.
+    """
+
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, sort_keys=True, default=str)
 
 
 _ANTHROPIC_HITL_MAX_TOOL_TURNS = 16
@@ -3682,14 +3697,46 @@ def _fold_memory_packet_into_system(
     if messages and messages[0].get("role") == "system":
         head = messages[0]
         kwargs["messages"] = [
-            {
-                **head,
-                "content": append_rendered_memory_packet(str(head.get("content") or ""), rendered),
-            },
+            {**head, "content": _content_with_appended_packet(head.get("content"), rendered)},
             *messages[1:],
         ]
         return
     kwargs["messages"] = [{"role": "system", "content": rendered.content}, *messages]
+
+
+def _content_with_appended_packet(
+    content: object,
+    rendered: RenderedMemoryPromptPacket,
+) -> str | list[Any]:
+    """Append a packet to a message ``content``, PRESERVING its representation.
+
+    B-83 [P2-a]. OpenAI accepts a system message's ``content`` as either a
+    plain string or a content-part ARRAY. Coercing the array through ``str()``
+    before appending would put a Python repr on the wire — the structure is
+    silently destroyed and the parts stop being parts. So each shape is folded
+    in its own terms:
+
+    * ``str`` / ``None`` — string append through the shared seam.
+    * a parts SEQUENCE — the packet becomes one ADDITIONAL
+      ``{"type": "text", "text": ...}`` part (the same part shape this module
+      already emits at the Anthropic system block and the external-CLI
+      response), with every original part preserved in order.
+    * anything else — JSON-serialized first (``sort_keys`` + ``default=str``,
+      matching `_inject_upstream_context_message` and the external-CLI
+      renderer), then string-appended. Lossy-free and never a raise: an
+      unexpected shape is not this repair's problem to adjudicate.
+
+    Ollama shares this helper but can only ever take the string branch:
+    `ollama._types.Message.content` is `Optional[str]` (`ollama/_types.py:312`),
+    so a parts array could not reach the daemon through the typed client.
+    """
+
+    if content is None or isinstance(content, str):
+        return append_rendered_memory_packet(content, rendered)
+    if isinstance(content, Sequence) and not isinstance(content, str | bytes):
+        parts = list(cast(Sequence[Any], content))
+        return [*parts, {"type": "text", "text": rendered.content}]
+    return append_rendered_memory_packet(json.dumps(content, sort_keys=True, default=str), rendered)
 
 
 async def _dispatch_ollama(
