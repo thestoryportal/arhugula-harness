@@ -37,9 +37,11 @@ from harness_is.memory_retrieval import MemoryRetriever
 from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_runtime.lifecycle.retry_breaker_fallback import _classify_provider_exception
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionContext,
     MemoryToolExecutionDeniedError,
+    MemoryToolExecutionInputError,
     MemoryToolExecutionRequest,
     StandardMemoryToolExecutor,
 )
@@ -196,6 +198,124 @@ def _request(
         arguments=arguments,
         context=_context(),
     )
+
+
+def test_search_unknown_allowed_kind_raises_typed_input_error_and_fails_fast(
+    tmp_path: Path,
+) -> None:
+    """B-84 round 1: an unknown `allowed_kinds` entry must raise the TYPED
+    `MemoryToolExecutionInputError`, not the bare `ValueError` that
+    `MemoryRecordKind(...)` raises.
+
+    The distinction is load-bearing rather than cosmetic: `_classify_provider_exception`
+    fail-fasts on `MemoryToolExecutionInputError`, and because that class
+    SUBCLASSES `ValueError` (not the reverse) a bare `ValueError` misses the
+    isinstance check entirely and classifies `TRANSIENT_RETRY`. A batch of
+    [memory.write_note (valid), memory.search (unknown allowed_kind)] would then
+    commit the write, raise, and replay the whole dispatch — the exact
+    duplication class this arc closes, reached through the one raise site the
+    first pass missed. The second assertion is the cross-layer half: the REAL
+    exception instance the executor raises is what the classifier must
+    fail-fast, so it is fed to the real classifier rather than a hand-built
+    stand-in."""
+    _store_unused, executor = _executor(tmp_path)
+
+    with pytest.raises(MemoryToolExecutionInputError) as excinfo:
+        executor.execute(
+            _request(
+                MemoryToolName.SEARCH,
+                {
+                    "query": "codex memory tools workflow preferences",
+                    "scope_ref": _SCOPE_REF,
+                    "policy_ref": _POLICY_REF,
+                    "allowed_kinds": ["preference", "not_a_real_kind"],
+                },
+            )
+        )
+    message = str(excinfo.value)
+    assert "not_a_real_kind" in message  # names the offending value
+    assert MemoryRecordKind.PREFERENCE.value in message  # names the accepted kinds
+
+    # Cross-layer: the real exception instance fail-fasts (None = no staircase).
+    assert _classify_provider_exception(excinfo.value) is None
+
+
+_SEED_MEMORY_REF = "<seed>"
+
+
+@pytest.mark.parametrize(
+    ("helper", "tool", "arguments", "expected_fragment"),
+    [
+        (
+            "_optional_string_arg",
+            MemoryToolName.WRITE_NOTE,
+            {
+                "note": "A note whose idempotency_key is the wrong JSON type.",
+                "scope_ref": _SCOPE_REF,
+                "policy_ref": _POLICY_REF,
+                "idempotency_key": 17,
+            },
+            "idempotency_key",
+        ),
+        (
+            "_positive_int_arg",
+            MemoryToolName.SEARCH,
+            {
+                "query": "codex memory tools workflow preferences",
+                "scope_ref": _SCOPE_REF,
+                "policy_ref": _POLICY_REF,
+                "limit": "ten",
+            },
+            "limit",
+        ),
+        (
+            "_promotion_kind",
+            MemoryToolName.PROPOSE_PROMOTION,
+            {
+                "memory_ref": _SEED_MEMORY_REF,
+                "target_kind": "not_a_promotion_kind",
+                "policy_ref": _POLICY_REF,
+            },
+            "not_a_promotion_kind",
+        ),
+    ],
+)
+def test_malformed_argument_helpers_raise_typed_input_error(
+    tmp_path: Path,
+    helper: str,
+    tool: MemoryToolName,
+    arguments: dict[str, object],
+    expected_fragment: str,
+) -> None:
+    """B-84 merge-gate lens 3: pin the three PRE-EXISTING argument helpers to the
+    TYPED `MemoryToolExecutionInputError`, one malformed-model-input case each.
+
+    These three were already typed when the arc opened, so nothing here is a fix
+    — the point is that nothing pinned them. The classifier fail-fasts on
+    `MemoryToolExecutionInputError` and that class SUBCLASSES `ValueError`, so a
+    revert of any one of them to the bare `ValueError` / `KeyError` the
+    underlying operation raises would silently re-open the same
+    subclass-asymmetry door this arc closed at `_allowed_kinds`: the error would
+    classify `TRANSIENT_RETRY` and replay a batch whose earlier write already
+    committed. A parametrized pin is the cheap standing guard.
+
+    `helper` is carried for failure-message legibility — it names which helper a
+    red case belongs to."""
+    seed = _semantic_record(
+        kind=MemoryRecordKind.PREFERENCE,
+        statement="A seed record so the promotion case reaches its target_kind parse.",
+    )
+    _store_unused, executor = _executor(tmp_path, records=(seed,))
+    resolved = dict(arguments)
+    if resolved.get("memory_ref") == _SEED_MEMORY_REF:
+        resolved["memory_ref"] = str(seed.envelope.memory_id)
+
+    with pytest.raises(MemoryToolExecutionInputError) as excinfo:
+        executor.execute(_request(tool, resolved))
+
+    assert expected_fragment in str(excinfo.value), helper
+    # Cross-layer, on the REAL exception instance: fail-fast (None = no staircase).
+    assert _classify_provider_exception(excinfo.value) is None, helper
 
 
 def test_search_and_read_return_only_policy_allowed_refs(tmp_path: Path) -> None:
