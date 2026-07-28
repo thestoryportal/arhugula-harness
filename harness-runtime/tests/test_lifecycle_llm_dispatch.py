@@ -31,7 +31,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from harness_as.memory_tool_contracts import MemoryToolName
+from harness_as.memory_tool_contracts import (
+    MEMORY_TOOL_CONTRACTS,
+    MemoryToolName,
+    memory_tool_contract,
+)
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
 from harness_core import PersonaTier
@@ -128,6 +132,7 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
 )
 from harness_runtime.lifecycle.sync_dispatcher_facade import SyncDispatcherFacade
 from harness_runtime.memory_context import RuntimeMemoryContext
+from harness_runtime.memory_tool_executor import MemoryToolExecutionInputError
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -288,6 +293,8 @@ class _OpenAIFakeAdapter:
 class _OllamaClient:
     def __init__(self) -> None:
         self.last_kwargs: dict[str, Any] | None = None
+        self.calls: list[dict[str, Any]] = []
+        self.responses: list[_OllamaResponse] = []
         self.canned_response = _OllamaResponse(
             prompt_eval_count=20,
             eval_count=8,
@@ -296,6 +303,12 @@ class _OllamaClient:
 
     async def chat(self, **kwargs: Any) -> _OllamaResponse:
         self.last_kwargs = kwargs
+        # Snapshot the mutable continuation-turn `messages` list — the memory
+        # tool loop appends to it in place across turns, so a shared reference
+        # would make every recorded call show only the FINAL message state.
+        self.calls.append({**kwargs, "messages": list(kwargs.get("messages", []))})
+        if self.responses:
+            return self.responses.pop(0)
         return self.canned_response
 
 
@@ -1595,6 +1608,297 @@ def test_openai_memory_tool_wire_name_resolves_back_to_provider_neutral_identity
             }
         )
     assert "non-memory tool" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# B-82 — Ollama standard memory tools (C-MEM-14).
+#
+# `select_memory_access_mode` selects STANDARD_MEMORY_TOOLS for ollama, so the
+# bare ollama branch silently degraded the selected mode to ZERO memory access.
+# Unlike the OpenAI arm there is no wire-name encoding: ollama's `/api/chat`
+# accepts the DOTTED provider-neutral identities verbatim.
+# ---------------------------------------------------------------------------
+
+
+class _FakeStandardMemoryToolExecutor:
+    def __init__(self) -> None:
+        self.requests: list[Any] = []
+
+    def execute(self, request: Any) -> dict[str, object]:
+        self.requests.append(request)
+        return {
+            "results": [
+                {
+                    "memory_ref": "mem:semantic:preference:" + ("a" * 64),
+                    "record_kind": "preference",
+                    "packet_section_ref": "active_operator_project_preferences",
+                    "packet_hash": "b" * 64,
+                    "score": 100,
+                }
+            ],
+            "policy_ref": "policy:u-mem-16",
+        }
+
+
+def _ollama_memory_context() -> RuntimeMemoryContext:
+    return _standard_tools_memory_context(
+        provider="ollama",
+        model="llama3.2:3b",
+        family=ProviderFamily.LOCAL_OPEN_WEIGHT,
+    )
+
+
+def _ollama_dump(message: dict[str, Any]) -> dict[str, Any]:
+    """An ollama `ChatResponse.model_dump()` — NO `choices[]`, message top-level."""
+    return {"model": "llama3.2:3b", "done": True, "message": message}
+
+
+@pytest.mark.asyncio
+async def test_ollama_standard_memory_tools_serialize_dotted_provider_neutral_names() -> None:
+    """The injected ollama tools carry the DOTTED C-MEM-14 identities.
+
+    Ollama imposes no `^[a-zA-Z0-9_-]{1,64}$` name grammar (the constraint that
+    forced the OpenAI wire-name map), so introducing one here would encode a
+    false capability claim. This asserts the serialized array directly.
+    """
+    client = _OllamaClient()
+    adapter = _OllamaFakeAdapter(client)
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "search memory"}],
+                # A caller-supplied duplicate under the SAME dotted spelling —
+                # the only collision shape that exists on this path.
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "memory.search", "parameters": {"type": "object"}},
+                    },
+                    {
+                        "type": "function",
+                        "function": {"name": "weather.lookup", "parameters": {"type": "object"}},
+                    },
+                ],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    emitted = client.calls[0]["tools"]
+    names = [tool["function"]["name"] for tool in emitted]
+    # The length check matters: a set comparison alone cannot see a surviving
+    # caller duplicate of an injected name.
+    assert len(names) == len(MEMORY_TOOL_CONTRACTS) + 1, f"expected dedup; got {names!r}"
+    assert set(names) == {
+        "weather.lookup",
+        "memory.search",
+        "memory.read",
+        "memory.write_note",
+        "memory.propose_promotion",
+        "memory.request_redaction",
+    }, f"unexpected serialized memory tool names: {sorted(names)!r}"
+    # The scope_ref / policy_ref properties are bound to the dispatch's context,
+    # and the shared module-level contract schema is NOT mutated by the binding.
+    search = next(tool for tool in emitted if tool["function"]["name"] == "memory.search")
+    properties = search["function"]["parameters"]["properties"]
+    assert properties["scope_ref"] == {"type": "string", "enum": ["scope:u-mem-16"]}
+    assert properties["policy_ref"] == {"type": "string", "enum": ["policy:u-mem-16"]}
+    contract = memory_tool_contract(MemoryToolName.SEARCH).contract
+    assert contract.input_schema["properties"]["scope_ref"] != properties["scope_ref"]  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_ollama_standard_memory_tool_loop_executes_provider_neutral_tool() -> None:
+    """A scripted ollama tool call round-trips through the executor.
+
+    Ollama hands back `arguments` ALREADY DECODED as a mapping
+    (`ollama/_types.py:346`), and its `Message` carries no `tool_call_id`
+    (`_types.py:304-355`) — the tool-result turn correlates by `tool_name`.
+    """
+    client = _OllamaClient()
+    tool_call = {
+        "function": {
+            # Ollama echoes back the dotted identity we advertised.
+            "name": "memory.search",
+            "arguments": {
+                "query": "codex memory",
+                "scope_ref": "scope:u-mem-16",
+                "policy_ref": "policy:u-mem-16",
+            },
+        }
+    }
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {"role": "assistant", "content": "", "tool_calls": [tool_call]},
+            ),
+        ),
+        _OllamaResponse(
+            prompt_eval_count=31,
+            eval_count=9,
+            _dump=_ollama_dump({"role": "assistant", "content": "done"}),
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    adapter = _OllamaFakeAdapter(client)
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama", model="llama3.2:3b"),
+        _step(),
+        step_context=_step_context(),
+    )
+
+    assert len(executor.requests) == 1
+    # The executor receives the provider-neutral `MemoryToolName`, and the
+    # arguments mapping passes through undecoded-by-us.
+    assert executor.requests[0].tool_name is MemoryToolName.SEARCH
+    assert executor.requests[0].arguments["query"] == "codex memory"
+    assert executor.requests[0].context.provider == "ollama"
+    assert executor.requests[0].context.policy_ref == "policy:u-mem-16"
+
+    assert len(client.calls) == 2
+    continuation = client.calls[1]["messages"]
+    assert continuation[-2] == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [tool_call],
+    }
+    # The ollama tool-result turn shape — `tool_name`, NOT `tool_call_id`/`name`.
+    assert continuation[-1]["role"] == "tool"
+    assert continuation[-1]["tool_name"] == "memory.search"
+    assert "tool_call_id" not in continuation[-1]
+    assert json.loads(continuation[-1]["content"])["results"][0]["record_kind"] == "preference"
+
+    # The final bundle is the bare path's shape — top-level `message`, and usage
+    # read off the FINAL turn's eval counts (no `response_id`).
+    assert result["message"]["content"] == "done"
+    attrs = exporter.get_finished_spans()[0].attributes or {}
+    assert attrs["gen_ai.usage.input_tokens"] == 31
+    assert attrs["gen_ai.usage.output_tokens"] == 9
+    assert "gen_ai.response.id" not in attrs
+
+
+def test_ollama_memory_tool_call_resolution_fails_loud_on_unknown_name() -> None:
+    """A non-memory tool name in the memory loop raises the typed shape error."""
+    resolve = llm_dispatch_module._ollama_memory_tool_name_and_arguments
+
+    tool_name, arguments = resolve(
+        {"function": {"name": "memory.write_note", "arguments": {"scope_ref": "scope:x"}}}
+    )
+    assert tool_name is MemoryToolName.WRITE_NOTE
+    assert arguments == {"scope_ref": "scope:x"}
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        resolve({"function": {"name": "memory_search", "arguments": {}}})
+    # `memory_search` is the OPENAI wire spelling — it is not a name this path
+    # ever advertises, so it fails loud rather than being silently tolerated.
+    assert "non-memory tool" in str(excinfo.value)
+
+
+def test_ollama_memory_tool_arguments_fail_loud_when_malformed() -> None:
+    """A JSON string is tolerated; junk and non-object arguments fail loud."""
+    resolve = llm_dispatch_module._ollama_memory_tool_name_and_arguments
+
+    _, arguments = resolve(
+        {"function": {"name": "memory.read", "arguments": '{"scope_ref": "scope:x"}'}}
+    )
+    assert arguments == {"scope_ref": "scope:x"}
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        resolve({"function": {"name": "memory.read", "arguments": "not json at all"}})
+    assert "not valid JSON" in str(excinfo.value)
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        resolve({"function": {"name": "memory.read", "arguments": "[1, 2]"}})
+    assert "must decode to an object" in str(excinfo.value)
+
+    with pytest.raises(LLMDispatchPayloadShapeError) as excinfo:
+        resolve({"function": {"name": "memory.read", "arguments": 17}})
+    assert "arguments missing" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_ollama_scope_ref_mismatch_fails_loud_mirroring_openai() -> None:
+    """A tool call whose `scope_ref` does not match the context fails loud.
+
+    Deliberately mirrors the OpenAI semantic (`_standard_memory_tool_context`
+    raises) — a feed-the-error-back-as-a-tool-turn recovery mechanism here
+    would be a per-provider divergence, i.e. a design extension.
+    """
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "memory.search",
+                                "arguments": {"query": "x", "scope_ref": "scope:someone-else"},
+                            }
+                        }
+                    ],
+                }
+            ),
+        )
+    ]
+    adapter = _OllamaFakeAdapter(client)
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(MemoryToolExecutionInputError):
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+
+@pytest.mark.asyncio
+async def test_ollama_without_standard_memory_tools_stays_on_the_bare_path() -> None:
+    """No standard-tools memory context bound → the bare branch, tools untouched.
+
+    Guards the B-82 branch guard against over-firing: a PROMPT_EXTENSION_PACKET
+    context (or no memory context at all) must NOT inject memory tools.
+    """
+    client = _OllamaClient()
+    adapter = _OllamaFakeAdapter(client)
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        memory_context=_prompt_extension_memory_context(provider="ollama"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert len(client.calls) == 1
+    assert "tools" not in client.calls[0]
 
 
 @pytest.mark.asyncio

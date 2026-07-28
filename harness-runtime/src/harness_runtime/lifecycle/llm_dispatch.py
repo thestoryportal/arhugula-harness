@@ -1708,13 +1708,30 @@ class RuntimeLLMDispatcher:
                 cache_attrs = None
                 request_attrs = None
             elif provider_name == "ollama":
-                response, usage_attrs = await _dispatch_ollama(
-                    adapter,
-                    model,
-                    payload,
-                    system=effective_system_prompt,
-                    upstream=upstream_output,
-                )
+                if (
+                    standard_memory_tool_executor is not None
+                    and memory_context is not None
+                    and memory_context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
+                ):
+                    response, usage_attrs = await _dispatch_ollama_with_standard_memory_tools(
+                        adapter,
+                        model,
+                        payload,
+                        memory_context=memory_context,
+                        standard_memory_tool_executor=standard_memory_tool_executor,
+                        step_context=step_context,
+                        step_id=step_id,
+                        system=effective_system_prompt,
+                        upstream=upstream_output,
+                    )
+                else:
+                    response, usage_attrs = await _dispatch_ollama(
+                        adapter,
+                        model,
+                        payload,
+                        system=effective_system_prompt,
+                        upstream=upstream_output,
+                    )
                 cache_attrs = None
                 request_attrs = None
             elif isinstance(adapter, _ExternalCLIProviderLike):
@@ -2971,7 +2988,7 @@ def _openai_tools_with_standard_memory(
             if not isinstance(tool, Mapping):
                 continue
             tool_mapping = dict(cast(Mapping[str, Any], tool))
-            if _openai_function_tool_name(tool_mapping) in memory_tool_names:
+            if _function_tool_name(tool_mapping) in memory_tool_names:
                 continue
             preserved.append(tool_mapping)
     return [*preserved, *_openai_standard_memory_tools(memory_context)]
@@ -3009,7 +3026,12 @@ def _bind_schema_fixed_value(properties: dict[str, object], name: str, value: st
         properties[name] = {"type": "string", "enum": [value]}
 
 
-def _openai_function_tool_name(tool: Mapping[str, Any]) -> str | None:
+def _function_tool_name(tool: Mapping[str, Any]) -> str | None:
+    """Read ``tools[].function.name`` off the shared ``{"type":"function",...}`` shape.
+
+    OpenAI and Ollama advertise function tools under the identical envelope, so
+    this reader is provider-neutral.
+    """
     function = tool.get("function")
     if not isinstance(function, Mapping):
         return None
@@ -3033,13 +3055,223 @@ async def _dispatch_ollama(
     """
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     response = await adapter.client.chat(model=model, **kwargs)
+    return _ollama_response_bundle(response)
 
+
+async def _dispatch_ollama_with_standard_memory_tools(
+    adapter: Any,
+    model: str,
+    payload: ProviderAgnosticPayload,
+    *,
+    memory_context: RuntimeMemoryContext,
+    standard_memory_tool_executor: Any,
+    step_context: StepExecutionContext,
+    step_id: str,
+    system: str | None = None,
+    upstream: Mapping[str, Any] | None = None,
+    max_iterations: int = 16,
+) -> tuple[Mapping[str, Any], _UsageAttrs]:
+    """Ollama provider branch with C-MEM-14 standard memory tool continuation.
+
+    B-82 — `select_memory_access_mode` selects `STANDARD_MEMORY_TOOLS` for
+    ollama, so the bare branch silently degraded the selected mode to zero
+    memory access. Unlike the OpenAI arm there is NO wire-name encoding here:
+    ollama's ``/api/chat`` accepts the dotted C-MEM-14 provider-neutral
+    identities (``memory.search`` ...) verbatim and echoes them back in
+    ``message.tool_calls[].function.name``.
+    """
+    kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
+    kwargs["tools"] = _ollama_tools_with_standard_memory(kwargs.get("tools"), memory_context)
+    messages = list(kwargs["messages"])
+    kwargs["messages"] = messages
+
+    for _ in range(max_iterations):
+        response = await adapter.client.chat(model=model, **kwargs)
+        response_mapping = _response_to_mapping(response)
+        tool_calls = _ollama_tool_calls(response_mapping)
+        if not tool_calls:
+            return _ollama_response_bundle(response)
+
+        messages.append(dict(_ollama_message(response_mapping)))
+        messages.extend(
+            _ollama_memory_tool_result_message(
+                call,
+                standard_memory_tool_executor=standard_memory_tool_executor,
+                memory_context=memory_context,
+                step_context=step_context,
+                step_id=step_id,
+                provider="ollama",
+                model=model,
+            )
+            for call in tool_calls
+        )
+
+    raise RuntimeError(
+        f"Ollama standard memory tool loop exceeded {max_iterations} continuation turns"
+    )
+
+
+def _ollama_response_bundle(response: Any) -> tuple[Mapping[str, Any], _UsageAttrs]:
     usage_attrs = _UsageAttrs(
         input_tokens=getattr(response, "prompt_eval_count", None),
         output_tokens=getattr(response, "eval_count", None),
         response_id=None,
     )
     return (_response_to_mapping(response), usage_attrs)
+
+
+def _ollama_message(response: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Read the assistant turn off an ollama ``ChatResponse`` dump.
+
+    Ollama has NO ``choices[]`` envelope — ``ChatResponse.message`` is
+    top-level (`ollama/_types.py:418`).
+    """
+    message = response.get("message")
+    if not isinstance(message, Mapping):
+        raise LLMDispatchPayloadShapeError("Ollama response message missing")
+    return cast(Mapping[str, Any], message)
+
+
+def _ollama_tool_calls(response: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    message = _ollama_message(response)
+    tool_calls = message.get("tool_calls")
+    if tool_calls is None:
+        return ()
+    if isinstance(tool_calls, str | bytes) or not isinstance(tool_calls, Sequence):
+        raise LLMDispatchPayloadShapeError("Ollama tool_calls must be a sequence")
+    calls: list[Mapping[str, Any]] = []
+    for item in cast(Sequence[object], tool_calls):
+        if not isinstance(item, Mapping):
+            raise LLMDispatchPayloadShapeError("Ollama tool_call entries must be mappings")
+        calls.append(cast(Mapping[str, Any], item))
+    return tuple(calls)
+
+
+def _ollama_memory_tool_result_message(
+    call: Mapping[str, Any],
+    *,
+    standard_memory_tool_executor: Any,
+    memory_context: RuntimeMemoryContext,
+    step_context: StepExecutionContext,
+    step_id: str,
+    provider: str,
+    model: str,
+) -> dict[str, Any]:
+    tool_name, arguments = _ollama_memory_tool_name_and_arguments(call)
+    request = MemoryToolExecutionRequest(
+        tool_name=tool_name,
+        arguments=arguments,
+        context=_standard_memory_tool_context(
+            arguments,
+            memory_context=memory_context,
+            step_context=step_context,
+            step_id=step_id,
+            provider=provider,
+            model=model,
+        ),
+    )
+    result = standard_memory_tool_executor.execute(request)
+    # Ollama's `Message` carries NO `tool_call_id` — the typed client drops the
+    # daemon's tool-call id entirely, so no correlation id is reachable. The
+    # tool-result turn correlates by NAME via `Message.tool_name`
+    # (`ollama/_types.py:330`); an extra `tool_call_id` key would be silently
+    # dropped by the pydantic model, so it is deliberately not emitted.
+    return {
+        "role": "tool",
+        "tool_name": tool_name.value,
+        "content": json.dumps(result, sort_keys=True, separators=(",", ":"), default=str),
+    }
+
+
+def _ollama_memory_tool_name_and_arguments(
+    call: Mapping[str, Any],
+) -> tuple[MemoryToolName, dict[str, object]]:
+    function = call.get("function")
+    if not isinstance(function, Mapping):
+        raise LLMDispatchPayloadShapeError("Ollama memory tool_call.function missing")
+    function_mapping = cast(Mapping[str, object], function)
+    name = function_mapping.get("name")
+    if not isinstance(name, str) or not name:
+        raise LLMDispatchPayloadShapeError("Ollama memory tool_call.function.name missing")
+    try:
+        tool_name = MemoryToolName(name)
+    except ValueError as exc:
+        raise LLMDispatchPayloadShapeError(
+            f"Ollama standard memory loop received non-memory tool {name!r}"
+        ) from exc
+    raw_arguments = function_mapping.get("arguments")
+    # `Message.ToolCall.Function.arguments` is typed `Mapping[str, Any]`
+    # (`ollama/_types.py:346`) — already decoded, so the happy path does NOT
+    # json.loads. A JSON string is still accepted defensively for client
+    # versions / hand-rolled stubs that hand back the OpenAI-shaped encoding.
+    if isinstance(raw_arguments, Mapping):
+        return (tool_name, dict(cast(Mapping[str, object], raw_arguments)))
+    if isinstance(raw_arguments, str):
+        try:
+            parsed = json.loads(raw_arguments)
+        except json.JSONDecodeError as exc:
+            raise LLMDispatchPayloadShapeError(
+                f"Ollama memory tool {name!r} arguments are not valid JSON"
+            ) from exc
+        if not isinstance(parsed, Mapping):
+            raise LLMDispatchPayloadShapeError(
+                f"Ollama memory tool {name!r} arguments must decode to an object"
+            )
+        return (tool_name, dict(cast(Mapping[str, object], parsed)))
+    raise LLMDispatchPayloadShapeError(f"Ollama memory tool {name!r} arguments missing")
+
+
+def _ollama_tools_with_standard_memory(
+    existing_tools: object,
+    memory_context: RuntimeMemoryContext,
+) -> list[dict[str, Any]]:
+    # Drop a caller-supplied tool that names one of the injected memory tools.
+    # The collision set is the DOTTED provider-neutral identities only — unlike
+    # OpenAI, ollama needs no second wire spelling, so there is no second name
+    # to collide on.
+    memory_tool_names = {entry.tool.value for entry in MEMORY_TOOL_CONTRACTS}
+    preserved: list[dict[str, Any]] = []
+    if isinstance(existing_tools, Sequence) and not isinstance(existing_tools, str | bytes):
+        for tool in cast(Sequence[object], existing_tools):
+            if not isinstance(tool, Mapping):
+                continue
+            tool_mapping = dict(cast(Mapping[str, Any], tool))
+            if _function_tool_name(tool_mapping) in memory_tool_names:
+                continue
+            preserved.append(tool_mapping)
+    return [*preserved, *_ollama_standard_memory_tools(memory_context)]
+
+
+def _ollama_standard_memory_tools(memory_context: RuntimeMemoryContext) -> list[dict[str, Any]]:
+    if memory_context.scope_ref is None:
+        raise MemoryToolExecutionInputError(
+            "standard memory tool schema injection requires RuntimeMemoryContext.scope_ref"
+        )
+    tools: list[dict[str, Any]] = []
+    for entry in MEMORY_TOOL_CONTRACTS:
+        # deepcopy BEFORE mutating — `entry.contract.input_schema` is the shared
+        # module-level contract object; binding the fixed values in place would
+        # leak this dispatch's scope_ref/policy_ref into every concurrent one.
+        parameters: dict[str, object] = deepcopy(entry.contract.input_schema)
+        properties = parameters.get("properties")
+        if not isinstance(properties, dict):
+            raise MemoryToolExecutionInputError("memory tool input schema properties missing")
+        schema_properties = cast("dict[str, object]", properties)
+        _bind_schema_fixed_value(schema_properties, "scope_ref", memory_context.scope_ref)
+        _bind_schema_fixed_value(schema_properties, "policy_ref", memory_context.policy_ref)
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    # DOTTED provider-neutral identity — no wire-name map on this
+                    # path (see `_dispatch_ollama_with_standard_memory_tools`).
+                    "name": entry.tool.value,
+                    "description": entry.contract.description,
+                    "parameters": parameters,
+                },
+            }
+        )
+    return tools
 
 
 async def _dispatch_external_cli(
