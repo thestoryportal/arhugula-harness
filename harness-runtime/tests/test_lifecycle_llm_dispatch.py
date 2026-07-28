@@ -1659,7 +1659,14 @@ async def test_openai_memory_tool_batch_is_validated_before_any_call_executes() 
                     scope_ref="scope:u-mem-16",
                     policy_ref="policy:u-mem-16",
                 ),
-                _openai_tool_call("call_bogus", "memory_not_a_tool"),
+                # A MEMORY-named call with a malformed payload — the case that
+                # still fails loud. (A non-memory name is the caller's and is
+                # handed back instead; witnessed separately below.)
+                {
+                    "id": "call_bad_args",
+                    "type": "function",
+                    "function": {"name": "memory_search", "arguments": "not json at all"},
+                },
             ),
         )
     ]
@@ -1722,6 +1729,138 @@ async def test_openai_memory_tool_loop_raises_exhaustion_before_executing_final_
         "the final iteration's batch must not execute — nothing can carry its "
         f"results back; got {len(executor.requests)} executions"
     )
+
+
+@pytest.mark.asyncio
+async def test_openai_memory_read_executes_without_a_scope_ref_argument() -> None:
+    """`memory.read` declares NO `scope_ref` — requiring one made it unreachable.
+
+    `memory.read` / `memory.propose_promotion` / `memory.request_redaction`
+    declare no `scope_ref` AND set `additionalProperties: false`
+    (`harness-as/src/harness_as/memory_tool_contracts.py`), so a schema-conformant
+    model cannot send one. The executor draws the same line — `_require_scope_ref`
+    is reached only from `_search` / `_write_note`
+    (`memory_tool_executor.py:195` / `:262`).
+    """
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_read",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump(
+                "cmpl_read",
+                _openai_tool_call(
+                    "call_read",
+                    "memory_read",
+                    memory_ref="mem:semantic:preference:" + ("a" * 64),
+                    policy_ref="policy:u-mem-16",
+                ),
+            ),
+        ),
+        _ProviderResponse(
+            id="cmpl_done",
+            usage=_Usage(prompt_tokens=12, completion_tokens=5),
+            _dump={"id": "cmpl_done", "choices": [{"message": {"role": "assistant"}}]},
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert [r.tool_name for r in executor.requests] == [MemoryToolName.READ]
+    # The authoritative scope_ref is the CONTEXT's, never the argument's.
+    assert executor.requests[0].context.scope_ref == "scope:u-mem-16"
+    assert "scope_ref" not in executor.requests[0].arguments
+
+
+@pytest.mark.asyncio
+async def test_openai_mixed_memory_and_caller_tool_batch_returns_to_caller() -> None:
+    """A batch containing a caller-advertised tool goes back to the caller whole.
+
+    Auto-injected memory tools must not break ordinary tool workflows, and no
+    memory call from a mixed batch may execute before control returns.
+    """
+    memory_call = _openai_tool_call(
+        "call_search",
+        "memory_search",
+        query="x",
+        scope_ref="scope:u-mem-16",
+        policy_ref="policy:u-mem-16",
+    )
+    caller_call = _openai_tool_call("call_weather", "weather_lookup", city="lisbon")
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_mixed",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump("cmpl_mixed", memory_call, caller_call),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("openai"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "weather_lookup", "parameters": {"type": "object"}},
+                    }
+                ],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert executor.requests == [], "no memory call may execute from a caller-owned batch"
+    assert len(client.chat.completions.calls) == 1, "the loop must not continue"
+    assert result["choices"][0]["message"]["tool_calls"] == [memory_call, caller_call]
+
+
+@pytest.mark.asyncio
+async def test_openai_caller_only_tool_batch_matches_bare_path_semantics() -> None:
+    """Bare-path parity: a non-memory tool_call is returned, never raised on.
+
+    `_dispatch_openai` returns every tool_call to the caller untouched whatever
+    it names, so a hallucinated name is handed back too rather than becoming a
+    new failure mode that only appears once automatic memory is enabled.
+    """
+    hallucinated = _openai_tool_call("call_ghost", "not_a_tool_anyone_advertised")
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_ghost",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump("cmpl_ghost", hallucinated),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert executor.requests == []
+    assert result["choices"][0]["message"]["tool_calls"] == [hallucinated]
 
 
 # ---------------------------------------------------------------------------
@@ -2085,6 +2224,139 @@ async def test_ollama_memory_tool_loop_raises_exhaustion_before_executing_final_
         "the final iteration's batch must not execute — nothing can carry its "
         f"results back; got {len(executor.requests)} executions"
     )
+
+
+@pytest.mark.asyncio
+async def test_ollama_memory_read_executes_without_a_scope_ref_argument() -> None:
+    """Ollama mirror — `memory.read` is reachable without a `scope_ref` argument."""
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "memory.read",
+                                "arguments": {
+                                    "memory_ref": "mem:semantic:preference:" + ("a" * 64),
+                                    "policy_ref": "policy:u-mem-16",
+                                },
+                            }
+                        }
+                    ],
+                }
+            ),
+        ),
+        _OllamaResponse(
+            prompt_eval_count=31,
+            eval_count=9,
+            _dump=_ollama_dump({"role": "assistant", "content": "done"}),
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert [r.tool_name for r in executor.requests] == [MemoryToolName.READ]
+    assert executor.requests[0].context.scope_ref == "scope:u-mem-16"
+    assert "scope_ref" not in executor.requests[0].arguments
+    assert result["message"]["content"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_ollama_mixed_memory_and_caller_tool_batch_returns_to_caller() -> None:
+    """Ollama mirror — a mixed batch goes back to the caller, executing nothing."""
+    memory_call = {
+        "function": {
+            "name": "memory.search",
+            "arguments": {
+                "query": "x",
+                "scope_ref": "scope:u-mem-16",
+                "policy_ref": "policy:u-mem-16",
+            },
+        }
+    }
+    caller_call = {"function": {"name": "weather.lookup", "arguments": {"city": "lisbon"}}}
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {"role": "assistant", "content": "", "tool_calls": [memory_call, caller_call]}
+            ),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "weather.lookup", "parameters": {"type": "object"}},
+                    }
+                ],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert executor.requests == [], "no memory call may execute from a caller-owned batch"
+    assert len(client.calls) == 1, "the loop must not continue"
+    assert result["message"]["tool_calls"] == [memory_call, caller_call]
+
+
+@pytest.mark.asyncio
+async def test_ollama_caller_only_tool_batch_matches_bare_path_semantics() -> None:
+    """Ollama mirror of the bare-path parity witness.
+
+    Note `memory_search` — the OPENAI wire spelling — is a caller-owned name on
+    this path: ollama advertises only the dotted identities, so the underscore
+    form names nothing we injected.
+    """
+    hallucinated = {"function": {"name": "memory_search", "arguments": {}}}
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump({"role": "assistant", "content": "", "tool_calls": [hallucinated]}),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert executor.requests == []
+    assert result["message"]["tool_calls"] == [hallucinated]
 
 
 @pytest.mark.asyncio

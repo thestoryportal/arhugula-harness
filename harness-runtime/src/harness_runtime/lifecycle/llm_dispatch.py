@@ -2739,6 +2739,26 @@ class _PreparedMemoryToolCall:
     tool_call_id: str | None = None
 
 
+#: The dotted C-MEM-14 provider-neutral identities, as a membership set.
+_MEMORY_TOOL_NAMES: Final[frozenset[str]] = frozenset(tool.value for tool in MemoryToolName)
+
+
+def _all_calls_are_memory_tools(
+    names: Sequence[str | None],
+    memory_names: frozenset[str],
+) -> bool:
+    """True only when EVERY call in the batch names a memory tool we advertised.
+
+    A batch containing any other call — a legitimate caller-advertised tool that
+    survived the dedup filter, a malformed tool_call shape, or a hallucinated
+    name — belongs to the CALLER. The bare dispatch paths (`_dispatch_openai` /
+    `_dispatch_ollama`) return every tool_call to the caller untouched, whatever
+    it names; auto-injecting memory tools must not turn that into a raise, or
+    enabling automatic memory would break ordinary tool workflows.
+    """
+    return all(name is not None and name in memory_names for name in names)
+
+
 def _memory_tool_loop_exhausted(provider_label: str, max_iterations: int) -> RuntimeError:
     """The C-MEM-14 continuation-loop bound error, shared by both provider loops.
 
@@ -2777,6 +2797,14 @@ async def _dispatch_openai_with_standard_memory_tools(
         response_mapping = _response_to_mapping(response)
         tool_calls = _openai_tool_calls(response_mapping)
         if not tool_calls:
+            return _openai_response_bundle(response)
+        if not _all_calls_are_memory_tools(
+            [_function_tool_name(call) for call in tool_calls],
+            _OPENAI_MEMORY_TOOL_CALL_NAMES,
+        ):
+            # The batch is the CALLER's — hand the whole response back
+            # unprocessed (bare-path parity) and execute NOTHING from it, so a
+            # mixed batch cannot half-commit memory before control returns.
             return _openai_response_bundle(response)
         if iteration + 1 >= max_iterations:
             # No iteration budget remains to send these results back, so the
@@ -2877,6 +2905,7 @@ def _openai_prepared_memory_tool_calls(
                     arguments=arguments,
                     context=_standard_memory_tool_context(
                         arguments,
+                        tool_name=tool_name,
                         memory_context=memory_context,
                         step_context=step_context,
                         step_id=step_id,
@@ -2952,9 +2981,42 @@ def _openai_memory_tool_name_and_arguments(
     raise LLMDispatchPayloadShapeError(f"OpenAI memory tool {name!r} arguments missing")
 
 
+def _memory_tools_declaring(field: str) -> frozenset[MemoryToolName]:
+    """Which C-MEM-14 tools declare ``field`` in their own input schema.
+
+    Same authority ``_bind_schema_fixed_value`` uses when it binds a fixed enum
+    value (presence in the contract's ``properties``), and the same partition
+    the executor itself enforces: ``StandardMemoryToolExecutor._require_scope_ref``
+    is reached ONLY from ``_search`` and ``_write_note``
+    (`memory_tool_executor.py:195` / `:262`) — exactly the two contracts that
+    declare ``scope_ref``.
+    """
+    return frozenset(
+        entry.tool
+        for entry in MEMORY_TOOL_CONTRACTS
+        if isinstance(properties := entry.contract.input_schema.get("properties"), Mapping)
+        and field in properties
+    )
+
+
+#: `memory.read` / `memory.propose_promotion` / `memory.request_redaction` declare
+#: NO `scope_ref` and set `additionalProperties: false`
+#: (`harness-as/src/harness_as/memory_tool_contracts.py`), so a schema-conformant
+#: model CANNOT send one. Requiring it in the arguments for every tool — as this
+#: dispatch-side check originally did — made three of the five ADVERTISED tools
+#: permanently unreachable: they failed here before ever reaching the executor.
+#: The authoritative `scope_ref` was never the argument anyway; it is
+#: `RuntimeMemoryContext.scope_ref`, and the argument is only a cross-check,
+#: which is exactly why it can be scoped to the tools that carry one.
+_MEMORY_TOOLS_DECLARING_SCOPE_REF: Final[frozenset[MemoryToolName]] = _memory_tools_declaring(
+    "scope_ref"
+)
+
+
 def _standard_memory_tool_context(
     arguments: Mapping[str, object],
     *,
+    tool_name: MemoryToolName,
     memory_context: RuntimeMemoryContext,
     step_context: StepExecutionContext,
     step_id: str,
@@ -2969,11 +3031,14 @@ def _standard_memory_tool_context(
         raise MemoryToolExecutionInputError(
             "standard memory tool dispatch requires RuntimeMemoryContext.scope_ref"
         )
-    scope_ref = arguments.get("scope_ref")
-    if not isinstance(scope_ref, str) or not scope_ref:
-        raise MemoryToolExecutionInputError("standard memory tool call requires scope_ref")
-    if scope_ref != memory_context.scope_ref:
-        raise MemoryToolExecutionInputError("standard memory tool scope_ref does not match context")
+    if tool_name in _MEMORY_TOOLS_DECLARING_SCOPE_REF:
+        scope_ref = arguments.get("scope_ref")
+        if not isinstance(scope_ref, str) or not scope_ref:
+            raise MemoryToolExecutionInputError("standard memory tool call requires scope_ref")
+        if scope_ref != memory_context.scope_ref:
+            raise MemoryToolExecutionInputError(
+                "standard memory tool scope_ref does not match context"
+            )
     token_budget = memory_context.packet.token_budget if memory_context.packet is not None else 0
     return MemoryToolExecutionContext(
         run_id=memory_context.run_id,
@@ -3041,6 +3106,13 @@ _OPENAI_MEMORY_TOOL_FROM_WIRE: Final[dict[str, MemoryToolName]] = (
     _invert_openai_memory_tool_wire_names()
 )
 
+#: Every spelling an OpenAI tool_call can carry and still be OURS — the wire
+#: names we actually advertise, plus the dotted identities the inbound resolver
+#: tolerates for byte-compat. Anything outside this set is the caller's.
+_OPENAI_MEMORY_TOOL_CALL_NAMES: Final[frozenset[str]] = _MEMORY_TOOL_NAMES | frozenset(
+    _OPENAI_MEMORY_TOOL_FROM_WIRE
+)
+
 
 def _openai_tools_with_standard_memory(
     existing_tools: object,
@@ -3099,10 +3171,11 @@ def _bind_schema_fixed_value(properties: dict[str, object], name: str, value: st
 
 
 def _function_tool_name(tool: Mapping[str, Any]) -> str | None:
-    """Read ``tools[].function.name`` off the shared ``{"type":"function",...}`` shape.
+    """Read ``function.name`` off the shared ``{"type":"function",...}`` shape.
 
-    OpenAI and Ollama advertise function tools under the identical envelope, so
-    this reader is provider-neutral.
+    OpenAI and Ollama advertise function tools — and echo function CALLS back —
+    under the identical envelope, so this reader is provider-neutral and serves
+    both the outbound ``tools[]`` array and the inbound ``tool_calls[]`` list.
     """
     function = tool.get("function")
     if not isinstance(function, Mapping):
@@ -3162,6 +3235,12 @@ async def _dispatch_ollama_with_standard_memory_tools(
         response_mapping = _response_to_mapping(response)
         tool_calls = _ollama_tool_calls(response_mapping)
         if not tool_calls:
+            return _ollama_response_bundle(response)
+        if not _all_calls_are_memory_tools(
+            [_function_tool_name(call) for call in tool_calls],
+            _MEMORY_TOOL_NAMES,
+        ):
+            # Caller-owned batch — see the OpenAI arm's matching comment.
             return _ollama_response_bundle(response)
         if iteration + 1 >= max_iterations:
             # Bound reached — raise BEFORE executing. See the OpenAI arm's
@@ -3246,6 +3325,7 @@ def _ollama_prepared_memory_tool_calls(
                     arguments=arguments,
                     context=_standard_memory_tool_context(
                         arguments,
+                        tool_name=tool_name,
                         memory_context=memory_context,
                         step_context=step_context,
                         step_id=step_id,
