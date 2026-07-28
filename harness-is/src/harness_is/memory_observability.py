@@ -147,20 +147,77 @@ def set_memory_telemetry_attributes(
         span.set_attribute("memory.context_editing_active", context_editing_active)
 
 
-def classify_memory_failure(exc: BaseException) -> MemoryTelemetryFailureClass:
-    """Classify memory failures into the C-MEM-19 vocabulary."""
+MEMORY_FAILURE_CLASS_ATTRIBUTE = "memory_failure_class"
+"""Class-attribute name an exception type uses to declare its C-MEM-19 class.
 
+An exception type whose C-MEM-19 failure class is determined by the type
+itself declares it at its own definition site::
+
+    class MemoryToolExecutionDeniedError(MemoryToolExecutionError):
+        memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+            MemoryTelemetryFailureClass.POLICY_DENIAL
+        )
+
+The declaration is inherited by subclasses that do not override it, and it is
+read by `classify_memory_failure` ahead of any message heuristic (B-88).
+"""
+
+
+def classify_memory_failure(exc: BaseException) -> MemoryTelemetryFailureClass:
+    """Classify memory failures into the C-MEM-19 vocabulary.
+
+    The raised exception TYPE is the authority: a type whose failure class is
+    fixed by construction declares it as a `memory_failure_class` class
+    attribute (see `MEMORY_FAILURE_CLASS_ATTRIBUTE`), and that declaration wins
+    outright. The message/type-name heuristics below are the RESIDUAL, reached
+    only by types that declare nothing - stdlib and third-party exceptions, and
+    harness types whose failure class genuinely is not determined by the type
+    (a store `ValueError` family, a pydantic `ValidationError`).
+
+    B-88: the residual previously ran for every exception, and its IO rule
+    matched the substring `"io"` in the lowercased type name - which matches
+    "execut-io-n", "operat-io-n", "validat-io-n". The whole
+    `MemoryToolExecution*` family therefore emitted `io_failure`, including
+    genuine policy denials whose wording missed the earlier rules, violating
+    the C-MEM-19 distinguish invariant on an axis the vocabulary already has.
+    The name-substring IO rule is deleted; `isinstance(exc, OSError)` remains
+    (`IOError` is an alias of `OSError`, so the old tuple was redundant).
+    """
+
+    declared = _declared_failure_class(exc)
+    if declared is not None:
+        return declared
     message = str(exc).lower()
     exc_name = type(exc).__name__.lower()
     if "policy" in message or "denied" in message or "unavailable" in message:
         return MemoryTelemetryFailureClass.POLICY_DENIAL
     if "path" in message or "traversal" in message or "prefix" in message:
         return MemoryTelemetryFailureClass.PATH_VIOLATION
-    if isinstance(exc, (OSError, IOError)) or "io" in exc_name:
+    if isinstance(exc, OSError):
         return MemoryTelemetryFailureClass.IO_FAILURE
     if "json" in exc_name or "serial" in message or "decode" in message:
         return MemoryTelemetryFailureClass.SERIALIZATION_FAILURE
     return MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
+
+
+def _declared_failure_class(exc: BaseException) -> MemoryTelemetryFailureClass | None:
+    """Return the failure class the exception's type declares, if any.
+
+    The attribute is read from ``type(exc)``, NOT the instance: only the
+    exception HIERARCHY is the declaration authority — an instance-level
+    assignment cannot shadow the type's declaration, and a raising instance
+    property cannot mask the original failure (codex R1). Class-level
+    ``getattr`` still walks the MRO, so a subclass inherits its base's
+    declaration for free. Only a real `MemoryTelemetryFailureClass` member is
+    honoured - a string or a misspelled attribute is ignored rather than
+    silently becoming an invented class outside the closed C-MEM-19
+    vocabulary.
+    """
+
+    declared = getattr(type(exc), MEMORY_FAILURE_CLASS_ATTRIBUTE, None)
+    if isinstance(declared, MemoryTelemetryFailureClass):
+        return declared
+    return None
 
 
 class _MemoryTelemetrySpanContext(AbstractContextManager[Any]):
@@ -226,6 +283,7 @@ def _string_value(value: MemoryTelemetryOperationName | MemoryTelemetryFailureCl
 
 
 __all__ = [
+    "MEMORY_FAILURE_CLASS_ATTRIBUTE",
     "MemoryTelemetryFailureClass",
     "MemoryTelemetryOperationName",
     "classify_memory_failure",

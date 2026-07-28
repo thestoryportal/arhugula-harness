@@ -41,8 +41,10 @@ from harness_runtime.lifecycle.retry_breaker_fallback import _classify_provider_
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionContext,
     MemoryToolExecutionDeniedError,
+    MemoryToolExecutionError,
     MemoryToolExecutionInputError,
     MemoryToolExecutionRequest,
+    MemoryToolExecutionStoreError,
     StandardMemoryToolExecutor,
 )
 from opentelemetry.sdk.trace import TracerProvider
@@ -667,6 +669,58 @@ def test_standard_memory_tool_call_emits_span(tmp_path: Path) -> None:
     assert spans[0].attributes["memory.cli_profile"] == "codex"
     assert spans[0].attributes["memory.policy.decision"] == "allowed"
     assert spans[0].attributes["memory.record_count"] == 1
+
+
+def test_write_note_store_failure_emits_io_failure_class(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-88 round 2: a real store/ledger write failure must reach the OUTER
+    standard-tool span as `io_failure`, not as the base's residual class.
+
+    `EpisodicMemoryCapture._capture` catches the durable-write exception,
+    classifies its OWN capture span `io_failure`, and returns `status=FAILED`
+    carrying only a formatted reason STRING - the original exception is not
+    retained (`memory_capture.py:541-552`). `_write_note` then re-raises. With
+    the base's unconditional `provider_adapter_failure` declaration, the two
+    spans contradicted each other about the same event; the typed
+    `MemoryToolExecutionStoreError` - discriminated on the capture API's own
+    closed status enum, never on the reason wording - makes them agree.
+
+    Grounded at this witness: on THIS path the outer span is the ONLY record
+    of the failure - `_write_note` constructs `EpisodicMemoryCapture` without
+    passing `self._tracer_provider`, so the capture layer's own span is a
+    no-op here. That makes the outer label the sole telemetry statement about
+    a real storage failure, which strengthens rather than weakens the case
+    for it being correct."""
+    exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    store, executor = _executor(tmp_path, tracer_provider=tracer_provider)
+
+    def _raise_disk_full(record: object) -> object:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "write_record", _raise_disk_full)
+
+    with pytest.raises(MemoryToolExecutionStoreError, match="OSError: disk full") as excinfo:
+        executor.execute(
+            _request(
+                MemoryToolName.WRITE_NOTE,
+                {
+                    "note": "A note whose durable write fails.",
+                    "scope_ref": _SCOPE_REF,
+                    "policy_ref": _POLICY_REF,
+                },
+            )
+        )
+    # Still the base type for every existing `except` / classifier caller.
+    assert isinstance(excinfo.value, MemoryToolExecutionError)
+
+    [span] = [s for s in exporter.get_finished_spans() if s.name == "memory.tool_call"]
+    outer = dict(span.attributes or {})
+    assert outer["memory.failure_class"] == "io_failure"
+    assert outer["memory.policy.decision"] == "failed"
 
 
 def test_standard_memory_tool_denial_emits_policy_failure_class(tmp_path: Path) -> None:

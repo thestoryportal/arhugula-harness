@@ -12,9 +12,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
-from typing import Final, cast
+from typing import ClassVar, Final, cast
 
 from harness_is.memory_observability import (
+    MemoryTelemetryFailureClass,
     MemoryTelemetryOperationName,
     classify_memory_failure,
     memory_telemetry_span,
@@ -53,6 +54,27 @@ _MEMORIES_SCOPE: Final[str] = "/memories/"
 _TEXT_ENCODING: Final[str] = "utf-8"
 _SCHEMA_VERSION: Final[str] = "native-memory-adapter/v1"
 _TOOL_NAME: Final[str] = "anthropic_memory"
+
+
+class _NativeMemoryPolicyDeniedError(MemoryCallbackIOError):
+    """A policy denial surfaced through the callback contract's I/O error type.
+
+    B-88. The C-MEM-15 native adapter must answer the Anthropic memory-tool
+    callback surface, which offers exactly one failure carrier
+    (`MemoryCallbackIOError`), so a policy denial has to be raised as one. This
+    private subclass keeps every existing behaviour identical - it IS a
+    `MemoryCallbackIOError` for `except` / `pytest.raises` / the C-RT-15
+    `RT-FAIL-MEMORY-CALLBACK-IO` transient fail-class mapping - while letting
+    `classify_memory_failure` emit `policy_denial` by construction instead of
+    by the accident that three of the four denial messages contain the word
+    "policy" and the fourth contains "unavailable". Module-private: it is a
+    telemetry discriminator, not an addition to the §14.12.1 typed-exception
+    surface.
+    """
+
+    memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+        MemoryTelemetryFailureClass.POLICY_DENIAL
+    )
 
 
 @dataclass(frozen=True)
@@ -257,12 +279,12 @@ class CanonicalNativeMemoryToolBackend:
     def _require_native_access(self) -> None:
         access = self._policy_resolver.resolve_native_memory()
         if access.access_decision is not AccessDecision.NATIVE_PROVIDER:
-            raise MemoryCallbackIOError("native memory policy denies adapter access")
+            raise _NativeMemoryPolicyDeniedError("native memory policy denies adapter access")
 
     def _require_capture_allowed(self) -> None:
         capture = self._policy_resolver.resolve_capture()
         if capture.capture_decision is CaptureDecision.DENY:
-            raise MemoryCallbackIOError("capture policy denies native memory write")
+            raise _NativeMemoryPolicyDeniedError("capture policy denies native memory write")
 
     def _require_retrieval_allowed(
         self,
@@ -270,14 +292,16 @@ class CanonicalNativeMemoryToolBackend:
         validated: _ValidatedMemoryPath,
     ) -> None:
         if record.envelope.redaction_state is not RedactionState.ACTIVE:
-            raise MemoryCallbackIOError(f"memory path {validated.external_path!r} is unavailable")
+            raise _NativeMemoryPolicyDeniedError(
+                f"memory path {validated.external_path!r} is unavailable"
+            )
         access = self._policy_resolver.resolve_retrieval(
             record_kind=record.envelope.kind,
             record_scope=record.envelope.scope,
             requested_scope=self._scope,
         )
         if access.access_decision is AccessDecision.DENY:
-            raise MemoryCallbackIOError(
+            raise _NativeMemoryPolicyDeniedError(
                 f"retrieval policy denies memory path {validated.external_path!r}"
             )
 

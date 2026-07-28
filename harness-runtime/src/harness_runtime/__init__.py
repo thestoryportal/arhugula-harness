@@ -122,6 +122,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionError,
     MemoryToolExecutionInputError,
     MemoryToolExecutionRequest,
+    MemoryToolExecutionStoreError,
     StandardMemoryToolExecutor,
 )
 from harness_runtime.memory_verification_suite import (
@@ -205,6 +206,7 @@ __all__ = [
     "MemoryToolExecutionError",
     "MemoryToolExecutionInputError",
     "MemoryToolExecutionRequest",
+    "MemoryToolExecutionStoreError",
     "MemoryVerificationMatrix",
     "PreferenceCandidateSource",
     "PreferencePromotionDetails",

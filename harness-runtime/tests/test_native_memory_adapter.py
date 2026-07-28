@@ -24,6 +24,7 @@ from harness_is.memory_record_envelope import (
     MemoryScope,
     MemoryTier,
     MemoryVisibility,
+    RedactionState,
     compute_memory_content_hash,
     derive_memory_id,
 )
@@ -83,6 +84,26 @@ def _tracer_provider() -> tuple[TracerProvider, InMemorySpanExporter]:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     return provider, exporter
+
+
+def _failure_span_attributes(exporter: InMemorySpanExporter) -> dict[str, Any]:
+    """Return the attributes of the ONE emitted native-adapter FAILURE span.
+
+    B-88: a call that fails after an earlier successful call has several
+    `memory.operation` spans in the exporter, so the failure span is selected
+    by `memory.policy.decision == "failed"` rather than by position. Unpacking
+    a single-element list keeps the selection honest - two failure spans, or
+    none, fails the test rather than silently asserting the wrong span.
+    """
+
+    failures = [
+        dict(span.attributes or {})
+        for span in exporter.get_finished_spans()
+        if span.name == "memory.operation"
+        and dict(span.attributes or {}).get("memory.policy.decision") == "failed"
+    ]
+    [attributes] = failures
+    return attributes
 
 
 def _backend(
@@ -261,15 +282,26 @@ async def test_native_adapter_ledgers_repeated_identical_reads(
 async def test_native_adapter_policy_denies_capture_without_writing(
     tmp_path: Path,
 ) -> None:
+    """B-88: the span assertion is load-bearing, not decorative.
+
+    `pytest.raises(MemoryCallbackIOError, ...)` alone is satisfied identically
+    by the base type and by the private `_NativeMemoryPolicyDeniedError`
+    subtype that carries the `policy_denial` declaration - so reverting this
+    raise site to the base would keep the suite green while re-emitting
+    `io_failure` for a genuine policy denial, the exact defect this arc closes.
+    Only the emitted `memory.failure_class` discriminates the two."""
+    tracer_provider, exporter = _tracer_provider()
     store, backend = _backend(
         tmp_path,
         policy=_policy(capture_decision=CaptureDecision.DENY),
+        tracer_provider=tracer_provider,
     )
 
     with pytest.raises(MemoryCallbackIOError, match="capture policy denies"):
         await backend.create("/memories/denied.txt", b"secret")
 
     assert store.read_memory_operations() == []
+    assert _failure_span_attributes(exporter)["memory.failure_class"] == "policy_denial"
 
 
 @pytest.mark.asyncio
@@ -324,9 +356,13 @@ async def test_native_adapter_policy_denies_native_access(
 async def test_native_adapter_policy_denies_retrieval_after_write(
     tmp_path: Path,
 ) -> None:
+    """B-88: same discrimination as the capture-deny witness above - the
+    emitted class, not the raised base type, is what pins this raise site."""
+    tracer_provider, exporter = _tracer_provider()
     store, backend = _backend(
         tmp_path,
         policy=_policy(retrieval_access=AccessDecision.DENY),
+        tracer_provider=tracer_provider,
     )
 
     await backend.create("/memories/hidden.txt", b"captured but not readable")
@@ -338,6 +374,48 @@ async def test_native_adapter_policy_denies_retrieval_after_write(
     assert [entry.operation_kind for entry in operations] == [
         MemoryOperationKind.NATIVE_ADAPTER_CALL
     ]
+    assert _failure_span_attributes(exporter)["memory.failure_class"] == "policy_denial"
+
+
+@pytest.mark.asyncio
+async def test_native_adapter_redacted_record_denial_emits_policy_failure_class(
+    tmp_path: Path,
+) -> None:
+    """B-88: the THIRD policy-denial raise site - a record whose
+    `redaction_state` is no longer ACTIVE - had no test at all.
+
+    It is a denial by C-MEM-18 redaction state rather than by a policy
+    resolver decision, and before this arc it emitted `policy_denial` only
+    because its message happens to contain the word "unavailable". The
+    subtype makes it a denial by construction; this test is what keeps it so.
+    """
+    tracer_provider, exporter = _tracer_provider()
+    store, backend = _backend(tmp_path, tracer_provider=tracer_provider)
+
+    await backend.create("/memories/tombstoned.txt", b"captured then tombstoned")
+
+    [entry] = store.read_memory_operations()
+    [memory_ref] = entry.memory_refs
+    record = store.read_record(
+        memory_ref,
+        MemoryRecordKind.TOOL_EVENT,
+        run_id=entry.run_id,
+        audit_mode=True,
+    )
+    store.write_record(
+        record.model_copy(
+            update={
+                "envelope": record.envelope.model_copy(
+                    update={"redaction_state": RedactionState.TOMBSTONED}
+                )
+            }
+        )
+    )
+
+    with pytest.raises(MemoryCallbackIOError, match="is unavailable"):
+        await backend.view("/memories/tombstoned.txt")
+
+    assert _failure_span_attributes(exporter)["memory.failure_class"] == "policy_denial"
 
 
 @pytest.mark.asyncio

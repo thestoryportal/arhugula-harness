@@ -20,15 +20,22 @@ Per L9-octies cluster discipline (runtime plan v2.15 §1):
 - Cross-package import of `MemoryToolStorageBackend` from
   `harness_as.anthropic_graceful_degradation` (already-landed carrier;
   ZERO new CXA edge per fork doc §5 + architect §13.6.D).
+- B-88 adds a second already-landed cross-package import,
+  `MemoryTelemetryFailureClass` from `harness_is.memory_observability`, so the
+  two typed exceptions can declare their own C-MEM-19 telemetry class at the
+  definition site instead of leaving it to message-substring inference. Import
+  direction is the existing runtime -> IS one (ZERO new CXA edge); the
+  declaration is inert unless `classify_memory_failure` reads it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
+from harness_is.memory_observability import MemoryTelemetryFailureClass
 
 __all__ = [
     "MemoryBackendResolutionError",
@@ -121,6 +128,12 @@ class MemoryPathViolationError(Exception):
     `/memories/`; paths not prefixed with `/memories/`.
     """
 
+    # B-88: C-MEM-19 telemetry class by construction rather than by the
+    # accident that every raise site's message happens to contain "path".
+    memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+        MemoryTelemetryFailureClass.PATH_VIOLATION
+    )
+
 
 class MemoryCallbackIOError(Exception):
     """Storage-backend callback I/O failure.
@@ -134,6 +147,16 @@ class MemoryCallbackIOError(Exception):
     Per §14.12.2 invariant 4: no retry inside the callback boundary; retry
     MAY be wrapped at C-RT-15 dispatcher level (implementation discretion).
     """
+
+    # B-88: the type IS the storage-backend I/O failure class per its own
+    # C-RT-15 mapping, so it declares `io_failure`. The C-MEM-15 native adapter
+    # additionally routes POLICY denials through this type (the callback
+    # surface offers no other failure carrier); those raise a private
+    # `io_failure`-overriding subclass at the adapter rather than relying on
+    # their message wording.
+    memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+        MemoryTelemetryFailureClass.IO_FAILURE
+    )
 
 
 class MemoryBackendResolutionError(Exception):
