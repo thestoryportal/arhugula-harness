@@ -3325,6 +3325,88 @@ async def test_b83_arm_repair_merges_into_anthropic_params_system() -> None:
 
 
 @pytest.mark.asyncio
+async def test_b83_anthropic_repair_preserves_a_params_system_block_array() -> None:
+    """P2-c — Anthropic's `params["system"]` may be the SDK's content-block ARRAY.
+
+    That is the same `[{"type": "text", ...}]` form `_anthropic_system_cache_block`
+    itself emits, so it is unambiguously valid. Keying the fold on truthiness
+    instead of PRESENCE sent it down the `system`-variable branch, where the
+    still-present `params["system"]` then collided and raised — the repair
+    turning a working dispatch into a failure.
+    """
+    client = _AnthropicClient()
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    original_blocks = [
+        {"type": "text", "text": "BLOCK ONE"},
+        {"type": "text", "text": "BLOCK TWO"},
+    ]
+    await dispatcher.dispatch(
+        _binding("anthropic"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": None,
+                "params": {"max_tokens": 100, "system": original_blocks},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert client.messages.last_kwargs is not None
+    system = client.messages.last_kwargs["system"]
+    assert isinstance(system, list), "the block array must survive as an array"
+    assert system[:2] == original_blocks, "original blocks preserved, in order"
+    assert len(system) == 3
+    assert system[2]["type"] == "text"
+    assert system[2]["text"].startswith("read-only memory packet")
+    assert _B83_SECTION_TEXT in system[2]["text"]
+
+
+@pytest.mark.asyncio
+async def test_b83_anthropic_repair_handles_empty_string_params_system() -> None:
+    """P2-c — an EMPTY `params["system"]` is present-but-empty, not absent.
+
+    `"system" in kwargs` (the conflict check) is True for `""`, so the fold has
+    to treat it as the existing source too; folding elsewhere raised.
+    """
+    client = _AnthropicClient()
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": None,
+                "params": {"max_tokens": 100, "system": ""},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert client.messages.last_kwargs is not None
+    system = client.messages.last_kwargs["system"]
+    assert isinstance(system, str)
+    assert system.startswith("read-only memory packet"), (
+        "an empty existing source contributes nothing, so the packet stands alone"
+    )
+    assert _B83_SECTION_TEXT in system
+
+
+@pytest.mark.asyncio
 async def test_b83_two_base_system_sources_still_fail_loud_through_the_repair() -> None:
     """The repair folds; it never MASKS a genuine two-BASE-prompt collision.
 

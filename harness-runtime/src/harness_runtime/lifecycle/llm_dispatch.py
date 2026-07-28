@@ -2612,11 +2612,27 @@ def _payload_to_anthropic_kwargs(
     # `place_on_system` decision so the cache block covers the merged text.
     # A genuine TWO-BASE collision (dispatch `system` AND `params["system"]`)
     # is left alone and still raises below, verbatim.
-    params_system = payload.params.get("system")
-    folded_params_system: str | None = None
-    if memory_packet is not None and not (system and params_system is not None):
-        if isinstance(params_system, str) and params_system:
-            folded_params_system = append_rendered_memory_packet(params_system, memory_packet)
+    #
+    # B-83 [P2-c]: "is there an existing source?" is keyed on PRESENCE
+    # (`"system" in payload.params`), because that is exactly what the conflict
+    # check below keys on (`"system" in kwargs`). Keying on truthiness instead
+    # let two VALID shapes slip past — the SDK's content-block ARRAY (the same
+    # `[{"type": "text", ...}]` form `_anthropic_system_cache_block` itself
+    # emits) and the empty string — into the `system`-variable branch, where the
+    # unrecognized-but-present `params["system"]` then collided and turned a
+    # working dispatch into `PromptInjectionConflictError`. The fold predicate
+    # and the conflict predicate MUST agree on what "present" means.
+    # `_content_with_appended_packet` covers every value shape and its sequence
+    # branch appends a `{"type": "text", ...}` block — a valid Anthropic
+    # `TextBlockParam` (`cache_control` is optional) — so no divergent
+    # serialization is introduced here.
+    params_system_present = "system" in payload.params
+    folded_params_system: str | list[Any] | None = None
+    if memory_packet is not None and not (system and params_system_present):
+        if params_system_present:
+            folded_params_system = _content_with_appended_packet(
+                payload.params.get("system"), memory_packet
+            )
         else:
             system = append_rendered_memory_packet(system, memory_packet)
     # U-1 slice 2 — decide ONCE where the single breakpoint lands, so the tools
@@ -2646,9 +2662,11 @@ def _payload_to_anthropic_kwargs(
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
     if folded_params_system is not None:
-        # The payload-owned system source, with the packet merged in. Left as a
-        # plain string (never the OQ-1 cache block) — a `params["system"]` was
-        # never breakpointed before B-83 either.
+        # The payload-owned system source, with the packet merged in — a string
+        # when it arrived as one, a block array (originals preserved, one text
+        # block appended) when it arrived as one. Never wrapped in the OQ-1
+        # cache block: a `params["system"]` was never breakpointed before B-83
+        # either, so its caching posture is unchanged.
         kwargs["system"] = folded_params_system
     if system:
         if "system" in kwargs:
