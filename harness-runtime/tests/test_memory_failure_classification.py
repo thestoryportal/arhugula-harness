@@ -39,6 +39,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionDeniedError,
     MemoryToolExecutionError,
     MemoryToolExecutionInputError,
+    MemoryToolExecutionStoreError,
 )
 
 _POLICY_DENIAL = MemoryTelemetryFailureClass.POLICY_DENIAL
@@ -105,13 +106,37 @@ _PROVIDER_ADAPTER = MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
             MemoryToolExecutionInputError("unsupported promotion target_kind 'nope'"),
             _PROVIDER_ADAPTER,
         ),
+        # --- MemoryToolExecutionStoreError: the durable-write failure -------
+        # Round 2. `_write_note` raises this whenever the capture API returns
+        # `status=FAILED`, which it does at exactly ONE place: the `except`
+        # around `write_record` + `append_memory_operation`. Round 1's base
+        # declaration alone would have reported a disk-full write as
+        # `provider_adapter_failure` - a regression this arc introduced and
+        # this row closes.
+        (MemoryToolExecutionStoreError("OSError: disk full"), _IO_FAILURE),
+        (
+            MemoryToolExecutionStoreError("PermissionError: [Errno 13] Permission denied"),
+            _IO_FAILURE,
+        ),
+        # Honest residual on THIS type: the capture layer labels ANY raise from
+        # the durable-write pair `io_failure`, so a non-IO exception escaping
+        # that pair is reported as IO too. That coarseness is the capture
+        # layer's pre-existing choice (recorded as B-88's adjacent item); the
+        # executor ADOPTS it rather than inventing a contradicting third
+        # answer, since the result carries no exception to re-classify from.
+        (
+            MemoryToolExecutionStoreError(
+                "MemoryOperationIdempotencyConflictError: idempotency_key 'k' already records "
+                "a different operation"
+            ),
+            _IO_FAILURE,
+        ),
         # --- MemoryToolExecutionError base: the residual --------------------
-        # WAS io_failure. The base's one raise site re-raises a capture result
-        # whose `failure_reason` is an arbitrary string (and the result may be
-        # a non-capture with no exception at all), so the type determines
-        # nothing beyond "not one of the five named substrate faults".
+        # WAS io_failure before B-88. After round 2 the base's only raise site
+        # is `_write_note`'s defensive `memory_id is None` branch (unreachable
+        # through the real capture API), so the type determines nothing beyond
+        # "not one of the five named substrate faults".
         (MemoryToolExecutionError("write_note capture failed"), _PROVIDER_ADAPTER),
-        (MemoryToolExecutionError("OSError: disk full"), _PROVIDER_ADAPTER),
         # --- native adapter / callback contract -----------------------------
         (
             MemoryPathViolationError("path '/memories/../x' contains path-traversal segment '..'"),

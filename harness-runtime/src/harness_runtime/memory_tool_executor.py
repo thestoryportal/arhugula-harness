@@ -83,12 +83,13 @@ class MemoryToolExecutionError(Exception):
 
     B-88: the family declares its own C-MEM-19 failure class so
     `classify_memory_failure` keys on the TYPE rather than on message wording.
-    The base carries no information about the nature of the failure - its one
-    raise site re-raises a capture result whose `failure_reason` is an
-    arbitrary string, and that result can also be a non-exception non-capture -
-    so it declares the residual class. A subclass that knows better overrides
-    it; a future subclass that declares nothing inherits the residual, never a
-    confidently wrong class.
+    The base carries no information about the nature of the failure, so it
+    declares the RESIDUAL class - a subclass that knows better overrides it,
+    and a future subclass that declares nothing inherits the residual rather
+    than a confidently wrong class. After round 2 the base's only remaining
+    raise site is `_write_note`'s defensive `memory_id is None` branch, which
+    is unreachable through the real capture API; every store/ledger write
+    failure raises `MemoryToolExecutionStoreError` instead.
     """
 
     memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
@@ -101,13 +102,42 @@ class MemoryToolExecutionDeniedError(MemoryToolExecutionError):
 
     B-88: `policy_denial` by construction. Before the declaration, four denial
     raise sites emitted `io_failure` purely because their wording missed the
-    message rules - `:308` "memory promotion review is forbidden", `:433`
-    "memory ref X is superseded", `:435` "memory ref X is not retrievable",
-    and `:485` "memory tool scope_ref does not match context".
+    message rules - "memory promotion review is forbidden", "memory ref X is
+    superseded", "memory ref X is not retrievable", and "memory tool scope_ref
+    does not match context" (line-number-free on purpose: the four are named by
+    message, which is stable, rather than by offsets this docstring's own edits
+    would immediately invalidate).
     """
 
     memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
         MemoryTelemetryFailureClass.POLICY_DENIAL
+    )
+
+
+class MemoryToolExecutionStoreError(MemoryToolExecutionError):
+    """Raised when a memory tool's durable store/ledger write raised.
+
+    B-88 round 2. Without this subtype the base's `provider_adapter_failure`
+    declaration mislabelled a real storage failure: `_write_note` re-raises a
+    `MemoryCaptureResult` whose `status is FAILED`, and that status is produced
+    at exactly ONE place - `EpisodicMemoryCapture._capture`'s `except` around
+    `write_record` + `append_memory_operation` (`memory_capture.py:541-552`),
+    which classifies its OWN span `io_failure`. The outer standard-tool span
+    would then have contradicted the inner capture span about the same event.
+
+    The discriminator is the capture API's closed two-value status enum, NOT
+    the wording of `failure_reason` (which is only `f"{type(exc).__name__}:
+    {exc}"` - the original exception is not retained on the result, so there
+    is nothing structured to propagate and no honest way to sub-classify
+    further without message guessing). Declaring `io_failure` here therefore
+    ADOPTS the capture layer's own classification rather than inventing a
+    third answer; the coarseness of that classification (it labels ANY raise
+    from the durable-write pair `io_failure`) is the capture layer's
+    pre-existing choice, recorded as the adjacent item on the B-88 row.
+    """
+
+    memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+        MemoryTelemetryFailureClass.IO_FAILURE
     )
 
 
@@ -336,7 +366,21 @@ class StandardMemoryToolExecutor:
             procedural_snapshot_ref=context.procedural_snapshot_ref,
             capture_mode=capture_mode,
         )
-        if result.status is not MemoryCaptureStatus.CAPTURED or result.memory_id is None:
+        if result.status is MemoryCaptureStatus.FAILED:
+            # B-88 round 2: discriminated on the capture API's OWN closed status
+            # enum, never on the wording of `failure_reason`. `FAILED` is
+            # produced at exactly one place - `EpisodicMemoryCapture._capture`'s
+            # `except` around `write_record` + `append_memory_operation`
+            # (`memory_capture.py:541-552`) - so the status IS the statement
+            # "the durable store/ledger write raised".
+            raise MemoryToolExecutionStoreError(
+                result.failure_reason or "write_note capture failed"
+            )
+        if result.memory_id is None:
+            # Defensive residual: a CAPTURED result always carries a memory_id
+            # (`memory_capture.py:553-560`), so this is unreachable through the
+            # real capture API. It stays on the base's residual class because
+            # nothing about it says which substrate fault occurred.
             raise MemoryToolExecutionError(result.failure_reason or "write_note capture failed")
         return {
             "memory_ref": str(result.memory_id),
