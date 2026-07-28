@@ -2714,6 +2714,45 @@ async def _dispatch_openai(
     return _openai_response_bundle(response)
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedMemoryToolCall:
+    """One memory tool call fully resolved + validated, NOT yet executed.
+
+    Batch preparation is what makes the memory tool loops safe against a
+    partially-committed batch: every call in a response is resolved and
+    validated BEFORE any of them runs, so a malformed *later* call cannot abort
+    the dispatch after an *earlier* (possibly write-like) call already committed
+    durable memory state. That matters because the abort is retryable —
+    ``_classify_provider_exception`` (`retry_breaker_fallback.py`) maps every
+    exception other than ``LLMDispatchProviderUnreachableError`` /
+    ``LLMDispatchPayloadShapeError`` / 401-403 to ``TRANSIENT_RETRY``, so
+    ``RetryBreakerFallbackDispatcher`` re-runs the whole dispatch from the top
+    and the already-committed call executes a second time.
+
+    ``tool_call_id`` is OpenAI-only: ollama's typed client exposes no tool-call
+    id at all (`ollama/_types.py:304-355`), so its result turn correlates by
+    name instead.
+    """
+
+    tool_name: MemoryToolName
+    request: MemoryToolExecutionRequest
+    tool_call_id: str | None = None
+
+
+def _memory_tool_loop_exhausted(provider_label: str, max_iterations: int) -> RuntimeError:
+    """The C-MEM-14 continuation-loop bound error, shared by both provider loops.
+
+    Deliberately the SAME generic ``RuntimeError`` both loops have always
+    raised — introducing a distinct type here would change how
+    ``_classify_provider_exception`` routes loop exhaustion (today:
+    ``TRANSIENT_RETRY``), which is a separate decision from the
+    execute-before-raise defect this shape exists to close.
+    """
+    return RuntimeError(
+        f"{provider_label} standard memory tool loop exceeded {max_iterations} continuation turns"
+    )
+
+
 async def _dispatch_openai_with_standard_memory_tools(
     adapter: Any,
     model: str,
@@ -2733,31 +2772,37 @@ async def _dispatch_openai_with_standard_memory_tools(
     messages = list(kwargs["messages"])
     kwargs["messages"] = messages
 
-    for _ in range(max_iterations):
+    for iteration in range(max_iterations):
         response = await adapter.client.chat.completions.create(model=model, **kwargs)
         response_mapping = _response_to_mapping(response)
         tool_calls = _openai_tool_calls(response_mapping)
         if not tool_calls:
             return _openai_response_bundle(response)
+        if iteration + 1 >= max_iterations:
+            # No iteration budget remains to send these results back, so the
+            # dispatch fails no matter what this batch returns. Raise BEFORE
+            # executing it — otherwise a terminal `memory.write_note` /
+            # `memory.propose_promotion` / `memory.request_redaction` commits
+            # for a dispatch that reports failure, and the failure is retryable
+            # (see `_PreparedMemoryToolCall`), so the sequence can repeat.
+            raise _memory_tool_loop_exhausted("OpenAI", max_iterations)
 
-        assistant_message = _openai_assistant_message(response_mapping)
-        messages.append(assistant_message)
+        prepared = _openai_prepared_memory_tool_calls(
+            tool_calls,
+            memory_context=memory_context,
+            step_context=step_context,
+            step_id=step_id,
+            model=model,
+        )
+        messages.append(_openai_assistant_message(response_mapping))
         messages.extend(
-            _openai_memory_tool_result_message(
-                call,
+            _openai_memory_tool_result_messages(
+                prepared,
                 standard_memory_tool_executor=standard_memory_tool_executor,
-                memory_context=memory_context,
-                step_context=step_context,
-                step_id=step_id,
-                provider="openai",
-                model=model,
             )
-            for call in tool_calls
         )
 
-    raise RuntimeError(
-        f"OpenAI standard memory tool loop exceeded {max_iterations} continuation turns"
-    )
+    raise _memory_tool_loop_exhausted("OpenAI", max_iterations)
 
 
 def _openai_response_bundle(response: Any) -> tuple[Mapping[str, Any], _UsageAttrs]:
@@ -2804,41 +2849,68 @@ def _openai_first_message(response: Mapping[str, Any]) -> Mapping[str, Any]:
     return cast(Mapping[str, Any], message)
 
 
-def _openai_memory_tool_result_message(
-    call: Mapping[str, Any],
+def _openai_prepared_memory_tool_calls(
+    calls: Sequence[Mapping[str, Any]],
     *,
-    standard_memory_tool_executor: Any,
     memory_context: RuntimeMemoryContext,
     step_context: StepExecutionContext,
     step_id: str,
-    provider: str,
     model: str,
-) -> dict[str, Any]:
-    tool_call_id = call.get("id")
-    if not isinstance(tool_call_id, str) or not tool_call_id:
-        raise LLMDispatchPayloadShapeError("OpenAI memory tool_call missing string id")
-    tool_name, arguments = _openai_memory_tool_name_and_arguments(call)
-    request = MemoryToolExecutionRequest(
-        tool_name=tool_name,
-        arguments=arguments,
-        context=_standard_memory_tool_context(
-            arguments,
-            memory_context=memory_context,
-            step_context=step_context,
-            step_id=step_id,
-            provider=provider,
-            model=model,
-        ),
-    )
-    result = standard_memory_tool_executor.execute(request)
-    return {
-        "role": "tool",
-        "tool_call_id": tool_call_id,
-        # Same wire boundary as the tools[] array — the tool-result turn echoes
-        # the function name the provider called, so it carries the wire name.
-        "name": _OPENAI_MEMORY_TOOL_WIRE_NAMES[tool_name],
-        "content": json.dumps(result, sort_keys=True, separators=(",", ":"), default=str),
-    }
+) -> tuple[_PreparedMemoryToolCall, ...]:
+    """Resolve + validate the COMPLETE batch before any of it executes.
+
+    Every failure mode of a single call — missing id, unknown tool name,
+    malformed arguments, a `scope_ref` that does not match the context — is
+    raised here, where nothing has run yet. See `_PreparedMemoryToolCall`.
+    """
+    prepared: list[_PreparedMemoryToolCall] = []
+    for call in calls:
+        tool_call_id = call.get("id")
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            raise LLMDispatchPayloadShapeError("OpenAI memory tool_call missing string id")
+        tool_name, arguments = _openai_memory_tool_name_and_arguments(call)
+        prepared.append(
+            _PreparedMemoryToolCall(
+                tool_name=tool_name,
+                request=MemoryToolExecutionRequest(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    context=_standard_memory_tool_context(
+                        arguments,
+                        memory_context=memory_context,
+                        step_context=step_context,
+                        step_id=step_id,
+                        provider="openai",
+                        model=model,
+                    ),
+                ),
+                tool_call_id=tool_call_id,
+            )
+        )
+    return tuple(prepared)
+
+
+def _openai_memory_tool_result_messages(
+    prepared: Sequence[_PreparedMemoryToolCall],
+    *,
+    standard_memory_tool_executor: Any,
+) -> list[dict[str, Any]]:
+    """Execute an ALREADY-VALIDATED batch in order and build its result turns."""
+    messages: list[dict[str, Any]] = []
+    for call in prepared:
+        result = standard_memory_tool_executor.execute(call.request)
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": call.tool_call_id,
+                # Same wire boundary as the tools[] array — the tool-result turn
+                # echoes the function name the provider called, so it carries the
+                # wire name.
+                "name": _OPENAI_MEMORY_TOOL_WIRE_NAMES[call.tool_name],
+                "content": json.dumps(result, sort_keys=True, separators=(",", ":"), default=str),
+            }
+        )
+    return messages
 
 
 def _openai_memory_tool_name_and_arguments(
@@ -3085,30 +3157,33 @@ async def _dispatch_ollama_with_standard_memory_tools(
     messages = list(kwargs["messages"])
     kwargs["messages"] = messages
 
-    for _ in range(max_iterations):
+    for iteration in range(max_iterations):
         response = await adapter.client.chat(model=model, **kwargs)
         response_mapping = _response_to_mapping(response)
         tool_calls = _ollama_tool_calls(response_mapping)
         if not tool_calls:
             return _ollama_response_bundle(response)
+        if iteration + 1 >= max_iterations:
+            # Bound reached — raise BEFORE executing. See the OpenAI arm's
+            # matching comment; the defect and the fix are identical.
+            raise _memory_tool_loop_exhausted("Ollama", max_iterations)
 
+        prepared = _ollama_prepared_memory_tool_calls(
+            tool_calls,
+            memory_context=memory_context,
+            step_context=step_context,
+            step_id=step_id,
+            model=model,
+        )
         messages.append(dict(_ollama_message(response_mapping)))
         messages.extend(
-            _ollama_memory_tool_result_message(
-                call,
+            _ollama_memory_tool_result_messages(
+                prepared,
                 standard_memory_tool_executor=standard_memory_tool_executor,
-                memory_context=memory_context,
-                step_context=step_context,
-                step_id=step_id,
-                provider="ollama",
-                model=model,
             )
-            for call in tool_calls
         )
 
-    raise RuntimeError(
-        f"Ollama standard memory tool loop exceeded {max_iterations} continuation turns"
-    )
+    raise _memory_tool_loop_exhausted("Ollama", max_iterations)
 
 
 def _ollama_response_bundle(response: Any) -> tuple[Mapping[str, Any], _UsageAttrs]:
@@ -3147,40 +3222,66 @@ def _ollama_tool_calls(response: Mapping[str, Any]) -> tuple[Mapping[str, Any], 
     return tuple(calls)
 
 
-def _ollama_memory_tool_result_message(
-    call: Mapping[str, Any],
+def _ollama_prepared_memory_tool_calls(
+    calls: Sequence[Mapping[str, Any]],
     *,
-    standard_memory_tool_executor: Any,
     memory_context: RuntimeMemoryContext,
     step_context: StepExecutionContext,
     step_id: str,
-    provider: str,
     model: str,
-) -> dict[str, Any]:
-    tool_name, arguments = _ollama_memory_tool_name_and_arguments(call)
-    request = MemoryToolExecutionRequest(
-        tool_name=tool_name,
-        arguments=arguments,
-        context=_standard_memory_tool_context(
-            arguments,
-            memory_context=memory_context,
-            step_context=step_context,
-            step_id=step_id,
-            provider=provider,
-            model=model,
-        ),
-    )
-    result = standard_memory_tool_executor.execute(request)
-    # Ollama's `Message` carries NO `tool_call_id` — the typed client drops the
-    # daemon's tool-call id entirely, so no correlation id is reachable. The
-    # tool-result turn correlates by NAME via `Message.tool_name`
-    # (`ollama/_types.py:330`); an extra `tool_call_id` key would be silently
-    # dropped by the pydantic model, so it is deliberately not emitted.
-    return {
-        "role": "tool",
-        "tool_name": tool_name.value,
-        "content": json.dumps(result, sort_keys=True, separators=(",", ":"), default=str),
-    }
+) -> tuple[_PreparedMemoryToolCall, ...]:
+    """Resolve + validate the COMPLETE batch before any of it executes.
+
+    Mirrors `_openai_prepared_memory_tool_calls` exactly, minus the tool-call-id
+    check ollama has no field for. See `_PreparedMemoryToolCall`.
+    """
+    prepared: list[_PreparedMemoryToolCall] = []
+    for call in calls:
+        tool_name, arguments = _ollama_memory_tool_name_and_arguments(call)
+        prepared.append(
+            _PreparedMemoryToolCall(
+                tool_name=tool_name,
+                request=MemoryToolExecutionRequest(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    context=_standard_memory_tool_context(
+                        arguments,
+                        memory_context=memory_context,
+                        step_context=step_context,
+                        step_id=step_id,
+                        provider="ollama",
+                        model=model,
+                    ),
+                ),
+            )
+        )
+    return tuple(prepared)
+
+
+def _ollama_memory_tool_result_messages(
+    prepared: Sequence[_PreparedMemoryToolCall],
+    *,
+    standard_memory_tool_executor: Any,
+) -> list[dict[str, Any]]:
+    """Execute an ALREADY-VALIDATED batch in order and build its result turns.
+
+    Ollama's `Message` carries NO `tool_call_id` — the typed client drops the
+    daemon's tool-call id entirely, so no correlation id is reachable. The
+    tool-result turn correlates by NAME via `Message.tool_name`
+    (`ollama/_types.py:330`); an extra `tool_call_id` key would be silently
+    dropped by the pydantic model, so it is deliberately not emitted.
+    """
+    messages: list[dict[str, Any]] = []
+    for call in prepared:
+        result = standard_memory_tool_executor.execute(call.request)
+        messages.append(
+            {
+                "role": "tool",
+                "tool_name": call.tool_name.value,
+                "content": json.dumps(result, sort_keys=True, separators=(",", ":"), default=str),
+            }
+        )
+    return messages
 
 
 def _ollama_memory_tool_name_and_arguments(

@@ -1611,6 +1611,120 @@ def test_openai_memory_tool_wire_name_resolves_back_to_provider_neutral_identity
 
 
 # ---------------------------------------------------------------------------
+# B-82 round 1 (out-of-family Codex) — durable-double-write hardening.
+#
+# Both memory tool loops previously (a) executed earlier calls in a batch before
+# validating later ones, and (b) executed the final iteration's batch before
+# raising loop-exhausted. Both aborts classify TRANSIENT_RETRY
+# (`retry_breaker_fallback.py:299-304` — only ProviderUnreachable / PayloadShape
+# / 401-403 are fail-fast), so `RetryBreakerFallbackDispatcher` re-runs the whole
+# dispatch and an already-committed `memory.write_note` runs twice.
+# ---------------------------------------------------------------------------
+
+
+def _openai_tool_call(call_id: str, name: str, **arguments: Any) -> dict[str, Any]:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(arguments, sort_keys=True)},
+    }
+
+
+def _openai_tool_call_dump(response_id: str, *calls: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": response_id,
+        "choices": [{"message": {"role": "assistant", "content": None, "tool_calls": list(calls)}}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_openai_memory_tool_batch_is_validated_before_any_call_executes() -> None:
+    """An invalid LATER call must abort BEFORE the earlier one commits.
+
+    The earlier call here is a WRITE (`memory.write_note`). Executing it and
+    then raising on call 2 leaves durable memory state changed for a dispatch
+    that reports a retryable failure — the double-write class.
+    """
+    client = _OpenAIClient()
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_batch",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump=_openai_tool_call_dump(
+                "cmpl_batch",
+                _openai_tool_call(
+                    "call_write",
+                    "memory_write_note",
+                    text="durable",
+                    scope_ref="scope:u-mem-16",
+                    policy_ref="policy:u-mem-16",
+                ),
+                _openai_tool_call("call_bogus", "memory_not_a_tool"),
+            ),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(LLMDispatchPayloadShapeError):
+        await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert executor.requests == [], (
+        "the whole batch must be validated before ANY call executes; the "
+        f"write-like call 1 ran anyway ({len(executor.requests)} execution(s))"
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_memory_tool_loop_raises_exhaustion_before_executing_final_batch() -> None:
+    """At the iteration bound, the final batch must NOT execute.
+
+    Its results can never be sent back, so the dispatch fails regardless —
+    executing it commits a write for a failed, retryable dispatch.
+    """
+    client = _OpenAIClient()
+    # Every turn asks for a tool call, so the loop runs to its bound.
+    client.chat.completions.canned_response = _ProviderResponse(
+        id="cmpl_forever",
+        usage=_Usage(prompt_tokens=10, completion_tokens=4),
+        _dump=_openai_tool_call_dump(
+            "cmpl_forever",
+            _openai_tool_call(
+                "call_write",
+                "memory_write_note",
+                text="durable",
+                scope_ref="scope:u-mem-16",
+                policy_ref="policy:u-mem-16",
+            ),
+        ),
+    )
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_standard_tools_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert "exceeded 16 continuation turns" in str(excinfo.value)
+    assert len(client.chat.completions.calls) == 16
+    # 16 turns requested tools; only the first 15 could have their results sent
+    # back, so exactly 15 executed. Pre-fix this was 16.
+    assert len(executor.requests) == 15, (
+        "the final iteration's batch must not execute — nothing can carry its "
+        f"results back; got {len(executor.requests)} executions"
+    )
+
+
+# ---------------------------------------------------------------------------
 # B-82 — Ollama standard memory tools (C-MEM-14).
 #
 # `select_memory_access_mode` selects STANDARD_MEMORY_TOOLS for ollama, so the
@@ -1876,6 +1990,101 @@ async def test_ollama_scope_ref_mismatch_fails_loud_mirroring_openai() -> None:
 
     with pytest.raises(MemoryToolExecutionInputError):
         await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+
+@pytest.mark.asyncio
+async def test_ollama_memory_tool_batch_is_validated_before_any_call_executes() -> None:
+    """Ollama mirror of the OpenAI batch pre-validation witness.
+
+    Call 1 is a WRITE, call 2 is malformed (`arguments` is a non-JSON string).
+    Nothing may execute.
+    """
+    client = _OllamaClient()
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "memory.write_note",
+                                "arguments": {
+                                    "text": "durable",
+                                    "scope_ref": "scope:u-mem-16",
+                                    "policy_ref": "policy:u-mem-16",
+                                },
+                            }
+                        },
+                        {"function": {"name": "memory.read", "arguments": "not json at all"}},
+                    ],
+                }
+            ),
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(LLMDispatchPayloadShapeError):
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert executor.requests == [], (
+        "the whole batch must be validated before ANY call executes; the "
+        f"write-like call 1 ran anyway ({len(executor.requests)} execution(s))"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ollama_memory_tool_loop_raises_exhaustion_before_executing_final_batch() -> None:
+    """Ollama mirror of the OpenAI iteration-bound witness."""
+    client = _OllamaClient()
+    client.canned_response = _OllamaResponse(
+        prompt_eval_count=20,
+        eval_count=8,
+        _dump=_ollama_dump(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "memory.write_note",
+                            "arguments": {
+                                "text": "durable",
+                                "scope_ref": "scope:u-mem-16",
+                                "policy_ref": "policy:u-mem-16",
+                            },
+                        }
+                    }
+                ],
+            }
+        ),
+    )
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert "exceeded 16 continuation turns" in str(excinfo.value)
+    assert len(client.calls) == 16
+    assert len(executor.requests) == 15, (
+        "the final iteration's batch must not execute — nothing can carry its "
+        f"results back; got {len(executor.requests)} executions"
+    )
 
 
 @pytest.mark.asyncio
