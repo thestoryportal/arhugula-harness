@@ -98,7 +98,14 @@ Both closed:
    verifiable chain once independent producer families interleave (families discriminate on the CXA
    §0.3 action-id prefix). This proof appends a **single** family (`r500-entry-ref-*`), so each
    tenant's sequence is exactly one chain and needs no partitioning — recorded in-code so a future
-   reader does not generalize the call incorrectly.
+   reader does not generalize the call incorrectly. *Scope note (codex round 7):* production's
+   producer-aware verifier (`verify_per_family_chains`) enforces linkage only for
+   `audit.redaction_token.*` families — cost/HITL/dispatch families deliberately do not chain — so
+   this proof exercises the §21.2 chain PRIMITIVE over a deliberately-chained single-family
+   fixture (a primitive-level witness across the rehydration surface), not a claim that production
+   enforces linkage for this fixture's family. A more production-faithful variant (a genuine
+   redaction-token-family fixture) is a registerable polish item, declined at this pass on
+   soundness grounds.
 
 **Live re-run (2026-07-28, stack up, free/local, `cost=0`):**
 
