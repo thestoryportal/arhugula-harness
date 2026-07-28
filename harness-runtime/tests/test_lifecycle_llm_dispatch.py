@@ -149,6 +149,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionInputError,
     StandardMemoryToolExecutor,
 )
+from ollama import ResponseError as OllamaResponseError
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -311,6 +312,8 @@ class _OllamaClient:
         self.last_kwargs: dict[str, Any] | None = None
         self.calls: list[dict[str, Any]] = []
         self.responses: list[_OllamaResponse] = []
+        #: Positional per-call side effects; `None` means "no error this call".
+        self.errors: list[BaseException | None] = []
         self.canned_response = _OllamaResponse(
             prompt_eval_count=20,
             eval_count=8,
@@ -323,6 +326,10 @@ class _OllamaClient:
         # tool loop appends to it in place across turns, so a shared reference
         # would make every recorded call show only the FINAL message state.
         self.calls.append({**kwargs, "messages": list(kwargs.get("messages", []))})
+        if self.errors:
+            error = self.errors.pop(0)
+            if error is not None:
+                raise error
         if self.responses:
             return self.responses.pop(0)
         return self.canned_response
@@ -2635,6 +2642,122 @@ async def test_ollama_malformed_terminal_batch_raises_shape_error_not_exhaustion
     )
     assert len(client.calls) == 16
     assert len(executor.requests) == 15
+
+
+@pytest.mark.asyncio
+async def test_ollama_tool_unsupported_model_falls_back_to_the_bare_text_path() -> None:
+    """A model with no tool template must keep working, exactly as pre-B-82.
+
+    `reflect_provider_capabilities` reports `supports_tools=True` for EVERY
+    ollama model string (`harness-cp/src/harness_cp/provider_capabilities.py:127`),
+    so the memory tools get injected even for e.g. `llava-llama3`, and the daemon
+    400s what used to be a working TEXT dispatch. The daemon — not a capability
+    table — is the authority, so the first call's rejection re-dispatches bare.
+
+    The error shape is the REAL `ollama.ResponseError`, probed live against
+    ollama 0.6.2: `.error` is the daemon's message, `.status_code` is 400.
+    """
+    client = _OllamaClient()
+    client.errors = [
+        OllamaResponseError(
+            "registry.ollama.ai/library/llava-llama3:latest does not support tools",
+            400,
+        )
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"),
+        _step(),
+        step_context=_step_context(),
+    )
+
+    assert result["message"]["content"] == "ok"
+    assert executor.requests == []
+    assert len(client.calls) == 2
+    # Call 1 carried the injected memory tools; the bare retry carries none.
+    assert len(client.calls[0]["tools"]) == len(MEMORY_TOOL_CONTRACTS)
+    assert "tools" not in client.calls[1], (
+        "the fallback must byte-restore the pre-B-82 bare dispatch — no tools at all"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ollama_non_tool_response_errors_still_propagate() -> None:
+    """Only the tool-unsupported rejection is absorbed; everything else raises.
+
+    Same exception TYPE and a 4xx status, so the discriminator really is the
+    message — a blanket `except ResponseError` would swallow this one too.
+    """
+    client = _OllamaClient()
+    client.errors = [OllamaResponseError("model 'no-such-model:latest' not found", 404)]
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(OllamaResponseError) as excinfo:
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert "not found" in str(excinfo.value)
+    assert len(client.calls) == 1, "a non-tool error must not trigger a bare retry"
+
+
+@pytest.mark.asyncio
+async def test_ollama_mid_loop_tool_unsupported_error_stays_fail_loud() -> None:
+    """The fallback is FIRST-call only.
+
+    A tool-unsupported rejection arriving mid-loop would mean the model changed
+    identity between continuation turns — not a case to paper over.
+    """
+    client = _OllamaClient()
+    client.errors = [
+        None,
+        OllamaResponseError("some-model does not support tools", 400),
+    ]
+    client.responses = [
+        _OllamaResponse(
+            prompt_eval_count=20,
+            eval_count=8,
+            _dump=_ollama_dump(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "memory.search",
+                                "arguments": {
+                                    "query": "x",
+                                    "scope_ref": "scope:u-mem-16",
+                                    "policy_ref": "policy:u-mem-16",
+                                },
+                            }
+                        }
+                    ],
+                }
+            ),
+        )
+    ]
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=_tracer_provider_with_exporter()[0],
+        memory_context=_ollama_memory_context(),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(OllamaResponseError):
+        await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert len(client.calls) == 2, "no bare retry — the mid-loop rejection propagates"
 
 
 @pytest.mark.asyncio

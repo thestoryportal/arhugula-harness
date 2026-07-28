@@ -3280,7 +3280,27 @@ async def _dispatch_ollama_with_standard_memory_tools(
 
     usage = _NO_USAGE
     for iteration in range(max_iterations):
-        response = await adapter.client.chat(model=model, **kwargs)
+        try:
+            response = await adapter.client.chat(model=model, **kwargs)
+        except Exception as exc:
+            if iteration != 0 or not _is_ollama_tools_unsupported_error(exc):
+                raise
+            # This model carries no tool template, so the memory tools we
+            # auto-injected turned a previously-working TEXT dispatch into a
+            # 400. Byte-restore the pre-B-82 behavior for exactly these models
+            # by re-dispatching bare — the daemon, not a capability table, is
+            # the authority on which models take tools.
+            #
+            # FIRST call only: a mid-loop rejection would mean the model changed
+            # identity between continuation turns, which is not a case to paper
+            # over, so it stays fail-loud.
+            return await _dispatch_ollama(
+                adapter,
+                model,
+                payload,
+                system=system,
+                upstream=upstream,
+            )
         # See the OpenAI arm — every turn's usage is folded in before exit.
         usage = _accumulated_usage(usage, _ollama_usage_attrs(response))
         response_mapping = _response_to_mapping(response)
@@ -3314,6 +3334,41 @@ async def _dispatch_ollama_with_standard_memory_tools(
         )
 
     raise _memory_tool_loop_exhausted("Ollama", max_iterations)
+
+
+#: Substring of the ollama daemon's rejection when a model has no tool template.
+_OLLAMA_TOOLS_UNSUPPORTED_MARKER: Final[str] = "does not support tools"
+
+
+def _is_ollama_tools_unsupported_error(exc: BaseException) -> bool:
+    """True for the daemon's ``<model> does not support tools`` rejection.
+
+    **Brittleness tradeoff, deliberate.** This matches a SUBSTRING of an upstream
+    error string because the daemon offers no machine-readable discriminator:
+    ``ollama.ResponseError`` carries only ``.error`` (str) and ``.status_code``
+    (`ollama/_types.py:632-651`), and the same type is raised for unrelated
+    failures. Probed live against ollama 0.6.2 + a local daemon:
+
+    - tools unsupported -> ``.error = 'registry.ollama.ai/library/llava-llama3:
+      latest does not support tools'``, ``.status_code = 400``
+    - model not found   -> ``.error = "model 'x' not found"``, ``.status_code = 404``
+
+    If upstream rewords the message this predicate simply stops matching and the
+    error propagates — it fails CLOSED (a loud dispatch failure), never silently
+    swallowing a different fault. The robust alternative, a per-model capability
+    table, is a design question this arc deliberately does not open:
+    `reflect_provider_capabilities` reports ``supports_tools=True`` for every
+    ollama model string (`harness-cp/src/harness_cp/provider_capabilities.py:127`),
+    which is the pre-existing gap this narrow fallback works around.
+
+    Duck-typed on the class NAME rather than importing `ollama`, so this module
+    stays free of provider-SDK imports like every other dispatch branch. Paired
+    with the ``.error`` substring, a false positive is not reachable in practice.
+    """
+    if type(exc).__name__ != "ResponseError":
+        return False
+    error = getattr(exc, "error", None)
+    return isinstance(error, str) and _OLLAMA_TOOLS_UNSUPPORTED_MARKER in error
 
 
 def _ollama_usage_attrs(response: Any) -> _UsageAttrs:
