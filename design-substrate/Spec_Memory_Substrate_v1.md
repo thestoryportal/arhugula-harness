@@ -10,6 +10,34 @@ Authority chain: ADR-F2, ADR-D3, PRD v1.2 R-MEM family, and Memory Substrate Des
 
 This specification introduces the `C-MEM-*` contract family for the full provider-neutral memory layer. It is additive to the existing Information Substrate, Action Surface, Control Plane, Operational Discipline, and Runtime specifications.
 
+Revision: v1 -> v1.1 (`B-86` spec-leg apply pass - C-MEM-03 `provider_family` value domain, `null` semantics, and derivation rule; C-MEM-13 cross-family withholding invariant; C-MEM-14 exposure qualification. The Memory threat model is unchanged. Detail at the change-note below.)
+
+Revision date: 2026-07-28
+
+## Change-note (v1 -> v1.1)
+
+**Trigger and back-flow authority.** RATIFIED Class 1 fork `.harness/class_1_fork_b86_memory_scope_provider_family_keying.md` (filed 2026-07-28; register row `B-86` at `.harness/forward-register.yaml`, status `design_substrate_gated`). The fork's §5 recommendations were produced by a three-leg decorrelated pass: an Opus grounding agent (direct code and spec read, file:line evidence), a transcript-aware `advisor()` pass, and a genuinely-convened council deliberation - C10 (action-safety / blast-radius) and C3 (state / memory / persistence) co-primary, C6 (model routing) consultant. The Q1 C10↔C3 tension was surfaced and probe-resolved in favour of chain-primary keying, with C10's requirement satisfied at a different mechanism (the dispatch-side predicate of Amendment 2). This delta is the mechanical spec-leg apply of the fork's §6 drafting targets; nothing was decided here.
+
+**Why this is conformance repair, not design extension (X-AL-3).** The Memory threat model's invariant "Retrieval and injection enforce project, workflow, tenant, provider-family, CLI-profile, and visibility scope before ranking." (line `:481` at fork-filing HEAD `f79dbe85`) **stands unchanged at v1.1 and is the authority for all three amendments below**. v1 already mandated that the provider-family boundary be enforced; it never stated what that boundary is keyed to, which left the mandate unfalsifiable at the contract level. v1.1 supplies the missing value domain, derivation rule, and dispatch-boundary condition that make the already-cleared invariant checkable. No new commitment is created.
+
+**Amendment 1 - C-MEM-03: NEW subsection "`MemoryScope.provider_family` value domain and derivation" plus two appended invariants.** (a) Value domain: the field carries a `ProviderFamily` value - `anthropic`, `openai`, `google`, or `local_open_weight` - never a provider key, a model identifier, or a CLI-profile identifier; a record written with a non-value identifier is not retrievable under a family-scoped request, including a request scoped to that identifier's own family; normalization to the value domain is forward-only, leaving pre-normalization records as a permanent residual. (b) `null` semantics, load-bearing in the enforcement predicates but undocumented at v1: `null` denotes an unpartitioned record that matches any requested family - a wildcard, not an unknown-deny sentinel. (c) Derivation rule (fork §6 item 2, placed at C-MEM-03 rather than C-MEM-11 because it constrains a field C-MEM-03 declares): a run-level partition attribute, derived once at run-scope composition from the fallback chain's primary family binding, not re-derived per dispatch, so a fallback advancement to a different-family candidate does not alter the run's memory scope. (d) The paired writer-side obligation: memory capture writes under the run's composed record scope and does not construct an independent scope.
+
+**Amendment 2 - C-MEM-13: NEW subsection "Cross-family withholding of standard memory tools" plus one appended invariant.** When `standard_memory_tools` has been selected and the dispatched candidate's provider family differs from `MemoryScope.provider_family`, the harness MUST NOT expose the memory tool schemas or the scope reference for that dispatch; the dispatch proceeds without model-facing memory access, and the withholding is recorded with a named denial reason. Harness-authored memory capture is unaffected - C3's condition of concurrence, on the ground that capture is a different authorship class and crosses no boundary the harness does not already hold. C6's limit is recorded as a stated non-claim: family equality is a necessary but not a sufficient trust condition, and within-family routing to a local terminal surface carries a distinct posture addressed outside this contract.
+
+**Amendment 3 - C-MEM-14: the exposure obligation qualified.** The present-tense "the harness exposes provider-neutral tools" obligation is now explicitly subject to the C-MEM-13 family-scope condition, and a withheld exposure is a ledgered outcome rather than a violation of this contract. Recorded as a clarification of C-MEM-14's existing invariant "Tools cannot bypass scope, redaction, retention, or injection policy." - withholding is that invariant enforced at the exposure boundary instead of at the call - not an extension of it.
+
+**No amendment - Memory threat model.** Zero change, deliberately. Per the X-AL-3 paragraph above, the `:481` invariant is the authority the three amendments conform to, not a surface they revise.
+
+**Downstream consequences recorded here, applied elsewhere.** (i) `B-89` (producer key-vs-value asymmetry: written records carry raw provider keys while retrieval requests carry family values, so an `ollama`-written note is invisible even to a `local_open_weight`-scoped request of its own family) now has its direction determined - the writer adopts the run's composed record scope per Amendment 1(d). (ii) `B-90` (the capture path's independently-constructed scope omits `tenant` and `workload_class`, so under the wildcard-on-`null` semantics every tool-captured record is tenant-unpartitioned, against the `:481` tenant mandate) is closed incidentally by that same writer-side repair. (iii) The impl leg - the C-MEM-13 withholding guard (fork §5 Q2), the `B-89` writer repair, and the `B-90` fold-in - follows as a separate arc per the `B-33` / `B-59` / `B-70` / `B-72` spec-leg-then-impl-leg precedent. This delta changes no code.
+
+**Plan absorption (same arc).** `Implementation_Plan_Memory_Substrate_v1.md` v1 -> v1.1 adds NEW U-MEM-26 decomposing that impl leg, filed in this same PR.
+
+**Named open question carried forward, not discharged.** Fork §7: whether records captured during a cross-family fallback leg are promotion-eligible under C-MEM-10. That is C-MEM-10 policy territory, outside B-86's scope; v1.1 neither resolves nor forecloses it, and it is restated here so it does not disappear with the fork doc.
+
+**Surfaced finding, not patched.** Three of the fork's `:NNN` cites are off-by-N against this file at HEAD `f79dbe85`: the C-MEM-14 "Tools cannot bypass scope…" invariant is at `:502` (fork §6 item 4 cites `:500`), the cross-run prompt-injection-persistence threat is at `:471` (fork §4 cites `:472`), and C-MEM-11's stable-result invariant is at `:392` (fork §4 cites `:384`). Every load-bearing cite the amendments rest on - C-MEM-03 `:100-108` and `:104`, C-MEM-11 `:346-395`, C-MEM-13 `:431-463` with `:449` and `:454`, the threat model `:465-483` and `:481`, C-MEM-14 `:485-504` - resolves byte-exact. No spec text is changed on account of the drifted cites. Separately, every pre-v1.1 `:NNN` cite into this file across `.harness/**` (for example the `B-84` row's `:463` and the `B-83` row's `:481`) is pinned to the HEAD at which it was written and shifts by construction with this delta; those are historical records of a filing state, not live contract references, and they are deliberately not rewritten here. Cite this spec by contract ID and section name, not by line, in any text authored after v1.1.
+
+**Sections preserved verbatim at v1.1.** The Status section (revision lines appended only); C-MEM-01; C-MEM-02; the C-MEM-03 `MemoryRecordEnvelope`, `SourceRef`, and `MemoryScope` field shapes plus its three existing invariants (byte-unchanged - the amendment constrains a declared field's value domain and derivation; it adds, removes, and retypes nothing); C-MEM-04 through C-MEM-12; the C-MEM-13 `MemoryAccessMode` vocabulary, selection-input list, and all six existing invariants (byte-unchanged; one subsection and one invariant appended); the Memory threat model in full; the C-MEM-14 tool table and all four existing invariants (byte-unchanged; one qualifying paragraph appended to its Contract); C-MEM-15 through C-MEM-20. Zero new record type, zero new field, zero new enum member, zero change to any ledger, packet, or telemetry shape.
+
 ## C-MEM-01 - Memory plane boundary
 
 ### Contract
@@ -108,11 +136,25 @@ MemoryScope {
 }
 ```
 
+### `MemoryScope.provider_family` value domain and derivation
+
+`provider_family` carries a `ProviderFamily` value - one of `anthropic`, `openai`, `google`, or `local_open_weight` - and never a provider key, a model identifier, or a CLI-profile identifier. The `string | null` declaration above is a serialization shape, not a licence to store an arbitrary identifier.
+
+A record written with a non-value identifier in this field is not retrievable under a family-scoped request. The retrieval, index, and policy scope predicates compare the stored identifier against the requested family directly, so such a record is invisible even to a request scoped to that identifier's own family. Normalization to the value domain is forward-only: records already written with a non-value identifier are not rewritten and remain unretrievable under family-scoped requests as a permanent residual.
+
+`null` denotes an unpartitioned record. It matches any requested provider family, and the same wildcard reading applies on either side of the comparison - a request that carries no family matches records of every family. `null` is not an unknown-deny sentinel; a record that must be confined to one provider family carries that family's value, never `null`.
+
+`provider_family` is a run-level partition attribute. It is derived once, at run-scope composition, from the fallback chain's primary family binding, and it is not re-derived per dispatch: a fallback advancement to a candidate of a different provider family does not alter the run's memory scope. A fallback chain is a continuity mechanism, and the run's memory partition is one of the run-level identities it preserves across that boundary.
+
+The paired writer-side obligation is that memory capture writes under the run's composed record scope. The capture path does not construct an independent `MemoryScope`; the run's composed scope is the single authority for every record the run writes, so what a run writes and what a run can retrieve share one partition by construction.
+
 ### Invariants
 
 - `content_hash` is computed over canonical serialized content excluding derived indexes.
 - Supersession does not delete the prior record.
 - Redaction and tombstone states are durable memory operations.
+- `provider_family` carries a `ProviderFamily` value or `null`, where `null` is the unpartitioned wildcard and not an unknown-deny sentinel.
+- The run's composed record scope is the single authority for both retrieval and capture within a run; the capture path does not construct an independent scope.
 
 ## C-MEM-04 - Episodic records
 
@@ -453,6 +495,12 @@ Selection inputs:
 - Token budget.
 - Record scope.
 
+### Cross-family withholding of standard memory tools
+
+When `standard_memory_tools` has been selected and the dispatched candidate's provider family differs from `MemoryScope.provider_family`, the harness MUST NOT expose the memory tool schemas or the scope reference for that dispatch. The dispatch proceeds without model-facing memory access, and the withholding is recorded with a named denial reason. Harness-authored memory capture is unaffected: capture is a different authorship class and crosses no boundary the harness does not already hold.
+
+Stated limit. Family equality is a necessary but not a sufficient trust condition for exposing model-facing memory. Within-family routing to a local terminal surface carries a distinct trust posture that this contract does not address and does not claim to cover.
+
 ### Invariants
 
 - Anthropic native Memory is an adapter, not canonical storage.
@@ -461,6 +509,7 @@ Selection inputs:
 - External CLI provider routing remains the provider-construction authority; memory access mode is selected after the route is known.
 - Local CLI OAuth/session tokens are never memory records and are never read by the memory layer.
 - `no_memory_access` is a valid policy outcome and must be ledgered when memory was requested.
+- Standard memory tools and the scope reference are withheld on a cross-family dispatch per the cross-family withholding rule above; the withholding is a ledgered outcome carrying a named denial reason.
 
 ## Memory threat model
 
@@ -495,6 +544,8 @@ When `standard_memory_tools` is selected, the harness exposes provider-neutral t
 | `memory.write_note` | Write an episodic note under policy. |
 | `memory.propose_promotion` | Submit a promotion candidate for policy/review. |
 | `memory.request_redaction` | Submit a redaction request. |
+
+Exposure is subject to the C-MEM-13 cross-family condition: when the dispatched candidate's provider family differs from `MemoryScope.provider_family`, the tool schemas and the scope reference are withheld for that dispatch. A withheld exposure is a ledgered outcome, not a violation of this contract. This qualification is a clarification of the "Tools cannot bypass scope, redaction, retention, or injection policy." invariant below - withholding enforces that invariant at the exposure boundary rather than at the call - and not an extension of it.
 
 ### Invariants
 

@@ -8,6 +8,20 @@ Date: 2026-07-01
 
 Scope: atomic implementation plan for the full memory substrate. This plan is not an MVP. Units are sequenced only to control risk and review size.
 
+Revision: v1 -> v1.1 (`B-86` spec-leg apply pass - NEW U-MEM-26 decomposing the impl leg of `Spec_Memory_Substrate_v1.md` v1.1. Detail at the change-note below.)
+
+Revision date: 2026-07-28
+
+## Change-note (v1 -> v1.1)
+
+**Trigger and back-flow authority.** RATIFIED Class 1 fork `.harness/class_1_fork_b86_memory_scope_provider_family_keying.md` (filed 2026-07-28; register row `B-86`), applied at the spec leg as `Spec_Memory_Substrate_v1.md` v1.1 in this same PR. v1.1 of that spec adds the C-MEM-03 `provider_family` value domain, `null` semantics, and run-level derivation rule with its paired writer-side obligation; the C-MEM-13 cross-family withholding invariant; and the C-MEM-14 exposure qualification. This plan delta decomposes the resulting impl leg.
+
+**Revision scope.** ONE new atomic unit, **U-MEM-26**, carrying the C-MEM-13 cross-family withholding guard at the standard-memory-tools context resolution, the `B-89` writer-side repair (the capture path consumes the run's composed record scope instead of constructing its own, which incidentally closes `B-90`'s `tenant` / `workload_class` omission), and their witnesses. U-MEM-26 is a **conformance-repair unit against the already-cleared threat-model invariant** "Retrieval and injection enforce project, workflow, tenant, provider-family, CLI-profile, and visibility scope before ranking." - not new capability.
+
+**Back-reference reconciliation inside this file.** §3 axis placement gains U-MEM-26 under control plane and runtime; §4 gains three dependency edges (`U-MEM-07`, `U-MEM-14`, `U-MEM-16` -> `U-MEM-26`); §4.1 coverage map extends the R-MEM-01 range and adds U-MEM-26 to R-MEM-09 and R-MEM-12; §7 gains a G6 review-boundary row; §9 extends the completion range to U-MEM-26. No other row is touched.
+
+**Sections preserved verbatim at v1.1.** The Status section (revision lines appended only); §1 goal; §2 non-negotiable constraints; §5 unit bodies U-MEM-01 through U-MEM-25; §6 required review gates; §8 risk controls. The five reconciliations above are the only edits to pre-existing text, and each is a range or membership extension - no unit body, acceptance criterion, or verification line is rewritten.
+
 ## 1. Goal
 
 Implement the complete provider-neutral memory layer specified by `Spec_Memory_Substrate_v1.md` and required by PRD v1.2 R-MEM.
@@ -50,9 +64,9 @@ Repository sequencing note: at filing head `cc612ec8`, this repository's `main` 
 |---|---|
 | Information substrate | U-MEM-01, U-MEM-02, U-MEM-03, U-MEM-04, U-MEM-05, U-MEM-06, U-MEM-10, U-MEM-11, U-MEM-21, U-MEM-24 |
 | Action surface | U-MEM-12, U-MEM-13, U-MEM-22, U-MEM-24 |
-| Control plane | U-MEM-11, U-MEM-12, U-MEM-18, U-MEM-19, U-MEM-24 |
+| Control plane | U-MEM-11, U-MEM-12, U-MEM-18, U-MEM-19, U-MEM-24, U-MEM-26 |
 | Operational discipline | U-MEM-04, U-MEM-08, U-MEM-09, U-MEM-20, U-MEM-21, U-MEM-22, U-MEM-24 |
-| Runtime | U-MEM-07, U-MEM-08, U-MEM-09, U-MEM-14, U-MEM-15, U-MEM-16, U-MEM-17, U-MEM-18, U-MEM-19, U-MEM-20, U-MEM-22, U-MEM-23, U-MEM-24 |
+| Runtime | U-MEM-07, U-MEM-08, U-MEM-09, U-MEM-14, U-MEM-15, U-MEM-16, U-MEM-17, U-MEM-18, U-MEM-19, U-MEM-20, U-MEM-22, U-MEM-23, U-MEM-24, U-MEM-26 |
 | Cross-axis closeout | U-MEM-24, U-MEM-25 |
 
 ## 4. Dependency map
@@ -116,6 +130,9 @@ U-MEM-20 -> U-MEM-24
 U-MEM-21 -> U-MEM-24
 U-MEM-22 -> U-MEM-24
 U-MEM-24 -> U-MEM-25
+U-MEM-07 -> U-MEM-26
+U-MEM-14 -> U-MEM-26
+U-MEM-16 -> U-MEM-26
 
 External CLI routing port gates CLI-route-specific acceptance in U-MEM-05, U-MEM-12, U-MEM-14, U-MEM-18, and U-MEM-24. It is not represented as a `U-MEM` node because it is an upstream/deployed feature port, not memory-layer scope.
 ```
@@ -124,7 +141,7 @@ External CLI routing port gates CLI-route-specific acceptance in U-MEM-05, U-MEM
 
 | Requirement | Primary units |
 |---|---|
-| R-MEM-01 full layer/no MVP | U-MEM-01 through U-MEM-25 |
+| R-MEM-01 full layer/no MVP | U-MEM-01 through U-MEM-26 |
 | R-MEM-02 canonical filesystem/git store | U-MEM-02, U-MEM-03, U-MEM-06 |
 | R-MEM-03 typed records | U-MEM-01, U-MEM-06, U-MEM-07 |
 | R-MEM-04 automatic episodic and durable capture | U-MEM-03, U-MEM-07 |
@@ -132,10 +149,10 @@ External CLI routing port gates CLI-route-specific acceptance in U-MEM-05, U-MEM
 | R-MEM-06 compaction safety | U-MEM-20 |
 | R-MEM-07 retrieval and ranking | U-MEM-10, U-MEM-11 |
 | R-MEM-08 packet assembly and injection | U-MEM-11, U-MEM-14, U-MEM-15, U-MEM-16, U-MEM-17 |
-| R-MEM-09 multi-provider memory routing | U-MEM-12, U-MEM-13, U-MEM-14, U-MEM-15, U-MEM-16, U-MEM-17 |
+| R-MEM-09 multi-provider memory routing | U-MEM-12, U-MEM-13, U-MEM-14, U-MEM-15, U-MEM-16, U-MEM-17, U-MEM-26 |
 | R-MEM-10 CLI-neutral and CLI-specific memory | U-MEM-05, U-MEM-18, U-MEM-24 |
 | R-MEM-11 engine-class durability | U-MEM-19 |
-| R-MEM-12 redaction, privacy, and scope | U-MEM-04, U-MEM-21, U-MEM-24 |
+| R-MEM-12 redaction, privacy, and scope | U-MEM-04, U-MEM-21, U-MEM-24, U-MEM-26 |
 | R-MEM-13 observability | U-MEM-22 |
 | R-MEM-14 review and administration | U-MEM-09, U-MEM-21, U-MEM-25 |
 | R-MEM-15 migration and compatibility | U-MEM-17, U-MEM-23, U-MEM-24 |
@@ -816,6 +833,47 @@ Verification:
 - Documentation link check.
 - Closeout checklist review.
 
+### U-MEM-26 - Enforce run-level memory scope keying and cross-family tool withholding
+
+Contracts: C-MEM-03, C-MEM-13, C-MEM-14.
+
+Requirements: R-MEM-09, R-MEM-12.
+
+Axis: Runtime plus control plane.
+
+Depends on: U-MEM-07, U-MEM-14, U-MEM-16.
+
+Back-flow authority: `.harness/class_1_fork_b86_memory_scope_provider_family_keying.md` (RATIFIED Class 1 fork; register rows `B-86`, `B-89`, `B-90`), applied at `Spec_Memory_Substrate_v1.md` v1.1.
+
+Implement:
+
+- The C-MEM-13 cross-family withholding guard at the standard-memory-tools context resolution: when `standard_memory_tools` has been selected and the dispatched candidate's provider family differs from `MemoryScope.provider_family`, neither the memory tool schemas nor the scope reference are exposed for that dispatch, and the dispatch proceeds without model-facing memory access.
+- A named denial reason recorded for the withheld dispatch, following the disposition shape already used for the withheld read-only rendered packet.
+- The `B-89` writer-side repair: the capture path consumes the run's composed record scope instead of constructing an independent `MemoryScope`, so written records carry the run's `ProviderFamily` value rather than a raw per-dispatch provider key.
+- Forward-only normalization posture for records already written with a non-value identifier: no rewrite, no migration.
+
+Acceptance:
+
+- A cross-family servable dispatch lands with the memory tools and scope reference withheld and the withholding reported with a named denial reason; the dispatch itself still completes.
+- Harness-authored automatic capture is unaffected by the withholding guard and continues on the same dispatch.
+- A same-family servable dispatch is unchanged: schemas and scope reference are exposed exactly as before.
+- Records written by the capture path carry the run's composed record scope, including `provider_family` as a `ProviderFamily` value and the `tenant` and `workload_class` fields the independently-constructed scope omitted, closing `B-90`.
+- A record written under the run's composed scope is retrievable by a family-scoped request of that same family, which the pre-repair raw-key write was not.
+- The forward-only migration residual is stated: pre-repair records written with a non-value identifier remain unretrievable under family-scoped requests and are not rewritten.
+
+Verification:
+
+- Cross-family servable dispatch test asserting withheld schemas, withheld scope reference, the named denial reason, and continued dispatch.
+- Same-family control test asserting exposure is unchanged.
+- Capture-unaffected test asserting harness-authored capture still writes on the withheld dispatch.
+- Capture-scope test asserting written records carry the composed scope's `provider_family`, `tenant`, and `workload_class`.
+- Round-trip retrieval test proving a newly captured record is visible to a family-scoped request of its own family.
+
+Out of scope for this unit:
+
+- The C6 stated limit at C-MEM-13: family equality is necessary but not sufficient, and the within-family local-terminal posture is addressed outside this contract.
+- Promotion eligibility of records captured during a cross-family fallback leg, which remains a C-MEM-10 policy question carried as a named open question at the spec v1.1 change-note.
+
 ## 6. Required review gates
 
 Before implementation starts:
@@ -850,6 +908,7 @@ Recommended PR groups:
 | G3 | U-MEM-12 through U-MEM-17 | Provider access modes, standard tools, prompt fallback, Anthropic adapter. External CLI route branches of U-MEM-12 and U-MEM-14 are port-gated. |
 | G4 | U-MEM-18 through U-MEM-22 | CLI profiles, engine durability, compaction safety, redaction, observability. Requires landed external CLI routing before CLI-profile completion claims. |
 | G5 | U-MEM-23 through U-MEM-25 | Migration, end-to-end verification, documentation, final evidence. |
+| G6 | U-MEM-26 | Run-level memory scope keying and cross-family tool withholding. Conformance repair against the cleared threat-model scope invariant; lands after the `B-86` spec leg. |
 
 No group may be described as an MVP. Groups are review boundaries only.
 
@@ -870,7 +929,7 @@ No group may be described as an MVP. Groups are review boundaries only.
 
 The memory substrate is complete when:
 
-- U-MEM-01 through U-MEM-25 are implemented.
+- U-MEM-01 through U-MEM-26 are implemented.
 - Every R-MEM requirement maps to implementation and verification evidence.
 - Every C-MEM contract maps to implementation and verification evidence.
 - Anthropic native memory, standard memory tools, and prompt packet fallback all operate over the same canonical store.
