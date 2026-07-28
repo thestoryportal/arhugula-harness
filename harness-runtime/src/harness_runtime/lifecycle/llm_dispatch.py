@@ -111,7 +111,7 @@ from harness_runtime.lifecycle.audit_signing_errors import (
 )
 from harness_runtime.lifecycle.cacheable_epoch import DEFAULT_CACHE_TTL, CacheTTL
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
-from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_provider
+from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_scope_check
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLToolLoopContext,
     ModelToolCall,
@@ -1631,6 +1631,11 @@ class RuntimeLLMDispatcher:
             repair_packet = (
                 degraded_sink.value.rendered if degraded_sink.value is not None else None
             )
+            # B-85 — a SECOND, structurally independent sink. Only a
+            # standard-tools loop writes it, and only the degraded paths write
+            # `degraded_sink`, so the two decisions never collide (see
+            # `_UnservedMemoryToolCallsSink`).
+            unserved_sink = _UnservedMemoryToolCallsSink()
 
             # --- Step 3: per-provider dispatch --------------------------
             cache_attrs: _AnthropicCacheAttrs | None
@@ -1753,6 +1758,7 @@ class RuntimeLLMDispatcher:
                             standard_memory_tool_executor=standard_memory_tool_executor,
                             step_context=step_context,
                             step_id=step_id,
+                            unserved_sink=unserved_sink,
                             system=effective_system_prompt,
                             upstream=upstream_output,
                         )
@@ -1791,6 +1797,7 @@ class RuntimeLLMDispatcher:
                             step_context=step_context,
                             step_id=step_id,
                             degraded_sink=degraded_sink,
+                            unserved_sink=unserved_sink,
                             system=effective_system_prompt,
                             upstream=upstream_output,
                         )
@@ -1843,6 +1850,20 @@ class RuntimeLLMDispatcher:
                     _emit_degraded_memory_serve_span(
                         self.tracer_provider,
                         degraded_sink.value,
+                        provider=provider_name,
+                        model=model,
+                        outcome=dispatch_outcome,
+                        error_type=dispatch_error_type,
+                    )
+                # B-85 — an INDEPENDENT emission, not an `elif`. The two sinks
+                # report different facts about different dispatches and are
+                # never both populated (see `_UnservedMemoryToolCallsSink`);
+                # chaining them would make that structural invariant load-
+                # bearing for correctness instead of merely true.
+                if unserved_sink.value is not None:
+                    _emit_unserved_memory_tool_calls_span(
+                        self.tracer_provider,
+                        unserved_sink.value,
                         provider=provider_name,
                         model=model,
                         outcome=dispatch_outcome,
@@ -2252,23 +2273,31 @@ def _packet_scope_matches_dispatch_family(
     layer down. (`selection.selected_family` is derived from the same primary,
     so it agrees with the scope and cannot serve as the discriminator either.)
 
-    `provider_family_for_provider` is the workspace's existing provider→family
-    authority (`cross_family_cost_tag.py:82`, also used by the C-RT-16 wrapper);
-    a second mapping here would be the mirror-copy drift class. NOTE its
-    unknown-provider fallback is `LOCAL_OPEN_WEIGHT`, so an unregistered
-    provider key compares equal to an ollama-scoped packet — conservative for
-    cost attribution, but a residual for THIS use; registered on `B-86`.
+    `provider_family_for_scope_check` is the fail-closed sibling of the
+    workspace's provider→family authority (`cross_family_cost_tag.py`, whose
+    cost-attribution entry point the C-RT-16 wrapper still uses); one shared
+    map, so a second mapping here would be the mirror-copy drift class. B-86
+    item (3): the cost entry point falls back to `LOCAL_OPEN_WEIGHT` for an
+    UNREGISTERED provider key, which made such a key compare EQUAL to an
+    ollama-scoped packet and get it REPAIRED — conservative for attribution, a
+    live disclosure leak for THIS scope-boundary use. The sibling returns
+    `None` instead and this function fails closed on it. (B-86's own KEYING
+    question — whether provider-family is the right scope discriminator at all
+    — remains open; only the unregistered-key sentinel is settled here.)
 
-    An absent scope or an absent `provider_family` is treated as NOT matching:
-    `_scope_mismatch` treats a `None` request family as "no constraint", so the
-    packet may hold records of ANY family and nothing here can prove otherwise.
-    Unverifiable is not the same as safe.
+    An absent scope, an absent `provider_family`, or an unregistered provider
+    key is treated as NOT matching: `_scope_mismatch` treats a `None` request
+    family as "no constraint", so the packet may hold records of ANY family and
+    nothing here can prove otherwise. Unverifiable is not the same as safe.
     """
 
     scope = memory_context.record_scope
     if scope is None or scope.provider_family is None:
         return False
-    return scope.provider_family == provider_family_for_provider(provider_name).value
+    dispatch_family = provider_family_for_scope_check(provider_name)
+    if dispatch_family is None:
+        return False
+    return scope.provider_family == dispatch_family.value
 
 
 def _degraded_serve_disposition(
@@ -2466,6 +2495,123 @@ def _emit_degraded_memory_serve_span(
             span.set_attribute("memory.degraded_serve.dispatch_outcome", outcome)
             if error_type is not None:
                 span.set_attribute("memory.degraded_serve.provider_error_type", error_type)
+
+
+#: B-85 unserved-reason. A span-attribute VALUE for the same reason the B-83
+#: reasons are (the C-MEM-19 enums are CLOSED; see the note at
+#: `_DEGRADED_REASON_ARM_UNSERVABLE`). `mixed_batch_caller_owned` — the model
+#: emitted a memory-tool call and a caller-tool call in ONE batch, and batch
+#: atomicity hands the whole response back unprocessed, so the memory call was
+#: not answered by THIS dispatch.
+_UNSERVED_REASON_MIXED_BATCH_CALLER_OWNED: Final[str] = "mixed_batch_caller_owned"
+
+
+@dataclass(frozen=True, slots=True)
+class _UnservedMemoryToolCalls:
+    """B-85 — memory-tool calls a standard-tools loop returned WITHOUT serving.
+
+    Deliberately NOT `_DegradedMemoryServe`. The two decisions are structurally
+    non-colliding and describe opposite facts: a degraded serve means the arm
+    could not serve the SELECTED MODE at all, while this means the mode WAS
+    served (by iteration `k` the loop has already answered `k` rounds of memory
+    calls) and exactly one batch went unanswered. Sharing the B-83 carrier
+    would force one single-slot decision to stand for both.
+    """
+
+    #: How many memory-named calls in the returned batch went unanswered.
+    #: Always ≥ 1 — a batch with none is the caller's alone and is not
+    #: reported (nothing memory-related happened to it).
+    count: int
+    reason: str
+
+
+@dataclass(slots=True)
+class _UnservedMemoryToolCallsSink:
+    """Mutable single-slot carrier for a B-85 unserved-batch decision.
+
+    Written INSIDE the standard-tools loop functions (neither of which receives
+    a tracer) and read by the arm site's `finally`, which owns every memory
+    telemetry emission for the dispatch. Single-slot is sufficient: the mixed
+    exit RETURNS immediately, so a dispatch populates it at most once, and the
+    openai / ollama arms are mutually exclusive `elif` branches so the two
+    write sites can never both run. The ollama R5 tools-unsupported fallback
+    returns at `iteration == 0` BEFORE any `tool_calls` inspection, so it can
+    never co-occur with a write here either — and because this sink is separate
+    from `_DegradedMemoryServeSink`, neither decision can overwrite the other.
+
+    One instance per dispatch, created at the arm-selection site; never shared
+    across concurrent branches.
+    """
+
+    value: _UnservedMemoryToolCalls | None = None
+
+
+def _emit_unserved_memory_tool_calls_span(
+    tracer_provider: Any,
+    unserved: _UnservedMemoryToolCalls,
+    *,
+    provider: str,
+    model: str,
+    outcome: str = _DISPATCH_OUTCOME_COMPLETED,
+    error_type: str | None = None,
+) -> None:
+    """Emit the ONE `memory.operation` span for a B-85 unserved tool-call batch.
+
+    B-85 posture (3): the mixed-batch exits KEEP their return-whole semantics
+    byte-identical — the response is already composed, batch atomicity forbids
+    half-committing memory writes from it, and the packet cannot retroactively
+    answer a tool call — so the only defect left to close is that NOTHING
+    recorded the memory call going unserved. This span records it, truthfully.
+
+    Every attribute reports what ACTUALLY happened, which is why this is NOT
+    `_emit_degraded_memory_serve_span`:
+
+    * `standard_tool_call`, not `DENIAL` — no resolver denied anything. The
+      caller may re-dispatch, the model may then emit the memory call alone,
+      and it will be served. This is "not served at THIS dispatch", not a
+      denial, and for the same reason NO `failure_class` is set (none of the
+      six closed classes describes it, and `POLICY_DENIAL` would assert a
+      policy decision that was never made).
+    * `standard_memory_tools`, not `no_memory_access` — the selected mode WAS
+      served by this arm. At iteration k>0 the loop has already executed k
+      rounds of memory calls; reporting no-memory-access would be false.
+    * `record_count=0` and NO `packet_hash` — nothing was served IN RESPONSE to
+      these calls, and no packet was rendered at all. Claiming a hash for a
+      packet that never went anywhere is the B-87 defect class.
+
+    The B-85-specific detail rides attribute VALUES in a distinct
+    `memory.unserved_tool_call.*` namespace, per the B-83 precedent documented
+    at the `_DEGRADED_REASON_*` constants: the three memory enums are CLOSED
+    per C-MEM-19 and extending one would be an X-AL-3 design extension. All of
+    it lands on the memory tracer's own span, never on the `gen_ai` span
+    (C-OD-04 §4.3 namespace discipline).
+
+    Emitted from the same `finally` as the B-83 span. Both record sites are
+    immediately followed by the arm's `return`, so on this path the outcome is
+    structurally `completed` — the `outcome`/`error_type` parameters exist only
+    for parity with the B-83 emitter's signature, not because a raise-after-mixed-
+    exit path is reachable. Because model-emitted batches are nondeterministic the
+    span may fire 0..N times across retry attempts of one logical call — the
+    same property the B-83 span has, and deliberately not deduped.
+    """
+
+    with memory_telemetry_span(
+        tracer_provider,
+        tracer_name="harness.runtime.llm_dispatch",
+        operation_name=MemoryTelemetryOperationName.STANDARD_TOOL_CALL,
+        operation_kind=MemoryOperationKind.STANDARD_TOOL_CALL.value,
+        access_mode=MemoryAccessMode.STANDARD_MEMORY_TOOLS.value,
+        provider=provider,
+        model=model,
+        packet_hash=None,
+        record_count=0,
+    ) as span:
+        if span is not None:
+            span.set_attribute("memory.unserved_tool_call.count", unserved.count)
+            span.set_attribute("memory.unserved_tool_call.reason", unserved.reason)
+            span.set_attribute("memory.unserved_tool_call.dispatch_outcome", outcome)
+            if error_type is not None:
+                span.set_attribute("memory.unserved_tool_call.provider_error_type", error_type)
 
 
 def _derive_tokenizer_version(model: str) -> str:
@@ -3307,6 +3453,33 @@ def _all_calls_are_memory_tools(
     return all(name is not None and name in memory_names for name in names)
 
 
+def _record_unserved_memory_tool_calls(
+    sink: _UnservedMemoryToolCallsSink,
+    names: Sequence[str | None],
+    memory_names: frozenset[str],
+) -> None:
+    """B-85 — report the memory calls a caller-owned batch left unanswered.
+
+    Takes the SAME `(names, memory_names)` inputs `_all_calls_are_memory_tools`
+    just rejected the batch on, so the count can never be computed against a
+    different membership rule than the guard used.
+
+    Writes NOTHING when the batch names no memory tool at all: a purely
+    caller-owned batch is the ordinary tool workflow the memory tools were
+    injected alongside, nothing memory-related went unserved in it, and a span
+    claiming otherwise would be false. Both provider loops route here so the
+    two exits cannot drift apart.
+    """
+
+    count = sum(1 for name in names if name is not None and name in memory_names)
+    if count == 0:
+        return
+    sink.value = _UnservedMemoryToolCalls(
+        count=count,
+        reason=_UNSERVED_REASON_MIXED_BATCH_CALLER_OWNED,
+    )
+
+
 def _add_optional_tokens(running: int | None, turn: int | None) -> int | None:
     """Sum two optional token counts, treating ``None`` as ABSENT — not zero.
 
@@ -3367,11 +3540,17 @@ async def _dispatch_openai_with_standard_memory_tools(
     standard_memory_tool_executor: Any,
     step_context: StepExecutionContext,
     step_id: str,
+    unserved_sink: _UnservedMemoryToolCallsSink,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     max_iterations: int = 16,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
-    """OpenAI provider branch with C-MEM-14 standard memory tool continuation."""
+    """OpenAI provider branch with C-MEM-14 standard memory tool continuation.
+
+    ``unserved_sink`` receives the B-85 report when a MIXED batch is handed
+    back whole. This function has no tracer; the caller's ``finally`` owns the
+    emission, as it does for the B-83 sink.
+    """
     kwargs = _payload_to_openai_kwargs(payload, system, upstream)
     kwargs["tools"] = _openai_tools_with_standard_memory(kwargs.get("tools"), memory_context)
     messages = list(kwargs["messages"])
@@ -3394,11 +3573,16 @@ async def _dispatch_openai_with_standard_memory_tools(
             # The batch is the CALLER's — hand the whole response back
             # unprocessed (bare-path parity) and execute NOTHING from it, so a
             # mixed batch cannot half-commit memory before control returns.
-            # B-85: the memory call inside a MIXED batch therefore goes
-            # unserved AND un-ledgered. Not repairable at this site — the
-            # response is already composed and the packet cannot retroactively
-            # answer a tool call — so it is a posture decision registered
-            # separately rather than absorbed here.
+            # B-85 posture (3): the memory call inside a MIXED batch therefore
+            # goes unserved AND un-ledgered. Still not repairable at this site —
+            # the response is already composed and the packet cannot
+            # retroactively answer a tool call — so the return semantics are
+            # kept byte-identical and the fact is REPORTED instead.
+            _record_unserved_memory_tool_calls(
+                unserved_sink,
+                [_function_tool_name(call) for call in tool_calls],
+                _OPENAI_MEMORY_TOOL_CALL_NAMES,
+            )
             return (response_mapping, usage)
         # Validate the batch BEFORE the bound check: a malformed memory call is
         # a fail-fast payload-shape error, and letting the generic (retryable)
@@ -3893,6 +4077,7 @@ async def _dispatch_ollama_with_standard_memory_tools(
     step_context: StepExecutionContext,
     step_id: str,
     degraded_sink: _DegradedMemoryServeSink,
+    unserved_sink: _UnservedMemoryToolCallsSink,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     max_iterations: int = 16,
@@ -3911,6 +4096,11 @@ async def _dispatch_ollama_with_standard_memory_tools(
     describes, so the report survives a retry that raises ([P2-d]). The caller
     owns the telemetry emission so every B-83 reachability reports through one
     emitter.
+
+    ``unserved_sink`` receives the B-85 report when a MIXED batch is handed
+    back whole — a strictly later point in the loop than the R5 fallback above
+    it, which returns at ``iteration == 0`` before any ``tool_calls`` exist, so
+    the two sinks can never both be written on one dispatch.
     """
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     kwargs["tools"] = _ollama_tools_with_standard_memory(kwargs.get("tools"), memory_context)
@@ -3982,9 +4172,15 @@ async def _dispatch_ollama_with_standard_memory_tools(
             _MEMORY_TOOL_NAMES,
         ):
             # Caller-owned batch — see the OpenAI arm's matching comment.
-            # B-85: the memory call inside a MIXED batch goes unserved and
-            # un-ledgered here; unrepairable at this site (the response is
-            # handed back whole for batch atomicity), registered separately.
+            # B-85 posture (3): the memory call inside a MIXED batch goes
+            # unserved and un-ledgered here; still unrepairable at this site
+            # (the response is handed back whole for batch atomicity), so the
+            # return is byte-identical and the fact is REPORTED instead.
+            _record_unserved_memory_tool_calls(
+                unserved_sink,
+                [_function_tool_name(call) for call in tool_calls],
+                _MEMORY_TOOL_NAMES,
+            )
             return (response_mapping, usage)
         # Validate first, then check the bound, then execute — see the OpenAI
         # arm's matching comments; the ordering rationale is identical.

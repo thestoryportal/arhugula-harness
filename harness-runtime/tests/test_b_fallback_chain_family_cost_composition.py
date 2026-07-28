@@ -63,8 +63,10 @@ from harness_runtime.api import (
 from harness_runtime.lifecycle import retry_breaker_fallback as _rbf
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cross_family_cost_tag import (
+    _PROVIDER_FAMILY_BY_PROVIDER,
     cross_family_tag_for_provider,
     provider_family_for_provider,
+    provider_family_for_scope_check,
 )
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchProviderUnreachableError,
@@ -174,6 +176,27 @@ def test_provider_family_for_provider_maps_and_falls_back() -> None:
     assert provider_family_for_provider("gemini") is ProviderFamily.GOOGLE
     assert provider_family_for_provider("ollama") is ProviderFamily.LOCAL_OPEN_WEIGHT
     assert provider_family_for_provider("nonsense") is ProviderFamily.LOCAL_OPEN_WEIGHT
+
+
+def test_provider_family_for_scope_check_maps_parses_and_fails_closed() -> None:
+    """B-86 item (3) — the fail-closed sibling for SCOPE-BOUNDARY callers.
+
+    Identical to `provider_family_for_provider` on every key it can resolve;
+    the ONLY difference is the terminal case, which returns `None` instead of
+    the conservative `LOCAL_OPEN_WEIGHT` cost-attribution fallback.
+    """
+    # Explicit map.
+    assert provider_family_for_scope_check("anthropic") is ProviderFamily.ANTHROPIC
+    assert provider_family_for_scope_check("codex") is ProviderFamily.OPENAI
+    assert provider_family_for_scope_check("ollama") is ProviderFamily.LOCAL_OPEN_WEIGHT
+    # The `ProviderFamily(provider)` PARSE path must survive: a key that is
+    # value-equal to a family member but absent from the explicit map still
+    # resolves, so `None` means "unregistered", never "spelled differently".
+    assert "local_open_weight" not in _PROVIDER_FAMILY_BY_PROVIDER
+    assert provider_family_for_scope_check("local_open_weight") is ProviderFamily.LOCAL_OPEN_WEIGHT
+    # The sentinel.
+    assert provider_family_for_scope_check("nonsense") is None
+    assert provider_family_for_scope_check("") is None
 
 
 def test_retry_breaker_fallback_reuses_canonical_provider_family() -> None:
