@@ -105,6 +105,9 @@ def test_materialize_custom_generic_config_with_argv_templates(tmp_path: Path) -
     assert provider["kind"] == "generic-command"
     assert provider["args"] == ["--model", "{model}", "--json"]
     assert provider["auth_args"] == ["auth", "status"]
+    # No-preset derivation: declared auth_args imply auth_check unless
+    # explicitly overridden — `bool(auth_args)` at _build_provider_entry.
+    assert provider["auth_check"] is True
     assert provider["response_format"] == "json"
     assert runtime["routing_manifest"]["fallback_chains"][0]["primary"] == {
         "provider": "local_llm",
@@ -238,6 +241,55 @@ def test_cli_no_auth_check_flag_disables_presets_that_default_to_true(
         assert runtime["external_cli_providers"][0]["auth_check"] is False
 
 
+def test_cli_no_auth_check_flag_overrides_the_no_preset_derivation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The explicit override must also win on the no-preset (generic-command)
+    path, where the default is derived as ``bool(auth_args)`` — a variant
+    mutation restricting the override term to preset providers would silently
+    ignore ``--no-auth-check`` here while every preset-path test stays green."""
+    helper = _load_helper()
+    repo_root = tmp_path / "checkout"
+    repo_root.mkdir()
+    base_path = tmp_path / "harness.toml"
+    base_path.write_text(_base_config(repo_root), encoding="utf-8")
+    out_path = tmp_path / "generic-no-auth-check.toml"
+
+    exit_code = helper.main(
+        [
+            "generic-command",
+            "--provider-name",
+            "local_llm",
+            "--command",
+            "my-llm",
+            "--model",
+            "demo-model",
+            "--family",
+            "openai",
+            "--auth-arg",
+            "auth",
+            "--auth-arg",
+            "status",
+            "--no-auth-check",
+            "--base",
+            str(base_path),
+            "--repo-root",
+            str(repo_root),
+            "--output",
+            str(out_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == out_path.as_posix()
+    provider = tomllib.loads(out_path.read_text(encoding="utf-8"))["runtime"][
+        "external_cli_providers"
+    ][0]
+    assert provider["auth_args"] == ["auth", "status"]
+    assert provider["auth_check"] is False
+
+
 def test_presets_without_declared_auth_args_emit_no_auth_args(tmp_path: Path) -> None:
     helper = _load_helper()
     repo_root = tmp_path / "checkout"
@@ -291,6 +343,10 @@ def test_cli_materializes_antigravity_print_mode_config(
     assert provider["provider"] == "antigravity"
     assert provider["kind"] == "antigravity"
     assert provider["command"] == "agy"
+    # No flag passed: the preset's declared auth_check=True must survive the
+    # argparse default (a `default=False` regression would silently disable
+    # the auth probe for every default-True preset).
+    assert provider["auth_check"] is True
     primary = runtime["routing_manifest"]["fallback_chains"][0]["primary"]
     assert primary == {
         "provider": "antigravity",
