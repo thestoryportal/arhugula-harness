@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `844902d24f3d` |
+| `workspace_state_hash` | `04fb94c74462` |
 | `last_refreshed` | 2026-07-28T00:00:00Z |
-| `git_head` | `97f04941` —  |
+| `git_head` | `fcac6d3d` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
-| `open_fork_doc_count` | 99 |
+| `open_fork_doc_count` | 100 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -103,7 +103,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(none)* | — | — | No open PRs at refresh time. |
+| #1145 | `b85-b86-grounding-closeout` | — | — |
 
 ---
 
@@ -111,11 +111,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1146 | 2026-07-28 | Round 37 (in flight): B-86 Class 1 fork filing merged doc-only (#1146, split from #1145 per context-guard DESIGN_IMPL_MIX); companion impl+register PR #1145 (B-85 posture-3 span, B-86(3) fail-closed sentinel, B-89/B-90 registered) green and awaiting merge-gate. |
 | PR #1144 | 2026-07-28 | B-88 impl half: failure class declared at the exception definition site (type(exc)-read, closed-vocabulary-guarded; substring rules only as residual). 14 denial sites now policy_denial by type; store-failure subtype keyed on the closed capture-status enum; public-API export. Codex 4 rounds / 3 bounded findings; merge-gate test-witness BLOCKED once on our own defect class (3 unwitnessed subtype sites revertible-to-base green) — span-pinned 1:1 + re-gated APPROVE. Spec-side vocabulary half stays registered. |
 | PR #1143 | 2026-07-28 | B-84 partial mitigation: MemoryToolExecutionInputError fail-fast in the retry classifier (spec §14.6 D2 residual-class grounding; DENIED excluded — wraps transient I/O; the same-candidate duplicate-commit staircase closes, multi-candidate residual recorded, row stays registered). Codex R1 caught the inverted-subclass bare-ValueError door at _allowed_kinds — wrapped + exhaustively swept. Merge-gate 3-lens all-approve R1; B-88 registered (substring failure-classifier mislabels input AND policy-denial families vs C-MEM-19 §641 — sharpened by the agent's own probe). |
 | PR #1142 | 2026-07-28 | B-83 CLOSED: dispatch-time memory serve-check with policy-authorized repair-to-packet. Three-conjunct authorization (identity, family scope via the packet's actual record_scope, prompt-packet eligibility via a composition-time counterfactual probe of the real selector); per-translator single-system-source folds; exception-safe emission with precise denial reasons. 8 codex rounds / 10 findings fixed; merge-gate 3-lens (spec-conformance BLOCKED once on 3 real ledger items, fixed + re-gated APPROVE). B-85/B-86/B-87 registered. Dual live proofs at the model. Deliberate behavior change: the B-82 R5 fallback now carries the packet. |
 | PR #1141 | 2026-07-28 | RC re-validation CLOSED: PASS with one operator-gated residual (3 OTLP e2es). Phase B 3/3 green after three real drift findings (r500 placeholder hashes + unverified OD chains — fixed, chained, per-tenant verification added, live probe frozen as CI regression; r420 stdio-floor tier-3 foreclosure — config-only Lima gVisor unblock; span-label mislabeling — unset-to-derive, honest re-run). Runbook + template de-staled; report per §7 with the green-e2e-weak-witness calibration note. Codex 8 findings/7 rounds; merge-gate 3-lens all-approve R1. |
-| PR #1140 | 2026-07-28 | B-82 CLOSED: ollama dispatch arm now serves standard memory tools (dotted identities native to /api/chat — no wire map, probe-grounded); both memory loops hardened (batch prevalidation, exhaustion-before-terminal-batch, caller-owned returns, usage accumulation, non-tool-model daemon-authoritative fallback). 6 codex rounds / 8 real findings, several fixed symmetrically on OpenAI; merge-gate 3-lens all-approve R1 with 2 inline closures (B-83 stale-carry reachability, multi-call correlation witnesses). B-83/B-84 registered. Live sanity vs llama3.2:3b completed end-to-end. |
 ---
 
 ---
