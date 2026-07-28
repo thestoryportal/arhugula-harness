@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 from harness_core import DeploymentSurface
-from harness_is.memory_operation_ledger import MemoryOperationKind
+from harness_is.memory_observability import MemoryTelemetryFailureClass
+from harness_is.memory_operation_ledger import (
+    MemoryOperationIdempotencyConflictError,
+    MemoryOperationKind,
+)
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_record_envelope import (
     MemoryRecordEnvelope,
@@ -25,6 +29,7 @@ from harness_is.memory_redaction import (
     MemoryRedactionActor,
     MemoryRedactionKind,
     MemoryRedactionService,
+    MemoryRedactionWriteError,
 )
 from harness_is.memory_retrieval_index import DerivedRetrievalIndexQuery, DerivedRetrievalIndexStore
 from harness_is.memory_store import (
@@ -207,6 +212,60 @@ def _service(
         cli_profile="codex",
         tracer_provider=tracer_provider,
     )
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected_failure_class"),
+    [
+        (OSError("ledger offline"), MemoryTelemetryFailureClass.IO_FAILURE),
+        # NOT io_failure - this row is what makes the assertion load-bearing.
+        # `append_memory_operation` genuinely raises this on a reused
+        # idempotency key, and its type name contains "operat-io-n", so it was
+        # `io_failure` before B-88 and is the residual class after. A mutation
+        # hardcoding `IO_FAILURE` at the emission site fails HERE.
+        (
+            MemoryOperationIdempotencyConflictError(
+                "idempotency_key 'redact:e-1' already records a different operation"
+            ),
+            MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE,
+        ),
+    ],
+)
+def test_redaction_write_failure_emits_classified_failure_class(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raised: Exception,
+    expected_failure_class: MemoryTelemetryFailureClass,
+) -> None:
+    """B-88: the THIRD `classify_memory_failure` consumer, span-pinned.
+
+    `memory_redaction`'s durable-write `except` emits
+    `memory.failure_class=classify_memory_failure(exc)` before wrapping into
+    `MemoryRedactionWriteError`. Nothing asserted the emitted value, so a
+    mutation hardcoding a class there survived. Two rows with DIFFERENT
+    expected classes pin the classification rather than a constant."""
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    record = _record(statement="A statement whose redaction write fails.")
+    store.write_record(record)
+    tracer_provider, exporter = _tracer_provider()
+
+    def _raise(payload: object) -> object:
+        raise raised
+
+    monkeypatch.setattr(store, "append_memory_operation", _raise)
+
+    with pytest.raises(MemoryRedactionWriteError, match="failed to write"):
+        _service(store, tracer_provider=tracer_provider).redact_content(
+            record.envelope.memory_id,
+            record.envelope.kind,
+            timestamp=_NOW,
+            reason="operator requested physical secret removal",
+            replacement_summary="Sensitive credential removed.",
+        )
+
+    [span] = [span for span in exporter.get_finished_spans() if span.name == "memory.operation"]
+    assert span.attributes["memory.failure_class"] == expected_failure_class.value
 
 
 def test_content_redaction_writes_event_before_physical_replacement(

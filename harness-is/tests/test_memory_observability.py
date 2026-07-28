@@ -62,12 +62,15 @@ def test_declaration_attribute_name_is_the_documented_one() -> None:
 @pytest.mark.parametrize(
     ("exc", "expected"),
     [
-        # The declaration WINS over a message that trips an earlier heuristic.
+        # The declaration WINS over a message that the residual would classify
+        # DIFFERENTLY: "path traversal" trips residual rule 2 (path_violation),
+        # so this row fails if the declaration ever stops taking precedence.
         (
-            _DeclaredDenialError("/memories/x.txt read failed: not found"),
+            _DeclaredDenialError("path traversal rejected for /memories/x.txt"),
             MemoryTelemetryFailureClass.POLICY_DENIAL,
         ),
-        # ... and over a message that trips no heuristic at all.
+        # ... and over a message that trips no heuristic at all (the residual
+        # would return provider_adapter_failure here).
         (_DeclaredDenialError("is superseded"), MemoryTelemetryFailureClass.POLICY_DENIAL),
         # Inheritance: `getattr` walks the MRO, so a subclass is covered free.
         (_DeclaredSubclassError("anything"), MemoryTelemetryFailureClass.POLICY_DENIAL),

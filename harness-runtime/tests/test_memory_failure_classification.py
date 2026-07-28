@@ -118,6 +118,16 @@ _PROVIDER_ADAPTER = MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
             MemoryToolExecutionStoreError("PermissionError: [Errno 13] Permission denied"),
             _IO_FAILURE,
         ),
+        # WORDING-CONFLICTING row: `failure_reason` is `f"{type(exc).__name__}:
+        # {exc}"`, so a store LookupError reads "... is unavailable" - which the
+        # RESIDUAL would classify `policy_denial`. Deleting this type's
+        # declaration therefore fails this row rather than passing green.
+        (
+            MemoryToolExecutionStoreError(
+                "MemoryStoreRecordUnavailableError: record mem-1 is unavailable"
+            ),
+            _IO_FAILURE,
+        ),
         # Honest residual on THIS type: the capture layer labels ANY raise from
         # the durable-write pair `io_failure`, so a non-IO exception escaping
         # that pair is reported as IO too. That coarseness is the capture
@@ -137,12 +147,25 @@ _PROVIDER_ADAPTER = MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
         # through the real capture API), so the type determines nothing beyond
         # "not one of the five named substrate faults".
         (MemoryToolExecutionError("write_note capture failed"), _PROVIDER_ADAPTER),
+        # WORDING-CONFLICTING row for the BASE declaration. Synthetic message
+        # (the real defensive branch can only produce the string above), but
+        # required: without a message whose residual differs, deleting the
+        # base's declaration would leave the suite green. "denied by policy"
+        # trips residual rule 1 -> policy_denial, so this row pins the base's
+        # residual declaration as load-bearing.
+        (MemoryToolExecutionError("write_note denied by policy"), _PROVIDER_ADAPTER),
         # --- native adapter / callback contract -----------------------------
         (
             MemoryPathViolationError("path '/memories/../x' contains path-traversal segment '..'"),
             _PATH_VIOLATION,
         ),
         (MemoryPathViolationError("path 'x' not prefixed with '/memories/'"), _PATH_VIOLATION),
+        # WORDING-CONFLICTING row for the path declaration. Every CURRENT raise
+        # site happens to say "path", so without a message that does not, the
+        # declaration is deletable-green and only wording holds the class up -
+        # exactly B-88's complaint. Synthetic but plausible as a future
+        # rewording; the residual would return provider_adapter_failure here.
+        (MemoryPathViolationError("'/memories/../x' escapes the memories scope"), _PATH_VIOLATION),
         # Genuine callback IO keeps io_failure - now by the type's own
         # declaration rather than by "io" appearing in its name.
         (MemoryCallbackIOError("view('/memories/x.txt') failed: not found"), _IO_FAILURE),
