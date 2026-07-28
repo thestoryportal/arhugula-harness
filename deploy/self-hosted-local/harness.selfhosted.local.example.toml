@@ -130,8 +130,10 @@ default_sandbox_tier = "tier-1-process"
 # daemon with `runsc` registered. Lima is one provisioning option — the same VM
 # the R-411 gVisor smoke uses (see
 # `.harness/release-candidate-deployment-readiness-runbook.md` §4 and the
-# `R411_GVISOR_DOCKER_COMMAND` recipe); any Docker-compatible daemon with a
-# tier-3 runtime works.
+# `R411_GVISOR_DOCKER_COMMAND` recipe). The daemon's runtime MUST be
+# registered under the exact name `runsc`: the tier-3 factory constructs
+# `GVisorRunscToolRunnerExecutionDriver`, which always passes
+# `--runtime runsc` — another tier-3 runtime name fails at container start.
 #
 # `docker_binary` is exec'd as argv[0] with NO shell, so a multi-word remote
 # invocation must be wrapped in a single executable script, e.g.
