@@ -16,8 +16,10 @@ Before B-88 the classifier keyed on message substrings and on `"io"` appearing
 anywhere in the lowercased type name. Since "execut-io-n" contains "io", the
 ENTIRE `MemoryToolExecution*` family emitted `io_failure` unless an earlier
 message rule happened to fire - so four genuine policy denials were reported
-as IO failures, violating the C-MEM-19 §641 distinguish invariant
-(`Spec_Memory_Substrate_v1.md:641`) on an axis the vocabulary already has.
+as IO failures, violating the C-MEM-19 Invariants distinguish rule ("Failure
+telemetry must distinguish policy denial, path violation, IO failure,
+serialization failure, provider adapter failure, and retrieval empty-result")
+on an axis the vocabulary already has.
 
 Mutation probes for this table are recorded in the B-88 register row.
 """

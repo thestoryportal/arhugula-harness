@@ -2191,7 +2191,8 @@ class _ExternalCLIAttrs:
 #: `arm_unservable` — the arm reached will not inject the C-MEM-14 tools, but
 #: the context was composed FOR THIS provider, so its packet is
 #: provider-matched by construction and can be served as prompt text
-#: (C-MEM-13, `Spec_Memory_Substrate_v1.md:460`). REPAIRED.
+#: (C-MEM-13 Invariants — "Providers without usable tool support may receive
+#: prompt-extension packets"). REPAIRED.
 _DEGRADED_REASON_ARM_UNSERVABLE: Final[str] = "arm_unservable"
 #: `provider_scope_mismatch` — the context was composed for a DIFFERENT
 #: provider than the one being dispatched. REPORT-ONLY: see
@@ -2716,10 +2717,17 @@ def _degraded_serve_for_unservable_arm(
     arm reached may not serve it. When `STANDARD_MEMORY_TOOLS` was selected and
     this dispatch will not inject the tools, the model would otherwise receive
     ZERO memory while a fully-retrieved, policy-checked packet sits unused on
-    the context. C-MEM-14 (`Spec_Memory_Substrate_v1.md:489`) states the
-    exposure as a present-tense obligation, and C-MEM-13 (`:460`) authorizes
-    the prompt-extension packet for providers without usable tool support — so
-    the repair is to serve the packet as read-only prompt text.
+    the context. C-MEM-14 Contract states the exposure as a present-tense
+    obligation, and C-MEM-13 Invariants ("Providers without usable tool support
+    may receive prompt-extension packets") authorizes the prompt-extension
+    packet for providers without usable tool support — so the repair is to
+    serve the packet as read-only prompt text. Since v1.1 that obligation is
+    CONDITIONED (C-MEM-14 Contract: "Exposure is subject to the C-MEM-13
+    cross-family condition ... A withheld exposure is a recorded outcome ...
+    and not a violation of this contract"); the conclusion is unchanged here
+    because the `arm_unservable` branch below is same-family BY CONSTRUCTION —
+    the context was composed for THIS provider — so the cross-family condition
+    is satisfied, not evaded.
 
     TWO DISPOSITIONS, and the discriminator is provider identity:
 
@@ -2730,8 +2738,9 @@ def _degraded_serve_for_unservable_arm(
 
     * `provider_scope_mismatch` / `provider_family_scope_mismatch` →
       REPORT-ONLY, no packet, no memory. Retrieval and injection enforce
-      PROVIDER-FAMILY scope before ranking (memory threat model,
-      `Spec_Memory_Substrate_v1.md:481`), and the packet was assembled under
+      PROVIDER-FAMILY scope before ranking ("Memory threat model" Invariants —
+      "Retrieval and injection enforce ... provider-family ... scope before
+      ranking"), and the packet was assembled under
       the composing binding's `MemoryScope.provider_family`. Forwarding its
       TEXT across that boundary is a DISCLOSURE leak, which no amount of
       read-only framing fixes. Recomposition cannot rescue either case —
@@ -4649,8 +4658,9 @@ async def _dispatch_ollama_with_standard_memory_tools(
             # left the model with ZERO memory on a plain default-reflection
             # path, with no trace of the degradation — B-83's shape on the
             # commonest configuration. The retry now carries the C-MEM-12
-            # packet as read-only prompt text (C-MEM-13,
-            # `Spec_Memory_Substrate_v1.md:460`) and reports the repair back
+            # packet as read-only prompt text (C-MEM-13 Invariants —
+            # "Providers without usable tool support may receive
+            # prompt-extension packets") and reports the repair back
             # for telemetry. The TOOLS are still dropped, so the daemon
             # rejection is still resolved; only the prompt differs from
             # pre-B-82.

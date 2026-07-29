@@ -399,8 +399,8 @@ def render_packet_for_degraded_dispatch(
     Sibling of `render_prompt_extension_packet` with the access-mode gate
     dropped and nothing else changed — both share `_render_packet`, so the
     read-only framing, the per-section body and every packet-derived field are
-    identical. C-MEM-13 (`Spec_Memory_Substrate_v1.md:460` — "Providers without
-    usable tool support may receive prompt-extension packets") authorizes
+    identical. C-MEM-13 Invariants ("Providers without usable tool support may
+    receive prompt-extension packets") authorizes
     serving an already-retrieved, already-policy-checked packet as prompt text
     when the dispatch arm reached cannot serve the mode that was SELECTED
     (B-83).
