@@ -24,7 +24,11 @@ from harness_cp.memory_access_mode import reflect_memory_provider_capabilities
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_is.cli_profile import DEFAULT_GENERIC_CLI_PROFILE
-from harness_is.memory_operation_ledger import MemoryOperationEngineClass, MemoryOperationKind
+from harness_is.memory_operation_ledger import (
+    MemoryOperationEngineClass,
+    MemoryOperationIdempotencyConflictError,
+    MemoryOperationKind,
+)
 from harness_is.memory_path_registry import MemoryPathRegistry, MemoryRootBinding
 from harness_is.memory_policy import (
     AccessDecision,
@@ -36,7 +40,6 @@ from harness_is.memory_policy import (
 )
 from harness_is.memory_record_envelope import (
     MemoryID,
-    MemoryRecordEnvelope,
     MemoryRecordKind,
     MemoryScope,
     MemoryVisibility,
@@ -48,7 +51,7 @@ from harness_is.memory_retrieval_index import (
     DerivedRetrievalIndexStaleError,
     DerivedRetrievalIndexStore,
 )
-from harness_is.memory_store import CanonicalMemoryStore
+from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 
 from harness_runtime.memory_capture import (
     RUN_START_EVENT_KIND,
@@ -316,7 +319,6 @@ class LocalAutomaticMemoryRuntime:
             self._complete_torn_run_start_capture(
                 context=context,
                 step_context=step_context,
-                engine_class=engine_class,
             )
             self._started_runs.add(context.run_id)
             return
@@ -345,7 +347,6 @@ class LocalAutomaticMemoryRuntime:
         *,
         context: RuntimeMemoryContext,
         step_context: StepExecutionContext,
-        engine_class: object,
     ) -> None:
         """Append the run-start CAPTURE row when the stored record carries none.
 
@@ -361,36 +362,47 @@ class LocalAutomaticMemoryRuntime:
            unchanged.
         3. no record                   -> not reached; the caller captures
            normally.
+
+        Codex R5: the probe at (1) and the append at (2) are not one atomic
+        step, so a SECOND worker can pass the probe while a first worker's row
+        is still in flight. Both halves of the answer live here. The repair
+        payload takes nothing from THIS worker (`repair_capture_operation`), so
+        the racing appends are equivalent and the ledger no-ops the loser
+        rather than conflicting. And the conflict that a genuinely divergent
+        row still raises - the original torn attempt's own append landing in
+        this window, carrying the dispatch metadata a repair cannot know - is
+        CAUGHT and read as completion: the ledger only raises when an entry
+        already occupies this exact `idempotency_key`, and that key names this
+        one capture, so a conflict is positive evidence the row is durable.
+        Failing the run over it would report a repair that in fact succeeded.
         """
-        envelope = self._stored_run_envelope(context.run_id)
-        if envelope is None:
+        record = self._stored_run_record(context.run_id)
+        if record is None:
             return
-        if self._run_start_capture_row_present(envelope.memory_id):
+        if self._run_start_capture_row_present(record.envelope.memory_id):
             return
-        result = self._recorder(
-            actor=step_context.parent_actor,
-            # Inert here - the repair writes no record, so nothing consults the
-            # record scope. Passed anyway so the recorder is bound the same way
-            # on both capture paths.
-            scope=context.record_scope,
-            capture_mode=MemoryCaptureMode.SUMMARIZED,
-        ).repair_capture_operation(
-            event_kind=RUN_START_EVENT_KIND,
-            envelope=envelope,
-            timestamp=datetime.now(UTC),
-            run_id=context.run_id,
-            step_id=None,
-            provider=context.selection.selected_provider,
-            model=context.selection.selected_model,
-            cli_profile=context.selection.cli_profile_ref,
-            engine_class=_memory_engine_class(engine_class),
-            policy_ref=context.policy_ref,
-            procedural_snapshot_ref=None,
-        )
+        try:
+            result = self._recorder(
+                # Both inert here - the repair writes no record, so nothing
+                # consults the record scope, and its row is attributed to the
+                # run-keyed repair actor rather than to this worker. Passed
+                # anyway so the recorder is bound the same way on both capture
+                # paths.
+                actor=step_context.parent_actor,
+                scope=context.record_scope,
+                capture_mode=MemoryCaptureMode.SUMMARIZED,
+            ).repair_capture_operation(
+                event_kind=RUN_START_EVENT_KIND,
+                record=record,
+                timestamp=datetime.now(UTC),
+                run_id=context.run_id,
+            )
+        except MemoryOperationIdempotencyConflictError:
+            return
         _raise_capture_failure(result)
 
-    def _stored_run_envelope(self, run_id: str) -> MemoryRecordEnvelope | None:
-        """The stored run record's envelope, or `None` when it cannot be read.
+    def _stored_run_record(self, run_id: str) -> MemoryStoreRecord | None:
+        """The stored run record, or `None` when it cannot be read.
 
         Identity comes from the STORED envelope and is never re-derived: a
         legacy record's `memory_id` need not equal what today's capture path
@@ -401,9 +413,14 @@ class LocalAutomaticMemoryRuntime:
         recoverable identity and no row can honestly reference it, so the
         caller leaves the stored history exactly as it found it - which is the
         durable-presence guard's own posture, not a swallowed failure.
+
+        The whole record is returned, not the envelope alone: the repair row's
+        `cli_profile` / `engine_class` / `step_id` come from the stored CONTENT,
+        which is where the torn capture recorded them, so the repair stays a
+        pure function of what is durable (Codex R5).
         """
         try:
-            return self._store.read_run_record(run_id).envelope
+            return self._store.read_run_record(run_id)
         except (LookupError, ValueError):
             return None
 

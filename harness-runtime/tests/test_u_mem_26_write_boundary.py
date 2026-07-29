@@ -38,6 +38,7 @@ from harness_is.memory_operation_ledger import (
     MemoryOperationKind,
     MemoryOperationPayload,
     MemoryOperationProjection,
+    MemoryOperationWriteResult,
 )
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_policy import (
@@ -70,7 +71,10 @@ from harness_is.memory_retrieval import (
 from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
-from harness_runtime.automatic_memory import materialize_automatic_memory_runtime
+from harness_runtime.automatic_memory import (
+    LocalAutomaticMemoryRuntime,
+    materialize_automatic_memory_runtime,
+)
 from harness_runtime.lifecycle.memory_tool_types import MemoryCallbackIOError
 from harness_runtime.lifecycle.native_memory_adapter import CanonicalNativeMemoryToolBackend
 from harness_runtime.memory_capture import (
@@ -80,6 +84,7 @@ from harness_runtime.memory_capture import (
     MemoryCaptureScopeValueDomainError,
     MemoryCaptureStatus,
     capture_operation_action_id,
+    capture_repair_actor,
 )
 from harness_runtime.memory_compaction_safety import (
     CompactionCandidateDisposition,
@@ -214,22 +219,27 @@ def _config(tmp_path: Path) -> RuntimeConfig:
     )
 
 
-def _ollama_chain(provider: str = _OLLAMA_KEY) -> FallbackChain:
+def _ollama_chain(
+    provider: str = _OLLAMA_KEY,
+    *,
+    model: str = "llama3.1",
+    family: ProviderFamily = ProviderFamily.LOCAL_OPEN_WEIGHT,
+) -> FallbackChain:
     return FallbackChain(
-        primary=ProviderCandidate(
-            provider=provider,
-            model="llama3.1",
-            family=ProviderFamily.LOCAL_OPEN_WEIGHT,
-        ),
+        primary=ProviderCandidate(provider=provider, model=model, family=family),
         same_family=(),
         cross_family=(),
     )
 
 
-def _ollama_binding(provider: str = _OLLAMA_KEY) -> StepEffectiveBinding:
+def _ollama_binding(
+    provider: str = _OLLAMA_KEY,
+    *,
+    model: str = "llama3.1",
+) -> StepEffectiveBinding:
     return StepEffectiveBinding(
         step_id="memory-step",
-        model_binding=ModelBinding(provider=provider, model="llama3.1"),
+        model_binding=ModelBinding(provider=provider, model=model),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
         persona_tier=PersonaTier.SOLO_DEVELOPER,
@@ -1172,15 +1182,28 @@ def _seed_run_start_capture_row(tmp_path: Path, *, record: MemoryStoreRecord) ->
     )
 
 
-def _compose_one_dispatch(tmp_path: Path) -> None:
+def _compose_one_dispatch(
+    tmp_path: Path,
+    *,
+    provider: str = _OLLAMA_KEY,
+    model: str = "llama3.1",
+    family: ProviderFamily = ProviderFamily.LOCAL_OPEN_WEIGHT,
+) -> None:
+    """Drive one dispatch through a FRESH runtime - i.e. one worker's bootstrap.
+
+    The provider triple is parameterized so a second worker can be given
+    genuinely different dispatch metadata: `_started_runs` is per-runtime, so a
+    second `materialize_...` call is what a second process resuming the same
+    run actually looks like.
+    """
     runtime = materialize_automatic_memory_runtime(
         _config(tmp_path),
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
     )
     assert runtime is not None
     runtime.compose_for_dispatch(
-        binding=_ollama_binding(),
-        fallback_chain=_ollama_chain(),
+        binding=_ollama_binding(provider, model=model),
+        fallback_chain=_ollama_chain(provider, model=model, family=family),
         step=_step(),
         step_context=_step_context(),
     )
@@ -1256,6 +1279,125 @@ def test_torn_run_start_capture_appends_the_missing_row_without_rewriting(
         RUN_START_EVENT_KIND, record.envelope.memory_id
     )
     assert capture.run_id == _RESUMED_RUN_ID
+
+
+def _force_probe_to_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the run-start row probe always report ABSENT.
+
+    Models the race window the probe cannot close: it reads the ledger, and
+    only THEN appends, so a second worker can pass the probe while the first
+    worker's row is still in flight. Two real processes reach this state on
+    their own; a single-process witness has to hold the window open, and the
+    probe is exactly the seam that window lives behind. Nothing else is faked -
+    both workers run the real repair against the real ledger.
+    """
+    monkeypatch.setattr(
+        LocalAutomaticMemoryRuntime,
+        "_run_start_capture_row_present",
+        lambda self, memory_id: False,
+    )
+
+
+def test_torn_repair_payload_is_worker_invariant(tmp_path: Path) -> None:
+    """Codex R5 - the repair payload takes NOTHING from the repairing worker.
+
+    Two capture APIs bound the way two different workers would bind them
+    (different actor, different record scope) repair the same stored record.
+    The payloads must be equal, which the ledger reports by resolving the
+    second append as `IDEMPOTENT_NOOP` rather than raising - the 18-field
+    equivalence check is the assertion, and it is the property the call-site
+    catch below must not be papering over.
+    """
+    record = _seed_legacy_run_record(tmp_path, run_id=_RESUMED_RUN_ID)
+    store = _memory_root_store(tmp_path)
+
+    def _repair(actor_id: str, provider_family: str) -> MemoryCaptureResult:
+        return EpisodicMemoryCapture(
+            store=store,
+            actor=Actor(actor_class=ActorClass.AGENT, actor_id=actor_id),
+            project="arhugula-v2",
+            record_scope=_scope(provider_family),
+        ).repair_capture_operation(
+            event_kind=RUN_START_EVENT_KIND,
+            record=record,
+            timestamp=_NOW,
+            run_id=_RESUMED_RUN_ID,
+        )
+
+    first = _repair("worker-one", _OLLAMA_FAMILY)
+    second = _repair("worker-two", ProviderFamily.ANTHROPIC.value)
+
+    assert first.status is MemoryCaptureStatus.CAPTURED
+    assert first.operation_result is MemoryOperationWriteResult.APPENDED
+    assert second.status is MemoryCaptureStatus.CAPTURED
+    assert second.operation_result is MemoryOperationWriteResult.IDEMPOTENT_NOOP
+    [capture] = _capture_entries(store)
+    # Attributed to the run, not to either worker, and carrying the STORED
+    # record's own metadata rather than any dispatch's.
+    assert capture.actor == capture_repair_actor(_RESUMED_RUN_ID)
+    assert capture.cli_profile == record.content["cli_profile"]
+    assert capture.provider is None
+    assert capture.model is None
+    assert capture.policy_ref is None
+
+
+def test_two_workers_repairing_one_torn_run_both_succeed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex R5 - divergent worker metadata must not fail the second resume.
+
+    Pre-fix the repair payload was built from the RESUMING worker's
+    provider/model/engine/policy, so two workers that both passed the presence
+    probe appended unequal payloads under one idempotency key: the ledger
+    raised, `_raise_capture_failure` turned that into a run failure, and the
+    run died over a row that was already durable.
+
+    The second worker here is deliberately a different provider AND model on a
+    different family - the metadata that used to diverge.
+    """
+    _seed_legacy_run_record(tmp_path, run_id=_RESUMED_RUN_ID)
+    _force_probe_to_miss(monkeypatch)
+
+    _compose_one_dispatch(tmp_path)
+    _compose_one_dispatch(
+        tmp_path,
+        provider="anthropic",
+        model="claude-sonnet-4",
+        family=ProviderFamily.ANTHROPIC,
+    )
+
+    [capture] = _capture_entries(_memory_root_store(tmp_path))
+    assert capture.actor == capture_repair_actor(_RESUMED_RUN_ID)
+    assert capture.run_id == _RESUMED_RUN_ID
+
+
+def test_a_conflicting_row_in_the_race_window_is_read_as_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex R5 - the residual divergence class, caught rather than raised.
+
+    Equal repair payloads close the repairer-vs-repairer race, but not the
+    repairer-vs-ORIGINAL-attempt one: the torn capture's own append can land
+    inside the probe window, and its row legitimately carries the dispatch
+    metadata a repair cannot know. The ledger raises on that divergence.
+
+    It must not fail the run. The ledger only raises when an entry ALREADY
+    occupies this exact `idempotency_key`, and that key names this one capture
+    of this one record - so the conflict is positive evidence the row is
+    durable, which is precisely the outcome the repair wanted. The seeded row
+    stands untouched; no second row appears.
+    """
+    record = _seed_legacy_run_record(tmp_path, run_id=_RESUMED_RUN_ID)
+    _seed_run_start_capture_row(tmp_path, record=record)
+    _force_probe_to_miss(monkeypatch)
+
+    _compose_one_dispatch(tmp_path)
+
+    [capture] = _capture_entries(_memory_root_store(tmp_path))
+    assert capture.actor == _actor()  # the seeded row, not a repair row
+    assert capture.memory_refs == (record.envelope.memory_id,)
 
 
 def test_run_start_capture_still_lands_a_new_run_id(tmp_path: Path) -> None:

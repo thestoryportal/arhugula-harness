@@ -23,6 +23,7 @@ from harness_is.memory_observability import (
 )
 from harness_is.memory_operation_ledger import (
     MemoryOperationEngineClass,
+    MemoryOperationIdempotencyConflictError,
     MemoryOperationKind,
     MemoryOperationPayload,
     MemoryOperationProjection,
@@ -41,7 +42,7 @@ from harness_is.memory_record_envelope import (
     derive_memory_id,
 )
 from harness_is.memory_store import MemoryStoreRecord, MemoryStoreWriteResult
-from harness_is.state_ledger_entry_schema import Actor, Identifier
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from harness_runtime.memory_scope_family import (
@@ -66,6 +67,25 @@ def capture_operation_action_id(event_kind: str, memory_id: MemoryID) -> Identif
     it here rather than re-spelling the format.
     """
     return Identifier(f"capture:{event_kind}:{memory_id}")
+
+
+def capture_repair_actor(run_id: str) -> Actor:
+    """Return the actor a torn-capture REPAIR row records for `run_id`.
+
+    A repair row is not a dispatch row. The dispatch that tore is gone, and the
+    worker that happens to notice the tear later is not its author - binding
+    the repair to the NOTICING worker's actor would both misattribute the
+    capture and make the payload worker-dependent, which two concurrent
+    repairers cannot agree on (they would collide under one idempotency key
+    with unequal payloads). The repair is therefore attributed to the harness
+    itself, keyed by the run it repairs, so every worker composes the same
+    actor for the same run.
+
+    Exported for the same reason `capture_operation_action_id` is: it is the
+    only spelling of this identity, and a caller asserting against a repair row
+    must build it here rather than re-spell the format.
+    """
+    return Actor(actor_class=ActorClass.AGENT, actor_id=f"memory-capture-repair:{run_id}")
 
 
 class SummarySource(StrEnum):
@@ -556,6 +576,7 @@ class EpisodicMemoryCapture:
         )
         payload = self._operation_payload(
             event_kind=event_kind,
+            actor=self._actor,
             memory_id=record.envelope.memory_id,
             timestamp=timestamp,
             run_id=run_id,
@@ -616,16 +637,9 @@ class EpisodicMemoryCapture:
         self,
         *,
         event_kind: str,
-        envelope: MemoryRecordEnvelope,
+        record: MemoryStoreRecord,
         timestamp: datetime,
         run_id: str,
-        step_id: str | None,
-        provider: str | None,
-        model: str | None,
-        cli_profile: str | None,
-        engine_class: MemoryOperationEngineClass | None,
-        policy_ref: str | None,
-        procedural_snapshot_ref: str | None,
     ) -> MemoryCaptureResult:
         """Append the C-MEM-08 CAPTURE row for an ALREADY-STORED record.
 
@@ -639,24 +653,59 @@ class EpisodicMemoryCapture:
         MISSING ROW ONLY, against the envelope's OWN `memory_id` as stored.
 
         The row reuses the `action_id` / `idempotency_key` the interrupted
-        attempt would have written, so it lands in exactly the slot that
-        attempt left empty and a concurrent second repair resolves through the
-        ledger's own idempotency rule (no-op on an equivalent payload, loud
-        conflict otherwise) instead of duplicating - the same semantics two
-        concurrent FIRST captures of one run already have.
+        attempt would have written, so it lands in exactly the slot that attempt
+        left empty rather than duplicating.
+
+        Codex R5: the payload is a PURE FUNCTION of the stored record and
+        `run_id` - it takes NOTHING from the repairing worker. Two workers
+        resuming one torn run compose byte-identical payloads, so the second
+        append resolves through the ledger's equivalence check as
+        `IDEMPOTENT_NOOP` (`append_memory_operation` compares the 18-field
+        equivalence payload, which excludes `timestamp`, and only raises
+        `MemoryOperationIdempotencyConflictError` on genuine divergence).
+        Sourcing per-worker dispatch metadata here instead is what made the
+        second repairer raise, failing a run whose row was already durable.
+
+        Field by field, and why each is worker-invariant:
+
+        * `action_id` / `idempotency_key` / `memory_refs` - the stored
+          envelope's own `memory_id`, never re-derived.
+        * `actor` - `capture_repair_actor(run_id)`; see there.
+        * `run_id` - the key the record was READ by, so identical by
+          construction for any worker that reached this repair.
+        * `cli_profile` / `engine_class` - read back from the STORED content,
+          where the torn capture itself recorded them. These are the original
+          capture's values, not the repairer's.
+        * `step_id` - read back from stored content too; absent on the
+          run-start content shape, which is the `None` the torn attempt carried.
+        * `provider` / `model` / `policy_ref` / `procedural_snapshot_ref` -
+          `None`. The stored record does not carry them (`provider_route` is
+          the CHAIN, not the access-mode SELECTION the torn payload recorded),
+          and they describe the dispatch that tore, which the repairer is not.
+          `None` is the honest deterministic value: a repair row attests that
+          this capture is durable, not which dispatch performed it.
+
+        The idempotency conflict is RAISED, not folded into a `FAILED` result:
+        it is a concurrency signal rather than an IO fault, and what it means
+        (a row already occupies this exact capture slot) is a judgement for the
+        caller that knows it is repairing. Every other append failure still
+        returns the `FAILED` result unchanged.
         """
+        envelope = record.envelope
+        cli_profile = _stored_text(record.content, "cli_profile")
         payload = self._operation_payload(
             event_kind=event_kind,
+            actor=capture_repair_actor(run_id),
             memory_id=envelope.memory_id,
             timestamp=timestamp,
             run_id=run_id,
-            step_id=step_id,
-            provider=provider,
-            model=model,
+            step_id=_stored_text(record.content, "step_id"),
+            provider=None,
+            model=None,
             cli_profile=cli_profile,
-            engine_class=engine_class,
-            policy_ref=policy_ref,
-            procedural_snapshot_ref=procedural_snapshot_ref,
+            engine_class=_stored_engine_class(record.content),
+            policy_ref=None,
+            procedural_snapshot_ref=None,
         )
         with memory_telemetry_span(
             self._tracer_provider,
@@ -664,14 +713,14 @@ class EpisodicMemoryCapture:
             operation_name=MemoryTelemetryOperationName.CAPTURE,
             operation_kind=MemoryOperationKind.CAPTURE.value,
             tier=envelope.tier.value,
-            provider=provider,
-            model=model,
             cli_profile=cli_profile,
             policy_decision=MemoryCaptureStatus.CAPTURED.value,
             record_count=1,
         ) as span:
             try:
                 operation_result = self._store.append_memory_operation(payload)
+            except MemoryOperationIdempotencyConflictError:
+                raise
             except Exception as exc:
                 set_memory_telemetry_attributes(
                     span,
@@ -697,6 +746,7 @@ class EpisodicMemoryCapture:
         self,
         *,
         event_kind: str,
+        actor: Actor,
         memory_id: MemoryID,
         timestamp: datetime,
         run_id: str,
@@ -712,7 +762,7 @@ class EpisodicMemoryCapture:
         return MemoryOperationPayload(
             action_id=action_id,
             idempotency_key=Identifier(f"idempotent:{action_id}"),
-            actor=self._actor,
+            actor=actor,
             timestamp=timestamp,
             operation_kind=MemoryOperationKind.CAPTURE,
             operation_projection=MemoryOperationProjection.NONE,
@@ -848,6 +898,30 @@ def _optional_string(value: object) -> str | None:
     return str(value)
 
 
+def _stored_text(content: Mapping[str, object], key: str) -> str | None:
+    """A stored content field, taken only when it is genuinely text.
+
+    Deliberately stricter than `_optional_string`: that one COERCES, which is
+    right when the caller authored the value this turn, and wrong when reading
+    a durable record back - `str()` over an unexpected shape would invent a
+    field value the original capture never recorded. An absent or non-text
+    field reads as `None`, which is what the torn payload carried anyway.
+    """
+    value = content.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _stored_engine_class(content: Mapping[str, object]) -> MemoryOperationEngineClass | None:
+    """The stored content's `engine_class`, or `None` when it is not one."""
+    value = _stored_text(content, "engine_class")
+    if value is None:
+        return None
+    try:
+        return MemoryOperationEngineClass(value)
+    except ValueError:
+        return None
+
+
 __all__ = [
     "RUN_START_EVENT_KIND",
     "EpisodicMemoryCapture",
@@ -859,4 +933,5 @@ __all__ = [
     "SummaryProvenance",
     "SummarySource",
     "capture_operation_action_id",
+    "capture_repair_actor",
 ]
