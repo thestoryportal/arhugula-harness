@@ -69,7 +69,9 @@ unconditioned. But **neither is a live auto-promotion exposure at HEAD**, and th
 saying so exactly. *(Both sharpenings below came from an out-of-family `just codex-review` R1 pass on the
 first draft of this filing; each was re-verified by direct read before being absorbed. The first draft
 asserted a live model-facing exposure and inferred the hint path's candidate family from the source record;
-both claims were wrong, and both are corrected here rather than quietly dropped.)*
+both claims were wrong, and both are corrected here rather than quietly dropped. A subsequent R2 pass found
+two further accuracy defects — the review branch's durability, corrected inline below, and the §3 data-flow
+claim's scope — both likewise re-verified by direct read.)*
 
 **Entry point 1 — the hint-extraction path. The candidate-side family is PRODUCER-DEFINED, hence UNDEFINED
 today.** `PromotionCandidateExtractor.extract_from_records`
@@ -119,7 +121,21 @@ stands. What does **not** stand is treating the path as reachable for a captured
    `promotion_decision=PromotionDecision.PROPOSE_SEMANTIC`, and `_promotion_auto_allowed` (`:897-903`)
    returns True only for `PROMOTE_SEMANTIC` / `PROMOTE_PROCEDURAL`. So `auto_promote_allowed` is False for
    **every** candidate on this path today and `_propose_promotion` takes the `propose_for_review` branch
-   (`:456`) with `review_required=True`. Eligible records reach review, not durability.
+   (`:456`) with `review_required=True`. **That branch is durable but inactive — not ephemeral.** *(The R2
+   correction; the first draft's "eligible records reach review, not durability" was wrong.)*
+   `PromotionDecisionService.propose_for_review` (`memory_promotion.py:328-352`) calls `_persist_decision`
+   with `status=SemanticRecordStatus.PROPOSED`, and `_persist_decision` (`:451-506`) writes **both** the
+   semantic/procedural record (`self._store.write_record`, `:498`) **and** a durable C-MEM-08 memory-operation
+   entry (`append_memory_operation`, `:499-506`). What review withholds is **activation**, not persistence: a
+   `PROPOSED` record is excluded from retrieval by construction (`_INACTIVE_STATUS_REASONS["proposed"]` →
+   `RetrievalExclusionReason.PROPOSED`, `harness-is/src/harness_is/memory_retrieval.py:65` / `:71-77`), so it
+   is never injected. But it exists, it accumulates, and only `approve` / `edit_and_approve` (`:354-390` /
+   `:416-449`) flip it to `ACTIVE` — neither consulting any family term. This does **not** re-open a live
+   exposure: reason 1 above still denies every captured kind before a candidate is built, so nothing reaches
+   this branch for a capture-path record today. What it does change is the shape of what the interim buys: for
+   any record that *is* eligible (the second-order case — a record already promoted out of a cross-family leg),
+   review produces a **durable** proposed record carrying the same unrecorded provenance, and the
+   operator-review flip that activates it has no family term either.
 
 **What the question therefore is, stated exactly.** Not "a live tool auto-promotes cross-family-captured
 content today." It is:
@@ -150,7 +166,8 @@ well-posed at all. The corrections concern what the *promotion* side does with s
 such a record exists.
 
 **Net, corrected.** The permissiveness is **structural, not yet exercised**. No family term exists at either
-entry point or in any policy field, and no record of the producing family survives to promotion time (§3).
+entry point or in any policy field, and on the **composed-scope capture path — the U-MEM-26 production
+path** — no record of the producing family survives to promotion time (§3).
 Live auto-promotion exposure at HEAD is **nil** — the tool path is closed twice over (by record kind and by
 policy decision), the hint path is unfed and its candidate convention undefined. What is real *now* is the
 contract gap, which a single policy field or a first producer converts into a live exposure with no further
@@ -158,32 +175,56 @@ review. That is precisely why this is a Class 1 spec question and not a Phase 7 
 urgency is **low and the necessity is not**: nothing is leaking today, and nothing prevents it from leaking
 the day a config changes.
 
-## §3 The prerequisite finding — the pipeline cannot discriminate even if policy said to
+## §3 The prerequisite finding — on the composed-scope path (the U-MEM-26 production path), the pipeline cannot discriminate even if policy said to
 
 **This is the load-bearing part of the filing.** Two of the three readings below are not merely unbuilt; they
-are currently *unrepresentable*.
+are currently *unrepresentable* — on the path where the question arises at all.
 
-`EpisodicMemoryCapture.capture_turn_completion` writes a `content` mapping
-(`harness-runtime/src/harness_runtime/memory_capture.py:407-422`) carrying `event_type`, `run_id`, `turn_id`,
+**Scoping first, because the data flow is not uniform.** *(The R2 correction; the first draft asserted an
+exhaustive two-destination flow for `provider` that in fact holds only on the composed-scope path.)*
+`EpisodicMemoryCapture` takes `record_scope: MemoryScope | None = None`
+(`harness-runtime/src/harness_runtime/memory_capture.py:253`), and `_scope_for_record` (`:1048-1086`) branches
+on it:
+
+- **Composed-scope path (`record_scope` supplied).** The envelope scope is the run's composed scope (`:1074`),
+  passed through the write boundary's canonicalize-or-deny (`:1083-1086`) — deliberately, per B-89. The
+  per-dispatch `provider` argument does **not** reach the envelope. This is the **production** path: the
+  automatic-memory runtime always supplies a composed scope whose `provider_family` is
+  `fallback_chain.primary.family.value` (`automatic_memory.py:211-221`, the family at `:217`), threaded to the
+  capture API at `:504-512` (`record_scope=scope`, `:511`). It is also the path the §1 witness exercises.
+- **Residual path (`record_scope` absent).** `_scope_for_record` builds the scope itself with
+  `provider_family=provider` (`:1075-1082`, the field at `:1079`) — the per-dispatch key, canonicalized by the
+  same `:1083-1086` boundary. Such a record therefore **does** retain its producing family, so the exhaustive
+  claim below does not hold for it. But it retains that family by **partitioning the record under it** — the
+  per-turn re-derivation B-89 named as a defect and B-90 / U-MEM-26 repaired — which means the cross-family
+  question **does not arise on this path at all**: a record written under the producing family is not a
+  foreign-family record sitting inside a primary's partition, and there is nothing for C-MEM-10 to
+  discriminate. The residual construction is retained only for callers with no composed scope.
+
+**The prerequisite finding's force is therefore undiminished, and this is the precise claim:** the path where
+the C-MEM-10 question is well-posed is exactly the path that cannot answer it — and it is the production path.
+Everything below is scoped to it.
+
+**On the composed-scope path.** `EpisodicMemoryCapture.capture_turn_completion` writes a `content` mapping
+(`:407-422`) carrying `event_type`, `run_id`, `turn_id`,
 `step_id`, the two summaries, `summary_source`, `summary_model`, `summary_hash`, `capture_mode`,
 `tool_event_refs`, `failure_observations`, `promotion_candidates`, and `token_usage`. **No `provider` field
 and no dispatched-`model` field.** The `provider` and `model` arguments are passed through to `_capture`
-(`:431-432`) and from there to two places only:
+(`:431-432`) and from there to two places only — the envelope scope being the *third* destination the residual
+path adds and this path does not:
 
 1. the C-MEM-08 memory-operation ledger row — `_operation_payload(..., provider=provider, model=model, ...)`
    (`:694-707`), which constructs a `MemoryOperationPayload` carrying `provider` (`:1006`), `model` (`:1007`)
    and `memory_refs=(memory_id,)` (`:1010`); and
 2. the C-MEM-19 telemetry span attributes (`:686-688`, `:714-716`).
 
-The record's *envelope* scope, meanwhile, is the run's composed scope verbatim (`_scope_for_record`,
-`:1048-1086`) — deliberately, per B-89.
-
 Promotion never reads either. `_hints_from_record` (`memory_promotion.py:545-560`) reads
 `record.content` alone; `_propose_promotion` reads `source.envelope` and `source` content. **There is no path
-from a stored record to the provider family that actually produced its content.**
+from a composed-scope stored record to the provider family that actually produced its content.**
 
-Consequence: readings **B** and **C** below cannot be implemented at all until a discriminator is surfaced,
-and surfacing one is itself contract-altitude work (§5) — X-AL-3-blocked at Phase 7. Only reading **A** is
+Consequence: readings **B** and **C** below cannot be implemented for composed-scope records — i.e. for every
+record the production path writes — until a discriminator is surfaced, and surfacing one is itself
+contract-altitude work (§5) — X-AL-3-blocked at Phase 7. Only reading **A** is
 implementable against the substrate as it stands (and reading A's "implementation" is a spec sentence, not
 code).
 
@@ -336,7 +377,8 @@ scope's key."* Reading B is that same resolution shape applied one contract down
 (C3/C6 satisfied), put the gate where it belongs (C10 satisfied).
 
 **And the decisive asymmetry against A is that A would ratify a decision nobody made.** Today the pipeline is
-not permissive-by-policy; it is permissive-by-blindness (§3 — it cannot represent the fact). Writing "eligible,
+not permissive-by-policy; on the production composed-scope path it is permissive-by-blindness (§3 — it cannot
+represent the fact, and the residual path where it can does not pose the question). Writing "eligible,
 unchanged" into C-MEM-10 would convert a structural gap into a contract commitment while the policy layer has
 still never had the input. That is the *precise* defect the v1.1 change-note identified as B-86's own trigger
 (`:21`): *"v1 already mandated that the provider-family boundary be enforced; it never stated what that
