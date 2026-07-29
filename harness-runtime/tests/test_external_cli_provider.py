@@ -558,9 +558,18 @@ async def test_asyncio_runner_reaps_the_child_when_the_run_is_cancelled(
             )
         )
         # Yield until the spawn has happened and the run is parked on the
-        # `communicate` await — the window the clause under test covers.
-        while not spawned:
+        # `communicate` await — the window the clause under test covers. The
+        # wait is bounded so a spawn that never happens fails the test instead
+        # of hanging it; a run that died on the way to the spawn ends the wait
+        # early, and awaiting the task below surfaces that real error.
+        for _ in range(10_000):
+            if spawned or task.done():
+                break
             await asyncio.sleep(0)
+        else:  # pragma: no cover - only on regression
+            pytest.fail("child never spawned")
+        if task.done():  # pragma: no cover - only on regression
+            await task
         await asyncio.sleep(0)
 
         task.cancel()
@@ -585,8 +594,9 @@ class _AlreadyReapedFakeProcess:
 
     `Process.kill()` raises `ProcessLookupError` in exactly this state:
     `BaseSubprocessTransport._call_connection_lost` clears the `Popen`
-    reference and `kill()` calls `_check_proc()` first, while `wait()` still
-    resolves immediately from the recorded return code. Every reap site in
+    reference, and `Process.kill()` delegates to that same transport, whose own
+    `kill()` calls `BaseSubprocessTransport._check_proc()` first, while
+    `wait()` still resolves immediately from the recorded return code. Every reap site in
     `AsyncioSubprocessRunner.run` races into it — the child can exit and the
     transport can finish between the reap-triggering event and the `kill()`
     (codex R1 [P2]). A real child cannot be held in that window deterministically,
@@ -640,8 +650,16 @@ async def test_cancelled_run_keeps_the_cancellation_when_the_child_already_exite
     task = asyncio.create_task(
         runner.run((sys.executable, "-c", "pass"), stdin="", timeout_seconds=300.0)
     )
-    while not process.parked_in_communicate:
+    # Bounded so a run that never reaches `communicate` fails rather than hangs;
+    # a task that died on the way there ends the wait, and the await surfaces it.
+    for _ in range(10_000):
+        if process.parked_in_communicate or task.done():
+            break
         await asyncio.sleep(0)
+    else:  # pragma: no cover - only on regression
+        pytest.fail("child never spawned")
+    if task.done():  # pragma: no cover - only on regression
+        await task
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
