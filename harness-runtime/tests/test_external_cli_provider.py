@@ -469,6 +469,132 @@ async def test_asyncio_runner_notifies_the_wire_once_the_process_exists() -> Non
     assert notified == ["fired"]
 
 
+@dataclass
+class _LegacyFakeRunner:
+    """A runner on the PRE-B-87 `run(argv, *, stdin, timeout_seconds)` contract.
+
+    `ExternalCLISubprocessRunner` conformance is STRUCTURAL, so such a runner is
+    still injectable through the public ``runner=`` constructor seam. An
+    unconditional ``on_wire=`` keyword breaks it with `TypeError` before any
+    process is spawned — on EVERY inference, degraded memory or not (codex R4
+    [P1]).
+    """
+
+    results: list[CLIProcessResult]
+    calls: list[tuple[tuple[str, ...], str, float]]
+
+    async def run(
+        self,
+        argv: tuple[str, ...],
+        *,
+        stdin: str,
+        timeout_seconds: float,
+    ) -> CLIProcessResult:
+        self.calls.append((argv, stdin, timeout_seconds))
+        return self.results.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_legacy_runner_injected_through_the_public_seam_still_dispatches() -> None:
+    """B-87 (codex R4 [P1]) — tier 2 at the ADAPTER→RUNNER seam. Every adapter
+    now forwards `on_wire` to its runner, so a pre-B-87 runner handed in through
+    `runner=` constructs fine and then `TypeError`s on the first inference. The
+    adapter detects the signature and omits the keyword instead."""
+    runner = _LegacyFakeRunner(
+        results=[
+            CLIProcessResult(exit_code=0, stdout='{"loggedIn": true}', stderr=""),
+            CLIProcessResult(exit_code=0, stdout='{"result": "OK"}', stderr=""),
+        ],
+        calls=[],
+    )
+    adapter = await construct_claude_code_cli_adapter(_config(), runner=runner)
+    notified: list[int] = []
+
+    result = await adapter.dispatch_text(
+        model="sonnet",
+        prompt="Reply OK",
+        on_wire=lambda: notified.append(len(runner.calls)),
+    )
+
+    assert result.text == "OK", "the legacy runner was dispatched to, not TypeError'd"
+    assert runner.calls[1][1] == "Reply OK"
+    assert notified == [1], (
+        "the ADAPTER fired the fallback mark, with the handover still ahead of it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_runner_post_spawn_failure_still_reports_post_wire() -> None:
+    """The legacy tier's adapter-side fire is load-bearing, not decorative:
+    without it a real post-wire failure through a legacy runner would report as
+    pre-wire — an under-report of a packet that did reach the CLI. The tier
+    trades spawn-failure precision (pre-R3 behavior) for never crashing and
+    never under-reporting."""
+    runner = _LegacyFakeRunner(
+        results=[
+            CLIProcessResult(exit_code=0, stdout='{"loggedIn": true}', stderr=""),
+            CLIProcessResult(exit_code=2, stdout="", stderr="the CLI died after reading stdin"),
+        ],
+        calls=[],
+    )
+    adapter = await construct_claude_code_cli_adapter(_config(), runner=runner)
+    notified: list[str] = []
+
+    with pytest.raises(ExternalCLICommandError, match="died after reading stdin"):
+        await adapter.dispatch_text(
+            model="sonnet",
+            prompt="Reply OK",
+            on_wire=lambda: notified.append("fired"),
+        )
+
+    assert notified == ["fired"], "a failure past the handover must not classify as pre-wire"
+
+
+@pytest.mark.asyncio
+async def test_kwargs_swallowing_runner_is_not_trusted_with_the_wire_boundary() -> None:
+    """B-87 (codex R4 [P2]) — a runner that accepts `**kwargs` and IGNORES
+    unknown keys would take the callback and never fire it, while the adapter,
+    having handed the boundary off, skips its own mark. The packet reaches the
+    CLI and telemetry reports pre-wire with no hash: silent UNDER-reporting of a
+    real disclosure. Only a DECLARED `on_wire` parameter counts as wire-aware,
+    so this runner takes the adapter-side fallback instead."""
+    handover: list[str] = []
+
+    @dataclass
+    class _KwargsSwallowingRunner:
+        results: list[CLIProcessResult]
+
+        async def run(
+            self,
+            argv: tuple[str, ...],
+            *,
+            stdin: str,
+            timeout_seconds: float,
+            **_ignored: object,
+        ) -> CLIProcessResult:
+            handover.append(stdin)  # the packet is gone — a provider can read it
+            return self.results.pop(0)
+
+    runner = _KwargsSwallowingRunner(
+        results=[
+            CLIProcessResult(exit_code=0, stdout='{"loggedIn": true}', stderr=""),
+            CLIProcessResult(exit_code=2, stdout="", stderr="the CLI died after reading stdin"),
+        ]
+    )
+    adapter = await construct_claude_code_cli_adapter(_config(), runner=runner)
+    notified: list[str] = []
+
+    with pytest.raises(ExternalCLICommandError, match="died after reading stdin"):
+        await adapter.dispatch_text(
+            model="sonnet",
+            prompt="Reply OK",
+            on_wire=lambda: notified.append("fired"),
+        )
+
+    assert handover[-1] == "Reply OK", "the packet really did reach the runner"
+    assert notified == ["fired"], "the swallowed callback was replaced by the adapter's own mark"
+
+
 @pytest.mark.asyncio
 async def test_gemini_auth_probe_nonzero_exit_rejects_construction() -> None:
     """G4 (PR #1137 follow-up) — the configured-auth-command probe's

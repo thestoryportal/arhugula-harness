@@ -4805,6 +4805,60 @@ async def test_b87_legacy_external_cli_adapter_post_wire_failure_still_reports_i
     assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
 
 
+@pytest.mark.asyncio
+async def test_b87_kwargs_swallowing_external_cli_adapter_is_classified_legacy() -> None:
+    """B-87 (codex R4 [P2]) — `**kwargs` is NOT a declaration of wire-awareness.
+
+    A pre-B-87 forwarding adapter may accept `**kwargs` and IGNORE unknown keys.
+    Counting that as callback-aware makes the dispatcher hand off the boundary
+    and skip its own fallback mark — so a provider failure past the handover
+    reports `pre_wire_failure` with NO `packet_hash`, for a packet that really
+    did reach the CLI. That is silent UNDER-reporting of a real disclosure, the
+    worse error direction. Only a DECLARED `on_wire` parameter counts, so this
+    adapter takes the legacy tier's dispatcher-side mark and the disclosure is
+    reported truthfully.
+    """
+
+    @dataclass
+    class _KwargsSwallowingExternalCLIAdapter:
+        calls: list[tuple[str, str]]
+
+        async def dispatch_text(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            **_ignored: Any,
+        ) -> _ExternalCLIResult:
+            # Swallows `on_wire` without ever firing it — the whole point.
+            self.calls.append((model, prompt))
+            raise TimeoutError("the CLI hung after the prompt was handed over")
+
+        async def aclose(self) -> None:
+            return None
+
+    adapter = _KwargsSwallowingExternalCLIAdapter(calls=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TimeoutError):
+        await dispatcher.dispatch(_binding("claude_code"), _step(), step_context=_step_context())
+
+    assert len(adapter.calls) == 1, "the prompt did reach the adapter"
+    assert _B83_SECTION_TEXT in adapter.calls[0][1]
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.packet_hash"] == "c" * 64, (
+        "the packet was disclosed — omitting the hash would UNDER-report it"
+    )
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+
+
 def _fake_memory_callbacks_module_attr(
     monkeypatch: pytest.MonkeyPatch,
     behaviour: Callable[[], Any],

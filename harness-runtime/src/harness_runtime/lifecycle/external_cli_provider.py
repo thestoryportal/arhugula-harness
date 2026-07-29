@@ -13,11 +13,13 @@ provider-construction authority; the operator-supply surface is the C-RT-02
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
+from weakref import WeakKeyDictionary
 
 from harness_runtime.types import (
     ExternalCLIPromptTransport,
@@ -42,6 +44,7 @@ __all__ = [
     "GeminiCLIAdapter",
     "GenericCommandCLIAdapter",
     "RecordingSubprocessRunner",
+    "accepts_explicit_on_wire",
     "construct_antigravity_cli_adapter",
     "construct_claude_code_cli_adapter",
     "construct_codex_cli_adapter",
@@ -123,6 +126,12 @@ class ExternalCLISubprocessRunner(Protocol):
     succeeded and before the payload is handed over, and never otherwise.
     ``None``, the default, is every caller not tracking the boundary (the auth
     probes, every non-degraded dispatch) and is a no-op.
+
+    Conformance to this Protocol is STRUCTURAL, so a pre-B-87 runner — one
+    whose ``run`` predates the parameter — is still injectable through the
+    public ``runner=`` constructor seam and must keep working (codex R4 [P1]).
+    The adapters detect that case and degrade per `_run_with_wire_boundary`;
+    they never hand the keyword to a runner that did not declare it.
     """
 
     async def run(
@@ -184,6 +193,99 @@ def _notify_wire(on_wire: Callable[[], None] | None) -> None:
     """
     if on_wire is not None:
         on_wire()
+
+
+def accepts_explicit_on_wire(target: Callable[..., Any] | None) -> bool:
+    """Does ``target`` DECLARE a named ``on_wire`` parameter? (B-87, codex R4 [P2])
+
+    The single wire-awareness predicate for both B-87 capability seams — the
+    dispatcher's adapter check (`llm_dispatch._adapter_accepts_on_wire`) and
+    the adapters' runner check (`_runner_accepts_on_wire`). One definition so
+    the two cannot drift.
+
+    Wire-awareness must be **declared**, never inferred: a bare ``**kwargs``
+    does NOT count, even though passing the keyword to such a callable would
+    not raise. A forwarding implementation that swallows unknown keys would
+    accept the callback and never fire it, while the caller — having handed
+    the boundary off — skips its own fallback mark. A packet that genuinely
+    reached a provider would then be reported ``pre_wire_failure`` with no
+    ``packet_hash``: silent UNDER-reporting of a real disclosure, which is the
+    worse error direction and the exact defect class B-87 exists to close.
+
+    The opposite misclassification is cheap and self-correcting: a genuinely
+    forwarding ``**kwargs`` implementation read as legacy merely takes the
+    caller-side fallback mark — i.e. pre-B-87 reporting precision, no crash and
+    no under-report. Declaring wire-awareness costs one keyword: name it.
+    """
+    if target is None:
+        return False
+    try:
+        parameters = inspect.signature(target).parameters
+    except (TypeError, ValueError):  # pragma: no cover - exotic non-introspectable callable
+        return False
+    parameter = parameters.get("on_wire")
+    return parameter is not None and parameter.kind in (
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+
+
+#: Wire-awareness verdicts, keyed by runner CLASS — a `run` signature is a
+#: property of the class, so one `inspect.signature` per runner type replaces
+#: one per dispatch. Weak keys so a test-local runner class does not pin its
+#: module. An instance that shadows `run` per-instance shares its class's
+#: verdict; at worst that selects the fallback tier below, which is truthful.
+_RUNNER_WIRE_AWARENESS: MutableMapping[type[Any], bool] = WeakKeyDictionary()
+
+
+def _runner_accepts_on_wire(runner: ExternalCLISubprocessRunner) -> bool:
+    runner_type = type(runner)
+    cached = _RUNNER_WIRE_AWARENESS.get(runner_type)
+    if cached is None:
+        cached = accepts_explicit_on_wire(getattr(runner, "run", None))
+        _RUNNER_WIRE_AWARENESS[runner_type] = cached
+    return cached
+
+
+async def _run_with_wire_boundary(
+    runner: ExternalCLISubprocessRunner,
+    argv: tuple[str, ...],
+    *,
+    stdin: str,
+    timeout_seconds: float,
+    on_wire: Callable[[], None] | None,
+) -> CLIProcessResult:
+    """Hand argv to the runner under B-87's TWO-TIER wire-boundary ownership.
+
+    * **Wire-aware runner** (declares ``on_wire`` — the shipped
+      `AsyncioSubprocessRunner`, and any runner that opts in by naming the
+      parameter). The keyword rides down and the RUNNER fires it past
+      `create_subprocess_exec`, so a spawn failure stays PRE-wire. This is the
+      full-precision tier.
+    * **Legacy runner** (a pre-B-87 `ExternalCLISubprocessRunner` injected
+      through the public ``runner=`` seam; Protocol conformance is structural
+      and never checked the signature — codex R4 [P1]). The keyword is NOT
+      passed: it would raise `TypeError` before any spawn, so every inference
+      through such a runner would fail outright. Instead the ADAPTER fires the
+      mark HERE — after all adapter-local argv validation, immediately before
+      the handover (the commit-54419eb4 placement).
+
+    The legacy tier's residual imprecision is bounded and truthful-by-
+    degradation: a spawn failure under a legacy runner reports POST-wire, which
+    is exactly the pre-R3 behavior — never a crash, and never an under-report
+    of a real disclosure. Adapter-local validation raises (the
+    `{prompt}`-template-under-stdin rejection) stay PRE-wire on both tiers,
+    because both fire strictly after them.
+    """
+    if not _runner_accepts_on_wire(runner):
+        _notify_wire(on_wire)
+        return await runner.run(argv, stdin=stdin, timeout_seconds=timeout_seconds)
+    return await runner.run(
+        argv,
+        stdin=stdin,
+        timeout_seconds=timeout_seconds,
+        on_wire=on_wire,
+    )
 
 
 def _scrubbed_child_env() -> dict[str, str]:
@@ -286,7 +388,8 @@ class ClaudeCodeCLIAdapter:
         on_wire: Callable[[], None] | None = None,
     ) -> ExternalCLITextResult:
         argv = _claude_inference_argv(self.command, model)
-        result = await self.runner.run(
+        result = await _run_with_wire_boundary(
+            self.runner,
             argv,
             stdin=prompt,
             timeout_seconds=self.timeout_seconds,
@@ -318,7 +421,8 @@ class CodexCLIAdapter:
         on_wire: Callable[[], None] | None = None,
     ) -> ExternalCLITextResult:
         argv = _codex_inference_argv(self.command, model)
-        result = await self.runner.run(
+        result = await _run_with_wire_boundary(
+            self.runner,
             argv,
             stdin=prompt,
             timeout_seconds=self.timeout_seconds,
@@ -359,7 +463,8 @@ class AntigravityCLIAdapter:
             prompt,
             timeout_seconds=self.timeout_seconds,
         )
-        result = await self.runner.run(
+        result = await _run_with_wire_boundary(
+            self.runner,
             argv,
             stdin="",
             timeout_seconds=self.timeout_seconds,
@@ -398,7 +503,8 @@ class GeminiCLIAdapter:
         on_wire: Callable[[], None] | None = None,
     ) -> ExternalCLITextResult:
         argv = _gemini_inference_argv(self.command, model, prompt)
-        result = await self.runner.run(
+        result = await _run_with_wire_boundary(
+            self.runner,
             argv,
             stdin="",
             timeout_seconds=self.timeout_seconds,
@@ -442,9 +548,9 @@ class GenericCommandCLIAdapter:
         prompt_in_argv = self.prompt_transport is ExternalCLIPromptTransport.ARG
         # `_render_argv_templates` REJECTS a `{prompt}` template under stdin
         # transport — an adapter-local validation raise with zero subprocess
-        # calls. It stays pre-wire because `on_wire` is fired by the runner,
-        # past process creation, and this raise never reaches the runner
-        # (B-87 R2, boundary relocated at R3 [P2-1]).
+        # calls. It stays pre-wire on BOTH `_run_with_wire_boundary` tiers,
+        # because this raise never reaches that call at all (B-87 R2, boundary
+        # relocated at R3 [P2-1], two-tiered at R4 [P1]).
         argv = (
             self.command,
             *_render_argv_templates(
@@ -454,7 +560,8 @@ class GenericCommandCLIAdapter:
                 prompt_in_argv=prompt_in_argv,
             ),
         )
-        result = await self.runner.run(
+        result = await _run_with_wire_boundary(
+            self.runner,
             argv,
             stdin="" if prompt_in_argv else prompt,
             timeout_seconds=self.timeout_seconds,

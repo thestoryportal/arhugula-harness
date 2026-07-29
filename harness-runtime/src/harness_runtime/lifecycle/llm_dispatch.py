@@ -55,7 +55,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
 import json
 import logging
 import re
@@ -113,6 +112,7 @@ from harness_runtime.lifecycle.audit_signing_errors import (
 from harness_runtime.lifecycle.cacheable_epoch import DEFAULT_CACHE_TTL, CacheTTL
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_scope_check
+from harness_runtime.lifecycle.external_cli_provider import accepts_explicit_on_wire
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLToolLoopContext,
     ModelToolCall,
@@ -4668,22 +4668,15 @@ def _adapter_accepts_on_wire(adapter: _ExternalCLIProviderLike) -> bool:
     Signature inspection, deliberately NOT `try`/`except TypeError` around the
     call: a `TypeError` raised from INSIDE a compliant adapter is a real
     failure, and a retry-without-the-keyword would both swallow it and dispatch
-    the prompt twice. ``**kwargs`` counts as acceptance — such an adapter
-    receives the callback and is free to ignore it, exactly as ``None`` is.
+    the prompt twice.
+
+    Only an EXPLICIT named ``on_wire`` parameter counts (codex R4 [P2]); a bare
+    ``**kwargs`` does NOT, even though passing the keyword would not raise —
+    see `accepts_explicit_on_wire`, the shared predicate this and the adapters'
+    own runner-level check both use so the rule cannot drift between the two
+    seams.
     """
-    try:
-        parameters = inspect.signature(adapter.dispatch_text).parameters
-    except (TypeError, ValueError):  # pragma: no cover - exotic non-introspectable callable
-        return False
-    for parameter in parameters.values():
-        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
-            return True
-        if parameter.name == "on_wire" and parameter.kind in (
-            inspect.Parameter.KEYWORD_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        ):
-            return True
-    return False
+    return accepts_explicit_on_wire(adapter.dispatch_text)
 
 
 async def _dispatch_external_cli(
@@ -4721,9 +4714,11 @@ async def _dispatch_external_cli(
     #     packet. The callback rides down to the runner, which fires it once a
     #     child process exists.
     #
-    # (2) Legacy tier (an adapter on the pre-B-87 `dispatch_text(*, model,
-    #     prompt)` signature, which `@runtime_checkable` still admits — codex
-    #     R3 [P2-2]). It cannot be handed the mark, so the dispatcher keeps the
+    # (2) Legacy tier (an adapter that does not DECLARE `on_wire`: the pre-B-87
+    #     `dispatch_text(*, model, prompt)` signature, which `@runtime_checkable`
+    #     still admits — codex R3 [P2-2] — and a `**kwargs` forwarder, which
+    #     might swallow the callback rather than fire it — codex R4 [P2]). It
+    #     cannot be TRUSTED with the mark, so the dispatcher keeps the
     #     PREVIOUS behavior verbatim: mark immediately before the await.
     #     Truthful for everything this module controls — a translation raise
     #     above still classifies pre-wire — and its residual window (that
