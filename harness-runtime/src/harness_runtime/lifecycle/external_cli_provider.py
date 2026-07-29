@@ -379,6 +379,16 @@ class AsyncioSubprocessRunner:
             process.kill()
             await process.wait()
             raise ExternalCLIProcessTimeout(argv[0], timeout_seconds) from exc
+        except asyncio.CancelledError:
+            # A cancellation delivered while awaiting the child must not leak it
+            # either (B-87 residual): without this clause control unwinds past
+            # the only two reap sites — the timeout path above and the R7
+            # observer guard — and the CLI keeps running. Same kill/wait idiom;
+            # SIGKILL is already issued, so the wait resolves without needing a
+            # fresh cancellation scope. The `CancelledError` is NEVER swallowed.
+            process.kill()
+            await process.wait()
+            raise
 
         return CLIProcessResult(
             exit_code=process.returncode or 0,

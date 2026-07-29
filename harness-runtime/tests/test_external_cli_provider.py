@@ -524,6 +524,62 @@ async def test_asyncio_runner_reaps_the_child_when_the_wire_callback_raises(
                 await process.wait()
 
 
+@pytest.mark.asyncio
+async def test_asyncio_runner_reaps_the_child_when_the_run_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-87 residual — a cancellation mid-`communicate` must not leak the child.
+
+    The timeout path and the R7 observer guard are the only other reap sites, so
+    a `CancelledError` delivered while awaiting the child unwinds past both and
+    leaves the CLI running. Cancellation is not exotic here: every dispatch runs
+    under a caller-owned task that a shutdown, a `wait_for` deadline one level
+    up, or a task-group failure can cancel. As with the observer guard, a real
+    child is used because the property under test — that it is actually dead —
+    is only observable on one."""
+    spawned: list[asyncio.subprocess.Process] = []
+    real_create = asyncio.create_subprocess_exec
+
+    async def _recording_create(*argv: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_create(*argv, **kwargs)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _recording_create)
+
+    runner = AsyncioSubprocessRunner()
+
+    try:
+        task = asyncio.create_task(
+            runner.run(
+                (sys.executable, "-c", "import time; time.sleep(300)"),
+                stdin="",
+                timeout_seconds=300.0,
+            )
+        )
+        # Yield until the spawn has happened and the run is parked on the
+        # `communicate` await — the window the clause under test covers.
+        while not spawned:
+            await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert len(spawned) == 1, "the spawn itself succeeded — the cancellation is the caller's"
+        assert spawned[0].returncode is not None, (
+            "the child outlived the cancelled run: a leaked CLI process"
+        )
+    finally:
+        # Belt-and-braces so a regression (or a mutation probe) cannot leave a
+        # 300-second sleeper behind.
+        for process in spawned:
+            if process.returncode is None:  # pragma: no cover - only on regression
+                process.kill()
+                await process.wait()
+
+
 @dataclass
 class _LegacyFakeRunner:
     """A runner on the PRE-B-87 `run(argv, *, stdin, timeout_seconds)` contract.
