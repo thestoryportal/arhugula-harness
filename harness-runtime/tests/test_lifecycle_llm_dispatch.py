@@ -120,6 +120,11 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
 )
 from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_provider
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore
+from harness_runtime.lifecycle.external_cli_provider import (
+    CLIProcessResult,
+    ExternalCLIOutputError,
+    GenericCommandCLIAdapter,
+)
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
 from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
@@ -157,6 +162,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionInputError,
     StandardMemoryToolExecutor,
 )
+from harness_runtime.types import ExternalCLIPromptTransport, ExternalCLIResponseFormat
 from ollama import ResponseError as OllamaResponseError
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -358,7 +364,15 @@ class _ExternalCLIResult:
 class _ExternalCLIFakeAdapter:
     calls: list[tuple[str, str]]
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> _ExternalCLIResult:
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> _ExternalCLIResult:
+        if on_wire is not None:
+            on_wire()
         self.calls.append((model, prompt))
         return _ExternalCLIResult(text="OK", exit_code=0)
 
@@ -4571,7 +4585,16 @@ async def test_b87_external_cli_post_wire_failure_still_reports_injection() -> N
     class _RaisingExternalCLIAdapter:
         calls: list[tuple[str, str]]
 
-        async def dispatch_text(self, *, model: str, prompt: str) -> _ExternalCLIResult:
+        async def dispatch_text(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            on_wire: Callable[[], None] | None = None,
+        ) -> _ExternalCLIResult:
+            # Same ordering the real adapters keep: notify, THEN hand over.
+            if on_wire is not None:
+                on_wire()
             self.calls.append((model, prompt))
             raise TimeoutError("the CLI hung after the prompt was handed over")
 
@@ -4596,6 +4619,66 @@ async def test_b87_external_cli_post_wire_failure_still_reports_injection() -> N
     assert attrs["memory.operation.name"] == "injection"
     assert attrs["memory.packet_hash"] == "c" * 64
     assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+
+
+@pytest.mark.asyncio
+async def test_b87_external_cli_adapter_local_validation_raise_is_pre_wire() -> None:
+    """B-87 (codex R2 [P2]) — the dispatcher's own translation is NOT the last
+    pre-wire step on this arm. `GenericCommandCLIAdapter` renders its argv
+    templates INSIDE `dispatch_text`, and a `{prompt}` template under the
+    default stdin transport — a config the constructor accepts — is rejected
+    there with zero subprocess calls. A marker set at the dispatcher's `await`
+    reported that as `injection` + packet_hash + `provider_error`; the marker
+    now rides an `on_wire` callback the adapter fires past its own validation.
+    """
+
+    @dataclass
+    class _RecordingRunner:
+        calls: list[tuple[str, ...]]
+
+        async def run(
+            self,
+            argv: tuple[str, ...],
+            *,
+            stdin: str,
+            timeout_seconds: float,
+        ) -> CLIProcessResult:
+            self.calls.append(argv)
+            return CLIProcessResult(exit_code=0, stdout="OK\n", stderr="")
+
+    runner = _RecordingRunner(calls=[])
+    adapter = GenericCommandCLIAdapter(
+        provider_name="claude_code",
+        command="my-llm",
+        args=("--prompt", "{prompt}"),
+        response_format=ExternalCLIResponseFormat.TEXT,
+        prompt_transport=ExternalCLIPromptTransport.STDIN,
+        timeout_seconds=42.0,
+        runner=runner,
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(ExternalCLIOutputError, match="prompt_transport"):
+        await dispatcher.dispatch(_binding("claude_code"), _step(), step_context=_step_context())
+
+    assert runner.calls == [], "the argv was rejected before any subprocess ran"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly"
+    assert "memory.packet_hash" not in attrs, (
+        "claiming a hash for a packet no subprocess ever saw is the B-87 defect"
+    )
+    assert attrs["memory.record_count"] == 0
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+    assert attrs["memory.degraded_serve.pre_wire_error_type"] == "ExternalCLIOutputError"
+    assert "memory.degraded_serve.provider_error_type" not in attrs, (
+        "no provider produced this error"
+    )
 
 
 def _fake_memory_callbacks_module_attr(

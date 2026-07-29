@@ -58,7 +58,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -267,9 +267,23 @@ class _ProvidersLike(Protocol):
 
 @runtime_checkable
 class _ExternalCLIProviderLike(Protocol):
-    """Provider shape for text-only local CLI adapters."""
+    """Provider shape for text-only local CLI adapters.
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> Any: ...
+    ``on_wire`` (B-87, codex R2 [P2]) is the reached-the-wire notification: the
+    adapter calls it immediately before the subprocess invocation and never
+    otherwise, so an adapter-LOCAL validation raise — the `{prompt}`-template-
+    under-stdin-transport rejection in `_render_argv_templates`, say — stays on
+    the pre-wire side of the boundary. The dispatcher cannot set that marker
+    itself: everything it controls happens before `dispatch_text` is entered.
+    """
+
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> Any: ...
 
 
 @runtime_checkable
@@ -2257,9 +2271,13 @@ class _ProviderWireReachedSink:
     process. This sink is what the emitter branches on so a pre-wire failure is
     classified as one.
 
-    Set at the LAST point this module controls before the awaited provider
-    call, never after it — a marker set afterwards would report a POST-wire
-    failure as pre-wire, which is this defect's mirror image.
+    Set at the LAST point before the awaited provider call, never after it — a
+    marker set afterwards would report a POST-wire failure as pre-wire, which
+    is this defect's mirror image. "Last point" is not always a point THIS
+    module controls: an adapter that runs its OWN validation inside its
+    dispatch method owns the boundary, and is handed the mark as a callback
+    (`_ExternalCLIProviderLike.dispatch_text`'s ``on_wire``, codex R2 [P2]) so
+    that its validation raises stay pre-wire.
 
     Written only by the arm helpers that carry a ``memory_packet`` — i.e. the
     dispatch the disposition describes. The standard-tools loops' OWN calls are
@@ -3514,6 +3532,12 @@ async def _dispatch_anthropic_with_memory(
     # `MemoryBackendResolutionError` as much as `_payload_to_anthropic_kwargs`'s
     # translate raise — which is why the emitter classifies by locus
     # (`pre_wire_failure`) and not by phase (codex R1 [P2]).
+    #
+    # Unlike the external-CLI arm (codex R2 [P2]), this callee needs NO `on_wire`
+    # callback: everything it does before its first awaited `messages.create`
+    # (`memory_tool_dispatch.py:411-420`) is a `messages`/`other_kwargs` split of
+    # the mapping assembled two lines up — no validation, no I/O, nothing that
+    # raises. The residual window is empty, so the marker is truthful here.
     _mark_wire_reached(wire_sink)
     response = await execute_with_memory_callbacks(
         adapter=adapter,
@@ -4644,8 +4668,17 @@ async def _dispatch_external_cli(
         upstream=upstream,
         memory_packet=memory_packet,
     )
-    _mark_wire_reached(wire_sink)
-    result = await adapter.dispatch_text(model=model, prompt=prompt)
+    # B-87 (codex R2 [P2]) — the boundary is INSIDE `dispatch_text`, not before
+    # it: the adapter validates its own argv templates first (a `{prompt}`
+    # template under stdin transport raises `ExternalCLIOutputError` with zero
+    # subprocess calls), so a marker set here would report that raise as a
+    # provider failure that saw the packet. The adapter calls `on_wire`
+    # immediately before its `runner.run(...)`.
+    result = await adapter.dispatch_text(
+        model=model,
+        prompt=prompt,
+        on_wire=lambda: _mark_wire_reached(wire_sink),
+    )
     text = getattr(result, "text", None)
     if not isinstance(text, str):
         raise LLMDispatchPayloadShapeError("external CLI provider result missing string text field")

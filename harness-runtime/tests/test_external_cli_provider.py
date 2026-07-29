@@ -9,6 +9,7 @@ from harness_runtime.lifecycle.external_cli_provider import (
     CLIProcessResult,
     ExternalCLICommandError,
     ExternalCLINotAuthenticatedError,
+    ExternalCLIOutputError,
     ExternalCLIProcessTimeout,
     RecordingSubprocessRunner,
     construct_antigravity_cli_adapter,
@@ -342,6 +343,73 @@ async def test_generic_command_adapter_uses_configured_templates_and_stdin() -> 
         (("my-llm", "auth", "status"), "", 42.0),
         (("my-llm", "--model", "demo-model", "--json"), "Reply OK", 42.0),
     ]
+
+
+@pytest.mark.asyncio
+async def test_generic_command_notifies_the_wire_only_after_argv_validation() -> None:
+    """B-87 (codex R2 [P2]) — `on_wire` is the caller's "did anything leave the
+    process?" boundary, so it must fire AFTER `_render_argv_templates` and
+    BEFORE `runner.run`. A `{prompt}` template under the default stdin
+    transport is a config the constructor accepts and the adapter rejects at
+    dispatch, with zero subprocess calls: the notification must not have fired.
+    """
+    runner = _FakeRunner(
+        results=[CLIProcessResult(exit_code=0, stdout="OK\n", stderr="")],
+        calls=[],
+    )
+    adapter = await construct_generic_command_cli_adapter(
+        _provider_config(
+            "local_llm",
+            "generic-command",
+            "my-llm",
+            args=("--prompt", "{prompt}"),
+            auth_check=False,
+        ),
+        runner=runner,
+    )
+    notified: list[int] = []
+
+    with pytest.raises(ExternalCLIOutputError, match="prompt_transport"):
+        await adapter.dispatch_text(
+            model="demo-model",
+            prompt="Reply OK",
+            on_wire=lambda: notified.append(len(runner.calls)),
+        )
+
+    assert notified == [], "the argv template was rejected before any subprocess ran"
+    assert runner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_generic_command_notifies_the_wire_before_the_subprocess_runs() -> None:
+    """B-87 ordering guard's other half — a notification placed after
+    `runner.run` would demote a real subprocess failure to a pre-wire one, so
+    the callback must fire with the runner still untouched."""
+    runner = _FakeRunner(
+        results=[CLIProcessResult(exit_code=0, stdout="OK\n", stderr="")],
+        calls=[],
+    )
+    adapter = await construct_generic_command_cli_adapter(
+        _provider_config(
+            "local_llm",
+            "generic-command",
+            "my-llm",
+            args=("--model", "{model}"),
+            auth_check=False,
+        ),
+        runner=runner,
+    )
+    notified: list[int] = []
+
+    result = await adapter.dispatch_text(
+        model="demo-model",
+        prompt="Reply OK",
+        on_wire=lambda: notified.append(len(runner.calls)),
+    )
+
+    assert result.text == "OK"
+    assert notified == [0], "fired exactly once, with the subprocess still ahead of it"
+    assert runner.calls == [(("my-llm", "--model", "demo-model"), "Reply OK", 42.0)]
 
 
 @pytest.mark.asyncio

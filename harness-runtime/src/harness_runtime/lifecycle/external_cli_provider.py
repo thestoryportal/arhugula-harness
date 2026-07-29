@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -144,6 +144,25 @@ _SCRUBBED_PROVIDER_ENV_VARS: frozenset[str] = frozenset(
 )
 
 
+def _notify_wire(on_wire: Callable[[], None] | None) -> None:
+    """Announce that the very next await hands the prompt to a subprocess.
+
+    B-87 (codex R2 [P2]) — the caller's "did anything leave the process?" marker
+    has to be set past EVERY adapter-local validation, not merely past the
+    dispatcher's own translation: `_render_argv_templates` rejects a `{prompt}`
+    template under `prompt_transport = "stdin"` inside `dispatch_text`, with
+    zero subprocess calls made. A marker set by the caller before the `await`
+    reports that raise as a post-wire provider failure.
+
+    Every `dispatch_text` implementation MUST call this immediately before its
+    `runner.run(...)` and nowhere else — earlier misreports a validation raise
+    as post-wire, later misreports a real subprocess failure as pre-wire.
+    ``None`` is every caller that is not tracking the boundary, and is a no-op.
+    """
+    if on_wire is not None:
+        on_wire()
+
+
 def _scrubbed_child_env() -> dict[str, str]:
     """The current environment minus hosted-provider inference credentials."""
     return {
@@ -223,9 +242,17 @@ class ClaudeCodeCLIAdapter:
     async def aclose(self) -> None:
         self._closed = True
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> ExternalCLITextResult:
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> ExternalCLITextResult:
+        argv = _claude_inference_argv(self.command, model)
+        _notify_wire(on_wire)
         result = await self.runner.run(
-            _claude_inference_argv(self.command, model),
+            argv,
             stdin=prompt,
             timeout_seconds=self.timeout_seconds,
         )
@@ -247,9 +274,17 @@ class CodexCLIAdapter:
     async def aclose(self) -> None:
         self._closed = True
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> ExternalCLITextResult:
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> ExternalCLITextResult:
+        argv = _codex_inference_argv(self.command, model)
+        _notify_wire(on_wire)
         result = await self.runner.run(
-            _codex_inference_argv(self.command, model),
+            argv,
             stdin=prompt,
             timeout_seconds=self.timeout_seconds,
         )
@@ -275,14 +310,22 @@ class AntigravityCLIAdapter:
     async def aclose(self) -> None:
         self._closed = True
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> ExternalCLITextResult:
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> ExternalCLITextResult:
+        argv = _antigravity_inference_argv(
+            self.command,
+            model,
+            prompt,
+            timeout_seconds=self.timeout_seconds,
+        )
+        _notify_wire(on_wire)
         result = await self.runner.run(
-            _antigravity_inference_argv(
-                self.command,
-                model,
-                prompt,
-                timeout_seconds=self.timeout_seconds,
-            ),
+            argv,
             stdin="",
             timeout_seconds=self.timeout_seconds,
         )
@@ -311,9 +354,17 @@ class GeminiCLIAdapter:
     async def aclose(self) -> None:
         self._closed = True
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> ExternalCLITextResult:
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> ExternalCLITextResult:
+        argv = _gemini_inference_argv(self.command, model, prompt)
+        _notify_wire(on_wire)
         result = await self.runner.run(
-            _gemini_inference_argv(self.command, model, prompt),
+            argv,
             stdin="",
             timeout_seconds=self.timeout_seconds,
         )
@@ -345,8 +396,17 @@ class GenericCommandCLIAdapter:
     async def aclose(self) -> None:
         self._closed = True
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> ExternalCLITextResult:
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> ExternalCLITextResult:
         prompt_in_argv = self.prompt_transport is ExternalCLIPromptTransport.ARG
+        # `_render_argv_templates` REJECTS a `{prompt}` template under stdin
+        # transport — an adapter-local validation raise with zero subprocess
+        # calls, which is why the wire notification sits after it (B-87 R2).
         argv = (
             self.command,
             *_render_argv_templates(
@@ -356,6 +416,7 @@ class GenericCommandCLIAdapter:
                 prompt_in_argv=prompt_in_argv,
             ),
         )
+        _notify_wire(on_wire)
         result = await self.runner.run(
             argv,
             stdin="" if prompt_in_argv else prompt,
