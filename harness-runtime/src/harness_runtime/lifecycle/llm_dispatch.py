@@ -1637,6 +1637,12 @@ class RuntimeLLMDispatcher:
             # `degraded_sink`, so the two decisions never collide (see
             # `_UnservedMemoryToolCallsSink`).
             unserved_sink = _UnservedMemoryToolCallsSink()
+            # B-87 — `degraded_sink.value.rendered` is populated HERE, before any
+            # translation runs, so it alone cannot tell an injection that
+            # happened from one that raised in translate. This sink is the
+            # discriminator; it is written only at the arms' provider-call
+            # boundaries (see `_ProviderWireReachedSink`).
+            wire_sink = _ProviderWireReachedSink()
 
             # --- Step 3: per-provider dispatch --------------------------
             cache_attrs: _AnthropicCacheAttrs | None
@@ -1700,6 +1706,7 @@ class RuntimeLLMDispatcher:
                             frozen_tool_superset=_effective_frozen_tool_superset,
                             cache_ttl=self.cache_ttl,
                             memory_packet=repair_packet,
+                            wire_sink=wire_sink,
                         )
                     elif (
                         self.hitl_tool_loop is not None
@@ -1724,6 +1731,7 @@ class RuntimeLLMDispatcher:
                             frozen_tool_superset=_effective_frozen_tool_superset,
                             cache_ttl=self.cache_ttl,
                             memory_packet=repair_packet,
+                            wire_sink=wire_sink,
                         )
                     else:
                         (
@@ -1740,6 +1748,7 @@ class RuntimeLLMDispatcher:
                             frozen_tool_superset=_effective_frozen_tool_superset,
                             cache_ttl=self.cache_ttl,
                             memory_packet=repair_packet,
+                            wire_sink=wire_sink,
                         )
                 elif provider_name == "openai":
                     # B-83 — the arm guard and the serve-check read the SAME
@@ -1771,6 +1780,7 @@ class RuntimeLLMDispatcher:
                             system=effective_system_prompt,
                             upstream=upstream_output,
                             memory_packet=repair_packet,
+                            wire_sink=wire_sink,
                         )
                     cache_attrs = None
                     request_attrs = None
@@ -1799,6 +1809,7 @@ class RuntimeLLMDispatcher:
                             step_id=step_id,
                             degraded_sink=degraded_sink,
                             unserved_sink=unserved_sink,
+                            wire_sink=wire_sink,
                             system=effective_system_prompt,
                             upstream=upstream_output,
                         )
@@ -1810,6 +1821,7 @@ class RuntimeLLMDispatcher:
                             system=effective_system_prompt,
                             upstream=upstream_output,
                             memory_packet=repair_packet,
+                            wire_sink=wire_sink,
                         )
                     cache_attrs = None
                     request_attrs = None
@@ -1822,6 +1834,7 @@ class RuntimeLLMDispatcher:
                         system=effective_system_prompt,
                         upstream=upstream_output,
                         memory_packet=repair_packet,
+                        wire_sink=wire_sink,
                     )
                     cache_attrs = None
                     request_attrs = None
@@ -1855,6 +1868,7 @@ class RuntimeLLMDispatcher:
                         model=model,
                         outcome=dispatch_outcome,
                         error_type=dispatch_error_type,
+                        reached_wire=wire_sink.reached,
                     )
                 # B-85 — an INDEPENDENT emission, not an `elif`. The two sinks
                 # report different facts about different dispatches and are
@@ -2208,6 +2222,60 @@ class _DegradedMemoryServeSink:
 _DISPATCH_OUTCOME_COMPLETED: Final[str] = "completed"
 _DISPATCH_OUTCOME_PROVIDER_ERROR: Final[str] = "provider_error"
 _DISPATCH_OUTCOME_CANCELLED: Final[str] = "cancelled"
+#: B-87 — the dispatch raised BEFORE any provider adapter was reached, so there
+#: was no provider call to have a disposition at all. Carried on the SAME axis
+#: as the three above rather than on `memory.degraded_serve.reason`: `reason`
+#: answers *why the selected mode could not be served* (a property of the
+#: context, settled before dispatch), while this axis answers *how the dispatch
+#: that decision rode on ended*. A translation raise is an answer to the second
+#: question, and folding it into the first would put a dispatch-lifecycle value
+#: into the degradation-reason value domain — two orthogonal facts on one
+#: attribute. Also a span-attribute VALUE, for the same C-MEM-19 reason.
+_DISPATCH_OUTCOME_TRANSLATION_ERROR: Final[str] = "translation_error"
+
+
+@dataclass(slots=True)
+class _ProviderWireReachedSink:
+    """B-87 — did the degraded-serve disposition actually reach a provider?
+
+    `_DegradedMemoryServe.rendered` is populated at the serve-check, BEFORE any
+    per-arm translation runs, and every translator can raise before its adapter
+    call (the two-BASE-system `PromptInjectionConflictError`, the external-CLI
+    text-only `LLMDispatchPayloadShapeError`, any future pre-adapter
+    validation). The arm site's ``finally`` then reported an `INJECTION` with
+    the packet's hash and record count for a packet that never left the
+    process. This sink is what the emitter branches on so a pre-wire failure is
+    classified as one.
+
+    Set at the LAST point this module controls before the awaited provider
+    call, never after it — a marker set afterwards would report a POST-wire
+    failure as pre-wire, which is this defect's mirror image.
+
+    Written only by the arm helpers that carry a ``memory_packet`` — i.e. the
+    dispatch the disposition describes. The standard-tools loops' OWN calls are
+    deliberately NOT marker sites: on the ollama R5 path the tools call has
+    already fired and FAILED by the time the disposition is published, so
+    marking it would make a pre-wire failure of the packet-carrying retry look
+    post-wire.
+
+    One instance per dispatch, created at the arm-selection site; never shared
+    across concurrent branches (module-level state would report one branch's
+    wire transit as another's).
+    """
+
+    reached: bool = False
+
+
+def _mark_wire_reached(sink: _ProviderWireReachedSink | None) -> None:
+    """Record that the next awaited call reaches the provider adapter.
+
+    Call IMMEDIATELY before the await, never after it (see the sink docstring).
+    ``None`` is the direct-helper-call case (no degraded serve is in flight, so
+    nothing reads the marker) and is a no-op.
+    """
+
+    if sink is not None:
+        sink.reached = True
 
 
 #: The provider arms that own a standard-memory-tools sibling dispatch fn.
@@ -2473,16 +2541,25 @@ def _emit_degraded_memory_serve_span(
     model: str,
     outcome: str = _DISPATCH_OUTCOME_COMPLETED,
     error_type: str | None = None,
+    reached_wire: bool = True,
 ) -> None:
     """Emit the ONE `memory.operation` span for a B-83 degraded serve.
 
-    Every attribute reports what ACTUALLY happened, so the two dispositions are
-    distinguishable without reading the reason string:
+    Every attribute reports what ACTUALLY happened, so the three dispositions
+    are distinguishable without reading the reason string:
 
-    * REPAIRED (`degraded.rendered` present) — `INJECTION` /
-      `access_mode=prompt_extension_packet` / the served packet's hash and
-      record count. A successful injection through a different seam, not a
-      failure, so no `failure_class` is set.
+    * REPAIRED AND SENT (`degraded.rendered` present, `reached_wire`) —
+      `INJECTION` / `access_mode=prompt_extension_packet` / the served packet's
+      hash and record count. A successful injection through a different seam,
+      not a failure, so no `failure_class` is set.
+    * REPAIRED BUT PRE-WIRE (`degraded.rendered` present, NOT `reached_wire`) —
+      B-87. The packet was rendered and then the dispatch raised in translation,
+      so it never left the process: `PACKET_ASSEMBLY` (the last thing that
+      truthfully happened) / `access_mode=no_memory_access` (what the model
+      actually got) / `record_count=0` / NO `packet_hash`. Reporting
+      `INJECTION` with the hash here asserts a disclosure that did not occur —
+      exactly the lie the B-85 emitter's `record_count` note names. NOT
+      `DENIAL` either: no resolver denied anything, the delivery failed.
     * REPORT-ONLY (`degraded.rendered is None`) — `DENIAL` /
       `access_mode=no_memory_access` / `record_count=0` / NO `packet_hash`
       (nothing was served, so claiming a served packet hash would be a lie).
@@ -2502,13 +2579,19 @@ def _emit_degraded_memory_serve_span(
     which is why the reason is a span-attribute VALUE.
     """
 
-    served = degraded.rendered
+    # B-87 — a rendered packet that never reached a provider is NOT a served
+    # packet. Collapsing it here means every downstream attribute (operation
+    # name, access mode, hash, record count) reports the delivery that actually
+    # happened, from ONE discriminator rather than four parallel conditions.
+    served = degraded.rendered if reached_wire else None
     with memory_telemetry_span(
         tracer_provider,
         tracer_name="harness.runtime.llm_dispatch",
         operation_name=(
             MemoryTelemetryOperationName.INJECTION
             if served is not None
+            else MemoryTelemetryOperationName.PACKET_ASSEMBLY
+            if degraded.rendered is not None
             else MemoryTelemetryOperationName.DENIAL
         ),
         operation_kind=MemoryOperationKind.INJECT.value,
@@ -2539,9 +2622,23 @@ def _emit_degraded_memory_serve_span(
             # everywhere rather than calling them explicitly); no exception is
             # raised INSIDE this short span, so the class is carried as an
             # attribute instead.
-            span.set_attribute("memory.degraded_serve.dispatch_outcome", outcome)
+            # B-87 — a raise with no provider call behind it is not a provider
+            # error, and its class is not a PROVIDER error type. Both move onto
+            # truthful keys; the post-wire spelling is untouched, so existing
+            # consumers of `provider_error_type` keep reading exactly the
+            # failures a provider actually produced.
+            pre_wire_failure = outcome == _DISPATCH_OUTCOME_PROVIDER_ERROR and not reached_wire
+            span.set_attribute(
+                "memory.degraded_serve.dispatch_outcome",
+                _DISPATCH_OUTCOME_TRANSLATION_ERROR if pre_wire_failure else outcome,
+            )
             if error_type is not None:
-                span.set_attribute("memory.degraded_serve.provider_error_type", error_type)
+                span.set_attribute(
+                    "memory.degraded_serve.translation_error_type"
+                    if pre_wire_failure
+                    else "memory.degraded_serve.provider_error_type",
+                    error_type,
+                )
 
 
 #: B-85 unserved-reason. A span-attribute VALUE for the same reason the B-83
@@ -3287,6 +3384,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with generic R-CXA-2 HITL tool continuation.
 
@@ -3316,6 +3414,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     )
 
     for _turn_index in range(_ANTHROPIC_HITL_MAX_TOOL_TURNS):
+        _mark_wire_reached(wire_sink)
         response = await adapter.client.messages.create(model=model, **kwargs)
         tool_use_blocks = _anthropic_tool_use_blocks(response)
         if not tool_use_blocks:
@@ -3374,6 +3473,7 @@ async def _dispatch_anthropic_with_memory(
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with Memory tool inner loop (U-RT-81).
 
@@ -3394,6 +3494,11 @@ async def _dispatch_anthropic_with_memory(
         payload, system, upstream, frozen_tool_superset, cache_ttl, memory_packet
     )
 
+    # B-87 — the adapter call itself lives inside `execute_with_memory_callbacks`,
+    # so this is the last point THIS module controls before the provider is
+    # reached. It covers the translate above, which is where the pre-wire raises
+    # on this arm originate (`_payload_to_anthropic_kwargs`).
+    _mark_wire_reached(wire_sink)
     response = await execute_with_memory_callbacks(
         adapter=adapter,
         model=model,
@@ -3417,6 +3522,7 @@ async def _dispatch_anthropic(
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch — ``client.messages.create(...)``.
 
@@ -3427,6 +3533,7 @@ async def _dispatch_anthropic(
     kwargs = _payload_to_anthropic_kwargs(
         payload, system, upstream, frozen_tool_superset, cache_ttl, memory_packet
     )
+    _mark_wire_reached(wire_sink)
     response = await adapter.client.messages.create(model=model, **kwargs)
 
     return _anthropic_response_bundle(response, payload, model, kwargs)
@@ -3440,6 +3547,7 @@ async def _dispatch_openai(
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
     """OpenAI provider branch — ``client.chat.completions.create(...)``.
 
@@ -3450,6 +3558,7 @@ async def _dispatch_openai(
     kwargs = _payload_to_openai_kwargs(payload, system, upstream)
     if memory_packet is not None:
         _fold_memory_packet_into_system(kwargs, memory_packet)
+    _mark_wire_reached(wire_sink)
     response = await adapter.client.chat.completions.create(model=model, **kwargs)
     return _openai_response_bundle(response)
 
@@ -4096,6 +4205,7 @@ async def _dispatch_ollama(
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
     """Ollama provider branch — ``client.chat(...)``.
 
@@ -4110,6 +4220,7 @@ async def _dispatch_ollama(
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     if memory_packet is not None:
         _fold_memory_packet_into_system(kwargs, memory_packet)
+    _mark_wire_reached(wire_sink)
     response = await adapter.client.chat(model=model, **kwargs)
     return _ollama_response_bundle(response)
 
@@ -4125,6 +4236,7 @@ async def _dispatch_ollama_with_standard_memory_tools(
     step_id: str,
     degraded_sink: _DegradedMemoryServeSink,
     unserved_sink: _UnservedMemoryToolCallsSink,
+    wire_sink: _ProviderWireReachedSink,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     max_iterations: int = 16,
@@ -4148,6 +4260,12 @@ async def _dispatch_ollama_with_standard_memory_tools(
     back whole — a strictly later point in the loop than the R5 fallback above
     it, which returns at ``iteration == 0`` before any ``tool_calls`` exist, so
     the two sinks can never both be written on one dispatch.
+
+    ``wire_sink`` (B-87) is passed THROUGH to the R5 bare retry and is
+    deliberately NOT marked for this loop's own calls: those carry the tools,
+    not the packet, and the R5 disposition is published only after the first of
+    them has already FAILED. Marking here would report a pre-wire failure of the
+    packet-carrying retry as post-wire.
     """
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     kwargs["tools"] = _ollama_tools_with_standard_memory(kwargs.get("tools"), memory_context)
@@ -4211,6 +4329,7 @@ async def _dispatch_ollama_with_standard_memory_tools(
                 system=system,
                 upstream=upstream,
                 memory_packet=degraded.rendered,
+                wire_sink=wire_sink,
             )
             return (bare_response, bare_usage)
         # See the OpenAI arm — every turn's usage is folded in before exit.
@@ -4494,6 +4613,7 @@ async def _dispatch_external_cli(
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _ExternalCLIAttrs]:
     """External CLI provider branch — one text prompt, one text response.
 
@@ -4508,6 +4628,7 @@ async def _dispatch_external_cli(
         upstream=upstream,
         memory_packet=memory_packet,
     )
+    _mark_wire_reached(wire_sink)
     result = await adapter.dispatch_text(model=model, prompt=prompt)
     text = getattr(result, "text", None)
     if not isinstance(text, str):
