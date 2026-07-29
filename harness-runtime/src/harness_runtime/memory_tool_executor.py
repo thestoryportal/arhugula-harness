@@ -71,6 +71,7 @@ from harness_runtime.memory_promotion import (
     PromotionRiskFlag,
     SemanticInjectionPolicy,
     SemanticRecordStatus,
+    cross_family_capture_flagged,
 )
 from harness_runtime.memory_scope_family import (
     resolve_scope_family,
@@ -414,6 +415,10 @@ class StandardMemoryToolExecutor:
         # from it, not at the record write, so key-vs-value-equivalent contexts
         # produce the same `candidate_id`.
         suggested_scope = self._resolved_scope(context)
+        # C-MEM-10 single gate authority: the provenance is read ONCE, here, and
+        # the two predicates below consume the derived flag set - never a second
+        # read of `source.envelope.captured_cross_family`.
+        risk_flags = _promotion_risk_flags(source)
         candidate = PromotionCandidate(
             candidate_id=_candidate_id(source, target_kind, suggested_scope, args),
             source_refs=_source_refs(source, _optional_string_arg(args, "evidence_ref")),
@@ -422,7 +427,7 @@ class StandardMemoryToolExecutor:
             statement=_promotion_statement(source),
             confidence=PromotionCandidateConfidence.HIGH,
             suggested_scope=suggested_scope,
-            risk_flags=_promotion_risk_flags(source),
+            risk_flags=risk_flags,
             preference_source=(
                 PreferenceCandidateSource.INFERRED
                 if target_kind is PromotionCandidateKind.PREFERENCE
@@ -430,8 +435,8 @@ class StandardMemoryToolExecutor:
             ),
             policy_decision=promotion.promotion_decision,
             review_mode=promotion.review_mode,
-            review_required=_promotion_review_required(promotion),
-            auto_promote_allowed=_promotion_auto_allowed(promotion),
+            review_required=_promotion_review_required(promotion, risk_flags=risk_flags),
+            auto_promote_allowed=_promotion_auto_allowed(promotion, risk_flags=risk_flags),
         )
         service = PromotionDecisionService(
             store=self._store,
@@ -880,12 +885,31 @@ def _capture_mode_from_decision(decision: CaptureDecision) -> MemoryCaptureMode:
 
 
 def _promotion_risk_flags(source: MemoryStoreRecord) -> tuple[PromotionRiskFlag, ...]:
+    """The tool path's single C-MEM-10 provenance read, once per candidate.
+
+    No reserved-flag overwrite is needed on this side, and the asymmetry with
+    the hint path is recorded rather than papered over: this derivation takes
+    the SOURCE RECORD and accepts no caller-supplied flags at all, so there is
+    nothing for a caller to spoof or suppress. `_risk_flags`
+    (`memory_promotion.py`) seeds from `hint.risk_flags` and therefore does need
+    the unconditional both-directions overwrite.
+    """
+
+    flags: set[PromotionRiskFlag] = set()
     if source.envelope.redaction_state.value != "active":
-        return (PromotionRiskFlag.SENSITIVE,)
-    return ()
+        flags.add(PromotionRiskFlag.SENSITIVE)
+    if cross_family_capture_flagged(source.envelope.captured_cross_family):
+        flags.add(PromotionRiskFlag.CROSS_FAMILY_CAPTURE)
+    return tuple(sorted(flags, key=lambda flag: flag.value))
 
 
-def _promotion_review_required(promotion: Any) -> bool:
+def _promotion_review_required(
+    promotion: Any,
+    *,
+    risk_flags: Sequence[PromotionRiskFlag],
+) -> bool:
+    if PromotionRiskFlag.CROSS_FAMILY_CAPTURE in risk_flags:
+        return True
     if promotion.review_mode is ReviewMode.OPERATOR_REQUIRED:
         return True
     return promotion.promotion_decision in {
@@ -894,7 +918,16 @@ def _promotion_review_required(promotion: Any) -> bool:
     }
 
 
-def _promotion_auto_allowed(promotion: Any) -> bool:
+def _promotion_auto_allowed(
+    promotion: Any,
+    *,
+    risk_flags: Sequence[PromotionRiskFlag],
+) -> bool:
+    # Note the asymmetry with the hint path's `_auto_promote_allowed`: this
+    # predicate has NO `proposed_kind` branch, so one gate covers both the
+    # semantic and the procedural decision here.
+    if PromotionRiskFlag.CROSS_FAMILY_CAPTURE in risk_flags:
+        return False
     if promotion.review_mode is not ReviewMode.AUTOMATIC:
         return False
     return promotion.promotion_decision in {

@@ -35,6 +35,7 @@ from harness_is.memory_policy import (
     ReviewMode,
 )
 from harness_is.memory_record_envelope import (
+    CapturedCrossFamily,
     MemoryID,
     MemoryRecordEnvelope,
     MemoryRecordKind,
@@ -78,12 +79,35 @@ class PromotionCandidateConfidence(StrEnum):
 
 
 class PromotionRiskFlag(StrEnum):
-    """Risk flags required by U-MEM-08."""
+    """Risk flags required by U-MEM-08.
+
+    `CROSS_FAMILY_CAPTURE` is the C-MEM-10 v1.2 (`B-92`) addition and the only
+    enum edit U-MEM-27 makes. It is RESERVED to the writer that derives it: it
+    names a fact about a stored source record's provenance, so a caller-supplied
+    instance carries no authority and is discarded and re-derived (see
+    `_risk_flags`). The contract field is an open `list<string>`; this
+    implementation-side enumeration is closed, so admitting the value here is
+    what makes it expressible at all.
+    """
 
     SENSITIVE = "sensitive"
     LOW_CONFIDENCE = "low_confidence"
     CROSS_SCOPE = "cross_scope"
     BEHAVIOR_CHANGING = "behavior_changing"
+    CROSS_FAMILY_CAPTURE = "cross_family_capture"
+
+
+def cross_family_capture_flagged(provenance: CapturedCrossFamily) -> bool:
+    """C-MEM-03 read-side mapping of the tri-state onto the C-MEM-10 gate.
+
+    `unknown` is NOT "presumed same-family": it is treated exactly as `true` is,
+    so only an explicit `false` - a comparison the capture writer actually made
+    and found equal - leaves a candidate ungated. An absent field deserializes
+    to `UNKNOWN`, so a pre-amendment record gates here by construction with no
+    back-fill and no migration.
+    """
+
+    return provenance is not CapturedCrossFamily.FALSE
 
 
 class PreferenceCandidateSource(StrEnum):
@@ -240,6 +264,21 @@ class PromotionCandidate(BaseModel):
             and self.preference_source is None
         ):
             raise ValueError("preference candidates require preference_source")
+        if PromotionRiskFlag.CROSS_FAMILY_CAPTURE in self.risk_flags and (
+            not self.review_required or self.auto_promote_allowed
+        ):
+            # C-MEM-10 v1.2 biconditional, CONSISTENCY half. Scope stated
+            # exactly: this refuses the illegal PAIR at every VALIDATING
+            # constructor (init, `model_validate`). It is not a provenance
+            # check - it cannot see a candidate that simply OMITS the mark - and
+            # it does not run on `model_copy(update=...)`, which bypasses
+            # after-validators by design on this project's Pydantic. Closing the
+            # copy route by overriding `model_copy` is deliberately NOT
+            # attempted; the activation-boundary re-derivation owns that.
+            raise ValueError(
+                "cross_family_capture candidates are review-required and never "
+                "auto-promotable (C-MEM-10)"
+            )
         return self
 
 
@@ -623,20 +662,27 @@ def _candidate_from_hint(
         update={"suggested_scope": canonical_candidate_scope(hint.suggested_scope)}
     )
     source_refs = _merge_source_refs(record.envelope.source_refs, hint.source_refs)
+    # The C-MEM-10 provenance read happens HERE and exactly once per candidate.
+    # The predicates below consume the DERIVED FLAG SET, never a second read of
+    # `record.envelope.captured_cross_family` - two parallel derivations of the
+    # same fact are free to diverge under later edits, which is the advisory-flag
+    # condition the `B-92` fork found and C-MEM-10 now forbids.
     risk_flags = _risk_flags(
         hint,
         source_scope=record.envelope.scope,
+        captured_cross_family=record.envelope.captured_cross_family,
     )
     preference_source = _preference_source(
         hint,
         source_refs=source_refs,
         source_content=record.content,
     )
-    review_required = _review_required(hint, resolution)
+    review_required = _review_required(hint, resolution, risk_flags=risk_flags)
     auto_promote_allowed = _auto_promote_allowed(
         hint,
         resolution=resolution,
         review_required=review_required,
+        risk_flags=risk_flags,
     )
     return PromotionCandidate(
         candidate_id=_candidate_id(record.envelope.memory_id, hint, preference_source),
@@ -673,6 +719,7 @@ def _risk_flags(
     hint: PromotionCandidateHint,
     *,
     source_scope: MemoryScope,
+    captured_cross_family: CapturedCrossFamily,
 ) -> tuple[PromotionRiskFlag, ...]:
     flags = set(hint.risk_flags)
     if hint.sensitive:
@@ -683,6 +730,17 @@ def _risk_flags(
         flags.add(PromotionRiskFlag.CROSS_SCOPE)
     if hint.behavior_changing:
         flags.add(PromotionRiskFlag.BEHAVIOR_CHANGING)
+    # C-MEM-10 v1.2: `cross_family_capture` is RESERVED to this derivation, so
+    # whatever the hint said about it is discarded and re-derived from the
+    # source record - unconditionally and in BOTH directions. A hint can neither
+    # introduce the mark on a `false` source nor suppress it on a `true` /
+    # `unknown` one. This is an overwrite, not a refusal: a hint carrying the
+    # value is not malformed, merely not authoritative. `cross_scope` above is
+    # untouched and stays independent - neither flag is derived from the other,
+    # and a candidate may carry both.
+    flags.discard(PromotionRiskFlag.CROSS_FAMILY_CAPTURE)
+    if cross_family_capture_flagged(captured_cross_family):
+        flags.add(PromotionRiskFlag.CROSS_FAMILY_CAPTURE)
     return tuple(sorted(flags, key=lambda flag: flag.value))
 
 
@@ -762,7 +820,13 @@ def _preference_source(
 def _review_required(
     hint: PromotionCandidateHint,
     resolution: MemoryPromotionResolution,
+    *,
+    risk_flags: Sequence[PromotionRiskFlag],
 ) -> bool:
+    if PromotionRiskFlag.CROSS_FAMILY_CAPTURE in risk_flags:
+        # Unconditional on policy: not a decision value, not a review mode, not
+        # a confidence threshold.
+        return True
     if hint.confidence is PromotionCandidateConfidence.LOW:
         return True
     if resolution.review_mode is ReviewMode.OPERATOR_REQUIRED:
@@ -778,7 +842,13 @@ def _auto_promote_allowed(
     *,
     resolution: MemoryPromotionResolution,
     review_required: bool,
+    risk_flags: Sequence[PromotionRiskFlag],
 ) -> bool:
+    if PromotionRiskFlag.CROSS_FAMILY_CAPTURE in risk_flags:
+        # AHEAD of the `proposed_kind` branch below, deliberately: a gate placed
+        # only on the semantic return would leave cross-family PROCEDURAL
+        # candidates auto-promoting under `PROMOTE_PROCEDURAL` + `AUTOMATIC`.
+        return False
     if review_required:
         return False
     if resolution.review_mode is not ReviewMode.AUTOMATIC:
@@ -916,6 +986,25 @@ def _record_content(
     )
 
 
+def _risk_flag_values(candidate: PromotionCandidate) -> list[str]:
+    """C-MEM-10 durable-review-artifact carrier for the candidate's risk flags.
+
+    The promotion-written record's own CONTENT states them, so an operator
+    inspecting the durable record can see why it was held. `MemoryStoreRecord.
+    content` is an open mapping, so no model edit is needed; `_promotion_record`
+    hashes the extended content, which means promotion records written from here
+    on carry one more key and therefore a different `content_hash` / `memory_id`
+    than they would have. That is forward-shape only - no already-written record
+    is rewritten, re-hashed, or re-identified.
+
+    Deliberately NOT the C-MEM-08 ledger row: `MemoryOperationPayload` is closed
+    (`extra="forbid"`), and a field there would be the C-MEM-08 amendment this
+    arc forswears, so `_operation_payload` is unchanged.
+    """
+
+    return [flag.value for flag in candidate.risk_flags]
+
+
 def _semantic_record_content(
     candidate: PromotionCandidate,
     *,
@@ -932,6 +1021,7 @@ def _semantic_record_content(
         "source_memory_refs": [str(memory_id) for memory_id in candidate.source_memory_refs],
         "semantic_kind": candidate.proposed_kind.value,
         "statement": statement_override or candidate.statement,
+        "risk_flags": _risk_flag_values(candidate),
         "rationale": rationale,
         "evidence": [ref.model_dump(mode="json") for ref in candidate.source_refs],
         "confidence": candidate.confidence.value,
@@ -977,6 +1067,7 @@ def _procedural_record_content(
         "instruction_file_refs": [],
         "memory_policy_ref": policy_ref,
         "procedural_update": statement_override or candidate.statement,
+        "risk_flags": _risk_flag_values(candidate),
         "rationale": rationale,
         "evidence": [ref.model_dump(mode="json") for ref in candidate.source_refs],
         "confidence": candidate.confidence.value,
