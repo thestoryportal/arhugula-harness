@@ -81,6 +81,15 @@ _EXPECTED_MEMORY_TOOL_WIRE_NAMES = frozenset(
 )
 
 
+# The B-83 degraded-serve reason emitted when the memory context's packet was
+# retrieved under a different provider-FAMILY scope than the family this
+# dispatch belongs to — `llm_dispatch._DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_
+# MISMATCH`, carried as a span-attribute VALUE (the C-MEM-19 enums are CLOSED).
+# Spelled as a literal on purpose: this is the telemetry WIRE value, so a rename
+# on the emitter side must fail here rather than follow silently.
+_DEGRADED_FAMILY_SCOPE_MISMATCH_REASON = "provider_family_scope_mismatch"
+
+
 def _openai_tool_function_names(calls: Sequence[dict[str, Any]]) -> list[str]:
     """Every ``tools[].function.name`` handed to the OpenAI leaf across calls."""
     names: list[str] = []
@@ -524,6 +533,37 @@ async def test_r300_deterministic_cross_family_fallback_through_production_path(
     assert not (_EXPECTED_MEMORY_TOOL_WIRE_NAMES & set(function_names)), (
         "C-MEM-13: NO memory tool schema may reach a cross-family fallback leg "
         f"(chain primary is anthropic-family); observed: {sorted(set(function_names))!r}"
+    )
+
+    # LIVENESS DISCRIMINATOR for the absence assertion above. On its own that
+    # assertion is satisfied by memory being absent for ANY reason — no
+    # `memory_runtime` bound, C-MEM-14 defaulted off, no standard-tool
+    # executor, the IDENTITY conjunct tripping instead of the family one, or
+    # `_openai_tool_function_names` regressing to `[]`. None of those would
+    # witness C-MEM-13 doing the withholding, and the inversion deleted the
+    # `assert function_names` that used to prove the substrate was live.
+    #
+    # The B-83 degraded-serve span is the artefact that ONLY exists when
+    # memory DID compose for this dispatch, the serve-check DID run, and it
+    # tripped on the FAMILY conjunct specifically: emitted from the single
+    # `finally` site at `llm_dispatch.py` `_emit_degraded_memory_serve_span`,
+    # with the reason set by `_degraded_serve_disposition`'s second conjunct
+    # (`_DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH`). Selecting on the
+    # discriminating attribute rather than the span name keeps the assertion
+    # loud at 0 (memory never composed / a different conjunct fired) and at 2
+    # (a second, unaccounted degraded dispatch).
+    degraded_reasons = [
+        reason
+        for span in spans
+        if isinstance(reason := (span.attributes or {}).get("memory.degraded_serve.reason"), str)
+    ]
+    family_mismatch = [r for r in degraded_reasons if r == _DEGRADED_FAMILY_SCOPE_MISMATCH_REASON]
+    assert len(family_mismatch) == 1, (
+        "expected EXACTLY ONE memory degraded-serve span carrying "
+        f"memory.degraded_serve.reason == {_DEGRADED_FAMILY_SCOPE_MISMATCH_REASON!r} — "
+        "the positive witness that the memory substrate composed for this dispatch "
+        "and C-MEM-13's provider-FAMILY conjunct is what withheld the tools; "
+        f"observed degraded-serve reasons: {degraded_reasons!r}"
     )
 
 
