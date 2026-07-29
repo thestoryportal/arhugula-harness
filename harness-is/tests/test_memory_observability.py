@@ -1,4 +1,4 @@
-"""B-88 - `classify_memory_failure` type-keyed classification (C-MEM-19 §641).
+"""B-88 - `classify_memory_failure` type-keyed classification (C-MEM-19 Invariants).
 
 Two contracts live here, both IS-local:
 

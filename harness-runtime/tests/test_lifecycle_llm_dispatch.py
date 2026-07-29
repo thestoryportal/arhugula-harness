@@ -3167,8 +3167,9 @@ async def test_ollama_without_standard_memory_tools_stays_on_the_bare_path() -> 
 # STANDARD_MEMORY_TOOLS was selected but the arm reached will not inject the
 # C-MEM-14 tools, the model used to receive ZERO memory while a fully
 # retrieved, policy-checked packet sat unused on the context. The repair serves
-# that packet as read-only prompt text (C-MEM-13,
-# `Spec_Memory_Substrate_v1.md:460`) and emits one degraded-serve span.
+# that packet as read-only prompt text (C-MEM-13 Invariants — "Providers
+# without usable tool support may receive prompt-extension packets") and emits
+# one degraded-serve span.
 # ---------------------------------------------------------------------------
 
 _B83_MEMORY_REF = MemoryID("mem:b-83:degraded-serve")
@@ -3296,8 +3297,9 @@ async def test_b83_provider_rebound_context_is_reported_but_never_served() -> No
     Neither the tools NOR the packet may reach Y. The tools are withheld
     because X's `scope_ref`/`policy_ref` would attribute Y's writes to a scope
     Y was never policy-checked for; the PACKET is withheld because retrieval
-    and injection enforce provider-family scope before ranking
-    (`Spec_Memory_Substrate_v1.md:481`) and the packet was assembled under X's
+    and injection enforce provider-family scope before ranking ("Memory threat
+    model" Invariants — "Retrieval and injection enforce ... provider-family
+    ... scope before ranking") and the packet was assembled under X's
     `MemoryScope.provider_family` — forwarding its text to a Y-family provider
     is a disclosure leak that read-only framing does not fix. Recomposition is
     impossible on this path (it is definitionally the `memory_runtime`-unbound

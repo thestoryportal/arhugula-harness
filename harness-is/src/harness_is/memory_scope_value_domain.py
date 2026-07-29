@@ -18,8 +18,10 @@ requested family, while a `null` REQUEST does not widen access past a
 family-scoped record ("a request that declines to name a partition is asking for
 *broader* reach than a partitioned record permits"). The forward-register row
 `B-90` carries the same reading for `tenant`, whose omission left every
-tool-captured record tenant-unpartitioned against the threat-model mandate at
-`Spec_Memory_Substrate_v1.md:481`.
+tool-captured record tenant-unpartitioned against the threat-model mandate at the
+"Memory threat model" Invariants ("Retrieval and injection enforce project,
+workflow, tenant, provider-family, CLI-profile, and visibility scope before
+ranking").
 
 The asymmetry is therefore applied to exactly those two fields. `project`,
 `workflow`, `workload_class`, and `cli_profile` keep the pre-existing
