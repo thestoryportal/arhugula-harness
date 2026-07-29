@@ -17,6 +17,9 @@ the R7 pass, at `d9907c24` on the R8 pass, and at `26720e8e` on the R9 pass (no 
 differs across those HEADs — every commit on this branch is doc-only; every R9 cite below was read directly,
 not carried).
 
+**RATIFIED 2026-07-29 — Reading B (flag + gate); Q2 routed to the spec leg. See §11.** The §8 ask is
+answered; the next arc is the spec-writer apply leg, then the impl leg.
+
 **Review status: R9 is the SOUNDNESS EXIT — this filing is CLOSED to further review rounds.** Nine
 out-of-family rounds; the A/B/C readings, the Q1 recommendation of **B**, and the ratification ask have been
 stable throughout; the ask's justification is precision-qualified at R9; all remaining sub-altitude mechanics
@@ -1326,3 +1329,68 @@ spec leg (`B-92`), not applied here.** The single exception the cap still admits
 an **A/B/C reading**, the **Q1 recommendation of B**, or the **ask itself** (that the choice is the operator's
 and is a real commitment) — none of which nine rounds has touched. What remains owed is not review. It is the
 operator's answer to §8.
+
+---
+
+## §11 RATIFICATION — Reading B (flag + gate); operator, 2026-07-29
+
+**The §8 ask is ANSWERED. This filing's decision surface is closed; what remains is the spec leg.**
+
+**Q1 — RATIFIED: Reading B.** The operator selected **B — "flag + gate"** on **2026-07-29**, via
+`AskUserQuestion` in the autonomous-loop session (root `CLAUDE.md` §14.2 — the interactive menu is this
+workspace's ratification primitive; §12.4.1 — the loop drives an item to its *genuine* gate and surfaces
+exactly that, which is what this ask was). The A/B/C menu was presented as §8 item 1 states it, with **B
+recommended per §7**, and the selected option read:
+
+> *"Cross-family-produced candidates carry a risk flag AND a review gate (no silent auto-promotion;
+> eligibility preserved) … Requires the discriminator first (spec leg picks the mechanism from the filing's
+> leveled Q2 analysis)."*
+
+Against §4's Reading B text, that ratifies both halves and neither neighbour: **eligibility is PRESERVED** —
+reading C's outright refusal is foreclosed, and with it the harm the B-86 council named (C3's *"silent,
+permanent, inverted-in-timing data loss"*, C6's continuity abstraction) — **and the silence is REMOVED** —
+reading A's status quo is not adopted as the permanent posture. Per §4's own cost line, the ratified position
+**states the gate, not only the flag**: such a candidate is `review_required` and never
+`auto_promote_allowed`. The **A-as-recorded-interim** variant was **not** selected, so its T1 / T2 / T3
+interim-ending triggers are not owed — B is ratified directly, as the target posture.
+
+**Q2 — deliberately NOT decided here.** §8 item 2 presents Q2 **leveled** — (i-envelope), with the
+(i-envelope-bool) / (i-envelope-family) payload sub-choice, against (ii)/(ii-a) — without a recommendation,
+R7 having struck the last asymmetry that held one. The operator-selected option's own text routes it: *"spec
+leg picks the mechanism from the filing's leveled Q2 analysis."* That is the disposition §10's cap already
+made binding, and it is unchanged by this ratification. **The spec leg owns, without exception:** the Q2
+option and its payload sub-choice; the join key, its `operation_kind == CAPTURE` qualification, the six-case
+`UNVERIFIABLE` set and the multi-match arm; the record/ledger coherence check with its `EPISODIC_RUN` scope
+and its detection bound; the α/β/γ residual disposition; under (i) the field's placement, payload, derivation
+rule, tri-state unknown and hash-inertness; and — the one thing that decides between the options — the
+**requirement statement** (stored-version present/absent vs by-family vs aggregate-run). §8's discriminator
+guidance stands as *input, not as a decision*: reading B's requirement as this filing argues it is
+stored-version provenance **present/absent**, which §5's three-column table answers most cheaply with
+**(i-envelope-bool)** — a recommendation the spec leg re-derives against its own HEAD, not a ratified choice.
+
+**Next step — the spec-writer apply leg, then the impl leg.** §9's routing is unchanged, and the sequencing
+is the `B-86` → PR #1147 (spec leg) → PR #1148 (impl leg) precedent chain: spec first, impl second, never
+bundled.
+
+1. **Spec leg** (`spec-writer`, its own arc/PR): the **C-MEM-10** amendment carrying reading B — the risk-flag
+   vocabulary sentence (`PromotionCandidate.risk_flags` is an **open** `list<string>` in the C-MEM-10 Contract
+   `PromotionCandidate` block, so this is a vocabulary addition, **not** a schema widening) **plus** the
+   gate-bearing obligation that makes the flag non-inert; **plus the discriminator's owed contract text** at
+   whichever of C-MEM-03 (option (i)) or C-MEM-08 (option (ii)) the leg selects, per §6's per-reading drafting
+   targets and §5's owed-sentence accounting; **plus** the `Implementation_Plan_Memory_Substrate_v1.md` delta
+   (a new **U-MEM-27**, owed under B per §9); **plus** clearance markers at `.harness/clearance/` in the same
+   PR per root `CLAUDE.md` §4.5. An out-of-family `just codex-review` decorator on the C-MEM diff is
+   recommended per §9 — threat-model-adjacent text inside an already-cleared contract is exactly the shape
+   that earned it on the B-86 spec leg.
+2. **Impl leg**: follows the spec leg as its own arc, per §9.
+
+**Run the spec leg as a FRESH, FOCUSED session.** §10's cap is a *requirement* on that leg, not a courtesy:
+every mechanics claim in this filing is a claim about code at `26720e8e`, and the spec leg **re-grounds all of
+them against its own HEAD** before authoring contract text (the `B-86` → `U-MEM-26` precedent, where the spec
+leg re-verified the capture-path mechanics rather than inheriting the fork doc's). A session carrying this
+filing's nine review rounds forward is the wrong instrument for that — it inherits precisely the claims the cap
+requires be re-derived.
+
+**Register disposition.** `B-92` **stays** `design_substrate_gated`. The ratification answers §8; it does not
+run the spec leg, and the register's own status enum is explicit that *"a filed doc does NOT flip the status —
+only ratified + applied spec deltas"*. The row flips to `open` when the C-MEM + plan deltas are APPLIED.
