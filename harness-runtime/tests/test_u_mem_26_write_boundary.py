@@ -600,15 +600,20 @@ def _extract(source: MemoryStoreRecord) -> list[PromotionCandidate]:
     return extractor.extract_from_records([source])
 
 
-def test_promotion_hint_with_registered_key_is_canonicalized(tmp_path: Path) -> None:
-    """:911 sub-case 1 - the registered key never reaches the persisted scope."""
+def test_promotion_hint_with_registered_key_is_canonicalized() -> None:
+    """:911 sub-case 1 - the registered key never reaches the persisted scope.
+
+    Extraction is a pure derivation: no store, no durable write, so no
+    `tmp_path`. The two assertions below are the whole witness - the earlier
+    `assert tmp_path.exists()` line asserted only that pytest had made its own
+    fixture directory, which is true of every test in this file.
+    """
     source = _source_record(_scope(_OLLAMA_FAMILY), [_hint(_OLLAMA_KEY)])
 
     [candidate] = _extract(source)
 
     assert candidate.suggested_scope.provider_family == _OLLAMA_FAMILY
     assert candidate.suggested_scope.provider_family != _OLLAMA_KEY
-    assert tmp_path.exists()  # no durable write is needed to observe the derivation
 
 
 def test_promotion_hint_with_unregistered_identifier_is_denied() -> None:

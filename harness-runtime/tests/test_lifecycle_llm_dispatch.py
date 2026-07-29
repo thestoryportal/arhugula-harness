@@ -3906,7 +3906,7 @@ async def test_b83_report_only_span_survives_a_failing_provider_call() -> None:
     with pytest.raises(RuntimeError):
         await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
 
-    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    attrs = _one_degraded_serve_span(exporter)
     assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
     assert attrs["memory.degraded_serve.reason"] == "provider_scope_mismatch"
     assert attrs["memory.operation.name"] == "denial"
@@ -4061,7 +4061,7 @@ async def test_b83_successful_dispatch_marks_the_outcome_completed() -> None:
 
     await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
 
-    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    attrs = _one_degraded_serve_span(exporter)
     assert attrs["memory.degraded_serve.dispatch_outcome"] == "completed"
     assert "memory.degraded_serve.provider_error_type" not in attrs
 
@@ -4149,7 +4149,7 @@ async def test_b83_packet_budget_denied_withholds_on_the_r5_path_with_its_own_re
 
     assert result["message"]["content"] == "ok", "the tool-free retry must still succeed"
     assert _B83_SECTION_TEXT not in json.dumps(client.calls[1]["messages"])
-    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    attrs = _one_degraded_serve_span(exporter)
     assert attrs["memory.degraded_serve.reason"] == "token_budget_empty", (
         "an empty BUDGET must never be reported as a policy denial"
     )
@@ -4187,7 +4187,7 @@ async def test_b83_undervied_eligibility_reports_not_derived_not_a_gate_denial()
     await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
 
     assert "system" not in client.messages.calls[0]
-    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    attrs = _one_degraded_serve_span(exporter)
     assert attrs["memory.degraded_serve.reason"] == "not_derived"
     # B-91 — a NON-decision carries no `failure_class`. The sentinel is defined
     # to be distinct from every `MemoryAccessModeDenialReason` value precisely so
