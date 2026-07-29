@@ -33,6 +33,13 @@ from harness_is.memory_record_envelope import (
     MemoryTier,
     RedactionState,
 )
+from harness_is.memory_scope_value_domain import (
+    RequestScopeResolution,
+    ScopeFamilyCanonicalizer,
+    resolve_request_scope,
+    scope_intersection_denied,
+    scope_partition_denied,
+)
 from harness_is.memory_store import MemoryStoreRecord
 
 CURRENT_DERIVED_RETRIEVAL_INDEX_VERSION = "derived-retrieval-index/v1"
@@ -145,9 +152,19 @@ class DerivedRetrievalIndexStore:
         *,
         root_binding: MemoryRootBinding | None = None,
         deployment_surface: DeploymentSurface = DeploymentSurface.LOCAL_DEVELOPMENT,
+        family_canonicalizer: ScopeFamilyCanonicalizer | None = None,
     ) -> None:
+        """Bind the index location and the optional request-side value domain.
+
+        `family_canonicalizer` is the C-MEM-03 request-side value-domain
+        authority (U-MEM-26). It is optional so the IS axis keeps zero outbound
+        cross-axis edges; production composition MUST inject it - absent, a
+        queried `provider_family` is compared as the raw string it arrived as.
+        See `memory_scope_value_domain`.
+        """
         self._registry = MemoryPathRegistry(root_binding)
         self._deployment_surface = deployment_surface
+        self._family_canonicalizer = family_canonicalizer
 
     def index_path(self) -> Path:
         """Return the canonical derived semantic index ledger path."""
@@ -218,7 +235,12 @@ class DerivedRetrievalIndexStore:
         """Return bounded metadata matches from the current derived index."""
 
         index = self.read_current()
-        candidates = tuple(_filter_candidates(index.entries, query))
+        resolution = (
+            None
+            if query.scope is None
+            else resolve_request_scope(query.scope, self._family_canonicalizer)
+        )
+        candidates = tuple(_filter_candidates(index.entries, query, resolution))
         ordered = _order_candidates(query, candidates, search_accelerator)
         selected_entries = tuple(ordered[: query.limit])
         return DerivedRetrievalIndexResult(
@@ -321,7 +343,23 @@ def _entry_from_record(record: MemoryStoreRecord) -> DerivedRetrievalIndexEntry:
 def _filter_candidates(
     entries: Sequence[DerivedRetrievalIndexEntry],
     query: DerivedRetrievalIndexQuery,
+    resolution: RequestScopeResolution | None,
 ) -> tuple[DerivedRetrievalIndexEntry, ...]:
+    """Apply the C-MEM-03 scope boundary before ranking (U-MEM-26).
+
+    `resolution` is `None` exactly when the query carries no scope object at
+    all. That is not a total wildcard: an absent request scope names no
+    partition, so it is denied against partition-scoped entries on the same
+    terms as an explicit `null` (`scope_partition_denied` with no requested
+    scope). The remaining dimensions and the visibility rank stay unconstrained,
+    since an absent scope asserts nothing about them.
+
+    An out-of-domain `provider_family` is a different disposition again: it
+    rejects the QUERY outright, so the result is empty rather than narrowed to
+    the unpartitioned remainder (see `memory_scope_value_domain`).
+    """
+    if resolution is not None and resolution.family_out_of_domain:
+        return ()
     query_terms = set(_tokenize(query.query_summary))
     candidates: list[DerivedRetrievalIndexEntry] = []
     for entry in entries:
@@ -329,7 +367,10 @@ def _filter_candidates(
             continue
         if query.allowed_kinds and entry.record_kind not in query.allowed_kinds:
             continue
-        if query.scope is not None and not _scope_matches(entry.scope, query.scope):
+        if resolution is None:
+            if scope_partition_denied(entry.scope, None):
+                continue
+        elif not _scope_matches(entry.scope, resolution.scope):
             continue
         if query_terms and not (set(entry.search_terms) & query_terms):
             continue
@@ -377,22 +418,19 @@ def _is_active_retrieval_entry(entry: DerivedRetrievalIndexEntry) -> bool:
 
 
 def _scope_matches(record_scope: MemoryScope, requested_scope: MemoryScope) -> bool:
-    for field_name in (
-        "project",
-        "workflow",
-        "workload_class",
-        "provider_family",
-        "cli_profile",
-        "tenant",
-    ):
-        requested_value = getattr(requested_scope, field_name)
-        record_value = getattr(record_scope, field_name)
-        if (
-            record_value is not None
-            and requested_value is not None
-            and record_value != requested_value
-        ):
-            return False
+    """True when the requested scope may reach this record (C-MEM-03, U-MEM-26).
+
+    The scope-partition fields (`provider_family`, `tenant`) carry the
+    asymmetric-`null` semantics: a `null` RECORD value is the unpartitioned
+    wildcard, but a `null` REQUEST value does NOT widen access past a
+    partitioned record. The remaining fields keep the either-side-`null`-skips
+    semantics. Both rules live at `memory_scope_value_domain`, shared with the
+    retriever predicate, per the per-layer independence U-MEM-26 requires.
+    """
+    if scope_partition_denied(record_scope, requested_scope):
+        return False
+    if scope_intersection_denied(record_scope, requested_scope):
+        return False
     return _visibility_rank(record_scope.visibility) <= _visibility_rank(requested_scope.visibility)
 
 

@@ -35,6 +35,10 @@ from harness_runtime.lifecycle.memory_tool_types import (
 # type); the table pins its classification directly, and the end-to-end span
 # assertion lives at `test_native_memory_adapter.py`.
 from harness_runtime.lifecycle.native_memory_adapter import _NativeMemoryPolicyDeniedError
+from harness_runtime.memory_capture import (
+    MemoryCaptureReservedActorError,
+    MemoryCaptureScopeValueDomainError,
+)
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionDeniedError,
     MemoryToolExecutionError,
@@ -197,6 +201,34 @@ _PROVIDER_ADAPTER = MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
         ),
         (
             _NativeMemoryPolicyDeniedError("retrieval policy denies memory path '/memories/x.txt'"),
+            _POLICY_DENIAL,
+        ),
+        # --- capture write-boundary refusals (U-MEM-26) ---------------------
+        # Both are caller CONTRACT violations, not substrate faults, and both
+        # reach `classify_memory_failure` through
+        # `StandardMemoryToolExecutor.execute`'s blanket `except`: the executor
+        # binds a caller-supplied `context.actor` (reserved-actor refusal at
+        # `EpisodicMemoryCapture.__init__`) and writes through the scope value
+        # domain (`_scope_for_record`). Both messages are WORDING-CONFLICTING
+        # by construction — neither trips a residual rule, so the residual
+        # returns provider_adapter_failure and deleting either type's
+        # `memory_failure_class` declaration fails its row rather than passing
+        # green. Messages are the raise sites' real wording
+        # (`memory_capture.py` `_RESERVED_REPAIR_ACTOR_PREFIX` refusal and
+        # `memory_scope_family.scope_family_out_of_domain_message`).
+        (
+            MemoryCaptureReservedActorError(
+                "actor_id 'memory-capture-repair:run-1' is inside the "
+                "'memory-capture-repair:' namespace, which is reserved for torn-capture "
+                "repair rows and may not be bound by an ordinary capture"
+            ),
+            _POLICY_DENIAL,
+        ),
+        (
+            MemoryCaptureScopeValueDomainError(
+                "memory scope provider_family 'not-a-family' is neither a ProviderFamily "
+                "value nor a registered provider key (C-MEM-03 value domain)"
+            ),
             _POLICY_DENIAL,
         ),
         # --- undeclared populations (the honest residual) -------------------

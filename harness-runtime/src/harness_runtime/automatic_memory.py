@@ -24,7 +24,11 @@ from harness_cp.memory_access_mode import reflect_memory_provider_capabilities
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_is.cli_profile import DEFAULT_GENERIC_CLI_PROFILE
-from harness_is.memory_operation_ledger import MemoryOperationEngineClass
+from harness_is.memory_operation_ledger import (
+    MemoryOperationEngineClass,
+    MemoryOperationIdempotencyConflictError,
+    MemoryOperationKind,
+)
 from harness_is.memory_path_registry import MemoryPathRegistry, MemoryRootBinding
 from harness_is.memory_policy import (
     AccessDecision,
@@ -34,7 +38,12 @@ from harness_is.memory_policy import (
     PromotionDecision,
     ReviewMode,
 )
-from harness_is.memory_record_envelope import MemoryRecordKind, MemoryScope, MemoryVisibility
+from harness_is.memory_record_envelope import (
+    MemoryID,
+    MemoryRecordKind,
+    MemoryScope,
+    MemoryVisibility,
+)
 from harness_is.memory_retrieval import MemoryRetriever
 from harness_is.memory_retrieval_index import (
     DerivedRetrievalIndex,
@@ -42,21 +51,25 @@ from harness_is.memory_retrieval_index import (
     DerivedRetrievalIndexStaleError,
     DerivedRetrievalIndexStore,
 )
-from harness_is.memory_store import CanonicalMemoryStore
+from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 
 from harness_runtime.memory_capture import (
+    RUN_START_EVENT_KIND,
     EpisodicMemoryCapture,
     MemoryCaptureMode,
     MemoryCaptureResult,
     MemoryCaptureStatus,
     SummaryProvenance,
     SummarySource,
+    capture_operation_action_id,
+    stored_capture_event_type,
 )
 from harness_runtime.memory_context import (
     MemoryContextCompositionRequest,
     RuntimeMemoryContext,
     RuntimeMemoryContextComposer,
 )
+from harness_runtime.memory_scope_family import canonical_scope_family
 from harness_runtime.memory_tool_executor import StandardMemoryToolExecutor
 from harness_runtime.types import RuntimeConfig
 
@@ -137,9 +150,15 @@ class LocalAutomaticMemoryRuntime:
             deployment_surface=self._surface,
         )
         self._store = store
+        # U-MEM-26: `harness-is` declares the C-MEM-03 request-side value domain
+        # as an injectable seam because the IS axis has zero outbound cross-axis
+        # edges. This is its composition root - absent the injection the read
+        # layers compare `provider_family` as the raw string it arrived as, and
+        # a crafted raw-key request reaches a legacy raw-key record.
         index_store = AutoRefreshingDerivedRetrievalIndexStore(
             root_binding=binding,
             deployment_surface=self._surface,
+            family_canonicalizer=canonical_scope_family,
         )
         index_store.read_current()
         retriever = MemoryRetriever(
@@ -147,6 +166,7 @@ class LocalAutomaticMemoryRuntime:
             index_store=index_store,
             policy_resolver=self._policy_resolver,
             policy_ref=self._policy.policy_id,
+            family_canonicalizer=canonical_scope_family,
         )
         self._composer = RuntimeMemoryContextComposer(
             retriever=retriever,
@@ -278,6 +298,31 @@ class LocalAutomaticMemoryRuntime:
             is None
         ):
             return
+        if self._store.has_run_record(context.run_id):
+            # Codex R3 [P2-c] durable-presence idempotence. `_started_runs` is
+            # in-process ONLY, so a fresh bootstrap resuming an older run finds
+            # it empty and captures run-start again - and EPISODIC_RUN is one
+            # `run.json` per run_id, so that second write REPLACES the stored
+            # envelope under today's canonical scope. Silently re-scoping a
+            # pre-v1.1 record is exactly what the C-MEM-03 forward-only posture
+            # forbids, so an existing record ends the capture instead. Two
+            # processes racing a genuinely FIRST write still resolve
+            # last-writer-wins as before; this closes the resume case, which is
+            # the one that rewrites history rather than re-deciding it.
+            #
+            # Codex R4: presence of the RECORD is not presence of the CAPTURE.
+            # `_capture` writes the record before its C-MEM-08 row, so a
+            # transient ledger failure leaves the record durable and the row
+            # missing - and this presence check then made the retry a no-op, so
+            # the required row was never written at all. The stored record
+            # still ends the capture; what it no longer does is end the
+            # OPERATION.
+            self._complete_torn_run_start_capture(
+                context=context,
+                step_context=step_context,
+            )
+            self._started_runs.add(context.run_id)
+            return
         result = self._recorder(
             actor=step_context.parent_actor,
             scope=context.record_scope,
@@ -298,6 +343,150 @@ class LocalAutomaticMemoryRuntime:
         _raise_capture_failure(result)
         self._started_runs.add(context.run_id)
 
+    def _complete_torn_run_start_capture(
+        self,
+        *,
+        context: RuntimeMemoryContext,
+        step_context: StepExecutionContext,
+    ) -> None:
+        """Append the run-start CAPTURE row when the stored record carries none.
+
+        The states a stored record can be in, and what each gets:
+
+        1. record + its run-start row  -> nothing (the R3 resume case, and the
+           genuinely-legacy pre-v1.1 runs whose own capture appended their row
+           at their own capture time). The envelope is not touched.
+        2. RUN-START record, NO row    -> the torn write. The MISSING ROW ONLY
+           is appended, against the STORED envelope's own identity. The record
+           is not rewritten and its scope is not re-derived, so the
+           forward-only posture the presence check exists to protect holds
+           unchanged.
+        3. any OTHER record, NO row    -> nothing (Codex R7). See below.
+        4. no record                   -> not reached; the caller captures
+           normally.
+
+        Codex R7: (2) and (3) were one case, and the missing row was read as
+        proof of a torn START. It is not. EPISODIC_RUN is ONE `run.json` keyed
+        by `run_id` and run-close OVERWRITES it, so a run that started and
+        closed before this substrate existed - or that was torn AFTER its
+        close - stores a `run_close` record carrying no run-start row, and the
+        repair then appended a run-start row asserting a start that this record
+        is not evidence of. The stored content's own `event_type` is therefore
+        read first, and only a genuine run-start record is repairable.
+
+        A run-close (or unreadable-shape) record gets NO row and an untouched
+        envelope: that run's durable history is closed or opaque to us, and
+        FABRICATING a start row against it is strictly worse than leaving the
+        row missing - a missing row is a gap the ledger honestly shows, while a
+        fabricated one is a false attestation in an append-only, hash-chained
+        substrate that cannot be retracted. The caller still registers the
+        `run_id` in `_started_runs`, so the run proceeds exactly as it does for
+        state (1); the record's presence still ends the capture.
+
+        Codex R5: the probe at (1) and the append at (2) are not one atomic
+        step, so a SECOND worker can pass the probe while a first worker's row
+        is still in flight. Both halves of the answer live here. The repair
+        payload takes nothing from THIS worker (`repair_capture_operation`), so
+        the racing appends are equivalent and the ledger no-ops the loser
+        rather than conflicting. And the conflict that a genuinely divergent
+        row still raises - the original torn attempt's own append landing in
+        this window, carrying the dispatch metadata a repair cannot know - is
+        CAUGHT and read as completion: the ledger only raises when an entry
+        already occupies this exact `idempotency_key`, and that key names this
+        one capture, so a conflict is positive evidence the row is durable.
+        Failing the run over it would report a repair that in fact succeeded.
+
+        Codex R6: that catch covers one ORDERING - the repair losing to the
+        original append. The reverse, this repair's row landing FIRST and the
+        original's own append then conflicting, raises inside `_capture` and is
+        read as completion there, on the same evidence. The two catches are one
+        symmetric answer; neither closes the race alone.
+
+        Codex R8: `_capture`'s half of that pair now IDENTIFIES the occupant
+        before reading a conflict as completion, and this half deliberately does
+        NOT. The two are not symmetric in what they have already done to the
+        durable state. `_capture` WROTE the record first, and the run-start
+        `memory_id` is derived from the `run_id` alone, so a divergent second
+        `capture_run_start` overwrites `run.json` and then meets the first
+        call's row - a real record-vs-ledger disagreement, which is why that
+        side must refuse any occupant but a repair. This side writes NO record
+        and derives nothing: it appends the one missing row against the STORED
+        envelope's own identity. Every occupant it can meet - the original
+        torn attempt's own append, a concurrent repair, or a divergent direct
+        re-capture - means the same single thing, that a run-start capture row
+        for this record is durable, which is the entire claim this repair
+        wanted to make. There is no state it could be disagreeing with.
+        """
+        record = self._stored_run_record(context.run_id)
+        if record is None:
+            return
+        # Ahead of the row probe: a non-run-start record is unrepairable
+        # whatever the ledger says, and this spares it the whole-ledger read.
+        if stored_capture_event_type(record.content) != RUN_START_EVENT_KIND:
+            return
+        if self._run_start_capture_row_present(record.envelope.memory_id):
+            return
+        try:
+            result = self._recorder(
+                # Both inert here - the repair writes no record, so nothing
+                # consults the record scope, and its row is attributed to the
+                # run-keyed repair actor rather than to this worker. Passed
+                # anyway so the recorder is bound the same way on both capture
+                # paths.
+                actor=step_context.parent_actor,
+                scope=context.record_scope,
+                capture_mode=MemoryCaptureMode.SUMMARIZED,
+            ).repair_capture_operation(
+                event_kind=RUN_START_EVENT_KIND,
+                record=record,
+                timestamp=datetime.now(UTC),
+                run_id=context.run_id,
+            )
+        except MemoryOperationIdempotencyConflictError:
+            return
+        _raise_capture_failure(result)
+
+    def _stored_run_record(self, run_id: str) -> MemoryStoreRecord | None:
+        """The stored run record, or `None` when it cannot be read.
+
+        Identity comes from the STORED envelope and is never re-derived: a
+        legacy record's `memory_id` need not equal what today's capture path
+        would compute for the same `run_id`, and a repair row that referenced a
+        re-derived id would point at a record that does not exist.
+
+        An unreadable record (legacy shape, corrupt bytes) therefore has no
+        recoverable identity and no row can honestly reference it, so the
+        caller leaves the stored history exactly as it found it - which is the
+        durable-presence guard's own posture, not a swallowed failure.
+
+        The whole record is returned, not the envelope alone: the repair row's
+        `cli_profile` / `engine_class` / `step_id` come from the stored CONTENT,
+        which is where the torn capture recorded them, so the repair stays a
+        pure function of what is durable (Codex R5).
+        """
+        try:
+            return self._store.read_run_record(run_id)
+        except (LookupError, ValueError):
+            return None
+
+    def _run_start_capture_row_present(self, memory_id: MemoryID) -> bool:
+        """True when the run-start CAPTURE row for `memory_id` is already durable.
+
+        Keyed on the run-start `action_id`, not on `memory_refs`: run-start and
+        run-close write ONE shared EPISODIC_RUN `memory_id`, so a `memory_refs`
+        match cannot tell the two capture events apart and a closed run would
+        read as an uncaptured one.
+
+        The whole-ledger read is the honest query an append-only C-MEM-08
+        ledger offers, and it is reached ONLY once a record already exists - a
+        fresh run never pays for it.
+        """
+        action_id = capture_operation_action_id(RUN_START_EVENT_KIND, memory_id)
+        return any(
+            entry.action_id == action_id and entry.operation_kind is MemoryOperationKind.CAPTURE
+            for entry in self._store.read_memory_operations()
+        )
+
     def _recorder(
         self,
         *,
@@ -305,6 +494,13 @@ class LocalAutomaticMemoryRuntime:
         scope: MemoryScope | None,
         capture_mode: MemoryCaptureMode,
     ) -> EpisodicMemoryCapture:
+        """Bind a capture API to the run's COMPOSED record scope (`B-89`).
+
+        `record_scope` is what the written records carry; `project` and
+        `visibility` remain as the inputs to the residual construction the
+        capture API falls back to when no composed scope exists (`scope is
+        None`), so the no-scope caller is unchanged.
+        """
         return EpisodicMemoryCapture(
             store=self._store,
             actor=cast("Any", actor),
@@ -312,6 +508,7 @@ class LocalAutomaticMemoryRuntime:
             visibility=scope.visibility if scope is not None else MemoryVisibility.PROJECT,
             capture_mode=capture_mode,
             tracer_provider=self._tracer_provider,
+            record_scope=scope,
         )
 
 

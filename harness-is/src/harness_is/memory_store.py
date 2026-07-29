@@ -213,6 +213,35 @@ class CanonicalMemoryStore:
             )
         return record
 
+    def has_run_record(self, run_id: str) -> bool:
+        """True when an EPISODIC_RUN record already exists for `run_id`.
+
+        A durable PRESENCE probe, deliberately not `read_record`: presence is a
+        property of the stored file, so a legacy, tombstoned, or otherwise
+        un-servable envelope still counts as present. The EPISODIC_RUN layout
+        is one `run.json` per run, so a second write for the same `run_id`
+        REPLACES the first - a writer whose only record of what it already
+        wrote is in-process (a fresh process resuming an older run) needs this
+        to avoid re-authoring stored history.
+        """
+        return self._run_record_path(run_id).exists()
+
+    def read_run_record(self, run_id: str) -> MemoryStoreRecord:
+        """Read the stored EPISODIC_RUN record for `run_id`.
+
+        Sibling of `has_run_record`, for a caller that needs the stored
+        record's own IDENTITY rather than just its presence. EPISODIC_RUN is
+        keyed by `run_id` (one `run.json` per run), so `read_record`'s
+        `memory_id` argument is inert for this kind and a caller holding only
+        the `run_id` has no honest value to pass it. Like `has_run_record`,
+        this is presence-honest: a legacy or tombstoned envelope is returned as
+        stored rather than hidden, because the caller's question is what the
+        stored bytes SAY, not whether they are servable to a reader.
+
+        Raises `MemoryStoreRecordNotFoundError` when no record exists.
+        """
+        return _read_json_record(self._run_record_path(run_id))
+
     def memory_operation_ledger_path(self) -> Path:
         """Return the canonical durable memory operation ledger path."""
 
@@ -242,11 +271,7 @@ class CanonicalMemoryStore:
         run_id: str | None,
     ) -> Path:
         if kind is MemoryRecordKind.EPISODIC_RUN:
-            return self._registry.resolve_path(
-                MemoryPathClass.EPISODIC_RUN_RECORD,
-                self._deployment_surface,
-                run_id=_required_run_id(kind, run_id),
-            )
+            return self._run_record_path(_required_run_id(kind, run_id))
         if kind in _JSONL_BY_KIND:
             return self._registry.resolve_path(
                 _JSONL_BY_KIND[kind],
@@ -261,6 +286,13 @@ class CanonicalMemoryStore:
             return directory / _record_filename(memory_id)
         _tier_for_kind(kind)
         raise AssertionError(f"unreachable kind mapping for {kind.value}")
+
+    def _run_record_path(self, run_id: str) -> Path:
+        return self._registry.resolve_path(
+            MemoryPathClass.EPISODIC_RUN_RECORD,
+            self._deployment_surface,
+            run_id=run_id,
+        )
 
     def _memory_operation_handle(self) -> JsonlLedgerHandle:
         path = self.memory_operation_ledger_path()

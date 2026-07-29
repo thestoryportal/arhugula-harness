@@ -13,16 +13,19 @@ import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol, Self
+from typing import ClassVar, Protocol, Self
 
 from harness_is.memory_observability import (
     MemoryTelemetryFailureClass,
     MemoryTelemetryOperationName,
+    classify_memory_failure,
     memory_telemetry_span,
     set_memory_telemetry_attributes,
 )
 from harness_is.memory_operation_ledger import (
     MemoryOperationEngineClass,
+    MemoryOperationEntry,
+    MemoryOperationIdempotencyConflictError,
     MemoryOperationKind,
     MemoryOperationPayload,
     MemoryOperationProjection,
@@ -41,11 +44,82 @@ from harness_is.memory_record_envelope import (
     derive_memory_id,
 )
 from harness_is.memory_store import MemoryStoreRecord, MemoryStoreWriteResult
-from harness_is.state_ledger_entry_schema import Actor, Identifier
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from pydantic import BaseModel, ConfigDict, model_validator
+
+from harness_runtime.memory_scope_family import (
+    resolve_scope_family,
+    scope_family_out_of_domain_message,
+)
 
 _REDACTED_SUMMARY = "[redacted]"
 _SCHEMA_VERSION = "episodic-capture/v1"
+
+RUN_START_EVENT_KIND = "run_start"
+"""Event kind of the run-start capture, shared with its durable-row probes.
+
+`capture_run_start` writes this same value as the record's own
+`content["event_type"]`, so it is also what `stored_capture_event_type` returns
+for a run-start record - one spelling for both the ledger key and the stored
+discriminator.
+"""
+
+
+def capture_operation_action_id(event_kind: str, memory_id: MemoryID) -> Identifier:
+    """Return the C-MEM-08 `action_id` a capture of `memory_id` writes.
+
+    Exported because it is the ONLY key that identifies one capture event in
+    the ledger: run-start and run-close share a single EPISODIC_RUN
+    `memory_id`, so `memory_refs` cannot tell them apart. A caller asking
+    whether a specific capture completed must ask by this id, and must build
+    it here rather than re-spelling the format.
+    """
+    return Identifier(f"capture:{event_kind}:{memory_id}")
+
+
+_RESERVED_REPAIR_ACTOR_PREFIX = "memory-capture-repair:"
+"""The `actor_id` namespace RESERVED for torn-capture repair rows.
+
+Codex R9. `Actor.actor_id` is an unrestricted `str` supplied by whoever binds
+an `EpisodicMemoryCapture`, so the R8 occupant test - which discriminates a
+synthetic repair row from an ordinary dispatch row by actor equality - was only
+as sound as the assumption that no ordinary capture can spell that identity.
+Nothing enforced the assumption: a caller binding this prefix would have made a
+later DIVERGENT run-start replay misread its own predecessor's row as a repair
+and return `CAPTURED` over a durable record/ledger disagreement.
+
+This prefix is therefore refused at the ONE place an ordinary capture's actor
+enters (`EpisodicMemoryCapture.__init__`), which makes the R8 discriminator
+unforgeable rather than merely conventional. `capture_repair_actor` below is
+the sole legitimate producer of an id in this namespace, and it composes it
+from this same constant so the reservation and the identity cannot drift apart.
+"""
+
+
+def capture_repair_actor(run_id: str) -> Actor:
+    """Return the actor a torn-capture REPAIR row records for `run_id`.
+
+    A repair row is not a dispatch row. The dispatch that tore is gone, and the
+    worker that happens to notice the tear later is not its author - binding
+    the repair to the NOTICING worker's actor would both misattribute the
+    capture and make the payload worker-dependent, which two concurrent
+    repairers cannot agree on (they would collide under one idempotency key
+    with unequal payloads). The repair is therefore attributed to the harness
+    itself, keyed by the run it repairs, so every worker composes the same
+    actor for the same run.
+
+    Exported for the same reason `capture_operation_action_id` is: it is the
+    only spelling of this identity, and a caller asserting against a repair row
+    must build it here rather than re-spell the format.
+
+    The `_RESERVED_REPAIR_ACTOR_PREFIX` namespace is closed to ordinary capture
+    (see there), so this function is the only producer of the identity - which
+    is what lets `_conflicting_row_is_a_repair` read actor equality as proof.
+    """
+    return Actor(
+        actor_class=ActorClass.AGENT,
+        actor_id=f"{_RESERVED_REPAIR_ACTOR_PREFIX}{run_id}",
+    )
 
 
 class SummarySource(StrEnum):
@@ -111,6 +185,58 @@ class MemoryCaptureStore(Protocol):
         payload: MemoryOperationPayload,
     ) -> MemoryOperationWriteResult: ...
 
+    def read_memory_operations(self) -> list[MemoryOperationEntry]:
+        """Read the durable C-MEM-08 ledger.
+
+        Codex R8: capture is a WRITER, and this is the one read it needs - the
+        run-start conflict path has to identify WHO already occupies the slot
+        before it may read that conflict as completion (`_capture`). It is
+        reached ONLY from that path, which is the rare one; every ordinary
+        capture still writes without reading the ledger at all.
+        """
+        ...
+
+
+class MemoryCaptureScopeValueDomainError(ValueError):
+    """Raised when a capture scope's `provider_family` is out of the value domain.
+
+    U-MEM-26 / C-MEM-03 v1.1. Reachable from BOTH branches of
+    `_scope_for_record` - the residual construction, where the scope is still
+    derived from a per-dispatch provider key, and a scope SUPPLIED by a caller,
+    which is no more trusted (Codex R2). The composed production path does not
+    raise it in practice: that scope's `provider_family` is by construction a
+    `ProviderFamily` value derived once from the chain primary.
+
+    It is a refusal, not a substrate fault, so it declares `policy_denial`
+    rather than inheriting the message-heuristic residual - the same
+    by-construction discipline `B-88` applied to the tool-executor family.
+    """
+
+    memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+        MemoryTelemetryFailureClass.POLICY_DENIAL
+    )
+
+
+class MemoryCaptureReservedActorError(ValueError):
+    """Raised when a caller binds an actor id inside the reserved REPAIR namespace.
+
+    Codex R9. A sibling refusal to `MemoryCaptureScopeValueDomainError` above
+    and classed the same way: it is a caller CONTRACT violation, not a
+    substrate fault, so it declares `policy_denial` at its own definition site
+    (B-88) rather than inheriting the message-heuristic residual. The
+    declaration is load-bearing, not decorative - `StandardMemoryToolExecutor`
+    binds a caller-supplied `context.actor` inside its `execute` try, whose
+    handler classes the exception by TYPE through `classify_memory_failure`.
+
+    It is raised from `__init__` rather than from a capture method because that
+    is where the actor enters and because refusing at construction means the
+    refused binding can never write anything at all.
+    """
+
+    memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+        MemoryTelemetryFailureClass.POLICY_DENIAL
+    )
+
 
 class EpisodicMemoryCapture:
     """Automatic capture API for runtime episodic events."""
@@ -124,13 +250,46 @@ class EpisodicMemoryCapture:
         visibility: MemoryVisibility = MemoryVisibility.PROJECT,
         capture_mode: MemoryCaptureMode = MemoryCaptureMode.SUMMARIZED,
         tracer_provider: object | None = None,
+        record_scope: MemoryScope | None = None,
     ) -> None:
+        """Bind the capture collaborators.
+
+        `record_scope` is the `B-89` writer-side repair: the run's COMPOSED
+        record scope, used for every record this instance writes. The composed
+        scope is the single authority for what a run captures, so what a run
+        captures and what a run can retrieve share one partition by
+        construction (C-MEM-03 v1.1, "The paired writer-side obligation"). It
+        is still passed through the write boundary's value domain rather than
+        stored verbatim - a supplied scope is not exempt (`_scope_for_record`).
+
+        It defaults to `None` so the residual construction below stays
+        available to callers that have no composed scope; that path is bound by
+        the value domain instead (`_scope_for_record`). The `provider` argument
+        the capture methods take is UNAFFECTED either way - it still feeds the
+        C-MEM-08 operation payload and the C-MEM-19 span as the raw per-dispatch
+        key it is. Only the RECORD scope stops deriving from it.
+
+        `actor` is the ONLY way an ordinary capture's actor is bound - no
+        `capture_*` method takes a per-call actor, and `_operation_payload` is
+        reached with exactly two actors: this one and, from
+        `repair_capture_operation` alone, `capture_repair_actor(run_id)`. So
+        refusing the reserved repair namespace here closes it for every
+        ordinary row, which is what makes the R8 occupant test unforgeable
+        (`_RESERVED_REPAIR_ACTOR_PREFIX`).
+        """
+        if actor.actor_id.startswith(_RESERVED_REPAIR_ACTOR_PREFIX):
+            raise MemoryCaptureReservedActorError(
+                f"actor_id {actor.actor_id!r} is inside the "
+                f"{_RESERVED_REPAIR_ACTOR_PREFIX!r} namespace, which is reserved for "
+                "torn-capture repair rows and may not be bound by an ordinary capture"
+            )
         self._store = store
         self._actor = actor
         self._project = project
         self._visibility = visibility
         self._capture_mode = capture_mode
         self._tracer_provider = tracer_provider
+        self._record_scope = record_scope
 
     def capture_run_start(
         self,
@@ -160,7 +319,7 @@ class EpisodicMemoryCapture:
             "close_status": "open",
         }
         return self._capture(
-            event_kind="run_start",
+            event_kind=RUN_START_EVENT_KIND,
             record_kind=MemoryRecordKind.EPISODIC_RUN,
             content=content,
             timestamp=timestamp,
@@ -486,31 +645,63 @@ class EpisodicMemoryCapture:
         policy_ref: str | None,
         procedural_snapshot_ref: str | None,
     ) -> MemoryCaptureResult:
-        record = self._record(
-            kind=record_kind,
-            content=content,
-            timestamp=timestamp,
-            source_ref=source_ref,
-            run_id=run_id,
-            workflow_id=_optional_string(content.get("workflow_id")),
-            cli_profile=cli_profile,
-            provider=provider,
-        )
-        action_id = Identifier(f"capture:{event_kind}:{record.envelope.memory_id}")
-        payload = MemoryOperationPayload(
-            action_id=action_id,
-            idempotency_key=Identifier(f"idempotent:{action_id}"),
+        try:
+            record = self._record(
+                kind=record_kind,
+                content=content,
+                timestamp=timestamp,
+                source_ref=source_ref,
+                run_id=run_id,
+                workflow_id=_optional_string(content.get("workflow_id")),
+                cli_profile=cli_profile,
+                provider=provider,
+            )
+        except MemoryCaptureScopeValueDomainError as exc:
+            # Codex R7: the write-boundary REFUSAL is an outcome C-MEM-19 has a
+            # vocabulary for, and it was the one capture outcome that emitted no
+            # span at all - the denial fires inside `_record`, which ran BEFORE
+            # the span below opened, so an out-of-domain scope was invisible to
+            # the telemetry that exists to make denials countable.
+            #
+            # The span is opened here rather than moving `_record` inside the
+            # one below, because the record is what supplies that span's `tier`
+            # and its payload's `memory_id` - and because the denial must keep
+            # PROPAGATING. Every other failure in this method folds into a
+            # `FAILED` result; a refusal is a contract violation by the caller,
+            # not an IO fault it may shrug off, and `raise` inside the context
+            # manager also lets the span record the exception on its way out.
+            #
+            # `tier` is EPISODIC by construction - `_record` hardcodes it for
+            # every record this class writes - and `record_count` is 0 because
+            # the refusal precedes any record. The failure class is read from
+            # the exception TYPE (`classify_memory_failure` honours the
+            # `memory_failure_class` declaration, B-88) rather than spelled
+            # literally here, so a future denial type carries its own class.
+            with memory_telemetry_span(
+                self._tracer_provider,
+                tracer_name="harness.runtime.memory_capture",
+                operation_name=MemoryTelemetryOperationName.CAPTURE,
+                operation_kind=MemoryOperationKind.CAPTURE.value,
+                tier=MemoryTier.EPISODIC.value,
+                provider=provider,
+                model=model,
+                cli_profile=cli_profile,
+                policy_decision=MemoryCaptureStatus.FAILED.value,
+                failure_class=classify_memory_failure(exc),
+                record_count=0,
+            ):
+                raise
+        payload = self._operation_payload(
+            event_kind=event_kind,
             actor=self._actor,
+            memory_id=record.envelope.memory_id,
             timestamp=timestamp,
-            operation_kind=MemoryOperationKind.CAPTURE,
-            operation_projection=MemoryOperationProjection.NONE,
             run_id=run_id,
             step_id=step_id,
             provider=provider,
             model=model,
             cli_profile=cli_profile,
             engine_class=engine_class,
-            memory_refs=(record.envelope.memory_id,),
             policy_ref=policy_ref,
             procedural_snapshot_ref=procedural_snapshot_ref,
         )
@@ -537,7 +728,79 @@ class EpisodicMemoryCapture:
                 # record itself is durable; only its audit trail is
                 # incomplete), never a ledger entry pointing at nothing.
                 self._store.write_record(record)
-                operation_result = self._store.append_memory_operation(payload)
+                try:
+                    operation_result = self._store.append_memory_operation(payload)
+                except MemoryOperationIdempotencyConflictError:
+                    # Codex R6: the REVERSE of the race the repair call site
+                    # catches. There, the repair loses to this append; here,
+                    # this append loses to the repair. A second worker can
+                    # observe the `run.json` written one line above while this
+                    # append is still in flight, read it as a torn capture, and
+                    # complete it with `repair_capture_operation`'s
+                    # worker-invariant payload. That row diverges from this one
+                    # (a repair cannot know the dispatch metadata), so the
+                    # ledger raises here - and the broad handler below turned
+                    # that into FAILED, aborting a run whose accounting was in
+                    # fact durably complete.
+                    #
+                    # A conflict is NOT by itself evidence of that (Codex R8).
+                    # The ledger raises whenever an entry already occupies this
+                    # `idempotency_key`, and for EPISODIC_RUN the key is a
+                    # function of `event_kind` and a `memory_id` derived from
+                    # the RUN_ID ALONE (`_memory_id_for`) - not from content -
+                    # so a plain SECOND `capture_run_start` for the same run
+                    # with divergent workflow / provider / policy metadata,
+                    # called outside `LocalAutomaticMemoryRuntime`'s presence
+                    # guard, lands on this same key too. That call has already
+                    # OVERWRITTEN `run.json` (one file per run), so reading its
+                    # conflict as completion returned CAPTURED over a durable
+                    # disagreement: the record holding call-2's data and the
+                    # sole ledger row holding call-1's.
+                    #
+                    # So the occupant is IDENTIFIED before the conflict is
+                    # read as completion, and only the synthetic REPAIR row
+                    # qualifies. `capture_repair_actor` is run-keyed and is
+                    # composed NOWHERE but the repair path; an ordinary capture
+                    # always attributes its row to the caller-supplied
+                    # `self._actor` (a dispatch actor), so no normal capture can
+                    # produce that identity. Any other occupant - a real prior
+                    # capture with a divergent payload - re-raises into the
+                    # broad handler below and stays FAILED, which is the
+                    # pre-R6 strictness for genuine divergent replays.
+                    #
+                    # The read costs a whole-ledger walk, but only on the
+                    # CONFLICT path: an uncontended capture never reaches it.
+                    #
+                    # Accepted information loss: the durable row is then the
+                    # repair's synthetic payload (`provider` / `model` /
+                    # `policy_ref` None) rather than this dispatch's richer
+                    # metadata. Correcting it would mean REWRITING a
+                    # hash-chained append-only ledger row, which is a strictly
+                    # worse trade than losing four attributes on a row whose
+                    # purpose is to attest that the capture is durable. The
+                    # RECORD keeps its full content either way: in this
+                    # ordering this worker wrote it, and the repair writes no
+                    # record.
+                    #
+                    # `event_kind` is still checked FIRST, and it is the cheap
+                    # half: `repair_capture_operation` is reached from one call
+                    # site, always with `RUN_START_EVENT_KIND`, so no other
+                    # event kind has a second writer sharing its keys and no
+                    # repair row can ever occupy one. A conflict on any of them
+                    # is a genuine divergence, must still surface as FAILED,
+                    # and is spared the ledger read.
+                    #
+                    # The span needs no annotation: it already declares
+                    # `policy_decision=captured`, and no `failure_class`
+                    # belongs on an outcome that is not a failure.
+                    if event_kind != RUN_START_EVENT_KIND:
+                        raise
+                    if not self._conflicting_row_is_a_repair(
+                        action_id=payload.action_id,
+                        run_id=run_id,
+                    ):
+                        raise
+                    operation_result = None
             except Exception as exc:
                 set_memory_telemetry_attributes(
                     span,
@@ -555,9 +818,199 @@ class EpisodicMemoryCapture:
                 event_kind=event_kind,
                 record_kind=record_kind,
                 memory_id=record.envelope.memory_id,
-                operation_action_id=action_id,
+                operation_action_id=payload.action_id,
                 operation_result=operation_result,
             )
+
+    def _conflicting_row_is_a_repair(self, *, action_id: Identifier, run_id: str) -> bool:
+        """True when the row occupying `action_id` is the synthetic REPAIR row.
+
+        Codex R8. The discriminator between the two writers that can legally
+        share one run-start `action_id`:
+
+        * `repair_capture_operation` attributes its row to
+          `capture_repair_actor(run_id)` - an identity composed there and
+          NOWHERE else, keyed by the run so every repairing worker composes the
+          same one.
+        * every ordinary capture attributes its row to `self._actor`, the
+          dispatch actor its caller bound at construction.
+
+        So a repair actor on the occupying row means the occupant is a repair,
+        which is the only occupant `_capture` may read as completion.
+
+        Codex R9 - what makes that inference SOUND rather than conventional:
+        `actor_id` is an unrestricted `str`, so on its own "no ordinary capture
+        composes this identity" was an assumption about caller behaviour, and a
+        caller that bound `memory-capture-repair:{run_id}` itself would have
+        made a later DIVERGENT run-start replay read this row as a repair and
+        return `CAPTURED` over a record/ledger disagreement. The namespace is
+        therefore RESERVED at the single point an ordinary actor enters
+        (`__init__` refuses `_RESERVED_REPAIR_ACTOR_PREFIX`), leaving
+        `repair_capture_operation` its only producer. Actor equality is
+        consequently unforgeable, not merely unlikely to collide.
+
+        Absence -
+        including a ledger that cannot be read, whose exception propagates into
+        the broad handler and fails the capture - is answered `False`, so the
+        conflict stays a failure.
+
+        Keyed on `action_id`, not `memory_refs`: run-start and run-close share
+        one EPISODIC_RUN `memory_id`, so `memory_refs` cannot tell the two
+        capture events apart (the same reason
+        `LocalAutomaticMemoryRuntime._run_start_capture_row_present` keys that
+        way).
+        """
+        repair_actor = capture_repair_actor(run_id)
+        return any(
+            entry.action_id == action_id
+            and entry.operation_kind is MemoryOperationKind.CAPTURE
+            and entry.actor == repair_actor
+            for entry in self._store.read_memory_operations()
+        )
+
+    def repair_capture_operation(
+        self,
+        *,
+        event_kind: str,
+        record: MemoryStoreRecord,
+        timestamp: datetime,
+        run_id: str,
+    ) -> MemoryCaptureResult:
+        """Append the C-MEM-08 CAPTURE row for an ALREADY-STORED record.
+
+        Completes a TORN capture. `_capture` writes the record before its
+        ledger row (see the ordering rationale there), so a failed append
+        leaves a durable record carrying no operation row - the record's
+        presence is therefore not evidence that its capture completed. Re-running
+        `_capture` is not the repair: EPISODIC_RUN is one `run.json` per run, so
+        it would REWRITE the stored envelope under today's scope, which is
+        precisely what the forward-only posture forbids. This writes the
+        MISSING ROW ONLY, against the envelope's OWN `memory_id` as stored.
+
+        The row reuses the `action_id` / `idempotency_key` the interrupted
+        attempt would have written, so it lands in exactly the slot that attempt
+        left empty rather than duplicating.
+
+        Codex R5: the payload is a PURE FUNCTION of the stored record and
+        `run_id` - it takes NOTHING from the repairing worker. Two workers
+        resuming one torn run compose byte-identical payloads, so the second
+        append resolves through the ledger's equivalence check as
+        `IDEMPOTENT_NOOP` (`append_memory_operation` compares the 18-field
+        equivalence payload, which excludes `timestamp`, and only raises
+        `MemoryOperationIdempotencyConflictError` on genuine divergence).
+        Sourcing per-worker dispatch metadata here instead is what made the
+        second repairer raise, failing a run whose row was already durable.
+
+        Field by field, and why each is worker-invariant:
+
+        * `action_id` / `idempotency_key` / `memory_refs` - the stored
+          envelope's own `memory_id`, never re-derived.
+        * `actor` - `capture_repair_actor(run_id)`; see there.
+        * `run_id` - the key the record was READ by, so identical by
+          construction for any worker that reached this repair.
+        * `cli_profile` / `engine_class` - read back from the STORED content,
+          where the torn capture itself recorded them. These are the original
+          capture's values, not the repairer's.
+        * `step_id` - read back from stored content too; absent on the
+          run-start content shape, which is the `None` the torn attempt carried.
+        * `provider` / `model` / `policy_ref` / `procedural_snapshot_ref` -
+          `None`. The stored record does not carry them (`provider_route` is
+          the CHAIN, not the access-mode SELECTION the torn payload recorded),
+          and they describe the dispatch that tore, which the repairer is not.
+          `None` is the honest deterministic value: a repair row attests that
+          this capture is durable, not which dispatch performed it.
+
+        The idempotency conflict is RAISED, not folded into a `FAILED` result:
+        it is a concurrency signal rather than an IO fault, and what it means
+        (a row already occupies this exact capture slot) is a judgement for the
+        caller that knows it is repairing. Every other append failure still
+        returns the `FAILED` result unchanged.
+        """
+        envelope = record.envelope
+        cli_profile = _stored_text(record.content, "cli_profile")
+        payload = self._operation_payload(
+            event_kind=event_kind,
+            actor=capture_repair_actor(run_id),
+            memory_id=envelope.memory_id,
+            timestamp=timestamp,
+            run_id=run_id,
+            step_id=_stored_text(record.content, "step_id"),
+            provider=None,
+            model=None,
+            cli_profile=cli_profile,
+            engine_class=_stored_engine_class(record.content),
+            policy_ref=None,
+            procedural_snapshot_ref=None,
+        )
+        with memory_telemetry_span(
+            self._tracer_provider,
+            tracer_name="harness.runtime.memory_capture",
+            operation_name=MemoryTelemetryOperationName.CAPTURE,
+            operation_kind=MemoryOperationKind.CAPTURE.value,
+            tier=envelope.tier.value,
+            cli_profile=cli_profile,
+            policy_decision=MemoryCaptureStatus.CAPTURED.value,
+            record_count=1,
+        ) as span:
+            try:
+                operation_result = self._store.append_memory_operation(payload)
+            except MemoryOperationIdempotencyConflictError:
+                raise
+            except Exception as exc:
+                set_memory_telemetry_attributes(
+                    span,
+                    policy_decision=MemoryCaptureStatus.FAILED.value,
+                    failure_class=MemoryTelemetryFailureClass.IO_FAILURE,
+                )
+                return MemoryCaptureResult(
+                    status=MemoryCaptureStatus.FAILED,
+                    event_kind=event_kind,
+                    record_kind=envelope.kind,
+                    failure_reason=f"{type(exc).__name__}: {exc}",
+                )
+            return MemoryCaptureResult(
+                status=MemoryCaptureStatus.CAPTURED,
+                event_kind=event_kind,
+                record_kind=envelope.kind,
+                memory_id=envelope.memory_id,
+                operation_action_id=payload.action_id,
+                operation_result=operation_result,
+            )
+
+    def _operation_payload(
+        self,
+        *,
+        event_kind: str,
+        actor: Actor,
+        memory_id: MemoryID,
+        timestamp: datetime,
+        run_id: str,
+        step_id: str | None,
+        provider: str | None,
+        model: str | None,
+        cli_profile: str | None,
+        engine_class: MemoryOperationEngineClass | None,
+        policy_ref: str | None,
+        procedural_snapshot_ref: str | None,
+    ) -> MemoryOperationPayload:
+        action_id = capture_operation_action_id(event_kind, memory_id)
+        return MemoryOperationPayload(
+            action_id=action_id,
+            idempotency_key=Identifier(f"idempotent:{action_id}"),
+            actor=actor,
+            timestamp=timestamp,
+            operation_kind=MemoryOperationKind.CAPTURE,
+            operation_projection=MemoryOperationProjection.NONE,
+            run_id=run_id,
+            step_id=step_id,
+            provider=provider,
+            model=model,
+            cli_profile=cli_profile,
+            engine_class=engine_class,
+            memory_refs=(memory_id,),
+            policy_ref=policy_ref,
+            procedural_snapshot_ref=procedural_snapshot_ref,
+        )
 
     def _record(
         self,
@@ -582,17 +1035,55 @@ class EpisodicMemoryCapture:
                 created_at=timestamp,
                 updated_at=None,
                 source_refs=(source_ref,),
-                scope=MemoryScope(
-                    project=self._project,
-                    workflow=workflow_id,
-                    provider_family=provider,
+                scope=self._scope_for_record(
+                    workflow_id=workflow_id,
                     cli_profile=cli_profile,
-                    visibility=self._visibility,
+                    provider=provider,
                 ),
                 content_hash=content_hash,
             ),
             content=content,
         )
+
+    def _scope_for_record(
+        self,
+        *,
+        workflow_id: str | None,
+        cli_profile: str | None,
+        provider: str | None,
+    ) -> MemoryScope:
+        """Return the scope this capture writes under (`B-89` / `B-90`).
+
+        The run's composed `record_scope` wins when it was supplied - it already
+        carries the `tenant` and `workload_class` fields the independently
+        constructed residual below omits (`B-90`), and re-deriving any of them
+        per turn is precisely the defect `B-89` names. The residual
+        construction is kept for callers with no composed scope.
+
+        BOTH paths then pass through the SAME canonicalize-or-deny, because
+        this method is the write boundary and a scope arriving from a caller is
+        no more trusted than one built here: a registered provider key is
+        canonicalized to its `ProviderFamily` value, and an out-of-domain
+        identifier is REFUSED rather than stored or degraded to `null` (`null`
+        is the unpartitioned wildcard, so degrading would widen the record's
+        reach - C-MEM-03 v1.1). On the composed production path the supplied
+        scope is already canonical and this is a no-op; returning it VERBATIM
+        instead would let any caller persist a raw registered key or an
+        out-of-domain value straight past the value domain.
+        """
+        scope = self._record_scope
+        if scope is None:
+            scope = MemoryScope(
+                project=self._project,
+                workflow=workflow_id,
+                provider_family=provider,
+                cli_profile=cli_profile,
+                visibility=self._visibility,
+            )
+        resolution = resolve_scope_family(scope)
+        if resolution.family_out_of_domain:
+            raise MemoryCaptureScopeValueDomainError(scope_family_out_of_domain_message(scope))
+        return resolution.scope
 
 
 def _captured_text(value: str, mode: MemoryCaptureMode) -> str:
@@ -642,12 +1133,59 @@ def _optional_string(value: object) -> str | None:
     return str(value)
 
 
+def _stored_text(content: Mapping[str, object], key: str) -> str | None:
+    """A stored content field, taken only when it is genuinely text.
+
+    Deliberately stricter than `_optional_string`: that one COERCES, which is
+    right when the caller authored the value this turn, and wrong when reading
+    a durable record back - `str()` over an unexpected shape would invent a
+    field value the original capture never recorded. An absent or non-text
+    field reads as `None`, which is what the torn payload carried anyway.
+    """
+    value = content.get(key)
+    return value if isinstance(value, str) else None
+
+
+def stored_capture_event_type(content: Mapping[str, object]) -> str | None:
+    """The `event_type` a stored capture record's content declares.
+
+    Every `capture_*` method opens its content with this field, so it is the
+    record's own statement of WHICH event wrote it - the discriminator a reader
+    needs when one `memory_id` is shared by several events (EPISODIC_RUN is one
+    `run.json` per run, written by run-start and OVERWRITTEN by run-close).
+
+    Exported for the same reason `capture_operation_action_id` is: the field is
+    written here, so a caller asking what a durable record IS reads it through
+    this module rather than re-spelling the key. Strict (`_stored_text`): an
+    absent or non-text field reads as `None` - an unrecognizable record, never
+    a guess at one.
+    """
+    return _stored_text(content, "event_type")
+
+
+def _stored_engine_class(content: Mapping[str, object]) -> MemoryOperationEngineClass | None:
+    """The stored content's `engine_class`, or `None` when it is not one."""
+    value = _stored_text(content, "engine_class")
+    if value is None:
+        return None
+    try:
+        return MemoryOperationEngineClass(value)
+    except ValueError:
+        return None
+
+
 __all__ = [
+    "RUN_START_EVENT_KIND",
     "EpisodicMemoryCapture",
     "MemoryCaptureMode",
+    "MemoryCaptureReservedActorError",
     "MemoryCaptureResult",
+    "MemoryCaptureScopeValueDomainError",
     "MemoryCaptureStatus",
     "MemoryCaptureStore",
     "SummaryProvenance",
     "SummarySource",
+    "capture_operation_action_id",
+    "capture_repair_actor",
+    "stored_capture_event_type",
 ]

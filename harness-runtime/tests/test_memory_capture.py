@@ -301,6 +301,9 @@ def test_capture_does_not_append_ledger_when_record_write_fails() -> None:
         def write_record(self, record: object) -> object:
             raise OSError("disk full")
 
+        def read_memory_operations(self) -> list[object]:
+            raise AssertionError("the ledger is read only on the conflict path")
+
     store = _RecordFailingStore()
     recorder = EpisodicMemoryCapture(
         store=store,
@@ -339,6 +342,9 @@ def test_capture_ledger_append_failure_after_record_write_leaves_no_dangling_ref
         def write_record(self, record: object) -> object:
             self.record_written = True
             return object()
+
+        def read_memory_operations(self) -> list[object]:
+            raise AssertionError("the ledger is read only on the conflict path")
 
     store = _LedgerFailingStore()
     recorder = EpisodicMemoryCapture(

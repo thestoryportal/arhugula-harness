@@ -3298,23 +3298,34 @@ async def test_b83_provider_rebound_context_is_reported_but_never_served() -> No
 
 
 @pytest.mark.asyncio
-async def test_b83_cross_family_recomposed_context_is_reported_but_never_rendered() -> None:
-    """P1-c — provider IDENTITY matches, provider FAMILY does not.
+async def test_u_mem_26_cross_family_ollama_dispatch_withholds_tools_and_packet() -> None:
+    """U-MEM-26 (:889 / :905) — the C-MEM-13 withhold on the OLLAMA arm.
 
-    The `memory_runtime` path recomposes per attempt, so on a cross-family
-    fallback `selection.selected_provider` becomes the CURRENT candidate and
-    the identity conjunct passes. But `compose_for_dispatch` derives
+    Provider IDENTITY matches, provider FAMILY does not. The `memory_runtime`
+    path recomposes per attempt, so on a cross-family fallback
+    `selection.selected_provider` becomes the CURRENT candidate and the identity
+    conjunct passes. But `compose_for_dispatch` derives
     `record_scope.provider_family` from the fallback chain's PRIMARY
-    (`automatic_memory.py:191-199`) and `MemoryRetriever` filters records on
+    (`automatic_memory.py:199-209`) and `MemoryRetriever` filters records on
     exactly that field (`memory_retrieval.py:371-384`), so the packet holds
-    OpenAI-family records while the dispatch is ollama. Rendering it is the
-    same disclosure leak one layer down, so this must be report-only — proven
-    through the R5 path, where the packet would otherwise be rendered.
+    OpenAI-family records while the dispatch is ollama.
+
+    C-MEM-13 (`Spec_Memory_Substrate_v1.md:509`, `:523`) withholds BOTH the tool
+    schemas and the scope reference for such a dispatch, so nothing here reaches
+    the standard-tools arm at all: one bare call, no `tools` key, no packet text,
+    and a report-only degraded span naming the denial reason.
+
+    HISTORY — this witness previously asserted the same withholding at the R5
+    ollama tools-unsupported fallback (`test_b83_cross_family_recomposed_
+    context_is_reported_but_never_rendered`), which required the tools to be
+    ARMED first so the daemon could refuse them, then checked that only the
+    PACKET was withheld on the tool-free retry. That arming is exactly what
+    C-MEM-13 forbids: the pre-U-MEM-26 code exposed the schemas and the
+    `scope_ref` to a cross-family candidate and withheld only one layer later.
+    The R5 reachability it exercised is now closed upstream by this guard, so
+    the witness moves up to the boundary that actually holds.
     """
     client = _OllamaClient()
-    client.errors = [
-        OllamaResponseError("llava-llama3:latest does not support tools", 400),
-    ]
     executor = _FakeStandardMemoryToolExecutor()
     tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
@@ -3337,22 +3348,24 @@ async def test_b83_cross_family_recomposed_context_is_reported_but_never_rendere
         step_context=_step_context(),
     )
 
-    assert result["message"]["content"] == "ok", "the tool-free retry must still succeed"
-    assert len(client.calls) == 2
-    retry = client.calls[1]
-    assert "tools" not in retry
-    serialized = json.dumps(retry["messages"])
+    assert result["message"]["content"] == "ok", "the withheld dispatch still completes (:889)"
+    assert len(client.calls) == 1, "the cross-family dispatch must never arm the tools"
+    call = client.calls[0]
+    assert "tools" not in call, "C-MEM-13 withholds the schemas on a cross-family dispatch"
+    assert executor.requests == [], "and the scope reference never reaches the executor"
+    serialized = json.dumps(call["messages"])
     assert _B83_SECTION_TEXT not in serialized, (
         "an OpenAI-family-scoped packet must never be rendered for an ollama dispatch"
     )
     assert "read-only memory packet" not in serialized
 
     spans = _degraded_serve_spans(exporter)
-    assert len(spans) == 1, "still reported, just not rendered"
+    assert len(spans) == 1, "still reported, just not served"
     attrs = dict(spans[0].attributes or {})
     assert attrs["memory.degraded_serve.reason"] == "provider_family_scope_mismatch"
     assert attrs["memory.operation.name"] == "denial"
     assert attrs["memory.access_mode"] == "no_memory_access"
+    assert attrs["memory.record_count"] == 0
     assert "memory.packet_hash" not in attrs
 
 
@@ -3478,6 +3491,292 @@ async def test_b83_absent_record_scope_fails_closed_to_report_only() -> None:
     assert attrs["memory.operation.name"] == "denial"
     assert attrs["memory.access_mode"] == "no_memory_access"
     assert "memory.packet_hash" not in attrs
+
+
+# ---------------------------------------------------------------------------
+# U-MEM-26 — the C-MEM-13 cross-family withholding guard.
+#
+# `Spec_Memory_Substrate_v1.md:509` / `:523`: when `standard_memory_tools` has
+# been selected and the dispatched candidate's provider family differs from
+# `MemoryScope.provider_family`, the harness MUST NOT expose the memory tool
+# schemas OR the scope reference for that dispatch. The dispatch proceeds
+# without model-facing memory access and the withholding is recorded with a
+# named denial reason on the C-MEM-19 telemetry surface.
+#
+# The guard is a sixth conjunct on `_standard_memory_tools_context`, reading the
+# SAME `_packet_scope_matches_dispatch_family` predicate
+# `_degraded_serve_disposition` reads. A divergent predicate would let a
+# cross-family dispatch fail the arm guard, fall through to the degraded-serve
+# check, PASS its family conjunct and be REPAIRED — serving the cross-family
+# packet as prompt text, the exact leak this withholds. The
+# `test_u_mem_26_..._withholds_tools_and_packet` pair asserts both halves.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_u_mem_26_cross_family_openai_dispatch_withholds_tools_and_packet() -> None:
+    """U-MEM-26 (:889 / :905) — the C-MEM-13 withhold on the OPENAI arm.
+
+    The sibling ollama witness above covers the other standard-tools arm; both
+    are asserted because `_STANDARD_MEMORY_TOOL_ARMS` has exactly these two
+    members and a guard placed on one arm's branch rather than on the shared
+    authority would leave the other open.
+
+    An openai candidate against a `local_open_weight`-scoped context: identity
+    matches (the `memory_runtime` path recomposes for the current candidate on a
+    cross-family fallback) while the packet still carries the chain PRIMARY's
+    family. Four things must hold — no tool schemas on the wire, no `scope_ref`
+    reaching the executor, no packet text, and a report-only denial span — and
+    the dispatch itself must still complete (:889 "the dispatch itself still
+    completes").
+    """
+    client = _OpenAIClient()
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(
+            provider="openai",
+            family=ProviderFamily.LOCAL_OPEN_WEIGHT,
+        ),
+        standard_memory_tool_executor=executor,
+    )
+
+    result = await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert result["choices"][0]["message"]["content"] == "ok", (
+        "the withheld dispatch still completes and returns the model's answer (:889)"
+    )
+    assert len(client.chat.completions.calls) == 1
+    call = client.chat.completions.calls[0]
+    assert "tools" not in call, "C-MEM-13 withholds the memory tool schemas cross-family"
+    assert executor.requests == [], (
+        "and withholds the scope reference — no tool call can be issued at all"
+    )
+    serialized = json.dumps(call["messages"])
+    assert _B83_SECTION_TEXT not in serialized, (
+        "nor may the packet be rendered as prompt text — the same disclosure, one layer down"
+    )
+    assert "read-only memory packet" not in serialized
+    assert all(message["role"] != "system" for message in call["messages"])
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "the withholding is REPORTED, not silent (:882)"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["memory.degraded_serve.reason"] == "provider_family_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert attrs["memory.record_count"] == 0
+    assert "memory.packet_hash" not in attrs, "nothing was served — claiming a hash would lie"
+    # :890 — the durable inject row that satisfies C-MEM-13's `no_memory_access`
+    # must-ledger obligation is NOT written here. It was already written at
+    # COMPOSITION time (`memory_context.py:299-304` `_write_injection_decision`),
+    # before this dispatch decided to withhold, and it records the composition's
+    # own `selected_refs` / `packet_hash` while this dispatch served nothing. The
+    # honest per-dispatch report is therefore the span above, and the acceptance
+    # criterion's "no new C-MEM-08 operation kind" holds by construction.
+
+
+@pytest.mark.asyncio
+async def test_u_mem_26_same_family_dispatch_exposure_is_unchanged() -> None:
+    """U-MEM-26 (:892 / :906) — the same-family control.
+
+    Identical setup to the cross-family witness except the scope family MATCHES
+    the candidate's. Schemas are injected, the executor is reached with the
+    context's `policy_ref`, and the tool-result turn round-trips — byte-unchanged
+    from pre-U-MEM-26. Without this control a guard that simply withheld the
+    tools unconditionally would pass every cross-family witness.
+    """
+    client = _OpenAIClient()
+    tool_call = {
+        "id": "call_memory_search",
+        "type": "function",
+        "function": {
+            "name": "memory_search",
+            "arguments": json.dumps(
+                {
+                    "query": "operator preferences",
+                    "scope_ref": "scope:u-mem-16",
+                    "policy_ref": "policy:u-mem-16",
+                },
+                sort_keys=True,
+            ),
+        },
+    }
+    client.chat.completions.responses = [
+        _ProviderResponse(
+            id="cmpl_tool_026",
+            usage=_Usage(prompt_tokens=10, completion_tokens=4),
+            _dump={
+                "id": "cmpl_tool_026",
+                "choices": [
+                    {"message": {"role": "assistant", "content": None, "tool_calls": [tool_call]}}
+                ],
+            },
+        ),
+        _ProviderResponse(
+            id="cmpl_final_026",
+            usage=_Usage(prompt_tokens=12, completion_tokens=5),
+            _dump={
+                "id": "cmpl_final_026",
+                "choices": [{"message": {"role": "assistant", "content": "done"}}],
+            },
+        ),
+    ]
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="openai", family=ProviderFamily.OPENAI),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    assert len(client.chat.completions.calls) == 2, "the serve loop still runs its two turns"
+    emitted = client.chat.completions.calls[0]["tools"]
+    assert {tool["function"]["name"] for tool in emitted} == set(
+        llm_dispatch_module._OPENAI_MEMORY_TOOL_FROM_WIRE
+    ), "same-family exposure is unchanged: every C-MEM-14 schema reaches the wire"
+    assert len(executor.requests) == 1
+    assert executor.requests[0].tool_name == "memory.search"
+    assert executor.requests[0].context.policy_ref == "policy:u-mem-16"
+    continuation = client.chat.completions.calls[1]["messages"]
+    assert continuation[-1]["role"] == "tool"
+    assert json.loads(continuation[-1]["content"])["results"][0]["record_kind"] == "preference"
+    assert _degraded_serve_spans(exporter) == [], "a served dispatch is not a degradation"
+
+
+def _scope_family_context(*, provider: str, scope_family: str) -> RuntimeMemoryContext:
+    """A STANDARD_MEMORY_TOOLS context whose scope names `scope_family` LITERALLY.
+
+    `MemoryScope.provider_family` is a plain `str`, and a statically-injected
+    context never runs `compose_for_dispatch`, so an operator-authored one can
+    carry a registered provider KEY (or anything else) where the canonical
+    `ProviderFamily` VALUE belongs. `_b83_memory_context` cannot express that —
+    its `family` parameter is `ProviderFamily`-typed — so the scope is rewritten
+    here after composition.
+    """
+    context = _b83_memory_context(provider=provider)
+    scope = context.record_scope
+    assert scope is not None
+    return context.model_copy(
+        update={"record_scope": scope.model_copy(update={"provider_family": scope_family})}
+    )
+
+
+@pytest.mark.asyncio
+async def test_r2_p2b_raw_provider_key_scope_serves_on_a_same_family_dispatch() -> None:
+    """Codex R2 [P2-b] — a raw registered KEY on the scope is NOT cross-family.
+
+    `_packet_scope_matches_dispatch_family` canonicalized only the PROVIDER side
+    and compared the scope's string RAW, so a static context declaring
+    `provider_family="ollama"` on an ollama dispatch compared `"ollama"` against
+    the canonical `"local_open_weight"`, reported a CROSS-family mismatch, and
+    withheld both the tool schemas and the packet on a dispatch that is plainly
+    same-family. `ollama` is the only registered key in the map whose string is
+    not value-equal to its family, so it is the only key that witnesses this.
+
+    Both sides are now canonicalized, so the two spellings are one value and the
+    exposure is the unchanged same-family exposure.
+    """
+    client = _OllamaClient()
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_scope_family_context(provider="ollama", scope_family="ollama"),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"), _step(), step_context=_step_context()
+    )
+
+    assert len(client.calls) == 1
+    assert len(client.calls[0]["tools"]) == len(MEMORY_TOOL_CONTRACTS), (
+        "a same-family dispatch spelled with the provider key must still be armed"
+    )
+    assert _degraded_serve_spans(exporter) == [], "a served dispatch is not a degradation"
+
+
+@pytest.mark.asyncio
+async def test_r2_p2b_raw_provider_key_scope_still_withholds_across_families() -> None:
+    """Codex R2 [P2-b] — canonicalizing the scope must not collapse the boundary.
+
+    `codex` is a registered key for the OPENAI family. Canonicalized it becomes
+    `"openai"`, which is genuinely cross-family against an ollama dispatch, so
+    the withholding must still fire. A fix that simply canonicalized both sides
+    into equality — or that treated any registered key as matching — passes the
+    same-family witness above and fails here.
+    """
+    client = _OllamaClient()
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_scope_family_context(provider="ollama", scope_family="codex"),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"), _step(), step_context=_step_context()
+    )
+
+    assert len(client.calls) == 1
+    assert "tools" not in client.calls[0], "an OPENAI-family scope may not arm an ollama dispatch"
+    assert executor.requests == []
+    serialized = json.dumps(client.calls[0]["messages"])
+    assert _B83_SECTION_TEXT not in serialized
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1
+    assert dict(spans[0].attributes or {})["memory.degraded_serve.reason"] == (
+        "provider_family_scope_mismatch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_r2_p2b_out_of_domain_scope_value_stays_report_only() -> None:
+    """Codex R2 [P2-b] — the B-86 sentinel semantics MIRROR onto the scope side.
+
+    The existing B-86 witness covers an unregistered PROVIDER key. This is the
+    other half: an unregistered value on the SCOPE, which the canonicalizer
+    answers with `None`. `None` means "family UNKNOWN" and must never compare
+    equal to anything — a fix that fell back to the raw string on a `None`
+    canonicalization would re-open exactly the raw-key comparison this closes.
+    """
+    client = _OllamaClient()
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_scope_family_context(provider="ollama", scope_family="mystery-provider"),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"), _step(), step_context=_step_context()
+    )
+
+    assert len(client.calls) == 1
+    assert "tools" not in client.calls[0]
+    assert executor.requests == []
+    serialized = json.dumps(client.calls[0]["messages"])
+    assert _B83_SECTION_TEXT not in serialized, (
+        "an unprovable scope family must not be served as prompt text either"
+    )
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "the withholding is reported, not silent"
+    assert dict(spans[0].attributes or {})["memory.degraded_serve.reason"] == (
+        "provider_family_scope_mismatch"
+    )
 
 
 class _RaisingOllamaClient(_OllamaClient):

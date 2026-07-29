@@ -46,6 +46,10 @@ from harness_runtime.lifecycle.memory_tool_types import (
     MemoryCallbackIOError,
     MemoryPathViolationError,
 )
+from harness_runtime.memory_scope_family import (
+    resolve_scope_family,
+    scope_family_out_of_domain_message,
+)
 
 __all__ = ["CanonicalNativeMemoryToolBackend", "normalize_native_memory_path"]
 
@@ -113,7 +117,15 @@ class CanonicalNativeMemoryToolBackend:
     ) -> None:
         self._store = store
         self._policy_resolver = policy_resolver
-        self._scope = scope
+        # U-MEM-26: `scope` is a REQUIRED constructor argument and is therefore
+        # whatever the wiring supplies - it is not discharged by construction.
+        # Resolving it ONCE here binds every use of it in one place: the record
+        # scope this adapter AUTHORS (`_build_tool_event_record`), the requested
+        # scope it READS with (`_require_retrieval_allowed`), and the whole-scope
+        # equality that finds this adapter's own prior writes (`_latest_state`).
+        scope_resolution = resolve_scope_family(scope)
+        self._scope = scope_resolution.scope
+        self._scope_family_out_of_domain = scope_resolution.family_out_of_domain
         self._actor = actor
         self._run_id = run_id
         self._step_id = step_id
@@ -286,6 +298,12 @@ class CanonicalNativeMemoryToolBackend:
         if capture.capture_decision is CaptureDecision.DENY:
             raise _NativeMemoryPolicyDeniedError("capture policy denies native memory write")
 
+    def _require_scope_family_in_domain(self) -> None:
+        """Refuse to author a record under an out-of-domain `provider_family`."""
+
+        if self._scope_family_out_of_domain:
+            raise _NativeMemoryPolicyDeniedError(scope_family_out_of_domain_message(self._scope))
+
     def _require_retrieval_allowed(
         self,
         record: MemoryStoreRecord,
@@ -294,6 +312,18 @@ class CanonicalNativeMemoryToolBackend:
         if record.envelope.redaction_state is not RedactionState.ACTIVE:
             raise _NativeMemoryPolicyDeniedError(
                 f"memory path {validated.external_path!r} is unavailable"
+            )
+        if self._scope_family_out_of_domain:
+            # U-MEM-26 direct-reader boundary: this backend reaches a scope
+            # predicate without constructing either request model, so the value
+            # domain has to bite here. A scope that named no family this
+            # substrate can resolve is REJECTED outright - the same disposition
+            # `_require_scope_family_in_domain` applies to this adapter's
+            # writes, and the one the IS read layers apply. Serving the
+            # unpartitioned remainder would be a third posture.
+            raise _NativeMemoryPolicyDeniedError(
+                f"retrieval policy denies memory path {validated.external_path!r}: "
+                + scope_family_out_of_domain_message(self._scope)
             )
         access = self._policy_resolver.resolve_retrieval(
             record_kind=record.envelope.kind,
@@ -366,6 +396,12 @@ class CanonicalNativeMemoryToolBackend:
         migration_id: str | None = None,
         migration_source_backend: str | None = None,
     ) -> MemoryStoreRecord:
+        # BEFORE `_append_native_adapter_call` below, per the U-MEM-26 ordering
+        # rule for this surface: the operation-ledger entry references the
+        # record's memory_id, so a denial raised at the record write would
+        # strand a durable, hash-chained ledger entry pointing at a record that
+        # was never persisted.
+        self._require_scope_family_in_domain()
         record = self._build_tool_event_record(
             command=command,
             validated=validated,

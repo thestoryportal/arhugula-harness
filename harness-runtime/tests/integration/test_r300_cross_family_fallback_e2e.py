@@ -81,6 +81,15 @@ _EXPECTED_MEMORY_TOOL_WIRE_NAMES = frozenset(
 )
 
 
+# The B-83 degraded-serve reason emitted when the memory context's packet was
+# retrieved under a different provider-FAMILY scope than the family this
+# dispatch belongs to — `llm_dispatch._DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_
+# MISMATCH`, carried as a span-attribute VALUE (the C-MEM-19 enums are CLOSED).
+# Spelled as a literal on purpose: this is the telemetry WIRE value, so a rename
+# on the emitter side must fail here rather than follow silently.
+_DEGRADED_FAMILY_SCOPE_MISMATCH_REASON = "provider_family_scope_mismatch"
+
+
 def _openai_tool_function_names(calls: Sequence[dict[str, Any]]) -> list[str]:
     """Every ``tools[].function.name`` handed to the OpenAI leaf across calls."""
     names: list[str] = []
@@ -492,30 +501,69 @@ async def test_r300_deterministic_cross_family_fallback_through_production_path(
         int((s.attributes or {}).get("fallback.chain_length", 0)) >= 2 for s in fallback_spans
     ), "expected the outer fallback span to carry fallback.chain_length ≥ 2"
 
-    # --- OpenAI wire-name witness -------------------------------------------
-    # The automatic memory substrate (default-on) injects the five C-MEM-14
-    # standard memory tools into every OpenAI dispatch. Their provider-neutral
-    # identities are dotted (`memory.search` ...) and OpenAI rejects a dotted
-    # `tools[].function.name` with an HTTP 400 — so EVERY emitted function name
-    # must be the adapter-owned wire encoding. Asserting on the recorded kwargs
-    # is what makes this deterministic test able to catch the 400 class at all.
+    # --- C-MEM-13 cross-family withholding witness ---------------------------
+    # UPDATED at U-MEM-26. This block previously asserted the OPPOSITE — that
+    # the default-on C-MEM-14 standard memory tools reach this OpenAI dispatch —
+    # and it was green because the pre-U-MEM-26 arm guard checked provider
+    # IDENTITY but not provider FAMILY. This leg is definitionally cross-family:
+    # `compose_for_dispatch` derives `record_scope.provider_family` from the
+    # chain PRIMARY (anthropic, `automatic_memory.py:205`) while the candidate
+    # that actually dispatches is openai. C-MEM-13
+    # (`Spec_Memory_Substrate_v1.md:509`, `:523`) forbids exposing the schemas
+    # OR the scope reference there — the tools would carry a `scope_ref` naming
+    # an anthropic-family partition this dispatch was never policy-checked for.
+    # So the old expectation pinned the defect, and the assertion is inverted.
+    #
+    # The wire-name / HTTP-400 coverage this block used to carry is preserved
+    # elsewhere, on paths where the tools legitimately ARE injected:
+    # `test_automatic_memory_runtime.py::test_default_local_init_normal_
+    # inference_exposes_and_persists_memory` (real composer, same-family openai
+    # primary) and `test_lifecycle_llm_dispatch.py` (the full five-name set plus
+    # the `^[a-zA-Z0-9_-]{1,64}$` conformance check at `:1584-1607`).
     openai_client = providers["openai"].client
     assert isinstance(openai_client, _SucceedingOpenAIClient)
     calls = openai_client.chat.completions.calls
     assert calls, "expected ≥1 recorded openai chat.completions.create call"
     function_names = _openai_tool_function_names(calls)
-    assert function_names, (
-        "expected the openai dispatch to carry tools[] (the default-on standard "
-        f"memory tools); recorded call keys: {[sorted(c) for c in calls]!r}"
-    )
     offenders = [n for n in function_names if _OPENAI_FUNCTION_NAME_PATTERN.match(n) is None]
     assert not offenders, (
         "every tools[].function.name must match ^[a-zA-Z0-9_-]{1,64}$ or OpenAI "
         f"rejects the request with HTTP 400; offenders: {offenders!r}"
     )
-    assert _EXPECTED_MEMORY_TOOL_WIRE_NAMES <= set(function_names), (
-        "expected the five C-MEM-14 memory tools serialized under their OpenAI "
-        f"wire names; observed function names: {sorted(set(function_names))!r}"
+    assert not (_EXPECTED_MEMORY_TOOL_WIRE_NAMES & set(function_names)), (
+        "C-MEM-13: NO memory tool schema may reach a cross-family fallback leg "
+        f"(chain primary is anthropic-family); observed: {sorted(set(function_names))!r}"
+    )
+
+    # LIVENESS DISCRIMINATOR for the absence assertion above. On its own that
+    # assertion is satisfied by memory being absent for ANY reason — no
+    # `memory_runtime` bound, C-MEM-14 defaulted off, no standard-tool
+    # executor, the IDENTITY conjunct tripping instead of the family one, or
+    # `_openai_tool_function_names` regressing to `[]`. None of those would
+    # witness C-MEM-13 doing the withholding, and the inversion deleted the
+    # `assert function_names` that used to prove the substrate was live.
+    #
+    # The B-83 degraded-serve span is the artefact that ONLY exists when
+    # memory DID compose for this dispatch, the serve-check DID run, and it
+    # tripped on the FAMILY conjunct specifically: emitted from the single
+    # `finally` site at `llm_dispatch.py` `_emit_degraded_memory_serve_span`,
+    # with the reason set by `_degraded_serve_disposition`'s second conjunct
+    # (`_DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH`). Selecting on the
+    # discriminating attribute rather than the span name keeps the assertion
+    # loud at 0 (memory never composed / a different conjunct fired) and at 2
+    # (a second, unaccounted degraded dispatch).
+    degraded_reasons = [
+        reason
+        for span in spans
+        if isinstance(reason := (span.attributes or {}).get("memory.degraded_serve.reason"), str)
+    ]
+    family_mismatch = [r for r in degraded_reasons if r == _DEGRADED_FAMILY_SCOPE_MISMATCH_REASON]
+    assert len(family_mismatch) == 1, (
+        "expected EXACTLY ONE memory degraded-serve span carrying "
+        f"memory.degraded_serve.reason == {_DEGRADED_FAMILY_SCOPE_MISMATCH_REASON!r} — "
+        "the positive witness that the memory substrate composed for this dispatch "
+        "and C-MEM-13's provider-FAMILY conjunct is what withheld the tools; "
+        f"observed degraded-serve reasons: {degraded_reasons!r}"
     )
 
 
