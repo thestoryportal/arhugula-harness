@@ -4002,9 +4002,17 @@ async def test_b83_degraded_span_survives_cancellation() -> None:
     with pytest.raises(asyncio.CancelledError):
         await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
 
-    attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
+    attrs = _one_degraded_serve_span(exporter)
     assert attrs["memory.degraded_serve.dispatch_outcome"] == "cancelled"
     assert "memory.degraded_serve.provider_error_type" not in attrs
+    # The outcome label is only half the span: the cancel arrives from the awaited
+    # coroutine, i.e. AFTER `_mark_wire_reached`, so this is a MARKED-cancel and
+    # must classify as a wire transit — `injection` plus the packet's hash, not
+    # the `packet_assembly`/no-hash shape a pre-wire failure carries. Pinning
+    # both axes is what keeps `cancelled` from silently drifting onto the
+    # pre-wire side of the classification.
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.packet_hash"] == "c" * 64
 
 
 @pytest.mark.asyncio

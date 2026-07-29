@@ -341,6 +341,68 @@ def test_b90_null_tenant_request_is_denied_at_every_predicate() -> None:
     )
 
 
+def test_index_retrieve_denies_a_tenant_partitioned_record_end_to_end(tmp_path: Path) -> None:
+    """`B-90` through the PUBLIC path, not the predicate in isolation.
+
+    The three witnesses above assert `tenant` at each predicate; none of them
+    runs a real store-write / index-rebuild / retrieve. That is the shape that
+    let `B-90` survive at `provider_family` — a predicate can be correct while
+    the production path never consults it for this field (an unindexed `tenant`,
+    a partition list the rebuild does not carry). The unpartitioned sibling is
+    the liveness control: it proves the query is genuinely reaching records, so
+    an empty result cannot pass this test for the wrong reason.
+    """
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    partitioned = _record(
+        statement="Tenant-A-partitioned memory fact.",
+        scope=_scope(tenant="tenant-a"),
+    )
+    unpartitioned = _record(statement="Unpartitioned memory fact.", scope=_scope())
+    store.write_record(partitioned)
+    store.write_record(unpartitioned)
+    index_store = _index_store(binding)
+    index_store.rebuild(indexed_at=_NOW)
+
+    mismatched = index_store.retrieve(DerivedRetrievalIndexQuery(scope=_scope(tenant="tenant-b")))
+    null_tenant = index_store.retrieve(DerivedRetrievalIndexQuery(scope=_scope()))
+    absent_scope = index_store.retrieve(DerivedRetrievalIndexQuery())
+
+    # A different tenant, an explicit `null` tenant, and no scope object at all
+    # are three distinct request shapes; none of them may reach tenant-A's
+    # record, and each still reaches the stored-`null` wildcard.
+    for result in (mismatched, null_tenant, absent_scope):
+        assert result.considered_count == 2
+        assert result.selected_refs == (unpartitioned.envelope.memory_id,)
+
+
+def test_policy_resolve_retrieval_denies_a_tenant_mismatched_record() -> None:
+    """`B-90` witness (iii) one layer UP — the resolver's own public method.
+
+    `memory_policy._scope_not_broader` hand-lists its comparison fields instead
+    of consuming `SCOPE_PARTITION_FIELDS`, so this third path is un-bounded by
+    the shared value domain: striking `tenant` from that list leaves the other
+    two layers green. `resolve_retrieval` is the method every policy-gated
+    consumer actually calls, and the matched-tenant control below keeps the
+    denial from being an artifact of some unrelated gate in `_resolve_access`.
+    """
+    resolver = MemoryPolicyResolver(_enabled_policy())
+
+    denied = resolver.resolve_retrieval(
+        record_kind=MemoryRecordKind.SEMANTIC_FACT,
+        record_scope=_scope(tenant="tenant-a"),
+        requested_scope=_scope(tenant="tenant-b"),
+    )
+    allowed = resolver.resolve_retrieval(
+        record_kind=MemoryRecordKind.SEMANTIC_FACT,
+        record_scope=_scope(tenant="tenant-a"),
+        requested_scope=_scope(tenant="tenant-a"),
+    )
+
+    assert denied.access_decision is AccessDecision.DENY
+    assert allowed.access_decision is AccessDecision.RETRIEVAL_ONLY
+
+
 # --- Witness 4: request-boundary value domain (plan acceptance :916) ---------
 
 

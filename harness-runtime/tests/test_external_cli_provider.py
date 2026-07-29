@@ -524,6 +524,195 @@ async def test_asyncio_runner_reaps_the_child_when_the_wire_callback_raises(
                 await process.wait()
 
 
+@pytest.mark.asyncio
+async def test_asyncio_runner_reaps_the_child_when_the_run_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-87 residual — a cancellation mid-`communicate` must not leak the child.
+
+    The timeout path and the R7 observer guard are the only other reap sites, so
+    a `CancelledError` delivered while awaiting the child unwinds past both and
+    leaves the CLI running. Cancellation is not exotic here: every dispatch runs
+    under a caller-owned task that a shutdown, a `wait_for` deadline one level
+    up, or a task-group failure can cancel. As with the observer guard, a real
+    child is used because the property under test — that it is actually dead —
+    is only observable on one."""
+    spawned: list[asyncio.subprocess.Process] = []
+    real_create = asyncio.create_subprocess_exec
+
+    async def _recording_create(*argv: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_create(*argv, **kwargs)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _recording_create)
+
+    runner = AsyncioSubprocessRunner()
+
+    try:
+        task = asyncio.create_task(
+            runner.run(
+                (sys.executable, "-c", "import time; time.sleep(300)"),
+                stdin="",
+                timeout_seconds=300.0,
+            )
+        )
+        # Yield until the spawn has happened and the run is parked on the
+        # `communicate` await — the window the clause under test covers. The
+        # wait is bounded so a spawn that never happens fails the test instead
+        # of hanging it; a run that died on the way to the spawn ends the wait
+        # early, and awaiting the task below surfaces that real error.
+        for _ in range(10_000):
+            if spawned or task.done():
+                break
+            await asyncio.sleep(0)
+        else:  # pragma: no cover - only on regression
+            pytest.fail("child never spawned")
+        if task.done():  # pragma: no cover - only on regression
+            await task
+        await asyncio.sleep(0)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert len(spawned) == 1, "the spawn itself succeeded — the cancellation is the caller's"
+        assert spawned[0].returncode is not None, (
+            "the child outlived the cancelled run: a leaked CLI process"
+        )
+    finally:
+        # Belt-and-braces so a regression (or a mutation probe) cannot leave a
+        # 300-second sleeper behind.
+        for process in spawned:
+            if process.returncode is None:  # pragma: no cover - only on regression
+                process.kill()
+                await process.wait()
+
+
+class _AlreadyReapedFakeProcess:
+    """A child asyncio's transport has ALREADY finished with.
+
+    `Process.kill()` raises `ProcessLookupError` in exactly this state:
+    `BaseSubprocessTransport._call_connection_lost` clears the `Popen`
+    reference, and `Process.kill()` delegates to that same transport, whose own
+    `kill()` calls `BaseSubprocessTransport._check_proc()` first, while
+    `wait()` still resolves immediately from the recorded return code. Every reap site in
+    `AsyncioSubprocessRunner.run` races into it — the child can exit and the
+    transport can finish between the reap-triggering event and the `kill()`
+    (codex R1 [P2]). A real child cannot be held in that window deterministically,
+    so the state is modelled directly.
+    """
+
+    def __init__(self) -> None:
+        self.returncode: int | None = 0
+        self.kill_calls = 0
+        self.wait_calls = 0
+        self.parked_in_communicate = False
+
+    async def communicate(self, payload: bytes | None = None) -> tuple[bytes, bytes]:
+        self.parked_in_communicate = True
+        # Never resolves: the run parks here until the deadline or the caller's
+        # cancellation lands, which is the window under test.
+        await asyncio.get_running_loop().create_future()
+        raise AssertionError("unreachable")  # pragma: no cover - the future never resolves
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        raise ProcessLookupError()
+
+    async def wait(self) -> int:
+        self.wait_calls += 1
+        return 0
+
+
+def _patch_spawn_with(monkeypatch: pytest.MonkeyPatch, process: _AlreadyReapedFakeProcess) -> None:
+    async def _fake_create(*argv: Any, **kwargs: Any) -> Any:
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_create)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_run_keeps_the_cancellation_when_the_child_already_exited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex R1 [P2] — the reap must never REPLACE the cancellation.
+
+    Without the `ProcessLookupError` suppression the reap's own `kill()` raises
+    out of the `except asyncio.CancelledError` clause, so the caller sees a
+    `ProcessLookupError` instead of the cancellation it requested — a shutdown
+    or deadline would be misclassified as a provider failure.
+    """
+    process = _AlreadyReapedFakeProcess()
+    _patch_spawn_with(monkeypatch, process)
+
+    runner = AsyncioSubprocessRunner()
+    task = asyncio.create_task(
+        runner.run((sys.executable, "-c", "pass"), stdin="", timeout_seconds=300.0)
+    )
+    # Bounded so a run that never reaches `communicate` fails rather than hangs;
+    # a task that died on the way there ends the wait, and the await surfaces it.
+    for _ in range(10_000):
+        if process.parked_in_communicate or task.done():
+            break
+        await asyncio.sleep(0)
+    else:  # pragma: no cover - only on regression
+        pytest.fail("child never spawned")
+    if task.done():  # pragma: no cover - only on regression
+        await task
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert process.kill_calls == 1, "the reap still fires — the suppression is not a skip"
+    assert process.wait_calls == 1, "and the wait still runs, so a live child is still reaped"
+
+
+@pytest.mark.asyncio
+async def test_timed_out_run_keeps_the_typed_timeout_when_the_child_already_exited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same race at the deadline reap site: a child exiting as `wait_for`
+    fires must not turn the typed `ExternalCLIProcessTimeout` — which callers
+    classify on — into a raw `ProcessLookupError`."""
+    process = _AlreadyReapedFakeProcess()
+    _patch_spawn_with(monkeypatch, process)
+
+    runner = AsyncioSubprocessRunner()
+    with pytest.raises(ExternalCLIProcessTimeout):
+        await runner.run(("my-cli",), stdin="", timeout_seconds=0.01)
+
+    assert process.kill_calls == 1
+    assert process.wait_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_raising_observer_keeps_its_own_error_when_the_child_already_exited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """And at the R7 observer reap site: an instantly-exiting child whose
+    transport finished before the notification raises must not mask the
+    observer's exception with a `ProcessLookupError`."""
+
+    class _ObserverFailure(RuntimeError):
+        pass
+
+    process = _AlreadyReapedFakeProcess()
+    _patch_spawn_with(monkeypatch, process)
+
+    def _fail() -> None:
+        raise _ObserverFailure("observer exploded")
+
+    runner = AsyncioSubprocessRunner()
+    with pytest.raises(_ObserverFailure):
+        await runner.run(("my-cli",), stdin="", timeout_seconds=30.0, on_wire=_fail)
+
+    assert process.kill_calls == 1
+    assert process.wait_calls == 1
+    assert not process.parked_in_communicate, "the observer raised before the payload handover"
+
+
 @dataclass
 class _LegacyFakeRunner:
     """A runner on the PRE-B-87 `run(argv, *, stdin, timeout_seconds)` contract.
