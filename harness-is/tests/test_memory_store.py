@@ -22,6 +22,7 @@ from harness_is.memory_operation_ledger import (
 )
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_record_envelope import (
+    CapturedCrossFamily,
     MemoryRecordEnvelope,
     MemoryRecordKind,
     MemoryScope,
@@ -417,3 +418,51 @@ def test_read_record_raises_when_never_written(tmp_path: Path) -> None:
 
     with pytest.raises(MemoryStoreRecordNotFoundError):
         store.read_record(never_written.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)
+
+
+def test_captured_cross_family_is_hash_inert(tmp_path: Path) -> None:
+    """U-MEM-27 hash-inertness witness.
+
+    Two records with byte-identical content and DIFFERING
+    `captured_cross_family` values share the same `content_hash` and the same
+    `memory_id`, and both pass the store's own envelope/content consistency
+    check (`MemoryStoreRecord._matches_envelope`, which recomputes
+    `compute_memory_content_hash(self.content)`). The acceptance is that this
+    stays true after the field was added, not merely that it was true before -
+    an envelope field must be an input to neither derivation.
+    """
+    content = _content_for(MemoryRecordKind.SEMANTIC_FACT)
+    content_hash = compute_memory_content_hash(content)
+
+    def _with(value: CapturedCrossFamily) -> MemoryStoreRecord:
+        return MemoryStoreRecord(
+            envelope=MemoryRecordEnvelope(
+                memory_id=derive_memory_id(
+                    MemoryTier.SEMANTIC, MemoryRecordKind.SEMANTIC_FACT, content_hash
+                ),
+                schema_version="memory-store-record/v1",
+                tier=MemoryTier.SEMANTIC,
+                kind=MemoryRecordKind.SEMANTIC_FACT,
+                created_at=_BASE_TIME,
+                scope=MemoryScope(project="arhugula-v2", visibility=MemoryVisibility.PROJECT),
+                content_hash=content_hash,
+                captured_cross_family=value,
+            ),
+            content=content,
+        )
+
+    cross_family = _with(CapturedCrossFamily.TRUE)
+    undetermined = _with(CapturedCrossFamily.UNKNOWN)
+
+    assert cross_family.envelope.captured_cross_family is not (
+        undetermined.envelope.captured_cross_family
+    )
+    assert cross_family.envelope.content_hash == undetermined.envelope.content_hash
+    assert cross_family.envelope.memory_id == undetermined.envelope.memory_id
+    # Both also survive a real round trip through the store, which re-derives
+    # the same way on the write path.
+    store = _store(tmp_path)
+    assert store.write_record(cross_family) is MemoryStoreWriteResult.WRITTEN
+    assert store.write_record(undetermined) is MemoryStoreWriteResult.WRITTEN
+    read_back = store.read_record(undetermined.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)
+    assert read_back.envelope.content_hash == content_hash

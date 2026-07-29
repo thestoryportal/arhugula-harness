@@ -89,6 +89,7 @@ from harness_is.memory_policy import (
 )
 from harness_is.memory_record_envelope import (
     DERIVED_INDEX_FIELD,
+    CapturedCrossFamily,
     MemoryID,
     MemoryRecordEnvelope,
     MemoryRecordKind,
@@ -182,6 +183,7 @@ __all__ = [
     "ArtifactTierMetadata",
     "CanonicalMemoryStore",
     "CaptureDecision",
+    "CapturedCrossFamily",
     "CliImportPolicy",
     "CliInstructionSource",
     "CliInstructionSourceKind",
