@@ -3340,19 +3340,19 @@ async def test_b83_provider_rebound_context_is_reported_but_never_served() -> No
     # `denied`, mirroring the primary DENIAL span's own convention.
     assert attrs["memory.cli_profile"] == "codex"
     assert attrs["memory.policy.decision"] == "provider_scope_mismatch"
-    # B-91 codex R1 [P2-1] — the IDENTITY guard carries NO failure class. It
-    # fires on any rebound provider KEY and never resolves a family, so it
-    # cannot have confirmed the cross-FAMILY condition C-MEM-13 mandates the
-    # withhold for; `policy_denial` here would claim a determination the branch
-    # did not make. (Anthropic-composed-against-openai happens to be
-    # cross-family in fact, but that is not what this branch tested — see
-    # `test_b91_same_family_provider_rebind_is_not_a_policy_denial` for the
-    # same-family rebind that makes the over-claim visible.) The withholding is
-    # unchanged: the branch is still REPORT-ONLY and `policy.decision` still
-    # names the gate verbatim.
-    assert "memory.failure_class" not in attrs, (
-        "an identity-guard withhold is not a confirmed cross-family policy denial"
-    )
+    # B-91 codex R2 — this rebind is CONFIRMED cross-family, so it carries the
+    # class even though the IDENTITY conjunct is what fired. The context is
+    # scoped `anthropic` (the fixture derives `record_scope.provider_family`
+    # from its `provider=`) and the dispatch is `openai`: both families resolve
+    # via the same registered map and are unequal, which is exactly the C-MEM-13
+    # determination — reached here regardless of which conjunct tested first.
+    # Classifying by branch rather than by relation left this confirmed withhold
+    # unreported; the class now follows `_ScopeFamilyRelation`, so the sibling
+    # `test_b91_same_family_provider_rebind_is_not_a_policy_denial` (codex → openai,
+    # ONE family) is what keeps the identity branch from over-claiming. The
+    # withholding itself is unchanged: still REPORT-ONLY, `policy.decision` still
+    # names the gate that closed verbatim.
+    assert attrs["memory.failure_class"] == "policy_denial"
 
 
 @pytest.mark.asyncio
@@ -3369,9 +3369,15 @@ async def test_b91_same_family_provider_rebind_is_not_a_policy_denial() -> None:
     policy decision that no policy made.
 
     The isolating witness: no other test exercises the identity branch with
-    families that agree, so an unconditional `policy_denial=True` there passes
+    families that AGREE, so an unconditional `policy_denial=True` there passes
     every other assertion in the file. This one kills it while leaving the
-    WITHHOLDING itself (tools + packet, both absent) fully asserted.
+    WITHHOLDING itself (tools + packet, both absent) fully asserted. Its pair is
+    `test_b83_provider_rebound_context_is_reported_but_never_served` (anthropic →
+    openai), which trips the SAME conjunct across a family boundary and DOES
+    carry the class — together they pin the converged rule of codex R2:
+    `policy_denial` tracks the family RELATION, never the branch (a relation-blind
+    `False` on this conjunct fails that one; an unconditional `True` fails this
+    one).
     """
     client = _OpenAIClient()
     tp, exporter = _tracer_provider_with_exporter()

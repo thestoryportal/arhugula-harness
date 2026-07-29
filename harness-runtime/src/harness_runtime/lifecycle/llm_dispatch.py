@@ -2257,18 +2257,20 @@ class _DegradedMemoryServe:
     #:   includes standard memory tool calls and policy denial", and `:683` is
     #:   that coverage item).
     #:
-    #: NOT the two withholds that resemble it (B-91 codex R1, 2026-07-29 — the
-    #: first application set this on both scope conjuncts unconditionally and
-    #: over-claimed on both counts):
+    #: On the two SCOPE conjuncts the value is a function of the family RELATION
+    #: alone, never of which conjunct fired: `policy_denial` ⟺ CONFIRMED_MISMATCH
+    #: (B-91 codex R2, 2026-07-29). An `anthropic`-composed context rebound to
+    #: `openai` trips the IDENTITY guard first, yet its families resolve and
+    #: differ — a confirmed C-MEM-13 withhold that the earlier reading left
+    #: unclassified purely by test order. NOT set for:
     #:
-    #: * the provider-IDENTITY guard. It fires on any rebound provider key,
-    #:   including a same-FAMILY rebind (`openai` → `codex`), and it never
-    #:   consults a family at all — so it cannot have confirmed the cross-family
-    #:   condition C-MEM-13 mandates the withhold for. [P2-1]
+    #: * a same-FAMILY identity rebind (`codex` → `openai`). The provider KEY
+    #:   moved, so the stale-context guard fires, but C-MEM-13 — which withholds
+    #:   only across FAMILIES — mandates nothing. [R1 P2-1]
     #: * the UNVERIFIABLE family states (absent `record_scope`, out-of-domain
-    #:   scope value, unregistered provider key). The withhold there is
-    #:   fail-closed validation: the relationship is UNKNOWN, not known-unequal.
-    #:   [P2-2]
+    #:   scope value, unregistered provider key), on EITHER conjunct. The
+    #:   withhold there is fail-closed validation: the relationship is UNKNOWN,
+    #:   not known-unequal. [R1 P2-2]
     #:
     #: Carried as DATA from the site that KNOWS the reason's provenance, so the
     #: emitter never has to re-derive it by matching on a string whose value
@@ -2628,41 +2630,60 @@ def _degraded_serve_disposition(
     Any conjunct failing is report-only: the degradation becomes visible in
     telemetry, and nothing is disclosed out of scope or through a mode the
     operator disabled.
+
+    The conjuncts are ordered for REASON reporting — the reason names the first
+    gate that closed — but the report-only `policy_denial` CLASS is NOT ordered
+    with them: on the two scope conjuncts it is a function of the family
+    relation alone (B-91 codex R2), so a cross-family rebind is classified
+    identically whether identity or family caught it.
     """
 
-    # B-91 Q1, refined by codex R1 [P2-1] — the IDENTITY conjunct is NOT a
-    # policy denial. It is a stale-context safety guard: a statically injected
-    # context is composed once and `RetryBreakerFallbackDispatcher` rebinds the
-    # provider per attempt, so this branch fires whenever the provider KEY moved
-    # — including an `openai`-composed context rebound to `codex`, where both
-    # keys resolve to the SAME family and C-MEM-13, which withholds only across
-    # FAMILIES, mandates nothing at all. This branch never consults a family, so
-    # it can never have confirmed the cross-family condition; classifying its
-    # withhold as POLICY_DENIAL would claim a determination it did not make.
+    # B-91 Q1, refined by codex R1 [P2-2] then converged by codex R2 —
+    # POLICY_DENIAL follows the FAMILY RELATION, not the branch that happened to
+    # fire. There the withholding is contract-MANDATED ("the harness MUST NOT
+    # expose the memory tool schemas or the scope reference",
+    # `Spec_Memory_Substrate_v1.md:509`) and the spec files the record under
+    # C-MEM-19's EXISTING coverage list (`:511`), whose only item this event can
+    # be is "Policy denial" (`:683`) — a withheld exposure is not a tool CALL;
+    # `no_memory_access`, what these branches report, is itself named "a valid
+    # policy outcome" at `:522`. On an UNVERIFIABLE relation the SAME withhold
+    # happens for the opposite reason — no family relationship could be
+    # established — so the class stays unset and `policy.decision` carries the
+    # reason verbatim, exactly as it does for the `not_derived` sentinel.
+    #
+    # Resolved BEFORE the identity return because the two conjuncts are not
+    # ordered by which determination was reached: a context composed for
+    # `anthropic` and rebound to `openai` trips IDENTITY first, yet both families
+    # resolve and are unequal — the confirmed C-MEM-13 cross-family withhold,
+    # which the identity return would otherwise report unclassified purely
+    # because it is tested first (codex R2 [P2]). The relation reads only
+    # `record_scope` + `provider_name`, both in scope here and neither touched by
+    # the identity test, so evaluating it earlier is free of ordering hazard and
+    # costs two dict lookups on an already-degraded path.
+    scope_relation = _packet_scope_family_relation(memory_context, provider_name)
+    policy_denial = scope_relation is _ScopeFamilyRelation.CONFIRMED_MISMATCH
+    # The IDENTITY conjunct is a stale-context safety guard, DISTINCT from the
+    # family conjunct: a statically injected context is composed once and
+    # `RetryBreakerFallbackDispatcher` rebinds the provider per attempt, so this
+    # branch fires whenever the provider KEY moved — including an
+    # `openai`-composed context rebound to `codex`, where both keys resolve to
+    # the SAME family and C-MEM-13, which withholds only across FAMILIES,
+    # mandates nothing at all. That same-family rebind stays UNCLASSIFIED, as
+    # does a rebind whose relation is UNVERIFIABLE; only the confirmed
+    # cross-family relation earns the class, whichever conjunct fired first.
     if memory_context.selection.selected_provider != provider_name:
         return _DegradedMemoryServe(
             selected_access_mode=memory_context.access_mode,
             reason=_DEGRADED_REASON_PROVIDER_SCOPE_MISMATCH,
             rendered=None,
+            policy_denial=policy_denial,
         )
-    # B-91 Q1, refined by codex R1 [P2-2] — POLICY_DENIAL only on a CONFIRMED
-    # cross-family withhold. There the withholding is contract-MANDATED ("the
-    # harness MUST NOT expose the memory tool schemas or the scope reference",
-    # `Spec_Memory_Substrate_v1.md:509`) and the spec files the record under
-    # C-MEM-19's EXISTING coverage list (`:511`), whose only item this event can
-    # be is "Policy denial" (`:683`) — a withheld exposure is not a tool CALL;
-    # `no_memory_access`, what this branch reports, is itself named "a valid
-    # policy outcome" at `:522`. On an UNVERIFIABLE relation the SAME withhold
-    # happens for the opposite reason — no family relationship could be
-    # established — so the class stays unset and `policy.decision` carries the
-    # reason verbatim, exactly as it does for the `not_derived` sentinel.
-    scope_relation = _packet_scope_family_relation(memory_context, provider_name)
     if scope_relation is not _ScopeFamilyRelation.MATCH:
         return _DegradedMemoryServe(
             selected_access_mode=memory_context.access_mode,
             reason=_DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH,
             rendered=None,
-            policy_denial=scope_relation is _ScopeFamilyRelation.CONFIRMED_MISMATCH,
+            policy_denial=policy_denial,
         )
     packet_denial = memory_context.prompt_packet_fallback_denial
     if packet_denial is not None:
@@ -2793,9 +2814,12 @@ def _emit_degraded_memory_serve_span(
        Discriminated by `degraded.policy_denial`, carried as DATA from the site
        that knows the reason's provenance, never re-derived by string-matching
        a value domain that spans all three families.
-    2. a CONFIRMED cross-family withhold (`provider_family_scope_mismatch`
-       reached with `_ScopeFamilyRelation.CONFIRMED_MISMATCH` — both families
-       RESOLVED and were unequal) — `POLICY_DENIAL` too (B-91 Q1). The
+    2. a CONFIRMED cross-family withhold — `_ScopeFamilyRelation.CONFIRMED_
+       MISMATCH`, both families RESOLVED and unequal, under EITHER scope reason
+       (`provider_family_scope_mismatch`, or `provider_scope_mismatch` where the
+       rebind also crossed a family — the converged rule of B-91 codex R2: the
+       class follows the RELATION, not the conjunct that fired first) —
+       `POLICY_DENIAL` too (B-91 Q1). The
        withholding is contract-MANDATED, not an absence of decision: C-MEM-13
        states it as a MUST NOT (`Spec_Memory_Substrate_v1.md:509`) and an
        invariant (`:523`), C-MEM-14 qualifies exposure by it (`:559`), and the
@@ -2819,18 +2843,17 @@ def _emit_degraded_memory_serve_span(
          `memory_context.py:48-52`) — a fail-safe non-decision: nobody ran the
          counterfactual, so nothing was denied by anyone and no contract
          mandated the withhold either.
-       * `provider_scope_mismatch` — the provider-IDENTITY guard (B-91 codex R1
-         [P2-1]). It fires on ANY rebound provider key, `openai` → `codex`
-         included, where both keys resolve to one family and C-MEM-13's
-         cross-FAMILY rule mandates nothing; the branch never resolves a family,
-         so it cannot report one as the cause. A stale-context safety guard, and
+       * `provider_scope_mismatch` reached with a SAME-family relation (B-91
+         codex R1 [P2-1]) — the provider-IDENTITY guard on an `openai` → `codex`
+         rebind, where both keys resolve to one family and C-MEM-13's
+         cross-FAMILY rule mandates nothing. A stale-context safety guard, and
          `policy.decision` names it verbatim.
-       * `provider_family_scope_mismatch` reached with
-         `_ScopeFamilyRelation.UNVERIFIABLE` — an absent `record_scope`, an
-         out-of-domain scope value, or an unregistered provider key (B-91 codex
-         R1 [P2-2]). The relationship is UNKNOWN, so the packet is withheld
-         fail-closed; reporting UNKNOWN as a confirmed denial would misreport a
-         validation state as an operator policy outcome.
+       * EITHER scope reason reached with `_ScopeFamilyRelation.UNVERIFIABLE` —
+         an absent `record_scope`, an out-of-domain scope value, or an
+         unregistered provider key (B-91 codex R1 [P2-2]). The relationship is
+         UNKNOWN, so the packet is withheld fail-closed; reporting UNKNOWN as a
+         confirmed denial would misreport a validation state as an operator
+         policy outcome.
 
     C-MEM-19 (`Spec_Memory_Substrate_v1.md:693-694`) requires
     `memory.cli_profile` + `memory.policy.decision` on every memory span.
