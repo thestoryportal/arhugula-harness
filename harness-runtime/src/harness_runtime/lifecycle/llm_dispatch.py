@@ -79,7 +79,7 @@ from harness_cp.cp_shared_types import (
 from harness_cp.engine_class import EngineClass
 from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS, LayerBudget
 from harness_cp.layered_routing_strategy import LayerDecisionFn
-from harness_cp.memory_access_mode import MemoryAccessMode
+from harness_cp.memory_access_mode import MemoryAccessMode, MemoryAccessModeDenialReason
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
 from harness_cp.routing_core_surface import (
@@ -94,6 +94,7 @@ from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryState
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_is.memory_observability import (
+    MemoryTelemetryFailureClass,
     MemoryTelemetryOperationName,
     memory_telemetry_span,
 )
@@ -1881,12 +1882,25 @@ class RuntimeLLMDispatcher:
                 # withheld (the denial happened). The sink is read rather than a
                 # local, so a degradation decided INSIDE a failing arm call is
                 # reported too.
+                # C-MEM-19 (`Spec_Memory_Substrate_v1.md:693`) requires
+                # `memory.cli_profile` on both emissions. Every write to either
+                # sink is gated on a non-None `memory_context` — the B-83 sink
+                # through `_degraded_serve_for_unservable_arm`, the B-85 sink
+                # through the tools loops, which are entered only when
+                # `_standard_memory_tools_context` returned this same context —
+                # so the None arm is unreachable whenever a span is emitted and
+                # exists only to keep the read total against the parameter's
+                # declared `RuntimeMemoryContext | None` type.
+                memory_cli_profile = (
+                    memory_context.selection.cli_profile_ref if memory_context is not None else None
+                )
                 if degraded_sink.value is not None:
                     _emit_degraded_memory_serve_span(
                         self.tracer_provider,
                         degraded_sink.value,
                         provider=provider_name,
                         model=model,
+                        cli_profile=memory_cli_profile,
                         outcome=dispatch_outcome,
                         error_type=dispatch_error_type,
                         reached_wire=wire_sink.reached,
@@ -1902,6 +1916,7 @@ class RuntimeLLMDispatcher:
                         unserved_sink.value,
                         provider=provider_name,
                         model=model,
+                        cli_profile=memory_cli_profile,
                         outcome=dispatch_outcome,
                         error_type=dispatch_error_type,
                     )
@@ -2195,6 +2210,17 @@ _DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH: Final[str] = "provider_family_s
 #: `packet_policy_denied` constant collapsed all of those into one label and
 #: reported a budget denial as an operator policy decision, which is a false
 #: accusation about a configuration the operator did not make.
+#:
+#: The VALUE DOMAIN of the real selector reasons, derived from the closed
+#: `MemoryAccessModeDenialReason` enum rather than spelled out here, so a new
+#: member is covered the day it is added. Membership is the discriminator for
+#: `_DegradedMemoryServe.policy_denial`: `prompt_packet_fallback_denial` carries
+#: EITHER a genuine selector reason (a resolver ran and decided) OR one of the
+#: two sentinels at `memory_context.py:48-52`, which are defined to be distinct
+#: from every enum value precisely so the two cases stay separable.
+_SELECTOR_DENIAL_REASON_VALUES: Final[frozenset[str]] = frozenset(
+    reason.value for reason in MemoryAccessModeDenialReason
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2217,6 +2243,16 @@ class _DegradedMemoryServe:
     reason: str
     #: None ⇒ report-only: nothing was served to the model.
     rendered: RenderedMemoryPromptPacket | None
+    #: Did a policy RESOLVER decide this degradation? True exactly when `reason`
+    #: is a `MemoryAccessModeDenialReason` the counterfactual selector actually
+    #: returned (`_SELECTOR_DENIAL_REASON_VALUES`), which is the C-MEM-19
+    #: `POLICY_DENIAL` condition the primary DENIAL span already applies to the
+    #: SAME values (`memory_context.py:210-216`). Carried as DATA from the site
+    #: that KNOWS the reason's provenance, so the emitter never has to re-derive
+    #: it by matching on a string whose value domain is three families wide.
+    #: False for the scope-mismatch conjuncts and for the sentinels — see
+    #: `_emit_degraded_memory_serve_span` for why those stay unset (B-91).
+    policy_denial: bool = False
 
 
 @dataclass(slots=True)
@@ -2534,6 +2570,11 @@ def _degraded_serve_disposition(
             selected_access_mode=memory_context.access_mode,
             reason=packet_denial,
             rendered=None,
+            # The ONLY report-only family a resolver actually decided: this
+            # value came back from a real `select_memory_access_mode` run
+            # (`memory_context.py:545-549`). Membership in the closed enum is
+            # what separates it from the two sentinels the same field can carry.
+            policy_denial=packet_denial in _SELECTOR_DENIAL_REASON_VALUES,
         )
     return _DegradedMemoryServe(
         selected_access_mode=memory_context.access_mode,
@@ -2606,6 +2647,7 @@ def _emit_degraded_memory_serve_span(
     *,
     provider: str,
     model: str,
+    cli_profile: str | None,
     outcome: str = _DISPATCH_OUTCOME_COMPLETED,
     error_type: str | None = None,
     reached_wire: bool = True,
@@ -2632,10 +2674,62 @@ def _emit_degraded_memory_serve_span(
       `access_mode=no_memory_access` / `record_count=0` / NO `packet_hash`
       (nothing was served, so claiming a served packet hash would be a lie).
       Mirrors `RuntimeMemoryContextComposer.compose_run_start`'s own
-      DENIAL+INJECT shape for the no-memory outcome. `failure_class` is
-      deliberately UNSET: no member of the closed `MemoryTelemetryFailureClass`
-      describes a provider-scope mismatch, and reusing `POLICY_DENIAL` would
-      assert a policy decision no resolver made.
+      DENIAL+INJECT shape for the no-memory outcome. `failure_class` splits
+      WITHIN this disposition — see below.
+
+    REPORT-ONLY is reached on THREE reason families, and `failure_class` is not
+    uniform across them (merge-gate spec-conformance lens, 2026-07-29):
+
+    1. the SELECTOR-DENIAL family — a `MemoryAccessModeDenialReason` value
+       (`no_supported_mode` / `token_budget_empty`) carried verbatim from
+       `prompt_packet_fallback_denial`. A resolver DID decide here: the value
+       is what a real `select_memory_access_mode` run returned
+       (`memory_context.py:545-549`), and the PRIMARY denial span sets
+       `failure_class=POLICY_DENIAL` for exactly these values
+       (`memory_context.py:210-216`). So does this span, per that precedent —
+       the same decision reported by two emitters must not carry two classes.
+       Discriminated by `degraded.policy_denial`, carried as DATA from the site
+       that knows the reason's provenance, never re-derived by string-matching
+       a value domain that spans all three families.
+    2. the SCOPE-MISMATCH conjuncts (`provider_scope_mismatch` /
+       `provider_family_scope_mismatch`) — UNSET here, and the question of
+       whether they SHOULD carry `POLICY_DENIAL` is REGISTERED (B-91), not
+       settled. Post-B-86 the withhold is policy-MANDATED
+       (`Spec_Memory_Substrate_v1.md:511` records it on the C-MEM-19 surface
+       "with the denial reason carried as an attribute value"; `:523` states it
+       as a C-MEM-13 invariant; `:559` qualifies C-MEM-14 exposure by it), so
+       the older reading — that no policy decision exists on this branch — is
+       over-stated. What remains genuinely open is whether a CONTRACT-mandated
+       withhold is the same telemetry class as a RESOLVER's denial. Unset is
+       the conservative answer while that is open: adding the attribute later
+       is additive, retracting a wrong one is not.
+    3. `not_derived` (and the `prompt_packet_denial_undetermined` sibling,
+       `memory_context.py:48-52`) — a fail-safe NON-decision: nobody ran the
+       counterfactual, so nothing was denied by anyone. UNSET, and deliberately
+       so. That these sentinels nonetheless land on `memory.policy.decision`
+       while being defined as distinct from every `MemoryAccessModeDenialReason`
+       value is the same registered question (B-91) seen from the other side:
+       whether that attribute is the right axis for a non-decision at all.
+
+    C-MEM-19 (`Spec_Memory_Substrate_v1.md:693-694`) requires
+    `memory.cli_profile` + `memory.policy.decision` on every memory span.
+    `cli_profile` is the composing selection's own `cli_profile_ref`, the same
+    value the primary injection path emits
+    (`memory_context.RuntimeMemoryContextComposer.compose_run_start`).
+    `policy.decision` splits on `degraded.rendered`, NOT on `reached_wire`:
+
+    * a RENDERED packet (both repaired dispositions) is `allowed` — the policy
+      DID authorize this delivery, since rendering requires
+      `prompt_packet_fallback_denial is None`. A repair that then failed
+      pre-wire is a DELIVERY failure, and that axis is already carried by
+      `dispatch_outcome`; reporting it as a policy decision would blame a gate
+      that opened.
+    * REPORT-ONLY reports `degraded.reason` verbatim, mirroring the primary
+      DENIAL span's `denial_reason.value`-or-`"denied"` convention. It is a
+      free-form attribute VALUE, so it can name the gate on ALL three families
+      without asserting a class. `failure_class` cannot: it is a CLOSED enum,
+      so it is set only on the family whose provenance is a resolver decision
+      (family 1 above) and left unset on the other two.
 
     `memory.degraded_serve` + `.reason` + `.selected_access_mode` carry the
     B-83-specific detail. All of it lands on the memory tracer's own span,
@@ -2670,6 +2764,11 @@ def _emit_degraded_memory_serve_span(
         ),
         provider=provider,
         model=model,
+        cli_profile=cli_profile,
+        policy_decision=("allowed" if degraded.rendered is not None else degraded.reason),
+        failure_class=(
+            MemoryTelemetryFailureClass.POLICY_DENIAL if degraded.policy_denial else None
+        ),
         packet_hash=served.packet_hash if served is not None else None,
         record_count=len(served.selected_refs) if served is not None else 0,
     ) as span:
@@ -2767,6 +2866,7 @@ def _emit_unserved_memory_tool_calls_span(
     *,
     provider: str,
     model: str,
+    cli_profile: str | None,
     outcome: str = _DISPATCH_OUTCOME_COMPLETED,
     error_type: str | None = None,
 ) -> None:
@@ -2793,6 +2893,13 @@ def _emit_unserved_memory_tool_calls_span(
     * `record_count=0` and NO `packet_hash` — nothing was served IN RESPONSE to
       these calls, and no packet was rendered at all. Claiming a hash for a
       packet that never went anywhere is the B-87 defect class.
+    * `policy.decision=allowed` — required by C-MEM-19
+      (`Spec_Memory_Substrate_v1.md:694`) and constant here for the same reason
+      the access mode is `standard_memory_tools`: reaching this site means the
+      policy authorized the tools and the arm armed them. A denial value would
+      contradict the mode this very span reports as served. `cli_profile`
+      (`:693`) is the composing selection's own `cli_profile_ref`, the same
+      value the primary injection path emits.
 
     The B-85-specific detail rides attribute VALUES in a distinct
     `memory.unserved_tool_call.*` namespace, per the B-83 precedent documented
@@ -2818,6 +2925,8 @@ def _emit_unserved_memory_tool_calls_span(
         access_mode=MemoryAccessMode.STANDARD_MEMORY_TOOLS.value,
         provider=provider,
         model=model,
+        cli_profile=cli_profile,
+        policy_decision="allowed",
         packet_hash=None,
         record_count=0,
     ) as span:

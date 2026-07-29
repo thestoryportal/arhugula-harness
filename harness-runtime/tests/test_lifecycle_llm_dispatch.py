@@ -2013,6 +2013,13 @@ def _assert_unserved_span_shape(attrs: dict[str, Any], *, provider: str, count: 
     assert attrs["memory.unserved_tool_call.count"] == count
     assert attrs["memory.unserved_tool_call.reason"] == "mixed_batch_caller_owned"
     assert attrs["memory.unserved_tool_call.dispatch_outcome"] == "completed"
+    # C-MEM-19 required attributes (`Spec_Memory_Substrate_v1.md:693-694`).
+    # `allowed` is the only truthful decision here for the same reason the
+    # access mode is `standard_memory_tools`: the policy armed the tools.
+    assert attrs["memory.cli_profile"] == "codex"
+    assert attrs["memory.policy.decision"] == "allowed", (
+        "the selected mode WAS served by this arm — no policy denied anything"
+    )
     assert "memory.packet_hash" not in attrs, "no packet was rendered — a hash would lie"
     assert "memory.degraded_serve" not in attrs, "this is not a B-83 degraded serve"
     assert "memory.failure_class" not in attrs, "nothing failed and nothing was denied"
@@ -3251,6 +3258,11 @@ async def test_b83_anthropic_arm_repairs_unservable_standard_tools_to_packet() -
     assert attrs["memory.provider"] == "anthropic"
     assert attrs["memory.packet_hash"] == "c" * 64
     assert attrs["memory.record_count"] == 1
+    # C-MEM-19 required attributes (`Spec_Memory_Substrate_v1.md:693-694`) —
+    # the REPAIRED-AND-SENT disposition. The packet was rendered, which itself
+    # required the packet mode to be authorized, so `allowed` is what happened.
+    assert attrs["memory.cli_profile"] == "codex"
+    assert attrs["memory.policy.decision"] == "allowed"
     assert "memory.failure_class" not in attrs, (
         "a degraded serve is a successful injection, not a failure"
     )
@@ -3322,6 +3334,19 @@ async def test_b83_provider_rebound_context_is_reported_but_never_served() -> No
     assert attrs["memory.record_count"] == 0
     assert "memory.packet_hash" not in attrs, "nothing was served — claiming a hash would lie"
     assert attrs["memory.degraded_serve.selected_access_mode"] == "standard_memory_tools"
+    # C-MEM-19 required attributes (`Spec_Memory_Substrate_v1.md:693-694`) —
+    # the REPORT-ONLY disposition. `allowed` here would be the lie: nothing was
+    # served, and the span names the gate that closed rather than a blanket
+    # `denied`, mirroring the primary DENIAL span's own convention.
+    assert attrs["memory.cli_profile"] == "codex"
+    assert attrs["memory.policy.decision"] == "provider_scope_mismatch"
+    # B-91 — the SCOPE-MISMATCH report-only family carries NO `failure_class`.
+    # Post-B-86 the withhold is policy-MANDATED (`Spec_Memory_Substrate_v1.md:511`
+    # / `:523`), so "no policy decision exists here" would be over-stated — but
+    # whether a contract-mandated withhold is the same telemetry CLASS as a
+    # resolver's own denial is registered, not settled. Unset is the conservative
+    # answer, and this assertion is what makes a later flip a deliberate act.
+    assert "memory.failure_class" not in attrs
 
 
 @pytest.mark.asyncio
@@ -3979,6 +4004,12 @@ async def test_b87_r5_retry_pre_wire_raise_is_not_reported_as_injection(
     assert "memory.packet_hash" not in attrs
     assert attrs["memory.record_count"] == 0
     assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+    # C-MEM-19 required attributes (`Spec_Memory_Substrate_v1.md:693-694`) —
+    # the REPAIRED-BUT-PRE-WIRE disposition. The policy DID authorize the
+    # packet (it was rendered); the delivery is what failed, and that axis is
+    # carried by `dispatch_outcome` above, not by the policy decision.
+    assert attrs["memory.cli_profile"] == "codex"
+    assert attrs["memory.policy.decision"] == "allowed"
 
 
 @pytest.mark.asyncio
@@ -4074,6 +4105,16 @@ async def test_b83_packet_mode_denied_context_is_reported_with_its_own_reason() 
     assert attrs["memory.access_mode"] == "no_memory_access"
     assert attrs["memory.record_count"] == 0
     assert "memory.packet_hash" not in attrs
+    # C-MEM-19 (`Spec_Memory_Substrate_v1.md:693-694`) — the one report-only
+    # reason family that IS a policy decision reaches `memory.policy.decision`
+    # verbatim, so the attribute names the gate the selector actually closed.
+    assert attrs["memory.cli_profile"] == "codex"
+    assert attrs["memory.policy.decision"] == "no_supported_mode"
+    # ...and therefore also carries the CLASS the primary DENIAL span sets for
+    # exactly this value (`memory_context.py:210-216`). A resolver ran and
+    # decided (`memory_context.py:545-549`); one decision reported by two
+    # emitters must not carry two classes.
+    assert attrs["memory.failure_class"] == "policy_denial"
 
 
 @pytest.mark.asyncio
@@ -4112,6 +4153,13 @@ async def test_b83_packet_budget_denied_withholds_on_the_r5_path_with_its_own_re
     assert attrs["memory.degraded_serve.reason"] == "token_budget_empty", (
         "an empty BUDGET must never be reported as a policy denial"
     )
+    # The REASON stays the selector's own, but the CLASS is `policy_denial` for
+    # the whole selector-denial family — the primary DENIAL span sets exactly
+    # that for every `MemoryAccessModeDenialReason` value including this one
+    # (`memory_context.py:210-216`), and the two emitters must agree. The two
+    # attributes answer different questions: WHICH gate closed vs WHAT KIND of
+    # event this was.
+    assert attrs["memory.failure_class"] == "policy_denial"
 
 
 @pytest.mark.asyncio
@@ -4141,6 +4189,12 @@ async def test_b83_undervied_eligibility_reports_not_derived_not_a_gate_denial()
     assert "system" not in client.messages.calls[0]
     attrs = dict(_degraded_serve_spans(exporter)[0].attributes or {})
     assert attrs["memory.degraded_serve.reason"] == "not_derived"
+    # B-91 — a NON-decision carries no `failure_class`. The sentinel is defined
+    # to be distinct from every `MemoryAccessModeDenialReason` value precisely so
+    # this stays separable from the selector-denial family one test above, which
+    # DOES carry `policy_denial`. Pinning both sides is what makes the carrier
+    # flag a real discriminator rather than a constant.
+    assert "memory.failure_class" not in attrs
 
 
 def test_b83_the_default_context_carries_the_not_derived_sentinel() -> None:
