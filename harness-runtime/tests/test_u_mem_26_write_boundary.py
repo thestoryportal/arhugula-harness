@@ -609,9 +609,13 @@ def test_tool_executor_denies_an_out_of_domain_context_scope(tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-def _compaction_candidate(provider_family: str) -> PromotionCandidate:
+def _compaction_candidate(
+    provider_family: str,
+    *,
+    candidate_id: str = "promocand:u-mem-26",
+) -> PromotionCandidate:
     return PromotionCandidate(
-        candidate_id="promocand:u-mem-26",
+        candidate_id=candidate_id,
         source_refs=(SourceRef(ref_type=SourceRefType.TURN, ref="turn-1"),),
         proposed_kind=PromotionCandidateKind.FACT,
         statement="A candidate carried into compaction.",
@@ -626,24 +630,42 @@ def _compaction_candidate(provider_family: str) -> PromotionCandidate:
 
 def _complete_compaction(
     tmp_path: Path,
-    candidate: PromotionCandidate,
+    *candidates: PromotionCandidate,
 ) -> MemoryStoreRecord:
     store = _store(_binding_root(tmp_path))
     hook = CompactionSafetyHook(store=store, actor=_actor(), run_id="run-u-mem-26")
     result = hook.complete_compaction(
         compaction_id="compaction-1",
-        candidates=(candidate,),
-        dispositions=(
+        candidates=candidates,
+        dispositions=tuple(
             CompactionCandidateDispositionRecord(
                 candidate_id=candidate.candidate_id,
                 disposition=CompactionCandidateDisposition.KEEP_EPISODIC,
                 rationale="retained for the witness",
-            ),
+            )
+            for candidate in candidates
         ),
         timestamp=_NOW,
         summary="compaction under a candidate-derived scope",
     )
     return result.record
+
+
+def _written_files(binding: MemoryRootBinding) -> list[Path]:
+    root = binding.default_root
+    return sorted(path for path in root.rglob("*") if path.is_file()) if root.exists() else []
+
+
+def _persisted_candidate_families(record: MemoryStoreRecord) -> list[object]:
+    dispositions = record.content["candidate_dispositions"]
+    assert isinstance(dispositions, list)
+    families: list[object] = []
+    for entry in dispositions:
+        assert isinstance(entry, dict)
+        scope = entry["suggested_scope"]
+        assert isinstance(scope, dict)
+        families.append(scope["provider_family"])
+    return families
 
 
 def test_compaction_canonicalizes_a_candidate_derived_registered_key(tmp_path: Path) -> None:
@@ -654,10 +676,62 @@ def test_compaction_canonicalizes_a_candidate_derived_registered_key(tmp_path: P
     assert record.envelope.scope.provider_family != _OLLAMA_KEY
 
 
+def test_compaction_canonicalizes_the_persisted_candidate_content(tmp_path: Path) -> None:
+    """:912 registered half at the CONTENT - the envelope alone is not enough.
+
+    The durable record persists every candidate's `suggested_scope` verbatim and
+    hashes it, so an envelope-only canonicalization leaves the record
+    self-inconsistent (envelope `local_open_weight`, content `ollama`) and the
+    content hash - hence `memory_id` - derived from the raw key.
+    """
+    record = _complete_compaction(
+        tmp_path,
+        _compaction_candidate(_OLLAMA_KEY),
+        _compaction_candidate(_OLLAMA_KEY, candidate_id="promocand:u-mem-26-second"),
+    )
+
+    assert _persisted_candidate_families(record) == [_OLLAMA_FAMILY, _OLLAMA_FAMILY]
+    assert _OLLAMA_KEY not in _persisted_candidate_families(record)
+    # The envelope agrees with the content it summarizes.
+    assert record.envelope.scope.provider_family == _OLLAMA_FAMILY
+    assert record.envelope.content_hash == compute_memory_content_hash(record.content)
+    # Positive control for the deny-side "nothing written" assertion below.
+    assert _written_files(_binding_root(tmp_path))
+
+
 def test_compaction_denies_a_candidate_derived_unregistered_identifier(tmp_path: Path) -> None:
     """:912 unregistered half."""
     with pytest.raises(CompactionScopeValueDomainError):
         _complete_compaction(tmp_path, _compaction_candidate(_UNREGISTERED_KEY))
+
+
+def test_compaction_denies_an_out_of_domain_candidate_past_the_first(tmp_path: Path) -> None:
+    """A non-scope-selecting candidate is checked too, and nothing is written."""
+    binding = _binding_root(tmp_path)
+    store = _store(binding)
+    hook = CompactionSafetyHook(store=store, actor=_actor(), run_id="run-u-mem-26")
+    candidates = (
+        _compaction_candidate(_OLLAMA_KEY),
+        _compaction_candidate(_UNREGISTERED_KEY, candidate_id="promocand:u-mem-26-second"),
+    )
+
+    with pytest.raises(CompactionScopeValueDomainError):
+        hook.complete_compaction(
+            compaction_id="compaction-1",
+            candidates=candidates,
+            dispositions=tuple(
+                CompactionCandidateDispositionRecord(
+                    candidate_id=candidate.candidate_id,
+                    disposition=CompactionCandidateDisposition.KEEP_EPISODIC,
+                    rationale="retained for the witness",
+                )
+                for candidate in candidates
+            ),
+            timestamp=_NOW,
+            summary="compaction under a candidate-derived scope",
+        )
+
+    assert _written_files(binding) == []
 
 
 # ---------------------------------------------------------------------------

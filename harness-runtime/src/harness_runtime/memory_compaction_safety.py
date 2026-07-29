@@ -61,10 +61,11 @@ class CompactionScopeValueDomainError(ValueError):
     """Raised when the compaction event scope's `provider_family` is out of domain.
 
     U-MEM-26 / C-MEM-03 v1.1. The compaction-decision record is an authoring
-    write: its scope is either an explicit caller-supplied `scope` keyword or
-    `candidates[0].suggested_scope`, which inherits the untrusted origin of a
-    promotion hint verbatim. Neither is discharged by construction, so the
-    obligation attaches here rather than to an assumed-safe caller.
+    write. Its envelope scope is either an explicit caller-supplied `scope`
+    keyword or `candidates[0].suggested_scope`, and its CONTENT persists every
+    candidate's `suggested_scope` - each of which inherits the untrusted origin
+    of a promotion hint verbatim. None of them is discharged by construction, so
+    the obligation attaches here rather than to an assumed-safe caller.
 
     A `ValueError` sibling of `CompactionDispositionRequiredError` - both refuse
     a malformed call before anything is written - rather than a
@@ -173,8 +174,12 @@ class CompactionSafetyHook:
             raise ValueError("compaction_id cannot be empty")
         if not summary.strip():
             raise ValueError("compaction summary cannot be empty")
+        # Ahead of EVERY scope-derived surface below - the selected event scope,
+        # the persisted per-candidate content, and the content hash computed
+        # over it - per the U-MEM-26 pre-derivation posture.
+        candidates = _canonical_candidates(candidates)
         ordered_dispositions = _validate_dispositions(candidates, dispositions)
-        event_scope = _canonical_event_scope(scope or _scope_from_candidates(candidates))
+        event_scope = _canonical_scope_or_deny(scope or _scope_from_candidates(candidates))
         record = _compaction_event_record(
             compaction_id=compaction_id,
             run_id=self._run_id,
@@ -258,13 +263,34 @@ def _validate_dispositions(
     return tuple(disposition_by_id[candidate_id] for candidate_id in candidate_ids)
 
 
-def _canonical_event_scope(scope: MemoryScope) -> MemoryScope:
-    """Canonicalize the compaction event scope, or deny the write (U-MEM-26)."""
+def _canonical_scope_or_deny(scope: MemoryScope) -> MemoryScope:
+    """Canonicalize a compaction-record scope, or deny the write (U-MEM-26)."""
 
     resolution = resolve_scope_family(scope)
     if resolution.family_out_of_domain:
         raise CompactionScopeValueDomainError(scope_family_out_of_domain_message(scope))
     return resolution.scope
+
+
+def _canonical_candidates(
+    candidates: Sequence[PromotionCandidate],
+) -> tuple[PromotionCandidate, ...]:
+    """Canonicalize EVERY candidate's `suggested_scope`, or deny the write.
+
+    Canonicalizing only the selected event scope would leave the durable record
+    self-inconsistent: an `ollama` candidate yields an envelope scoped
+    `local_open_weight` while `_disposition_content` persists the raw
+    `provider_family: ollama` verbatim - and the content hash, and therefore the
+    derived `memory_id`, is taken over those raw values. A candidate that never
+    supplies the event scope (any position but the first, or any position when
+    an explicit `scope` is passed) would face no value-domain check at all.
+    """
+    return tuple(
+        candidate.model_copy(
+            update={"suggested_scope": _canonical_scope_or_deny(candidate.suggested_scope)}
+        )
+        for candidate in candidates
+    )
 
 
 def _scope_from_candidates(candidates: Sequence[PromotionCandidate]) -> MemoryScope:
