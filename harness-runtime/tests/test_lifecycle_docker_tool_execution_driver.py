@@ -203,26 +203,49 @@ class _AlreadyReapedProcess(_FakeProcess):
 
     `Process.kill()` then raises `ProcessLookupError` (the transport's
     `_check_proc()` sees a cleared `Popen` reference); `wait()` still resolves
-    immediately from the recorded return code.
+    immediately from the recorded return code. The `kill_calls` / `wait_calls`
+    counters mirror the settled sibling `_AlreadyReapedFakeProcess` in
+    `test_external_cli_provider.py`: without them a witness stays green when the
+    reap call itself is deleted, since a never-entered reap path and a
+    suppressed-lookup-error reap path are indistinguishable from the raised
+    exception alone.
     """
+
+    def __init__(
+        self,
+        *,
+        stdout: bytes,
+        stderr: bytes = b"",
+        returncode: int = 0,
+    ) -> None:
+        super().__init__(stdout=stdout, stderr=stderr, returncode=returncode)
+        self.kill_calls = 0
+        self.wait_calls = 0
 
     async def communicate(self, stdin_payload: bytes) -> tuple[bytes, bytes]:
         await asyncio.Event().wait()  # never resolves
         raise AssertionError("unreachable")
 
     def kill(self) -> None:
+        self.kill_calls += 1
         raise ProcessLookupError("child already reaped by the transport")
 
     async def wait(self) -> int:
+        self.wait_calls += 1
         return 137
 
 
-def _already_reaped_run_exec() -> Any:
+def _already_reaped_run_exec(spawned: list[_AlreadyReapedProcess]) -> Any:
+    """`create_subprocess_exec` replacement that records the spawned `docker run`
+    child, so a witness can assert on its reap counters afterwards."""
+
     async def fake_exec(*argv: str, **_kwargs: Any) -> _FakeProcess:
         if argv[:2] == ("docker", "inspect"):
             return _FakeProcess(stdout=b"sha256:resolved-local-image\n")
         assert argv[:2] == ("docker", "run")
-        return _AlreadyReapedProcess(stdout=b"")
+        process = _AlreadyReapedProcess(stdout=b"")
+        spawned.append(process)
+        return process
 
     return fake_exec
 
@@ -237,9 +260,10 @@ async def test_timeout_survives_already_reaped_child(monkeypatch: pytest.MonkeyP
     `ToolInvocationTimeoutError`, so the dispatcher's TOOL_STEP retry wrapper
     would see a raw OS error rather than a timeout.
     """
+    spawned: list[_AlreadyReapedProcess] = []
     monkeypatch.setattr(
         "harness_runtime.lifecycle.docker_tool_execution_driver.asyncio.create_subprocess_exec",
-        _already_reaped_run_exec(),
+        _already_reaped_run_exec(spawned),
     )
     driver = DockerToolRunnerExecutionDriver(
         image="python:3.11-slim",
@@ -256,6 +280,10 @@ async def test_timeout_survives_already_reaped_child(monkeypatch: pytest.MonkeyP
             idempotency_key="idem",
         )
 
+    (process,) = spawned
+    assert process.kill_calls == 1, "the reap still fires — the suppression is not a skip"
+    assert process.wait_calls == 1, "and the wait still runs, so a live child is still reaped"
+
 
 @pytest.mark.asyncio
 async def test_cancellation_survives_already_reaped_child(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,9 +292,10 @@ async def test_cancellation_survives_already_reaped_child(monkeypatch: pytest.Mo
     Same `kill()` race as the deadline path: an escaping `ProcessLookupError`
     would reclassify a shutdown cancellation as a provider failure.
     """
+    spawned: list[_AlreadyReapedProcess] = []
     monkeypatch.setattr(
         "harness_runtime.lifecycle.docker_tool_execution_driver.asyncio.create_subprocess_exec",
-        _already_reaped_run_exec(),
+        _already_reaped_run_exec(spawned),
     )
     driver = DockerToolRunnerExecutionDriver(
         image="python:3.11-slim",
@@ -286,6 +315,10 @@ async def test_cancellation_survives_already_reaped_child(monkeypatch: pytest.Mo
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+    (process,) = spawned
+    assert process.kill_calls == 1, "the reap still fires — the suppression is not a skip"
+    assert process.wait_calls == 1, "and the wait still runs, so a live child is still reaped"
 
 
 @pytest.mark.asyncio
