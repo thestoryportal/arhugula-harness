@@ -4189,7 +4189,15 @@ async def test_b83_arm_repair_merges_into_a_payload_carried_system_message() -> 
     assert messages[0] is system_messages[0], "and it stays leading"
     assert system_messages[0]["content"].startswith("STEP-OWNED SYSTEM\n\nread-only memory packet")
     assert _B83_SECTION_TEXT in system_messages[0]["content"]
-    assert len(_degraded_serve_spans(exporter)) == 1
+    # B-87 — the openai arm's own wire marker is load-bearing here: this repair
+    # DID reach the provider, so the span must report the disclosure that
+    # happened. Without these two the marker could be deleted from
+    # `_dispatch_openai` and every successful openai repair would silently
+    # under-report as `packet_assembly` with no hash.
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.packet_hash"] == "c" * 64
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -4791,6 +4799,97 @@ async def test_b87_sdk_call_time_argument_rejection_is_pre_wire() -> None:
     assert "memory.degraded_serve.provider_error_type" not in attrs, (
         "no provider produced this error — no request was constructed"
     )
+
+
+@pytest.mark.asyncio
+async def test_b87_openai_sdk_call_time_argument_rejection_is_pre_wire() -> None:
+    """B-87, openai arm — the sibling of the anthropic-plain call-time witness.
+
+    `openai`'s `chat.completions.create` is an `@required_args` wrapper over an
+    `async def`, so an unsupported provider keyword out of `payload.params`
+    raises `TypeError` AT THE CALL. The arm's construct-then-mark-then-await
+    ordering is what keeps that pre-wire; without it a request the SDK refused
+    to build would report `injection` + a packet hash.
+    """
+    client = _OpenAIClient()
+    reached_body: list[str] = []
+
+    async def _strict_create(*, model: str, messages: Any) -> Any:
+        # No `**kwargs`: the real SDK signature rejects unknown keywords at the
+        # call, and a swallowing double cannot witness this ordering.
+        reached_body.append(model)
+        raise AssertionError("the fake's body must be unreachable")
+
+    client.chat.completions.create = _strict_create  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="openai"),
+        # No executor → the openai arm cannot serve the selected mode, so the
+        # repair fires and this dispatch carries the packet.
+        standard_memory_tool_executor=None,
+    )
+
+    with pytest.raises(TypeError, match="unsupported_sdk_kwarg"):
+        await dispatcher.dispatch(
+            _binding("openai"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": None,
+                    "params": {"unsupported_sdk_kwarg": True},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+    assert reached_body == [], "the SDK method body never ran — the call itself was rejected"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly", (
+        "the packet was assembled and then never sent — it was not an injection"
+    )
+    assert "memory.packet_hash" not in attrs, (
+        "claiming a hash for a request the SDK refused to build is the B-87 defect"
+    )
+    assert attrs["memory.record_count"] == 0
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+    assert attrs["memory.degraded_serve.pre_wire_error_type"] == "TypeError"
+    assert "memory.degraded_serve.provider_error_type" not in attrs, (
+        "no provider produced this error — no request was constructed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_b87_openai_post_wire_failure_still_reports_injection() -> None:
+    """B-87 ordering guard for the openai arm's own marker site.
+
+    The failure happens DURING the await, i.e. after the request went out, so
+    the disclosure really occurred. A marker moved below the await would demote
+    this into `pre_wire_failure` / `packet_assembly` and hide it.
+    """
+    client = _OpenAIClient()
+
+    async def _boom(**_kwargs: Any) -> Any:
+        raise TimeoutError("provider timed out after the request was sent")
+
+    client.chat.completions.create = _boom  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="openai"),
+        standard_memory_tool_executor=None,  # unservable → repair fires
+    )
+
+    with pytest.raises(TimeoutError):
+        await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection", "the packet WAS sent before the failure"
+    assert attrs["memory.packet_hash"] == "c" * 64
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+    assert attrs["memory.degraded_serve.provider_error_type"] == "TimeoutError"
 
 
 @dataclass

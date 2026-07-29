@@ -2642,9 +2642,9 @@ def _emit_degraded_memory_serve_span(
     never on the `gen_ai` span (C-OD-04 §4.3 namespace discipline).
 
     Uses only existing closed-enum members (`MemoryTelemetryOperationName.
-    INJECTION` / `.DENIAL`, `MemoryOperationKind.INJECT`) — adding a member to
-    any of the three closed memory enums would be an X-AL-3 design extension,
-    which is why the reason is a span-attribute VALUE.
+    INJECTION` / `.PACKET_ASSEMBLY` / `.DENIAL`, `MemoryOperationKind.INJECT`)
+    — adding a member to any of the three closed memory enums would be an
+    X-AL-3 design extension, which is why the reason is a span-attribute VALUE.
     """
 
     # B-87 — a rendered packet that never reached a provider is NOT a served
