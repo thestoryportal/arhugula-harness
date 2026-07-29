@@ -12,9 +12,15 @@ before code — here reinforced by the fact that the spec *itself* named the que
 it).
 
 All code and spec cites below were re-grounded by direct read at HEAD `dd2a8c1a`, re-verified at
-`6ab41d7f` on the R3 pass, at `ca0cc5a2` on the R4 pass, at `1c99e208` on the R6 pass, and at `d8df7647` on
-the R7 pass (no code file under `harness-*/` differs across those HEADs — every commit on this branch is
-doc-only; every R7 cite below was read directly, not carried).
+`6ab41d7f` on the R3 pass, at `ca0cc5a2` on the R4 pass, at `1c99e208` on the R6 pass, at `d8df7647` on
+the R7 pass, at `d9907c24` on the R8 pass, and at `26720e8e` on the R9 pass (no code file under `harness-*/`
+differs across those HEADs — every commit on this branch is doc-only; every R9 cite below was read directly,
+not carried).
+
+**Review status: R9 is the SOUNDNESS EXIT — this filing is CLOSED to further review rounds.** Nine
+out-of-family rounds; the A/B/C readings, the Q1 recommendation of **B**, and the ratification ask have been
+stable throughout; the ask's justification is precision-qualified at R9; all remaining sub-altitude mechanics
+are routed to the spec leg **by rule**. See §10.
 
 **Cite convention (Codex R3 [P2-2]).** `Spec_Memory_Substrate_v1.md` is cited **by contract ID + section name
 + a byte-verified quoted fragment**, never by line number. That is the spec's own instruction at its v1.1
@@ -416,13 +422,31 @@ honest comparison.
   *byte-unchanged* at v1.1, and the change-note says so explicitly at **"Sections preserved verbatim at
   v1.1."**: *"Zero new record type, zero new field, zero new enum member, zero change to any ledger, packet, or
   telemetry shape."* Either variant reverses that posture one delta later.
-- **Touches every capture writer.** Six `capture_*` methods plus `_capture` / `_record` thread the new value,
-  whatever its payload shape.
+- **[R9] ONE central derivation site — NOT "every capture writer". The prior bullet was false about the code,
+  and is corrected here rather than quietly repaired.** *(out-of-family `just codex-review` R9 [P2-1]; upheld
+  and verified by direct read at `26720e8e`.)* It read: *"Touches every capture writer. Six `capture_*` methods
+  plus `_capture` / `_record` thread the new value, whatever its payload shape."* There are **seven**
+  `capture_*` methods, not six (`memory_capture.py:294` / `:337` / `:382` / `:439` / `:487` / `:534` / `:585`,
+  all on `EpisodicMemoryCapture`, `:241`), and **none of them needs to thread anything**: every one already
+  takes `provider: str | None` and already passes it to `_capture` (`:321` / `:366` / `:423` / `:471` / `:518` /
+  `:569` / `:615`), which threads it into `_record` (`:649-658`). `_record` (`:1015-1046`) therefore already
+  holds **both** inputs the predicate needs — the call's raw `provider` (`:1025`) and the record's resolved
+  scope, returned by `_scope_for_record` (`:1038-1042`, defined `:1048-1086`, whose `resolve_scope_family`
+  output is canonical by construction and has already refused an out-of-domain family). The derivation is a
+  **single hoist inside `_record`**: compare the canonicalized call `provider` against `scope.provider_family`
+  and store the answer. **Zero per-method threading; zero signature change at any public writer.** An optional
+  field defaulted to the tri-state's *unknown* value likewise leaves the other three `MemoryRecordEnvelope`
+  construction sites untouched (`memory_promotion.py:844`, `native_memory_adapter.py:463`,
+  `memory_compaction_safety.py:327`) and lets a pre-amendment serialized envelope still validate under
+  `extra="forbid"`. *(The default must be **unknown**, never `false` — which is the tri-state obligation stated
+  at (i-envelope-bool) below, reached here by a second route.)*
 - **Its own null / unknown semantics, whatever the payload.** A writer that cannot determine the value must
   record *unknown* rather than a default, or reading B inherits the permissive-by-silence defect §2 documents
   in a new place.
-- **Forward-only.** A record written before the amendment carries no field at all, so the pre-amendment corpus
-  is `UNVERIFIABLE` under (i) by construction.
+- **Forward-only, absent a back-fill migration.** A record written before the amendment carries no field at
+  all, so the pre-amendment corpus is `UNVERIFIABLE` under (i) by construction. A back-fill is not impossible —
+  it would be option (ii)'s join run offline over the existing corpus — but it is then (ii)'s cost, and it
+  inherits (ii)'s whole unresolvable set.
 - **The R3 multi-writer exception, which no variant escapes** — recorded at the assessment below, where
   the `EPISODIC_RUN` overwrite path was re-verified for the **envelope** variant specifically rather than
   assumed from the content one: on `EPISODIC_RUN`, which is one stored record per run written by run-start and
@@ -481,8 +505,9 @@ record's own composed `scope.provider_family`, and stores the answer.
   reuses the B-86 / B-89 authorities verbatim.
 - **What it still pays:** everything in "What every variant pays" — the closed-schema addition at
   `MemoryRecordEnvelope` (`extra="forbid", frozen=True`) reversing v1.1's zero-new-field posture one delta
-  later; every capture writer touched; forward-only. **A boolean is not a cheaper *schema* change than a family
-  field — it is the same schema change with a narrower contract surface behind it.**
+  later; the one central derivation in `_record` **[R9]**; forward-only absent a back-fill. **A boolean is not
+  a cheaper *schema* change than a family field — it is the same schema change with a narrower contract surface
+  behind it.**
 - **It must be a TRI-STATE, not a `bool`, and that is a contract obligation rather than a nicety.** The writer
   cannot always determine the predicate: `provider` is `str | None` at every `capture_*` signature (e.g.
   `memory_capture.py:302` / `:347` / `:396`), `provider_family_for_scope_check` returns `None` for an
@@ -780,10 +805,12 @@ say so," it says so.*
   — binding the row to the record's `content_hash` — is a **C-MEM-08 closed-schema field addition**, and it
   would hand (ii) a schema cost of exactly the kind (i) was charged for. That conditional is new at R7 and
   must not be elided: "read-side only" is true of (ii-a) *as specified*, not of every honest closure of it.
-- **What (i) costs — per variant, after the R6 [P2-1] placement split and the R8 [P2-2] payload split.** Every
-  variant pays the closed-schema extension at C-MEM-03, reversing v1.1's own zero-new-field posture one delta
-  later; every one touches every capture writer; every one is **forward-only** (a record written before the
-  amendment carries no field, so the pre-amendment corpus is `UNVERIFIABLE` under (i) by construction). On top
+- **What (i) costs — per variant, after the R6 [P2-1] placement split, the R8 [P2-2] payload split and the R9
+  [P2-1] write-cost correction.** Every variant pays the closed-schema extension at C-MEM-03, reversing v1.1's
+  own zero-new-field posture one delta later; every one is derived at **one** site (`_record`, which already
+  receives both inputs — **[R9]**, correcting "every capture writer touched"); every one is **forward-only**
+  absent a back-fill (a record written before the amendment carries no field, so the pre-amendment corpus is
+  `UNVERIFIABLE` under (i) by construction, and back-filling it *is* option (ii) offline). On top
   of that: **(i-content)** alone pays content-hash identity movement — **(i-envelope)** pays none of it, the
   envelope being an input to neither `content_hash` nor `memory_id` (§5(i)); and **(i-*-family)** alone pays
   the second family-valued field beside `MemoryScope.provider_family` (a one-source-of-truth hazard) plus the
@@ -820,7 +847,7 @@ the cheaper shape.*
 | What it can answer | *Whether* the leg was cross-family — present/absent only | *Whether*, **and which family** produced the content | *Whether* + *which* (the row's raw `provider`, canonicalized) |
 | Identity movement | None (envelope is hash-inert) | None | None |
 | Schema cost | A closed-schema field addition at C-MEM-03, reversing v1.1's zero-new-field posture — **but no new family value domain and no second family-valued field** | The same field addition **plus** a second family-valued field beside `MemoryScope.provider_family` and its C-MEM-03 value-domain reconciliation | None **as specified** — but disposition (α) of the R7 residual reintroduces one at C-MEM-08 |
-| Write side | Every capture writer touched; the predicate is derived at capture from the existing B-86/B-89 family authorities | Every capture writer touched | Untouched |
+| Write side **[R9]** | **One** derivation site — `_record` (`memory_capture.py:1015-1046`) already receives both the call's `provider` and the resolved scope; the predicate is derived there from the existing B-86/B-89 family authorities. No public writer signature changes | **One** site, identically | Untouched |
 | Read side | Read one field | Read one field | Compose the key, scan an unindexed append-only `durable/memory_ops.jsonl`, qualify the row, run the `EPISODIC_RUN`-scoped coherence check, handle six `UNVERIFIABLE` cases + the multi-match arm |
 | Cross-contract dependency | None; works for a record read in isolation | None | New: C-MEM-10 on C-MEM-08 availability + readability |
 | Existing records | **No help** — forward-only; the pre-amendment corpus is `UNVERIFIABLE` by construction | **No help** — same | Works on any already-written record that has a row |
@@ -858,6 +885,23 @@ forward-only consequence, and — for the boolean — the tri-state's derivation
 *for reading B's own present/absent requirement* is a statement about (i)'s internal shape, not a verdict
 between (i) and (ii) — the three axes on which (ii) still wins (already-written records, zero write-side
 reach, aggregate-run provenance) are untouched by it.
+
+**[R9] The write-cost correction moves weight, and the honest accounting of how much is: within (i)'s own
+column only, and the level holds.** *(out-of-family `just codex-review` R9 [P2-1].)* (i)'s "Write side" cell
+went from *every capture writer touched* to *one derivation in `_record`* — a real reduction, and the third
+time a cost charged to (i) has been struck (R6: identity movement; R8: the family value domain; R9: the
+write-side reach). But it changes **nothing** on the three axes that carry (ii)'s side of the level: **existing
+records** (still `UNVERIFIABLE` under (i) by construction — a back-fill is (ii) run offline, not a cheaper
+(i)), **aggregate-run provenance** (still structurally unrepresentable in an envelope), and **comparison-basis
+flexibility** (the stored answer is still baked at write time and cannot be re-derived under a different basis;
+(ii)'s row-side `provider` can). Nor does it touch (ii)'s own write-side cell, which was already **zero** and
+cannot go lower — so the axis on which the correction operates is one (ii) already won, and winning it by a
+smaller margin does not move the balance. **What it does correct is a mis-framing of the cost's *kind*:** (i)'s
+write-side price is a **contract** obligation (a closed-schema field at C-MEM-03, its derivation rule, its
+tri-state unknown, forward-only) — never a refactor across seven public signatures, which is what the struck
+sentence implied. Per §10's rule this is a Q2-mechanics finding and would ordinarily be registered against the
+spec leg; it was applied here only because it was a **false statement about the code in the filing's own
+text**, on the same standard R3-R8 were held to. No recommendation is restored.
 
 ## §6 Recommended drafting targets, per reading
 
@@ -983,10 +1027,45 @@ present/absent flag requirement while foreclosing any later family-discriminatin
 
 ## §8 Ratification ask — operator decision
 
-The A / B / C choice is the operator's. It is an irreversible contract commitment: once C-MEM-10 states a
+The A / B / C choice is the operator's. It is a **durable contract commitment**: once C-MEM-10 states a
 position, records written under it accumulate against that position, and reversing later leaves a
-mixed-provenance corpus with no way to re-adjudicate the already-promoted records (promotion supersession
-does not delete — C-MEM-03 §Invariants: *"Supersession does not delete the prior record."*).
+mixed-provenance corpus that must be re-adjudicated record by record — promotion supersession does not delete
+(C-MEM-03 §Invariants: *"Supersession does not delete the prior record."*), so the prior record survives every
+correction.
+
+**[R9] "Irreversible" was too strong, and the ask is stated exactly rather than rhetorically.** *(out-of-family
+`just codex-review` R9 [P2-2]; upheld and verified by direct read at `26720e8e`.)* The pre-R9 text said
+reversal leaves the corpus *"with no way to re-adjudicate the already-promoted records"*. **There is a way, and
+this filing already describes its machinery.** A promoted **semantic / preference** record persists its
+lineage: `_semantic_record_content` writes `"source_memory_refs": [str(memory_id) for memory_id in
+candidate.source_memory_refs]` into the record's own content (`memory_promotion.py:919-943`, the field at
+`:932`), and the capture rows those ids resolve to retain their `provider` — which is precisely what option
+(ii) reads, and option (ii) *"works on any already-written record that has a row"* (§5's table). So a later
+migration can traverse surviving lineage → capture row → provider, re-run the family comparison, and supersede
+or deny promotions made under the reversed position. **Reversal is therefore COSTLY AND INCOMPLETE, not
+impossible — and the incompleteness is bounded by this filing's own analysis, not asserted:**
+
+- **Missing rows** — §5's unresolvable cases (1) and (3): no reachable capture row at all
+  (promotion-authored, compaction-authored, native-adapter-authored, or an unreadable ledger), or a torn
+  capture whose repair never ran, so the composed key matches nothing.
+- **Repaired rows** — case (5): the repair row carries `provider = None` *by construction*
+  (`repair_capture_operation`, `memory_capture.py:938-939`), because *"a repair row attests that this capture is
+  durable, not which dispatch performed it"* (`:916-921`). A repaired capture is unknown provenance forever.
+- **Stale rows** — case (6), `EPISODIC_RUN`-scoped per R8: a matched, correctly-qualified, non-`None`-provider
+  row may describe a *superseded version* of a multi-writer record, and the coherence check that detects it is
+  itself detection-bounded (a divergence confined to the ledger-only or content-only field set passes it).
+
+Plus a **fourth bound on the traversal itself**, which is a corollary rather than one of the six: lineage
+survives on the **semantic / preference** path only. `_procedural_record_content` (`memory_promotion.py:959-989`)
+writes `evidence` (`SourceRef`s) but **no** `source_memory_refs`, so a promoted **procedural** record carries no
+memory-id lineage to traverse and sits outside the migration by construction.
+
+**This remains a genuine operator gate — the qualification sharpens it rather than dissolving it.** The gate is
+real because the cheapest moment to decide is *before* durable records accumulate: every promotion written
+under a position that is later reversed becomes a row in a migration that is unindexed, partially blind on the
+four bounds above, and non-deleting (a re-adjudication supersedes; it does not erase the record, and it cannot
+recall content already injected into a completed run). What the operator is being asked to authorize is a
+position whose practical unwind is a **costly, partially-complete migration**, not one with no unwind at all.
 
 Decisions owed:
 
@@ -1012,8 +1091,12 @@ Decisions owed:
      field ships inside the version it describes and cannot go stale relative to it, including in the
      divergent-second-writer case that defeats the join. No identity movement, no cross-contract dependency,
      a one-field read side. **Costs:** a closed-schema amendment at C-MEM-03 reversing v1.1's own
-     zero-new-field posture one delta later; every capture writer touched; and it is **forward-only** — no
-     help for already-written records. **[R8] Two payload shapes, and they are NOT the same commitment.**
+     zero-new-field posture one delta later; and it is **forward-only** — no help for already-written records
+     absent a back-fill, which is option (ii) run offline. *(**[R9]** the third cost previously listed here —
+     "every capture writer touched" — was **false**: all seven `capture_*` methods already thread `provider`
+     into `_record`, which also holds the resolved scope, so the derivation is one central hoist and no public
+     signature changes. (i)'s write-side price is a **contract** obligation, not a refactor.)*
+     **[R8] Two payload shapes, and they are NOT the same commitment.**
      **(i-envelope-bool)** stores a *tri-state* `captured_cross_family` (true / false / unknown, the B-91
      idiom) derived at capture from the existing family authorities: it adds **no** family value domain and
      **no** second family-valued field, making it the cheapest shape of (i) and — on reading B as argued here,
@@ -1082,7 +1165,18 @@ the join key, from `content_hash`, so the key is itself the content binding; and
 `engine_class` in content, so a kind-blind check would false-`UNVERIFIABLE` the entire non-run corpus), and
 [P2-2] option (i)'s **payload** axis — a family value vs the tri-state `captured_cross_family` boolean the
 section's own opening sentence offered — had never been costed, so the boolean was priced with costs it does
-not carry (this pass).
+not carry. **R9 (this pass) is the SOUNDNESS EXIT**, and both of its findings landed on statements the filing
+made about the code rather than on its substance: [P2-1] (i)'s write-side cost was overstated — all seven
+`capture_*` methods already thread `provider` into `_record`, which also holds the resolved scope, so the
+provenance field is derived at **one** central site with no public signature change, and an unknown-defaulted
+optional field leaves the other three envelope constructors and every pre-amendment envelope intact; the
+leveling is unmoved, because the three axes carrying (ii)'s side (existing records, aggregate-run provenance,
+comparison-basis flexibility) are untouched and (ii)'s own write side was already zero; and [P2-2] the
+ratification ask's *"irreversible … no way to re-adjudicate"* was too strong — `source_memory_refs` persists on
+the semantic path and capture rows retain `provider`, so a later migration **can** re-adjudicate many existing
+promotions; the ask now states the unwind exactly, as costly and partially complete (bounded by missing,
+repaired and stale rows, plus the procedural path carrying no lineage at all), and the gate stands on *when* the
+decision is cheapest rather than on impossibility.
 
 **No Phase 7 execution is halted by this filing.** U-MEM-26 has landed; the question was already scoped out
 of it at `Implementation_Plan_Memory_Substrate_v1.md` U-MEM-26, subsection "Out of scope for this unit:".
@@ -1096,14 +1190,17 @@ above.
 `deferred-mechanism spec leg exits on soundness, not review-quiet` precedent. This section bounds the review
 surface so a further round has a principled exit rather than an open-ended one.*
 
-**What eight rounds converged on, and what they did not touch — restated at R7, because R7 breaks the
+**What nine rounds converged on, and what they did not touch — restated at R7, because R7 breaks the
 previous version of this claim and the honest move is to say so rather than re-assert it.** Rounds R1-R6
 corrected *exposure* and *mechanics* (R6 adding a third class, *cost accounting* — mechanics applied to the
 comparison rather than to the code) and left the filing's substance untouched. **R7 did not.** It reached the
 Q2 discriminator comparison itself — which §10's own exit condition names as in-scope, altitude-qualifying
 substance — and changed its outcome from a recommendation to a leveled decision. **R8 reached the same
 comparison and did NOT change its outcome:** both of its findings refine one column each and cancel on the
-balance, which is why R8 is recorded as the round that *tested* the leveling and left it standing:
+balance, which is why R8 is recorded as the round that *tested* the leveling and left it standing. **R9 is the
+terminating round** — one finding on (i)'s write-side cost (the leveling again unmoved) and one on the
+ratification ask's irreversibility framing, the latter being the first R7-or-later finding to land on a surface
+§10 names as *live* rather than as spec-leg-routable:
 
 | Round | What it corrected | Class |
 |---|---|---|
@@ -1115,32 +1212,46 @@ balance, which is why R8 is recorded as the round that *tested* the leveling and
 | R6 | The §5 option-(i) cost accounting (content vs envelope variants: identity movement belongs to the content variant alone, and the envelope variant is the real contender — its `EPISODIC_RUN` overwrite behaviour re-verified rather than inherited); the §2 exposure framing (no single named change creates live auto-promotion — the combination table, and the §7/§8 interim triggers restated with the transition each enables) | cost accounting + exposure |
 | R7 | **[P1]** the (ii-a) join's version-binding: a matched, correctly-qualified, non-`None`-provider row need not be a row about the *stored version* — exhibited by a shipped test — so the join owes a mandatory record/ledger coherence check, a sixth `UNVERIFIABLE` case, and an explicit disposition of the residual that check provably cannot reach. **[P2]** the R3/R6 multi-writer penalty on (i-envelope) is **false** — envelope and content are written together from one call, so the field describes the version it ships inside, which is (ii-a)'s semantics reached directly; and on the divergent case the asymmetry **inverts** in (i-envelope)'s favour. Net: **the Q2 comparison levels and the recommendation is withdrawn** | mechanics + **discriminator outcome** |
 | R8 | **[P2-1]** the R7 coherence check is **per-kind**, and is owed on `EPISODIC_RUN` alone: `cli_profile` / `engine_class` are content-side only on the run kinds, `step_id` only on the turn / tool kinds, and every non-run kind derives `memory_id` — hence the join key — from `content_hash`, so the key *is* the content binding and the stale-version window cannot open there; stated kind-blind, the check would false-`UNVERIFIABLE` the entire non-run corpus. **[P2-2]** option (i) varies along **two** axes, not one — placement (R6) **and payload** — and the boolean `captured_cross_family` the section's own opening offered was priced with the family value's costs (a value domain, a second family-valued field) that it does not carry; analysed on its own it is the cheapest shape of (i), must be a tri-state to avoid recording an undetermined `false`, and cannot answer *which* family — bounding reading B's flag to present/absent. Net: **both columns refined, the level holds, no recommendation restored** | cost accounting + mechanics scope |
+| R9 | **[P2-1]** (i)'s write-side cost was **overstated**: the filing said "touches every capture writer — six `capture_*` methods plus `_capture` / `_record` thread the new value". There are **seven** such methods, and none needs to thread anything — all already take `provider` and pass it to `_capture` → `_record` (`memory_capture.py:649-658`), which also holds the resolved scope (`_scope_for_record`, `:1038-1042`), so the predicate is derived at **one** central site with no public signature change; an unknown-defaulted optional field also leaves the other three `MemoryRecordEnvelope` constructors and every pre-amendment envelope intact. The level is **unmoved**: (ii)'s write side was already zero, and the three axes carrying its side (existing records, aggregate-run provenance, comparison-basis flexibility) are untouched — what changes is the cost's *kind*, a contract obligation rather than a seven-signature refactor. **[P2-2]** the **ratification ask** called the A/B/C choice *"irreversible … no way to re-adjudicate the already-promoted records"* — too strong. `_semantic_record_content` persists `source_memory_refs` (`memory_promotion.py:932`) and capture rows retain `provider`, so a later migration can traverse lineage → row → provider and supersede or deny promotions made under a reversed position. The ask now states the unwind **exactly**: costly and **incomplete**, bounded by missing (cases 1/3), repaired (case 5, `provider = None` by construction) and stale (case 6, `EPISODIC_RUN`) rows, plus the procedural path carrying no `source_memory_refs` at all — and the gate stands on *when* the decision is cheapest, not on impossibility | cost accounting + **the operator-facing ask** |
 
-**Stable across all eight rounds, uncorrected by any of them:** the three READINGS (A / B / C) and their
+**Stable across all nine rounds, uncorrected by any of them:** the three READINGS (A / B / C) and their
 respective owed spec text; the recommendation of **B** on Q1; the [MODERATE] confidence on both Q1 and Q2;
 the A-as-recorded-interim option, *with* named interim-ending triggers; the §1 witness; the §8 ratification
-ask *as an ask* (its Q1 item is verbatim; its Q2 item now presents two options instead of one, plus R8's
-payload sub-choice under (i)); and the §9 routing. Seven independent out-of-family passes have found nothing
-against any of those.
+ask *as an ask* — that the A/B/C choice is the operator's and is a real commitment, not a default (its Q1 item
+is verbatim across all nine; its Q2 item now presents two options instead of one, plus R8's payload sub-choice
+under (i)); and the §9 routing. Eight independent out-of-family passes have found nothing against any of those.
+
+**One qualification to that list, added at R9 rather than absorbed into it.** R9 [P2-2] *did* reach the
+ratification ask — the first finding since R4 to touch a surface §10 names as live. What it corrected is the
+ask's **justification**, not the ask: "irreversible, with no way to re-adjudicate" became "a durable commitment
+whose practical unwind is a costly and partially-complete migration, bounded by missing / repaired / stale rows
+and by the procedural path's absent lineage." The gate survives on a *different and narrower* ground — that the
+cheapest moment to decide is before durable records accumulate — which is a strengthening of the ask's honesty
+and a weakening of its rhetoric. The operator is not being asked a different question; they are being told the
+true cost of answering it wrongly.
 
 **What is NOT stable, stated plainly rather than folded into the list above:** the **Q2 mechanics comparison**.
 It has now been corrected **three times** — R3 (wrong field family), R4 (wrong uniqueness guarantee), R6
 (variant-blind cost accounting) — R7 corrected it a fourth and fifth time, once on each option, with the
-result that it no longer carries a preference at all, and **R8 a sixth and seventh time, again one per side**
-(the coherence check over-scoped; the boolean payload over-priced). The R6 text claimed the preference "still
+result that it no longer carries a preference at all, **R8 a sixth and seventh time, again one per side**
+(the coherence check over-scoped; the boolean payload over-priced), and **R9 an eighth** — (i)'s write-side
+reach, overstated a third time in a row on the same column. The R6 text claimed the preference "still
 did not move" under the sharpest test yet; R7 is a sharper one, and it moved; R8 is sharper still and it did
-**not** move — the two refinements point in opposite directions and cancel. Q2 is therefore presented
-**leveled** — a two-option decision for the spec leg, with a payload sub-choice under (i) — rather than picked.
-The three A/B/C readings and the operator-facing ask remain the filing's substance and remain stable; that is
-still the artifact this filing owes, and it is undamaged by Q2's mechanics having proved to be the unstable
-part. **That seven corrections have landed on one comparison is itself the finding the spec leg should carry:
-this is a mechanics surface that does not converge by review, and §10's cap is the right response to it.**
+**not** move — the two refinements point in opposite directions and cancel; R9 is sharper again on (i)'s side
+alone and it did not move either, because the axes (ii) wins on are not the axis R9 touches. Q2 is therefore
+presented **leveled** — a two-option decision for the spec leg, with a payload sub-choice under (i) — rather
+than picked. The three A/B/C readings and the operator-facing ask remain the filing's substance and remain
+stable; that is still the artifact this filing owes, and it is undamaged by Q2's mechanics having proved to be
+the unstable part. **That EIGHT corrections have landed on one comparison — three of them successively
+striking a cost from the same option — is itself the finding the spec leg should carry: this is a mechanics
+surface that does not converge by review, and §10's cap is the right response to it.**
 
 **The cap, stated as a rule rather than an enumeration.** Residual mechanics claims not corrected above are
 **bounded by rule, not by exhaustive review**: every mechanics claim in this filing is a claim about code at
-`d9907c24` (the R8 verification HEAD; no file under `harness-*/` differs from the `dd2a8c1a` grounding HEAD or
-from R3's `6ab41d7f`, R4's `ca0cc5a2`, R6's `1c99e208` or R7's `d8df7647` — every commit on this branch is
-doc-only), and the
+`26720e8e` (the R9 verification HEAD; no file under `harness-*/` differs from the `dd2a8c1a` grounding HEAD or
+from R3's `6ab41d7f`, R4's `ca0cc5a2`, R6's `1c99e208`, R7's `d8df7647` or R8's `d9907c24` — every commit on
+this branch is doc-only, verified by `git diff --name-only dd2a8c1a 26720e8e`, which lists only the fork doc
+and its two register carriers), and the
 spec leg that discharges `B-92` re-grounds all mechanics against its **own** HEAD before
 authoring contract text — the `B-86` → `U-MEM-26` precedent, where the spec leg re-verified the capture-path
 mechanics rather than inheriting the fork doc's. A mechanics error surviving here therefore cannot reach the
@@ -1163,18 +1274,55 @@ filing now declines to decide — should be **registered against the spec leg** 
 correction round here, per the non-convergent-adversarial-hardening discriminator (*"does this finding
 invalidate the carrier's premise?"* — if no, stop). Q2's mechanics in particular are now **explicitly** the
 spec leg's: it re-derives them against its own HEAD, and it is the leg that must state the requirement anyway.
-The filing remains sound as a decision artifact on its A/B/C substance, which eight rounds have left intact.
+The filing remains sound as a decision artifact on its A/B/C substance, which nine rounds have left intact.
 
-**R8 measured against that rule, honestly — it sits ON the boundary, and this is the last round the rule
-admits.** Neither R8 finding changes a reading, the Q1 recommendation, the ask, or the missing requirement;
-both are *refinements of a comparison the filing declines to decide*, which the paragraph above routes to the
-spec leg. They were applied here rather than registered for one reason: each was a **false statement in the
-filing's own text** (a check specified over kinds whose writers do not carry the fields it compares; a costing
-that charged a variant with costs it does not have), and a fork doc that states a falsehood about the code is
-not a sound decision artifact even when the falsehood does not move the decision — the same "stated rather
-than quietly repaired" standard R3-R7 were held to. **That reasoning does not generalize to another round.**
-The comparison has now absorbed seven corrections across six rounds and has changed its verdict exactly once;
-its marginal return is spent. **Any further Q2-mechanics finding — including one that is factually correct —
-is to be registered against the spec leg, not applied here.** The remaining live surfaces for a further round
-are the A/B/C readings, the Q1 recommendation, and the ratification ask; a finding against none of those is,
-by this filing's own rule, out of scope for it.
+**R8 measured against that rule, honestly — it sat ON the boundary.** Neither R8 finding changed a reading,
+the Q1 recommendation, the ask, or the missing requirement; both were *refinements of a comparison the filing
+declines to decide*, which the paragraph above routes to the spec leg. They were applied there rather than
+registered for one reason: each was a **false statement in the filing's own text** (a check specified over
+kinds whose writers do not carry the fields it compares; a costing that charged a variant with costs it does
+not have), and a fork doc that states a falsehood about the code is not a sound decision artifact even when
+the falsehood does not move the decision — the same "stated rather than quietly repaired" standard R3-R7 were
+held to. R8 recorded that *"that reasoning does not generalize to another round."*
+
+---
+
+### **SOUNDNESS EXIT — declared at R9. This filing is CLOSED to further review rounds.**
+
+*Per the PD-9 cap this section has carried since R4, and on the `deferred-mechanism spec leg exits on
+soundness, not review-quiet` precedent: the exit is declared on the filing's **soundness as a decision
+artifact**, not on a review going quiet.*
+
+**Why R9 was admitted at all, when R8 declared itself the last round the rule admits.** Because R9 [P2-2]
+landed on the **ratification ask** — one of the three surfaces the exit condition names as *live*, and the
+first finding since R4 to reach one. Under the rule as written that is an admissible round, not a violation of
+the cap; the cap forecloses further **Q2-mechanics** rounds, which is a different thing. R9 [P2-1] *is* such a
+mechanics finding and would have been registered against the spec leg on its own — it was applied alongside
+[P2-2] only under R8's own false-statement standard, because the sentence it corrects ("touches every capture
+writer — six `capture_*` methods … thread the new value") was false about the code in two independent ways at
+once. Applying it in the round that was already open costs nothing; it does not reopen the cap.
+
+**The exit, stated as a conclusion.** Nine rounds. Across all nine, the load-bearing substance never moved:
+**the three A/B/C readings and their owed spec text, the Q1 recommendation of B at [MODERATE], the
+A-as-recorded-interim option with its named interim-ending triggers, the §1 witness, the §9 routing, and the
+ratification ask *as an ask*.** Eight out-of-family passes found nothing against any of them. What *did* move,
+repeatedly, was the **Q2 mechanics comparison** (eight corrections, one verdict change) — which the filing now
+explicitly declines to decide and hands to the spec leg — and, at R9, the **precision of the ask's
+justification**, which is now stated exactly rather than rhetorically. A filing whose substance is stable, whose
+unstable surface has been identified, bounded and routed, and whose operator-facing ask is precision-qualified
+is **sound**, and soundness is the exit criterion.
+
+**What this closes, by rule.** All remaining sub-altitude mechanics are the **spec leg's**, without exception
+and without a further round here: the Q2 option choice and its payload sub-choice; the join key, its
+qualification, the six-case `UNVERIFIABLE` set and the multi-match arm; the record/ledger coherence check, its
+`EPISODIC_RUN` scope and its detection bound; the α/β/γ residual disposition; under (i) the field's placement,
+payload, derivation rule, tri-state unknown and hash-inertness; and the missing *requirement* statement
+(stored-version present/absent vs by-family vs aggregate-run) that would decide between them. The spec leg
+re-grounds every one of these against its **own** HEAD before authoring contract text (the `B-86` → `U-MEM-26`
+precedent), so no mechanics error surviving here can reach the spec.
+
+**Any further finding against this filing — including a factually correct one — is to be registered against the
+spec leg (`B-92`), not applied here.** The single exception the cap still admits is a finding that would change
+an **A/B/C reading**, the **Q1 recommendation of B**, or the **ask itself** (that the choice is the operator's
+and is a real commitment) — none of which nine rounds has touched. What remains owed is not review. It is the
+operator's answer to §8.
