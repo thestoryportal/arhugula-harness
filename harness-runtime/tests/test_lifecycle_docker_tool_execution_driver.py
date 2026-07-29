@@ -17,6 +17,7 @@ from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     SandboxDispatchDecision,
     ToolInvocationProtocolError,
+    ToolInvocationTimeoutError,
 )
 
 
@@ -195,6 +196,96 @@ async def test_cancellation_during_communicate_kills_and_reaps_process(
 
     assert kill_calls == ["killed"]
     assert wait_calls == ["waited"]
+
+
+class _AlreadyReapedProcess(_FakeProcess):
+    """A child asyncio's transport has already finished with.
+
+    `Process.kill()` then raises `ProcessLookupError` (the transport's
+    `_check_proc()` sees a cleared `Popen` reference); `wait()` still resolves
+    immediately from the recorded return code.
+    """
+
+    async def communicate(self, stdin_payload: bytes) -> tuple[bytes, bytes]:
+        await asyncio.Event().wait()  # never resolves
+        raise AssertionError("unreachable")
+
+    def kill(self) -> None:
+        raise ProcessLookupError("child already reaped by the transport")
+
+    async def wait(self) -> int:
+        return 137
+
+
+def _already_reaped_run_exec() -> Any:
+    async def fake_exec(*argv: str, **_kwargs: Any) -> _FakeProcess:
+        if argv[:2] == ("docker", "inspect"):
+            return _FakeProcess(stdout=b"sha256:resolved-local-image\n")
+        assert argv[:2] == ("docker", "run")
+        return _AlreadyReapedProcess(stdout=b"")
+
+    return fake_exec
+
+
+@pytest.mark.asyncio
+async def test_timeout_survives_already_reaped_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Race guard — the deadline reap must not replace the typed timeout.
+
+    The `docker` child can exit (and its transport finish) in the window
+    between the deadline firing and `proc.kill()`, at which point `kill()`
+    raises `ProcessLookupError`. Unsuppressed, that would propagate instead of
+    `ToolInvocationTimeoutError`, so the dispatcher's TOOL_STEP retry wrapper
+    would see a raw OS error rather than a timeout.
+    """
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.docker_tool_execution_driver.asyncio.create_subprocess_exec",
+        _already_reaped_run_exec(),
+    )
+    driver = DockerToolRunnerExecutionDriver(
+        image="python:3.11-slim",
+        command=("python", "-c", "runner"),
+        timeout_seconds=0.01,
+    )
+
+    with pytest.raises(ToolInvocationTimeoutError, match="Docker tool runner timed out"):
+        await driver.call_tool(
+            mcp_client_host=cast(MCPClientHost, object()),
+            sandbox_decision=_decision(),
+            tool_id="echo",
+            tool_args={},
+            idempotency_key="idem",
+        )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_survives_already_reaped_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Race guard — the cancel-path reap must not replace the `CancelledError`.
+
+    Same `kill()` race as the deadline path: an escaping `ProcessLookupError`
+    would reclassify a shutdown cancellation as a provider failure.
+    """
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.docker_tool_execution_driver.asyncio.create_subprocess_exec",
+        _already_reaped_run_exec(),
+    )
+    driver = DockerToolRunnerExecutionDriver(
+        image="python:3.11-slim",
+        command=("python", "-c", "runner"),
+    )
+
+    task = asyncio.ensure_future(
+        driver.call_tool(
+            mcp_client_host=cast(MCPClientHost, object()),
+            sandbox_decision=_decision(),
+            tool_id="echo",
+            tool_args={},
+            idempotency_key="idem",
+        )
+    )
+    await asyncio.sleep(0)  # let it reach the hanging communicate() await
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 @pytest.mark.asyncio
