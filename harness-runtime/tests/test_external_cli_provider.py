@@ -479,6 +479,10 @@ class _LegacyFakeRunner:
     unconditional ``on_wire=`` keyword breaks it with `TypeError` before any
     process is spawned — on EVERY inference, degraded memory or not (codex R4
     [P1]).
+
+    This test is the RUNTIME half of that compatibility. The STATIC half — the
+    public seam type admitting this shape under pyright strict — is witnessed at
+    `test_b87_runner_seam_typing.py` (codex R6 [P2]).
     """
 
     results: list[CLIProcessResult]

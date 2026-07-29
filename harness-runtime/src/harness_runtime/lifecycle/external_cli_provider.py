@@ -43,6 +43,7 @@ __all__ = [
     "GeminiCLIAdapter",
     "GenericCommandCLIAdapter",
     "RecordingSubprocessRunner",
+    "WireAwareExternalCLISubprocessRunner",
     "accepts_explicit_on_wire",
     "construct_antigravity_cli_adapter",
     "construct_claude_code_cli_adapter",
@@ -113,24 +114,50 @@ class ExternalCLINotAuthenticatedError(ExternalCLIProviderError):
 
 
 class ExternalCLISubprocessRunner(Protocol):
-    """Subprocess boundary for external CLI calls.
+    """Subprocess boundary for external CLI calls — the PUBLIC ``runner=`` seam.
 
     The shape intentionally has no shell parameter; production uses argv-only
     `create_subprocess_exec`, and tests inject deterministic fakes.
 
-    ``on_wire`` (B-87) is the reached-the-wire notification described at
-    `_notify_wire`. It lives HERE rather than in the adapters because the
-    boundary it names — a child process exists — is only observable at this
-    layer. Every implementation MUST fire it once process creation has
-    succeeded and before the payload is handed over, and never otherwise.
-    ``None``, the default, is every caller not tracking the boundary (the auth
-    probes, every non-degraded dispatch) and is a no-op.
+    This is deliberately the pre-B-87 signature — no ``on_wire``. It is the
+    seam every public constructor (`construct_*_cli_adapter`) and every adapter
+    field is typed with, and it is the WIDER of B-87's two runner shapes: a
+    legacy runner satisfies it, and so does a wire-aware one (the extra
+    parameter is keyword-only WITH a default, so an implementation declaring it
+    is still assignable here). Typing the seam with the NARROWER wire-aware
+    shape would have made a typed pre-B-87 runner a pyright error at injection
+    — runtime compatibility without static compatibility (codex R6 [P2]).
 
-    Conformance to this Protocol is STRUCTURAL, so a pre-B-87 runner — one
-    whose ``run`` predates the parameter — is still injectable through the
-    public ``runner=`` constructor seam and must keep working (codex R4 [P1]).
-    The adapters detect that case and degrade per `_run_with_wire_boundary`;
-    they never hand the keyword to a runner that did not declare it.
+    `WireAwareExternalCLISubprocessRunner` is the opt-in extension; runners that
+    want full-precision wire attribution declare ``on_wire`` and are still
+    injectable HERE unchanged. `_run_with_wire_boundary` picks the tier per
+    dispatch and never hands the keyword to a runner that did not declare it.
+    """
+
+    async def run(
+        self,
+        argv: tuple[str, ...],
+        *,
+        stdin: str,
+        timeout_seconds: float,
+    ) -> CLIProcessResult: ...
+
+
+class WireAwareExternalCLISubprocessRunner(ExternalCLISubprocessRunner, Protocol):
+    """A runner that OPTS IN to B-87's reached-the-wire notification.
+
+    ``on_wire`` is the notification described at `_notify_wire`. It lives at the
+    runner rather than in the adapters because the boundary it names — a child
+    process exists — is only observable at this layer. An implementation of
+    THIS Protocol MUST fire it once process creation has succeeded and before
+    the payload is handed over, and never otherwise. ``None``, the default, is
+    every caller not tracking the boundary (the auth probes, every non-degraded
+    dispatch) and is a no-op.
+
+    A wire-aware runner is assignable to the plain `ExternalCLISubprocessRunner`
+    seam, so declaring the parameter is a pure opt-in: nothing about injection
+    changes. `_run_with_wire_boundary` narrows to this shape only after
+    `_runner_accepts_on_wire` confirms the parameter is genuinely declared.
     """
 
     async def run(
@@ -258,13 +285,14 @@ async def _run_with_wire_boundary(
       parameter). The keyword rides down and the RUNNER fires it past
       `create_subprocess_exec`, so a spawn failure stays PRE-wire. This is the
       full-precision tier.
-    * **Legacy runner** (a pre-B-87 `ExternalCLISubprocessRunner` injected
-      through the public ``runner=`` seam; Protocol conformance is structural
-      and never checked the signature — codex R4 [P1]). The keyword is NOT
-      passed: it would raise `TypeError` before any spawn, so every inference
-      through such a runner would fail outright. Instead the ADAPTER fires the
-      mark HERE — after all adapter-local argv validation, immediately before
-      the handover (the commit-54419eb4 placement).
+    * **Legacy runner** (a pre-B-87 runner injected through the public
+      ``runner=`` seam, which is typed with the wider, ``on_wire``-free
+      `ExternalCLISubprocessRunner` precisely so this stays statically legal —
+      codex R4 [P1] / R6 [P2]). The keyword is NOT passed: it would raise
+      `TypeError` before any spawn, so every inference through such a runner
+      would fail outright. Instead the ADAPTER fires the mark HERE — after all
+      adapter-local argv validation, immediately before the handover (the
+      commit-54419eb4 placement).
 
     The legacy tier's residual imprecision is bounded and truthful-by-
     degradation: a spawn failure under a legacy runner reports POST-wire, which
@@ -276,7 +304,14 @@ async def _run_with_wire_boundary(
     if not _runner_accepts_on_wire(runner):
         _notify_wire(on_wire)
         return await runner.run(argv, stdin=stdin, timeout_seconds=timeout_seconds)
-    return await runner.run(
+    # `_runner_accepts_on_wire` just proved THIS instance's bound `run` declares
+    # the parameter, which is exactly `WireAwareExternalCLISubprocessRunner`
+    # conformance. The narrowing cannot be expressed as an `isinstance` check
+    # (a non-`runtime_checkable` Protocol, and `runtime_checkable` would only
+    # test the member's presence, not its signature), so the runtime predicate
+    # is the narrowing and the cast records it.
+    wire_aware = cast(WireAwareExternalCLISubprocessRunner, runner)
+    return await wire_aware.run(
         argv,
         stdin=stdin,
         timeout_seconds=timeout_seconds,
