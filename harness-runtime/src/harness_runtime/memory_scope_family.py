@@ -9,7 +9,9 @@ posture":
   value through the workspace's provider-to-family authority
   (`lifecycle/cross_family_cost_tag.provider_family_for_scope_check`), and
 * an UNREGISTERED / otherwise out-of-domain identifier is DENIED - the write is
-  refused, and the request is refused against every family-scoped record.
+  refused, and the read request is REJECTED against every record (unpartitioned
+  ones included; serving those would be a third posture - see
+  `harness_is.memory_scope_value_domain`).
 
 `harness-is` cannot reach that authority (the IS axis has zero outbound
 cross-axis edges, `harness-is/CLAUDE.md` §1.1), so it declares the rule as an

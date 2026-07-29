@@ -42,13 +42,20 @@ composition-root injection shape the workspace uses for
 
 The registered / unregistered split is exactly two dispositions, per C-MEM-03's
 "no third posture": a registered key is canonicalized to its family value, and
-an unregistered identifier NEVER reaches a scope predicate as the raw string it
-arrived as - it is denied against every partition-scoped record, because such a
-request has named no partition this layer can prove it belongs to. Records
-carrying `null` stay reachable under that denial: the stored `null` is the
-unpartitioned wildcard that "matches any requested provider family"
-(`Spec_Memory_Substrate_v1.md` C-MEM-03), so serving them widens nothing - an
-unscoped request would reach exactly the same set.
+an out-of-domain identifier REJECTS THE REQUEST. It never reaches a scope
+predicate as the raw string it arrived as, and it is not quietly narrowed to
+"whatever an unscoped request could see" either - EVERY record is denied,
+unpartitioned records included. That is the disposition C-MEM-03 v1.1 states
+(out-of-domain is "rejected") and the one every other boundary already applies:
+`StandardMemoryToolExecutor._resolved_scope` denies the call, the capture and
+promotion write boundaries raise, and the native adapter refuses. Serving the
+unpartitioned remainder would be a third posture between canonicalize and
+reject - a rejected request answered anyway, just with less.
+
+A `null` REQUEST is a different thing and still reaches unpartitioned records:
+naming no partition is the legitimate unscoped ask, not an identifier this
+layer failed to resolve. Those are the asymmetric-`null` semantics above; they
+are not an out-of-domain outcome.
 
 When it is ABSENT the pre-existing comparison behaviour for non-`null` values is
 preserved verbatim (raw string comparison); only the `null` asymmetry above
@@ -94,7 +101,11 @@ class RequestScopeResolution(NamedTuple):
     """The request scope with a registered provider key canonicalized."""
 
     family_out_of_domain: bool
-    """True when the requested `provider_family` is not in the value domain."""
+    """True when the requested `provider_family` is not in the value domain.
+
+    The caller MUST reject the whole request on it - every record, not only the
+    partition-scoped ones (see the module docstring).
+    """
 
 
 def resolve_request_scope(
@@ -105,8 +116,8 @@ def resolve_request_scope(
 
     A registered provider key is canonicalized to its family value before any
     predicate compares it; an out-of-domain identifier is flagged so the caller
-    can deny it against family-scoped records in that layer's own deny
-    vocabulary. With no `canonicalizer` injected the scope passes through
+    can reject the request in that layer's own deny vocabulary. With no
+    `canonicalizer` injected the scope passes through
     unchanged - the documented un-wired default (see the module docstring).
     """
     requested_family = scope.provider_family
@@ -121,17 +132,6 @@ def resolve_request_scope(
         scope=scope.model_copy(update={"provider_family": canonical}),
         family_out_of_domain=False,
     )
-
-
-def record_is_family_scoped(record_scope: MemoryScope) -> bool:
-    """True when the record names a provider-family partition.
-
-    Such a record is unreachable by a request whose `provider_family` is out of
-    the value domain: the request never named a partition this layer can prove
-    it belongs to. Records carrying `null` (the unpartitioned wildcard) stay
-    reachable.
-    """
-    return record_scope.provider_family is not None
 
 
 def scope_partition_denied(
@@ -178,7 +178,6 @@ __all__ = [
     "SCOPE_PARTITION_FIELDS",
     "RequestScopeResolution",
     "ScopeFamilyCanonicalizer",
-    "record_is_family_scoped",
     "resolve_request_scope",
     "scope_intersection_denied",
     "scope_partition_denied",

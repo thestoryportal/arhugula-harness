@@ -286,6 +286,19 @@ class LocalAutomaticMemoryRuntime:
             is None
         ):
             return
+        if self._store.has_run_record(context.run_id):
+            # Codex R3 [P2-c] durable-presence idempotence. `_started_runs` is
+            # in-process ONLY, so a fresh bootstrap resuming an older run finds
+            # it empty and captures run-start again - and EPISODIC_RUN is one
+            # `run.json` per run_id, so that second write REPLACES the stored
+            # envelope under today's canonical scope. Silently re-scoping a
+            # pre-v1.1 record is exactly what the C-MEM-03 forward-only posture
+            # forbids, so an existing record ends the capture instead. Two
+            # processes racing a genuinely FIRST write still resolve
+            # last-writer-wins as before; this closes the resume case, which is
+            # the one that rewrites history rather than re-deciding it.
+            self._started_runs.add(context.run_id)
+            return
         result = self._recorder(
             actor=step_context.parent_actor,
             scope=context.record_scope,

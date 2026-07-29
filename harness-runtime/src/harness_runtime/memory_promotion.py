@@ -51,6 +51,7 @@ from harness_is.state_ledger_entry_schema import Actor, Identifier
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness_runtime.memory_scope_family import (
+    canonical_scope_family,
     resolve_scope_family,
     scope_family_out_of_domain_message,
 )
@@ -597,12 +598,14 @@ def canonical_candidate_scope(scope: MemoryScope) -> MemoryScope:
 
     U-MEM-26 write-boundary ORDERING rule for the promotion surface: this must
     run BEFORE risk-flag and candidate-identity derivation, not merely before
-    the record write. `_scope_escapes_source` compares `provider_family` as a
-    raw string and `_candidate_id` hashes the whole suggested scope, so
-    canonicalizing at the write would leave two observable defects intact -
-    key-vs-value-equivalent inputs receiving DIFFERENT candidate identities, and
-    a registered alias of the record's own family being FALSELY flagged
-    `CROSS_SCOPE`.
+    the record write. `_candidate_id` hashes the whole suggested scope, so
+    canonicalizing at the write would leave key-vs-value-equivalent inputs
+    receiving DIFFERENT candidate identities.
+
+    The sibling defect - a registered alias of the record's own family FALSELY
+    flagged `CROSS_SCOPE` - was fixed at its own site instead (Codex R3 [P2-b],
+    `_family_escapes_source`): the SOURCE side is a stored value this ordering
+    rule never reaches, so ordering alone could not close it.
     """
     resolution = resolve_scope_family(scope)
     if resolution.family_out_of_domain:
@@ -699,7 +702,6 @@ def _scope_escapes_source(candidate_scope: MemoryScope, source_scope: MemoryScop
         "project",
         "workflow",
         "workload_class",
-        "provider_family",
         "cli_profile",
         "tenant",
     ):
@@ -707,7 +709,37 @@ def _scope_escapes_source(candidate_scope: MemoryScope, source_scope: MemoryScop
         candidate_value = getattr(candidate_scope, field_name)
         if source_value is not None and candidate_value != source_value:
             return True
-    return False
+    return _family_escapes_source(candidate_scope.provider_family, source_scope.provider_family)
+
+
+def _family_escapes_source(candidate_family: str | None, source_family: str | None) -> bool:
+    """True when the candidate's family leaves the SOURCE record's partition.
+
+    `provider_family` is the one scope field with a value domain, so it is the
+    one field a raw string comparison gets wrong. The candidate side is already
+    canonical by the U-MEM-26 ordering rule, but the SOURCE side is a STORED
+    value that may predate C-MEM-03 v1.1: a legacy record persisted under the
+    registered key `ollama` names the SAME partition as a `local_open_weight`
+    candidate, and comparing the raw strings flagged that same-family promotion
+    `CROSS_SCOPE` - forcing review and blocking auto-promotion. Both sides are
+    therefore canonicalized before they are compared.
+
+    An out-of-domain value on EITHER side stays fail-closed. It names a
+    partition this substrate cannot resolve, so the candidate cannot be shown
+    to stay inside the source's - and `CROSS_SCOPE` is the conservative answer
+    (a review, not a disclosure).
+    """
+    if source_family is None:
+        # Preserved verbatim from the shared loop above: an unpartitioned
+        # source constrains nothing, whatever the candidate names.
+        return False
+    source_canonical = canonical_scope_family(source_family)
+    if source_canonical is None or candidate_family is None:
+        return True
+    candidate_canonical = canonical_scope_family(candidate_family)
+    if candidate_canonical is None:
+        return True
+    return candidate_canonical != source_canonical
 
 
 def _preference_source(

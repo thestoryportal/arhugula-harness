@@ -35,7 +35,9 @@ from harness_is.memory_record_envelope import (
 from harness_is.memory_retrieval import (
     MemoryPacketAccessMode,
     MemoryRetrievalRequest,
+    MemoryRetrievalResult,
     MemoryRetriever,
+    RetrievalExclusionReason,
 )
 from harness_is.memory_retrieval import _scope_mismatch as retriever_scope_mismatch
 from harness_is.memory_retrieval_index import (
@@ -168,6 +170,23 @@ def _retrieved_refs(
     canonicalizer_injected: bool = False,
 ) -> tuple[str, ...]:
     """Run a full `MemoryRetriever.retrieve` and return the selected refs."""
+    result = _retrieval_result(
+        tmp_path,
+        records=records,
+        request_scope=request_scope,
+        canonicalizer_injected=canonicalizer_injected,
+    )
+    return tuple(str(ref) for ref in result.selected_refs)
+
+
+def _retrieval_result(
+    tmp_path: Path,
+    *,
+    records: tuple[MemoryStoreRecord, ...],
+    request_scope: MemoryScope,
+    canonicalizer_injected: bool = False,
+) -> MemoryRetrievalResult:
+    """Run a full `MemoryRetriever.retrieve` and return the whole result."""
     binding = _binding(tmp_path)
     store = _store(binding)
     for record in records:
@@ -181,13 +200,12 @@ def _retrieved_refs(
         policy_ref="policy:u-mem-26-test",
         family_canonicalizer=_fake_canonicalizer if canonicalizer_injected else None,
     )
-    result = retriever.retrieve(
+    return retriever.retrieve(
         _request(scope=request_scope),
         timestamp=_NOW,
         actor=Actor(actor_class=ActorClass.AGENT, actor_id="codex"),
         access_mode=MemoryPacketAccessMode.PROMPT_EXTENSION_PACKET,
     )
-    return tuple(str(ref) for ref in result.selected_refs)
 
 
 # --- Witness 1: the asymmetric-`null` pair (plan acceptance :910) ------------
@@ -345,11 +363,17 @@ def test_registered_provider_key_request_is_canonicalized_at_the_retriever(
     assert selected == (str(record.envelope.memory_id),)
 
 
-def test_out_of_domain_request_family_is_excluded_at_the_retriever(tmp_path: Path) -> None:
-    """An out-of-domain identifier is unauthorized for family-scoped records.
+def test_out_of_domain_request_family_rejects_the_request_at_the_retriever(
+    tmp_path: Path,
+) -> None:
+    """Codex R3 [P2-a] - out-of-domain REJECTS the request, it does not narrow it.
 
-    The unpartitioned record stays reachable: rejection removes the request's
-    claim to a partition, it does not revoke the stored wildcard.
+    C-MEM-03 v1.1 gives exactly two dispositions, and the executor
+    (`StandardMemoryToolExecutor._resolved_scope`) denies such a call outright.
+    Excluding only the partition-scoped records - serving the unpartitioned
+    remainder - was a third posture: a rejected request answered anyway, just
+    with less. The unpartitioned record here is the discriminator; without it
+    this test would pass under the old behaviour.
     """
     partitioned = _record(
         statement="Anthropic-partitioned memory fact.",
@@ -357,10 +381,33 @@ def test_out_of_domain_request_family_is_excluded_at_the_retriever(tmp_path: Pat
     )
     unpartitioned = _record(statement="Unpartitioned memory fact.", scope=_scope())
 
-    selected = _retrieved_refs(
+    result = _retrieval_result(
         tmp_path,
         records=(partitioned, unpartitioned),
         request_scope=_scope(provider_family="not-a-provider"),
+        canonicalizer_injected=True,
+    )
+
+    assert result.selected_refs == ()
+    excluded = {ref.memory_ref: ref.reason for ref in result.excluded_refs}
+    assert excluded == {
+        partitioned.envelope.memory_id: RetrievalExclusionReason.SCOPE_MISMATCH,
+        unpartitioned.envelope.memory_id: RetrievalExclusionReason.SCOPE_MISMATCH,
+    }
+
+
+def test_null_request_family_still_reaches_unpartitioned_records(tmp_path: Path) -> None:
+    """The paired positive: a `null` REQUEST is not an out-of-domain request.
+
+    Naming no partition is the legitimate unscoped ask; failing to resolve a
+    named identifier is not. The rejection above must not collapse the two.
+    """
+    unpartitioned = _record(statement="Unpartitioned memory fact.", scope=_scope())
+
+    selected = _retrieved_refs(
+        tmp_path,
+        records=(unpartitioned,),
+        request_scope=_scope(),
         canonicalizer_injected=True,
     )
 
@@ -436,8 +483,15 @@ def test_registered_provider_key_query_is_canonicalized_at_the_derived_index(
     assert result.selected_refs == (record.envelope.memory_id,)
 
 
-def test_out_of_domain_query_family_is_excluded_at_the_derived_index(tmp_path: Path) -> None:
-    """The out-of-domain half at the index layer, mirroring the retriever."""
+def test_out_of_domain_query_family_rejects_the_query_at_the_derived_index(
+    tmp_path: Path,
+) -> None:
+    """Codex R3 [P2-a] - the same rejection at the index layer, end to end.
+
+    Empty means empty at this layer: no entries AND no refs. The unpartitioned
+    record is again the discriminator - it was served under the old
+    partition-only filter.
+    """
     binding = _binding(tmp_path)
     store = _store(binding)
     partitioned = _record(
@@ -454,7 +508,9 @@ def test_out_of_domain_query_family_is_excluded_at_the_derived_index(tmp_path: P
         DerivedRetrievalIndexQuery(scope=_scope(provider_family="not-a-provider"))
     )
 
-    assert result.selected_refs == (unpartitioned.envelope.memory_id,)
+    assert result.selected_refs == ()
+    assert result.entries == ()
+    assert result.considered_count == 2  # the records exist; the QUERY was rejected
 
 
 def test_unregistered_raw_key_record_stays_unreachable_by_its_own_raw_key_request(

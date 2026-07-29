@@ -36,7 +36,6 @@ from harness_is.memory_record_envelope import (
 from harness_is.memory_scope_value_domain import (
     RequestScopeResolution,
     ScopeFamilyCanonicalizer,
-    record_is_family_scoped,
     resolve_request_scope,
     scope_intersection_denied,
     scope_partition_denied,
@@ -354,7 +353,13 @@ def _filter_candidates(
     terms as an explicit `null` (`scope_partition_denied` with no requested
     scope). The remaining dimensions and the visibility rank stay unconstrained,
     since an absent scope asserts nothing about them.
+
+    An out-of-domain `provider_family` is a different disposition again: it
+    rejects the QUERY outright, so the result is empty rather than narrowed to
+    the unpartitioned remainder (see `memory_scope_value_domain`).
     """
+    if resolution is not None and resolution.family_out_of_domain:
+        return ()
     query_terms = set(_tokenize(query.query_summary))
     candidates: list[DerivedRetrievalIndexEntry] = []
     for entry in entries:
@@ -365,8 +370,6 @@ def _filter_candidates(
         if resolution is None:
             if scope_partition_denied(entry.scope, None):
                 continue
-        elif resolution.family_out_of_domain and record_is_family_scoped(entry.scope):
-            continue
         elif not _scope_matches(entry.scope, resolution.scope):
             continue
         if query_terms and not (set(entry.search_terms) & query_terms):

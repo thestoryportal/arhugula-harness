@@ -28,7 +28,6 @@ from harness_is.memory_retrieval_index import (
 from harness_is.memory_scope_value_domain import (
     RequestScopeResolution,
     ScopeFamilyCanonicalizer,
-    record_is_family_scoped,
     resolve_request_scope,
     scope_intersection_denied,
     scope_partition_denied,
@@ -373,6 +372,13 @@ def _static_exclusion_reason(
     request: MemoryRetrievalRequest,
     resolution: RequestScopeResolution,
 ) -> RetrievalExclusionReason | None:
+    if resolution.family_out_of_domain:
+        # The REQUEST is rejected, not narrowed: an out-of-domain
+        # `provider_family` names a partition this layer cannot resolve, so
+        # EVERY record is excluded - unpartitioned ones included. Serving the
+        # unpartitioned remainder would be a third posture between C-MEM-03's
+        # two dispositions (see `memory_scope_value_domain`).
+        return RetrievalExclusionReason.SCOPE_MISMATCH
     if request.allowed_kinds and entry.record_kind not in request.allowed_kinds:
         return RetrievalExclusionReason.KIND_NOT_ALLOWED
     if entry.redaction_state.value == "redacted":
@@ -384,8 +390,6 @@ def _static_exclusion_reason(
         return _INACTIVE_STATUS_REASONS[status]
     if entry.superseded_by:
         return RetrievalExclusionReason.SUPERSEDED
-    if resolution.family_out_of_domain and record_is_family_scoped(entry.scope):
-        return RetrievalExclusionReason.SCOPE_MISMATCH
     if _scope_mismatch(entry.scope, resolution.scope):
         return RetrievalExclusionReason.SCOPE_MISMATCH
     return None

@@ -39,7 +39,6 @@ from harness_is.memory_record_envelope import (
     compute_memory_content_hash,
     derive_memory_id,
 )
-from harness_is.memory_scope_value_domain import record_is_family_scoped
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, Identifier
 
@@ -314,13 +313,14 @@ class CanonicalNativeMemoryToolBackend:
             raise _NativeMemoryPolicyDeniedError(
                 f"memory path {validated.external_path!r} is unavailable"
             )
-        if self._scope_family_out_of_domain and record_is_family_scoped(record.envelope.scope):
+        if self._scope_family_out_of_domain:
             # U-MEM-26 direct-reader boundary: this backend reaches a scope
             # predicate without constructing either request model, so the value
-            # domain has to bite here. A request that named no family this
-            # substrate can resolve has proven no membership in the record's
-            # partition; records carrying `null` (the unpartitioned wildcard)
-            # stay reachable.
+            # domain has to bite here. A scope that named no family this
+            # substrate can resolve is REJECTED outright - the same disposition
+            # `_require_scope_family_in_domain` applies to this adapter's
+            # writes, and the one the IS read layers apply. Serving the
+            # unpartitioned remainder would be a third posture.
             raise _NativeMemoryPolicyDeniedError(
                 f"retrieval policy denies memory path {validated.external_path!r}: "
                 + scope_family_out_of_domain_message(self._scope)

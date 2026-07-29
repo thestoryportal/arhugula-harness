@@ -33,7 +33,7 @@ from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
-from harness_is.memory_operation_ledger import MemoryOperationKind
+from harness_is.memory_operation_ledger import MemoryOperationEntry, MemoryOperationKind
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_policy import (
     AccessDecision,
@@ -560,11 +560,14 @@ def test_key_and_value_equivalent_hints_derive_the_same_candidate_id() -> None:
 
 
 def test_registered_alias_of_the_source_family_is_not_flagged_cross_scope() -> None:
-    """:913 ordering witness (ii) - fails if canonicalization sits at the write.
+    """:913 - a registered alias of the source family is not an escape.
 
-    `_scope_escapes_source` compares `provider_family` as a RAW STRING, so
-    `ollama` against a `local_open_weight` source reads as an escape until the
-    alias is resolved.
+    This was the second ORDERING witness while `_scope_escapes_source`
+    compared `provider_family` as a raw string. Codex R3 [P2-b] moved that
+    comparison onto canonical values on BOTH sides, so the property now holds
+    independently of where canonicalization runs - `_candidate_id` (witness (i)
+    above) is what still pins the ordering. Kept as the defence-in-depth half:
+    the alias must not read as an escape by either route.
     """
     source = _source_record(_scope(_OLLAMA_FAMILY), [_hint(_OLLAMA_KEY)])
 
@@ -1025,3 +1028,182 @@ def test_legacy_raw_key_record_stays_redactable_with_its_scope_intact(
     assert json.dumps(
         result.record.envelope.scope.model_dump(mode="json"), sort_keys=True
     ) == json.dumps(legacy.envelope.scope.model_dump(mode="json"), sort_keys=True)
+
+
+# ---------------------------------------------------------------------------
+# Codex R3 - one posture, both sides canonical, forward-only means no rewrite
+# ---------------------------------------------------------------------------
+
+
+def test_native_adapter_direct_reader_rejects_an_out_of_domain_scope(tmp_path: Path) -> None:
+    """Codex R3 [P2-a] ripple - the third posture also lived at this reader.
+
+    The adapter refused an out-of-domain scope at its WRITE path
+    (`_require_scope_family_in_domain`) but, on the read path, excluded only
+    partition-scoped records - so an unpartitioned record was still served to a
+    scope this substrate could not resolve. The record here carries `null`;
+    under the old partition-only filter this call returned normally.
+    """
+    unpartitioned = _semantic_record(_scope(None))
+    _store_unused, backend = _native_backend(tmp_path, _scope(_UNREGISTERED_KEY))
+    validated = backend._validate_observed_path("/memories/notes.md")  # pyright: ignore[reportPrivateUsage]
+
+    with pytest.raises(MemoryCallbackIOError):
+        backend._require_retrieval_allowed(unpartitioned, validated)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_legacy_raw_key_source_is_not_flagged_cross_scope() -> None:
+    """Codex R3 [P2-b] - the SOURCE side is a stored value, not a fresh input.
+
+    `ollama` and `local_open_weight` name ONE partition. The hint side was
+    canonicalized by the U-MEM-26 ordering rule, but the source record's stored
+    family was compared raw, so a legacy same-family record read as an escape:
+    `CROSS_SCOPE`, review forced, auto-promotion blocked.
+    """
+    source = _source_record(_scope(_OLLAMA_KEY), [_hint(_OLLAMA_FAMILY)])
+
+    [candidate] = _extract(source)
+
+    assert PromotionRiskFlag.CROSS_SCOPE not in candidate.risk_flags
+
+
+def test_genuinely_cross_family_legacy_source_is_still_flagged_cross_scope() -> None:
+    """Codex R3 [P2-b] negative - canonicalizing must not blunt the real flag.
+
+    `claude_code` canonicalizes to `anthropic`, which is NOT the candidate's
+    `local_open_weight`. A legacy raw key on the source side is still a real
+    cross-family escape once resolved.
+    """
+    source = _source_record(_scope("claude_code"), [_hint(_OLLAMA_FAMILY)])
+
+    [candidate] = _extract(source)
+
+    assert PromotionRiskFlag.CROSS_SCOPE in candidate.risk_flags
+
+
+def test_out_of_domain_source_family_is_still_flagged_cross_scope() -> None:
+    """Codex R3 [P2-b] fail-closed - an unresolvable SOURCE family is an escape.
+
+    The source names a partition this substrate cannot resolve, so the
+    candidate cannot be shown to stay inside it. `CROSS_SCOPE` is the
+    conservative answer - a review, not a disclosure. (The write boundary bites
+    only on the CANDIDATE scope, so nothing else refuses this case.)
+    """
+    source = _source_record(_scope(_UNREGISTERED_KEY), [_hint(_OLLAMA_FAMILY)])
+
+    [candidate] = _extract(source)
+
+    assert PromotionRiskFlag.CROSS_SCOPE in candidate.risk_flags
+
+
+# The run_id `LocalAutomaticMemoryRuntime` derives from `_step_context()` - the
+# resumed run whose stored envelope must survive a fresh bootstrap.
+_RESUMED_RUN_ID = "run-memory-step-0"
+
+
+def _memory_root_store(tmp_path: Path) -> CanonicalMemoryStore:
+    """A store bound to the root `materialize_automatic_memory_runtime` uses."""
+    return CanonicalMemoryStore(
+        root_binding=MemoryRootBinding(default_root=tmp_path / ".harness" / "memory"),
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+    )
+
+
+def _seed_legacy_run_record(tmp_path: Path, *, run_id: str) -> Path:
+    """Persist a pre-v1.1 EPISODIC_RUN envelope scoped by the RAW provider key."""
+    store = _memory_root_store(tmp_path)
+    content: dict[str, object] = {
+        "event_type": "run_start",
+        "run_id": run_id,
+        "workflow_id": "workflow-memory",
+        "thread_id": None,
+        "engine_class": None,
+        "cli_profile": "generic",
+        "provider_route": [_OLLAMA_KEY],
+        "close_status": "open",
+    }
+    content_hash = compute_memory_content_hash(content)
+    record = MemoryStoreRecord(
+        envelope=MemoryRecordEnvelope(
+            memory_id=derive_memory_id(
+                MemoryTier.EPISODIC, MemoryRecordKind.EPISODIC_RUN, content_hash
+            ),
+            schema_version="episodic-capture/v1",
+            tier=MemoryTier.EPISODIC,
+            kind=MemoryRecordKind.EPISODIC_RUN,
+            created_at=_NOW,
+            source_refs=(SourceRef(ref_type=SourceRefType.RUN, ref=run_id),),
+            scope=_scope(_OLLAMA_KEY),
+            content_hash=content_hash,
+            redaction_state=RedactionState.ACTIVE,
+        ),
+        content=content,
+    )
+    store.write_record(record)
+    return store.record_path(record)
+
+
+def _compose_one_dispatch(tmp_path: Path) -> None:
+    runtime = materialize_automatic_memory_runtime(
+        _config(tmp_path),
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+    )
+    assert runtime is not None
+    runtime.compose_for_dispatch(
+        binding=_ollama_binding(),
+        fallback_chain=_ollama_chain(),
+        step=_step(),
+        step_context=_step_context(),
+    )
+
+
+def _capture_entries(store: CanonicalMemoryStore) -> list[MemoryOperationEntry]:
+    return [
+        entry
+        for entry in store.read_memory_operations()
+        if entry.operation_kind is MemoryOperationKind.CAPTURE
+    ]
+
+
+def test_run_start_capture_preserves_a_pre_existing_run_envelope(tmp_path: Path) -> None:
+    """Codex R3 [P2-c] - forward-only: a resumed run's history is not re-scoped.
+
+    `_started_runs` is in-process, so a FRESH bootstrap resuming an older run
+    saw an empty set and captured run-start again - and EPISODIC_RUN is one
+    `run.json` per run_id, so `write_record` REPLACED the stored envelope under
+    today's canonical scope. Byte-equality is the assertion, not field
+    equality: the defect was a silent rewrite, so anything that re-authored the
+    file at all is the defect.
+    """
+    assert _step_context().parent_idempotency_key == _RESUMED_RUN_ID  # no silent drift
+    run_path = _seed_legacy_run_record(tmp_path, run_id=_RESUMED_RUN_ID)
+    before = run_path.read_bytes()
+
+    _compose_one_dispatch(tmp_path)
+
+    assert run_path.read_bytes() == before
+    stored_scope = json.loads(run_path.read_text())["envelope"]["scope"]
+    assert stored_scope["provider_family"] == _OLLAMA_KEY  # still the legacy key
+    assert _capture_entries(_memory_root_store(tmp_path)) == []  # and no duplicate row
+
+
+def test_run_start_capture_still_lands_a_new_run_id(tmp_path: Path) -> None:
+    """Codex R3 [P2-c] positive control - presence is keyed per RUN, not global.
+
+    Another run's stored envelope must not suppress this run's first capture;
+    the skip is a durable-presence check on THIS run_id, not a "some history
+    exists" check.
+    """
+    _seed_legacy_run_record(tmp_path, run_id="run-an-unrelated-earlier-run")
+
+    _compose_one_dispatch(tmp_path)
+
+    store = _memory_root_store(tmp_path)
+    [capture] = _capture_entries(store)
+    [memory_ref] = capture.memory_refs
+    record = store.read_record(
+        memory_ref,
+        MemoryRecordKind.EPISODIC_RUN,
+        run_id=_RESUMED_RUN_ID,
+    )
+    assert record.envelope.scope.provider_family == _OLLAMA_FAMILY
