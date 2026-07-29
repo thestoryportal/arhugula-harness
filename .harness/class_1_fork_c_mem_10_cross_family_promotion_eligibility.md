@@ -162,11 +162,42 @@ content today." It is:
   **second-order** case needs no policy change at all: a semantic/procedural record *already promoted* out of
   a cross-family leg is an eligible kind by construction, and carries the same unrecorded provenance forward
   into every later promotion and injection.
-- **Future policy configs.** A deployment setting `PROMOTE_SEMANTIC` / `PROMOTE_PROCEDURAL` with
-  `ReviewMode.AUTOMATIC` — a configuration C-MEM-09 explicitly permits — makes the path auto-promoting, with
-  no family term anywhere for it to consult.
+- **Future policy configs.** A `PROMOTE_SEMANTIC` / `PROMOTE_PROCEDURAL` promotion decision under
+  `ReviewMode.AUTOMATIC` — a configuration C-MEM-09 explicitly permits, and whose review-mode half is
+  *already* the production setting — makes the tool path auto-promoting for every kind it admits, with no
+  family term anywhere for it to consult.
 - **A first hint producer.** The moment one populates `promotion_candidates`, entry point 1 becomes live with
   its candidate-family convention still unpinned.
+
+**None of these is individually sufficient, and the filing states the combinations rather than leaving "a
+single policy field" to imply otherwise** *(out-of-family `just codex-review` R6 [P2-2]; upheld and verified by
+direct read at `1c99e208`. An earlier draft's "a single policy field or a first producer converts this into a
+live exposure" was true of **candidate-reachability**, not of **active promotion**, and the two are worth
+separating exactly because the interim-ending triggers at §7 are read off them.)* The gate functions are
+conjunctions, and one of their conjuncts is **already satisfied in production**:
+
+| Change | What it enables **on its own** |
+|---|---|
+| **(a)** admit a capture-written kind into `eligible_record_kinds` | **Candidate-reachability only.** The record survives `_read_retrievable_record_by_ref` and a candidate is constructed — but `_policy_from_config` still pins `PROPOSE_SEMANTIC` (`automatic_memory.py:542`), so `_promotion_auto_allowed` (`memory_tool_executor.py:897-903`) is False and `_propose_promotion` takes `propose_for_review`: a **durable `PROPOSED`** record, retrieval-excluded, never injected. |
+| **(b)** switch the promotion decision to `PROMOTE_SEMANTIC` / `PROMOTE_PROCEDURAL` | **Active auto-promotion — but only of already-eligible kinds**, i.e. exactly the **second-order** case above (a semantic/procedural record already promoted out of a cross-family leg). Every capture-written kind is still denied at (a)'s gate before a candidate exists. |
+| **(c)** set `ReviewMode.AUTOMATIC` | **Nothing — it is already set.** `_policy_from_config` pins `review_mode=ReviewMode.AUTOMATIC` (`automatic_memory.py:555`). This conjunct of `_promotion_auto_allowed` is satisfied at HEAD; only the decision conjunct is not. Correspondingly, the *other* two review modes are live foreclosures a deployment could re-assert: `ReviewMode.OPERATOR_REQUIRED` forces `review_required` (`:889-890`), and `ReviewMode.FORBIDDEN` denies the tool outright at `:406-407`. |
+| **(d)** a first caller populating `promotion_candidates` | **Nothing promotable, on two counts.** Under the production policy `_review_required` (`memory_promotion.py:762-773`) returns True for `PROPOSE_SEMANTIC`, so `_auto_promote_allowed` (`:776-790`) is False; and even set True it actuates nothing — see below. |
+
+- **Tool path (entry point 2) — live auto-promotion of a *captured* record requires (a) ∧ (b)**, with (c)
+  already true. Both are constructor arguments of the sole production policy, hard-coded side by side at
+  `_policy_from_config` (`automatic_memory.py:542` and `:556`) and drawn from **no** `config.memory` field, so
+  today this is a code change rather than a deployment setting — but they are C-MEM-09 **policy** fields by
+  contract, which is precisely why the contract gap is real regardless of how they are currently sourced.
+- **Hint path (entry point 1) — requires (d) ∧ (b) ∧ non-`LOW` hint confidence ∧ an actuator that does not
+  exist.** `_auto_promote_allowed` additionally demands `hint.confidence` not `LOW` (`:786-787`) and, for a
+  `PROCEDURAL_UPDATE` kind, `PROMOTE_PROCEDURAL` specifically (`:788-790`). And satisfying all of it still
+  promotes nothing: the **only** `PromotionDecisionService.approve` call site anywhere under `src/` is the
+  tool path's (`memory_tool_executor.py:449`). `extract_from_records` is reached solely from
+  `CompactionSafetyHook.extract_candidates` (`memory_compaction_safety.py:153-159`), whose sibling
+  `complete_compaction` (`:161-209`) persists the auditable **disposition** set and never promotes — and
+  `CompactionSafetyHook` itself has no production caller at all, appearing under `src/` only at its definition
+  and its `harness_runtime/__init__.py` export. So on this path `auto_promote_allowed=True` is a value that is
+  **computed and persisted and actuated by nothing**.
 
 **The inert-flag finding — unchanged, and still load-bearing.** `risk_flags` **gates nothing today**. A
 repo-wide grep finds it only at its definition, its two construction sites, and its persistence
@@ -186,11 +217,16 @@ such a record exists.
 entry point or in any policy field, and on the **composed-scope capture path — the U-MEM-26 production
 path** — no record of the producing family survives to promotion time (§3).
 Live auto-promotion exposure at HEAD is **nil** — the tool path is closed twice over (by record kind and by
-policy decision), the hint path is unfed and its candidate convention undefined. What is real *now* is the
-contract gap, which a single policy field or a first producer converts into a live exposure with no further
-review. That is precisely why this is a Class 1 spec question and not a Phase 7 bug — and it is also why the
-urgency is **low and the necessity is not**: nothing is leaking today, and nothing prevents it from leaking
-the day a config changes.
+policy decision), the hint path is unfed, its candidate convention undefined, and its result actuated by
+nothing. What is real *now* is the contract gap — which **no single named change converts into a live
+exposure**, and which the combination table above states exactly: **(a) ∧ (b)** on the tool path (with (c)
+already satisfied in production), or **(d) ∧ (b) ∧ an actuator** on the hint path. What a single change *does*
+buy is the **transition below it** — (a) makes captured records candidate-reachable and durably `PROPOSED`;
+(b) makes the second-order case actively auto-promoting — and each such transition happens **with no further
+review**, because there is no family term at any of these gates to consult. That is precisely why this is a
+Class 1 spec question and not a Phase 7 bug — and it is also why the urgency is **low and the necessity is
+not**: nothing is leaking today, the last step to leaking is a two-field policy change nothing forbids, and
+the contract has no position to fall back on when it happens.
 
 ## §3 The prerequisite finding — on the composed-scope path (the U-MEM-26 production path), the pipeline cannot discriminate even if policy said to
 
@@ -351,23 +387,62 @@ cross-family leg. Two options; they are not equal in cost.
 ### (i) A new content or envelope field at C-MEM-03 altitude
 
 Capture stamps the dispatched provider family (or a boolean `captured_cross_family`) onto the record itself.
+**These are two variants with materially different blast radii, and the R6 finding is that the cost analysis
+was written as if they were one** *(out-of-family `just codex-review` R6 [P2-1]; upheld and verified by direct
+read at `1c99e208`)*. The consequence the R4 draft charged to the whole of (i) — moved record identities —
+belongs to the **content** variant only. Both are stated separately below, and the (i)-vs-(ii) comparison is
+re-run against the cheaper one.
 
-- **Blast radius: high.** C-MEM-03's field shapes were preserved *byte-unchanged* at v1.1, and the change-note
-  says so explicitly at **"Sections preserved verbatim at v1.1."**: *"Zero new record type, zero new field,
-  zero new enum member, zero change to any ledger, packet, or telemetry shape."* Adding one reverses that
-  posture one delta later.
-- Touches every capture writer, and the field must be reconciled against the C-MEM-03 value domain
+**What both variants pay.**
+
+- **A closed-schema amendment either way.** `MemoryRecordEnvelope` carries
+  `model_config = ConfigDict(extra="forbid", frozen=True)`
+  (`harness-is/src/harness_is/memory_record_envelope.py:129`), as do `MemoryScope` (`:115`) and `SourceRef`
+  (`:97`) — an envelope addition is a real field addition at a closed model, not an open-map extension. And at
+  contract altitude the distinction does not exist at all: C-MEM-03's field shapes were preserved
+  *byte-unchanged* at v1.1, and the change-note says so explicitly at **"Sections preserved verbatim at
+  v1.1."**: *"Zero new record type, zero new field, zero new enum member, zero change to any ledger, packet, or
+  telemetry shape."* Either variant reverses that posture one delta later.
+- **Touches every capture writer**, and the field must be reconciled against the C-MEM-03 value domain
   (§"`MemoryScope.provider_family` value domain and derivation") — a *second* family-valued field on the same
   record, with its own null semantics, sitting beside `MemoryScope.provider_family` and meaning something
-  different. That is a one-source-of-truth hazard in its own right.
-- `MemoryScope` is hash-inert for `memory_id` (`memory_capture.py:574-575` per the B-86 §3 P5 finding), but a
-  new **content** field is not — content is hashed (C-MEM-03 §Invariants: *"`content_hash` is computed over
-  canonical serialized content excluding derived indexes."*), so this option moves identities for newly
-  written records and needs an explicit forward-only statement.
-- Upside: self-contained; no cross-contract read dependency; works for a record read in isolation — **with one
-  exception the R3 finding exposes, recorded at the assessment below**: on `EPISODIC_RUN`, which is one stored
-  record per run written by run-start and overwritten by run-close, a stored field is set by *whichever writer
-  ran last* and records nothing about which that was.
+  different. That is a one-source-of-truth hazard in its own right, and it is the same hazard under both
+  variants.
+- **The R3 multi-writer exception, which neither variant escapes** — recorded at the assessment below, where
+  the `EPISODIC_RUN` overwrite path was re-verified for the **envelope** variant specifically rather than
+  assumed from the content one: on `EPISODIC_RUN`, which is one stored record per run written by run-start and
+  overwritten by run-close, a stored field is set by *whichever writer ran last* and records nothing about
+  which that was.
+
+**(i-content) — a field inside the record's `content` mapping. Moves identities.** Content is hashed, and the
+hash *is* the identity. `compute_memory_content_hash(content)` digests the canonicalized **content mapping
+alone** (`harness-is/src/harness_is/memory_record_envelope.py:207-210`, over `canonicalize_memory_content`,
+`:189-204`, which omits only top-level `derived_indexes`), and `derive_memory_id(tier, kind, content_hash)`
+(`:213-222`) composes `mem:{tier}:{kind}:{hex}` from it. The spec states the same at C-MEM-03 §Invariants:
+*"`content_hash` is computed over canonical serialized content excluding derived indexes."* So a new content
+field changes `content_hash` and, through it, the `memory_id` of every newly written record of every kind
+**except** `EPISODIC_RUN`, whose id derives from the `run_id` alone and is content-independent
+(`_memory_id_for`, `harness-runtime/src/harness_runtime/memory_capture.py:1100-1109`). That needs an explicit
+forward-only statement in the contract.
+
+**(i-envelope) — a field on `MemoryRecordEnvelope`. Moves NO identities.** The envelope is not an input to
+either hash. `_record` (`memory_capture.py:1015-1046`) computes `content_hash` from `content` at `:1027` and
+`memory_id` at `:1028` **before** constructing the envelope around them (`:1030-1044`), and the store's own
+consistency check re-derives it the same way — `expected_hash = compute_memory_content_hash(self.content)`
+(`harness-is/src/harness_is/memory_store.py:95`). *(This also corrects a drifted cite carried since the R4
+draft, which anchored `MemoryScope`'s hash-inertness at `memory_capture.py:574-575` — a `source_ref=` /
+`run_id=` argument pair inside `capture_failure_observation`. The hash-inertness property is real; it is
+carried by the three anchors named above, not by those lines. Corrected here rather than quietly repaired,
+and stated as a cite defect because it is the exact claim this split rests on.)* So (i-envelope) leaves every
+existing `memory_id` and every existing `content_hash` intact; on the identity axis it costs nothing.
+
+**(i-envelope) is therefore the real contender, and (i-content) is strictly dominated by it** — (i-content)
+pays identity movement for a discriminator the envelope carries for free, and buys nothing (i-envelope) does
+not, since promotion reads the stored record and can read either field from it. The assessment below compares
+(ii)/(ii-a) against **(i-envelope)**.
+
+- Upside, both variants: self-contained; no cross-contract read dependency; works for a record read in
+  isolation — subject to the `EPISODIC_RUN` exception above.
 
 ### (ii) A C-MEM-08 ledger join at promotion time
 
@@ -497,22 +572,44 @@ accounting is stated rather than asserted.**
   discrimination as their reason for being exported*, and R4's key derivation is a one-line composition over
   them that the capture writer already performs. This remains a **specification** cost, not a **mechanism**
   cost — more precise sentences, not more moving parts.
-- **What (i) still costs, unchanged.** A closed-schema extension at C-MEM-03 reversing v1.1's own zero-new-field
-  posture one delta later; a second family-valued field beside `MemoryScope.provider_family`; content-hash
-  identity movement for newly written records.
-- **And (i) does not escape the finding either — this is what keeps the preference from flipping.** A content
-  field on an `EPISODIC_RUN` record is written by run-start and **overwritten** by run-close, so (i) resolves
-  the same ambiguity by the same last-writer-wins accident that (ii-a) resolves *deliberately* — and resolves
-  it silently, since nothing in a stored field records which writer set it. (i)'s "works for a record read in
-  isolation" upside is real for single-writer kinds like `EPISODIC_TURN`; for the multi-writer kind that
-  produced this finding it is **weaker** than (ii-a), not stronger.
+- **What (i) still costs — restated per variant after the R6 [P2-1] split, because the R4 draft over-charged
+  it.** Both variants pay the closed-schema extension at C-MEM-03 reversing v1.1's own zero-new-field posture
+  one delta later, and both pay the second family-valued field beside `MemoryScope.provider_family`. Only
+  **(i-content)** additionally pays content-hash identity movement; **(i-envelope)** pays none of that, because
+  the envelope is an input to neither `content_hash` nor `memory_id` (§5(i)). Charging identity movement to the
+  whole of (i) over-stated the price of the variant a spec leg would actually pick, and the comparison below is
+  re-run without it.
+- **And (i-envelope) — the cheaper variant, therefore the one the comparison must be run against — does not
+  escape the R3 finding either. This is what keeps the preference from flipping, and it was re-verified
+  directly rather than carried over from the content variant.** `capture_run_close`
+  (`memory_capture.py:337-380`) does not patch a stored record: like every capture it goes through `_record`
+  (`:1015-1046`), which builds a **complete, fresh** `MemoryRecordEnvelope` — including a re-computed
+  `scope=self._scope_for_record(...)` (`:1038-1042`) — and `MemoryStore.write_record` then writes the **whole**
+  canonicalized record, envelope and content together, to the single `run.json` for that run
+  (`harness-is/src/harness_is/memory_store.py:178-188`; `EPISODIC_RUN` is not a JSONL kind, so it takes the
+  `_write_file_atomically` branch at `:186` against `_run_record_path`, `:273-274` / `:290-295`). **So an
+  envelope provenance field set at run-start is overwritten by run-close's independently computed value,
+  exactly as a content field is, and the stored envelope records nothing about which writer set it.** Both
+  variants of (i) therefore resolve the multi-writer ambiguity by the same silent last-writer-wins accident
+  that (ii-a) resolves *deliberately*, off the record's own declared `event_type`. (i)'s "works for a record
+  read in isolation" upside is real for single-writer kinds like `EPISODIC_TURN`; for the multi-writer kind
+  that produced this finding it is **weaker** than (ii-a) under **either** variant, not stronger.
 
-**Preference: unchanged, (ii) with (ii-a) as the join.** Stated plainly because the temptation here is to
-defend the prior pick: had event-qualification required new machinery — a new key, a new index, a scan
-discipline — the balance would genuinely have moved toward (i)'s single self-contained field, and this filing
-would say so. It does not. Confidence on the Q2 recommendation stays **[MODERATE]** and does not recover,
-because the join's *shape* has now been mis-stated **twice** (R3: the wrong field family; R4: the wrong
-uniqueness guarantee). The corrected mechanics are, if anything, slightly *stronger* than the R3 draft's —
+**Preference: unchanged, (ii) with (ii-a) as the join — and R6 is the round that tested it hardest, because it
+struck out (i)'s single largest stated cost.** Stated plainly because the temptation here is to defend the
+prior pick: had event-qualification required new machinery — a new key, a new index, a scan discipline — the
+balance would genuinely have moved toward (i)'s single self-contained field, and this filing would say so. It
+does not. With identity movement removed from the contending variant, the honest remaining ledger is:
+**(i-envelope)** costs a closed-schema field addition at an already-cleared contract, a second family-valued
+field beside `MemoryScope.provider_family`, and every capture writer — and still resolves the multi-writer
+kind by silent accident; **(ii)/(ii-a)** costs four contract sentences and a new cross-contract read
+dependency — and resolves it deliberately, off machinery already exported for exactly this discrimination.
+That is **closer than the R4 accounting made it look**, and this filing says so rather than restating a margin
+it no longer has. It does not cross over, because the one point R6 re-verified rather than removed is the
+deliberateness point, and the multi-writer kind is what the choice turns on. Confidence on the Q2
+recommendation stays **[MODERATE]** and does not recover, because the join's *shape* has now been mis-stated
+**twice** (R3: the wrong field family; R4: the wrong uniqueness guarantee) and the alternative's cost once
+(R6: variant-blind). The corrected mechanics are, if anything, slightly *stronger* than the R3 draft's —
 the ledger really does enforce at-most-one on the key, which the `action_id` claim only asserted — but the
 recurrence is the signal: **the spec leg must state the key exactly, and state what enforces its uniqueness,
 rather than gesture at "the record's capture row."**
@@ -522,7 +619,7 @@ rather than gesture at "the record's capture row."**
 | Reading | Owed spec text |
 |---|---|
 | **A** | **C-MEM-10 Contract** — one paragraph: promotion eligibility is determined by record scope, policy, and evidence, and is not conditioned on the provider family that produced the content during a fallback leg; the run's composed partition (C-MEM-03 §"`MemoryScope.provider_family` value domain and derivation", the continuity sentence) is the whole of the provenance question at this contract. **C-MEM-10 Invariants** — one bullet mirroring it. Nothing else; no C-MEM-08, no C-MEM-03, no plan unit beyond a coverage-matrix row. |
-| **B** | **C-MEM-10 Contract** — the cross-family-captured condition; the risk-flag obligation; and, explicitly, the **gate**: such a candidate is review-required and not auto-promotable (§2's inert-flag finding makes the gate sentence mandatory, not decorative). **C-MEM-10 `PromotionCandidate.risk_flags`** — no schema change needed: the `PromotionCandidate` block's `risk_flags: list<string>` is already an open list, so the new value is a vocabulary addition at the contract, and only the impl-side `PromotionRiskFlag` enum (`memory_promotion.py:80-86`) is closed. **C-MEM-10 Invariants** — the gate as an invariant. **C-MEM-08** — if discriminator (ii), and per the R3 [P2-1] + R4 [P2] findings this is now **four** sentences, not one: (a) the capture row is the authoritative provenance source for promotion, (b) the join is keyed on the capture **`idempotency_key`, composed from the capture `action_id`, which is composed from the record's own declared `event_type`** — explicitly **not** on `memory_refs` (which cannot discriminate a shared-`memory_id` kind) and explicitly **not** on the bare `action_id` (which the ledger does not constrain for uniqueness at all — `append_memory_operation` dedups on `idempotency_key` alone), (c) the matched row must be **qualified** on `operation_kind == CAPTURE` rather than assumed to be a capture row, and (d) the five-case `UNVERIFIABLE` disposition (no reachable row / record cannot name its writer / composed key matches no row / matched row is not a CAPTURE row / matched row carries `provider = None`, the repair-row shape), plus the multi-match ambiguity arm. **or C-MEM-03** — if discriminator (i): the new field, its value domain, its null semantics, its content-hash consequence, **and** its own multi-writer disposition for `EPISODIC_RUN` (§5(i)'s last bullet). Plus a memory-plan unit (U-MEM-27) decomposing the impl leg. |
+| **B** | **C-MEM-10 Contract** — the cross-family-captured condition; the risk-flag obligation; and, explicitly, the **gate**: such a candidate is review-required and not auto-promotable (§2's inert-flag finding makes the gate sentence mandatory, not decorative). **C-MEM-10 `PromotionCandidate.risk_flags`** — no schema change needed: the `PromotionCandidate` block's `risk_flags: list<string>` is already an open list, so the new value is a vocabulary addition at the contract, and only the impl-side `PromotionRiskFlag` enum (`memory_promotion.py:80-86`) is closed. **C-MEM-10 Invariants** — the gate as an invariant. **C-MEM-08** — if discriminator (ii), and per the R3 [P2-1] + R4 [P2] findings this is now **four** sentences, not one: (a) the capture row is the authoritative provenance source for promotion, (b) the join is keyed on the capture **`idempotency_key`, composed from the capture `action_id`, which is composed from the record's own declared `event_type`** — explicitly **not** on `memory_refs` (which cannot discriminate a shared-`memory_id` kind) and explicitly **not** on the bare `action_id` (which the ledger does not constrain for uniqueness at all — `append_memory_operation` dedups on `idempotency_key` alone), (c) the matched row must be **qualified** on `operation_kind == CAPTURE` rather than assumed to be a capture row, and (d) the five-case `UNVERIFIABLE` disposition (no reachable row / record cannot name its writer / composed key matches no row / matched row is not a CAPTURE row / matched row carries `provider = None`, the repair-row shape), plus the multi-match ambiguity arm. **or C-MEM-03** — if discriminator (i), and the owed text differs by **variant** per the R6 [P2-1] split: under **(i-envelope)** the new envelope field, its value domain, its null semantics, an explicit statement that it is **hash-inert** (it enters neither `content_hash` nor `memory_id`), and its multi-writer disposition for `EPISODIC_RUN`; under **(i-content)** all of that **plus** the content-hash identity-movement consequence and its forward-only statement. Both also owe the reconciliation against `MemoryScope.provider_family` as a second family-valued field. Plus a memory-plan unit (U-MEM-27) decomposing the impl leg. |
 | **C** | Everything reading B owes, minus the flag/gate wording, plus a **refusal** invariant at C-MEM-10 and a statement of the permanent consequence (fallback-leg learning is unpromotable). Additionally owes a reconciliation sentence against the C-MEM-03 continuity statement (§"`MemoryScope.provider_family` value domain and derivation") and against the C-MEM-13 capture carve-out (§"Cross-family withholding of standard memory tools"), both of which read against it. |
 
 Under all three readings the Memory threat model needs **no** amendment: its §Threats opener, its
@@ -600,12 +697,25 @@ so rather than steering.** With zero live exposure, taking A costs nothing *obse
 B's discriminator (§5) is real work against a path nothing currently exercises — the ordering "state the
 position now, build the mechanism when a producer or a policy makes it live" is coherent, not a dodge. Two
 conditions keep it honest, and both should be recorded with the decision: (a) it is an **interim with B named
-as the target**, not a discharge; and (b) the two triggers that end the interim are named — a policy
-admitting an episodic kind into `eligible_record_kinds` (or setting `PROMOTE_*` with `ReviewMode.AUTOMATIC`),
-and the first caller to populate `promotion_candidates`. Absent (b) the interim silently becomes permanent
-exactly when it stops being safe. B remains the recommendation on the merits; A-as-recorded-interim is now a
-close second rather than a concession. What must not happen is still the third outcome: leaving it silent a
-second time.
+as the target**, not a discharge; and (b) the triggers that end the interim are named.
+
+**The triggers, stated as the combinations they actually are** *(the R6 [P2-2] sharpening; §2's table is the
+grounding, and it replaces the earlier "a single policy field converts this into a live exposure" framing,
+which was true of candidate-**reachability** and not of active **promotion**)*. They remain **review-triggers**
+— any one of them re-opens the question and ends the interim — but each is now recorded with the transition it
+actually enables, so no later reader infers that one of them alone turns on live auto-promotion:
+
+| Trigger | Transition it enables **alone** | Why it nonetheless ends the interim |
+|---|---|---|
+| **T1** — a policy admits a capture-written kind into `eligible_record_kinds` | **Candidate-reachability.** Captured records reach the tool path and accumulate as durable `PROPOSED` records carrying unrecorded provenance; still not injectable | The `PROPOSED` corpus it builds is exactly what a later operator-review flip — which has no family term either — activates. The interim's "nothing accumulates" premise dies here |
+| **T2** — the promotion decision moves to `PROMOTE_SEMANTIC` / `PROMOTE_PROCEDURAL` | **Active auto-promotion of already-eligible kinds** — the second-order case (a record already promoted out of a cross-family leg), live *immediately*, because `ReviewMode.AUTOMATIC` is already the production setting (`automatic_memory.py:555`) | It is the *last* missing conjunct for the second-order case — the only trigger that is one change away from real promotions today |
+| **T1 ∧ T2** | **Live auto-promotion of a cross-family-captured record.** The full first-order exposure | The interim's premise — nil live exposure — is false from that moment |
+| **T3** — a first caller populates `promotion_candidates` | **Candidate-reachability on the hint path only**, and it forces the candidate-family convention §2 records as undefined. Promotes nothing by itself: under `PROPOSE_SEMANTIC` `_auto_promote_allowed` is False, and no actuator reads it | The convention must be pinned *before* a producer ships one, not after; and an actuator for `auto_promote_allowed` (none exists under `src/` today) is the natural companion change that would arrive with it |
+
+Absent this, the interim silently becomes permanent exactly when it stops being safe — and the single-change
+framing would have let T1 or T2 pass as "not the live one yet." B remains the recommendation on the merits;
+A-as-recorded-interim is now a close second rather than a concession. What must not happen is still the third
+outcome: leaving it silent a second time.
 
 If B is selected, take **discriminator (ii)** with the **(ii-a) event-qualified join** (§5) — cheaper, no
 schema extension, no identity movement, and it reuses the B-91 tri-state, the B-89 canonicalization
@@ -626,9 +736,13 @@ does not delete — C-MEM-03 §Invariants: *"Supersession does not delete the pr
 Decisions owed:
 
 1. **Q1 — A, B, or C** (or "A as a recorded interim, B as the target" — which, per §7, the corrected
-   zero-live-exposure picture makes a materially defensible choice, provided the two interim-ending triggers
-   are recorded with it: an `eligible_record_kinds` / `PROMOTE_*` policy change, and the first caller to
-   populate `promotion_candidates`).
+   zero-live-exposure picture makes a materially defensible choice, provided the interim-ending triggers are
+   recorded with it **as §7's table states them**: **T1** an `eligible_record_kinds` admission
+   (candidate-reachability), **T2** a `PROMOTE_*` decision (second-order auto-promotion, live immediately
+   since `ReviewMode.AUTOMATIC` is already the production setting), **T1 ∧ T2** the full first-order exposure,
+   and **T3** the first caller to populate `promotion_candidates`. Recording them as *three review-triggers
+   with distinct transitions* — rather than as "the policy change" and "the producer" — is what keeps T1 or T2
+   from passing later as "not the live one yet.")
 2. **Q2, only if B or C** — discriminator (i) new field or (ii) C-MEM-08 ledger join. Recommendation: **(ii),
    with the (ii-a) event-qualified join** — the ledger row is selected by the capture **`idempotency_key`**
    (`idempotent:capture:{event_kind}:{memory_id}`, composed from the record's own declared `event_type`),
@@ -655,7 +769,10 @@ C-MEM diff is recommended — the amendment is threat-model-adjacent (the Memory
 and cross-run-persistence bullet, and its model-authored-notes invariant) inside an already-cleared contract,
 which is exactly the shape that earned it on the B-86 spec leg. It has already earned it here: R1 corrected
 two exposure over-claims, R2 corrected the review branch's durability and the §3 data-flow scope, R3
-corrected the §5 join premise, and R4 corrected the Reading-A reach rationale and the §5 join key (this pass).
+corrected the §5 join premise, R4 corrected the Reading-A reach rationale and the §5 join key, R5 synced the
+register carriers to the R4 join semantics, and R6 split §5's option (i) into its content and envelope
+variants — striking identity movement from the contending one — and replaced the single-change exposure
+framing with §2's combination table (this pass).
 
 **No Phase 7 execution is halted by this filing.** U-MEM-26 has landed; the question was already scoped out
 of it at `Implementation_Plan_Memory_Substrate_v1.md` U-MEM-26, subsection "Out of scope for this unit:".
@@ -664,13 +781,14 @@ above.
 
 ## §10 Review-time inventory — the soundness cap on this filing
 
-*Filed at R4 per the PD-9 review-time-inventory discipline (`Project_Workflow_v1_19.md` §7.5.2 PD-9,
-adversarial-review-loop non-convergence discriminators), and on the `deferred-mechanism spec leg exits on
-soundness, not review-quiet` precedent. This section bounds the review surface so a further round has a
-principled exit rather than an open-ended one.*
+*Filed at R4 and maintained each round since, per the PD-9 review-time-inventory discipline
+(`Project_Workflow_v1_19.md` §7.5.2 PD-9, adversarial-review-loop non-convergence discriminators), and on the
+`deferred-mechanism spec leg exits on soundness, not review-quiet` precedent. This section bounds the review
+surface so a further round has a principled exit rather than an open-ended one.*
 
-**What four rounds converged on, and what they did not touch.** Every round corrected the same class of
-claim — *exposure* and *mechanics* — and no round has touched the filing's substance:
+**What six rounds converged on, and what they did not touch.** Every round corrected the same class of
+claim — *exposure* and *mechanics* (R6 adds a third: *cost accounting*, which is mechanics applied to the
+comparison rather than to the code) — and no round has touched the filing's substance:
 
 | Round | What it corrected | Class |
 |---|---|---|
@@ -678,17 +796,24 @@ claim — *exposure* and *mechanics* — and no round has touched the filing's s
 | R2 | The review branch's durability (durable-but-inactive, not ephemeral); the §3 data-flow claim's scope (composed-scope path only) | exposure + mechanics |
 | R3 | The §5 join premise (`EPISODIC_RUN` has two writers against one `memory_id`; `memory_refs` is not the key) | mechanics |
 | R4 | Reading A's reach rationale (promotion is the reach transition, not a durability one); the §5 join key (`idempotency_key`, not `action_id`) | rationale + mechanics |
+| R5 | No fork-body correction — the register carriers (YAML + mirror) synced to the R4 join semantics | carrier sync |
+| R6 | The §5 option-(i) cost accounting (content vs envelope variants: identity movement belongs to the content variant alone, and the envelope variant is the real contender — its `EPISODIC_RUN` overwrite behaviour re-verified rather than inherited); the §2 exposure framing (no single named change creates live auto-promotion — the combination table, and the §7/§8 interim triggers restated with the transition each enables) | cost accounting + exposure |
 
-**Stable across all four rounds, uncorrected by any of them:** the three READINGS (A / B / C) and their
+**Stable across all six rounds, uncorrected by any of them:** the three READINGS (A / B / C) and their
 respective owed spec text; the recommendation of **B** with discriminator **(ii)/(ii-a)**; the [MODERATE]
-confidence on both Q1 and Q2; the A-as-recorded-interim option with its two named interim-ending triggers;
-the §1 witness; the §8 ratification ask; and the §9 routing. Four independent out-of-family passes have found
-nothing against any of them. That is the filing's convergence claim, and it is the one that matters, because
+confidence on both Q1 and Q2; the A-as-recorded-interim option, *with* named interim-ending triggers; the §1
+witness; the §8 ratification ask; and the §9 routing. R6 is the sharpest test of that claim so far, because it
+removed (i)'s largest stated cost and the preference still did not move (§5's re-run assessment says so in
+full, and concedes the margin is narrower); what it changed in the interim-trigger option is the *statement* of
+the triggers — from two, to three review-triggers each carrying its own transition — not their existence or
+their role. Five independent out-of-family passes have found nothing against any of the stable items. That is the filing's convergence claim, and it is the one that matters, because
 the artifact this filing owes the operator is a **decision**, not a mechanics reference.
 
 **The cap, stated as a rule rather than an enumeration.** Residual mechanics claims not corrected above are
 **bounded by rule, not by exhaustive review**: every mechanics claim in this filing is a claim about code at
-`ca0cc5a2`, and the spec leg that discharges `B-92` re-grounds all mechanics against its **own** HEAD before
+`1c99e208` (the R6 verification HEAD; no file under `harness-*/` differs from the `dd2a8c1a` grounding HEAD or
+from R3's `6ab41d7f` or R4's `ca0cc5a2` — every commit on this branch is doc-only), and the spec leg that
+discharges `B-92` re-grounds all mechanics against its **own** HEAD before
 authoring contract text — the `B-86` → `U-MEM-26` precedent, where the spec leg re-verified the capture-path
 mechanics rather than inheriting the fork doc's. A mechanics error surviving here therefore cannot reach the
 spec: it is caught at the leg that consumes it, by a pass that must read the code anyway. What a further
@@ -698,6 +823,6 @@ recommendation, or in the ratification ask.
 **Consequently, the exit condition for further review of *this filing* is:** a finding that would change the
 A/B/C choice, the Q2 discriminator choice, or the operator-facing ask. Findings below that altitude — a
 mis-cited line, a mechanism detail stated at the wrong precision — should be **registered against the spec
-leg** rather than spun into a fifth correction round here, per the non-convergent-adversarial-hardening
+leg** rather than spun into a seventh correction round here, per the non-convergent-adversarial-hardening
 discriminator (*"does this finding invalidate the carrier's premise?"* — if no, stop). The filing is sound as
 a decision artifact; the mechanics are the spec leg's to re-derive.
