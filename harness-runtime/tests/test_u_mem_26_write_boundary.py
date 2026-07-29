@@ -88,6 +88,7 @@ from harness_runtime.lifecycle.native_memory_adapter import CanonicalNativeMemor
 from harness_runtime.memory_capture import (
     RUN_START_EVENT_KIND,
     EpisodicMemoryCapture,
+    MemoryCaptureReservedActorError,
     MemoryCaptureResult,
     MemoryCaptureScopeValueDomainError,
     MemoryCaptureStatus,
@@ -1657,6 +1658,53 @@ def test_a_divergent_second_run_start_capture_is_not_read_as_completion(tmp_path
     assert capture.provider == _OLLAMA_KEY
     assert capture.policy_ref == _POLICY_REF
     assert store.read_run_record(_RESUMED_RUN_ID).content["workflow_id"] == "workflow-divergent"
+
+
+def test_an_ordinary_capture_may_not_bind_the_reserved_repair_actor(tmp_path: Path) -> None:
+    """Codex R9 - the reservation that makes the R8 discriminator unforgeable.
+
+    R8 tells a synthetic repair row apart from an ordinary dispatch row by
+    ACTOR EQUALITY, but `Actor.actor_id` is an unrestricted `str` supplied by
+    whoever binds the capture. Without a reservation the discriminator rested
+    on caller behaviour: an ordinary capture binding
+    `memory-capture-repair:{run_id}` would have made the divergent second
+    run-start above read its own predecessor's row as a repair and return
+    `CAPTURED` over the record/ledger disagreement R8 exists to report.
+
+    The refusal fires at CONSTRUCTION - the one place an ordinary actor enters,
+    since no `capture_*` method takes a per-call actor - so a refused binding
+    never reaches a write at all. `repair_capture_operation` stays the sole
+    producer of the identity, and it is unaffected: it composes the actor
+    internally from a `run_id`, never from a bound one.
+    """
+    store = _store(_binding_root(tmp_path))
+    reserved = capture_repair_actor(_RESUMED_RUN_ID)
+
+    with pytest.raises(MemoryCaptureReservedActorError) as excinfo:
+        EpisodicMemoryCapture(
+            store=store,
+            actor=reserved,
+            project="arhugula-v2",
+            record_scope=_scope(_OLLAMA_FAMILY),
+        )
+
+    assert reserved.actor_id in str(excinfo.value)
+    # Nothing written: the refusal precedes the binding, let alone any capture.
+    assert list(store.read_memory_operations()) == []
+    assert not (tmp_path / "memory" / "episodic").exists()
+    # The prefix is what is reserved, not the one exact repair identity - an id
+    # merely CARRYING it is equally forged.
+    with pytest.raises(MemoryCaptureReservedActorError):
+        EpisodicMemoryCapture(
+            store=store,
+            actor=Actor(
+                actor_class=ActorClass.OPERATOR,
+                actor_id=f"{capture_repair_actor('run-other').actor_id}-suffix",
+            ),
+            project="arhugula-v2",
+        )
+    # And an ordinary actor is untouched.
+    assert EpisodicMemoryCapture(store=store, actor=_actor(), project="arhugula-v2") is not None
 
 
 def test_a_non_run_start_idempotency_conflict_still_fails_the_capture(tmp_path: Path) -> None:

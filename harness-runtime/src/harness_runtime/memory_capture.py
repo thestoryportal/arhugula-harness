@@ -77,6 +77,25 @@ def capture_operation_action_id(event_kind: str, memory_id: MemoryID) -> Identif
     return Identifier(f"capture:{event_kind}:{memory_id}")
 
 
+_RESERVED_REPAIR_ACTOR_PREFIX = "memory-capture-repair:"
+"""The `actor_id` namespace RESERVED for torn-capture repair rows.
+
+Codex R9. `Actor.actor_id` is an unrestricted `str` supplied by whoever binds
+an `EpisodicMemoryCapture`, so the R8 occupant test - which discriminates a
+synthetic repair row from an ordinary dispatch row by actor equality - was only
+as sound as the assumption that no ordinary capture can spell that identity.
+Nothing enforced the assumption: a caller binding this prefix would have made a
+later DIVERGENT run-start replay misread its own predecessor's row as a repair
+and return `CAPTURED` over a durable record/ledger disagreement.
+
+This prefix is therefore refused at the ONE place an ordinary capture's actor
+enters (`EpisodicMemoryCapture.__init__`), which makes the R8 discriminator
+unforgeable rather than merely conventional. `capture_repair_actor` below is
+the sole legitimate producer of an id in this namespace, and it composes it
+from this same constant so the reservation and the identity cannot drift apart.
+"""
+
+
 def capture_repair_actor(run_id: str) -> Actor:
     """Return the actor a torn-capture REPAIR row records for `run_id`.
 
@@ -92,8 +111,15 @@ def capture_repair_actor(run_id: str) -> Actor:
     Exported for the same reason `capture_operation_action_id` is: it is the
     only spelling of this identity, and a caller asserting against a repair row
     must build it here rather than re-spell the format.
+
+    The `_RESERVED_REPAIR_ACTOR_PREFIX` namespace is closed to ordinary capture
+    (see there), so this function is the only producer of the identity - which
+    is what lets `_conflicting_row_is_a_repair` read actor equality as proof.
     """
-    return Actor(actor_class=ActorClass.AGENT, actor_id=f"memory-capture-repair:{run_id}")
+    return Actor(
+        actor_class=ActorClass.AGENT,
+        actor_id=f"{_RESERVED_REPAIR_ACTOR_PREFIX}{run_id}",
+    )
 
 
 class SummarySource(StrEnum):
@@ -191,6 +217,27 @@ class MemoryCaptureScopeValueDomainError(ValueError):
     )
 
 
+class MemoryCaptureReservedActorError(ValueError):
+    """Raised when a caller binds an actor id inside the reserved REPAIR namespace.
+
+    Codex R9. A sibling refusal to `MemoryCaptureScopeValueDomainError` above
+    and classed the same way: it is a caller CONTRACT violation, not a
+    substrate fault, so it declares `policy_denial` at its own definition site
+    (B-88) rather than inheriting the message-heuristic residual. The
+    declaration is load-bearing, not decorative - `StandardMemoryToolExecutor`
+    binds a caller-supplied `context.actor` inside its `execute` try, whose
+    handler classes the exception by TYPE through `classify_memory_failure`.
+
+    It is raised from `__init__` rather than from a capture method because that
+    is where the actor enters and because refusing at construction means the
+    refused binding can never write anything at all.
+    """
+
+    memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
+        MemoryTelemetryFailureClass.POLICY_DENIAL
+    )
+
+
 class EpisodicMemoryCapture:
     """Automatic capture API for runtime episodic events."""
 
@@ -221,7 +268,21 @@ class EpisodicMemoryCapture:
         the capture methods take is UNAFFECTED either way - it still feeds the
         C-MEM-08 operation payload and the C-MEM-19 span as the raw per-dispatch
         key it is. Only the RECORD scope stops deriving from it.
+
+        `actor` is the ONLY way an ordinary capture's actor is bound - no
+        `capture_*` method takes a per-call actor, and `_operation_payload` is
+        reached with exactly two actors: this one and, from
+        `repair_capture_operation` alone, `capture_repair_actor(run_id)`. So
+        refusing the reserved repair namespace here closes it for every
+        ordinary row, which is what makes the R8 occupant test unforgeable
+        (`_RESERVED_REPAIR_ACTOR_PREFIX`).
         """
+        if actor.actor_id.startswith(_RESERVED_REPAIR_ACTOR_PREFIX):
+            raise MemoryCaptureReservedActorError(
+                f"actor_id {actor.actor_id!r} is inside the "
+                f"{_RESERVED_REPAIR_ACTOR_PREFIX!r} namespace, which is reserved for "
+                "torn-capture repair rows and may not be bound by an ordinary capture"
+            )
         self._store = store
         self._actor = actor
         self._project = project
@@ -775,7 +836,20 @@ class EpisodicMemoryCapture:
           dispatch actor its caller bound at construction.
 
         So a repair actor on the occupying row means the occupant is a repair,
-        which is the only occupant `_capture` may read as completion. Absence -
+        which is the only occupant `_capture` may read as completion.
+
+        Codex R9 - what makes that inference SOUND rather than conventional:
+        `actor_id` is an unrestricted `str`, so on its own "no ordinary capture
+        composes this identity" was an assumption about caller behaviour, and a
+        caller that bound `memory-capture-repair:{run_id}` itself would have
+        made a later DIVERGENT run-start replay read this row as a repair and
+        return `CAPTURED` over a record/ledger disagreement. The namespace is
+        therefore RESERVED at the single point an ordinary actor enters
+        (`__init__` refuses `_RESERVED_REPAIR_ACTOR_PREFIX`), leaving
+        `repair_capture_operation` its only producer. Actor equality is
+        consequently unforgeable, not merely unlikely to collide.
+
+        Absence -
         including a ledger that cannot be read, whose exception propagates into
         the broad handler and fails the capture - is answered `False`, so the
         conflict stays a failure.
@@ -1104,6 +1178,7 @@ __all__ = [
     "RUN_START_EVENT_KIND",
     "EpisodicMemoryCapture",
     "MemoryCaptureMode",
+    "MemoryCaptureReservedActorError",
     "MemoryCaptureResult",
     "MemoryCaptureScopeValueDomainError",
     "MemoryCaptureStatus",
