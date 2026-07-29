@@ -4730,6 +4730,69 @@ async def test_b87_external_cli_spawn_failure_is_pre_wire() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_b87_sdk_call_time_argument_rejection_is_pre_wire() -> None:
+    """B-87 (codex R7 [P2-1]) — a vendor client's CALL-TIME argument validation
+    is pre-wire, and telling it apart needs NO instrumentation of the SDK: the
+    three clients are `async def`s (`ollama.AsyncClient.chat`) or synchronous
+    `@required_args` wrappers over one (`anthropic` / `openai`'s `create`), so
+    an unsupported provider keyword out of `payload.params` raises `TypeError`
+    AT THE CALL, before any coroutine — let alone a request — exists.
+
+    Splitting the call from the await is the whole fix. Marking first reported
+    `injection` + packet_hash for a request that was never even built. What
+    the vendor validates INSIDE the coroutine stays post-wire by design (the
+    standing decline recorded at `_ProviderWireReachedSink`).
+    """
+    client = _AnthropicClient()
+    reached_body: list[str] = []
+
+    async def _strict_create(
+        *, model: str, messages: Any, max_tokens: int, system: Any = None
+    ) -> Any:
+        # No `**kwargs`: the real SDK signature rejects unknown keywords at the
+        # call, and a swallowing double cannot witness this ordering.
+        reached_body.append(model)
+        raise AssertionError("the fake's body must be unreachable")
+
+    client.messages.create = _strict_create  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TypeError, match="unsupported_sdk_kwarg"):
+        await dispatcher.dispatch(
+            _binding("anthropic"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": None,
+                    "params": {"max_tokens": 100, "unsupported_sdk_kwarg": True},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+    assert reached_body == [], "the SDK method body never ran — the call itself was rejected"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly", (
+        "the packet was assembled and then never sent — it was not an injection"
+    )
+    assert "memory.packet_hash" not in attrs, (
+        "claiming a hash for a request the SDK refused to build is the B-87 defect"
+    )
+    assert attrs["memory.record_count"] == 0
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+    assert attrs["memory.degraded_serve.pre_wire_error_type"] == "TypeError"
+    assert "memory.degraded_serve.provider_error_type" not in attrs, (
+        "no provider produced this error — no request was constructed"
+    )
+
+
 @dataclass
 class _LegacyExternalCLIFakeAdapter:
     """An adapter on the PRE-B-87 `dispatch_text(*, model, prompt)` contract.

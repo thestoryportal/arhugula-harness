@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
@@ -376,6 +376,85 @@ async def test_on_wire_not_fired_when_the_pre_send_split_raises(tmp_path: Path) 
 
     assert msgs.calls == [], "no request was built, let alone sent"
     assert fired == []
+
+
+class _StrictFakeMessages:
+    """A fake on the REAL SDK's call shape: explicit keyword parameters, no
+    ``**kwargs`` swallow, `async def` body.
+
+    `anthropic`'s `AsyncMessages.create` is an `async def` behind a synchronous
+    `@required_args` wrapper, so an unsupported keyword — or a missing required
+    one — is a `TypeError` raised AT THE CALL, before any coroutine exists. A
+    `**kwargs`-swallowing double cannot witness that ordering at all."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def create(self, *, model: str, messages: Any, max_tokens: int) -> Any:
+        self.calls.append({"model": model, "messages": messages, "max_tokens": max_tokens})
+        raise AssertionError("_StrictFakeMessages.create body must be unreachable in these tests")
+
+
+@pytest.mark.asyncio
+async def test_on_wire_not_fired_when_the_sdk_rejects_the_call_arguments(tmp_path: Path) -> None:
+    """B-87 (codex R7 [P2-1]) — the SDK's CALL-TIME argument validation is
+    pre-wire, and no vendor instrumentation is needed to see it: constructing
+    the call before firing the mark is enough. An unsupported provider keyword
+    riding in `params` raises `TypeError` synchronously, with no request built;
+    firing the mark first reported `injection` + packet_hash for it."""
+    msgs = _StrictFakeMessages()
+    fired: list[str] = []
+
+    with pytest.raises(TypeError, match="unsupported_sdk_kwarg"):
+        await execute_with_memory_callbacks(
+            adapter=_FakeAdapter(cast(Any, msgs)),
+            model="claude-sonnet-4-5",
+            messages_create_kwargs={
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 8,
+                "unsupported_sdk_kwarg": True,
+            },
+            backend=LocalFilesystemMemoryToolBackend(root=tmp_path),
+            backend_enum=MemoryToolStorageBackend.FILESYSTEM,
+            tracer=TracerProvider().get_tracer("test"),
+            context_editing_active=False,
+            on_wire=lambda: fired.append("fired"),
+        )
+
+    assert msgs.calls == [], "the SDK method body never ran — the call itself was rejected"
+    assert fired == [], "nothing was sent, so the wire was never reached"
+
+
+@pytest.mark.asyncio
+async def test_a_raising_on_wire_propagates_and_discards_the_unsent_request(
+    tmp_path: Path,
+) -> None:
+    """The mark now sits BETWEEN construction and the await, so a caller whose
+    callback raises leaves a constructed-but-never-awaited request behind. It is
+    closed rather than left to surface as a stray `coroutine was never awaited`
+    RuntimeWarning, and the caller's exception propagates unchanged."""
+
+    class _ObserverFailure(RuntimeError):
+        pass
+
+    msgs = _FakeMessages([])
+
+    def _fail() -> None:
+        raise _ObserverFailure("observer exploded")
+
+    with pytest.raises(_ObserverFailure):
+        await execute_with_memory_callbacks(
+            adapter=_FakeAdapter(msgs),
+            model="claude-sonnet-4-5",
+            messages_create_kwargs={"messages": [{"role": "user", "content": "hi"}]},
+            backend=LocalFilesystemMemoryToolBackend(root=tmp_path),
+            backend_enum=MemoryToolStorageBackend.FILESYSTEM,
+            tracer=TracerProvider().get_tracer("test"),
+            context_editing_active=False,
+            on_wire=_fail,
+        )
+
+    assert msgs.calls == [], "the constructed request was discarded, never awaited"
 
 
 # ---------------------------------------------------------------------------

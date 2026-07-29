@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -468,6 +469,59 @@ async def test_asyncio_runner_notifies_the_wire_once_the_process_exists() -> Non
     assert result.exit_code == 0
     assert result.stdout == "Reply OK"
     assert notified == ["fired"]
+
+
+@pytest.mark.asyncio
+async def test_asyncio_runner_reaps_the_child_when_the_wire_callback_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-87 (codex R7 [P2-2]) — a raising observer must not leak the child.
+
+    The notification fires after `create_subprocess_exec` succeeds, so an
+    exception out of it unwinds past the `communicate` block whose timeout path
+    is the only other place this process is reaped. Without the cleanup guard
+    the long-lived child below survives the raise; repeated observer failures
+    would leak one running CLI process each. A real child is used because the
+    property under test — that it is actually dead — is only observable on one."""
+
+    class _ObserverFailure(RuntimeError):
+        pass
+
+    spawned: list[asyncio.subprocess.Process] = []
+    real_create = asyncio.create_subprocess_exec
+
+    async def _recording_create(*argv: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_create(*argv, **kwargs)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _recording_create)
+
+    runner = AsyncioSubprocessRunner()
+
+    def _fail() -> None:
+        raise _ObserverFailure("observer exploded")
+
+    try:
+        with pytest.raises(_ObserverFailure):
+            await runner.run(
+                (sys.executable, "-c", "import time; time.sleep(300)"),
+                stdin="",
+                timeout_seconds=30.0,
+                on_wire=_fail,
+            )
+
+        assert len(spawned) == 1, "the spawn itself succeeded — the raise is the observer's"
+        assert spawned[0].returncode is not None, (
+            "the child outlived the failed notification: a leaked CLI process"
+        )
+    finally:
+        # Belt-and-braces so a regression (or a mutation probe) cannot leave a
+        # 300-second sleeper behind.
+        for process in spawned:
+            if process.returncode is None:  # pragma: no cover - only on regression
+                process.kill()
+                await process.wait()
 
 
 @dataclass

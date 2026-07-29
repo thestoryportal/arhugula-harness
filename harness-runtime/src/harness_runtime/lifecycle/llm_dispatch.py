@@ -2289,18 +2289,32 @@ class _ProviderWireReachedSink:
     process exists (codex R3 [P2-1]); an adapter that predates the callback
     falls back to the marker-before-the-await placement (`_dispatch_external_cli`).
 
-    DECLINED, on the record (codex R5 [P2-1], second half): moving the plain
-    SDK arms' mark past a vendor client's own parameter validation. On those
-    arms (`anthropic` plain + HITL, `openai`, `ollama`) the mark already sits
-    immediately before the awaited SDK client call — the B-87 contract's own
-    prescribed boundary, "the provider-call boundary, the one place per arm
-    where the adapter is actually invoked". An SDK-INTERNAL, client-side
-    parameter rejection is indistinguishable from a wire failure without
-    instrumenting the vendor SDK's HTTP layer, so such pre-HTTP rejections
-    classify post-wire BY DESIGN: the boundary this marker can honestly claim
-    is OUR last observable point, not the vendor's. Where the last pre-send
-    step is code we DO own, it is marked there instead — hence
-    `execute_with_memory_callbacks`'s ``on_wire``.
+    On the plain SDK arms (`anthropic` plain + HITL, `openai`, `ollama`) the
+    boundary is split in two, because the vendor's own validation is:
+
+    * **CALL-TIME** rejection — an unsupported provider keyword out of
+      `payload.params`, or a `required_args` omission. Every one of those
+      clients is an `async def` (`ollama.AsyncClient.chat`) or a thin sync
+      wrapper over one (`anthropic`/`openai`'s `@required_args`-decorated
+      `create`), so the rejection is a `TypeError` raised SYNCHRONOUSLY at the
+      call, before any coroutine exists. Distinguishing it needs no vendor
+      instrumentation at all — just splitting the call from the await. The arms
+      therefore CONSTRUCT the awaitable first, mark second, await third (codex
+      R7 [P2-1]), so a repaired dispatch that never built a request reports
+      `pre_wire_failure` with no `packet_hash`. Nothing sits between the
+      construction and the await but `_mark_wire_reached`, a total attribute
+      write, so no coroutine can be orphaned by that reordering.
+    * **IN-COROUTINE** rejection — anything the vendor validates past the await
+      entry, inside its own request pipeline. This remains DECLINED, on the
+      record (codex R5 [P2-1], second half; narrowed to this half at R7): it is
+      indistinguishable from a wire failure without instrumenting the vendor
+      SDK's HTTP layer, so such pre-HTTP rejections classify post-wire BY
+      DESIGN. The boundary this marker can honestly claim is OUR last
+      observable point, not the vendor's.
+
+    Where the last pre-send step is code we DO own, it is marked there instead
+    — hence `execute_with_memory_callbacks`'s ``on_wire``, which fires under
+    the same construct-then-mark-then-await ordering.
 
     Written only by the arm helpers that carry a ``memory_packet`` — i.e. the
     dispatch the disposition describes. The standard-tools loops' OWN calls are
@@ -2320,9 +2334,11 @@ class _ProviderWireReachedSink:
 def _mark_wire_reached(sink: _ProviderWireReachedSink | None) -> None:
     """Record that the next awaited call reaches the provider adapter.
 
-    Call IMMEDIATELY before the await, never after it (see the sink docstring).
-    ``None`` is the direct-helper-call case (no degraded serve is in flight, so
-    nothing reads the marker) and is a no-op.
+    Call after the provider call has been CONSTRUCTED and immediately before
+    its await, never after the await (see the sink docstring): construction is
+    where the vendor client's call-time argument validation runs, and it is
+    pre-wire. ``None`` is the direct-helper-call case (no degraded serve is in
+    flight, so nothing reads the marker) and is a no-op.
     """
 
     if sink is not None:
@@ -3469,8 +3485,11 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     )
 
     for _turn_index in range(_ANTHROPIC_HITL_MAX_TOOL_TURNS):
+        # Construct, then mark, then await (codex R7 [P2-1] — see the sink
+        # docstring): a call-time SDK argument rejection stays PRE-wire.
+        pending = adapter.client.messages.create(model=model, **kwargs)
         _mark_wire_reached(wire_sink)
-        response = await adapter.client.messages.create(model=model, **kwargs)
+        response = await pending
         tool_use_blocks = _anthropic_tool_use_blocks(response)
         if not tool_use_blocks:
             return _anthropic_response_bundle(response, payload, model, kwargs)
@@ -3597,8 +3616,11 @@ async def _dispatch_anthropic(
     kwargs = _payload_to_anthropic_kwargs(
         payload, system, upstream, frozen_tool_superset, cache_ttl, memory_packet
     )
+    # Construct, then mark, then await (codex R7 [P2-1] — see the sink
+    # docstring): a call-time SDK argument rejection stays PRE-wire.
+    pending = adapter.client.messages.create(model=model, **kwargs)
     _mark_wire_reached(wire_sink)
-    response = await adapter.client.messages.create(model=model, **kwargs)
+    response = await pending
 
     return _anthropic_response_bundle(response, payload, model, kwargs)
 
@@ -3622,8 +3644,11 @@ async def _dispatch_openai(
     kwargs = _payload_to_openai_kwargs(payload, system, upstream)
     if memory_packet is not None:
         _fold_memory_packet_into_system(kwargs, memory_packet)
+    # Construct, then mark, then await (codex R7 [P2-1] — see the sink
+    # docstring): a call-time SDK argument rejection stays PRE-wire.
+    pending = adapter.client.chat.completions.create(model=model, **kwargs)
     _mark_wire_reached(wire_sink)
-    response = await adapter.client.chat.completions.create(model=model, **kwargs)
+    response = await pending
     return _openai_response_bundle(response)
 
 
@@ -4284,8 +4309,11 @@ async def _dispatch_ollama(
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     if memory_packet is not None:
         _fold_memory_packet_into_system(kwargs, memory_packet)
+    # Construct, then mark, then await (codex R7 [P2-1] — see the sink
+    # docstring): a call-time SDK argument rejection stays PRE-wire.
+    pending = adapter.client.chat(model=model, **kwargs)
     _mark_wire_reached(wire_sink)
-    response = await adapter.client.chat(model=model, **kwargs)
+    response = await pending
     return _ollama_response_bundle(response)
 
 
@@ -4733,7 +4761,10 @@ async def _dispatch_external_cli(
     #     still admits — codex R3 [P2-2] — and a `**kwargs` forwarder, which
     #     might swallow the callback rather than fire it — codex R4 [P2]). It
     #     cannot be TRUSTED with the mark, so the dispatcher keeps the
-    #     PREVIOUS behavior verbatim: mark immediately before the await.
+    #     PREVIOUS behavior verbatim: mark immediately before the await —
+    #     construct-then-mark-then-await, so that a legacy adapter rejecting
+    #     these keywords at CALL time stays pre-wire (codex R7 [P2-1], the same
+    #     ordering as the direct-SDK arms).
     #     Truthful for everything this module controls — a translation raise
     #     above still classifies pre-wire — and its residual window (that
     #     adapter's own internals) is exactly the pre-B-87 status quo, which is
@@ -4745,8 +4776,9 @@ async def _dispatch_external_cli(
             on_wire=lambda: _mark_wire_reached(wire_sink),
         )
     else:
+        pending = adapter.dispatch_text(model=model, prompt=prompt)
         _mark_wire_reached(wire_sink)
-        result = await adapter.dispatch_text(model=model, prompt=prompt)
+        result = await pending
     text = getattr(result, "text", None)
     if not isinstance(text, str):
         raise LLMDispatchPayloadShapeError("external CLI provider result missing string text field")

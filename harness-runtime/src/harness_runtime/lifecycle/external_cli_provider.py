@@ -356,7 +356,19 @@ class AsyncioSubprocessRunner:
         # `create_subprocess_exec` raises that is NOT translated (a
         # `PermissionError` on an unexecutable command propagates as-is and is
         # pre-wire for free). Everything below is post-wire.
-        _notify_wire(on_wire)
+        try:
+            _notify_wire(on_wire)
+        except BaseException:
+            # A caller-supplied observer that raises must not leak the child we
+            # just spawned (B-87, codex R7 [P2-2]): control would unwind past
+            # the `communicate` block below, whose timeout path is the ONLY
+            # other place this process is reaped, and the CLI would keep
+            # running. Repeated observer failures would leak one process each.
+            # Same kill/wait idiom as that timeout path; the observer's
+            # exception is then propagated unchanged.
+            process.kill()
+            await process.wait()
+            raise
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
