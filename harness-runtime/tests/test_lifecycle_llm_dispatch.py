@@ -3841,7 +3841,7 @@ async def test_b83_degraded_span_survives_a_failing_provider_call() -> None:
     assert attrs["memory.access_mode"] == "prompt_extension_packet"
     assert attrs["memory.packet_hash"] == "c" * 64
     assert attrs["memory.record_count"] == 1
-    assert "memory.degraded_serve.translation_error_type" not in attrs
+    assert "memory.degraded_serve.pre_wire_error_type" not in attrs
 
 
 @pytest.mark.asyncio
@@ -3962,7 +3962,7 @@ async def test_b87_r5_retry_pre_wire_raise_is_not_reported_as_injection(
     )
     assert "memory.packet_hash" not in attrs
     assert attrs["memory.record_count"] == 0
-    assert attrs["memory.degraded_serve.dispatch_outcome"] == "translation_error"
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
 
 
 @pytest.mark.asyncio
@@ -4431,8 +4431,8 @@ async def test_b83_two_base_system_sources_still_fail_loud_through_the_repair() 
         "claiming a hash for a packet no provider ever saw is the B-87 defect"
     )
     assert attrs["memory.record_count"] == 0
-    assert attrs["memory.degraded_serve.dispatch_outcome"] == "translation_error"
-    assert attrs["memory.degraded_serve.translation_error_type"] == "PromptInjectionConflictError"
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+    assert attrs["memory.degraded_serve.pre_wire_error_type"] == "PromptInjectionConflictError"
     assert "memory.degraded_serve.provider_error_type" not in attrs, (
         "no provider produced this error"
     )
@@ -4472,7 +4472,7 @@ async def test_b87_external_cli_pre_wire_payload_rejection_is_not_reported_as_in
     attrs = _one_degraded_serve_span(exporter)
     assert attrs["memory.operation.name"] == "packet_assembly"
     assert "memory.packet_hash" not in attrs
-    assert attrs["memory.degraded_serve.dispatch_outcome"] == "translation_error"
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
 
 
 @pytest.mark.asyncio
@@ -4514,7 +4514,7 @@ async def test_b87_anthropic_hitl_variant_pre_wire_raise_is_not_reported_as_inje
     attrs = _one_degraded_serve_span(exporter)
     assert attrs["memory.operation.name"] == "packet_assembly"
     assert "memory.packet_hash" not in attrs
-    assert attrs["memory.degraded_serve.dispatch_outcome"] == "translation_error"
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
 
 
 @pytest.mark.asyncio
@@ -4668,7 +4668,7 @@ async def test_b87_anthropic_memory_variant_pre_wire_raise_is_not_reported_as_in
     attrs = _one_degraded_serve_span(exporter)
     assert attrs["memory.operation.name"] == "packet_assembly"
     assert "memory.packet_hash" not in attrs
-    assert attrs["memory.degraded_serve.dispatch_outcome"] == "translation_error"
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
 
 
 @pytest.mark.asyncio
@@ -4676,7 +4676,7 @@ async def test_b87_anthropic_memory_variant_post_wire_failure_still_reports_inje
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """B-87 ordering guard for the memory variant — a marker set AFTER the await
-    would regress this into `translation_error` / `packet_assembly`."""
+    would regress this into `pre_wire_failure` / `packet_assembly`."""
 
     def _boom() -> Any:
         raise TimeoutError("provider timed out after the request was sent")

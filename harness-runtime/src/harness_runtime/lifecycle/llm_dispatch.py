@@ -1638,10 +1638,10 @@ class RuntimeLLMDispatcher:
             # `_UnservedMemoryToolCallsSink`).
             unserved_sink = _UnservedMemoryToolCallsSink()
             # B-87 — `degraded_sink.value.rendered` is populated HERE, before any
-            # translation runs, so it alone cannot tell an injection that
-            # happened from one that raised in translate. This sink is the
-            # discriminator; it is written only at the arms' provider-call
-            # boundaries (see `_ProviderWireReachedSink`).
+            # of the per-arm pre-adapter work runs, so it alone cannot tell an
+            # injection that happened from one that raised before the wire. This
+            # sink is the discriminator; it is written only at the arms'
+            # provider-call boundaries (see `_ProviderWireReachedSink`).
             wire_sink = _ProviderWireReachedSink()
 
             # --- Step 3: per-provider dispatch --------------------------
@@ -2227,11 +2227,20 @@ _DISPATCH_OUTCOME_CANCELLED: Final[str] = "cancelled"
 #: as the three above rather than on `memory.degraded_serve.reason`: `reason`
 #: answers *why the selected mode could not be served* (a property of the
 #: context, settled before dispatch), while this axis answers *how the dispatch
-#: that decision rode on ended*. A translation raise is an answer to the second
+#: that decision rode on ended*. A pre-wire raise is an answer to the second
 #: question, and folding it into the first would put a dispatch-lifecycle value
 #: into the degradation-reason value domain — two orthogonal facts on one
 #: attribute. Also a span-attribute VALUE, for the same C-MEM-19 reason.
-_DISPATCH_OUTCOME_TRANSLATION_ERROR: Final[str] = "translation_error"
+#:
+#: PHASE-NEUTRAL BY CONSTRUCTION (codex R1 [P2]). The `_ProviderWireReachedSink`
+#: marker discriminates reached-the-wire from not; it cannot know WHICH pre-wire
+#: phase raised. Translation (`_payload_to_anthropic_kwargs`, the external-CLI
+#: text-only shape check) is only one of them — `registry.resolve_backend`'s
+#: `MemoryBackendResolutionError`, and any other pre-adapter setup failure,
+#: raise on the same side of the marker. So the value names the LOCUS ("before
+#: the wire"), never a phase: a `translation_error` spelling would mislabel
+#: every non-translation pre-wire raise and corrupt the telemetry it feeds.
+_DISPATCH_OUTCOME_PRE_WIRE_FAILURE: Final[str] = "pre_wire_failure"
 
 
 @dataclass(slots=True)
@@ -2239,9 +2248,10 @@ class _ProviderWireReachedSink:
     """B-87 — did the degraded-serve disposition actually reach a provider?
 
     `_DegradedMemoryServe.rendered` is populated at the serve-check, BEFORE any
-    per-arm translation runs, and every translator can raise before its adapter
-    call (the two-BASE-system `PromptInjectionConflictError`, the external-CLI
-    text-only `LLMDispatchPayloadShapeError`, any future pre-adapter
+    per-arm pre-adapter work runs, and any of that work can raise before the
+    adapter call (translation's two-BASE-system `PromptInjectionConflictError`
+    and the external-CLI text-only `LLMDispatchPayloadShapeError`, backend
+    resolution's `MemoryBackendResolutionError`, any future pre-adapter
     validation). The arm site's ``finally`` then reported an `INJECTION` with
     the packet's hash and record count for a packet that never left the
     process. This sink is what the emitter branches on so a pre-wire failure is
@@ -2553,8 +2563,9 @@ def _emit_degraded_memory_serve_span(
       hash and record count. A successful injection through a different seam,
       not a failure, so no `failure_class` is set.
     * REPAIRED BUT PRE-WIRE (`degraded.rendered` present, NOT `reached_wire`) —
-      B-87. The packet was rendered and then the dispatch raised in translation,
-      so it never left the process: `PACKET_ASSEMBLY` (the last thing that
+      B-87. The packet was rendered and then the dispatch raised before any
+      provider adapter was reached, so it never left the process — whichever
+      pre-adapter step raised: `PACKET_ASSEMBLY` (the last thing that
       truthfully happened) / `access_mode=no_memory_access` (what the model
       actually got) / `record_count=0` / NO `packet_hash`. Reporting
       `INJECTION` with the hash here asserts a disclosure that did not occur —
@@ -2626,15 +2637,18 @@ def _emit_degraded_memory_serve_span(
             # error, and its class is not a PROVIDER error type. Both move onto
             # truthful keys; the post-wire spelling is untouched, so existing
             # consumers of `provider_error_type` keep reading exactly the
-            # failures a provider actually produced.
+            # failures a provider actually produced. The pre-wire keys name only
+            # the LOCUS, never a phase — the marker knows the call never reached
+            # the wire, not whether translation, backend resolution, or any
+            # other pre-adapter step was the one that raised (codex R1 [P2]).
             pre_wire_failure = outcome == _DISPATCH_OUTCOME_PROVIDER_ERROR and not reached_wire
             span.set_attribute(
                 "memory.degraded_serve.dispatch_outcome",
-                _DISPATCH_OUTCOME_TRANSLATION_ERROR if pre_wire_failure else outcome,
+                _DISPATCH_OUTCOME_PRE_WIRE_FAILURE if pre_wire_failure else outcome,
             )
             if error_type is not None:
                 span.set_attribute(
-                    "memory.degraded_serve.translation_error_type"
+                    "memory.degraded_serve.pre_wire_error_type"
                     if pre_wire_failure
                     else "memory.degraded_serve.provider_error_type",
                     error_type,
@@ -3496,8 +3510,10 @@ async def _dispatch_anthropic_with_memory(
 
     # B-87 — the adapter call itself lives inside `execute_with_memory_callbacks`,
     # so this is the last point THIS module controls before the provider is
-    # reached. It covers the translate above, which is where the pre-wire raises
-    # on this arm originate (`_payload_to_anthropic_kwargs`).
+    # reached. It covers EVERY pre-adapter step above — `resolve_backend`'s
+    # `MemoryBackendResolutionError` as much as `_payload_to_anthropic_kwargs`'s
+    # translate raise — which is why the emitter classifies by locus
+    # (`pre_wire_failure`) and not by phase (codex R1 [P2]).
     _mark_wire_reached(wire_sink)
     response = await execute_with_memory_callbacks(
         adapter=adapter,
