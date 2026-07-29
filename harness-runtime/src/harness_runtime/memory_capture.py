@@ -52,6 +52,21 @@ from harness_runtime.memory_scope_family import (
 _REDACTED_SUMMARY = "[redacted]"
 _SCHEMA_VERSION = "episodic-capture/v1"
 
+RUN_START_EVENT_KIND = "run_start"
+"""Event kind of the run-start capture, shared with its durable-row probes."""
+
+
+def capture_operation_action_id(event_kind: str, memory_id: MemoryID) -> Identifier:
+    """Return the C-MEM-08 `action_id` a capture of `memory_id` writes.
+
+    Exported because it is the ONLY key that identifies one capture event in
+    the ledger: run-start and run-close share a single EPISODIC_RUN
+    `memory_id`, so `memory_refs` cannot tell them apart. A caller asking
+    whether a specific capture completed must ask by this id, and must build
+    it here rather than re-spelling the format.
+    """
+    return Identifier(f"capture:{event_kind}:{memory_id}")
+
 
 class SummarySource(StrEnum):
     """Provenance classes for stored episodic summaries."""
@@ -203,7 +218,7 @@ class EpisodicMemoryCapture:
             "close_status": "open",
         }
         return self._capture(
-            event_kind="run_start",
+            event_kind=RUN_START_EVENT_KIND,
             record_kind=MemoryRecordKind.EPISODIC_RUN,
             content=content,
             timestamp=timestamp,
@@ -539,21 +554,16 @@ class EpisodicMemoryCapture:
             cli_profile=cli_profile,
             provider=provider,
         )
-        action_id = Identifier(f"capture:{event_kind}:{record.envelope.memory_id}")
-        payload = MemoryOperationPayload(
-            action_id=action_id,
-            idempotency_key=Identifier(f"idempotent:{action_id}"),
-            actor=self._actor,
+        payload = self._operation_payload(
+            event_kind=event_kind,
+            memory_id=record.envelope.memory_id,
             timestamp=timestamp,
-            operation_kind=MemoryOperationKind.CAPTURE,
-            operation_projection=MemoryOperationProjection.NONE,
             run_id=run_id,
             step_id=step_id,
             provider=provider,
             model=model,
             cli_profile=cli_profile,
             engine_class=engine_class,
-            memory_refs=(record.envelope.memory_id,),
             policy_ref=policy_ref,
             procedural_snapshot_ref=procedural_snapshot_ref,
         )
@@ -598,9 +608,124 @@ class EpisodicMemoryCapture:
                 event_kind=event_kind,
                 record_kind=record_kind,
                 memory_id=record.envelope.memory_id,
-                operation_action_id=action_id,
+                operation_action_id=payload.action_id,
                 operation_result=operation_result,
             )
+
+    def repair_capture_operation(
+        self,
+        *,
+        event_kind: str,
+        envelope: MemoryRecordEnvelope,
+        timestamp: datetime,
+        run_id: str,
+        step_id: str | None,
+        provider: str | None,
+        model: str | None,
+        cli_profile: str | None,
+        engine_class: MemoryOperationEngineClass | None,
+        policy_ref: str | None,
+        procedural_snapshot_ref: str | None,
+    ) -> MemoryCaptureResult:
+        """Append the C-MEM-08 CAPTURE row for an ALREADY-STORED record.
+
+        Completes a TORN capture. `_capture` writes the record before its
+        ledger row (see the ordering rationale there), so a failed append
+        leaves a durable record carrying no operation row - the record's
+        presence is therefore not evidence that its capture completed. Re-running
+        `_capture` is not the repair: EPISODIC_RUN is one `run.json` per run, so
+        it would REWRITE the stored envelope under today's scope, which is
+        precisely what the forward-only posture forbids. This writes the
+        MISSING ROW ONLY, against the envelope's OWN `memory_id` as stored.
+
+        The row reuses the `action_id` / `idempotency_key` the interrupted
+        attempt would have written, so it lands in exactly the slot that
+        attempt left empty and a concurrent second repair resolves through the
+        ledger's own idempotency rule (no-op on an equivalent payload, loud
+        conflict otherwise) instead of duplicating - the same semantics two
+        concurrent FIRST captures of one run already have.
+        """
+        payload = self._operation_payload(
+            event_kind=event_kind,
+            memory_id=envelope.memory_id,
+            timestamp=timestamp,
+            run_id=run_id,
+            step_id=step_id,
+            provider=provider,
+            model=model,
+            cli_profile=cli_profile,
+            engine_class=engine_class,
+            policy_ref=policy_ref,
+            procedural_snapshot_ref=procedural_snapshot_ref,
+        )
+        with memory_telemetry_span(
+            self._tracer_provider,
+            tracer_name="harness.runtime.memory_capture",
+            operation_name=MemoryTelemetryOperationName.CAPTURE,
+            operation_kind=MemoryOperationKind.CAPTURE.value,
+            tier=envelope.tier.value,
+            provider=provider,
+            model=model,
+            cli_profile=cli_profile,
+            policy_decision=MemoryCaptureStatus.CAPTURED.value,
+            record_count=1,
+        ) as span:
+            try:
+                operation_result = self._store.append_memory_operation(payload)
+            except Exception as exc:
+                set_memory_telemetry_attributes(
+                    span,
+                    policy_decision=MemoryCaptureStatus.FAILED.value,
+                    failure_class=MemoryTelemetryFailureClass.IO_FAILURE,
+                )
+                return MemoryCaptureResult(
+                    status=MemoryCaptureStatus.FAILED,
+                    event_kind=event_kind,
+                    record_kind=envelope.kind,
+                    failure_reason=f"{type(exc).__name__}: {exc}",
+                )
+            return MemoryCaptureResult(
+                status=MemoryCaptureStatus.CAPTURED,
+                event_kind=event_kind,
+                record_kind=envelope.kind,
+                memory_id=envelope.memory_id,
+                operation_action_id=payload.action_id,
+                operation_result=operation_result,
+            )
+
+    def _operation_payload(
+        self,
+        *,
+        event_kind: str,
+        memory_id: MemoryID,
+        timestamp: datetime,
+        run_id: str,
+        step_id: str | None,
+        provider: str | None,
+        model: str | None,
+        cli_profile: str | None,
+        engine_class: MemoryOperationEngineClass | None,
+        policy_ref: str | None,
+        procedural_snapshot_ref: str | None,
+    ) -> MemoryOperationPayload:
+        action_id = capture_operation_action_id(event_kind, memory_id)
+        return MemoryOperationPayload(
+            action_id=action_id,
+            idempotency_key=Identifier(f"idempotent:{action_id}"),
+            actor=self._actor,
+            timestamp=timestamp,
+            operation_kind=MemoryOperationKind.CAPTURE,
+            operation_projection=MemoryOperationProjection.NONE,
+            run_id=run_id,
+            step_id=step_id,
+            provider=provider,
+            model=model,
+            cli_profile=cli_profile,
+            engine_class=engine_class,
+            memory_refs=(memory_id,),
+            policy_ref=policy_ref,
+            procedural_snapshot_ref=procedural_snapshot_ref,
+        )
 
     def _record(
         self,
@@ -724,6 +849,7 @@ def _optional_string(value: object) -> str | None:
 
 
 __all__ = [
+    "RUN_START_EVENT_KIND",
     "EpisodicMemoryCapture",
     "MemoryCaptureMode",
     "MemoryCaptureResult",
@@ -732,4 +858,5 @@ __all__ = [
     "MemoryCaptureStore",
     "SummaryProvenance",
     "SummarySource",
+    "capture_operation_action_id",
 ]

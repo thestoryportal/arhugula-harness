@@ -33,7 +33,12 @@ from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
-from harness_is.memory_operation_ledger import MemoryOperationEntry, MemoryOperationKind
+from harness_is.memory_operation_ledger import (
+    MemoryOperationEntry,
+    MemoryOperationKind,
+    MemoryOperationPayload,
+    MemoryOperationProjection,
+)
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_policy import (
     AccessDecision,
@@ -64,15 +69,17 @@ from harness_is.memory_retrieval import (
 )
 from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
-from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_runtime.automatic_memory import materialize_automatic_memory_runtime
 from harness_runtime.lifecycle.memory_tool_types import MemoryCallbackIOError
 from harness_runtime.lifecycle.native_memory_adapter import CanonicalNativeMemoryToolBackend
 from harness_runtime.memory_capture import (
+    RUN_START_EVENT_KIND,
     EpisodicMemoryCapture,
     MemoryCaptureResult,
     MemoryCaptureScopeValueDomainError,
     MemoryCaptureStatus,
+    capture_operation_action_id,
 )
 from harness_runtime.memory_compaction_safety import (
     CompactionCandidateDisposition,
@@ -1109,7 +1116,7 @@ def _memory_root_store(tmp_path: Path) -> CanonicalMemoryStore:
     )
 
 
-def _seed_legacy_run_record(tmp_path: Path, *, run_id: str) -> Path:
+def _seed_legacy_run_record(tmp_path: Path, *, run_id: str) -> MemoryStoreRecord:
     """Persist a pre-v1.1 EPISODIC_RUN envelope scoped by the RAW provider key."""
     store = _memory_root_store(tmp_path)
     content: dict[str, object] = {
@@ -1140,7 +1147,29 @@ def _seed_legacy_run_record(tmp_path: Path, *, run_id: str) -> Path:
         content=content,
     )
     store.write_record(record)
-    return store.record_path(record)
+    return record
+
+
+def _seed_run_start_capture_row(tmp_path: Path, *, record: MemoryStoreRecord) -> None:
+    """Append the C-MEM-08 row a COMPLETED run-start capture leaves behind.
+
+    Seeding the record alone models a TORN write, not a captured run: the
+    capture path writes the record before its ledger row. A fully-captured run
+    is both, so a witness for the resume case has to seed both.
+    """
+    action_id = capture_operation_action_id(RUN_START_EVENT_KIND, record.envelope.memory_id)
+    _memory_root_store(tmp_path).append_memory_operation(
+        MemoryOperationPayload(
+            action_id=action_id,
+            idempotency_key=Identifier(f"idempotent:{action_id}"),
+            actor=_actor(),
+            timestamp=_NOW,
+            operation_kind=MemoryOperationKind.CAPTURE,
+            operation_projection=MemoryOperationProjection.NONE,
+            run_id=str(record.content["run_id"]),
+            memory_refs=(record.envelope.memory_id,),
+        )
+    )
 
 
 def _compose_one_dispatch(tmp_path: Path) -> None:
@@ -1174,9 +1203,16 @@ def test_run_start_capture_preserves_a_pre_existing_run_envelope(tmp_path: Path)
     today's canonical scope. Byte-equality is the assertion, not field
     equality: the defect was a silent rewrite, so anything that re-authored the
     file at all is the defect.
+
+    Codex R4 amends the seeded state to the FULLY-CAPTURED shape - record AND
+    its C-MEM-08 row, which is what a genuinely-legacy run leaves behind, its
+    own capture having appended the row at its own capture time. Record-only
+    is now the distinct torn-write case below.
     """
     assert _step_context().parent_idempotency_key == _RESUMED_RUN_ID  # no silent drift
-    run_path = _seed_legacy_run_record(tmp_path, run_id=_RESUMED_RUN_ID)
+    record = _seed_legacy_run_record(tmp_path, run_id=_RESUMED_RUN_ID)
+    _seed_run_start_capture_row(tmp_path, record=record)
+    run_path = _memory_root_store(tmp_path).record_path(record)
     before = run_path.read_bytes()
 
     _compose_one_dispatch(tmp_path)
@@ -1184,7 +1220,42 @@ def test_run_start_capture_preserves_a_pre_existing_run_envelope(tmp_path: Path)
     assert run_path.read_bytes() == before
     stored_scope = json.loads(run_path.read_text())["envelope"]["scope"]
     assert stored_scope["provider_family"] == _OLLAMA_KEY  # still the legacy key
-    assert _capture_entries(_memory_root_store(tmp_path)) == []  # and no duplicate row
+    [capture] = _capture_entries(_memory_root_store(tmp_path))  # and no duplicate row
+    assert capture.memory_refs == (record.envelope.memory_id,)  # the seeded one
+
+
+def test_torn_run_start_capture_appends_the_missing_row_without_rewriting(
+    tmp_path: Path,
+) -> None:
+    """Codex R4 - a stored record with no CAPTURE row is TORN, not captured.
+
+    `_capture` writes the record BEFORE its C-MEM-08 row, so a transient
+    ledger-append failure leaves exactly this state: `run.json` durable, no
+    operation row, the first attempt raising. Pre-fix the R3 presence check
+    read that as "already captured" and early-returned, so the required row was
+    never appended on ANY retry - file presence alone is not completion.
+
+    Both halves are load-bearing. The row must appear, referencing the STORED
+    envelope's own `memory_id` (the seeded legacy record is deliberately keyed
+    by the generic content-hash derivation, NOT the run-id digest today's
+    capture path would compute, so a re-derived reference would point at a
+    record that does not exist). And the envelope must not be re-authored -
+    byte-equality, for the same reason R3 uses it.
+    """
+    record = _seed_legacy_run_record(tmp_path, run_id=_RESUMED_RUN_ID)
+    run_path = _memory_root_store(tmp_path).record_path(record)
+    before = run_path.read_bytes()
+    assert _capture_entries(_memory_root_store(tmp_path)) == []  # the torn state
+
+    _compose_one_dispatch(tmp_path)
+
+    assert run_path.read_bytes() == before  # repaired, never rewritten
+    [capture] = _capture_entries(_memory_root_store(tmp_path))
+    assert capture.memory_refs == (record.envelope.memory_id,)
+    assert capture.action_id == capture_operation_action_id(
+        RUN_START_EVENT_KIND, record.envelope.memory_id
+    )
+    assert capture.run_id == _RESUMED_RUN_ID
 
 
 def test_run_start_capture_still_lands_a_new_run_id(tmp_path: Path) -> None:

@@ -226,6 +226,22 @@ class CanonicalMemoryStore:
         """
         return self._run_record_path(run_id).exists()
 
+    def read_run_record(self, run_id: str) -> MemoryStoreRecord:
+        """Read the stored EPISODIC_RUN record for `run_id`.
+
+        Sibling of `has_run_record`, for a caller that needs the stored
+        record's own IDENTITY rather than just its presence. EPISODIC_RUN is
+        keyed by `run_id` (one `run.json` per run), so `read_record`'s
+        `memory_id` argument is inert for this kind and a caller holding only
+        the `run_id` has no honest value to pass it. Like `has_run_record`,
+        this is presence-honest: a legacy or tombstoned envelope is returned as
+        stored rather than hidden, because the caller's question is what the
+        stored bytes SAY, not whether they are servable to a reader.
+
+        Raises `MemoryStoreRecordNotFoundError` when no record exists.
+        """
+        return _read_json_record(self._run_record_path(run_id))
+
     def memory_operation_ledger_path(self) -> Path:
         """Return the canonical durable memory operation ledger path."""
 

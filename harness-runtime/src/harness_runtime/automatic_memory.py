@@ -24,7 +24,7 @@ from harness_cp.memory_access_mode import reflect_memory_provider_capabilities
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_is.cli_profile import DEFAULT_GENERIC_CLI_PROFILE
-from harness_is.memory_operation_ledger import MemoryOperationEngineClass
+from harness_is.memory_operation_ledger import MemoryOperationEngineClass, MemoryOperationKind
 from harness_is.memory_path_registry import MemoryPathRegistry, MemoryRootBinding
 from harness_is.memory_policy import (
     AccessDecision,
@@ -34,7 +34,13 @@ from harness_is.memory_policy import (
     PromotionDecision,
     ReviewMode,
 )
-from harness_is.memory_record_envelope import MemoryRecordKind, MemoryScope, MemoryVisibility
+from harness_is.memory_record_envelope import (
+    MemoryID,
+    MemoryRecordEnvelope,
+    MemoryRecordKind,
+    MemoryScope,
+    MemoryVisibility,
+)
 from harness_is.memory_retrieval import MemoryRetriever
 from harness_is.memory_retrieval_index import (
     DerivedRetrievalIndex,
@@ -45,12 +51,14 @@ from harness_is.memory_retrieval_index import (
 from harness_is.memory_store import CanonicalMemoryStore
 
 from harness_runtime.memory_capture import (
+    RUN_START_EVENT_KIND,
     EpisodicMemoryCapture,
     MemoryCaptureMode,
     MemoryCaptureResult,
     MemoryCaptureStatus,
     SummaryProvenance,
     SummarySource,
+    capture_operation_action_id,
 )
 from harness_runtime.memory_context import (
     MemoryContextCompositionRequest,
@@ -297,6 +305,19 @@ class LocalAutomaticMemoryRuntime:
             # processes racing a genuinely FIRST write still resolve
             # last-writer-wins as before; this closes the resume case, which is
             # the one that rewrites history rather than re-deciding it.
+            #
+            # Codex R4: presence of the RECORD is not presence of the CAPTURE.
+            # `_capture` writes the record before its C-MEM-08 row, so a
+            # transient ledger failure leaves the record durable and the row
+            # missing - and this presence check then made the retry a no-op, so
+            # the required row was never written at all. The stored record
+            # still ends the capture; what it no longer does is end the
+            # OPERATION.
+            self._complete_torn_run_start_capture(
+                context=context,
+                step_context=step_context,
+                engine_class=engine_class,
+            )
             self._started_runs.add(context.run_id)
             return
         result = self._recorder(
@@ -318,6 +339,91 @@ class LocalAutomaticMemoryRuntime:
         )
         _raise_capture_failure(result)
         self._started_runs.add(context.run_id)
+
+    def _complete_torn_run_start_capture(
+        self,
+        *,
+        context: RuntimeMemoryContext,
+        step_context: StepExecutionContext,
+        engine_class: object,
+    ) -> None:
+        """Append the run-start CAPTURE row when the stored record carries none.
+
+        The three states a stored record can be in, and what each gets:
+
+        1. record + its run-start row  -> nothing (the R3 resume case, and the
+           genuinely-legacy pre-v1.1 runs whose own capture appended their row
+           at their own capture time). The envelope is not touched.
+        2. record, NO run-start row    -> the torn write. The MISSING ROW ONLY
+           is appended, against the STORED envelope's own identity. The record
+           is not rewritten and its scope is not re-derived, so the
+           forward-only posture the presence check exists to protect holds
+           unchanged.
+        3. no record                   -> not reached; the caller captures
+           normally.
+        """
+        envelope = self._stored_run_envelope(context.run_id)
+        if envelope is None:
+            return
+        if self._run_start_capture_row_present(envelope.memory_id):
+            return
+        result = self._recorder(
+            actor=step_context.parent_actor,
+            # Inert here - the repair writes no record, so nothing consults the
+            # record scope. Passed anyway so the recorder is bound the same way
+            # on both capture paths.
+            scope=context.record_scope,
+            capture_mode=MemoryCaptureMode.SUMMARIZED,
+        ).repair_capture_operation(
+            event_kind=RUN_START_EVENT_KIND,
+            envelope=envelope,
+            timestamp=datetime.now(UTC),
+            run_id=context.run_id,
+            step_id=None,
+            provider=context.selection.selected_provider,
+            model=context.selection.selected_model,
+            cli_profile=context.selection.cli_profile_ref,
+            engine_class=_memory_engine_class(engine_class),
+            policy_ref=context.policy_ref,
+            procedural_snapshot_ref=None,
+        )
+        _raise_capture_failure(result)
+
+    def _stored_run_envelope(self, run_id: str) -> MemoryRecordEnvelope | None:
+        """The stored run record's envelope, or `None` when it cannot be read.
+
+        Identity comes from the STORED envelope and is never re-derived: a
+        legacy record's `memory_id` need not equal what today's capture path
+        would compute for the same `run_id`, and a repair row that referenced a
+        re-derived id would point at a record that does not exist.
+
+        An unreadable record (legacy shape, corrupt bytes) therefore has no
+        recoverable identity and no row can honestly reference it, so the
+        caller leaves the stored history exactly as it found it - which is the
+        durable-presence guard's own posture, not a swallowed failure.
+        """
+        try:
+            return self._store.read_run_record(run_id).envelope
+        except (LookupError, ValueError):
+            return None
+
+    def _run_start_capture_row_present(self, memory_id: MemoryID) -> bool:
+        """True when the run-start CAPTURE row for `memory_id` is already durable.
+
+        Keyed on the run-start `action_id`, not on `memory_refs`: run-start and
+        run-close write ONE shared EPISODIC_RUN `memory_id`, so a `memory_refs`
+        match cannot tell the two capture events apart and a closed run would
+        read as an uncaptured one.
+
+        The whole-ledger read is the honest query an append-only C-MEM-08
+        ledger offers, and it is reached ONLY once a record already exists - a
+        fresh run never pays for it.
+        """
+        action_id = capture_operation_action_id(RUN_START_EVENT_KIND, memory_id)
+        return any(
+            entry.action_id == action_id and entry.operation_kind is MemoryOperationKind.CAPTURE
+            for entry in self._store.read_memory_operations()
+        )
 
     def _recorder(
         self,
