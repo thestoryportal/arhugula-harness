@@ -343,6 +343,10 @@ async def _reap_child(process: asyncio.subprocess.Process) -> None:
     a provider failure. An already-exited child needs no signal and cannot be
     leaked, so suppression loses nothing; `wait()` stays unconditional because
     it still resolves immediately from the recorded return code.
+
+    `docker_tool_execution_driver._reap_child` is a deliberate local sibling of
+    this helper (this one is module-private, so the Docker tier driver carries
+    its own copy rather than importing it); an edit here likely belongs there too.
     """
     try:
         process.kill()

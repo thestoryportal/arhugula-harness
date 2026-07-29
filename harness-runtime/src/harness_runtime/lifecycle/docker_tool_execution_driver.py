@@ -32,6 +32,32 @@ from harness_runtime.lifecycle.runtime_tool_dispatcher import (
 __all__ = ["DockerToolRunnerExecutionDriver", "GVisorRunscToolRunnerExecutionDriver"]
 
 
+async def _reap_child(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL a child and await its exit, tolerating one already reaped.
+
+    Deliberate small duplicate of `external_cli_provider._reap_child` (that one
+    is module-private; importing it here would couple the Docker tier driver to
+    another lifecycle module's internals). The rationale is shared: on CPython
+    `Process.kill()` delegates to `BaseSubprocessTransport.kill()`, which runs
+    `_check_proc()` and raises `ProcessLookupError` once the transport has
+    finished with the child (`_call_connection_lost` clears the `Popen`
+    reference). Every reap site below races that — the `docker` child can exit
+    and its transport finish in the window between the event that sends us into
+    the reap path (a deadline, a cancellation) and the `kill()` itself. Letting
+    the `ProcessLookupError` escape would REPLACE the exception being unwound —
+    a `ToolInvocationTimeoutError` or a `CancelledError` — with an unrelated
+    lookup failure, e.g. surfacing a shutdown cancellation as a raw OS error. An
+    already-exited child needs no signal and cannot be leaked, so suppression
+    loses nothing; `wait()` stays unconditional because it still resolves
+    immediately from the recorded return code.
+    """
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+    await proc.wait()
+
+
 @dataclass(frozen=True)
 class DockerToolRunnerExecutionDriver:
     """Execute one TOOL_STEP through a Docker-hosted JSON tool runner.
@@ -195,17 +221,16 @@ class DockerToolRunnerExecutionDriver:
                 timeout=self.timeout_seconds,
             )
         except TimeoutError as exc:
-            proc.kill()
-            await proc.wait()
+            await _reap_child(proc)
             raise ToolInvocationTimeoutError(timeout_message) from exc
         except asyncio.CancelledError:
             # Cancelling the awaiting coroutine does not kill the Docker
             # subprocess — same reasoning as the TimeoutError branch above,
             # which is precisely why that branch explicitly kills + reaps.
             # Without this, an external cancellation (an outer step-level
-            # timeout, workflow shutdown) orphans the container.
-            proc.kill()
-            await proc.wait()
+            # timeout, workflow shutdown) orphans the container. The
+            # `CancelledError` is NEVER swallowed.
+            await _reap_child(proc)
             raise
         return stdout, stderr, proc.returncode or 0
 
