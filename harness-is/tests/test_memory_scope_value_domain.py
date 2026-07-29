@@ -341,6 +341,52 @@ def test_b90_null_tenant_request_is_denied_at_every_predicate() -> None:
     )
 
 
+def test_retriever_retrieve_denies_a_tenant_partitioned_record_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """`B-90` through `MemoryRetriever.retrieve`, not the predicate in isolation.
+
+    The retriever's own tenant coverage was predicate-level only: a mutation
+    stopping `_static_exclusion_reason` from consulting `_scope_mismatch` left
+    every isolation witness green, because the policy leg one step later denies
+    the same record on its own hand-listed fields - the record disappears from
+    `selected_refs` either way. The EXCLUSION REASON is what discriminates the
+    two layers, so it is asserted rather than the selection alone.
+
+    The `null`-tenant request is the arm that pins NEW behaviour: before
+    U-MEM-26 the retriever compared `tenant` with either-side-`null`-skips
+    semantics, so the mismatched-tenant arm alone would pass against the old
+    predicate too. The unpartitioned sibling is the liveness control - it proves
+    the query genuinely reaches records, so an empty result cannot pass this
+    test for the wrong reason.
+    """
+    partitioned = _record(
+        statement="Tenant-A-partitioned memory fact.",
+        scope=_scope(tenant="tenant-a"),
+    )
+    unpartitioned = _record(statement="Unpartitioned memory fact.", scope=_scope())
+    records = (partitioned, unpartitioned)
+
+    mismatched = _retrieval_result(
+        tmp_path / "mismatched-tenant",
+        records=records,
+        request_scope=_scope(tenant="tenant-b"),
+    )
+    null_tenant = _retrieval_result(
+        tmp_path / "null-tenant",
+        records=records,
+        request_scope=_scope(),
+    )
+
+    for result in (mismatched, null_tenant):
+        assert tuple(str(ref) for ref in result.selected_refs) == (
+            str(unpartitioned.envelope.memory_id),
+        )
+        assert {ref.memory_ref: ref.reason for ref in result.excluded_refs} == {
+            partitioned.envelope.memory_id: RetrievalExclusionReason.SCOPE_MISMATCH
+        }
+
+
 def test_index_retrieve_denies_a_tenant_partitioned_record_end_to_end(tmp_path: Path) -> None:
     """`B-90` through the PUBLIC path, not the predicate in isolation.
 
