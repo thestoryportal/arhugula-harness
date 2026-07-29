@@ -326,6 +326,30 @@ def _scrubbed_child_env() -> dict[str, str]:
     }
 
 
+async def _reap_child(process: asyncio.subprocess.Process) -> None:
+    """SIGKILL a child and await its exit, tolerating one already reaped.
+
+    `Process.kill()` raises `ProcessLookupError` once asyncio's transport has
+    finished with the child — `BaseSubprocessTransport._call_connection_lost`
+    clears the `Popen` reference and `kill()` runs `_check_proc()` first — and
+    every reap site below races that: the child can exit and the transport can
+    finish in the window between the event that sends us into the reap path
+    (cancellation, a deadline, a raising observer) and the `kill()` itself
+    (codex R1 [P2]). Letting it escape would replace the exception being
+    unwound — a `CancelledError`, an `ExternalCLIProcessTimeout`, or the
+    observer's own error — with an unrelated `ProcessLookupError`, e.g.
+    classifying a shutdown cancellation as a provider failure. An already-exited
+    child needs no signal and cannot be leaked, so suppression loses nothing;
+    `wait()` stays unconditional because it still resolves immediately from the
+    recorded return code.
+    """
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+    await process.wait()
+
+
 class AsyncioSubprocessRunner:
     """Production subprocess runner using argv-only execution."""
 
@@ -364,10 +388,9 @@ class AsyncioSubprocessRunner:
             # the `communicate` block below, whose timeout path is the ONLY
             # other place this process is reaped, and the CLI would keep
             # running. Repeated observer failures would leak one process each.
-            # Same kill/wait idiom as that timeout path; the observer's
-            # exception is then propagated unchanged.
-            process.kill()
-            await process.wait()
+            # Same reap idiom as that timeout path; the observer's exception is
+            # then propagated unchanged.
+            await _reap_child(process)
             raise
 
         try:
@@ -376,18 +399,16 @@ class AsyncioSubprocessRunner:
                 timeout=timeout_seconds,
             )
         except TimeoutError as exc:
-            process.kill()
-            await process.wait()
+            await _reap_child(process)
             raise ExternalCLIProcessTimeout(argv[0], timeout_seconds) from exc
         except asyncio.CancelledError:
             # A cancellation delivered while awaiting the child must not leak it
             # either (B-87 residual): without this clause control unwinds past
             # the only two reap sites — the timeout path above and the R7
-            # observer guard — and the CLI keeps running. Same kill/wait idiom;
+            # observer guard — and the CLI keeps running. Same reap idiom;
             # SIGKILL is already issued, so the wait resolves without needing a
             # fresh cancellation scope. The `CancelledError` is NEVER swallowed.
-            process.kill()
-            await process.wait()
+            await _reap_child(process)
             raise
 
         return CLIProcessResult(
