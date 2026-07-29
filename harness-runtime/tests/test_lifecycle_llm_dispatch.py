@@ -3915,6 +3915,10 @@ async def test_r2_p2b_out_of_domain_scope_value_stays_report_only() -> None:
     assert dict(spans[0].attributes or {})["memory.degraded_serve.reason"] == (
         "provider_family_scope_mismatch"
     )
+    assert "memory.failure_class" not in dict(spans[0].attributes or {}), (
+        "an out-of-domain scope value is UNVERIFIABLE, not a confirmed cross-family"
+        " denial — the relationship was never resolved, so no class is claimed (B-91)"
+    )
 
 
 class _RaisingOllamaClient(_OllamaClient):
