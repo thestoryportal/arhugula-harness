@@ -1881,12 +1881,25 @@ class RuntimeLLMDispatcher:
                 # withheld (the denial happened). The sink is read rather than a
                 # local, so a degradation decided INSIDE a failing arm call is
                 # reported too.
+                # C-MEM-19 (`Spec_Memory_Substrate_v1.md:693`) requires
+                # `memory.cli_profile` on both emissions. Every write to either
+                # sink is gated on a non-None `memory_context` — the B-83 sink
+                # through `_degraded_serve_for_unservable_arm`, the B-85 sink
+                # through the tools loops, which are entered only when
+                # `_standard_memory_tools_context` returned this same context —
+                # so the None arm is unreachable whenever a span is emitted and
+                # exists only to keep the read total against the parameter's
+                # declared `RuntimeMemoryContext | None` type.
+                memory_cli_profile = (
+                    memory_context.selection.cli_profile_ref if memory_context is not None else None
+                )
                 if degraded_sink.value is not None:
                     _emit_degraded_memory_serve_span(
                         self.tracer_provider,
                         degraded_sink.value,
                         provider=provider_name,
                         model=model,
+                        cli_profile=memory_cli_profile,
                         outcome=dispatch_outcome,
                         error_type=dispatch_error_type,
                         reached_wire=wire_sink.reached,
@@ -1902,6 +1915,7 @@ class RuntimeLLMDispatcher:
                         unserved_sink.value,
                         provider=provider_name,
                         model=model,
+                        cli_profile=memory_cli_profile,
                         outcome=dispatch_outcome,
                         error_type=dispatch_error_type,
                     )
@@ -2606,6 +2620,7 @@ def _emit_degraded_memory_serve_span(
     *,
     provider: str,
     model: str,
+    cli_profile: str | None,
     outcome: str = _DISPATCH_OUTCOME_COMPLETED,
     error_type: str | None = None,
     reached_wire: bool = True,
@@ -2636,6 +2651,26 @@ def _emit_degraded_memory_serve_span(
       deliberately UNSET: no member of the closed `MemoryTelemetryFailureClass`
       describes a provider-scope mismatch, and reusing `POLICY_DENIAL` would
       assert a policy decision no resolver made.
+
+    C-MEM-19 (`Spec_Memory_Substrate_v1.md:693-694`) requires
+    `memory.cli_profile` + `memory.policy.decision` on every memory span.
+    `cli_profile` is the composing selection's own `cli_profile_ref`, the same
+    value the primary injection path emits
+    (`memory_context.RuntimeMemoryContextComposer.compose_run_start`).
+    `policy.decision` splits on `degraded.rendered`, NOT on `reached_wire`:
+
+    * a RENDERED packet (both repaired dispositions) is `allowed` — the policy
+      DID authorize this delivery, since rendering requires
+      `prompt_packet_fallback_denial is None`. A repair that then failed
+      pre-wire is a DELIVERY failure, and that axis is already carried by
+      `dispatch_outcome`; reporting it as a policy decision would blame a gate
+      that opened.
+    * REPORT-ONLY reports `degraded.reason` verbatim, mirroring the primary
+      DENIAL span's `denial_reason.value`-or-`"denied"` convention. It is a
+      free-form attribute VALUE, which is why naming the gate here is truthful
+      while `failure_class` above must stay UNSET: that one is a CLOSED enum
+      whose only candidate member (`POLICY_DENIAL`) would assert a policy
+      decision no resolver made on the two scope-mismatch reasons.
 
     `memory.degraded_serve` + `.reason` + `.selected_access_mode` carry the
     B-83-specific detail. All of it lands on the memory tracer's own span,
@@ -2670,6 +2705,8 @@ def _emit_degraded_memory_serve_span(
         ),
         provider=provider,
         model=model,
+        cli_profile=cli_profile,
+        policy_decision=("allowed" if degraded.rendered is not None else degraded.reason),
         packet_hash=served.packet_hash if served is not None else None,
         record_count=len(served.selected_refs) if served is not None else 0,
     ) as span:
@@ -2767,6 +2804,7 @@ def _emit_unserved_memory_tool_calls_span(
     *,
     provider: str,
     model: str,
+    cli_profile: str | None,
     outcome: str = _DISPATCH_OUTCOME_COMPLETED,
     error_type: str | None = None,
 ) -> None:
@@ -2793,6 +2831,13 @@ def _emit_unserved_memory_tool_calls_span(
     * `record_count=0` and NO `packet_hash` — nothing was served IN RESPONSE to
       these calls, and no packet was rendered at all. Claiming a hash for a
       packet that never went anywhere is the B-87 defect class.
+    * `policy.decision=allowed` — required by C-MEM-19
+      (`Spec_Memory_Substrate_v1.md:694`) and constant here for the same reason
+      the access mode is `standard_memory_tools`: reaching this site means the
+      policy authorized the tools and the arm armed them. A denial value would
+      contradict the mode this very span reports as served. `cli_profile`
+      (`:693`) is the composing selection's own `cli_profile_ref`, the same
+      value the primary injection path emits.
 
     The B-85-specific detail rides attribute VALUES in a distinct
     `memory.unserved_tool_call.*` namespace, per the B-83 precedent documented
@@ -2818,6 +2863,8 @@ def _emit_unserved_memory_tool_calls_span(
         access_mode=MemoryAccessMode.STANDARD_MEMORY_TOOLS.value,
         provider=provider,
         model=model,
+        cli_profile=cli_profile,
+        policy_decision="allowed",
         packet_hash=None,
         record_count=0,
     ) as span:
