@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import re
@@ -270,11 +271,17 @@ class _ExternalCLIProviderLike(Protocol):
     """Provider shape for text-only local CLI adapters.
 
     ``on_wire`` (B-87, codex R2 [P2]) is the reached-the-wire notification: the
-    adapter calls it immediately before the subprocess invocation and never
-    otherwise, so an adapter-LOCAL validation raise — the `{prompt}`-template-
-    under-stdin-transport rejection in `_render_argv_templates`, say — stays on
-    the pre-wire side of the boundary. The dispatcher cannot set that marker
-    itself: everything it controls happens before `dispatch_text` is entered.
+    adapter hands it down to its subprocess runner, which fires it once a child
+    process exists (codex R3 [P2-1]), so an adapter-LOCAL validation raise — the
+    `{prompt}`-template-under-stdin-transport rejection in
+    `_render_argv_templates`, say — and a failed spawn both stay on the pre-wire
+    side of the boundary. The dispatcher cannot set that marker itself:
+    everything it controls happens before `dispatch_text` is entered.
+
+    The parameter is OPTIONAL in both directions: `@runtime_checkable` tests
+    method presence only, so an adapter written against the pre-B-87
+    `dispatch_text(*, model, prompt)` shape still satisfies this Protocol at
+    runtime and must keep working — see `_adapter_accepts_on_wire`.
     """
 
     async def dispatch_text(
@@ -2277,7 +2284,10 @@ class _ProviderWireReachedSink:
     module controls: an adapter that runs its OWN validation inside its
     dispatch method owns the boundary, and is handed the mark as a callback
     (`_ExternalCLIProviderLike.dispatch_text`'s ``on_wire``, codex R2 [P2]) so
-    that its validation raises stay pre-wire.
+    that its validation raises stay pre-wire. On that arm the callback rides
+    all the way down to the subprocess runner, which fires it once a child
+    process exists (codex R3 [P2-1]); an adapter that predates the callback
+    falls back to the marker-before-the-await placement (`_dispatch_external_cli`).
 
     Written only by the arm helpers that carry a ``memory_packet`` — i.e. the
     dispatch the disposition describes. The standard-tools loops' OWN calls are
@@ -4644,6 +4654,38 @@ def _ollama_standard_memory_tools(memory_context: RuntimeMemoryContext) -> list[
     return tools
 
 
+def _adapter_accepts_on_wire(adapter: _ExternalCLIProviderLike) -> bool:
+    """Does this adapter's ``dispatch_text`` take the B-87 ``on_wire`` callback?
+
+    `_ExternalCLIProviderLike` is `@runtime_checkable`, and a runtime-checkable
+    Protocol's `isinstance` tests METHOD PRESENCE only — never the signature. An
+    adapter written against the pre-B-87 contract `dispatch_text(*, model,
+    prompt)` and injected through `external_cli_construct` or straight into
+    `RuntimeLLMDispatcher` therefore still passes the arm guard at
+    `_dispatch_step`, and an unconditional ``on_wire=`` keyword breaks it with
+    `TypeError` — on EVERY dispatch, degraded memory or not (codex R3 [P2-2]).
+
+    Signature inspection, deliberately NOT `try`/`except TypeError` around the
+    call: a `TypeError` raised from INSIDE a compliant adapter is a real
+    failure, and a retry-without-the-keyword would both swallow it and dispatch
+    the prompt twice. ``**kwargs`` counts as acceptance — such an adapter
+    receives the callback and is free to ignore it, exactly as ``None`` is.
+    """
+    try:
+        parameters = inspect.signature(adapter.dispatch_text).parameters
+    except (TypeError, ValueError):  # pragma: no cover - exotic non-introspectable callable
+        return False
+    for parameter in parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == "on_wire" and parameter.kind in (
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            return True
+    return False
+
+
 async def _dispatch_external_cli(
     adapter: _ExternalCLIProviderLike,
     provider: str,
@@ -4668,17 +4710,34 @@ async def _dispatch_external_cli(
         upstream=upstream,
         memory_packet=memory_packet,
     )
-    # B-87 (codex R2 [P2]) — the boundary is INSIDE `dispatch_text`, not before
-    # it: the adapter validates its own argv templates first (a `{prompt}`
-    # template under stdin transport raises `ExternalCLIOutputError` with zero
-    # subprocess calls), so a marker set here would report that raise as a
-    # provider failure that saw the packet. The adapter calls `on_wire`
-    # immediately before its `runner.run(...)`.
-    result = await adapter.dispatch_text(
-        model=model,
-        prompt=prompt,
-        on_wire=lambda: _mark_wire_reached(wire_sink),
-    )
+    # B-87 — TWO TIERS of boundary ownership on this arm.
+    #
+    # (1) `on_wire` tier (the shipped adapters). The boundary is INSIDE
+    #     `dispatch_text`, not before it: the adapter validates its own argv
+    #     templates first (a `{prompt}` template under stdin transport raises
+    #     `ExternalCLIOutputError` with zero subprocess calls, codex R2), and
+    #     its runner can still fail to spawn the command (codex R3 [P2-1]). A
+    #     marker set here would report both as provider failures that saw the
+    #     packet. The callback rides down to the runner, which fires it once a
+    #     child process exists.
+    #
+    # (2) Legacy tier (an adapter on the pre-B-87 `dispatch_text(*, model,
+    #     prompt)` signature, which `@runtime_checkable` still admits — codex
+    #     R3 [P2-2]). It cannot be handed the mark, so the dispatcher keeps the
+    #     PREVIOUS behavior verbatim: mark immediately before the await.
+    #     Truthful for everything this module controls — a translation raise
+    #     above still classifies pre-wire — and its residual window (that
+    #     adapter's own internals) is exactly the pre-B-87 status quo, which is
+    #     strictly better than breaking the adapter with a `TypeError`.
+    if _adapter_accepts_on_wire(adapter):
+        result = await adapter.dispatch_text(
+            model=model,
+            prompt=prompt,
+            on_wire=lambda: _mark_wire_reached(wire_sink),
+        )
+    else:
+        _mark_wire_reached(wire_sink)
+        result = await adapter.dispatch_text(model=model, prompt=prompt)
     text = getattr(result, "text", None)
     if not isinstance(text, str):
         raise LLMDispatchPayloadShapeError("external CLI provider result missing string text field")

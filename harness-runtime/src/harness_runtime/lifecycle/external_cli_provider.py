@@ -115,6 +115,14 @@ class ExternalCLISubprocessRunner(Protocol):
 
     The shape intentionally has no shell parameter; production uses argv-only
     `create_subprocess_exec`, and tests inject deterministic fakes.
+
+    ``on_wire`` (B-87) is the reached-the-wire notification described at
+    `_notify_wire`. It lives HERE rather than in the adapters because the
+    boundary it names — a child process exists — is only observable at this
+    layer. Every implementation MUST fire it once process creation has
+    succeeded and before the payload is handed over, and never otherwise.
+    ``None``, the default, is every caller not tracking the boundary (the auth
+    probes, every non-degraded dispatch) and is a no-op.
     """
 
     async def run(
@@ -123,6 +131,7 @@ class ExternalCLISubprocessRunner(Protocol):
         *,
         stdin: str,
         timeout_seconds: float,
+        on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult: ...
 
 
@@ -145,19 +154,33 @@ _SCRUBBED_PROVIDER_ENV_VARS: frozenset[str] = frozenset(
 
 
 def _notify_wire(on_wire: Callable[[], None] | None) -> None:
-    """Announce that the very next await hands the prompt to a subprocess.
+    """Announce that the payload has REACHED THE WIRE.
 
-    B-87 (codex R2 [P2]) — the caller's "did anything leave the process?" marker
-    has to be set past EVERY adapter-local validation, not merely past the
-    dispatcher's own translation: `_render_argv_templates` rejects a `{prompt}`
-    template under `prompt_transport = "stdin"` inside `dispatch_text`, with
-    zero subprocess calls made. A marker set by the caller before the `await`
-    reports that raise as a post-wire provider failure.
+    B-87 defines "reached the wire" as: **a child process exists that can
+    observe the payload.** That is the whole semantic anchor, and it fixes the
+    boundary in both directions:
 
-    Every `dispatch_text` implementation MUST call this immediately before its
-    `runner.run(...)` and nowhere else — earlier misreports a validation raise
-    as post-wire, later misreports a real subprocess failure as pre-wire.
-    ``None`` is every caller that is not tracking the boundary, and is a no-op.
+    * A **spawn failure** is PRE-wire — a missing or unexecutable command, an
+      empty argv, a `PermissionError` out of `create_subprocess_exec`. Nothing
+      left the runtime, so nothing can have read the prompt. (Adapter-local
+      validation raises — `_render_argv_templates` rejecting a `{prompt}`
+      template under `prompt_transport = "stdin"`, codex R2 — are pre-wire for
+      the same reason, one layer further out.)
+    * A failure **during or after the stdin write, or while awaiting output**,
+      is POST-wire — the process existed and may have seen the packet. A
+      timeout, a nonzero exit, an unparseable payload: all post-wire.
+
+    This is the DEFINED stopping point (codex R3 [P2-1]). The boundary is NOT
+    pushed further — a partial stdin write, an unread pipe, a child that exited
+    before reading: all post-wire. The register's contract is "did the payload
+    leave the process", not "did the peer read byte N"; refining past process
+    existence is an endless regress with no observable answer.
+
+    Fired by the RUNNER, immediately after process creation succeeds and before
+    the payload is handed over (`AsyncioSubprocessRunner.run`), so every
+    pre-spawn raise — whether the runner translates it or lets it propagate —
+    lands on the pre-wire side automatically. ``None`` is every caller that is
+    not tracking the boundary, and is a no-op.
     """
     if on_wire is not None:
         on_wire()
@@ -179,6 +202,7 @@ class AsyncioSubprocessRunner:
         *,
         stdin: str,
         timeout_seconds: float,
+        on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
         if not argv:
             raise ExternalCLICommandError("", 127, "empty argv")
@@ -192,6 +216,14 @@ class AsyncioSubprocessRunner:
             )
         except FileNotFoundError as exc:
             raise ExternalCLICommandError(argv[0], 127, str(exc)) from exc
+
+        # A child process now exists and can observe the payload: THIS is the
+        # wire (B-87, codex R3 [P2-1]). Every raise above is pre-wire — the
+        # empty-argv guard, the missing-command translation, and anything
+        # `create_subprocess_exec` raises that is NOT translated (a
+        # `PermissionError` on an unexecutable command propagates as-is and is
+        # pre-wire for free). Everything below is post-wire.
+        _notify_wire(on_wire)
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -223,7 +255,11 @@ class RecordingSubprocessRunner:
         *,
         stdin: str,
         timeout_seconds: float,
+        on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
+        # Models a successful spawn, so the wire notification precedes the
+        # recorded handover — the real runner's ordering (B-87).
+        _notify_wire(on_wire)
         self.calls.append((argv, stdin, timeout_seconds))
         if not self._results:
             raise AssertionError("RecordingSubprocessRunner has no remaining results")
@@ -250,11 +286,11 @@ class ClaudeCodeCLIAdapter:
         on_wire: Callable[[], None] | None = None,
     ) -> ExternalCLITextResult:
         argv = _claude_inference_argv(self.command, model)
-        _notify_wire(on_wire)
         result = await self.runner.run(
             argv,
             stdin=prompt,
             timeout_seconds=self.timeout_seconds,
+            on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
         payload = _parse_json_object(result.stdout, "Claude Code inference response")
@@ -282,11 +318,11 @@ class CodexCLIAdapter:
         on_wire: Callable[[], None] | None = None,
     ) -> ExternalCLITextResult:
         argv = _codex_inference_argv(self.command, model)
-        _notify_wire(on_wire)
         result = await self.runner.run(
             argv,
             stdin=prompt,
             timeout_seconds=self.timeout_seconds,
+            on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
         events = _parse_json_lines(result.stdout, "Codex inference response")
@@ -323,11 +359,11 @@ class AntigravityCLIAdapter:
             prompt,
             timeout_seconds=self.timeout_seconds,
         )
-        _notify_wire(on_wire)
         result = await self.runner.run(
             argv,
             stdin="",
             timeout_seconds=self.timeout_seconds,
+            on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
         text, raw_response = _parse_response_by_format(
@@ -362,11 +398,11 @@ class GeminiCLIAdapter:
         on_wire: Callable[[], None] | None = None,
     ) -> ExternalCLITextResult:
         argv = _gemini_inference_argv(self.command, model, prompt)
-        _notify_wire(on_wire)
         result = await self.runner.run(
             argv,
             stdin="",
             timeout_seconds=self.timeout_seconds,
+            on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
         text, raw_response = _parse_response_by_format(
@@ -406,7 +442,9 @@ class GenericCommandCLIAdapter:
         prompt_in_argv = self.prompt_transport is ExternalCLIPromptTransport.ARG
         # `_render_argv_templates` REJECTS a `{prompt}` template under stdin
         # transport — an adapter-local validation raise with zero subprocess
-        # calls, which is why the wire notification sits after it (B-87 R2).
+        # calls. It stays pre-wire because `on_wire` is fired by the runner,
+        # past process creation, and this raise never reaches the runner
+        # (B-87 R2, boundary relocated at R3 [P2-1]).
         argv = (
             self.command,
             *_render_argv_templates(
@@ -416,11 +454,11 @@ class GenericCommandCLIAdapter:
                 prompt_in_argv=prompt_in_argv,
             ),
         )
-        _notify_wire(on_wire)
         result = await self.runner.run(
             argv,
             stdin="" if prompt_in_argv else prompt,
             timeout_seconds=self.timeout_seconds,
+            on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
         text, raw_response = _parse_response_by_format(

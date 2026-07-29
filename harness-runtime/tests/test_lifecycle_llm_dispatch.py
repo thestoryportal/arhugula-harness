@@ -121,7 +121,9 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
 from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_provider
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore
 from harness_runtime.lifecycle.external_cli_provider import (
+    AsyncioSubprocessRunner,
     CLIProcessResult,
+    ExternalCLICommandError,
     ExternalCLIOutputError,
     GenericCommandCLIAdapter,
 )
@@ -4642,7 +4644,10 @@ async def test_b87_external_cli_adapter_local_validation_raise_is_pre_wire() -> 
             *,
             stdin: str,
             timeout_seconds: float,
+            on_wire: Callable[[], None] | None = None,
         ) -> CLIProcessResult:
+            if on_wire is not None:
+                on_wire()
             self.calls.append(argv)
             return CLIProcessResult(exit_code=0, stdout="OK\n", stderr="")
 
@@ -4679,6 +4684,125 @@ async def test_b87_external_cli_adapter_local_validation_raise_is_pre_wire() -> 
     assert "memory.degraded_serve.provider_error_type" not in attrs, (
         "no provider produced this error"
     )
+
+
+@pytest.mark.asyncio
+async def test_b87_external_cli_spawn_failure_is_pre_wire() -> None:
+    """B-87 (codex R3 [P2-1]) — the adapter's own validation is not the last
+    pre-wire step either: `AsyncioSubprocessRunner` can still fail to SPAWN the
+    configured command, and a notification fired before `create_subprocess_exec`
+    reported that as `injection` + packet_hash though no child process ever
+    existed and the prompt never left the runtime.
+
+    The REAL runner is used deliberately — the ordering under test is
+    `create_subprocess_exec`'s, and a fake runner cannot witness it.
+    """
+    adapter = GenericCommandCLIAdapter(
+        provider_name="claude_code",
+        command="harness-b87-command-that-does-not-exist",
+        args=("--model", "{model}"),
+        response_format=ExternalCLIResponseFormat.TEXT,
+        prompt_transport=ExternalCLIPromptTransport.STDIN,
+        timeout_seconds=30.0,
+        runner=AsyncioSubprocessRunner(),
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(ExternalCLICommandError, match="127"):
+        await dispatcher.dispatch(_binding("claude_code"), _step(), step_context=_step_context())
+
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly"
+    assert "memory.packet_hash" not in attrs, (
+        "claiming a hash for a packet no process ever existed to read is the B-87 defect"
+    )
+    assert attrs["memory.record_count"] == 0
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+    assert attrs["memory.degraded_serve.pre_wire_error_type"] == "ExternalCLICommandError"
+    assert "memory.degraded_serve.provider_error_type" not in attrs, (
+        "no provider produced this error — the command could not be spawned"
+    )
+
+
+@dataclass
+class _LegacyExternalCLIFakeAdapter:
+    """An adapter on the PRE-B-87 `dispatch_text(*, model, prompt)` contract.
+
+    `_ExternalCLIProviderLike` is `@runtime_checkable`, so this still satisfies
+    the arm guard's `isinstance` — method presence is all that is tested — and
+    an unconditional `on_wire=` keyword breaks it with `TypeError` (codex R3
+    [P2-2]). ``fail_after_handover`` models a provider failure that happened
+    once the prompt was already gone.
+    """
+
+    calls: list[tuple[str, str]]
+    fail_after_handover: bool = False
+
+    async def dispatch_text(self, *, model: str, prompt: str) -> _ExternalCLIResult:
+        self.calls.append((model, prompt))
+        if self.fail_after_handover:
+            raise TimeoutError("the CLI hung after the prompt was handed over")
+        return _ExternalCLIResult(text="OK", exit_code=0)
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_b87_legacy_external_cli_adapter_dispatches_without_type_error() -> None:
+    """B-87 (codex R3 [P2-2]) — tier 2 of the boundary contract: an adapter
+    predating `on_wire` must keep dispatching. The dispatcher inspects the
+    signature and omits the keyword rather than passing it unconditionally."""
+    adapter = _LegacyExternalCLIFakeAdapter(calls=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("claude_code"), _step(), step_context=_step_context()
+    )
+
+    assert len(adapter.calls) == 1, "the legacy adapter was dispatched to, not TypeError'd"
+    assert _B83_SECTION_TEXT in adapter.calls[0][1]
+    assert result["content"] == [{"type": "text", "text": "OK"}]
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_b87_legacy_external_cli_adapter_post_wire_failure_still_reports_injection() -> None:
+    """B-87 (codex R3 [P2-2]) — the legacy tier's fallback marker is load-bearing,
+    not decorative: without it a real post-wire provider failure on a legacy
+    adapter would be demoted to `pre_wire_failure`. The tier keeps the exact
+    pre-B-87 placement — mark immediately before the await."""
+    adapter = _LegacyExternalCLIFakeAdapter(calls=[], fail_after_handover=True)
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TimeoutError):
+        await dispatcher.dispatch(_binding("claude_code"), _step(), step_context=_step_context())
+
+    assert len(adapter.calls) == 1, "the prompt did reach the legacy adapter"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.packet_hash"] == "c" * 64
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
 
 
 def _fake_memory_callbacks_module_attr(

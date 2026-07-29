@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pytest
 from harness_runtime.lifecycle.external_cli_provider import (
+    AsyncioSubprocessRunner,
     CLIProcessResult,
     ExternalCLICommandError,
     ExternalCLINotAuthenticatedError,
@@ -32,7 +35,12 @@ class _FakeRunner:
         *,
         stdin: str,
         timeout_seconds: float,
+        on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
+        # Models a successful spawn: the wire notification precedes the
+        # recorded payload handover, as in `AsyncioSubprocessRunner` (B-87).
+        if on_wire is not None:
+            on_wire()
         self.calls.append((argv, stdin, timeout_seconds))
         return self.results.pop(0)
 
@@ -157,8 +165,13 @@ async def test_claude_dispatch_timeout_is_typed() -> None:
             *,
             stdin: str,
             timeout_seconds: float,
+            on_wire: Callable[[], None] | None = None,
         ) -> CLIProcessResult:
             _ = argv, stdin, timeout_seconds
+            # A timeout is POST-wire — the process existed and may have read
+            # the payload — so the notification fires before the raise (B-87).
+            if on_wire is not None:
+                on_wire()
             raise ExternalCLIProcessTimeout("claude", 1.0)
 
     adapter = await construct_claude_code_cli_adapter(
@@ -382,9 +395,11 @@ async def test_generic_command_notifies_the_wire_only_after_argv_validation() ->
 
 @pytest.mark.asyncio
 async def test_generic_command_notifies_the_wire_before_the_subprocess_runs() -> None:
-    """B-87 ordering guard's other half — a notification placed after
-    `runner.run` would demote a real subprocess failure to a pre-wire one, so
-    the callback must fire with the runner still untouched."""
+    """B-87 ordering guard's other half — a notification placed after the
+    payload handover would demote a real subprocess failure to a pre-wire one,
+    so the callback must fire with the handover still ahead of it. The adapter
+    now delegates the firing to the runner (codex R3 [P2-1]); `_FakeRunner`
+    keeps the real runner's ordering (spawn, notify, hand over)."""
     runner = _FakeRunner(
         results=[CLIProcessResult(exit_code=0, stdout="OK\n", stderr="")],
         calls=[],
@@ -408,8 +423,50 @@ async def test_generic_command_notifies_the_wire_before_the_subprocess_runs() ->
     )
 
     assert result.text == "OK"
-    assert notified == [0], "fired exactly once, with the subprocess still ahead of it"
+    assert notified == [0], "fired exactly once, with the payload handover still ahead of it"
     assert runner.calls == [(("my-llm", "--model", "demo-model"), "Reply OK", 42.0)]
+
+
+@pytest.mark.asyncio
+async def test_asyncio_runner_does_not_notify_the_wire_when_the_spawn_fails() -> None:
+    """B-87 (codex R3 [P2-1]) — "reached the wire" means a CHILD PROCESS EXISTS
+    that can observe the payload. A command that cannot be spawned never
+    reaches it: nothing left the runtime, so a notification fired before
+    `create_subprocess_exec` would claim the prompt was seen by a process that
+    was never created. The REAL runner is under test here because the ordering
+    in question is `create_subprocess_exec`'s own."""
+    runner = AsyncioSubprocessRunner()
+    notified: list[str] = []
+
+    with pytest.raises(ExternalCLICommandError, match="127"):
+        await runner.run(
+            ("harness-b87-command-that-does-not-exist",),
+            stdin="Reply OK",
+            timeout_seconds=30.0,
+            on_wire=lambda: notified.append("fired"),
+        )
+
+    assert notified == [], "no child process existed, so nothing could have seen the prompt"
+
+
+@pytest.mark.asyncio
+async def test_asyncio_runner_notifies_the_wire_once_the_process_exists() -> None:
+    """The positive control for the boundary above — a spawn that SUCCEEDS
+    fires the notification exactly once, and everything from the stdin write
+    onward is post-wire."""
+    runner = AsyncioSubprocessRunner()
+    notified: list[str] = []
+
+    result = await runner.run(
+        (sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"),
+        stdin="Reply OK",
+        timeout_seconds=30.0,
+        on_wire=lambda: notified.append("fired"),
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "Reply OK"
+    assert notified == ["fired"]
 
 
 @pytest.mark.asyncio
