@@ -62,6 +62,7 @@ from harness_runtime.memory_capture import (
     SummaryProvenance,
     SummarySource,
     capture_operation_action_id,
+    stored_capture_event_type,
 )
 from harness_runtime.memory_context import (
     MemoryContextCompositionRequest,
@@ -350,18 +351,37 @@ class LocalAutomaticMemoryRuntime:
     ) -> None:
         """Append the run-start CAPTURE row when the stored record carries none.
 
-        The three states a stored record can be in, and what each gets:
+        The states a stored record can be in, and what each gets:
 
         1. record + its run-start row  -> nothing (the R3 resume case, and the
            genuinely-legacy pre-v1.1 runs whose own capture appended their row
            at their own capture time). The envelope is not touched.
-        2. record, NO run-start row    -> the torn write. The MISSING ROW ONLY
+        2. RUN-START record, NO row    -> the torn write. The MISSING ROW ONLY
            is appended, against the STORED envelope's own identity. The record
            is not rewritten and its scope is not re-derived, so the
            forward-only posture the presence check exists to protect holds
            unchanged.
-        3. no record                   -> not reached; the caller captures
+        3. any OTHER record, NO row    -> nothing (Codex R7). See below.
+        4. no record                   -> not reached; the caller captures
            normally.
+
+        Codex R7: (2) and (3) were one case, and the missing row was read as
+        proof of a torn START. It is not. EPISODIC_RUN is ONE `run.json` keyed
+        by `run_id` and run-close OVERWRITES it, so a run that started and
+        closed before this substrate existed - or that was torn AFTER its
+        close - stores a `run_close` record carrying no run-start row, and the
+        repair then appended a run-start row asserting a start that this record
+        is not evidence of. The stored content's own `event_type` is therefore
+        read first, and only a genuine run-start record is repairable.
+
+        A run-close (or unreadable-shape) record gets NO row and an untouched
+        envelope: that run's durable history is closed or opaque to us, and
+        FABRICATING a start row against it is strictly worse than leaving the
+        row missing - a missing row is a gap the ledger honestly shows, while a
+        fabricated one is a false attestation in an append-only, hash-chained
+        substrate that cannot be retracted. The caller still registers the
+        `run_id` in `_started_runs`, so the run proceeds exactly as it does for
+        state (1); the record's presence still ends the capture.
 
         Codex R5: the probe at (1) and the append at (2) are not one atomic
         step, so a SECOND worker can pass the probe while a first worker's row
@@ -384,6 +404,10 @@ class LocalAutomaticMemoryRuntime:
         """
         record = self._stored_run_record(context.run_id)
         if record is None:
+            return
+        # Ahead of the row probe: a non-run-start record is unrepairable
+        # whatever the ledger says, and this spares it the whole-ledger read.
+        if stored_capture_event_type(record.content) != RUN_START_EVENT_KIND:
             return
         if self._run_start_capture_row_present(record.envelope.memory_id):
             return

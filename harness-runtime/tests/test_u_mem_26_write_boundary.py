@@ -33,6 +33,10 @@ from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
+from harness_is.memory_observability import (
+    MemoryTelemetryFailureClass,
+    MemoryTelemetryOperationName,
+)
 from harness_is.memory_operation_ledger import (
     MemoryOperationEntry,
     MemoryOperationKind,
@@ -112,6 +116,9 @@ from harness_runtime.memory_tool_executor import (
     StandardMemoryToolExecutor,
 )
 from harness_runtime.types import OTelConfig, RuntimeConfig
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _NOW = datetime(2026, 7, 28, 12, 0, 0, tzinfo=UTC)
 _POLICY_REF = "policy:u-mem-26"
@@ -333,8 +340,18 @@ def test_capture_under_unregistered_candidate_key_still_lands_the_composed_famil
     assert scope.provider_family != _UNREGISTERED_KEY
 
 
+def _in_memory_tracer() -> tuple[TracerProvider, InMemorySpanExporter]:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider, exporter
+
+
 def _supplied_scope_capture(
-    tmp_path: Path, *, provider_family: str
+    tmp_path: Path,
+    *,
+    provider_family: str,
+    tracer_provider: TracerProvider | None = None,
 ) -> tuple[CanonicalMemoryStore, EpisodicMemoryCapture]:
     """A capture bound to a HAND-SUPPLIED `record_scope`.
 
@@ -347,6 +364,7 @@ def _supplied_scope_capture(
         store=store,
         actor=_actor(),
         project="arhugula-v2",
+        tracer_provider=tracer_provider,
         record_scope=MemoryScope(
             project="arhugula-v2",
             workflow="memory-substrate",
@@ -425,6 +443,48 @@ def test_supplied_record_scope_out_of_domain_is_refused_and_writes_nothing(
     assert _UNREGISTERED_KEY in str(excinfo.value)
     assert list(store.read_memory_operations()) == []
     assert not (tmp_path / "memory" / "episodic").exists()
+
+
+def test_out_of_domain_supplied_scope_denial_emits_its_c_mem_19_span(tmp_path: Path) -> None:
+    """Codex R7 - the refusal above is COUNTABLE, not silent.
+
+    The denial fires inside `_record`, which ran BEFORE `_capture` opened its
+    telemetry span - so the one capture outcome C-MEM-19 has a `policy_denial`
+    class for was the one outcome that emitted no span at all. The error type
+    declares that class at its own definition site (`memory_failure_class`,
+    B-88) and nothing ever carried the declaration to a span.
+
+    The span is selected by the discriminating attribute rather than by
+    position, and the class is asserted as `policy_denial` - not `io_failure`,
+    which is what the surrounding capture-failure path emits and what a refusal
+    must never be confused with. The denial must still PROPAGATE: it is a
+    caller contract violation, not a `FAILED` result to shrug off, so the
+    `pytest.raises` and the write-nothing assertion are as load-bearing here as
+    the span is.
+    """
+    tracer_provider, exporter = _in_memory_tracer()
+    store, capture = _supplied_scope_capture(
+        tmp_path,
+        provider_family=_UNREGISTERED_KEY,
+        tracer_provider=tracer_provider,
+    )
+
+    with pytest.raises(MemoryCaptureScopeValueDomainError):
+        _run_start(capture)
+
+    [span] = [
+        span
+        for span in exporter.get_finished_spans()
+        if dict(span.attributes or {}).get("memory.failure_class")
+        == MemoryTelemetryFailureClass.POLICY_DENIAL.value
+    ]
+    attrs = dict(span.attributes or {})
+    assert attrs["memory.operation.name"] == MemoryTelemetryOperationName.CAPTURE.value
+    assert attrs["memory.operation.kind"] == MemoryOperationKind.CAPTURE.value
+    assert attrs["memory.tier"] == MemoryTier.EPISODIC.value
+    assert attrs["memory.policy.decision"] == MemoryCaptureStatus.FAILED.value
+    assert attrs["memory.record_count"] == 0  # the refusal precedes any record
+    assert list(store.read_memory_operations()) == []  # and it still writes nothing
 
 
 def test_captured_scope_round_trips_where_the_pre_repair_scope_does_not(tmp_path: Path) -> None:
@@ -1130,18 +1190,30 @@ def _memory_root_store(tmp_path: Path) -> CanonicalMemoryStore:
     )
 
 
-def _seed_legacy_run_record(tmp_path: Path, *, run_id: str) -> MemoryStoreRecord:
-    """Persist a pre-v1.1 EPISODIC_RUN envelope scoped by the RAW provider key."""
+def _seed_legacy_run_record(
+    tmp_path: Path,
+    *,
+    run_id: str,
+    event_type: str = "run_start",
+    close_status: str = "open",
+) -> MemoryStoreRecord:
+    """Persist a pre-v1.1 EPISODIC_RUN envelope scoped by the RAW provider key.
+
+    `event_type` is parameterized because EPISODIC_RUN is ONE `run.json` per
+    run and run-close OVERWRITES it: what a resumed run finds on disk is
+    whichever event wrote LAST, so a closed run's stored record is genuinely a
+    `run_close` one (Codex R7).
+    """
     store = _memory_root_store(tmp_path)
     content: dict[str, object] = {
-        "event_type": "run_start",
+        "event_type": event_type,
         "run_id": run_id,
         "workflow_id": "workflow-memory",
         "thread_id": None,
         "engine_class": None,
         "cli_profile": "generic",
         "provider_route": [_OLLAMA_KEY],
-        "close_status": "open",
+        "close_status": close_status,
     }
     content_hash = compute_memory_content_hash(content)
     record = MemoryStoreRecord(
@@ -1283,6 +1355,37 @@ def test_torn_run_start_capture_appends_the_missing_row_without_rewriting(
         RUN_START_EVENT_KIND, record.envelope.memory_id
     )
     assert capture.run_id == _RESUMED_RUN_ID
+
+
+def test_a_stored_run_close_record_is_not_repaired_as_a_torn_start(tmp_path: Path) -> None:
+    """Codex R7 - a missing run-start row is not evidence of a torn START.
+
+    EPISODIC_RUN is ONE `run.json` keyed by `run_id` and run-close OVERWRITES
+    it, so a run that started and closed before this substrate existed (or one
+    torn AFTER its close) stores a `run_close` record carrying no run-start
+    row - the exact shape the repair read as a torn start. It then appended a
+    run-start row asserting a start this record is not evidence of: a false
+    attestation in an append-only, hash-chained ledger, which is strictly worse
+    than the gap it was closing.
+
+    Both halves are load-bearing. NO row may appear (the fabrication), and the
+    closed run's envelope must be byte-unchanged (the forward-only posture).
+    The dispatch itself must still proceed - a closed prior run is not a fault.
+    """
+    record = _seed_legacy_run_record(
+        tmp_path,
+        run_id=_RESUMED_RUN_ID,
+        event_type="run_close",
+        close_status="completed",
+    )
+    run_path = _memory_root_store(tmp_path).record_path(record)
+    before = run_path.read_bytes()
+    assert _capture_entries(_memory_root_store(tmp_path)) == []  # the shape under test
+
+    _compose_one_dispatch(tmp_path)  # must not raise
+
+    assert _capture_entries(_memory_root_store(tmp_path)) == []  # nothing fabricated
+    assert run_path.read_bytes() == before  # and nothing rewritten
 
 
 def _force_probe_to_miss(monkeypatch: pytest.MonkeyPatch) -> None:

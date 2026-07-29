@@ -18,6 +18,7 @@ from typing import ClassVar, Protocol, Self
 from harness_is.memory_observability import (
     MemoryTelemetryFailureClass,
     MemoryTelemetryOperationName,
+    classify_memory_failure,
     memory_telemetry_span,
     set_memory_telemetry_attributes,
 )
@@ -54,7 +55,13 @@ _REDACTED_SUMMARY = "[redacted]"
 _SCHEMA_VERSION = "episodic-capture/v1"
 
 RUN_START_EVENT_KIND = "run_start"
-"""Event kind of the run-start capture, shared with its durable-row probes."""
+"""Event kind of the run-start capture, shared with its durable-row probes.
+
+`capture_run_start` writes this same value as the record's own
+`content["event_type"]`, so it is also what `stored_capture_event_type` returns
+for a run-start record - one spelling for both the ledger key and the stored
+discriminator.
+"""
 
 
 def capture_operation_action_id(event_kind: str, memory_id: MemoryID) -> Identifier:
@@ -155,10 +162,11 @@ class MemoryCaptureStore(Protocol):
 class MemoryCaptureScopeValueDomainError(ValueError):
     """Raised when a capture scope's `provider_family` is out of the value domain.
 
-    U-MEM-26 / C-MEM-03 v1.1. Reached only on the RESIDUAL construction path
-    below (no `record_scope` supplied), where the scope is still derived from a
-    per-dispatch provider key. A run that supplies its composed `record_scope`
-    cannot reach it: that scope's `provider_family` is by construction a
+    U-MEM-26 / C-MEM-03 v1.1. Reachable from BOTH branches of
+    `_scope_for_record` - the residual construction, where the scope is still
+    derived from a per-dispatch provider key, and a scope SUPPLIED by a caller,
+    which is no more trusted (Codex R2). The composed production path does not
+    raise it in practice: that scope's `provider_family` is by construction a
     `ProviderFamily` value derived once from the chain primary.
 
     It is a refusal, not a substrate fault, so it declares `policy_denial`
@@ -564,16 +572,52 @@ class EpisodicMemoryCapture:
         policy_ref: str | None,
         procedural_snapshot_ref: str | None,
     ) -> MemoryCaptureResult:
-        record = self._record(
-            kind=record_kind,
-            content=content,
-            timestamp=timestamp,
-            source_ref=source_ref,
-            run_id=run_id,
-            workflow_id=_optional_string(content.get("workflow_id")),
-            cli_profile=cli_profile,
-            provider=provider,
-        )
+        try:
+            record = self._record(
+                kind=record_kind,
+                content=content,
+                timestamp=timestamp,
+                source_ref=source_ref,
+                run_id=run_id,
+                workflow_id=_optional_string(content.get("workflow_id")),
+                cli_profile=cli_profile,
+                provider=provider,
+            )
+        except MemoryCaptureScopeValueDomainError as exc:
+            # Codex R7: the write-boundary REFUSAL is an outcome C-MEM-19 has a
+            # vocabulary for, and it was the one capture outcome that emitted no
+            # span at all - the denial fires inside `_record`, which ran BEFORE
+            # the span below opened, so an out-of-domain scope was invisible to
+            # the telemetry that exists to make denials countable.
+            #
+            # The span is opened here rather than moving `_record` inside the
+            # one below, because the record is what supplies that span's `tier`
+            # and its payload's `memory_id` - and because the denial must keep
+            # PROPAGATING. Every other failure in this method folds into a
+            # `FAILED` result; a refusal is a contract violation by the caller,
+            # not an IO fault it may shrug off, and `raise` inside the context
+            # manager also lets the span record the exception on its way out.
+            #
+            # `tier` is EPISODIC by construction - `_record` hardcodes it for
+            # every record this class writes - and `record_count` is 0 because
+            # the refusal precedes any record. The failure class is read from
+            # the exception TYPE (`classify_memory_failure` honours the
+            # `memory_failure_class` declaration, B-88) rather than spelled
+            # literally here, so a future denial type carries its own class.
+            with memory_telemetry_span(
+                self._tracer_provider,
+                tracer_name="harness.runtime.memory_capture",
+                operation_name=MemoryTelemetryOperationName.CAPTURE,
+                operation_kind=MemoryOperationKind.CAPTURE.value,
+                tier=MemoryTier.EPISODIC.value,
+                provider=provider,
+                model=model,
+                cli_profile=cli_profile,
+                policy_decision=MemoryCaptureStatus.FAILED.value,
+                failure_class=classify_memory_failure(exc),
+                record_count=0,
+            ):
+                raise
         payload = self._operation_payload(
             event_kind=event_kind,
             actor=self._actor,
@@ -960,6 +1004,23 @@ def _stored_text(content: Mapping[str, object], key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def stored_capture_event_type(content: Mapping[str, object]) -> str | None:
+    """The `event_type` a stored capture record's content declares.
+
+    Every `capture_*` method opens its content with this field, so it is the
+    record's own statement of WHICH event wrote it - the discriminator a reader
+    needs when one `memory_id` is shared by several events (EPISODIC_RUN is one
+    `run.json` per run, written by run-start and OVERWRITTEN by run-close).
+
+    Exported for the same reason `capture_operation_action_id` is: the field is
+    written here, so a caller asking what a durable record IS reads it through
+    this module rather than re-spelling the key. Strict (`_stored_text`): an
+    absent or non-text field reads as `None` - an unrecognizable record, never
+    a guess at one.
+    """
+    return _stored_text(content, "event_type")
+
+
 def _stored_engine_class(content: Mapping[str, object]) -> MemoryOperationEngineClass | None:
     """The stored content's `engine_class`, or `None` when it is not one."""
     value = _stored_text(content, "engine_class")
@@ -983,4 +1044,5 @@ __all__ = [
     "SummarySource",
     "capture_operation_action_id",
     "capture_repair_actor",
+    "stored_capture_event_type",
 ]
