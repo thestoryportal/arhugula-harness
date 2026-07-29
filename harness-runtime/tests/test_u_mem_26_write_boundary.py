@@ -69,7 +69,11 @@ from harness_is.memory_retrieval import (
     MemoryRetriever,
 )
 from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
-from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
+from harness_is.memory_store import (
+    CanonicalMemoryStore,
+    MemoryStoreRecord,
+    MemoryStoreWriteResult,
+)
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_runtime.automatic_memory import (
     LocalAutomaticMemoryRuntime,
@@ -1398,6 +1402,134 @@ def test_a_conflicting_row_in_the_race_window_is_read_as_completion(
     [capture] = _capture_entries(_memory_root_store(tmp_path))
     assert capture.actor == _actor()  # the seeded row, not a repair row
     assert capture.memory_refs == (record.envelope.memory_id,)
+
+
+def _repair_between_write_and_append(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    repairs: list[MemoryCaptureResult],
+    written: list[bytes],
+) -> None:
+    """Let a second worker repair THIS capture's record before it appends.
+
+    Holds open the same window `_force_probe_to_miss` does, from the other
+    side: `_capture` writes the record and only THEN appends its row, so a
+    second worker reading `run.json` in between sees a torn capture and
+    completes it. The seam is the record write, so that is what is wrapped -
+    the real write still happens, and the second worker runs the real repair
+    against the real ledger.
+    """
+    real_write = CanonicalMemoryStore.write_record
+
+    def _write_then_repair(
+        self: CanonicalMemoryStore, record: MemoryStoreRecord
+    ) -> MemoryStoreWriteResult:
+        result = real_write(self, record)
+        if not repairs and record.envelope.kind is MemoryRecordKind.EPISODIC_RUN:
+            written.append(self.record_path(record).read_bytes())
+            repairs.append(
+                EpisodicMemoryCapture(
+                    store=_memory_root_store(tmp_path),
+                    actor=Actor(actor_class=ActorClass.AGENT, actor_id="worker-two"),
+                    project="arhugula-v2",
+                    record_scope=_scope(_OLLAMA_FAMILY),
+                ).repair_capture_operation(
+                    event_kind=RUN_START_EVENT_KIND,
+                    record=record,
+                    timestamp=_NOW,
+                    run_id=_RESUMED_RUN_ID,
+                )
+            )
+        return result
+
+    monkeypatch.setattr(CanonicalMemoryStore, "write_record", _write_then_repair)
+
+
+def test_a_repair_landing_before_the_original_append_completes_the_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex R6 - the REVERSE ordering of the R5 race, from the original's side.
+
+    R5 catches the repair losing to the original append. This is the other
+    ordering: a second worker observes `run.json` while the ORIGINAL capture
+    sits between its record write and its ledger append, repairs it with the
+    worker-invariant synthetic payload, and the original's own append - which
+    legitimately carries dispatch metadata (actor, provider, model, policy) -
+    then conflicts. Pre-fix `_capture`'s broad handler read that as FAILED and
+    `_raise_capture_failure` aborted an otherwise-successful run.
+
+    The conflict is evidence, not a fault: the key names this event kind and
+    the `memory_id` of the record THIS worker just wrote, so the occupant can
+    only be that repair. The run must complete, exactly one row must exist, and
+    the record - written by this worker, never touched by the repair - must be
+    intact.
+    """
+    repairs: list[MemoryCaptureResult] = []
+    written: list[bytes] = []
+    _repair_between_write_and_append(tmp_path, monkeypatch, repairs=repairs, written=written)
+
+    _compose_one_dispatch(tmp_path)  # must not raise
+
+    [repair] = repairs
+    assert repair.operation_result is MemoryOperationWriteResult.APPENDED  # it won the race
+    store = _memory_root_store(tmp_path)
+    [capture] = _capture_entries(store)
+    # The durable row is the repair's synthetic payload, not this dispatch's:
+    # the accepted information loss under this ordering (rewriting an
+    # append-only ledger row is the worse trade - see `_capture`).
+    assert capture.actor == capture_repair_actor(_RESUMED_RUN_ID)
+    assert capture.provider is None
+    assert capture.model is None
+    stored = store.read_run_record(_RESUMED_RUN_ID)
+    assert capture.memory_refs == (stored.envelope.memory_id,)
+    # No envelope divergence question in this ordering: the original worker
+    # wrote the record itself and the repair writes none.
+    assert store.record_path(stored).read_bytes() == written[0]
+    assert stored.content["provider_route"] == [f"{_OLLAMA_KEY}:llama3.1"]  # this dispatch's
+
+
+def test_a_non_run_start_idempotency_conflict_still_fails_the_capture(tmp_path: Path) -> None:
+    """Codex R6 negative control - the completion reading is run-start ONLY.
+
+    `repair_capture_operation` is reached from one call site, always with
+    `RUN_START_EVENT_KIND`, so no other event kind has a second writer sharing
+    its keys and a conflict on one is a genuine divergence. Two provider-route
+    captures of identical content under divergent dispatch metadata land on one
+    `action_id` with unequal payloads; that must still surface as FAILED.
+    Widening the catch past `event_kind` would silently mask it.
+    """
+    store = _memory_root_store(tmp_path)
+
+    def _route(provider: str, model: str) -> MemoryCaptureResult:
+        return EpisodicMemoryCapture(
+            store=store,
+            actor=_actor(),
+            project="arhugula-v2",
+            record_scope=_scope(_OLLAMA_FAMILY),
+        ).capture_provider_route(
+            run_id=_RESUMED_RUN_ID,
+            route_id="route-one",
+            provider_route=[_OLLAMA_KEY],
+            step_id="memory-step",
+            timestamp=_NOW,
+            provider=provider,
+            model=model,
+            cli_profile="generic",
+            engine_class=None,
+            policy_ref=_POLICY_REF,
+            procedural_snapshot_ref=None,
+        )
+
+    first = _route(_OLLAMA_KEY, "llama3.1")
+    second = _route("anthropic", "claude-sonnet-4")
+
+    assert first.status is MemoryCaptureStatus.CAPTURED
+    assert second.status is MemoryCaptureStatus.FAILED
+    assert "MemoryOperationIdempotencyConflictError" in (second.failure_reason or "")
+    [capture] = _capture_entries(store)  # and the divergent row never landed
+    assert capture.provider == _OLLAMA_KEY
 
 
 def test_run_start_capture_still_lands_a_new_run_id(tmp_path: Path) -> None:

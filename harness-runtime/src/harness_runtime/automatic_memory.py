@@ -375,6 +375,12 @@ class LocalAutomaticMemoryRuntime:
         already occupies this exact `idempotency_key`, and that key names this
         one capture, so a conflict is positive evidence the row is durable.
         Failing the run over it would report a repair that in fact succeeded.
+
+        Codex R6: that catch covers one ORDERING - the repair losing to the
+        original append. The reverse, this repair's row landing FIRST and the
+        original's own append then conflicting, raises inside `_capture` and is
+        read as completion there, on the same evidence. The two catches are one
+        symmetric answer; neither closes the race alone.
         """
         record = self._stored_run_record(context.run_id)
         if record is None:

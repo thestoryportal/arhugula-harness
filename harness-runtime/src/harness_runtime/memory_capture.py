@@ -611,7 +611,56 @@ class EpisodicMemoryCapture:
                 # record itself is durable; only its audit trail is
                 # incomplete), never a ledger entry pointing at nothing.
                 self._store.write_record(record)
-                operation_result = self._store.append_memory_operation(payload)
+                try:
+                    operation_result = self._store.append_memory_operation(payload)
+                except MemoryOperationIdempotencyConflictError:
+                    # Codex R6: the REVERSE of the race the repair call site
+                    # catches. There, the repair loses to this append; here,
+                    # this append loses to the repair. A second worker can
+                    # observe the `run.json` written one line above while this
+                    # append is still in flight, read it as a torn capture, and
+                    # complete it with `repair_capture_operation`'s
+                    # worker-invariant payload. That row diverges from this one
+                    # (a repair cannot know the dispatch metadata), so the
+                    # ledger raises here - and the broad handler below turned
+                    # that into FAILED, aborting a run whose accounting was in
+                    # fact durably complete.
+                    #
+                    # A conflict is positive evidence of exactly that. The
+                    # ledger raises ONLY when an entry already occupies this
+                    # `idempotency_key`, and the key is a function of this
+                    # `event_kind` and the `memory_id` of the record THIS
+                    # worker just wrote - so the occupant can only be the
+                    # repair row for this capture or a concurrent identical
+                    # one. Either way the record is written and the row is
+                    # present, which is what CAPTURED asserts.
+                    #
+                    # Accepted information loss: the durable row is then the
+                    # repair's synthetic payload (`provider` / `model` /
+                    # `policy_ref` None) rather than this dispatch's richer
+                    # metadata. Correcting it would mean REWRITING a
+                    # hash-chained append-only ledger row, which is a strictly
+                    # worse trade than losing four attributes on a row whose
+                    # purpose is to attest that the capture is durable. The
+                    # RECORD keeps its full content either way: in this
+                    # ordering this worker wrote it, and the repair writes no
+                    # record.
+                    #
+                    # Scoped to run-start ONLY. `repair_capture_operation` is
+                    # reached from one call site, always with
+                    # `RUN_START_EVENT_KIND`, so no other event kind has a
+                    # second writer sharing its keys - a conflict on any of
+                    # them is a genuine divergence and must still surface as
+                    # FAILED (it re-raises into the handler below). `event_kind`
+                    # is the whole discriminator because it is what the
+                    # `action_id`, and hence the key, is built from.
+                    #
+                    # The span needs no annotation: it already declares
+                    # `policy_decision=captured`, and no `failure_class`
+                    # belongs on an outcome that is not a failure.
+                    if event_kind != RUN_START_EVENT_KIND:
+                        raise
+                    operation_result = None
             except Exception as exc:
                 set_memory_telemetry_attributes(
                     span,
