@@ -2243,15 +2243,42 @@ class _DegradedMemoryServe:
     reason: str
     #: None ⇒ report-only: nothing was served to the model.
     rendered: RenderedMemoryPromptPacket | None
-    #: Did a policy RESOLVER decide this degradation? True exactly when `reason`
-    #: is a `MemoryAccessModeDenialReason` the counterfactual selector actually
-    #: returned (`_SELECTOR_DENIAL_REASON_VALUES`), which is the C-MEM-19
-    #: `POLICY_DENIAL` condition the primary DENIAL span already applies to the
-    #: SAME values (`memory_context.py:210-216`). Carried as DATA from the site
-    #: that KNOWS the reason's provenance, so the emitter never has to re-derive
-    #: it by matching on a string whose value domain is three families wide.
-    #: False for the scope-mismatch conjuncts and for the sentinels — see
-    #: `_emit_degraded_memory_serve_span` for why those stay unset (B-91).
+    #: Did POLICY withhold this memory? True on exactly the report-only
+    #: outcomes where a policy determination was actually REACHED:
+    #:
+    #: * a `MemoryAccessModeDenialReason` the counterfactual selector actually
+    #:   returned (`_SELECTOR_DENIAL_REASON_VALUES`, the C-MEM-19
+    #:   `POLICY_DENIAL` condition the primary DENIAL span already applies to
+    #:   the SAME values, `memory_context.py:210-216`);
+    #: * a CONFIRMED cross-family withhold — both families RESOLVED and were
+    #:   found unequal — whose withholding is MANDATED by C-MEM-13 (B-91 Q1,
+    #:   decided 2026-07-29 — `Spec_Memory_Substrate_v1.md:511` records the
+    #:   withhold on the C-MEM-19 surface "whose declared coverage already
+    #:   includes standard memory tool calls and policy denial", and `:683` is
+    #:   that coverage item).
+    #:
+    #: On the two SCOPE conjuncts the value is a function of the family RELATION
+    #: alone, never of which conjunct fired: `policy_denial` ⟺ CONFIRMED_MISMATCH
+    #: (B-91 codex R2, 2026-07-29). An `anthropic`-composed context rebound to
+    #: `openai` trips the IDENTITY guard first, yet its families resolve and
+    #: differ — a confirmed C-MEM-13 withhold that the earlier reading left
+    #: unclassified purely by test order. NOT set for:
+    #:
+    #: * a same-FAMILY identity rebind (`codex` → `openai`). The provider KEY
+    #:   moved, so the stale-context guard fires, but C-MEM-13 — which withholds
+    #:   only across FAMILIES — mandates nothing. [R1 P2-1]
+    #: * the UNVERIFIABLE family states (absent `record_scope`, out-of-domain
+    #:   scope value, unregistered provider key), on EITHER conjunct. The
+    #:   withhold there is fail-closed validation: the relationship is UNKNOWN,
+    #:   not known-unequal. [R1 P2-2]
+    #:
+    #: Carried as DATA from the site that KNOWS the reason's provenance, so the
+    #: emitter never has to re-derive it by matching on a string whose value
+    #: domain is three families wide — and never has to guess which of the two
+    #: `_ScopeFamilyRelation` non-MATCH values produced a family-mismatch
+    #: reason. False for the `not_derived` / `prompt_packet_denial_undetermined`
+    #: sentinels for the same reason as for the two withholds above: nobody
+    #: decided anything — see `_emit_degraded_memory_serve_span` (B-91 Q2).
     policy_denial: bool = False
 
 
@@ -2452,11 +2479,52 @@ def _standard_memory_tools_context(
     return memory_context
 
 
+class _ScopeFamilyRelation(StrEnum):
+    """How the packet's retrieval-scope family relates to the dispatch's family.
+
+    B-91 codex R1 [P2-2]. The bool the two WITHHOLDING callers need collapses
+    two facts a TELEMETRY caller must keep apart: a `False` means either "both
+    families resolved and they DIFFER" (the C-MEM-13 cross-family withhold, a
+    policy outcome) or "the relationship could not be established at all" (an
+    absent scope, an out-of-domain scope value, an unregistered provider key —
+    fail-closed validation states where nothing was decided about a family).
+    Reporting the second as `POLICY_DENIAL` claims a determination that was
+    never made, the same over-claim the per-reason [P2-e] split exists to stop.
+
+    Withholding treats CONFIRMED_MISMATCH and UNVERIFIABLE identically — only
+    MATCH authorizes exposure — so `_packet_scope_matches_dispatch_family` is a
+    pure projection of this value and the guard's behavior is unchanged.
+    """
+
+    MATCH = "match"
+    CONFIRMED_MISMATCH = "confirmed_mismatch"
+    UNVERIFIABLE = "unverifiable"
+
+
 def _packet_scope_matches_dispatch_family(
     memory_context: RuntimeMemoryContext,
     provider_name: str,
 ) -> bool:
     """True iff the packet's RETRIEVAL scope belongs to this dispatch's family.
+
+    The withholding projection of `_packet_scope_family_relation` — the single
+    authority both callers read, so the guard and the disposition can never
+    disagree about whether a packet may be exposed. Only MATCH authorizes
+    exposure; CONFIRMED_MISMATCH and UNVERIFIABLE both withhold, and the
+    difference between them is a TELEMETRY distinction the disposition site
+    reads directly from the relation (B-91 codex R1 [P2-2]).
+    """
+
+    return (
+        _packet_scope_family_relation(memory_context, provider_name) is _ScopeFamilyRelation.MATCH
+    )
+
+
+def _packet_scope_family_relation(
+    memory_context: RuntimeMemoryContext,
+    provider_name: str,
+) -> _ScopeFamilyRelation:
+    """Resolve BOTH families and report how the packet's scope relates.
 
     B-83 [P1-c]. Provider IDENTITY is not sufficient. On the `memory_runtime`
     path a cross-family fallback RECOMPOSES the context for the current
@@ -2498,24 +2566,36 @@ def _packet_scope_matches_dispatch_family(
     Canonicalizing the scope side makes the two spellings one value.
 
     An absent scope, an absent `provider_family`, an out-of-domain scope value,
-    or an unregistered provider key is treated as NOT matching: `_scope_mismatch`
-    treats a `None` request family as "no constraint", so the packet may hold
-    records of ANY family and nothing here can prove otherwise. Unverifiable is
-    not the same as safe — the B-86 sentinel semantics hold on the SCOPE side
-    exactly as they do on the provider side, so an unknown value never compares
-    equal to anything.
+    or an unregistered provider key is UNVERIFIABLE, and every caller that
+    WITHHOLDS treats it exactly as it treats a confirmed mismatch:
+    `_scope_mismatch` treats a `None` request family as "no constraint", so the
+    packet may hold records of ANY family and nothing here can prove otherwise.
+    Unverifiable is not the same as safe — the B-86 sentinel semantics hold on
+    the SCOPE side exactly as they do on the provider side, so an unknown value
+    never compares equal to anything.
+
+    It is NOT, however, the same as a cross-family DENIAL, and that is why this
+    function returns three values rather than a bool (B-91 codex R1 [P2-2]).
+    CONFIRMED_MISMATCH is reached only where both families RESOLVED and were
+    found unequal — the C-MEM-13 determination. On every UNVERIFIABLE state no
+    family relationship was ever established, so no telemetry reader may be told
+    that policy decided one.
     """
 
     scope = memory_context.record_scope
     if scope is None or scope.provider_family is None:
-        return False
+        return _ScopeFamilyRelation.UNVERIFIABLE
     scope_family = canonical_scope_family(scope.provider_family)
     if scope_family is None:
-        return False
+        return _ScopeFamilyRelation.UNVERIFIABLE
     dispatch_family = provider_family_for_scope_check(provider_name)
     if dispatch_family is None:
-        return False
-    return scope_family == dispatch_family.value
+        return _ScopeFamilyRelation.UNVERIFIABLE
+    return (
+        _ScopeFamilyRelation.MATCH
+        if scope_family == dispatch_family.value
+        else _ScopeFamilyRelation.CONFIRMED_MISMATCH
+    )
 
 
 def _degraded_serve_disposition(
@@ -2550,19 +2630,60 @@ def _degraded_serve_disposition(
     Any conjunct failing is report-only: the degradation becomes visible in
     telemetry, and nothing is disclosed out of scope or through a mode the
     operator disabled.
+
+    The conjuncts are ordered for REASON reporting — the reason names the first
+    gate that closed — but the report-only `policy_denial` CLASS is NOT ordered
+    with them: on the two scope conjuncts it is a function of the family
+    relation alone (B-91 codex R2), so a cross-family rebind is classified
+    identically whether identity or family caught it.
     """
 
+    # B-91 Q1, refined by codex R1 [P2-2] then converged by codex R2 —
+    # POLICY_DENIAL follows the FAMILY RELATION, not the branch that happened to
+    # fire. There the withholding is contract-MANDATED ("the harness MUST NOT
+    # expose the memory tool schemas or the scope reference",
+    # `Spec_Memory_Substrate_v1.md:509`) and the spec files the record under
+    # C-MEM-19's EXISTING coverage list (`:511`), whose only item this event can
+    # be is "Policy denial" (`:683`) — a withheld exposure is not a tool CALL;
+    # `no_memory_access`, what these branches report, is itself named "a valid
+    # policy outcome" at `:522`. On an UNVERIFIABLE relation the SAME withhold
+    # happens for the opposite reason — no family relationship could be
+    # established — so the class stays unset and `policy.decision` carries the
+    # reason verbatim, exactly as it does for the `not_derived` sentinel.
+    #
+    # Resolved BEFORE the identity return because the two conjuncts are not
+    # ordered by which determination was reached: a context composed for
+    # `anthropic` and rebound to `openai` trips IDENTITY first, yet both families
+    # resolve and are unequal — the confirmed C-MEM-13 cross-family withhold,
+    # which the identity return would otherwise report unclassified purely
+    # because it is tested first (codex R2 [P2]). The relation reads only
+    # `record_scope` + `provider_name`, both in scope here and neither touched by
+    # the identity test, so evaluating it earlier is free of ordering hazard and
+    # costs two dict lookups on an already-degraded path.
+    scope_relation = _packet_scope_family_relation(memory_context, provider_name)
+    policy_denial = scope_relation is _ScopeFamilyRelation.CONFIRMED_MISMATCH
+    # The IDENTITY conjunct is a stale-context safety guard, DISTINCT from the
+    # family conjunct: a statically injected context is composed once and
+    # `RetryBreakerFallbackDispatcher` rebinds the provider per attempt, so this
+    # branch fires whenever the provider KEY moved — including an
+    # `openai`-composed context rebound to `codex`, where both keys resolve to
+    # the SAME family and C-MEM-13, which withholds only across FAMILIES,
+    # mandates nothing at all. That same-family rebind stays UNCLASSIFIED, as
+    # does a rebind whose relation is UNVERIFIABLE; only the confirmed
+    # cross-family relation earns the class, whichever conjunct fired first.
     if memory_context.selection.selected_provider != provider_name:
         return _DegradedMemoryServe(
             selected_access_mode=memory_context.access_mode,
             reason=_DEGRADED_REASON_PROVIDER_SCOPE_MISMATCH,
             rendered=None,
+            policy_denial=policy_denial,
         )
-    if not _packet_scope_matches_dispatch_family(memory_context, provider_name):
+    if scope_relation is not _ScopeFamilyRelation.MATCH:
         return _DegradedMemoryServe(
             selected_access_mode=memory_context.access_mode,
             reason=_DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH,
             rendered=None,
+            policy_denial=policy_denial,
         )
     packet_denial = memory_context.prompt_packet_fallback_denial
     if packet_denial is not None:
@@ -2678,7 +2799,9 @@ def _emit_degraded_memory_serve_span(
       WITHIN this disposition — see below.
 
     REPORT-ONLY is reached on THREE reason families, and `failure_class` is not
-    uniform across them (merge-gate spec-conformance lens, 2026-07-29):
+    uniform across them (B-91, decided 2026-07-29 — the split is between
+    families whose withholding POLICY caused and the one family where nobody
+    decided anything, NOT between resolver-decided and everything else):
 
     1. the SELECTOR-DENIAL family — a `MemoryAccessModeDenialReason` value
        (`no_supported_mode` / `token_budget_empty`) carried verbatim from
@@ -2691,25 +2814,46 @@ def _emit_degraded_memory_serve_span(
        Discriminated by `degraded.policy_denial`, carried as DATA from the site
        that knows the reason's provenance, never re-derived by string-matching
        a value domain that spans all three families.
-    2. the SCOPE-MISMATCH conjuncts (`provider_scope_mismatch` /
-       `provider_family_scope_mismatch`) — UNSET here, and the question of
-       whether they SHOULD carry `POLICY_DENIAL` is REGISTERED (B-91), not
-       settled. Post-B-86 the withhold is policy-MANDATED
-       (`Spec_Memory_Substrate_v1.md:511` records it on the C-MEM-19 surface
-       "with the denial reason carried as an attribute value"; `:523` states it
-       as a C-MEM-13 invariant; `:559` qualifies C-MEM-14 exposure by it), so
-       the older reading — that no policy decision exists on this branch — is
-       over-stated. What remains genuinely open is whether a CONTRACT-mandated
-       withhold is the same telemetry class as a RESOLVER's denial. Unset is
-       the conservative answer while that is open: adding the attribute later
-       is additive, retracting a wrong one is not.
-    3. `not_derived` (and the `prompt_packet_denial_undetermined` sibling,
-       `memory_context.py:48-52`) — a fail-safe NON-decision: nobody ran the
-       counterfactual, so nothing was denied by anyone. UNSET, and deliberately
-       so. That these sentinels nonetheless land on `memory.policy.decision`
-       while being defined as distinct from every `MemoryAccessModeDenialReason`
-       value is the same registered question (B-91) seen from the other side:
-       whether that attribute is the right axis for a non-decision at all.
+    2. a CONFIRMED cross-family withhold — `_ScopeFamilyRelation.CONFIRMED_
+       MISMATCH`, both families RESOLVED and unequal, under EITHER scope reason
+       (`provider_family_scope_mismatch`, or `provider_scope_mismatch` where the
+       rebind also crossed a family — the converged rule of B-91 codex R2: the
+       class follows the RELATION, not the conjunct that fired first) —
+       `POLICY_DENIAL` too (B-91 Q1). The
+       withholding is contract-MANDATED, not an absence of decision: C-MEM-13
+       states it as a MUST NOT (`Spec_Memory_Substrate_v1.md:509`) and an
+       invariant (`:523`), C-MEM-14 qualifies exposure by it (`:559`), and the
+       recording-surface paragraph (`:511`) files the record under C-MEM-19's
+       EXISTING coverage list "whose declared coverage already includes standard
+       memory tool calls and policy denial". A withheld exposure is not a tool
+       CALL, so "Policy denial" (`:683`) is the coverage item being invoked —
+       and `memory.failure_class` is the only required attribute (`:687-698`)
+       whose value domain carries that classification, the same phrase the
+       failure-class invariant uses (`:703`). That vocabulary is scoped by
+       OUTCOME KIND (policy denial / path violation / IO failure / …), never by
+       WHICH component decided, so a contract-mandated withhold and a resolver's
+       denial are one class. `no_memory_access` — what this branch reports — is
+       itself "a valid policy outcome" per `:522`.
+    3. the NON-DECISIONS — UNSET, and deliberately so: this is the family the
+       `policy_denial` discriminator exists to separate, and no member of the
+       closed failure-class vocabulary describes a determination nobody made.
+       Three shapes reach it:
+
+       * `not_derived` (and the `prompt_packet_denial_undetermined` sibling,
+         `memory_context.py:48-52`) — a fail-safe non-decision: nobody ran the
+         counterfactual, so nothing was denied by anyone and no contract
+         mandated the withhold either.
+       * `provider_scope_mismatch` reached with a SAME-family relation (B-91
+         codex R1 [P2-1]) — the provider-IDENTITY guard on an `openai` → `codex`
+         rebind, where both keys resolve to one family and C-MEM-13's
+         cross-FAMILY rule mandates nothing. A stale-context safety guard, and
+         `policy.decision` names it verbatim.
+       * EITHER scope reason reached with `_ScopeFamilyRelation.UNVERIFIABLE` —
+         an absent `record_scope`, an out-of-domain scope value, or an
+         unregistered provider key (B-91 codex R1 [P2-2]). The relationship is
+         UNKNOWN, so the packet is withheld fail-closed; reporting UNKNOWN as a
+         confirmed denial would misreport a validation state as an operator
+         policy outcome.
 
     C-MEM-19 (`Spec_Memory_Substrate_v1.md:693-694`) requires
     `memory.cli_profile` + `memory.policy.decision` on every memory span.
@@ -2728,8 +2872,23 @@ def _emit_degraded_memory_serve_span(
       DENIAL span's `denial_reason.value`-or-`"denied"` convention. It is a
       free-form attribute VALUE, so it can name the gate on ALL three families
       without asserting a class. `failure_class` cannot: it is a CLOSED enum,
-      so it is set only on the family whose provenance is a resolver decision
-      (family 1 above) and left unset on the other two.
+      so it is set only where POLICY was actually determined to have withheld
+      (1 and 2 above) and left unset on family 3, where nobody decided
+      anything.
+
+      The SENTINELS ride this attribute verbatim too (B-91 Q2, decided
+      2026-07-29 — keep-as-is). `memory.policy.decision` is REQUIRED on every
+      memory span (`Spec_Memory_Substrate_v1.md:694`), so omitting it on the
+      one branch where no gate closed would drop a required attribute exactly
+      where a reader most needs to know the decision axis was empty. Mapping to
+      a generic `"denied"` — the primary span's own fallback when it has no
+      specific reason — would be the worse lie here: it asserts a denial nobody
+      issued, the same false accusation the per-reason [P2-e] split exists to
+      prevent. Verbatim is truthful on both counts: `not_derived` names no gate
+      (it is defined distinct from every `MemoryAccessModeDenialReason`,
+      `memory_context.py:48-52`, so it can never be misread as one) while the
+      span still reports `no_memory_access` + `record_count=0`, so the
+      degradation is never hidden.
 
     `memory.degraded_serve` + `.reason` + `.selected_access_mode` carry the
     B-83-specific detail. All of it lands on the memory tracer's own span,
