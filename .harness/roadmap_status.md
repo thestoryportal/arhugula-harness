@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `4b4c0474d819` |
+| `workspace_state_hash` | `56488dded8ed` |
 | `last_refreshed` | 2026-07-29T00:00:00Z |
-| `git_head` | `db4c259d` —  |
+| `git_head` | `4fe13f77` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 101 |
 
@@ -21,6 +21,8 @@
 ## Next action
 
 **Purpose.** Section 02 names the next Claude/Codex-executable frontier. Completion history lives in `Recently completed`; the full remaining itemization lives in `Remaining forward work` (next section).
+
+**Round 48 — B-92 RATIFIED 2026-07-29 at PR #1157: Reading B (flag + gate).** The operator answered the fork's A/B/C ask via AskUserQuestion at the loop session's close: cross-family-produced promotion candidates carry a risk flag AND a review gate — eligibility preserved (C foreclosed per the B-86 council's continuity record), silent auto-promotion removed (A's permanent posture denied). Q2 — the discriminator mechanism — deliberately NOT decided at ratification: routed to the spec leg per the filing's leveled analysis and the ratified option's own text. The ratification is recorded at fork doc §11 + the B-92 register close_out (status correctly HELD at `design_substrate_gated` — only applied spec deltas flip it, per the register's own enum rule; the B-39/B-72 record shape). **Next action — the C-MEM-10 spec-writer apply leg**, recommended as a FRESH focused session per the filing's §10 cap (the spec leg re-grounds all mechanics at its own HEAD): C-MEM-10 amendment (Reading B's flag+gate contract text), the discriminator's owed contract text (mechanism chosen from the leveled Q2 analysis — C-MEM-03 envelope tri-state vs C-MEM-08 join, with the six UNVERIFIABLE cases / coherence bind / aggregate-run-provenance requirement question as decision inputs), a NEW U-MEM-27 plan unit, clearance markers in-PR, out-of-family codex decorator on the C-MEM diff (the B-86 → #1147 → #1148 precedent chain); the impl leg follows. After that leg: the 13 verified-dormant `registered_finding` rows and the two standing operator unlocks (IAM grant → 3 OTLP e2es; guard-blocked branch deletes) remain the only other frontier.
 
 **Round 47 — the C-MEM-10 Class 1 fork FILED 2026-07-29 at PR #1156 (doc-only); B-92 registered `design_substrate_gated`; the loop reaches its genuine operator gate.** Per round 46's queue head, the U-MEM-26 C-MEM-10 residual was grounded FORK-SHAPED (the spec v1.1 change-note explicitly carries the question forward unresolved; current behavior is permissive BY BLINDNESS — the promotion layer has no discriminator for the composed-scope production path; live auto-promotion exposure at HEAD verified NIL through both entry points) and the Class 1 filing authored at `.harness/class_1_fork_c_mem_10_cross_family_promotion_eligibility.md`: three readings (A explicit-eligible / B flag+gate / C refuse), **Reading B recommended** on the B-86 council record (C3/C6 continuity forecloses C; C10's write-bounded-irreversible classification denies A's silence; A-as-recorded-interim a close second with named ending triggers), Q2 (discriminator mechanics) presented honestly LEVELED after the review corrected it three times — the deciding factor is an unstated requirement (stored-version vs aggregate-run provenance) named for the spec leg. **Nine out-of-family codex rounds, every round real, none rubber-stamps** (exposure corrections R1-R2; join mechanics through six UNVERIFIABLE cases + a record/ledger coherence bind R3-R7 incl. the reconstructible idempotency-key find and the repair-rows-attest-durability-not-provenance case; Q2 leveled R7-R9; the ratification ask precision-qualified R9 — durable contract commitment with costly-partially-complete unwind, NOT "irreversible"); the A/B/C readings + Q1 recommendation stable across all nine; SOUNDNESS EXIT recorded in the filing's §10 with further sub-altitude mechanics routed to the spec leg by rule. Also in-PR: B-84/B-88 dormancy re-checks dated (premises intact). Register **93 items / 77 closed / 1 design_substrate_gated / 13 registered_finding**. **The forward queue is now genuinely slice-exhausted to gates:** every Claude-executable item from rounds 39-46 is closed; the remaining frontier is (a) **the B-92 ratification** — the A/B/C reading choice, a genuine operator fork (surfaced at loop close via AskUserQuestion; its spec leg + impl leg follow ratification per the B-86→U-MEM-26 precedent); (b) the 13 verified-dormant `registered_finding` rows; (c) the two standing operator unlocks (IAM grant → 3 OTLP e2es; the older guard-blocked branch deletes). A future iteration re-grounds only if intervening merges touch the relevant surfaces.
 
@@ -133,11 +135,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| #1157 | 2026-07-29 | Round 48: B-92 RATIFIED — Reading B (flag + gate) recorded in fork doc §11 + register; status stays design_substrate_gated; next = the C-MEM-10 spec-writer apply leg (fresh session per the §10 re-ground cap), then the impl leg. |
 | #1156 | 2026-07-29 | Round 47: C-MEM-10 Class 1 fork filed (B-92 design_substrate_gated) — cross-family promotion eligibility; 9 codex rounds to soundness exit; readings + Q1 recommendation stable throughout; ratification is the operator gate. |
 | #1155 | 2026-07-29 | Round 46: cite-hygiene closed — 12 pre-v1.1 Spec_Memory_Substrate line cites replaced with durable contract-ID anchors (+ the C-MEM-14 qualification clause); the design-phase half dissolved on preserve-verbatim precedent; codex R1 clean; merge-gate skipped per doc-only scope rule; just check 7026. |
 | #1154 | 2026-07-29 | Round 45: B-91 closed — report-only failure_class/policy.decision semantics decided (policy_denial iff CONFIRMED_MISMATCH under either conjunct; sentinels verbatim); 3 codex rounds converging the predicate; merge-gate R1 all-approve with 2 inline closures; just check 7026. |
 | #1153 | 2026-07-29 | Round 44: carry-forward witness batch closed — retriever-layer tenant witness (the previously deletable-green scope consultation now pinned via exclusion reason), 4 exactly-one span lookups, tmp_path tautology fixed, 3 dispositions; merge-gate R1 all-approve; codex R1 clean; just check 7025. |
-| #1152 | 2026-07-29 | Round 43: docker-driver reap-race closed — ProcessLookupError-safe _reap_child at both kill sites (Docker + gVisor via the shared _communicate); merge-gate R2 all-approve after one real lens-3 pass-on-absence BLOCK (liveness counters added); codex R1 clean + re-converged; just check 7024. |
 ---
 
 ---
