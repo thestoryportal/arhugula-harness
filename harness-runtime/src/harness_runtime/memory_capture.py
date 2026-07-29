@@ -24,6 +24,7 @@ from harness_is.memory_observability import (
 )
 from harness_is.memory_operation_ledger import (
     MemoryOperationEngineClass,
+    MemoryOperationEntry,
     MemoryOperationIdempotencyConflictError,
     MemoryOperationKind,
     MemoryOperationPayload,
@@ -157,6 +158,17 @@ class MemoryCaptureStore(Protocol):
         self,
         payload: MemoryOperationPayload,
     ) -> MemoryOperationWriteResult: ...
+
+    def read_memory_operations(self) -> list[MemoryOperationEntry]:
+        """Read the durable C-MEM-08 ledger.
+
+        Codex R8: capture is a WRITER, and this is the one read it needs - the
+        run-start conflict path has to identify WHO already occupies the slot
+        before it may read that conflict as completion (`_capture`). It is
+        reached ONLY from that path, which is the rare one; every ordinary
+        capture still writes without reading the ledger at all.
+        """
+        ...
 
 
 class MemoryCaptureScopeValueDomainError(ValueError):
@@ -670,14 +682,33 @@ class EpisodicMemoryCapture:
                     # that into FAILED, aborting a run whose accounting was in
                     # fact durably complete.
                     #
-                    # A conflict is positive evidence of exactly that. The
-                    # ledger raises ONLY when an entry already occupies this
-                    # `idempotency_key`, and the key is a function of this
-                    # `event_kind` and the `memory_id` of the record THIS
-                    # worker just wrote - so the occupant can only be the
-                    # repair row for this capture or a concurrent identical
-                    # one. Either way the record is written and the row is
-                    # present, which is what CAPTURED asserts.
+                    # A conflict is NOT by itself evidence of that (Codex R8).
+                    # The ledger raises whenever an entry already occupies this
+                    # `idempotency_key`, and for EPISODIC_RUN the key is a
+                    # function of `event_kind` and a `memory_id` derived from
+                    # the RUN_ID ALONE (`_memory_id_for`) - not from content -
+                    # so a plain SECOND `capture_run_start` for the same run
+                    # with divergent workflow / provider / policy metadata,
+                    # called outside `LocalAutomaticMemoryRuntime`'s presence
+                    # guard, lands on this same key too. That call has already
+                    # OVERWRITTEN `run.json` (one file per run), so reading its
+                    # conflict as completion returned CAPTURED over a durable
+                    # disagreement: the record holding call-2's data and the
+                    # sole ledger row holding call-1's.
+                    #
+                    # So the occupant is IDENTIFIED before the conflict is
+                    # read as completion, and only the synthetic REPAIR row
+                    # qualifies. `capture_repair_actor` is run-keyed and is
+                    # composed NOWHERE but the repair path; an ordinary capture
+                    # always attributes its row to the caller-supplied
+                    # `self._actor` (a dispatch actor), so no normal capture can
+                    # produce that identity. Any other occupant - a real prior
+                    # capture with a divergent payload - re-raises into the
+                    # broad handler below and stays FAILED, which is the
+                    # pre-R6 strictness for genuine divergent replays.
+                    #
+                    # The read costs a whole-ledger walk, but only on the
+                    # CONFLICT path: an uncontended capture never reaches it.
                     #
                     # Accepted information loss: the durable row is then the
                     # repair's synthetic payload (`provider` / `model` /
@@ -690,19 +721,23 @@ class EpisodicMemoryCapture:
                     # ordering this worker wrote it, and the repair writes no
                     # record.
                     #
-                    # Scoped to run-start ONLY. `repair_capture_operation` is
-                    # reached from one call site, always with
-                    # `RUN_START_EVENT_KIND`, so no other event kind has a
-                    # second writer sharing its keys - a conflict on any of
-                    # them is a genuine divergence and must still surface as
-                    # FAILED (it re-raises into the handler below). `event_kind`
-                    # is the whole discriminator because it is what the
-                    # `action_id`, and hence the key, is built from.
+                    # `event_kind` is still checked FIRST, and it is the cheap
+                    # half: `repair_capture_operation` is reached from one call
+                    # site, always with `RUN_START_EVENT_KIND`, so no other
+                    # event kind has a second writer sharing its keys and no
+                    # repair row can ever occupy one. A conflict on any of them
+                    # is a genuine divergence, must still surface as FAILED,
+                    # and is spared the ledger read.
                     #
                     # The span needs no annotation: it already declares
                     # `policy_decision=captured`, and no `failure_class`
                     # belongs on an outcome that is not a failure.
                     if event_kind != RUN_START_EVENT_KIND:
+                        raise
+                    if not self._conflicting_row_is_a_repair(
+                        action_id=payload.action_id,
+                        run_id=run_id,
+                    ):
                         raise
                     operation_result = None
             except Exception as exc:
@@ -725,6 +760,39 @@ class EpisodicMemoryCapture:
                 operation_action_id=payload.action_id,
                 operation_result=operation_result,
             )
+
+    def _conflicting_row_is_a_repair(self, *, action_id: Identifier, run_id: str) -> bool:
+        """True when the row occupying `action_id` is the synthetic REPAIR row.
+
+        Codex R8. The discriminator between the two writers that can legally
+        share one run-start `action_id`:
+
+        * `repair_capture_operation` attributes its row to
+          `capture_repair_actor(run_id)` - an identity composed there and
+          NOWHERE else, keyed by the run so every repairing worker composes the
+          same one.
+        * every ordinary capture attributes its row to `self._actor`, the
+          dispatch actor its caller bound at construction.
+
+        So a repair actor on the occupying row means the occupant is a repair,
+        which is the only occupant `_capture` may read as completion. Absence -
+        including a ledger that cannot be read, whose exception propagates into
+        the broad handler and fails the capture - is answered `False`, so the
+        conflict stays a failure.
+
+        Keyed on `action_id`, not `memory_refs`: run-start and run-close share
+        one EPISODIC_RUN `memory_id`, so `memory_refs` cannot tell the two
+        capture events apart (the same reason
+        `LocalAutomaticMemoryRuntime._run_start_capture_row_present` keys that
+        way).
+        """
+        repair_actor = capture_repair_actor(run_id)
+        return any(
+            entry.action_id == action_id
+            and entry.operation_kind is MemoryOperationKind.CAPTURE
+            and entry.actor == repair_actor
+            for entry in self._store.read_memory_operations()
+        )
 
     def repair_capture_operation(
         self,

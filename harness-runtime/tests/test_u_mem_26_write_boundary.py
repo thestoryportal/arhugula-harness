@@ -1593,6 +1593,72 @@ def test_a_repair_landing_before_the_original_append_completes_the_run(
     assert stored.content["provider_route"] == [f"{_OLLAMA_KEY}:llama3.1"]  # this dispatch's
 
 
+def test_a_divergent_second_run_start_capture_is_not_read_as_completion(tmp_path: Path) -> None:
+    """Codex R8 - the run-start completion reading requires a REPAIR occupant.
+
+    `LocalAutomaticMemoryRuntime` guards against a second run-start for one run,
+    but `EpisodicMemoryCapture` is a public API and the guard is not in it. A
+    DIRECT second `capture_run_start` for the same `run_id` reaches the same
+    `action_id` - the run-start `memory_id` is derived from the `run_id` ALONE,
+    not from content - having first OVERWRITTEN `run.json`, which is one file
+    per run. Under the event-kind-only catch its genuine conflict was read as
+    completion: `CAPTURED` returned over a record holding call-2's data and a
+    sole ledger row holding call-1's, a silent durable disagreement.
+
+    The disagreement is real either way; what the fix changes is that it is
+    REPORTED. The occupant here is an ordinary dispatch row, not the synthetic
+    repair row, so the conflict re-raises and the capture is FAILED - the
+    pre-R6 strictness for a genuine divergent replay.
+    """
+    store = _memory_root_store(tmp_path)
+
+    def _start(
+        *, workflow_id: str, provider: str, model: str, policy_ref: str
+    ) -> MemoryCaptureResult:
+        return EpisodicMemoryCapture(
+            store=store,
+            actor=_actor(),
+            project="arhugula-v2",
+            record_scope=_scope(_OLLAMA_FAMILY),
+        ).capture_run_start(
+            run_id=_RESUMED_RUN_ID,
+            workflow_id=workflow_id,
+            thread_id="thread-one",
+            provider_route=[f"{provider}:{model}"],
+            timestamp=_NOW,
+            provider=provider,
+            model=model,
+            cli_profile="generic",
+            engine_class=None,
+            policy_ref=policy_ref,
+            procedural_snapshot_ref=None,
+        )
+
+    first = _start(
+        workflow_id="workflow-memory",
+        provider=_OLLAMA_KEY,
+        model="llama3.1",
+        policy_ref=_POLICY_REF,
+    )
+    second = _start(
+        workflow_id="workflow-divergent",
+        provider="anthropic",
+        model="claude-sonnet-4",
+        policy_ref="policy:divergent",
+    )
+
+    assert first.status is MemoryCaptureStatus.CAPTURED
+    assert second.status is MemoryCaptureStatus.FAILED
+    assert "MemoryOperationIdempotencyConflictError" in (second.failure_reason or "")
+    # The disagreement the FAILED result is reporting: one row, call ONE's
+    # metadata, against a `run.json` call TWO has already rewritten.
+    [capture] = _capture_entries(store)
+    assert capture.actor == _actor()  # a dispatch row, never a repair row
+    assert capture.provider == _OLLAMA_KEY
+    assert capture.policy_ref == _POLICY_REF
+    assert store.read_run_record(_RESUMED_RUN_ID).content["workflow_id"] == "workflow-divergent"
+
+
 def test_a_non_run_start_idempotency_conflict_still_fails_the_capture(tmp_path: Path) -> None:
     """Codex R6 negative control - the completion reading is run-start ONLY.
 

@@ -401,6 +401,21 @@ class LocalAutomaticMemoryRuntime:
         original's own append then conflicting, raises inside `_capture` and is
         read as completion there, on the same evidence. The two catches are one
         symmetric answer; neither closes the race alone.
+
+        Codex R8: `_capture`'s half of that pair now IDENTIFIES the occupant
+        before reading a conflict as completion, and this half deliberately does
+        NOT. The two are not symmetric in what they have already done to the
+        durable state. `_capture` WROTE the record first, and the run-start
+        `memory_id` is derived from the `run_id` alone, so a divergent second
+        `capture_run_start` overwrites `run.json` and then meets the first
+        call's row - a real record-vs-ledger disagreement, which is why that
+        side must refuse any occupant but a repair. This side writes NO record
+        and derives nothing: it appends the one missing row against the STORED
+        envelope's own identity. Every occupant it can meet - the original
+        torn attempt's own append, a concurrent repair, or a divergent direct
+        re-capture - means the same single thing, that a run-start capture row
+        for this record is durable, which is the entire claim this repair
+        wanted to make. There is no state it could be disagreeing with.
         """
         record = self._stored_run_record(context.run_id)
         if record is None:
