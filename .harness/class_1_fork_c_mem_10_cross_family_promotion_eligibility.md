@@ -11,7 +11,17 @@ directly at `design_substrate_gated` (the B-70 discriminator: a real gap that ne
 before code — here reinforced by the fact that the spec *itself* named the question and declined to answer
 it).
 
-All code and spec cites below were re-grounded by direct read at HEAD `dd2a8c1a`.
+All code and spec cites below were re-grounded by direct read at HEAD `dd2a8c1a`, and re-verified at
+`6ab41d7f` on the R3 pass.
+
+**Cite convention (Codex R3 [P2-2]).** `Spec_Memory_Substrate_v1.md` is cited **by contract ID + section name
++ a byte-verified quoted fragment**, never by line number. That is the spec's own instruction at its v1.1
+change-note, "Surfaced finding, not patched.": *"Cite this spec by contract ID and section name, not by line,
+in any text authored after v1.1."* — the anchor-drift class this workspace repaired at PR #1155. The same
+convention is applied to `Implementation_Plan_Memory_Substrate_v1.md` (unit ID + subsection heading). Cites
+into **code** files keep `file:line`, which is the fork-doc genre's existing convention and is sound because
+each was verified at the HEADs named above; the two historical `:NNN` spec cites reproduced below are marked
+as historical records of an earlier filing state, not live references.
 
 ## §1 The question, and what carries it
 
@@ -34,7 +44,10 @@ assert captured.envelope.scope.provider_family == ProviderFamily.ANTHROPIC.value
 ```
 
 An `openai`-produced turn lands as an `anthropic`-family record. That is correct and intended per C-MEM-03
-`:153`/`:155`. What it means downstream at C-MEM-10 is the open question.
+§"`MemoryScope.provider_family` value domain and derivation" — the run-level derivation rule (*"A fallback
+chain is a continuity mechanism, and the run's memory partition is one of the run-level identities it
+preserves across that boundary."*) and its paired writer-side obligation (*"records are written under the
+run's composed record scope"*). What it means downstream at C-MEM-10 is the open question.
 
 **Carrier 2 — the lineage.** The question was surfaced at the B-86 council convening (2026-07-28) as C3's
 fourth forward item and carried, unresolved, through every artifact of that arc:
@@ -43,16 +56,18 @@ fourth forward item and carried, unresolved, through every artifact of that arc:
   promotion-eligibility question** (records captured during a cross-family leg under C-MEM-10) — flagged, out
   of B-86 scope, C-MEM-10 policy territory; carried here as a named open question for the spec-leg author to
   restate or discharge."*
-- `design-substrate/Spec_Memory_Substrate_v1.md:37` (the v1.1 change-note), byte-exact:
+- `design-substrate/Spec_Memory_Substrate_v1.md`, change-note (v1 -> v1.1), paragraph **"Named open question
+  carried forward, not discharged."** — byte-exact:
 
   > **Named open question carried forward, not discharged.** Fork §7: whether records captured during a
   > cross-family fallback leg are promotion-eligible under C-MEM-10. That is C-MEM-10 policy territory,
   > outside B-86's scope; v1.1 neither resolves nor forecloses it, and it is restated here so it does not
   > disappear with the fork doc.
 
-- `design-substrate/Implementation_Plan_Memory_Substrate_v1.md:933` (U-MEM-26, "Out of scope for this unit"):
-  *"Promotion eligibility of records captured during a cross-family fallback leg, which remains a C-MEM-10
-  policy question carried as a named open question at the spec v1.1 change-note."*
+- `design-substrate/Implementation_Plan_Memory_Substrate_v1.md`, **U-MEM-26**, subsection **"Out of scope for
+  this unit:"** (the sole occurrence of that heading in the file): *"Promotion eligibility of records captured
+  during a cross-family fallback leg, which remains a C-MEM-10 policy question carried as a named open
+  question at the spec v1.1 change-note."*
 
 The spec-leg author restated it rather than discharging it. This filing is the discharge arc.
 
@@ -99,7 +114,8 @@ from compaction safety (`memory_compaction_safety.py:159`).
 **Entry point 2 — the model-facing tool path. NOT a live auto-promotion exposure at HEAD, for two independent
 reasons.** `MemoryToolExecutor._propose_promotion`
 (`harness-runtime/src/harness_runtime/memory_tool_executor.py:399-435`) serves the C-MEM-14
-`memory.propose_promotion` tool (`Spec_Memory_Substrate_v1.md:556`). It reads a source record **by reference**
+`memory.propose_promotion` tool (C-MEM-14 Contract, tool table: *"| `memory.propose_promotion` | Submit a
+promotion candidate for policy/review. |"*). It reads a source record **by reference**
 (`:408-411`), hardcodes `confidence=PromotionCandidateConfidence.HIGH` (`:423`), takes `auto_promote_allowed`
 from policy alone (`_promotion_auto_allowed`, `:897-903`), and computes `risk_flags=_promotion_risk_flags(source)`
 (`:425`) — which inspects **only** `redaction_state` (`:882-885`). *That* — no scope comparison of any kind —
@@ -239,13 +255,15 @@ than an accident of a pipeline that cannot see the fact.
 
 Rationale:
 
-- **The composed scope IS the run's declared identity.** C-MEM-03 `:153` states the run-level derivation as
-  contract: *"A fallback chain is a continuity mechanism, and the run's memory partition is one of the
-  run-level identities it preserves across that boundary."* A record inside that partition is, by the
-  contract's own construction, a record of that run. Conditioning promotion on sub-run provenance
-  re-introduces at C-MEM-10 exactly the per-dispatch partitioning C-MEM-03 `:153` forbids at C-MEM-03.
-- **Capture-time scoping was ratified at B-86/B-89 on exactly this ground.** C-MEM-13 `:509`: *"Harness-authored
-  memory capture is unaffected: capture is a different authorship class and crosses no boundary the harness
+- **The composed scope IS the run's declared identity.** C-MEM-03 §"`MemoryScope.provider_family` value domain
+  and derivation" states the run-level derivation as contract: *"A fallback chain is a continuity mechanism,
+  and the run's memory partition is one of the run-level identities it preserves across that boundary."* A
+  record inside that partition is, by the contract's own construction, a record of that run. Conditioning
+  promotion on sub-run provenance re-introduces at C-MEM-10 exactly the per-dispatch partitioning that same
+  derivation rule forbids at C-MEM-03.
+- **Capture-time scoping was ratified at B-86/B-89 on exactly this ground.** C-MEM-13 §"Cross-family
+  withholding of standard memory tools": *"Harness-authored memory capture is unaffected: capture is a
+  different authorship class and crosses no boundary the harness
   does not already hold."* The harness already holds the content; promotion confers durability on content the
   harness holds, and grants the foreign candidate no new reach.
 - **The content passed the same capture pipeline as any other record** — same redaction state, same
@@ -263,12 +281,12 @@ preserved; what is removed is *silent* auto-promotion.
 
 Rationale:
 
-- The memory threat model already treats provenance as a first-class axis: *"The memory substrate treats
-  model-authored and external CLI-authored memory as untrusted until policy promotes it."* (`:529`), and
-  *"Model-authored notes are episodic by default and cannot become injectable semantic memory without policy
-  and evidence."* (`:539`). Promotion is the trust-conferring step, and `:531` names *"Cross-run
-  prompt-injection persistence through promoted semantic/procedural memory"* as a covered threat — the exact
-  channel this question sits on.
+- The memory threat model already treats provenance as a first-class axis: §Threats opens *"The memory
+  substrate treats model-authored and external CLI-authored memory as untrusted until policy promotes it."*,
+  and §Invariants carries *"Model-authored notes are episodic by default and cannot become injectable semantic
+  memory without policy and evidence."* Promotion is the trust-conferring step, and §Threats bullets
+  *"Cross-run prompt-injection persistence through promoted semantic/procedural memory."* as a covered
+  threat — the exact channel this question sits on.
 - It satisfies C10's B-86 position (a durable, primary-attributed, promotion-eligible write needs a real
   gate) at the *right* mechanism, without paying C3's continuity cost — structurally the same move B-86
   itself made (keep the run-level partition; satisfy the safety voice at a different mechanism).
@@ -281,7 +299,8 @@ correction): a flag alone is inert at HEAD.
 Strongest isolation: such records are ineligible for promotion outright; they remain episodic and
 retrievable, but can never become injectable semantic/procedural memory.
 
-Rationale for: closes the `:531` channel completely for foreign-family content; needs no judgement about
+Rationale for: closes the cross-run prompt-injection-persistence channel (Memory threat model §Threats)
+completely for foreign-family content; needs no judgement about
 *how much* review is enough.
 
 Rationale against, and it is the B-86 council record's own argument:
@@ -309,52 +328,125 @@ cross-family leg. Two options; they are not equal in cost.
 Capture stamps the dispatched provider family (or a boolean `captured_cross_family`) onto the record itself.
 
 - **Blast radius: high.** C-MEM-03's field shapes were preserved *byte-unchanged* at v1.1, and the change-note
-  says so explicitly (`:43`): *"Zero new record type, zero new field, zero new enum member, zero change to any
-  ledger, packet, or telemetry shape."* Adding one reverses that posture one delta later.
+  says so explicitly at **"Sections preserved verbatim at v1.1."**: *"Zero new record type, zero new field,
+  zero new enum member, zero change to any ledger, packet, or telemetry shape."* Adding one reverses that
+  posture one delta later.
 - Touches every capture writer, and the field must be reconciled against the C-MEM-03 value domain
-  (`:145-157`) — a *second* family-valued field on the same record, with its own null semantics, sitting
-  beside `MemoryScope.provider_family` and meaning something different. That is a one-source-of-truth hazard
-  in its own right.
+  (§"`MemoryScope.provider_family` value domain and derivation") — a *second* family-valued field on the same
+  record, with its own null semantics, sitting beside `MemoryScope.provider_family` and meaning something
+  different. That is a one-source-of-truth hazard in its own right.
 - `MemoryScope` is hash-inert for `memory_id` (`memory_capture.py:574-575` per the B-86 §3 P5 finding), but a
-  new **content** field is not — content is hashed (`content_hash`, C-MEM-03 `:161`), so this option moves
-  identities for newly written records and needs an explicit forward-only statement.
-- Upside: self-contained; no cross-contract read dependency; works for a record read in isolation.
+  new **content** field is not — content is hashed (C-MEM-03 §Invariants: *"`content_hash` is computed over
+  canonical serialized content excluding derived indexes."*), so this option moves identities for newly
+  written records and needs an explicit forward-only statement.
+- Upside: self-contained; no cross-contract read dependency; works for a record read in isolation — **with one
+  exception the R3 finding exposes, recorded at the assessment below**: on `EPISODIC_RUN`, which is one stored
+  record per run written by run-start and overwritten by run-close, a stored field is set by *whichever writer
+  ran last* and records nothing about which that was.
 
 ### (ii) A C-MEM-08 ledger join at promotion time
 
 Promotion resolves the record's capture row and reads its `provider`.
 
-- **The join key already exists, with no schema change.** `MemoryOperationEntry` carries `provider` (`:306`),
-  `model` (`:307`) and `memory_refs: list<memory_id>` (`:310`); capture writes exactly one `capture` row per
-  record with `memory_refs=(memory_id,)` (`memory_capture.py:1010`). Authoritative ledger for `capture` is
-  `durable/memory_ops.jsonl` (`:320`).
+- **The join key exists with no schema change — but it is `action_id`, not `memory_refs`.**
+  `MemoryOperationEntry` (C-MEM-08 Contract) carries `provider: string | null`, `model: string | null` and
+  `memory_refs: list<memory_id>`; the authoritative ledger for `capture` is `durable/memory_ops.jsonl`
+  (C-MEM-08 Contract, "Projection mapping" table, row *"| `capture` | `durable/memory_ops.jsonl` | none |"*).
+  **A first draft of this bullet said capture "writes exactly one `capture` row per record with
+  `memory_refs=(memory_id,)`". That premise is FALSE for `EPISODIC_RUN`, and the correction is stated here
+  rather than quietly repaired** *(out-of-family `just codex-review` R3 [P2-1]; verified by direct read at
+  `6ab41d7f`)*. `_memory_id_for` (`harness-runtime/src/harness_runtime/memory_capture.py:1100-1109`) derives an
+  `EPISODIC_RUN` `memory_id` from the **`run_id` alone** — content-independent — so `capture_run_start`
+  (`:294-335`) and `capture_run_close` (`:337-380`) write **two** capture rows against **one** `memory_id`.
+  The module states the consequence at the point it exports the remedy: `capture_operation_action_id`
+  (`:68-77`) — *"run-start and run-close share a single EPISODIC_RUN `memory_id`, so `memory_refs` cannot tell
+  them apart"* — and again at the repair-row probe (`:857-861`). Each `capture_*` method takes its **own**
+  per-call `provider` (`capture_run_start(..., provider=...)` at `:302`, `capture_run_close(..., provider=...)`
+  at `:347`; the runtime supplies the run-start selection at `automatic_memory.py:336`), so on a run whose
+  fallback advanced between the two events the two rows carry **different provider keys**. A
+  `memory_refs`-keyed join is therefore **not a function**: it classifies provenance by whichever row the scan
+  happened to select. **Honest scoping, on the same footing as the rest of this filing:** `capture_run_close`
+  has **no production caller at HEAD** (its only call site is `harness-runtime/tests/test_memory_capture.py:151`),
+  so today every stored `EPISODIC_RUN` record does in fact carry exactly one row. Like every other exposure in
+  §2, the ambiguity is **structural, not yet exercised** — and contract text must not rest on the accident,
+  because the API is public and the module's own docstrings treat the two-row case as the operative invariant.
+- **(ii-a) — the event-qualified join, which is the one the code already provides. [recommended]** The
+  contract names the join key as the capture `action_id`, composed from **the record's own declared writer**:
+  `capture_operation_action_id(stored_capture_event_type(record.content), memory_id)`. Both halves are already
+  exported, and their docstrings say they are exported for exactly this discrimination —
+  `stored_capture_event_type` (`memory_capture.py:1149-1163`) is *"the record's own statement of WHICH event
+  wrote it - the discriminator a reader needs when one `memory_id` is shared by several events (EPISODIC_RUN
+  is one `run.json` per run, written by run-start and OVERWRITTEN by run-close)"*. Because the stored record
+  is overwritten by its later writer, its `content["event_type"]` names the event that wrote **the version
+  being promoted**, which is precisely the row whose `provider` is that content's provenance. The result is an
+  exact-match single-row lookup, and the ledger's `action_id` idempotency makes a ">1 row" outcome unreachable
+  rather than merely unlikely.
+- **(ii-b) — fail closed on ambiguity.** The alternative: the contract defines no event-qualified key and
+  instead states that a record whose join resolves to more than one capture row yields `UNVERIFIABLE` — no
+  auto-promotion under reading B. It invents no join semantics, but it is **not** the conservative default it
+  looks like: it makes **every** `EPISODIC_RUN` record permanently unverifiable the moment `capture_run_close`
+  acquires a production caller, i.e. it silently becomes reading **C** for run records while presenting itself
+  as reading B. That is a real cost, and a spec leg choosing (ii-b) must state it as a chosen foreclosure.
+- **They are not exclusive, and the honest resolution uses both:** (ii-a) is the join, (ii-b) is its residue.
 - The ledger's `provider` is a raw provider **key**, not a family value, so the join needs canonicalization —
   and the machinery already exists and is already the house authority (`provider_family_for_scope_check` /
   `canonical_scope_family`, landed at B-86/B-89). No new normalization posture is invented.
 - **Cost: read-side only, but it is a new cross-contract dependency** — C-MEM-10 would depend on C-MEM-08
   availability and readability, which C-MEM-10 does not today. It also couples a promotion decision to a
-  ledger scan on `durable/memory_ops.jsonl` (append-only, hash-chained, no index over `memory_refs`).
-- **The unresolvable case must be specified.** A record with no reachable capture row (promotion-authored,
-  compaction-authored, native-adapter-authored, or an unreadable ledger) yields *unknown*, not *same-family*.
-  The house idiom for exactly this is already established and should be reused verbatim rather than
-  re-invented: the B-91 tri-state convergence (`MATCH` / `CONFIRMED_MISMATCH` / `UNVERIFIABLE`, where a
-  determination is only reported when it was actually reached). Under reading B the honest mapping is
-  `UNVERIFIABLE` → review_required, never auto-promote.
+  ledger scan on `durable/memory_ops.jsonl` (append-only, hash-chained, no index over `memory_refs` **or**
+  `action_id`).
+- **The unresolvable set must be specified, and R3 makes it larger than the first draft's single case.** All
+  of: (1) no reachable capture row at all (promotion-authored, compaction-authored, native-adapter-authored,
+  or an unreadable ledger); (2) `stored_capture_event_type` returning `None` — the helper is deliberately
+  strict, *"an absent or non-text field reads as `None` - an unrecognizable record, never a guess at one"* —
+  so the record cannot name its own writer; (3) the composed `action_id` matching no row (a torn capture whose
+  repair never ran — `_capture` writes the record before its ledger row, `memory_capture.py:721-732`). Each
+  yields *unknown*, not *same-family*. The house idiom for exactly this is already established and should be
+  reused verbatim rather than re-invented: the B-91 tri-state convergence (`MATCH` / `CONFIRMED_MISMATCH` /
+  `UNVERIFIABLE`, where a determination is only reported when it was actually reached). Under reading B the
+  honest mapping is `UNVERIFIABLE` → review_required, never auto-promote.
 
-**Assessment:** (ii) is materially cheaper and better precedented. It requires no closed-schema extension, no
-new field, no identity movement, and it reuses two existing authorities. Its two real costs — the
-cross-contract dependency and the unresolvable case — are both statable in contract text.
+**Assessment, re-run after the R3 finding — (ii) stands, by a narrower margin, and the accounting is stated
+rather than asserted.**
+
+- **What the finding cost (ii).** The "join key already exists" claim was too clean. The key that exists is
+  `action_id`, not `memory_refs`, and the one-row-per-record premise was false for the one record kind that
+  has multiple writers. The contract now owes **three** things where it owed two: the join key stated
+  precisely (composed from the record's own `event_type`, explicitly **not** `memory_refs`), the three-case
+  `UNVERIFIABLE` set, and the existing cross-contract-dependency sentence.
+- **What it did not cost.** No new field, schema member, enum value, hash input, or identity movement. The
+  event-qualification machinery is *two already-exported helpers whose docstrings name this exact
+  discrimination as their reason for being exported*. This is a **specification** cost, not a **mechanism**
+  cost — one more precise sentence, not one more moving part.
+- **What (i) still costs, unchanged.** A closed-schema extension at C-MEM-03 reversing v1.1's own zero-new-field
+  posture one delta later; a second family-valued field beside `MemoryScope.provider_family`; content-hash
+  identity movement for newly written records.
+- **And (i) does not escape the finding either — this is what keeps the preference from flipping.** A content
+  field on an `EPISODIC_RUN` record is written by run-start and **overwritten** by run-close, so (i) resolves
+  the same ambiguity by the same last-writer-wins accident that (ii-a) resolves *deliberately* — and resolves
+  it silently, since nothing in a stored field records which writer set it. (i)'s "works for a record read in
+  isolation" upside is real for single-writer kinds like `EPISODIC_TURN`; for the multi-writer kind that
+  produced this finding it is **weaker** than (ii-a), not stronger.
+
+**Preference: unchanged, (ii) with (ii-a) as the join.** Stated plainly because the temptation here is to
+defend the prior pick: had event-qualification required new machinery — a new key, a new index, a scan
+discipline — the balance would genuinely have moved toward (i)'s single self-contained field, and this filing
+would say so. It does not. Confidence on the Q2 recommendation is **[MODERATE]**, a notch below where the
+first draft implicitly carried it, because the finding demonstrated that this join's *shape* was mis-stated
+once already: the spec leg must state the key exactly, not gesture at "the record's capture row".
 
 ## §6 Recommended drafting targets, per reading
 
 | Reading | Owed spec text |
 |---|---|
-| **A** | **C-MEM-10 Contract** — one paragraph: promotion eligibility is determined by record scope, policy, and evidence, and is not conditioned on the provider family that produced the content during a fallback leg; the run's composed partition (C-MEM-03 `:153`) is the whole of the provenance question at this contract. **C-MEM-10 Invariants** — one bullet mirroring it. Nothing else; no C-MEM-08, no C-MEM-03, no plan unit beyond a coverage-matrix row. |
-| **B** | **C-MEM-10 Contract** — the cross-family-captured condition; the risk-flag obligation; and, explicitly, the **gate**: such a candidate is review-required and not auto-promotable (§2's inert-flag finding makes the gate sentence mandatory, not decorative). **C-MEM-10 `PromotionCandidate.risk_flags`** — no schema change needed: `risk_flags: list<string>` (`:378`) is already an open list, so the new value is a vocabulary addition at the contract, and only the impl-side `PromotionRiskFlag` enum (`memory_promotion.py:80-86`) is closed. **C-MEM-10 Invariants** — the gate as an invariant. **C-MEM-08** — if discriminator (ii): a sentence naming the capture row as the authoritative provenance source for promotion, and the `UNVERIFIABLE` disposition; **or C-MEM-03** — if discriminator (i): the new field, its value domain, its null semantics, and its content-hash consequence. Plus a memory-plan unit (U-MEM-27) decomposing the impl leg. |
-| **C** | Everything reading B owes, minus the flag/gate wording, plus a **refusal** invariant at C-MEM-10 and a statement of the permanent consequence (fallback-leg learning is unpromotable). Additionally owes a reconciliation sentence against C-MEM-03 `:153`'s continuity statement and against C-MEM-13 `:509`'s capture carve-out, both of which read against it. |
+| **A** | **C-MEM-10 Contract** — one paragraph: promotion eligibility is determined by record scope, policy, and evidence, and is not conditioned on the provider family that produced the content during a fallback leg; the run's composed partition (C-MEM-03 §"`MemoryScope.provider_family` value domain and derivation", the continuity sentence) is the whole of the provenance question at this contract. **C-MEM-10 Invariants** — one bullet mirroring it. Nothing else; no C-MEM-08, no C-MEM-03, no plan unit beyond a coverage-matrix row. |
+| **B** | **C-MEM-10 Contract** — the cross-family-captured condition; the risk-flag obligation; and, explicitly, the **gate**: such a candidate is review-required and not auto-promotable (§2's inert-flag finding makes the gate sentence mandatory, not decorative). **C-MEM-10 `PromotionCandidate.risk_flags`** — no schema change needed: the `PromotionCandidate` block's `risk_flags: list<string>` is already an open list, so the new value is a vocabulary addition at the contract, and only the impl-side `PromotionRiskFlag` enum (`memory_promotion.py:80-86`) is closed. **C-MEM-10 Invariants** — the gate as an invariant. **C-MEM-08** — if discriminator (ii), and per the R3 [P2-1] finding this is now **three** sentences, not one: (a) the capture row is the authoritative provenance source for promotion, (b) the join is keyed on the capture **`action_id` composed from the record's own declared `event_type`** — explicitly **not** on `memory_refs`, which cannot discriminate a shared-`memory_id` kind — and (c) the three-case `UNVERIFIABLE` disposition (no reachable row / record cannot name its writer / composed `action_id` matches no row). **or C-MEM-03** — if discriminator (i): the new field, its value domain, its null semantics, its content-hash consequence, **and** its own multi-writer disposition for `EPISODIC_RUN` (§5(i)'s last bullet). Plus a memory-plan unit (U-MEM-27) decomposing the impl leg. |
+| **C** | Everything reading B owes, minus the flag/gate wording, plus a **refusal** invariant at C-MEM-10 and a statement of the permanent consequence (fallback-leg learning is unpromotable). Additionally owes a reconciliation sentence against the C-MEM-03 continuity statement (§"`MemoryScope.provider_family` value domain and derivation") and against the C-MEM-13 capture carve-out (§"Cross-family withholding of standard memory tools"), both of which read against it. |
 
-Under all three readings the Memory threat model needs **no** amendment: `:529` / `:531` / `:539` are the
-authority the resolution conforms to, not a surface it revises — the same X-AL-3 posture v1.1 took at `:21`.
+Under all three readings the Memory threat model needs **no** amendment: its §Threats opener, its
+cross-run-prompt-injection-persistence bullet, and its model-authored-notes invariant are the authority the
+resolution conforms to, not a surface it revises — the same X-AL-3 posture v1.1 took at its change-note
+paragraph **"Why this is conformance repair, not design extension (X-AL-3)"**.
 
 ## §7 Recommendation — **Reading B** [MODERATE]
 
@@ -368,8 +460,10 @@ would overturn a ratified council resolution one arc later without new evidence.
 **It does not license A's silence.** The withhold half of that same record (Q2) rests on C10's classification
 of `memory.write_note` as `write-bounded-irreversible` — *"durable, primary-attributed, supersession
 non-deleting, promotion-eligible → the `:472` cross-run prompt-injection-persistence threat runs directly
-through it"* (B-86 fork §4; its `:472` is quoted verbatim and is the drifted cite the v1.1 change-note `:39`
-already corrected — the threat is at `:531` at this filing's HEAD). C10 named **promotion-eligibility itself**
+through it"* (B-86 fork §4; its `:472` is quoted verbatim as a **historical** record of that filing's state,
+and is one of the drifted cites the v1.1 change-note paragraph **"Surfaced finding, not patched."** already
+corrected — the live reference is the Memory threat model §Threats bullet *"Cross-run prompt-injection
+persistence through promoted semantic/procedural memory."*). C10 named **promotion-eligibility itself**
 as part of what makes that write
 dangerous. C10 declined to re-key the scope because the *mechanism* was wrong, not because the concern was
 absent — the council's own words: *"the defect is in the absent gate at the dispatch boundary, not in the
@@ -380,8 +474,9 @@ scope's key."* Reading B is that same resolution shape applied one contract down
 not permissive-by-policy; on the production composed-scope path it is permissive-by-blindness (§3 — it cannot
 represent the fact, and the residual path where it can does not pose the question). Writing "eligible,
 unchanged" into C-MEM-10 would convert a structural gap into a contract commitment while the policy layer has
-still never had the input. That is the *precise* defect the v1.1 change-note identified as B-86's own trigger
-(`:21`): *"v1 already mandated that the provider-family boundary be enforced; it never stated what that
+still never had the input. That is the *precise* defect the v1.1 change-note identified as B-86's own trigger,
+at **"Why this is conformance repair, not design extension (X-AL-3)"**: *"v1 already mandated that the
+provider-family boundary be enforced; it never stated what that
 boundary is keyed to, which left the mandate unfalsifiable at the contract level."* Reading A repeats that
 error one contract over.
 
@@ -406,15 +501,19 @@ exactly when it stops being safe. B remains the recommendation on the merits; A-
 close second rather than a concession. What must not happen is still the third outcome: leaving it silent a
 second time.
 
-If B is selected, take **discriminator (ii)** (§5) — cheaper, no schema extension, no identity movement, and
-it reuses the B-91 tri-state and the B-89 canonicalization authorities verbatim.
+If B is selected, take **discriminator (ii)** with the **(ii-a) event-qualified join** (§5) — cheaper, no
+schema extension, no identity movement, and it reuses the B-91 tri-state, the B-89 canonicalization
+authorities, and the two already-exported capture-side helpers verbatim. The R3 [P2-1] finding **did not move
+this preference** (§5's re-run assessment states why in full, including the respect in which (i) is *worse*
+than (ii-a) on the same finding); it raised (ii)'s owed contract text from one sentence to three, and it
+lowered the Q2 confidence to [MODERATE] because the join's shape was mis-stated once already.
 
 ## §8 Ratification ask — operator decision
 
 The A / B / C choice is the operator's. It is an irreversible contract commitment: once C-MEM-10 states a
 position, records written under it accumulate against that position, and reversing later leaves a
 mixed-provenance corpus with no way to re-adjudicate the already-promoted records (promotion supersession
-does not delete — C-MEM-03 `:162`).
+does not delete — C-MEM-03 §Invariants: *"Supersession does not delete the prior record."*).
 
 Decisions owed:
 
@@ -422,7 +521,14 @@ Decisions owed:
    zero-live-exposure picture makes a materially defensible choice, provided the two interim-ending triggers
    are recorded with it: an `eligible_record_kinds` / `PROMOTE_*` policy change, and the first caller to
    populate `promotion_candidates`).
-2. **Q2, only if B or C** — discriminator (i) new field or (ii) C-MEM-08 ledger join. Recommendation: (ii).
+2. **Q2, only if B or C** — discriminator (i) new field or (ii) C-MEM-08 ledger join. Recommendation: **(ii),
+   with the (ii-a) event-qualified join** — the ledger row is selected by the capture `action_id` composed
+   from the record's own declared `event_type`, **not** by `memory_refs`, which cannot discriminate the
+   run-start / run-close rows that share one `EPISODIC_RUN` `memory_id`; the three-case `UNVERIFIABLE`
+   residue fails closed (review_required, never auto-promote). Sub-choice (ii-b) — fail closed on *any*
+   multi-row ambiguity, defining no event-qualified key — is available and needs no new join semantics, but
+   §5 records that it is a de-facto reading **C** for `EPISODIC_RUN` records and must be taken as a stated
+   foreclosure, not as a conservative default.
 
 Per root `CLAUDE.md` §12.4.1, this filing drove the question to its genuine gate: the grounding, the witness,
 the prerequisite mechanics, the drafting targets, and a recommendation are all done. What remains is the
@@ -435,9 +541,13 @@ revision-pass** (`Spec_Memory_Substrate_v1.md` C-MEM-10, plus C-MEM-08 or C-MEM-
 `Implementation_Plan_Memory_Substrate_v1.md` delta (a new U-MEM-27) owed under readings B and C, and clearance
 markers at `.harness/clearance/` in the same PR per §4.5. The impl leg follows the spec leg per the
 B-33 / B-59 / B-70 / B-72 / B-86 precedent. An out-of-family `just codex-review` decorator on the eventual
-C-MEM diff is recommended — the amendment is threat-model-adjacent (`:529` / `:531` / `:539`) inside an
-already-cleared contract, which is exactly the shape that earned it on the B-86 spec leg.
+C-MEM diff is recommended — the amendment is threat-model-adjacent (the Memory threat model's §Threats opener
+and cross-run-persistence bullet, and its model-authored-notes invariant) inside an already-cleared contract,
+which is exactly the shape that earned it on the B-86 spec leg. It has already earned it here: R1 corrected
+two exposure over-claims, R2 corrected the review branch's durability and the §3 data-flow scope, and R3
+corrected the §5 join premise (this pass).
 
 **No Phase 7 execution is halted by this filing.** U-MEM-26 has landed; the question was already scoped out
-of it at `Implementation_Plan_Memory_Substrate_v1.md:933`. What is halted is any *implementation* of a
-promotion-side family term, which must wait for the ratification above.
+of it at `Implementation_Plan_Memory_Substrate_v1.md` U-MEM-26, subsection "Out of scope for this unit:".
+What is halted is any *implementation* of a promotion-side family term, which must wait for the ratification
+above.
