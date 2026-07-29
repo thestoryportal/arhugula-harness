@@ -24,7 +24,7 @@ import asyncio
 import inspect
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
@@ -120,6 +120,13 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
 )
 from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_provider
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore
+from harness_runtime.lifecycle.external_cli_provider import (
+    AsyncioSubprocessRunner,
+    CLIProcessResult,
+    ExternalCLICommandError,
+    ExternalCLIOutputError,
+    GenericCommandCLIAdapter,
+)
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
 from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
@@ -157,6 +164,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionInputError,
     StandardMemoryToolExecutor,
 )
+from harness_runtime.types import ExternalCLIPromptTransport, ExternalCLIResponseFormat
 from ollama import ResponseError as OllamaResponseError
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -358,7 +366,15 @@ class _ExternalCLIResult:
 class _ExternalCLIFakeAdapter:
     calls: list[tuple[str, str]]
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> _ExternalCLIResult:
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> _ExternalCLIResult:
+        if on_wire is not None:
+            on_wire()
         self.calls.append((model, prompt))
         return _ExternalCLIResult(text="OK", exit_code=0)
 
@@ -3192,6 +3208,17 @@ def _degraded_serve_spans(exporter: InMemorySpanExporter) -> list[Any]:
     ]
 
 
+def _one_degraded_serve_span(exporter: InMemorySpanExporter) -> dict[str, Any]:
+    """The attributes of the single degraded-serve span, asserting there is one.
+
+    B-87 witnesses read several attributes each; the exactly-one check belongs
+    with the lookup so a second (or missing) span cannot pass silently.
+    """
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "exactly one degraded-serve span per degraded dispatch"
+    return dict(spans[0].attributes or {})
+
+
 @pytest.mark.asyncio
 async def test_b83_anthropic_arm_repairs_unservable_standard_tools_to_packet() -> None:
     """(a) — an explicit capability override can select STANDARD_MEMORY_TOOLS
@@ -3824,6 +3851,13 @@ async def test_b83_degraded_span_survives_a_failing_provider_call() -> None:
     assert attrs["memory.degraded_serve.provider_error_type"] == "TimeoutError"
     assert attrs["memory.degraded_serve.reason"] == "arm_unservable"
     assert attrs["memory.operation.name"] == "injection", "the packet WAS sent before the failure"
+    # B-87 ordering guard. The reached-the-wire marker MUST be set before the
+    # awaited provider call; a marker set after it would demote this POST-wire
+    # failure to the pre-wire classification — the defect's mirror image.
+    assert attrs["memory.access_mode"] == "prompt_extension_packet"
+    assert attrs["memory.packet_hash"] == "c" * 64
+    assert attrs["memory.record_count"] == 1
+    assert "memory.degraded_serve.pre_wire_error_type" not in attrs
 
 
 @pytest.mark.asyncio
@@ -3889,6 +3923,62 @@ async def test_b83_r5_retry_failure_still_reports_the_degradation() -> None:
     attrs = dict(spans[0].attributes or {})
     assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
     assert attrs["memory.degraded_serve.reason"] == "arm_unservable"
+    # B-87 ordering guard on the R5 site specifically: the retry DID reach the
+    # daemon (the assertion above proves the packet was on that request), so
+    # this must stay a reported injection.
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.packet_hash"] == "c" * 64
+
+
+@pytest.mark.asyncio
+async def test_b87_r5_retry_pre_wire_raise_is_not_reported_as_injection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-87 on the ollama R5 path — the one arm where the marker's placement is
+    not merely an ordering question but a *which call* question.
+
+    By the time the R5 disposition is published, the loop's OWN tools call has
+    already fired and failed. Marking that call would make this packet-carrying
+    retry look post-wire, so it is deliberately not a marker site. Here the
+    retry raises between the disposition and the daemon (the register's "any
+    future pre-adapter validation" reachability), and the span must say so.
+    """
+
+    def _reject(_kwargs: dict[str, Any], _rendered: Any) -> None:
+        raise LLMDispatchPayloadShapeError("pre-adapter validation rejected the folded packet")
+
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.llm_dispatch._fold_memory_packet_into_system",
+        _reject,
+    )
+    client = _OllamaClient()
+    client.errors = [OllamaResponseError("llava-llama3:latest does not support tools", 400)]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="ollama", model="llava-llama3:latest"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(LLMDispatchPayloadShapeError):
+        await dispatcher.dispatch(
+            _binding("ollama", model="llava-llama3:latest"),
+            _step(),
+            step_context=_step_context(),
+        )
+
+    assert len(client.calls) == 1, "only the tools call fired — the retry never reached the daemon"
+    assert _B83_SECTION_TEXT not in json.dumps(client.calls[0]["messages"]), (
+        "and that one call carried the tools, not the packet"
+    )
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly", (
+        "an already-failed tools call is not this packet's wire transit"
+    )
+    assert "memory.packet_hash" not in attrs
+    assert attrs["memory.record_count"] == 0
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
 
 
 @pytest.mark.asyncio
@@ -4099,7 +4189,15 @@ async def test_b83_arm_repair_merges_into_a_payload_carried_system_message() -> 
     assert messages[0] is system_messages[0], "and it stays leading"
     assert system_messages[0]["content"].startswith("STEP-OWNED SYSTEM\n\nread-only memory packet")
     assert _B83_SECTION_TEXT in system_messages[0]["content"]
-    assert len(_degraded_serve_spans(exporter)) == 1
+    # B-87 — the openai arm's own wire marker is load-bearing here: this repair
+    # DID reach the provider, so the span must report the disclosure that
+    # happened. Without these two the marker could be deleted from
+    # `_dispatch_openai` and every successful openai repair would silently
+    # under-report as `packet_assembly` with no hash.
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.packet_hash"] == "c" * 64
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -4317,10 +4415,17 @@ async def test_b83_two_base_system_sources_still_fail_loud_through_the_repair() 
 
     An active prompt AND a payload-carried system source remain the
     detect-then-refuse case (R-PM-1), packet or no packet.
+
+    B-87 — and the span must not claim the packet was injected. The repair is
+    authorized, so `_DegradedMemoryServe.rendered` is populated at the
+    serve-check, but the translate raises BEFORE the adapter is called: nothing
+    left the process, and the `finally` used to report `injection` +
+    `prompt_extension_packet` + the packet hash + a non-zero record count for it.
     """
-    tp, _ = _tracer_provider_with_exporter()
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
-        providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
         tracer_provider=tp,
         memory_context=_b83_memory_context(provider="anthropic"),
         standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
@@ -4339,6 +4444,750 @@ async def test_b83_two_base_system_sources_still_fail_loud_through_the_repair() 
             ),
             step_context=_step_context(),
         )
+
+    assert client.messages.calls == [], "the provider was never called at all"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly", (
+        "the packet was assembled and then never sent — it was not an injection"
+    )
+    assert attrs["memory.access_mode"] == "no_memory_access", "the model received nothing"
+    assert "memory.packet_hash" not in attrs, (
+        "claiming a hash for a packet no provider ever saw is the B-87 defect"
+    )
+    assert attrs["memory.record_count"] == 0
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+    assert attrs["memory.degraded_serve.pre_wire_error_type"] == "PromptInjectionConflictError"
+    assert "memory.degraded_serve.provider_error_type" not in attrs, (
+        "no provider produced this error"
+    )
+    assert attrs["memory.degraded_serve.reason"] == "arm_unservable", (
+        "the DEGRADATION reason is unchanged — the pre-wire fact rides the outcome axis"
+    )
+
+
+@pytest.mark.asyncio
+async def test_b87_external_cli_pre_wire_payload_rejection_is_not_reported_as_injection() -> None:
+    """B-87 — the second real pre-wire reachability: the external-CLI arm is
+    text-only and rejects a tool-carrying payload in
+    `_payload_to_external_cli_prompt`, before `dispatch_text` is awaited."""
+    adapter = _ExternalCLIFakeAdapter(calls=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(LLMDispatchPayloadShapeError, match="text-only"):
+        await dispatcher.dispatch(
+            _binding("claude_code"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": [{"name": "search_docs", "server": "docs-mcp"}],
+                    "params": {},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+    assert adapter.calls == [], "the CLI was never invoked"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly"
+    assert "memory.packet_hash" not in attrs
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+
+
+@pytest.mark.asyncio
+async def test_b87_anthropic_hitl_variant_pre_wire_raise_is_not_reported_as_injection() -> None:
+    """B-87 — the anthropic arm has THREE variants and each owns its own
+    provider-call boundary. The HITL-tool-loop variant translates once, outside
+    its turn loop, so its pre-wire window is real too."""
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        hitl_tool_loop=cast(Any, _FakeHITLToolLoop({"toolu_001": {"ok": True}})),
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+        active_system_prompt="ACTIVE PROMPT",
+    )
+
+    with pytest.raises(PromptInjectionConflictError):
+        await dispatcher.dispatch(
+            _binding("anthropic"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "search"}],
+                    "tools": [
+                        {
+                            "name": "search_docs",
+                            "server": "docs-mcp",
+                            "input_schema": {"type": "object"},
+                        }
+                    ],
+                    "params": {"max_tokens": 100, "system": "PAYLOAD-OWNED SYSTEM"},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+    assert client.messages.calls == [], "the HITL loop never reached its first turn"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly"
+    assert "memory.packet_hash" not in attrs
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+
+
+@pytest.mark.asyncio
+async def test_b87_anthropic_hitl_variant_post_wire_failure_still_reports_injection() -> None:
+    """B-87 ordering guard for the HITL variant's own boundary — its marker sits
+    inside the turn loop, so a placement after the await would demote a real
+    post-wire failure. Every marker site owns one of these."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+
+    async def _boom(**_kwargs: Any) -> Any:
+        raise TimeoutError("provider timed out after the request was sent")
+
+    adapter.client.messages.create = _boom  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        hitl_tool_loop=cast(Any, _FakeHITLToolLoop({"toolu_001": {"ok": True}})),
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TimeoutError):
+        await dispatcher.dispatch(
+            _binding("anthropic"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "search"}],
+                    "tools": [
+                        {
+                            "name": "search_docs",
+                            "server": "docs-mcp",
+                            "input_schema": {"type": "object"},
+                        }
+                    ],
+                    "params": {"max_tokens": 100},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.packet_hash"] == "c" * 64
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+
+
+@pytest.mark.asyncio
+async def test_b87_external_cli_post_wire_failure_still_reports_injection() -> None:
+    """B-87 ordering guard for the external-CLI boundary — same shape, its own
+    `dispatch_text` await."""
+
+    @dataclass
+    class _RaisingExternalCLIAdapter:
+        calls: list[tuple[str, str]]
+
+        async def dispatch_text(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            on_wire: Callable[[], None] | None = None,
+        ) -> _ExternalCLIResult:
+            # Same ordering the real adapters keep: notify, THEN hand over.
+            if on_wire is not None:
+                on_wire()
+            self.calls.append((model, prompt))
+            raise TimeoutError("the CLI hung after the prompt was handed over")
+
+        async def aclose(self) -> None:
+            return None
+
+    adapter = _RaisingExternalCLIAdapter(calls=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TimeoutError):
+        await dispatcher.dispatch(_binding("claude_code"), _step(), step_context=_step_context())
+
+    assert len(adapter.calls) == 1, "the prompt did reach the CLI"
+    assert _B83_SECTION_TEXT in adapter.calls[0][1]
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.packet_hash"] == "c" * 64
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+
+
+@pytest.mark.asyncio
+async def test_b87_external_cli_adapter_local_validation_raise_is_pre_wire() -> None:
+    """B-87 (codex R2 [P2]) — the dispatcher's own translation is NOT the last
+    pre-wire step on this arm. `GenericCommandCLIAdapter` renders its argv
+    templates INSIDE `dispatch_text`, and a `{prompt}` template under the
+    default stdin transport — a config the constructor accepts — is rejected
+    there with zero subprocess calls. A marker set at the dispatcher's `await`
+    reported that as `injection` + packet_hash + `provider_error`; the marker
+    now rides an `on_wire` callback the adapter fires past its own validation.
+    """
+
+    @dataclass
+    class _RecordingRunner:
+        calls: list[tuple[str, ...]]
+
+        async def run(
+            self,
+            argv: tuple[str, ...],
+            *,
+            stdin: str,
+            timeout_seconds: float,
+            on_wire: Callable[[], None] | None = None,
+        ) -> CLIProcessResult:
+            if on_wire is not None:
+                on_wire()
+            self.calls.append(argv)
+            return CLIProcessResult(exit_code=0, stdout="OK\n", stderr="")
+
+    runner = _RecordingRunner(calls=[])
+    adapter = GenericCommandCLIAdapter(
+        provider_name="claude_code",
+        command="my-llm",
+        args=("--prompt", "{prompt}"),
+        response_format=ExternalCLIResponseFormat.TEXT,
+        prompt_transport=ExternalCLIPromptTransport.STDIN,
+        timeout_seconds=42.0,
+        runner=runner,
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(ExternalCLIOutputError, match="prompt_transport"):
+        await dispatcher.dispatch(_binding("claude_code"), _step(), step_context=_step_context())
+
+    assert runner.calls == [], "the argv was rejected before any subprocess ran"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly"
+    assert "memory.packet_hash" not in attrs, (
+        "claiming a hash for a packet no subprocess ever saw is the B-87 defect"
+    )
+    assert attrs["memory.record_count"] == 0
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+    assert attrs["memory.degraded_serve.pre_wire_error_type"] == "ExternalCLIOutputError"
+    assert "memory.degraded_serve.provider_error_type" not in attrs, (
+        "no provider produced this error"
+    )
+
+
+@pytest.mark.asyncio
+async def test_b87_external_cli_spawn_failure_is_pre_wire() -> None:
+    """B-87 (codex R3 [P2-1]) — the adapter's own validation is not the last
+    pre-wire step either: `AsyncioSubprocessRunner` can still fail to SPAWN the
+    configured command, and a notification fired before `create_subprocess_exec`
+    reported that as `injection` + packet_hash though no child process ever
+    existed and the prompt never left the runtime.
+
+    The REAL runner is used deliberately — the ordering under test is
+    `create_subprocess_exec`'s, and a fake runner cannot witness it.
+    """
+    adapter = GenericCommandCLIAdapter(
+        provider_name="claude_code",
+        command="harness-b87-command-that-does-not-exist",
+        args=("--model", "{model}"),
+        response_format=ExternalCLIResponseFormat.TEXT,
+        prompt_transport=ExternalCLIPromptTransport.STDIN,
+        timeout_seconds=30.0,
+        runner=AsyncioSubprocessRunner(),
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(ExternalCLICommandError, match="127"):
+        await dispatcher.dispatch(_binding("claude_code"), _step(), step_context=_step_context())
+
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly"
+    assert "memory.packet_hash" not in attrs, (
+        "claiming a hash for a packet no process ever existed to read is the B-87 defect"
+    )
+    assert attrs["memory.record_count"] == 0
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+    assert attrs["memory.degraded_serve.pre_wire_error_type"] == "ExternalCLICommandError"
+    assert "memory.degraded_serve.provider_error_type" not in attrs, (
+        "no provider produced this error — the command could not be spawned"
+    )
+
+
+@pytest.mark.asyncio
+async def test_b87_sdk_call_time_argument_rejection_is_pre_wire() -> None:
+    """B-87 (codex R7 [P2-1]) — a vendor client's CALL-TIME argument validation
+    is pre-wire, and telling it apart needs NO instrumentation of the SDK: the
+    three clients are `async def`s (`ollama.AsyncClient.chat`) or synchronous
+    `@required_args` wrappers over one (`anthropic` / `openai`'s `create`), so
+    an unsupported provider keyword out of `payload.params` raises `TypeError`
+    AT THE CALL, before any coroutine — let alone a request — exists.
+
+    Splitting the call from the await is the whole fix. Marking first reported
+    `injection` + packet_hash for a request that was never even built. What
+    the vendor validates INSIDE the coroutine stays post-wire by design (the
+    standing decline recorded at `_ProviderWireReachedSink`).
+    """
+    client = _AnthropicClient()
+    reached_body: list[str] = []
+
+    async def _strict_create(
+        *, model: str, messages: Any, max_tokens: int, system: Any = None
+    ) -> Any:
+        # No `**kwargs`: the real SDK signature rejects unknown keywords at the
+        # call, and a swallowing double cannot witness this ordering.
+        reached_body.append(model)
+        raise AssertionError("the fake's body must be unreachable")
+
+    client.messages.create = _strict_create  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TypeError, match="unsupported_sdk_kwarg"):
+        await dispatcher.dispatch(
+            _binding("anthropic"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": None,
+                    "params": {"max_tokens": 100, "unsupported_sdk_kwarg": True},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+    assert reached_body == [], "the SDK method body never ran — the call itself was rejected"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly", (
+        "the packet was assembled and then never sent — it was not an injection"
+    )
+    assert "memory.packet_hash" not in attrs, (
+        "claiming a hash for a request the SDK refused to build is the B-87 defect"
+    )
+    assert attrs["memory.record_count"] == 0
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+    assert attrs["memory.degraded_serve.pre_wire_error_type"] == "TypeError"
+    assert "memory.degraded_serve.provider_error_type" not in attrs, (
+        "no provider produced this error — no request was constructed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_b87_openai_sdk_call_time_argument_rejection_is_pre_wire() -> None:
+    """B-87, openai arm — the sibling of the anthropic-plain call-time witness.
+
+    `openai`'s `chat.completions.create` is an `@required_args` wrapper over an
+    `async def`, so an unsupported provider keyword out of `payload.params`
+    raises `TypeError` AT THE CALL. The arm's construct-then-mark-then-await
+    ordering is what keeps that pre-wire; without it a request the SDK refused
+    to build would report `injection` + a packet hash.
+    """
+    client = _OpenAIClient()
+    reached_body: list[str] = []
+
+    async def _strict_create(*, model: str, messages: Any) -> Any:
+        # No `**kwargs`: the real SDK signature rejects unknown keywords at the
+        # call, and a swallowing double cannot witness this ordering.
+        reached_body.append(model)
+        raise AssertionError("the fake's body must be unreachable")
+
+    client.chat.completions.create = _strict_create  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="openai"),
+        # No executor → the openai arm cannot serve the selected mode, so the
+        # repair fires and this dispatch carries the packet.
+        standard_memory_tool_executor=None,
+    )
+
+    with pytest.raises(TypeError, match="unsupported_sdk_kwarg"):
+        await dispatcher.dispatch(
+            _binding("openai"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": None,
+                    "params": {"unsupported_sdk_kwarg": True},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+    assert reached_body == [], "the SDK method body never ran — the call itself was rejected"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly", (
+        "the packet was assembled and then never sent — it was not an injection"
+    )
+    assert "memory.packet_hash" not in attrs, (
+        "claiming a hash for a request the SDK refused to build is the B-87 defect"
+    )
+    assert attrs["memory.record_count"] == 0
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+    assert attrs["memory.degraded_serve.pre_wire_error_type"] == "TypeError"
+    assert "memory.degraded_serve.provider_error_type" not in attrs, (
+        "no provider produced this error — no request was constructed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_b87_openai_post_wire_failure_still_reports_injection() -> None:
+    """B-87 ordering guard for the openai arm's own marker site.
+
+    The failure happens DURING the await, i.e. after the request went out, so
+    the disclosure really occurred. A marker moved below the await would demote
+    this into `pre_wire_failure` / `packet_assembly` and hide it.
+    """
+    client = _OpenAIClient()
+
+    async def _boom(**_kwargs: Any) -> Any:
+        raise TimeoutError("provider timed out after the request was sent")
+
+    client.chat.completions.create = _boom  # type: ignore[method-assign]
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="openai"),
+        standard_memory_tool_executor=None,  # unservable → repair fires
+    )
+
+    with pytest.raises(TimeoutError):
+        await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection", "the packet WAS sent before the failure"
+    assert attrs["memory.packet_hash"] == "c" * 64
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+    assert attrs["memory.degraded_serve.provider_error_type"] == "TimeoutError"
+
+
+@dataclass
+class _LegacyExternalCLIFakeAdapter:
+    """An adapter on the PRE-B-87 `dispatch_text(*, model, prompt)` contract.
+
+    `_ExternalCLIProviderLike` is `@runtime_checkable`, so this still satisfies
+    the arm guard's `isinstance` — method presence is all that is tested — and
+    an unconditional `on_wire=` keyword breaks it with `TypeError` (codex R3
+    [P2-2]). ``fail_after_handover`` models a provider failure that happened
+    once the prompt was already gone.
+    """
+
+    calls: list[tuple[str, str]]
+    fail_after_handover: bool = False
+
+    async def dispatch_text(self, *, model: str, prompt: str) -> _ExternalCLIResult:
+        self.calls.append((model, prompt))
+        if self.fail_after_handover:
+            raise TimeoutError("the CLI hung after the prompt was handed over")
+        return _ExternalCLIResult(text="OK", exit_code=0)
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_b87_legacy_external_cli_adapter_dispatches_without_type_error() -> None:
+    """B-87 (codex R3 [P2-2]) — tier 2 of the boundary contract: an adapter
+    predating `on_wire` must keep dispatching. The dispatcher inspects the
+    signature and omits the keyword rather than passing it unconditionally."""
+    adapter = _LegacyExternalCLIFakeAdapter(calls=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("claude_code"), _step(), step_context=_step_context()
+    )
+
+    assert len(adapter.calls) == 1, "the legacy adapter was dispatched to, not TypeError'd"
+    assert _B83_SECTION_TEXT in adapter.calls[0][1]
+    assert result["content"] == [{"type": "text", "text": "OK"}]
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_b87_legacy_external_cli_adapter_post_wire_failure_still_reports_injection() -> None:
+    """B-87 (codex R3 [P2-2]) — the legacy tier's fallback marker is load-bearing,
+    not decorative: without it a real post-wire provider failure on a legacy
+    adapter would be demoted to `pre_wire_failure`. The tier keeps the exact
+    pre-B-87 placement — mark immediately before the await."""
+    adapter = _LegacyExternalCLIFakeAdapter(calls=[], fail_after_handover=True)
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TimeoutError):
+        await dispatcher.dispatch(_binding("claude_code"), _step(), step_context=_step_context())
+
+    assert len(adapter.calls) == 1, "the prompt did reach the legacy adapter"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.packet_hash"] == "c" * 64
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+
+
+@pytest.mark.asyncio
+async def test_b87_kwargs_swallowing_external_cli_adapter_is_classified_legacy() -> None:
+    """B-87 (codex R4 [P2]) — `**kwargs` is NOT a declaration of wire-awareness.
+
+    A pre-B-87 forwarding adapter may accept `**kwargs` and IGNORE unknown keys.
+    Counting that as callback-aware makes the dispatcher hand off the boundary
+    and skip its own fallback mark — so a provider failure past the handover
+    reports `pre_wire_failure` with NO `packet_hash`, for a packet that really
+    did reach the CLI. That is silent UNDER-reporting of a real disclosure, the
+    worse error direction. Only a DECLARED `on_wire` parameter counts, so this
+    adapter takes the legacy tier's dispatcher-side mark and the disclosure is
+    reported truthfully.
+    """
+
+    @dataclass
+    class _KwargsSwallowingExternalCLIAdapter:
+        calls: list[tuple[str, str]]
+
+        async def dispatch_text(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            **_ignored: Any,
+        ) -> _ExternalCLIResult:
+            # Swallows `on_wire` without ever firing it — the whole point.
+            self.calls.append((model, prompt))
+            raise TimeoutError("the CLI hung after the prompt was handed over")
+
+        async def aclose(self) -> None:
+            return None
+
+    adapter = _KwargsSwallowingExternalCLIAdapter(calls=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"claude_code": adapter},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(provider="claude_code"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TimeoutError):
+        await dispatcher.dispatch(_binding("claude_code"), _step(), step_context=_step_context())
+
+    assert len(adapter.calls) == 1, "the prompt did reach the adapter"
+    assert _B83_SECTION_TEXT in adapter.calls[0][1]
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection"
+    assert attrs["memory.packet_hash"] == "c" * 64, (
+        "the packet was disclosed — omitting the hash would UNDER-report it"
+    )
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+
+
+def _fake_memory_callbacks_module_attr(
+    monkeypatch: pytest.MonkeyPatch,
+    behaviour: Callable[[], Any],
+) -> list[dict[str, Any]]:
+    """Swap `execute_with_memory_callbacks` for a recorder with a chosen ending.
+
+    The third anthropic variant's adapter call lives INSIDE that helper, so the
+    module-level swap is what makes its wire boundary observable from here.
+
+    The double fires `on_wire` before `behaviour()`, exactly where the real
+    helper fires it (immediately before its first awaited `messages.create`,
+    codex R5 [P2-1]) — a double that swallowed the callback would report every
+    post-wire failure staged here as pre-wire.
+    """
+    calls: list[dict[str, Any]] = []
+
+    async def _fake(
+        *,
+        messages_create_kwargs: dict[str, Any],
+        on_wire: Callable[[], None] | None = None,
+        **_kw: Any,
+    ) -> Any:
+        calls.append(dict(messages_create_kwargs))
+        if on_wire is not None:
+            on_wire()
+        return behaviour()
+
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.llm_dispatch.execute_with_memory_callbacks",
+        _fake,
+    )
+    return calls
+
+
+class _FakeMemoryToolRegistry:
+    configured_backend = "sqlite"
+
+    def resolve_backend(self, _surface: Any) -> Any:
+        return object()
+
+
+def _b87_memory_variant_step(system_collision: bool) -> WorkflowStep:
+    params: dict[str, Any] = {"max_tokens": 100}
+    if system_collision:
+        params["system"] = "PAYLOAD-OWNED SYSTEM"
+    return _step(
+        {
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "memory_20250818", "name": "memory"}],
+            "params": params,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_b87_anthropic_memory_variant_pre_wire_raise_is_not_reported_as_injection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-87 — the memory-tool anthropic variant, the third call boundary."""
+    recorded = _fake_memory_callbacks_module_attr(monkeypatch, lambda: None)
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
+        tracer_provider=tp,
+        memory_tool_registry=_FakeMemoryToolRegistry(),
+        deployment_surface="local-development",
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+        active_system_prompt="ACTIVE PROMPT",
+    )
+
+    with pytest.raises(PromptInjectionConflictError):
+        await dispatcher.dispatch(
+            _binding("anthropic"),
+            _b87_memory_variant_step(system_collision=True),
+            step_context=_step_context(),
+        )
+
+    assert recorded == [], "the memory inner loop was never entered"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly"
+    assert "memory.packet_hash" not in attrs
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
+
+
+@pytest.mark.asyncio
+async def test_b87_anthropic_memory_variant_post_wire_failure_still_reports_injection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-87 ordering guard for the memory variant — a marker set AFTER the await
+    would regress this into `pre_wire_failure` / `packet_assembly`."""
+
+    def _boom() -> Any:
+        raise TimeoutError("provider timed out after the request was sent")
+
+    recorded = _fake_memory_callbacks_module_attr(monkeypatch, _boom)
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
+        tracer_provider=tp,
+        memory_tool_registry=_FakeMemoryToolRegistry(),
+        deployment_surface="local-development",
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TimeoutError):
+        await dispatcher.dispatch(
+            _binding("anthropic"),
+            _b87_memory_variant_step(system_collision=False),
+            step_context=_step_context(),
+        )
+
+    assert len(recorded) == 1, "the packet did go out on the inner loop's request"
+    assert _B83_SECTION_TEXT in recorded[0]["system"]
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "injection", "the packet WAS sent before the failure"
+    assert attrs["memory.packet_hash"] == "c" * 64
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
+    assert attrs["memory.degraded_serve.provider_error_type"] == "TimeoutError"
+
+
+@pytest.mark.asyncio
+async def test_b87_memory_variant_raise_inside_the_helper_before_its_send_is_pre_wire() -> None:
+    """B-87 (codex R5 [P2-1]) — the residual window the R4 shape left open.
+
+    `execute_with_memory_callbacks` does its own pre-send work (the
+    `messages` / `other_kwargs` split), and that work CAN raise: the accepted
+    opaque `params["messages"]` override merges into the translated kwargs, so
+    `None` makes the helper's `list(...)` raise before any request is built.
+    No SDK call happens, so the packet never left the process — yet with the
+    mark set by the CALLER (the pre-R5 placement) the arm's `finally` reported
+    an `injection` carrying the packet's hash: an over-report of a disclosure
+    that did not occur. The real helper is used here, unpatched, because the
+    ordering under test is INSIDE it.
+    """
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        memory_tool_registry=_FakeMemoryToolRegistry(),
+        deployment_surface="local-development",
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TypeError):
+        await dispatcher.dispatch(
+            _binding("anthropic"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": [{"type": "memory_20250818", "name": "memory"}],
+                    "params": {"max_tokens": 100, "messages": None},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+    assert adapter.client.messages.calls == [], "no request was ever sent"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly"
+    assert "memory.packet_hash" not in attrs, (
+        "hashing a packet that never left the process over-reports a disclosure"
+    )
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
 
 
 @pytest.mark.asyncio

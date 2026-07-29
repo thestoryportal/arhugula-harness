@@ -13,9 +13,10 @@ provider-construction authority; the operator-supply surface is the C-RT-02
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -42,6 +43,8 @@ __all__ = [
     "GeminiCLIAdapter",
     "GenericCommandCLIAdapter",
     "RecordingSubprocessRunner",
+    "WireAwareExternalCLISubprocessRunner",
+    "accepts_explicit_on_wire",
     "construct_antigravity_cli_adapter",
     "construct_claude_code_cli_adapter",
     "construct_codex_cli_adapter",
@@ -111,10 +114,24 @@ class ExternalCLINotAuthenticatedError(ExternalCLIProviderError):
 
 
 class ExternalCLISubprocessRunner(Protocol):
-    """Subprocess boundary for external CLI calls.
+    """Subprocess boundary for external CLI calls — the PUBLIC ``runner=`` seam.
 
     The shape intentionally has no shell parameter; production uses argv-only
     `create_subprocess_exec`, and tests inject deterministic fakes.
+
+    This is deliberately the pre-B-87 signature — no ``on_wire``. It is the
+    seam every public constructor (`construct_*_cli_adapter`) and every adapter
+    field is typed with, and it is the WIDER of B-87's two runner shapes: a
+    legacy runner satisfies it, and so does a wire-aware one (the extra
+    parameter is keyword-only WITH a default, so an implementation declaring it
+    is still assignable here). Typing the seam with the NARROWER wire-aware
+    shape would have made a typed pre-B-87 runner a pyright error at injection
+    — runtime compatibility without static compatibility (codex R6 [P2]).
+
+    `WireAwareExternalCLISubprocessRunner` is the opt-in extension; runners that
+    want full-precision wire attribution declare ``on_wire`` and are still
+    injectable HERE unchanged. `_run_with_wire_boundary` picks the tier per
+    dispatch and never hands the keyword to a runner that did not declare it.
     """
 
     async def run(
@@ -123,6 +140,33 @@ class ExternalCLISubprocessRunner(Protocol):
         *,
         stdin: str,
         timeout_seconds: float,
+    ) -> CLIProcessResult: ...
+
+
+class WireAwareExternalCLISubprocessRunner(ExternalCLISubprocessRunner, Protocol):
+    """A runner that OPTS IN to B-87's reached-the-wire notification.
+
+    ``on_wire`` is the notification described at `_notify_wire`. It lives at the
+    runner rather than in the adapters because the boundary it names — a child
+    process exists — is only observable at this layer. An implementation of
+    THIS Protocol MUST fire it once process creation has succeeded and before
+    the payload is handed over, and never otherwise. ``None``, the default, is
+    every caller not tracking the boundary (the auth probes, every non-degraded
+    dispatch) and is a no-op.
+
+    A wire-aware runner is assignable to the plain `ExternalCLISubprocessRunner`
+    seam, so declaring the parameter is a pure opt-in: nothing about injection
+    changes. `_run_with_wire_boundary` narrows to this shape only after
+    `_runner_accepts_on_wire` confirms the parameter is genuinely declared.
+    """
+
+    async def run(
+        self,
+        argv: tuple[str, ...],
+        *,
+        stdin: str,
+        timeout_seconds: float,
+        on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult: ...
 
 
@@ -144,6 +188,137 @@ _SCRUBBED_PROVIDER_ENV_VARS: frozenset[str] = frozenset(
 )
 
 
+def _notify_wire(on_wire: Callable[[], None] | None) -> None:
+    """Announce that the payload has REACHED THE WIRE.
+
+    B-87 defines "reached the wire" as: **a child process exists that can
+    observe the payload.** That is the whole semantic anchor, and it fixes the
+    boundary in both directions:
+
+    * A **spawn failure** is PRE-wire — a missing or unexecutable command, an
+      empty argv, a `PermissionError` out of `create_subprocess_exec`. Nothing
+      left the runtime, so nothing can have read the prompt. (Adapter-local
+      validation raises — `_render_argv_templates` rejecting a `{prompt}`
+      template under `prompt_transport = "stdin"`, codex R2 — are pre-wire for
+      the same reason, one layer further out.)
+    * A failure **during or after the stdin write, or while awaiting output**,
+      is POST-wire — the process existed and may have seen the packet. A
+      timeout, a nonzero exit, an unparseable payload: all post-wire.
+
+    This is the DEFINED stopping point (codex R3 [P2-1]). The boundary is NOT
+    pushed further — a partial stdin write, an unread pipe, a child that exited
+    before reading: all post-wire. The register's contract is "did the payload
+    leave the process", not "did the peer read byte N"; refining past process
+    existence is an endless regress with no observable answer.
+
+    Fired by the RUNNER, immediately after process creation succeeds and before
+    the payload is handed over (`AsyncioSubprocessRunner.run`), so every
+    pre-spawn raise — whether the runner translates it or lets it propagate —
+    lands on the pre-wire side automatically. ``None`` is every caller that is
+    not tracking the boundary, and is a no-op.
+    """
+    if on_wire is not None:
+        on_wire()
+
+
+def accepts_explicit_on_wire(target: Callable[..., Any] | None) -> bool:
+    """Does ``target`` DECLARE a named ``on_wire`` parameter? (B-87, codex R4 [P2])
+
+    The single wire-awareness predicate for both B-87 capability seams — the
+    dispatcher's adapter check (`llm_dispatch._adapter_accepts_on_wire`) and
+    the adapters' runner check (`_runner_accepts_on_wire`). One definition so
+    the two cannot drift.
+
+    Wire-awareness must be **declared**, never inferred: a bare ``**kwargs``
+    does NOT count, even though passing the keyword to such a callable would
+    not raise. A forwarding implementation that swallows unknown keys would
+    accept the callback and never fire it, while the caller — having handed
+    the boundary off — skips its own fallback mark. A packet that genuinely
+    reached a provider would then be reported ``pre_wire_failure`` with no
+    ``packet_hash``: silent UNDER-reporting of a real disclosure, which is the
+    worse error direction and the exact defect class B-87 exists to close.
+
+    The opposite misclassification is cheap and self-correcting: a genuinely
+    forwarding ``**kwargs`` implementation read as legacy merely takes the
+    caller-side fallback mark — i.e. pre-B-87 reporting precision, no crash and
+    no under-report. Declaring wire-awareness costs one keyword: name it.
+    """
+    if target is None:
+        return False
+    try:
+        parameters = inspect.signature(target).parameters
+    except (TypeError, ValueError):  # pragma: no cover - exotic non-introspectable callable
+        return False
+    parameter = parameters.get("on_wire")
+    return parameter is not None and parameter.kind in (
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+
+
+def _runner_accepts_on_wire(runner: ExternalCLISubprocessRunner) -> bool:
+    """Inspect THIS runner's bound `run`, per dispatch (B-87, codex R5 [P2-2]).
+
+    Deliberately uncached. A verdict memoized per runner CLASS is wrong: `run`
+    can be shadowed per instance, so two instances of one class can disagree,
+    and whichever dispatched first would decide for both — handing ``on_wire=``
+    to a legacy callable (`TypeError`, the inference dies) or withholding it
+    from a wire-aware one (precision silently lost). One `inspect.signature`
+    is microseconds against a subprocess spawn; the cache bought nothing and
+    cost correctness.
+    """
+    return accepts_explicit_on_wire(getattr(runner, "run", None))
+
+
+async def _run_with_wire_boundary(
+    runner: ExternalCLISubprocessRunner,
+    argv: tuple[str, ...],
+    *,
+    stdin: str,
+    timeout_seconds: float,
+    on_wire: Callable[[], None] | None,
+) -> CLIProcessResult:
+    """Hand argv to the runner under B-87's TWO-TIER wire-boundary ownership.
+
+    * **Wire-aware runner** (declares ``on_wire`` — the shipped
+      `AsyncioSubprocessRunner`, and any runner that opts in by naming the
+      parameter). The keyword rides down and the RUNNER fires it past
+      `create_subprocess_exec`, so a spawn failure stays PRE-wire. This is the
+      full-precision tier.
+    * **Legacy runner** (a pre-B-87 runner injected through the public
+      ``runner=`` seam, which is typed with the wider, ``on_wire``-free
+      `ExternalCLISubprocessRunner` precisely so this stays statically legal —
+      codex R4 [P1] / R6 [P2]). The keyword is NOT passed: it would raise
+      `TypeError` before any spawn, so every inference through such a runner
+      would fail outright. Instead the ADAPTER fires the mark HERE — after all
+      adapter-local argv validation, immediately before the handover (the
+      commit-54419eb4 placement).
+
+    The legacy tier's residual imprecision is bounded and truthful-by-
+    degradation: a spawn failure under a legacy runner reports POST-wire, which
+    is exactly the pre-R3 behavior — never a crash, and never an under-report
+    of a real disclosure. Adapter-local validation raises (the
+    `{prompt}`-template-under-stdin rejection) stay PRE-wire on both tiers,
+    because both fire strictly after them.
+    """
+    if not _runner_accepts_on_wire(runner):
+        _notify_wire(on_wire)
+        return await runner.run(argv, stdin=stdin, timeout_seconds=timeout_seconds)
+    # `_runner_accepts_on_wire` just proved THIS instance's bound `run` declares
+    # the parameter, which is exactly `WireAwareExternalCLISubprocessRunner`
+    # conformance. The narrowing cannot be expressed as an `isinstance` check
+    # (a non-`runtime_checkable` Protocol, and `runtime_checkable` would only
+    # test the member's presence, not its signature), so the runtime predicate
+    # is the narrowing and the cast records it.
+    wire_aware = cast(WireAwareExternalCLISubprocessRunner, runner)
+    return await wire_aware.run(
+        argv,
+        stdin=stdin,
+        timeout_seconds=timeout_seconds,
+        on_wire=on_wire,
+    )
+
+
 def _scrubbed_child_env() -> dict[str, str]:
     """The current environment minus hosted-provider inference credentials."""
     return {
@@ -160,6 +335,7 @@ class AsyncioSubprocessRunner:
         *,
         stdin: str,
         timeout_seconds: float,
+        on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
         if not argv:
             raise ExternalCLICommandError("", 127, "empty argv")
@@ -173,6 +349,26 @@ class AsyncioSubprocessRunner:
             )
         except FileNotFoundError as exc:
             raise ExternalCLICommandError(argv[0], 127, str(exc)) from exc
+
+        # A child process now exists and can observe the payload: THIS is the
+        # wire (B-87, codex R3 [P2-1]). Every raise above is pre-wire — the
+        # empty-argv guard, the missing-command translation, and anything
+        # `create_subprocess_exec` raises that is NOT translated (a
+        # `PermissionError` on an unexecutable command propagates as-is and is
+        # pre-wire for free). Everything below is post-wire.
+        try:
+            _notify_wire(on_wire)
+        except BaseException:
+            # A caller-supplied observer that raises must not leak the child we
+            # just spawned (B-87, codex R7 [P2-2]): control would unwind past
+            # the `communicate` block below, whose timeout path is the ONLY
+            # other place this process is reaped, and the CLI would keep
+            # running. Repeated observer failures would leak one process each.
+            # Same kill/wait idiom as that timeout path; the observer's
+            # exception is then propagated unchanged.
+            process.kill()
+            await process.wait()
+            raise
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -204,7 +400,11 @@ class RecordingSubprocessRunner:
         *,
         stdin: str,
         timeout_seconds: float,
+        on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
+        # Models a successful spawn, so the wire notification precedes the
+        # recorded handover — the real runner's ordering (B-87).
+        _notify_wire(on_wire)
         self.calls.append((argv, stdin, timeout_seconds))
         if not self._results:
             raise AssertionError("RecordingSubprocessRunner has no remaining results")
@@ -223,11 +423,20 @@ class ClaudeCodeCLIAdapter:
     async def aclose(self) -> None:
         self._closed = True
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> ExternalCLITextResult:
-        result = await self.runner.run(
-            _claude_inference_argv(self.command, model),
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> ExternalCLITextResult:
+        argv = _claude_inference_argv(self.command, model)
+        result = await _run_with_wire_boundary(
+            self.runner,
+            argv,
             stdin=prompt,
             timeout_seconds=self.timeout_seconds,
+            on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
         payload = _parse_json_object(result.stdout, "Claude Code inference response")
@@ -247,11 +456,20 @@ class CodexCLIAdapter:
     async def aclose(self) -> None:
         self._closed = True
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> ExternalCLITextResult:
-        result = await self.runner.run(
-            _codex_inference_argv(self.command, model),
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> ExternalCLITextResult:
+        argv = _codex_inference_argv(self.command, model)
+        result = await _run_with_wire_boundary(
+            self.runner,
+            argv,
             stdin=prompt,
             timeout_seconds=self.timeout_seconds,
+            on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
         events = _parse_json_lines(result.stdout, "Codex inference response")
@@ -275,16 +493,25 @@ class AntigravityCLIAdapter:
     async def aclose(self) -> None:
         self._closed = True
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> ExternalCLITextResult:
-        result = await self.runner.run(
-            _antigravity_inference_argv(
-                self.command,
-                model,
-                prompt,
-                timeout_seconds=self.timeout_seconds,
-            ),
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> ExternalCLITextResult:
+        argv = _antigravity_inference_argv(
+            self.command,
+            model,
+            prompt,
+            timeout_seconds=self.timeout_seconds,
+        )
+        result = await _run_with_wire_boundary(
+            self.runner,
+            argv,
             stdin="",
             timeout_seconds=self.timeout_seconds,
+            on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
         text, raw_response = _parse_response_by_format(
@@ -311,11 +538,20 @@ class GeminiCLIAdapter:
     async def aclose(self) -> None:
         self._closed = True
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> ExternalCLITextResult:
-        result = await self.runner.run(
-            _gemini_inference_argv(self.command, model, prompt),
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> ExternalCLITextResult:
+        argv = _gemini_inference_argv(self.command, model, prompt)
+        result = await _run_with_wire_boundary(
+            self.runner,
+            argv,
             stdin="",
             timeout_seconds=self.timeout_seconds,
+            on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
         text, raw_response = _parse_response_by_format(
@@ -345,8 +581,19 @@ class GenericCommandCLIAdapter:
     async def aclose(self) -> None:
         self._closed = True
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> ExternalCLITextResult:
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> ExternalCLITextResult:
         prompt_in_argv = self.prompt_transport is ExternalCLIPromptTransport.ARG
+        # `_render_argv_templates` REJECTS a `{prompt}` template under stdin
+        # transport — an adapter-local validation raise with zero subprocess
+        # calls. It stays pre-wire on BOTH `_run_with_wire_boundary` tiers,
+        # because this raise never reaches that call at all (B-87 R2, boundary
+        # relocated at R3 [P2-1], two-tiered at R4 [P1]).
         argv = (
             self.command,
             *_render_argv_templates(
@@ -356,10 +603,12 @@ class GenericCommandCLIAdapter:
                 prompt_in_argv=prompt_in_argv,
             ),
         )
-        result = await self.runner.run(
+        result = await _run_with_wire_boundary(
+            self.runner,
             argv,
             stdin="" if prompt_in_argv else prompt,
             timeout_seconds=self.timeout_seconds,
+            on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
         text, raw_response = _parse_response_by_format(

@@ -42,7 +42,8 @@ of scope for this arc per FM-2.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import inspect
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, cast
 
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
@@ -386,6 +387,7 @@ async def execute_with_memory_callbacks(
     tracer: Any,
     context_editing_active: bool,
     max_iterations: int = 16,
+    on_wire: Callable[[], None] | None = None,
 ) -> Mapping[str, Any]:
     """Harness-authored inner loop (mechanism β) wrapping `messages.create`.
 
@@ -407,7 +409,19 @@ async def execute_with_memory_callbacks(
     runaway tool-use sequences; matches the spirit of the SDK's
     `tool_runner(max_iterations=...)` param. Default 16 mirrors common
     Anthropic SDK fixture values.
+
+    `on_wire` (B-87, codex R5 [P2-1]) is the caller's reached-the-wire mark,
+    fired ONCE, on the FIRST `messages.create` — after the `messages` /
+    `other_kwargs` split, which is this helper's only pre-send local work and
+    CAN raise on an opaque `params["messages"]` override (`list(None)`), and
+    after the SDK call itself has been CONSTRUCTED, whose synchronous argument
+    validation is likewise pre-wire (codex R7 [P2-1]); only the `await` is on
+    the far side of it. The caller cannot mark before handing off: its dispatch
+    would then report a packet that never left the process as sent. Later
+    iterations are already post-wire, hence fire-once. `None` — every caller
+    not tracking the boundary — is a no-op.
     """
+    pending_on_wire = on_wire
     messages = list(messages_create_kwargs.get("messages", []))
     other_kwargs: dict[str, Any] = {
         k: v for k, v in messages_create_kwargs.items() if k != "messages"
@@ -415,9 +429,24 @@ async def execute_with_memory_callbacks(
 
     response: Mapping[str, Any] | Any = None
     for _ in range(max_iterations):
-        response = await adapter.client.messages.create(
-            model=model, messages=messages, **other_kwargs
-        )
+        # Construct, then fire, then await (B-87, codex R7 [P2-1]). The SDK's
+        # `messages.create` validates its arguments SYNCHRONOUSLY at the call —
+        # an unsupported `params` keyword riding in `other_kwargs` raises
+        # `TypeError` before any coroutine exists — and that is pre-wire: no
+        # request was built, let alone sent.
+        pending = adapter.client.messages.create(model=model, messages=messages, **other_kwargs)
+        if pending_on_wire is not None:
+            try:
+                pending_on_wire()
+            except BaseException:
+                # The caller's mark raised, so the constructed request will
+                # never be awaited: close it rather than leave a stray
+                # "coroutine was never awaited" RuntimeWarning behind.
+                if inspect.iscoroutine(pending):
+                    pending.close()
+                raise
+            pending_on_wire = None
+        response = await pending
 
         if _stop_reason(response) != "tool_use":
             # Final response — return mapping form (caller pipeline coerces

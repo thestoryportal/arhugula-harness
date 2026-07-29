@@ -58,7 +58,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -112,6 +112,7 @@ from harness_runtime.lifecycle.audit_signing_errors import (
 from harness_runtime.lifecycle.cacheable_epoch import DEFAULT_CACHE_TTL, CacheTTL
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_scope_check
+from harness_runtime.lifecycle.external_cli_provider import accepts_explicit_on_wire
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLToolLoopContext,
     ModelToolCall,
@@ -267,9 +268,29 @@ class _ProvidersLike(Protocol):
 
 @runtime_checkable
 class _ExternalCLIProviderLike(Protocol):
-    """Provider shape for text-only local CLI adapters."""
+    """Provider shape for text-only local CLI adapters.
 
-    async def dispatch_text(self, *, model: str, prompt: str) -> Any: ...
+    ``on_wire`` (B-87, codex R2 [P2]) is the reached-the-wire notification: the
+    adapter hands it down to its subprocess runner, which fires it once a child
+    process exists (codex R3 [P2-1]), so an adapter-LOCAL validation raise — the
+    `{prompt}`-template-under-stdin-transport rejection in
+    `_render_argv_templates`, say — and a failed spawn both stay on the pre-wire
+    side of the boundary. The dispatcher cannot set that marker itself:
+    everything it controls happens before `dispatch_text` is entered.
+
+    The parameter is OPTIONAL in both directions: `@runtime_checkable` tests
+    method presence only, so an adapter written against the pre-B-87
+    `dispatch_text(*, model, prompt)` shape still satisfies this Protocol at
+    runtime and must keep working — see `_adapter_accepts_on_wire`.
+    """
+
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> Any: ...
 
 
 @runtime_checkable
@@ -1637,6 +1658,12 @@ class RuntimeLLMDispatcher:
             # `degraded_sink`, so the two decisions never collide (see
             # `_UnservedMemoryToolCallsSink`).
             unserved_sink = _UnservedMemoryToolCallsSink()
+            # B-87 — `degraded_sink.value.rendered` is populated HERE, before any
+            # of the per-arm pre-adapter work runs, so it alone cannot tell an
+            # injection that happened from one that raised before the wire. This
+            # sink is the discriminator; it is written only at the arms'
+            # provider-call boundaries (see `_ProviderWireReachedSink`).
+            wire_sink = _ProviderWireReachedSink()
 
             # --- Step 3: per-provider dispatch --------------------------
             cache_attrs: _AnthropicCacheAttrs | None
@@ -1700,6 +1727,7 @@ class RuntimeLLMDispatcher:
                             frozen_tool_superset=_effective_frozen_tool_superset,
                             cache_ttl=self.cache_ttl,
                             memory_packet=repair_packet,
+                            wire_sink=wire_sink,
                         )
                     elif (
                         self.hitl_tool_loop is not None
@@ -1724,6 +1752,7 @@ class RuntimeLLMDispatcher:
                             frozen_tool_superset=_effective_frozen_tool_superset,
                             cache_ttl=self.cache_ttl,
                             memory_packet=repair_packet,
+                            wire_sink=wire_sink,
                         )
                     else:
                         (
@@ -1740,6 +1769,7 @@ class RuntimeLLMDispatcher:
                             frozen_tool_superset=_effective_frozen_tool_superset,
                             cache_ttl=self.cache_ttl,
                             memory_packet=repair_packet,
+                            wire_sink=wire_sink,
                         )
                 elif provider_name == "openai":
                     # B-83 — the arm guard and the serve-check read the SAME
@@ -1771,6 +1801,7 @@ class RuntimeLLMDispatcher:
                             system=effective_system_prompt,
                             upstream=upstream_output,
                             memory_packet=repair_packet,
+                            wire_sink=wire_sink,
                         )
                     cache_attrs = None
                     request_attrs = None
@@ -1799,6 +1830,7 @@ class RuntimeLLMDispatcher:
                             step_id=step_id,
                             degraded_sink=degraded_sink,
                             unserved_sink=unserved_sink,
+                            wire_sink=wire_sink,
                             system=effective_system_prompt,
                             upstream=upstream_output,
                         )
@@ -1810,6 +1842,7 @@ class RuntimeLLMDispatcher:
                             system=effective_system_prompt,
                             upstream=upstream_output,
                             memory_packet=repair_packet,
+                            wire_sink=wire_sink,
                         )
                     cache_attrs = None
                     request_attrs = None
@@ -1822,6 +1855,7 @@ class RuntimeLLMDispatcher:
                         system=effective_system_prompt,
                         upstream=upstream_output,
                         memory_packet=repair_packet,
+                        wire_sink=wire_sink,
                     )
                     cache_attrs = None
                     request_attrs = None
@@ -1855,6 +1889,7 @@ class RuntimeLLMDispatcher:
                         model=model,
                         outcome=dispatch_outcome,
                         error_type=dispatch_error_type,
+                        reached_wire=wire_sink.reached,
                     )
                 # B-85 — an INDEPENDENT emission, not an `elif`. The two sinks
                 # report different facts about different dispatches and are
@@ -2208,6 +2243,106 @@ class _DegradedMemoryServeSink:
 _DISPATCH_OUTCOME_COMPLETED: Final[str] = "completed"
 _DISPATCH_OUTCOME_PROVIDER_ERROR: Final[str] = "provider_error"
 _DISPATCH_OUTCOME_CANCELLED: Final[str] = "cancelled"
+#: B-87 — the dispatch raised BEFORE any provider adapter was reached, so there
+#: was no provider call to have a disposition at all. Carried on the SAME axis
+#: as the three above rather than on `memory.degraded_serve.reason`: `reason`
+#: answers *why the selected mode could not be served* (a property of the
+#: context, settled before dispatch), while this axis answers *how the dispatch
+#: that decision rode on ended*. A pre-wire raise is an answer to the second
+#: question, and folding it into the first would put a dispatch-lifecycle value
+#: into the degradation-reason value domain — two orthogonal facts on one
+#: attribute. Also a span-attribute VALUE, for the same C-MEM-19 reason.
+#:
+#: PHASE-NEUTRAL BY CONSTRUCTION (codex R1 [P2]). The `_ProviderWireReachedSink`
+#: marker discriminates reached-the-wire from not; it cannot know WHICH pre-wire
+#: phase raised. Translation (`_payload_to_anthropic_kwargs`, the external-CLI
+#: text-only shape check) is only one of them — `registry.resolve_backend`'s
+#: `MemoryBackendResolutionError`, and any other pre-adapter setup failure,
+#: raise on the same side of the marker. So the value names the LOCUS ("before
+#: the wire"), never a phase: a `translation_error` spelling would mislabel
+#: every non-translation pre-wire raise and corrupt the telemetry it feeds.
+_DISPATCH_OUTCOME_PRE_WIRE_FAILURE: Final[str] = "pre_wire_failure"
+
+
+@dataclass(slots=True)
+class _ProviderWireReachedSink:
+    """B-87 — did the degraded-serve disposition actually reach a provider?
+
+    `_DegradedMemoryServe.rendered` is populated at the serve-check, BEFORE any
+    per-arm pre-adapter work runs, and any of that work can raise before the
+    adapter call (translation's two-BASE-system `PromptInjectionConflictError`
+    and the external-CLI text-only `LLMDispatchPayloadShapeError`, backend
+    resolution's `MemoryBackendResolutionError`, any future pre-adapter
+    validation). The arm site's ``finally`` then reported an `INJECTION` with
+    the packet's hash and record count for a packet that never left the
+    process. This sink is what the emitter branches on so a pre-wire failure is
+    classified as one.
+
+    Set at the LAST point before the awaited provider call, never after it — a
+    marker set afterwards would report a POST-wire failure as pre-wire, which
+    is this defect's mirror image. "Last point" is not always a point THIS
+    module controls: an adapter that runs its OWN validation inside its
+    dispatch method owns the boundary, and is handed the mark as a callback
+    (`_ExternalCLIProviderLike.dispatch_text`'s ``on_wire``, codex R2 [P2]) so
+    that its validation raises stay pre-wire. On that arm the callback rides
+    all the way down to the subprocess runner, which fires it once a child
+    process exists (codex R3 [P2-1]); an adapter that predates the callback
+    falls back to the marker-before-the-await placement (`_dispatch_external_cli`).
+
+    On the plain SDK arms (`anthropic` plain + HITL, `openai`, `ollama`) the
+    boundary is split in two, because the vendor's own validation is:
+
+    * **CALL-TIME** rejection — an unsupported provider keyword out of
+      `payload.params`, or a `required_args` omission. Every one of those
+      clients is an `async def` (`ollama.AsyncClient.chat`) or a thin sync
+      wrapper over one (`anthropic`/`openai`'s `@required_args`-decorated
+      `create`), so the rejection is a `TypeError` raised SYNCHRONOUSLY at the
+      call, before any coroutine exists. Distinguishing it needs no vendor
+      instrumentation at all — just splitting the call from the await. The arms
+      therefore CONSTRUCT the awaitable first, mark second, await third (codex
+      R7 [P2-1]), so a repaired dispatch that never built a request reports
+      `pre_wire_failure` with no `packet_hash`. Nothing sits between the
+      construction and the await but `_mark_wire_reached`, a total attribute
+      write, so no coroutine can be orphaned by that reordering.
+    * **IN-COROUTINE** rejection — anything the vendor validates past the await
+      entry, inside its own request pipeline. This remains DECLINED, on the
+      record (codex R5 [P2-1], second half; narrowed to this half at R7): it is
+      indistinguishable from a wire failure without instrumenting the vendor
+      SDK's HTTP layer, so such pre-HTTP rejections classify post-wire BY
+      DESIGN. The boundary this marker can honestly claim is OUR last
+      observable point, not the vendor's.
+
+    Where the last pre-send step is code we DO own, it is marked there instead
+    — hence `execute_with_memory_callbacks`'s ``on_wire``, which fires under
+    the same construct-then-mark-then-await ordering.
+
+    Written only by the arm helpers that carry a ``memory_packet`` — i.e. the
+    dispatch the disposition describes. The standard-tools loops' OWN calls are
+    deliberately NOT marker sites: on the ollama R5 path the tools call has
+    already fired and FAILED by the time the disposition is published, so
+    marking it would make a pre-wire failure of the packet-carrying retry look
+    post-wire.
+
+    One instance per dispatch, created at the arm-selection site; never shared
+    across concurrent branches (module-level state would report one branch's
+    wire transit as another's).
+    """
+
+    reached: bool = False
+
+
+def _mark_wire_reached(sink: _ProviderWireReachedSink | None) -> None:
+    """Record that the next awaited call reaches the provider adapter.
+
+    Call after the provider call has been CONSTRUCTED and immediately before
+    its await, never after the await (see the sink docstring): construction is
+    where the vendor client's call-time argument validation runs, and it is
+    pre-wire. ``None`` is the direct-helper-call case (no degraded serve is in
+    flight, so nothing reads the marker) and is a no-op.
+    """
+
+    if sink is not None:
+        sink.reached = True
 
 
 #: The provider arms that own a standard-memory-tools sibling dispatch fn.
@@ -2473,16 +2608,26 @@ def _emit_degraded_memory_serve_span(
     model: str,
     outcome: str = _DISPATCH_OUTCOME_COMPLETED,
     error_type: str | None = None,
+    reached_wire: bool = True,
 ) -> None:
     """Emit the ONE `memory.operation` span for a B-83 degraded serve.
 
-    Every attribute reports what ACTUALLY happened, so the two dispositions are
-    distinguishable without reading the reason string:
+    Every attribute reports what ACTUALLY happened, so the three dispositions
+    are distinguishable without reading the reason string:
 
-    * REPAIRED (`degraded.rendered` present) — `INJECTION` /
-      `access_mode=prompt_extension_packet` / the served packet's hash and
-      record count. A successful injection through a different seam, not a
-      failure, so no `failure_class` is set.
+    * REPAIRED AND SENT (`degraded.rendered` present, `reached_wire`) —
+      `INJECTION` / `access_mode=prompt_extension_packet` / the served packet's
+      hash and record count. A successful injection through a different seam,
+      not a failure, so no `failure_class` is set.
+    * REPAIRED BUT PRE-WIRE (`degraded.rendered` present, NOT `reached_wire`) —
+      B-87. The packet was rendered and then the dispatch raised before any
+      provider adapter was reached, so it never left the process — whichever
+      pre-adapter step raised: `PACKET_ASSEMBLY` (the last thing that
+      truthfully happened) / `access_mode=no_memory_access` (what the model
+      actually got) / `record_count=0` / NO `packet_hash`. Reporting
+      `INJECTION` with the hash here asserts a disclosure that did not occur —
+      exactly the lie the B-85 emitter's `record_count` note names. NOT
+      `DENIAL` either: no resolver denied anything, the delivery failed.
     * REPORT-ONLY (`degraded.rendered is None`) — `DENIAL` /
       `access_mode=no_memory_access` / `record_count=0` / NO `packet_hash`
       (nothing was served, so claiming a served packet hash would be a lie).
@@ -2497,18 +2642,24 @@ def _emit_degraded_memory_serve_span(
     never on the `gen_ai` span (C-OD-04 §4.3 namespace discipline).
 
     Uses only existing closed-enum members (`MemoryTelemetryOperationName.
-    INJECTION` / `.DENIAL`, `MemoryOperationKind.INJECT`) — adding a member to
-    any of the three closed memory enums would be an X-AL-3 design extension,
-    which is why the reason is a span-attribute VALUE.
+    INJECTION` / `.PACKET_ASSEMBLY` / `.DENIAL`, `MemoryOperationKind.INJECT`)
+    — adding a member to any of the three closed memory enums would be an
+    X-AL-3 design extension, which is why the reason is a span-attribute VALUE.
     """
 
-    served = degraded.rendered
+    # B-87 — a rendered packet that never reached a provider is NOT a served
+    # packet. Collapsing it here means every downstream attribute (operation
+    # name, access mode, hash, record count) reports the delivery that actually
+    # happened, from ONE discriminator rather than four parallel conditions.
+    served = degraded.rendered if reached_wire else None
     with memory_telemetry_span(
         tracer_provider,
         tracer_name="harness.runtime.llm_dispatch",
         operation_name=(
             MemoryTelemetryOperationName.INJECTION
             if served is not None
+            else MemoryTelemetryOperationName.PACKET_ASSEMBLY
+            if degraded.rendered is not None
             else MemoryTelemetryOperationName.DENIAL
         ),
         operation_kind=MemoryOperationKind.INJECT.value,
@@ -2539,9 +2690,26 @@ def _emit_degraded_memory_serve_span(
             # everywhere rather than calling them explicitly); no exception is
             # raised INSIDE this short span, so the class is carried as an
             # attribute instead.
-            span.set_attribute("memory.degraded_serve.dispatch_outcome", outcome)
+            # B-87 — a raise with no provider call behind it is not a provider
+            # error, and its class is not a PROVIDER error type. Both move onto
+            # truthful keys; the post-wire spelling is untouched, so existing
+            # consumers of `provider_error_type` keep reading exactly the
+            # failures a provider actually produced. The pre-wire keys name only
+            # the LOCUS, never a phase — the marker knows the call never reached
+            # the wire, not whether translation, backend resolution, or any
+            # other pre-adapter step was the one that raised (codex R1 [P2]).
+            pre_wire_failure = outcome == _DISPATCH_OUTCOME_PROVIDER_ERROR and not reached_wire
+            span.set_attribute(
+                "memory.degraded_serve.dispatch_outcome",
+                _DISPATCH_OUTCOME_PRE_WIRE_FAILURE if pre_wire_failure else outcome,
+            )
             if error_type is not None:
-                span.set_attribute("memory.degraded_serve.provider_error_type", error_type)
+                span.set_attribute(
+                    "memory.degraded_serve.pre_wire_error_type"
+                    if pre_wire_failure
+                    else "memory.degraded_serve.provider_error_type",
+                    error_type,
+                )
 
 
 #: B-85 unserved-reason. A span-attribute VALUE for the same reason the B-83
@@ -3287,6 +3455,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with generic R-CXA-2 HITL tool continuation.
 
@@ -3316,7 +3485,11 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     )
 
     for _turn_index in range(_ANTHROPIC_HITL_MAX_TOOL_TURNS):
-        response = await adapter.client.messages.create(model=model, **kwargs)
+        # Construct, then mark, then await (codex R7 [P2-1] — see the sink
+        # docstring): a call-time SDK argument rejection stays PRE-wire.
+        pending = adapter.client.messages.create(model=model, **kwargs)
+        _mark_wire_reached(wire_sink)
+        response = await pending
         tool_use_blocks = _anthropic_tool_use_blocks(response)
         if not tool_use_blocks:
             return _anthropic_response_bundle(response, payload, model, kwargs)
@@ -3374,6 +3547,7 @@ async def _dispatch_anthropic_with_memory(
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with Memory tool inner loop (U-RT-81).
 
@@ -3394,6 +3568,19 @@ async def _dispatch_anthropic_with_memory(
         payload, system, upstream, frozen_tool_superset, cache_ttl, memory_packet
     )
 
+    # B-87 — the adapter call itself lives inside `execute_with_memory_callbacks`,
+    # so the boundary is not this module's to mark: the helper owns it and takes
+    # the mark as `on_wire`, firing it immediately before its first awaited
+    # `messages.create` (codex R5 [P2-1]). Marking HERE instead would be a lie
+    # whenever the helper's own pre-send work raises — an opaque
+    # `params["messages"] = None` override makes its `messages`/`other_kwargs`
+    # split raise from `list(None)` with no request ever sent, and the arm's
+    # `finally` would still report an `injection` with the packet's hash.
+    #
+    # Everything above this line is likewise covered — `resolve_backend`'s
+    # `MemoryBackendResolutionError` as much as `_payload_to_anthropic_kwargs`'s
+    # translate raise — which is why the emitter classifies by locus
+    # (`pre_wire_failure`) and not by phase (codex R1 [P2]).
     response = await execute_with_memory_callbacks(
         adapter=adapter,
         model=model,
@@ -3402,6 +3589,7 @@ async def _dispatch_anthropic_with_memory(
         backend_enum=configured_backend,
         tracer=tracer,
         context_editing_active=context_editing_active,
+        on_wire=lambda: _mark_wire_reached(wire_sink),
     )
 
     return _anthropic_response_bundle(response, payload, model, kwargs)
@@ -3417,6 +3605,7 @@ async def _dispatch_anthropic(
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
     cache_ttl: CacheTTL = DEFAULT_CACHE_TTL,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch — ``client.messages.create(...)``.
 
@@ -3427,7 +3616,11 @@ async def _dispatch_anthropic(
     kwargs = _payload_to_anthropic_kwargs(
         payload, system, upstream, frozen_tool_superset, cache_ttl, memory_packet
     )
-    response = await adapter.client.messages.create(model=model, **kwargs)
+    # Construct, then mark, then await (codex R7 [P2-1] — see the sink
+    # docstring): a call-time SDK argument rejection stays PRE-wire.
+    pending = adapter.client.messages.create(model=model, **kwargs)
+    _mark_wire_reached(wire_sink)
+    response = await pending
 
     return _anthropic_response_bundle(response, payload, model, kwargs)
 
@@ -3440,6 +3633,7 @@ async def _dispatch_openai(
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
     """OpenAI provider branch — ``client.chat.completions.create(...)``.
 
@@ -3450,7 +3644,11 @@ async def _dispatch_openai(
     kwargs = _payload_to_openai_kwargs(payload, system, upstream)
     if memory_packet is not None:
         _fold_memory_packet_into_system(kwargs, memory_packet)
-    response = await adapter.client.chat.completions.create(model=model, **kwargs)
+    # Construct, then mark, then await (codex R7 [P2-1] — see the sink
+    # docstring): a call-time SDK argument rejection stays PRE-wire.
+    pending = adapter.client.chat.completions.create(model=model, **kwargs)
+    _mark_wire_reached(wire_sink)
+    response = await pending
     return _openai_response_bundle(response)
 
 
@@ -4096,6 +4294,7 @@ async def _dispatch_ollama(
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
     """Ollama provider branch — ``client.chat(...)``.
 
@@ -4110,7 +4309,11 @@ async def _dispatch_ollama(
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     if memory_packet is not None:
         _fold_memory_packet_into_system(kwargs, memory_packet)
-    response = await adapter.client.chat(model=model, **kwargs)
+    # Construct, then mark, then await (codex R7 [P2-1] — see the sink
+    # docstring): a call-time SDK argument rejection stays PRE-wire.
+    pending = adapter.client.chat(model=model, **kwargs)
+    _mark_wire_reached(wire_sink)
+    response = await pending
     return _ollama_response_bundle(response)
 
 
@@ -4125,6 +4328,7 @@ async def _dispatch_ollama_with_standard_memory_tools(
     step_id: str,
     degraded_sink: _DegradedMemoryServeSink,
     unserved_sink: _UnservedMemoryToolCallsSink,
+    wire_sink: _ProviderWireReachedSink,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     max_iterations: int = 16,
@@ -4148,6 +4352,12 @@ async def _dispatch_ollama_with_standard_memory_tools(
     back whole — a strictly later point in the loop than the R5 fallback above
     it, which returns at ``iteration == 0`` before any ``tool_calls`` exist, so
     the two sinks can never both be written on one dispatch.
+
+    ``wire_sink`` (B-87) is passed THROUGH to the R5 bare retry and is
+    deliberately NOT marked for this loop's own calls: those carry the tools,
+    not the packet, and the R5 disposition is published only after the first of
+    them has already FAILED. Marking here would report a pre-wire failure of the
+    packet-carrying retry as post-wire.
     """
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     kwargs["tools"] = _ollama_tools_with_standard_memory(kwargs.get("tools"), memory_context)
@@ -4211,6 +4421,7 @@ async def _dispatch_ollama_with_standard_memory_tools(
                 system=system,
                 upstream=upstream,
                 memory_packet=degraded.rendered,
+                wire_sink=wire_sink,
             )
             return (bare_response, bare_usage)
         # See the OpenAI arm — every turn's usage is folded in before exit.
@@ -4485,6 +4696,31 @@ def _ollama_standard_memory_tools(memory_context: RuntimeMemoryContext) -> list[
     return tools
 
 
+def _adapter_accepts_on_wire(adapter: _ExternalCLIProviderLike) -> bool:
+    """Does this adapter's ``dispatch_text`` take the B-87 ``on_wire`` callback?
+
+    `_ExternalCLIProviderLike` is `@runtime_checkable`, and a runtime-checkable
+    Protocol's `isinstance` tests METHOD PRESENCE only — never the signature. An
+    adapter written against the pre-B-87 contract `dispatch_text(*, model,
+    prompt)` and injected through `external_cli_construct` or straight into
+    `RuntimeLLMDispatcher` therefore still passes the arm guard at
+    `_dispatch_step`, and an unconditional ``on_wire=`` keyword breaks it with
+    `TypeError` — on EVERY dispatch, degraded memory or not (codex R3 [P2-2]).
+
+    Signature inspection, deliberately NOT `try`/`except TypeError` around the
+    call: a `TypeError` raised from INSIDE a compliant adapter is a real
+    failure, and a retry-without-the-keyword would both swallow it and dispatch
+    the prompt twice.
+
+    Only an EXPLICIT named ``on_wire`` parameter counts (codex R4 [P2]); a bare
+    ``**kwargs`` does NOT, even though passing the keyword would not raise —
+    see `accepts_explicit_on_wire`, the shared predicate this and the adapters'
+    own runner-level check both use so the rule cannot drift between the two
+    seams.
+    """
+    return accepts_explicit_on_wire(adapter.dispatch_text)
+
+
 async def _dispatch_external_cli(
     adapter: _ExternalCLIProviderLike,
     provider: str,
@@ -4494,6 +4730,7 @@ async def _dispatch_external_cli(
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     memory_packet: RenderedMemoryPromptPacket | None = None,
+    wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _ExternalCLIAttrs]:
     """External CLI provider branch — one text prompt, one text response.
 
@@ -4508,7 +4745,40 @@ async def _dispatch_external_cli(
         upstream=upstream,
         memory_packet=memory_packet,
     )
-    result = await adapter.dispatch_text(model=model, prompt=prompt)
+    # B-87 — TWO TIERS of boundary ownership on this arm.
+    #
+    # (1) `on_wire` tier (the shipped adapters). The boundary is INSIDE
+    #     `dispatch_text`, not before it: the adapter validates its own argv
+    #     templates first (a `{prompt}` template under stdin transport raises
+    #     `ExternalCLIOutputError` with zero subprocess calls, codex R2), and
+    #     its runner can still fail to spawn the command (codex R3 [P2-1]). A
+    #     marker set here would report both as provider failures that saw the
+    #     packet. The callback rides down to the runner, which fires it once a
+    #     child process exists.
+    #
+    # (2) Legacy tier (an adapter that does not DECLARE `on_wire`: the pre-B-87
+    #     `dispatch_text(*, model, prompt)` signature, which `@runtime_checkable`
+    #     still admits — codex R3 [P2-2] — and a `**kwargs` forwarder, which
+    #     might swallow the callback rather than fire it — codex R4 [P2]). It
+    #     cannot be TRUSTED with the mark, so the dispatcher keeps the
+    #     PREVIOUS behavior verbatim: mark immediately before the await —
+    #     construct-then-mark-then-await, so that a legacy adapter rejecting
+    #     these keywords at CALL time stays pre-wire (codex R7 [P2-1], the same
+    #     ordering as the direct-SDK arms).
+    #     Truthful for everything this module controls — a translation raise
+    #     above still classifies pre-wire — and its residual window (that
+    #     adapter's own internals) is exactly the pre-B-87 status quo, which is
+    #     strictly better than breaking the adapter with a `TypeError`.
+    if _adapter_accepts_on_wire(adapter):
+        result = await adapter.dispatch_text(
+            model=model,
+            prompt=prompt,
+            on_wire=lambda: _mark_wire_reached(wire_sink),
+        )
+    else:
+        pending = adapter.dispatch_text(model=model, prompt=prompt)
+        _mark_wire_reached(wire_sink)
+        result = await pending
     text = getattr(result, "text", None)
     if not isinstance(text, str):
         raise LLMDispatchPayloadShapeError("external CLI provider result missing string text field")
