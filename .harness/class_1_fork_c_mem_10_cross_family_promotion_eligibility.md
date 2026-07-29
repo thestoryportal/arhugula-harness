@@ -62,49 +62,101 @@ CONTRACT text — C-MEM-10 today has no provenance term at all, and two of the t
 require a discriminator that does not exist at any contract (§3). An implementation choosing any reading on
 its own authority would be silent absorption.
 
-## §2 Current behaviour at HEAD `dd2a8c1a` — permissive, and silent
+## §2 Current behaviour at HEAD `dd2a8c1a` — silent everywhere; permissive only where a future producer or policy makes it so
 
-There are **two** promotion entry points. Neither has a family term.
+There are **two** promotion entry points. Neither has a family term — that is the contract gap, and it is
+unconditioned. But **neither is a live auto-promotion exposure at HEAD**, and this filing is more useful for
+saying so exactly. *(Both sharpenings below came from an out-of-family `just codex-review` R1 pass on the
+first draft of this filing; each was re-verified by direct read before being absorbed. The first draft
+asserted a live model-facing exposure and inferred the hint path's candidate family from the source record;
+both claims were wrong, and both are corrected here rather than quietly dropped.)*
 
-**Entry point 1 — the hint-extraction path.** `PromotionCandidateExtractor.extract_from_records`
+**Entry point 1 — the hint-extraction path. The candidate-side family is PRODUCER-DEFINED, hence UNDEFINED
+today.** `PromotionCandidateExtractor.extract_from_records`
 (`harness-runtime/src/harness_runtime/memory_promotion.py:286-297`) reads hints from a stored record and
-calls `_candidate_from_hint` (`:296`). That builds risk flags with `source_scope=record.envelope.scope`
-(`:626-628`) — i.e. the **composed run scope**, `anthropic` on the witness above. `_scope_escapes_source`
-(`:698-712`) delegates the family comparison to `_family_escapes_source` (`:715-743`), which canonicalizes
-both sides and compares candidate family against **source-record** family. Both are `anthropic`. No
-`CROSS_SCOPE` flag. `_auto_promote_allowed` (`:776-790`) consults `review_required`, `resolution.review_mode`,
-`hint.confidence`, and `hint.proposed_kind` — **no family term, and no risk-flag term** (see the next
-paragraph).
+calls `_candidate_from_hint` (`:296`). Risk flags are built from the **hint**, with
+`source_scope=record.envelope.scope` (`:626-629`) — the composed run scope, `anthropic` on the witness above.
+`_scope_escapes_source` (`:698-712`) delegates the family comparison to `_family_escapes_source`
+(`:715-743`), which canonicalizes both sides. But the **candidate** side it compares is
+`hint.suggested_scope` (`:682`), and `suggested_scope: MemoryScope` (`:191`) is a **required, caller-supplied
+field with no default and no derivation from the record**. Nothing in the pipeline makes it the record's
+family. So the relation between the two families is a property of a producer that does not exist yet:
 
-**Entry point 2 — the live model-facing tool path, which is the sharper one.**
-`MemoryToolExecutor._propose_promotion` (`harness-runtime/src/harness_runtime/memory_tool_executor.py:399-435`)
-serves the C-MEM-14 `memory.propose_promotion` tool (`Spec_Memory_Substrate_v1.md:556`). It reads a source
-record **by reference** (`:408-411`), hardcodes `confidence=PromotionCandidateConfidence.HIGH` (`:423`),
-takes `auto_promote_allowed` from policy alone (`_promotion_auto_allowed`, `:897-903`), and computes
-`risk_flags=_promotion_risk_flags(source)` (`:425`) — which inspects **only** `redaction_state` (`:882-885`).
-No scope comparison of any kind. So the cross-family-captured record is reachable by the *primary-family*
-model on any later same-family turn — a path the C-MEM-13 withhold does not and should not touch, because on
-that turn the acting model is legitimately in-partition.
+- a producer that mirrors the composed run scope supplies `anthropic` — equal to the source, no `CROSS_SCOPE`;
+- a producer that supplies the *dispatched* family (`openai`) **already trips `CROSS_SCOPE`** at `:683`.
 
-**A grounded correction to the obvious "just flag it" framing.** `risk_flags` **gates nothing today**. A
+Neither outcome is a promotion *gate* (see the inert-flag finding below), but the distinction is load-bearing
+for the ask: **which of the two a producer must supply is itself part of what C-MEM-10 owes**, and it cannot
+be read off the code, because there is no producer to read. What *is* settled is `_auto_promote_allowed`
+(`:776-790`): it consults `review_required`, `resolution.review_mode`, `hint.confidence` and
+`hint.proposed_kind` — **no family term, and no risk-flag term**. The path is also **unfed**: the sole
+production caller of `capture_turn_completion` passes `promotion_candidates=()`
+(`harness-runtime/src/harness_runtime/automatic_memory.py:273`), and the extractor is otherwise reached only
+from compaction safety (`memory_compaction_safety.py:159`).
+
+**Entry point 2 — the model-facing tool path. NOT a live auto-promotion exposure at HEAD, for two independent
+reasons.** `MemoryToolExecutor._propose_promotion`
+(`harness-runtime/src/harness_runtime/memory_tool_executor.py:399-435`) serves the C-MEM-14
+`memory.propose_promotion` tool (`Spec_Memory_Substrate_v1.md:556`). It reads a source record **by reference**
+(`:408-411`), hardcodes `confidence=PromotionCandidateConfidence.HIGH` (`:423`), takes `auto_promote_allowed`
+from policy alone (`_promotion_auto_allowed`, `:897-903`), and computes `risk_flags=_promotion_risk_flags(source)`
+(`:425`) — which inspects **only** `redaction_state` (`:882-885`). *That* — no scope comparison of any kind —
+stands. What does **not** stand is treating the path as reachable for a captured record:
+
+1. **The record kind is denied before a candidate is ever constructed.** `_read_retrievable_record_by_ref`
+   (`:554-567`) routes the source record through `resolve_retrieval`, and `_record_kind_allowed`
+   (`harness-is/src/harness_is/memory_policy.py:327-333`) denies any kind outside the policy's
+   `eligible_record_kinds` (`:300-304`). The **sole** production policy — `_policy_from_config`
+   (`automatic_memory.py:532-557`), the only *enabled* `MemoryPolicyDocument` constructed anywhere under
+   `src/` (the other is `DEFAULT_DISABLED_MEMORY_POLICY`, `memory_policy.py:105`, `enabled=False`, which
+   denies everything) — sets that set to `_retrievable_kinds()` (`:560-569`): the seven **promoted/derived**
+   kinds. Every kind the capture path writes is excluded — `EPISODIC_RUN` / `EPISODIC_TURN` / `TOOL_EVENT` /
+   `COMPACTION_EVENT` (`memory_tool_executor.py:769-775`) — which covers the witness's `EPISODIC_TURN` and
+   also `memory.write_note`'s own output (`capture_tool_event`, `record_kind=MemoryRecordKind.TOOL_EVENT`,
+   `memory_capture.py:471-473`). The call raises `MemoryToolExecutionDeniedError` (`:565-566`) before
+   candidate construction at `:417`.
+2. **And an eligible record could not auto-promote either.** `_policy_from_config:542` pins
+   `promotion_decision=PromotionDecision.PROPOSE_SEMANTIC`, and `_promotion_auto_allowed` (`:897-903`)
+   returns True only for `PROMOTE_SEMANTIC` / `PROMOTE_PROCEDURAL`. So `auto_promote_allowed` is False for
+   **every** candidate on this path today and `_propose_promotion` takes the `propose_for_review` branch
+   (`:456`) with `review_required=True`. Eligible records reach review, not durability.
+
+**What the question therefore is, stated exactly.** Not "a live tool auto-promotes cross-family-captured
+content today." It is:
+
+- **Future retrievable-kind records.** `eligible_record_kinds` is a C-MEM-09 **policy** field, not a constant;
+  a policy admitting an episodic kind makes the captured record readable through this tool immediately. And a
+  **second-order** case needs no policy change at all: a semantic/procedural record *already promoted* out of
+  a cross-family leg is an eligible kind by construction, and carries the same unrecorded provenance forward
+  into every later promotion and injection.
+- **Future policy configs.** A deployment setting `PROMOTE_SEMANTIC` / `PROMOTE_PROCEDURAL` with
+  `ReviewMode.AUTOMATIC` — a configuration C-MEM-09 explicitly permits — makes the path auto-promoting, with
+  no family term anywhere for it to consult.
+- **A first hint producer.** The moment one populates `promotion_candidates`, entry point 1 becomes live with
+  its candidate-family convention still unpinned.
+
+**The inert-flag finding — unchanged, and still load-bearing.** `risk_flags` **gates nothing today**. A
 repo-wide grep finds it only at its definition, its two construction sites, and its persistence
 (`memory_promotion.py:175/193/222/576/626/649/672/677`, `memory_tool_executor.py:425/882`); no gating
 predicate reads it. `_review_required` (`memory_promotion.py:762-773`) never consults it, and
-`_auto_promote_allowed` reads `review_required`, not flags. So `CROSS_SCOPE` is **advisory metadata that is
-carried and persisted and never acted on**. Any reading that relies on flagging must therefore state the
-**gate** as well as the flag, or it lands inert — the enforced-vs-advisory distinction the workspace has been
-bitten by before.
+`_auto_promote_allowed` reads `review_required`, not flags. So `CROSS_SCOPE` — including the one a
+dispatch-family hint producer would already trip — is **advisory metadata that is carried and persisted and
+never acted on**. Any reading that relies on flagging must therefore state the **gate** as well as the flag,
+or it lands inert — the enforced-vs-advisory distinction the workspace has been bitten by before.
 
-**Net.** An `openai`-produced record is auto-promotable under the `anthropic` family on exactly the same
-terms as a genuinely same-family record, with no flag, no review, and no record of the provenance anywhere in
-the promotion decision.
+**The §1 witness stands regardless.** Nothing above touches it: it pins the **capture-side** fact — an
+`openai`-produced turn lands as an `anthropic`-family record — which is what makes the C-MEM-10 question
+well-posed at all. The corrections concern what the *promotion* side does with such a record, not whether
+such a record exists.
 
-**Live-ness, stated honestly.** Entry point 2 is live (a model-callable tool). Entry point 1 is structurally
-reachable but currently unfed on the automatic path: the sole production caller of `capture_turn_completion`
-passes `promotion_candidates=()` (`harness-runtime/src/harness_runtime/automatic_memory.py:273`), and the
-extractor is reached from compaction safety (`memory_compaction_safety.py:159`). So the hint path is latent
-today and becomes live the moment a caller populates the field. The exposure is real via entry point 2 and
-latent-but-one-line-away via entry point 1.
+**Net, corrected.** The permissiveness is **structural, not yet exercised**. No family term exists at either
+entry point or in any policy field, and no record of the producing family survives to promotion time (§3).
+Live auto-promotion exposure at HEAD is **nil** — the tool path is closed twice over (by record kind and by
+policy decision), the hint path is unfed and its candidate convention undefined. What is real *now* is the
+contract gap, which a single policy field or a first producer converts into a live exposure with no further
+review. That is precisely why this is a Class 1 spec question and not a Phase 7 bug — and it is also why the
+urgency is **low and the necessity is not**: nothing is leaking today, and nothing prevents it from leaking
+the day a config changes.
 
 ## §3 The prerequisite finding — the pipeline cannot discriminate even if policy said to
 
@@ -291,12 +343,26 @@ still never had the input. That is the *precise* defect the v1.1 change-note ide
 boundary is keyed to, which left the mandate unfalsifiable at the contract level."* Reading A repeats that
 error one contract over.
 
-**Confidence is [MODERATE], not [HIGH], and the reason is stated rather than hidden.** Reading B costs a
-discriminator (§5) that reading A does not, and the live exposure is bounded: the tool path (entry point 2)
-requires `ReviewMode.AUTOMATIC` plus `PROMOTE_SEMANTIC`/`PROMOTE_PROCEDURAL` policy to auto-promote at all,
-and the hint path is currently unfed. An operator who wants minimum commitment now could legitimately take
-**A as an interim** — but if so it should be recorded as an *interim with B named as the target*, not as a
-discharge. What must not happen is the third outcome: leaving it silent a second time.
+**Confidence is [MODERATE], not [HIGH], and the R1 corrections at §2 lowered it rather than raised it.**
+Reading B costs a discriminator (§5) that reading A does not, and the live exposure it buys down is — on the
+corrected reading — **nil at HEAD**, not merely bounded: the tool path is denied twice over (the capture
+kinds are outside the sole production policy's `eligible_record_kinds`, and that policy pins
+`PROPOSE_SEMANTIC`, so no candidate on that path is auto-promotable at all), and the hint path is unfed with
+its candidate-family convention still undefined. B's case therefore rests entirely on the *contract*
+argument above — which is unweakened, because the argument was never that content is leaking today; it is
+that C-MEM-10 would be committing to a permissiveness the policy layer has never evaluated.
+
+**What that changes: A-as-interim is now a materially more defensible operator choice, and this filing says
+so rather than steering.** With zero live exposure, taking A costs nothing *observable* in the interim, while
+B's discriminator (§5) is real work against a path nothing currently exercises — the ordering "state the
+position now, build the mechanism when a producer or a policy makes it live" is coherent, not a dodge. Two
+conditions keep it honest, and both should be recorded with the decision: (a) it is an **interim with B named
+as the target**, not a discharge; and (b) the two triggers that end the interim are named — a policy
+admitting an episodic kind into `eligible_record_kinds` (or setting `PROMOTE_*` with `ReviewMode.AUTOMATIC`),
+and the first caller to populate `promotion_candidates`. Absent (b) the interim silently becomes permanent
+exactly when it stops being safe. B remains the recommendation on the merits; A-as-recorded-interim is now a
+close second rather than a concession. What must not happen is still the third outcome: leaving it silent a
+second time.
 
 If B is selected, take **discriminator (ii)** (§5) — cheaper, no schema extension, no identity movement, and
 it reuses the B-91 tri-state and the B-89 canonicalization authorities verbatim.
@@ -310,7 +376,10 @@ does not delete — C-MEM-03 `:162`).
 
 Decisions owed:
 
-1. **Q1 — A, B, or C** (or "A as a recorded interim, B as the target").
+1. **Q1 — A, B, or C** (or "A as a recorded interim, B as the target" — which, per §7, the corrected
+   zero-live-exposure picture makes a materially defensible choice, provided the two interim-ending triggers
+   are recorded with it: an `eligible_record_kinds` / `PROMOTE_*` policy change, and the first caller to
+   populate `promotion_candidates`).
 2. **Q2, only if B or C** — discriminator (i) new field or (ii) C-MEM-08 ledger join. Recommendation: (ii).
 
 Per root `CLAUDE.md` §12.4.1, this filing drove the question to its genuine gate: the grounding, the witness,
