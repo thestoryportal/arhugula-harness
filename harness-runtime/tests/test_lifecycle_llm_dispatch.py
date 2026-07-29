@@ -3340,13 +3340,65 @@ async def test_b83_provider_rebound_context_is_reported_but_never_served() -> No
     # `denied`, mirroring the primary DENIAL span's own convention.
     assert attrs["memory.cli_profile"] == "codex"
     assert attrs["memory.policy.decision"] == "provider_scope_mismatch"
-    # B-91 Q1 (decided) — the SCOPE-MISMATCH family DOES carry `policy_denial`.
-    # The withhold is contract-MANDATED (`Spec_Memory_Substrate_v1.md:509` MUST
-    # NOT, `:523` invariant) and `:511` files the record under C-MEM-19's
-    # existing coverage list, whose only fitting item is "Policy denial"
-    # (`:683`); the failure-class vocabulary (`:703`) is scoped by outcome kind,
-    # not by which component decided.
-    assert attrs["memory.failure_class"] == "policy_denial"
+    # B-91 codex R1 [P2-1] — the IDENTITY guard carries NO failure class. It
+    # fires on any rebound provider KEY and never resolves a family, so it
+    # cannot have confirmed the cross-FAMILY condition C-MEM-13 mandates the
+    # withhold for; `policy_denial` here would claim a determination the branch
+    # did not make. (Anthropic-composed-against-openai happens to be
+    # cross-family in fact, but that is not what this branch tested — see
+    # `test_b91_same_family_provider_rebind_is_not_a_policy_denial` for the
+    # same-family rebind that makes the over-claim visible.) The withholding is
+    # unchanged: the branch is still REPORT-ONLY and `policy.decision` still
+    # names the gate verbatim.
+    assert "memory.failure_class" not in attrs, (
+        "an identity-guard withhold is not a confirmed cross-family policy denial"
+    )
+
+
+@pytest.mark.asyncio
+async def test_b91_same_family_provider_rebind_is_not_a_policy_denial() -> None:
+    """B-91 codex R1 [P2-1] — a SAME-FAMILY rebind is a safety guard, not a denial.
+
+    `codex` and `openai` both resolve to `ProviderFamily.OPENAI`
+    (`cross_family_cost_tag.py` `_PROVIDER_FAMILY_BY_PROVIDER`), so a
+    statically-injected context composed for `codex` and rebound to `openai` by
+    `RetryBreakerFallbackDispatcher` trips the provider-IDENTITY conjunct while
+    C-MEM-13 — which withholds across FAMILIES (`Spec_Memory_Substrate_v1.md:509`,
+    `:523`) — mandates nothing whatsoever here. The withhold is a stale-context
+    safety guard, and classifying it `policy_denial` would report an operator
+    policy decision that no policy made.
+
+    The isolating witness: no other test exercises the identity branch with
+    families that agree, so an unconditional `policy_denial=True` there passes
+    every other assertion in the file. This one kills it while leaving the
+    WITHHOLDING itself (tools + packet, both absent) fully asserted.
+    """
+    client = _OpenAIClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(client)},
+        tracer_provider=tp,
+        # Composed for codex; rebound to openai — one family, two provider keys.
+        memory_context=_b83_memory_context(provider="codex"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    call = client.chat.completions.calls[0]
+    assert "tools" not in call, "the identity guard still withholds the schemas"
+    serialized = json.dumps(call["messages"])
+    assert _B83_SECTION_TEXT not in serialized, "and still withholds the packet text"
+
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.degraded_serve.reason"] == "provider_scope_mismatch"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert attrs["memory.policy.decision"] == "provider_scope_mismatch"
+    assert "memory.failure_class" not in attrs, (
+        "same-family rebind: both keys resolve to ProviderFamily.OPENAI, so no "
+        "cross-family policy denial was ever determined"
+    )
 
 
 @pytest.mark.asyncio
@@ -3424,6 +3476,12 @@ async def test_u_mem_26_cross_family_ollama_dispatch_withholds_tools_and_packet(
     # under its "policy denial" coverage item (`:683`). The two attributes answer
     # different questions: `policy.decision` names WHICH gate closed, and
     # `failure_class` says WHAT KIND of event it was.
+    #
+    # This is the CONFIRMED case, and the only shape that earns the class after
+    # codex R1: both families resolve — the scope side to `ProviderFamily.OPENAI`
+    # (the fixture's `record_scope.provider_family`), the dispatch side to
+    # `LOCAL_OPEN_WEIGHT` (`ollama` is registered) — and they are unequal, so
+    # `_packet_scope_family_relation` returns CONFIRMED_MISMATCH.
     assert attrs["memory.policy.decision"] == "provider_family_scope_mismatch"
     assert attrs["memory.failure_class"] == "policy_denial"
 
@@ -3512,6 +3570,13 @@ async def test_b86_unregistered_provider_key_fails_closed_against_local_scope() 
     assert attrs["memory.operation.name"] == "denial"
     assert attrs["memory.access_mode"] == "no_memory_access"
     assert "memory.packet_hash" not in attrs
+    # B-91 codex R1 [P2-2] — UNVERIFIABLE, not confirmed-unequal. The provider
+    # key is UNREGISTERED, so its family never resolved and nothing was ever
+    # compared; the withhold is fail-closed validation. Reporting it as
+    # `policy_denial` would misattribute a validation state to operator policy.
+    assert "memory.failure_class" not in attrs, (
+        "an unresolvable provider family is unknown, not a confirmed cross-family denial"
+    )
 
 
 @pytest.mark.asyncio
@@ -3550,6 +3615,14 @@ async def test_b83_absent_record_scope_fails_closed_to_report_only() -> None:
     assert attrs["memory.operation.name"] == "denial"
     assert attrs["memory.access_mode"] == "no_memory_access"
     assert "memory.packet_hash" not in attrs
+    # B-91 codex R1 [P2-2] — with NO `record_scope` there is no family to
+    # resolve on the packet side, so `_packet_scope_family_relation` returns
+    # UNVERIFIABLE and the class stays unset. `policy.decision` still names the
+    # gate verbatim, so the withhold remains fully visible without claiming a
+    # cross-family determination nobody reached.
+    assert "memory.failure_class" not in attrs, (
+        "an absent record scope is unverifiable, not a confirmed cross-family denial"
+    )
 
 
 # ---------------------------------------------------------------------------
