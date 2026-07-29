@@ -16,10 +16,9 @@ import asyncio
 import inspect
 import json
 import os
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
-from weakref import WeakKeyDictionary
 
 from harness_runtime.types import (
     ExternalCLIPromptTransport,
@@ -230,21 +229,18 @@ def accepts_explicit_on_wire(target: Callable[..., Any] | None) -> bool:
     )
 
 
-#: Wire-awareness verdicts, keyed by runner CLASS — a `run` signature is a
-#: property of the class, so one `inspect.signature` per runner type replaces
-#: one per dispatch. Weak keys so a test-local runner class does not pin its
-#: module. An instance that shadows `run` per-instance shares its class's
-#: verdict; at worst that selects the fallback tier below, which is truthful.
-_RUNNER_WIRE_AWARENESS: MutableMapping[type[Any], bool] = WeakKeyDictionary()
-
-
 def _runner_accepts_on_wire(runner: ExternalCLISubprocessRunner) -> bool:
-    runner_type = type(runner)
-    cached = _RUNNER_WIRE_AWARENESS.get(runner_type)
-    if cached is None:
-        cached = accepts_explicit_on_wire(getattr(runner, "run", None))
-        _RUNNER_WIRE_AWARENESS[runner_type] = cached
-    return cached
+    """Inspect THIS runner's bound `run`, per dispatch (B-87, codex R5 [P2-2]).
+
+    Deliberately uncached. A verdict memoized per runner CLASS is wrong: `run`
+    can be shadowed per instance, so two instances of one class can disagree,
+    and whichever dispatched first would decide for both — handing ``on_wire=``
+    to a legacy callable (`TypeError`, the inference dies) or withholding it
+    from a wire-aware one (precision silently lost). One `inspect.signature`
+    is microseconds against a subprocess spawn; the cache bought nothing and
+    cost correctness.
+    """
+    return accepts_explicit_on_wire(getattr(runner, "run", None))
 
 
 async def _run_with_wire_boundary(

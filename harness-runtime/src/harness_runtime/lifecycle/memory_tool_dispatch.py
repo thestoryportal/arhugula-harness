@@ -42,7 +42,7 @@ of scope for this arc per FM-2.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, cast
 
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
@@ -386,6 +386,7 @@ async def execute_with_memory_callbacks(
     tracer: Any,
     context_editing_active: bool,
     max_iterations: int = 16,
+    on_wire: Callable[[], None] | None = None,
 ) -> Mapping[str, Any]:
     """Harness-authored inner loop (mechanism β) wrapping `messages.create`.
 
@@ -407,7 +408,17 @@ async def execute_with_memory_callbacks(
     runaway tool-use sequences; matches the spirit of the SDK's
     `tool_runner(max_iterations=...)` param. Default 16 mirrors common
     Anthropic SDK fixture values.
+
+    `on_wire` (B-87, codex R5 [P2-1]) is the caller's reached-the-wire mark,
+    fired ONCE, immediately before the FIRST awaited `messages.create` — i.e.
+    after the `messages` / `other_kwargs` split, which is this helper's only
+    pre-send local work and CAN raise on an opaque `params["messages"]`
+    override (`list(None)`). The caller cannot mark before handing off: its
+    dispatch would then report a packet that never left the process as sent.
+    Later iterations are already post-wire, hence fire-once. `None` — every
+    caller not tracking the boundary — is a no-op.
     """
+    pending_on_wire = on_wire
     messages = list(messages_create_kwargs.get("messages", []))
     other_kwargs: dict[str, Any] = {
         k: v for k, v in messages_create_kwargs.items() if k != "messages"
@@ -415,6 +426,9 @@ async def execute_with_memory_callbacks(
 
     response: Mapping[str, Any] | Any = None
     for _ in range(max_iterations):
+        if pending_on_wire is not None:
+            pending_on_wire()
+            pending_on_wire = None
         response = await adapter.client.messages.create(
             model=model, messages=messages, **other_kwargs
         )

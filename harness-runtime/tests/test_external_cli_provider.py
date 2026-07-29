@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from harness_runtime.lifecycle.external_cli_provider import (
@@ -548,6 +549,112 @@ async def test_legacy_runner_post_spawn_failure_still_reports_post_wire() -> Non
         )
 
     assert notified == ["fired"], "a failure past the handover must not classify as pre-wire"
+
+
+def _per_instance_runner_class() -> type[Any]:
+    """A FRESH runner class whose `run` is chosen per INSTANCE.
+
+    Fresh per call so the two dispatch orderings below cannot contaminate each
+    other through anything the implementation might memoize per class.
+    """
+
+    class _PerInstanceRunner:
+        def __init__(self, *, wire_aware: bool, results: list[CLIProcessResult]) -> None:
+            self.results = results
+            self.calls: list[tuple[tuple[str, ...], str, float]] = []
+            self.fired_in_runner: list[str] = []
+            # The shadowing that makes wire-awareness an INSTANCE property.
+            self.run = self._wire_aware_run if wire_aware else self._legacy_run
+
+        async def _wire_aware_run(
+            self,
+            argv: tuple[str, ...],
+            *,
+            stdin: str,
+            timeout_seconds: float,
+            on_wire: Callable[[], None] | None = None,
+        ) -> CLIProcessResult:
+            if on_wire is not None:
+                on_wire()
+                self.fired_in_runner.append("runner")
+            self.calls.append((argv, stdin, timeout_seconds))
+            return self.results.pop(0)
+
+        async def _legacy_run(
+            self,
+            argv: tuple[str, ...],
+            *,
+            stdin: str,
+            timeout_seconds: float,
+        ) -> CLIProcessResult:
+            self.calls.append((argv, stdin, timeout_seconds))
+            return self.results.pop(0)
+
+    return _PerInstanceRunner
+
+
+def _per_instance_results() -> list[CLIProcessResult]:
+    return [
+        CLIProcessResult(exit_code=0, stdout='{"loggedIn": true}', stderr=""),
+        CLIProcessResult(exit_code=0, stdout='{"result": "OK"}', stderr=""),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_wire_awareness_is_judged_per_runner_instance_not_per_class() -> None:
+    """B-87 (codex R5 [P2-2]) — `run` can be shadowed per instance, so two
+    instances of ONE class can disagree about wire-awareness. A verdict cached
+    by class lets whichever instance dispatched first decide for its siblings,
+    and both directions of that are broken: a legacy instance then receives an
+    `on_wire=` keyword it cannot accept (`TypeError`, the inference dies), or a
+    wire-aware instance is denied the callback it declares (precision silently
+    lost back to the adapter-side fallback). Both orderings are exercised
+    because a class-keyed cache breaks whichever instance is second."""
+    # (a) legacy first — a cache would then withhold the callback from the
+    #     wire-aware sibling.
+    runner_cls = _per_instance_runner_class()
+    legacy = runner_cls(wire_aware=False, results=_per_instance_results())
+    wire_aware = runner_cls(wire_aware=True, results=_per_instance_results())
+
+    legacy_adapter = await construct_claude_code_cli_adapter(_config(), runner=legacy)
+    wire_aware_adapter = await construct_claude_code_cli_adapter(_config(), runner=wire_aware)
+
+    legacy_marks: list[int] = []
+    result = await legacy_adapter.dispatch_text(
+        model="sonnet",
+        prompt="Reply OK",
+        on_wire=lambda: legacy_marks.append(len(legacy.calls)),
+    )
+    assert result.text == "OK", "the legacy instance was dispatched to, not TypeError'd"
+    assert legacy_marks == [1], "and it took the ADAPTER-side fallback mark"
+    assert legacy.fired_in_runner == []
+
+    wire_marks: list[int] = []
+    result = await wire_aware_adapter.dispatch_text(
+        model="sonnet",
+        prompt="Reply OK",
+        on_wire=lambda: wire_marks.append(len(wire_aware.calls)),
+    )
+    assert result.text == "OK"
+    assert wire_aware.fired_in_runner == ["runner"], (
+        "the wire-aware sibling keeps full precision — the RUNNER fires the mark"
+    )
+    assert wire_marks == [1], "past the auth probe, before the inference handover"
+
+    # (b) wire-aware first — a cache would then hand `on_wire=` to the legacy
+    #     sibling and kill the dispatch outright.
+    runner_cls = _per_instance_runner_class()
+    wire_aware = runner_cls(wire_aware=True, results=_per_instance_results())
+    legacy = runner_cls(wire_aware=False, results=_per_instance_results())
+
+    wire_aware_adapter = await construct_claude_code_cli_adapter(_config(), runner=wire_aware)
+    legacy_adapter = await construct_claude_code_cli_adapter(_config(), runner=legacy)
+
+    await wire_aware_adapter.dispatch_text(model="sonnet", prompt="Reply OK", on_wire=lambda: None)
+    result = await legacy_adapter.dispatch_text(
+        model="sonnet", prompt="Reply OK", on_wire=lambda: None
+    )
+    assert result.text == "OK", "the legacy sibling still dispatches after a wire-aware one"
 
 
 @pytest.mark.asyncio

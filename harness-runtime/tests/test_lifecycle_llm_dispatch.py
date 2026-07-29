@@ -4867,11 +4867,23 @@ def _fake_memory_callbacks_module_attr(
 
     The third anthropic variant's adapter call lives INSIDE that helper, so the
     module-level swap is what makes its wire boundary observable from here.
+
+    The double fires `on_wire` before `behaviour()`, exactly where the real
+    helper fires it (immediately before its first awaited `messages.create`,
+    codex R5 [P2-1]) — a double that swallowed the callback would report every
+    post-wire failure staged here as pre-wire.
     """
     calls: list[dict[str, Any]] = []
 
-    async def _fake(*, messages_create_kwargs: dict[str, Any], **_kw: Any) -> Any:
+    async def _fake(
+        *,
+        messages_create_kwargs: dict[str, Any],
+        on_wire: Callable[[], None] | None = None,
+        **_kw: Any,
+    ) -> Any:
         calls.append(dict(messages_create_kwargs))
+        if on_wire is not None:
+            on_wire()
         return behaviour()
 
     monkeypatch.setattr(
@@ -4967,6 +4979,53 @@ async def test_b87_anthropic_memory_variant_post_wire_failure_still_reports_inje
     assert attrs["memory.packet_hash"] == "c" * 64
     assert attrs["memory.degraded_serve.dispatch_outcome"] == "provider_error"
     assert attrs["memory.degraded_serve.provider_error_type"] == "TimeoutError"
+
+
+@pytest.mark.asyncio
+async def test_b87_memory_variant_raise_inside_the_helper_before_its_send_is_pre_wire() -> None:
+    """B-87 (codex R5 [P2-1]) — the residual window the R4 shape left open.
+
+    `execute_with_memory_callbacks` does its own pre-send work (the
+    `messages` / `other_kwargs` split), and that work CAN raise: the accepted
+    opaque `params["messages"]` override merges into the translated kwargs, so
+    `None` makes the helper's `list(...)` raise before any request is built.
+    No SDK call happens, so the packet never left the process — yet with the
+    mark set by the CALLER (the pre-R5 placement) the arm's `finally` reported
+    an `injection` carrying the packet's hash: an over-report of a disclosure
+    that did not occur. The real helper is used here, unpatched, because the
+    ordering under test is INSIDE it.
+    """
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        memory_tool_registry=_FakeMemoryToolRegistry(),
+        deployment_surface="local-development",
+        memory_context=_b83_memory_context(provider="anthropic"),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    with pytest.raises(TypeError):
+        await dispatcher.dispatch(
+            _binding("anthropic"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": [{"type": "memory_20250818", "name": "memory"}],
+                    "params": {"max_tokens": 100, "messages": None},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+    assert adapter.client.messages.calls == [], "no request was ever sent"
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.operation.name"] == "packet_assembly"
+    assert "memory.packet_hash" not in attrs, (
+        "hashing a packet that never left the process over-reports a disclosure"
+    )
+    assert attrs["memory.degraded_serve.dispatch_outcome"] == "pre_wire_failure"
 
 
 @pytest.mark.asyncio

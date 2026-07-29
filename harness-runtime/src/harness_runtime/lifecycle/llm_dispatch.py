@@ -2289,6 +2289,19 @@ class _ProviderWireReachedSink:
     process exists (codex R3 [P2-1]); an adapter that predates the callback
     falls back to the marker-before-the-await placement (`_dispatch_external_cli`).
 
+    DECLINED, on the record (codex R5 [P2-1], second half): moving the plain
+    SDK arms' mark past a vendor client's own parameter validation. On those
+    arms (`anthropic` plain + HITL, `openai`, `ollama`) the mark already sits
+    immediately before the awaited SDK client call — the B-87 contract's own
+    prescribed boundary, "the provider-call boundary, the one place per arm
+    where the adapter is actually invoked". An SDK-INTERNAL, client-side
+    parameter rejection is indistinguishable from a wire failure without
+    instrumenting the vendor SDK's HTTP layer, so such pre-HTTP rejections
+    classify post-wire BY DESIGN: the boundary this marker can honestly claim
+    is OUR last observable point, not the vendor's. Where the last pre-send
+    step is code we DO own, it is marked there instead — hence
+    `execute_with_memory_callbacks`'s ``on_wire``.
+
     Written only by the arm helpers that carry a ``memory_packet`` — i.e. the
     dispatch the disposition describes. The standard-tools loops' OWN calls are
     deliberately NOT marker sites: on the ollama R5 path the tools call has
@@ -3537,18 +3550,18 @@ async def _dispatch_anthropic_with_memory(
     )
 
     # B-87 — the adapter call itself lives inside `execute_with_memory_callbacks`,
-    # so this is the last point THIS module controls before the provider is
-    # reached. It covers EVERY pre-adapter step above — `resolve_backend`'s
+    # so the boundary is not this module's to mark: the helper owns it and takes
+    # the mark as `on_wire`, firing it immediately before its first awaited
+    # `messages.create` (codex R5 [P2-1]). Marking HERE instead would be a lie
+    # whenever the helper's own pre-send work raises — an opaque
+    # `params["messages"] = None` override makes its `messages`/`other_kwargs`
+    # split raise from `list(None)` with no request ever sent, and the arm's
+    # `finally` would still report an `injection` with the packet's hash.
+    #
+    # Everything above this line is likewise covered — `resolve_backend`'s
     # `MemoryBackendResolutionError` as much as `_payload_to_anthropic_kwargs`'s
     # translate raise — which is why the emitter classifies by locus
     # (`pre_wire_failure`) and not by phase (codex R1 [P2]).
-    #
-    # Unlike the external-CLI arm (codex R2 [P2]), this callee needs NO `on_wire`
-    # callback: everything it does before its first awaited `messages.create`
-    # (`memory_tool_dispatch.py:411-420`) is a `messages`/`other_kwargs` split of
-    # the mapping assembled two lines up — no validation, no I/O, nothing that
-    # raises. The residual window is empty, so the marker is truthful here.
-    _mark_wire_reached(wire_sink)
     response = await execute_with_memory_callbacks(
         adapter=adapter,
         model=model,
@@ -3557,6 +3570,7 @@ async def _dispatch_anthropic_with_memory(
         backend_enum=configured_backend,
         tracer=tracer,
         context_editing_active=context_editing_active,
+        on_wire=lambda: _mark_wire_reached(wire_sink),
     )
 
     return _anthropic_response_bundle(response, payload, model, kwargs)

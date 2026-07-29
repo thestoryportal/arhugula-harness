@@ -301,6 +301,84 @@ async def test_callback_wiring_create_invokes_backend(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# B-87 (codex R5 [P2-1]) — the `on_wire` boundary this helper OWNS.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_on_wire_fires_once_immediately_before_the_first_send(tmp_path: Path) -> None:
+    """The caller's dispatch is classified pre-/post-wire by this mark, so it
+    must fire strictly BEFORE the first `messages.create` (a mark set after it
+    would report a real provider failure as pre-wire, losing the packet hash of
+    a genuine disclosure) and exactly ONCE (later loop turns are already
+    post-wire)."""
+    msgs = _FakeMessages(
+        [
+            _FakeAnthropicResponse(
+                content=[
+                    {
+                        "type": "tool_use",
+                        "id": "tu-1",
+                        "name": "memory",
+                        "input": {
+                            "command": "create",
+                            "path": "/memories/notes.txt",
+                            "file_text": "hello",
+                        },
+                    }
+                ],
+                stop_reason="tool_use",
+            ),
+            _FakeAnthropicResponse(
+                content=[{"type": "text", "text": "done"}],
+                stop_reason="end_turn",
+            ),
+        ]
+    )
+    fired_at: list[int] = []
+
+    await execute_with_memory_callbacks(
+        adapter=_FakeAdapter(msgs),
+        model="claude-sonnet-4-5",
+        messages_create_kwargs={"messages": [{"role": "user", "content": "hi"}]},
+        backend=LocalFilesystemMemoryToolBackend(root=tmp_path),
+        backend_enum=MemoryToolStorageBackend.FILESYSTEM,
+        tracer=TracerProvider().get_tracer("test"),
+        context_editing_active=False,
+        on_wire=lambda: fired_at.append(len(msgs.calls)),
+    )
+
+    assert len(msgs.calls) == 2, "the loop really did re-dispatch"
+    assert fired_at == [0], "fired once, with the first send still ahead of it"
+
+
+@pytest.mark.asyncio
+async def test_on_wire_not_fired_when_the_pre_send_split_raises(tmp_path: Path) -> None:
+    """This helper's own pre-send work can raise — an opaque
+    `params["messages"]` override reaches it as `None` and `list(None)` fails
+    before any request exists. Nothing went out, so the mark must stay unset;
+    firing it (or having the caller pre-mark) reports a packet hash for a
+    disclosure that never happened."""
+    msgs = _FakeMessages([])
+    fired: list[str] = []
+
+    with pytest.raises(TypeError):
+        await execute_with_memory_callbacks(
+            adapter=_FakeAdapter(msgs),
+            model="claude-sonnet-4-5",
+            messages_create_kwargs={"messages": None, "max_tokens": 8},
+            backend=LocalFilesystemMemoryToolBackend(root=tmp_path),
+            backend_enum=MemoryToolStorageBackend.FILESYSTEM,
+            tracer=TracerProvider().get_tracer("test"),
+            context_editing_active=False,
+            on_wire=lambda: fired.append("fired"),
+        )
+
+    assert msgs.calls == [], "no request was built, let alone sent"
+    assert fired == []
+
+
+# ---------------------------------------------------------------------------
 # AC #3 — memory.* namespace emission + locked kind bijection.
 # ---------------------------------------------------------------------------
 
