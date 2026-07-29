@@ -3649,6 +3649,136 @@ async def test_u_mem_26_same_family_dispatch_exposure_is_unchanged() -> None:
     assert _degraded_serve_spans(exporter) == [], "a served dispatch is not a degradation"
 
 
+def _scope_family_context(*, provider: str, scope_family: str) -> RuntimeMemoryContext:
+    """A STANDARD_MEMORY_TOOLS context whose scope names `scope_family` LITERALLY.
+
+    `MemoryScope.provider_family` is a plain `str`, and a statically-injected
+    context never runs `compose_for_dispatch`, so an operator-authored one can
+    carry a registered provider KEY (or anything else) where the canonical
+    `ProviderFamily` VALUE belongs. `_b83_memory_context` cannot express that —
+    its `family` parameter is `ProviderFamily`-typed — so the scope is rewritten
+    here after composition.
+    """
+    context = _b83_memory_context(provider=provider)
+    scope = context.record_scope
+    assert scope is not None
+    return context.model_copy(
+        update={"record_scope": scope.model_copy(update={"provider_family": scope_family})}
+    )
+
+
+@pytest.mark.asyncio
+async def test_r2_p2b_raw_provider_key_scope_serves_on_a_same_family_dispatch() -> None:
+    """Codex R2 [P2-b] — a raw registered KEY on the scope is NOT cross-family.
+
+    `_packet_scope_matches_dispatch_family` canonicalized only the PROVIDER side
+    and compared the scope's string RAW, so a static context declaring
+    `provider_family="ollama"` on an ollama dispatch compared `"ollama"` against
+    the canonical `"local_open_weight"`, reported a CROSS-family mismatch, and
+    withheld both the tool schemas and the packet on a dispatch that is plainly
+    same-family. `ollama` is the only registered key in the map whose string is
+    not value-equal to its family, so it is the only key that witnesses this.
+
+    Both sides are now canonicalized, so the two spellings are one value and the
+    exposure is the unchanged same-family exposure.
+    """
+    client = _OllamaClient()
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_scope_family_context(provider="ollama", scope_family="ollama"),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"), _step(), step_context=_step_context()
+    )
+
+    assert len(client.calls) == 1
+    assert len(client.calls[0]["tools"]) == len(MEMORY_TOOL_CONTRACTS), (
+        "a same-family dispatch spelled with the provider key must still be armed"
+    )
+    assert _degraded_serve_spans(exporter) == [], "a served dispatch is not a degradation"
+
+
+@pytest.mark.asyncio
+async def test_r2_p2b_raw_provider_key_scope_still_withholds_across_families() -> None:
+    """Codex R2 [P2-b] — canonicalizing the scope must not collapse the boundary.
+
+    `codex` is a registered key for the OPENAI family. Canonicalized it becomes
+    `"openai"`, which is genuinely cross-family against an ollama dispatch, so
+    the withholding must still fire. A fix that simply canonicalized both sides
+    into equality — or that treated any registered key as matching — passes the
+    same-family witness above and fails here.
+    """
+    client = _OllamaClient()
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_scope_family_context(provider="ollama", scope_family="codex"),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"), _step(), step_context=_step_context()
+    )
+
+    assert len(client.calls) == 1
+    assert "tools" not in client.calls[0], "an OPENAI-family scope may not arm an ollama dispatch"
+    assert executor.requests == []
+    serialized = json.dumps(client.calls[0]["messages"])
+    assert _B83_SECTION_TEXT not in serialized
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1
+    assert dict(spans[0].attributes or {})["memory.degraded_serve.reason"] == (
+        "provider_family_scope_mismatch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_r2_p2b_out_of_domain_scope_value_stays_report_only() -> None:
+    """Codex R2 [P2-b] — the B-86 sentinel semantics MIRROR onto the scope side.
+
+    The existing B-86 witness covers an unregistered PROVIDER key. This is the
+    other half: an unregistered value on the SCOPE, which the canonicalizer
+    answers with `None`. `None` means "family UNKNOWN" and must never compare
+    equal to anything — a fix that fell back to the raw string on a `None`
+    canonicalization would re-open exactly the raw-key comparison this closes.
+    """
+    client = _OllamaClient()
+    executor = _FakeStandardMemoryToolExecutor()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": _OllamaFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_scope_family_context(provider="ollama", scope_family="mystery-provider"),
+        standard_memory_tool_executor=executor,
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama", model="llava-llama3:latest"), _step(), step_context=_step_context()
+    )
+
+    assert len(client.calls) == 1
+    assert "tools" not in client.calls[0]
+    assert executor.requests == []
+    serialized = json.dumps(client.calls[0]["messages"])
+    assert _B83_SECTION_TEXT not in serialized, (
+        "an unprovable scope family must not be served as prompt text either"
+    )
+
+    spans = _degraded_serve_spans(exporter)
+    assert len(spans) == 1, "the withholding is reported, not silent"
+    assert dict(spans[0].attributes or {})["memory.degraded_serve.reason"] == (
+        "provider_family_scope_mismatch"
+    )
+
+
 class _RaisingOllamaClient(_OllamaClient):
     """Raises on EVERY chat call, including the tools-unsupported retry."""
 

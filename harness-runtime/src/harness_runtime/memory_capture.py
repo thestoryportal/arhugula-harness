@@ -153,10 +153,12 @@ class EpisodicMemoryCapture:
         """Bind the capture collaborators.
 
         `record_scope` is the `B-89` writer-side repair: the run's COMPOSED
-        record scope, used verbatim for every record this instance writes. The
-        composed scope is the single authority for what a run captures, so what
-        a run captures and what a run can retrieve share one partition by
-        construction (C-MEM-03 v1.1, "The paired writer-side obligation").
+        record scope, used for every record this instance writes. The composed
+        scope is the single authority for what a run captures, so what a run
+        captures and what a run can retrieve share one partition by
+        construction (C-MEM-03 v1.1, "The paired writer-side obligation"). It
+        is still passed through the write boundary's value domain rather than
+        stored verbatim - a supplied scope is not exempt (`_scope_for_record`).
 
         It defaults to `None` so the residual construction below stays
         available to callers that have no composed scope; that path is bound by
@@ -642,33 +644,35 @@ class EpisodicMemoryCapture:
     ) -> MemoryScope:
         """Return the scope this capture writes under (`B-89` / `B-90`).
 
-        The run's composed `record_scope` wins VERBATIM when it was supplied -
-        it already carries the `ProviderFamily` value plus the `tenant` and
-        `workload_class` fields the independently-constructed scope below omits
-        (`B-90`), and re-deriving any of them per turn is precisely the defect
-        `B-89` names.
+        The run's composed `record_scope` wins when it was supplied - it already
+        carries the `tenant` and `workload_class` fields the independently
+        constructed residual below omits (`B-90`), and re-deriving any of them
+        per turn is precisely the defect `B-89` names. The residual
+        construction is kept for callers with no composed scope.
 
-        The residual construction is kept for callers with no composed scope,
-        but it no longer stores the raw per-dispatch provider key: a registered
-        key is canonicalized to its family value, and an out-of-domain
+        BOTH paths then pass through the SAME canonicalize-or-deny, because
+        this method is the write boundary and a scope arriving from a caller is
+        no more trusted than one built here: a registered provider key is
+        canonicalized to its `ProviderFamily` value, and an out-of-domain
         identifier is REFUSED rather than stored or degraded to `null` (`null`
         is the unpartitioned wildcard, so degrading would widen the record's
-        reach - C-MEM-03 v1.1).
+        reach - C-MEM-03 v1.1). On the composed production path the supplied
+        scope is already canonical and this is a no-op; returning it VERBATIM
+        instead would let any caller persist a raw registered key or an
+        out-of-domain value straight past the value domain.
         """
-        if self._record_scope is not None:
-            return self._record_scope
-        constructed = MemoryScope(
-            project=self._project,
-            workflow=workflow_id,
-            provider_family=provider,
-            cli_profile=cli_profile,
-            visibility=self._visibility,
-        )
-        resolution = resolve_scope_family(constructed)
-        if resolution.family_out_of_domain:
-            raise MemoryCaptureScopeValueDomainError(
-                scope_family_out_of_domain_message(constructed)
+        scope = self._record_scope
+        if scope is None:
+            scope = MemoryScope(
+                project=self._project,
+                workflow=workflow_id,
+                provider_family=provider,
+                cli_profile=cli_profile,
+                visibility=self._visibility,
             )
+        resolution = resolve_scope_family(scope)
+        if resolution.family_out_of_domain:
+            raise MemoryCaptureScopeValueDomainError(scope_family_out_of_domain_message(scope))
         return resolution.scope
 
 

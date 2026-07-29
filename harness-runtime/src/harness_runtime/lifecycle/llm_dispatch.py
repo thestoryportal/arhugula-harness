@@ -129,6 +129,7 @@ from harness_runtime.memory_context import (
     compose_system_prompt_with_memory_packet,
     render_packet_for_degraded_dispatch,
 )
+from harness_runtime.memory_scope_family import canonical_scope_family
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionContext,
     MemoryToolExecutionInputError,
@@ -2312,19 +2313,38 @@ def _packet_scope_matches_dispatch_family(
     question — whether provider-family is the right scope discriminator at all
     — remains open; only the unregistered-key sentinel is settled here.)
 
-    An absent scope, an absent `provider_family`, or an unregistered provider
-    key is treated as NOT matching: `_scope_mismatch` treats a `None` request
-    family as "no constraint", so the packet may hold records of ANY family and
-    nothing here can prove otherwise. Unverifiable is not the same as safe.
+    BOTH sides are canonicalized before they are compared. The provider side
+    reads `provider_family_for_scope_check`; the SCOPE side reads
+    `canonical_scope_family`, which is that same fail-closed authority behind
+    the C-MEM-03 value domain. `MemoryScope.provider_family` is a plain `str`
+    field, and a STATICALLY-injected `RuntimeMemoryContext` (the
+    `memory_runtime`-unbound path, which never runs `compose_for_dispatch`) can
+    therefore carry a registered provider KEY rather than the family VALUE —
+    `provider_family="ollama"` on an ollama dispatch. Comparing that raw string
+    against the canonical `"local_open_weight"` reports a CROSS-family mismatch
+    for a dispatch that is plainly same-family, and both callers then withhold:
+    the guard drops the tool schemas and the disposition refuses the packet.
+    Canonicalizing the scope side makes the two spellings one value.
+
+    An absent scope, an absent `provider_family`, an out-of-domain scope value,
+    or an unregistered provider key is treated as NOT matching: `_scope_mismatch`
+    treats a `None` request family as "no constraint", so the packet may hold
+    records of ANY family and nothing here can prove otherwise. Unverifiable is
+    not the same as safe — the B-86 sentinel semantics hold on the SCOPE side
+    exactly as they do on the provider side, so an unknown value never compares
+    equal to anything.
     """
 
     scope = memory_context.record_scope
     if scope is None or scope.provider_family is None:
         return False
+    scope_family = canonical_scope_family(scope.provider_family)
+    if scope_family is None:
+        return False
     dispatch_family = provider_family_for_scope_check(provider_name)
     if dispatch_family is None:
         return False
-    return scope.provider_family == dispatch_family.value
+    return scope_family == dispatch_family.value
 
 
 def _degraded_serve_disposition(

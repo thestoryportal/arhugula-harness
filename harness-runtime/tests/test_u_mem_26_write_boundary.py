@@ -68,6 +68,12 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.automatic_memory import materialize_automatic_memory_runtime
 from harness_runtime.lifecycle.memory_tool_types import MemoryCallbackIOError
 from harness_runtime.lifecycle.native_memory_adapter import CanonicalNativeMemoryToolBackend
+from harness_runtime.memory_capture import (
+    EpisodicMemoryCapture,
+    MemoryCaptureResult,
+    MemoryCaptureScopeValueDomainError,
+    MemoryCaptureStatus,
+)
 from harness_runtime.memory_compaction_safety import (
     CompactionCandidateDisposition,
     CompactionCandidateDispositionRecord,
@@ -304,6 +310,100 @@ def test_capture_under_unregistered_candidate_key_still_lands_the_composed_famil
     assert scope.provider_family == _OLLAMA_FAMILY
     assert scope.provider_family is not None
     assert scope.provider_family != _UNREGISTERED_KEY
+
+
+def _supplied_scope_capture(
+    tmp_path: Path, *, provider_family: str
+) -> tuple[CanonicalMemoryStore, EpisodicMemoryCapture]:
+    """A capture bound to a HAND-SUPPLIED `record_scope`.
+
+    The composed production path (`_captured_run_scope` above) always hands in
+    an already-canonical scope, so it cannot witness what the write boundary
+    does with one that is not. This builds that case directly.
+    """
+    store = _store(_binding_root(tmp_path))
+    return store, EpisodicMemoryCapture(
+        store=store,
+        actor=_actor(),
+        project="arhugula-v2",
+        record_scope=MemoryScope(
+            project="arhugula-v2",
+            workflow="memory-substrate",
+            workload_class=WorkloadClass.PIPELINE_AUTOMATION.value,
+            tenant=_TENANT,
+            provider_family=provider_family,
+            cli_profile="generic",
+            visibility=MemoryVisibility.WORKFLOW,
+        ),
+    )
+
+
+def _run_start(capture: EpisodicMemoryCapture) -> MemoryCaptureResult:
+    return capture.capture_run_start(
+        run_id="run-u-mem-26",
+        workflow_id="memory-substrate",
+        thread_id=None,
+        provider_route=(_OLLAMA_KEY,),
+        timestamp=_NOW,
+        provider=_OLLAMA_KEY,
+        model="llama3.1",
+        cli_profile="generic",
+        engine_class=None,
+        policy_ref=_POLICY_REF,
+        procedural_snapshot_ref=None,
+    )
+
+
+def test_supplied_record_scope_with_a_raw_key_is_canonicalized_before_it_persists(
+    tmp_path: Path,
+) -> None:
+    """Codex R2 [P2-a] - the supplied scope is NOT trusted past the value domain.
+
+    `_scope_for_record` returned `self._record_scope` VERBATIM, so a caller
+    handing in a registered provider KEY (`ollama`) rather than its
+    `ProviderFamily` VALUE persisted that key straight into the record - the
+    exact raw-key partition the residual path was hardened against, reachable
+    through the other branch. Both branches now share one canonicalize-or-deny.
+    """
+    store, capture = _supplied_scope_capture(tmp_path, provider_family=_OLLAMA_KEY)
+
+    result = _run_start(capture)
+
+    assert result.status is MemoryCaptureStatus.CAPTURED
+    [entry] = [
+        operation
+        for operation in store.read_memory_operations()
+        if operation.operation_kind is MemoryOperationKind.CAPTURE
+    ]
+    [memory_ref] = entry.memory_refs
+    record = store.read_record(memory_ref, MemoryRecordKind.EPISODIC_RUN, run_id=entry.run_id)
+    scope = record.envelope.scope
+    assert scope.provider_family == _OLLAMA_FAMILY
+    assert scope.provider_family != _OLLAMA_KEY
+    # The rest of the SUPPLIED scope survives - canonicalization replaces one
+    # field, it does not fall back to the residual construction (`B-90`).
+    assert scope.tenant == _TENANT
+    assert scope.workload_class == WorkloadClass.PIPELINE_AUTOMATION.value
+
+
+def test_supplied_record_scope_out_of_domain_is_refused_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """Codex R2 [P2-a] - the deny half, and it must deny BEFORE any write.
+
+    `null` is not the fallback (it is C-MEM-03's unpartitioned wildcard, which
+    would WIDEN reach), and neither is storing the identifier verbatim. The
+    refusal must also leave no record and no C-MEM-08 row behind - a denied
+    write that still landed a row would be the worst of both.
+    """
+    store, capture = _supplied_scope_capture(tmp_path, provider_family=_UNREGISTERED_KEY)
+
+    with pytest.raises(MemoryCaptureScopeValueDomainError) as excinfo:
+        _run_start(capture)
+
+    assert _UNREGISTERED_KEY in str(excinfo.value)
+    assert list(store.read_memory_operations()) == []
+    assert not (tmp_path / "memory" / "episodic").exists()
 
 
 def test_captured_scope_round_trips_where_the_pre_repair_scope_does_not(tmp_path: Path) -> None:
