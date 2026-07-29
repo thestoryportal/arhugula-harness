@@ -12,8 +12,9 @@ before code — here reinforced by the fact that the spec *itself* named the que
 it).
 
 All code and spec cites below were re-grounded by direct read at HEAD `dd2a8c1a`, re-verified at
-`6ab41d7f` on the R3 pass, and re-verified again at `ca0cc5a2` on the R4 pass (no code file differs across
-the three HEADs; every R4 cite below was read directly, not carried).
+`6ab41d7f` on the R3 pass, at `ca0cc5a2` on the R4 pass, at `1c99e208` on the R6 pass, and at `d8df7647` on
+the R7 pass (no code file under `harness-*/` differs across those HEADs — every commit on this branch is
+doc-only; every R7 cite below was read directly, not carried).
 
 **Cite convention (Codex R3 [P2-2]).** `Spec_Memory_Substrate_v1.md` is cited **by contract ID + section name
 + a byte-verified quoted fragment**, never by line number. That is the spec's own instruction at its v1.1
@@ -511,6 +512,55 @@ Promotion resolves the record's capture row and reads its `provider`.
      `memory_promotion.py:523-528` — which shares the *identical* `idempotent:{action_id}` spelling) is a
      convention across producers, not a ledger invariant. The matched row must be **confirmed** to be a
      capture row, never assumed to be one; a matched row of any other `operation_kind` is `UNVERIFIABLE`.
+  3. **[R7] A matched row is not, by itself, a row about *this version of* the record — so the join owes a
+     MANDATORY record/ledger coherence check, and the contract must state what that check can and cannot
+     reach.** *(out-of-family `just codex-review` R7 [P1]; upheld and verified by direct read at `d8df7647`.)*
+     The failure is exhibited by a **shipped test**, not hypothesized: in
+     `test_a_divergent_second_run_start_capture_is_not_read_as_completion`
+     (`harness-runtime/tests/test_u_mem_26_write_boundary.py:1602-1662`) a divergent second
+     `capture_run_start` for one `run_id` — reachable because `EpisodicMemoryCapture` is a public API and
+     `LocalAutomaticMemoryRuntime`'s presence guard is not in it — **overwrites `run.json` at
+     `memory_capture.py:730` and only then meets the first call's row at `:732`**. The capture correctly
+     returns `FAILED`, but the durable residue is a record holding **call two's** content beside a single
+     ledger row holding **call one's** `provider`. Reconstructing the (ii-a) key against that record still
+     resolves to exactly **one** `CAPTURE` row carrying a non-`None` provider — so every qualification stated
+     above passes, and the join returns **stale provenance as if it were determined**. None of cases 1-5
+     below catches it.
+
+     **What is checkable, stated exactly, because the precision is the whole of this consequence.** No field
+     on the capture row binds it to a stored-content *version*: `MemoryOperationEntry`
+     (`harness-is/src/harness_is/memory_operation_ledger.py:136-154`) carries no content hash, and the
+     `response_hash` it inherits from `StateLedgerEntry` (`state_ledger_entry_schema.py:164-169`) is computed
+     over **the ledger entry's own** canonical payload (`compute_memory_operation_response_hash`, `:335-338`,
+     over `canonicalize_memory_operation`, `:324-332`), never over the record's content; `memory_refs` carries
+     the `memory_id`, which for `EPISODIC_RUN` is `run_id`-derived and content-independent. **So "bind the row
+     to the stored content hash" is not available at HEAD** — the field does not exist. What *is* available is
+     the set of values `_capture` threads from **one call** into **both** surfaces, which a coherent pair must
+     therefore agree on:
+     `entry.timestamp` ↔ `record.envelope.created_at` (the single `timestamp` argument, to `_record` at
+     `:649-658` and to `_operation_payload` at `:694-707`); `entry.cli_profile` ↔ `content["cli_profile"]`;
+     `entry.engine_class` ↔ `content["engine_class"]` (`_engine_class_value`, `:1122-1125`); `entry.step_id` ↔
+     `content["step_id"]` on the kinds that carry one; and `entry.run_id` ↔ `content["run_id"]`, which is
+     vacuous on this join because the key already derives from it. The `created_at` comparison must be scoped
+     to **dispatch** rows: `repair_capture_operation` takes the repairer's own `datetime.now(UTC)`
+     (`automatic_memory.py:442`), so a repair row never matches it — which costs nothing, because a repair row
+     is already case 5.
+
+     **And the honest bound: this check does not close the case that produced it.** The witness's two calls
+     differ in `workflow_id` / `provider` / `model` / `policy_ref` and agree on `cli_profile`, `engine_class`
+     and `timestamp` — and `provider` / `model` / `policy_ref` / `procedural_snapshot_ref` are **ledger-only**
+     (absent from run-start/run-close content) while `workflow_id` / `thread_id` / `provider_route` /
+     `started_at` / `close_status` are **content-only**, so a divergence confined to either set is invisible
+     to any comparison the two surfaces support. The check catches the divergences that touch a shared value
+     — a real second dispatch at a different wall-clock instant fails the `created_at` comparison — and that
+     is worth mandating; it is **not** a closure. **The spec leg therefore owes an explicit disposition of the
+     residual**, and it has exactly three forms, none of them free: (α) add the record's `content_hash` (or an
+     envelope-version stamp) to the capture row — a **C-MEM-08 closed-schema field addition**, i.e. precisely
+     the schema cost (ii) was preferred for avoiding, and it repairs no already-written row; (β) classify
+     every `EPISODIC_RUN` record as `UNVERIFIABLE` by rule, which is (ii-b) applied to that kind and carries
+     (ii-b)'s stated foreclosure; or (γ) state the residual as accepted — a matched row may describe a
+     superseded version of a multi-writer record, and the determination is reported anyway. **(i-envelope) has
+     no counterpart residual** (see the assessment below): its field ships *inside* the version it describes.
 - **(ii-b) — fail closed on ambiguity.** The alternative: the contract defines no event-qualified key and
   instead states that a record whose join resolves to more than one capture row yields `UNVERIFIABLE` — no
   auto-promotion under reading B. It invents no join semantics, but it is **not** the conservative default it
@@ -530,7 +580,7 @@ Promotion resolves the record's capture row and reads its `provider`.
   ledger scan on `durable/memory_ops.jsonl` (append-only, hash-chained, no index over `memory_refs` **or**
   `action_id`).
 - **The unresolvable set must be specified, and each review round has made it larger — R3 took it from one
-  case to three, R4 takes it to five.** All of:
+  case to three, R4 to five, R7 to six.** All of:
   1. no reachable capture row at all (promotion-authored, compaction-authored, native-adapter-authored, or an
      unreadable ledger);
   2. `stored_capture_event_type` returning `None` — the helper is deliberately strict, *"an absent or non-text
@@ -547,6 +597,12 @@ Promotion resolves the record's capture row and reads its `provider`.
      dispatch that tore, which the repairer is not … a repair row attests that this capture is durable, not
      which dispatch performed it"* (`:916-921`). A **repaired** capture therefore yields *unknown provenance*,
      and must not be read as *same-family* merely because a row was found.
+  6. **[R7]** the matched row **fails the record/ledger coherence check** of consequence 3 above — row and
+     stored record disagree on a value only one call could have written (`envelope.created_at` ↔
+     `entry.timestamp`, `cli_profile`, `engine_class`, `step_id`). The row is then about a *different version*
+     of this record, and its `provider` is not this content's provenance. This case is **detection-bounded,
+     not exhaustive**: a disagreement confined to the ledger-only or the content-only field set passes it,
+     which is the residual consequence 3 requires the spec leg to dispose of explicitly (α / β / γ there).
 
   Plus the ambiguity arm: **any** resolution returning more than one row is `UNVERIFIABLE` (vacuous under the
   (ii-a) key-shaped join, mandatory in the contract regardless — (ii-b) above).
@@ -556,70 +612,100 @@ Promotion resolves the record's capture row and reads its `provider`.
   `UNVERIFIABLE`, where a determination is only reported when it was actually reached). Under reading B the
   honest mapping is `UNVERIFIABLE` → review_required, never auto-promote.
 
-**Assessment, re-run after the R3 and R4 findings — (ii) stands, by a narrower margin each round, and the
-accounting is stated rather than asserted.**
+**Assessment, re-run after R3, R4, R6 and R7 — and the honest outcome is that the two options have LEVELED.
+This filing no longer recommends one; it presents both, with the requirement that would decide between them.**
 
-- **What the findings cost (ii).** The "join key already exists" claim was too clean, twice over. R3: the key
-  is not `memory_refs`, and the one-row-per-record premise was false for the one record kind that has multiple
-  writers. R4: the key is not `action_id` either — the ledger's uniqueness is on `idempotency_key`, and the
-  capture path's deterministic `idempotent:{action_id}` derivation is what makes that key reconstructible from
-  a stored record. The contract now owes **four** things where it originally owed two: the join key stated
-  exactly (the capture `idempotency_key`, composed from the record's own `event_type`; explicitly **not**
-  `memory_refs` and **not** the bare `action_id`), the `operation_kind == CAPTURE` qualification, the
-  five-case `UNVERIFIABLE` set plus its multi-match arm, and the existing cross-contract-dependency sentence.
-- **What they did not cost.** No new field, schema member, enum value, hash input, or identity movement. The
-  event-qualification machinery is *two already-exported helpers whose docstrings name this exact
-  discrimination as their reason for being exported*, and R4's key derivation is a one-line composition over
-  them that the capture writer already performs. This remains a **specification** cost, not a **mechanism**
-  cost — more precise sentences, not more moving parts.
-- **What (i) still costs — restated per variant after the R6 [P2-1] split, because the R4 draft over-charged
-  it.** Both variants pay the closed-schema extension at C-MEM-03 reversing v1.1's own zero-new-field posture
-  one delta later, and both pay the second family-valued field beside `MemoryScope.provider_family`. Only
-  **(i-content)** additionally pays content-hash identity movement; **(i-envelope)** pays none of that, because
-  the envelope is an input to neither `content_hash` nor `memory_id` (§5(i)). Charging identity movement to the
-  whole of (i) over-stated the price of the variant a spec leg would actually pick, and the comparison below is
-  re-run without it.
-- **And (i-envelope) — the cheaper variant, therefore the one the comparison must be run against — does not
-  escape the R3 finding either. This is what keeps the preference from flipping, and it was re-verified
-  directly rather than carried over from the content variant.** `capture_run_close`
-  (`memory_capture.py:337-380`) does not patch a stored record: like every capture it goes through `_record`
-  (`:1015-1046`), which builds a **complete, fresh** `MemoryRecordEnvelope` — including a re-computed
-  `scope=self._scope_for_record(...)` (`:1038-1042`) — and `MemoryStore.write_record` then writes the **whole**
-  canonicalized record, envelope and content together, to the single `run.json` for that run
-  (`harness-is/src/harness_is/memory_store.py:178-188`; `EPISODIC_RUN` is not a JSONL kind, so it takes the
-  `_write_file_atomically` branch at `:186` against `_run_record_path`, `:273-274` / `:290-295`). **So an
-  envelope provenance field set at run-start is overwritten by run-close's independently computed value,
-  exactly as a content field is, and the stored envelope records nothing about which writer set it.** Both
-  variants of (i) therefore resolve the multi-writer ambiguity by the same silent last-writer-wins accident
-  that (ii-a) resolves *deliberately*, off the record's own declared `event_type`. (i)'s "works for a record
-  read in isolation" upside is real for single-writer kinds like `EPISODIC_TURN`; for the multi-writer kind
-  that produced this finding it is **weaker** than (ii-a) under **either** variant, not stronger.
+*The change of shape is deliberate and is stated as a correction, not a softening. R6 struck out (i)'s largest
+stated cost (identity movement, which belongs to the content variant alone) and the preference was re-affirmed
+on one remaining point: that (i-envelope) resolves the multi-writer kind "by silent last-writer-wins accident"
+where (ii-a) resolves it deliberately. **R7 found that point FALSE**, and with it goes the last thing keeping
+the preference in place. Having said at R6 that a struck-out cost would move the balance "and this filing would
+say so," it says so.*
 
-**Preference: unchanged, (ii) with (ii-a) as the join — and R6 is the round that tested it hardest, because it
-struck out (i)'s single largest stated cost.** Stated plainly because the temptation here is to defend the
-prior pick: had event-qualification required new machinery — a new key, a new index, a scan discipline — the
-balance would genuinely have moved toward (i)'s single self-contained field, and this filing would say so. It
-does not. With identity movement removed from the contending variant, the honest remaining ledger is:
-**(i-envelope)** costs a closed-schema field addition at an already-cleared contract, a second family-valued
-field beside `MemoryScope.provider_family`, and every capture writer — and still resolves the multi-writer
-kind by silent accident; **(ii)/(ii-a)** costs four contract sentences and a new cross-contract read
-dependency — and resolves it deliberately, off machinery already exported for exactly this discrimination.
-That is **closer than the R4 accounting made it look**, and this filing says so rather than restating a margin
-it no longer has. It does not cross over, because the one point R6 re-verified rather than removed is the
-deliberateness point, and the multi-writer kind is what the choice turns on. Confidence on the Q2
-recommendation stays **[MODERATE]** and does not recover, because the join's *shape* has now been mis-stated
-**twice** (R3: the wrong field family; R4: the wrong uniqueness guarantee) and the alternative's cost once
-(R6: variant-blind). The corrected mechanics are, if anything, slightly *stronger* than the R3 draft's —
-the ledger really does enforce at-most-one on the key, which the `action_id` claim only asserted — but the
-recurrence is the signal: **the spec leg must state the key exactly, and state what enforces its uniqueness,
-rather than gesture at "the record's capture row."**
+- **What the findings cost (ii) — now five owed things, up from R4's four.** The "join key already exists"
+  claim was too clean, three times over. R3: the key is not `memory_refs`, and the one-row-per-record premise
+  was false for the one record kind that has multiple writers. R4: the key is not `action_id` either — the
+  ledger's uniqueness is on `idempotency_key`, and the capture path's deterministic `idempotent:{action_id}`
+  derivation is what makes that key reconstructible from a stored record. **R7: a matched row is not a row
+  about *this version of* the record** — for `EPISODIC_RUN` nothing on the row binds it to stored content
+  (no content hash; `response_hash` hashes the ledger entry itself; `memory_refs` carries a `run_id`-derived,
+  content-independent id), so a divergent second writer leaves a single, correctly-qualified, non-`None`-provider
+  row that the join reads as determined provenance while the record it describes has been overwritten. The
+  contract now owes: the join key stated exactly; the `operation_kind == CAPTURE` qualification; the
+  **six**-case `UNVERIFIABLE` set plus its multi-match arm; the **mandatory record/ledger coherence check with
+  its detection bound stated**; and an explicit disposition of the residual that check cannot reach
+  (α / β / γ at consequence 3) — plus the cross-contract-dependency sentence.
+- **What they did not cost — with one conditional.** No new field, schema member, enum value, hash input, or
+  identity movement, *provided the spec leg disposes of the R7 residual by (β) or (γ)*. Disposition **(α)**
+  — binding the row to the record's `content_hash` — is a **C-MEM-08 closed-schema field addition**, and it
+  would hand (ii) a schema cost of exactly the kind (i) was charged for. That conditional is new at R7 and
+  must not be elided: "read-side only" is true of (ii-a) *as specified*, not of every honest closure of it.
+- **What (i) costs — per variant, after the R6 [P2-1] split.** Both variants pay the closed-schema extension
+  at C-MEM-03, reversing v1.1's own zero-new-field posture one delta later, and both pay a second
+  family-valued field beside `MemoryScope.provider_family` (a one-source-of-truth hazard). Only **(i-content)**
+  additionally pays content-hash identity movement; **(i-envelope)** pays none of that, because the envelope is
+  an input to neither `content_hash` nor `memory_id` (§5(i)). Both are **forward-only**: a record written
+  before the amendment carries no field, so the pre-amendment corpus is `UNVERIFIABLE` under (i) by
+  construction.
+- **[R7] The multi-writer penalty charged to (i-envelope) at R3/R6 is FALSE, and on that axis (i-envelope) is
+  in fact STRICTLY BETTER than (ii-a).** *(out-of-family `just codex-review` R7 [P2]; upheld and verified by
+  direct read at `d8df7647`.)* The R6 text is mechanically correct that `capture_run_close`
+  (`memory_capture.py:337-380`) goes through `_record` (`:1015-1046`), builds a **complete, fresh**
+  `MemoryRecordEnvelope`, and that `MemoryStore.write_record` writes the **whole** canonicalized record —
+  envelope **and** content together — to the single `run.json`
+  (`harness-is/src/harness_is/memory_store.py:178-188`; `EPISODIC_RUN` takes the `_write_file_atomically`
+  branch at `:186` against `_run_record_path`, `:273-274` / `:290-295`). **What it drew from that is the
+  error.** Envelope and content being written *together, from one call*, is precisely why the field does **not**
+  go stale: the stored `content["event_type"]` says `run_close`, and an envelope provenance field would carry
+  **that same call's** `provider` — the argument `_capture` threads into `_record` at `:649-658`, alongside the
+  content it is describing. The overwrite therefore **preserves** provenance for the version that is stored,
+  which is the identical semantics (ii-a) obtains *indirectly*, by selecting the row that `event_type` names.
+  "Records nothing about which writer set it" is not a defect when the field describes the version it ships
+  inside; the reader is promoting **that** version, not the run's history. And the two diverge in exactly one
+  place — the R7 finding-1 case: with the record overwritten and the row not, **(i-envelope) reads call two's
+  provider (correct for the stored content) while (ii-a) reads call one's (stale)**. The multi-writer kind
+  that R6 said "is what the choice turns on" turns it the other way.
+
+**The comparison, leveled — stated as a ledger rather than a verdict.**
+
+| | **(i-envelope)** | **(ii)/(ii-a)** |
+|---|---|---|
+| Provenance semantics | Same-call: the field ships inside the version it describes; **cannot** go stale relative to it | Event-selected: same answer whenever the row and the stored version agree; **stale** when they do not (R7) |
+| Identity movement | None (envelope is hash-inert) | None |
+| Schema cost | A closed-schema field addition at C-MEM-03, reversing v1.1's zero-new-field posture; a second family-valued field beside `MemoryScope.provider_family` | None **as specified** — but disposition (α) of the R7 residual reintroduces one at C-MEM-08 |
+| Write side | Every capture writer touched | Untouched |
+| Read side | Read one field | Compose the key, scan an unindexed append-only `durable/memory_ops.jsonl`, qualify the row, run the coherence check, handle six `UNVERIFIABLE` cases + the multi-match arm |
+| Cross-contract dependency | None; works for a record read in isolation | New: C-MEM-10 on C-MEM-08 availability + readability |
+| Existing records | **No help** — forward-only; the pre-amendment corpus is `UNVERIFIABLE` by construction | Works on any already-written record that has a row |
+| Aggregate-run provenance ("did *any* leg of this run run cross-family") | **Cannot answer** — a record's envelope carries its own writer's value only | **Can** answer — every capture row for the run is retained, each with its own `provider` (a `run_id`-scoped scan, not the keyed join) |
+| Contract text owed | The field, its value domain, its null semantics, its hash-inertness, its multi-writer disposition, and the reconciliation against `MemoryScope.provider_family` | The five items above |
+
+**The requirement that would decide it, which this filing has NOT established and does not invent.** The two
+columns answer *different questions*, and the fork has never stated which one C-MEM-10 needs:
+
+- If the requirement is **stored-version provenance** — "which dispatch produced the content I am about to
+  promote" — the options are semantically equivalent on the coherent path and **(i-envelope) is strictly more
+  reliable on the incoherent one**, at the price of a closed-schema field and every capture writer.
+- If the requirement is **aggregate-run provenance** — "was any leg of the run that produced this record
+  cross-family" — **(ii) is required**, because the envelope cannot represent it at all. Note this is a
+  *stronger* reading of reading B than the fork has argued for anywhere, and adopting it is itself a decision.
+
+**Confidence on Q2: [MODERATE], and it is now a confidence in the *framing*, not in a pick.** The
+recommendation is withdrawn rather than re-stated, because the one asymmetry it rested on did not survive
+verification. Three rounds have now corrected this comparison — R3 (wrong field family), R4 (wrong uniqueness
+guarantee), R6 (variant-blind cost) — and R7 corrects it twice more, once on each side. That recurrence is the
+signal, and the honest conclusion from it is that **Q2 is a decision for the spec leg to make against its own
+re-grounding and against a stated requirement, not a preference this filing should carry forward.** What the
+filing does carry forward is the mechanics both options must respect: state the key exactly and what enforces
+its uniqueness; state the coherence check and its detection bound; state the residual's disposition; and, under
+(i), state hash-inertness and the forward-only consequence.
 
 ## §6 Recommended drafting targets, per reading
 
 | Reading | Owed spec text |
 |---|---|
 | **A** | **C-MEM-10 Contract** — one paragraph: promotion eligibility is determined by record scope, policy, and evidence, and is not conditioned on the provider family that produced the content during a fallback leg; the run's composed partition (C-MEM-03 §"`MemoryScope.provider_family` value domain and derivation", the continuity sentence) is the whole of the provenance question at this contract. **C-MEM-10 Invariants** — one bullet mirroring it. Nothing else; no C-MEM-08, no C-MEM-03, no plan unit beyond a coverage-matrix row. |
-| **B** | **C-MEM-10 Contract** — the cross-family-captured condition; the risk-flag obligation; and, explicitly, the **gate**: such a candidate is review-required and not auto-promotable (§2's inert-flag finding makes the gate sentence mandatory, not decorative). **C-MEM-10 `PromotionCandidate.risk_flags`** — no schema change needed: the `PromotionCandidate` block's `risk_flags: list<string>` is already an open list, so the new value is a vocabulary addition at the contract, and only the impl-side `PromotionRiskFlag` enum (`memory_promotion.py:80-86`) is closed. **C-MEM-10 Invariants** — the gate as an invariant. **C-MEM-08** — if discriminator (ii), and per the R3 [P2-1] + R4 [P2] findings this is now **four** sentences, not one: (a) the capture row is the authoritative provenance source for promotion, (b) the join is keyed on the capture **`idempotency_key`, composed from the capture `action_id`, which is composed from the record's own declared `event_type`** — explicitly **not** on `memory_refs` (which cannot discriminate a shared-`memory_id` kind) and explicitly **not** on the bare `action_id` (which the ledger does not constrain for uniqueness at all — `append_memory_operation` dedups on `idempotency_key` alone), (c) the matched row must be **qualified** on `operation_kind == CAPTURE` rather than assumed to be a capture row, and (d) the five-case `UNVERIFIABLE` disposition (no reachable row / record cannot name its writer / composed key matches no row / matched row is not a CAPTURE row / matched row carries `provider = None`, the repair-row shape), plus the multi-match ambiguity arm. **or C-MEM-03** — if discriminator (i), and the owed text differs by **variant** per the R6 [P2-1] split: under **(i-envelope)** the new envelope field, its value domain, its null semantics, an explicit statement that it is **hash-inert** (it enters neither `content_hash` nor `memory_id`), and its multi-writer disposition for `EPISODIC_RUN`; under **(i-content)** all of that **plus** the content-hash identity-movement consequence and its forward-only statement. Both also owe the reconciliation against `MemoryScope.provider_family` as a second family-valued field. Plus a memory-plan unit (U-MEM-27) decomposing the impl leg. |
+| **B** | **C-MEM-10 Contract** — the cross-family-captured condition; the risk-flag obligation; and, explicitly, the **gate**: such a candidate is review-required and not auto-promotable (§2's inert-flag finding makes the gate sentence mandatory, not decorative). **C-MEM-10 `PromotionCandidate.risk_flags`** — no schema change needed: the `PromotionCandidate` block's `risk_flags: list<string>` is already an open list, so the new value is a vocabulary addition at the contract, and only the impl-side `PromotionRiskFlag` enum (`memory_promotion.py:80-86`) is closed. **C-MEM-10 Invariants** — the gate as an invariant. **C-MEM-08** — if discriminator (ii), and per the R3 [P2-1] + R4 [P2] + R7 [P1] findings this is now **five** sentences, not one: (a) the capture row is the authoritative provenance source for promotion, (b) the join is keyed on the capture **`idempotency_key`, composed from the capture `action_id`, which is composed from the record's own declared `event_type`** — explicitly **not** on `memory_refs` (which cannot discriminate a shared-`memory_id` kind) and explicitly **not** on the bare `action_id` (which the ledger does not constrain for uniqueness at all — `append_memory_operation` dedups on `idempotency_key` alone), (c) the matched row must be **qualified** on `operation_kind == CAPTURE` rather than assumed to be a capture row, (d) the **six**-case `UNVERIFIABLE` disposition (no reachable row / record cannot name its writer / composed key matches no row / matched row is not a CAPTURE row / matched row carries `provider = None`, the repair-row shape / matched row fails the record-ledger coherence check), plus the multi-match ambiguity arm, and (e) the **mandatory record/ledger coherence check** — the comparable same-call values (`envelope.created_at` ↔ `entry.timestamp` on dispatch rows, `cli_profile`, `engine_class`, `step_id`), its **detection bound** (ledger-only and content-only fields are outside it), and an explicit disposition of the residual it cannot reach (α a C-MEM-08 content-hash binding field / β `EPISODIC_RUN` `UNVERIFIABLE` by rule / γ accepted residual). **or C-MEM-03** — if discriminator (i), and the owed text differs by **variant** per the R6 [P2-1] split: under **(i-envelope)** the new envelope field, its value domain, its null semantics, an explicit statement that it is **hash-inert** (it enters neither `content_hash` nor `memory_id`), the **forward-only** consequence (pre-amendment records carry no field and are `UNVERIFIABLE`), and its multi-writer disposition for `EPISODIC_RUN` — which per R7 is that the field describes **the stored version**, co-written with the content it qualifies, not the run's writer history; under **(i-content)** all of that **plus** the content-hash identity-movement consequence and its own forward-only statement. Both also owe the reconciliation against `MemoryScope.provider_family` as a second family-valued field. Plus a memory-plan unit (U-MEM-27) decomposing the impl leg. |
 | **C** | Everything reading B owes, minus the flag/gate wording, plus a **refusal** invariant at C-MEM-10 and a statement of the permanent consequence (fallback-leg learning is unpromotable). Additionally owes a reconciliation sentence against the C-MEM-03 continuity statement (§"`MemoryScope.provider_family` value domain and derivation") and against the C-MEM-13 capture carve-out (§"Cross-family withholding of standard memory tools"), both of which read against it. |
 
 Under all three readings the Memory threat model needs **no** amendment: its §Threats opener, its
@@ -717,14 +803,20 @@ framing would have let T1 or T2 pass as "not the live one yet." B remains the re
 A-as-recorded-interim is now a close second rather than a concession. What must not happen is still the third
 outcome: leaving it silent a second time.
 
-If B is selected, take **discriminator (ii)** with the **(ii-a) event-qualified join** (§5) — cheaper, no
-schema extension, no identity movement, and it reuses the B-91 tri-state, the B-89 canonicalization
-authorities, and the two already-exported capture-side helpers verbatim. Neither the R3 [P2-1] nor the R4 [P2]
-finding **moved this preference** (§5's re-run assessment states why in full, including the respect in which
-(i) is *worse* than (ii-a) on the R3 finding). Between them they raised (ii)'s owed contract text from one
-sentence to four and its `UNVERIFIABLE` set from one case to five, and they hold the Q2 confidence at
-[MODERATE] because the join's shape has now been mis-stated twice — once in field family, once in what
-enforces its uniqueness.
+**If B is selected, Q2 is a second decision, not a follow-on — and this filing no longer picks it.** Through
+R6 the recommendation was **(ii)** with the **(ii-a) event-qualified join**, held in place by one asymmetry:
+that (i-envelope) resolved the multi-writer kind by silent last-writer-wins accident where (ii-a) resolved it
+deliberately. **R7 [P2] found that asymmetry false** — envelope and content are written *together, from one
+call*, so an envelope provenance field describes exactly the version it ships inside, which is the same
+semantics (ii-a) reaches indirectly through `event_type` — and **R7 [P1] found the reverse asymmetry real**:
+nothing on a capture row binds it to a stored-content *version*, so a divergent second writer leaves (ii-a)
+reading stale provenance from a correctly-qualified single row, a case (i-envelope) cannot have. With the one
+load-bearing point struck out and a counter-point established, the comparison **levels** (§5's re-run
+assessment states the full ledger). The remaining difference is not cost but *question*: (i-envelope) answers
+stored-version provenance more reliably and cannot answer aggregate-run provenance at all; (ii) answers both,
+covers already-written records, and pays a read-side join plus a residual disposition. Which one C-MEM-10 needs
+is a **requirement** this filing has not established and declines to invent. Q2 confidence stays **[MODERATE]**
+and is now confidence in the framing rather than in a pick.
 
 ## §8 Ratification ask — operator decision
 
@@ -743,20 +835,47 @@ Decisions owed:
    and **T3** the first caller to populate `promotion_candidates`. Recording them as *three review-triggers
    with distinct transitions* — rather than as "the policy change" and "the producer" — is what keeps T1 or T2
    from passing later as "not the live one yet.")
-2. **Q2, only if B or C** — discriminator (i) new field or (ii) C-MEM-08 ledger join. Recommendation: **(ii),
-   with the (ii-a) event-qualified join** — the ledger row is selected by the capture **`idempotency_key`**
-   (`idempotent:capture:{event_kind}:{memory_id}`, composed from the record's own declared `event_type`),
-   **not** by `memory_refs`, which cannot discriminate the run-start / run-close rows that share one
-   `EPISODIC_RUN` `memory_id`, and **not** by the bare `action_id`, which the ledger does not dedup on; the
-   matched row is qualified on `operation_kind == CAPTURE`, and the five-case `UNVERIFIABLE` residue plus the
-   multi-match arm fail closed (review_required, never auto-promote). Sub-choice (ii-b) — fail closed on *any*
-   multi-row ambiguity, defining no event-qualified key — is available and needs no new join semantics, but
-   §5 records that it is a de-facto reading **C** for `EPISODIC_RUN` records and must be taken as a stated
-   foreclosure, not as a conservative default.
+2. **Q2, only if B or C — a LEVELED two-option decision, presented without a recommendation.** *(Changed at
+   R7. Through R6 this item carried a **(ii)/(ii-a)** recommendation; R7 struck out the single asymmetry that
+   held it and established one running the other way, so the honest presentation is the ledger, not a pick.
+   The A/B/C reading recommendation at item 1 is **untouched** by this — it never rested on Q2.)* Either
+   option is defensible, and the choice may reasonably be deferred to the spec leg, which re-grounds all
+   mechanics against its own HEAD in any case (§10's cap):
+
+   - **(i-envelope)** — a new hash-inert provenance field on `MemoryRecordEnvelope`. Same-call semantics: the
+     field ships inside the version it describes and cannot go stale relative to it, including in the
+     divergent-second-writer case that defeats the join. No identity movement, no cross-contract dependency,
+     a one-field read side. **Costs:** a closed-schema amendment at C-MEM-03 reversing v1.1's own
+     zero-new-field posture one delta later; a second family-valued field beside `MemoryScope.provider_family`;
+     every capture writer touched; and it is **forward-only** — no help for already-written records.
+     *(Variant **(i-content)** is strictly dominated by it — same benefits, plus content-hash identity
+     movement.)*
+   - **(ii)/(ii-a)** — the event-qualified C-MEM-08 ledger join. The row is selected by the capture
+     **`idempotency_key`** (`idempotent:capture:{event_kind}:{memory_id}`, composed from the record's own
+     declared `event_type`), **not** by `memory_refs` (which cannot discriminate the run-start / run-close rows
+     sharing one `EPISODIC_RUN` `memory_id`) and **not** by the bare `action_id` (which the ledger does not
+     dedup on); the matched row is qualified on `operation_kind == CAPTURE`; the **six**-case `UNVERIFIABLE`
+     residue plus the multi-match arm fail closed (review_required, never auto-promote). Works on
+     already-written records, and is the **only** option that can answer aggregate-run provenance. **Costs:**
+     a new cross-contract read dependency plus an unindexed scan; five owed contract sentences; a mandatory
+     record/ledger coherence check whose **detection bound must be stated**; and an explicit disposition of the
+     residual that check cannot reach — of which (α), binding the row to the record's `content_hash`, is
+     itself a C-MEM-08 closed-schema addition, i.e. (ii) is "read-side only" *as specified*, not under every
+     honest closure.
+   - **Sub-choice (ii-b)** — fail closed on *any* multi-row ambiguity, defining no event-qualified key — is
+     available and needs no new join semantics, but §5 records that it is a de-facto reading **C** for
+     `EPISODIC_RUN` records and must be taken as a stated foreclosure, not as a conservative default.
+
+   **What would decide it, if the operator or the spec leg wants a discriminator rather than a coin-flip:**
+   state the requirement. **Stored-version provenance** ("which dispatch produced the content I am promoting")
+   favours (i-envelope) on reliability; **aggregate-run provenance** ("did any leg of this run run
+   cross-family") *requires* (ii). §5's table is the full ledger.
 
 Per root `CLAUDE.md` §12.4.1, this filing drove the question to its genuine gate: the grounding, the witness,
-the prerequisite mechanics, the drafting targets, and a recommendation are all done. What remains is the
-choice itself, which is a real architectural commitment and not a default.
+the prerequisite mechanics, the drafting targets, and — on Q1 — a recommendation are all done. What remains is
+the choice itself, which is a real architectural commitment and not a default. On Q2 what remains is a
+genuinely leveled pair, and saying so is the honest discharge rather than restating a preference that did not
+survive R7.
 
 ## §9 Routing
 
@@ -770,9 +889,15 @@ and cross-run-persistence bullet, and its model-authored-notes invariant) inside
 which is exactly the shape that earned it on the B-86 spec leg. It has already earned it here: R1 corrected
 two exposure over-claims, R2 corrected the review branch's durability and the §3 data-flow scope, R3
 corrected the §5 join premise, R4 corrected the Reading-A reach rationale and the §5 join key, R5 synced the
-register carriers to the R4 join semantics, and R6 split §5's option (i) into its content and envelope
+register carriers to the R4 join semantics, R6 split §5's option (i) into its content and envelope
 variants — striking identity movement from the contending one — and replaced the single-change exposure
-framing with §2's combination table (this pass).
+framing with §2's combination table, and R7 corrected the Q2 discriminator comparison on both sides at once:
+[P1] the (ii-a) join can accept **stale** provenance from a correctly-qualified single row (nothing on a
+capture row binds it to a stored-content version), which adds a mandatory coherence check, a sixth
+`UNVERIFIABLE` case and an owed residual disposition; and [P2] the multi-writer penalty charged to
+(i-envelope) is **false** (envelope and content are co-written, so the field describes the version it ships
+inside), which removed the last asymmetry holding the (ii) preference and **levelled** Q2 into a two-option
+decision (this pass).
 
 **No Phase 7 execution is halted by this filing.** U-MEM-26 has landed; the question was already scoped out
 of it at `Implementation_Plan_Memory_Substrate_v1.md` U-MEM-26, subsection "Out of scope for this unit:".
@@ -786,9 +911,12 @@ above.
 `deferred-mechanism spec leg exits on soundness, not review-quiet` precedent. This section bounds the review
 surface so a further round has a principled exit rather than an open-ended one.*
 
-**What six rounds converged on, and what they did not touch.** Every round corrected the same class of
-claim — *exposure* and *mechanics* (R6 adds a third: *cost accounting*, which is mechanics applied to the
-comparison rather than to the code) — and no round has touched the filing's substance:
+**What seven rounds converged on, and what they did not touch — restated at R7, because R7 breaks the
+previous version of this claim and the honest move is to say so rather than re-assert it.** Rounds R1-R6
+corrected *exposure* and *mechanics* (R6 adding a third class, *cost accounting* — mechanics applied to the
+comparison rather than to the code) and left the filing's substance untouched. **R7 did not.** It reached the
+Q2 discriminator comparison itself — which §10's own exit condition names as in-scope, altitude-qualifying
+substance — and changed its outcome from a recommendation to a leveled decision:
 
 | Round | What it corrected | Class |
 |---|---|---|
@@ -798,31 +926,47 @@ comparison rather than to the code) — and no round has touched the filing's su
 | R4 | Reading A's reach rationale (promotion is the reach transition, not a durability one); the §5 join key (`idempotency_key`, not `action_id`) | rationale + mechanics |
 | R5 | No fork-body correction — the register carriers (YAML + mirror) synced to the R4 join semantics | carrier sync |
 | R6 | The §5 option-(i) cost accounting (content vs envelope variants: identity movement belongs to the content variant alone, and the envelope variant is the real contender — its `EPISODIC_RUN` overwrite behaviour re-verified rather than inherited); the §2 exposure framing (no single named change creates live auto-promotion — the combination table, and the §7/§8 interim triggers restated with the transition each enables) | cost accounting + exposure |
+| R7 | **[P1]** the (ii-a) join's version-binding: a matched, correctly-qualified, non-`None`-provider row need not be a row about the *stored version* — exhibited by a shipped test — so the join owes a mandatory record/ledger coherence check, a sixth `UNVERIFIABLE` case, and an explicit disposition of the residual that check provably cannot reach. **[P2]** the R3/R6 multi-writer penalty on (i-envelope) is **false** — envelope and content are written together from one call, so the field describes the version it ships inside, which is (ii-a)'s semantics reached directly; and on the divergent case the asymmetry **inverts** in (i-envelope)'s favour. Net: **the Q2 comparison levels and the recommendation is withdrawn** | mechanics + **discriminator outcome** |
 
-**Stable across all six rounds, uncorrected by any of them:** the three READINGS (A / B / C) and their
-respective owed spec text; the recommendation of **B** with discriminator **(ii)/(ii-a)**; the [MODERATE]
-confidence on both Q1 and Q2; the A-as-recorded-interim option, *with* named interim-ending triggers; the §1
-witness; the §8 ratification ask; and the §9 routing. R6 is the sharpest test of that claim so far, because it
-removed (i)'s largest stated cost and the preference still did not move (§5's re-run assessment says so in
-full, and concedes the margin is narrower); what it changed in the interim-trigger option is the *statement* of
-the triggers — from two, to three review-triggers each carrying its own transition — not their existence or
-their role. Five independent out-of-family passes have found nothing against any of the stable items. That is the filing's convergence claim, and it is the one that matters, because
-the artifact this filing owes the operator is a **decision**, not a mechanics reference.
+**Stable across all seven rounds, uncorrected by any of them:** the three READINGS (A / B / C) and their
+respective owed spec text; the recommendation of **B** on Q1; the [MODERATE] confidence on both Q1 and Q2;
+the A-as-recorded-interim option, *with* named interim-ending triggers; the §1 witness; the §8 ratification
+ask *as an ask* (its Q1 item is verbatim; its Q2 item now presents two options instead of one); and the §9
+routing. Six independent out-of-family passes have found nothing against any of those.
+
+**What is NOT stable, stated plainly rather than folded into the list above:** the **Q2 mechanics comparison**.
+It has now been corrected **three times** — R3 (wrong field family), R4 (wrong uniqueness guarantee), R6
+(variant-blind cost accounting) — and R7 corrected it a fourth and fifth time, once on each option, with the
+result that it no longer carries a preference at all. The R6 text claimed the preference "still did not move"
+under the sharpest test yet; R7 is a sharper one, and it moved. Q2 is therefore presented **leveled** — a
+two-option decision for the spec leg — rather than picked. The three A/B/C readings and the operator-facing
+ask remain the filing's substance and remain stable; that is still the artifact this filing owes, and it is
+undamaged by Q2's mechanics having proved to be the unstable part.
 
 **The cap, stated as a rule rather than an enumeration.** Residual mechanics claims not corrected above are
 **bounded by rule, not by exhaustive review**: every mechanics claim in this filing is a claim about code at
-`1c99e208` (the R6 verification HEAD; no file under `harness-*/` differs from the `dd2a8c1a` grounding HEAD or
-from R3's `6ab41d7f` or R4's `ca0cc5a2` — every commit on this branch is doc-only), and the spec leg that
-discharges `B-92` re-grounds all mechanics against its **own** HEAD before
+`d8df7647` (the R7 verification HEAD; no file under `harness-*/` differs from the `dd2a8c1a` grounding HEAD or
+from R3's `6ab41d7f`, R4's `ca0cc5a2` or R6's `1c99e208` — every commit on this branch is doc-only), and the
+spec leg that discharges `B-92` re-grounds all mechanics against its **own** HEAD before
 authoring contract text — the `B-86` → `U-MEM-26` precedent, where the spec leg re-verified the capture-path
 mechanics rather than inheriting the fork doc's. A mechanics error surviving here therefore cannot reach the
 spec: it is caught at the leg that consumes it, by a pass that must read the code anyway. What a further
-review round can still change is only what re-grounding would *not* catch — a defect in a READING, in the
+review round can still change is only what re-grounding would *not* catch — a defect in a READING, in the Q1
 recommendation, or in the ratification ask.
 
-**Consequently, the exit condition for further review of *this filing* is:** a finding that would change the
-A/B/C choice, the Q2 discriminator choice, or the operator-facing ask. Findings below that altitude — a
-mis-cited line, a mechanism detail stated at the wrong precision — should be **registered against the spec
-leg** rather than spun into a seventh correction round here, per the non-convergent-adversarial-hardening
-discriminator (*"does this finding invalidate the carrier's premise?"* — if no, stop). The filing is sound as
-a decision artifact; the mechanics are the spec leg's to re-derive.
+**The exit condition, restated at R7 rather than re-asserted — because R7 satisfied the previous one.** The
+R4-R6 exit condition was: *a finding that would change the A/B/C choice, the Q2 discriminator choice, or the
+operator-facing ask.* R7's [P2] **did** change the Q2 discriminator choice — it dissolved it into a leveled
+pair — so R7 was a legitimate seventh round under the rule as written, not a violation of it. What that
+demonstrates is the rule working, not the rule failing.
+
+**Consequently, and with Q2 no longer carrying a preference to overturn, the exit condition tightens to:** a
+finding that would change the **A/B/C reading**, the **Q1 recommendation of B**, or the **operator-facing
+ask**; or, on Q2, a finding that establishes the missing *requirement* (stored-version vs aggregate-run
+provenance) — the one thing that would restore a principled preference. Findings below that altitude — a
+mis-cited line, a mechanism detail stated at the wrong precision, or a further refinement of a comparison the
+filing now declines to decide — should be **registered against the spec leg** rather than spun into an eighth
+correction round here, per the non-convergent-adversarial-hardening discriminator (*"does this finding
+invalidate the carrier's premise?"* — if no, stop). Q2's mechanics in particular are now **explicitly** the
+spec leg's: it re-derives them against its own HEAD, and it is the leg that must state the requirement anyway.
+The filing remains sound as a decision artifact on its A/B/C substance, which seven rounds have left intact.
