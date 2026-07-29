@@ -2243,15 +2243,22 @@ class _DegradedMemoryServe:
     reason: str
     #: None ⇒ report-only: nothing was served to the model.
     rendered: RenderedMemoryPromptPacket | None
-    #: Did a policy RESOLVER decide this degradation? True exactly when `reason`
-    #: is a `MemoryAccessModeDenialReason` the counterfactual selector actually
-    #: returned (`_SELECTOR_DENIAL_REASON_VALUES`), which is the C-MEM-19
-    #: `POLICY_DENIAL` condition the primary DENIAL span already applies to the
-    #: SAME values (`memory_context.py:210-216`). Carried as DATA from the site
-    #: that KNOWS the reason's provenance, so the emitter never has to re-derive
-    #: it by matching on a string whose value domain is three families wide.
-    #: False for the scope-mismatch conjuncts and for the sentinels — see
-    #: `_emit_degraded_memory_serve_span` for why those stay unset (B-91).
+    #: Did POLICY withhold this memory? True on the two report-only families
+    #: whose withholding is a policy outcome — a `MemoryAccessModeDenialReason`
+    #: the counterfactual selector actually returned
+    #: (`_SELECTOR_DENIAL_REASON_VALUES`, the C-MEM-19 `POLICY_DENIAL` condition
+    #: the primary DENIAL span already applies to the SAME values,
+    #: `memory_context.py:210-216`), and the scope-mismatch conjuncts, whose
+    #: withholding is MANDATED by C-MEM-13 (B-91 Q1, decided 2026-07-29 —
+    #: `Spec_Memory_Substrate_v1.md:511` records the withhold on the C-MEM-19
+    #: surface "whose declared coverage already includes standard memory tool
+    #: calls and policy denial", and `:683` is that coverage item).
+    #:
+    #: Carried as DATA from the site that KNOWS the reason's provenance, so the
+    #: emitter never has to re-derive it by matching on a string whose value
+    #: domain is three families wide. False ONLY for the `not_derived` /
+    #: `prompt_packet_denial_undetermined` sentinels, where nobody decided
+    #: anything — see `_emit_degraded_memory_serve_span` for why (B-91 Q2).
     policy_denial: bool = False
 
 
@@ -2552,17 +2559,26 @@ def _degraded_serve_disposition(
     operator disabled.
     """
 
+    # B-91 Q1 — both scope conjuncts are POLICY denials. The withholding is
+    # contract-MANDATED ("the harness MUST NOT expose the memory tool schemas or
+    # the scope reference", `Spec_Memory_Substrate_v1.md:509`) and the spec files
+    # the record under C-MEM-19's EXISTING coverage list (`:511`), whose only
+    # item this event can be is "Policy denial" (`:683`) — a withheld exposure is
+    # not a tool CALL. `no_memory_access`, what both branches report, is itself
+    # named "a valid policy outcome" at `:522`.
     if memory_context.selection.selected_provider != provider_name:
         return _DegradedMemoryServe(
             selected_access_mode=memory_context.access_mode,
             reason=_DEGRADED_REASON_PROVIDER_SCOPE_MISMATCH,
             rendered=None,
+            policy_denial=True,
         )
     if not _packet_scope_matches_dispatch_family(memory_context, provider_name):
         return _DegradedMemoryServe(
             selected_access_mode=memory_context.access_mode,
             reason=_DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH,
             rendered=None,
+            policy_denial=True,
         )
     packet_denial = memory_context.prompt_packet_fallback_denial
     if packet_denial is not None:
@@ -2678,7 +2694,9 @@ def _emit_degraded_memory_serve_span(
       WITHIN this disposition — see below.
 
     REPORT-ONLY is reached on THREE reason families, and `failure_class` is not
-    uniform across them (merge-gate spec-conformance lens, 2026-07-29):
+    uniform across them (B-91, decided 2026-07-29 — the split is between
+    families whose withholding POLICY caused and the one family where nobody
+    decided anything, NOT between resolver-decided and everything else):
 
     1. the SELECTOR-DENIAL family — a `MemoryAccessModeDenialReason` value
        (`no_supported_mode` / `token_budget_empty`) carried verbatim from
@@ -2692,24 +2710,27 @@ def _emit_degraded_memory_serve_span(
        that knows the reason's provenance, never re-derived by string-matching
        a value domain that spans all three families.
     2. the SCOPE-MISMATCH conjuncts (`provider_scope_mismatch` /
-       `provider_family_scope_mismatch`) — UNSET here, and the question of
-       whether they SHOULD carry `POLICY_DENIAL` is REGISTERED (B-91), not
-       settled. Post-B-86 the withhold is policy-MANDATED
-       (`Spec_Memory_Substrate_v1.md:511` records it on the C-MEM-19 surface
-       "with the denial reason carried as an attribute value"; `:523` states it
-       as a C-MEM-13 invariant; `:559` qualifies C-MEM-14 exposure by it), so
-       the older reading — that no policy decision exists on this branch — is
-       over-stated. What remains genuinely open is whether a CONTRACT-mandated
-       withhold is the same telemetry class as a RESOLVER's denial. Unset is
-       the conservative answer while that is open: adding the attribute later
-       is additive, retracting a wrong one is not.
+       `provider_family_scope_mismatch`) — `POLICY_DENIAL` too (B-91 Q1). The
+       withholding is contract-MANDATED, not an absence of decision: C-MEM-13
+       states it as a MUST NOT (`Spec_Memory_Substrate_v1.md:509`) and an
+       invariant (`:523`), C-MEM-14 qualifies exposure by it (`:559`), and the
+       recording-surface paragraph (`:511`) files the record under C-MEM-19's
+       EXISTING coverage list "whose declared coverage already includes standard
+       memory tool calls and policy denial". A withheld exposure is not a tool
+       CALL, so "Policy denial" (`:683`) is the coverage item being invoked —
+       and `memory.failure_class` is the only required attribute (`:687-698`)
+       whose value domain carries that classification, the same phrase the
+       failure-class invariant uses (`:703`). That vocabulary is scoped by
+       OUTCOME KIND (policy denial / path violation / IO failure / …), never by
+       WHICH component decided, so a contract-mandated withhold and a resolver's
+       denial are one class. `no_memory_access` — what this branch reports — is
+       itself "a valid policy outcome" per `:522`.
     3. `not_derived` (and the `prompt_packet_denial_undetermined` sibling,
        `memory_context.py:48-52`) — a fail-safe NON-decision: nobody ran the
-       counterfactual, so nothing was denied by anyone. UNSET, and deliberately
-       so. That these sentinels nonetheless land on `memory.policy.decision`
-       while being defined as distinct from every `MemoryAccessModeDenialReason`
-       value is the same registered question (B-91) seen from the other side:
-       whether that attribute is the right axis for a non-decision at all.
+       counterfactual, so nothing was denied by anyone and no contract mandated
+       the withhold either. UNSET, and deliberately so: this is the family the
+       `policy_denial` discriminator exists to separate, and no member of the
+       closed failure-class vocabulary describes an underived counterfactual.
 
     C-MEM-19 (`Spec_Memory_Substrate_v1.md:693-694`) requires
     `memory.cli_profile` + `memory.policy.decision` on every memory span.
@@ -2728,8 +2749,22 @@ def _emit_degraded_memory_serve_span(
       DENIAL span's `denial_reason.value`-or-`"denied"` convention. It is a
       free-form attribute VALUE, so it can name the gate on ALL three families
       without asserting a class. `failure_class` cannot: it is a CLOSED enum,
-      so it is set only on the family whose provenance is a resolver decision
-      (family 1 above) and left unset on the other two.
+      so it is set only on the families POLICY withheld (1 and 2 above) and
+      left unset on the sentinel family, where nobody decided anything.
+
+      The SENTINELS ride this attribute verbatim too (B-91 Q2, decided
+      2026-07-29 — keep-as-is). `memory.policy.decision` is REQUIRED on every
+      memory span (`Spec_Memory_Substrate_v1.md:694`), so omitting it on the
+      one branch where no gate closed would drop a required attribute exactly
+      where a reader most needs to know the decision axis was empty. Mapping to
+      a generic `"denied"` — the primary span's own fallback when it has no
+      specific reason — would be the worse lie here: it asserts a denial nobody
+      issued, the same false accusation the per-reason [P2-e] split exists to
+      prevent. Verbatim is truthful on both counts: `not_derived` names no gate
+      (it is defined distinct from every `MemoryAccessModeDenialReason`,
+      `memory_context.py:48-52`, so it can never be misread as one) while the
+      span still reports `no_memory_access` + `record_count=0`, so the
+      degradation is never hidden.
 
     `memory.degraded_serve` + `.reason` + `.selected_access_mode` carry the
     B-83-specific detail. All of it lands on the memory tracer's own span,

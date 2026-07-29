@@ -3340,13 +3340,13 @@ async def test_b83_provider_rebound_context_is_reported_but_never_served() -> No
     # `denied`, mirroring the primary DENIAL span's own convention.
     assert attrs["memory.cli_profile"] == "codex"
     assert attrs["memory.policy.decision"] == "provider_scope_mismatch"
-    # B-91 — the SCOPE-MISMATCH report-only family carries NO `failure_class`.
-    # Post-B-86 the withhold is policy-MANDATED (`Spec_Memory_Substrate_v1.md:511`
-    # / `:523`), so "no policy decision exists here" would be over-stated — but
-    # whether a contract-mandated withhold is the same telemetry CLASS as a
-    # resolver's own denial is registered, not settled. Unset is the conservative
-    # answer, and this assertion is what makes a later flip a deliberate act.
-    assert "memory.failure_class" not in attrs
+    # B-91 Q1 (decided) — the SCOPE-MISMATCH family DOES carry `policy_denial`.
+    # The withhold is contract-MANDATED (`Spec_Memory_Substrate_v1.md:509` MUST
+    # NOT, `:523` invariant) and `:511` files the record under C-MEM-19's
+    # existing coverage list, whose only fitting item is "Policy denial"
+    # (`:683`); the failure-class vocabulary (`:703`) is scoped by outcome kind,
+    # not by which component decided.
+    assert attrs["memory.failure_class"] == "policy_denial"
 
 
 @pytest.mark.asyncio
@@ -3419,6 +3419,13 @@ async def test_u_mem_26_cross_family_ollama_dispatch_withholds_tools_and_packet(
     assert attrs["memory.access_mode"] == "no_memory_access"
     assert attrs["memory.record_count"] == 0
     assert "memory.packet_hash" not in attrs
+    # B-91 Q1 (decided) — this is THE C-MEM-13 cross-family withhold, the exact
+    # event `Spec_Memory_Substrate_v1.md:511` records on the C-MEM-19 surface
+    # under its "policy denial" coverage item (`:683`). The two attributes answer
+    # different questions: `policy.decision` names WHICH gate closed, and
+    # `failure_class` says WHAT KIND of event it was.
+    assert attrs["memory.policy.decision"] == "provider_family_scope_mismatch"
+    assert attrs["memory.failure_class"] == "policy_denial"
 
 
 @pytest.mark.asyncio
@@ -4189,11 +4196,18 @@ async def test_b83_undervied_eligibility_reports_not_derived_not_a_gate_denial()
     assert "system" not in client.messages.calls[0]
     attrs = _one_degraded_serve_span(exporter)
     assert attrs["memory.degraded_serve.reason"] == "not_derived"
-    # B-91 — a NON-decision carries no `failure_class`. The sentinel is defined
-    # to be distinct from every `MemoryAccessModeDenialReason` value precisely so
-    # this stays separable from the selector-denial family one test above, which
-    # DOES carry `policy_denial`. Pinning both sides is what makes the carrier
-    # flag a real discriminator rather than a constant.
+    # B-91 Q2 (decided — keep verbatim). `memory.policy.decision` is REQUIRED on
+    # every memory span (`Spec_Memory_Substrate_v1.md:694`), so it is not omitted
+    # here, and a generic `"denied"` would assert a denial nobody issued. The
+    # sentinel names NO gate — it is defined distinct from every
+    # `MemoryAccessModeDenialReason` (`memory_context.py:48-52`) — so it says
+    # truthfully that the decision axis is empty.
+    assert attrs["memory.policy.decision"] == "not_derived"
+    # B-91 Q1 (decided) — and a NON-decision is the ONE report-only family with
+    # no `failure_class`: nobody denied, and no contract mandated the withhold
+    # either (unlike the scope-mismatch family, which now DOES carry
+    # `policy_denial`). Pinning both sides is what keeps the carrier flag a real
+    # discriminator rather than a constant.
     assert "memory.failure_class" not in attrs
 
 
