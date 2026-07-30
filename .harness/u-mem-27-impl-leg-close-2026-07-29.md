@@ -78,7 +78,10 @@ implementation decision:
 > separable `write_record` call — it is inside the same lock-held region as the write. The
 > store side stays free of promotion semantics (an opaque callable, per carrier-home
 > discipline), and the compared value is the snapshot's decision-bearing projection (`gated`),
-> not raw equality of every per-source tri-state. Scope stated honestly: these are in-process
+> not raw equality of every per-source tri-state. **[SUPERSEDED at Codex round 2 — see the
+> "Codex round 2" section below. The compared value is now the EXACT per-source provenance
+> vector; the projection reading narrowed the plan's literal `:1022` obligation and is
+> retracted. The rest of this quoted paragraph stands.]** Scope stated honestly: these are in-process
 > locks, so the guarantee is exactly as strong as the store's existing write atomicity and
 > makes no cross-process claim. The guard is applied to the activation path only — a
 > `PROPOSED` or `DENIED` write authorizes nothing, so a concurrent source append must not be
@@ -245,3 +248,80 @@ The slice-3b `write_record_guarded` docstring's SCOPE paragraph and the `_commit
 mechanism narration were both corrected in place — the earlier "makes no cross-process claim"
 and "the capture writers do not hold it" statements are now false of the shipped code, and
 carrying them forward would have been a stale-carry.
+
+## Codex round 2 — two P2 findings
+
+A second out-of-family pass returned two findings, both on surfaces this leg owns. Both are
+resolved in code; neither required a spec or plan amendment.
+
+### [P2] The commit binding compared a projection, not the exact provenance — FIXED
+
+The guarded-write precondition compared only the snapshot's `.gated` projection. The plan's
+obligation at `Implementation_Plan_Memory_Substrate_v1.md:1022` is literal and unqualified —
+"the activation write must not commit against a source whose recorded provenance changed after
+the snapshot; on change the invocation fails or retakes the snapshot and re-decides." It says
+*changed*, not *changed the decision*. The projection reading therefore narrowed the contract,
+and two classes of real change committed against a stale snapshot: a single source moving
+`true` -> `unknown` (both gate, same mark), and multi-source changes that preserve the
+worst-value aggregate. **The round-1 "decision-bearing projection" rationale is retracted, not
+defended** — the literal text governs, and the mechanism paragraph quoted earlier in this
+document now carries a bracketed superseded-note pointing here.
+
+Fix: `_EffectiveProvenance` gained a `per_source` field — the tri-state of every cited source,
+positionally aligned with `candidate.source_memory_refs` — and the precondition compares that
+vector. ANY difference is a conflict, surfaced as the existing
+`PromotionProvenanceChangedError` (fail rather than retake-and-re-decide: the simpler of the
+two shapes the plan permits, and the one already wired through the service and its witnesses).
+
+One level down, the same defect was closed with it. `_resolve_source_provenance` now returns
+`CapturedCrossFamily | None`, with `None` marking UNRESOLVABLE, kept DISTINCT from a source
+whose stored value literally is `unknown`. Collapsing the two would have re-introduced a
+compare-a-projection hole: a source that was readable at the snapshot and is unreadable at
+commit HAS changed its recorded provenance, and both readings resolve to `unknown`. `None`
+aggregates exactly as `unknown` does, so no gate, mark, or fail-closed behaviour moves —
+`_aggregate_provenance`'s middle test became "any value that is not `false`", which is the
+same predicate stated over the wider domain.
+
+Test consequences, all three handled explicitly rather than by loosening assertions:
+
+- `test_a_mutation_that_cannot_change_the_decision_still_commits` **encoded the narrowed
+  reading** and is inverted + renamed to
+  `test_a_mutation_that_cannot_change_the_decision_is_still_a_conflict`, asserting the refusal
+  (and that neither store was written), with `:1022` quoted in its docstring and its
+  predecessor named as superseded rather than silently replaced. It refuses even an
+  operator-approved activation — the operator attested to the provenance the snapshot showed
+  them, which is no longer what the store records.
+- `test_one_service_call_resolves_the_cited_source_exactly_once` used a `true` -> `unknown`
+  `after_first_read` mutation that now conflicts before reaching its assertions. Its mutating
+  arm is retired (`mutate_to=None`) and the docstring states why: under the exact binding no
+  mutating arm can reach those assertions, and the resolution COUNTER carries the
+  single-snapshot property unaided — a two-lookup implementation shows 2 whether or not the
+  value moved.
+- Two NEW witnesses pin the cases a re-narrowed implementation could otherwise pass:
+  `test_a_multi_source_change_preserving_the_aggregate_is_a_conflict` (two sources SWAP
+  `true`/`false`; every scalar projection — aggregate, gate, persisted mark — is preserved, so
+  only a vector comparison sees it) and `test_a_source_that_becomes_unresolvable_is_a_conflict`
+  (stored `unknown` becomes unreadable; only the `None`/`unknown` distinction sees it). A new
+  `_RewritingSourceStore` double drives the first through the REAL store, so the precondition
+  re-reads genuinely re-recorded provenance rather than a double's bookkeeping.
+
+Mutation probes, three, each isolating a different half: reverting the precondition to
+`.gated` fails all three binding witnesses; collapsing `None` into `UNKNOWN` in the snapshot
+fails **exactly** `test_a_source_that_becomes_unresolvable_is_a_conflict` and nothing else.
+
+### [P2] Malformed stored sources raising `TypeError` escaped the handler — FIXED
+
+Same class as round 1's [P2], one exception type over: a stored payload that fails
+deserialization on a TYPE rather than a value — a serialized `content_hash` of `null` reaching
+`_bytes32_from_json`, an envelope field of the wrong JSON type — raises `TypeError`, which is
+neither `LookupError`, `ValueError`, nor `OSError`. It escaped `_resolve_source_provenance`
+and, because every decision operation snapshots first, aborted `propose_for_review`, `deny`,
+and operator-approved `approve` alike.
+
+Fixed with a sixth per-branch arm, `except TypeError` -> unresolvable, keeping the written-out
+style. Witness `test_fail_closed_on_a_source_read_that_raises_a_type_error`, parametrized over
+two `TypeError` shapes, asserting the same four outcomes separately as the branch-5 witness.
+Mutation-probed: with the branch removed both arms fail with the raw `TypeError`. The
+`_IOFailingSourceStore` double was moved up to the doubles section (it now has three users)
+and gained a `fail_after` counter, which is what lets one double model "readable at the
+snapshot, unreadable at commit".

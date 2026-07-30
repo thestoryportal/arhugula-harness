@@ -294,6 +294,66 @@ class _MutatingSourceStore:
         return self.inner.append_memory_operation(payload)
 
 
+class _IOFailingSourceStore:
+    """Delegates every effect to a real store, except ONE cited source's read.
+
+    That read raises a filesystem I/O error, which is what the concrete store
+    does when the record is on disk but unreadable - `read_text` on a file whose
+    mode or parent directory denies it, a vanished mount, EMFILE. Modelled at
+    the `PromotionDecisionStore` seam rather than by `chmod`, so the branch is
+    deterministic regardless of the privileges the suite runs under (`chmod`
+    denies nothing to root).
+
+    `fail_after` delays the failure by N successful reads, which turns the same
+    double into a source that was readable at the snapshot and is not at commit.
+    """
+
+    def __init__(
+        self,
+        inner: CanonicalMemoryStore,
+        *,
+        failing: MemoryID,
+        error: Exception,
+        fail_after: int = 0,
+    ) -> None:
+        self.inner = inner
+        self._failing = failing
+        self._error = error
+        self._fail_after = fail_after
+        self.reads = 0
+
+    def read_record(
+        self,
+        memory_id: MemoryID,
+        kind: MemoryRecordKind,
+        *,
+        run_id: str | None = None,
+        audit_mode: bool = False,
+    ) -> MemoryStoreRecord:
+        if memory_id == self._failing:
+            self.reads += 1
+            if self.reads > self._fail_after:
+                raise self._error
+        return self.inner.read_record(memory_id, kind, run_id=run_id, audit_mode=audit_mode)
+
+    def write_record(self, record: MemoryStoreRecord) -> object:
+        return self.inner.write_record(record)
+
+    def write_record_guarded(
+        self,
+        record: MemoryStoreRecord,
+        *,
+        precondition: Callable[[], bool],
+    ) -> object:
+        return self.inner.write_record_guarded(record, precondition=precondition)
+
+    def append_memory_operation(
+        self,
+        payload: MemoryOperationPayload,
+    ) -> MemoryOperationWriteResult:
+        return self.inner.append_memory_operation(payload)
+
+
 def _mutating_store(
     tmp_path: Path,
     *,
@@ -324,21 +384,19 @@ def test_one_service_call_resolves_the_cited_source_exactly_once(
 ) -> None:
     """:1066 - ONE decision-bearing resolution, and gate/mark agreement.
 
-    The source flips `true` -> `unknown` after the first read. Both values gate
-    and both carry the mark, so the mutation cannot change the decision and the
-    call proceeds - which is what makes the COUNTER the load-bearing half here:
-    a two-lookup implementation reads twice before the write and fails outright.
-
-    This deliberately does NOT assert that first-read-wins is correct. A
-    mutation that CROSSES the `false` boundary genuinely changes the decision,
-    and the chosen commit-binding mechanism converts that case into a refusal
-    rather than a divergence - which the commit-binding witness below owns.
+    The cited source is STABLE here, and deliberately so: under the exact
+    per-source commit binding (`:1022`, Codex round 2) ANY mutation between the
+    snapshot and the write is a conflict, so a mutating arm could no longer
+    reach the assertions below. That leaves the COUNTER carrying this witness
+    alone, which it does without help - a two-lookup implementation resolves the
+    source twice before the write and shows 2 here, whether or not the value
+    moved. The mutating arms live in the two commit-binding witnesses below.
     """
 
     store = _mutating_store(
         tmp_path,
         provenance=CapturedCrossFamily.TRUE,
-        mutate_to=CapturedCrossFamily.UNKNOWN,
+        mutate_to=None,
         mutate_at="after_first_read",
     )
     service = _service(store)
@@ -409,13 +467,24 @@ def test_a_source_mutated_before_the_durable_write_does_not_auto_activate(
     assert store.inner.read_memory_operations() == []
 
 
-def test_a_mutation_that_cannot_change_the_decision_still_commits(tmp_path: Path) -> None:
-    """The commit binding is bound to the DECISION, not to raw value equality.
+def test_a_mutation_that_cannot_change_the_decision_is_still_a_conflict(
+    tmp_path: Path,
+) -> None:
+    """:1022 (Codex round 2 [P2]) - the binding is EXACT, not decision-shaped.
 
-    `true` -> `unknown` gates either way and carries the same mark, so refusing
-    it would be a false conflict. Paired with the witness above, this pins the
-    binding at the right width: narrower would miss real changes, wider would
-    refuse commits no reading of the store could have decided differently.
+    The plan's obligation is literal and unqualified: "the activation write must
+    not commit against a source whose recorded provenance changed after the
+    snapshot; on change the invocation fails or retakes the snapshot and
+    re-decides." `true` -> `unknown` gates either way and carries the same mark,
+    so an earlier reading treated it as a false conflict and committed. That
+    narrowed the contract - the plan says "changed", not "changed the decision"
+    - and this witness now pins the inverted outcome. Its predecessor,
+    `test_a_mutation_that_cannot_change_the_decision_still_commits`, encoded the
+    narrowed reading and is superseded by this test, not merely renamed.
+
+    Note the operator attestation: this refuses even an operator-approved
+    activation, because the operator attested to the provenance the SNAPSHOT
+    showed them, which is no longer what the store records.
     """
 
     store = _mutating_store(
@@ -426,14 +495,136 @@ def test_a_mutation_that_cannot_change_the_decision_still_commits(tmp_path: Path
     )
     service = _service(store)
 
-    result = service.approve(
-        _candidate(source_memory_refs=(store.source_memory_id,)),
-        timestamp=_NOW,
-        injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
-        operator_approved=True,
-    )
+    with pytest.raises(PromotionProvenanceChangedError):
+        service.approve(
+            _candidate(source_memory_refs=(store.source_memory_id,)),
+            timestamp=_NOW,
+            injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+            operator_approved=True,
+        )
 
-    assert result.status is SemanticRecordStatus.ACTIVE
+    assert store.written == []
+    assert store.inner.read_memory_operations() == []
+
+
+class _RewritingSourceStore:
+    """Delegates to a real store, rewriting cited sources at the guarded write.
+
+    The multi-source counterpart of `_MutatingSourceStore`'s `at_write` hook:
+    the rewrites land through the REAL store (same content, therefore the same
+    hash-inert `memory_id`, therefore the same path), so the precondition's
+    re-read observes genuinely re-recorded provenance rather than a double's
+    bookkeeping.
+    """
+
+    def __init__(
+        self,
+        inner: CanonicalMemoryStore,
+        *,
+        rewrites: Sequence[MemoryStoreRecord],
+    ) -> None:
+        self.inner = inner
+        self._rewrites = tuple(rewrites)
+        self.written: list[MemoryStoreRecord] = []
+
+    def read_record(
+        self,
+        memory_id: MemoryID,
+        kind: MemoryRecordKind,
+        *,
+        run_id: str | None = None,
+        audit_mode: bool = False,
+    ) -> MemoryStoreRecord:
+        return self.inner.read_record(memory_id, kind, run_id=run_id, audit_mode=audit_mode)
+
+    def write_record(self, record: MemoryStoreRecord) -> object:
+        self.written.append(record)
+        return self.inner.write_record(record)
+
+    def write_record_guarded(
+        self,
+        record: MemoryStoreRecord,
+        *,
+        precondition: Callable[[], bool],
+    ) -> object:
+        for rewrite in self._rewrites:
+            self.inner.write_record(rewrite)
+        self.written.append(record)
+        return self.inner.write_record_guarded(record, precondition=precondition)
+
+    def append_memory_operation(
+        self,
+        payload: MemoryOperationPayload,
+    ) -> MemoryOperationWriteResult:
+        return self.inner.append_memory_operation(payload)
+
+
+def test_a_multi_source_change_preserving_the_aggregate_is_a_conflict(
+    tmp_path: Path,
+) -> None:
+    """:1022 (Codex round 2 [P2]) - the case a scalar comparison cannot see.
+
+    Two cited sources SWAP values (`true`/`false` -> `false`/`true`) between the
+    snapshot and the write. Every scalar projection is preserved - the worst-
+    value aggregate is `true` before and after, the gate is on before and after,
+    the persisted mark is identical - yet BOTH sources' recorded provenance
+    changed. Only a per-source vector comparison detects it, so this is the
+    witness that a re-narrowed implementation cannot pass by widening the
+    compared scalar.
+    """
+
+    inner = _store(tmp_path)
+    first = _stored_source(inner, CapturedCrossFamily.TRUE, tag="first")
+    second = _stored_source(inner, CapturedCrossFamily.FALSE, tag="second")
+    store = _RewritingSourceStore(
+        inner,
+        rewrites=(
+            _semantic_source(CapturedCrossFamily.FALSE, tag="first"),
+            _semantic_source(CapturedCrossFamily.TRUE, tag="second"),
+        ),
+    )
+    service = _service(store)
+
+    with pytest.raises(PromotionProvenanceChangedError):
+        service.approve(
+            _candidate(source_memory_refs=(first, second)),
+            timestamp=_NOW,
+            injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+            operator_approved=True,
+        )
+
+    assert inner.read_memory_operations() == []
+
+
+def test_a_source_that_becomes_unresolvable_is_a_conflict(tmp_path: Path) -> None:
+    """:1022 (Codex round 2 [P2]) - unresolvable is DISTINCT from stored unknown.
+
+    The cited source is stored `unknown` and becomes unreadable before the
+    write. Its resolved tri-state is `unknown` both times, so a vector that
+    collapsed unresolvable into `unknown` would see no change and commit - the
+    same compare-a-projection defect, one level down. The snapshot marks
+    unresolvable as `None`, so the change is seen.
+    """
+
+    inner = _store(tmp_path)
+    source = _stored_source(inner, CapturedCrossFamily.UNKNOWN, tag="vanishing")
+    store = _IOFailingSourceStore(
+        inner,
+        failing=source,
+        error=PermissionError(13, "Permission denied"),
+        fail_after=1,
+    )
+    service = _service(store)
+
+    with pytest.raises(PromotionProvenanceChangedError):
+        service.approve(
+            _candidate(source_memory_refs=(source,)),
+            timestamp=_NOW,
+            injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+            operator_approved=True,
+        )
+
+    assert inner.read_memory_operations() == []
 
 
 # ---------------------------------------------------------------------------
@@ -781,58 +972,6 @@ def test_fail_closed_on_an_unreadable_source_record(tmp_path: Path) -> None:
     assert approved.status is SemanticRecordStatus.ACTIVE
 
 
-class _IOFailingSourceStore:
-    """Delegates every effect to a real store, except the ONE cited source read.
-
-    That read raises a filesystem I/O error, which is what the concrete store
-    does when the record is on disk but unreadable - `read_text` on a file whose
-    mode or parent directory denies it, a vanished mount, EMFILE. Modelled at
-    the `PromotionDecisionStore` seam rather than by `chmod`, so the branch is
-    deterministic regardless of the privileges the suite runs under (`chmod`
-    denies nothing to root).
-    """
-
-    def __init__(
-        self,
-        inner: CanonicalMemoryStore,
-        *,
-        failing: MemoryID,
-        error: OSError,
-    ) -> None:
-        self.inner = inner
-        self._failing = failing
-        self._error = error
-
-    def read_record(
-        self,
-        memory_id: MemoryID,
-        kind: MemoryRecordKind,
-        *,
-        run_id: str | None = None,
-        audit_mode: bool = False,
-    ) -> MemoryStoreRecord:
-        if memory_id == self._failing:
-            raise self._error
-        return self.inner.read_record(memory_id, kind, run_id=run_id, audit_mode=audit_mode)
-
-    def write_record(self, record: MemoryStoreRecord) -> object:
-        return self.inner.write_record(record)
-
-    def write_record_guarded(
-        self,
-        record: MemoryStoreRecord,
-        *,
-        precondition: Callable[[], bool],
-    ) -> object:
-        return self.inner.write_record_guarded(record, precondition=precondition)
-
-    def append_memory_operation(
-        self,
-        payload: MemoryOperationPayload,
-    ) -> MemoryOperationWriteResult:
-        return self.inner.append_memory_operation(payload)
-
-
 @pytest.mark.parametrize(
     "error",
     [PermissionError(13, "Permission denied"), OSError(5, "Input/output error")],
@@ -878,6 +1017,63 @@ def test_fail_closed_on_a_source_read_that_raises_an_io_error(
     assert _FLAG.value in _persisted_risk_flags(inner, proposed)
 
     denied = service.deny(candidate, timestamp=_NOW, reason="unreadable provenance")
+    assert denied.status is SemanticRecordStatus.DENIED
+
+    approved = service.approve(
+        candidate,
+        timestamp=_NOW,
+        injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+        operator_approved=True,
+    )
+    assert approved.status is SemanticRecordStatus.ACTIVE
+    assert _FLAG.value in _persisted_risk_flags(inner, approved)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TypeError("expected SHA-256 digest hex string"),
+        TypeError("stored envelope field has the wrong JSON type"),
+    ],
+    ids=["null-content-hash", "wrong-json-type"],
+)
+def test_fail_closed_on_a_source_read_that_raises_a_type_error(
+    tmp_path: Path,
+    error: TypeError,
+) -> None:
+    """:1090 branch 6 (Codex round-2 [P2]) - a MALFORMED stored source.
+
+    Sibling of branch 5, and the same failure class: a stored payload that fails
+    deserialization on a TYPE rather than a value - a serialized `content_hash`
+    of `null` reaching `_bytes32_from_json`, an envelope field of the wrong JSON
+    type - raises `TypeError`, which is neither a `LookupError`, a `ValueError`,
+    nor an `OSError`. Escaping the handler, it aborts proposals, denials, and
+    operator-approved promotions alike. All four outcomes asserted separately,
+    per-branch.
+    """
+
+    inner = _store(tmp_path)
+    malformed = _stored_source(inner, CapturedCrossFamily.FALSE, tag="malformed")
+    store = _IOFailingSourceStore(inner, failing=malformed, error=error)
+    service = _service(store)
+    candidate = _candidate(source_memory_refs=(malformed,))
+
+    with pytest.raises(PromotionReviewRequiredError):
+        service.approve(
+            candidate,
+            timestamp=_NOW,
+            injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+        )
+
+    proposed = service.propose_for_review(
+        candidate,
+        timestamp=_NOW,
+        injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+    )
+    assert proposed.status is SemanticRecordStatus.PROPOSED
+    assert _FLAG.value in _persisted_risk_flags(inner, proposed)
+
+    denied = service.deny(candidate, timestamp=_NOW, reason="malformed provenance")
     assert denied.status is SemanticRecordStatus.DENIED
 
     approved = service.approve(

@@ -385,6 +385,7 @@ class _EffectiveProvenance(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    per_source: tuple[CapturedCrossFamily | None, ...]
     aggregate: CapturedCrossFamily
     risk_flags: tuple[PromotionRiskFlag, ...]
 
@@ -395,13 +396,14 @@ class _EffectiveProvenance(BaseModel):
         return cross_family_capture_flagged(self.aggregate)
 
 
-def _aggregate_provenance(values: Sequence[CapturedCrossFamily]) -> CapturedCrossFamily:
+def _aggregate_provenance(values: Sequence[CapturedCrossFamily | None]) -> CapturedCrossFamily:
     """Worst-value aggregation across every cited source (C-MEM-10 v1.2).
 
     `true` if ANY resolved source is `true`; else `unknown` if ANY is `unknown`
-    or unresolvable; `false` only when EVERY cited source resolves `false`. An
-    EMPTY citation list is `unknown`, not `false` - a candidate that names no
-    source has shown nothing, and the fail-closed reading is the honest one.
+    or unresolvable (`None`); `false` only when EVERY cited source resolves
+    `false`. An EMPTY citation list is `unknown`, not `false` - a candidate that
+    names no source has shown nothing, and the fail-closed reading is the honest
+    one.
 
     An implementation that gated only when ALL sources were risky would satisfy
     every single-source witness while auto-promoting a mixed candidate.
@@ -411,7 +413,7 @@ def _aggregate_provenance(values: Sequence[CapturedCrossFamily]) -> CapturedCros
         return CapturedCrossFamily.UNKNOWN
     if any(value is CapturedCrossFamily.TRUE for value in values):
         return CapturedCrossFamily.TRUE
-    if any(value is CapturedCrossFamily.UNKNOWN for value in values):
+    if any(value is not CapturedCrossFamily.FALSE for value in values):
         return CapturedCrossFamily.UNKNOWN
     return CapturedCrossFamily.FALSE
 
@@ -438,36 +440,43 @@ def _resolve_source_provenance(
     memory_id: MemoryID,
     *,
     run_id: str | None,
-) -> CapturedCrossFamily:
+) -> CapturedCrossFamily | None:
     """Read ONE cited source record's `captured_cross_family`, fail-closed.
 
-    Every unresolvable branch returns `unknown` - mark carried, automatic
-    activation withheld, operator-approved path left open. The branches are
-    written out rather than collapsed into one catch-all, because a single
-    blanket `except` satisfies one aggregate test while leaving the others
-    silently unhandled.
+    `None` means UNRESOLVABLE - no recorded provenance could be read at all. It
+    aggregates exactly like `unknown` (mark carried, automatic activation
+    withheld, operator-approved path left open) but is kept DISTINCT from a
+    source whose stored value literally is `unknown`, because the commit binding
+    compares the per-source vector: a cited source that was readable at the
+    snapshot and has since become unreadable is a change in recorded provenance,
+    and collapsing the two would hide it (Codex round 2 [P2] - the same
+    compare-a-projection defect, one level down).
+
+    The branches are written out rather than collapsed into one catch-all,
+    because a single blanket `except` satisfies one aggregate test while leaving
+    the others silently unhandled.
     """
 
     kind = _record_kind_from_memory_id(memory_id)
     if kind is None:
         # Branch 1: the reference names no parseable record kind.
-        return CapturedCrossFamily.UNKNOWN
+        return None
     if kind in _EPISODIC_KINDS and run_id is None:
         # Branch 2: an episodic source with no usable `run_id`. Pre-checked
         # rather than left to `_required_run_id`'s raise, so the branch is
         # deterministic across every store implementation, not only the
         # concrete one.
-        return CapturedCrossFamily.UNKNOWN
+        return None
     try:
         record = store.read_record(memory_id, kind, run_id=run_id, audit_mode=True)
     except LookupError:
         # Branch 3: absent, or present but unservable.
-        return CapturedCrossFamily.UNKNOWN
+        return None
     except ValueError:
         # Branch 4: the store refused the lookup arguments (the
         # `_required_run_id` raise on a store that does not pre-check) or the
         # stored payload would not deserialize.
-        return CapturedCrossFamily.UNKNOWN
+        return None
     except OSError:
         # Branch 5 (Codex round 1 [P2]): the source is on disk but could not be
         # READ - an unreadable file or directory, a vanished mount, EMFILE.
@@ -478,12 +487,21 @@ def _resolve_source_provenance(
         # which withholds the AUTOMATIC path only and must leave the
         # operator-approved path OPEN. `PermissionError` is an `OSError`, and
         # so is every other read failure the filesystem can raise here.
-        return CapturedCrossFamily.UNKNOWN
+        return None
+    except TypeError:
+        # Branch 6 (Codex round 2 [P2]): the stored payload is MALFORMED in a
+        # way that fails on a type rather than a value - a serialized
+        # `content_hash` of `null` reaching `_bytes32_from_json`, a stored
+        # envelope field of the wrong JSON type. Same class as branch 5: a
+        # deserialization defect in one cited source must withhold the
+        # AUTOMATIC path, not abort `propose_for_review`, `deny`, and
+        # operator-approved `approve` alike.
+        return None
     if record.envelope.memory_id != memory_id:
         # `EPISODIC_RUN` is keyed by `run_id`, so `read_record`'s `memory_id`
         # argument is inert for it and a different record can come back. A
         # record that is not the cited one proves nothing about the cited one.
-        return CapturedCrossFamily.UNKNOWN
+        return None
     return record.envelope.captured_cross_family
 
 
@@ -694,15 +712,20 @@ class PromotionDecisionService:
         the durable write's mark alike - is a projection of the value returned
         here, so a call cannot admit an activation on one reading and persist a
         different one.
+
+        The snapshot retains the PER-SOURCE vector as well as the projections
+        derived from it, positionally aligned with `candidate.source_memory_refs`.
+        The commit binding compares that vector, so the exact value it must
+        compare has to survive the snapshot rather than be reconstructed.
         """
 
-        aggregate = _aggregate_provenance(
-            [
-                _resolve_source_provenance(self._store, memory_id, run_id=self._run_id)
-                for memory_id in candidate.source_memory_refs
-            ]
+        per_source = tuple(
+            _resolve_source_provenance(self._store, memory_id, run_id=self._run_id)
+            for memory_id in candidate.source_memory_refs
         )
+        aggregate = _aggregate_provenance(per_source)
         return _EffectiveProvenance(
+            per_source=per_source,
             aggregate=aggregate,
             risk_flags=_normalized_risk_flags(
                 candidate,
@@ -854,15 +877,21 @@ class PromotionDecisionService:
         append new provenance lines DO hold the lock this section holds - which
         is exactly what the service-local alternative could not arrange.
 
-        The compared value is the snapshot's DECISION-BEARING projection, not
-        raw equality of every per-source tri-state. `gated` is exactly what both
-        the activation decision and the durable mark depend on, so a mutation
-        that cannot change either (`true` -> `unknown`, say: both gate, both
-        carry the flag) is correctly not a conflict, while any mutation crossing
-        the `false` boundary in either direction is. Binding to something
-        narrower would miss real changes; binding to something wider would
-        refuse commits that no reading of the store could have decided
-        differently.
+        The compared value is the EXACT per-source provenance vector the
+        snapshot read - every cited source's tri-state, positionally aligned
+        with `candidate.source_memory_refs`, with `None` marking a source that
+        was unresolvable. ANY difference is a conflict. This is the plan's
+        literal obligation (`:1022`): "the activation write must not commit
+        against a source whose recorded provenance changed after the snapshot",
+        unqualified. An earlier reading (Codex round 1 and before) compared only
+        the decision-bearing `gated` projection on the argument that a mutation
+        which cannot change the decision is not worth refusing; that narrowed
+        the contract - `true` -> `unknown`, and multi-source changes that
+        preserve the aggregate, both committed - and is SUPERSEDED. The vector
+        keeps `None` distinct from a stored `unknown` for the same reason: a
+        source that was readable at the snapshot and is not at commit HAS
+        changed, and collapsing the two would reintroduce the same defect one
+        level down.
 
         Scope, stated rather than implied: the guard is applied to the
         ACTIVATION path only. A `PROPOSED` or `DENIED` write authorizes nothing
@@ -876,7 +905,7 @@ class PromotionDecisionService:
             return
 
         def _provenance_unchanged() -> bool:
-            return self._provenance_snapshot(candidate).gated == provenance.gated
+            return self._provenance_snapshot(candidate).per_source == provenance.per_source
 
         try:
             self._store.write_record_guarded(record, precondition=_provenance_unchanged)
