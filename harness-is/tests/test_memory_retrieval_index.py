@@ -278,6 +278,46 @@ def test_search_accelerator_is_non_authoritative(tmp_path: Path) -> None:
     assert result.selected_refs == (first.envelope.memory_id, second.envelope.memory_id)
 
 
+def _episodic_record() -> MemoryStoreRecord:
+    """A committed record the derived index does NOT carry.
+
+    The index is built from the JSON semantic/procedural directories, so an
+    EPISODIC_TURN write still emits a stale marker while leaving the rebuilt
+    content — and therefore the index hash — identical.
+    """
+
+    content: dict[str, object] = {
+        "run_id": "run-u-mem-10-coverage",
+        "turn_id": "turn-1",
+        "step_id": "step-1",
+        "prompt_summary": "a turn the index does not carry",
+        "response_summary": "a turn the index does not carry",
+        "summary_source": "harness_rule",
+        "summary_model": None,
+        "summary_hash": b"\x33" * 32,
+        "tool_event_refs": [],
+        "failure_observations": [],
+        "promotion_candidates": [],
+        "token_usage": None,
+    }
+    content_hash = compute_memory_content_hash(content)
+    return MemoryStoreRecord(
+        envelope=MemoryRecordEnvelope(
+            memory_id=derive_memory_id(
+                MemoryTier.EPISODIC, MemoryRecordKind.EPISODIC_TURN, content_hash
+            ),
+            schema_version="memory-store-record/v1",
+            tier=MemoryTier.EPISODIC,
+            kind=MemoryRecordKind.EPISODIC_TURN,
+            created_at=_NOW,
+            source_refs=(SourceRef(ref_type=SourceRefType.OPERATOR, ref="operator:u-mem-10"),),
+            scope=_scope(),
+            content_hash=content_hash,
+        ),
+        content=content,
+    )
+
+
 def _commit_seqs(binding: MemoryRootBinding) -> list[int]:
     """Every stale marker's `commit_seq`, in ledger order."""
 
@@ -319,9 +359,16 @@ def test_a_late_rebuild_of_an_older_commit_does_not_supersede_a_newer_index(
     [seq_a] = _commit_seqs(binding)
     index_store.rebuild(indexed_at=_NOW, commit_seq=seq_a)
     lines = path.read_text().splitlines()
-    late_rebuild_line = lines[-1]
-    # Withhold it — A's hook has not returned yet.
-    path.write_text("\n".join(lines[:-1]) + "\n")
+    # A tokenized rebuild emits a PAIR — the rebuild then its coverage — and
+    # both are what A's hook would have written, so both are withheld. Taking
+    # only the trailing coverage line would leave the A-only rebuild in place
+    # early and stop the witness from replaying a genuinely late rebuild.
+    late_rebuild_pair = lines[-2:]
+    assert [str(json.loads(line)["event"]) for line in late_rebuild_pair] == [
+        "rebuilt",
+        "rebuilt_coverage",
+    ], "a tokenized rebuild must emit its rebuild followed by its coverage"
+    path.write_text("\n".join(lines[:-2]) + "\n")
 
     # Commit B; B's hook rebuilds and sees BOTH records.
     store.write_record(record_b)
@@ -332,7 +379,8 @@ def test_a_late_rebuild_of_an_older_commit_does_not_supersede_a_newer_index(
 
     # A's hook finally lands — LAST in the append-only ledger.
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(late_rebuild_line + "\n")
+        for line in late_rebuild_pair:
+            fh.write(line + "\n")
 
     current = index_store.read_current()
 
@@ -459,3 +507,47 @@ def test_a_new_writer_ledger_still_parses_under_the_pre_b93_reader(tmp_path: Pat
 
     # And the new reader agrees about the same ledger.
     assert index_store.read_current(require_fresh=False).stale
+
+
+def test_an_untokenized_rebuild_is_not_captured_by_an_earlier_coverage_event(
+    tmp_path: Path,
+) -> None:
+    """Codex R4 [P2] — coverage binds to ONE rebuild, not to a content hash.
+
+    The sequence `AutoRefreshingDerivedRetrievalIndexStore` actually produces:
+    a tokenized rebuild of content hash H; a later canonical commit that leaves
+    the rebuilt content UNCHANGED (still H — a write to a record kind the index
+    does not carry); then an untokenized `rebuild(commit_seq=None)` off the
+    stale path. Keyed only by hash, the first rebuild's coverage attaches to
+    the new direct rebuild too, so the fresh index still reads as stale and the
+    refresh path rebuilds forever, growing the ledger without converging.
+    """
+
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    index_store = _index_store(binding)
+
+    store.write_record(_record(statement="Indexed content, rebuilt under a token."))
+    [seq] = _commit_seqs(binding)
+    first = index_store.rebuild(indexed_at=_NOW, commit_seq=seq)
+
+    # A later commit that does NOT change what the index holds: the index is
+    # built from the JSON semantic/procedural directories only, so an EPISODIC
+    # record still marks it stale while leaving the rebuilt content identical.
+    store.write_record(_episodic_record())
+    second = index_store.rebuild(indexed_at=_NOW + timedelta(seconds=1))
+    assert second.index_hash == first.index_hash, "the repro needs the content hash unchanged"
+
+    # The direct rebuild answered the stale marker; it carries no token, so it
+    # falls to the legacy positional rule and IS the current index.
+    current = index_store.read_current()
+
+    assert current.index_hash == first.index_hash
+    assert not current.stale
+
+    # And the refresh path converges: a second read needs no further rebuild.
+    ledger_size = index_store.index_path().stat().st_size
+    index_store.read_current()
+    assert index_store.index_path().stat().st_size == ledger_size, (
+        "read_current is still driving rebuilds — the ledger grew on a pure read"
+    )

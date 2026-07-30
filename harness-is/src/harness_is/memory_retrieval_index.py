@@ -161,11 +161,15 @@ class _RebuiltCoverageEvent(BaseModel):
     stays byte-compatible for readers that predate this metadata: their loop
     matches neither `rebuilt` nor `stale` on this line and ignores it.
 
-    Keyed by `index_hash` rather than by position, because two rebuilds racing
-    at the append boundary can interleave their lines; a hash binds coverage to
-    the index CONTENT it was computed for. Identical content rebuilt at two
-    commits collapses to the higher coverage, which is correct - the same
-    entries do reflect the later commit.
+    It is written AFTER the rebuild it describes and claims exactly ONE of
+    them: the nearest preceding rebuild of the same content not already
+    claimed. `index_hash` alone is NOT the association (Codex R4) - the same
+    entries can be rebuilt many times, and a later UNTOKENIZED rebuild must
+    stay untokenized rather than inherit an older rebuild's coverage.
+
+    The claim walk needs no atomic paired append, which matters because
+    `_append_jsonl` takes no lock and another process can land lines between a
+    rebuild and its coverage.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -241,13 +245,6 @@ class DerivedRetrievalIndexStore:
             stale=False,
         )
         path = self.index_path()
-        if commit_seq is not None:
-            coverage = _RebuiltCoverageEvent(
-                event=_REBUILT_COVERAGE_EVENT,
-                index_hash=index.index_hash,
-                covers_commit_seq=commit_seq,
-            )
-            _append_jsonl(path, _canonical_json_bytes(coverage.model_dump(mode="json")))
         event = _DerivedRetrievalIndexLedgerEvent(
             event=_REBUILT_EVENT,
             index_version=index.index_version,
@@ -256,6 +253,20 @@ class DerivedRetrievalIndexStore:
             entries=index.entries,
         )
         _append_jsonl(path, _canonical_json_bytes(event.model_dump(mode="json")))
+        if commit_seq is not None:
+            # AFTER its rebuild, deliberately. The two appends are NOT atomic
+            # as a pair (`_append_jsonl` takes no lock), so either line can be
+            # the one a crash loses. Losing the trailing coverage leaves an
+            # untokenized rebuild, which falls to the legacy positional rule -
+            # safe. The reverse order would leave an ORPHAN coverage that a
+            # later untokenized rebuild of the same content could adopt, which
+            # is the misassociation this ordering exists to prevent.
+            coverage = _RebuiltCoverageEvent(
+                event=_REBUILT_COVERAGE_EVENT,
+                index_hash=index.index_hash,
+                covers_commit_seq=commit_seq,
+            )
+            _append_jsonl(path, _canonical_json_bytes(coverage.model_dump(mode="json")))
         return index
 
     def read_current(self, *, require_fresh: bool = True) -> DerivedRetrievalIndex:
@@ -296,26 +307,37 @@ class DerivedRetrievalIndexStore:
                 continue
             records.append(cast("Mapping[str, object]", raw_object))
 
-        # Coverage rides its own event kind and is keyed by content hash, so it
-        # is collected up front rather than read off the rebuild line: a racing
-        # pair of rebuilds can land a coverage line after the rebuild it
-        # describes.
-        coverage_by_hash: dict[str, int] = {}
-        for raw in records:
-            if raw.get("event") != _REBUILT_COVERAGE_EVENT:
-                continue
+        # Pair each coverage event to ONE rebuild INSTANCE (Codex R4 [P2]): the
+        # nearest PRECEDING rebuild of the same content that no other coverage
+        # event has already claimed. Binding by content hash alone let a single
+        # coverage event attach to every rebuild that happened to produce the
+        # same entries - including a later UNTOKENIZED one, whose whole point is
+        # that it has no coverage and must fall to the legacy positional rule.
+        #
+        # The claim walk is what makes this safe without atomic paired appends
+        # (`_append_jsonl` takes no lock, so another process can interleave
+        # between a rebuild and its coverage): each coverage consumes exactly
+        # one rebuild, so interleaved pairs still resolve to their own partners,
+        # and an extra rebuild simply goes unclaimed.
+        coverage_for_record: dict[int, int] = {}
+        unclaimed_rebuilds: dict[str, list[int]] = {}
+        for position, raw in enumerate(records):
             index_hash = raw.get("index_hash")
-            seq_value = raw.get("covers_commit_seq")
-            if not isinstance(index_hash, str) or not isinstance(seq_value, int):
+            if not isinstance(index_hash, str):
                 continue
-            known = coverage_by_hash.get(index_hash)
-            coverage_by_hash[index_hash] = seq_value if known is None else max(known, seq_value)
-
-        for raw in records:
             event = raw.get("event")
             if event == _REBUILT_EVENT:
-                raw_hash = raw.get("index_hash")
-                seq = coverage_by_hash.get(raw_hash) if isinstance(raw_hash, str) else None
+                unclaimed_rebuilds.setdefault(index_hash, []).append(position)
+            elif event == _REBUILT_COVERAGE_EVENT:
+                seq_value = raw.get("covers_commit_seq")
+                pending = unclaimed_rebuilds.get(index_hash)
+                if isinstance(seq_value, int) and pending:
+                    coverage_for_record[pending.pop()] = seq_value
+
+        for position, raw in enumerate(records):
+            event = raw.get("event")
+            if event == _REBUILT_EVENT:
+                seq = coverage_for_record.get(position)
                 if seq is not None and current_seq is not None and seq < current_seq:
                     # A LATE rebuild answering an OLDER commit. Accepting it
                     # would drop every record committed since the rebuild it
