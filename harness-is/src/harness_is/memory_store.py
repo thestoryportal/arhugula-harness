@@ -157,7 +157,10 @@ class DerivedIndexInvalidation(BaseModel):
     rebuild retroactively by any read-side rule, so a mixed-version window falls
     back to positional ordering (register row B-95). Rebuilds that pass no
     token - the production auto-refresh path among them - are likewise
-    positional (register row B-94).
+    positional (register row B-94). On Windows the uniqueness of this token
+    additionally inherits the B-45 bound: the per-root scope lock is a no-op
+    there and the ledger-length read is not covered by the JSONL append lock,
+    so two writers can mint the same value (register row B-45).
     """
 
 

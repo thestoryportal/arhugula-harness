@@ -296,9 +296,10 @@ class DerivedRetrievalIndexStore:
             # as a pair (`_append_jsonl` takes no lock), so either line can be
             # the one a crash loses. Losing the trailing coverage leaves an
             # untokenized rebuild, which falls to the legacy positional rule -
-            # safe. The reverse order would leave an ORPHAN coverage that a
-            # later untokenized rebuild of the same content could adopt, which
-            # is the misassociation this ordering exists to prevent.
+            # safe. The reverse order would leave an ORPHAN coverage that an
+            # EARLIER unclaimed rebuild of the same content could adopt (the
+            # claim walk only ever pairs a coverage to a rebuild that precedes
+            # it), which is the misassociation this ordering exists to prevent.
             coverage = _RebuiltCoverageEvent(
                 event=_REBUILT_COVERAGE_EVENT,
                 index_hash=index.index_hash,
@@ -381,8 +382,15 @@ class DerivedRetrievalIndexStore:
         # The claim walk is what makes this safe without atomic paired appends
         # (`_append_jsonl` takes no lock, so another process can interleave
         # between a rebuild and its coverage): each coverage consumes exactly
-        # one rebuild, so interleaved pairs still resolve to their own partners,
-        # and an extra rebuild simply goes unclaimed.
+        # one rebuild. Interleaved same-hash pairs MAY cross-claim (the walk is
+        # LIFO), and that is benign by construction: the hash covers entries
+        # only, so two same-hash rebuilds are byte-identical as content, any
+        # claimed seq is a true statement about that content, and the winner
+        # rule takes the max seq under either pairing. The one arrangement
+        # that diverges - a tokenized and an untokenized rebuild of the same
+        # content, where the untokenized one adopts the token - errs toward a
+        # spurious stale, the documented-safe direction. An extra rebuild
+        # simply goes unclaimed.
         coverage_for_record: dict[int, int] = {}
         unclaimed_rebuilds: dict[str, list[int]] = {}
         for position, meta in enumerate(records):
