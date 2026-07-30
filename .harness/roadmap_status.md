@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `22af00ffa454` |
-| `last_refreshed` | 2026-07-30T21:11:22Z |
-| `git_head` | `58e7fdd2` —  |
+| `workspace_state_hash` | `17bcd683e76f` |
+| `last_refreshed` | 2026-07-30T23:56:47Z |
+| `git_head` | `204f7ef4` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 101 |
 
@@ -21,6 +21,8 @@
 ## Next action
 
 **Purpose.** Section 02 names the next Claude/Codex-executable frontier. Completion history lives in `Recently completed`; the full remaining itemization lives in `Remaining forward work` (next section).
+
+**Round 55 — B-77 CLOSED 2026-07-30 at PR #1163 (the first registered_finding row re-opened and BUILT under the ground-every-arc directive; B-74 narrowed; B-96 registered).** Grounding past the dormancy labels found B-77's close_out was a fully-ratified advisor-directed design, not a wait-state: `gc_sweep` first-observation grace gating (module-wide registry keyed by root `st_dev:st_ino`, recorded inside the locked re-verify; reclaim only if observed expired in a PRIOR sweep) closes the crash-between-`os.link`-and-post-commit-refresh reclaim window — implementable entirely inside `gc_sweep`/`_publish_atomic`, no config-contract change, TTL floor correctly NOT added (B-74's declined option). Built by a worktree Opus agent (Fable-5-orchestrator discipline; survived TWO transient API-stream kills, resumed clean each time). The central design judgment — module-wide-per-root NOT per-instance — grounded against the real call graph (fresh store per bootstrap at `protected_result_store_factory.py:78`; sweeps at `stage_4_od.py:123` + `shutdown.py:800`). **Codex 5 rounds** (R1 [P1] wall-clock-phase flake pinned; R2 [P2] sweep-count-vs-elapsed-time bound → **B-96 registered** rather than a 4th unratified mechanism attempt — the arms-race stop rule; R3 [P2] a grace-masked pre-existing witness re-armed; R4/R5 clean). **Merge-gate 3-lens: one REAL lens-3 BLOCK** — the pass-on-absence class AGAIN: the per-root-registry design judgment had ZERO discriminating witness (per-instance mutation passed the ENTIRE suite; the fresh-bootstrap witness's freshness was not load-bearing — `write_once`'s pre-publish opportunistic sweep primes the registry at `_last_gc_at=0.0`) — fixed at `227541e4` (test-only: the two-instance-one-root witness + per-root-vs-global + the `.tmp-*` half + the lock-held-at-call witness, each probed BOTH directions), re-gate APPROVE verified BY EXECUTION (each mutation killed by exactly one test, 61 green); lens 1 APPROVE (every race resolves retain-direction; in-flight-tmp observation structurally unreachable); lens 2 APPROVE (§14.8.11 mandates which sweeps exist, not first-observation timing; X-AL-3 clean; 4-row register diff digest-verified). **B-74** stays `registered_finding`, honestly narrowed to the granularity-exceeds-the-inter-sweep-gap residue, pinned as an executable `REGISTERED RESIDUAL` assertion. Tests 3388→3392 (-m "not e2e"); store file 54→62. Register **97 items / 80 closed / 16 registered_finding / 1 held**. **Next action:** (a) apply the same ground-past-the-label pass to the remaining actionable-looking registered_finding rows — B-69 (durable-pause-state read accessor design) is the next close_out that reads as a design rather than a wait-state; ground it at its own HEAD before building; (b) B-96 + B-74's narrowed residue stay registered (fresh, premises live); (c) held=1 (R-1) honored.
 
 **Round 54 — the OTLP live-e2e standing gate RESOLVED 2026-07-30 (no PR; evidence commit `58e7fdd2`).** The "IAM grant → 3 OTLP e2es" operator unlock carried since the 2026-06-10 RC close is CLOSED end-to-end: operator standing authorization → grant applied by the agent and verified → first attempt failed FAST AND FREE at secret resolution exposing the TRUE blocker (project billing disabled — never IAM) → operator re-enabled billing → **r421 / r810 / r820 all PASS on first post-billing attempt** (trace IDs + full evidence at `.harness/otlp-e2e-revalidation-2026-07-30.md`) → grant REVOKED at close, TOML copy deleted, zero resources left behind. Readiness 7/7 pre-flight; cost: 3 usage-billed hosted-provider calls. **Next action:** the forward queue is genuinely slice-exhausted again — (a) the 16 `registered_finding` rows (verified-dormant; re-ground only on surface overlap), (b) `held`=1 (R-1, honored), (c) residual micro-cleanups recorded at PR #1162's body (B-17 row self-referential prose; `post-phase-8-forward-register.md:211` stale in-flight text) — candidates for the next natural register touch, not an arc of their own. `operator_gated`=0; the two long-standing operator unlocks (branch hygiene; IAM/OTLP) are BOTH closed as of this date.
 
@@ -147,11 +149,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1163 | 2026-07-30 | B-77 impl leg — gc_sweep first-observation grace closes the crash-window reclaim; B-74 narrowed to the exceeds-sweep-gap residue; B-96 registered (sweep-count vs elapsed-time bound); merge-gate 3-lens: one REAL lens-3 BLOCK fixed at 227541e4, re-gate APPROVE |
 | 1162 | 2026-07-30 | B-17 §2.2 follow-on — remaining CLAUDE.md inline history relocated (pure deletion, byte-verified) + B-17 register pr ref reconciled to #1161; codex x2 zero findings |
 | 1161 | 2026-07-30 | B-17 governance-only ICM adoption — R-ICM-1 conservative CLAUDE.md split + R-ICM-2 CONTEXT.md router + register flip (B-17 closed) |
 | 1160 | 2026-07-30 | Round 51: gate-log LOW batch merged — hook hoist, DirLock release safety, Protocol-seam witness; commit-seq ordering protocol (codex R1-R6, R6 held); B-93/B-94/B-95 registered; merge-gate 3-lens all-approve R1; just check 7134. |
 | 1159 | 2026-07-30 | Round 50: U-MEM-27 impl leg merged — cross-family-captured promotion gate landed end-to-end; B-92 CLOSED; closeout window 2 closed; merge-gate 3-lens all-approve after one real lens-2 BLOCK; codex 4 rounds + re-converge; just check 7124. |
-| PR #1158 | 2026-07-29 | B-92 spec leg — Spec_Memory_Substrate v1.2 (C-MEM-10 flag+gate, C-MEM-03 captured_cross_family tri-state) + plan v1.2 (NEW U-MEM-27) + clearance markers; register B-92 -> open; 10 codex rounds, 27 findings, PD-9 soundness exit |
 ---
 
 ---
