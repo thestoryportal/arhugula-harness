@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -271,3 +272,98 @@ def test_search_accelerator_is_non_authoritative(tmp_path: Path) -> None:
     )
 
     assert result.selected_refs == (first.envelope.memory_id, second.envelope.memory_id)
+
+
+def _commit_seqs(binding: MemoryRootBinding) -> list[int]:
+    """Every stale marker's `commit_seq`, in ledger order."""
+
+    path = _index_store(binding).index_path()
+    return [
+        int(json.loads(line)["commit_seq"])
+        for line in path.read_text().splitlines()
+        if line.strip() and json.loads(line).get("event") == "stale"
+    ]
+
+
+def test_a_late_rebuild_of_an_older_commit_does_not_supersede_a_newer_index(
+    tmp_path: Path,
+) -> None:
+    """Codex R2 [P2-1] — ledger POSITION is not the freshness authority.
+
+    The store notifies derived-index hooks OUTSIDE its write hold (the callback
+    deadlock fix), so two overlapping writes can rebuild in either order. The
+    hazardous interleaving: A commits, B commits, B's hook rebuilds A+B, and
+    A's slower hook appends its A-ONLY rebuild LAST. Reading the last `rebuilt`
+    line then reports the older index as current — with B missing and `stale`
+    false, because B's marker precedes that final line.
+
+    Reproduced deterministically at the ledger, with real rebuild output: the
+    A-only rebuild is produced while only A exists, withheld, and replayed
+    after B's. No threads, so the witness cannot flake.
+    """
+
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    index_store = _index_store(binding)
+    path = index_store.index_path()
+
+    record_a = _record(statement="Record A, committed first.")
+    record_b = _record(statement="Record B, committed second.")
+
+    # Commit A, and produce the rebuild A's hook would have produced.
+    store.write_record(record_a)
+    [seq_a] = _commit_seqs(binding)
+    index_store.rebuild(indexed_at=_NOW, commit_seq=seq_a)
+    lines = path.read_text().splitlines()
+    late_rebuild_line = lines[-1]
+    # Withhold it — A's hook has not returned yet.
+    path.write_text("\n".join(lines[:-1]) + "\n")
+
+    # Commit B; B's hook rebuilds and sees BOTH records.
+    store.write_record(record_b)
+    seq_a_again, seq_b = _commit_seqs(binding)
+    assert seq_a_again == seq_a
+    assert seq_b > seq_a, "commit_seq must order the two commits"
+    index_store.rebuild(indexed_at=_NOW + timedelta(seconds=1), commit_seq=seq_b)
+
+    # A's hook finally lands — LAST in the append-only ledger.
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(late_rebuild_line + "\n")
+
+    current = index_store.read_current()
+
+    indexed = {entry.memory_id for entry in current.entries}
+    assert indexed == {record_a.envelope.memory_id, record_b.envelope.memory_id}, (
+        "the late A-only rebuild superseded the newer A+B index — a committed "
+        "record is missing from an index reported as current"
+    )
+    assert not current.stale
+
+
+def test_a_commit_no_rebuild_covers_is_stale_even_when_its_marker_comes_first(
+    tmp_path: Path,
+) -> None:
+    """The other half of [P2-1] — under-covered, not merely out-of-order.
+
+    A commits, B commits, and only A's hook ever rebuilds. Both stale markers
+    precede that rebuild, so the purely positional rule sees no marker AFTER
+    the current index and reports it fresh — while B is genuinely absent.
+    `commit_seq` makes the gap visible: the highest committed marker outruns
+    what the rebuild claims to cover.
+    """
+
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    index_store = _index_store(binding)
+
+    store.write_record(_record(statement="Record A, covered."))
+    [seq_a] = _commit_seqs(binding)
+    store.write_record(_record(statement="Record B, never rebuilt for."))
+
+    # A's hook rebuilds, but attributes only A's commit (the honest,
+    # under-claiming attribution the rebuild contract requires).
+    index_store.rebuild(indexed_at=_NOW, commit_seq=seq_a)
+
+    with pytest.raises(DerivedRetrievalIndexStaleError):
+        index_store.read_current()
+    assert index_store.read_current(require_fresh=False).stale

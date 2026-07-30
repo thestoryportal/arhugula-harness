@@ -142,6 +142,13 @@ class _DerivedRetrievalIndexLedgerEvent(BaseModel):
     indexed_at: datetime
     index_hash: str
     entries: tuple[DerivedRetrievalIndexEntry, ...]
+    covers_commit_seq: int | None = None
+    """The `DerivedIndexInvalidation.commit_seq` this rebuild answers, if any.
+
+    `None` for a rebuild not triggered by a specific commit (a direct
+    `rebuild()` call, or any event written before this field existed) - those
+    keep the original purely positional semantics.
+    """
 
 
 class DerivedRetrievalIndexStore:
@@ -174,8 +181,28 @@ class DerivedRetrievalIndexStore:
             self._deployment_surface,
         )
 
-    def rebuild(self, *, indexed_at: datetime) -> DerivedRetrievalIndex:
-        """Rebuild the current index from canonical semantic/procedural records."""
+    def rebuild(
+        self,
+        *,
+        indexed_at: datetime,
+        commit_seq: int | None = None,
+    ) -> DerivedRetrievalIndex:
+        """Rebuild the current index from canonical semantic/procedural records.
+
+        `commit_seq` is the `DerivedIndexInvalidation.commit_seq` of the write
+        this rebuild answers, and a hook rebuilding in response to one MUST
+        pass it. The store notifies hooks outside its write hold, so two
+        overlapping writes can rebuild in either order; without the token, a
+        late rebuild of an older commit lands LAST in the append-only ledger
+        and `read_current` would report it as the newest index, silently
+        dropping the newer write's records.
+
+        Attributing the rebuild to its TRIGGERING commit under-claims by
+        design: the rebuild reads the filesystem after that commit, so it
+        reflects at least that commit and possibly later ones. Under-claiming
+        costs a spurious `stale` (safe); over-claiming would report a missing
+        record as fresh (not safe).
+        """
 
         entries = tuple(_iter_index_entries(self._registry, self._deployment_surface))
         index_hash = _compute_index_hash(
@@ -195,15 +222,35 @@ class DerivedRetrievalIndexStore:
             indexed_at=index.indexed_at,
             index_hash=index.index_hash,
             entries=index.entries,
+            covers_commit_seq=commit_seq,
         )
         _append_jsonl(self.index_path(), _canonical_json_bytes(event.model_dump(mode="json")))
         return index
 
     def read_current(self, *, require_fresh: bool = True) -> DerivedRetrievalIndex:
-        """Read the last rebuilt index and detect later stale markers."""
+        """Read the newest rebuilt index and detect uncovered canonical writes.
+
+        Ledger POSITION alone is not the freshness authority. Because the store
+        notifies its derived-index hooks outside the write hold, two overlapping
+        writes can rebuild in either order, so the last `rebuilt` line is not
+        necessarily the newest index. Two rules run together:
+
+        * `covers_commit_seq` ORDERS rebuilds. A rebuild answering an older
+          commit than one already accepted is ignored outright, however late it
+          landed in the file.
+        * a stale marker's `commit_seq` greater than the accepted rebuild's
+          means that commit is NOT reflected in this index - stale, whatever the
+          two lines' relative positions.
+
+        The original positional rule is preserved verbatim underneath for
+        events that carry no token (legacy ledger lines and direct `rebuild()`
+        calls), so an untokenized ledger behaves exactly as before.
+        """
 
         current: DerivedRetrievalIndex | None = None
+        current_seq: int | None = None
         stale_after_current = False
+        max_stale_seq: int | None = None
         path = self.index_path()
         if not path.exists():
             raise DerivedRetrievalIndexMissingError(f"retrieval index not found at {path!s}")
@@ -216,12 +263,28 @@ class DerivedRetrievalIndexStore:
             raw = cast("Mapping[str, object]", raw_object)
             event = raw.get("event")
             if event == _REBUILT_EVENT:
+                raw_seq = raw.get("covers_commit_seq")
+                seq = raw_seq if isinstance(raw_seq, int) else None
+                if seq is not None and current_seq is not None and seq < current_seq:
+                    # A LATE rebuild answering an OLDER commit. Accepting it
+                    # would drop every record committed since the rebuild it
+                    # displaces, and report the result as fresh.
+                    continue
                 current = _index_from_event(raw)
+                current_seq = seq
                 stale_after_current = False
-            elif event == _STALE_EVENT and current is not None:
-                stale_after_current = True
+            elif event == _STALE_EVENT:
+                raw_seq = raw.get("commit_seq")
+                if isinstance(raw_seq, int):
+                    max_stale_seq = (
+                        raw_seq if max_stale_seq is None else max(max_stale_seq, raw_seq)
+                    )
+                if current is not None:
+                    stale_after_current = True
         if current is None:
             raise DerivedRetrievalIndexMissingError(f"retrieval index not found at {path!s}")
+        if current_seq is not None and max_stale_seq is not None and max_stale_seq > current_seq:
+            stale_after_current = True
         if stale_after_current and require_fresh:
             raise DerivedRetrievalIndexStaleError("retrieval index is stale after canonical write")
         return current.model_copy(update={"stale": stale_after_current})

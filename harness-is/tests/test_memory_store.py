@@ -339,7 +339,31 @@ def test_store_marks_derived_semantic_index_stale_after_canonical_write(
         "memory_id": fact.envelope.memory_id,
         "record_kind": "semantic_fact",
         "content_hash": fact.envelope.content_hash.hex(),
+        # First marker on a ledger that did not exist yet.
+        "commit_seq": 0,
     }
+
+
+def test_stale_marker_commit_seq_is_strictly_increasing(tmp_path: Path) -> None:
+    """`commit_seq` is a usable commit ORDER, not a constant.
+
+    A hook rebuilding a derived index orders its rebuilds by this token, so a
+    stamp that never advances (or advances non-monotonically) is worse than no
+    stamp at all — it would look like ordering while providing none.
+    """
+
+    store = _store(tmp_path)
+    for n in range(4):
+        store.write_record(_semantic_record(f"ordered write {n}"))
+
+    seqs = [
+        marker["commit_seq"]
+        for marker in _jsonl_records(tmp_path / "memory" / "semantic" / "index.jsonl")
+    ]
+
+    assert len(seqs) == 4
+    assert seqs == sorted(seqs)
+    assert len(set(seqs)) == 4, f"commit_seq repeated across distinct commits: {seqs}"
 
 
 @pytest.mark.parametrize(
