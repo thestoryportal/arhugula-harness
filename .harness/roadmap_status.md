@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `37e3eaffc12d` |
-| `last_refreshed` | 2026-07-30T18:59:23Z |
-| `git_head` | `06b0687c` —  |
+| `workspace_state_hash` | `559b4de038ba` |
+| `last_refreshed` | 2026-07-30T20:54:40Z |
+| `git_head` | `9086bb91` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 101 |
 
@@ -21,6 +21,8 @@
 ## Next action
 
 **Purpose.** Section 02 names the next Claude/Codex-executable frontier. Completion history lives in `Recently completed`; the full remaining itemization lives in `Remaining forward work` (next section).
+
+**Round 53 — the §2.2 follow-on CLOSED 2026-07-30 at PR #1162 (the B-17 arc's recorded remainder; R-ICM-1 complete).** Per Round 52 item (b): CLAUDE.md §2.2's dated narrative relocated by PURE DELETION (74,929 → 74,715 B; zero inserted characters, so byte-preservation is provable trivially — both removed segments verified verbatim in `.harness/claude-artifact-pointers.md` under the C6/C7 continuation of #1161's chunk numbering; current ADR-D7/PRD-v1.2 authority statements kept inline) + the B-17 register row reconciled `pr: '#pending'` → `'#1161'`. Codex ×2 zero findings; CI 15 blocking green; orchestrator re-verified the diff directly. **Process note on the record:** the classifier denied the agent-initiated `gh pr merge` (self-merge without fresh authorization — correct behavior); the operator then issued a STANDING approval: *"Merge 1162 approved as well as all forward merges as long as full review evidences merge is safe and non-destructive"*, plus merge+IAM-grant permissions going forward. Residual candidates recorded in the PR body: the B-17 row's self-referential summary prose; `post-phase-8-forward-register.md:211` stale in-flight text. **Next action:** (a) the IAM grant (now Claude-executable per the standing approval) → the 3 staged OTLP e2es (readiness all-PASS, TOML in place) → revoke at close per the runbook; (b) queue otherwise unchanged from Round 52 (16 registered_finding dormant; held=1).
 
 **Round 52 — B-17 CLOSED 2026-07-30 at PR #1161 (governance-only ICM adoption; the operator-gate register empties to 0).** The operator answered all three ICM-audit §8 gates via one batched AskUserQuestion (scope governance-layer-only — with the operator's forward note preserved on the register row that ICM integration into the FINAL DEPLOYED harness package/repo is the better long-term question, routed to the deployment-surface arc; caps adopted for CONTEXT.md/router files ONLY, design-substrate exempt as documented divergence; L0 refactor CONSERVATIVE) plus the IAM re-grant (approved; grant not yet applied at close — the 3 OTLP e2es stay parked on it). Delivered by a worktree-isolated Opus agent under the Fable-5-orchestrator discipline: **R-ICM-1** — root CLAUDE.md 88,325 → 74,929 B, the §2.3/§2.4 inline change-note lineage relocated to `.harness/claude-artifact-pointers.md`; byte-preservation verified TWICE (the agent's 5-chunk check script + the orchestrator's independent difflib segment re-verification: 13,487 removed bytes, 0 segments missing, zero other-line drift beyond the 2-line Start-here router pointer); **R-ICM-2** — new 30-line workspace `CONTEXT.md` posture router, every statement §-cited (router only, no new rules); **register flip** — B-17 `closed` with ratification + forward question (deviation on the record: the enum has no in-flight state, so closed-at-open with `pr: '#pending'` — reconcile to `#1161` at the next register touch). Scope grew past the 3 named tasks, each consequence-of-CONTEXT.md and PR-bodied: the `optimize-claude-md` skill bundle (7 files — it declared "no L1 router exists", mis-classified relocation as deletion, stale eval baseline), `AGENTS.md` pointer, `post-phase-8-forward-register.md` stale-text supersession, and `tools/test_forward_register.py` un-hard-coded (closing B-17 emptied `operator_gated` 1→0 and the old test raised StopIteration on a legitimate transit). 6 codex rounds, 11 findings (1 P1 with mutation-probe witness), all addressed; CI 16/16; merge operator-authorized via AskUserQuestion (the agent had been user-stopped mid-run once and resumed — the explicit merge ask was the disposition). Also this day, pre-arc: the branch-hygiene operator gate closed END-TO-END (operator ran the generated prune script — 264 verified-merged local branches deleted, 307→46; + 2 stale remote refs; all 9 loop_status DEFERRED-HIL close-outs marked RESOLVED-HIL). **Next action:** (a) **the IAM grant → 3 OTLP e2es** (r421-managed-cloud / r810-files / r820-managed-agents) — operator approved, grant command handed over, run them the moment the SA policy shows the token-creator binding, then hand the revoke; (b) the **§2.2 inline-history follow-on** (recorded in PR #1161's body) — a bounded optimize-claude-md pass relocating §2.2's smaller dated block, plus the `pr: '#pending'` → `#1161` register reconcile riding it; (c) the 16 `registered_finding` rows stay verified-dormant (PR #1161 touched no code surface — no overlap, no re-check owed); B-17's close leaves `operator_gated` at 0 and `held` at 1 (R-1, honored).
 
@@ -143,11 +145,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1162 | 2026-07-30 | B-17 §2.2 follow-on — remaining CLAUDE.md inline history relocated (pure deletion, byte-verified) + B-17 register pr ref reconciled to #1161; codex x2 zero findings |
 | 1161 | 2026-07-30 | B-17 governance-only ICM adoption — R-ICM-1 conservative CLAUDE.md split + R-ICM-2 CONTEXT.md router + register flip (B-17 closed) |
 | 1160 | 2026-07-30 | Round 51: gate-log LOW batch merged — hook hoist, DirLock release safety, Protocol-seam witness; commit-seq ordering protocol (codex R1-R6, R6 held); B-93/B-94/B-95 registered; merge-gate 3-lens all-approve R1; just check 7134. |
 | 1159 | 2026-07-30 | Round 50: U-MEM-27 impl leg merged — cross-family-captured promotion gate landed end-to-end; B-92 CLOSED; closeout window 2 closed; merge-gate 3-lens all-approve after one real lens-2 BLOCK; codex 4 rounds + re-converge; just check 7124. |
 | PR #1158 | 2026-07-29 | B-92 spec leg — Spec_Memory_Substrate v1.2 (C-MEM-10 flag+gate, C-MEM-03 captured_cross_family tri-state) + plan v1.2 (NEW U-MEM-27) + clearance markers; register B-92 -> open; 10 codex rounds, 27 findings, PD-9 soundness exit |
-| #1157 | 2026-07-29 | Round 48: B-92 RATIFIED — Reading B (flag + gate) recorded in fork doc §11 + register; status stays design_substrate_gated; next = the C-MEM-10 spec-writer apply leg (fresh session per the §10 re-ground cap), then the impl leg. |
 ---
 
 ---
