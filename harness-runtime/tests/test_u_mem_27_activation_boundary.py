@@ -781,6 +781,115 @@ def test_fail_closed_on_an_unreadable_source_record(tmp_path: Path) -> None:
     assert approved.status is SemanticRecordStatus.ACTIVE
 
 
+class _IOFailingSourceStore:
+    """Delegates every effect to a real store, except the ONE cited source read.
+
+    That read raises a filesystem I/O error, which is what the concrete store
+    does when the record is on disk but unreadable - `read_text` on a file whose
+    mode or parent directory denies it, a vanished mount, EMFILE. Modelled at
+    the `PromotionDecisionStore` seam rather than by `chmod`, so the branch is
+    deterministic regardless of the privileges the suite runs under (`chmod`
+    denies nothing to root).
+    """
+
+    def __init__(
+        self,
+        inner: CanonicalMemoryStore,
+        *,
+        failing: MemoryID,
+        error: OSError,
+    ) -> None:
+        self.inner = inner
+        self._failing = failing
+        self._error = error
+
+    def read_record(
+        self,
+        memory_id: MemoryID,
+        kind: MemoryRecordKind,
+        *,
+        run_id: str | None = None,
+        audit_mode: bool = False,
+    ) -> MemoryStoreRecord:
+        if memory_id == self._failing:
+            raise self._error
+        return self.inner.read_record(memory_id, kind, run_id=run_id, audit_mode=audit_mode)
+
+    def write_record(self, record: MemoryStoreRecord) -> object:
+        return self.inner.write_record(record)
+
+    def write_record_guarded(
+        self,
+        record: MemoryStoreRecord,
+        *,
+        precondition: Callable[[], bool],
+    ) -> object:
+        return self.inner.write_record_guarded(record, precondition=precondition)
+
+    def append_memory_operation(
+        self,
+        payload: MemoryOperationPayload,
+    ) -> MemoryOperationWriteResult:
+        return self.inner.append_memory_operation(payload)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [PermissionError(13, "Permission denied"), OSError(5, "Input/output error")],
+    ids=["permission-denied", "eio"],
+)
+def test_fail_closed_on_a_source_read_that_raises_an_io_error(
+    tmp_path: Path,
+    error: OSError,
+) -> None:
+    """:1090 branch 5 (Codex round-1 [P2]) - an UNREADABLE source.
+
+    The four pre-existing branches all concern what the reference SAYS; this one
+    concerns the filesystem refusing to answer. It is the branch that breaks the
+    fail-closed reading asymmetrically if it escapes: every decision operation
+    takes the snapshot first, so an I/O error propagating out of it aborts
+    `propose_for_review` and `deny` - neither of which authorizes anything - and
+    aborts an operator-approved `approve` too, which the plan requires to stay
+    OPEN. All four outcomes are asserted per-branch below; a catch-all
+    `assert not raised` would pass on an implementation that only fixed one.
+    """
+
+    inner = _store(tmp_path)
+    unreadable = _stored_source(inner, CapturedCrossFamily.FALSE, tag="unreadable")
+    store = _IOFailingSourceStore(inner, failing=unreadable, error=error)
+    service = _service(store)
+    candidate = _candidate(source_memory_refs=(unreadable,))
+
+    # Gated: the unreadable source resolves `unknown`, so the AUTOMATIC path is
+    # withheld - not crashed.
+    with pytest.raises(PromotionReviewRequiredError):
+        service.approve(
+            candidate,
+            timestamp=_NOW,
+            injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+        )
+
+    proposed = service.propose_for_review(
+        candidate,
+        timestamp=_NOW,
+        injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+    )
+    assert proposed.status is SemanticRecordStatus.PROPOSED
+    assert _FLAG.value in _persisted_risk_flags(inner, proposed)
+
+    denied = service.deny(candidate, timestamp=_NOW, reason="unreadable provenance")
+    assert denied.status is SemanticRecordStatus.DENIED
+
+    approved = service.approve(
+        candidate,
+        timestamp=_NOW,
+        injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+        operator_approved=True,
+    )
+    assert approved.status is SemanticRecordStatus.ACTIVE
+    assert _FLAG.value in _persisted_risk_flags(inner, approved)
+
+
 # ---------------------------------------------------------------------------
 # :1087 / :1088 / :1089 - the choke-point normalization, all four call sites
 # ---------------------------------------------------------------------------

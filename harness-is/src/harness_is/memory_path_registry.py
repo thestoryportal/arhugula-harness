@@ -213,6 +213,11 @@ class MemoryPathRegistry:
     def __init__(self, binding: MemoryRootBinding | None = None) -> None:
         self._binding = binding or MemoryRootBinding()
 
+    def canonical_root(self, deployment_surface: DeploymentSurface) -> Path:
+        """Return the canonical memory root every resolved path sits under."""
+
+        return self._binding.root_for(deployment_surface)
+
     def resolve_path(
         self,
         path_class: MemoryPathClass,

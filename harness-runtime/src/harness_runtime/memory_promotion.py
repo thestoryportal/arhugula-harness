@@ -468,6 +468,17 @@ def _resolve_source_provenance(
         # `_required_run_id` raise on a store that does not pre-check) or the
         # stored payload would not deserialize.
         return CapturedCrossFamily.UNKNOWN
+    except OSError:
+        # Branch 5 (Codex round 1 [P2]): the source is on disk but could not be
+        # READ - an unreadable file or directory, a vanished mount, EMFILE.
+        # Without this branch the I/O error escapes the snapshot, and because
+        # EVERY decision operation takes the snapshot first, an unreadable
+        # source aborts `propose_for_review`, `deny`, AND an operator-approved
+        # `approve` - the exact opposite of the documented fail-closed reading,
+        # which withholds the AUTOMATIC path only and must leave the
+        # operator-approved path OPEN. `PermissionError` is an `OSError`, and
+        # so is every other read failure the filesystem can raise here.
+        return CapturedCrossFamily.UNKNOWN
     if record.envelope.memory_id != memory_id:
         # `EPISODIC_RUN` is keyed by `run_id`, so `read_record`'s `memory_id`
         # argument is inert for it and a different record can come back. A
@@ -833,6 +844,15 @@ class PromotionDecisionService:
         promotion-free on the store side - it is an opaque callable - so
         harness-is gains a general compare-and-commit primitive rather than
         promotion semantics it has no business knowing (carrier-home discipline).
+
+        CROSS-PROCESS (Codex round-1 [P1]): the store's locks were in-process
+        only, which left the same interleaving open between two OS processes
+        sharing one repo-derived memory root - a real topology, not a
+        hypothetical one (`harness run` alongside `harness daemon`). The store
+        now takes a per-root `cross_process_scope_lock` around this guarded
+        section AND around every mutating write, so the capture writers that
+        append new provenance lines DO hold the lock this section holds - which
+        is exactly what the service-local alternative could not arrange.
 
         The compared value is the snapshot's DECISION-BEARING projection, not
         raw equality of every per-source tri-state. `gated` is exactly what both

@@ -12,6 +12,7 @@ import os
 import threading
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -21,7 +22,10 @@ from urllib.parse import quote
 from harness_core import DeploymentSurface
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from harness_is.cross_process_ledger_lock import cross_process_read_lock
+from harness_is.cross_process_ledger_lock import (
+    cross_process_read_lock,
+    cross_process_scope_lock,
+)
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.memory_operation_ledger import (
     MemoryOperationEntry,
@@ -53,10 +57,11 @@ type StoreJSON = str | int | bool | None | list[StoreJSON] | dict[str, StoreJSON
 # through `_mark_semantic_index_stale`. Cross-thread mutual exclusion is
 # unchanged; only same-thread re-acquisition is now permitted.
 #
-# LOCK ORDER: `_FILE_WRITE_LOCK` before `_JSONL_WRITE_LOCK`, everywhere both are
-# held. No pre-existing path nests them at all (`_write_file_atomically`
-# releases before `_mark_semantic_index_stale` appends), so this single ordering
-# rule is sufficient to keep the pair acyclic.
+# LOCK ORDER: the per-root cross-process scope lock (`_write_scope`) OUTERMOST,
+# then `_FILE_WRITE_LOCK`, then `_JSONL_WRITE_LOCK`. That order is taken
+# identically by both write entry points, and no store path nests a canonical-
+# file ledger lock inside a scope hold (`append_memory_operation` is a sibling
+# call, never nested in a write), so the whole set stays acyclic.
 _FILE_WRITE_LOCK = threading.RLock()
 _JSONL_WRITE_LOCK = threading.RLock()
 
@@ -200,12 +205,24 @@ class CanonicalMemoryStore:
 
         payload = canonicalize_memory_store_record(record)
         path = self.record_path(record)
-        if record.envelope.kind in _JSONL_BY_KIND:
-            _append_jsonl(path, payload)
-        else:
-            _write_file_atomically(path, payload)
-        self._mark_semantic_index_stale(record)
+        with self._write_scope():
+            if record.envelope.kind in _JSONL_BY_KIND:
+                _append_jsonl(path, payload)
+            else:
+                _write_file_atomically(path, payload)
+            self._mark_semantic_index_stale(record)
         return MemoryStoreWriteResult.WRITTEN
+
+    def _write_scope(self) -> AbstractContextManager[None]:
+        """The per-root cross-process hold every mutating write takes.
+
+        Keyed on the memory ROOT rather than the written file, because the
+        section `write_record_guarded` wraps re-reads a caller-chosen set of
+        OTHER records before writing this one; a per-file lock cannot exclude a
+        writer of a file the section has not named yet.
+        """
+
+        return cross_process_scope_lock(self._registry.canonical_root(self._deployment_surface))
 
     def write_record_guarded(
         self,
@@ -232,15 +249,24 @@ class CanonicalMemoryStore:
         locks are re-entrant, so `precondition` may re-read through this store's
         own read path and the wrapped `write_record` may re-take them.
 
-        SCOPE, stated rather than implied: these are in-process
-        `threading.RLock`s, so this is exactly as strong as the store's existing
-        write atomicity - it excludes concurrent writers in THIS process and
-        makes no cross-process claim. Raising `MemoryStoreGuardedWriteConflictError`
-        rather than returning a sentinel keeps a caller from treating a refused
-        commit as a completed one by ignoring a return value.
+        SCOPE (Codex round-1 [P1] - this guarantee is now CROSS-PROCESS). The
+        `threading.RLock`s alone were only as strong as the store's pre-existing
+        in-process write atomicity, which is not enough here: the memory root is
+        repo-derived and stable (`.harness/memory` under `repository_root`), and
+        two ordinary same-host invocations - a one-shot `harness run` alongside
+        a `harness daemon` - already share it, so a second OS process could
+        append a source line between this precondition and the write it
+        authorizes. The section therefore also takes the per-root
+        `cross_process_scope_lock`, OUTERMOST, and every mutating write in the
+        store takes the same lock (`write_record` -> `_write_scope`); the
+        `RLock`s are retained beneath it for cheap same-process exclusion and
+        re-entrancy. Same-host only, and a no-op on Windows - the B-40/B-45/B-46
+        posture, unchanged. Raising `MemoryStoreGuardedWriteConflictError` rather
+        than returning a sentinel keeps a caller from treating a refused commit
+        as a completed one by ignoring a return value.
         """
 
-        with _FILE_WRITE_LOCK, _JSONL_WRITE_LOCK:
+        with self._write_scope(), _FILE_WRITE_LOCK, _JSONL_WRITE_LOCK:
             if not precondition():
                 raise MemoryStoreGuardedWriteConflictError(
                     f"guarded write precondition failed for {record.envelope.memory_id!s}"

@@ -147,3 +147,101 @@ remains open for exactly such a candidate.
 - Bounds carried forward unchanged, each needing its own later amendment: the field answers
   **present/absent only** (not by-family), and **aggregate-run** provenance is not
   representable per-record.
+
+## Codex round 1 — two findings against the slice-3b surface
+
+An out-of-family `just codex-review` pass over the slice-3b surface returned two findings.
+Both are resolved in code; neither required a spec or plan amendment.
+
+### [P2] Source-read I/O failures escaped the fail-closed snapshot — FIXED
+
+`_resolve_source_provenance` (`harness-runtime/src/harness_runtime/memory_promotion.py`)
+enumerated four unresolvable branches and caught only `LookupError` and `ValueError`. A
+source that is on disk but *unreadable* — an unreadable file or parent directory, a vanished
+mount, EMFILE — raises `OSError` (`PermissionError` is one), which propagated straight out of
+`_provenance_snapshot`. Because **every** decision operation takes the snapshot first, that
+aborted `propose_for_review` and `deny` — neither of which authorizes anything — and aborted
+an operator-approved `approve` too, which the plan (`:1020`) requires to stay OPEN. The
+finding is asymmetric in exactly the wrong direction: it converts a fail-closed reading into
+a fail-*shut* one.
+
+Fixed by adding a fifth branch, `except OSError`, returning `UNKNOWN` like its four siblings —
+written out per-branch rather than folded into a catch-all, matching the module's own stated
+discipline. Witness: `test_fail_closed_on_a_source_read_that_raises_an_io_error`
+(`harness-runtime/tests/test_u_mem_27_activation_boundary.py`), parametrized over
+`PermissionError` and a non-permission `OSError`, asserting all four outcomes separately —
+automatic activation withheld, `propose_for_review` completes carrying the mark, `deny`
+completes, operator-approved `approve` reaches `ACTIVE` carrying the mark. Modelled at the
+`PromotionDecisionStore` seam rather than by `chmod`, so the branch is deterministic
+regardless of the privileges the suite runs under. Mutation-probed: with the `except OSError`
+branch removed both arms fail with the raw errno.
+
+### [P1] The guarded write was in-process only — FIXED (cross-process lock built)
+
+Codex reproduced the interleaving directly: `precondition_saw=false`, `source_at_commit=true`,
+`activation_committed=True`. Slice 3b's docstring scoped the guarantee honestly to one
+process, but the grounding pass found that honest scoping is not discharge here, because the
+topology is real:
+
+1. **A house cross-process primitive exists.** `harness-is/src/harness_is/cross_process_ledger_lock.py`
+   (B-40, redesigned at B-46) — POSIX `fcntl.flock`, same-host, per-*canonical-file* with a
+   parent-directory lock for the absent-file state, plus a reentrant in-process `_DirLock`
+   face; Windows degrades to a no-op (registered B-45 gap).
+2. **The store's own writers were NOT cross-process coordinated.** `_append_jsonl`
+   (`memory_store.py:492`) and `_write_file_atomically` (`:481`) took only module-level
+   `threading.RLock`s. Only the durable *memory-ops ledger* was hardened (B-40, flock);
+   the canonical record store was not. So the finding was **not** asking the guarded write to
+   be stronger than every other write in the store — it was asking the store's write plane to
+   match the sibling ledger's already-shipped posture.
+3. **Shared-root multi-process is real at HEAD, not hypothetical.** The root is repo-derived
+   and stable — `automatic_memory.py:127` resolves `config.memory.root_path or
+   (config.repository_root / ".harness" / "memory")`; the unbound default is the relative
+   `.harness/memory` (`memory_path_registry.py:18`, `:214`); nothing in `src` derives a
+   per-run temp root. Three console scripts ship (`harness-runtime/pyproject.toml:91-99`), and
+   both `harness daemon` (which bootstraps the in-process MCP server on a deliberately
+   de-PID-ed host-global socket) and the default one-shot `harness run` execute the same
+   `run_bootstrap` → stage-5 → `CanonicalMemoryStore` against the same `repository_root`.
+   `Spec_Memory_Substrate_v1.md` states **no** process model (one "in-process" hit, at `:57`,
+   in a trust-boundary sentence), and the workspace already adjudicated that silence at B-40
+   rounds 2-4 — a round-4 Codex pass corrected "dormant" to **LIVE** on exactly this
+   two-concurrent-`harness run` ground.
+
+**Branch taken: build it.** Per the decision rule's first branch — house primitive exists and
+the topology is real. What is reusable is the primitive's `_DirLock` building block (per-path
+`flock` EX + reentrant in-process face), not its file-lock context managers: those key on ONE
+canonical file, and this critical section's read set is discovered dynamically inside a
+caller-supplied predicate, so there is no single file to key on and locking the discovered set
+member-by-member reintroduces a lock-ordering problem. Added `cross_process_scope_lock(root)`
+to the same module — a generic, promotion-free exclusive lock over a directory TREE, keyed on
+a provisioned `.cross-process-scope.lock` file (a dedicated inode, so scope holders are not
+coupled to unrelated ledger writers in the same directory), reentrant per thread, same-host,
+Windows no-op — identical posture to its siblings.
+
+Wired in `CanonicalMemoryStore` via `_write_scope()` (`memory_store.py`), taken by **both**
+`write_record` (covering `_append_jsonl` for the JSONL determination-bearing kinds AND
+`_write_file_atomically`, the atomic-replace branch that redaction rewrites reach through
+`memory_redaction.py:271`) and `write_record_guarded` (covering precondition + write). The
+in-process `RLock` pair is retained beneath it — cheap same-process exclusion plus the
+re-entrancy the guarded section needs. Documented lock order, taken identically at both entry
+points: **scope lock → `_FILE_WRITE_LOCK` → `_JSONL_WRITE_LOCK`**; no store path nests a
+canonical-file ledger lock inside a scope hold (`append_memory_operation` is a sibling call,
+never nested in a write), so the set stays acyclic. `MemoryPathRegistry.canonical_root` was
+added as the one new accessor this needs.
+
+Witness: `harness-is/tests/test_memory_store_cross_process_guard.py::test_a_second_process_cannot_append_between_precondition_and_commit`
+— a genuine second OS process (`multiprocessing` fork context, forked BEFORE any lock is
+acquired per the workspace fork+lock hazard, gated by `ctx.Event`) holds a guarded section
+open across its precondition while this process attempts the superseding append. Thread-based
+witnesses cannot pin this: every thread here contends on the same `_DirLock` in-process face
+and would pass on the `RLock`s alone. The append BLOCKS for the section's duration, and the
+store's own semantic-index ledger — appended inside the same section as each record — gives
+the committed order `[source_v1, target, source_v2]`, i.e. the activation committed strictly
+before the superseding line. The superseding record is the real colliding shape: same content,
+different `captured_cross_family`, therefore the same hash-inert `memory_id`, appended
+last-wins. Mutation-probed: with `_write_scope()` removed from both write entry points the
+append lands inside the guarded section and the witness fails on its blocking assertion.
+
+The slice-3b `write_record_guarded` docstring's SCOPE paragraph and the `_commit_record`
+mechanism narration were both corrected in place — the earlier "makes no cross-process claim"
+and "the capture writers do not hold it" statements are now false of the shipped code, and
+carrying them forward would have been a stale-carry.
