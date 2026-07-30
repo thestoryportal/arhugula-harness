@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `559b4de038ba` |
-| `last_refreshed` | 2026-07-30T20:54:40Z |
-| `git_head` | `9086bb91` —  |
+| `workspace_state_hash` | `22af00ffa454` |
+| `last_refreshed` | 2026-07-30T21:11:22Z |
+| `git_head` | `58e7fdd2` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 101 |
 
@@ -21,6 +21,8 @@
 ## Next action
 
 **Purpose.** Section 02 names the next Claude/Codex-executable frontier. Completion history lives in `Recently completed`; the full remaining itemization lives in `Remaining forward work` (next section).
+
+**Round 54 — the OTLP live-e2e standing gate RESOLVED 2026-07-30 (no PR; evidence commit `58e7fdd2`).** The "IAM grant → 3 OTLP e2es" operator unlock carried since the 2026-06-10 RC close is CLOSED end-to-end: operator standing authorization → grant applied by the agent and verified → first attempt failed FAST AND FREE at secret resolution exposing the TRUE blocker (project billing disabled — never IAM) → operator re-enabled billing → **r421 / r810 / r820 all PASS on first post-billing attempt** (trace IDs + full evidence at `.harness/otlp-e2e-revalidation-2026-07-30.md`) → grant REVOKED at close, TOML copy deleted, zero resources left behind. Readiness 7/7 pre-flight; cost: 3 usage-billed hosted-provider calls. **Next action:** the forward queue is genuinely slice-exhausted again — (a) the 16 `registered_finding` rows (verified-dormant; re-ground only on surface overlap), (b) `held`=1 (R-1, honored), (c) residual micro-cleanups recorded at PR #1162's body (B-17 row self-referential prose; `post-phase-8-forward-register.md:211` stale in-flight text) — candidates for the next natural register touch, not an arc of their own. `operator_gated`=0; the two long-standing operator unlocks (branch hygiene; IAM/OTLP) are BOTH closed as of this date.
 
 **Round 53 — the §2.2 follow-on CLOSED 2026-07-30 at PR #1162 (the B-17 arc's recorded remainder; R-ICM-1 complete).** Per Round 52 item (b): CLAUDE.md §2.2's dated narrative relocated by PURE DELETION (74,929 → 74,715 B; zero inserted characters, so byte-preservation is provable trivially — both removed segments verified verbatim in `.harness/claude-artifact-pointers.md` under the C6/C7 continuation of #1161's chunk numbering; current ADR-D7/PRD-v1.2 authority statements kept inline) + the B-17 register row reconciled `pr: '#pending'` → `'#1161'`. Codex ×2 zero findings; CI 15 blocking green; orchestrator re-verified the diff directly. **Process note on the record:** the classifier denied the agent-initiated `gh pr merge` (self-merge without fresh authorization — correct behavior); the operator then issued a STANDING approval: *"Merge 1162 approved as well as all forward merges as long as full review evidences merge is safe and non-destructive"*, plus merge+IAM-grant permissions going forward. Residual candidates recorded in the PR body: the B-17 row's self-referential summary prose; `post-phase-8-forward-register.md:211` stale in-flight text. **Next action:** (a) the IAM grant (now Claude-executable per the standing approval) → the 3 staged OTLP e2es (readiness all-PASS, TOML in place) → revoke at close per the runbook; (b) queue otherwise unchanged from Round 52 (16 registered_finding dormant; held=1).
 
