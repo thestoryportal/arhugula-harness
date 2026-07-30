@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Self, cast
+from typing import Literal, NamedTuple, Self, cast
 
 from harness_core import DeploymentSurface
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -152,6 +152,24 @@ class _DerivedRetrievalIndexLedgerEvent(BaseModel):
     # here, including one serialized as `null`. Rebuild coverage therefore
     # rides a separate event kind (`_REBUILT_COVERAGE_EVENT`), which the older
     # reader's `event ==` discrimination skips instead of validating.
+
+
+class _LedgerEventMeta(NamedTuple):
+    """One ledger line reduced to what `read_current`'s rules need - no payload.
+
+    A `rebuilt` line carries the ENTIRE index entry array. Holding the decoded
+    form of every line would tie peak memory to the ledger's rebuild history
+    rather than to a single index, so the resolution passes run over these
+    scalars and only the winning line is decoded (Codex R5 [P2]).
+
+    `seq` is whichever commit token the line's own kind carries: a stale
+    marker's `commit_seq`, or a coverage event's `covers_commit_seq`.
+    """
+
+    kind: str
+    index_hash: str | None
+    seq: int | None
+    line_number: int
 
 
 class _RebuiltCoverageEvent(BaseModel):
@@ -290,7 +308,7 @@ class DerivedRetrievalIndexStore:
         calls), so an untokenized ledger behaves exactly as before.
         """
 
-        current: DerivedRetrievalIndex | None = None
+        winner: _LedgerEventMeta | None = None
         current_seq: int | None = None
         stale_after_current = False
         max_stale_seq: int | None = None
@@ -298,14 +316,40 @@ class DerivedRetrievalIndexStore:
         if not path.exists():
             raise DerivedRetrievalIndexMissingError(f"retrieval index not found at {path!s}")
 
-        records: list[Mapping[str, object]] = []
-        for line in path.read_text().splitlines():
+        lines = path.read_text().splitlines()
+
+        # PASS 1 - METADATA ONLY (Codex R5 [P2]). Every `rebuilt` event carries
+        # the COMPLETE entry array, so retaining each decoded event would make
+        # peak memory grow with the ledger's whole rebuild HISTORY rather than
+        # with one index. Each decoded line is reduced to the few scalars the
+        # rules below need and then dropped; only the winning rebuild is
+        # decoded into a snapshot, after the winner is known.
+        records: list[_LedgerEventMeta] = []
+        for line_number, line in enumerate(lines):
             if not line.strip():
                 continue
             raw_object: object = json.loads(line)
             if not isinstance(raw_object, dict):
                 continue
-            records.append(cast("Mapping[str, object]", raw_object))
+            raw = cast("Mapping[str, object]", raw_object)
+            event = raw.get("event")
+            if not isinstance(event, str):
+                continue
+            index_hash = raw.get("index_hash")
+            seq_value = (
+                raw.get("covers_commit_seq")
+                if event == _REBUILT_COVERAGE_EVENT
+                else raw.get("commit_seq")
+            )
+            records.append(
+                _LedgerEventMeta(
+                    kind=event,
+                    index_hash=index_hash if isinstance(index_hash, str) else None,
+                    seq=seq_value if isinstance(seq_value, int) else None,
+                    line_number=line_number,
+                )
+            )
+            # `raw` dies here - no decoded entry array outlives this iteration.
 
         # Pair each coverage event to ONE rebuild INSTANCE (Codex R4 [P2]): the
         # nearest PRECEDING rebuild of the same content that no other coverage
@@ -321,45 +365,43 @@ class DerivedRetrievalIndexStore:
         # and an extra rebuild simply goes unclaimed.
         coverage_for_record: dict[int, int] = {}
         unclaimed_rebuilds: dict[str, list[int]] = {}
-        for position, raw in enumerate(records):
-            index_hash = raw.get("index_hash")
-            if not isinstance(index_hash, str):
+        for position, meta in enumerate(records):
+            if meta.index_hash is None:
                 continue
-            event = raw.get("event")
-            if event == _REBUILT_EVENT:
-                unclaimed_rebuilds.setdefault(index_hash, []).append(position)
-            elif event == _REBUILT_COVERAGE_EVENT:
-                seq_value = raw.get("covers_commit_seq")
-                pending = unclaimed_rebuilds.get(index_hash)
-                if isinstance(seq_value, int) and pending:
-                    coverage_for_record[pending.pop()] = seq_value
+            if meta.kind == _REBUILT_EVENT:
+                unclaimed_rebuilds.setdefault(meta.index_hash, []).append(position)
+            elif meta.kind == _REBUILT_COVERAGE_EVENT:
+                pending = unclaimed_rebuilds.get(meta.index_hash)
+                if meta.seq is not None and pending:
+                    coverage_for_record[pending.pop()] = meta.seq
 
-        for position, raw in enumerate(records):
-            event = raw.get("event")
-            if event == _REBUILT_EVENT:
+        for position, meta in enumerate(records):
+            if meta.kind == _REBUILT_EVENT:
                 seq = coverage_for_record.get(position)
                 if seq is not None and current_seq is not None and seq < current_seq:
                     # A LATE rebuild answering an OLDER commit. Accepting it
                     # would drop every record committed since the rebuild it
                     # displaces, and report the result as fresh.
                     continue
-                current = _index_from_event(raw)
+                winner = meta
                 current_seq = seq
                 stale_after_current = False
-            elif event == _STALE_EVENT:
-                raw_seq = raw.get("commit_seq")
-                if isinstance(raw_seq, int):
+            elif meta.kind == _STALE_EVENT:
+                if meta.seq is not None:
                     max_stale_seq = (
-                        raw_seq if max_stale_seq is None else max(max_stale_seq, raw_seq)
+                        meta.seq if max_stale_seq is None else max(max_stale_seq, meta.seq)
                     )
-                if current is not None:
+                if winner is not None:
                     stale_after_current = True
-        if current is None:
+        if winner is None:
             raise DerivedRetrievalIndexMissingError(f"retrieval index not found at {path!s}")
         if current_seq is not None and max_stale_seq is not None and max_stale_seq > current_seq:
             stale_after_current = True
         if stale_after_current and require_fresh:
             raise DerivedRetrievalIndexStaleError("retrieval index is stale after canonical write")
+        # The ONLY full decode: one snapshot per call, whatever the history.
+        winning_object: object = json.loads(lines[winner.line_number])
+        current = _index_from_event(cast("Mapping[str, object]", winning_object))
         return current.model_copy(update={"stale": stale_after_current})
 
     def retrieve(

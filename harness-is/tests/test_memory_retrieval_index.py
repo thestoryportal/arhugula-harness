@@ -10,6 +10,7 @@ from typing import Literal, cast
 
 import pytest
 from harness_core import DeploymentSurface
+from harness_is import memory_retrieval_index
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_record_envelope import (
     MemoryRecordEnvelope,
@@ -24,6 +25,7 @@ from harness_is.memory_record_envelope import (
 )
 from harness_is.memory_retrieval_index import (
     CURRENT_DERIVED_RETRIEVAL_INDEX_VERSION,
+    DerivedRetrievalIndex,
     DerivedRetrievalIndexEntry,
     DerivedRetrievalIndexMissingError,
     DerivedRetrievalIndexQuery,
@@ -550,4 +552,54 @@ def test_an_untokenized_rebuild_is_not_captured_by_an_earlier_coverage_event(
     index_store.read_current()
     assert index_store.index_path().stat().st_size == ledger_size, (
         "read_current is still driving rebuilds — the ledger grew on a pure read"
+    )
+
+
+def test_read_current_materializes_exactly_one_snapshot_per_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex R5 [P2] — retention must not scale with ledger history.
+
+    Every `rebuilt` event carries the COMPLETE index entry array. The
+    resolution passes therefore run over per-line metadata only, and just the
+    winning line is decoded into a snapshot — so peak retention is one index,
+    whatever the append-only ledger has accumulated.
+
+    Counted at `_index_from_event`, the single place a stored event becomes a
+    `DerivedRetrievalIndex`: exactly one call per `read_current`, with several
+    rebuilds on the ledger.
+    """
+
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    index_store = _index_store(binding)
+
+    # Several distinct historical snapshots, each a full entry array.
+    for n in range(4):
+        store.write_record(_record(statement=f"Accumulated fact {n}."))
+        index_store.rebuild(indexed_at=_NOW + timedelta(seconds=n))
+
+    rebuilt_lines = sum(
+        1
+        for line in index_store.index_path().read_text().splitlines()
+        if line.strip() and json.loads(line).get("event") == "rebuilt"
+    )
+    assert rebuilt_lines == 4, "the witness needs several historical snapshots to discriminate"
+
+    decoded = 0
+    real_index_from_event = memory_retrieval_index._index_from_event
+
+    def _counting_index_from_event(raw: Mapping[str, object]) -> DerivedRetrievalIndex:
+        nonlocal decoded
+        decoded += 1
+        return real_index_from_event(raw)
+
+    monkeypatch.setattr(memory_retrieval_index, "_index_from_event", _counting_index_from_event)
+
+    index_store.read_current()
+
+    assert decoded == 1, (
+        f"read_current fully decoded {decoded} stored snapshots for one call — retention "
+        f"scales with ledger history, not with a single index"
     )
