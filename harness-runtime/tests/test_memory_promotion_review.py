@@ -14,14 +14,18 @@ from harness_is.memory_operation_ledger import (
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_policy import PromotionDecision, ReviewMode
 from harness_is.memory_record_envelope import (
+    CapturedCrossFamily,
     MemoryID,
+    MemoryRecordEnvelope,
     MemoryRecordKind,
     MemoryScope,
+    MemoryTier,
     MemoryVisibility,
     SourceRef,
     SourceRefType,
+    compute_memory_content_hash,
 )
-from harness_is.memory_store import CanonicalMemoryStore
+from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.memory_promotion import (
     PreferenceCandidateSource,
@@ -46,11 +50,50 @@ _NOW = datetime(2026, 7, 1, 18, 0, 0, tzinfo=UTC)
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="codex")
 
 
+_RUN_ID = "run-u-mem-09"
+_SOURCE_MEMORY_ID = MemoryID("mem:episodic:episodic_turn:" + "1" * 64)
+
+
 def _store(tmp_path: Path) -> CanonicalMemoryStore:
-    return CanonicalMemoryStore(
+    """A store whose seeded source record makes `_SOURCE_MEMORY_ID` RESOLVABLE.
+
+    U-MEM-27 gave `approve` / `edit_and_approve` an activation-boundary
+    re-derivation that resolves `candidate.source_memory_refs` against the store
+    and fails closed on a reference it cannot read. These U-MEM-09 candidates
+    cite a fabricated id, so without a matching stored record every
+    auto-promotion below would now be withheld as `unknown` provenance - which
+    is the correct new behaviour, not a defect. The seed is `false`-provenance
+    (a same-family capture), which is what those tests always MEANT by an
+    auto-promotable candidate.
+    """
+
+    store = CanonicalMemoryStore(
         root_binding=MemoryRootBinding(default_root=tmp_path / "memory"),
         deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
     )
+    content: dict[str, object] = {
+        "event_type": "turn_completion",
+        "run_id": _RUN_ID,
+        "turn_id": "turn-1",
+    }
+    content_hash = compute_memory_content_hash(content)
+    store.write_record(
+        MemoryStoreRecord(
+            envelope=MemoryRecordEnvelope(
+                memory_id=_SOURCE_MEMORY_ID,
+                schema_version="test-episodic/v1",
+                tier=MemoryTier.EPISODIC,
+                kind=MemoryRecordKind.EPISODIC_TURN,
+                created_at=_NOW,
+                source_refs=(_source_ref(),),
+                scope=_scope(),
+                content_hash=content_hash,
+                captured_cross_family=CapturedCrossFamily.FALSE,
+            ),
+            content=content,
+        )
+    )
+    return store
 
 
 def _tracer_provider() -> tuple[TracerProvider, InMemorySpanExporter]:
@@ -84,7 +127,7 @@ def _candidate(
     return PromotionCandidate(
         candidate_id=f"candidate:{kind.value}",
         source_refs=source_refs or (_source_ref(),),
-        source_memory_refs=(MemoryID("mem:episodic:episodic_turn:" + "1" * 64),),
+        source_memory_refs=(_SOURCE_MEMORY_ID,),
         proposed_kind=kind,
         statement=f"Promote {kind.value} statement.",
         confidence=confidence,
@@ -107,7 +150,7 @@ def _service(
         store=store,
         actor=_ACTOR,
         policy_ref="policy:memory-test",
-        run_id="run-u-mem-09",
+        run_id=_RUN_ID,
         cli_profile="codex",
         provider="openai",
         model="gpt-5",

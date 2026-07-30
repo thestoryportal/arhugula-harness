@@ -46,8 +46,19 @@ from harness_is.memory_record_envelope import (
 
 type StoreJSON = str | int | bool | None | list[StoreJSON] | dict[str, StoreJSON]
 
-_FILE_WRITE_LOCK = threading.Lock()
-_JSONL_WRITE_LOCK = threading.Lock()
+# Re-entrant, deliberately. `write_record_guarded` evaluates a caller
+# precondition and then performs the write it authorizes WITHOUT releasing
+# either lock in between, and the write it wraps re-takes them: the JSON branch
+# re-takes `_FILE_WRITE_LOCK`, and every branch re-takes `_JSONL_WRITE_LOCK`
+# through `_mark_semantic_index_stale`. Cross-thread mutual exclusion is
+# unchanged; only same-thread re-acquisition is now permitted.
+#
+# LOCK ORDER: `_FILE_WRITE_LOCK` before `_JSONL_WRITE_LOCK`, everywhere both are
+# held. No pre-existing path nests them at all (`_write_file_atomically`
+# releases before `_mark_semantic_index_stale` appends), so this single ordering
+# rule is sufficient to keep the pair acyclic.
+_FILE_WRITE_LOCK = threading.RLock()
+_JSONL_WRITE_LOCK = threading.RLock()
 
 
 class MemoryStoreWriteResult(StrEnum):
@@ -70,6 +81,15 @@ class MemoryStoreUnsupportedKindError(ValueError):
 
 class MemoryStoreContentHashMismatchError(ValueError):
     """Raised when envelope content hash does not match canonical content."""
+
+
+class MemoryStoreGuardedWriteConflictError(RuntimeError):
+    """Raised when a guarded write's precondition no longer holds at commit time.
+
+    A concurrency outcome, not a value defect: the record itself was well-formed
+    and the store simply refused to commit it against store state that changed
+    after the caller decided to write. The caller retries, re-decides, or fails.
+    """
 
 
 class MemoryStoreRecord(BaseModel):
@@ -186,6 +206,46 @@ class CanonicalMemoryStore:
             _write_file_atomically(path, payload)
         self._mark_semantic_index_stale(record)
         return MemoryStoreWriteResult.WRITTEN
+
+    def write_record_guarded(
+        self,
+        record: MemoryStoreRecord,
+        *,
+        precondition: Callable[[], bool],
+    ) -> MemoryStoreWriteResult:
+        """Write one record only if `precondition` still holds, ATOMICALLY.
+
+        A GENERIC compare-and-commit seam. The store knows nothing about what
+        the precondition tests - it carries no promotion, provenance, or policy
+        semantics - it only guarantees the one property a caller cannot build
+        for itself from the outside: the precondition is evaluated and the write
+        it authorizes is performed WITHOUT releasing the store's write locks in
+        between. A caller that reads, decides, and then calls `write_record` has
+        a TOCTOU window no amount of re-checking closes, because every re-check
+        it can write is separable from the write it authorizes.
+
+        Both write locks are held across the whole region, in the documented
+        `_FILE_WRITE_LOCK` -> `_JSONL_WRITE_LOCK` order, because a record this
+        store can mutate reaches the disk through either branch: the JSONL kinds
+        append (last line wins, so a rewrite under the same `memory_id` silently
+        changes what a reader sees) and the JSON kinds replace atomically. Both
+        locks are re-entrant, so `precondition` may re-read through this store's
+        own read path and the wrapped `write_record` may re-take them.
+
+        SCOPE, stated rather than implied: these are in-process
+        `threading.RLock`s, so this is exactly as strong as the store's existing
+        write atomicity - it excludes concurrent writers in THIS process and
+        makes no cross-process claim. Raising `MemoryStoreGuardedWriteConflictError`
+        rather than returning a sentinel keeps a caller from treating a refused
+        commit as a completed one by ignoring a return value.
+        """
+
+        with _FILE_WRITE_LOCK, _JSONL_WRITE_LOCK:
+            if not precondition():
+                raise MemoryStoreGuardedWriteConflictError(
+                    f"guarded write precondition failed for {record.envelope.memory_id!s}"
+                )
+            return self.write_record(record)
 
     def read_record(
         self,
@@ -518,6 +578,7 @@ __all__ = [
     "DerivedIndexInvalidation",
     "DerivedIndexInvalidationHook",
     "MemoryStoreContentHashMismatchError",
+    "MemoryStoreGuardedWriteConflictError",
     "MemoryStoreRecord",
     "MemoryStoreRecordNotFoundError",
     "MemoryStoreRecordUnavailableError",

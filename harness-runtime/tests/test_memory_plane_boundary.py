@@ -38,6 +38,7 @@ from harness_is.memory_policy import (
     ReviewMode,
 )
 from harness_is.memory_record_envelope import (
+    CapturedCrossFamily,
     MemoryRecordEnvelope,
     MemoryRecordKind,
     MemoryScope,
@@ -303,10 +304,40 @@ def test_promotion_and_injection_are_independently_settable_policy_decisions(
         provider="openai",
         model="gpt-5",
     )
+    # U-MEM-27: `approve` re-derives cross-family provenance from the CITED
+    # source records and fails closed on an empty or unreadable citation, so an
+    # auto-promotable candidate must name a source that genuinely resolves
+    # `false`. Seeding one keeps this test's subject the promotion-vs-injection
+    # independence rather than the provenance gate.
+    source_content: dict[str, object] = {
+        "semantic_kind": MemoryRecordKind.SEMANTIC_FACT.value,
+        "statement": "Same-family source for the promotion-vs-injection probe.",
+        "status": "active",
+    }
+    source_hash = compute_memory_content_hash(source_content)
+    source_memory_id = derive_memory_id(
+        MemoryTier.SEMANTIC, MemoryRecordKind.SEMANTIC_FACT, source_hash
+    )
+    store.write_record(
+        MemoryStoreRecord(
+            envelope=MemoryRecordEnvelope(
+                memory_id=source_memory_id,
+                schema_version="memory-store-record/v1",
+                tier=MemoryTier.SEMANTIC,
+                kind=MemoryRecordKind.SEMANTIC_FACT,
+                created_at=_NOW,
+                source_refs=(SourceRef(ref_type=SourceRefType.OPERATOR, ref="operator:c-mem-01"),),
+                scope=_scope(),
+                content_hash=source_hash,
+                captured_cross_family=CapturedCrossFamily.FALSE,
+            ),
+            content=source_content,
+        )
+    )
     candidate = PromotionCandidate(
         candidate_id="candidate:fact",
         source_refs=(SourceRef(ref_type=SourceRefType.OPERATOR, ref="operator:c-mem-01"),),
-        source_memory_refs=(),
+        source_memory_refs=(source_memory_id,),
         proposed_kind=PromotionCandidateKind.FACT,
         statement="Promote fact statement, forbid injection.",
         confidence=PromotionCandidateConfidence.HIGH,

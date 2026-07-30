@@ -36,6 +36,7 @@ from harness_is.memory_record_envelope import (
 )
 from harness_is.memory_store import (
     CanonicalMemoryStore,
+    MemoryStoreGuardedWriteConflictError,
     MemoryStoreRecord,
     MemoryStoreRecordNotFoundError,
     MemoryStoreRecordUnavailableError,
@@ -466,3 +467,74 @@ def test_captured_cross_family_is_hash_inert(tmp_path: Path) -> None:
     assert store.write_record(undetermined) is MemoryStoreWriteResult.WRITTEN
     read_back = store.read_record(undetermined.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)
     assert read_back.envelope.content_hash == content_hash
+
+
+def _semantic_record(statement: str) -> MemoryStoreRecord:
+    content: dict[str, object] = {"semantic_kind": "semantic_fact", "statement": statement}
+    content_hash = compute_memory_content_hash(content)
+    return MemoryStoreRecord(
+        envelope=MemoryRecordEnvelope(
+            memory_id=derive_memory_id(
+                MemoryTier.SEMANTIC, MemoryRecordKind.SEMANTIC_FACT, content_hash
+            ),
+            schema_version="memory-store-record/v1",
+            tier=MemoryTier.SEMANTIC,
+            kind=MemoryRecordKind.SEMANTIC_FACT,
+            created_at=_BASE_TIME,
+            scope=MemoryScope(project="arhugula-v2", visibility=MemoryVisibility.PROJECT),
+            content_hash=content_hash,
+        ),
+        content=content,
+    )
+
+
+def test_guarded_write_commits_when_the_precondition_holds(tmp_path: Path) -> None:
+    """The generic compare-and-commit seam behaves as a plain write when it passes."""
+
+    store = _store(tmp_path)
+    record = _semantic_record("guarded write, precondition satisfied")
+
+    result = store.write_record_guarded(record, precondition=lambda: True)
+
+    assert result is MemoryStoreWriteResult.WRITTEN
+    read_back = store.read_record(record.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)
+    assert read_back.envelope.memory_id == record.envelope.memory_id
+
+
+def test_guarded_write_refuses_and_writes_nothing_when_the_precondition_fails(
+    tmp_path: Path,
+) -> None:
+    """A failed precondition is a REFUSAL, not a silently skipped write."""
+
+    store = _store(tmp_path)
+    record = _semantic_record("guarded write, precondition violated")
+
+    with pytest.raises(MemoryStoreGuardedWriteConflictError):
+        store.write_record_guarded(record, precondition=lambda: False)
+
+    with pytest.raises(MemoryStoreRecordNotFoundError):
+        store.read_record(record.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)
+
+
+def test_guarded_write_precondition_may_read_through_the_store(tmp_path: Path) -> None:
+    """Re-entrancy witness - the guard holds the store's own write locks.
+
+    The precondition re-reads through `read_record` and the wrapped write
+    re-takes both locks (`_write_file_atomically` for the JSON branch, and
+    `_append_jsonl` for the derived-index stale marker on every branch). A
+    non-re-entrant lock deadlocks here instead of returning.
+    """
+
+    store = _store(tmp_path)
+    existing = _semantic_record("already stored")
+    store.write_record(existing)
+    incoming = _semantic_record("written under the guard")
+
+    def _existing_is_unchanged() -> bool:
+        read_back = store.read_record(existing.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)
+        return read_back.envelope.content_hash == existing.envelope.content_hash
+
+    assert (
+        store.write_record_guarded(incoming, precondition=_existing_is_unchanged)
+        is MemoryStoreWriteResult.WRITTEN
+    )
