@@ -109,3 +109,13 @@ v1 cleared 2026-07-09, v1.1 cleared 2026-07-28 — the `B-86` spec leg's plan de
 
  — the `B-92` spec leg's plan delta: NEW U-MEM-27 cross-family-captured promotion gate, one central origin-aware tri-state derivation (`_capture` determines the origin disposition from `event_kind` and passes it into `_record`, which computes the final value by gating the family comparison over `provider` + resolved scope) plus the review gate at both promotion entry points, depends on U-MEM-26
 
+### §2.2 change-note lineage relocated 2026-07-30 (B-17 R-ICM-1 follow-on)
+
+**C6 ADR-D7 dated adoption marker (proposed / cleared)** — relocated verbatim from root `CLAUDE.md` §2.2:
+
+**New (2026-07-01, cleared 2026-07-09):** 
+
+**C7 ADR-D7 §15/§86 in-place-correction note** — relocated verbatim from root `CLAUDE.md` §2.2:
+
+ (its §15/§86 "external CLI routing … not in this repo" claim is corrected in-place — the routing was ported to `main` at PR #914, `R-300-external-cli-oauth-routing`)
+

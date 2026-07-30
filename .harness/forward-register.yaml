@@ -181,7 +181,7 @@ items:
   council: not convened — the nameable context-minimalism (C2-style) vs governance-completeness
     tension was answered directly by the operator ratification of 2026-07-30 (governance-only
     scope + conservative L0 split), so no convening is owed.
-  pr: '#pending'
+  pr: '#1161'
   heading: '### B-17 · ICM workspace-methodology adoption *(appended 2026-06-04 at HEAD `ca2bc34`)*'
 - id: B-18
   title: U-1 — cache_control breakpoint emission

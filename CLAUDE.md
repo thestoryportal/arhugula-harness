@@ -53,7 +53,7 @@ Current governance anchors: `Project_Workflow_v1_19.md`, `Phase_7_Meta_Architect
 
 ### 2.2 ADR + ADD + PRD
 
-Foundational authority remains ADR-F1..F5 plus ADR-D1..D6, then `Architectural_Design_Document_v1_3.md`, then `PRD_v1_1.md`. **New (2026-07-01, cleared 2026-07-09):** `ADR-D7_memory_substrate.md` adopts the provider-neutral memory substrate + CLI-profile/provider-adapter surface (its §15/§86 "external CLI routing … not in this repo" claim is corrected in-place — the routing was ported to `main` at PR #914, `R-300-external-cli-oauth-routing`); `PRD_v1_2.md` adds the R-MEM memory-substrate requirement family (additive to PRD v1.1). Full version notes are indexed at `claude-artifact-pointers.md` §2.2 in `.harness`.
+Foundational authority remains ADR-F1..F5 plus ADR-D1..D6, then `Architectural_Design_Document_v1_3.md`, then `PRD_v1_1.md`. `ADR-D7_memory_substrate.md` adopts the provider-neutral memory substrate + CLI-profile/provider-adapter surface; `PRD_v1_2.md` adds the R-MEM memory-substrate requirement family (additive to PRD v1.1). Full version notes are indexed at `claude-artifact-pointers.md` §2.2 in `.harness`.
 
 ### 2.3 Per-Axis Specs (Phase 5 Contract Authority)
 
