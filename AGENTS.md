@@ -4,6 +4,7 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 
 ## Startup Context
 
+- Read `CONTEXT.md` (workspace root) first — the compact task router; it names the operative posture and that posture's entry points, and points back into `CLAUDE.md` for full governance.
 - Read `.harness/roadmap_status.md`, `justfile`, `.codex/notes/codex-compatibility-outline.md`, and the relevant local `AGENTS.md` before substantive work.
 - Read `.codex/notes/deterministic-context-workflow.md` and run `just codex-preflight` before substantive work. This writes the required local context checkpoint.
 - For axis-specific work, read the closest `harness-{is,as,cp,od}/AGENTS.md` first; consult the matching `CLAUDE.md` only when exact Claude lineage or axis posture is needed.

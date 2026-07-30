@@ -62,10 +62,10 @@ snapshot:
   open: 0
   design_substrate_gated: 0
   registered_finding: 16
-  operator_gated: 1
+  operator_gated: 0
   held: 1
-  closed: 78
-  identity_digest: 4c7a7f105b4e4a70
+  closed: 79
+  identity_digest: 71d3b84caeed51a1
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -169,10 +169,19 @@ items:
   heading: '### B-16 · Open architectural / speculative arcs'
 - id: B-17
   title: ICM workspace-methodology adoption
-  status: operator_gated
-  summary: ICM_Alignment_Audit_v1.md landed; no adoption decided — 3 operator gates outstanding.
-  close_out: Operator decides scope / file-size caps / L0-refactor appetite (audit §8) before any spec.
-  council: conditional — nameable context-minimalism (C2-style) vs governance-completeness tension
+  status: closed
+  summary: RATIFIED 2026-07-30 — all 3 audit-§8 gates answered. Scope governance-layer-only;
+    ICM <80/<200-line caps adopted for CONTEXT.md / router files ONLY (design-substrate specs
+    exempt, a documented divergence); L0 refactor CONSERVATIVE. Delivered by this PR.
+  close_out: DELIVERED by this PR — R-ICM-1 (root CLAUDE.md §2.3/§2.4 change-note lineage relocated byte-exact to
+    .harness/claude-artifact-pointers.md, live governance kept inline) + R-ICM-2 (workspace
+    CONTEXT.md task-router); close the row at merge. FORWARD QUESTION preserved for the
+    deployment-surface arc — ICM integration into the final deployed harness package/repo is the
+    better long-term question, and belongs there, not to this repo's governance layer.
+  council: not convened — the nameable context-minimalism (C2-style) vs governance-completeness
+    tension was answered directly by the operator ratification of 2026-07-30 (governance-only
+    scope + conservative L0 split), so no convening is owed.
+  pr: '#pending'
   heading: '### B-17 · ICM workspace-methodology adoption *(appended 2026-06-04 at HEAD `ca2bc34`)*'
 - id: B-18
   title: U-1 — cache_control breakpoint emission

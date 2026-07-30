@@ -15,7 +15,9 @@ Per-stage working goal: **2,000–8,000 focused tokens**. ICM's named anti-patte
 **30,000–50,000 monolithic tokens** loaded regardless of task.
 
 In this repo the per-axis `harness-*/CLAUDE.md` files are the closest **L2-analog** (scope
-pointers), so they take the **200–500** target. There is currently no L1 router (R-ICM-2).
+pointers), so they take the **200–500** target. The **L1 router exists** as of 2026-07-30 —
+root `CONTEXT.md`, landed by `R-ICM-2` under the governance-only ICM adoption ratified that day
+(`B-17`); `scripts/measure.py` discovers and classifies it as L1 against the ~300 target.
 
 ## How this skill uses the targets
 

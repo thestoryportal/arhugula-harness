@@ -23,6 +23,7 @@ SCOPE IS ENFORCED, NOT ASSUMED
 ICM BUDGET TARGETS  (source: ICM_Alignment_Audit_v1.md §3 / §5; token estimate = bytes / 4,
 the audit's own method, so numbers reconcile with the audit)
     L0  repo-root CLAUDE.md ............ ~800 tokens
+    L1  repo-root CONTEXT.md ........... ~300 tokens   (the task router; R-ICM-2, 2026-07-30)
     L2  per-axis subdir CLAUDE.md ...... 200-500 tokens   (the audit's "L2-analog")
 
     These are DIAGNOSTIC targets that frame the gap. They are NOT truncation gates. The
@@ -47,6 +48,7 @@ import subprocess
 import sys
 
 L0_TARGET = 800  # tokens — repo-root CLAUDE.md (ICM L0)
+L1_TARGET = 300  # tokens — repo-root CONTEXT.md task router (ICM L1; R-ICM-2)
 L2_TARGET_LO = 200  # tokens — per-axis subdir CLAUDE.md (ICM L2-analog)
 L2_TARGET_HI = 500
 BYTES_PER_TOKEN = 4  # ICM audit convention (B/4)
@@ -54,7 +56,13 @@ HOTSPOT_LINE_CHARS = 1000  # a line longer than this is a relocation candidate
 
 
 def discover(root: str) -> tuple[list[str], str]:
-    """Return (relative CLAUDE.md paths, source-label). git-tracked first; FS-scan fallback."""
+    """Return (relative governance paths, source-label). git-tracked first; FS-scan fallback.
+
+    The set is every tracked CLAUDE.md plus the repo-root CONTEXT.md (the L1 task router,
+    R-ICM-2). Nested/stage CONTEXT.md files are ICM L2 stage contracts owned by their own
+    stage trees, not part of the always-loaded governance portfolio, so only the root one
+    is picked up.
+    """
     try:
         out = subprocess.run(
             ["git", "-C", root, "ls-files"],
@@ -63,8 +71,10 @@ def discover(root: str) -> tuple[list[str], str]:
             check=True,
         ).stdout
         files = sorted(p for p in out.splitlines() if os.path.basename(p) == "CLAUDE.md")
+        if "CONTEXT.md" in out.splitlines():
+            files.append("CONTEXT.md")
         if files:
-            return files, "git-tracked"
+            return sorted(files), "git-tracked"
     except Exception:
         pass
     # Fallback: scan, skipping the dirs that hold vendored / bundled / build artifacts.
@@ -84,21 +94,31 @@ def discover(root: str) -> tuple[list[str], str]:
         dirnames[:] = [d for d in dirnames if d not in skip]
         if "CLAUDE.md" in filenames:
             found.append(os.path.relpath(os.path.join(dp, "CLAUDE.md"), root))
+    if os.path.isfile(os.path.join(root, "CONTEXT.md")):
+        found.append("CONTEXT.md")
     return sorted(found), "fs-scan"
 
 
 def kind_of(relpath: str) -> str:
-    """L0 = repo-root CLAUDE.md; everything else is an L2-analog governance pointer."""
-    return "L0" if relpath in ("CLAUDE.md", "./CLAUDE.md") else "L2"
+    """L0 = repo-root CLAUDE.md; L1 = repo-root CONTEXT.md; else an L2-analog pointer."""
+    if relpath in ("CLAUDE.md", "./CLAUDE.md"):
+        return "L0"
+    if relpath in ("CONTEXT.md", "./CONTEXT.md"):
+        return "L1"
+    return "L2"
 
 
 def target_str(kind: str) -> str:
-    return f"~{L0_TARGET}" if kind == "L0" else f"{L2_TARGET_LO}-{L2_TARGET_HI}"
+    if kind == "L0":
+        return f"~{L0_TARGET}"
+    if kind == "L1":
+        return f"~{L1_TARGET}"
+    return f"{L2_TARGET_LO}-{L2_TARGET_HI}"
 
 
 def over_ratio(tokens: int, kind: str) -> float:
     """How many times over the (upper) target a file sits. <1.0 means within budget."""
-    hi = L0_TARGET if kind == "L0" else L2_TARGET_HI
+    hi = {"L0": L0_TARGET, "L1": L1_TARGET}.get(kind, L2_TARGET_HI)
     return tokens / hi if hi else 0.0
 
 

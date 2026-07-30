@@ -201,11 +201,16 @@ def test_negative_status_flip_without_snapshot_bump_fails() -> None:
 
 def test_negative_status_swap_with_unchanged_counts_fails() -> None:
     """Two items trading statuses (aggregate counts unaffected) must still be caught
-    -- the exact class a count-only pin structurally cannot detect."""
+    -- the exact class a count-only pin structurally cannot detect.
+
+    The pair is discovered, not hard-coded to two named statuses: which statuses are
+    populated is live register state (B-17's close emptied `operator_gated` entirely),
+    and a test that pins them fails on a legitimate register transit rather than on the
+    defect it exists to catch."""
 
     def m(data):
-        a = next(r for r in data["items"] if r["status"] == "registered_finding")
-        b = next(r for r in data["items"] if r["status"] == "operator_gated")
+        a = data["items"][0]
+        b = next(r for r in data["items"] if r["status"] != a["status"])
         a["status"], b["status"] = b["status"], a["status"]
         # every count stays identical -- only identity_digest can catch this
 
