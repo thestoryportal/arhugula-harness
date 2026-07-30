@@ -334,6 +334,58 @@ def test_dir_lock_survives_failed_open(tmp_path: Path, monkeypatch: pytest.Monke
     assert done.is_set(), "dir lock poisoned by the failed open"
 
 
+def test_dir_lock_release_survives_a_raising_unlock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate-log LOW (post-#1159) — a raising `LOCK_UN` must not wedge the lock.
+
+    `release` unlocked, closed the fd, and dropped the RLock in bare sequence,
+    so an `OSError` out of `flock(fd, LOCK_UN)` (vanished mount, EBADF) skipped
+    BOTH the `os.close` and the `self._rlock.release()`: the shared in-process
+    face was then held forever and every later thread on that path blocked.
+    The exception must still propagate — it is a real failure — but the lock
+    must be left releasable, mirroring `acquire`'s already-hardened discipline.
+    """
+    import fcntl as fcntl_module
+
+    from harness_is.cross_process_ledger_lock import _DirLock
+
+    real_flock = fcntl_module.flock
+    unlocks = 0
+
+    def _flaky_flock(fd: int, operation: int) -> None:
+        nonlocal unlocks
+        if operation == fcntl_module.LOCK_UN:
+            unlocks += 1
+            if unlocks == 1:
+                raise OSError(5, "Input/output error")
+        real_flock(fd, operation)
+
+    monkeypatch.setattr(fcntl_module, "flock", _flaky_flock)
+
+    lock = _DirLock(tmp_path)
+    lock.acquire()
+    with pytest.raises(OSError):
+        lock.release()
+
+    done = threading.Event()
+
+    def _retry() -> None:
+        lock.acquire()
+        try:
+            done.set()
+        finally:
+            lock.release()
+
+    # `daemon` so a regression fails this assertion rather than hanging the
+    # interpreter at exit on a thread blocked forever inside `acquire`.
+    t = threading.Thread(target=_retry, daemon=True)
+    t.start()
+    t.join(_WAIT)
+    assert done.is_set(), "the in-process face stayed wedged after the raising unlock"
+    assert lock._fd == -1, "the failed unlock left a stale fd behind"
+
+
 def test_txn_with_reader_on_sibling_ledgers_does_not_deadlock(tmp_path: Path) -> None:
     """Codex round-2 P1 (B-46 landing) — the ABBA cycle: a transaction
     holds an existing sidecar's FILE lock and then writes the sibling

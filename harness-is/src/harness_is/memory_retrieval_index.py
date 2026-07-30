@@ -4,6 +4,26 @@ The canonical semantic/procedural records remain the source of truth. This
 module rebuilds the derived ``semantic/index.jsonl`` projection from those
 records and provides a bounded metadata retrieval base for later U-MEM-11
 ranking and packet assembly.
+
+SCOPE OF THE COMMIT-ORDERING PROTECTION (B-93 arc). ``read_current`` orders
+rebuilds by commit token rather than by ledger position, but that protection
+covers a ledger written ENTIRELY by B-93-or-later writers. Two bounds are
+registered rather than fixed:
+
+* A mixed-version window with a live PRE-B-93 WRITER (not merely an old
+  reader, which `_DerivedRetrievalIndexLedgerEvent`'s byte-compatibility
+  already covers) puts untokenized stale markers on the ledger. Legacy
+  markers carry no commit token BY DEFINITION, so no read-side rule can
+  order them against a covered rebuild retroactively - the ledger falls back
+  to positional ordering and can misorder exactly as pre-B-93 could. See
+  register row B-95.
+* Rebuilds that pass no ``commit_seq`` - which includes the production
+  auto-refresh path, untokenized by design - remain positional last-wins and
+  can leave an older overlapping snapshot reading fresh. See register row
+  B-94.
+
+Both are pre-existing behaviours that this protocol narrows rather than
+introduces; neither is witnessed here, deliberately.
 """
 
 from __future__ import annotations
@@ -16,7 +36,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Self, cast
+from typing import Literal, NamedTuple, Self, cast
 
 from harness_core import DeploymentSurface
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -47,6 +67,7 @@ CURRENT_DERIVED_RETRIEVAL_INDEX_VERSION = "derived-retrieval-index/v1"
 
 _REBUILT_EVENT: Literal["rebuilt"] = "rebuilt"
 _STALE_EVENT: Literal["stale"] = "stale"
+_REBUILT_COVERAGE_EVENT: Literal["rebuilt_coverage"] = "rebuilt_coverage"
 _MAX_SEARCH_TERMS_PER_RECORD = 64
 _INACTIVE_STATUSES = {"denied", "expired", "proposed", "superseded", "tombstoned"}
 
@@ -143,6 +164,58 @@ class _DerivedRetrievalIndexLedgerEvent(BaseModel):
     index_hash: str
     entries: tuple[DerivedRetrievalIndexEntry, ...]
 
+    # BYTE-COMPATIBLE WITH PRE-B-93 WRITERS, DELIBERATELY (Codex R3 [P1]).
+    # This model is `extra="forbid"` and an older reader validates EVERY
+    # `rebuilt` line against its own copy of it. A new writer sharing a memory
+    # root with a still-running older process - the daemon + one-shot upgrade
+    # window - would break that reader's retrieval outright by adding ANY key
+    # here, including one serialized as `null`. Rebuild coverage therefore
+    # rides a separate event kind (`_REBUILT_COVERAGE_EVENT`), which the older
+    # reader's `event ==` discrimination skips instead of validating.
+
+
+class _LedgerEventMeta(NamedTuple):
+    """One ledger line reduced to what `read_current`'s rules need - no payload.
+
+    A `rebuilt` line carries the ENTIRE index entry array. Holding the decoded
+    form of every line would tie peak memory to the ledger's rebuild history
+    rather than to a single index, so the resolution passes run over these
+    scalars and only the winning line is decoded (Codex R5 [P2]).
+
+    `seq` is whichever commit token the line's own kind carries: a stale
+    marker's `commit_seq`, or a coverage event's `covers_commit_seq`.
+    """
+
+    kind: str
+    index_hash: str | None
+    seq: int | None
+    line_number: int
+
+
+class _RebuiltCoverageEvent(BaseModel):
+    """Which commit a `rebuilt` event's index reflects (`semantic/index.jsonl`).
+
+    A SEPARATE event kind rather than a field on the rebuild, so the rebuild
+    stays byte-compatible for readers that predate this metadata: their loop
+    matches neither `rebuilt` nor `stale` on this line and ignores it.
+
+    It is written AFTER the rebuild it describes and claims exactly ONE of
+    them: the nearest preceding rebuild of the same content not already
+    claimed. `index_hash` alone is NOT the association (Codex R4) - the same
+    entries can be rebuilt many times, and a later UNTOKENIZED rebuild must
+    stay untokenized rather than inherit an older rebuild's coverage.
+
+    The claim walk needs no atomic paired append, which matters because
+    `_append_jsonl` takes no lock and another process can land lines between a
+    rebuild and its coverage.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    event: Literal["rebuilt_coverage"]
+    index_hash: str
+    covers_commit_seq: int
+
 
 class DerivedRetrievalIndexStore:
     """Filesystem-backed derived index API for C-MEM-02/C-MEM-11."""
@@ -174,8 +247,28 @@ class DerivedRetrievalIndexStore:
             self._deployment_surface,
         )
 
-    def rebuild(self, *, indexed_at: datetime) -> DerivedRetrievalIndex:
-        """Rebuild the current index from canonical semantic/procedural records."""
+    def rebuild(
+        self,
+        *,
+        indexed_at: datetime,
+        commit_seq: int | None = None,
+    ) -> DerivedRetrievalIndex:
+        """Rebuild the current index from canonical semantic/procedural records.
+
+        `commit_seq` is the `DerivedIndexInvalidation.commit_seq` of the write
+        this rebuild answers, and a hook rebuilding in response to one MUST
+        pass it. The store notifies hooks outside its write hold, so two
+        overlapping writes can rebuild in either order; without the token, a
+        late rebuild of an older commit lands LAST in the append-only ledger
+        and `read_current` would report it as the newest index, silently
+        dropping the newer write's records.
+
+        Attributing the rebuild to its TRIGGERING commit under-claims by
+        design: the rebuild reads the filesystem after that commit, so it
+        reflects at least that commit and possibly later ones. Under-claiming
+        costs a spurious `stale` (safe); over-claiming would report a missing
+        record as fresh (not safe).
+        """
 
         entries = tuple(_iter_index_entries(self._registry, self._deployment_surface))
         index_hash = _compute_index_hash(
@@ -189,6 +282,7 @@ class DerivedRetrievalIndexStore:
             entries=entries,
             stale=False,
         )
+        path = self.index_path()
         event = _DerivedRetrievalIndexLedgerEvent(
             event=_REBUILT_EVENT,
             index_version=index.index_version,
@@ -196,18 +290,63 @@ class DerivedRetrievalIndexStore:
             index_hash=index.index_hash,
             entries=index.entries,
         )
-        _append_jsonl(self.index_path(), _canonical_json_bytes(event.model_dump(mode="json")))
+        _append_jsonl(path, _canonical_json_bytes(event.model_dump(mode="json")))
+        if commit_seq is not None:
+            # AFTER its rebuild, deliberately. The two appends are NOT atomic
+            # as a pair (`_append_jsonl` takes no lock), so either line can be
+            # the one a crash loses. Losing the trailing coverage leaves an
+            # untokenized rebuild, which falls to the legacy positional rule -
+            # safe. The reverse order would leave an ORPHAN coverage that an
+            # EARLIER unclaimed rebuild of the same content could adopt (the
+            # claim walk only ever pairs a coverage to a rebuild that precedes
+            # it), which is the misassociation this ordering exists to prevent.
+            coverage = _RebuiltCoverageEvent(
+                event=_REBUILT_COVERAGE_EVENT,
+                index_hash=index.index_hash,
+                covers_commit_seq=commit_seq,
+            )
+            _append_jsonl(path, _canonical_json_bytes(coverage.model_dump(mode="json")))
         return index
 
     def read_current(self, *, require_fresh: bool = True) -> DerivedRetrievalIndex:
-        """Read the last rebuilt index and detect later stale markers."""
+        """Read the newest rebuilt index and detect uncovered canonical writes.
 
-        current: DerivedRetrievalIndex | None = None
+        Ledger POSITION alone is not the freshness authority. Because the store
+        notifies its derived-index hooks outside the write hold, two overlapping
+        writes can rebuild in either order, so the last `rebuilt` line is not
+        necessarily the newest index. Two rules run together:
+
+        * a `rebuilt_coverage` event ORDERS rebuilds. A rebuild answering an
+          older commit than one already accepted is ignored outright, however
+          late it landed in the file. Coverage is a separate event kind so the
+          `rebuilt` line stays byte-compatible for pre-B-93 readers.
+        * a stale marker's `commit_seq` greater than the accepted rebuild's
+          means that commit is NOT reflected in this index - stale, whatever the
+          two lines' relative positions.
+
+        The original positional rule is preserved verbatim underneath for
+        events that carry no token (legacy ledger lines and direct `rebuild()`
+        calls), so an untokenized ledger behaves exactly as before.
+        """
+
+        winner: _LedgerEventMeta | None = None
+        current_seq: int | None = None
         stale_after_current = False
+        max_stale_seq: int | None = None
         path = self.index_path()
         if not path.exists():
             raise DerivedRetrievalIndexMissingError(f"retrieval index not found at {path!s}")
-        for line in path.read_text().splitlines():
+
+        lines = path.read_text().splitlines()
+
+        # PASS 1 - METADATA ONLY (Codex R5 [P2]). Every `rebuilt` event carries
+        # the COMPLETE entry array, so retaining each decoded event would make
+        # peak memory grow with the ledger's whole rebuild HISTORY rather than
+        # with one index. Each decoded line is reduced to the few scalars the
+        # rules below need and then dropped; only the winning rebuild is
+        # decoded into a snapshot, after the winner is known.
+        records: list[_LedgerEventMeta] = []
+        for line_number, line in enumerate(lines):
             if not line.strip():
                 continue
             raw_object: object = json.loads(line)
@@ -215,15 +354,82 @@ class DerivedRetrievalIndexStore:
                 continue
             raw = cast("Mapping[str, object]", raw_object)
             event = raw.get("event")
-            if event == _REBUILT_EVENT:
-                current = _index_from_event(raw)
+            if not isinstance(event, str):
+                continue
+            index_hash = raw.get("index_hash")
+            seq_value = (
+                raw.get("covers_commit_seq")
+                if event == _REBUILT_COVERAGE_EVENT
+                else raw.get("commit_seq")
+            )
+            records.append(
+                _LedgerEventMeta(
+                    kind=event,
+                    index_hash=index_hash if isinstance(index_hash, str) else None,
+                    seq=seq_value if isinstance(seq_value, int) else None,
+                    line_number=line_number,
+                )
+            )
+            # `raw` dies here - no decoded entry array outlives this iteration.
+
+        # Pair each coverage event to ONE rebuild INSTANCE (Codex R4 [P2]): the
+        # nearest PRECEDING rebuild of the same content that no other coverage
+        # event has already claimed. Binding by content hash alone let a single
+        # coverage event attach to every rebuild that happened to produce the
+        # same entries - including a later UNTOKENIZED one, whose whole point is
+        # that it has no coverage and must fall to the legacy positional rule.
+        #
+        # The claim walk is what makes this safe without atomic paired appends
+        # (`_append_jsonl` takes no lock, so another process can interleave
+        # between a rebuild and its coverage): each coverage consumes exactly
+        # one rebuild. Interleaved same-hash pairs MAY cross-claim (the walk is
+        # LIFO), and that is benign by construction: the hash covers entries
+        # only, so two same-hash rebuilds are byte-identical as content, any
+        # claimed seq is a true statement about that content, and the winner
+        # rule takes the max seq under either pairing. The one arrangement
+        # that diverges - a tokenized and an untokenized rebuild of the same
+        # content, where the untokenized one adopts the token - errs toward a
+        # spurious stale, the documented-safe direction. An extra rebuild
+        # simply goes unclaimed.
+        coverage_for_record: dict[int, int] = {}
+        unclaimed_rebuilds: dict[str, list[int]] = {}
+        for position, meta in enumerate(records):
+            if meta.index_hash is None:
+                continue
+            if meta.kind == _REBUILT_EVENT:
+                unclaimed_rebuilds.setdefault(meta.index_hash, []).append(position)
+            elif meta.kind == _REBUILT_COVERAGE_EVENT:
+                pending = unclaimed_rebuilds.get(meta.index_hash)
+                if meta.seq is not None and pending:
+                    coverage_for_record[pending.pop()] = meta.seq
+
+        for position, meta in enumerate(records):
+            if meta.kind == _REBUILT_EVENT:
+                seq = coverage_for_record.get(position)
+                if seq is not None and current_seq is not None and seq < current_seq:
+                    # A LATE rebuild answering an OLDER commit. Accepting it
+                    # would drop every record committed since the rebuild it
+                    # displaces, and report the result as fresh.
+                    continue
+                winner = meta
+                current_seq = seq
                 stale_after_current = False
-            elif event == _STALE_EVENT and current is not None:
-                stale_after_current = True
-        if current is None:
+            elif meta.kind == _STALE_EVENT:
+                if meta.seq is not None:
+                    max_stale_seq = (
+                        meta.seq if max_stale_seq is None else max(max_stale_seq, meta.seq)
+                    )
+                if winner is not None:
+                    stale_after_current = True
+        if winner is None:
             raise DerivedRetrievalIndexMissingError(f"retrieval index not found at {path!s}")
+        if current_seq is not None and max_stale_seq is not None and max_stale_seq > current_seq:
+            stale_after_current = True
         if stale_after_current and require_fresh:
             raise DerivedRetrievalIndexStaleError("retrieval index is stale after canonical write")
+        # The ONLY full decode: one snapshot per call, whatever the history.
+        winning_object: object = json.loads(lines[winner.line_number])
+        current = _index_from_event(cast("Mapping[str, object]", winning_object))
         return current.model_copy(update={"stale": stale_after_current})
 
     def retrieve(

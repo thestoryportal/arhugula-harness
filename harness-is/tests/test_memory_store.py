@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +37,7 @@ from harness_is.memory_record_envelope import (
 )
 from harness_is.memory_store import (
     CanonicalMemoryStore,
+    DerivedIndexInvalidation,
     MemoryStoreGuardedWriteConflictError,
     MemoryStoreRecord,
     MemoryStoreRecordNotFoundError,
@@ -337,7 +339,31 @@ def test_store_marks_derived_semantic_index_stale_after_canonical_write(
         "memory_id": fact.envelope.memory_id,
         "record_kind": "semantic_fact",
         "content_hash": fact.envelope.content_hash.hex(),
+        # First marker on a ledger that did not exist yet.
+        "commit_seq": 0,
     }
+
+
+def test_stale_marker_commit_seq_is_strictly_increasing(tmp_path: Path) -> None:
+    """`commit_seq` is a usable commit ORDER, not a constant.
+
+    A hook rebuilding a derived index orders its rebuilds by this token, so a
+    stamp that never advances (or advances non-monotonically) is worse than no
+    stamp at all — it would look like ordering while providing none.
+    """
+
+    store = _store(tmp_path)
+    for n in range(4):
+        store.write_record(_semantic_record(f"ordered write {n}"))
+
+    seqs = [
+        marker["commit_seq"]
+        for marker in _jsonl_records(tmp_path / "memory" / "semantic" / "index.jsonl")
+    ]
+
+    assert len(seqs) == 4
+    assert seqs == sorted(seqs)
+    assert len(set(seqs)) == 4, f"commit_seq repeated across distinct commits: {seqs}"
 
 
 @pytest.mark.parametrize(
@@ -538,3 +564,70 @@ def test_guarded_write_precondition_may_read_through_the_store(tmp_path: Path) -
         store.write_record_guarded(incoming, precondition=_existing_is_unchanged)
         is MemoryStoreWriteResult.WRITTEN
     )
+
+
+@pytest.mark.parametrize("entry_point", ("write_record", "write_record_guarded"))
+def test_derived_index_hook_runs_outside_every_write_hold(
+    tmp_path: Path,
+    entry_point: str,
+) -> None:
+    """Gate-log LOW (post-#1159) - the hook must not run under the write hold.
+
+    The derived-index hook is caller-supplied and arbitrary. Invoked INSIDE the
+    per-root `cross_process_scope_lock`, a hook that writes back through the
+    store from another thread deadlocks the whole memory root: the hook's own
+    frame holds the scope and the inner thread blocks on it forever, so the hook
+    never returns to release it.
+
+    BOTH entry points carry an arm. `write_record_guarded` holds its own scope
+    across the write it authorizes, so a hoist applied only inside
+    `write_record` leaves this path deadlocked - silently, because the
+    unguarded arm alone still passes.
+    """
+
+    inner = _semantic_record("written from inside the derived-index hook")
+    outer = _semantic_record("the write whose hook re-enters the store")
+    events: list[DerivedIndexInvalidation] = []
+    reentered = threading.Event()
+
+    def _hook(event: DerivedIndexInvalidation) -> None:
+        events.append(event)
+        if len(events) > 1:
+            return  # the nested write's own notification - do not recurse
+        # `daemon` so a regression fails the assertion below rather than
+        # leaving a thread blocked on the scope lock at interpreter exit.
+        worker = threading.Thread(target=lambda: store.write_record(inner), daemon=True)
+        worker.start()
+        worker.join(5.0)
+        assert not worker.is_alive(), (
+            "a write from another thread blocked while the derived-index hook ran - "
+            "the hook is still being invoked under the store's write hold"
+        )
+        reentered.set()
+
+    store = CanonicalMemoryStore(
+        root_binding=MemoryRootBinding(default_root=tmp_path / "memory"),
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        derived_index_hook=_hook,
+    )
+
+    if entry_point == "write_record":
+        assert store.write_record(outer) is MemoryStoreWriteResult.WRITTEN
+    else:
+        assert (
+            store.write_record_guarded(outer, precondition=lambda: True)
+            is MemoryStoreWriteResult.WRITTEN
+        )
+
+    assert reentered.is_set()
+    assert [event.memory_id for event in events] == [
+        outer.envelope.memory_id,
+        inner.envelope.memory_id,
+    ]
+    # The durable ledger remains the ordering authority, and both writes are on
+    # it - the hoist moved the notification, not the stale marker.
+    index_path = tmp_path / "memory" / "semantic" / "index.jsonl"
+    assert [marker["memory_id"] for marker in _jsonl_records(index_path)] == [
+        outer.envelope.memory_id,
+        inner.envelope.memory_id,
+    ]

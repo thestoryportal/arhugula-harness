@@ -135,6 +135,33 @@ class DerivedIndexInvalidation(BaseModel):
     memory_id: MemoryID
     record_kind: MemoryRecordKind
     content_hash: str
+    commit_seq: int
+    """Monotonic COMMIT-ORDER token, assigned inside the per-root write hold.
+
+    The store notifies its hook OUTSIDE that hold (`_notify_derived_index`), so
+    hook invocations are NOT commit-ordered: two overlapping writes can run
+    their hooks in either order. A hook that rebuilds a derived index must
+    therefore say WHICH commit its rebuild reflects, or a late rebuild of an
+    older commit silently supersedes a newer one in the append-only index
+    ledger. This token is that statement - a hook passes it to
+    `DerivedRetrievalIndexStore.rebuild(commit_seq=...)`, and `read_current`
+    keeps the highest-seq rebuild rather than the last-written one.
+
+    Opaque and comparable only: currently the index ledger's byte length before
+    the marker append, which is strictly increasing under the hold and shared
+    across every process on the root. Never interpret it as a count.
+
+    SCOPE. The ordering it buys holds for a ledger written entirely by
+    B-93-or-later writers. A live PRE-B-93 writer emits stale markers with no
+    token at all, and an untokenized marker cannot be ordered against a covered
+    rebuild retroactively by any read-side rule, so a mixed-version window falls
+    back to positional ordering (register row B-95). Rebuilds that pass no
+    token - the production auto-refresh path among them - are likewise
+    positional (register row B-94). On Windows the uniqueness of this token
+    additionally inherits the B-45 bound: the per-root scope lock is a no-op
+    there and the ledger-length read is not covered by the JSONL append lock,
+    so two writers can mint the same value (register row B-45).
+    """
 
 
 DerivedIndexInvalidationHook = Callable[[DerivedIndexInvalidation], None]
@@ -203,15 +230,59 @@ class CanonicalMemoryStore:
     def write_record(self, record: MemoryStoreRecord) -> MemoryStoreWriteResult:
         """Write one envelope-backed record, then invalidate derived indexes."""
 
+        # Serialization and path resolution stay OUTSIDE the hold. `content` is
+        # unbounded, so canonicalizing a large record under a root-wide
+        # exclusive lock would block every other writer on the root for its full
+        # serialization cost. Neither step touches the filesystem.
         payload = canonicalize_memory_store_record(record)
         path = self.record_path(record)
         with self._write_scope():
-            if record.envelope.kind in _JSONL_BY_KIND:
-                _append_jsonl(path, payload)
-            else:
-                _write_file_atomically(path, payload)
-            self._mark_semantic_index_stale(record)
+            event = self._write_record_locked(record, payload=payload, path=path)
+        self._notify_derived_index(event)
         return MemoryStoreWriteResult.WRITTEN
+
+    def _write_record_locked(
+        self,
+        record: MemoryStoreRecord,
+        *,
+        payload: bytes,
+        path: Path,
+    ) -> DerivedIndexInvalidation:
+        """The durable half of a write. PRECONDITION: the write scope is HELD.
+
+        The canonical write and the semantic-index stale marker both stay inside
+        the hold, so the index ledger keeps ordering committed writes (the
+        cross-process commit-order oracle) and the marker's `commit_seq` is a
+        true commit order. Only the derived-index HOOK is left to the caller, to
+        be run after the hold is released.
+
+        `payload` and `path` are supplied by the caller rather than computed
+        here, so each entry point can decide whether that cost falls inside the
+        hold: `write_record` precomputes them outside it, while
+        `write_record_guarded` computes them inside a region it is already
+        holding for the precondition anyway.
+        """
+
+        if record.envelope.kind in _JSONL_BY_KIND:
+            _append_jsonl(path, payload)
+        else:
+            _write_file_atomically(path, payload)
+        return self._mark_semantic_index_stale(record)
+
+    def _notify_derived_index(self, event: DerivedIndexInvalidation) -> None:
+        """Run the derived-index hook OUTSIDE every write lock.
+
+        Deliberately unserialized: a hook is caller-supplied and arbitrary, and
+        under the hold one that writes back through this store from another
+        thread deadlocks the whole memory root. Hook INVOCATIONS therefore no
+        longer observe commit order - the durable `semantic/index.jsonl` ledger
+        remains the ordering authority - and the event is an idempotent stale
+        marker carrying the written record's `content_hash`, so a consumer that
+        rebuilds from the ledger converges regardless of the order it saw.
+        """
+
+        if self._derived_index_hook is not None:
+            self._derived_index_hook(event)
 
     def _write_scope(self) -> AbstractContextManager[None]:
         """The per-root cross-process hold every mutating write takes.
@@ -247,7 +318,8 @@ class CanonicalMemoryStore:
         append (last line wins, so a rewrite under the same `memory_id` silently
         changes what a reader sees) and the JSON kinds replace atomically. Both
         locks are re-entrant, so `precondition` may re-read through this store's
-        own read path and the wrapped `write_record` may re-take them.
+        own read path and the wrapped write may re-take them. The derived-index
+        hook is the one thing NOT run under the region (`_notify_derived_index`).
 
         SCOPE (Codex round-1 [P1] - this guarantee is now CROSS-PROCESS). The
         `threading.RLock`s alone were only as strong as the store's pre-existing
@@ -271,7 +343,13 @@ class CanonicalMemoryStore:
                 raise MemoryStoreGuardedWriteConflictError(
                     f"guarded write precondition failed for {record.envelope.memory_id!s}"
                 )
-            return self.write_record(record)
+            event = self._write_record_locked(
+                record,
+                payload=canonicalize_memory_store_record(record),
+                path=self.record_path(record),
+            )
+        self._notify_derived_index(event)
+        return MemoryStoreWriteResult.WRITTEN
 
     def read_record(
         self,
@@ -395,19 +473,25 @@ class CanonicalMemoryStore:
             entry_count=entry_count,
         )
 
-    def _mark_semantic_index_stale(self, record: MemoryStoreRecord) -> None:
-        event = DerivedIndexInvalidation(
-            memory_id=record.envelope.memory_id,
-            record_kind=record.envelope.kind,
-            content_hash=record.envelope.content_hash.hex(),
-        )
+    def _mark_semantic_index_stale(self, record: MemoryStoreRecord) -> DerivedIndexInvalidation:
+        """Append the durable stale marker and RETURN the event to notify.
+
+        Notification is the caller's, at `_notify_derived_index`, once the write
+        scope is released.
+        """
+
         path = self._registry.resolve_path(
             MemoryPathClass.SEMANTIC_INDEX_LEDGER,
             self._deployment_surface,
         )
+        event = DerivedIndexInvalidation(
+            memory_id=record.envelope.memory_id,
+            record_kind=record.envelope.kind,
+            content_hash=record.envelope.content_hash.hex(),
+            commit_seq=_next_commit_seq(path),
+        )
         _append_jsonl(path, _canonical_json_bytes(_normalize_for_store_json(event)))
-        if self._derived_index_hook is not None:
-            self._derived_index_hook(event)
+        return event
 
 
 def canonicalize_memory_store_record(record: MemoryStoreRecord) -> bytes:
@@ -513,6 +597,27 @@ def _write_file_atomically(path: Path, payload: bytes) -> None:
             temporary.replace(path)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+def _next_commit_seq(index_path: Path) -> int:
+    """A monotonic commit-order token for the next stale marker.
+
+    PRECONDITION: the per-root write scope is HELD, which is what makes the
+    result a genuine commit order rather than a racy read.
+
+    The index ledger's current byte length. Every commit appends a non-empty
+    line to that ledger inside the hold, so successive commits observe strictly
+    increasing values, and because the source is the shared FILE rather than
+    any process-local counter the order holds across every process on the root
+    (a process-local counter would restart at zero in a second `harness run`).
+    Rebuild events appended by a hook also grow the file; that keeps the token
+    monotonic and is harmless, since only the ORDER is ever compared.
+    """
+
+    try:
+        return index_path.stat().st_size
+    except FileNotFoundError:
+        return 0
 
 
 def _append_jsonl(path: Path, payload: bytes) -> None:

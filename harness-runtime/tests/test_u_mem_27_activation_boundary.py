@@ -354,6 +354,91 @@ class _IOFailingSourceStore:
         return self.inner.append_memory_operation(payload)
 
 
+class _RunIdBlindSourceStore:
+    """A `PromotionDecisionStore` double whose `read_record` IGNORES `run_id`.
+
+    The Protocol permits it - `run_id` is a keyword a store MAY consult, and
+    only the concrete `CanonicalMemoryStore` raises for an episodic read without
+    one. Against that concrete store the service's episodic-no-`run_id`
+    PRE-CHECK is unobservable: the raise lands in `_resolve_source_provenance`'s
+    sibling `except ValueError`, which returns `None` identically, so deleting
+    the pre-check leaves every concrete-store witness green.
+
+    This double is the shape that tells the two apart. It SERVES the cited
+    episodic record, so without the pre-check the service resolves a `false`
+    provenance it has no run-scoped right to trust and auto-promotes silently.
+    """
+
+    def __init__(self, inner: CanonicalMemoryStore, *, source: MemoryStoreRecord) -> None:
+        self.inner = inner
+        self._source = source
+
+    def read_record(
+        self,
+        memory_id: MemoryID,
+        kind: MemoryRecordKind,
+        *,
+        run_id: str | None = None,
+        audit_mode: bool = False,
+    ) -> MemoryStoreRecord:
+        if memory_id == self._source.envelope.memory_id:
+            return self._source
+        return self.inner.read_record(memory_id, kind, run_id=run_id, audit_mode=audit_mode)
+
+    def write_record(self, record: MemoryStoreRecord) -> object:
+        return self.inner.write_record(record)
+
+    def write_record_guarded(
+        self,
+        record: MemoryStoreRecord,
+        *,
+        precondition: Callable[[], bool],
+    ) -> object:
+        return self.inner.write_record_guarded(record, precondition=precondition)
+
+    def append_memory_operation(
+        self,
+        payload: MemoryOperationPayload,
+    ) -> MemoryOperationWriteResult:
+        return self.inner.append_memory_operation(payload)
+
+
+def _episodic_source(provenance: CapturedCrossFamily) -> MemoryStoreRecord:
+    """An EPISODIC_TURN source - the kind whose read is run-scoped."""
+
+    content: dict[str, object] = {
+        "run_id": _RUN_ID,
+        "turn_id": "turn-1",
+        "step_id": "step-1",
+        "prompt_summary": "the cited episodic source",
+        "response_summary": "the cited episodic source",
+        "summary_source": "harness_rule",
+        "summary_model": None,
+        "summary_hash": b"\x21" * 32,
+        "tool_event_refs": [],
+        "failure_observations": [],
+        "promotion_candidates": [],
+        "token_usage": None,
+    }
+    content_hash = compute_memory_content_hash(content)
+    return MemoryStoreRecord(
+        envelope=MemoryRecordEnvelope(
+            memory_id=derive_memory_id(
+                MemoryTier.EPISODIC, MemoryRecordKind.EPISODIC_TURN, content_hash
+            ),
+            schema_version="memory-store-record/v1",
+            tier=MemoryTier.EPISODIC,
+            kind=MemoryRecordKind.EPISODIC_TURN,
+            created_at=_NOW,
+            source_refs=(SourceRef(ref_type=SourceRefType.OPERATOR, ref="operator:episodic"),),
+            scope=_scope(),
+            content_hash=content_hash,
+            captured_cross_family=provenance,
+        ),
+        content=content,
+    )
+
+
 def _mutating_store(
     tmp_path: Path,
     *,
@@ -932,6 +1017,39 @@ def test_fail_closed_on_an_episodic_source_with_no_usable_run_id(tmp_path: Path)
     service = _service(store, run_id=None)
     episodic_ref = MemoryID("mem:episodic:episodic_turn:" + "2" * 64)
     candidate = _candidate(source_memory_refs=(episodic_ref,))
+
+    with pytest.raises(PromotionReviewRequiredError):
+        service.approve(
+            candidate,
+            timestamp=_NOW,
+            injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+        )
+
+    approved = service.approve(
+        candidate,
+        timestamp=_NOW,
+        injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+        operator_approved=True,
+    )
+    assert approved.status is SemanticRecordStatus.ACTIVE
+
+
+def test_the_episodic_no_run_id_pre_check_holds_at_the_protocol_seam(tmp_path: Path) -> None:
+    """:1090 branch 3, PINNED where it is actually load-bearing.
+
+    The sibling witness above drives the CONCRETE store, which raises for an
+    episodic read without a `run_id` - and `_resolve_source_provenance`'s
+    `except ValueError` returns `None` identically, so that witness stays green
+    with the pre-check deleted. `PromotionDecisionStore` is a Protocol, though,
+    and nothing in it obliges an implementation to raise. Against a store that
+    simply SERVES the record, only the pre-check stands between an unscoped read
+    and silent auto-promotion.
+    """
+
+    source = _episodic_source(CapturedCrossFamily.FALSE)
+    store = _RunIdBlindSourceStore(_store(tmp_path), source=source)
+    service = _service(store, run_id=None)
+    candidate = _candidate(source_memory_refs=(source.envelope.memory_id,))
 
     with pytest.raises(PromotionReviewRequiredError):
         service.approve(
