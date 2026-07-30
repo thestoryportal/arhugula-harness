@@ -141,12 +141,20 @@ class _DirLock:
     def release(self) -> None:
         import fcntl
 
-        self._refcount -= 1
-        if self._refcount == 0:
-            fcntl.flock(self._fd, fcntl.LOCK_UN)
-            os.close(self._fd)
-            self._fd = -1
-        self._rlock.release()
+        # Mirror of `acquire`'s discipline on the way out: a raising `flock`
+        # (LOCK_UN on a vanished mount, EBADF) must not skip the `os.close` or,
+        # worse, leave the RLock held forever - the shared in-process face would
+        # be permanently wedged for every other thread on this path.
+        try:
+            self._refcount -= 1
+            if self._refcount == 0:
+                fd, self._fd = self._fd, -1
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd)
+        finally:
+            self._rlock.release()
 
 
 _DIR_LOCKS: dict[str, _DirLock] = {}
