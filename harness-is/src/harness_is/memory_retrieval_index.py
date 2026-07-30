@@ -4,6 +4,26 @@ The canonical semantic/procedural records remain the source of truth. This
 module rebuilds the derived ``semantic/index.jsonl`` projection from those
 records and provides a bounded metadata retrieval base for later U-MEM-11
 ranking and packet assembly.
+
+SCOPE OF THE COMMIT-ORDERING PROTECTION (B-93 arc). ``read_current`` orders
+rebuilds by commit token rather than by ledger position, but that protection
+covers a ledger written ENTIRELY by B-93-or-later writers. Two bounds are
+registered rather than fixed:
+
+* A mixed-version window with a live PRE-B-93 WRITER (not merely an old
+  reader, which `_DerivedRetrievalIndexLedgerEvent`'s byte-compatibility
+  already covers) puts untokenized stale markers on the ledger. Legacy
+  markers carry no commit token BY DEFINITION, so no read-side rule can
+  order them against a covered rebuild retroactively - the ledger falls back
+  to positional ordering and can misorder exactly as pre-B-93 could. See
+  register row B-95.
+* Rebuilds that pass no ``commit_seq`` - which includes the production
+  auto-refresh path, untokenized by design - remain positional last-wins and
+  can leave an older overlapping snapshot reading fresh. See register row
+  B-94.
+
+Both are pre-existing behaviours that this protocol narrows rather than
+introduces; neither is witnessed here, deliberately.
 """
 
 from __future__ import annotations

@@ -150,6 +150,14 @@ class DerivedIndexInvalidation(BaseModel):
     Opaque and comparable only: currently the index ledger's byte length before
     the marker append, which is strictly increasing under the hold and shared
     across every process on the root. Never interpret it as a count.
+
+    SCOPE. The ordering it buys holds for a ledger written entirely by
+    B-93-or-later writers. A live PRE-B-93 writer emits stale markers with no
+    token at all, and an untokenized marker cannot be ordered against a covered
+    rebuild retroactively by any read-side rule, so a mixed-version window falls
+    back to positional ordering (register row B-95). Rebuilds that pass no
+    token - the production auto-refresh path among them - are likewise
+    positional (register row B-94).
     """
 
 

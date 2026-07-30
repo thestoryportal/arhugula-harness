@@ -468,7 +468,7 @@ def _pre_b93_read_current(path: Path) -> tuple[int, bool]:
 
 
 def test_a_new_writer_ledger_still_parses_under_the_pre_b93_reader(tmp_path: Path) -> None:
-    """Codex R3 [P1] — the mixed-version window must not break the old side.
+    """Codex R3 [P1] — mixed-version READER COMPATIBILITY, and only that.
 
     The memory root is repo-derived and shared, so a `harness daemon` started
     before an upgrade keeps reading a ledger a new one-shot process is writing
@@ -480,6 +480,12 @@ def test_a_new_writer_ledger_still_parses_under_the_pre_b93_reader(tmp_path: Pat
 
     So this drives the real new writer and replays the real old reader over
     every event kind the new writer emits to the shared file.
+
+    SCOPE — this witness proves the old reader still PARSES, nothing about
+    ORDERING during a mixed-version window. A live pre-B-93 WRITER emits
+    untokenized stale markers, which no read-side rule can order against a
+    covered rebuild; that bound is registered as B-94's sibling row B-95 and
+    is deliberately NOT witnessed here.
     """
 
     binding = _binding(tmp_path)
