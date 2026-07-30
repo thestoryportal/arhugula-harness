@@ -95,8 +95,24 @@ _root_locks_guard = threading.Lock()
 #: candidate.
 _CROSS_PROCESS_LOCK_FILENAME = ".cross_process.lock"
 
+#: B-77: the set of past-TTL filenames each store root was observed holding
+#: at its PREVIOUS `gc_sweep` — the first-observation grace that keeps a
+#: crash-recovered entry from being reclaimed on sight. Keyed by the root's
+#: filesystem identity (module-wide, NOT per-instance) for the same reason
+#: `_root_locks` is: the composition root builds a FRESH
+#: `ProtectedResultStore` per `run()`/`resume()` bootstrap
+#: (`bootstrap/factories/protected_result_store_factory.py` ->
+#: `bootstrap/stage_4_od.py`), so a per-instance record would hand EVERY
+#: bootstrap sweep a fresh grace and defer reclaim to shutdown indefinitely,
+#: weakening the bounded-retention guarantee. A fresh PROCESS legitimately
+#: starts empty — it has no way to distinguish a genuine age from a
+#: crash-window mtime artifact, so granting the grace is the safe direction,
+#: and that IS the crash-recovery case B-77 names. See `gc_sweep`.
+_root_observed_expired: dict[str, frozenset[str]] = {}
+_root_observed_expired_guard = threading.Lock()
 
-def _lock_for_root(root: Path) -> threading.Lock:
+
+def _root_identity_key(root: Path) -> str:
     # codex round 3 [P2]: keyed by RESOLVED path, not the raw `str(root)` —
     # two filesystem-equivalent spellings of the same directory (e.g. a
     # `..`-containing alias) would otherwise key different lock objects,
@@ -147,7 +163,15 @@ def _lock_for_root(root: Path) -> threading.Lock:
     resolved = root.resolve()
     resolved.mkdir(parents=True, exist_ok=True)
     st = resolved.stat()
-    key = f"{st.st_dev}:{st.st_ino}"
+    return f"{st.st_dev}:{st.st_ino}"
+
+
+def _lock_for_root(root: Path) -> threading.Lock:
+    # The module-wide publish/sweep lock registry, keyed on the root's
+    # filesystem identity — see `_root_identity_key` above for why identity
+    # (not a path string) is the only safe key, and why deriving it is what
+    # guarantees the directory exists.
+    key = _root_identity_key(root)
     with _root_locks_guard:
         lock = _root_locks.get(key)
         if lock is None:
@@ -500,11 +524,12 @@ class ProtectedResultStore:
         is now `os.link` -> the post-commit refresh completing — the SAME
         shape B-77 originally named, but starting from the pre-commit
         stamp's fresher baseline (excluding the data write+fsync term)
-        rather than the temp file's raw write-time mtime. See B-77's
-        forward-register row for why closing that residual (an age
-        authority that cannot predate publication by construction, e.g. a
-        grace period gating a NEWLY-observed entry from reclaim until a
-        subsequent sweep) is deferred rather than built into this method.
+        rather than the temp file's raw write-time mtime. That residual is
+        closed OUTSIDE this method, at `gc_sweep`'s first-observation grace
+        (a newly-observed past-TTL entry is never reclaimed until a
+        subsequent sweep still finds it expired) — no third reordering of
+        this two-stamp pipeline is involved, and `ttl_seconds` keeps its
+        full spec'd range.
         Restoring the post-commit block also reintroduces a pre-existing,
         out-of-scope inconsistency the reorder had incidentally fixed: if
         this SECOND refresh's own fsync fails, `write_once` reports
@@ -657,6 +682,34 @@ class ProtectedResultStore:
         A separate OS PROCESS sharing this same directory is additionally
         excluded by `_cross_process_lock` (B-73), composed inside
         `self._publish_lock` below.
+
+        B-77 FIRST-OBSERVATION GRACE: an entry is reclaimed only if it was
+        ALREADY observed past TTL at a PRIOR sweep of this root (see
+        `_observe_expired`). Neither lock can close B-77's residual crash
+        window — a process KILLED between `_publish_atomic`'s `os.link` and
+        its post-commit mtime refresh leaves a genuinely-live entry carrying
+        the pre-commit stamp, and the next process's bootstrap sweep has no
+        way to tell that stale-looking mtime from a genuine age. Under a
+        short deployment `ttl_seconds`, reclaiming on sight would destroy
+        the only recoverable copy of an already-completed paid effect. The
+        grace makes mtime's under-report harmless up to ONE sweep interval
+        without narrowing `ttl_seconds` itself (a spec'd
+        deployment-configurable surface, spec v1.103 §14.8.11 bounded-
+        retention term — a TTL floor was the explicitly-declined
+        alternative, B-74's own close_out option). Bounded retention is
+        preserved, not weakened: a genuinely-expired entry is still
+        collected, one sweep later.
+
+        The grace is bounded by SWEEP COUNT, not elapsed time — stated
+        plainly so it is not read as more than it is. Every
+        `run()`/`resume()` sweeps twice by construction (bootstrap
+        `stage_4_od.py`, then `shutdown.py` step 5b), so on a short or
+        immediately-failing run the two observations can be milliseconds
+        apart. The reachable loss B-77 names — reclaim by the sweep that
+        FIRST sees the crash-recovered entry — is closed; a wall-clock
+        interval a repair flow could rely on is NOT provided. That residue
+        is registered at B-96 (out-of-family Codex round 2 on the B-77 impl
+        arc), whose close_out is the elapsed-time variant.
         """
         current_time = now if now is not None else time.time()
         expired: list[str] = []
@@ -723,8 +776,8 @@ class ProtectedResultStore:
                 continue
             if current_time - tmp_mtime > self._ttl_seconds:
                 provisional_tmp.append(tmp_entry_path)
-        entry_candidates: list[tuple[Path, float]] = []
-        tmp_candidates: list[tuple[Path, float]] = []
+        verified_entries: list[tuple[Path, float]] = []
+        verified_tmp: list[tuple[Path, float]] = []
         with self._publish_lock, self._cross_process_lock():
             for entry_path in provisional_entries:
                 try:
@@ -732,14 +785,21 @@ class ProtectedResultStore:
                 except OSError:
                     continue
                 if current_time - written_at > self._ttl_seconds:
-                    entry_candidates.append((entry_path, written_at))
+                    verified_entries.append((entry_path, written_at))
             for tmp_entry_path in provisional_tmp:
                 try:
                     tmp_mtime = tmp_entry_path.stat().st_mtime
                 except OSError:
                     continue
                 if current_time - tmp_mtime > self._ttl_seconds:
-                    tmp_candidates.append((tmp_entry_path, tmp_mtime))
+                    verified_tmp.append((tmp_entry_path, tmp_mtime))
+            # B-77 first-observation grace — see this method's docstring.
+            previously_observed = self._observe_expired(
+                {path.name for path, _ in verified_entries}
+                | {path.name for path, _ in verified_tmp}
+            )
+        entry_candidates = [c for c in verified_entries if c[0].name in previously_observed]
+        tmp_candidates = [c for c in verified_tmp if c[0].name in previously_observed]
         # Phase 2 — outside the lock: decrypt (best-effort, logging only)
         # and the actual unlinks. See the round-7 comment above for why
         # this is safe unlocked.
@@ -799,6 +859,25 @@ class ProtectedResultStore:
             )
         self._last_gc_at = current_time
         return expired
+
+    def _observe_expired(self, still_expired: set[str]) -> frozenset[str]:
+        """Record this sweep's past-TTL filenames for this root and return
+        the set recorded by the PREVIOUS sweep (B-77 first-observation
+        grace; see `gc_sweep`'s docstring for why).
+
+        Called with `self._publish_lock` held, so two concurrent sweeps of
+        one root cannot interleave a read with the other's replace.
+        Replacing (rather than accumulating) the recorded set is what keeps
+        it bounded — a name that has since been reclaimed, ack-deleted, or
+        refreshed below TTL simply drops out. Entry filenames are sha256
+        digests of a uuid4-bearing composite key and `.tmp-*` names come
+        from `mkstemp`, so a name is never reused for a different file.
+        """
+        key = _root_identity_key(self._root)
+        with _root_observed_expired_guard:
+            previously_observed = _root_observed_expired.get(key, frozenset())
+            _root_observed_expired[key] = frozenset(still_expired)
+        return previously_observed
 
     def _maybe_opportunistic_gc_sweep(self) -> None:
         """Best-effort in-write housekeeping — never blocks the write.
