@@ -1067,9 +1067,24 @@ def test_write_once_temp_file_protected_from_concurrent_sweep_before_commit(
     sweep can never run at all while a temp file is still in active use.
 
     Mutation probe: narrowing `_publish_atomic`'s `with self._publish_lock:`
-    back to start at `os.link` (the round 2/3 shape) reproduces the exact
-    codex-verified failure — a concurrent sweep unlinks the still-in-flight
-    temp file and `write_once()` returns `UnresolvableResultRef`.
+    back to start at `os.link` (the round 2/3 shape) makes the sweeper
+    acquire the lock immediately — the writer has not reached it yet — so
+    the timing assertion below (`not sweep_done.wait(0.3)`) fails.
+
+    merge-gate round-2 test-witness lens (PR #1163) — what this test
+    discriminates CHANGED with B-77's first-observation grace, and the
+    docstring is corrected in place rather than left stale: the probe
+    outcome above used to be stated as "`write_once()` returns
+    `UnresolvableResultRef`" (the sweeper unlinks the in-flight temp file,
+    so the subsequent `os.link` raises `FileNotFoundError`). Under the
+    grace, the concurrent sweeper can no longer unlink a temp file on the
+    sweep that FIRST observes it, so that downstream consequence no longer
+    materializes on a single sweep. The load-bearing assertion is now the
+    TIMING/lock one below — the sweeper must not COMPLETE while the parked
+    writer still holds `self._publish_lock` — which is the property this
+    test was always structurally pinning (`[[verification-shape-sharpened-
+    grep-vs-e2e]]`: assert lock-identity, not a race outcome). The test
+    itself is unchanged and not weakened.
 
     merge-gate round-1 test-witness lens (PR #1103): an earlier version of
     this test signaled the sweeper via a sleep-then-set inside the mocked
@@ -1965,3 +1980,152 @@ def test_coarse_filesystem_mtime_granularity_does_not_lose_a_live_entry_on_sight
     # still loses the live entry. Pinned here so a future B-74 fix has to
     # come back and update this witness rather than silently diverge.
     assert store.gc_sweep(now=time.time()) == [entry_path.stem]
+
+
+def test_observation_record_is_shared_across_instances_of_one_root(tmp_path: Path) -> None:
+    """merge-gate round-2 test-witness lens (PR #1163), BLOCKING finding.
+    The central design judgment of the B-77 fix is that the
+    first-observation record is MODULE-WIDE, keyed by the root's filesystem
+    identity — not an instance attribute — because the composition root
+    builds a FRESH `ProtectedResultStore` per `run()`/`resume()` bootstrap
+    (`bootstrap/factories/protected_result_store_factory.py` ->
+    `bootstrap/stage_4_od.py`, which sweeps immediately). A per-instance
+    record would hand EVERY bootstrap sweep a fresh grace and defer reclaim
+    to shutdown indefinitely, weakening the spec's bounded-retention term.
+
+    Nothing else in this module discriminates that: the crash-recovery
+    witness's fresh instance is NOT load-bearing there, because
+    `write_once` runs `_maybe_opportunistic_gc_sweep()` before publishing
+    and a fresh instance's `_last_gc_at = 0.0` makes that pre-publish sweep
+    always fire — so the recovering sweep is the root's second sweep either
+    way. This test pins the property directly: instance A observes the
+    expired entry, then a SECOND instance on the SAME root must reclaim it
+    on ITS OWN FIRST sweep, inheriting A's observation.
+
+    Mutation probe: making the record an instance attribute (e.g.
+    `self._observed_expired` initialized in `__init__` instead of the
+    module-level `_root_observed_expired` registry) makes instance B's
+    first sweep return `[]` and this test fails."""
+    store_a = _store(tmp_path, ttl_seconds=1.0)
+    ref = store_a.write_once("tenant-a", "observed by A, reclaimed by B")
+    assert isinstance(ref, str)
+    entry_path = store_a._entry_path(ref)  # type: ignore[attr-defined]
+    sweep_at = time.time() + 10.0
+
+    # A observes it past TTL (grace: no reclaim).
+    assert store_a.gc_sweep(now=sweep_at) == []
+    assert entry_path.exists()
+
+    # A genuinely fresh instance on the SAME root — exactly what the next
+    # bootstrap constructs.
+    store_b = ProtectedResultStore(
+        tmp_path / "store",
+        codec=store_a._codec,  # type: ignore[attr-defined]
+        ttl_seconds=1.0,
+    )
+    assert store_b.gc_sweep(now=sweep_at) == [entry_path.stem], (
+        "a second instance's FIRST sweep did not inherit the first instance's "
+        "observation — the record is per-instance, not per-root"
+    )
+    assert not entry_path.exists()
+
+
+def test_observation_records_are_keyed_per_root_not_one_global_set(tmp_path: Path) -> None:
+    """merge-gate round-2 test-witness lens (PR #1163), rider 1. The record
+    is keyed by ROOT identity and REPLACED on each sweep (that replacement
+    is what keeps it bounded). Those two facts only compose safely because
+    the key is per-root: a single un-keyed global set, replaced each sweep,
+    would let alternating sweeps of two distinct roots wipe each other's
+    records and starve reclaim indefinitely.
+
+    Mutation probe: replacing `_root_identity_key(self._root)` in
+    `_observe_expired` with a constant key (one global set) makes each
+    root's SECOND sweep return `[]` — the other root's sweep having wiped
+    its record — and this test fails."""
+    store_1 = _store(tmp_path / "one", ttl_seconds=1.0)
+    store_2 = ProtectedResultStore(
+        tmp_path / "two" / "store",
+        codec=store_1._codec,  # type: ignore[attr-defined]
+        ttl_seconds=1.0,
+    )
+    ref_1 = store_1.write_once("tenant-a", "root one")
+    ref_2 = store_2.write_once("tenant-a", "root two")
+    assert isinstance(ref_1, str) and isinstance(ref_2, str)
+    entry_1 = store_1._entry_path(ref_1)  # type: ignore[attr-defined]
+    entry_2 = store_2._entry_path(ref_2)  # type: ignore[attr-defined]
+    sweep_at = time.time() + 10.0
+
+    # Interleaved first observations — neither may disturb the other's.
+    assert store_1.gc_sweep(now=sweep_at) == []
+    assert store_2.gc_sweep(now=sweep_at) == []
+
+    assert store_1.gc_sweep(now=sweep_at) == [entry_1.stem]
+    assert store_2.gc_sweep(now=sweep_at) == [entry_2.stem]
+    assert not entry_1.exists()
+    assert not entry_2.exists()
+
+
+def test_crash_orphaned_temp_file_survives_its_first_observed_sweep(tmp_path: Path) -> None:
+    """merge-gate round-2 test-witness lens (PR #1163), rider 2. The grace
+    covers `.tmp-*` crash orphans uniformly with `*.entry` — one rule, no
+    branch — and `test_gc_sweep_reclaims_crash_orphaned_temp_files` only
+    asserts EVENTUAL reclaim (it sweeps past the grace), so nothing pinned
+    the tmp half of the gate.
+
+    Mutation probe: dropping the `previously_observed` filter from the tmp
+    path alone (`tmp_candidates = verified_tmp`) makes the first sweep
+    reclaim the orphan and this test fails."""
+    store = _store(tmp_path, ttl_seconds=1.0)
+    store_root = tmp_path / "store"
+    store_root.mkdir(parents=True, exist_ok=True)
+    orphan = store_root / ".tmp-crash-orphan-first-observation"
+    orphan.write_bytes(b"partial ciphertext from a killed write")
+    old_time = time.time() - 10.0
+    os.utime(orphan, (old_time, old_time))
+    sweep_at = time.time()
+
+    store.gc_sweep(now=sweep_at)
+    assert orphan.exists(), (
+        "a crash-orphaned temp file was reclaimed by the sweep that FIRST "
+        "observed it — the grace does not cover the .tmp-* path"
+    )
+
+    store.gc_sweep(now=sweep_at)
+    assert not orphan.exists()
+
+
+def test_observe_expired_runs_while_the_publish_lock_is_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """merge-gate round-2 test-witness lens (PR #1163), rider 4.
+    `_observe_expired`'s docstring claims it is called with
+    `self._publish_lock` held — that is what stops two concurrent sweeps of
+    one root from interleaving a read with the other's replace (a lost
+    observation, hence a premature reclaim). Structural witness in the same
+    shape as `test_gc_sweep_candidate_enumeration_runs_without_holding_
+    publish_lock` (`[[verification-shape-sharpened-grep-vs-e2e]]`: assert
+    lock-identity, not a race outcome): record whether the lock is held at
+    the moment the call is made.
+
+    Mutation probe: hoisting the `self._observe_expired(...)` call out of
+    `gc_sweep`'s `with self._publish_lock, self._cross_process_lock():`
+    block records `False` and this test fails."""
+    store = _store(tmp_path, ttl_seconds=0.01)
+    ref = store.write_once("tenant-a", "will be swept")
+    assert isinstance(ref, str)
+    time.sleep(0.05)  # comfortably past the 0.01s TTL
+
+    lock_held_at_call: list[bool] = []
+    real_observe = store._observe_expired  # type: ignore[attr-defined]
+
+    def _recording_observe(still_expired: set[str]) -> frozenset[str]:
+        lock_held_at_call.append(store._publish_lock.locked())  # type: ignore[attr-defined]
+        return real_observe(still_expired)
+
+    monkeypatch.setattr(store, "_observe_expired", _recording_observe)
+
+    store.gc_sweep(now=time.time())
+
+    assert lock_held_at_call == [True], (
+        f"_observe_expired was called with `_publish_lock` UNHELD: {lock_held_at_call}"
+    )
