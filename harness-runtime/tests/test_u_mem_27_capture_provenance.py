@@ -54,6 +54,7 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.automatic_memory import materialize_automatic_memory_runtime
 from harness_runtime.memory_capture import (
     EpisodicMemoryCapture,
+    MemoryCaptureMode,
     MemoryCaptureStatus,
     SummaryProvenance,
     SummarySource,
@@ -112,13 +113,14 @@ def _direct_capture(
     )
 
 
-def _tool_event_provenance(
+def _tool_event_record(
     tmp_path: Path,
     *,
     scope_family: str | None,
     provider: str | None,
-) -> CapturedCrossFamily:
-    """Capture one CONTENT-BEARING, dispatch-derived record and read its value.
+    capture_mode: MemoryCaptureMode | None = None,
+) -> MemoryStoreRecord:
+    """Capture one CONTENT-BEARING, dispatch-derived record and read it back.
 
     `tool_event` is the arm matrix's content-bearing carrier: its sole
     production caller (`StandardMemoryToolExecutor._write_note`) stores the note
@@ -140,11 +142,22 @@ def _tool_event_provenance(
         engine_class=None,
         policy_ref=_POLICY_REF,
         procedural_snapshot_ref=None,
+        capture_mode=capture_mode,
     )
     assert result.status is MemoryCaptureStatus.CAPTURED
     assert result.memory_id is not None
-    record = store.read_record(result.memory_id, MemoryRecordKind.TOOL_EVENT, run_id=_RUN_ID)
-    return record.envelope.captured_cross_family
+    return store.read_record(result.memory_id, MemoryRecordKind.TOOL_EVENT, run_id=_RUN_ID)
+
+
+def _tool_event_provenance(
+    tmp_path: Path,
+    *,
+    scope_family: str | None,
+    provider: str | None,
+) -> CapturedCrossFamily:
+    return _tool_event_record(
+        tmp_path, scope_family=scope_family, provider=provider
+    ).envelope.captured_cross_family
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +239,173 @@ def test_registered_provider_key_canonicalizes_before_the_comparison(tmp_path: P
         _tool_event_provenance(tmp_path, scope_family=_OLLAMA_FAMILY, provider=_OLLAMA_KEY)
         is CapturedCrossFamily.FALSE
     )
+
+
+# ---------------------------------------------------------------------------
+# codex R3 - REDACTED capture mode is the second origin dimension
+# ---------------------------------------------------------------------------
+
+
+def _turn_record(
+    tmp_path: Path,
+    *,
+    scope_family: str | None,
+    provider: str,
+    capture_mode: MemoryCaptureMode | None = None,
+) -> MemoryStoreRecord:
+    store, capture = _direct_capture(tmp_path, scope_family=scope_family)
+    result = capture.capture_turn_completion(
+        run_id=_RUN_ID,
+        turn_id="turn-1",
+        step_id="step-1",
+        prompt_summary="the operator's own question",
+        response_summary="the provider's own completed answer",
+        summary=SummaryProvenance(source=SummarySource.HARNESS_RULE),
+        tool_event_refs=(),
+        failure_observations=(),
+        promotion_candidates=(),
+        token_usage=None,
+        timestamp=_NOW,
+        provider=provider,
+        model="llama3.1",
+        cli_profile="generic",
+        engine_class=None,
+        policy_ref=_POLICY_REF,
+        procedural_snapshot_ref=None,
+        capture_mode=capture_mode,
+    )
+    assert result.status is MemoryCaptureStatus.CAPTURED
+    assert result.memory_id is not None
+    return store.read_record(result.memory_id, MemoryRecordKind.EPISODIC_TURN, run_id=_RUN_ID)
+
+
+def test_redacted_same_family_turn_capture_lands_unknown(tmp_path: Path) -> None:
+    """Codex R3, the load-bearing arm - this is the cell that landed `false`.
+
+    `_captured_text` does not MASK a redacted summary, it discards it and
+    substitutes the harness-authored `[redacted]` constant wholesale, and
+    `summary_hash` is then taken over that replacement text. So the stored
+    content derives from no dispatch output, and per C-MEM-03 "a determination
+    is recorded only where the stored content derives from the output of a
+    completed provider dispatch" the honest value is `unknown` - even though
+    the dispatch really was same-family and really did complete.
+
+    The SUMMARIZED control in the same test is what makes the arm meaningful:
+    only the capture mode differs between the two calls.
+    """
+    redacted = _turn_record(
+        tmp_path / "redacted",
+        scope_family=_OLLAMA_FAMILY,
+        provider=_OLLAMA_KEY,
+        capture_mode=MemoryCaptureMode.REDACTED,
+    )
+    assert redacted.content["prompt_summary"] == "[redacted]"
+    assert redacted.content["response_summary"] == "[redacted]"
+    assert redacted.envelope.captured_cross_family is CapturedCrossFamily.UNKNOWN
+
+    control = _turn_record(
+        tmp_path / "summarized",
+        scope_family=_OLLAMA_FAMILY,
+        provider=_OLLAMA_KEY,
+        capture_mode=MemoryCaptureMode.SUMMARIZED,
+    )
+    assert control.content["response_summary"] == "the provider's own completed answer"
+    assert control.envelope.captured_cross_family is CapturedCrossFamily.FALSE
+
+
+def test_redacted_cross_family_turn_capture_lands_unknown(tmp_path: Path) -> None:
+    """Codex R3 - the override runs in BOTH directions, not just away from `false`.
+
+    A redacted cross-family capture must not land `true` either: the field
+    describes the stored version, and this version's content came from the
+    harness, so no cross-family claim about it is honest.
+    """
+    redacted = _turn_record(
+        tmp_path / "redacted",
+        scope_family=_OLLAMA_FAMILY,
+        provider=_OPENAI_KEY,
+        capture_mode=MemoryCaptureMode.REDACTED,
+    )
+    assert redacted.content["response_summary"] == "[redacted]"
+    assert redacted.envelope.captured_cross_family is CapturedCrossFamily.UNKNOWN
+
+    control = _turn_record(
+        tmp_path / "summarized",
+        scope_family=_OLLAMA_FAMILY,
+        provider=_OPENAI_KEY,
+        capture_mode=MemoryCaptureMode.SUMMARIZED,
+    )
+    assert control.envelope.captured_cross_family is CapturedCrossFamily.TRUE
+
+
+def test_redacted_tool_event_capture_lands_unknown_both_directions(tmp_path: Path) -> None:
+    """Codex R3 - the same override on the OTHER dispatch-derived kind.
+
+    `capture_tool_event` takes the same `capture_mode` parameter and redacts
+    its `summary` through the same `_captured_text`, and its production caller
+    `_write_note` reaches `REDACTED` under `CaptureDecision.CAPTURE_REDACTED`
+    (`memory_tool_executor.py:882-883`), so this is a live production path and
+    not a hypothetical one.
+    """
+    same_family = _tool_event_record(
+        tmp_path / "same",
+        scope_family=_OLLAMA_FAMILY,
+        provider=_OLLAMA_KEY,
+        capture_mode=MemoryCaptureMode.REDACTED,
+    )
+    cross_family = _tool_event_record(
+        tmp_path / "cross",
+        scope_family=_OLLAMA_FAMILY,
+        provider=_OPENAI_KEY,
+        capture_mode=MemoryCaptureMode.REDACTED,
+    )
+
+    assert same_family.content["summary"] == "[redacted]"
+    assert cross_family.content["summary"] == "[redacted]"
+    assert same_family.envelope.captured_cross_family is CapturedCrossFamily.UNKNOWN
+    assert cross_family.envelope.captured_cross_family is CapturedCrossFamily.UNKNOWN
+
+
+def test_instance_default_redacted_mode_also_lands_unknown(tmp_path: Path) -> None:
+    """Codex R3 - the EFFECTIVE mode is what governs, not the argument.
+
+    `mode = capture_mode or self._capture_mode`, so a recorder bound with
+    `capture_mode=REDACTED` redacts every capture that takes no explicit
+    argument. Consulting only the per-call argument would leave this path
+    landing `false`.
+    """
+    store = CanonicalMemoryStore(
+        root_binding=MemoryRootBinding(default_root=tmp_path / "memory"),
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+    )
+    capture = EpisodicMemoryCapture(
+        store=store,
+        actor=_actor(),
+        project="arhugula-v2",
+        capture_mode=MemoryCaptureMode.REDACTED,
+        record_scope=_scope(_OLLAMA_FAMILY),
+    )
+
+    result = capture.capture_tool_event(
+        run_id=_RUN_ID,
+        tool_event_id="tool-1",
+        tool_name="memory_write_note",
+        summary_text="the note the model produced on this dispatch",
+        summary=SummaryProvenance(source=SummarySource.MODEL_GENERATED, model="llama3.1"),
+        step_id="step-1",
+        timestamp=_NOW,
+        provider=_OLLAMA_KEY,
+        model="llama3.1",
+        cli_profile="generic",
+        engine_class=None,
+        policy_ref=_POLICY_REF,
+        procedural_snapshot_ref=None,
+    )
+    assert result.memory_id is not None
+    record = store.read_record(result.memory_id, MemoryRecordKind.TOOL_EVENT, run_id=_RUN_ID)
+
+    assert record.content["summary"] == "[redacted]"
+    assert record.envelope.captured_cross_family is CapturedCrossFamily.UNKNOWN
 
 
 # ---------------------------------------------------------------------------

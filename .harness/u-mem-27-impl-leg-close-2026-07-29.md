@@ -36,10 +36,22 @@ disposition into `_record`, which holds the call `provider` and the resolved sco
 computes the final tri-state. Origin **gates** the family comparison: a non-dispatch-derived
 origin yields `unknown` and the comparison is never consulted.
 
+The disposition has **two dimensions**, not one (the codex R3 correction below): the
+`event_kind` table applies only when the capture is not redacting its content.
+`MemoryCaptureMode.REDACTED` overrides every row to `UNDETERMINED`, because
+`_captured_text` replaces the summary wholesale with a harness-authored constant. Both
+dimensions are resolved at `_capture` by `_content_origin_for(event_kind, capture_mode)`;
+the final tri-state is still computed only at `_record`.
+
+| Capture mode | Origin disposition | Why |
+| --- | --- | --- |
+| `REDACTED` (any `event_kind`) | `UNDETERMINED` | Content is the harness-authored `[redacted]` constant; no dispatch produced it. Overrides the table below in **both** directions — a same-family redacted capture must not land `false`, a cross-family one must not land `true`. |
+| `FULL` / `SUMMARIZED` / *(none)* | per the `event_kind` table below | The stored content is the caller's own material. |
+
 | `event_kind` | Origin disposition | Why |
 | --- | --- | --- |
-| `turn_completion` | `DISPATCH_DERIVED` | The stored `response_summary` is computed from the actual provider response, notwithstanding its `SummarySource.HARNESS_RULE` label. |
-| `tool_event` | `DISPATCH_DERIVED` | Tool-event content is produced by a completed dispatch. |
+| `turn_completion` | `DISPATCH_DERIVED` *(unless `REDACTED`)* | The stored `response_summary` is computed from the actual provider response, notwithstanding its `SummarySource.HARNESS_RULE` label. |
+| `tool_event` | `DISPATCH_DERIVED` *(unless `REDACTED`)* | Tool-event content is produced by a completed dispatch. |
 | `run_start` | `UNDETERMINED` | Written by `compose_for_dispatch` **before** any provider call; its provider is a *selection*, not a result. |
 | `run_close` | `UNDETERMINED` | Post-dispatch in timing, but its content is run metadata describing no provider-produced output. |
 | `provider_route` | `UNDETERMINED` | Routing metadata, not dispatch output. |
@@ -325,3 +337,102 @@ Mutation-probed: with the branch removed both arms fail with the raw `TypeError`
 `_IOFailingSourceStore` double was moved up to the doubles section (it now has three users)
 and gained a `fail_after` counter, which is what lets one double model "readable at the
 snapshot, unreadable at commit".
+
+## Codex round 3 — one P1 against the write-side derivation
+
+### [P1] `REDACTED` captures recorded a determination against harness-authored content — FIXED
+
+**Finding.** The origin disposition was resolved from `event_kind` alone. Under
+`MemoryCaptureMode.REDACTED` a turn or tool capture stores no dispatch output, yet the
+mapping still classified the invocation `DISPATCH_DERIVED` — so a same-family redacted
+capture recorded `captured_cross_family=false` against content the provider never produced,
+and a cross-family one recorded `true`.
+
+**Grounding, by direct read at HEAD — wholesale replacement, not partial masking.**
+`_captured_text` (`harness-runtime/src/harness_runtime/memory_capture.py:1216-1219`) is the
+whole redaction mechanism:
+
+```python
+def _captured_text(value: str, mode: MemoryCaptureMode) -> str:
+    if mode is MemoryCaptureMode.REDACTED:
+        return _REDACTED_SUMMARY
+    return value
+```
+
+It **discards `value` entirely** and returns the module constant `_REDACTED_SUMMARY =
+"[redacted]"` (`:57`). No substring is preserved, so nothing about the provider's output
+survives into the record. It is applied to `prompt_summary` **and** `response_summary` at
+`capture_turn_completion` (`:471-472`) and to `summary_text` at `capture_tool_event`
+(`:524`), and each method then computes `summary_hash` over the **already-redacted** text
+(`:482`, `:534`) — so even the digest carries no dispatch material. The residual
+dispatch-adjacent keys are `token_usage` (metering counts) and the refs/ids, none of which
+is provider-produced *content*.
+
+Both are live production paths, not hypotheticals: `CaptureDecision.CAPTURE_REDACTED` maps
+to `MemoryCaptureMode.REDACTED` at `memory_tool_executor.py:882-883` (reached by
+`_write_note`, the tool-event path) and at `automatic_memory.py:663-664` (the turn path).
+
+**Spec text that governs — verbatim, `design-substrate/Spec_Memory_Substrate_v1.md`.**
+
+- C-MEM-03 derivation rule, §"…keyed to the content's ORIGIN" (`:234`): *"A determination -
+  `true` or `false` - is recorded **only where the stored content derives from the output of
+  a completed provider dispatch**. Everything else is `unknown` … the field states whether
+  *the content in this version* came from a leg whose family differed, so where no dispatch
+  produced the material there is no such leg, and `false` would assert an equality that was
+  never tested against anything."*
+- The per-invocation qualification the fix turns on (`:238`): *"The signal is the **capturing
+  caller's own knowledge on THIS invocation** … This is a property of the individual call,
+  not of a stored field and not of the capture method's name. Where every production
+  invocation of a given capture method shares one origin, a method-level mapping is a sound
+  way to realize the rule; where a method's invocations can differ … the method name is
+  **not** a sufficient signal."* `REDACTED` mode is exactly such a per-invocation variation,
+  so the `event_kind`-only mapping was an unsound realization of the rule.
+- The direct analogue, the transition-reset paragraph (`:252`): *"it substitutes
+  harness-authored replacement material for the content the record held. Because this field
+  describes **the stored version**, a preserved `true` or `false` would then assert that the
+  replacement material came from the original dispatch, which is false on its face and
+  contradicts both the stored-version rule and the content-origin rule."* Invariant `:271`
+  states the same over durable transitions. The redacted **capture** is the capture-time twin
+  of that case: the same harness-authored replacement material, arriving one step earlier.
+
+Every source supports the same reading, so the fix was applied rather than reported back.
+
+**Fix.** A second origin dimension, resolved where the first already is. NEW
+`_content_origin_for(event_kind, capture_mode)` returns `UNDETERMINED` for
+`MemoryCaptureMode.REDACTED` and otherwise defers to `_CONTENT_ORIGIN_BY_EVENT_KIND`; it is
+now the only reader of that mapping. `_capture` gained a private
+`capture_mode: MemoryCaptureMode | None = None` parameter — a **private** method, so the
+plan's "no `capture_*` signature changes" constraint is untouched — threaded from the four
+public methods that can replace their content through `_captured_text`
+(`capture_turn_completion`, `capture_tool_event`, `capture_failure_observation`,
+`capture_compaction_event`). The value threaded is the **effective** `mode`
+(`mode = capture_mode or self._capture_mode`), not the argument, so a recorder bound with
+`capture_mode=REDACTED` is covered too. The run kinds pass nothing; they cannot redact and
+are `UNDETERMINED` regardless. The final tri-state is still computed only at `_record` — the
+plan's non-discretionary placement is unchanged.
+
+All four `_captured_text` callers declare the mode, including the two currently
+`UNDETERMINED` by `event_kind`, so a future origin reclassification of `compaction` or
+`failure_observation` inherits the override automatically instead of silently regressing.
+
+**Witnesses** (`harness-runtime/tests/test_u_mem_27_capture_provenance.py`), four new:
+
+- `test_redacted_same_family_turn_capture_lands_unknown` — the load-bearing arm, the exact
+  cell that landed `false`. Asserts the stored content really is `[redacted]`, then pairs the
+  redacted call with a `SUMMARIZED` control differing **only** in mode, which lands `false`.
+- `test_redacted_cross_family_turn_capture_lands_unknown` — the override in the other
+  direction; its `SUMMARIZED` control lands `true`.
+- `test_redacted_tool_event_capture_lands_unknown_both_directions` — the same override on the
+  other `DISPATCH_DERIVED` kind, both family arms.
+- `test_instance_default_redacted_mode_also_lands_unknown` — a recorder bound with
+  `capture_mode=REDACTED` and no per-call argument; consulting only the argument would leave
+  this path landing `false`.
+
+**Mutation probe.** Reverting `_content_origin_for` to the bare mapping lookup fails exactly
+those four and nothing else: `test_redacted_same_family_turn_capture_lands_unknown`
+(`FALSE is not UNKNOWN`), `test_redacted_cross_family_turn_capture_lands_unknown`
+(`TRUE is not UNKNOWN`), `test_redacted_tool_event_capture_lands_unknown_both_directions`
+(`FALSE is not UNKNOWN`), `test_instance_default_redacted_mode_also_lands_unknown`
+(`FALSE is not UNKNOWN`) — 4 failed, 11 passed. The eleven pre-existing witnesses stay green
+under both the mutated and the fixed source, so they are the positive controls: the fix
+narrows nothing that was already correct.

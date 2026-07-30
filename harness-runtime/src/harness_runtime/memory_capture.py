@@ -120,6 +120,11 @@ class _ContentOrigin(StrEnum):
 #: An `event_kind` absent from this mapping resolves to `UNDETERMINED`, so a
 #: writer added later inherits the conservative disposition rather than a
 #: fabricated determination.
+#:
+#: `event_kind` is NOT the whole signal, and this mapping is not consulted
+#: alone: `MemoryCaptureMode.REDACTED` overrides every entry above to
+#: `UNDETERMINED` (codex R3). See `_content_origin_for`, which is the only
+#: legitimate reader of this mapping.
 _CONTENT_ORIGIN_BY_EVENT_KIND: Mapping[str, _ContentOrigin] = {
     "turn_completion": _ContentOrigin.DISPATCH_DERIVED,
     "tool_event": _ContentOrigin.DISPATCH_DERIVED,
@@ -500,6 +505,10 @@ class EpisodicMemoryCapture:
             engine_class=engine_class,
             policy_ref=policy_ref,
             procedural_snapshot_ref=procedural_snapshot_ref,
+            # The EFFECTIVE mode, not the argument: `self._capture_mode` can be
+            # `REDACTED` on its own. Declared by every method that can replace
+            # its content via `_captured_text` (codex R3).
+            capture_mode=mode,
         )
 
     def capture_tool_event(
@@ -548,6 +557,7 @@ class EpisodicMemoryCapture:
             engine_class=engine_class,
             policy_ref=policy_ref,
             procedural_snapshot_ref=procedural_snapshot_ref,
+            capture_mode=mode,
         )
 
     def capture_provider_route(
@@ -646,6 +656,7 @@ class EpisodicMemoryCapture:
             engine_class=engine_class,
             policy_ref=policy_ref,
             procedural_snapshot_ref=procedural_snapshot_ref,
+            capture_mode=mode,
         )
 
     def capture_compaction_event(
@@ -692,6 +703,7 @@ class EpisodicMemoryCapture:
             engine_class=engine_class,
             policy_ref=policy_ref,
             procedural_snapshot_ref=procedural_snapshot_ref,
+            capture_mode=mode,
         )
 
     def _capture(
@@ -710,6 +722,7 @@ class EpisodicMemoryCapture:
         engine_class: MemoryOperationEngineClass | None,
         policy_ref: str | None,
         procedural_snapshot_ref: str | None,
+        capture_mode: MemoryCaptureMode | None = None,
     ) -> MemoryCaptureResult:
         try:
             record = self._record(
@@ -726,10 +739,10 @@ class EpisodicMemoryCapture:
                 # holds the raw `provider` and the resolved scope, so it decides
                 # the final tri-state. Computing a finished value here would be
                 # non-conforming - the scope the comparison needs does not
-                # exist at this altitude.
-                content_origin=_CONTENT_ORIGIN_BY_EVENT_KIND.get(
-                    event_kind, _ContentOrigin.UNDETERMINED
-                ),
+                # exist at this altitude. `capture_mode` joins `event_kind` as
+                # the second origin dimension (codex R3): a REDACTED capture
+                # stores harness-authored replacement text, not dispatch output.
+                content_origin=_content_origin_for(event_kind, capture_mode),
             )
         except MemoryCaptureScopeValueDomainError as exc:
             # Codex R7: the write-boundary REFUSAL is an outcome C-MEM-19 has a
@@ -1171,6 +1184,35 @@ class EpisodicMemoryCapture:
         if resolution.family_out_of_domain:
             raise MemoryCaptureScopeValueDomainError(scope_family_out_of_domain_message(scope))
         return resolution.scope
+
+
+def _content_origin_for(
+    event_kind: str,
+    capture_mode: MemoryCaptureMode | None,
+) -> _ContentOrigin:
+    """The C-MEM-03 content-ORIGIN disposition for one capture invocation.
+
+    Two dimensions, because one is not enough. `event_kind` identifies the
+    calling method, which is a sound realization of the rule only where every
+    production invocation of that method shares one origin. `REDACTED` capture
+    mode is exactly the per-invocation variation that qualification exists for
+    (codex R3): `_captured_text` does not MASK the summary, it discards it and
+    substitutes the harness-authored `_REDACTED_SUMMARY` constant wholesale, and
+    `summary_hash` is then taken over that replacement text - so a redacted
+    turn or tool record stores no dispatch output at all, and a determination
+    on it would assert an equality tested against material the provider never
+    produced. This is the capture-time twin of C-MEM-03's transition-reset rule
+    for redaction, which resets to `unknown` for the same reason.
+
+    `REDACTED` therefore overrides the mapping in both directions - a
+    same-family redacted capture must not land `false`, and a cross-family one
+    must not land `true`. `None` means the caller has no capture mode (the run
+    kinds), which cannot redact anything and are `UNDETERMINED` regardless.
+    """
+
+    if capture_mode is MemoryCaptureMode.REDACTED:
+        return _ContentOrigin.UNDETERMINED
+    return _CONTENT_ORIGIN_BY_EVENT_KIND.get(event_kind, _ContentOrigin.UNDETERMINED)
 
 
 def _captured_cross_family(
