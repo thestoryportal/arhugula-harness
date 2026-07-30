@@ -32,6 +32,7 @@ from harness_is.memory_operation_ledger import (
     MemoryOperationWriteResult,
 )
 from harness_is.memory_record_envelope import (
+    CapturedCrossFamily,
     MemoryID,
     MemoryRecordEnvelope,
     MemoryRecordKind,
@@ -48,6 +49,7 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from harness_runtime.memory_scope_family import (
+    canonical_scope_family,
     resolve_scope_family,
     scope_family_out_of_domain_message,
 )
@@ -63,6 +65,75 @@ RUN_START_EVENT_KIND = "run_start"
 for a run-start record - one spelling for both the ledger key and the stored
 discriminator.
 """
+
+
+class _ContentOrigin(StrEnum):
+    """Whether a capture's stored content derives from a completed dispatch.
+
+    The C-MEM-03 v1.2 content-ORIGIN condition, as a value. A determination
+    (`true` / `false`) is recorded ONLY where the stored content derives from
+    the output of a completed provider dispatch; everything else is `unknown`.
+
+    This is deliberately NOT a finished tri-state: the family comparison it
+    gates needs the record's RESOLVED scope, which does not exist at
+    `_capture`. `_capture` decides origin, `_record` decides the value.
+    """
+
+    DISPATCH_DERIVED = "dispatch_derived"
+    UNDETERMINED = "undetermined"
+
+
+#: The C-MEM-03 content-origin CONDITION, realized over `event_kind`.
+#:
+#: The rule is stated over content origin - "did the capturing caller hold a
+#: completed dispatch result on THIS invocation" - not over method names and
+#: emphatically not over `summary_source` (a harness rule summarizing a real
+#: provider response is *harness-summarized* and *dispatch-derived*, so a
+#: `summary_source` test would mark every production turn capture `unknown`).
+#: `event_kind` is the one signal available centrally, and it identifies the
+#: calling method; a method-level entry is a SOUND realization of the rule only
+#: where every production invocation of that method shares one origin, which is
+#: why each entry below records the invocation set it was grounded against.
+#:
+#: * `turn_completion` - `LocalAutomaticMemoryRuntime.capture_turn_completion`
+#:   (`automatic_memory.py:240-284`) computes `response_summary` from the actual
+#:   provider `response` (`:269`) and passes the dispatched `provider` (`:276`).
+#:   Dispatch-derived on every production invocation.
+#: * `tool_event` - sole production caller `StandardMemoryToolExecutor._write_note`
+#:   (`memory_tool_executor.py:339-376`) stores the note the model produced on
+#:   the dispatch whose `context.provider` it passes. Dispatch-derived.
+#: * `run_start` - written by `compose_for_dispatch` BEFORE the dispatch it
+#:   composes for (`automatic_memory.py:232` precedes the return at `:238`), so
+#:   the provider in hand is a SELECTION, not a producer.
+#: * `run_close` - run-lifecycle metadata (`run_id` / `workflow_id` /
+#:   `thread_id` / `engine_class` / `cli_profile` / `provider_route` /
+#:   `started_at` / `closed_at` / `close_status`, no summary field of any kind),
+#:   which derives from no dispatch output whenever it is written.
+#: * `provider_route` - harness-composed route text; derives from a routing
+#:   decision, not from dispatch output.
+#: * `failure_observation` / `compaction` - origin varies PER INVOCATION (a
+#:   failure summary may describe output a dispatch produced, or a dispatch that
+#:   produced none), so the method name cannot decide it. Neither has a
+#:   production caller at HEAD; both record `unknown` for the invocations they
+#:   cannot distinguish, per C-MEM-03's own treatment of that case.
+#:
+#: An `event_kind` absent from this mapping resolves to `UNDETERMINED`, so a
+#: writer added later inherits the conservative disposition rather than a
+#: fabricated determination.
+#:
+#: `event_kind` is NOT the whole signal, and this mapping is not consulted
+#: alone: `MemoryCaptureMode.REDACTED` overrides every entry above to
+#: `UNDETERMINED` (codex R3). See `_content_origin_for`, which is the only
+#: legitimate reader of this mapping.
+_CONTENT_ORIGIN_BY_EVENT_KIND: Mapping[str, _ContentOrigin] = {
+    "turn_completion": _ContentOrigin.DISPATCH_DERIVED,
+    "tool_event": _ContentOrigin.DISPATCH_DERIVED,
+    RUN_START_EVENT_KIND: _ContentOrigin.UNDETERMINED,
+    "run_close": _ContentOrigin.UNDETERMINED,
+    "provider_route": _ContentOrigin.UNDETERMINED,
+    "failure_observation": _ContentOrigin.UNDETERMINED,
+    "compaction": _ContentOrigin.UNDETERMINED,
+}
 
 
 def capture_operation_action_id(event_kind: str, memory_id: MemoryID) -> Identifier:
@@ -434,6 +505,10 @@ class EpisodicMemoryCapture:
             engine_class=engine_class,
             policy_ref=policy_ref,
             procedural_snapshot_ref=procedural_snapshot_ref,
+            # The EFFECTIVE mode, not the argument: `self._capture_mode` can be
+            # `REDACTED` on its own. Declared by every method that can replace
+            # its content via `_captured_text` (codex R3).
+            capture_mode=mode,
         )
 
     def capture_tool_event(
@@ -482,6 +557,7 @@ class EpisodicMemoryCapture:
             engine_class=engine_class,
             policy_ref=policy_ref,
             procedural_snapshot_ref=procedural_snapshot_ref,
+            capture_mode=mode,
         )
 
     def capture_provider_route(
@@ -580,6 +656,7 @@ class EpisodicMemoryCapture:
             engine_class=engine_class,
             policy_ref=policy_ref,
             procedural_snapshot_ref=procedural_snapshot_ref,
+            capture_mode=mode,
         )
 
     def capture_compaction_event(
@@ -626,6 +703,7 @@ class EpisodicMemoryCapture:
             engine_class=engine_class,
             policy_ref=policy_ref,
             procedural_snapshot_ref=procedural_snapshot_ref,
+            capture_mode=mode,
         )
 
     def _capture(
@@ -644,6 +722,7 @@ class EpisodicMemoryCapture:
         engine_class: MemoryOperationEngineClass | None,
         policy_ref: str | None,
         procedural_snapshot_ref: str | None,
+        capture_mode: MemoryCaptureMode | None = None,
     ) -> MemoryCaptureResult:
         try:
             record = self._record(
@@ -655,6 +734,15 @@ class EpisodicMemoryCapture:
                 workflow_id=_optional_string(content.get("workflow_id")),
                 cli_profile=cli_profile,
                 provider=provider,
+                # C-MEM-03 v1.2. This method is the ONE place `event_kind` is
+                # held, so it decides the content-ORIGIN disposition; `_record`
+                # holds the raw `provider` and the resolved scope, so it decides
+                # the final tri-state. Computing a finished value here would be
+                # non-conforming - the scope the comparison needs does not
+                # exist at this altitude. `capture_mode` joins `event_kind` as
+                # the second origin dimension (codex R3): a REDACTED capture
+                # stores harness-authored replacement text, not dispatch output.
+                content_origin=_content_origin_for(event_kind, capture_mode),
             )
         except MemoryCaptureScopeValueDomainError as exc:
             # Codex R7: the write-boundary REFUSAL is an outcome C-MEM-19 has a
@@ -1023,9 +1111,18 @@ class EpisodicMemoryCapture:
         workflow_id: str | None,
         cli_profile: str | None,
         provider: str | None,
+        content_origin: _ContentOrigin,
     ) -> MemoryStoreRecord:
         content_hash = compute_memory_content_hash(content)
         memory_id = _memory_id_for(kind, content_hash=content_hash, run_id=run_id)
+        # Bound to a local BEFORE the envelope: the C-MEM-03 comparison is
+        # against the RESOLVED scope's own `provider_family`, so the resolution
+        # cannot stay inline at the `scope=` argument.
+        scope = self._scope_for_record(
+            workflow_id=workflow_id,
+            cli_profile=cli_profile,
+            provider=provider,
+        )
         return MemoryStoreRecord(
             envelope=MemoryRecordEnvelope(
                 memory_id=memory_id,
@@ -1035,12 +1132,15 @@ class EpisodicMemoryCapture:
                 created_at=timestamp,
                 updated_at=None,
                 source_refs=(source_ref,),
-                scope=self._scope_for_record(
-                    workflow_id=workflow_id,
-                    cli_profile=cli_profile,
-                    provider=provider,
-                ),
+                scope=scope,
                 content_hash=content_hash,
+                # Hash-inert by construction: both `content_hash` and
+                # `memory_id` are already fixed above, from content alone.
+                captured_cross_family=_captured_cross_family(
+                    content_origin=content_origin,
+                    provider=provider,
+                    scope=scope,
+                ),
             ),
             content=content,
         )
@@ -1084,6 +1184,75 @@ class EpisodicMemoryCapture:
         if resolution.family_out_of_domain:
             raise MemoryCaptureScopeValueDomainError(scope_family_out_of_domain_message(scope))
         return resolution.scope
+
+
+def _content_origin_for(
+    event_kind: str,
+    capture_mode: MemoryCaptureMode | None,
+) -> _ContentOrigin:
+    """The C-MEM-03 content-ORIGIN disposition for one capture invocation.
+
+    Two dimensions, because one is not enough. `event_kind` identifies the
+    calling method, which is a sound realization of the rule only where every
+    production invocation of that method shares one origin. `REDACTED` capture
+    mode is exactly the per-invocation variation that qualification exists for
+    (codex R3): `_captured_text` does not MASK the summary, it discards it and
+    substitutes the harness-authored `_REDACTED_SUMMARY` constant wholesale, and
+    `summary_hash` is then taken over that replacement text - so a redacted
+    turn or tool record stores no dispatch output at all, and a determination
+    on it would assert an equality tested against material the provider never
+    produced. This is the capture-time twin of C-MEM-03's transition-reset rule
+    for redaction, which resets to `unknown` for the same reason.
+
+    `REDACTED` therefore overrides the mapping in both directions - a
+    same-family redacted capture must not land `false`, and a cross-family one
+    must not land `true`. `None` means the caller has no capture mode (the run
+    kinds), which cannot redact anything and are `UNDETERMINED` regardless.
+    """
+
+    if capture_mode is MemoryCaptureMode.REDACTED:
+        return _ContentOrigin.UNDETERMINED
+    return _CONTENT_ORIGIN_BY_EVENT_KIND.get(event_kind, _ContentOrigin.UNDETERMINED)
+
+
+def _captured_cross_family(
+    *,
+    content_origin: _ContentOrigin,
+    provider: str | None,
+    scope: MemoryScope,
+) -> CapturedCrossFamily:
+    """The C-MEM-03 v1.2 tri-state for one capture.
+
+    The content-origin disposition GATES the family comparison: where the
+    stored content was not produced by a completed provider dispatch the
+    comparison is not consulted at all, because there is no producing leg for
+    it to be about.
+
+    The comparison itself reuses the B-86 / B-89 authorities verbatim -
+    `canonical_scope_family`, which binds the fail-closed
+    `provider_family_for_scope_check` - against the ALREADY-canonical
+    `provider_family` of the resolved scope. No new normalization posture.
+
+    `unknown` (never `false`) in each of the four undetermined cases: content
+    not produced by a completed dispatch; no `provider`; an unregistered
+    provider key, whose family the fail-closed authority declines to guess;
+    and a `null` `scope.provider_family`, the unpartitioned wildcard against
+    which "cross-family" is undefined.
+    """
+
+    if content_origin is not _ContentOrigin.DISPATCH_DERIVED:
+        return CapturedCrossFamily.UNKNOWN
+    if provider is None:
+        return CapturedCrossFamily.UNKNOWN
+    scope_family = scope.provider_family
+    if scope_family is None:
+        return CapturedCrossFamily.UNKNOWN
+    dispatch_family = canonical_scope_family(provider)
+    if dispatch_family is None:
+        return CapturedCrossFamily.UNKNOWN
+    if dispatch_family == scope_family:
+        return CapturedCrossFamily.FALSE
+    return CapturedCrossFamily.TRUE
 
 
 def _captured_text(value: str, mode: MemoryCaptureMode) -> str:

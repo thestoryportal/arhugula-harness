@@ -89,6 +89,7 @@ from harness_is.memory_policy import (
 )
 from harness_is.memory_record_envelope import (
     DERIVED_INDEX_FIELD,
+    CapturedCrossFamily,
     MemoryID,
     MemoryRecordEnvelope,
     MemoryRecordKind,
@@ -139,6 +140,7 @@ from harness_is.memory_store import (
     DerivedIndexInvalidation,
     DerivedIndexInvalidationHook,
     MemoryStoreContentHashMismatchError,
+    MemoryStoreGuardedWriteConflictError,
     MemoryStoreRecord,
     MemoryStoreRecordNotFoundError,
     MemoryStoreRecordUnavailableError,
@@ -182,6 +184,7 @@ __all__ = [
     "ArtifactTierMetadata",
     "CanonicalMemoryStore",
     "CaptureDecision",
+    "CapturedCrossFamily",
     "CliImportPolicy",
     "CliInstructionSource",
     "CliInstructionSourceKind",
@@ -247,6 +250,7 @@ __all__ = [
     "MemoryRootBinding",
     "MemoryScope",
     "MemoryStoreContentHashMismatchError",
+    "MemoryStoreGuardedWriteConflictError",
     "MemoryStoreRecord",
     "MemoryStoreRecordNotFoundError",
     "MemoryStoreRecordUnavailableError",

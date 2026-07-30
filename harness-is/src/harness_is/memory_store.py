@@ -12,6 +12,7 @@ import os
 import threading
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -21,7 +22,10 @@ from urllib.parse import quote
 from harness_core import DeploymentSurface
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from harness_is.cross_process_ledger_lock import cross_process_read_lock
+from harness_is.cross_process_ledger_lock import (
+    cross_process_read_lock,
+    cross_process_scope_lock,
+)
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.memory_operation_ledger import (
     MemoryOperationEntry,
@@ -46,8 +50,20 @@ from harness_is.memory_record_envelope import (
 
 type StoreJSON = str | int | bool | None | list[StoreJSON] | dict[str, StoreJSON]
 
-_FILE_WRITE_LOCK = threading.Lock()
-_JSONL_WRITE_LOCK = threading.Lock()
+# Re-entrant, deliberately. `write_record_guarded` evaluates a caller
+# precondition and then performs the write it authorizes WITHOUT releasing
+# either lock in between, and the write it wraps re-takes them: the JSON branch
+# re-takes `_FILE_WRITE_LOCK`, and every branch re-takes `_JSONL_WRITE_LOCK`
+# through `_mark_semantic_index_stale`. Cross-thread mutual exclusion is
+# unchanged; only same-thread re-acquisition is now permitted.
+#
+# LOCK ORDER: the per-root cross-process scope lock (`_write_scope`) OUTERMOST,
+# then `_FILE_WRITE_LOCK`, then `_JSONL_WRITE_LOCK`. That order is taken
+# identically by both write entry points, and no store path nests a canonical-
+# file ledger lock inside a scope hold (`append_memory_operation` is a sibling
+# call, never nested in a write), so the whole set stays acyclic.
+_FILE_WRITE_LOCK = threading.RLock()
+_JSONL_WRITE_LOCK = threading.RLock()
 
 
 class MemoryStoreWriteResult(StrEnum):
@@ -70,6 +86,15 @@ class MemoryStoreUnsupportedKindError(ValueError):
 
 class MemoryStoreContentHashMismatchError(ValueError):
     """Raised when envelope content hash does not match canonical content."""
+
+
+class MemoryStoreGuardedWriteConflictError(RuntimeError):
+    """Raised when a guarded write's precondition no longer holds at commit time.
+
+    A concurrency outcome, not a value defect: the record itself was well-formed
+    and the store simply refused to commit it against store state that changed
+    after the caller decided to write. The caller retries, re-decides, or fails.
+    """
 
 
 class MemoryStoreRecord(BaseModel):
@@ -180,12 +205,73 @@ class CanonicalMemoryStore:
 
         payload = canonicalize_memory_store_record(record)
         path = self.record_path(record)
-        if record.envelope.kind in _JSONL_BY_KIND:
-            _append_jsonl(path, payload)
-        else:
-            _write_file_atomically(path, payload)
-        self._mark_semantic_index_stale(record)
+        with self._write_scope():
+            if record.envelope.kind in _JSONL_BY_KIND:
+                _append_jsonl(path, payload)
+            else:
+                _write_file_atomically(path, payload)
+            self._mark_semantic_index_stale(record)
         return MemoryStoreWriteResult.WRITTEN
+
+    def _write_scope(self) -> AbstractContextManager[None]:
+        """The per-root cross-process hold every mutating write takes.
+
+        Keyed on the memory ROOT rather than the written file, because the
+        section `write_record_guarded` wraps re-reads a caller-chosen set of
+        OTHER records before writing this one; a per-file lock cannot exclude a
+        writer of a file the section has not named yet.
+        """
+
+        return cross_process_scope_lock(self._registry.canonical_root(self._deployment_surface))
+
+    def write_record_guarded(
+        self,
+        record: MemoryStoreRecord,
+        *,
+        precondition: Callable[[], bool],
+    ) -> MemoryStoreWriteResult:
+        """Write one record only if `precondition` still holds, ATOMICALLY.
+
+        A GENERIC compare-and-commit seam. The store knows nothing about what
+        the precondition tests - it carries no promotion, provenance, or policy
+        semantics - it only guarantees the one property a caller cannot build
+        for itself from the outside: the precondition is evaluated and the write
+        it authorizes is performed WITHOUT releasing the store's write locks in
+        between. A caller that reads, decides, and then calls `write_record` has
+        a TOCTOU window no amount of re-checking closes, because every re-check
+        it can write is separable from the write it authorizes.
+
+        Both write locks are held across the whole region, in the documented
+        `_FILE_WRITE_LOCK` -> `_JSONL_WRITE_LOCK` order, because a record this
+        store can mutate reaches the disk through either branch: the JSONL kinds
+        append (last line wins, so a rewrite under the same `memory_id` silently
+        changes what a reader sees) and the JSON kinds replace atomically. Both
+        locks are re-entrant, so `precondition` may re-read through this store's
+        own read path and the wrapped `write_record` may re-take them.
+
+        SCOPE (Codex round-1 [P1] - this guarantee is now CROSS-PROCESS). The
+        `threading.RLock`s alone were only as strong as the store's pre-existing
+        in-process write atomicity, which is not enough here: the memory root is
+        repo-derived and stable (`.harness/memory` under `repository_root`), and
+        two ordinary same-host invocations - a one-shot `harness run` alongside
+        a `harness daemon` - already share it, so a second OS process could
+        append a source line between this precondition and the write it
+        authorizes. The section therefore also takes the per-root
+        `cross_process_scope_lock`, OUTERMOST, and every mutating write in the
+        store takes the same lock (`write_record` -> `_write_scope`); the
+        `RLock`s are retained beneath it for cheap same-process exclusion and
+        re-entrancy. Same-host only, and a no-op on Windows - the B-40/B-45/B-46
+        posture, unchanged. Raising `MemoryStoreGuardedWriteConflictError` rather
+        than returning a sentinel keeps a caller from treating a refused commit
+        as a completed one by ignoring a return value.
+        """
+
+        with self._write_scope(), _FILE_WRITE_LOCK, _JSONL_WRITE_LOCK:
+            if not precondition():
+                raise MemoryStoreGuardedWriteConflictError(
+                    f"guarded write precondition failed for {record.envelope.memory_id!s}"
+                )
+            return self.write_record(record)
 
     def read_record(
         self,
@@ -518,6 +604,7 @@ __all__ = [
     "DerivedIndexInvalidation",
     "DerivedIndexInvalidationHook",
     "MemoryStoreContentHashMismatchError",
+    "MemoryStoreGuardedWriteConflictError",
     "MemoryStoreRecord",
     "MemoryStoreRecordNotFoundError",
     "MemoryStoreRecordUnavailableError",

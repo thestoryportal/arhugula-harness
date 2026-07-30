@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from enum import StrEnum
 from typing import Protocol, Self, cast
@@ -35,6 +35,7 @@ from harness_is.memory_policy import (
     ReviewMode,
 )
 from harness_is.memory_record_envelope import (
+    CapturedCrossFamily,
     MemoryID,
     MemoryRecordEnvelope,
     MemoryRecordKind,
@@ -46,7 +47,7 @@ from harness_is.memory_record_envelope import (
     compute_memory_content_hash,
     derive_memory_id,
 )
-from harness_is.memory_store import MemoryStoreRecord
+from harness_is.memory_store import MemoryStoreGuardedWriteConflictError, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, Identifier
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -78,12 +79,35 @@ class PromotionCandidateConfidence(StrEnum):
 
 
 class PromotionRiskFlag(StrEnum):
-    """Risk flags required by U-MEM-08."""
+    """Risk flags required by U-MEM-08.
+
+    `CROSS_FAMILY_CAPTURE` is the C-MEM-10 v1.2 (`B-92`) addition and the only
+    enum edit U-MEM-27 makes. It is RESERVED to the writer that derives it: it
+    names a fact about a stored source record's provenance, so a caller-supplied
+    instance carries no authority and is discarded and re-derived (see
+    `_risk_flags`). The contract field is an open `list<string>`; this
+    implementation-side enumeration is closed, so admitting the value here is
+    what makes it expressible at all.
+    """
 
     SENSITIVE = "sensitive"
     LOW_CONFIDENCE = "low_confidence"
     CROSS_SCOPE = "cross_scope"
     BEHAVIOR_CHANGING = "behavior_changing"
+    CROSS_FAMILY_CAPTURE = "cross_family_capture"
+
+
+def cross_family_capture_flagged(provenance: CapturedCrossFamily) -> bool:
+    """C-MEM-03 read-side mapping of the tri-state onto the C-MEM-10 gate.
+
+    `unknown` is NOT "presumed same-family": it is treated exactly as `true` is,
+    so only an explicit `false` - a comparison the capture writer actually made
+    and found equal - leaves a candidate ungated. An absent field deserializes
+    to `UNKNOWN`, so a pre-amendment record gates here by construction with no
+    back-fill and no migration.
+    """
+
+    return provenance is not CapturedCrossFamily.FALSE
 
 
 class PreferenceCandidateSource(StrEnum):
@@ -146,6 +170,16 @@ class PreferenceSourceAuthority(StrEnum):
 
 class PromotionReviewRequiredError(ValueError):
     """Raised when a caller tries to activate a candidate that still needs review."""
+
+
+class PromotionProvenanceChangedError(RuntimeError):
+    """Raised when a cited source's provenance changed after the frozen snapshot.
+
+    C-MEM-10 v1.2 commit binding. The decision the service took is no longer the
+    decision the current store state supports, so the write it authorized is
+    refused rather than committed against a stale reading. Nothing is written to
+    either store; the caller re-reads and re-decides.
+    """
 
 
 class PreferencePromotionValidationError(ValueError):
@@ -240,6 +274,21 @@ class PromotionCandidate(BaseModel):
             and self.preference_source is None
         ):
             raise ValueError("preference candidates require preference_source")
+        if PromotionRiskFlag.CROSS_FAMILY_CAPTURE in self.risk_flags and (
+            not self.review_required or self.auto_promote_allowed
+        ):
+            # C-MEM-10 v1.2 biconditional, CONSISTENCY half. Scope stated
+            # exactly: this refuses the illegal PAIR at every VALIDATING
+            # constructor (init, `model_validate`). It is not a provenance
+            # check - it cannot see a candidate that simply OMITS the mark - and
+            # it does not run on `model_copy(update=...)`, which bypasses
+            # after-validators by design on this project's Pydantic. Closing the
+            # copy route by overriding `model_copy` is deliberately NOT
+            # attempted; the activation-boundary re-derivation owns that.
+            raise ValueError(
+                "cross_family_capture candidates are review-required and never "
+                "auto-promotable (C-MEM-10)"
+            )
         return self
 
 
@@ -267,14 +316,214 @@ class PromotionDecisionResult(BaseModel):
 
 
 class PromotionDecisionStore(Protocol):
-    """Store surface consumed by ``PromotionDecisionService``."""
+    """Store surface consumed by ``PromotionDecisionService``.
+
+    `read_record` and `write_record_guarded` are the U-MEM-27 additions. Both
+    are INTERNAL SEAM widenings, not public contract changes - verified rather
+    than asserted: `PromotionDecisionStore` appears nowhere under
+    `design-substrate/`, so no spec declares its shape. Both are satisfied by
+    the existing concrete `CanonicalMemoryStore` without new concrete code:
+    `read_record` already exists, and `write_record_guarded` is the GENERIC
+    compare-and-commit seam this unit added to the store - generic because the
+    store must stay free of promotion semantics (carrier-home discipline).
+    """
 
     def write_record(self, record: MemoryStoreRecord) -> object: ...
+
+    def write_record_guarded(
+        self,
+        record: MemoryStoreRecord,
+        *,
+        precondition: Callable[[], bool],
+    ) -> object: ...
+
+    def read_record(
+        self,
+        memory_id: MemoryID,
+        kind: MemoryRecordKind,
+        *,
+        run_id: str | None = None,
+        audit_mode: bool = False,
+    ) -> MemoryStoreRecord: ...
 
     def append_memory_operation(
         self,
         payload: MemoryOperationPayload,
     ) -> MemoryOperationWriteResult: ...
+
+
+_EPISODIC_KINDS: frozenset[MemoryRecordKind] = frozenset(
+    {
+        MemoryRecordKind.EPISODIC_RUN,
+        MemoryRecordKind.EPISODIC_TURN,
+        MemoryRecordKind.TOOL_EVENT,
+        MemoryRecordKind.COMPACTION_EVENT,
+    }
+)
+"""Kinds whose store path is keyed by `run_id`.
+
+`MemoryStore._required_run_id` RAISES for these when no `run_id` is supplied,
+and the promotion service holds only an OPTIONAL `self._run_id` which may be
+absent or may belong to a different run than the cited source. Named here so
+the "no usable run_id" fail-closed branch is an explicit, testable arm rather
+than an incidental exception catch.
+"""
+
+
+class _EffectiveProvenance(BaseModel):
+    """The ONE frozen provenance snapshot of a single promotion service call.
+
+    The `B-91` frozen-decision-input idiom, and the reason the gate and the
+    durable write cannot disagree. The cited source records are resolved exactly
+    once, at the start of the call; this value carries both the aggregated
+    tri-state AND the normalized risk-flag set derived from it, and the same
+    instance is threaded through the activation gate and `_persist_decision`.
+    The gate is a PURE PROJECTION of it (`gated`) and performs no lookup of its
+    own - deliberately NOT two lookups plus a comparison, which would detect the
+    disagreement instead of preventing it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    per_source: tuple[CapturedCrossFamily | None, ...]
+    aggregate: CapturedCrossFamily
+    risk_flags: tuple[PromotionRiskFlag, ...]
+
+    @property
+    def gated(self) -> bool:
+        """Whether automatic activation is withheld on the cross-family ground."""
+
+        return cross_family_capture_flagged(self.aggregate)
+
+
+def _aggregate_provenance(values: Sequence[CapturedCrossFamily | None]) -> CapturedCrossFamily:
+    """Worst-value aggregation across every cited source (C-MEM-10 v1.2).
+
+    `true` if ANY resolved source is `true`; else `unknown` if ANY is `unknown`
+    or unresolvable (`None`); `false` only when EVERY cited source resolves
+    `false`. An EMPTY citation list is `unknown`, not `false` - a candidate that
+    names no source has shown nothing, and the fail-closed reading is the honest
+    one.
+
+    An implementation that gated only when ALL sources were risky would satisfy
+    every single-source witness while auto-promoting a mixed candidate.
+    """
+
+    if not values:
+        return CapturedCrossFamily.UNKNOWN
+    if any(value is CapturedCrossFamily.TRUE for value in values):
+        return CapturedCrossFamily.TRUE
+    if any(value is not CapturedCrossFamily.FALSE for value in values):
+        return CapturedCrossFamily.UNKNOWN
+    return CapturedCrossFamily.FALSE
+
+
+def _record_kind_from_memory_id(memory_id: MemoryID) -> MemoryRecordKind | None:
+    """Recover the record kind from `mem:{tier}:{kind}:{hex}`, or `None`.
+
+    `None` is one of the four unresolvable branches, kept distinct from the
+    others so each has its own witness: a caller-supplied `source_memory_refs`
+    entry is an opaque string and may name no parseable kind at all.
+    """
+
+    parts = str(memory_id).split(":")
+    if len(parts) != 4 or parts[0] != "mem":
+        return None
+    try:
+        return MemoryRecordKind(parts[2])
+    except ValueError:
+        return None
+
+
+def _resolve_source_provenance(
+    store: PromotionDecisionStore,
+    memory_id: MemoryID,
+    *,
+    run_id: str | None,
+) -> CapturedCrossFamily | None:
+    """Read ONE cited source record's `captured_cross_family`, fail-closed.
+
+    `None` means UNRESOLVABLE - no recorded provenance could be read at all. It
+    aggregates exactly like `unknown` (mark carried, automatic activation
+    withheld, operator-approved path left open) but is kept DISTINCT from a
+    source whose stored value literally is `unknown`, because the commit binding
+    compares the per-source vector: a cited source that was readable at the
+    snapshot and has since become unreadable is a change in recorded provenance,
+    and collapsing the two would hide it (Codex round 2 [P2] - the same
+    compare-a-projection defect, one level down).
+
+    The branches are written out rather than collapsed into one catch-all,
+    because a single blanket `except` satisfies one aggregate test while leaving
+    the others silently unhandled.
+    """
+
+    kind = _record_kind_from_memory_id(memory_id)
+    if kind is None:
+        # Branch 1: the reference names no parseable record kind.
+        return None
+    if kind in _EPISODIC_KINDS and run_id is None:
+        # Branch 2: an episodic source with no usable `run_id`. Pre-checked
+        # rather than left to `_required_run_id`'s raise, so the branch is
+        # deterministic across every store implementation, not only the
+        # concrete one.
+        return None
+    try:
+        record = store.read_record(memory_id, kind, run_id=run_id, audit_mode=True)
+    except LookupError:
+        # Branch 3: absent, or present but unservable.
+        return None
+    except ValueError:
+        # Branch 4: the store refused the lookup arguments (the
+        # `_required_run_id` raise on a store that does not pre-check) or the
+        # stored payload would not deserialize.
+        return None
+    except OSError:
+        # Branch 5 (Codex round 1 [P2]): the source is on disk but could not be
+        # READ - an unreadable file or directory, a vanished mount, EMFILE.
+        # Without this branch the I/O error escapes the snapshot, and because
+        # EVERY decision operation takes the snapshot first, an unreadable
+        # source aborts `propose_for_review`, `deny`, AND an operator-approved
+        # `approve` - the exact opposite of the documented fail-closed reading,
+        # which withholds the AUTOMATIC path only and must leave the
+        # operator-approved path OPEN. `PermissionError` is an `OSError`, and
+        # so is every other read failure the filesystem can raise here.
+        return None
+    except TypeError:
+        # Branch 6 (Codex round 2 [P2]): the stored payload is MALFORMED in a
+        # way that fails on a type rather than a value - a serialized
+        # `content_hash` of `null` reaching `_bytes32_from_json`, a stored
+        # envelope field of the wrong JSON type. Same class as branch 5: a
+        # deserialization defect in one cited source must withhold the
+        # AUTOMATIC path, not abort `propose_for_review`, `deny`, and
+        # operator-approved `approve` alike.
+        return None
+    if record.envelope.memory_id != memory_id:
+        # `EPISODIC_RUN` is keyed by `run_id`, so `read_record`'s `memory_id`
+        # argument is inert for it and a different record can come back. A
+        # record that is not the cited one proves nothing about the cited one.
+        return None
+    return record.envelope.captured_cross_family
+
+
+def _normalized_risk_flags(
+    candidate: PromotionCandidate,
+    *,
+    gated: bool,
+) -> tuple[PromotionRiskFlag, ...]:
+    """The candidate's flags with the reserved mark restated from the snapshot.
+
+    Every durable write taken from a candidate the service did not itself derive
+    persists the RE-DERIVED mark, never the supplied one: injected when
+    re-derivation yields `true` or `unknown` (including every unresolvable
+    branch - "this needs review and here is why" is the honest durable
+    statement), stripped when it yields `false`.
+    """
+
+    flags = set(candidate.risk_flags)
+    flags.discard(PromotionRiskFlag.CROSS_FAMILY_CAPTURE)
+    if gated:
+        flags.add(PromotionRiskFlag.CROSS_FAMILY_CAPTURE)
+    return tuple(sorted(flags, key=lambda flag: flag.value))
 
 
 class PromotionCandidateExtractor:
@@ -339,6 +588,7 @@ class PromotionDecisionService:
 
         return self._persist_decision(
             candidate,
+            provenance=self._provenance_snapshot(candidate),
             status=SemanticRecordStatus.PROPOSED,
             operation_kind=MemoryOperationKind.PROPOSE_PROMOTION,
             timestamp=timestamp,
@@ -365,7 +615,8 @@ class PromotionDecisionService:
     ) -> PromotionDecisionResult:
         """Persist an active record when policy or operator review allows it."""
 
-        if not candidate.auto_promote_allowed and not operator_approved:
+        provenance = self._provenance_snapshot(candidate)
+        if not self._auto_promotable(candidate, provenance) and not operator_approved:
             raise PromotionReviewRequiredError(
                 "candidate cannot become active until operator review approves it"
             )
@@ -377,6 +628,7 @@ class PromotionDecisionService:
             raise ValueError("active promotion requires an injection_policy")
         return self._persist_decision(
             candidate,
+            provenance=provenance,
             status=SemanticRecordStatus.ACTIVE,
             operation_kind=MemoryOperationKind.PROMOTE,
             timestamp=timestamp,
@@ -401,6 +653,7 @@ class PromotionDecisionService:
 
         return self._persist_decision(
             candidate,
+            provenance=self._provenance_snapshot(candidate),
             status=SemanticRecordStatus.DENIED,
             operation_kind=MemoryOperationKind.DENY_PROMOTION,
             timestamp=timestamp,
@@ -428,7 +681,8 @@ class PromotionDecisionService:
     ) -> PromotionDecisionResult:
         """Apply an operator-edited statement and persist it as active."""
 
-        if not candidate.auto_promote_allowed and not operator_approved:
+        provenance = self._provenance_snapshot(candidate)
+        if not self._auto_promotable(candidate, provenance) and not operator_approved:
             raise PromotionReviewRequiredError(
                 "candidate cannot become active until operator review approves it"
             )
@@ -436,6 +690,7 @@ class PromotionDecisionService:
             raise ValueError("edited promotion statement cannot be empty")
         return self._persist_decision(
             candidate,
+            provenance=provenance,
             status=SemanticRecordStatus.ACTIVE,
             operation_kind=MemoryOperationKind.PROMOTE,
             timestamp=timestamp,
@@ -448,10 +703,65 @@ class PromotionDecisionService:
             statement_override=statement,
         )
 
+    def _provenance_snapshot(self, candidate: PromotionCandidate) -> _EffectiveProvenance:
+        """Resolve the cited source records ONCE and freeze the result.
+
+        Called at the START of every service call that consumes a candidate the
+        service did not itself derive, and the only place in this class that
+        reads a source record. Everything downstream - the activation gate and
+        the durable write's mark alike - is a projection of the value returned
+        here, so a call cannot admit an activation on one reading and persist a
+        different one.
+
+        The snapshot retains the PER-SOURCE vector as well as the projections
+        derived from it, positionally aligned with `candidate.source_memory_refs`.
+        The commit binding compares that vector, so the exact value it must
+        compare has to survive the snapshot rather than be reconstructed.
+        """
+
+        per_source = tuple(
+            _resolve_source_provenance(self._store, memory_id, run_id=self._run_id)
+            for memory_id in candidate.source_memory_refs
+        )
+        aggregate = _aggregate_provenance(per_source)
+        return _EffectiveProvenance(
+            per_source=per_source,
+            aggregate=aggregate,
+            risk_flags=_normalized_risk_flags(
+                candidate,
+                gated=cross_family_capture_flagged(aggregate),
+            ),
+        )
+
+    def _auto_promotable(
+        self,
+        candidate: PromotionCandidate,
+        provenance: _EffectiveProvenance,
+    ) -> bool:
+        """Override the candidate's `auto_promote_allowed` claim from the snapshot.
+
+        C-MEM-10 v1.2 surface 2, and the shape matters as much as the effect:
+        this OVERRIDES the input to the pre-existing disjunction rather than
+        adding a second refusal branch ahead of it. A re-derived `true` /
+        `unknown` blocks AUTOMATIC activation only - explicit operator approval
+        still activates, because approval records a decision to accept the
+        provenance and eligibility is preserved, not removed. A refusal that
+        outranked operator approval would implement the reading the operator
+        explicitly foreclosed.
+
+        It is deliberately blind to `candidate.risk_flags`: the two cases no
+        value-level check can catch are a candidate that OMITS the mark while
+        claiming auto-promotability, and one carrying the illegal pair reached
+        through `model_copy(update=...)`, which bypasses after-validators.
+        """
+
+        return candidate.auto_promote_allowed and not provenance.gated
+
     def _persist_decision(
         self,
         candidate: PromotionCandidate,
         *,
+        provenance: _EffectiveProvenance,
         status: SemanticRecordStatus,
         operation_kind: MemoryOperationKind,
         timestamp: datetime,
@@ -470,8 +780,23 @@ class PromotionDecisionService:
             preference_details=preference_details,
         )
         _require_canonical_candidate_scope(candidate)
+        # The SINGLE choke point, covering all four callers by construction -
+        # `propose_for_review` (PROPOSED), `approve` (ACTIVE), `deny` (DENIED),
+        # `edit_and_approve` (ACTIVE) - and every future caller by the same
+        # construction. `deny` is exactly the one a per-method fix would miss.
+        #
+        # The normalized flags are handed to the content builders as VALUES; no
+        # normalized `PromotionCandidate` is constructed. That is the deliberate
+        # resolution of the interplay with the slice-3a model validator: a
+        # candidate that omits the mark against a `true` source legitimately
+        # asserts `auto_promote_allowed=True`, so re-building it with the mark
+        # injected would hit the validator's illegal-pair refusal and turn a
+        # correct normalization into a crash. Normalizing the values keeps the
+        # untrusted candidate untouched (it is the caller's object) while making
+        # the DURABLE statement the re-derived one.
         record = _promotion_record(
             candidate,
+            risk_flags=provenance.risk_flags,
             status=status,
             timestamp=timestamp,
             injection_policy=injection_policy,
@@ -495,7 +820,7 @@ class PromotionDecisionService:
             policy_decision=status.value,
             record_count=1,
         ):
-            self._store.write_record(record)
+            self._commit_record(record, candidate=candidate, provenance=provenance, status=status)
             operation_result = self._store.append_memory_operation(
                 self._operation_payload(
                     candidate,
@@ -511,6 +836,84 @@ class PromotionDecisionService:
             operation_kind=operation_kind,
             operation_result=operation_result,
         )
+
+    def _commit_record(
+        self,
+        record: MemoryStoreRecord,
+        *,
+        candidate: PromotionCandidate,
+        provenance: _EffectiveProvenance,
+        status: SemanticRecordStatus,
+    ) -> None:
+        """Write the decision record, binding an ACTIVATION to its snapshot.
+
+        MECHANISM CHOSEN (C-MEM-10 v1.2 / U-MEM-27 commit binding), and why.
+        The obligation is that an activation must not commit against a source
+        whose recorded provenance changed after the snapshot, and the round-10
+        constraint is that the verification be ATOMIC WITH PERSISTENCE - a
+        re-check the runtime performs and then follows with a separate
+        `write_record` call is still a TOCTOU window, because the store's own
+        locks cover individual writes only. Of the three shapes the plan leaves
+        open, a version/generation token is unavailable (the store exposes none,
+        and the envelope is hash-inert so `memory_id` cannot serve as one - a
+        rewrite carrying different `captured_cross_family` collides on the SAME
+        id, which is the whole reason the race is live), and a service-local
+        lock would only pretend atomicity (the capture writers that append new
+        provenance lines do not hold it). What is left is a GUARDED CONDITIONAL
+        WRITE executed inside the store's own write locks: the store's new
+        generic `write_record_guarded` evaluates this precondition and performs
+        the write it authorizes without releasing those locks in between, so no
+        interleaved writer can land between the two. The precondition is kept
+        promotion-free on the store side - it is an opaque callable - so
+        harness-is gains a general compare-and-commit primitive rather than
+        promotion semantics it has no business knowing (carrier-home discipline).
+
+        CROSS-PROCESS (Codex round-1 [P1]): the store's locks were in-process
+        only, which left the same interleaving open between two OS processes
+        sharing one repo-derived memory root - a real topology, not a
+        hypothetical one (`harness run` alongside `harness daemon`). The store
+        now takes a per-root `cross_process_scope_lock` around this guarded
+        section AND around every mutating write, so the capture writers that
+        append new provenance lines DO hold the lock this section holds - which
+        is exactly what the service-local alternative could not arrange.
+
+        The compared value is the EXACT per-source provenance vector the
+        snapshot read - every cited source's tri-state, positionally aligned
+        with `candidate.source_memory_refs`, with `None` marking a source that
+        was unresolvable. ANY difference is a conflict. This is the plan's
+        literal obligation (`:1022`): "the activation write must not commit
+        against a source whose recorded provenance changed after the snapshot",
+        unqualified. An earlier reading (Codex round 1 and before) compared only
+        the decision-bearing `gated` projection on the argument that a mutation
+        which cannot change the decision is not worth refusing; that narrowed
+        the contract - `true` -> `unknown`, and multi-source changes that
+        preserve the aggregate, both committed - and is SUPERSEDED. The vector
+        keeps `None` distinct from a stored `unknown` for the same reason: a
+        source that was readable at the snapshot and is not at commit HAS
+        changed, and collapsing the two would reintroduce the same defect one
+        level down.
+
+        Scope, stated rather than implied: the guard is applied to the
+        ACTIVATION path only. A `PROPOSED` or `DENIED` write authorizes nothing
+        - it records that review is owed or was refused - so a concurrent source
+        append must not be able to make a denial fail. Those writes still state
+        the snapshot's re-derived mark; they simply are not conflict-bound to it.
+        """
+
+        if status is not SemanticRecordStatus.ACTIVE:
+            self._store.write_record(record)
+            return
+
+        def _provenance_unchanged() -> bool:
+            return self._provenance_snapshot(candidate).per_source == provenance.per_source
+
+        try:
+            self._store.write_record_guarded(record, precondition=_provenance_unchanged)
+        except MemoryStoreGuardedWriteConflictError as exc:
+            raise PromotionProvenanceChangedError(
+                "cited source provenance changed after the promotion snapshot; "
+                "the activation was not committed"
+            ) from exc
 
     def _operation_payload(
         self,
@@ -623,20 +1026,27 @@ def _candidate_from_hint(
         update={"suggested_scope": canonical_candidate_scope(hint.suggested_scope)}
     )
     source_refs = _merge_source_refs(record.envelope.source_refs, hint.source_refs)
+    # The C-MEM-10 provenance read happens HERE and exactly once per candidate.
+    # The predicates below consume the DERIVED FLAG SET, never a second read of
+    # `record.envelope.captured_cross_family` - two parallel derivations of the
+    # same fact are free to diverge under later edits, which is the advisory-flag
+    # condition the `B-92` fork found and C-MEM-10 now forbids.
     risk_flags = _risk_flags(
         hint,
         source_scope=record.envelope.scope,
+        captured_cross_family=record.envelope.captured_cross_family,
     )
     preference_source = _preference_source(
         hint,
         source_refs=source_refs,
         source_content=record.content,
     )
-    review_required = _review_required(hint, resolution)
+    review_required = _review_required(hint, resolution, risk_flags=risk_flags)
     auto_promote_allowed = _auto_promote_allowed(
         hint,
         resolution=resolution,
         review_required=review_required,
+        risk_flags=risk_flags,
     )
     return PromotionCandidate(
         candidate_id=_candidate_id(record.envelope.memory_id, hint, preference_source),
@@ -673,6 +1083,7 @@ def _risk_flags(
     hint: PromotionCandidateHint,
     *,
     source_scope: MemoryScope,
+    captured_cross_family: CapturedCrossFamily,
 ) -> tuple[PromotionRiskFlag, ...]:
     flags = set(hint.risk_flags)
     if hint.sensitive:
@@ -683,6 +1094,17 @@ def _risk_flags(
         flags.add(PromotionRiskFlag.CROSS_SCOPE)
     if hint.behavior_changing:
         flags.add(PromotionRiskFlag.BEHAVIOR_CHANGING)
+    # C-MEM-10 v1.2: `cross_family_capture` is RESERVED to this derivation, so
+    # whatever the hint said about it is discarded and re-derived from the
+    # source record - unconditionally and in BOTH directions. A hint can neither
+    # introduce the mark on a `false` source nor suppress it on a `true` /
+    # `unknown` one. This is an overwrite, not a refusal: a hint carrying the
+    # value is not malformed, merely not authoritative. `cross_scope` above is
+    # untouched and stays independent - neither flag is derived from the other,
+    # and a candidate may carry both.
+    flags.discard(PromotionRiskFlag.CROSS_FAMILY_CAPTURE)
+    if cross_family_capture_flagged(captured_cross_family):
+        flags.add(PromotionRiskFlag.CROSS_FAMILY_CAPTURE)
     return tuple(sorted(flags, key=lambda flag: flag.value))
 
 
@@ -762,7 +1184,13 @@ def _preference_source(
 def _review_required(
     hint: PromotionCandidateHint,
     resolution: MemoryPromotionResolution,
+    *,
+    risk_flags: Sequence[PromotionRiskFlag],
 ) -> bool:
+    if PromotionRiskFlag.CROSS_FAMILY_CAPTURE in risk_flags:
+        # Unconditional on policy: not a decision value, not a review mode, not
+        # a confidence threshold.
+        return True
     if hint.confidence is PromotionCandidateConfidence.LOW:
         return True
     if resolution.review_mode is ReviewMode.OPERATOR_REQUIRED:
@@ -778,7 +1206,13 @@ def _auto_promote_allowed(
     *,
     resolution: MemoryPromotionResolution,
     review_required: bool,
+    risk_flags: Sequence[PromotionRiskFlag],
 ) -> bool:
+    if PromotionRiskFlag.CROSS_FAMILY_CAPTURE in risk_flags:
+        # AHEAD of the `proposed_kind` branch below, deliberately: a gate placed
+        # only on the semantic return would leave cross-family PROCEDURAL
+        # candidates auto-promoting under `PROMOTE_PROCEDURAL` + `AUTOMATIC`.
+        return False
     if review_required:
         return False
     if resolution.review_mode is not ReviewMode.AUTOMATIC:
@@ -815,6 +1249,7 @@ def _candidate_id(
 def _promotion_record(
     candidate: PromotionCandidate,
     *,
+    risk_flags: Sequence[PromotionRiskFlag],
     status: SemanticRecordStatus,
     timestamp: datetime,
     injection_policy: SemanticInjectionPolicy,
@@ -830,6 +1265,7 @@ def _promotion_record(
     tier = _tier_for_record_kind(kind)
     content = _record_content(
         candidate,
+        risk_flags=risk_flags,
         status=status,
         injection_policy=injection_policy,
         preference_details=preference_details,
@@ -884,6 +1320,7 @@ def _tier_for_record_kind(kind: MemoryRecordKind) -> MemoryTier:
 def _record_content(
     candidate: PromotionCandidate,
     *,
+    risk_flags: Sequence[PromotionRiskFlag],
     status: SemanticRecordStatus,
     injection_policy: SemanticInjectionPolicy,
     preference_details: PreferencePromotionDetails | None,
@@ -896,6 +1333,7 @@ def _record_content(
     if candidate.proposed_kind is PromotionCandidateKind.PROCEDURAL_UPDATE:
         return _procedural_record_content(
             candidate,
+            risk_flags=risk_flags,
             status=status,
             injection_policy=injection_policy,
             rationale=rationale,
@@ -906,6 +1344,7 @@ def _record_content(
         )
     return _semantic_record_content(
         candidate,
+        risk_flags=risk_flags,
         status=status,
         injection_policy=injection_policy,
         preference_details=preference_details,
@@ -916,9 +1355,33 @@ def _record_content(
     )
 
 
+def _risk_flag_values(risk_flags: Sequence[PromotionRiskFlag]) -> list[str]:
+    """C-MEM-10 durable-review-artifact carrier for the decision's risk flags.
+
+    The promotion-written record's own CONTENT states them, so an operator
+    inspecting the durable record can see why it was held. `MemoryStoreRecord.
+    content` is an open mapping, so no model edit is needed; `_promotion_record`
+    hashes the extended content, which means promotion records written from here
+    on carry one more key and therefore a different `content_hash` / `memory_id`
+    than they would have. That is forward-shape only - no already-written record
+    is rewritten, re-hashed, or re-identified.
+
+    Takes the flag VALUES rather than the candidate: what is persisted is the
+    `_persist_decision` choke point's NORMALIZED set, re-derived from the frozen
+    provenance snapshot, never the untrusted candidate's own claim.
+
+    Deliberately NOT the C-MEM-08 ledger row: `MemoryOperationPayload` is closed
+    (`extra="forbid"`), and a field there would be the C-MEM-08 amendment this
+    arc forswears, so `_operation_payload` is unchanged.
+    """
+
+    return [flag.value for flag in risk_flags]
+
+
 def _semantic_record_content(
     candidate: PromotionCandidate,
     *,
+    risk_flags: Sequence[PromotionRiskFlag],
     status: SemanticRecordStatus,
     injection_policy: SemanticInjectionPolicy,
     preference_details: PreferencePromotionDetails | None,
@@ -932,6 +1395,7 @@ def _semantic_record_content(
         "source_memory_refs": [str(memory_id) for memory_id in candidate.source_memory_refs],
         "semantic_kind": candidate.proposed_kind.value,
         "statement": statement_override or candidate.statement,
+        "risk_flags": _risk_flag_values(risk_flags),
         "rationale": rationale,
         "evidence": [ref.model_dump(mode="json") for ref in candidate.source_refs],
         "confidence": candidate.confidence.value,
@@ -959,6 +1423,7 @@ def _semantic_record_content(
 def _procedural_record_content(
     candidate: PromotionCandidate,
     *,
+    risk_flags: Sequence[PromotionRiskFlag],
     status: SemanticRecordStatus,
     injection_policy: SemanticInjectionPolicy,
     rationale: str | None,
@@ -977,6 +1442,7 @@ def _procedural_record_content(
         "instruction_file_refs": [],
         "memory_policy_ref": policy_ref,
         "procedural_update": statement_override or candidate.statement,
+        "risk_flags": _risk_flag_values(risk_flags),
         "rationale": rationale,
         "evidence": [ref.model_dump(mode="json") for ref in candidate.source_refs],
         "confidence": candidate.confidence.value,
@@ -1054,6 +1520,7 @@ __all__ = [
     "PromotionDecisionResult",
     "PromotionDecisionService",
     "PromotionDecisionStore",
+    "PromotionProvenanceChangedError",
     "PromotionReviewRequiredError",
     "PromotionRiskFlag",
     "PromotionScopeValueDomainError",

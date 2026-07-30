@@ -29,6 +29,7 @@ from harness_is.memory_operation_ledger import (
     MemoryOperationProjection,
 )
 from harness_is.memory_record_envelope import (
+    CapturedCrossFamily,
     MemoryID,
     MemoryRecordKind,
     MemoryTier,
@@ -204,6 +205,18 @@ class MemoryRedactionService:
                     "updated_at": timestamp,
                     "content_hash": new_content_hash,
                     "redaction_state": redaction_state,
+                    # C-MEM-03 v1.2 content-replacing-transition RESET. All
+                    # three transitions routed here - redaction, tombstone,
+                    # retention expiry - substitute wholly harness-authored
+                    # material (`_replacement_content`, which derives from no
+                    # dispatch) for the content the record held. Because the
+                    # field describes THE STORED VERSION, a preserved `true` or
+                    # `false` would assert that the replacement material came
+                    # from the original dispatch. This is not a back-fill: that
+                    # rule forbids manufacturing a determination where none was
+                    # made; this discards one that no longer describes the
+                    # content, and both directions fail closed.
+                    "captured_cross_family": CapturedCrossFamily.UNKNOWN,
                 }
             ),
             content=replacement_content,

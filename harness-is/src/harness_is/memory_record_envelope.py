@@ -91,6 +91,26 @@ class RedactionState(StrEnum):
     TOMBSTONED = "tombstoned"
 
 
+class CapturedCrossFamily(StrEnum):
+    """C-MEM-03 stored-version cross-family capture provenance (tri-state).
+
+    Records one fact about THE STORED VERSION of a record: whether the content
+    in that version was produced on a dispatch whose provider family differed
+    from the family the record is partitioned under.
+
+    `UNKNOWN` is the ABSENT value and the default. A pre-amendment envelope
+    carries no key at all and reads as `UNKNOWN`; a writer that did not
+    actually determine the comparison records `UNKNOWN` too. It is never
+    `FALSE`: `FALSE` asserts an equality that was tested, and defaulting to it
+    would persist a determination no writer made - the permissive-by-silence
+    failure this field exists to remove (C-MEM-03 v1.2).
+    """
+
+    TRUE = "true"
+    FALSE = "false"
+    UNKNOWN = "unknown"
+
+
 class SourceRef(BaseModel):
     """Reference to source material that produced or justified a memory record."""
 
@@ -140,6 +160,16 @@ class MemoryRecordEnvelope(BaseModel):
     supersedes: tuple[MemoryID, ...] = Field(default_factory=_empty_memory_ids)
     superseded_by: tuple[MemoryID, ...] = Field(default_factory=_empty_memory_ids)
     redaction_state: RedactionState = RedactionState.ACTIVE
+    captured_cross_family: CapturedCrossFamily = CapturedCrossFamily.UNKNOWN
+    """C-MEM-03 tri-state cross-family capture provenance for this version.
+
+    Optional and hash-inert: it is an envelope field, so it enters neither
+    `content_hash` (computed over content alone) nor `memory_id`. The default
+    keeps every pre-amendment serialized envelope valid under
+    `extra="forbid"` and keeps the non-capture authoring writers - promotion,
+    compaction disposition, native adapter - correct without change: they do
+    not determine the predicate, so `unknown` is their honest value.
+    """
 
 
 def _nfc(value: str) -> str:
@@ -224,6 +254,7 @@ def derive_memory_id(
 
 __all__ = [
     "DERIVED_INDEX_FIELD",
+    "CapturedCrossFamily",
     "MemoryID",
     "MemoryRecordEnvelope",
     "MemoryRecordKind",

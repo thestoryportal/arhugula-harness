@@ -86,6 +86,9 @@ def test_memory_record_envelope_declares_common_identity_fields() -> None:
         "supersedes",
         "superseded_by",
         "redaction_state",
+        # U-MEM-27 bullet 1 (`Implementation_Plan_Memory_Substrate_v1.md`:1007):
+        # the C-MEM-03 v1.2 tri-state joins the envelope's field set.
+        "captured_cross_family",
     }
 
     envelope = m.MemoryRecordEnvelope(**_valid_envelope_payload())
@@ -97,6 +100,47 @@ def test_memory_record_envelope_declares_common_identity_fields() -> None:
     assert isinstance(envelope.source_refs, tuple)
     assert isinstance(envelope.supersedes, tuple)
     assert isinstance(envelope.superseded_by, tuple)
+
+
+def test_captured_cross_family_value_domain_is_the_tri_state() -> None:
+    """U-MEM-27 - C-MEM-03 v1.2 declares exactly `true` / `false` / `unknown`."""
+    m = _memory_module()
+
+    assert {value.value for value in m.CapturedCrossFamily} == {"true", "false", "unknown"}
+
+
+def test_pre_amendment_envelope_without_the_key_validates_and_reads_unknown() -> None:
+    """U-MEM-27 acceptance - the absent value is `unknown`, and it is the DEFAULT.
+
+    Two claims in one, because they fail independently. A pre-amendment
+    serialized envelope carries no `captured_cross_family` key at all and must
+    still validate under `extra="forbid"`; and the value it then reads must be
+    `unknown`, never `false` - a `false` default would persist a determination
+    no writer made.
+    """
+    m = _memory_module()
+    payload = _valid_envelope_payload()
+    assert "captured_cross_family" not in payload
+
+    envelope = m.MemoryRecordEnvelope.model_validate(payload)
+
+    assert envelope.captured_cross_family is m.CapturedCrossFamily.UNKNOWN
+    assert envelope.captured_cross_family is not m.CapturedCrossFamily.FALSE
+    # The transition path serializes with defaults included, so an explicit
+    # `unknown` may materialize where the key was absent - permitted, and the
+    # two denote the identical undetermined status (C-MEM-03 forward-only).
+    assert envelope.model_dump()["captured_cross_family"] is m.CapturedCrossFamily.UNKNOWN
+
+
+def test_captured_cross_family_rejects_an_out_of_domain_value() -> None:
+    """U-MEM-27 - the tri-state is closed; `null` is not a fourth state."""
+    m = _memory_module()
+    payload = _valid_envelope_payload()
+
+    with pytest.raises(ValidationError):
+        m.MemoryRecordEnvelope.model_validate({**payload, "captured_cross_family": "maybe"})
+    with pytest.raises(ValidationError):
+        m.MemoryRecordEnvelope.model_validate({**payload, "captured_cross_family": None})
 
 
 def test_memory_record_envelope_rejects_illegal_tier_and_kind() -> None:

@@ -66,6 +66,16 @@ NEW-version reader racing a FRESH old-version writer's very first sidecar
 creation can take a torn read (loud parse error, never silent corruption —
 the historical posture); full retirement of the legacy protocol rides the
 B-45 successor arc.
+
+**Scope locks (U-MEM-27 Codex round-1 [P1]).** The three context managers above
+serialize writers of ONE canonical file. A critical section whose read set is
+discovered dynamically — a compare-and-commit that re-reads an unbounded,
+caller-chosen set of source files and then writes a different one — cannot be
+expressed that way: there is no single canonical file to key on, and locking the
+discovered set member-by-member reintroduces a lock-ordering problem.
+`cross_process_scope_lock` covers that case with one exclusive lock per
+directory TREE, built on the same `_DirLock` (per-path `flock` EX + reentrant
+in-process face) the file locks already use.
 """
 
 from __future__ import annotations
@@ -81,8 +91,12 @@ _IS_WINDOWS = sys.platform == "win32"
 
 
 class _DirLock:
-    """Per-directory lock: one cross-process `flock` EX face + a per-thread
+    """Per-PATH lock: one cross-process `flock` EX face + a per-thread
     REENTRANT in-process face.
+
+    Named for its original and still primary target, a ledger's parent
+    directory; `cross_process_scope_lock` reuses it unchanged against a
+    provisioned lock FILE, which `flock` treats identically (any fd will do).
 
     `flock` contends between separate fds even within one process, so a
     naive per-acquisition dir fd self-deadlocks the B-50
@@ -147,6 +161,53 @@ def _dir_lock_for(parent: Path) -> _DirLock:
             lock = _DirLock(parent)
             _DIR_LOCKS[key] = lock
         return lock
+
+
+SCOPE_LOCK_FILENAME = ".cross-process-scope.lock"
+"""Provisioned lock target for `cross_process_scope_lock`, one per scope root.
+
+A dedicated file rather than the scope directory itself: a directory inode is
+already the `_DirLock` target of every canonical-file lock under it, so locking
+it here would couple scope holders to unrelated ledger writers in the same
+directory. It is a LOCK file, never a canonical one — it carries no bytes and
+nothing reads it.
+"""
+
+
+@contextmanager
+def cross_process_scope_lock(scope_root: Path) -> Generator[None, None, None]:
+    """Hold an exclusive same-host lock over a whole directory TREE.
+
+    The coarse sibling of `cross_process_write_lock`, for a critical section
+    whose file set is not known when the lock is taken: a compare-and-commit
+    that re-reads a caller-chosen set of source files and then writes a
+    different one. One lock per `scope_root` serializes every such section
+    against every other, and against any writer in the tree that takes the same
+    scope lock — which is the discipline the tree's writers must adopt for the
+    guarantee to mean anything (a writer outside it is simply unserialized).
+
+    REENTRANT per thread, so a guarded section may call through the tree's own
+    write path (which re-takes this lock) without self-deadlock; other threads
+    and other OS processes still block. Provisioning the lock file is
+    `O_CREAT`-idempotent, so concurrent first callers converge on one inode.
+
+    Same-host only, and a no-op on Windows — identical posture to this module's
+    file locks (see the module docstring and the B-45 register row).
+    """
+    if _IS_WINDOWS:
+        yield
+        return
+
+    scope_root.mkdir(parents=True, exist_ok=True)
+    lock_file = scope_root / SCOPE_LOCK_FILENAME
+    open_flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    os.close(os.open(lock_file, open_flags, 0o600))
+    lock = _dir_lock_for(lock_file)
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def _legacy_lock_file_path(canonical_path: Path) -> Path:

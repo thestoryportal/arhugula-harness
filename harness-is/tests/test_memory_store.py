@@ -22,6 +22,7 @@ from harness_is.memory_operation_ledger import (
 )
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_record_envelope import (
+    CapturedCrossFamily,
     MemoryRecordEnvelope,
     MemoryRecordKind,
     MemoryScope,
@@ -35,6 +36,7 @@ from harness_is.memory_record_envelope import (
 )
 from harness_is.memory_store import (
     CanonicalMemoryStore,
+    MemoryStoreGuardedWriteConflictError,
     MemoryStoreRecord,
     MemoryStoreRecordNotFoundError,
     MemoryStoreRecordUnavailableError,
@@ -417,3 +419,122 @@ def test_read_record_raises_when_never_written(tmp_path: Path) -> None:
 
     with pytest.raises(MemoryStoreRecordNotFoundError):
         store.read_record(never_written.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)
+
+
+def test_captured_cross_family_is_hash_inert(tmp_path: Path) -> None:
+    """U-MEM-27 hash-inertness witness.
+
+    Two records with byte-identical content and DIFFERING
+    `captured_cross_family` values share the same `content_hash` and the same
+    `memory_id`, and both pass the store's own envelope/content consistency
+    check (`MemoryStoreRecord._matches_envelope`, which recomputes
+    `compute_memory_content_hash(self.content)`). The acceptance is that this
+    stays true after the field was added, not merely that it was true before -
+    an envelope field must be an input to neither derivation.
+    """
+    content = _content_for(MemoryRecordKind.SEMANTIC_FACT)
+    content_hash = compute_memory_content_hash(content)
+
+    def _with(value: CapturedCrossFamily) -> MemoryStoreRecord:
+        return MemoryStoreRecord(
+            envelope=MemoryRecordEnvelope(
+                memory_id=derive_memory_id(
+                    MemoryTier.SEMANTIC, MemoryRecordKind.SEMANTIC_FACT, content_hash
+                ),
+                schema_version="memory-store-record/v1",
+                tier=MemoryTier.SEMANTIC,
+                kind=MemoryRecordKind.SEMANTIC_FACT,
+                created_at=_BASE_TIME,
+                scope=MemoryScope(project="arhugula-v2", visibility=MemoryVisibility.PROJECT),
+                content_hash=content_hash,
+                captured_cross_family=value,
+            ),
+            content=content,
+        )
+
+    cross_family = _with(CapturedCrossFamily.TRUE)
+    undetermined = _with(CapturedCrossFamily.UNKNOWN)
+
+    assert cross_family.envelope.captured_cross_family is not (
+        undetermined.envelope.captured_cross_family
+    )
+    assert cross_family.envelope.content_hash == undetermined.envelope.content_hash
+    assert cross_family.envelope.memory_id == undetermined.envelope.memory_id
+    # Both also survive a real round trip through the store, which re-derives
+    # the same way on the write path.
+    store = _store(tmp_path)
+    assert store.write_record(cross_family) is MemoryStoreWriteResult.WRITTEN
+    assert store.write_record(undetermined) is MemoryStoreWriteResult.WRITTEN
+    read_back = store.read_record(undetermined.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)
+    assert read_back.envelope.content_hash == content_hash
+
+
+def _semantic_record(statement: str) -> MemoryStoreRecord:
+    content: dict[str, object] = {"semantic_kind": "semantic_fact", "statement": statement}
+    content_hash = compute_memory_content_hash(content)
+    return MemoryStoreRecord(
+        envelope=MemoryRecordEnvelope(
+            memory_id=derive_memory_id(
+                MemoryTier.SEMANTIC, MemoryRecordKind.SEMANTIC_FACT, content_hash
+            ),
+            schema_version="memory-store-record/v1",
+            tier=MemoryTier.SEMANTIC,
+            kind=MemoryRecordKind.SEMANTIC_FACT,
+            created_at=_BASE_TIME,
+            scope=MemoryScope(project="arhugula-v2", visibility=MemoryVisibility.PROJECT),
+            content_hash=content_hash,
+        ),
+        content=content,
+    )
+
+
+def test_guarded_write_commits_when_the_precondition_holds(tmp_path: Path) -> None:
+    """The generic compare-and-commit seam behaves as a plain write when it passes."""
+
+    store = _store(tmp_path)
+    record = _semantic_record("guarded write, precondition satisfied")
+
+    result = store.write_record_guarded(record, precondition=lambda: True)
+
+    assert result is MemoryStoreWriteResult.WRITTEN
+    read_back = store.read_record(record.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)
+    assert read_back.envelope.memory_id == record.envelope.memory_id
+
+
+def test_guarded_write_refuses_and_writes_nothing_when_the_precondition_fails(
+    tmp_path: Path,
+) -> None:
+    """A failed precondition is a REFUSAL, not a silently skipped write."""
+
+    store = _store(tmp_path)
+    record = _semantic_record("guarded write, precondition violated")
+
+    with pytest.raises(MemoryStoreGuardedWriteConflictError):
+        store.write_record_guarded(record, precondition=lambda: False)
+
+    with pytest.raises(MemoryStoreRecordNotFoundError):
+        store.read_record(record.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)
+
+
+def test_guarded_write_precondition_may_read_through_the_store(tmp_path: Path) -> None:
+    """Re-entrancy witness - the guard holds the store's own write locks.
+
+    The precondition re-reads through `read_record` and the wrapped write
+    re-takes both locks (`_write_file_atomically` for the JSON branch, and
+    `_append_jsonl` for the derived-index stale marker on every branch). A
+    non-re-entrant lock deadlocks here instead of returning.
+    """
+
+    store = _store(tmp_path)
+    existing = _semantic_record("already stored")
+    store.write_record(existing)
+    incoming = _semantic_record("written under the guard")
+
+    def _existing_is_unchanged() -> bool:
+        read_back = store.read_record(existing.envelope.memory_id, MemoryRecordKind.SEMANTIC_FACT)
+        return read_back.envelope.content_hash == existing.envelope.content_hash
+
+    assert (
+        store.write_record_guarded(incoming, precondition=_existing_is_unchanged)
+        is MemoryStoreWriteResult.WRITTEN
+    )
