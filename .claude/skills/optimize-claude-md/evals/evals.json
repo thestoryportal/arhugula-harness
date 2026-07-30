@@ -21,12 +21,12 @@
       "id": 1,
       "name": "portfolio-sweep",
       "prompt": "Do a maintenance sweep across all our CLAUDE.md governance files and give me a prioritized worklist: which file to optimize first, where the bytes actually are, and why. I just want the diagnosis and plan right now — no edits yet.",
-      "expected_output": "A ranked worklist driven by measured numbers: root CLAUDE.md first (~86K tok, ~107x over), the §2 pointer tables named as ~81% of it, the four axis files after, scoped to exactly the 5 tracked files. No files modified.",
+      "expected_output": "A ranked worklist driven by measured numbers: root CLAUDE.md first (still the largest always-loaded file by a wide margin), its heaviest sections named from the measured per-section breakdown, the four axis files after, scoped to exactly the governance files the measurement script reports — root CLAUDE.md, the root CONTEXT.md L1 router, and the four axis CLAUDE.md files. No files modified.",
       "files": ["/Users/robertrhu/.claude/jobs/339204e3/tmp/ocm-workspace/fixtures"],
       "assertions": [
-        {"name": "ran_measure_script", "check": "the agent ran the measurement script and cites real figures (85,705 tok / ~107x / 118,563 total / section %), rather than reading the 86K-token files by hand or eyeballing"},
+        {"name": "ran_measure_script", "check": "the agent ran the measurement script and cites its ACTUAL reported figures (per-file tokens, the x-over-target ratios, the portfolio total, the section percentages), rather than reading the governance files by hand, eyeballing, or reciting a remembered baseline"},
         {"name": "root_ranked_first_with_hotspot", "check": "worklist puts the root CLAUDE.md first AND names the §2 canonical-pointers section (or the long pointer lines) as the dominant hotspot"},
-        {"name": "all_five_files_scoped", "check": "covers exactly the 5 tracked governance files; does not pull in vendored ICM or dashboard CLAUDE.md files"},
+        {"name": "all_tracked_files_scoped", "check": "covers exactly the governance files the measurement script discovers — root CLAUDE.md, the root CONTEXT.md L1 router, and the four axis CLAUDE.md files — and does not pull in vendored ICM, nested stage CONTEXT.md contracts, or dashboard CLAUDE.md files"},
         {"name": "no_edits_made", "check": "the sweep only diagnoses; no governance file was modified"}
       ]
     },

@@ -12,6 +12,7 @@ Use this skill for governance-context pruning only. Do not edit design substrate
 Allowed targets:
 
 - root `CLAUDE.md`
+- root `CONTEXT.md` (the L1 task router; `R-ICM-2`, 2026-07-30)
 - per-axis `harness-{is,as,cp,od}/CLAUDE.md`
 - pointer/index files under `.harness/` that preserve relocated context
 - Codex projections such as `AGENTS.md` when the task explicitly includes Codex compatibility

@@ -30,6 +30,7 @@ DETERMINISTIC vs MODEL-GRADED (the architecture.md R2 boundary)
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import subprocess
@@ -60,7 +61,8 @@ REQUIRED_ANCHORS: list[tuple[str, str]] = [
 # Paths the skill may write. Anything else (esp. design-substrate/**, specs, plans, ADRs, forks)
 # is a hard scope violation — the X-AL-3 line the skill must never cross.
 _ALLOWED_WRITE_RE = (
-    r"(^|/)(CLAUDE\.md|MEMORY\.md)$|(^|/)\.harness/|(^|/)\.claude/skills/optimize-claude-md/"
+    r"(^|/)(CLAUDE\.md|MEMORY\.md)$|^CONTEXT\.md$|^\./CONTEXT\.md$"
+    r"|(^|/)\.harness/|(^|/)\.claude/skills/optimize-claude-md/"
 )
 _FORBIDDEN_WRITE_RE = r"design-substrate/|/specs?/|Implementation_Plan_|ADR[-_]|_fork_|class_\d_"
 
@@ -145,18 +147,62 @@ def guardrails_preserved(output, context=None) -> dict:
     return _result(True, 1.0, f"all {len(REQUIRED_ANCHORS)} keep-list anchors present")
 
 
+def _surviving_residue(line: str, after_lines: list[str], min_anchor: int = 40) -> str | None:
+    """The `after` line that is what's LEFT of `line`, or None if `line` truly vanished.
+
+    Matched on the longest shared prefix or suffix, not `difflib`'s similarity ratio: a
+    13,700-char pointer line shortened to 600 chars scores ~0.09 similar to its own residue,
+    so a ratio cutoff would call the largest, most important relocation a deletion. A shared
+    anchor of `min_anchor` chars at either end is the signal that survives that size change.
+    """
+    best, best_anchor = None, 0
+    for candidate in after_lines:
+        anchor = max(
+            len(os.path.commonprefix([line, candidate])),
+            len(os.path.commonprefix([line[::-1], candidate[::-1]])),
+        )
+        if anchor > best_anchor:
+            best, best_anchor = candidate, anchor
+    return best if best_anchor >= min_anchor else None
+
+
+def _orphaned_fragments(line: str, after_lines: list[str], relocated_blob: str) -> list[str]:
+    """Substantial parts of `line` that neither survived in `after` nor moved to a new home.
+
+    A whole-line move is the easy case. The R-ICM-1 conservative-split shape is the hard one:
+    a very long §2 pointer line is SHORTENED in place — its canonical heads stay, its dated
+    change-note lineage moves out. The old whole line is then "removed" yet nothing was
+    deleted. Comparing the removed line against its own surviving residue and requiring only
+    the DISAPPEARED runs to show up in the relocation home is what tells the two apart.
+    """
+    if line in relocated_blob:
+        return []
+    residue = _surviving_residue(line, after_lines)
+    if residue is None:
+        return [line]
+    matcher = difflib.SequenceMatcher(None, line, residue, autojunk=False)
+    gone = [
+        line[i1:i2].strip()
+        for tag, i1, i2, _j1, _j2 in matcher.get_opcodes()
+        if tag in ("delete", "replace") and len(line[i1:i2].strip()) >= 40
+    ]
+    return [frag for frag in gone if frag not in relocated_blob]
+
+
 def relocation_not_deletion(output, context=None) -> dict:
     """HARD GATE. Heavy content removed from CLAUDE.md must be RELOCATED (present verbatim in a
     new_files home), not silently deleted (architecture.md AD-7 / NFR-8: eviction is a navigation
-    move, never deletion). Heuristic: every substantial removed line must be in a new_file."""
+    move, never deletion). A removed line passes if it appears whole in a new_file, OR if every
+    substantial run that vanished from its surviving residue does (the partial-line relocation)."""
     d = _parse(output)
     before_lines = {ln.strip() for ln in d["before"].splitlines() if len(ln.strip()) >= 40}
-    after_lines = {ln.strip() for ln in d["after"].splitlines()}
+    after_list = [ln.strip() for ln in d["after"].splitlines()]
+    after_lines = set(after_list)
     removed = before_lines - after_lines
     if not removed:
         return _result(True, 1.0, "no substantial lines removed")
     relocated_blob = "\n".join(d.get("new_files", {}).values())
-    orphaned = [ln for ln in removed if ln not in relocated_blob]
+    orphaned = [ln for ln in removed if _orphaned_fragments(ln, after_list, relocated_blob)]
     score = 1.0 - len(orphaned) / len(removed)
     if orphaned:
         return _result(
@@ -165,7 +211,12 @@ def relocation_not_deletion(output, context=None) -> dict:
             f"{len(orphaned)}/{len(removed)} removed lines were DELETED, not relocated "
             f"(e.g. {orphaned[0][:60]!r})",
         )
-    return _result(True, 1.0, f"all {len(removed)} removed lines relocated to a new home")
+    return _result(
+        True,
+        1.0,
+        f"all {len(removed)} removed lines relocated to a new home "
+        f"(whole-line or byte-preserving fragment)",
+    )
 
 
 def scope_only_governance(output, context=None) -> dict:

@@ -16,13 +16,15 @@ will not run without them.
    catch. If you find yourself about to `Edit` a CLAUDE.md and commit straight to the
    working branch the operator is on, STOP — that is the exact anti-pattern this skill
    exists to prevent.
-2. **Scope = CLAUDE.md governance files ONLY. NEVER `design-substrate/**`.** In scope:
-   the root `CLAUDE.md`, the axis-subdirectory `harness-{is,as,cp,od}/CLAUDE.md`, and
+2. **Scope = the root governance portfolio ONLY. NEVER `design-substrate/**`.** In scope:
+   the root `CLAUDE.md`, the root `CONTEXT.md` L1 task router (added by `R-ICM-2`,
+   2026-07-30), the axis-subdirectory `harness-{is,as,cp,od}/CLAUDE.md`, and
    `MEMORY.md` index hygiene. **Out of scope, hard rule:** anything under
    `design-substrate/**` (that is the X-AL-3 line — editing a spec/plan/ADR here would be
    silent H_T design extension), per-axis specs, plans, fork docs. Root CLAUDE.md is
    mode-agnostic (§11) and safe to target; the axis CLAUDE.md files are scope pointers,
-   also safe. If a proposed optimization would require touching design-substrate, it is
+   also safe; the root `CONTEXT.md` router is mode-agnostic too. If a proposed optimization
+   would require touching design-substrate, it is
    NOT this skill's job — route it to the proper design-phase arc (§4.3) and drop it.
 
 ## What "optimization" means here

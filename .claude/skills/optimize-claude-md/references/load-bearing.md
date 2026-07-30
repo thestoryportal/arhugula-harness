@@ -91,10 +91,11 @@ channels** are load-bearing.
 ## The X-AL-3 hard scope line (the skill's own guardrail)
 
 The skill must never edit `design-substrate/**`, per-axis specs, plans, ADRs, or fork docs —
-editing those would *be* a silent H_T design extension. In scope: the tracked CLAUDE.md files +
-`MEMORY.md` index hygiene. `measure.py` enforces this mechanically (it only ever reports
-`git ls-files` CLAUDE.md paths; gitignored/vendored files never appear). The optimization pass
-must touch nothing outside that set.
+editing those would *be* a silent H_T design extension. In scope: the tracked CLAUDE.md files,
+the root `CONTEXT.md` L1 task router (`R-ICM-2`, 2026-07-30), and `MEMORY.md` index hygiene.
+`measure.py` enforces this mechanically (it only ever reports `git ls-files` CLAUDE.md paths
+plus the repo-root `CONTEXT.md`; gitignored/vendored files and nested stage `CONTEXT.md`
+contracts never appear). The optimization pass must touch nothing outside that set.
 
 ## Verify you didn't drop a guardrail
 
