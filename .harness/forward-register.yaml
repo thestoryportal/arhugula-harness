@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 96
+  total: 97
   open: 0
   design_substrate_gated: 0
   registered_finding: 16
   operator_gated: 0
   held: 1
-  closed: 79
-  identity_digest: 71d3b84caeed51a1
+  closed: 80
+  identity_digest: 861e9989d9aa8e9f
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -172,10 +172,10 @@ items:
   status: closed
   summary: RATIFIED 2026-07-30 — all 3 audit-§8 gates answered. Scope governance-layer-only;
     ICM <80/<200-line caps adopted for CONTEXT.md / router files ONLY (design-substrate specs
-    exempt, a documented divergence); L0 refactor CONSERVATIVE. Delivered by this PR.
-  close_out: DELIVERED by this PR — R-ICM-1 (root CLAUDE.md §2.3/§2.4 change-note lineage relocated byte-exact to
+    exempt, a documented divergence); L0 refactor CONSERVATIVE. Delivered by PR `#1161`.
+  close_out: DELIVERED by PR `#1161` — R-ICM-1 (root CLAUDE.md §2.3/§2.4 change-note lineage relocated byte-exact to
     .harness/claude-artifact-pointers.md, live governance kept inline) + R-ICM-2 (workspace
-    CONTEXT.md task-router); close the row at merge. FORWARD QUESTION preserved for the
+    CONTEXT.md task-router); the row closed at that merge. FORWARD QUESTION preserved for the
     deployment-surface arc — ICM integration into the final deployed harness package/repo is the
     better long-term question, and belongs there, not to this repo's governance layer.
   council: not convened — the nameable context-minimalism (C2-style) vs governance-completeness
@@ -1737,7 +1737,24 @@ items:
     close_out option ("reject TTLs below a guaranteed timestamp resolution"), already flagged as
     a genuine design decision, and the field is a spec''d deployment-configurable surface
     (Runtime v1.103 SS14.8.11 AC 7) Phase-7 impl discretion should not narrow unilaterally.
-    Remains open, not dormant, not built this arc.'
+    Remains open, not dormant, not built this arc. NARROWED AGAIN 2026-07-30 (dated
+    re-check against the landed B-77 fix, PR #pending): B-77''s first-observation grace
+    covers this row''s reachable loss case but does NOT subsume the row. What is now
+    covered: a granularity error up to ONE sweep interval -- the sweep that FIRST observes
+    a coarse-stamped, genuinely-live entry can no longer reclaim it, which is the
+    bootstrap-sweep-immediately-after-publication path (witnessed at
+    `test_coarse_filesystem_mtime_granularity_does_not_lose_a_live_entry_on_sight`, whose
+    first assertion passes only because of the grace). What SURVIVES, and is now this
+    row''s whole remaining scope: a rounding error EXCEEDING the gap between two
+    consecutive sweeps. That gap is not TTL-bound -- a bootstrap sweep
+    (`stage_4_od.py`) and an explicit or shutdown sweep (`shutdown.py` step 5b) can land
+    milliseconds apart, well inside a 1-second filesystem granularity -- so a live entry
+    can still be lost on such a volume. That exact residue is PINNED as an executable
+    assertion in the same witness (its second `gc_sweep` reclaims the live entry, labelled
+    REGISTERED RESIDUAL in the test body), so a future fix here must come back and update
+    it rather than silently diverge. Not closed as subsumed-by-B-77; the close_out below
+    (probe the deployment volume''s real resolution and either refuse a sub-resolution TTL
+    typed or select a higher-resolution age signal) is unchanged and still the fix.'
   close_out: 'Design a TTL-floor validation or a probe-based age-authority selection that
     accounts for the deployment filesystem''s actual timestamp resolution -- e.g. probe the
     store root''s filesystem granularity at construction/first-write time (write a marker file,
@@ -1786,7 +1803,8 @@ items:
 - id: B-77
   title: Protected result store's mtime refresh is not durable atomically with the publish
     commit, leaving a crash window where a recovered entry looks pre-aged
-  status: registered_finding
+  status: closed
+  pr: '#pending'
   summary: 'NARROWED TWICE, not closed, 2026-07-26 (PR #1123). This PR went through THREE wrong
     claims before landing here, all caught by out-of-family Codex: round 1 tried to classify
     B-77 as dormant via a "sub-millisecond os.link-to-os.utime window" argument (wrong -- the
@@ -1814,24 +1832,54 @@ items:
     (post-link-to-post-commit-refresh tail) is registered, not tested, since no fix for it has
     landed. merge-gate 3-lens review approved the round-2 diff; only the concurrency lens was
     re-run for round 3 (the durability-step change is inside the same lock its reasoning already
-    covered) per advisor()-directed scope.'
-  close_out: 'advisor()-directed: do NOT add a TTL floor -- that is B-74''s own already-declined
-    close_out option ("reject TTLs below a guaranteed timestamp resolution... a genuine design
-    decision"), and the field is a spec''d deployment-configurable surface (Runtime v1.103
-    SS14.8.11 AC 7) Phase-7 impl discretion should not narrow. The actual fix is an age
-    authority that cannot predate publication by construction, not a further reordering of a
-    two-stamp pipeline: `gc_sweep` should not reclaim an entry it has not observed in a PRIOR
-    sweep (a grace period) -- bounded to one sweep interval, immune to arbitrary I/O latency in
-    the publish path, implementable entirely inside `gc_sweep`/`_publish_atomic` without
-    touching the config contract. Witness with a test that simulates a crash strictly BETWEEN
-    `os.link` and the post-commit refresh completing (e.g. a monkeypatched post-commit
-    `os.utime` that raises once) and asserts a subsequent bootstrap-style sweep does not reclaim
-    the crash-recovered entry immediately.'
+    covered) per advisor()-directed scope. CLOSED 2026-07-30 (PR #pending, branch
+    b77-gc-first-observation-grace-20260730) -- the close_out''s own fix landed as a
+    FIRST-OBSERVATION GRACE inside `gc_sweep`, with no fourth reordering of the two-stamp
+    pipeline and no narrowing of `ttl_seconds`. The residual window this row named (a crash
+    strictly between `os.link` and the post-commit refresh completing, leaving a live entry
+    carrying the pre-commit stamp) is no longer reclaimable on sight: an entry is collected
+    only if it was ALREADY observed past TTL at a PRIOR sweep of the same root. The
+    OUT-OF-SCOPE inconsistency this row also recorded (a failing post-commit refresh fsync
+    reporting `UnresolvableResultRef` for an entry already durably linked) is UNCHANGED and
+    still not fixed -- it remains `main`''s original semantics, recorded here so it is not
+    later rediscovered as novel.'
+  close_out: 'CLOSED by the landed fix, 2026-07-30. MECHANISM: `gc_sweep` records the
+    filenames it verified past TTL under its own lock and reclaims only those a PRIOR sweep
+    of the same root already recorded (`ProtectedResultStore._observe_expired` +
+    the module-level `_root_observed_expired` registry in
+    `harness-runtime/src/harness_runtime/lifecycle/protected_result_store.py`). PERSISTENCE
+    JUDGMENT: the observation record is module-wide, keyed by the root''s filesystem
+    identity (`_root_identity_key`, extracted from `_lock_for_root` so both key the same
+    way) -- NOT per-instance. Grounded against the real call graph: the composition root
+    builds a FRESH `ProtectedResultStore` per `run()`/`resume()` bootstrap
+    (`bootstrap/factories/protected_result_store_factory.py:78` <- `bootstrap/stage_4_od.py:123`,
+    which sweeps immediately), so a per-instance record would hand EVERY bootstrap sweep a
+    fresh grace and defer reclaim to shutdown indefinitely, weakening the spec''s
+    bounded-retention term. A fresh PROCESS legitimately starts with an empty registry --
+    it cannot distinguish a genuine age from a crash-window artifact, so granting the grace
+    is the safe direction, and that IS exactly the crash-recovery case. No new config
+    surface, no new public API, no persisted sidecar. WITNESSES (all mutation-probed, in
+    `harness-runtime/tests/test_lifecycle_protected_result_store.py`):
+    `test_crash_between_link_and_post_commit_refresh_survives_a_fresh_bootstrap_sweep`
+    (the close_out''s own recipe -- post-commit `os.utime` raises once, then a FRESH
+    instance''s bootstrap-style sweep does not reclaim, and the next one does);
+    `test_uninterrupted_write_survives_an_immediate_sweep_past_the_grace` (the PR #1123
+    round-2 normal-path regression class, swept TWICE so the grace cannot mask it);
+    `test_genuinely_expired_entry_is_reclaimed_at_the_second_sweep_not_the_first`
+    (liveness -- the grace is one interval, not immortality);
+    `test_coarse_filesystem_mtime_granularity_does_not_lose_a_live_entry_on_sight`
+    (the B-74 re-assessment witness). Pre-existing single-sweep witnesses were updated to
+    sweep twice at one pinned `now` (`_sweep_past_grace`) so their original TTL-classification
+    discrimination is preserved rather than masked. One out-of-family `just
+    codex-review-uncommitted` round: [P1] the coarse-mtime witness was wall-clock-PHASE
+    dependent (~10% spurious failure within 100ms of a second boundary) -- fixed by pinning
+    the phase before the write; round 2 clean.'
   council: no -- the grace-period fix shape is a known pattern (first-observation gating), not
     an open design question; narrow implementation-discretion follow-on once picked up
   heading: '### B-77 · Protected result store''s mtime refresh is not durable atomically with
     the publish commit, leaving a crash window where a recovered entry looks pre-aged *(surfaced
-    at the B-68 impl arc, out-of-family Codex round 8 [P2], 2026-07-25)*'
+    at the B-68 impl arc, out-of-family Codex round 8 [P2], 2026-07-25; CLOSED 2026-07-30 --
+    first-observation grace)*'
 - id: B-78
   title: A SUB_AGENT_DISPATCH step's own SUB_AGENT_BOUNDARY gate under EVALUATOR_OPTIMIZER or
     DECENTRALIZED_HANDOFF can exhibit the same pre-dispatch re-fire livelock B-72 property 6
@@ -2729,3 +2777,49 @@ items:
   close_out: 'INFORMATION-THEORETIC LIMIT, stated precisely: a legacy stale marker carries no commit token BY DEFINITION, so no read-side rule can retroactively order it against a covered rebuild -- the information required for the comparison was never written. This is not a missing check; it is absent data. The choices are therefore only three. (1) SERIALIZE NOTIFICATIONS during a detected mixed window -- reintroduces exactly the callback-deadlock surface the arc''''s first commit removed (a hook holding the notify turn while its inner thread''''s write waits behind it), so it trades a latent ordering gap for a latent hang; rejected on that ground unless the window can be detected AND the serialization scoped to it. (2) VERSION-FENCE THE LEDGER -- have B-93+ writers refuse to share a ledger they can detect an older writer is also appending to (a writer-version marker line, or a fence file beside the ledger), converting a silent misorder into a loud refusal during the upgrade window; costs a new failure mode operators must understand and a decision about what a fenced writer should DO. (3) ACCEPT THE BOUND and document it -- taken here, since all three preconditions are counterfactual at HEAD. HOLD RATIONALE: this is the THIRD consecutive self-inflicted `read_current` finding (R4 was caused by R3''''s carrier, R5''''s [P2] by R3/R4''''s two-pass read, and this by R2''''s ordering protocol), which is the arms-race stop rule the arc pre-declared at round 4 firing exactly as written. No further carrier change is made. Re-open when a genuine mixed-version deployment is planned, or when the first production `derived_index_hook` consumer is wired -- whichever comes first, since either alone makes a precondition true.'
   council: 'Not for the bound itself -- accepting a documented limit needs no deliberation. IF the version-fence direction (2) is ever taken it becomes council-eligible: refusing to write during an upgrade window is an operator-visible availability tradeoff (C11 operator-loop / local-deployment against C3 state-and-persistence integrity), and that IS a nameable cross-domain tension rather than an implementation detail.'
   heading: '### B-95 · Mixed-version ordering bound — a live PRE-B-93 **writer**''s untokenized stale markers cannot be ordered against a covered rebuild *(surfaced by out-of-family Codex R6 on the B-93 gate-log arc, 2026-07-30; REGISTER-AND-HOLD under the arc''s own stop rule)*'
+- id: B-96
+  title: 'The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time --
+    a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry
+    milliseconds after its bootstrap sweep first observed it'
+  status: registered_finding
+  summary: 'Surfaced by out-of-family Codex round 2 at the B-77 impl arc (2026-07-30),
+    against the fix landed in that same PR. `gc_sweep`''s first-observation grace refuses to
+    reclaim an entry the store has not already seen past TTL at a PRIOR sweep of the same
+    root -- which closes B-77''s named defect (a crash-recovered entry carrying the
+    pre-commit stamp is never reclaimed BY THE SWEEP THAT FIRST SEES IT, i.e. never by the
+    bootstrap sweep of the recovering process). The residue Codex names is the grace''s
+    PRACTICAL DURATION: every `run()`/`resume()` sweeps twice by construction -- once at
+    `bootstrap/stage_4_od.py:123` and once, unconditionally, at `shutdown.py` step 5b -- so
+    the interval between the first and second observation is the RUN''s own duration, which
+    for a short or immediately-failing run is milliseconds. A genuinely-live,
+    crash-recovered entry therefore still survives only to that same run''s shutdown, not
+    for a wall-clock interval any repair flow can rely on. This is the sweep-COUNT reading
+    of B-77''s ratified close_out (verbatim: "should not reclaim an entry it has not
+    observed in a PRIOR sweep (a grace period) -- bounded to one sweep interval"), landed
+    as ratified and NOT redesigned mid-arc -- the B-77 row records three prior wrong
+    mechanism claims on this same file, and a fourth unratified attempt is precisely the
+    non-convergent-adversarial-hardening pattern this workspace stops on. Registered here
+    instead, with the practical bound stated honestly in the code docstring rather than
+    overclaimed. Reachability is the same narrow floor B-74/B-77 already share: it needs a
+    deployment `ttl_seconds` short enough that the crash window alone tips a live entry
+    past it (the factory default is 86400s, roughly seven orders of magnitude above that),
+    AND a crash landing strictly between `os.link` and the post-commit mtime refresh, AND a
+    recovering run short enough that its own shutdown sweep fires before any repair read.'
+  close_out: 'Replace the sweep-COUNT grace with an elapsed-TIME one, using the first
+    observation''s wall-clock as the age authority B-77''s close_out actually names ("an age
+    authority that cannot predate publication by construction") -- record `first_observed_at`
+    alongside the filename in `_root_observed_expired` and reclaim only when BOTH the
+    mtime-derived age AND `now - first_observed_at` exceed `ttl_seconds`. Note the genuine
+    tradeoff that makes this a ratification-owned decision rather than a mechanical patch:
+    the conservative rule lengthens worst-case retention of a genuine crash orphan by up to
+    one full TTL (a day at the factory default), which trades against the spec''s own
+    bounded-retention term (Runtime v1.106 SS14.8.11 -- "a signing outage must not grow an
+    unbounded store of sensitive payloads"). Pick the bound deliberately; do not narrow
+    `ttl_seconds` itself (B-74''s declined option). Witness by driving a full
+    bootstrap-then-shutdown pair against a crash-window entry and asserting it survives
+    BOTH sweeps when the elapsed interval is under TTL, and is reclaimed once it is not.'
+  council: 'conditional -- the mechanism is mechanical, but the retention bound it picks is
+    a nameable cross-domain tension (C3 state-and-persistence integrity wanting the
+    conservative age authority against C7/C8 wanting the spec''s bounded-retention floor on
+    sensitive payloads); convene if the elapsed-time variant is taken.'
+  heading: '### B-96 · The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time -- a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry milliseconds after its bootstrap sweep first observed it *(surfaced at the B-77 impl arc, out-of-family Codex round 2 [P2], 2026-07-30)*'
