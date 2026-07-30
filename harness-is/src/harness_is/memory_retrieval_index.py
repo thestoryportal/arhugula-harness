@@ -47,6 +47,7 @@ CURRENT_DERIVED_RETRIEVAL_INDEX_VERSION = "derived-retrieval-index/v1"
 
 _REBUILT_EVENT: Literal["rebuilt"] = "rebuilt"
 _STALE_EVENT: Literal["stale"] = "stale"
+_REBUILT_COVERAGE_EVENT: Literal["rebuilt_coverage"] = "rebuilt_coverage"
 _MAX_SEARCH_TERMS_PER_RECORD = 64
 _INACTIVE_STATUSES = {"denied", "expired", "proposed", "superseded", "tombstoned"}
 
@@ -142,13 +143,36 @@ class _DerivedRetrievalIndexLedgerEvent(BaseModel):
     indexed_at: datetime
     index_hash: str
     entries: tuple[DerivedRetrievalIndexEntry, ...]
-    covers_commit_seq: int | None = None
-    """The `DerivedIndexInvalidation.commit_seq` this rebuild answers, if any.
 
-    `None` for a rebuild not triggered by a specific commit (a direct
-    `rebuild()` call, or any event written before this field existed) - those
-    keep the original purely positional semantics.
+    # BYTE-COMPATIBLE WITH PRE-B-93 WRITERS, DELIBERATELY (Codex R3 [P1]).
+    # This model is `extra="forbid"` and an older reader validates EVERY
+    # `rebuilt` line against its own copy of it. A new writer sharing a memory
+    # root with a still-running older process - the daemon + one-shot upgrade
+    # window - would break that reader's retrieval outright by adding ANY key
+    # here, including one serialized as `null`. Rebuild coverage therefore
+    # rides a separate event kind (`_REBUILT_COVERAGE_EVENT`), which the older
+    # reader's `event ==` discrimination skips instead of validating.
+
+
+class _RebuiltCoverageEvent(BaseModel):
+    """Which commit a `rebuilt` event's index reflects (`semantic/index.jsonl`).
+
+    A SEPARATE event kind rather than a field on the rebuild, so the rebuild
+    stays byte-compatible for readers that predate this metadata: their loop
+    matches neither `rebuilt` nor `stale` on this line and ignores it.
+
+    Keyed by `index_hash` rather than by position, because two rebuilds racing
+    at the append boundary can interleave their lines; a hash binds coverage to
+    the index CONTENT it was computed for. Identical content rebuilt at two
+    commits collapses to the higher coverage, which is correct - the same
+    entries do reflect the later commit.
     """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    event: Literal["rebuilt_coverage"]
+    index_hash: str
+    covers_commit_seq: int
 
 
 class DerivedRetrievalIndexStore:
@@ -216,15 +240,22 @@ class DerivedRetrievalIndexStore:
             entries=entries,
             stale=False,
         )
+        path = self.index_path()
+        if commit_seq is not None:
+            coverage = _RebuiltCoverageEvent(
+                event=_REBUILT_COVERAGE_EVENT,
+                index_hash=index.index_hash,
+                covers_commit_seq=commit_seq,
+            )
+            _append_jsonl(path, _canonical_json_bytes(coverage.model_dump(mode="json")))
         event = _DerivedRetrievalIndexLedgerEvent(
             event=_REBUILT_EVENT,
             index_version=index.index_version,
             indexed_at=index.indexed_at,
             index_hash=index.index_hash,
             entries=index.entries,
-            covers_commit_seq=commit_seq,
         )
-        _append_jsonl(self.index_path(), _canonical_json_bytes(event.model_dump(mode="json")))
+        _append_jsonl(path, _canonical_json_bytes(event.model_dump(mode="json")))
         return index
 
     def read_current(self, *, require_fresh: bool = True) -> DerivedRetrievalIndex:
@@ -235,9 +266,10 @@ class DerivedRetrievalIndexStore:
         writes can rebuild in either order, so the last `rebuilt` line is not
         necessarily the newest index. Two rules run together:
 
-        * `covers_commit_seq` ORDERS rebuilds. A rebuild answering an older
-          commit than one already accepted is ignored outright, however late it
-          landed in the file.
+        * a `rebuilt_coverage` event ORDERS rebuilds. A rebuild answering an
+          older commit than one already accepted is ignored outright, however
+          late it landed in the file. Coverage is a separate event kind so the
+          `rebuilt` line stays byte-compatible for pre-B-93 readers.
         * a stale marker's `commit_seq` greater than the accepted rebuild's
           means that commit is NOT reflected in this index - stale, whatever the
           two lines' relative positions.
@@ -254,17 +286,36 @@ class DerivedRetrievalIndexStore:
         path = self.index_path()
         if not path.exists():
             raise DerivedRetrievalIndexMissingError(f"retrieval index not found at {path!s}")
+
+        records: list[Mapping[str, object]] = []
         for line in path.read_text().splitlines():
             if not line.strip():
                 continue
             raw_object: object = json.loads(line)
             if not isinstance(raw_object, dict):
                 continue
-            raw = cast("Mapping[str, object]", raw_object)
+            records.append(cast("Mapping[str, object]", raw_object))
+
+        # Coverage rides its own event kind and is keyed by content hash, so it
+        # is collected up front rather than read off the rebuild line: a racing
+        # pair of rebuilds can land a coverage line after the rebuild it
+        # describes.
+        coverage_by_hash: dict[str, int] = {}
+        for raw in records:
+            if raw.get("event") != _REBUILT_COVERAGE_EVENT:
+                continue
+            index_hash = raw.get("index_hash")
+            seq_value = raw.get("covers_commit_seq")
+            if not isinstance(index_hash, str) or not isinstance(seq_value, int):
+                continue
+            known = coverage_by_hash.get(index_hash)
+            coverage_by_hash[index_hash] = seq_value if known is None else max(known, seq_value)
+
+        for raw in records:
             event = raw.get("event")
             if event == _REBUILT_EVENT:
-                raw_seq = raw.get("covers_commit_seq")
-                seq = raw_seq if isinstance(raw_seq, int) else None
+                raw_hash = raw.get("index_hash")
+                seq = coverage_by_hash.get(raw_hash) if isinstance(raw_hash, str) else None
                 if seq is not None and current_seq is not None and seq < current_seq:
                     # A LATE rebuild answering an OLDER commit. Accepting it
                     # would drop every record committed since the rebuild it

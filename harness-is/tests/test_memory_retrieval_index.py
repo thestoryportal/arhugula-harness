@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal, cast
 
 import pytest
 from harness_core import DeploymentSurface
@@ -22,12 +24,14 @@ from harness_is.memory_record_envelope import (
 )
 from harness_is.memory_retrieval_index import (
     CURRENT_DERIVED_RETRIEVAL_INDEX_VERSION,
+    DerivedRetrievalIndexEntry,
     DerivedRetrievalIndexMissingError,
     DerivedRetrievalIndexQuery,
     DerivedRetrievalIndexStaleError,
     DerivedRetrievalIndexStore,
 )
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
+from pydantic import BaseModel, ConfigDict
 
 _NOW = datetime(2026, 7, 2, 12, 0, 0, tzinfo=UTC)
 
@@ -366,4 +370,92 @@ def test_a_commit_no_rebuild_covers_is_stale_even_when_its_marker_comes_first(
 
     with pytest.raises(DerivedRetrievalIndexStaleError):
         index_store.read_current()
+    assert index_store.read_current(require_fresh=False).stale
+
+
+class _PreB93LedgerEvent(BaseModel):
+    """Verbatim copy of the PRE-B-93 closed rebuild model.
+
+    `git show fc40fb2b:harness-is/src/harness_is/memory_retrieval_index.py`,
+    lines 135-144. Reproduced here rather than imported so the witness keeps
+    testing the OLD shape after the live one moves on.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    event: Literal["rebuilt"]
+    index_version: str
+    indexed_at: datetime
+    index_hash: str
+    entries: tuple[DerivedRetrievalIndexEntry, ...]
+
+
+def _pre_b93_read_current(path: Path) -> tuple[int, bool]:
+    """Replay the PRE-B-93 read loop verbatim (same source, lines 210-227).
+
+    Returns `(entry_count, stale)`. Raises exactly where the old reader would:
+    `ValidationError` out of the closed model on any unexpected key.
+    """
+
+    current: _PreB93LedgerEvent | None = None
+    stale_after_current = False
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        raw_object: object = json.loads(line)
+        if not isinstance(raw_object, dict):
+            continue
+        raw = cast("Mapping[str, object]", raw_object)
+        event = raw.get("event")
+        if event == "rebuilt":
+            current = _PreB93LedgerEvent.model_validate(raw)
+            stale_after_current = False
+        elif event == "stale" and current is not None:
+            stale_after_current = True
+    if current is None:
+        raise AssertionError("the pre-B-93 reader found no rebuilt event")
+    return len(current.entries), stale_after_current
+
+
+def test_a_new_writer_ledger_still_parses_under_the_pre_b93_reader(tmp_path: Path) -> None:
+    """Codex R3 [P1] — the mixed-version window must not break the old side.
+
+    The memory root is repo-derived and shared, so a `harness daemon` started
+    before an upgrade keeps reading a ledger a new one-shot process is writing
+    (the same topology the U-MEM-27 cross-process witness rests on). The old
+    reader validates EVERY `rebuilt` line against a closed `extra="forbid"`
+    model, so one added key there — even serialized `null` — raises
+    `ValidationError` on its auto-refresh path and leaves its retrieval broken
+    until restart.
+
+    So this drives the real new writer and replays the real old reader over
+    every event kind the new writer emits to the shared file.
+    """
+
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    index_store = _index_store(binding)
+    path = index_store.index_path()
+
+    store.write_record(_record(statement="Record visible to both versions."))
+    [seq] = _commit_seqs(binding)
+    index_store.rebuild(indexed_at=_NOW, commit_seq=seq)
+    store.write_record(_record(statement="A later commit the old reader must see as stale."))
+
+    kinds = {
+        str(json.loads(line)["event"]) for line in path.read_text().splitlines() if line.strip()
+    }
+    assert kinds == {"stale", "rebuilt_coverage", "rebuilt"}, (
+        f"unexpected event kinds on the shared ledger: {sorted(kinds)} — every kind here "
+        f"must be one the pre-B-93 reader either validates cleanly or skips"
+    )
+
+    # The load-bearing call: raises ValidationError if any shared-file event
+    # the new writer emits carries a key the old closed model forbids.
+    entry_count, stale = _pre_b93_read_current(path)
+
+    assert entry_count == 1
+    assert stale, "the old reader must still see the later commit's stale marker"
+
+    # And the new reader agrees about the same ledger.
     assert index_store.read_current(require_fresh=False).stale
