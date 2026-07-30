@@ -93,9 +93,13 @@ implementation decision:
 > not raw equality of every per-source tri-state. **[SUPERSEDED at Codex round 2 — see the
 > "Codex round 2" section below. The compared value is now the EXACT per-source provenance
 > vector; the projection reading narrowed the plan's literal `:1022` obligation and is
-> retracted. The rest of this quoted paragraph stands.]** Scope stated honestly: these are in-process
+> retracted.]** Scope stated honestly: these are in-process
 > locks, so the guarantee is exactly as strong as the store's existing write atomicity and
-> makes no cross-process claim. The guard is applied to the activation path only — a
+> makes no cross-process claim. **[ALSO SUPERSEDED, at Codex round 1 — see "Codex round 1 →
+> [P1] The guarded write was in-process only" below. The scoping sentence is no longer true:
+> the store's write plane was hardened to the sibling memory-ops ledger's already-shipped
+> `fcntl.flock` posture, so the guarded write now DOES carry a same-host cross-process claim
+> (Windows degrades to a no-op, registered `B-45`).]** The guard is applied to the activation path only — a
 > `PROPOSED` or `DENIED` write authorizes nothing, so a concurrent source append must not be
 > able to make a denial fail; those writes still state the snapshot's re-derived mark, they
 > are simply not conflict-bound to it.
@@ -127,9 +131,22 @@ witness the **resolution counter** is the load-bearing half (exactly one resolut
 decision, with the gate and the persisted mark agreeing), and a boundary-crossing mutation
 would confound it with the commit-binding outcome. Boundary-crossing mutations are owned by
 the **commit-binding witness** (`false` → `true` after the snapshot but before the durable
-write, which must not auto-activate), and its `test_a_mutation_that_cannot_change_the_decision_still_commits`
-sibling pins the other side — a mutation that leaves the decision-bearing projection intact
-must still commit, so the guard is not a blanket refusal.
+write, which must not auto-activate), and its
+`test_a_mutation_that_cannot_change_the_decision_is_still_a_conflict` sibling pins the other
+side.
+
+**[UPDATED at Codex round 2 — see "Codex round 2 → [P2] The commit binding compared a
+projection, not the exact provenance" below.]** As authored at slice 3b that sibling was
+`test_a_mutation_that_cannot_change_the_decision_still_commits`, asserting that a mutation
+leaving the decision-bearing projection intact must still COMMIT. That is no longer the
+shipped behaviour and the sentence stating it is retracted: the plan's `:1022` obligation is
+literal — "a source whose recorded provenance changed", not *changed the decision* — so the
+precondition now compares the EXACT per-source tri-state vector and **any** per-source change
+is a conflict, this `true` → `unknown` one included. The witness was inverted and renamed
+accordingly (superseded, not merely renamed), and the guard's not-a-blanket-refusal property
+is carried instead by the unchanged positive control
+`test_an_all_false_candidate_auto_activates_with_no_operator_approval` and by the unmutated
+arms of the commit-binding family.
 
 ## Pre-existing tests updated at slice 3b
 
@@ -148,6 +165,36 @@ are unresolvable is now **withheld from automatic activation**. That is the new 
 working, not a defect — those tests always *meant* an auto-promotable candidate to be a
 same-family one, and the seed states that intent explicitly. The operator-approved path
 remains open for exactly such a candidate.
+
+## Plan-mandated probes (slice 3a)
+
+`Implementation_Plan_Memory_Substrate_v1.md:1080-1081` names two mutation probes by
+obligation. Both were run at slice 3a (commit `5447b653`) against
+`harness-runtime/tests/test_u_mem_27_promotion_gate.py` and are recorded here because the
+slice-3a write-up carried the fixes without their empirical results.
+
+- **Probe on the gate** (`:1080` — "with the gate reverted, the `unknown`-arm read-side
+  witnesses must FAIL"). All four predicate gates removed, the derivation left in place →
+  **19 failed / 19 passed**. The failures include every `unknown`-arm read-side witness at
+  BOTH entry points: `test_hint_path_gates_a_cross_family_captured_source[unknown]`,
+  `test_tool_path_gates_a_cross_family_captured_source[unknown]`,
+  `test_hint_path_gate_holds_under_promote_semantic_and_automatic[unknown-False]`,
+  `test_tool_path_gate_holds_under_promote_semantic_and_automatic[unknown-False]`,
+  `test_hint_path_gate_holds_under_promote_procedural_and_automatic[unknown-False]`,
+  `test_hint_path_legacy_source_with_no_key_reads_unknown_and_gates`,
+  `test_tool_path_legacy_source_with_no_key_reads_unknown_and_gates`, and
+  `test_hint_omitting_cross_family_capture_cannot_suppress_it[unknown]`. **Notable structural
+  result:** the failures surfaced as `ValidationError` from the NEW model validator rather
+  than as plain assertion failures — with the gate gone the derivation still marks the
+  candidate, which makes the illegal pair unconstructible. The biconditional is therefore
+  enforced *structurally*, not only by the four gate sites.
+- **Probe on the durable carrier** (`:1081` — "with the content-side risk-flag write removed,
+  the durable-carrier witness must FAIL while every in-memory read-side witness still
+  passes"). Both `"risk_flags"` content lines removed → **exactly 2 failed / 36 passed**. The
+  two failures are precisely the durable-carrier witnesses, failing with
+  `KeyError: 'risk_flags'`, while every in-memory read-side witness stayed green — the exact
+  asymmetry the plan says only a probe can distinguish, and the shape of the defect
+  out-of-family review caught in this unit's first draft.
 
 ## Closeout
 

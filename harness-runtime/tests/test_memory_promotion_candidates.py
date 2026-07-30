@@ -214,6 +214,18 @@ def test_low_confidence_candidates_do_not_auto_promote_when_review_required() ->
     record = _record(
         kind=MemoryRecordKind.EPISODIC_TURN,
         source_ref=SourceRef(ref_type=SourceRefType.TURN, ref="turn-low-confidence"),
+        # U-MEM-27: this test is about the U-MEM-08 review-required predicates,
+        # so the source's C-MEM-03 provenance is pinned to the one value that
+        # adds none of its own. Left at the `unknown` default the cross-family
+        # gate supplies `review_required=True` / `auto_promote_allowed=False`
+        # by itself, and BOTH review-required predicates can be deleted from
+        # `_review_required` with this test still green (mutation-probed).
+        # Pinned, deleting them fails it. Residual, pre-dating U-MEM-27 and out
+        # of its scope: the LOW-confidence predicate is still not individually
+        # load-bearing here, because the policy's own `OPERATOR_REQUIRED` review
+        # mode returns `True` one branch later. Its `cross_family_capture`
+        # interaction is witnessed separately at `test_u_mem_27_promotion_gate.py`.
+        captured_cross_family=CapturedCrossFamily.FALSE,
         content={
             "event_type": "turn_completion",
             "summary_source": "operator",
