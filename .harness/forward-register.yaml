@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 97
-  open: 0
+  total: 100
+  open: 1
   design_substrate_gated: 0
-  registered_finding: 16
+  registered_finding: 18
   operator_gated: 0
   held: 1
   closed: 80
-  identity_digest: 861e9989d9aa8e9f
+  identity_digest: 403aa7c88ac59aa8
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1939,27 +1939,79 @@ items:
 - id: B-69
   title: resume_handle crash-recovery resume path cannot address individual paused children
     for multi-child HITL delivery
-  status: registered_finding
-  summary: api.resume()'s resume_handle mode gives the caller no prior PauseSnapshot to read
-    a paused child's run_id from before resume_context must be constructed, so B-39's hitl_responses
-    keyed-map addressing is unreachable on that path. GENERALIZED 2026-07-24 at B-70 grounding
-    (out-of-family Codex) -- the identical gap applies to effect-fence idempotency_keys, not just
-    HITL child run_ids -- the accessor must expose BOTH identity kinds.
-  close_out: 'Design a durable-pause-state read accessor (Runtime-owned, reads JournalWorkflowPauseStore)
-    a resume_handle caller can invoke before constructing resume_context, to learn currently-paused
-    children''s run_ids AND currently-paused effect-fence idempotency_keys for the same workflow_id
-    -- GENERALIZED 2026-07-24 (out-of-family Codex, B-70 spec-leg round 5): a first draft of CP
-    spec v1.107''s resume_handle scope-limit note (section 1) claimed this row already covers
-    effect-fence identities, but this row as then-written named only HITL child run_ids -- the
-    accessor''s scope is widened here to make that claim true, not merely asserted. A genuine
-    new API surface, not a mechanical patch. See .harness/post-phase-8-forward-register.md B-69
-    for full detail.'
-  council: TBD at build time -- narrow implementation-discretion follow-on in scope shape, but
-    the read-accessor's own API design is a real choice worth a dyadic council pass if non-obvious
-    once scoped.
+  status: open
+  summary: 'LIVE NEXT STEP -- the B-69 impl arc: build U-RT-148 (Runtime plan v2.55) + the
+    U-CP-64 amendment (CP plan v2.47) + a NEW, NOT-YET-NUMBERED OD unit carrying the OD spec
+    v1.36 section 30.5.2 additive audit carrier for the PRE-BOOTSTRAP staleness refusal. THREE
+    units, not two: the refusal is raised pre-bootstrap (no ResumeAttempt/ResumeOutcome exists
+    yet) and PauseResumeAuditPayload is frozen with extra=forbid and no staleness-token field,
+    so U-RT-148 AC #13(c) CANNOT execute until that OD-owned schema surface lands. An OD plan
+    delta is owed at the impl leg under EITHER carrier option (additive field OR sibling payload
+    type) because both mutate or extend an OD-owned schema and a Runtime unit cannot own that.
+    DAG: U-RT-148 depends on U-CP-64 AND on the pending OD unit -- do not schedule U-RT-148 as
+    ready once CP alone lands. SPEC LEG APPLIED 2026-07-30 (ratified option A prime,
+    CO-REQUISITE / SEQUENCED): Runtime spec v1.106->v1.107 (NEW section 31 §14.14.9 accessor +
+    closed four-variant projection DTO + five-member cause attribution + declared postures;
+    NEW section 30 refusal-only staleness precondition + cause attribution on the EXISTING
+    RT-FAIL-RESUME-HANDLE-UNKNOWN, no new peer class; the discharged :3274 scope-limit
+    sentence replaced by a cross-reference; NEW section 14.14.8 append-only/never-truncated
+    substrate invariant), CP spec v1.111->v1.112 (REQUIRED non-downgradable ResumeContext
+    response-provenance carrier; NEW public projection-returning surface over the two private
+    resume-tree walks; two registered scope-limit lifts), OD spec v1.35->v1.36 (NEW C-OD-30.5
+    emission home), CXA v2.22->v2.23 (classification-only: NO new row, aggregate FROZEN at
+    111, payload widening recorded). ORIGINAL FINDING: api.resume()''s resume_handle mode gives
+    the caller no prior PauseSnapshot to read a paused child''s run_id from before resume_context
+    must be constructed, so B-39''s hitl_responses keyed-map addressing is unreachable on that
+    path. GENERALIZED 2026-07-24 at B-70 grounding (out-of-family Codex) -- the identical gap
+    applies to effect-fence idempotency_keys, not just HITL child run_ids -- the accessor must
+    expose BOTH identity kinds.'
+  close_out: 'CLOSURE CRITERION, X-AL-2 CONJUNCTIVE FORM (verbatim, operator-ratified 2026-07-30):
+    "B-69 closes iff (accessor landed) AND (precondition landed AND exercised by the W3
+    mutation-probe); partial is non-closure. The spec surfaces and their impl units MAY land in
+    separate merges within the arc, subject to one ordering constraint: the staleness precondition
+    lands first or simultaneously -- never after. No interval exists in which an unfenced accessor
+    is reachable on main." ENFORCEMENT IS A PRE-MERGE REVIEW OBLIGATION, NOT A VALIDATOR RULE --
+    tools/forward_register.py --check validates that close_out is present and that a closed row
+    cites a pr, but it does NOT parse the conjunction and cannot today refuse a premature closed
+    flip. The reviewer of the closing PR MUST confirm BOTH conjuncts, with the W3 mutation-probe
+    green, before this row is flipped closed. REGISTERED GAP (out-of-family review round 3 P1,
+    2026-07-30): structured per-conjunct register fields plus matching validator support would
+    make the conjunction mechanically enforceable; that is a tools/ change, out of scope for a
+    doc-only spec leg, and is recorded here rather than silently assumed. WHY THE ACCESSOR MAY
+    NOT SHIP ALONE: resume() re-derives the SNAPSHOT
+    from the journal but never re-derives the operator''s RESPONSE MAP -- two different objects,
+    only one is re-derived -- and CP spec v1.106 section 1.2 property 4''s sole-member carve-out
+    PERMITS a uniform hitl_response to resolve the single unaddressed gate-owning branch of the
+    live cycle, so a superseded read can land a response on a branch the operator never saw,
+    reachable through the 1-to-1 single-location happy path. IMPL-ARC OBLIGATIONS: the council
+    section 11 witnesses W1/W2(PRIMARY, 1-to-1 shape)/W2-prime/W3(the PD-8 mutation probe that is
+    one half of this criterion)/W4(characterization; its correct disposition on placeholder
+    replacement is DELETION or INVERSION, never repair) as Runtime plan v2.55 U-RT-148 AC #1-#16
+    (SIXTEEN, recounted programmatically -- a closeout that checks only #1-#15 would skip the
+    empty-fence-key and scalar-binding witnesses), where AC #15 is the source-shape
+    sub-discriminator detect-then-refuse witness (the DTO variants span seven-plus source shapes
+    with different field sets, so a per-variant optional step_kind would readmit an illegal
+    state), AC #16 covers the empty-idempotency_key crash-reconstruction re-probe state plus the
+    SCALAR-field staleness binding (a maps-only binding would leave the W2 path itself unfenced),
+    and AC #13 splits success/failure emission;
+    the checkable one-authority criterion carried verbatim on BOTH plan sides ("Runtime''s accessor
+    contains no recursion over PauseSnapshot and reads no nested resume-carrier field"); and the
+    FOLD-IN of the Class 3 cite-hygiene fix for THREE stale docstrings in
+    pause_resume_protocol_types.py -- PauseSnapshot''s class docstring says "8-field pause-snapshot
+    envelope" for a 15-field type, pause_reason''s says "5-class enum" for a SIX-member enum, and
+    snapshot_hash''s docstring still describes a FOUR-element hash. Not cosmetic: a projection arc
+    enumerating from these docstrings undercounts EFFECT_FENCE_AMBIGUOUS (the member carrying the
+    2026-07-24 widening''s weight) and mis-states the hash coverage; the stale text caused two real
+    miscounts inside the convening itself. FOUR findings routed OUT, not absorbed: B-97 (pause-journal
+    tenant binding), B-98 (gate description absent from durable state), B-99 (summary_text reopening
+    condition), plus the eval measurable (fence FALSE-MATCH rate, handed to C8 -- refusal rate alone
+    would have shown a snapshot_hash fence as perfectly quiet, quiet because it never fired, which is
+    indistinguishable from quiet because nothing was stale).'
+  council: ran 2026-07-30, converged, record at .harness/council-b69-pause-state-accessor-2026-07-30.md
   heading: '### B-69 · `resume_handle` crash-recovery resume path cannot address individual
     paused children for multi-child HITL delivery *(registered at the B-39 spec-leg PR #1092,
-    out-of-family Codex round 3 (branch-vs-main), 2026-07-23)*'
+    out-of-family Codex round 3 (branch-vs-main), 2026-07-23; council convened + spec leg applied
+    2026-07-30)*'
 - id: B-70
   filing: .harness/class_2_fork_b70_effect_fence_resolution_uniform_fallback.md
   title: effect_fence_resolution_for's uniform-fallback semantics share B-39's cross-branch-misapplication
@@ -2823,3 +2875,93 @@ items:
     conservative age authority against C7/C8 wanting the spec''s bounded-retention floor on
     sensitive payloads); convene if the elapsed-time variant is taken.'
   heading: '### B-96 · The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time -- a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry milliseconds after its bootstrap sweep first observed it *(surfaced at the B-77 impl arc, out-of-family Codex round 2 [P2], 2026-07-30)*'
+- id: B-97
+  title: The durable pause journal carries no tenant binding, and its appends are unserialized
+    across processes
+  status: registered_finding
+  summary: 'Runtime spec section 14.8.11 (:4636, :4639) commits a FULL-STRENGTH tenant-composite
+    key plus a typed cross-tenant refusal for comparable durable state, while
+    JournalWorkflowPauseStore is workflow_id-keyed, one file per workflow -- and now carries
+    recovered branch outputs. Urgency raised by an independent reliability finding surfaced at the
+    same convening: two processes sharing a resolved STATE_LEDGER dir are serialized by NOTHING --
+    _append writes through a plain append-mode open with no O_EXCL, no lockfile and no advisory
+    lock -- so the store''s threat model is WEAKER than the one section 14.8.11 already protects.
+    PRE-EXISTING and explicitly NOT B-69''s: api.resume() reads the same key today, and the B-69
+    accessor adds ZERO tenant exposure (it grants a strict subset of the authority resume() already
+    grants the identical caller with the identical inputs).'
+  close_out: 'Split out per the B-73/B-80 discipline rather than folded into B-69, on a stated
+    boundary: fixing it changes the store''s KEYING, which drags a capture-side, hash-adjacent change
+    into a deliberately read-only arc. Close-out is two separable halves that should be scoped
+    together: (a) a tenant-composite key plus typed cross-tenant refusal on JournalWorkflowPauseStore,
+    mirroring the shape section 14.8.11 already specifies for the protected post-effect result store;
+    (b) a genuine cross-process write serialization primitive on _append (O_EXCL, lockfile, or advisory
+    lock), which the current plain append open does not provide. Note the two failure modes are
+    DISTINCT and only (b) is a concurrency question: concurrent write-write is a store-integrity
+    problem (interleaved/torn records), whereas SEQUENTIAL interleaving -- one writer at a time, both
+    records well-formed -- is the supersession problem B-69''s staleness precondition already fences,
+    and needs no concurrency at all.'
+  council: 'conditional -- (a) is C3''s surface (state/persistence keying) with a nameable C3 vs
+    C11 tension if a tenant key adds local-deployment config burden; (b) is mechanical. Convene only
+    if (a) is taken without (b).'
+  heading: '### B-97 · The durable pause journal carries no tenant binding, and its appends are
+    unserialized across processes *(surfaced at the B-69 council convening as residual R-3, routed
+    OUT of that arc, 2026-07-30)*'
+- id: B-98
+  title: Gate description / question text is absent from every durable pause carrier
+  status: registered_finding
+  summary: 'An operator inspecting durable pause state can learn WHERE a workflow is paused and
+    through WHICH resolution channel, but not WHAT was asked. Verified across every PauseSnapshot
+    field at the B-69 convening, and symmetrically for the closed-vocabulary counter-proposal:
+    HITLPlacementKind exists as a StrEnum, but NO durable pause carrier declares a field of that
+    type -- every placement occurrence in pause_resume_protocol_types.py is docstring prose. Both a
+    free-text description and a closed-vocabulary placement field are therefore CAPTURE-SIDE scope,
+    and the same empirical fact defeats both proposals. hitl_gate_config_hash was tested as a
+    substitute and rejected on its surviving ground: it is a MATERIAL-DIFF IDENTITY, not a
+    description -- an opaque digest whose only operator-meaningful semantic is "the gate config
+    changed since capture"; it discriminates a config EDIT, never a re-pause.'
+  close_out: 'Capture-side, hash-affecting, X-AL-3-relevant -- materially bigger than the read-only
+    projection B-69 authored, and explicitly declined for that arc by the ergonomics voice itself.
+    Close-out requires a capture-side carrier decision (which field, on which resume-state carriers,
+    with what hash disposition per the drop-when-empty precedent) before any read-side projection
+    field is added. DISTINCT FROM B-71, which adds a run-instance correlation id to
+    HITLEscalationBrief and the webhook payload -- B-71 is about DISAMBIGUATING two identical-looking
+    escalations; this row is about DESCRIBING one. Open only if the operator loop demands it: the
+    B-69 projection deliberately ships without it, and position plus pause_reason were judged
+    sufficient for the map-composition task.'
+  council: 'yes if opened -- a nameable C10 vs C11 tension (action-safety wanting a closed vocabulary
+    and no unbounded free-text channel in durable state, against operator-loop wanting a description
+    a human can actually act on), and the B-69 convening surfaced exactly that tension without
+    resolving it, because the empirical absence closed the seam first.'
+  heading: '### B-98 · Gate description / question text is absent from every durable pause carrier
+    *(surfaced at the B-69 council convening, SEAM 3, routed OUT of that arc, 2026-07-30)*'
+- id: B-99
+  title: The B-69 projection's summary_text exclusion must be re-adjudicated when the
+    pause_context_reader deferral is discharged
+  status: registered_finding
+  summary: 'A NAMED REOPENING CONDITION, not a defect and not a gate -- filed so the B-69
+    projection''s own justification cannot go stale silently. Runtime spec v1.107 section 31.2
+    excludes StateSummary.summary_text from the caller-facing projection. That exclusion originally
+    rested on TWO legs; one was falsified at the convening''s own adversarial pass. The FALSIFIED
+    leg: "the exclusion is free, since summary_text is empty everywhere" -- true today, but only
+    because the MVP binding is the injected placeholder pause_context_reader that Runtime spec
+    section 14.14.7 marks explicitly deferred and whose own docstring says its successor "reads the
+    current ledger head." The SURVIVING leg, which now carries the argument alone: the field is an
+    UNBOUNDED FORWARD CHANNEL -- a placeholder for real ledger content with no redaction contract
+    anywhere. Honest counter left unsmoothed: when a real reader is composed, the ergonomics case
+    for INCLUSION genuinely reopens.'
+  close_out: 'TRIGGER: the discharge of Runtime spec section 14.14.7''s pause_context_reader
+    deferral -- i.e. when a real reader is composed and summary_text begins carrying ledger content.
+    OBLIGATION AT THAT POINT: re-adjudicate the B-69 projection''s field set, WITH A REDACTION
+    CONTRACT AS A PRECONDITION OF ANY INCLUSION, and re-adjudicate the paired OD spec v1.36
+    section 30.5.4 redaction posture (currently NOT ENGAGED precisely because nothing redactable is
+    emitted) in the SAME arc. NO redaction gate is imposed now, and that restraint is deliberate:
+    the field is excluded, so there is nothing to redact, and gating an absent channel is textbook
+    over-gating. Also re-examine at the same trigger: Runtime plan v2.55 U-RT-148 AC #5 (the W4
+    characterization witness) asserts a PLACEHOLDER property and will fail for a good reason once a
+    real reader lands -- its correct disposition is then DELETION or INVERSION, never repair.'
+  council: 'no -- the tension was already convened and adjudicated at the B-69 record (C10 vs C11 on
+    payload boundary); this row records the condition under which that adjudication must be re-run,
+    and the re-run inherits the same voice pair without needing a fresh activation decision.'
+  heading: '### B-99 · The B-69 projection''s `summary_text` exclusion must be re-adjudicated when
+    the `pause_context_reader` deferral is discharged *(named reopening condition registered at the
+    B-69 spec leg, 2026-07-30)*'

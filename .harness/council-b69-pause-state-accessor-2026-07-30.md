@@ -572,3 +572,49 @@ Re-verified at HEAD after the fold, by direct read rather than by trusting the p
 | Register effect | **NONE at this arc.** `forward-register.yaml` + `roadmap_status.md` deliberately untouched; the B-69 row update rides the spec leg (§9 row 9). |
 | Authority | Advisory. This record recommends; it does not amend any canonical artifact. Per §1.3 authority chain, `design-substrate/**` wins on any conflict. |
 
+---
+
+## §14 — Ratification addendum (appended 2026-07-30, at the spec leg)
+
+*Appended per the `B-92` fork-doc-§11 precedent: the operator's answer to a record's own gate is recorded ON the record, so a later reader of §8.2 cannot mistake an answered gate for an open one. §§0–13 above are PRESERVED VERBATIM — nothing in the deliberation is edited by this addendum, including §13's "Register effect: NONE at this arc" and "Operator gate: ONE, at §8.2", both of which describe the CONVENING and remain accurate as such.*
+
+### §14.1 The question asked
+
+§8.2's THE QUESTION, put to the operator verbatim as filed, with its three options **(A′) / (A) / (B)** and the council's stated recommendation *"(A′), with (A) acceptable and (B) rejected."* The §8.2 **sizing correction** — that §6.3's required typed carrier may need to live on CP's `ResumeContext` rather than Runtime-side, making the arc **three** spec surfaces rather than two — was surfaced to the operator **inside the same question**, exactly as §8.2 framed it (*"not a new gate, a correction to the size of the one already asked"*).
+
+### §14.2 The answer
+
+**Date:** 2026-07-30. **Mechanism:** operator `AskUserQuestion` (workspace `CLAUDE.md` §14.2).
+
+**Selected option, verbatim:**
+
+> **(A′) — CO-REQUISITE, SEQUENCED.** Both surfaces authorized under **one arc gate** with the X-AL-2 conjunctive closure criterion: B-69 closes iff *(accessor landed) ∧ (precondition landed ∧ exercised by the W3 mutation-probe)*; partial is non-closure. The spec surfaces and their impl units **MAY land in separate merges within the arc**, subject to one ordering constraint: **the staleness precondition lands first or simultaneously — never after.** No interval exists in which an unfenced accessor is reachable on `main`.
+
+The **sizing correction is covered by this ratification** — the arc is authorized at three spec surfaces (Runtime + CP + OD), and the CP-homed-vs-Runtime-only carrier reading was left to the spec leg's own grounding, with C9's CP-homed recommendation as the default absent an overturning finding.
+
+### §14.3 What the spec leg did with it
+
+| Item | Disposition at the spec leg |
+|---|---|
+| §8.2 gate | **ANSWERED — A′.** No further operator gate was opened by the apply pass |
+| Carrier home (§8.2 sizing correction, `[MODERATE]` residual) | **CP-HOMED**, per C9's recommendation, **not overturned** — grounding confirmed the responses the token binds (`hitl_responses`, `effect_fence_resolutions`) are CP-owned `ResumeContext` fields, so a Runtime-side parallel carrier would leave *"these responses came from **this** read"* untyped and create a second authority. Landed as §9 row 3b → `Spec_Control_Plane_v1_112.md` §1 |
+| CXA row-vs-coverage (§6.6, `[MODERATE]` residual — *"CXA's call, not the council's"*) | **DETERMINED: no new row, aggregate frozen at 111**, with the payload widening (three scalars → one structured sequence) recorded explicitly. `Cross_Axis_Composition_Document_v2_23.md` |
+| §9 row 1's contract-number choice (*left to the spec-writer*) | **NEW `§14.14.9` at NEW §14.14.9**, not a §14.14.9 sibling — §14.14.x is C-RT-24 internal-composition territory; this is a caller-facing package-root API, the second member of C-RT-35 §30's class. `:680`'s "no new operation" framing is the discriminator |
+| §9 row 5b's OD determination (*new namespace vs. rides existing*) | **SPLIT, and OD BUMPED to v1.36.** Both events ride the EXISTING C-OD-30 `pause.*` / `resume.*` family — no new top-level namespace, C-OD-05 §5.1 roster unchanged — **but NEITHER is representable by the existing payload composition unchanged.** The read is a **third event class**. The refusal is raised **PRE-BOOTSTRAP**, before any `(ResumeAttempt, ResumeOutcome)` exists, so it composes through neither existing §C-OD-30.4 helper nor the CP→OD converter's `resume:` branch — and `PauseResumeAuditPayload` is `frozen` + `extra="forbid"` with no staleness-token field. **§30.5.2 therefore AUTHORIZES an additive carrier** (additive field or sibling payload type — impl discretion), and an **OD plan delta is OWED at the impl leg under EITHER option**. *(An earlier draft of this addendum row said the refusal "rides the existing `resume.*` half unchanged"; out-of-family review rounds 2 and 7 found that false on both timing and schema — corrected here so the addendum cannot mislead an implementer through the clearance artifacts that cite it.)* |
+| §9 row 9's register update | **APPLIED at the spec leg**, as §9 row 9 itself prescribes — status `registered_finding` → `open`, `council:` disposition replaced, closure criterion recorded in X-AL-2 conjunctive form, plus the §10 routed-out rows filed |
+| §10's routed-out findings | **REGISTERED, not absorbed** — each filed as prescribed, none folded into B-69's own scope |
+
+### §14.4 Where the record's text could NOT be applied as written — reported, not silently reinterpreted
+
+**Twelve** out-of-family `just codex-review-uncommitted` rounds against the applied delta found **three** places where the record's own text, applied literally, would have shipped a defect. Each is corrected in the spec text **with the divergence named in place**, and each is listed here so the record's readers see them:
+
+| # | Record's text | Why it could not be applied as written | Disposition |
+|---|---|---|---|
+| **1** | §6.2's field table lists `created_at` and the staleness token *"on every variant"*; §6.6 states them as **root-level** and accessor-minted | The two are inconsistent. One read yields one snapshot, so one `created_at` and one token are the truthful cardinality; per-variant copies would be a second authority over a single fact | **§6.6's root-level reading applied**, divergence named in the spec rather than smoothed |
+| **2** | §6.4's cause vocabulary groups *"`OSError`/`UnicodeDecodeError` → **read-error**"*, i.e. **transient** | The journal is JSON-serialized, so an undecodable byte is **persistent on-disk corruption no re-invocation can repair**. Routing it transient would send the operator loop into unbounded retry — **the exact misrouting §6.4 exists to prevent, one branch further in** | **I/O → `read-error` (transient); decode → `corrupt-latest` (permanent).** Five-member vocabulary UNCHANGED; `corrupt-latest`'s definition widened |
+| **3** | §6.2's field rule is stated **per variant** | The four variants span **seven-plus SOURCE SHAPES** with different field sets — `step_kind` is on three of them; the LINEAR `EffectFenceResumeState` declares exactly one field; and fan-out crash reconstruction builds `EffectFencePausedBranchResumeState(..., idempotency_key="")` whose empty key **both resume sites ignore on a truthiness check**, so surfacing it as a key would have the operator's response **silently DROPPED, not refused**. A per-variant rule forces those fields optional, which **readmits illegal states one level below the union** | **Field declaration is stated PER SOURCE SHAPE, with a required SOURCE-SHAPE SUB-DISCRIMINATOR** on the two multi-shape variants. **The variant SET stays at the record's FOUR** |
+
+**On item 3 — a reversal inside this leg, recorded because it is instructive.** A draft declared a **FIFTH** variant (`AwaitingFenceReprobe`) for the empty-key state, flagged as a deliberate extension. **Out-of-family review round 11 [P1] showed that extension would BREAK the record's own one-authority invariant (§6.6)** — the empty-key distinction is **not derivable from CP properties 1–8** (the authoritative effect-fence walk *includes* the empty key, the uniform-fallback computation *counts* it, only the abort walk filters it), so a fifth variant demanded either a new CP classification rule or **projection-only logic Runtime derives for itself**: exactly the second authority §6.6 exists to prevent. **Retracted to the source-shape treatment**, which forecloses the same harm with the classification still coming wholly from the shared computation. **Net: this leg went beyond the record's literal text in ZERO places** — items 1–3 are all resolutions *between* or *within* the record's own statements, applying its own principles to its own text.
+
+**Otherwise, the council record's text was applied as written.** The three items the record explicitly delegated (contract number, carrier home, CXA row-vs-coverage) were decided with the grounding stated in each artifact's change-note rather than silently; the one place the record's own §6.2 field table and §6.6 diverged (whether `created_at` and the staleness token are per-variant or root-level) was resolved in favour of §6.6's root-level statement, **with the divergence named in the applied spec text rather than smoothed** — one read yields one snapshot, so one `created_at` and one token are the truthful cardinality.
+
