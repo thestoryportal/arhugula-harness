@@ -252,7 +252,6 @@ def _fsync_dir(directory: Path) -> None:
         pass
     finally:
         os.close(dir_fd)
-    return _EXIT_OK
 
 
 if __name__ == "__main__":

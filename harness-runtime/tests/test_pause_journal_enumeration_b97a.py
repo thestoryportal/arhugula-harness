@@ -101,10 +101,16 @@ def test_ac7a_the_surface_accepts_no_workflow_id_to_probe() -> None:
     legacy path, so a distinct result would disclose that a record exists for a
     GUESSED `workflow_id`. **This is the load-bearing shape term**, so it is
     pinned at the signature — a future `workflow_id=` parameter fails here.
+
+    The pin is EXHAUSTIVE deliberately: an allow-list of forbidden names would
+    let a `for_workflow=` synonym through. `scope_known` joined it at round 4 and
+    is not a lookup key of any kind — it says only whether `tenant_scope` carries
+    a claim about this deployment at all.
     """
     signature = inspect.signature(enumerate_pause_journals)
-    assert list(signature.parameters) == ["journal_dir", "tenant_scope"]
+    assert list(signature.parameters) == ["journal_dir", "tenant_scope", "scope_known"]
     assert signature.parameters["tenant_scope"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["scope_known"].kind is inspect.Parameter.KEYWORD_ONLY
     assert "workflow_id" not in signature.parameters
 
 
@@ -644,6 +650,57 @@ def test_an_undeterminable_scope_is_reported_not_assumed_untenanted(
     assert payload["pause_journal_deployment_scope_known"] is False
     # The row is still listed — the surface never omits a journal.
     assert payload["pause_journal_count"] == 1
+
+
+def test_round4_an_unknown_scope_does_not_classify_an_untenanted_journal_current_format(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Round 4 [P2] — **an UNKNOWN scope is not an UNTENANTED one.**
+
+    The round-3 fix reported `scope_known` but still passed `tenant_scope=None`
+    to the classifier, and `None` is a *legitimate domain value*: it re-derives
+    the UNTENANTED-format filename. So every untenanted-format journal in the
+    directory came back CURRENT-FORMAT — *ordinary state, not at risk* — on a
+    deployment whose scope could not be determined and which may not own it. A
+    JSON consumer reading `identity_actionable: false` acts on that false
+    all-clear. Under an unknown scope the CURRENT-FORMAT arm is simply not
+    available; LEGACY still proves itself and everything else is honestly
+    NOT-ATTRIBUTABLE.
+
+    **This is also the MUTATION PROBE**, by construction: `scope_known` is
+    consumed in exactly one place — the `scope_known and ...` conjunct guarding
+    the CURRENT-FORMAT arm — so deleting that conjunct makes `scope_known=False`
+    behave identically to `scope_known=True`. The `scope_known=True` leg below
+    therefore *is* the reverted code's answer on these same bytes, and it is
+    `current-format`.
+    """
+    journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
+    # An UNTENANTED-format journal — the shape `tenant_scope=None` re-derives.
+    JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None).capture(
+        _snapshot("wf-untenanted")
+    )
+
+    (unknown,) = enumerate_pause_journals(journal_dir, tenant_scope=None, scope_known=False)
+    assert unknown.workflow_id == "wf-untenanted", "the identity is still reported in full"
+    assert unknown.classification is JournalIdentityClass.NOT_ATTRIBUTABLE
+    assert unknown.identity_actionable is False
+
+    # The reverted-guard answer on the SAME bytes: the false all-clear.
+    (known,) = enumerate_pause_journals(journal_dir, tenant_scope=None, scope_known=True)
+    assert known.classification is JournalIdentityClass.CURRENT_FORMAT, (
+        "the two legs agree, so the flag is not load-bearing and this witness "
+        "would pass against the reverted code"
+    )
+
+    # And end-to-end through the binary, where no usable config exists at all.
+    ledger = tmp_path / "state.jsonl"
+    _write_n_entries(ledger, 1)
+    assert main(["--ledger-path", str(ledger), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["pause_journal_deployment_scope_known"] is False
+    (row,) = payload["pause_journals"]
+    assert row["classification"] == "not-attributable"
+    assert row["identity_actionable"] is False
 
 
 def test_a_lone_surrogate_workflow_id_does_not_crash_human_output(

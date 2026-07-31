@@ -342,8 +342,19 @@ def _wrapper_workflow_id(line: bytes) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _classify(filename: str, workflow_id: str, *, tenant_scope: str | None) -> JournalIdentityClass:
-    """The §13.7.1 THREE-WAY classification, by RE-DERIVATION of the filename."""
+def _classify(
+    filename: str, workflow_id: str, *, tenant_scope: str | None, scope_known: bool
+) -> JournalIdentityClass:
+    """The §13.7.1 THREE-WAY classification, by RE-DERIVATION of the filename.
+
+    **The CURRENT-FORMAT arm is available ONLY under a KNOWN scope.** With
+    `scope_known=False` the `tenant_scope` argument carries no claim about this
+    deployment at all, so re-deriving `pause_journal_filename(None, ...)` would
+    match every UNTENANTED-format journal in the directory and report it as
+    ordinary state on a deployment that may not own it. LEGACY still proves
+    itself — its derivation consumes no scope — and everything else is honestly
+    NOT-ATTRIBUTABLE. *(Out-of-family review round 4 [P2].)*
+    """
     try:
         if legacy_pause_journal_filename(workflow_id) == filename:
             return JournalIdentityClass.LEGACY
@@ -352,6 +363,6 @@ def _classify(filename: str, workflow_id: str, *, tenant_scope: str | None) -> J
         # the pre-v1.108 derivation used STRICT UTF-8 and would have raised at
         # capture. Not legacy — fall through to the remaining derivations.
         pass
-    if pause_journal_filename(tenant_scope, workflow_id) == filename:
+    if scope_known and pause_journal_filename(tenant_scope, workflow_id) == filename:
         return JournalIdentityClass.CURRENT_FORMAT
     return JournalIdentityClass.NOT_ATTRIBUTABLE

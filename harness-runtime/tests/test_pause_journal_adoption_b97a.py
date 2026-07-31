@@ -29,6 +29,7 @@ from harness_runtime.admin.pause_journal_adoption import (
 )
 from harness_runtime.admin.pause_journal_disposal import main as disposal_main
 from harness_runtime.admin.pause_journal_disposal import plan_disposal
+from harness_runtime.admin.pause_journal_enumeration import JournalIdentityClass
 from harness_runtime.lifecycle import journal_workflow_pause_store as store_module
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
     PAUSE_JOURNAL_LOCK_SUFFIX,
@@ -620,6 +621,13 @@ def test_ac9d_ter_mutation_probe_without_the_binding_check_dormant_becomes_live(
     *This is the one place where the record shape being unchanged is not enough:
     the binding the old key carried implicitly must be checked explicitly before
     the new key replaces it.*
+
+    **The mutation reverts BOTH enforcement points**, because since round 4 the
+    binding term is enforced twice: once pre-lock on the enumeration's
+    classification, and again under the exclusion on the bytes read there. Either
+    one alone holds the record dormant, so mutating only the first would leave
+    the probe passing for the wrong reason — it would be measuring the under-lock
+    re-check rather than the term the probe names.
     """
     from harness_runtime.admin import pause_journal_enumeration as enum_module
 
@@ -629,7 +637,15 @@ def test_ac9d_ter_mutation_probe_without_the_binding_check_dormant_becomes_live(
         _record("B", wrapper_id="B") + "\n"
     )
 
-    # THE MUTATION: `adoptable` trusts the wrapper instead of the classification.
+    real_classify = adoption_module.classify_journal_bytes
+
+    def _trusting_classify(
+        filename: str, raw: bytes, **kwargs: object
+    ) -> tuple[str | None, JournalIdentityClass | None]:
+        identity, _ = real_classify(filename, raw, **kwargs)  # type: ignore[arg-type]
+        return identity, JournalIdentityClass.LEGACY
+
+    # THE MUTATION: both checks trust the wrapper instead of the classification.
     monkey = pytest.MonkeyPatch()
     try:
         monkey.setattr(
@@ -637,6 +653,7 @@ def test_ac9d_ter_mutation_probe_without_the_binding_check_dormant_becomes_live(
             "adoptable",
             property(lambda self: self.workflow_id is not None),
         )
+        monkey.setattr(adoption_module, "classify_journal_bytes", _trusting_classify)
         outcomes = _run(journal_dir, tmp_path)
     finally:
         monkey.undo()
@@ -1154,3 +1171,207 @@ def test_the_dry_run_previews_legacy_journals_without_an_acknowledgement(
     # The gate still bites on the DESTRUCTIVE path.
     assert disposal_main([str(journal_dir), "--tenant-id", _TENANT, "--delete"]) == 1
     assert legacy.is_file()
+
+
+# ---------------------------------------------------------------------------
+# Out-of-family review ROUND 4 — the three adoption/disposal witnesses.
+# ---------------------------------------------------------------------------
+
+
+@requires_posix_flock
+def test_round4_the_source_is_reclassified_under_the_lock_not_before_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 4 [P1] — **the identity that decides the target is re-derived from
+    the bytes read UNDER the lock**, never carried over from the enumeration.
+
+    The enumeration necessarily classifies BEFORE any lock is taken, so a
+    LOCK-RESPECTING appender can land between the two and change the wrapper
+    identity. Publishing under the PRE-LOCK identity would then write the CURRENT
+    source bytes to the STALE key — an unusable target under a name whose record
+    says something else, reported as ADOPTED, with every re-run refusing the
+    source. Here the interfering append is injected at the exact instant the
+    adoption reaches for the lock, which is the whole window.
+    """
+    journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
+    source = _legacy(journal_dir, "A")
+    real_lock = adoption_module.cross_process_journal_lock
+    interfered: list[str] = []
+
+    def _append_then_lock(journal_path: Path) -> object:
+        # A lock-RESPECTING writer: it appends before the adoption acquires, so
+        # no exclusion is violated and the read-back cannot see it move either.
+        if not interfered:
+            interfered.append(journal_path.name)
+            with journal_path.open("a", encoding="utf-8") as handle:
+                handle.write(_record("B", wrapper_id="B") + "\n")
+        return real_lock(journal_path)
+
+    monkeypatch.setattr(adoption_module, "cross_process_journal_lock", _append_then_lock)
+    outcomes = _run(journal_dir, tmp_path)
+    monkeypatch.undo()
+
+    assert interfered == [source.name], "the interference never ran — the probe is vacuous"
+    assert [o.disposition for o in outcomes] == [AdoptionDisposition.REFUSED_NOT_LEGACY]
+    # NOTHING is published — not at the stale key, and not at the new identity's
+    # key either (this run never proved the new identity is adoptable at all).
+    assert not (journal_dir / pause_journal_filename(_TENANT, "A")).exists()
+    assert not (journal_dir / pause_journal_filename(_TENANT, "B")).exists()
+
+
+@requires_posix_flock
+def test_round4_mutation_probe_without_the_under_lock_recheck_the_stale_key_is_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 4 [P1] — **THE MUTATION PROBE** for the witness above.
+
+    The mutation makes the under-lock re-classification return the PRE-LOCK
+    answer, which is exactly what the code did before the round-4 fix. The
+    stale-key publication reappears: the target is committed at
+    `encode(tenant, "A")` carrying bytes whose latest wrapper says `"B"`.
+    """
+    journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
+    source = _legacy(journal_dir, "A")
+    real_lock = adoption_module.cross_process_journal_lock
+    interfered: list[str] = []
+
+    def _append_then_lock(journal_path: Path) -> object:
+        if not interfered:
+            interfered.append(journal_path.name)
+            with journal_path.open("a", encoding="utf-8") as handle:
+                handle.write(_record("B", wrapper_id="B") + "\n")
+        return real_lock(journal_path)
+
+    # THE MUTATION: the re-check yields the enumeration's stale answer.
+    def _stale_classification(
+        filename: str, raw: bytes, **kwargs: object
+    ) -> tuple[str | None, JournalIdentityClass | None]:
+        return "A", JournalIdentityClass.LEGACY
+
+    monkeypatch.setattr(adoption_module, "cross_process_journal_lock", _append_then_lock)
+    monkeypatch.setattr(adoption_module, "classify_journal_bytes", _stale_classification)
+    outcomes = _run(journal_dir, tmp_path)
+    monkeypatch.undo()
+
+    assert interfered == [source.name]
+    assert [o.disposition for o in outcomes] == [AdoptionDisposition.ADOPTED], (
+        "the mutation did not reproduce the publication — the under-lock re-check "
+        "is not actually what is refusing"
+    )
+    stale_target = journal_dir / pause_journal_filename(_TENANT, "A")
+    assert stale_target.is_file(), "no stale-key publication — the probe is vacuous"
+    latest = json.loads(stale_target.read_text().splitlines()[-1])
+    assert latest["workflow_id"] == "B", (
+        "the target committed at A's key does not carry B's record, so the probe "
+        "did not actually demonstrate the stale-key hazard"
+    )
+
+    # RESTORE: with the real re-check, the same interference refuses.
+    stale_target.unlink()
+    interfered.clear()
+    monkeypatch.setattr(adoption_module, "cross_process_journal_lock", _append_then_lock)
+    restored = _run(journal_dir, tmp_path)
+    monkeypatch.undo()
+    assert [o.disposition for o in restored] == [AdoptionDisposition.REFUSED_NOT_LEGACY]
+    assert not stale_target.exists()
+
+
+def test_round4_a_newly_created_account_parent_has_its_own_dirent_fsynced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 4 [P2] — a directory the account write CREATES needs its OWN dirent
+    made durable in ITS parent.
+
+    Fsyncing only `account_path.parent` persists the account file's entry INSIDE
+    a directory whose own entry may still be unflushed, so a power loss could
+    preserve the adopted targets and lose the WHOLE account directory — the same
+    total loss the round-2 file-dirent fix closed one level down. Asserted per
+    INODE, over a two-deep account path, so the two newly-created ancestors are
+    distinguished from the leaf directory the round-2 fix already covered.
+    """
+    journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
+    _legacy(journal_dir, "wf-legacy")
+    outer = tmp_path / "acct"
+    inner = outer / "nested"
+    account = inner / "account.jsonl"
+
+    root_id = (tmp_path.stat().st_dev, tmp_path.stat().st_ino)
+    fsynced: set[tuple[int, int]] = set()
+    real_fsync = os.fsync
+
+    def _spy_fsync(fd: int) -> None:
+        try:
+            info = os.fstat(fd)
+            fsynced.add((info.st_dev, info.st_ino))
+        except OSError:  # pragma: no cover — defensive
+            pass
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", _spy_fsync)
+    adopt_pause_journals(journal_dir, tenant_id=_TENANT, account_path=account)
+    monkeypatch.undo()
+
+    assert account.is_file()
+    inner_id = (inner.stat().st_dev, inner.stat().st_ino)
+    outer_id = (outer.stat().st_dev, outer.stat().st_ino)
+    # The leaf — already covered at round 2, asserted here so the probe is not
+    # silently measuring the wrong directory.
+    assert inner_id in fsynced
+    # The two NEW ones: each created ancestor's dirent, made durable in ITS parent.
+    assert outer_id in fsynced, "the created account parent's own dirent is not durable"
+    assert root_id in fsynced, "the outermost created directory's dirent is not durable"
+
+
+def test_round4_disposal_fsyncs_the_journal_directory_after_the_unlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 4 [P3] — an unlink is a directory-entry change like any other.
+
+    Without a directory fsync afterwards the command reports success and the
+    orphan REAPPEARS after a power loss — a disposal tool whose deletions do not
+    survive a reboot is worse than one that refuses. Scoped to the journal
+    directory's own inode and ORDERED against the unlinks, so a fsync that ran
+    before the removals would not satisfy it.
+    """
+    journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
+    legacy = _legacy(journal_dir, "wf-legacy")
+
+    target_id = (journal_dir.stat().st_dev, journal_dir.stat().st_ino)
+    events: list[str] = []
+    real_unlink = os.unlink
+    real_fsync = os.fsync
+
+    def _spy_unlink(path: object, **kwargs: object) -> None:
+        events.append("unlink")
+        return real_unlink(path, **kwargs)  # type: ignore[arg-type]
+
+    def _spy_fsync(fd: int) -> None:
+        try:
+            info = os.fstat(fd)
+            if (info.st_dev, info.st_ino) == target_id:
+                events.append("journal-dir-fsync")
+        except OSError:  # pragma: no cover — defensive
+            pass
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "unlink", _spy_unlink)
+    monkeypatch.setattr(os, "fsync", _spy_fsync)
+    exit_code = disposal_main(
+        [
+            str(journal_dir),
+            "--tenant-id",
+            _TENANT,
+            "--delete",
+            "--acknowledge-discarding-recoverable-state",
+        ]
+    )
+    monkeypatch.undo()
+
+    assert exit_code == 0
+    assert not legacy.exists(), "nothing was removed — the probe is vacuous"
+    assert "unlink" in events
+    assert "journal-dir-fsync" in events, "the removals were never made durable"
+    assert events.index("journal-dir-fsync") > events.index("unlink"), (
+        "the directory fsync ran BEFORE the unlinks, which persists nothing that "
+        "the removals changed"
+    )
