@@ -60,6 +60,7 @@ Sub-arc A landing arc per `[[fork-u-cp-72-cost-and-pause-resume-prefix-gap]]`
 from __future__ import annotations
 
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import Final
 
 from harness_core import AttributeValueType, Cardinality
@@ -69,7 +70,7 @@ from harness_cp.pause_resume_protocol import (
     ResumeOutcome,
     ResumeOutcomeKind,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 # ----------------------------------------------------------------------------
 # Span-site identifiers (2 sites per §C-OD-30.1)
@@ -461,12 +462,154 @@ def _project_resume_outcome_to_audit_payload(
     )
 
 
+# ----------------------------------------------------------------------------
+# §C-OD-30.5 (NEW at OD spec v1.36) — the B-69 durable-pause-state read + the
+# staleness-refused resume. A SIBLING payload type, per §30.5.2 option (b).
+# ----------------------------------------------------------------------------
+
+PAUSE_STATE_EVENT_HEAD_SAMPLING_RATE: Final[float] = 1.0
+"""Head sampling rate for BOTH §C-OD-30.5 event kinds (OD spec v1.36 §30.5.4).
+
+DECLARED, not inherited: C-OD-30's existing sampling discipline names only the
+two event kinds it already carries, so "inherit the existing convention" would
+have left these REQUIRED emissions with no rule at all. Both take the SAME rate
+the existing pause/resume event kinds take, because §30.5.3's pairing requirement
+is only sound if BOTH members of a pair are retained — independent sampling would
+break causal-pair reconstruction at exactly the rate it drops either one.
+"""
+
+
+class PauseStateEventKind(StrEnum):
+    """The TWO NEW event kinds within the EXISTING C-OD-30 namespace family."""
+
+    ACCESSOR_READ = "pause.state.read"
+    """Every invocation of the Runtime §14.14.9 durable-pause-state read accessor,
+    whether it succeeds or fails (OD spec v1.36 §30.5.1)."""
+
+    STALENESS_REFUSED_RESUME = "resume.refused.pause_state_stale"
+    """A `resume()` refused on the Runtime v1.107 §30 staleness precondition —
+    raised PRE-BOOTSTRAP, so it rides this sibling payload rather than the
+    `(ResumeAttempt, ResumeOutcome)`-composed `PauseResumeAuditPayload`
+    (OD spec v1.36 §30.5.2)."""
+
+
+class PauseStateAuditPayload(BaseModel):
+    """§C-OD-30.5 sibling payload for the B-69 read + staleness-refusal events.
+
+    **Why a SIBLING type and not an additive field on `PauseResumeAuditPayload`.**
+    OD spec v1.36 §30.5.2 authorizes either; option (b) is taken here because
+    `PauseResumeAuditPayload` is `frozen` + `extra="forbid"` and is constructed at
+    every existing pause/resume site — widening it would put a
+    never-populated-on-those-paths field on every already-shipped row, whereas a
+    sibling leaves the existing field set and BOTH existing §C-OD-30.4 helpers
+    **PRESERVED VERBATIM** and the existing converter branch unchanged for every
+    event it already handles.
+
+    **Content is SPLIT BY OUTCOME**, because §14.14.9.4's fail-closed rule means a
+    failed read mints no token and returns no projection, so a single conflated
+    content rule would be unimplementable:
+
+    | Event | token | per-variant counts | cause |
+    |---|---|---|---|
+    | read, succeeded | REQUIRED | REQUIRED (four) | absent |
+    | read, failed | absent | absent | REQUIRED |
+    | staleness-refused resume | REQUIRED | absent | absent |
+
+    The split is ENFORCED here rather than documented — an illegal combination is
+    rejected at construction.
+
+    **Disclosure limits (§30.5.1), each closing a specific hazard.** NEVER the
+    locations' associated payload; NEVER the never-keyable pre-dispatch or
+    depth-0-root internal identity (emit presence + classification, which the
+    per-variant counts carry exactly, never identity); the cause attribution names
+    the CAUSE CLASS ONLY — never exception text, never a resolved filesystem path.
+    No field on this payload can carry any of them: they are absent by type.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    event_kind: PauseStateEventKind
+    """Which of the two §C-OD-30.5 event kinds this row records."""
+
+    workflow_id: str
+    """The read's only key (§30.5.1)."""
+
+    succeeded: bool
+    """Whether the read produced a projection. Always `False` for a
+    staleness-refused resume (nothing succeeded on that path)."""
+
+    staleness_token: str | None = None
+    """The pairing key (§30.5.3) — the token minted by a SUCCESSFUL read, and the
+    SAME value re-emitted by the resume that refuses on it, so the two are
+    reconstructable as ONE causal pair from telemetry alone. `None` on a failed
+    read, where no token exists by construction."""
+
+    cause_attribution: str | None = None
+    """One of the five stable identifiers Runtime v1.107 §30 declares — on an
+    UNSUCCESSFUL read only. Cause class ONLY."""
+
+    hitl_addressable_count: int | None = None
+    effect_fence_addressable_count: int | None = None
+    uniform_fallback_only_count: int | None = None
+    transitively_paused_count: int | None = None
+    """PER-VARIANT counts of returned locations — FOUR counts, never one aggregate
+    total (§30.5.1): a single scalar cannot express classification, while the
+    disclosure limit requires classification WITHOUT identity. Populated on a
+    successful read only."""
+
+    @model_validator(mode="after")
+    def _enforce_outcome_split(self) -> PauseStateAuditPayload:
+        """Reject the field combinations §30.5.1's outcome split forbids."""
+        counts = (
+            self.hitl_addressable_count,
+            self.effect_fence_addressable_count,
+            self.uniform_fallback_only_count,
+            self.transitively_paused_count,
+        )
+        if self.event_kind is PauseStateEventKind.STALENESS_REFUSED_RESUME:
+            if self.succeeded:
+                raise ValueError("a staleness-refused resume never succeeded")
+            if self.staleness_token is None:
+                raise ValueError(
+                    "a staleness-refused resume MUST carry the supplied staleness "
+                    "token — it is §30.5.3's pairing key"
+                )
+            if self.cause_attribution is not None or any(c is not None for c in counts):
+                raise ValueError(
+                    "a staleness-refused resume carries neither a cause attribution "
+                    "nor location counts"
+                )
+            return self
+        if self.succeeded:
+            if self.staleness_token is None:
+                raise ValueError("a successful read MUST carry the token it minted")
+            if self.cause_attribution is not None:
+                raise ValueError("a successful read carries no cause attribution")
+            if any(c is None for c in counts):
+                raise ValueError(
+                    "a successful read MUST carry all FOUR per-variant counts; a "
+                    "single aggregate total cannot express classification"
+                )
+            return self
+        if self.cause_attribution is None:
+            raise ValueError("a failed read MUST carry its cause attribution")
+        if self.staleness_token is not None or any(c is not None for c in counts):
+            raise ValueError(
+                "a failed read mints no token and returns no projection, so it "
+                "carries neither a token nor location counts"
+            )
+        return self
+
+
 __all__ = [  # noqa: RUF022 — grouped public-symbols-then-helpers with an
     # explanatory comment block between the groups; alphabetic re-sort would
     # destroy the documented two-group structure.
     "AttributeSpec",
     "PAUSE_RESUME_SPAN_NAMESPACE_SCHEMA",
+    "PAUSE_STATE_EVENT_HEAD_SAMPLING_RATE",
     "PauseResumeAuditPayload",
+    "PauseStateAuditPayload",
+    "PauseStateEventKind",
     "SPAN_SITE_PAUSE_CAPTURED",
     "SPAN_SITE_RESUME_ATTEMPTED",
     # Production-invocation helpers (§C-OD-30.4 NEW at OD spec v1.11; dead code

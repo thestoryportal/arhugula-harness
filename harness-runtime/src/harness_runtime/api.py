@@ -84,6 +84,7 @@ from harness_core.identity import WorkflowID
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext
+from harness_cp.pause_state_projection import AccessorDerivedResumeContext
 from harness_cp.workflow_driver_types import RunResult as _CpRunResult
 from harness_cp.workflow_driver_types import (
     RunStatus as _CpRunStatus,
@@ -98,6 +99,10 @@ from harness_od.cross_family_rollup import (
 from harness_od.idempotency_join_dedup import SpanCostRecord
 from pydantic import BaseModel, ConfigDict
 
+from harness_runtime.lifecycle.journal_workflow_pause_store import (
+    PauseJournalReadCause,
+    PauseJournalReadResult,
+)
 from harness_runtime.types import COST_ACCUM_VAR, CostRecordAccumulator, RuntimeConfig
 
 if TYPE_CHECKING:
@@ -189,7 +194,49 @@ class ResumeHandleUnknownError(Exception):
     `STATE_LEDGER` dir) has no record for the workflow_id, or its latest record
     is corrupt (fail-closed read → `None`). Detect-then-refuse before bootstrap
     rather than silently re-run from step 0.
+
+    **Cause attribution (REFINEMENT at spec v1.107 §30 — NOT a new peer class).**
+    `read_latest` returns nothing for FIVE distinguishable causes and the v1.46
+    taxonomy row collapsed them into one permanent absence, erasing the
+    classification the retry mechanism is defined to consume — one of the five is
+    transient. This class now carries a `cause` drawn from the closed five-member
+    stable-identifier vocabulary, and a `retryable` disposition that is a FUNCTION
+    OF THE CAUSE rather than a constant. The class IDENTITY is unchanged; no peer
+    class is minted. The attribution names the CAUSE CLASS ONLY — never the
+    underlying exception text, never a resolved filesystem path.
     """
+
+    def __init__(
+        self, message: str, *, cause: PauseJournalReadCause, retryable: bool = False
+    ) -> None:
+        super().__init__(message)
+        self.cause: PauseJournalReadCause = cause
+        self.retryable: bool = retryable
+
+
+class ResumePauseStateStaleError(Exception):
+    """`RT-FAIL-RESUME-PAUSE-STATE-STALE` (NEW at spec v1.107 §30) — the durably
+    journaled pause state changed between the caller's §14.14.9 accessor read and
+    this `resume()` call.
+
+    **Refusal-only.** The value domain of the precondition contains NO member
+    meaning *proceed regardless* — no `force=True`, no `fence="skip"`, no sentinel
+    — and this carrier is deliberately not typed as a union that could later admit
+    one. A precondition is a DIFFERENT OBJECT from a mode: no value of it causes
+    execution.
+
+    **Operator-actionable.** A refusal the operator cannot act on is a livelock
+    with good manners, so the message says, in prose, what to do next.
+
+    **A mitigation, booked as one.** The precondition NARROWS the supersession
+    window; it does not CLOSE it. It protects a COMPOSED CLAIM and makes no claim
+    about cross-process write-write serialization of the journal, which remains
+    unguarded (pre-existing, registered at `B-97`).
+    """
+
+    def __init__(self, message: str, *, claimed_token: str) -> None:
+        super().__init__(message)
+        self.claimed_token: str = claimed_token
 
 
 # ---------------------------------------------------------------------------
@@ -683,15 +730,19 @@ def _read_durable_pause_snapshot(
     config: RuntimeConfig,
     workflow: WorkflowObject,
     resume_handle: str,
-) -> PauseSnapshot | None:
+) -> PauseJournalReadResult:
     """Read the latest durably-journaled `PauseSnapshot` for the handle (C-RT-35).
 
     Resolves the pause-journal directory the SAME way the stage-5 factory does at
     capture — `<STATE_LEDGER resolved dir>/pause-journal` for this workflow's
     `(workload_class, deployment_surface)` — and reads the latest record. Pure
     (no bootstrap side effects); `PathResolver.resolve_path` does not create the
-    directory. Returns `None` (fail-closed) when no record exists or the latest
-    record is corrupt → the caller raises `RT-FAIL-RESUME-HANDLE-UNKNOWN`.
+    directory.
+
+    Returns the CAUSE-ATTRIBUTED result (spec v1.107 §30): fail-closed exactly as
+    before, but with the five causes distinguished instead of collapsed into one
+    permanent absence, and with the §30 staleness token's change-detector inputs
+    carried so the token needs no second read.
     """
     from harness_is.path_class_registry import PathClass
     from harness_is.path_resolver import PathResolver
@@ -709,7 +760,76 @@ def _read_durable_pause_snapshot(
         config.deployment_surface,
     )
     store = JournalWorkflowPauseStore(journal_dir=pause_journal_dir_for(state_ledger_dir))
-    return store.read_latest(resume_handle)
+    return store.read_latest_attributed(resume_handle)
+
+
+def _enforce_pause_state_staleness_precondition(
+    config: RuntimeConfig,
+    workflow: WorkflowObject,
+    resume_context: ResumeContext | None,
+) -> None:
+    """The §30 refusal-only staleness precondition (NEW at spec v1.107).
+
+    Fires PRE-BOOTSTRAP, alongside the rest of the `RT-FAIL-RESUME-*`
+    detect-then-refuse battery, and ONLY for a `resume_context` that was composed
+    against a §14.14.9 accessor read — i.e. an `AccessorDerivedResumeContext`. The
+    legacy no-read variant is untouched and byte-identical to pre-v1.107: the
+    precondition narrows a supersession window for COMPOSED CLAIMS; it does not
+    deprecate unfenced resume.
+
+    **Why the fence exists at all — the distinction that is the entire finding.**
+    `resume()` re-derives the SNAPSHOT from the durable journal on every call, and
+    it is tempting to conclude that this makes any caller-side read untrusted and
+    therefore harmless. That proves the *snapshot* is re-derived. It does NOT prove
+    the operator's *response map* was composed against the same snapshot. Two
+    different objects; only one is re-derived. A response composed against a
+    superseded read, delivered through CP §1.2 property 4's sole-member carve-out,
+    lands a HITL response on a branch the operator never saw.
+
+    **Fail-closed.** If the current token cannot be minted at all (the journal is
+    gone, unreadable, or corrupt), the claim cannot be validated, so the resume is
+    REFUSED — never admitted on the strength of an unverifiable claim.
+    """
+    if not isinstance(resume_context, AccessorDerivedResumeContext):
+        return
+    from harness_runtime.lifecycle.pause_state_staleness import mint_staleness_token
+
+    claimed = resume_context.staleness_token
+    current_read = _read_durable_pause_snapshot(config, workflow, workflow.workflow_id)
+    current = mint_staleness_token(current_read)
+    if current == claimed:
+        return
+    _emit_staleness_refusal(config, workflow, claimed_token=claimed)
+    raise ResumePauseStateStaleError(
+        f"the workflow's paused state changed since your read "
+        f"(workflow_id={workflow.workflow_id!r}); re-read the durable pause state "
+        f"and recompose your resume_context before resuming (C-RT-35 §30, "
+        f"RT-FAIL-RESUME-PAUSE-STATE-STALE).",
+        claimed_token=claimed,
+    )
+
+
+def _emit_staleness_refusal(
+    config: RuntimeConfig, workflow: WorkflowObject, *, claimed_token: str
+) -> None:
+    """OD spec v1.36 §30.5.2 — the refusal event, to a REAL pre-bootstrap sink.
+
+    Carries the SAME staleness token the refused read minted (§30.5.3's pairing
+    key), so a stale-read refusal is reconstructable as ONE causal pair with the
+    read that produced it, from telemetry alone.
+    """
+    from harness_od.pause_resume_namespace import PauseStateAuditPayload, PauseStateEventKind
+
+    from harness_runtime.lifecycle.pre_bootstrap_pause_state_sink import pause_state_sink_for
+
+    pause_state_sink_for(config, workflow.workload_class).emit(
+        PauseStateAuditPayload(
+            event_kind=PauseStateEventKind.STALENESS_REFUSED_RESUME,
+            workflow_id=workflow.workflow_id,
+            succeeded=False,
+            staleness_token=claimed_token,
+        )
+    )
 
 
 async def resume(
@@ -863,13 +983,22 @@ async def resume(
                 "(pause_resume_protocol_config.durable=True); without it the "
                 "harness owns no snapshot store to read (C-RT-35)."
             )
-        snapshot = _read_durable_pause_snapshot(resolved_config, workflow, resume_handle)
-        if snapshot is None:
+        _read = _read_durable_pause_snapshot(resolved_config, workflow, resume_handle)
+        if _read.snapshot is None:
+            # spec v1.107 §30: the cause attribution is carried as a STABLE
+            # IDENTIFIER on the EXISTING fail class, and the retry disposition is a
+            # FUNCTION OF THE CAUSE rather than a flat "permanent" — a flat label
+            # would suppress exactly the `read-error` retry the refinement exists
+            # to enable. Cause class only: no exception text, no resolved path.
+            assert _read.cause is not None
             raise ResumeHandleUnknownError(
-                f"no durable PauseSnapshot journaled for resume_handle="
-                f"{resume_handle!r} under the resolved STATE_LEDGER pause-journal "
-                f"(C-RT-35)."
+                f"no resumable durable PauseSnapshot for resume_handle="
+                f"{resume_handle!r} under the resolved STATE_LEDGER pause-journal; "
+                f"cause={_read.cause.value} (C-RT-35).",
+                cause=_read.cause,
+                retryable=_read.retryable,
             )
+        snapshot = _read.snapshot
     else:
         assert pause_snapshot is not None  # exactly-one-of guard guarantees this
         snapshot = pause_snapshot
@@ -893,6 +1022,11 @@ async def resume(
             f"valid step of the resumed workflow (0 <= i < {_step_count}); the "
             f"workflow may have changed since the pause (C-RT-35)."
         )
+    # Detect-then-refuse: a resume_context composed against a §14.14.9 accessor
+    # read is refused when the durably-journaled pause state changed since that
+    # read (spec v1.107 §30, NEW — refusal-only, no value proceeds). Pre-bootstrap,
+    # alongside the rest of the battery, and inert for the legacy no-read variant.
+    _enforce_pause_state_staleness_precondition(resolved_config, workflow, resume_context)
 
     from harness_runtime.bootstrap import run_bootstrap
     from harness_runtime.shutdown import shutdown as _shutdown
