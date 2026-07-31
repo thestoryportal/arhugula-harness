@@ -1,0 +1,192 @@
+"""Pre-bootstrap sink for the two §C-OD-30.5 events (OD spec v1.36 §30.5.2).
+
+`B-69` impl leg. Both events — the §14.14.9 accessor read and a `resume()` refused
+on the §30 staleness precondition — fire on the **first crash-recovery call in a
+fresh process**, while the SDK ``TracerProvider`` and the audit writers are created
+*during* bootstrap. A default no-op / proxy provider **records nothing**, so an
+implementation that emits and moves on would satisfy the letter of §30.5.1 and
+§30.5.2 while producing no telemetry at all — defeating both the no-silent-failure
+rule and §30.5.3's causal-pair reconstruction, on the exact path this arc exists to
+serve.
+
+**The mechanism chosen, of the three §30.5.2 authorizes.** A minimal pre-bootstrap
+audit initialization these two events can use: an append-only JSONL sink under the
+resolved ``STATE_LEDGER`` directory, resolved purely from ``config`` +
+``workflow.workload_class`` via ``PathResolver`` with no bootstrap side effects —
+the SAME resolution the pause journal itself uses, and for the same reason (a fresh
+process must find what a prior process wrote). Rejected alternatives: a deferred
+buffer drained by the next bootstrap loses every event of a run that refuses
+pre-bootstrap and never bootstraps at all (which is *every* staleness refusal);
+an in-memory sink is not retrievable across the process boundary the witness
+obligation names.
+
+**No new ``PathClass``.** Like the pause journal (§14.14.8 residence note), this is
+harness-internal audit substrate, not one of the four canonical *artifact* classes
+the ``PathClass`` registry enumerates — IS-AL-1 forecloses inventing a canonical
+artifact class, not co-locating an internal file.
+
+Authority: `Spec_Operational_Discipline_v1_36.md` §C-OD-30.5;
+`Spec_Harness_Runtime_v1.md` v1.107 §14.14.9.5 (trace emission REQUIRED on BOTH
+outcomes, content SPLIT BY OUTCOME).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from harness_od.pause_resume_namespace import PauseStateAuditPayload
+from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from harness_core.workload_class import WorkloadClass
+
+    from harness_runtime.types import RuntimeConfig
+
+__all__ = [
+    "PAUSE_STATE_AUDIT_FILENAME",
+    "PAUSE_STATE_AUDIT_SUBDIR",
+    "PreBootstrapPauseStateSink",
+    "pause_state_audit_dir_for",
+    "pause_state_sink_for",
+]
+
+#: Subdirectory under the resolved ``STATE_LEDGER`` directory holding the sink.
+PAUSE_STATE_AUDIT_SUBDIR = "pause-state-audit"
+
+#: The single append-only sink file within that subdirectory.
+PAUSE_STATE_AUDIT_FILENAME = "events.jsonl"
+
+
+def pause_state_audit_dir_for(state_ledger_dir: Path) -> Path:
+    """The §C-OD-30.5 sink directory co-located under the STATE_LEDGER dir."""
+    return state_ledger_dir / PAUSE_STATE_AUDIT_SUBDIR
+
+
+class PreBootstrapPauseStateSink:
+    """An append-only, ``fsync``-ed JSONL sink for §C-OD-30.5 payloads.
+
+    Deliberately tiny and dependency-free: it must work with NO ``HarnessContext``,
+    NO ``TracerProvider`` and NO audit writer in existence.
+    """
+
+    def __init__(self, *, sink_dir: Path) -> None:
+        self._sink_dir = Path(sink_dir)
+
+    @property
+    def path(self) -> Path:
+        """The sink file this instance appends to / reads from."""
+        return self._sink_dir / PAUSE_STATE_AUDIT_FILENAME
+
+    def emit(self, payload: PauseStateAuditPayload) -> None:
+        """Append one payload durably. Never silent: a write failure propagates.
+
+        **Torn-append self-healing**, mirroring the pause journal's own hardening:
+        a crash *during* a prior append can leave a partial trailing line with no
+        terminating newline. Without a leading newline the next record would be
+        concatenated onto that fragment, making the combined line unparseable — so
+        :meth:`read_all` would skip it and the REQUIRED read/refusal event would be
+        silently LOST, which is precisely the no-silent-failure rule §30.5.1
+        exists to enforce. The fragment instead becomes its own (skipped)
+        line and the new record lands clean.
+        """
+        line = json.dumps(payload.model_dump(mode="json"), sort_keys=True)
+        dir_is_new = not self._sink_dir.exists()
+        self._sink_dir.mkdir(parents=True, exist_ok=True)
+        path = self.path
+        is_new_file = not path.exists()
+        needs_leading_newline = (not is_new_file) and self._last_byte_is_not_newline(path)
+        with path.open("a", encoding="utf-8") as handle:
+            if needs_leading_newline:
+                handle.write("\n")
+            handle.write(line + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        # `fsync` on the FILE does not durably persist a newly-created DIRENT on
+        # POSIX, so a host crash right after the very first `emit()` could lose the
+        # only pre-bootstrap read/refusal event despite this sink's durability
+        # claim. Mirrors the pause journal's own two-level handling exactly.
+        # *(Out-of-family review [P2], round 2.)*
+        if is_new_file:
+            self._fsync_dir(self._sink_dir)
+        if dir_is_new:
+            self._fsync_dir(self._sink_dir.parent)
+
+    @staticmethod
+    def _last_byte_is_not_newline(path: Path) -> bool:
+        """`True` iff the file's last byte is not `\\n` (a torn trailing append).
+
+        On any read error, conservatively returns `True` so the next append is
+        newline-separated rather than risking a concatenation onto a fragment.
+        """
+        try:
+            with path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    return False
+                handle.seek(-1, os.SEEK_END)
+                return handle.read(1) != b"\n"
+        except OSError:
+            return True
+
+    @staticmethod
+    def _fsync_dir(directory: Path) -> None:
+        """fsync a directory so a freshly-created entry's dirent is durable.
+
+        Best-effort: directory fsync is unsupported on some platforms/filesystems,
+        where it is a no-op rather than a failure.
+        """
+        try:
+            dir_fd = os.open(directory, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(dir_fd)
+
+    def read_all(self) -> tuple[PauseStateAuditPayload, ...]:
+        """Every payload retrievable from the sink, oldest first.
+
+        This is what the §30.5.2 witness obligation asserts against — the events
+        must be **retrievable from a real sink**, never merely "an emit was
+        invoked" against a proxy provider.
+        """
+        path = self.path
+        if not path.exists():
+            return ()
+        rows: list[PauseStateAuditPayload] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rows.append(PauseStateAuditPayload.model_validate_json(line))
+            except ValidationError:  # pragma: no cover — a torn trailing append
+                continue
+        return tuple(rows)
+
+
+def pause_state_sink_for(
+    config: RuntimeConfig, workload_class: WorkloadClass
+) -> PreBootstrapPauseStateSink:
+    """Resolve the sink for a workload PURELY from config — no bootstrap needed.
+
+    Mirrors ``api._read_durable_pause_snapshot``'s own resolution so a capture-side
+    process and a fresh crash-recovery process agree on the location.
+    """
+    from harness_is.path_class_registry import PathClass
+    from harness_is.path_resolver import PathResolver
+
+    from harness_runtime.config.path_bindings import build_path_binding
+
+    resolver = PathResolver(build_path_binding(config.path_bindings))
+    state_ledger_dir = resolver.resolve_path(
+        PathClass.STATE_LEDGER,
+        workload_class,
+        config.deployment_surface,
+    )
+    return PreBootstrapPauseStateSink(sink_dir=pause_state_audit_dir_for(state_ledger_dir))

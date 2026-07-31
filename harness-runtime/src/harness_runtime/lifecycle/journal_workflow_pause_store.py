@@ -64,11 +64,13 @@ Authority: runtime spec v1.46 (R-CC-1 arc #3 cascade step 2); CP spec v1.11
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
+from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 from harness_cp.pause_resume_protocol_types import PauseSnapshot
 from pydantic import ValidationError
@@ -76,8 +78,121 @@ from pydantic import ValidationError
 __all__ = [
     "PAUSE_JOURNAL_SUBDIR",
     "JournalWorkflowPauseStore",
+    "PauseJournalReadCause",
+    "PauseJournalReadResult",
     "pause_journal_dir_for",
 ]
+
+
+class PauseJournalReadCause(StrEnum):
+    """The FIVE distinguishable causes a durable pause-journal read can fail with.
+
+    Runtime spec v1.107 §30 ("Cause attribution on `RT-FAIL-RESUME-HANDLE-UNKNOWN`")
+    + §14.14.9.4 — a closed five-member vocabulary of STABLE IDENTIFIERS, carried
+    IDENTICALLY by both surfaces (``resume()`` and the §14.14.9 accessor) so the
+    operator never receives two names for one state. Never prose: prose is
+    unconsumable by a routing decision.
+
+    The vocabulary names the CAUSE CLASS ONLY — never the underlying exception
+    text, never a resolved filesystem path (§30 disclosure limit).
+    """
+
+    ABSENT = "absent"
+    """No journal record exists for this ``workflow_id`` — permanent."""
+
+    EMPTY_JOURNAL = "empty-journal"
+    """The per-workflow file EXISTS but holds no record. Permanent for the
+    single-process deployment, where it is decisive; INDETERMINATE across
+    processes (a concurrent ``capture()`` may complete immediately after this
+    read; cross-process append serialization is unresolved, registered at
+    ``B-97``). MUST NOT fold into :attr:`ABSENT` despite sharing that routing —
+    collapsing on shared routing is the exact defect this refinement undoes, and
+    the two carry different operator repairs."""
+
+    READ_ERROR = "read-error"
+    """The read raised an **I/O** error. Transient BY DEFAULT — but retryability
+    follows the underlying errno, not the class label: the store's read catches
+    the whole ``OSError`` family, which includes permanently-failing shapes
+    (permission denied, invalid path component, read-only filesystem). See
+    :func:`_read_error_is_retryable`."""
+
+    CORRUPT_LATEST = "corrupt-latest"
+    """The stored bytes could not be **decoded**, OR the latest record failed to
+    **parse** — permanent. A decode failure routes here rather than to
+    :attr:`READ_ERROR` deliberately (Runtime spec v1.107 §30's stated divergence
+    from the council record's literal mapping): the journal is serialized as JSON
+    via ``model_dump(mode="json")``, so an undecodable byte is persistent
+    corruption on disk that no number of re-invocations can repair, and a
+    transient classification would send the operator loop into an unbounded retry
+    with no diagnostic."""
+
+    WORKFLOW_MISMATCH = "workflow-mismatch"
+    """The latest record's ``workflow_id`` does not match — permanent."""
+
+
+#: errnos whose failure is PERMANENT despite arriving as an ``OSError``. Routing
+#: every ``read-error`` as blindly retryable would encode futile retries into the
+#: contract (Runtime spec v1.107 §30; the errno partition itself is impl
+#: discretion, the "do not blanket-route" term is not).
+_PERMANENT_READ_ERRNOS = frozenset(
+    {
+        errno.EACCES,
+        errno.EPERM,
+        errno.EROFS,
+        errno.EISDIR,
+        errno.ENOTDIR,
+        errno.ENAMETOOLONG,
+        errno.EINVAL,
+        errno.ELOOP,
+    }
+)
+
+
+def _read_error_is_retryable(error: OSError) -> bool:
+    """Whether an ``OSError`` from the journal read is worth re-invoking."""
+    return error.errno not in _PERMANENT_READ_ERRNOS
+
+
+class PauseJournalReadResult(NamedTuple):
+    """A cause-attributed durable read (Runtime spec v1.107 §30 + §14.14.9.4).
+
+    Carries the change-detector inputs alongside the outcome so the §30 staleness
+    token can be minted WITHOUT a second read and WITHOUT any capture-side carrier
+    change — the §14.14.8 append-only / never-truncated substrate invariant is what
+    makes ``record_count`` a sound change-detector.
+    """
+
+    snapshot: PauseSnapshot | None
+    """The latest journaled snapshot, or ``None`` on any of the five causes."""
+
+    cause: PauseJournalReadCause | None
+    """``None`` iff :attr:`snapshot` is populated."""
+
+    retryable: bool
+    """Whether re-invoking could plausibly succeed. ``True`` only for a
+    ``read-error`` whose underlying errno is not permanent."""
+
+    indeterminate: bool
+    """Whether this outcome is NOT decisive loss.
+
+    Spec v1.107 §30 is explicit for ``empty-journal``: it is permanent *for the
+    single-process deployment, where it is decisive*, but **INDETERMINATE across
+    processes** — a concurrent ``capture()`` may complete immediately after this
+    read, and cross-process append serialization is unresolved (``B-97``) — and
+    *"an implementation MUST NOT present it as decisive loss where a second writer
+    is reachable."* Reporting a bare ``retryable=False`` did exactly that, so the
+    indeterminacy is carried as its own fact rather than collapsed into the retry
+    flag. *(Out-of-family review [P2], round 3.)*
+    """
+
+    record_count: int
+    """How many well-formed lines the workflow's journal holds. Monotonically
+    non-decreasing for the journal's lifetime per §14.14.8 (append-only, NEVER
+    truncated), so two successively observable records always differ here."""
+
+    latest_record_digest: str | None
+    """sha256 of the latest RAW journal line, or ``None`` when there is none."""
+
 
 #: Subdirectory under the resolved ``STATE_LEDGER`` directory that holds the
 #: per-workflow pause journals (design §7b D2-bis co-location).
@@ -122,21 +237,87 @@ class JournalWorkflowPauseStore:
         ``None`` when the workflow has no journal file OR its latest record is
         unparseable (fail closed). Only the last record is consulted: a torn
         latest append must NOT silently resume an older snapshot.
+
+        Behaviour is PRESERVED VERBATIM at the ``B-69`` impl leg — this is now a
+        projection of :meth:`read_latest_attributed`, which distinguishes the five
+        causes the flat ``None`` collapses.
+        """
+        return self.read_latest_attributed(workflow_id).snapshot
+
+    def read_latest_attributed(self, workflow_id: str) -> PauseJournalReadResult:
+        """Read the latest record, attributing any failure to one of FIVE causes.
+
+        Runtime spec v1.107 §30 + §14.14.9.4. The fail-closed disposition is
+        UNCHANGED — the read stays **latest-record-only** and NEVER walks backwards
+        to an older well-formed record (§14.14.8: everything is kept so a
+        change-detector can be derived over the journal's growth; nothing older is
+        ever resumed from).
         """
         path = self._journal_file(workflow_id)
-        if not path.exists():
-            return None
         try:
             text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            # A read-level failure (incl. an invalid-UTF-8 byte that would
-            # otherwise be silently replaced) fails closed rather than crashing
-            # or resuming altered state.
-            return None
+        except FileNotFoundError:
+            return PauseJournalReadResult(
+                snapshot=None,
+                cause=PauseJournalReadCause.ABSENT,
+                retryable=False,
+                indeterminate=False,
+                record_count=0,
+                latest_record_digest=None,
+            )
+        except IsADirectoryError:
+            # Not "no record" — the path is occupied by something unusable.
+            return PauseJournalReadResult(
+                snapshot=None,
+                cause=PauseJournalReadCause.READ_ERROR,
+                retryable=False,
+                indeterminate=False,
+                record_count=0,
+                latest_record_digest=None,
+            )
+        except UnicodeDecodeError:
+            # An undecodable byte is persistent on-disk corruption, NOT an I/O
+            # blip: routing it transient would send the operator loop into an
+            # unbounded retry with no diagnostic (spec v1.107 §30's stated
+            # divergence from the council record's literal mapping).
+            return PauseJournalReadResult(
+                snapshot=None,
+                cause=PauseJournalReadCause.CORRUPT_LATEST,
+                retryable=False,
+                indeterminate=False,
+                record_count=0,
+                latest_record_digest=None,
+            )
+        except OSError as exc:
+            return PauseJournalReadResult(
+                snapshot=None,
+                cause=PauseJournalReadCause.READ_ERROR,
+                retryable=_read_error_is_retryable(exc),
+                indeterminate=False,
+                record_count=0,
+                latest_record_digest=None,
+            )
         lines = [line for line in text.splitlines() if line.strip()]
         if not lines:
-            return None
-        return self._parse_snapshot(lines[-1], workflow_id)
+            return PauseJournalReadResult(
+                snapshot=None,
+                cause=PauseJournalReadCause.EMPTY_JOURNAL,
+                retryable=False,
+                indeterminate=True,
+                record_count=0,
+                latest_record_digest=None,
+            )
+        latest = lines[-1]
+        digest = hashlib.sha256(latest.encode("utf-8")).hexdigest()
+        snapshot, cause = self._parse_snapshot_attributed(latest, workflow_id)
+        return PauseJournalReadResult(
+            snapshot=snapshot,
+            cause=cause,
+            retryable=False,
+            indeterminate=False,
+            record_count=len(lines),
+            latest_record_digest=digest,
+        )
 
     # -- durable journal I/O ------------------------------------------------
 
@@ -235,15 +416,38 @@ class JournalWorkflowPauseStore:
         defensive integrity check (per-workflow files make this near-impossible,
         but a mismatched record is treated as corruption — fail closed).
         """
+        return JournalWorkflowPauseStore._parse_snapshot_attributed(line, expected_workflow_id)[0]
+
+    @staticmethod
+    def _parse_snapshot_attributed(
+        line: str, expected_workflow_id: str
+    ) -> tuple[PauseSnapshot | None, PauseJournalReadCause | None]:
+        """Parse one journal line, splitting the flat ``None`` into its two causes.
+
+        A record belonging to a DIFFERENT workflow is ``workflow-mismatch``, not
+        ``corrupt-latest``: the two share the permanent routing but carry different
+        operator repairs (the handle names a different workflow vs. the record we
+        would resume from is unusable).
+        """
         try:
             loaded = json.loads(line)
             if not isinstance(loaded, dict):
-                return None
+                return None, PauseJournalReadCause.CORRUPT_LATEST
             record = cast("dict[str, object]", loaded)
             if record.get("workflow_id") != expected_workflow_id:
-                return None
-            return PauseSnapshot.model_validate(record["pause_snapshot"])
+                return None, PauseJournalReadCause.WORKFLOW_MISMATCH
+            snapshot = PauseSnapshot.model_validate(record["pause_snapshot"])
+            if snapshot.workflow_id != expected_workflow_id:
+                # The JSONL WRAPPER matched but the EMBEDDED snapshot names a
+                # different workflow. Attributing this here — rather than letting a
+                # successful read flow on to `resume()`'s own
+                # `ResumeWorkflowMismatchError` — is what keeps §30's promise that
+                # BOTH surfaces report the SAME five stable identifiers: otherwise
+                # the accessor would say `workflow-mismatch` while `resume()` raised
+                # a differently-named class for the identical state.
+                return None, PauseJournalReadCause.WORKFLOW_MISMATCH
+            return snapshot, None
         except (ValueError, ValidationError, KeyError, TypeError):
             # ValueError covers json.JSONDecodeError; any value-level failure
             # means a corrupt record → fail closed.
-            return None
+            return None, PauseJournalReadCause.CORRUPT_LATEST

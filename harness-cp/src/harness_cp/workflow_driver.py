@@ -106,6 +106,11 @@ from harness_cp.pause_resume_protocol_types import (
     ResumeContext,
     WorkflowPauseReason,
 )
+from harness_cp.pause_state_projection import (
+    PreDispatchUniformFallbackOnlyLocation,
+    pre_dispatch_gate_owning_branch_identity,
+    walk_pause_tree,
+)
 from harness_cp.per_role_catalog import derive_agent_role
 from harness_cp.per_step_override_evaluator import (
     StepEffectiveBinding,
@@ -2676,22 +2681,14 @@ def _record_reconciler_fanout_resume_finalized(
         record(run_idempotency_key)
 
 
-def _pre_dispatch_gate_owning_branch_identity(snapshot_run_id: str, branch_index: int) -> str:
-    """Tree-wide-unique internal identity for a pre-dispatch gate-owning branch.
-
-    B-72 impl leg (CP spec v1.108 §1.1(d)) — a pre-dispatch gate-owning branch has
-    no child `run_id` to identify it (property 6 §1.1(b) forbids ever keying it into
-    `hitl_responses`), so the resolver needs an impl-discretion internal identity for
-    property 4's counting + SOLE-member comparison. Composing the CONTAINING
-    `PauseSnapshot`'s own `run_id` (already tree-wide-unique by construction — every
-    recursion level's snapshot carries the run_id of the distinct sub-workflow run
-    that captured it) with the local branch ordinal is sufficient: two pre-dispatch
-    gate-owning branches at different tree positions are, by definition, captured
-    under snapshots with distinct `run_id`s, so their composed identities can never
-    collide even when the LOCAL ordinal happens to match (the nested-fan-out
-    collision codex's [P1] review named). Never placed in, or compatible with,
-    `hitl_responses` (which stays exclusively `child_run_id`-keyed per property 1)."""
-    return f"{snapshot_run_id}:pre-dispatch-gate:{branch_index}"
+#: Tree-wide-unique internal identity for a pre-dispatch gate-owning branch.
+#:
+#: **Relocated (not redefined) at the `B-69` impl leg** into
+#: `harness_cp.pause_state_projection`, so the ONE shared resume-tree traversal can
+#: compose it without importing this module. The composition is byte-identical; see
+#: that function's docstring for the B-72 §1.1(d) grounding. Re-bound here under the
+#: original private name so this module's three call sites are unchanged.
+_pre_dispatch_gate_owning_branch_identity = pre_dispatch_gate_owning_branch_identity
 
 
 def _pre_dispatch_gate_owning_captured_child_workflow_id(step: WorkflowStep) -> str | None:
@@ -2810,19 +2807,18 @@ def _collect_gate_owning_run_ids(snapshot: PauseSnapshot) -> list[str]:
     the `paused_child_branches` recursion below). Each such ordinal contributes
     its own tree-wide-unique internal identity (never a `run_id`) to the
     returned set, alongside the recursively-collected genuine child run_ids.
+
+    B-69 impl leg (CP spec v1.112 §2.3 / plan AC #A8) — this is now a FILTER over
+    `walk_pause_tree`, the ONE shared resume-tree traversal the public projection
+    surface is also a view of, rather than its own recursion. The classification
+    and the emission order are unchanged; what changed is that a second
+    classification authority can no longer exist to drift from this one.
     """
-    resume_state = snapshot.fan_out_resume or snapshot.peer_fan_out_resume
-    if resume_state is None:
-        if snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING:
-            return [snapshot.run_id]
-        return []
-    run_ids: list[str] = [
-        _pre_dispatch_gate_owning_branch_identity(snapshot.run_id, _row.branch_index)
-        for _row in resume_state.pre_dispatch_gate_owning_branches
+    return [
+        _entry.gate_owning_identity
+        for _entry in walk_pause_tree(snapshot)
+        if _entry.gate_owning_identity is not None
     ]
-    for paused_child in resume_state.paused_child_branches:
-        run_ids.extend(_collect_gate_owning_run_ids(paused_child.child_snapshot))
-    return run_ids
 
 
 def _collect_pre_dispatch_gate_owning_identities(snapshot: PauseSnapshot) -> frozenset[str]:
@@ -2839,18 +2835,17 @@ def _collect_pre_dispatch_gate_owning_identities(snapshot: PauseSnapshot) -> fro
     misattribute a response across two DISTINCT pre-dispatch branches (exactly the
     cross-branch misattribution property 4 exists to prevent). This set lets the
     caller force every pre-dispatch identity to count as unconditionally unaddressed,
-    mirroring how the root `run_id` already gets an identical exclusion. Mirrors
-    `_collect_gate_owning_run_ids`'s own recursion shape."""
-    resume_state = snapshot.fan_out_resume or snapshot.peer_fan_out_resume
-    if resume_state is None:
-        return frozenset()
-    identities: set[str] = {
-        _pre_dispatch_gate_owning_branch_identity(snapshot.run_id, _row.branch_index)
-        for _row in resume_state.pre_dispatch_gate_owning_branches
-    }
-    for paused_child in resume_state.paused_child_branches:
-        identities |= _collect_pre_dispatch_gate_owning_identities(paused_child.child_snapshot)
-    return frozenset(identities)
+    mirroring how the root `run_id` already gets an identical exclusion.
+
+    B-69 impl leg — a FILTER over the SAME `walk_pause_tree` traversal
+    `_collect_gate_owning_run_ids` and the public projection surface consume, so
+    the never-keyable subset cannot drift from the set it is a subset of."""
+    return frozenset(
+        _entry.gate_owning_identity
+        for _entry in walk_pause_tree(snapshot)
+        if _entry.gate_owning_identity is not None
+        and isinstance(_entry.projection, PreDispatchUniformFallbackOnlyLocation)
+    )
 
 
 def compute_hitl_uniform_fallback_eligible_run_id(
@@ -2921,19 +2916,20 @@ def _collect_effect_fence_idempotency_keys(snapshot: PauseSnapshot) -> list[str]
     branches` (a transitively-paused SUB_AGENT_DISPATCH branch's nested child may
     itself carry any of the three carriers at its own recursion depth). `handoff_
     resume` / `evaluator_optimizer_resume` carry no effect-fence carrier (single-owner
-    sequential topologies with no fan-out barrier to pause at) and are not walked."""
-    keys: list[str] = []
-    if snapshot.effect_fence_resume is not None:
-        keys.append(snapshot.effect_fence_resume.idempotency_key)
-    if snapshot.orchestrator_effect_fence_resume is not None:
-        keys.append(snapshot.orchestrator_effect_fence_resume.idempotency_key)
-    resume_state = snapshot.fan_out_resume or snapshot.peer_fan_out_resume
-    if resume_state is not None:
-        for ef in resume_state.effect_fence_paused_branches:
-            keys.append(ef.idempotency_key)
-        for paused_child in resume_state.paused_child_branches:
-            keys.extend(_collect_effect_fence_idempotency_keys(paused_child.child_snapshot))
-    return keys
+    sequential topologies with no fan-out barrier to pause at) and are not walked.
+
+    B-69 impl leg (CP spec v1.112 §2.3 / plan AC #A8) — a FILTER over the ONE
+    shared `walk_pause_tree` traversal rather than a second recursion. The
+    empty-key crash-reconstruction entry is still enumerated here (its `""` key is
+    what `compute_effect_fence_tree_wide_abort_present` filters out downstream),
+    even though the PUBLIC projection of that same location carries no key field
+    at all — the walk entry keeps the resolver's view and the caller-facing view
+    distinct without duplicating the walk."""
+    return [
+        _entry.effect_fence_key
+        for _entry in walk_pause_tree(snapshot)
+        if _entry.effect_fence_key is not None
+    ]
 
 
 def compute_effect_fence_uniform_fallback_eligible_key(
