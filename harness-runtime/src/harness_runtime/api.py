@@ -794,7 +794,7 @@ def _read_durable_pause_snapshot(
     return store.read_latest_attributed(resume_handle)
 
 
-def _enforce_pause_state_staleness_precondition(
+async def _enforce_pause_state_staleness_precondition(
     config: RuntimeConfig,
     workflow: WorkflowObject,
     resume_context: ResumeContext | None,
@@ -828,7 +828,15 @@ def _enforce_pause_state_staleness_precondition(
 
     claimed = resume_context.staleness_token
     pause_state = resume_context.pause_state
-    current_read = _read_durable_pause_snapshot(config, workflow, workflow.workflow_id)
+    # Blocking filesystem work, pushed off the event loop. This is safe to `await`
+    # HERE and nowhere earlier: the caller runs it INSIDE `_run_lock`, so the
+    # documented await-free window between the `_run_lock.locked()` guard and the
+    # lock acquisition — the window that makes that guard sound — is untouched, and
+    # the journal cannot be written concurrently while the comparison runs.
+    # *(Out-of-family review [P2], round 2.)*
+    current_read = await asyncio.to_thread(
+        _read_durable_pause_snapshot, config, workflow, workflow.workflow_id
+    )
     current = mint_staleness_token(current_read)
     # THREE conditions, all required. The token match alone is NOT sufficient on
     # the `pause_snapshot=` mode: that mode resumes a CALLER-SUPPLIED snapshot,
@@ -842,12 +850,20 @@ def _enforce_pause_state_staleness_precondition(
     # *(Out-of-family review [P1] at the impl leg.)*
     fresh = current is not None and current == claimed
     same_workflow = pause_state.workflow_id == workflow.workflow_id
+    # The snapshot being resumed must BE the record the read described. Compared by
+    # VALUE against the journal's current latest (frozen carriers compare
+    # structurally), NOT by `created_at`: epoch-ms timestamps COLLIDE for two
+    # captures within the same millisecond, and a colliding comparison admits
+    # exactly the stale `pause_snapshot=` resume this clause exists to refuse
+    # *(out-of-family review [P1], round 2 — round 1's fix was right in shape and
+    # wrong in its identity)*. The token match already pins "the journal has not
+    # moved since the read", so the current latest IS the read's own record.
     describes_this_snapshot = (
-        resolved_snapshot is None or pause_state.created_at == resolved_snapshot.created_at
+        resolved_snapshot is None or resolved_snapshot == current_read.snapshot
     )
     if fresh and same_workflow and describes_this_snapshot:
         return
-    _emit_staleness_refusal(config, workflow, claimed_token=claimed)
+    await asyncio.to_thread(_emit_staleness_refusal, config, workflow, claimed_token=claimed)
     raise ResumePauseStateStaleError(
         f"the workflow's paused state changed since your read "
         f"(workflow_id={workflow.workflow_id!r}); re-read the durable pause state "
@@ -1290,16 +1306,23 @@ async def resume(
             f"valid step of the resumed workflow (0 <= i < {_step_count}); the "
             f"workflow may have changed since the pause (C-RT-35)."
         )
-    # Detect-then-refuse: a resume_context composed against a §14.14.9 accessor
-    # read is refused when the durably-journaled pause state changed since that
-    # read (spec v1.107 §30, NEW — refusal-only, no value proceeds). Pre-bootstrap,
-    # alongside the rest of the battery, and inert for the legacy no-read variant.
-    _enforce_pause_state_staleness_precondition(resolved_config, workflow, resume_context, snapshot)
-
     from harness_runtime.bootstrap import run_bootstrap
     from harness_runtime.shutdown import shutdown as _shutdown
 
     async with _run_lock:
+        # Detect-then-refuse: a resume_context composed against a §14.14.9 accessor
+        # read is refused when the durably-journaled pause state changed since that
+        # read (spec v1.107 §30, NEW — refusal-only, no value proceeds). Still
+        # PRE-BOOTSTRAP, alongside the rest of the `RT-FAIL-RESUME-*` battery, and
+        # inert for the legacy no-read variant. Placed INSIDE the lock rather than
+        # beside the other guards for two reasons, both load-bearing: it performs
+        # filesystem I/O, which must not run in the await-free window the
+        # `_run_lock.locked()` guard depends on; and holding the lock means the
+        # journal cannot be written between the read it compares against and the
+        # decision it makes.
+        await _enforce_pause_state_staleness_precondition(
+            resolved_config, workflow, resume_context, snapshot
+        )
         # B-INTERSTEP-PERRUN-ISOLATION — isolate this resume's cost accumulator in
         # `COST_ACCUM_VAR` for the whole run (mirrors `run()`); the post-run cost
         # read resolves the SAME accumulator the wrappers appended to, and the

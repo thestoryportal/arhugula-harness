@@ -93,15 +93,26 @@ class PreBootstrapPauseStateSink:
         line and the new record lands clean.
         """
         line = json.dumps(payload.model_dump(mode="json"), sort_keys=True)
+        dir_is_new = not self._sink_dir.exists()
         self._sink_dir.mkdir(parents=True, exist_ok=True)
         path = self.path
-        needs_leading_newline = path.exists() and self._last_byte_is_not_newline(path)
+        is_new_file = not path.exists()
+        needs_leading_newline = (not is_new_file) and self._last_byte_is_not_newline(path)
         with path.open("a", encoding="utf-8") as handle:
             if needs_leading_newline:
                 handle.write("\n")
             handle.write(line + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+        # `fsync` on the FILE does not durably persist a newly-created DIRENT on
+        # POSIX, so a host crash right after the very first `emit()` could lose the
+        # only pre-bootstrap read/refusal event despite this sink's durability
+        # claim. Mirrors the pause journal's own two-level handling exactly.
+        # *(Out-of-family review [P2], round 2.)*
+        if is_new_file:
+            self._fsync_dir(self._sink_dir)
+        if dir_is_new:
+            self._fsync_dir(self._sink_dir.parent)
 
     @staticmethod
     def _last_byte_is_not_newline(path: Path) -> bool:
@@ -119,6 +130,24 @@ class PreBootstrapPauseStateSink:
                 return handle.read(1) != b"\n"
         except OSError:
             return True
+
+    @staticmethod
+    def _fsync_dir(directory: Path) -> None:
+        """fsync a directory so a freshly-created entry's dirent is durable.
+
+        Best-effort: directory fsync is unsupported on some platforms/filesystems,
+        where it is a no-op rather than a failure.
+        """
+        try:
+            dir_fd = os.open(directory, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(dir_fd)
 
     def read_all(self) -> tuple[PauseStateAuditPayload, ...]:
         """Every payload retrievable from the sink, oldest first.

@@ -24,6 +24,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import harness_cp.pause_resume_protocol as _prp_module
 import pytest
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.identity import EntryID, StepID
@@ -95,6 +96,7 @@ from pydantic import ValidationError
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
 _WORKFLOW_ID = "wf-b69-accessor"
+_ORIGINAL_NOW_EPOCH_MS = _prp_module._now_epoch_ms
 _ANCHOR = "0" * 64
 
 _CHAIN = FallbackChain(
@@ -512,8 +514,14 @@ async def test_ac4_fresh_token_is_admitted_by_the_fence(tmp_path: Path) -> None:
     await _capture(tmp_path, run_id="run-1")
     read = await read_paused_workflow_state(workflow, resume_handle=_WORKFLOW_ID, config=config)
     composed = AccessorDerivedResumeContext.from_pause_state(read, hitl_response=_hitl())
+    latest = _store(tmp_path).read_latest(_WORKFLOW_ID)
     # No second capture — the precondition must NOT raise.
-    api_module._enforce_pause_state_staleness_precondition(config, workflow, composed)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+    await api_module._enforce_pause_state_staleness_precondition(  # pyright: ignore[reportPrivateUsage]
+        config,
+        workflow,  # pyright: ignore[reportArgumentType]
+        composed,
+        latest,
+    )
 
 
 @pytest.mark.asyncio
@@ -536,8 +544,17 @@ async def test_ac4_pause_snapshot_mode_is_bound_to_the_snapshot_the_read_describ
     """
     config = _config(tmp_path)
     workflow = _Workflow()
-    snapshot_a = await _capture(tmp_path, run_id="run-A", step_index=0)
-    await _capture(tmp_path, run_id="run-B", step_index=1)
+    # Pin the capture clock so BOTH records share a `created_at` — the
+    # millisecond collision a timestamp-based binding would admit (out-of-family
+    # review [P1], round 2). The binding must refuse regardless.
+    _frozen_ms = _ORIGINAL_NOW_EPOCH_MS()
+    _prp_module._now_epoch_ms = lambda: _frozen_ms  # pyright: ignore[reportPrivateUsage]
+    try:
+        snapshot_a = await _capture(tmp_path, run_id="run-A", step_index=0)
+        snapshot_b = await _capture(tmp_path, run_id="run-B", step_index=1)
+        assert snapshot_a.created_at == snapshot_b.created_at
+    finally:
+        _prp_module._now_epoch_ms = _ORIGINAL_NOW_EPOCH_MS  # pyright: ignore[reportPrivateUsage]
     # A read of the LATEST record (B) — its token matches the current journal.
     read_b = await read_paused_workflow_state(workflow, resume_handle=_WORKFLOW_ID, config=config)
     composed_from_b = AccessorDerivedResumeContext.from_pause_state(read_b, hitl_response=_hitl())
@@ -622,12 +639,12 @@ async def test_ac14_no_read_path_is_byte_compatible(tmp_path: Path) -> None:
     workflow = _Workflow()
     await _capture(tmp_path, run_id="run-1")
     await _capture(tmp_path, run_id="run-2")
-    api_module._enforce_pause_state_staleness_precondition(  # pyright: ignore[reportPrivateUsage]
+    await api_module._enforce_pause_state_staleness_precondition(  # pyright: ignore[reportPrivateUsage]
         config,
         workflow,  # pyright: ignore[reportArgumentType]
         ResumeContext(hitl_response=_hitl()),
     )
-    api_module._enforce_pause_state_staleness_precondition(  # pyright: ignore[reportPrivateUsage]
+    await api_module._enforce_pause_state_staleness_precondition(  # pyright: ignore[reportPrivateUsage]
         config,
         workflow,  # pyright: ignore[reportArgumentType]
         None,
