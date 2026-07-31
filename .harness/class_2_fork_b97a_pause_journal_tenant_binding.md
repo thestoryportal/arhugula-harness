@@ -591,7 +591,14 @@ convening, and it produced a **split result that this filing reports rather than
   declaration burden of (3b), not just the former.
 - **But the recommended reading carries a different local-deployment cost the row did not
   anticipate:** under A/A+B the journal **path changes for every deployment including the
-  single-tenant local default** (whose scope normalizes to the `_single` sentinel), so an upgrade
+  single-tenant local default** (~~whose scope normalizes to the `_single` sentinel~~ — **CORRECTED at
+  the council convening, probe P6, and applied at the spec leg per `K-16(a)`: this parenthetical is
+  FALSE at HEAD.** No tenant normalization is bound for this store at all, and the sibling Runtime
+  store's own authority maps `None → None`, refusing `""`/`"_single"` rather than adopting either.
+  **The CONCLUSION stands and the correction does not reopen the reading** — the untenanted default's
+  path changes under *any* total encoding, since `sha256(workflow_id)` cannot equal
+  `sha256(encode(None, workflow_id))`; only the mechanism description was wrong. Recorded in-body
+  rather than silently rewritten, per this filing's own §10 discipline; see §11.3), so an upgrade
   **orphans existing journals and abandons in-flight pauses** (§5.3). That is squarely C11's
   surface — it is an upgrade/operator-loop burden rather than a configuration one, and it is
   **exactly the kind of cost a local-first voice exists to price against C3's keying-correctness
@@ -1025,3 +1032,75 @@ diagnostic recommendation was withdrawn at round 3. Each move followed a **verif
 correction**, not reviewer preference — the `[[reviewer-oscillation-register-and-hold]]` cap is not
 engaged, and the `[[over-correction-away-from-mostly-right-baseline]]` discipline runs the other way
 here, because the draft-1 baseline was wrong on load-bearing properties rather than mostly-right.
+
+---
+
+## §11 RATIFICATION
+
+**Status: RATIFIED 2026-07-31. Leg 2 COMPLETE (all three steps). Leg 3 — the spec leg — applied 2026-07-31.**
+
+The `B-92` precedent is followed: the outcome is recorded here verbatim rather than only at the
+register row, so the decision travels with the filing a later session actually reads.
+
+### §11.1 Gate 1 — the reading (operator `AskUserQuestion` #1, 2026-07-31)
+
+> **Operator selected: READING A — path segregation.**
+>
+> Ratified together with the four sub-decisions §8's `(A)` row carries: the **injective constant
+> encoding**; the **five-cause vocabulary stays at five**; the **mandatory quiesced cutover**; and the
+> `(workflow_id, run_id)` rider **NOT bundled**.
+
+Per §8, gate 1 also provisionally ratified the two rows the C3 ⊥ C11 dyadic was convened to price —
+the **(3a)/(3b) default** and the **§5.3.1 diagnostic** — and those two were re-confirmed at gate 2
+below. The reading itself, the encoding requirement, the refusal shape and the no-rider call were
+settled at gate 1 outright and were **not** on the table at gate 2.
+
+### §11.2 The C3 ⊥ C11 dyadic (2026-07-31)
+
+Convened per §7's sequencing as a **narrow RE-CONFIRM** of the already-ratified reading — the reading
+was **not** on the table and neither voice was permitted to relitigate it. Record at
+`.harness/council-b97a-tenant-path-segregation-2026-07-31.md` (PR #1169, merged `d9170b77`).
+
+**Verdict: CONFIRM-WITH-CONDITIONS**, unanimous, independently reached, decorrelated grounds.
+**17 conditions `K-1`…`K-17` — 15 LOAD-BEARING, 2 RECOMMENDED.** No finding met this filing's own
+reopening criteria (`:1017`-`:1018`): no defect in Reading A, none in the injective-encoding contract
+term, none in the two-gate sequencing, and no cite failing to resolve at HEAD.
+
+### §11.3 Gate 2 — the two priced rows (operator `AskUserQuestion` #2, 2026-07-31)
+
+> **Row 1 — (3a)-abandon vs (3b)-adopt as the DEFAULT: operator CONFIRMED (3a) abandon-by-default**,
+> as the council recommended. (3b) remains available as an explicit, bounded exception under the
+> council's `K-2`–`K-6` mechanical terms.
+>
+> **Row 2 — §5.3.1 (i) alone vs (i)+(iii): operator CONFIRMED (i)+(iii), with (iii) a PRECONDITION of
+> (3a)**, as the council recommended — not an optional companion.
+
+**One in-body correction carried by the ratification** (`K-16(a)`): §7's parenthetical
+*"whose scope normalizes to the `_single` sentinel"* is **FALSE at HEAD** and is struck in place
+above. The **conclusion stands** — the untenanted default's path changes under any total encoding —
+and the spec leg states, as a contract term, that this store's untenanted scope **MUST NOT** be said
+to normalize to `_single`.
+
+### §11.4 What leg 3 landed against this filing
+
+| Filing obligation (§9 leg 3) | Disposition at the spec leg |
+|---|---|
+| Item 0 — the injective-encoding contract term | **APPLIED**, and **widened from one hazard to three** per `K-15` (branch / delimiter / field-boundary), with the in-house length-prefixed realization named. Delimiter rejection **not** adopted (unratified input-contract narrowing) |
+| Item 1 — §14.14.8 keying amendment + legacy disposition stated explicitly | **APPLIED** — `:5826` amended to the tenant-composite key; (3a) stated with its failure-mode-asymmetry ground as spec text (`K-8`) |
+| Item 2 — §30 new cause row | **NOT OWED, and stated as a DECISION rather than an omission** — Reading A mints no cause member; the five-member vocabulary stays closed |
+| Item 3 — §14.14.9.1 (`:3384`) amended under A | **APPLIED**, per that paragraph's own both-surfaces-or-neither rule |
+| Item 4 — the four stale-as-described fold-ins | **APPLIED** (`:3313`, `:3319`, line-27's `:4636`/`:4639`, `:5824`) |
+| Item 4-bis — the `absent` row tenant-scoped in meaning AND repair | **APPLIED** (`K-9`), extended to **THREE** states (never-journaled / wrong-tenant / abandoned-legacy) |
+| Item 5 — `B-102`'s cause-table amendment folded in | **APPLIED** for its **spec** half (the reachability qualification on `absent` + `corrupt-latest`); its **impl** half (the read-side attribution flip) rides the impl leg, and the row is **narrowed, not closed** |
+| Item 5-bis — the mixed-version cutover term | **APPLIED as MANDATORY**, together with `K-1`'s negative fact (no directory-scoped liveness predicate exists) — never as a discharged precondition |
+| Item 5-ter — close `B-102`'s row in the same leg | **PARTIALLY DISCHARGED, honestly**: the row is narrowed to its impl remainder with this leg's PR recorded, rather than closed while half its close-out is unshipped |
+| Item 6 — Runtime plan delta | **APPLIED** — `Implementation_Plan_Harness_Runtime_v2_56.md`, NEW U-RT-149. **CP plan UNCHANGED**: §14.14.9.1's amendment pulls no CP unit (record shape unchanged; `PauseSnapshot` untouched) |
+| Item 7 — CXA determination | **DETERMINED: no new §2.3 row, no CXA document delta, aggregate frozen at 111** — this arc has **no cross-package consumption at all**, a stronger ground than B-69's |
+| Item 8 — clearance markers + adversarial review | **APPLIED** — markers for Runtime spec v1.108 and Runtime plan v2.56; pre-merge out-of-family review recorded on the PR |
+| Explicitly-not-folded-in — the blocking-`flock` follow-up | **SPLIT to its own register row at this leg**, per the leg-2 obligation the council's §9 recorded as still outstanding |
+
+Additional obligations the council added beyond this filing's §9, all applied: `K-10`/`K-11`'s
+enumerate-never-probe / `harness-inspect`-landing shape (NEW §13.7); `K-12`'s §13.4 inventory rows;
+`K-13`'s two-halved orphan statement; `K-7`'s named silence; `K-14`'s no-config-surface ruling;
+`K-16(b)`'s FIFTH fold-in (the `harness-shutdown` stale drain self-description — a **code** touch,
+docstring/help/message only); and `K-17`'s no-HITL-gate posture.
