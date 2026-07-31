@@ -798,6 +798,7 @@ def _enforce_pause_state_staleness_precondition(
     config: RuntimeConfig,
     workflow: WorkflowObject,
     resume_context: ResumeContext | None,
+    resolved_snapshot: PauseSnapshot | None = None,
 ) -> None:
     """The §30 refusal-only staleness precondition (NEW at spec v1.107).
 
@@ -826,9 +827,25 @@ def _enforce_pause_state_staleness_precondition(
     from harness_runtime.lifecycle.pause_state_staleness import mint_staleness_token
 
     claimed = resume_context.staleness_token
+    pause_state = resume_context.pause_state
     current_read = _read_durable_pause_snapshot(config, workflow, workflow.workflow_id)
     current = mint_staleness_token(current_read)
-    if current == claimed:
+    # THREE conditions, all required. The token match alone is NOT sufficient on
+    # the `pause_snapshot=` mode: that mode resumes a CALLER-SUPPLIED snapshot,
+    # which need not be the journal's latest, so a context composed against a
+    # LATER read would match the current token while the resume proceeds against
+    # an EARLIER snapshot — delivering the later read's responses to the earlier
+    # snapshot's gates, the exact misattribution this precondition exists to
+    # refuse. `created_at` is the discriminator §14.14.9.2 declares for precisely
+    # this ("a genuine cross-pause discriminator, since `run_id` is REUSED across
+    # resume"), so the read's own record is bound to the snapshot being resumed.
+    # *(Out-of-family review [P1] at the impl leg.)*
+    fresh = current is not None and current == claimed
+    same_workflow = pause_state.workflow_id == workflow.workflow_id
+    describes_this_snapshot = (
+        resolved_snapshot is None or pause_state.created_at == resolved_snapshot.created_at
+    )
+    if fresh and same_workflow and describes_this_snapshot:
         return
     _emit_staleness_refusal(config, workflow, claimed_token=claimed)
     raise ResumePauseStateStaleError(
@@ -968,7 +985,14 @@ async def read_paused_workflow_state(
             "owns no snapshot store to read (§14.14.9.1)."
         )
 
-    read = _read_durable_pause_snapshot(resolved_config, workflow, resume_handle)
+    # The journal read and the sink write are BLOCKING filesystem work. This is a
+    # public ASYNC surface, so they are pushed off the event loop rather than
+    # stalling every other task on a slow filesystem or a large journal
+    # *(out-of-family review [P2] at the impl leg)*. `resume()`'s own long-standing
+    # synchronous read is UNCHANGED — narrowing that is out of this arc's scope.
+    read = await asyncio.to_thread(
+        _read_durable_pause_snapshot, resolved_config, workflow, resume_handle
+    )
     snapshot = read.snapshot
     # The WORKFLOW-MATCH guard runs HERE, before any projection is returned
     # (§14.14.9.4) — not deferred to §30.
@@ -981,8 +1005,14 @@ async def read_paused_workflow_state(
         # projection carrying an absent token would be read by a subsequent
         # `resume()` as "no claim" — the precise failure §14.14.9.4 forbids.
         cause = read.cause if read.cause is not None else PauseJournalReadCause.CORRUPT_LATEST
-        _emit_pause_state_read(
-            resolved_config, workflow, succeeded=False, cause=cause, token=None, locations=()
+        await asyncio.to_thread(
+            _emit_pause_state_read,
+            resolved_config,
+            workflow,
+            succeeded=False,
+            cause=cause,
+            token=None,
+            locations=(),
         )
         raise PausedWorkflowStateUnavailableError(
             f"no durable pause state is readable for resume_handle={resume_handle!r}; "
@@ -992,8 +1022,14 @@ async def read_paused_workflow_state(
         )
 
     locations = project_pause_locations(snapshot)
-    _emit_pause_state_read(
-        resolved_config, workflow, succeeded=True, cause=None, token=token, locations=locations
+    await asyncio.to_thread(
+        _emit_pause_state_read,
+        resolved_config,
+        workflow,
+        succeeded=True,
+        cause=None,
+        token=token,
+        locations=locations,
     )
     return PausedWorkflowState(
         workflow_id=snapshot.workflow_id,
@@ -1024,7 +1060,11 @@ def _emit_pause_state_read(
     never-keyable pre-dispatch / depth-0-root internal identity — neither of which
     this payload declares a field for.
     """
-    from harness_od.pause_resume_namespace import PauseStateAuditPayload, PauseStateEventKind
+    from harness_od.pause_resume_namespace import (
+        PauseStateAuditPayload,
+        PauseStateCauseAttribution,
+        PauseStateEventKind,
+    )
 
     from harness_runtime.lifecycle.pre_bootstrap_pause_state_sink import pause_state_sink_for
 
@@ -1052,7 +1092,9 @@ def _emit_pause_state_read(
             workflow_id=workflow.workflow_id,
             succeeded=succeeded,
             staleness_token=token,
-            cause_attribution=cause.value if cause is not None else None,
+            cause_attribution=(
+                PauseStateCauseAttribution(cause.value) if cause is not None else None
+            ),
             **counts,
         )
     )
@@ -1252,7 +1294,7 @@ async def resume(
     # read is refused when the durably-journaled pause state changed since that
     # read (spec v1.107 §30, NEW — refusal-only, no value proceeds). Pre-bootstrap,
     # alongside the rest of the battery, and inert for the legacy no-read variant.
-    _enforce_pause_state_staleness_precondition(resolved_config, workflow, resume_context)
+    _enforce_pause_state_staleness_precondition(resolved_config, workflow, resume_context, snapshot)
 
     from harness_runtime.bootstrap import run_bootstrap
     from harness_runtime.shutdown import shutdown as _shutdown

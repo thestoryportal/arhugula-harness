@@ -479,6 +479,25 @@ break causal-pair reconstruction at exactly the rate it drops either one.
 """
 
 
+class PauseStateCauseAttribution(StrEnum):
+    """The FIVE stable identifiers a failed §14.14.9 read reports (Runtime v1.107 §30).
+
+    Declared here so the audit row's `cause_attribution` carries a CLOSED domain
+    rather than an inherited `str`. `harness-od` must not import `harness-runtime`
+    (the axis direction runs the other way), so the vocabulary is re-declared, not
+    re-derived — and any divergence from the Runtime-side enum fails the
+    cross-surface identity witness the §30 contract term requires.
+
+    Cause class ONLY — never exception text, never a resolved filesystem path.
+    """
+
+    ABSENT = "absent"
+    EMPTY_JOURNAL = "empty-journal"
+    READ_ERROR = "read-error"
+    CORRUPT_LATEST = "corrupt-latest"
+    WORKFLOW_MISMATCH = "workflow-mismatch"
+
+
 class PauseStateEventKind(StrEnum):
     """The TWO NEW event kinds within the EXISTING C-OD-30 namespace family."""
 
@@ -544,9 +563,18 @@ class PauseStateAuditPayload(BaseModel):
     reconstructable as ONE causal pair from telemetry alone. `None` on a failed
     read, where no token exists by construction."""
 
-    cause_attribution: str | None = None
-    """One of the five stable identifiers Runtime v1.107 §30 declares — on an
-    UNSUCCESSFUL read only. Cause class ONLY."""
+    cause_attribution: PauseStateCauseAttribution | None = None
+    """One of the FIVE stable identifiers Runtime v1.107 §30 declares — on an
+    UNSUCCESSFUL read only. Cause class ONLY.
+
+    The domain is DECLARED here rather than inherited as `str`: a free `str` would
+    persist an unrouteable row (`cause_attribution="typo"`) that satisfies the
+    closed-schema posture in form while defeating the routing decision the whole
+    refinement exists to enable. *(Out-of-family review [P2] at the impl leg.)*
+    The vocabulary is re-declared rather than imported because `harness-od` must
+    not depend on `harness-runtime` (the axis direction runs the other way); the
+    five values are byte-identical to the Runtime-side enum, and a divergence
+    would fail the cross-surface identity witness."""
 
     hitl_addressable_count: int | None = None
     effect_fence_addressable_count: int | None = None
@@ -609,6 +637,7 @@ __all__ = [  # noqa: RUF022 — grouped public-symbols-then-helpers with an
     "PAUSE_STATE_EVENT_HEAD_SAMPLING_RATE",
     "PauseResumeAuditPayload",
     "PauseStateAuditPayload",
+    "PauseStateCauseAttribution",
     "PauseStateEventKind",
     "SPAN_SITE_PAUSE_CAPTURED",
     "SPAN_SITE_RESUME_ATTEMPTED",

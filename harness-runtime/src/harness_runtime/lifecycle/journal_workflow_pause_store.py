@@ -241,7 +241,9 @@ class JournalWorkflowPauseStore:
         ever resumed from).
         """
         path = self._journal_file(workflow_id)
-        if not path.exists():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
             return PauseJournalReadResult(
                 snapshot=None,
                 cause=PauseJournalReadCause.ABSENT,
@@ -249,8 +251,15 @@ class JournalWorkflowPauseStore:
                 record_count=0,
                 latest_record_digest=None,
             )
-        try:
-            text = path.read_text(encoding="utf-8")
+        except IsADirectoryError:
+            # Not "no record" — the path is occupied by something unusable.
+            return PauseJournalReadResult(
+                snapshot=None,
+                cause=PauseJournalReadCause.READ_ERROR,
+                retryable=False,
+                record_count=0,
+                latest_record_digest=None,
+            )
         except UnicodeDecodeError:
             # An undecodable byte is persistent on-disk corruption, NOT an I/O
             # blip: routing it transient would send the operator loop into an
@@ -408,7 +417,17 @@ class JournalWorkflowPauseStore:
             record = cast("dict[str, object]", loaded)
             if record.get("workflow_id") != expected_workflow_id:
                 return None, PauseJournalReadCause.WORKFLOW_MISMATCH
-            return PauseSnapshot.model_validate(record["pause_snapshot"]), None
+            snapshot = PauseSnapshot.model_validate(record["pause_snapshot"])
+            if snapshot.workflow_id != expected_workflow_id:
+                # The JSONL WRAPPER matched but the EMBEDDED snapshot names a
+                # different workflow. Attributing this here — rather than letting a
+                # successful read flow on to `resume()`'s own
+                # `ResumeWorkflowMismatchError` — is what keeps §30's promise that
+                # BOTH surfaces report the SAME five stable identifiers: otherwise
+                # the accessor would say `workflow-mismatch` while `resume()` raised
+                # a differently-named class for the identical state.
+                return None, PauseJournalReadCause.WORKFLOW_MISMATCH
+            return snapshot, None
         except (ValueError, ValidationError, KeyError, TypeError):
             # ValueError covers json.JSONDecodeError; any value-level failure
             # means a corrupt record → fail closed.

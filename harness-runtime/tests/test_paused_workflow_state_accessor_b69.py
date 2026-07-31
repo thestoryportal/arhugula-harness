@@ -516,6 +516,43 @@ async def test_ac4_fresh_token_is_admitted_by_the_fence(tmp_path: Path) -> None:
     api_module._enforce_pause_state_staleness_precondition(config, workflow, composed)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
 
 
+@pytest.mark.asyncio
+async def test_ac4_pause_snapshot_mode_is_bound_to_the_snapshot_the_read_described(
+    tmp_path: Path,
+) -> None:
+    """AC #4, the binding half — a token match ALONE is not sufficient.
+
+    `resume()` supports a `pause_snapshot=` mode that resumes a CALLER-SUPPLIED
+    snapshot, which need not be the journal's latest. A context composed against a
+    LATER read therefore matches the CURRENT token while the resume proceeds
+    against an EARLIER snapshot — delivering the later read's responses to the
+    earlier snapshot's gates. That is the same misattribution W2 reproduces,
+    arriving through the other resume mode.
+
+    The precondition binds the read's own record to the snapshot being resumed via
+    `created_at` — the discriminator §14.14.9.2 declares for exactly this, since
+    `run_id` is REUSED across resume. *(Out-of-family review [P1] at the impl leg;
+    an earlier draft of the fence compared the token alone and admitted this.)*
+    """
+    config = _config(tmp_path)
+    workflow = _Workflow()
+    snapshot_a = await _capture(tmp_path, run_id="run-A", step_index=0)
+    await _capture(tmp_path, run_id="run-B", step_index=1)
+    # A read of the LATEST record (B) — its token matches the current journal.
+    read_b = await read_paused_workflow_state(workflow, resume_handle=_WORKFLOW_ID, config=config)
+    composed_from_b = AccessorDerivedResumeContext.from_pause_state(read_b, hitl_response=_hitl())
+
+    # Resuming the EARLIER snapshot A with B's responses must be REFUSED, even
+    # though the token is perfectly fresh against the journal.
+    with pytest.raises(ResumePauseStateStaleError):
+        await resume(
+            workflow,  # pyright: ignore[reportArgumentType]
+            pause_snapshot=snapshot_a,
+            resume_context=composed_from_b,
+            config=config,
+        )
+
+
 # --------------------------------------------------------------------------
 # AC #6 / #14 / #16(b) — the carrier
 # --------------------------------------------------------------------------

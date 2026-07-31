@@ -486,6 +486,20 @@ def _walk(
     snapshot: PauseSnapshot, *, child_position: _ChildPosition | None
 ) -> list[PauseTreeWalkEntry]:
     entries: list[PauseTreeWalkEntry] = []
+    # `snapshot.pause_reason` is the NODE's aggregate label, and a mixed pause can
+    # carry several locations of different kinds beneath one node — a container
+    # whose reason is `EFFECT_FENCE_AMBIGUOUS` may hold a pre-dispatch HITL branch,
+    # and B-32's own capture sites INFORMATIONALLY relabel a container to
+    # `HITL_PENDING`. Since CP v1.112 §2.1 makes `pause_reason` the MAP-ROUTING
+    # discriminator — what tells the operator which map an entry belongs in —
+    # stamping the aggregate onto every location would misroute exactly the way
+    # property 4 exists to prevent. Each location's reason is therefore derived
+    # from ITS OWN SOURCE CARRIER, which determines it by construction: an
+    # effect-fence carrier IS `EFFECT_FENCE_AMBIGUOUS`; a gate-owning HITL carrier
+    # IS `HITL_PENDING`. Only the container node keeps the node's own aggregate,
+    # which is the one place that label is truthful.
+    # *(Out-of-family review [P2] at the impl leg; no classification RULE is added
+    # here — the variant is unchanged, only the label is read off the right thing.)*
     reason = snapshot.pause_reason
     step_index = snapshot.step_index
 
@@ -493,7 +507,7 @@ def _walk(
         entries.append(
             PauseTreeWalkEntry(
                 projection=LinearEffectFenceAddressableLocation(
-                    pause_reason=reason,
+                    pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
                     step_index=step_index,
                     idempotency_key=snapshot.effect_fence_resume.idempotency_key,
                 ),
@@ -506,7 +520,7 @@ def _walk(
         entries.append(
             PauseTreeWalkEntry(
                 projection=OrchestratorEffectFenceAddressableLocation(
-                    pause_reason=reason,
+                    pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
                     step_index=step_index,
                     idempotency_key=_orch.idempotency_key,
                     step_id=_orch.step_id,
@@ -534,7 +548,7 @@ def _walk(
         entries.append(
             PauseTreeWalkEntry(
                 projection=PreDispatchUniformFallbackOnlyLocation(
-                    pause_reason=reason,
+                    pause_reason=WorkflowPauseReason.HITL_PENDING,
                     step_index=step_index,
                     step_id=_row.step_id,
                     step_kind=StepKind(_row.step_kind),
@@ -550,7 +564,7 @@ def _walk(
         entries.append(
             PauseTreeWalkEntry(
                 projection=_effect_fence_branch_projection(
-                    reason=reason,
+                    reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
                     step_index=step_index,
                     step_id=_fence.step_id,
                     step_kind=StepKind(_fence.step_kind),

@@ -81,13 +81,44 @@ class PreBootstrapPauseStateSink:
         return self._sink_dir / PAUSE_STATE_AUDIT_FILENAME
 
     def emit(self, payload: PauseStateAuditPayload) -> None:
-        """Append one payload durably. Never silent: a write failure propagates."""
+        """Append one payload durably. Never silent: a write failure propagates.
+
+        **Torn-append self-healing**, mirroring the pause journal's own hardening:
+        a crash *during* a prior append can leave a partial trailing line with no
+        terminating newline. Without a leading newline the next record would be
+        concatenated onto that fragment, making the combined line unparseable — so
+        :meth:`read_all` would skip it and the REQUIRED read/refusal event would be
+        silently LOST, which is precisely the no-silent-failure rule §30.5.1
+        exists to enforce. The fragment instead becomes its own (skipped)
+        line and the new record lands clean.
+        """
         line = json.dumps(payload.model_dump(mode="json"), sort_keys=True)
         self._sink_dir.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
+        path = self.path
+        needs_leading_newline = path.exists() and self._last_byte_is_not_newline(path)
+        with path.open("a", encoding="utf-8") as handle:
+            if needs_leading_newline:
+                handle.write("\n")
             handle.write(line + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+
+    @staticmethod
+    def _last_byte_is_not_newline(path: Path) -> bool:
+        """`True` iff the file's last byte is not `\\n` (a torn trailing append).
+
+        On any read error, conservatively returns `True` so the next append is
+        newline-separated rather than risking a concatenation onto a fragment.
+        """
+        try:
+            with path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    return False
+                handle.seek(-1, os.SEEK_END)
+                return handle.read(1) != b"\n"
+        except OSError:
+            return True
 
     def read_all(self) -> tuple[PauseStateAuditPayload, ...]:
         """Every payload retrievable from the sink, oldest first.
