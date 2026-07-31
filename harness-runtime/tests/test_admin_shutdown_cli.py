@@ -184,7 +184,28 @@ def test_shutdown_cli_wait_times_out(
     assert code == 3
     out = capsys.readouterr().out
     assert "wait-timeout" in out
-    assert "fork-u-rt-44-workflow-loop-drain" in out
+    # The wait-timeout detail frames the causes as EXAMPLES, not a taxonomy,
+    # because the tool cannot tell them apart from outside. Note the daemon
+    # case in particular: a `harness daemon` shuts down via *uvicorn's* own
+    # captured SIGTERM handler (`Server.serve()` runs inside
+    # `capture_signals()`, which replaces the stage-7 handler while serving),
+    # NOT via `drained_flag` — the `_daemon_main` drained_flag race is real
+    # code but handles a drain raised by some other route. The message
+    # previously pointed at `fork-u-rt-44-workflow-loop-drain`, which
+    # `harness_runtime.drain`'s own docstring records as CLOSED (C-RT-11
+    # full-land 2026-05-20) — refreshed at the B-97(a) spec leg per Runtime
+    # spec v1.108's stale-as-described fold-in.
+    assert "drained_flag" in out
+    assert "daemon" in out
+    assert "fork-u-rt-44" not in out
+    # The probe's own blind spot must be named: os.kill(pid, 0) keeps
+    # succeeding for an unreaped zombie, so exit 3 is NOT proof the target is
+    # still running (documented at test_shutdown_cli_signals_real_subprocess).
+    assert "ZOMBIE" in out
+    # Guard the correction itself: the message must NOT re-assert the flat
+    # "the process does not exit" claim an intermediate draft carried, which
+    # is false for the daemon shape.
+    assert "does not exit on its own" not in out
 
 
 def test_shutdown_cli_wait_observes_exit(
