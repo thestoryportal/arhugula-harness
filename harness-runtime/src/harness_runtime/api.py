@@ -103,7 +103,7 @@ from harness_od.cross_family_rollup import (
     rollup_costs_by_axis,
 )
 from harness_od.idempotency_join_dedup import SpanCostRecord
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
     PauseJournalReadCause,
@@ -213,11 +213,17 @@ class ResumeHandleUnknownError(Exception):
     """
 
     def __init__(
-        self, message: str, *, cause: PauseJournalReadCause, retryable: bool = False
+        self,
+        message: str,
+        *,
+        cause: PauseJournalReadCause,
+        retryable: bool = False,
+        indeterminate: bool = False,
     ) -> None:
         super().__init__(message)
         self.cause: PauseJournalReadCause = cause
         self.retryable: bool = retryable
+        self.indeterminate: bool = indeterminate
 
 
 class PausedWorkflowStateUnavailableError(Exception):
@@ -238,11 +244,20 @@ class PausedWorkflowStateUnavailableError(Exception):
     """
 
     def __init__(
-        self, message: str, *, cause: PauseJournalReadCause, retryable: bool = False
+        self,
+        message: str,
+        *,
+        cause: PauseJournalReadCause,
+        retryable: bool = False,
+        indeterminate: bool = False,
     ) -> None:
         super().__init__(message)
         self.cause: PauseJournalReadCause = cause
         self.retryable: bool = retryable
+        self.indeterminate: bool = indeterminate
+        """`True` when this outcome is NOT decisive loss — see
+        `PauseJournalReadResult.indeterminate`. Spec v1.107 §30 forbids presenting
+        `empty-journal` as decisive where a second writer is reachable."""
 
 
 class ResumePauseStateStaleError(Exception):
@@ -844,10 +859,10 @@ async def _enforce_pause_state_staleness_precondition(
     # LATER read would match the current token while the resume proceeds against
     # an EARLIER snapshot — delivering the later read's responses to the earlier
     # snapshot's gates, the exact misattribution this precondition exists to
-    # refuse. `created_at` is the discriminator §14.14.9.2 declares for precisely
-    # this ("a genuine cross-pause discriminator, since `run_id` is REUSED across
-    # resume"), so the read's own record is bound to the snapshot being resumed.
-    # *(Out-of-family review [P1] at the impl leg.)*
+    # refuse. The third condition therefore binds the read's own record to the
+    # snapshot being resumed by comparing the two snapshots BY VALUE — see the
+    # note on `describes_this_snapshot` below for why an identity derived from
+    # `created_at` is not sufficient. *(Out-of-family review [P1], rounds 1+2.)*
     fresh = current is not None and current == claimed
     same_workflow = pause_state.workflow_id == workflow.workflow_id
     # The snapshot being resumed must BE the record the read described. Compared by
@@ -1035,9 +1050,34 @@ async def read_paused_workflow_state(
             f"cause={cause.value} (§14.14.9.4).",
             cause=cause,
             retryable=read.retryable,
+            indeterminate=read.indeterminate,
         )
 
-    locations = project_pause_locations(snapshot)
+    try:
+        locations = project_pause_locations(snapshot)
+    except (ValueError, ValidationError) as exc:
+        # A journal written by a NEWER deployment can carry a `step_kind` (or any
+        # other closed-vocabulary value) this runtime does not know: the snapshot
+        # itself still validates, because those source fields are plain `str`, but
+        # projecting it raises. Letting that escape would bypass BOTH the promised
+        # typed failure channel and §30.5.1's REQUIRED failed-read emission. The
+        # record we would resume from is unusable, which is exactly what
+        # `corrupt-latest` means. *(Out-of-family review [P2], round 3.)*
+        await asyncio.to_thread(
+            _emit_pause_state_read,
+            resolved_config,
+            workflow,
+            succeeded=False,
+            cause=PauseJournalReadCause.CORRUPT_LATEST,
+            token=None,
+            locations=(),
+        )
+        raise PausedWorkflowStateUnavailableError(
+            f"the durable pause record for resume_handle={resume_handle!r} could not "
+            f"be projected by this runtime; cause="
+            f"{PauseJournalReadCause.CORRUPT_LATEST.value} (§14.14.9.4).",
+            cause=PauseJournalReadCause.CORRUPT_LATEST,
+        ) from exc
     await asyncio.to_thread(
         _emit_pause_state_read,
         resolved_config,
@@ -1281,6 +1321,7 @@ async def resume(
                 f"cause={_read.cause.value} (C-RT-35).",
                 cause=_read.cause,
                 retryable=_read.retryable,
+                indeterminate=_read.indeterminate,
             )
         snapshot = _read.snapshot
     else:

@@ -537,10 +537,16 @@ async def test_ac4_pause_snapshot_mode_is_bound_to_the_snapshot_the_read_describ
     earlier snapshot's gates. That is the same misattribution W2 reproduces,
     arriving through the other resume mode.
 
-    The precondition binds the read's own record to the snapshot being resumed via
-    `created_at` — the discriminator §14.14.9.2 declares for exactly this, since
-    `run_id` is REUSED across resume. *(Out-of-family review [P1] at the impl leg;
-    an earlier draft of the fence compared the token alone and admitted this.)*
+    The precondition binds the read's own record to the snapshot being resumed by
+    comparing the two snapshots **BY VALUE** against the journal's current latest
+    (frozen carriers compare structurally). It deliberately does **not** derive that
+    identity from `created_at`: epoch-ms timestamps COLLIDE for two captures within
+    the same millisecond, and a colliding comparison admits exactly the stale
+    `pause_snapshot=` resume this clause exists to refuse — which is why the body
+    below pins the capture clock so both records share a `created_at` and asserts
+    the refusal fires anyway. *(Out-of-family review [P1], round 1 caught the
+    missing binding; round 2 caught that round 1's own `created_at` identity was
+    the collidable one.)*
     """
     config = _config(tmp_path)
     workflow = _Workflow()
@@ -791,6 +797,134 @@ async def test_ac8_resume_side_cause_attribution_uses_the_same_vocabulary(
         )
     assert excinfo.value.cause is PauseJournalReadCause.ABSENT
     assert excinfo.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_ac8_indeterminate_empty_journal_is_not_presented_as_decisive_loss(
+    tmp_path: Path,
+) -> None:
+    """AC #8 — `empty-journal` is permanent for the single-process deployment,
+    where it is decisive, but **INDETERMINATE across processes**: a concurrent
+    `capture()` may complete immediately after this read, and cross-process append
+    serialization is unresolved (`B-97`).
+
+    Spec v1.107 §30 is explicit that *an implementation MUST NOT present it as
+    decisive loss where a second writer is reachable* — so the indeterminacy is
+    carried as its own fact rather than collapsed into `retryable`, which would
+    make recovery logic abandon a pause that is still being written.
+    *(Out-of-family review [P2], round 3.)*
+    """
+    config = _config(tmp_path)
+    store = _store(tmp_path)
+    journal = store._journal_file(_WORKFLOW_ID)  # pyright: ignore[reportPrivateUsage]
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    journal.write_text("\n", encoding="utf-8")
+    with pytest.raises(PausedWorkflowStateUnavailableError) as excinfo:
+        await read_paused_workflow_state(
+            _Workflow(),  # pyright: ignore[reportArgumentType]
+            resume_handle=_WORKFLOW_ID,
+            config=config,
+        )
+    assert excinfo.value.cause is PauseJournalReadCause.EMPTY_JOURNAL
+    assert excinfo.value.indeterminate is True
+    # ... and every DECISIVE cause is not marked indeterminate.
+    journal.write_text("{not json\n", encoding="utf-8")
+    with pytest.raises(PausedWorkflowStateUnavailableError) as decisive:
+        await read_paused_workflow_state(
+            _Workflow(),  # pyright: ignore[reportArgumentType]
+            resume_handle=_WORKFLOW_ID,
+            config=config,
+        )
+    assert decisive.value.indeterminate is False
+
+
+@pytest.mark.asyncio
+async def test_ac8_unprojectable_record_routes_through_the_typed_failure_channel(
+    tmp_path: Path,
+) -> None:
+    """AC #8 / §14.14.9.4 — a record this runtime cannot PROJECT must still fail
+    through the typed channel AND still emit.
+
+    A journal written by a NEWER deployment can carry a `step_kind` this runtime
+    does not know: the snapshot validates (those source fields are plain `str`) but
+    the projection raises. Letting that escape would bypass both the promised typed
+    failure and §30.5.1's REQUIRED failed-read emission — a silent failure on the
+    one path this arc exists to serve. *(Out-of-family review [P2], round 3.)*
+    """
+    config = _config(tmp_path)
+    await _capture(
+        tmp_path,
+        run_id="run-skew",
+        pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=1,
+            effect_fence_paused_branches=(
+                EffectFencePausedBranchResumeState(
+                    branch_index=0,
+                    step_id="p0",
+                    step_kind="a-step-kind-from-the-future",
+                    idempotency_key="k",
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(PausedWorkflowStateUnavailableError) as excinfo:
+        await read_paused_workflow_state(
+            _Workflow(),  # pyright: ignore[reportArgumentType]
+            resume_handle=_WORKFLOW_ID,
+            config=config,
+        )
+    assert excinfo.value.cause is PauseJournalReadCause.CORRUPT_LATEST
+    rows = _sink_rows(tmp_path)
+    assert [r.succeeded for r in rows] == [False]
+    assert rows[0].cause_attribution == "corrupt-latest"
+
+
+@pytest.mark.asyncio
+async def test_provenance_is_lost_through_base_typed_serialization_registered_b101(
+    tmp_path: Path,
+) -> None:
+    """**A LIMIT, pinned as a test rather than left to be discovered.** `B-101`.
+
+    Pydantic v2 serializes a subclass through a base-typed field or `TypeAdapter`
+    using the BASE's schema, so an `AccessorDerivedResumeContext` round-tripped
+    that way emits only `ResumeContext`'s four fields and silently drops
+    `pause_state` — after which `resume()`'s variant check sees a legacy context
+    and the fence does not fire.
+
+    **This cannot be closed from the subclass**: the behavior is controlled by the
+    BASE type's schema, and CP spec v1.112 requires `ResumeContext`'s field set be
+    PRESERVED VERBATIM, so adding a discriminator to it is a SPEC change an impl
+    leg must not make. It is an unsurprising-in-hindsight instance of the residual
+    §1.2 already states on the record (*"a caller who takes an accessor read and
+    then, independently, constructs a legacy `ResumeContext` is unfenced… the type
+    system cannot track a side effect that happened before construction"*) — but it
+    arrives through ORDINARY SERIALIZATION rather than a deliberate act, which is
+    the sharper form and why it is registered rather than absorbed.
+
+    This test asserts the CURRENT behavior so the boundary is visible and any
+    future change to it is a deliberate, reviewed one — **not** a claim that the
+    behavior is desirable. *(Out-of-family review [P1], round 3.)*
+    """
+    from pydantic import TypeAdapter
+
+    config = _config(tmp_path)
+    await _capture(tmp_path, run_id="run-serde")
+    read = await read_paused_workflow_state(
+        _Workflow(),  # pyright: ignore[reportArgumentType]
+        resume_handle=_WORKFLOW_ID,
+        config=config,
+    )
+    composed = AccessorDerivedResumeContext.from_pause_state(read, hitl_response=_hitl())
+
+    base_adapter: TypeAdapter[ResumeContext] = TypeAdapter(ResumeContext)
+    round_tripped = base_adapter.validate_python(base_adapter.dump_python(composed))
+    # THE LIMIT: provenance does not survive, so the fence would not fire.
+    assert not isinstance(round_tripped, AccessorDerivedResumeContext)
+    # The DIRECT path — the one `resume()` actually uses — is unaffected.
+    assert isinstance(composed, AccessorDerivedResumeContext)
+    assert composed.staleness_token == read.staleness_token
 
 
 # --------------------------------------------------------------------------

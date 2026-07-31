@@ -172,6 +172,19 @@ class PauseJournalReadResult(NamedTuple):
     """Whether re-invoking could plausibly succeed. ``True`` only for a
     ``read-error`` whose underlying errno is not permanent."""
 
+    indeterminate: bool
+    """Whether this outcome is NOT decisive loss.
+
+    Spec v1.107 §30 is explicit for ``empty-journal``: it is permanent *for the
+    single-process deployment, where it is decisive*, but **INDETERMINATE across
+    processes** — a concurrent ``capture()`` may complete immediately after this
+    read, and cross-process append serialization is unresolved (``B-97``) — and
+    *"an implementation MUST NOT present it as decisive loss where a second writer
+    is reachable."* Reporting a bare ``retryable=False`` did exactly that, so the
+    indeterminacy is carried as its own fact rather than collapsed into the retry
+    flag. *(Out-of-family review [P2], round 3.)*
+    """
+
     record_count: int
     """How many well-formed lines the workflow's journal holds. Monotonically
     non-decreasing for the journal's lifetime per §14.14.8 (append-only, NEVER
@@ -248,6 +261,7 @@ class JournalWorkflowPauseStore:
                 snapshot=None,
                 cause=PauseJournalReadCause.ABSENT,
                 retryable=False,
+                indeterminate=False,
                 record_count=0,
                 latest_record_digest=None,
             )
@@ -257,6 +271,7 @@ class JournalWorkflowPauseStore:
                 snapshot=None,
                 cause=PauseJournalReadCause.READ_ERROR,
                 retryable=False,
+                indeterminate=False,
                 record_count=0,
                 latest_record_digest=None,
             )
@@ -269,6 +284,7 @@ class JournalWorkflowPauseStore:
                 snapshot=None,
                 cause=PauseJournalReadCause.CORRUPT_LATEST,
                 retryable=False,
+                indeterminate=False,
                 record_count=0,
                 latest_record_digest=None,
             )
@@ -277,6 +293,7 @@ class JournalWorkflowPauseStore:
                 snapshot=None,
                 cause=PauseJournalReadCause.READ_ERROR,
                 retryable=_read_error_is_retryable(exc),
+                indeterminate=False,
                 record_count=0,
                 latest_record_digest=None,
             )
@@ -286,6 +303,7 @@ class JournalWorkflowPauseStore:
                 snapshot=None,
                 cause=PauseJournalReadCause.EMPTY_JOURNAL,
                 retryable=False,
+                indeterminate=True,
                 record_count=0,
                 latest_record_digest=None,
             )
@@ -296,6 +314,7 @@ class JournalWorkflowPauseStore:
             snapshot=snapshot,
             cause=cause,
             retryable=False,
+            indeterminate=False,
             record_count=len(lines),
             latest_record_digest=digest,
         )
