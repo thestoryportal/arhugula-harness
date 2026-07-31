@@ -43,7 +43,7 @@ CP spec v1.112 states two CP-owned surfaces for the B-69 arc:
 ## §1 U-CP-64 amendment — `ResumeContext` response-provenance carrier + the public projection-returning surface
 
 **Unit ID:** U-CP-64 (EXISTING — amended, not re-decomposed)
-**Spec anchors:** `Spec_Control_Plane_v1_112.md` §1 + §2 + §3; consumed cross-axis by `Spec_Harness_Runtime_v1.md` v1.107 §31 (C-RT-36)
+**Spec anchors:** `Spec_Control_Plane_v1_112.md` §1 + §2 + §3; consumed cross-axis by `Spec_Harness_Runtime_v1.md` v1.107 §14.14.9
 **Prior amendments preserved:** v2.21 (original `ResumeContext` authoring), v2.42 (`hitl_responses` / `hitl_response_for` keyed by the paused child's own `run_id`; the `DriverContext.resume_context_holder` CONTRACT-level retirement). **All prior U-CP-64 acceptance criteria are PRESERVED VERBATIM**; the criteria below are ADDED.
 
 ### §1.1 Added scope

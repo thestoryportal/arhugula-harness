@@ -1950,7 +1950,7 @@ items:
     type) because both mutate or extend an OD-owned schema and a Runtime unit cannot own that.
     DAG: U-RT-148 depends on U-CP-64 AND on the pending OD unit -- do not schedule U-RT-148 as
     ready once CP alone lands. SPEC LEG APPLIED 2026-07-30 (ratified option A prime,
-    CO-REQUISITE / SEQUENCED): Runtime spec v1.106->v1.107 (NEW section 31 C-RT-36 accessor +
+    CO-REQUISITE / SEQUENCED): Runtime spec v1.106->v1.107 (NEW section 31 §14.14.9 accessor +
     closed four-variant projection DTO + five-member cause attribution + declared postures;
     NEW section 30 refusal-only staleness precondition + cause attribution on the EXISTING
     RT-FAIL-RESUME-HANDLE-UNKNOWN, no new peer class; the discharged :3274 scope-limit
