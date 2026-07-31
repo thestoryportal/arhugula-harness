@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 100
-  open: 1
+  total: 101
+  open: 0
   design_substrate_gated: 0
-  registered_finding: 18
+  registered_finding: 19
   operator_gated: 0
   held: 1
-  closed: 80
-  identity_digest: 403aa7c88ac59aa8
+  closed: 81
+  identity_digest: 23a2436035732606
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1939,7 +1939,8 @@ items:
 - id: B-69
   title: resume_handle crash-recovery resume path cannot address individual paused children
     for multi-child HITL delivery
-  status: open
+  status: closed
+  pr: '#pending'
   summary: 'LIVE NEXT STEP -- the B-69 impl arc: build U-RT-148 (Runtime plan v2.55) + the
     U-CP-64 amendment (CP plan v2.47) + a NEW, NOT-YET-NUMBERED OD unit carrying the OD spec
     v1.36 section 30.5.2 additive audit carrier for the PRE-BOOTSTRAP staleness refusal. THREE
@@ -2965,3 +2966,40 @@ items:
   heading: '### B-99 · The B-69 projection''s `summary_text` exclusion must be re-adjudicated when
     the `pause_context_reader` deferral is discharged *(named reopening condition registered at the
     B-69 spec leg, 2026-07-30)*'
+- id: B-100
+  title: The empty-idempotency_key key-ABSENT carve-out is scoped to the fan-out crash-reconstruction
+    carrier, but the LINEAR and orchestrator fence capture sites admit an empty key too
+  status: registered_finding
+  summary: 'Surfaced at the B-69 IMPL leg (2026-07-31), NOT absorbed. CP spec v1.112 section 2.1
+    and Runtime spec v1.107 section 14.14.9.2 both scope the empty-key / key-field-ABSENT source
+    shape to EffectFencePausedBranchResumeState -- the fan-out crash-reconstruction carrier, which
+    the spec leg verified constructs idempotency_key="" deliberately (workflow_driver.py:4078). The
+    shipped LINEAR site constructs EffectFenceResumeState(idempotency_key=_fence_key) whenever
+    isinstance(_fence_key, str) (workflow_driver.py:5456), which ADMITS "", and the orchestrator
+    site is unconstrained the same way. Both real resume sites consult a fence resolution only when
+    the key is TRUTHY, and compute_effect_fence_tree_wide_abort_present already filters ALL empty
+    keys regardless of carrier -- so an empty key surfaced on either of those two shapes is the
+    SAME drop-not-refuse livelock (the operator response is silently DROPPED, not refused) that the
+    branch-carrier carve-out exists to foreclose, arriving one door over. The B-69 impl leg
+    therefore conforms to the cleared enumeration EXACTLY (the two shapes carry their key field
+    unconstrained) and files this rather than widening the carve-out, because adding keyless
+    sibling source shapes for those two carriers would extend the cleared eight-shape enumeration
+    -- an X-AL-3 design extension an impl leg must not make silently.'
+  close_out: 'Two separable dispositions, and the choice is a real one rather than a formality.
+    (a) SPEC-SIDE: widen section 2.1 / section 14.14.9.2''s key-ABSENT treatment from "the
+    crash-reconstruction carrier" to "any effect-fence source shape whose captured key is empty",
+    adding a keyless sibling source shape for the LINEAR and orchestrator carriers -- the variant
+    set stays at FOUR either way, only the SOURCE column widens, which is exactly the shape the two
+    prior widenings at the spec leg took (rounds 1 and 2). (b) CAPTURE-SIDE: refuse an empty key at
+    the LINEAR/orchestrator capture sites instead, so the read side never has to represent it --
+    cheaper in type surface but capture-side and therefore hash-adjacent, which is why it is NOT
+    the default recommendation. Note the exposure is currently DEFENSIVE-ONLY at both sites (the
+    key is read by name off a runtime error, and no production path is known to yield ""), so this
+    is a soundness gap rather than a live defect -- which is why it is registered rather than
+    treated as a halt.'
+  council: 'no -- the tension was already convened and adjudicated at the B-69 record; this row
+    only asks whether the SAME adjudicated rule reaches two more source carriers, which is a
+    scoping question for a spec-writer apply pass, not a fresh cross-domain tension.'
+  heading: '### B-100 · The empty-`idempotency_key` key-ABSENT carve-out does not reach the LINEAR
+    and orchestrator fence carriers *(surfaced at the `B-69` impl leg, reported not absorbed,
+    2026-07-31)*'

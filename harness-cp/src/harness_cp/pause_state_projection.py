@@ -44,10 +44,11 @@ Authority: `Spec_Control_Plane_v1_112.md` §1 + §2;
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING, Annotated, Literal, NamedTuple, Self
+from typing import Annotated, Literal, NamedTuple, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from harness_cp.hitl_placement import HITLResult
 from harness_cp.pause_resume_protocol_types import (
     EffectFenceResolution,
     PauseSnapshot,
@@ -55,9 +56,6 @@ from harness_cp.pause_resume_protocol_types import (
     WorkflowPauseReason,
 )
 from harness_cp.workflow_driver_types import StepKind
-
-if TYPE_CHECKING:
-    from harness_cp.hitl_placement import HITLResult
 
 __all__ = [
     "AccessorDerivedResumeContext",
