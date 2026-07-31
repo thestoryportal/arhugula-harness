@@ -68,6 +68,9 @@ import errno
 import hashlib
 import json
 import os
+import sys
+from collections.abc import Generator
+from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple, cast
@@ -76,12 +79,15 @@ from harness_cp.pause_resume_protocol_types import PauseSnapshot
 from pydantic import ValidationError
 
 __all__ = [
+    "PAUSE_JOURNAL_LOCK_SUFFIX",
     "PAUSE_JOURNAL_SUBDIR",
     "JournalWorkflowPauseStore",
     "PauseJournalReadCause",
     "PauseJournalReadResult",
     "pause_journal_dir_for",
 ]
+
+_IS_WINDOWS = sys.platform == "win32"
 
 
 class PauseJournalReadCause(StrEnum):
@@ -104,8 +110,11 @@ class PauseJournalReadCause(StrEnum):
     """The per-workflow file EXISTS but holds no record. Permanent for the
     single-process deployment, where it is decisive; INDETERMINATE across
     processes (a concurrent ``capture()`` may complete immediately after this
-    read; cross-process append serialization is unresolved, registered at
-    ``B-97``). MUST NOT fold into :attr:`ABSENT` despite sharing that routing —
+    read). That indeterminacy is UNCHANGED by ``B-97`` half (b): serializing
+    concurrent APPENDS against each other says nothing about a capture that
+    lands after a read has already returned, and the read deliberately takes no
+    lock (see :meth:`JournalWorkflowPauseStore.read_latest_attributed`).
+    MUST NOT fold into :attr:`ABSENT` despite sharing that routing —
     collapsing on shared routing is the exact defect this refinement undoes, and
     the two carry different operator repairs."""
 
@@ -178,7 +187,7 @@ class PauseJournalReadResult(NamedTuple):
     Spec v1.107 §30 is explicit for ``empty-journal``: it is permanent *for the
     single-process deployment, where it is decisive*, but **INDETERMINATE across
     processes** — a concurrent ``capture()`` may complete immediately after this
-    read, and cross-process append serialization is unresolved (``B-97``) — and
+    read — and
     *"an implementation MUST NOT present it as decisive loss where a second writer
     is reachable."* Reporting a bare ``retryable=False`` did exactly that, so the
     indeterminacy is carried as its own fact rather than collapsed into the retry
@@ -197,6 +206,18 @@ class PauseJournalReadResult(NamedTuple):
 #: Subdirectory under the resolved ``STATE_LEDGER`` directory that holds the
 #: per-workflow pause journals (design §7b D2-bis co-location).
 PAUSE_JOURNAL_SUBDIR = "pause-journal"
+
+PAUSE_JOURNAL_LOCK_SUFFIX = ".lock"
+"""Suffix of a workflow journal's dedicated cross-process advisory-lock file
+(``<sha256(workflow_id)>.jsonl.lock``), one per workflow, beside the journal
+it guards (``B-97`` half (b)).
+
+A DEDICATED file rather than the journal itself: `flock` rides the inode, and
+locking the journal would couple the lock's lifetime to any future operation
+that replaces that inode. It is a LOCK file, never a canonical one — it carries
+no bytes and nothing reads it. Reads open one sha256-named path directly and
+nothing globs this directory, so the extra sibling is inert.
+"""
 
 
 def pause_journal_dir_for(state_ledger_dir: Path) -> Path:
@@ -252,6 +273,19 @@ class JournalWorkflowPauseStore:
         to an older well-formed record (§14.14.8: everything is kept so a
         change-detector can be derived over the journal's growth; nothing older is
         ever resumed from).
+
+        **This read deliberately does NOT acquire `_append`'s cross-process write
+        lock (`B-97` half (b)).** Taking it would make an empty-journal read
+        mutually exclusive with a concurrent ``capture()``, and that is precisely
+        the property Runtime spec v1.107 §30 declines to promise: the spec calls
+        ``empty-journal`` *"INDETERMINATE across processes"* because *"a concurrent
+        `capture()` may complete immediately after this read"* — an
+        after-the-read completion no write lock can exclude, since the read has
+        already returned. Locking here would therefore buy no additional
+        determinism while making :attr:`PauseJournalReadResult.indeterminate`'s
+        ``True`` on that cause read as over-conservative rather than exact. Keeping
+        the read unlocked is what holds the shipped §30 attribution correct AS
+        WRITTEN and is why serializing the write path owed zero spec text.
         """
         path = self._journal_file(workflow_id)
         try:
@@ -326,20 +360,116 @@ class JournalWorkflowPauseStore:
         digest = hashlib.sha256(workflow_id.encode("utf-8")).hexdigest()
         return self._journal_dir / f"{digest}.jsonl"
 
+    @contextmanager
+    def _cross_process_append_lock(self, journal_path: Path) -> Generator[None, None, None]:
+        """Hold an exclusive same-host lock over ONE workflow's append section.
+
+        ``B-97`` half (b). A hand-rolled ``fcntl.flock`` on a dedicated
+        ``<journal>.lock`` file, mirroring the primitive already shipped at
+        ``protected_result_store._cross_process_lock`` — a fresh fd opened and
+        closed per call, no process-wide registry: ``flock`` coordinates through
+        the kernel via the on-disk inode, and the lock is released on process
+        death.
+
+        **PER-WORKFLOW, not per-directory — the grounded choice.** The house
+        ``harness_is.cross_process_ledger_lock.cross_process_scope_lock`` was the
+        obvious candidate (one exclusive lock per directory TREE, already imported
+        across this axis) and was tried first. Out-of-family review found it does
+        NOT fit cleanly here: a directory-wide lock makes one workflow's append
+        wait behind ANOTHER workflow's, which (i) contradicts this store's own
+        stated isolation property — per-workflow files exist precisely so one
+        workflow cannot block another — and (ii) has an externally visible cost,
+        because the read path is deliberately unlocked: while workflow B's first
+        capture queues behind workflow A's append, a read of B reports the
+        ``absent`` cause, which Runtime spec v1.107 §30 attributes as PERMANENT.
+        A per-workflow lock leaves that pre-existing capture-not-yet-landed race
+        exactly the size it already was; a directory-wide one would have widened
+        it to the whole contended hold. *(The residual spec-side asymmetry — §30
+        qualifies only ``empty-journal`` as cross-process INDETERMINATE, though
+        ``absent`` and ``corrupt-latest`` are reachable the same way — is a
+        contract question an impl leg must not settle, and is registered at
+        ``B-102``.)*
+
+        No-op on Windows (``_IS_WINDOWS``) — no ``fcntl`` there; same posture as
+        pre-``B-97``, matching ``harness_is.cross_process_ledger_lock``'s own
+        carve-out (the ``B-45`` register row). ``fcntl`` is imported lazily inside
+        this method, NEVER at module scope: an unguarded top-level import would
+        break ``import harness_runtime`` outright on Windows.
+
+        **KNOWN + REGISTERED, deliberately not built here: this ``flock`` blocks
+        the event loop.** ``capture()`` is called synchronously from the async
+        ``DurablePauseResumeProtocol.capture_pause_snapshot``, so a contended
+        acquisition stalls the loop for the holder's critical section (one write
+        plus two directory fsyncs — bounded by that section, not unbounded, but
+        still on-loop). The sibling durable store hit exactly this and grew an
+        off-loop path (``resolve_result_ref_off_loop``), so the shape is
+        precedented; adopting it here is a scoping decision for the ``B-97``
+        half-(a) leg or a follow-on, recorded on the ``B-97`` register row rather
+        than absorbed silently into a serialization arc. Re-raised by every
+        transcript-less reviewer — it is a DEFERRAL, not an oversight.
+        """
+        if _IS_WINDOWS:
+            yield
+            return
+        import fcntl  # POSIX-only; never reached on Windows.
+
+        lock_path = journal_path.with_name(journal_path.name + PAUSE_JOURNAL_LOCK_SUFFIX)
+        # O_NOFOLLOW: a symlink planted at the lock path — including a dangling
+        # one, which O_CREAT would otherwise materialize at its target — fails
+        # loud with ELOOP rather than silently locking (or creating) elsewhere.
+        flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        fd = os.open(lock_path, flags, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
     def _append(self, snapshot: PauseSnapshot) -> None:
         """Append one JSONL record to the workflow's file, durably.
 
         The record is ``fsync``-ed to stable storage before returning so a host
         crash / power loss immediately after ``capture`` cannot lose an
-        already-accepted pause. Two directory-fsyncs persist the new dirents
-        (best-effort — POSIX) so the journal survives a first-capture crash:
-        when the journal *file* is created, its directory entry is fsync-ed; and
-        when the ``pause-journal`` *directory* itself is created (the very first
-        durable pause), its parent (the ``STATE_LEDGER`` dir) is also fsync-ed —
-        otherwise fsyncing only the new child dir persists the file entry inside
-        it but NOT the child dir's own entry in its parent, so a crash could lose
-        the entire ``pause-journal`` directory (→ a spurious
-        ``RT-FAIL-RESUME-HANDLE-UNKNOWN`` despite the durability guarantee).
+        already-accepted pause. Two directory-fsyncs persist the dirents
+        (best-effort — POSIX): the ``pause-journal`` directory's own entry in its
+        parent (the ``STATE_LEDGER`` dir), and this workflow's journal-file entry
+        inside ``pause-journal``. Both are needed — fsyncing only the child dir
+        persists the file entry inside it but NOT the child dir's own entry in
+        its parent, so a crash could lose the entire ``pause-journal`` directory
+        (→ a spurious ``RT-FAIL-RESUME-HANDLE-UNKNOWN`` despite the durability
+        guarantee).
+
+        **Both directory fsyncs are UNCONDITIONAL, and that is load-bearing.**
+        Every flag-gated form of them is unsound, because the flags are
+        process-local and the crash they guard against is another process's:
+
+        - Gating the parent fsync on ``dir_is_new`` (this call created the
+          directory) loses it whenever a writer created the directory and died
+          before fsyncing — the dirent is then present but NOT durable, every
+          later writer samples ``dir_is_new=False``, and the fsync is skipped
+          FOREVER.
+        - Gating it on ``is_new_file or dir_is_new`` narrows that window but does
+          NOT close it (out-of-family review, this arc): a writer whose
+          ``path.open("a")`` creates the journal file and which then dies before
+          reaching the fsync leaves BOTH flags False for every successor. "A
+          journal file exists ⇒ some earlier writer already fsynced" is simply
+          false for that interleaving.
+        - Gating the child fsync on ``is_new_file`` has the identical shape one
+          level down: create the file, write, die before the fsync, and no
+          successor ever links the dirent durably. This one is PRE-EXISTING —
+          byte-identical to the pre-``B-97`` code — and is closed here rather
+          than left as a known twin of the defect being fixed beside it.
+
+        Unconditional fsyncs make the invariant true BY CONSTRUCTION with no
+        interleaving exception: the parent is fsynced before any statement that
+        could create a journal file, and the child is fsynced after every append.
+        The cost is two best-effort directory fsyncs on a path that already
+        ``fsync``s the record itself, for an event (a durable pause capture) that
+        occurs at human latency — and it deletes both flags rather than adding a
+        third.
 
         **Torn-append self-healing.** A crash *during* a prior append can leave a
         partial trailing line with no terminating newline. To prevent the next
@@ -352,6 +482,35 @@ class JournalWorkflowPauseStore:
 
         Both durability hardenings caught by out-of-family Codex review
         (R-CC-1 arc #3 cascade step 2).
+
+        **Cross-process write serialization (B-97 half (b)).** Everything from
+        the existence probes through the final directory fsyncs runs under
+        :meth:`_cross_process_append_lock`, an exclusive same-host advisory lock
+        on THIS workflow's journal. Without it two OS processes sharing one
+        resolved ``STATE_LEDGER`` dir were serialized by NOTHING: the plain
+        append-mode ``open`` carries no ``O_EXCL``, no lockfile and no advisory
+        lock. The three-way TOCTOU — ``is_new_file``, ``needs_leading_newline``
+        and the append itself were each computed or performed against a file
+        another process could mutate in between — is closed by that hold, which
+        is also what makes the torn-append self-heal above sound: it was
+        single-writer-only reasoning before.
+
+        The lock is a LEAF (nothing inside the hold acquires another
+        cross-process lock), so it cannot participate in a lock-ordering cycle
+        with the IS ledger locks that guard the enclosing ``STATE_LEDGER``
+        directory, whatever order a caller composes them in.
+
+        ``is_new_file`` survives ONLY as the guard on ``needs_leading_newline``
+        (a brand-new file must not receive a spurious leading newline, since
+        :meth:`_last_byte_is_not_newline` reports ``True`` for an absent file).
+        It carries no durability meaning any more — see above.
+
+        Windows: the lock degrades to a documented no-op there (no ``fcntl``;
+        C-STK-10 / the ``B-45`` register row), so Windows sits at exact pre-B-97
+        parity rather than gaining a partial guarantee.
+
+        **The read path deliberately does NOT take this lock** — see
+        :meth:`read_latest_attributed`.
         """
         record = {
             "workflow_id": snapshot.workflow_id,
@@ -360,22 +519,25 @@ class JournalWorkflowPauseStore:
         line = json.dumps(record, sort_keys=True)
         path = self._journal_file(snapshot.workflow_id)
         journal_dir = path.parent
-        dir_is_new = not journal_dir.exists()
         journal_dir.mkdir(parents=True, exist_ok=True)
-        is_new_file = not path.exists()
-        needs_leading_newline = (not is_new_file) and self._last_byte_is_not_newline(path)
-        with path.open("a", encoding="utf-8") as handle:
-            if needs_leading_newline:
-                handle.write("\n")
-            handle.write(line + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        if is_new_file:
+        # UNCONDITIONAL, and BEFORE the lock — so it precedes any statement that
+        # could create a journal file. See the docstring's durability section:
+        # both directory fsyncs are unconditional precisely because every
+        # flag-gated form leaves a crash window that a later writer then skips
+        # FOREVER.
+        self._fsync_dir(journal_dir.parent)
+        with self._cross_process_append_lock(path):
+            is_new_file = not path.exists()
+            needs_leading_newline = (not is_new_file) and self._last_byte_is_not_newline(path)
+            with path.open("a", encoding="utf-8") as handle:
+                if needs_leading_newline:
+                    handle.write("\n")
+                handle.write(line + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            # UNCONDITIONAL, and AFTER the file exists — durably links this
+            # workflow's journal dirent into `pause-journal`.
             self._fsync_dir(journal_dir)
-        if dir_is_new:
-            # Durably link the freshly-created `pause-journal` dirent into its
-            # parent (the STATE_LEDGER dir), else a crash could lose the dir.
-            self._fsync_dir(journal_dir.parent)
 
     @staticmethod
     def _last_byte_is_not_newline(path: Path) -> bool:
