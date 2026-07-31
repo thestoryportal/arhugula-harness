@@ -395,6 +395,18 @@ class JournalWorkflowPauseStore:
         carve-out (the ``B-45`` register row). ``fcntl`` is imported lazily inside
         this method, NEVER at module scope: an unguarded top-level import would
         break ``import harness_runtime`` outright on Windows.
+
+        **KNOWN + REGISTERED, deliberately not built here: this ``flock`` blocks
+        the event loop.** ``capture()`` is called synchronously from the async
+        ``DurablePauseResumeProtocol.capture_pause_snapshot``, so a contended
+        acquisition stalls the loop for the holder's critical section (one write
+        plus two directory fsyncs — bounded by that section, not unbounded, but
+        still on-loop). The sibling durable store hit exactly this and grew an
+        off-loop path (``resolve_result_ref_off_loop``), so the shape is
+        precedented; adopting it here is a scoping decision for the ``B-97``
+        half-(a) leg or a follow-on, recorded on the ``B-97`` register row rather
+        than absorbed silently into a serialization arc. Re-raised by every
+        transcript-less reviewer — it is a DEFERRAL, not an oversight.
         """
         if _IS_WINDOWS:
             yield
@@ -421,15 +433,43 @@ class JournalWorkflowPauseStore:
 
         The record is ``fsync``-ed to stable storage before returning so a host
         crash / power loss immediately after ``capture`` cannot lose an
-        already-accepted pause. Two directory-fsyncs persist the new dirents
-        (best-effort — POSIX) so the journal survives a first-capture crash:
-        when the journal *file* is created, its directory entry is fsync-ed; and
-        when the ``pause-journal`` *directory* itself is created (the very first
-        durable pause), its parent (the ``STATE_LEDGER`` dir) is also fsync-ed —
-        otherwise fsyncing only the new child dir persists the file entry inside
-        it but NOT the child dir's own entry in its parent, so a crash could lose
-        the entire ``pause-journal`` directory (→ a spurious
-        ``RT-FAIL-RESUME-HANDLE-UNKNOWN`` despite the durability guarantee).
+        already-accepted pause. Two directory-fsyncs persist the dirents
+        (best-effort — POSIX): the ``pause-journal`` directory's own entry in its
+        parent (the ``STATE_LEDGER`` dir), and this workflow's journal-file entry
+        inside ``pause-journal``. Both are needed — fsyncing only the child dir
+        persists the file entry inside it but NOT the child dir's own entry in
+        its parent, so a crash could lose the entire ``pause-journal`` directory
+        (→ a spurious ``RT-FAIL-RESUME-HANDLE-UNKNOWN`` despite the durability
+        guarantee).
+
+        **Both directory fsyncs are UNCONDITIONAL, and that is load-bearing.**
+        Every flag-gated form of them is unsound, because the flags are
+        process-local and the crash they guard against is another process's:
+
+        - Gating the parent fsync on ``dir_is_new`` (this call created the
+          directory) loses it whenever a writer created the directory and died
+          before fsyncing — the dirent is then present but NOT durable, every
+          later writer samples ``dir_is_new=False``, and the fsync is skipped
+          FOREVER.
+        - Gating it on ``is_new_file or dir_is_new`` narrows that window but does
+          NOT close it (out-of-family review, this arc): a writer whose
+          ``path.open("a")`` creates the journal file and which then dies before
+          reaching the fsync leaves BOTH flags False for every successor. "A
+          journal file exists ⇒ some earlier writer already fsynced" is simply
+          false for that interleaving.
+        - Gating the child fsync on ``is_new_file`` has the identical shape one
+          level down: create the file, write, die before the fsync, and no
+          successor ever links the dirent durably. This one is PRE-EXISTING —
+          byte-identical to the pre-``B-97`` code — and is closed here rather
+          than left as a known twin of the defect being fixed beside it.
+
+        Unconditional fsyncs make the invariant true BY CONSTRUCTION with no
+        interleaving exception: the parent is fsynced before any statement that
+        could create a journal file, and the child is fsynced after every append.
+        The cost is two best-effort directory fsyncs on a path that already
+        ``fsync``s the record itself, for an event (a durable pause capture) that
+        occurs at human latency — and it deletes both flags rather than adding a
+        third.
 
         **Torn-append self-healing.** A crash *during* a prior append can leave a
         partial trailing line with no terminating newline. To prevent the next
@@ -460,12 +500,10 @@ class JournalWorkflowPauseStore:
         with the IS ledger locks that guard the enclosing ``STATE_LEDGER``
         directory, whatever order a caller composes them in.
 
-        ``dir_is_new`` is sampled before ``mkdir`` — necessarily, since the
-        sample is what ``mkdir`` would destroy — and is fail-SAFE in the only
-        direction that matters: a racing process can make us fsync a parent that
-        needed no fsync (harmless, and the fsync is best-effort anyway), never
-        the reverse. The durability guarantee does not rest on it alone; see the
-        ``is_new_file or dir_is_new`` disjunction below.
+        ``is_new_file`` survives ONLY as the guard on ``needs_leading_newline``
+        (a brand-new file must not receive a spurious leading newline, since
+        :meth:`_last_byte_is_not_newline` reports ``True`` for an absent file).
+        It carries no durability meaning any more — see above.
 
         Windows: the lock degrades to a documented no-op there (no ``fcntl``;
         C-STK-10 / the ``B-45`` register row), so Windows sits at exact pre-B-97
@@ -481,8 +519,13 @@ class JournalWorkflowPauseStore:
         line = json.dumps(record, sort_keys=True)
         path = self._journal_file(snapshot.workflow_id)
         journal_dir = path.parent
-        dir_is_new = not journal_dir.exists()
         journal_dir.mkdir(parents=True, exist_ok=True)
+        # UNCONDITIONAL, and BEFORE the lock — so it precedes any statement that
+        # could create a journal file. See the docstring's durability section:
+        # both directory fsyncs are unconditional precisely because every
+        # flag-gated form leaves a crash window that a later writer then skips
+        # FOREVER.
+        self._fsync_dir(journal_dir.parent)
         with self._cross_process_append_lock(path):
             is_new_file = not path.exists()
             needs_leading_newline = (not is_new_file) and self._last_byte_is_not_newline(path)
@@ -492,29 +535,9 @@ class JournalWorkflowPauseStore:
                 handle.write(line + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            if is_new_file:
-                self._fsync_dir(journal_dir)
-            if is_new_file or dir_is_new:
-                # Durably link the freshly-created `pause-journal` dirent into its
-                # parent (the STATE_LEDGER dir), else a crash could lose the dir.
-                #
-                # `is_new_file` — not `dir_is_new` alone — is what makes this
-                # sound (out-of-family Codex [P1] on this arc). A process that
-                # creates the directory and then dies before writing leaves the
-                # dirent present but NOT durable, and the next writer samples
-                # `dir_is_new=False` and would skip this fsync forever: a capture
-                # could then return successfully while the whole `pause-journal`
-                # directory is still losable. The window PRE-EXISTS this arc (the
-                # old code had the same gap between its `mkdir` and its write) and
-                # is not specific to any lock — it just went unnoticed. Keying on
-                # "this call created the first journal FILE in that directory"
-                # closes it outright: any existing journal file implies some
-                # earlier writer already reached this line. `dir_is_new` is
-                # retained as the second disjunct so the fsync still fires in the
-                # (harmless, racing) case where another process created both the
-                # directory and this workflow's file between our sample and our
-                # own `mkdir`.
-                self._fsync_dir(journal_dir.parent)
+            # UNCONDITIONAL, and AFTER the file exists — durably links this
+            # workflow's journal dirent into `pause-journal`.
+            self._fsync_dir(journal_dir)
 
     @staticmethod
     def _last_byte_is_not_newline(path: Path) -> bool:

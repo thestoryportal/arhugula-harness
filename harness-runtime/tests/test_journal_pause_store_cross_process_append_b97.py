@@ -43,10 +43,16 @@ reports the `absent` cause that Runtime spec v1.107 §30 attributes as PERMANENT
 and a genuine liveness witness), because that decision is exactly what keeps §30's
 `empty-journal` INDETERMINATE clause correct as written, and therefore what makes this
 arc owe zero spec text.
+
+**Both directory fsyncs are unconditional**, and three witnesses below pin that. Every
+flag-gated form (`dir_is_new`, `is_new_file`, or their disjunction) is unsound because
+the flags are process-local while the crash they guard against is another process's —
+see `_append`'s own docstring for the two interleavings that defeat them.
 """
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import subprocess
@@ -66,11 +72,20 @@ from harness_runtime.lifecycle.journal_workflow_pause_store import (
     JournalWorkflowPauseStore,
 )
 
-pytestmark = pytest.mark.skipif(
+requires_posix_flock = pytest.mark.skipif(
     sys.platform == "win32",
-    reason="cross_process_scope_lock deliberately no-ops on Windows (C-STK-10, no fcntl; "
-    "the B-45 register row) — the exclusion assertions below do not hold there.",
+    reason="`_cross_process_append_lock` deliberately no-ops on Windows (C-STK-10, no "
+    "fcntl; the B-45 register row), so no lock file is created and the exclusion "
+    "assertions do not hold there.",
 )
+"""Applied PER TEST, not module-wide.
+
+A module-wide `pytestmark` also skipped the durability, self-heal, round-trip and
+provisioning witnesses — none of which touch `fcntl` — leaving those properties with
+ZERO Windows coverage for no reason, and leaving the `_IS_WINDOWS` branch itself
+unexecuted on every platform. Only the tests that genuinely require POSIX `flock`
+semantics carry this mark.
+"""
 
 _WORKFLOW_ID = "wf-b97-cross-process"
 _READY_TIMEOUT = 30.0
@@ -251,18 +266,21 @@ def _child(script: str, *args: object) -> Generator[subprocess.Popen[bytes]]:
 # --------------------------------------------------------------------------
 
 
+@requires_posix_flock
 def test_append_blocks_a_second_os_process_holding_the_journal_lock(tmp_path: Path) -> None:
     """THE primary witness: a genuinely separate OS process's `capture()` BLOCKS
     while this process holds the journal's cross-process lock.
 
-    A thread-based witness would prove nothing — `cross_process_scope_lock`'s
-    in-process face is a per-thread reentrant `RLock` over a shared `_DirLock`, so a
-    second thread would contend on that alone. Only a second interpreter, with fresh
-    locks and fresh fds, isolates the `flock`.
+    A GENUINE second interpreter is required, not a thread. `_cross_process_append_lock`
+    opens a FRESH fd per call and `flock`s it, so its exclusion is kernel-side and
+    per-open-file-description; a same-process thread pair would tell us nothing about
+    the property under test, and any in-process serialization the caller happened to
+    hold would mask a missing `flock` entirely.
 
-    Mutation probe (run at this arc): deleting the `with cross_process_scope_lock(...)`
-    wrapper from `_append` makes the child's `capture()` complete immediately —
-    `done_marker` exists inside the parent's hold and this test FAILS. Restored: green.
+    Mutation probe (run at this arc): deleting the
+    `with self._cross_process_append_lock(path):` wrapper from `_append` makes the
+    child's `capture()` complete immediately — `done_marker` exists inside the parent's
+    hold and this test FAILS. Restored: green.
     """
     journal_dir = tmp_path / "state_ledger" / "pause-journal"
     done = tmp_path / "child_done"
@@ -295,6 +313,7 @@ def test_append_blocks_a_second_os_process_holding_the_journal_lock(tmp_path: Pa
     assert read.snapshot is not None and read.snapshot.run_id == "run-child"
 
 
+@requires_posix_flock
 def test_both_processes_contend_on_the_same_lock_file_identity(tmp_path: Path) -> None:
     """Lock-IDENTITY witness: the writer this process runs and the writer a separate
     OS process runs `flock` the SAME inode.
@@ -331,6 +350,10 @@ def test_both_processes_contend_on_the_same_lock_file_identity(tmp_path: Path) -
     )
 
 
+@requires_posix_flock  # its corroboration half spawns `_CHILD_CAPTURE_SCRIPT`, which
+# imports `fcntl` unconditionally. The platform-independent half of this claim (the lock
+# target IS this workflow's own journal) stays covered on Windows by
+# `test_the_read_path_acquires_no_cross_process_lock`'s callsite assertion.
 def test_two_workflows_lock_distinct_targets_and_do_not_block_each_other(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -398,6 +421,7 @@ def test_two_workflows_lock_distinct_targets_and_do_not_block_each_other(
         assert done.exists()
 
 
+@requires_posix_flock
 def test_two_os_processes_appending_large_records_leave_every_record_whole(
     tmp_path: Path,
 ) -> None:
@@ -498,6 +522,7 @@ def test_the_read_path_acquires_no_cross_process_lock(
     assert acquired == [], "the read path acquired the write lock — see this test's docstring"
 
 
+@requires_posix_flock
 def test_read_completes_while_a_separate_os_process_holds_the_journal_lock(
     tmp_path: Path,
 ) -> None:
@@ -560,81 +585,190 @@ def test_torn_tail_self_heal_still_repairs_under_the_lock(tmp_path: Path) -> Non
     assert lines[1].endswith("cros"), "the fragment was concatenated onto, not separated"
 
 
-def test_first_capture_still_fsyncs_both_the_journal_dir_and_its_parent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The one durability property this arc could plausibly have regressed.
-
-    `cross_process_scope_lock` PROVISIONS its scope root, so sampling `dir_is_new`
-    after acquisition would always read `False` and silently drop the grandparent
-    fsync that persists the `pause-journal` dirent into the `STATE_LEDGER` directory —
-    the exact loss the shipped comment says would produce a spurious
-    `RT-FAIL-RESUME-HANDLE-UNKNOWN`. `_append` therefore samples it BEFORE the lock.
-
-    Mutation probe (run at this arc): moving the `dir_is_new = not journal_dir.exists()`
-    line inside the `with cross_process_scope_lock(...)` block leaves every other test
-    in this module green and makes THIS one fail — the parent is never fsynced.
-    """
-    journal_dir = tmp_path / "state_ledger" / "pause-journal"
-    fsynced: list[Path] = []
+def _record_fsyncs(monkeypatch: pytest.MonkeyPatch, journal_dir: Path) -> list[tuple[Path, bool]]:
+    """Record every `_fsync_dir` target AND whether this workflow's journal file
+    existed at that instant — the ordering fact the by-construction claim rests on."""
+    seen: list[tuple[Path, bool]] = []
     real = JournalWorkflowPauseStore._fsync_dir  # pyright: ignore[reportPrivateUsage]
 
     def _recording(directory: Path) -> None:
-        fsynced.append(directory)
+        seen.append((directory, _journal_file(journal_dir).exists()))
         real(directory)
 
     monkeypatch.setattr(JournalWorkflowPauseStore, "_fsync_dir", staticmethod(_recording))
-
-    store = JournalWorkflowPauseStore(journal_dir=journal_dir)
-    store.capture(_snapshot("run-first"))
-    assert fsynced == [journal_dir, journal_dir.parent]
-
-    fsynced.clear()
-    store.capture(_snapshot("run-second"))
-    assert fsynced == [], "a repeat append into an existing journal owes no directory fsync"
+    return seen
 
 
-def test_parent_is_fsynced_when_a_prior_process_left_the_directory_but_no_record(
+def test_parent_dirent_is_fsynced_before_any_journal_file_can_exist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """out-of-family Codex [P1] on this arc — the crash window `dir_is_new` alone
-    leaves open, and the reason the parent fsync keys on `is_new_file`.
+    """The by-construction ordering claim, asserted directly.
 
-    A process that `mkdir`s the journal directory and then dies before writing leaves
-    the dirent PRESENT but NOT DURABLE. Every later writer then samples
-    `dir_is_new=False` and, keyed on that alone, skips the grandparent fsync FOREVER —
-    so a capture returns successfully while the whole `pause-journal` directory is
-    still losable to a host crash. The window pre-exists this arc (the old code had the
-    same gap between its `mkdir` and its write); it just went unnoticed until an
-    out-of-family reviewer looked at the provisioning order.
+    The parent (`STATE_LEDGER`) fsync must happen BEFORE any statement that could
+    create a journal file — that ordering is the whole reason the unconditional form
+    is sound where every flag-gated form is not.
 
-    Mutation probe (run at this arc): reverting the condition to `if dir_is_new:`
-    alone leaves every other test in this module green — including the first-capture
-    witness above, whose directory is created by `_append` itself — and makes THIS one
-    fail with an empty parent fsync.
+    Mutation probes (run at this arc): DELETING the pre-lock
+    `self._fsync_dir(journal_dir.parent)` fails this on a missing parent entry;
+    MOVING it after the `with` block fails it on `journal_file_existed=True`.
     """
     journal_dir = tmp_path / "state_ledger" / "pause-journal"
-    # Exactly what the dead process left behind: the directory, no journal record,
-    # no durable parent dirent.
+    seen = _record_fsyncs(monkeypatch, journal_dir)
+
+    JournalWorkflowPauseStore(journal_dir=journal_dir).capture(_snapshot("run-first"))
+
+    assert seen, "no directory fsync happened at all"
+    first_target, journal_file_existed = seen[0]
+    assert first_target == journal_dir.parent, (
+        "the first directory fsync was not the STATE_LEDGER parent — the "
+        "pause-journal dirent is not linked durably before a journal file appears"
+    )
+    assert not journal_file_existed, (
+        "the parent was fsynced only AFTER a journal file already existed — a writer "
+        "dying in that window leaves a file whose directory is not durably linked"
+    )
+    assert [target for target, _ in seen] == [journal_dir.parent, journal_dir]
+
+
+@pytest.mark.parametrize(
+    ("residue", "gated_form_it_defeats"),
+    [
+        ("directory-only", "if dir_is_new:"),
+        ("directory-and-file", "if is_new_file or dir_is_new:"),
+    ],
+)
+def test_parent_is_fsynced_even_when_a_dead_writer_left_state_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, residue: str, gated_form_it_defeats: str
+) -> None:
+    """Both crash residues a flag-gated parent fsync skips FOREVER.
+
+    `dir_is_new` and `is_new_file` are PROCESS-LOCAL, but the crash they must survive
+    is another process's. Two residues, each defeating one gated form:
+
+    - `directory-only` — a writer `mkdir`ed and died. Every successor reads
+      `dir_is_new=False`, so `if dir_is_new:` never fires again.
+    - `directory-and-file` — a writer's `path.open("a")` created the journal file and
+      it died before the fsync. Every successor reads BOTH flags False, so even
+      `if is_new_file or dir_is_new:` never fires again. This is the interleaving that
+      falsifies "a journal file exists ⇒ some earlier writer already fsynced".
+
+    Mutation probes (run at this arc): gating the parent fsync on `dir_is_new` fails
+    the second case; gating it on `is_new_file or dir_is_new` also fails the second
+    case; deleting it fails both.
+    """
+    journal_dir = tmp_path / "state_ledger" / "pause-journal"
     journal_dir.mkdir(parents=True)
-    assert not _journal_file(journal_dir).exists()
+    if residue == "directory-and-file":
+        # The dead writer got as far as creating + writing its record.
+        _journal_file(journal_dir).write_text(
+            json.dumps({"workflow_id": _WORKFLOW_ID, "pause_snapshot": {}}) + "\n",
+            encoding="utf-8",
+        )
 
-    fsynced: list[Path] = []
-    real = JournalWorkflowPauseStore._fsync_dir  # pyright: ignore[reportPrivateUsage]
+    seen = _record_fsyncs(monkeypatch, journal_dir)
+    JournalWorkflowPauseStore(journal_dir=journal_dir).capture(_snapshot("run-after-residue"))
 
-    def _recording(directory: Path) -> None:
-        fsynced.append(directory)
-        real(directory)
-
-    monkeypatch.setattr(JournalWorkflowPauseStore, "_fsync_dir", staticmethod(_recording))
-    JournalWorkflowPauseStore(journal_dir=journal_dir).capture(_snapshot("run-after-orphan"))
-
-    assert journal_dir.parent in fsynced, (
-        "the first real capture after a lock-only directory creation never made the "
-        "pause-journal dirent durable — an accepted pause is losable to a host crash"
+    assert journal_dir.parent in [target for target, _ in seen], (
+        f"a capture over {residue} crash residue never made the pause-journal dirent "
+        f"durable — the {gated_form_it_defeats} form skips it forever"
     )
 
 
+def test_journal_dir_is_fsynced_on_every_append_not_only_the_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The identical defect one level down, closed rather than left as a known twin.
+
+    A writer that creates the journal file, writes, and dies before
+    `_fsync_dir(journal_dir)` leaves the file's dirent non-durable; under an
+    `if is_new_file:` gate every successor reads `False` and never links it. This
+    window is PRE-EXISTING (byte-identical to the pre-`B-97` code) — it is closed here
+    because shipping a fix for the parent while knowingly leaving its exact twin one
+    level down is the asymmetry, not the discipline.
+
+    Mutation probes (run at this arc): re-gating on `if is_new_file:` fails the
+    second-capture assertion; deleting the call fails the first.
+    """
+    journal_dir = tmp_path / "state_ledger" / "pause-journal"
+    seen = _record_fsyncs(monkeypatch, journal_dir)
+    store = JournalWorkflowPauseStore(journal_dir=journal_dir)
+
+    store.capture(_snapshot("run-first"))
+    assert [target for target, _ in seen] == [journal_dir.parent, journal_dir]
+
+    seen.clear()
+    store.capture(_snapshot("run-second"))
+    assert [target for target, _ in seen] == [journal_dir.parent, journal_dir], (
+        "a repeat append skipped a directory fsync — a predecessor that died before "
+        "linking the dirent would never be recovered from"
+    )
+
+
+@requires_posix_flock
+@pytest.mark.parametrize("dangling", [False, True])
+def test_a_symlink_planted_at_the_lock_path_fails_loud(tmp_path: Path, dangling: bool) -> None:
+    """`O_NOFOLLOW` on the lock-file open, witnessed.
+
+    Without it, a symlink planted at `<journal>.lock` silently redirects exclusion to
+    an attacker-chosen inode: every writer would `flock` a file of someone else's
+    choosing, so two writers could believe they hold the lock while serializing
+    against nothing — and a DANGLING symlink is worse, because `O_CREAT` would
+    materialize the lock file at the link's target instead. Both are refused loudly.
+
+    Mutation probe (run at this arc): dropping `os.O_NOFOLLOW` from the flag set makes
+    `capture()` succeed against both planted links and fails BOTH parameterizations of
+    this test — and only this test, which is why it is owed.
+    """
+    journal_dir = tmp_path / "state_ledger" / "pause-journal"
+    journal_dir.mkdir(parents=True)
+    target = tmp_path / "attacker-chosen"
+    if not dangling:
+        target.write_bytes(b"")
+    _lock_file(journal_dir).symlink_to(target)
+
+    with pytest.raises(OSError) as excinfo:
+        JournalWorkflowPauseStore(journal_dir=journal_dir).capture(_snapshot("run-symlink"))
+    assert excinfo.value.errno in {errno.ELOOP, errno.EMLINK}, (
+        f"expected a loud O_NOFOLLOW refusal, got errno={excinfo.value.errno}"
+    )
+    assert not target.exists() or not target.read_bytes(), (
+        "the lock open followed the symlink and wrote through it"
+    )
+
+
+def test_windows_carve_out_round_trips_without_creating_a_lock_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `_IS_WINDOWS` branch, EXECUTED — on every platform.
+
+    It was previously unreachable in CI: `fcntl` exists on the POSIX runners, so the
+    branch never ran, and the module-wide skip meant Windows ran nothing at all. The
+    branch is not decoration — it is the documented C-STK-10 / `B-45` posture, and a
+    typo in it would have shipped invisibly.
+
+    Asserts the two things the carve-out promises: the store still round-trips (Windows
+    sits at exact pre-`B-97` parity, not at a broken capture), and NO lock file is
+    created (there is nothing to lock with).
+
+    Mutation probe (run at this arc): making the carve-out `raise` instead of yielding
+    fails this test and no other.
+    """
+    monkeypatch.setattr(store_module, "_IS_WINDOWS", True)
+    journal_dir = tmp_path / "state_ledger" / "pause-journal"
+    store = JournalWorkflowPauseStore(journal_dir=journal_dir)
+
+    store.capture(_snapshot("run-windows"))
+    store.capture(_snapshot("run-windows-2"))
+
+    read = store.read_latest_attributed(_WORKFLOW_ID)
+    assert read.snapshot is not None and read.snapshot.run_id == "run-windows-2"
+    assert read.record_count == 2
+    assert not _lock_file(journal_dir).exists(), (
+        "the Windows carve-out created a lock file it can never lock"
+    )
+
+
+@requires_posix_flock
 def test_the_lock_file_is_not_mistaken_for_a_journal_record(tmp_path: Path) -> None:
     """The lock file is a `<journal>.lock` sibling in the same directory. Nothing globs
     that directory (reads open one sha256-named path directly), so its presence must
