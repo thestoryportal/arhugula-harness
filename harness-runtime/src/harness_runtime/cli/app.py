@@ -724,6 +724,84 @@ def migrate_audit_sidecar_command(ctx: typer.Context) -> None:
     raise typer.Exit(code=code)
 
 
+@app.command(
+    "adopt-pause-journals",
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+        "help_option_names": [],
+    },
+    help=(
+        "One-time (3b) adoption: relocate LEGACY untenanted pause journals to "
+        "the tenant-composite key. NOT the default — (3a) abandon-by-default is."
+    ),
+    short_help="Pause-journal (3b) adoption (delegates to the B-97(a) module).",
+)
+def adopt_pause_journals_command(ctx: typer.Context) -> None:
+    """Pass-through wrapper for the `B-97`(a) (3b) adoption action (Runtime spec
+    v1.108 §13.4's NEW admin-migration row; U-RT-149).
+
+    Forwards all extra args verbatim to
+    `harness_runtime.admin.pause_journal_adoption:main` — the `python -m` module
+    path stays as the implementation (§13.4 permits it, on the
+    `migrate-audit-sidecar` precedent); no logic is duplicated here.
+    """
+    from harness_runtime.admin import pause_journal_adoption as _adoption_admin
+
+    raise typer.Exit(code=_remap_admin_arg_parse_exit(_adoption_admin.main, ctx.args))
+
+
+@app.command(
+    "dispose-pause-journals",
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+        "help_option_names": [],
+    },
+    help=(
+        "OPTIONAL destructive disposal of orphaned pause journals. DRY-RUN BY "
+        "DEFAULT; refuses while a (3b) adoption could still recover them."
+    ),
+    short_help="Pause-journal orphan disposal (dry-run by default).",
+)
+def dispose_pause_journals_command(ctx: typer.Context) -> None:
+    """Pass-through wrapper for the `B-97`(a) OPTIONAL disposal action (Runtime
+    spec v1.108 §13.4's NEW CONDITIONAL row; U-RT-149 AC #10).
+
+    A destructive write, and therefore FORECLOSED from `harness-inspect` by the
+    §13 read-only invariant (§13.7 term 6) — it lives as its own action, here.
+    """
+    from harness_runtime.admin import pause_journal_disposal as _disposal_admin
+
+    raise typer.Exit(code=_remap_admin_arg_parse_exit(_disposal_admin.main, ctx.args))
+
+
+def _remap_admin_arg_parse_exit(admin_main: Callable[[list[str]], int], argv: list[str]) -> int:
+    """Run an argparse-based admin `main`, honoring the §14.18.4 arg-parse contract.
+
+    argparse PARSE failures raise `SystemExit(2)` inside the admin module. Under
+    the parent CLI those map to `RT-FAIL-CLI-ARG-INVALID` -> exit 3, exactly as
+    the `migrate-audit-sidecar` wrapper already does; body return codes
+    (0 success / 1 refused / 2 usage-by-return) pass through unchanged.
+
+    Factored out at the `B-97`(a) impl leg rather than copied a third time —
+    *(out-of-family review round 1 [P2]: the two new wrappers let
+    `SystemExit(2)` escape, returning 2 with no fail class and diverging from
+    the flat-CLI contract the adjacent wrapper honors)*. The older
+    inspect/shutdown wrappers predate this remap and keep their landed behavior.
+    """
+    try:
+        return admin_main(argv)
+    except SystemExit as exc:
+        if exc.code == 2:
+            _print_fail_class(
+                _ARG_INVALID_FAIL_CLASS,
+                "admin subcommand argument parsing failed (see stderr above)",
+            )
+            raise typer.Exit(code=_ARG_INVALID_EXIT_CODE) from exc
+        raise
+
+
 # Click UsageError exits with code 2 by default. Per runtime spec v1.35
 # §14.18.4 + §14.18.2, CLI arg-parse failures map to RT-FAIL-CLI-ARG-INVALID
 # → exit code 3. We discriminate UsageError (arg-parse) from legitimate

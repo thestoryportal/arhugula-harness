@@ -805,7 +805,18 @@ def _read_durable_pause_snapshot(
         workflow.workload_class,
         config.deployment_surface,
     )
-    store = JournalWorkflowPauseStore(journal_dir=pause_journal_dir_for(state_ledger_dir))
+    # The tenant scope enters the KEY from `config` — Runtime spec v1.108
+    # §14.14.9.1: keying is the §14.14.8 TENANT-COMPOSITE key, *"matching
+    # `resume()` exactly"*, by that paragraph's OWN both-surfaces-or-neither
+    # rule. This ONE function is the read authority for BOTH the `resume()`
+    # `resume_handle` path AND the §14.14.9 accessor, so the two surfaces cannot
+    # drift apart by construction — de-pairing them would require adding a
+    # SECOND read path, which `test_.._both_surfaces_read_through_one_authority`
+    # fails on. The caller-facing input triple is BYTE-UNCHANGED.
+    store = JournalWorkflowPauseStore(
+        journal_dir=pause_journal_dir_for(state_ledger_dir),
+        tenant_id=config.tenant_id,
+    )
     return store.read_latest_attributed(resume_handle)
 
 

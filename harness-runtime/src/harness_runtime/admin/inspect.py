@@ -37,6 +37,7 @@ N/A in the summary.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sqlite3
 import sys
@@ -53,6 +54,7 @@ from harness_od.operator_burden_eval_primitives import OperatorBurdenEvalPrimiti
 
 if TYPE_CHECKING:
     from harness_runtime.admin.inspect_audit_verification import AuditInspectionOutcome
+    from harness_runtime.admin.pause_journal_enumeration import EnumeratedJournal
 
 __all__ = ["build_parser", "main"]
 
@@ -133,7 +135,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_audit_verification_arguments(parser)
     _add_holdout_arguments(parser)
+    _add_pause_journal_arguments(parser)
     return parser
+
+
+def _add_pause_journal_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register the §13.7 pause-journal ENUMERATION input (Runtime spec v1.108).
+
+    ONE optional override. The deployment's authoritative `RuntimeConfig` —
+    which supplies the tenant scope the §13.7.1 classification re-derives against
+    — is ALREADY a §13.5 input to this binary (`--runtime-config`), so **nothing
+    new is asked of the operator** (§13.7.1). The flag spelling is
+    implementation discretion per §13.7's deferred list; the seven terms are not.
+    """
+    parser.add_argument(
+        "--pause-journal-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the durable pause-journal directory (Runtime spec v1.108 "
+            "§13.7). Default: <ledger dir>/pause-journal, the §14.14.8 residence. "
+            "Enumeration ENGAGES ONLY when the directory exists; output is "
+            "byte-unchanged otherwise."
+        ),
+    )
 
 
 def _add_audit_verification_arguments(parser: argparse.ArgumentParser) -> None:
@@ -358,6 +383,7 @@ def _format_human(
     entries: list[StateLedgerEntry],
     last_n: int,
     audit_section: str | None = None,
+    pause_journal_section: str | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append("harness-inspect — read-only summary")
@@ -389,6 +415,13 @@ def _format_human(
         # cost sections (codex round-4 P2).
         lines.append("")
         lines.append(audit_section)
+    if pause_journal_section is not None:
+        # §13.7 term 5 — ENGAGES ONLY when a journal directory exists. When it
+        # does not, this argument is `None` and the output above is
+        # BYTE-UNCHANGED from a pre-v1.108 run: the operator's burden is zero and
+        # a deployment that has never journaled a pause never sees this surface.
+        lines.append("")
+        lines.append(pause_journal_section)
     return "\n".join(lines) + "\n"
 
 
@@ -398,6 +431,7 @@ def _format_json(
     entries: list[StateLedgerEntry],
     last_n: int,
     audit_report: dict[str, Any] | None = None,
+    pause_journal_report: dict[str, Any] | None = None,
 ) -> str:
     head = _entry_head_hash(entries[-1]) if entries else None
     payload: dict[str, Any] = {
@@ -412,6 +446,8 @@ def _format_json(
     }
     if audit_report is not None:
         payload.update(audit_report)
+    if pause_journal_report is not None:
+        payload.update(pause_journal_report)
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
@@ -672,12 +708,36 @@ def main(argv: list[str] | None = None) -> int:
     if isinstance(audit, int):
         return audit  # RT-FAIL-INSPECT-PATH input error — summary skipped
 
+    # --- §13.7 pause-journal enumeration (U-RT-149) ------------------------
+    # Engagement predicate: the resolved pause-journal directory EXISTS. Absent
+    # → `None` → output byte-unchanged from a pre-v1.108 run (term 5, the §13.5
+    # engagement-predicate shape). Like §13.5 the report COMPOSES with the
+    # established summary; it never replaces a section and never governs the
+    # exit code (enumeration is a read, not a verdict).
+    try:
+        journals = _enumerate_pause_journals_if_engaged(args, ledger_path)
+    except OSError as exc:
+        # An unreadable journal directory is a PATH ERROR, never an empty
+        # listing. Swallowing it would render `pause journals: 0` and present
+        # UNKNOWN exposure as a proven zero — on the pre-flight surface whose
+        # entire purpose is to bound what a cutover would abandon. It takes the
+        # binary's own RT-FAIL-INSPECT-PATH exit, exactly like an unreadable
+        # ledger. *(Out-of-family review round 1 [P2].)*
+        print(
+            f"harness-inspect: RT-FAIL-INSPECT-PATH — pause-journal directory unreadable: {exc}",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
+
     if args.json:
         output = _format_json(
             ledger_path=ledger_path,
             entries=entries,
             last_n=last_n,
             audit_report=audit.as_report() if audit is not None else None,
+            pause_journal_report=(
+                _format_pause_journal_json(journals) if journals is not None else None
+            ),
         )
     else:
         output = _format_human(
@@ -688,6 +748,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"audit verification: {audit.disposition.upper()}\n{audit.detail}"
                 if audit is not None
                 else None
+            ),
+            pause_journal_section=(
+                _format_pause_journal_human(journals) if journals is not None else None
             ),
         )
 
@@ -852,6 +915,165 @@ def _run_audit_verification_if_engaged(
     if outcome.disposition == "hash-only-preserved":
         return None  # pre-v1.101 behavior verbatim — plain summary proceeds.
     return outcome
+
+
+# ---------------------------------------------------------------------------
+# §13.7 durable-pause-journal enumeration (U-RT-149; Runtime spec v1.108).
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PauseJournalReport:
+    """The §13.7 enumeration plus whether the classification had an AUTHORITY.
+
+    `scope_known=False` means the deployment's own tenant scope could NOT be
+    determined, so CURRENT-FORMAT is indistinguishable from NOT-ATTRIBUTABLE and
+    the listing says exactly that instead of presenting an unfounded diagnosis.
+    """
+
+    journals: list[EnumeratedJournal]
+    scope_known: bool
+
+
+_SCOPE_UNAVAILABLE_NOTE = (
+    "DEPLOYMENT SCOPE UNAVAILABLE — no usable RuntimeConfig was found, so this "
+    "deployment's own tenant scope is unknown and CURRENT-FORMAT journals cannot "
+    "be distinguished from NOT-ATTRIBUTABLE ones. Pass --runtime-config to "
+    "classify. No row below is a diagnosis of mis-filing."
+)
+
+
+def _enumerate_pause_journals_if_engaged(
+    args: argparse.Namespace, ledger_path: Path
+) -> PauseJournalReport | None:
+    """Enumerate the pause-journal directory when it exists; else `None`.
+
+    §13.7 term 5 — ENGAGES ONLY when a journal directory exists. §13.7 term 2 —
+    the surface is usable BEFORE an upgrade, against a not-yet-upgraded
+    deployment, so the operator can drain outstanding pauses rather than
+    discover the loss afterwards; nothing here requires v1.108-format journals.
+
+    The tenant scope for the §13.7.1 classification comes from the deployment's
+    authoritative `RuntimeConfig` — already a §13.5 input to this binary. When no
+    usable config can be found the scope is UNKNOWN, and that is reported rather
+    than silently assumed to be the untenanted branch.
+    """
+    from harness_runtime.admin.pause_journal_enumeration import enumerate_pause_journals
+    from harness_runtime.lifecycle.journal_workflow_pause_store import PAUSE_JOURNAL_SUBDIR
+
+    journal_dir: Path = (
+        args.pause_journal_dir
+        if args.pause_journal_dir is not None
+        else ledger_path.parent / PAUSE_JOURNAL_SUBDIR
+    )
+    if not journal_dir.is_dir():
+        return None
+    tenant_scope, scope_known = _authoritative_tenant_scope(args)
+    return PauseJournalReport(
+        # `scope_known` is passed THROUGH to the classifier, not merely reported
+        # alongside it: an unknown scope is NOT an untenanted one, and letting
+        # `None` stand in for it would emit `current-format` — *ordinary state,
+        # not at risk* — for an untenanted-format journal this deployment may not
+        # own. A JSON consumer would act on that false all-clear.
+        # *(Out-of-family review round 4 [P2].)*
+        journals=enumerate_pause_journals(
+            journal_dir, tenant_scope=tenant_scope, scope_known=scope_known
+        ),
+        scope_known=scope_known,
+    )
+
+
+def _authoritative_tenant_scope(args: argparse.Namespace) -> tuple[str | None, bool]:
+    """The deployment's normalized tenant scope for the §13.7.1 classification.
+
+    **Loaded through the NORMAL `RuntimeConfigSource` precedence chain, not only
+    from an explicit `--runtime-config`.** A tenanted deployment configured the
+    ordinary way — `HARNESS_TENANT_ID`, or an auto-discovered `harness.toml` —
+    would otherwise be read as UNTENANTED here, and every one of its valid
+    tenant-keyed journals would be classified `NOT_ATTRIBUTABLE` instead of
+    `CURRENT_FORMAT`: the surface would slander a healthy deployment's own live
+    state on its most common configuration. `--runtime-config` still wins when
+    supplied; §3.7's precedence does the rest. *(Out-of-family review round 3
+    [P2].)*
+    """
+    from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
+    from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
+
+    try:
+        config = RuntimeConfigSource.load(config_file=args.runtime_config)
+    except RuntimeConfigLoadError:
+        # The §13.5 path already refuses an unusable EXPLICIT --runtime-config
+        # with RT-FAIL-INSPECT-PATH before this runs; re-raising here would give
+        # one input two error surfaces, and an absent or unusable AMBIENT source
+        # must not break a plain ledger summary. But it MUST NOT be silently read
+        # as "untenanted" either — that would present a tenanted deployment's own
+        # live journals as NOT-ATTRIBUTABLE with no hint the diagnosis rests on an
+        # unknown. Report the scope UNAVAILABLE; the listing says so.
+        return None, False
+    try:
+        return normalize_tenant_scope(config.tenant_id), True
+    except ValueError:
+        # A reserved scope cannot classify anything; report it as unavailable
+        # rather than as a confident untenanted classification.
+        return None, False
+
+
+def _format_pause_journal_human(report: PauseJournalReport) -> str:
+    """Human rendering of the §13.7 enumeration."""
+    from harness_runtime.admin.pause_journal_enumeration import UPPER_BOUND_DISCLAIMER
+
+    journals = report.journals
+    lines = [
+        f"pause journals: {len(journals)} (Runtime spec v1.108 §13.7)",
+        f"  {UPPER_BOUND_DISCLAIMER}",
+    ]
+    if not report.scope_known:
+        lines.append(f"  {_SCOPE_UNAVAILABLE_NOTE}")
+    for journal in journals:
+        # The identity is rendered with `!r`, NEVER verbatim. The key encoding
+        # deliberately supports EVERY Python string via `surrogatepass`, so a
+        # persisted `workflow_id` may hold a LONE SURROGATE — which raises
+        # `UnicodeEncodeError` the moment this line reaches a normal UTF-8
+        # stdout — or control characters that would corrupt the row structure.
+        # `repr` escapes both. *(Out-of-family review round 3 [P2].)*
+        identity = repr(journal.workflow_id) if journal.workflow_id is not None else "(ABSENT)"
+        classification = (
+            journal.classification.value if journal.classification is not None else "unclassified"
+        )
+        actionable = "actionable" if journal.identity_actionable else "NOT actionable"
+        digest = journal.latest_record_digest or "(none)"
+        records = "UNREADABLE" if journal.record_count is None else str(journal.record_count)
+        lines.append(
+            f"  - {journal.path.name} records={records} "
+            f"latest_record_digest={digest} workflow_id={identity} "
+            f"class={classification} ({actionable})"
+        )
+    return "\n".join(lines)
+
+
+def _format_pause_journal_json(report: PauseJournalReport) -> dict[str, Any]:
+    """JSON rendering of the §13.7 enumeration, composed into the summary payload."""
+    from harness_runtime.admin.pause_journal_enumeration import UPPER_BOUND_DISCLAIMER
+
+    journals = report.journals
+    return {
+        "pause_journal_count": len(journals),
+        "pause_journal_upper_bound_disclaimer": UPPER_BOUND_DISCLAIMER,
+        "pause_journal_deployment_scope_known": report.scope_known,
+        "pause_journals": [
+            {
+                "file": journal.path.name,
+                "record_count": journal.record_count,
+                "latest_record_digest": journal.latest_record_digest,
+                "workflow_id": journal.workflow_id,
+                "classification": (
+                    journal.classification.value if journal.classification is not None else None
+                ),
+                "identity_actionable": journal.identity_actionable,
+            }
+            for journal in journals
+        ],
+    }
 
 
 if __name__ == "__main__":  # pragma: no cover — invoked via console_script

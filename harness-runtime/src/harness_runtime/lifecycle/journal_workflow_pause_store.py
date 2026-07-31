@@ -17,12 +17,18 @@ CXA-2 bounded-residual (line 181), untouched; this is its workflow-layer sibling
 where a *real producer* (the DURABLE_ASYNC HITL / EXPLICIT_OPERATOR pause at
 ``workflow_driver.py:795/:951``) and a *real caller* (``api.resume``) exist.
 
-**One journal file per workflow.** Each workflow's pauses append to a dedicated
-``<journal_dir>/<sha256(workflow_id)>.jsonl`` file (mirrors #475). The last line
-of a workflow's file is its authoritative latest pause; per-workflow files
-isolate workflows (a corrupt record for one workflow cannot block resuming
-another). The resume handle is the ``workflow_id`` (the identifier the caller
-always knows after a crash — the fresh-uuid ``run_id`` of a lost ``RunResult``
+**One journal file per (TENANT, WORKFLOW) pair.** Each pair's pauses append to a
+dedicated ``<journal_dir>/<sha256(encode(tenant_scope, workflow_id))>.jsonl``
+file. The last line of a pair's file is its authoritative latest pause;
+per-pair files isolate workflows (a corrupt record for one cannot block
+resuming another) AND isolate tenants sharing one resolved journal directory
+(Runtime spec v1.108 §14.14.8, the RATIFIED ``B-97`` half (a) arc — keying
+AMENDED from ``workflow_id`` alone to the tenant-composite tuple, realized as
+per-tenant PATH SEGREGATION; see :func:`encode_pause_journal_key`). The resume
+handle is STILL the ``workflow_id`` alone and the caller-facing input triple is
+BYTE-UNCHANGED — the tenant scope has always lived inside ``RuntimeConfig``,
+which both construction sites already hold (the identifier the caller always
+knows after a crash — the fresh-uuid ``run_id`` of a lost ``RunResult``
 is not knowable post-crash; design §7b keying decision). The ``run_id`` is
 carried *inside* the persisted snapshot for audit continuity, and resume
 correctness is preserved by the ``api.resume`` detect-then-refuse guards
@@ -78,13 +84,21 @@ from typing import NamedTuple, cast
 from harness_cp.pause_resume_protocol_types import PauseSnapshot
 from pydantic import ValidationError
 
+from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
+
 __all__ = [
+    "PAUSE_JOURNAL_FILENAME_SUFFIX",
     "PAUSE_JOURNAL_LOCK_SUFFIX",
     "PAUSE_JOURNAL_SUBDIR",
     "JournalWorkflowPauseStore",
     "PauseJournalReadCause",
     "PauseJournalReadResult",
+    "cross_process_journal_lock",
+    "encode_pause_journal_key",
+    "journal_exclusion_is_degraded",
+    "legacy_pause_journal_filename",
     "pause_journal_dir_for",
+    "pause_journal_filename",
 ]
 
 _IS_WINDOWS = sys.platform == "win32"
@@ -104,7 +118,26 @@ class PauseJournalReadCause(StrEnum):
     """
 
     ABSENT = "absent"
-    """No journal record exists for this ``workflow_id`` — permanent."""
+    """No journal record exists for this **TENANT-COMPOSITE KEY** — the
+    ``(normalized_tenant_scope, workflow_id)`` pair of §14.14.8, not the
+    ``workflow_id`` alone (Runtime spec v1.108 §30; a DEFINITION amendment, no
+    new cause member — the vocabulary stays CLOSED at five).
+
+    Permanent for the SINGLE-PROCESS deployment, where it is decisive;
+    INDETERMINATE across processes (`B-102`) — a ``capture()`` dispatched but not
+    yet having created its journal file reports ``absent``, and that capture may
+    complete immediately after this read.
+
+    **THREE DISTINCT UNDERLYING STATES share this cause, and they are
+    deliberately NOT DISTINGUISHABLE at this surface**: (1) this workflow never
+    journaled a pause under this tenant scope; (2) a WRONG-TENANT lookup — the
+    record may exist under a different ``config.tenant_id``, and the lookup
+    resolved the caller's OWN path and truthfully found nothing there; (3) an
+    ABANDONED LEGACY pre-v1.108 untenanted journal. Adding a discriminator here
+    would be exactly the EXISTENCE ORACLE path segregation removes — every tenant
+    probes the same legacy path, so a distinct signal would disclose an
+    untenanted record for a GUESSED ``workflow_id``. Learning which state obtains
+    is the operator-only §13.7 enumeration surface's job."""
 
     EMPTY_JOURNAL = "empty-journal"
     """The per-workflow file EXISTS but holds no record. Permanent for the
@@ -114,6 +147,9 @@ class PauseJournalReadCause(StrEnum):
     concurrent APPENDS against each other says nothing about a capture that
     lands after a read has already returned, and the read deliberately takes no
     lock (see :meth:`JournalWorkflowPauseStore.read_latest_attributed`).
+    *(`B-102`, v1.108: :attr:`ABSENT` and :attr:`CORRUPT_LATEST`'s parse branch
+    now carry this same qualification — the residual asymmetry the `B-97`(b) arc
+    registered is closed.)*
     MUST NOT fold into :attr:`ABSENT` despite sharing that routing —
     collapsing on shared routing is the exact defect this refinement undoes, and
     the two carry different operator repairs."""
@@ -133,7 +169,15 @@ class PauseJournalReadCause(StrEnum):
     via ``model_dump(mode="json")``, so an undecodable byte is persistent
     corruption on disk that no number of re-invocations can repair, and a
     transient classification would send the operator loop into an unbounded retry
-    with no diagnostic."""
+    with no diagnostic.
+
+    **The `B-102` indeterminacy reaches the PARSE-failure branch ONLY, never the
+    DECODE-failure branch** (Runtime spec v1.108 §30). PARSE failure: the latest
+    line is present but unparseable — a torn trailing line is exactly what an
+    in-flight append looks like from a reader, so this is INDETERMINATE across
+    processes. DECODE failure: the stored bytes are not decodable at all —
+    UNCONDITIONALLY PERMANENT, since the invalid bytes persist on disk, an append
+    leaves them in place, and every re-read fails identically."""
 
     WORKFLOW_MISMATCH = "workflow-mismatch"
     """The latest record's ``workflow_id`` does not match — permanent."""
@@ -184,7 +228,7 @@ class PauseJournalReadResult(NamedTuple):
     indeterminate: bool
     """Whether this outcome is NOT decisive loss.
 
-    Spec v1.107 §30 is explicit for ``empty-journal``: it is permanent *for the
+    Spec v1.107 §30 was explicit for ``empty-journal``: it is permanent *for the
     single-process deployment, where it is decisive*, but **INDETERMINATE across
     processes** — a concurrent ``capture()`` may complete immediately after this
     read — and
@@ -192,12 +236,25 @@ class PauseJournalReadResult(NamedTuple):
     is reachable."* Reporting a bare ``retryable=False`` did exactly that, so the
     indeterminacy is carried as its own fact rather than collapsed into the retry
     flag. *(Out-of-family review [P2], round 3.)*
+
+    **AMENDED at v1.108 — `B-102`'s impl half. ALL THREE permanent-absence causes
+    now carry the qualification, rather than one of three:** ``empty-journal``
+    (unchanged), ``absent`` (a capture dispatched but not yet having created its
+    file), and ``corrupt-latest``'s **PARSE-failure branch** (a torn tail is what
+    an in-flight append looks like from a reader). ``corrupt-latest``'s
+    **DECODE-failure branch** stays UNCONDITIONALLY PERMANENT, and so do
+    ``read-error`` and ``workflow-mismatch``.
     """
 
     record_count: int
-    """How many well-formed lines the workflow's journal holds. Monotonically
-    non-decreasing for the journal's lifetime per §14.14.8 (append-only, NEVER
-    truncated), so two successively observable records always differ here."""
+    """How many **NON-BLANK RAW LINES** the journal holds — counted WITHOUT
+    parsing any record, which is what lets the §13.7 enumeration surface report
+    the SAME number for a journal that this store does (Runtime spec v1.108
+    §13.7 term 3; a *"well-formed lines"* count would require parsing, which
+    §13.7 term 4 forbids, and the two surfaces would disagree on a torn journal).
+    Monotonically non-decreasing for the journal's lifetime per §14.14.8
+    (append-only, NEVER truncated), so two successively observable records always
+    differ here."""
 
     latest_record_digest: str | None
     """sha256 of the latest RAW journal line, or ``None`` when there is none."""
@@ -206,6 +263,12 @@ class PauseJournalReadResult(NamedTuple):
 #: Subdirectory under the resolved ``STATE_LEDGER`` directory that holds the
 #: per-workflow pause journals (design §7b D2-bis co-location).
 PAUSE_JOURNAL_SUBDIR = "pause-journal"
+
+PAUSE_JOURNAL_FILENAME_SUFFIX = ".jsonl"
+"""Suffix of a canonical per-`(tenant, workflow)` journal file. The canonical
+journal name shape is ``<64 lowercase hex>.jsonl`` and NOTHING else — the
+§13.7 enumeration filter is defined against exactly this (Runtime spec v1.108
+§13.7 term 1)."""
 
 PAUSE_JOURNAL_LOCK_SUFFIX = ".lock"
 """Suffix of a workflow journal's dedicated cross-process advisory-lock file
@@ -234,19 +297,222 @@ def pause_journal_dir_for(state_ledger_dir: Path) -> Path:
     return state_ledger_dir / PAUSE_JOURNAL_SUBDIR
 
 
+# ---------------------------------------------------------------------------
+# The tenant-composite key encoding (Runtime spec v1.108 §14.14.8).
+# ---------------------------------------------------------------------------
+
+#: Byte joined BETWEEN length-prefixed segments. Part of the PINNED grammar.
+_KEY_SEGMENT_JOINER = b"|"
+
+#: Byte separating a segment's decimal-ASCII BYTE-length prefix from its bytes.
+_KEY_LENGTH_SEPARATOR = b":"
+
+#: The error handler is PART OF THE GRAMMAR, not an implementation detail
+#: (Runtime spec v1.108 §14.14.8). `RuntimeConfig.tenant_id` and `workflow_id`
+#: are plain `str` fields that accept a LONE SURROGATE, which STRICT UTF-8
+#: encoding REFUSES — a strict encoder would make this encoding PARTIAL over
+#: its own declared domain and turn a config-valid deployment's capture into a
+#: crash. `surrogatepass` keeps it TOTAL over the full `(str | None) × str`
+#: domain without narrowing a public input contract, which this arc may not do.
+_KEY_ENCODING_ERRORS = "surrogatepass"
+
+
+def encode_pause_journal_key(tenant_scope: str | None, workflow_id: str) -> bytes:
+    """The TOTAL, INJECTIVE canonical encoding of `(tenant_scope, workflow_id)`.
+
+    Runtime spec v1.108 §14.14.8, *"THE ENCODING IS A CONTRACT TERM, TOTAL AND
+    INJECTIVE"*. The sha256 preimage of a journal filename. **The grammar is
+    PINNED by the spec and is NOT implementation discretion:**
+
+    - each segment is encoded UTF-8 **with the ``surrogatepass`` error handler**;
+    - each segment is prefixed with its resulting **BYTE** length in decimal
+      ASCII followed by ``:`` (the byte-count variant of the in-house
+      length-prefixed canonical-segment shape — the codebase ships BOTH a
+      character-count form at ``cost_attribution_f2_write`` and a byte-count
+      form at ``harness_od.audit_cutover_record``, and they emit different
+      bytes for any non-ASCII identifier, so the spec pins the byte-count one);
+    - segments are joined with ``|``;
+    - the **untenanted branch is the ONE-segment form** and a real tenant scope
+      the **TWO-segment form**.
+
+    **THE DERIVATION IS A CONSTANT — there is NO configuration surface, and none
+    may be added.** A configurable key derivation would be a second authority
+    over one durable address space: flipping it re-addresses every
+    `(tenant, workflow_id)` pair, orphaning every journal silently, with no
+    migration and no diagnostic. A future encoding change is a KEYING change and
+    MUST take the `B-97` half (a) fork path.
+
+    **Injective by construction, closing all THREE recorded hazards.** The
+    encoding is prefix-free and self-delimiting — a decoder reads decimal digits
+    greedily up to the first ``:``, then takes EXACTLY that many bytes, then
+    expects either end-of-input or ``|`` — so:
+
+    1. **branch collision** (`None` vs a real scope) is closed by SEGMENT COUNT
+       alone: no reserved literal is needed and none is reserved. *(This store
+       does NOT normalize its untenanted scope to ``_single``; see
+       :func:`normalize_tenant_scope`, whose `None → None` disposition is the
+       Runtime-local authority this encoding delegates to.)*
+    2. **delimiter collision** (a scope or `workflow_id` containing ``|`` or
+       ``:``) is closed by the length prefix — the delimiter is never SEARCHED
+       for, only counted past. Delimiter REJECTION is explicitly NOT available
+       as the answer: it would narrow a public input contract.
+    3. **field-boundary shift** — the naive ``tenant + "\\x00" + workflow_id``
+       concatenation maps `("a", "b\\0c")` and `("a\\0b", "c")` to identical
+       bytes; the length prefixes make the boundary explicit.
+    """
+    segments = (workflow_id,) if tenant_scope is None else (tenant_scope, workflow_id)
+    encoded = [segment.encode("utf-8", _KEY_ENCODING_ERRORS) for segment in segments]
+    return _KEY_SEGMENT_JOINER.join(
+        str(len(part)).encode("ascii") + _KEY_LENGTH_SEPARATOR + part for part in encoded
+    )
+
+
+def pause_journal_filename(tenant_scope: str | None, workflow_id: str) -> str:
+    """The canonical journal filename for a `(tenant_scope, workflow_id)` pair.
+
+    `tenant_scope` MUST already be normalized (see :func:`normalize_tenant_scope`).
+    The sha256 digest is the ONLY thing that reaches the filesystem — the
+    TENANT-SUBDIRECTORY layout is FORECLOSED by Runtime spec v1.108 §14.14.8 on
+    path-safety grounds (`RuntimeConfig.tenant_id` accepts `/`, `..`, an absolute
+    path and NUL, so a tenant used as a path COMPONENT could escape the journal
+    root; injectivity alone does not make a component filesystem-safe).
+    """
+    digest = hashlib.sha256(encode_pause_journal_key(tenant_scope, workflow_id)).hexdigest()
+    return f"{digest}{PAUSE_JOURNAL_FILENAME_SUFFIX}"
+
+
+def legacy_pause_journal_filename(workflow_id: str) -> str:
+    """The PRE-v1.108 journal filename: ``sha256(workflow_id)`` bare.
+
+    Retained SOLELY for the §13.7 three-way classification and the (3b)
+    adoption's LEGACY re-derivation. **No read path consults it** — Runtime spec
+    v1.108 §14.14.8 forbids a fallback read (*"a fallback would create a second
+    read authority over one key and fail open at exactly the boundary being
+    built"*), and the (3a) disposition abandons legacy journals by default.
+
+    Raises `UnicodeEncodeError` for a lone-surrogate `workflow_id` — faithful to
+    the legacy derivation, which used STRICT UTF-8 and therefore could never
+    have produced a file for such an id. Callers classifying an enumerated
+    journal treat that as "not LEGACY".
+    """
+    digest = hashlib.sha256(workflow_id.encode("utf-8")).hexdigest()
+    return f"{digest}{PAUSE_JOURNAL_FILENAME_SUFFIX}"
+
+
+def journal_exclusion_is_degraded() -> bool:
+    """Whether :func:`cross_process_journal_lock` is a documented no-op here.
+
+    The predicate the (3b) adoption's *"REFUSE WHERE THE PRIMITIVE DEGRADES"*
+    term keys on (Runtime spec v1.108 §14.14.8). Exposed as a NAMED PROPERTY of
+    the lock rather than leaving callers to re-test the platform: the adoption's
+    question is *"can this primitive exclude a straggler appender?"*, not *"is
+    this Windows?"* — and a caller answering the second question would silently
+    diverge if a future platform grew the same carve-out.
+
+    Read at CALL time, not import time, so the carve-out branch is exercisable.
+    """
+    return _IS_WINDOWS
+
+
+@contextmanager
+def cross_process_journal_lock(journal_path: Path) -> Generator[None, None, None]:
+    """Hold an exclusive same-host advisory lock over ONE journal's critical section.
+
+    ``B-97`` half (b)'s primitive, promoted to module scope at half (a) so the
+    (3b) adoption tool holds **the same lock of the same construction on the same
+    inode** a straggler appender contends on (Runtime spec v1.108 §14.14.8 term 1
+    / council `K-2`), rather than a second copy that would exclude nothing.
+    :meth:`JournalWorkflowPauseStore._cross_process_append_lock` delegates here —
+    ONE authority, never two.
+
+    A hand-rolled ``fcntl.flock`` on a dedicated ``<journal>.lock`` file,
+    mirroring the primitive already shipped at
+    ``protected_result_store._cross_process_lock`` — a fresh fd opened and
+    closed per call, no process-wide registry: ``flock`` coordinates through
+    the kernel via the on-disk inode, and the lock is released on process
+    death.
+
+    **PER-WORKFLOW, not per-directory — the grounded choice.** The house
+    ``harness_is.cross_process_ledger_lock.cross_process_scope_lock`` was the
+    obvious candidate (one exclusive lock per directory TREE, already imported
+    across this axis) and was tried first. Out-of-family review found it does
+    NOT fit cleanly here: a directory-wide lock makes one workflow's append
+    wait behind ANOTHER workflow's, which (i) contradicts this store's own
+    stated isolation property — per-workflow files exist precisely so one
+    workflow cannot block another — and (ii) has an externally visible cost,
+    because the read path is deliberately unlocked: while workflow B's first
+    capture queues behind workflow A's append, a read of B reports the
+    ``absent`` cause. A per-workflow lock leaves that pre-existing
+    capture-not-yet-landed race exactly the size it already was; a directory-wide
+    one would have widened it to the whole contended hold.
+
+    No-op on Windows (``_IS_WINDOWS``) — no ``fcntl`` there; same posture as
+    pre-``B-97``, matching ``harness_is.cross_process_ledger_lock``'s own
+    carve-out (the ``B-45`` register row). ``fcntl`` is imported lazily inside
+    this function, NEVER at module scope: an unguarded top-level import would
+    break ``import harness_runtime`` outright on Windows. **The (3b) adoption
+    REFUSES BY DEFAULT where this degrades** (spec §14.14.8 *"REFUSE WHERE THE
+    PRIMITIVE DEGRADES"*) rather than proceeding on a declaration.
+
+    **KNOWN + REGISTERED, deliberately not built here: this ``flock`` blocks
+    the event loop** on the capture path. Registered at ``B-103``; explicitly
+    out of scope for ``B-97`` half (a) (a mechanism/latency question with no
+    keying content). Re-raised by every transcript-less reviewer — it is a
+    DEFERRAL, not an oversight.
+    """
+    if _IS_WINDOWS:
+        yield
+        return
+    import fcntl  # POSIX-only; never reached on Windows.
+
+    lock_path = journal_path.with_name(journal_path.name + PAUSE_JOURNAL_LOCK_SUFFIX)
+    # O_NOFOLLOW: a symlink planted at the lock path — including a dangling
+    # one, which O_CREAT would otherwise materialize at its target — fails
+    # loud with ELOOP rather than silently locking (or creating) elsewhere.
+    flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 class JournalWorkflowPauseStore:
     """Durable per-workflow ``PauseSnapshot`` journal (workflow-layer F2/JOURNAL).
 
     ``capture`` appends the captured ``PauseSnapshot`` as one JSON line to the
-    workflow's ``<journal_dir>/<sha256(workflow_id)>.jsonl`` file (durably,
-    ``fsync``-ed); ``read_latest`` reads that file's **latest** line and
-    re-validates it into a ``PauseSnapshot``. Because the journal is on disk, a
-    fresh store over the same directory (a new process after a restart) resumes a
-    pause captured by a prior process.
+    pair's ``<journal_dir>/<sha256(encode(tenant_scope, workflow_id))>.jsonl``
+    file (durably, ``fsync``-ed); ``read_latest`` reads that file's **latest**
+    line and re-validates it into a ``PauseSnapshot``. Because the journal is on
+    disk, a fresh store over the same directory (a new process after a restart)
+    resumes a pause captured by a prior process.
+
+    **``tenant_id`` is a REQUIRED keyword, deliberately without a default.**
+    Runtime spec v1.108 §14.14.8 makes the tenant scope part of the store's key
+    identity, so a store that does not know its scope cannot compute a key at
+    all. ``None`` is a legitimate DOMAIN VALUE here (the untenanted /
+    single-tenant deployment), not an absence — defaulting it would conflate
+    *"not specified"* with *"untenanted"* and would let a construction site
+    silently key the wrong address space. Requiring it makes the §14.14.9.1
+    both-surfaces-or-neither rule a type-level property at every construction
+    site, not only a runtime one.
     """
 
-    def __init__(self, *, journal_dir: Path) -> None:
+    def __init__(self, *, journal_dir: Path, tenant_id: str | None) -> None:
         self._journal_dir = Path(journal_dir)
+        # Normalized ONCE, at construction, so an invalid scope fails fast rather
+        # than at the first capture. Delegates to the RUNTIME-LOCAL authority
+        # (`None -> None`; `""` and `"_single"` REFUSED) — Runtime spec v1.108
+        # §14.14.8 BINDS this delegate and explicitly FORBIDS delegating to
+        # `harness_od`'s `sidecar_tag` / `_tenant_tag`, whose `None -> "_single"`
+        # disposition is incompatible and would bind this store to a reserved
+        # literal it has no need to reserve. It must also not be a THIRD
+        # re-derivation — hence the import rather than a local copy.
+        self._tenant_scope = normalize_tenant_scope(tenant_id)
 
     def capture(self, snapshot: PauseSnapshot) -> None:
         """Append one ``PauseSnapshot`` record to the workflow's file, durably."""
@@ -295,7 +561,19 @@ class JournalWorkflowPauseStore:
                 snapshot=None,
                 cause=PauseJournalReadCause.ABSENT,
                 retryable=False,
-                indeterminate=False,
+                # `B-102` impl half (Runtime spec v1.108 §30's `absent` row):
+                # INDETERMINATE across processes on exactly the argument
+                # `empty-journal` already carried — a `capture()` dispatched but
+                # not yet having created its journal file reports `absent`, and
+                # that capture may complete immediately after this read.
+                # `B-97`(b)'s append lock SHRINKS the window; it does not close
+                # it, because the reader deliberately takes no lock. Reported
+                # unconditionally, exactly as `empty-journal` is: the store
+                # cannot know whether a second writer is reachable, and the spec
+                # term is *"MUST NOT PRESENT it as decisive loss where a second
+                # writer is reachable"* — so the honest value is the one that
+                # never over-claims.
+                indeterminate=True,
                 record_count=0,
                 latest_record_digest=None,
             )
@@ -314,6 +592,14 @@ class JournalWorkflowPauseStore:
             # blip: routing it transient would send the operator loop into an
             # unbounded retry with no diagnostic (spec v1.107 §30's stated
             # divergence from the council record's literal mapping).
+            #
+            # `B-102`'s indeterminacy reaches the PARSE-failure branch ONLY,
+            # NEVER this DECODE-failure branch (Runtime spec v1.108 §30's
+            # `corrupt-latest` row): the invalid bytes are persistent on disk, an
+            # append leaves them in place, and every re-read fails identically —
+            # so routing this indeterminate would send the operator into exactly
+            # the futile re-read loop the decode-routing rule exists to prevent.
+            # UNCONDITIONALLY PERMANENT.
             return PauseJournalReadResult(
                 snapshot=None,
                 cause=PauseJournalReadCause.CORRUPT_LATEST,
@@ -348,7 +634,14 @@ class JournalWorkflowPauseStore:
             snapshot=snapshot,
             cause=cause,
             retryable=False,
-            indeterminate=False,
+            # `B-102` impl half — the PARSE-failure branch of `corrupt-latest`
+            # ONLY (Runtime spec v1.108 §30). A torn trailing line is exactly
+            # what an in-flight append looks like from a reader, so a read
+            # landing mid-append attributes `corrupt-latest` to a record that is
+            # about to become well-formed. `workflow-mismatch` stays decisive:
+            # the handle names a different workflow, which no concurrent append
+            # changes.
+            indeterminate=cause is PauseJournalReadCause.CORRUPT_LATEST,
             record_count=len(lines),
             latest_record_digest=digest,
         )
@@ -356,77 +649,28 @@ class JournalWorkflowPauseStore:
     # -- durable journal I/O ------------------------------------------------
 
     def _journal_file(self, workflow_id: str) -> Path:
-        """The per-workflow journal file (filesystem-safe, collision-free name)."""
-        digest = hashlib.sha256(workflow_id.encode("utf-8")).hexdigest()
-        return self._journal_dir / f"{digest}.jsonl"
+        """The per-`(tenant, workflow)` journal file (filesystem-safe, collision-free).
+
+        The ONLY key-derivation site in the store. **There is NO fallback read**
+        — no code path consults the pre-v1.108 ``sha256(workflow_id)`` name
+        (Runtime spec v1.108 §14.14.8: legacy records are ABANDONED BY DEFAULT
+        under disposition (3a); a fallback would create a second read authority
+        over one key and fail open at exactly the boundary being built).
+        """
+        return self._journal_dir / pause_journal_filename(self._tenant_scope, workflow_id)
 
     @contextmanager
     def _cross_process_append_lock(self, journal_path: Path) -> Generator[None, None, None]:
-        """Hold an exclusive same-host lock over ONE workflow's append section.
+        """Hold an exclusive same-host lock over ONE journal's append section.
 
-        ``B-97`` half (b). A hand-rolled ``fcntl.flock`` on a dedicated
-        ``<journal>.lock`` file, mirroring the primitive already shipped at
-        ``protected_result_store._cross_process_lock`` — a fresh fd opened and
-        closed per call, no process-wide registry: ``flock`` coordinates through
-        the kernel via the on-disk inode, and the lock is released on process
-        death.
-
-        **PER-WORKFLOW, not per-directory — the grounded choice.** The house
-        ``harness_is.cross_process_ledger_lock.cross_process_scope_lock`` was the
-        obvious candidate (one exclusive lock per directory TREE, already imported
-        across this axis) and was tried first. Out-of-family review found it does
-        NOT fit cleanly here: a directory-wide lock makes one workflow's append
-        wait behind ANOTHER workflow's, which (i) contradicts this store's own
-        stated isolation property — per-workflow files exist precisely so one
-        workflow cannot block another — and (ii) has an externally visible cost,
-        because the read path is deliberately unlocked: while workflow B's first
-        capture queues behind workflow A's append, a read of B reports the
-        ``absent`` cause, which Runtime spec v1.107 §30 attributes as PERMANENT.
-        A per-workflow lock leaves that pre-existing capture-not-yet-landed race
-        exactly the size it already was; a directory-wide one would have widened
-        it to the whole contended hold. *(The residual spec-side asymmetry — §30
-        qualifies only ``empty-journal`` as cross-process INDETERMINATE, though
-        ``absent`` and ``corrupt-latest`` are reachable the same way — is a
-        contract question an impl leg must not settle, and is registered at
-        ``B-102``.)*
-
-        No-op on Windows (``_IS_WINDOWS``) — no ``fcntl`` there; same posture as
-        pre-``B-97``, matching ``harness_is.cross_process_ledger_lock``'s own
-        carve-out (the ``B-45`` register row). ``fcntl`` is imported lazily inside
-        this method, NEVER at module scope: an unguarded top-level import would
-        break ``import harness_runtime`` outright on Windows.
-
-        **KNOWN + REGISTERED, deliberately not built here: this ``flock`` blocks
-        the event loop.** ``capture()`` is called synchronously from the async
-        ``DurablePauseResumeProtocol.capture_pause_snapshot``, so a contended
-        acquisition stalls the loop for the holder's critical section (one write
-        plus two directory fsyncs — bounded by that section, not unbounded, but
-        still on-loop). The sibling durable store hit exactly this and grew an
-        off-loop path (``resolve_result_ref_off_loop``), so the shape is
-        precedented; adopting it here is a scoping decision for the ``B-97``
-        half-(a) leg or a follow-on, recorded on the ``B-97`` register row rather
-        than absorbed silently into a serialization arc. Re-raised by every
-        transcript-less reviewer — it is a DEFERRAL, not an oversight.
+        ``B-97`` half (b). Delegates to the module-level
+        :func:`cross_process_journal_lock` — promoted out of this method at half
+        (a) so the (3b) adoption tool takes the SAME lock, of the same
+        construction, on the SAME inode a straggler appender contends on. One
+        authority, never two.
         """
-        if _IS_WINDOWS:
+        with cross_process_journal_lock(journal_path):
             yield
-            return
-        import fcntl  # POSIX-only; never reached on Windows.
-
-        lock_path = journal_path.with_name(journal_path.name + PAUSE_JOURNAL_LOCK_SUFFIX)
-        # O_NOFOLLOW: a symlink planted at the lock path — including a dangling
-        # one, which O_CREAT would otherwise materialize at its target — fails
-        # loud with ELOOP rather than silently locking (or creating) elsewhere.
-        flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-        fd = os.open(lock_path, flags, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
 
     def _append(self, snapshot: PauseSnapshot) -> None:
         """Append one JSONL record to the workflow's file, durably.

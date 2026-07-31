@@ -59,13 +59,13 @@
 
 snapshot:
   total: 105
-  open: 2
+  open: 0
   design_substrate_gated: 0
   registered_finding: 21
   operator_gated: 0
   held: 1
-  closed: 81
-  identity_digest: 2b1d75c8792e6633
+  closed: 83
+  identity_digest: 1e1a8944f368c7ca
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -2887,9 +2887,9 @@ items:
   heading: '### B-96 · The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time -- a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry milliseconds after its bootstrap sweep first observed it *(surfaced at the B-77 impl arc, out-of-family Codex round 2 [P2], 2026-07-30)*'
 - id: B-97
   title: The durable pause journal carries no tenant binding (half (a) -- RATIFIED
-    Reading A and SPEC-APPLIED at v1.108, impl owed); its appends were unserialized
-    across processes (half (b), CLOSED)
-  status: open
+    Reading A, SPEC-APPLIED at v1.108, IMPL LANDED at U-RT-149); its appends were
+    unserialized across processes (half (b), CLOSED)
+  status: closed
   pr: '#pending'
   summary: 'HALF (b) CLOSED at PR #1167; HALF (a) RATIFIED AND SPEC-APPLIED at this leg, IMPL OWED -- the
     row moves off registered_finding to open because its design question is answered and what
@@ -2957,7 +2957,30 @@ items:
     SPLIT to its own row B-103 (parking it here would have lost it the moment this row closes);
     B-102''s cause-table amendment is folded into the same section 30 rows so one cleared table is
     amended once rather than twice; and a NEW row B-104 records the absent pause-resolved marker
-    that bounds what the section 13.7 enumeration can honestly claim.'
+    that bounds what the section 13.7 enumeration can honestly claim. HALF (a) IMPL LANDED, and the
+    CONJUNCTIVE CRITERION ABOVE IS MET IN FULL, term by term, each by EXECUTION: (i) tenant-composite
+    keying landed at journal_workflow_pause_store.encode_pause_journal_key / pause_journal_filename
+    (length-prefixed canonical segments, UTF-8 BYTE counts with surrogatepass, joined on |, the
+    untenanted branch the ONE-segment form) with injectivity witnessed across ALL THREE hazards at
+    test_pause_journal_tenant_keying_b97a.py -- field-boundary shift plus a length-varying family,
+    branch collision against every string a reserved-literal scheme would have reserved, and
+    delimiter collision in either position -- plus totality over lone surrogates and a
+    reads-no-configuration witness; (ii) the section 13.7 enumeration surface landed at
+    admin/pause_journal_enumeration.py and as a harness-inspect extension, AC #7 green term by term
+    at test_pause_journal_enumeration_b97a.py including the lock-file exclusion, the
+    engage-only-when-the-dir-exists byte-identity, the no-PauseSnapshot-constructed assertion and
+    the EXISTING chmod-readonly fixture; (iii) the (3a) disposition and the orphan statement
+    witnessed -- the untenanted default path CHANGES, no code path consults the legacy key
+    (open-spied), and the store removes nothing on any path with no pruner on its surface; (iv) the
+    (3b) adoption landed to its FULL FIVE-TERM set at admin/pause_journal_adoption.py, AC #9
+    INCLUDING (d-ter), whose MUTATION PROBE is witnessed both ways: with the binding check removed a
+    mis-filed record is republished at encode(tenant, B) and becomes LIVE and readable, and with it
+    restored the same directory refuses. The OPTIONAL disposal action was ALSO built, to its full
+    term set (dry-run by default, refuse-while-recoverable), at admin/pause_journal_disposal.py.
+    ONE DELIBERATE ADDITION beyond the spec''s minimum disposition vocabulary, recorded rather than
+    absorbed: a CURRENT-FORMAT journal takes a SKIP disposition rather than refused-as-not-LEGACY,
+    because section 13.7.1 calls it ORDINARY STATE and folding it into a refusal made every
+    idempotent re-run on a healthy deployment exit nonzero -- surfaced by execution, not argued.'
   council: 'DISCHARGED -- the C3 (state/persistence keying) vs C11 (operator-loop / local-deployment)
     dyadic was convened 2026-07-31 as a narrow RE-CONFIRM of the already-ratified Reading A and
     returned CONFIRM-WITH-CONDITIONS, unanimous and independently reached, with 17 conditions
@@ -3106,8 +3129,8 @@ items:
 - id: B-102
   title: corrupt-latest AND absent are presented as decisive while the same cross-process
     reachability argument that qualifies empty-journal applies to both (spec half DISCHARGED
-    at v1.108; the read-side attribution flip rides the B-97(a) impl leg)
-  status: open
+    at v1.108; read-side attribution flip LANDED at the B-97(a) impl leg)
+  status: closed
   pr: '#pending'
   summary: 'NARROWED at the B-97(a) spec leg, 2026-07-31: THE SPEC HALF IS DISCHARGED, THE IMPL HALF IS THE
     LIVE REMAINDER. Runtime spec v1.108 amends section 30''s cause table so absent (:3318) and
@@ -3141,7 +3164,20 @@ items:
     close-out is unshipped would present unshipped work as done, and the contract and the code would
     disagree with nothing tracking the gap. Disposition (b) (document why they ARE decisive despite
     the symmetry) stays REJECTED -- nobody produced the asymmetry. No new cause member was needed
-    and none was minted.'
+    and none was minted. IMPL HALF LANDED at the B-97(a) impl leg (U-RT-149 AC #4(c)), and the row
+    now CLOSES: read_latest_attributed reports indeterminate=True for absent (a capture dispatched
+    but not yet having created its file) and for corrupt-latest''s PARSE-failure branch (a torn tail
+    is what an in-flight append looks like to a reader), UNCONDITIONALLY -- exactly as empty-journal
+    already did -- because the store cannot know whether a second writer is reachable and the
+    contract term is MUST-NOT-PRESENT-AS-DECISIVE. THE DECODE-FAILURE BRANCH IS DELIBERATELY NOT
+    FLIPPED and stays unconditionally permanent: invalid bytes persist on disk, an append leaves
+    them in place, and every re-read reproduces them, so routing it indeterminate would send the
+    operator into exactly the futile re-read loop section 30''s cause refinement exists to prevent.
+    read-error and workflow-mismatch are likewise untouched. Witnessed at
+    test_pause_journal_tenant_keying_b97a.py (four causes, each asserted separately) and at the
+    B-69 accessor suite, whose AC #8 decisive-cause assertion was re-pointed from corrupt-latest --
+    no longer decisive by contract -- onto the decode branch and workflow-mismatch, preserving the
+    assertion''s SHAPE while moving its instances.'
   council: 'no -- this asks whether an already-adjudicated qualification reaches one more row
     of the same table; it is a scoping question for a spec-writer apply pass, not a fresh
     cross-domain tension.'
@@ -3175,7 +3211,17 @@ items:
     that no-lock property is what keeps Runtime spec section 30''s empty-journal INDETERMINATE
     clause exact as written. NO SPEC TEXT IS EXPECTED TO BE OWED: the offload is an execution-venue
     mechanism, and section 14.8.1''s wrap-asymmetry lineage already covers the class -- but confirm
-    that before building, and file a fork if it turns out otherwise rather than absorbing it.'
+    that before building, and file a fork if it turns out otherwise rather than absorbing it.
+    DATED RE-CHECK 2026-07-31 (B-97(a) impl leg, touched-surface overlap): the leg REFACTORED the
+    lock -- _cross_process_append_lock now DELEGATES to a new module-level
+    cross_process_journal_lock, promoted so the (3b) adoption holds the same lock of the same
+    construction on the same inode rather than a second copy -- and a public
+    journal_exclusion_is_degraded() predicate was added for the refuse-where-degraded term. NEITHER
+    CHANGES THIS ROW: the primitive is byte-identical (same fcntl.flock, same dedicated lock file,
+    same per-workflow granularity, same Windows no-op), the acquisition is still BLOCKING and still
+    taken synchronously from capture(), and the READ path still takes no lock. The two things this
+    row forbids -- changing the lock''s GRANULARITY and changing the READ path -- were both
+    preserved. STILL OPEN, unchanged in substance.'
   council: 'no -- a single-axis execution-venue question with no nameable cross-domain tension. The
     granularity decision that WOULD have carried one is already settled and is explicitly out of
     this row''s scope; route to C9 (reliability/recovery) directly plus advisor() if the offload
@@ -3215,7 +3261,17 @@ items:
     is recommended without grounding: check FIRST whether an operator who has the section 13.7 upper
     bound plus their own drain procedure actually needs the discrimination, because a marker bought
     for a need nobody has is a capture-side change against a hash-adjacent record for nothing. DO
-    NOT bundle this into the B-97(a) impl leg -- it is capture-side and that leg is not.'
+    NOT bundle this into the B-97(a) impl leg -- it is capture-side and that leg is not.
+    DATED RE-CHECK 2026-07-31 (B-97(a) impl leg): NOT bundled, as instructed -- no capture-side
+    marker was added and the record shape is byte-unchanged. What the leg DID ship is the honest
+    SCOPING of the ceiling this row names: the section 13.7 surface emits an explicit upper-bound
+    disclaimer in BOTH its human and --json renderings (admin/pause_journal_enumeration.py
+    UPPER_BOUND_DISCLAIMER), stating in its own output that it is not an outstanding-pause
+    inventory, that a resolved journal is byte-indistinguishable from an outstanding one, and that
+    it MUST NOT be cited as proof a cutover is safe -- witnessed at
+    test_pause_journal_enumeration_b97a.py AC #7(d-bis). The row''s ceiling is therefore now VISIBLE
+    to the operator rather than latent, which does not close it: the discrimination itself remains
+    absent and capture-side. STILL OPEN, unchanged in substance.'
   council: 'conditional -- if opened, it carries a nameable C3 (state/persistence integrity, wanting the
     record shape and the append-only invariant left alone) vs C11 (operator loop, wanting an
     answerable ''is anything actually outstanding'') tension, which is the same pair the B-97(a)

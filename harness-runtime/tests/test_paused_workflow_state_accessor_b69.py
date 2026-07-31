@@ -19,6 +19,7 @@ absence.
 from __future__ import annotations
 
 import errno
+import json
 import os
 from collections.abc import Sequence
 from pathlib import Path
@@ -196,7 +197,7 @@ def _summary() -> StateSummary:
 
 def _store(tmp_path: Path) -> JournalWorkflowPauseStore:
     resolved = tmp_path / PathClass.STATE_LEDGER.value.lower()
-    return JournalWorkflowPauseStore(journal_dir=pause_journal_dir_for(resolved))
+    return JournalWorkflowPauseStore(journal_dir=pause_journal_dir_for(resolved), tenant_id=None)
 
 
 def _protocol(tmp_path: Path) -> DurablePauseResumeProtocol:
@@ -394,7 +395,7 @@ async def _child_snapshot(tmp_path: Path, *, run_id: str) -> PauseSnapshot:
         state_ledger_writer=object(),
         state_ledger_reader=object(),
         pause_context_reader=lambda: (_summary(), _ANCHOR),
-        store=JournalWorkflowPauseStore(journal_dir=tmp_path / "throwaway-journal"),
+        store=JournalWorkflowPauseStore(journal_dir=tmp_path / "throwaway-journal", tenant_id=None),
     )
     return await protocol.capture_pause_snapshot(
         _WORKFLOW_ID, run_id, 1, WorkflowPauseReason.HITL_PENDING
@@ -805,14 +806,25 @@ async def test_ac8_indeterminate_empty_journal_is_not_presented_as_decisive_loss
 ) -> None:
     """AC #8 — `empty-journal` is permanent for the single-process deployment,
     where it is decisive, but **INDETERMINATE across processes**: a concurrent
-    `capture()` may complete immediately after this read, and cross-process append
-    serialization is unresolved (`B-97`).
+    `capture()` may complete immediately after this read.
 
     Spec v1.107 §30 is explicit that *an implementation MUST NOT present it as
     decisive loss where a second writer is reachable* — so the indeterminacy is
     carried as its own fact rather than collapsed into `retryable`, which would
     make recovery logic abandon a pause that is still being written.
     *(Out-of-family review [P2], round 3.)*
+
+    **AMENDED at `B-97`(a) / `B-102`'s impl half (Runtime spec v1.108 §30):** the
+    decisive-cause half of this witness was originally written against
+    `corrupt-latest`, which v1.108 re-classifies as INDETERMINATE on its
+    PARSE-failure branch — a torn tail is exactly what an in-flight append looks
+    like from a reader. The decisive assertion is therefore re-pointed at causes
+    that ARE still decisive: the DECODE-failure branch of `corrupt-latest`
+    (invalid bytes persist; every re-read reproduces them) and
+    `workflow-mismatch` (no concurrent append changes which workflow a record
+    names). *The assertion's SHAPE — that a decisive cause is not marked
+    indeterminate — is preserved verbatim; only its instances moved, because the
+    old instance is no longer decisive by contract.*
     """
     config = _config(tmp_path)
     store = _store(tmp_path)
@@ -827,15 +839,38 @@ async def test_ac8_indeterminate_empty_journal_is_not_presented_as_decisive_loss
         )
     assert excinfo.value.cause is PauseJournalReadCause.EMPTY_JOURNAL
     assert excinfo.value.indeterminate is True
-    # ... and every DECISIVE cause is not marked indeterminate.
+    # A torn/unparseable latest line is now INDETERMINATE too (`B-102`).
     journal.write_text("{not json\n", encoding="utf-8")
-    with pytest.raises(PausedWorkflowStateUnavailableError) as decisive:
+    with pytest.raises(PausedWorkflowStateUnavailableError) as torn:
         await read_paused_workflow_state(
             _Workflow(),  # pyright: ignore[reportArgumentType]
             resume_handle=_WORKFLOW_ID,
             config=config,
         )
-    assert decisive.value.indeterminate is False
+    assert torn.value.cause is PauseJournalReadCause.CORRUPT_LATEST
+    assert torn.value.indeterminate is True
+    # ... and every still-DECISIVE cause is not marked indeterminate.
+    journal.write_bytes(b"\xff\xfe not decodable\n")
+    with pytest.raises(PausedWorkflowStateUnavailableError) as undecodable:
+        await read_paused_workflow_state(
+            _Workflow(),  # pyright: ignore[reportArgumentType]
+            resume_handle=_WORKFLOW_ID,
+            config=config,
+        )
+    assert undecodable.value.cause is PauseJournalReadCause.CORRUPT_LATEST
+    assert undecodable.value.indeterminate is False
+    journal.write_text(
+        json.dumps({"workflow_id": "someone-else", "pause_snapshot": {}}) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(PausedWorkflowStateUnavailableError) as mismatched:
+        await read_paused_workflow_state(
+            _Workflow(),  # pyright: ignore[reportArgumentType]
+            resume_handle=_WORKFLOW_ID,
+            config=config,
+        )
+    assert mismatched.value.cause is PauseJournalReadCause.WORKFLOW_MISMATCH
+    assert mismatched.value.indeterminate is False
 
 
 @pytest.mark.asyncio
