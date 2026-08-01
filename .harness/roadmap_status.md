@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `500d1ae9a9c9` |
-| `last_refreshed` | 2026-08-01T11:07:49Z |
-| `git_head` | `4e4b702f` —  |
+| `workspace_state_hash` | `b727d1535117` |
+| `last_refreshed` | 2026-08-01T00:00:00Z |
+| `git_head` | `21e6e1d5` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 106 |
 
@@ -185,11 +185,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1182 | 2026-08-01 | Round 74: B-98+B-104 ratified-defer legs merged (#1182). Runtime v1.110 — two declaration-only sites (§14.14.9.1 latest-durable-record-not-liveness; §30 invariant bullet + resume-guards-never-outstandingness sharpening) + api.py docstring companions per fork Component 1. Both rows stay registered_finding with D-0..D-3 falsifiable triggers; superseded reopening rules struck in place; clearance marker + head-pointer + lineage landed; codex 6 rounds converged; gate proportional-skip logged. RATIFICATION BATCH fully recorded: B-107→A-hybrid, B-96→C, B-98→C, B-104→D, __all__→leave. IN FLIGHT: B-96 dyadic C3+C10 council convening (C-2 converged in confirm-back, zero contested; orchestrator folding + reconcile-to-zero; PR pending). NEXT: B-107 A-hybrid spec leg (register now free); then B-96 spec leg on the council verdict; B-74-residue filing unblocks at B-96's answer. |
 | 1181 | 2026-08-01 | B-104 Class 2 fork FILED — shape (c) grounded AND falsified, a fourth shape (OD sink event) found and carried as Reading C; recommendation D declare-symmetric-then-defer; A-vs-B runner-up HELD under the oscillation rule; two empirical probes (sentinel reports as torn append; sixth cause member forces a cross-axis OD leg); 3 codex rounds, 13 findings, soundness exit |
 | 1180 | 2026-08-01 | B-98 Class 2 fork FILED — codex R1 falsified the filing's own central premise (the HITL-pause class is production-DORMANT in stock bootstrap: the webhook precondition raises before the pause fires; the description text already reaches the operator contractually); recommendation C defer-with-falsifiable-demand-test (D-0..D-3); council reversed to probe-resolved; 6 codex rounds, 17 findings, recommendation never moved |
 | 1179 | 2026-08-01 | B-96 Class 2 fork FILED — finding 3 decisive: the close_out's per-process elapsed-time design has UNBOUNDED retention in the one-shot shape and does not survive as written; Reading C (durable observation state) recommended, runner-up A (keep sweep-count + document); council REVERSED to convene (dyadic C3+C7, scoped C-1 vs C-2 ceiling); one sub-decision held under the oscillation rule; 6 codex rounds to soundness exit |
 | 1178 | 2026-08-01 | B-107 Class 2 fork FILED — hybrid Reading A recommended (scalar membership amendment + map-construction refusal + resolver-boundary enforcement) vs input-keyed B; empirical find: frozen=True does not freeze the nested resolutions dict (live mutation hole at HEAD); 4 codex rounds, zero recommendation flips, soundness exit; ratification batches to the operator |
-| 1177 | 2026-08-01 | B-107 grounding absorbed — row self-contradiction fixed with the corrected seven-site map; verdict SPEC-LEG-FIRST/fork-shaped; status transited to design_substrate_gated (no buildable slice); closure criterion amended (was satisfiable by the defect); B-100/B-101/B-106 pr reconciles + stale inline promises cleared; 6 codex rounds |
 ---
 
 ---
