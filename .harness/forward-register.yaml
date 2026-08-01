@@ -61,11 +61,11 @@ snapshot:
   total: 107
   open: 0
   design_substrate_gated: 0
-  registered_finding: 21
+  registered_finding: 20
   operator_gated: 0
   held: 1
-  closed: 85
-  identity_digest: 2bb802714cceb5a3
+  closed: 86
+  identity_digest: bde4441a3c304f13
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -3160,9 +3160,48 @@ items:
 - id: B-101
   title: Accessor-derived resume-context provenance is LOST through base-typed Pydantic
     serialization, and closing it requires a ResumeContext spec change
-  status: registered_finding
-  pr: '#1166'
-  summary: 'Surfaced at the B-69 IMPL leg by out-of-family review round 3 [P1], reported not
+  status: closed
+  pr: '#pending'
+  summary: 'SPEC LEG APPLIED 2026-08-01, DISPOSITION (b)-PLUS -- CP spec v1.113->v1.114, ONE
+    amendment site: section 1.2 constraint 3''s stated residual is APPENDED TO with ONE paragraph -- NO TEXT
+    retracted or reworded, though section 1.3(c)''s reach IS made explicit where v1.112 left it implicit (it
+    binds the CP-OWNED affordances its own detect-then-refuse witness exercises -- no downgrade helper, frozen-
+    carrier mutation refused, the accessor-derived variant''s OWN dump refused into the legacy type by
+    extra=forbid -- and NOT generic base-schema serialization, which slips past that third guard because the base
+    schema never emits the provenance field for extra=forbid to see). Under the BROADEST reading of section
+    1.3(c) that is a NARROWING rather than a clarification; the counter-reading is recorded IN FULL at the
+    delta''s section 0.5 finding (vi) -- raised as a [P1] at this leg''s out-of-family round 2 -- with the
+    narrower reading''s three grounds and the ONE-STEP escalation route (disposition (a)) named, so a reviewer
+    can overturn it rather than discover it. The paragraph (i) declares the ORDINARY-SERIALIZATION
+    boundary formally OUT of the staleness fence''s scope, (ii) NAMES StepExecutionContext.resume_context
+    (harness-cp/src/harness_cp/workflow_driver_types.py:460) as the ONE live base-typed carrier, (iii)
+    RECORDS the three grounded facts that keep it unreachable at HEAD -- re-verified at that leg rather
+    than carried from the 2026-07-31 note: ZERO model_dump/model_dump_json/TypeAdapter of that field OR
+    of its enclosing StepExecutionContext across src AND tests (and StepExecutionContext is never a field
+    of another model, so never transitively serialized), compose_branch_child_context''s model_copy is
+    shallow and non-revalidating, and revalidate_instances is unset repository-wide so Pydantic''s never
+    default holds -- and (iv) states the normative PROMOTION TRIGGER, keyed on MECHANISM rather than
+    on the named carrier so a named-carrier reading cannot under-cover it: any future arc introducing ANY
+    BASE-SCHEMA SERIALIZATION BOUNDARY over a ResumeContext value on a resume path -- a ResumeContext-typed
+    model field (of which StepExecutionContext.resume_context is today the only live one), a base TypeAdapter
+    or RootModel over ResumeContext (the route the pin test demonstrates directly at :960), a base-annotated
+    parameter or return crossing a schema-generating boundary, or any equivalent -- MUST promote this row to
+    disposition (a) (the closed variant discriminator on ResumeContext) and land it BEFORE or SIMULTANEOUSLY
+    WITH that arc, never after. Naming the carrier makes the trigger checkable at today''s one live site; it
+    does NOT bound it. Disposition (a) is
+    NOT applied here: it breaks the field-set-preserved-verbatim guarantee CP spec v1.112 section 0.4
+    makes, and this row''s own close_out conditions it on a serialization boundary appearing on a real
+    resume path, which does not exist at HEAD. ZERO contract numbers, ZERO carriers retyped, ZERO fields
+    added, ZERO hash impact, ZERO impl units owed, ZERO plan deltas owed, ZERO test changes owed --
+    verified: B-101 is cited at exactly ONE place in design-substrate (Spec_Control_Plane_v1_113.md
+    section 0.4 finding (vi), as the obstacle B-107 disposition (d) would hit) and at NO implementation
+    plan. THE PIN TEST STAYS AND MUST NOT BE DELETED AT THIS CLOSE:
+    test_provenance_is_lost_through_base_typed_serialization_registered_b101
+    (harness-runtime/tests/test_paused_workflow_state_accessor_b69.py:924) is the executable half of the
+    trigger -- it asserts the CURRENT lossy behavior deliberately so any change to it is reviewed. HONEST
+    LIMIT, stated in the spec rather than papered over: trigger enforcement is a PRE-MERGE REVIEW
+    OBLIGATION, not a validator rule, and the pin test breaks on a BEHAVIOR change but does NOT fire on
+    the bare addition of a model_dump call. ORIGINAL FINDING: surfaced at the B-69 IMPL leg by out-of-family review round 3 [P1], reported not
     absorbed. AccessorDerivedResumeContext is a SUBCLASS of the CP-owned ResumeContext, and
     Pydantic v2 serializes a subclass through a base-typed field or TypeAdapter using the BASE
     schema -- so a round-trip through a ResumeContext-typed boundary emits only the four legacy
@@ -3177,7 +3216,14 @@ items:
     which is the sharper form and the reason it is filed. Pinned by
     test_provenance_is_lost_through_base_typed_serialization_registered_b101, which asserts the
     CURRENT behavior so the boundary is visible and any future change to it is deliberate. NEAREST-APPROACH VECTOR (scoped re-gate at the B-97(b) arc, 2026-07-31): ResumeContext is ALREADY a base-typed field of StepExecutionContext (workflow_driver_types.py:460). It is not dumped today -- only HandoffContext is model_dump_json''d, model_copy preserves object references rather than revalidating, and revalidate_instances defaults to never -- so the not-reachable-today claim STANDS. But the hazard is ONE model_dump away on an existing carrier, not a hypothetical future boundary, and disposition (b) (documenting the boundary as out of scope) would NOT close that vector.'
-  close_out: 'CANNOT be closed from the subclass: the behavior is controlled by the BASE type''s
+  close_out: 'DISCHARGED 2026-08-01 by the (b)-PLUS spec leg (CP spec v1.114 section 1, clearance
+    marker .harness/clearance/spec-control-plane-v1-114-cleared-2026-08-01.md). Disposition (b) is
+    DOCUMENTARY BY CONSTRUCTION -- it declares a boundary rather than moving one -- so unlike the
+    B-100 / B-97(a) / B-102 precedent of NARROWING at a spec leg, this row CLOSES: those rows left
+    unbuilt impl remainders and closing them would have presented unshipped work as done, whereas this
+    close-out is fully discharged with no impl, plan or test remainder. The row is REOPENED, not
+    re-litigated, at the promotion trigger. ORIGINAL CLOSE-OUT (preserved): CANNOT be closed from the
+    subclass: the behavior is controlled by the BASE type''s
     Pydantic schema, and CP spec v1.112 requires ResumeContext''s field set be PRESERVED VERBATIM,
     so adding a variant discriminator to it is a SPEC change an impl leg must not make. Two
     dispositions, both spec-side: (a) amend CP spec section 1 so ResumeContext itself carries a
@@ -3192,7 +3238,8 @@ items:
     spec-writer apply pass; no new cross-domain tension is present.'
   heading: '### B-101 · Accessor-derived provenance is lost through base-typed Pydantic
     serialization *(surfaced at the `B-69` impl leg, out-of-family review round 3, reported not
-    absorbed, 2026-07-31)*'
+    absorbed, 2026-07-31; CLOSED 2026-08-01 — disposition (b)-PLUS applied at CP spec v1.114, with a
+    normative PROMOTION TRIGGER to disposition (a) and the pin test retained as the boundary marker)*'
 - id: B-102
   title: corrupt-latest AND absent are presented as decisive while the same cross-process
     reachability argument that qualifies empty-journal applies to both (spec half DISCHARGED
