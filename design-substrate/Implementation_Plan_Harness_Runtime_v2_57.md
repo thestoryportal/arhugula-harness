@@ -36,7 +36,7 @@ U-RT-148 already **depends on** U-CP-64, declared at v2.55 and re-stated at `Imp
 - It does **NOT** amend U-RT-149 (the `B-97`(a) keying / migration / `harness-inspect` unit), U-RT-148's AC #1 – #14, or any §30 / §14.14.8 / §13.7 obligation. All are **PRESERVED VERBATIM**.
 - It does **NOT** add a DTO variant, a cause member, an emission, or a posture. **Sixteen acceptance criteria remain sixteen** — two are widened in scope, none is added or removed.
 - It does **NOT** add a capture-side obligation. `B-100` disposition **(b)** is NOT applied; no carrier gains a length constraint and `snapshot_hash` is untouched.
-- It does **NOT** close the SCALAR uniform-fallback channel, **REGISTERED as `B-106`**. The widened AC #15(b) / #16(a) constrain the **DTO**; they cannot constrain `resume_context.effect_fence_resolution`, a scalar the caller sets independently, and `compute_effect_fence_uniform_fallback_eligible_key` (`workflow_driver.py:2935`–`:2970`) does not filter empty keys. **Do NOT read these criteria green as evidence that channel is closed.**
+- It does **NOT** close the SCALAR uniform-fallback channel, **REGISTERED as `B-107`**. The widened AC #15(b) / #16(a) constrain the **DTO**; they cannot constrain `resume_context.effect_fence_resolution`, a scalar the caller sets independently, and `compute_effect_fence_uniform_fallback_eligible_key` (`workflow_driver.py:2935`–`:2970`) does not filter empty keys. **Do NOT read these criteria green as evidence that channel is closed.**
 
 ---
 
