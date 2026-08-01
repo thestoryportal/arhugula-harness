@@ -254,6 +254,30 @@ async def run_bootstrap(
     roll back in reverse order and a typed `BootstrapFailure` is raised with
     the failed stage + original cause attached.
 
+    Audience (B-106) — the returned `HarnessContext` is an INTERNAL type per
+    Runtime spec §4: "The type is not part of any operator-facing surface in
+    Track A." Its component fields are driver-consumed, not a caller API; the
+    contracted operator-facing surface is exactly the three package-root async
+    functions `run()` (§8), `resume()` (§30) and `read_paused_workflow_state()`
+    (§14.14.9.1), and NONE of them hands a `HarnessContext` to its caller:
+    `run()`/`resume()` build one internally and drive the CP workflow driver in
+    an `asyncio.to_thread` worker (where `workflow_driver`'s
+    `_run_protocol_method_sync` runs each protocol coroutine on a private,
+    single-task loop), and `read_paused_workflow_state()` reads the pause
+    journal off-loop without driving the driver at all. A caller that obtains a
+    `ctx` here and awaits one of its components on its own event loop is
+    OUTSIDE that contract and must assume blocking-syscall behavior — see
+    `pause_resume_protocol` on `types.HarnessContext` for the concrete case —
+    and arrange its own offload. *Capturing* a pause is likewise the driver's
+    job, never the caller's: §4 designates `ctx.pause_requested_flag` as the
+    caller-side primitive an external caller sets to *request* a pause, and the
+    driver captures at the next per-step pre-entry. §14.14.7 leaves the
+    caller-facing surface for setting that flag to implementation discretion,
+    so no external setter is exposed today (the only in-repo production setter
+    is the internal HITL gate composer) — but the request/capture split is the
+    contract either way, and awaiting the protocol directly is not the way to
+    close it.
+
     Parameters
     ----------
     config :

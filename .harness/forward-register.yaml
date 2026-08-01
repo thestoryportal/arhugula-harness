@@ -61,11 +61,11 @@ snapshot:
   total: 107
   open: 0
   design_substrate_gated: 0
-  registered_finding: 20
+  registered_finding: 19
   operator_gated: 0
   held: 1
-  closed: 86
-  identity_digest: bde4441a3c304f13
+  closed: 87
+  identity_digest: 6f96170a7a4edfe0
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -3544,30 +3544,79 @@ items:
   heading: '### B-107 · No channel REFUSES an operator resolution addressed to an EMPTY effect-fence key — the response map and the scalar uniform fallback both drop it silently, on all three carriers *(surfaced at the `B-100` spec leg, out-of-family review rounds 3 + 8, reported not absorbed, 2026-07-31)*'
 - id: B-106
   title: Embedder-path event-loop exposure for capture_pause_snapshot (outside the shipped driver path)
-  status: registered_finding
-  summary: 'Surfaced by the out-of-family confirming round on the B-103 rework (PR #1172, codex [P2],
-    2026-07-31, delivered AFTER the merge -- recorded here as the follow-up). B-103 was closed
-    PREMISE-FALSIFIED for every SHIPPED call site (all production capture_pause_snapshot calls run
-    under workflow_driver._run_protocol_method_sync -> asyncio.run on a private single-task loop in
-    the driver''s to_thread worker). Codex identified a path OUTSIDE that set: run_bootstrap() is a
-    public export (harness_runtime.__all__), ctx.pause_resume_protocol is a context field, and an
-    EMBEDDING application that directly awaits ctx.pause_resume_protocol.capture_pause_snapshot(...)
-    on its own live loop bypasses the private-loop helper entirely -- codex measured a 300ms loop
-    sleep delayed to ~2s while a second process held the journal lock. The B-103 close_out''s
-    shipped-call-site scoping stays literally true; THIS row carries the decorrelated-reviewer
-    disagreement (lens-1/orchestrator vs codex) instead of silently adjudicating it.'
-  close_out: 'GROUND FIRST: is the embedder path a SUPPORTED surface -- is ctx.pause_resume_protocol
-    part of the public embedding contract (spec section 14.14.x / the bootstrap context''s documented
-    fields), or an internal field an embedder reaches at their own risk? If SUPPORTED: the preserved
-    B-103 offload shape applies (built + gated at PR #1172''s pre-rework commits, 3636762c-era head
-    of b103-off-loop-journal-lock -- dedicated executor, join-on-cancel, measured witnesses) and
-    B-103''s reopening trigger fires for this surface; re-price the cancellation-window cost (the
-    withdrawn B-105 analysis) against a now-REAL benefit. If NOT supported: one sentence in the
-    embedding docs/context docstring stating the capture path is loop-blocking and embedders must
-    offload, and this row closes as documentation. Either way the adjudication is a scope question
-    (what does the harness SUPPORT), not a mechanism question -- the mechanism exists on the shelf.'
-  council: 'no -- the mechanism is settled (built + preserved); the open question is support-surface
-    scope, a grounding question against the spec''s own embedding contract, with advisor() + out-of-
-    family review at the leg. Councilable only if grounding finds the embedding contract itself
-    ambiguous.'
-  heading: '### B-106 · Embedder-path event-loop exposure for `capture_pause_snapshot` *(surfaced by the out-of-family confirming round on the `B-103` rework, PR #1172 codex [P2], delivered post-merge, 2026-07-31)*'
+  status: closed
+  pr: '#pending'
+  summary: 'Surfaced by the out-of-family confirming round on the B-103 rework (PR #1172, codex [P2], 2026-07-31,
+    delivered AFTER the merge -- recorded here as the follow-up). B-103 was closed PREMISE-FALSIFIED for every SHIPPED
+    call site (all production capture_pause_snapshot calls run under workflow_driver._run_protocol_method_sync ->
+    asyncio.run on a private single-task loop in the driver''s to_thread worker). Codex identified a path OUTSIDE
+    that set: run_bootstrap() is a public export (harness_runtime.__all__), ctx.pause_resume_protocol is a context
+    field, and an EMBEDDING application that directly awaits ctx.pause_resume_protocol.capture_pause_snapshot(...)
+    on its own live loop bypasses the private-loop helper entirely -- codex measured a 300ms loop sleep delayed
+    to ~2s while a second process held the journal lock. The B-103 close_out''s shipped-call-site scoping stays
+    literally true; THIS row carries the decorrelated-reviewer disagreement (lens-1/orchestrator vs codex) instead
+    of silently adjudicating it.'
+  close_out: 'CLOSED 2026-08-01 -- the embedder path is NOT SUPPORTED. The embedding contract is defined by EXCLUSION,
+    not by silence, so the grounding verdict is a ruling and not an absence of evidence. FOUR LEGS, each re-verified
+    by direct read at this head. (1) EXCLUSION-DEFINED CONTRACT: Runtime spec section 4 (:3093) states it verbatim
+    -- "HarnessContext is an internal type (consumers reach into specific fields, not the whole context) ... The
+    type is not part of any operator-facing surface in Track A." ctx.pause_resume_protocol is one of those fields;
+    an embedder awaiting it is reaching into an internal type by the spec''s own words. (2) THE OPERATOR-FACING
+    API IS EXACTLY THREE package-root async functions and it enumerates itself: section 8 (:3264) run(), section
+    30 (:3363) resume(), section 14.14.9.1 (:3456) read_paused_workflow_state() -- each introduced as "exactly one"
+    / "a second" / "a third async function exposed at the harness_runtime package root". run_bootstrap is not among
+    them; a closed self-counting enumeration is the strongest form of exclusion this corpus has. (3) THE CONTRACTED
+    EXTERNAL-CALLER PAUSE ROUTE IS DESIGNATED, AND IT IS NOT THE PROTOCOL: pause_requested_flag (section 4 field
+    row :3085 -- "Caller-side pause-signaling primitive. Set by external caller (operator API, MCP tool, etc.)";
+    section 14.14.7 :5897 leaves only the flag-setting surface''s shape to implementation discretion). The external
+    caller SETS THE FLAG and the driver captures at the next per-step pre-entry; the capture is the driver''s to
+    perform, never the caller''s. GROUNDED SHARPENING (out-of-family round 1, [P2], ACCEPTED on the source, not
+    argued down): no external setter for that flag is EXPOSED today -- the only in-repo production setter is the
+    internal HITL gate composer (lifecycle/hitl_gate_composer.py:1329); every other setter is a test reaching through
+    ctx. That is not a hole in this ruling, it is the ruling''s own evidence -- the designated external route is
+    deliberately still at implementation discretion (section 14.14.7), which is exactly what ''the embedding surface
+    has not been minted yet'' looks like from the inside. So the embedder path is not an undocumented corner of
+    a supported route -- it is a SECOND, uncontracted route to something the contract routes elsewhere and has not
+    yet opened. (4) NO EMBEDDING SURFACE EXISTS TO BE IN SCOPE: a full scan of design-substrate/**.md finds ZERO
+    library-embedding text -- every ''embed*'' hit is either the unrelated CP EMBEDDING routing layer (C-CP-02 section
+    2) or ''embedded credentials'' / ''embedded in HandoffContext''. The committed deployment surfaces are the ADR-D2
+    v1.2 THREE-TIER set (local-development / self-hosted-server / managed-cloud; CLAUDE.md section 10.2), and ''harness
+    embedded as a library in a host application'' is not among them. PRECEDENT: B-69 is the controlling how-surfaces-get-minted
+    rule -- an operator-facing surface is MINTED by a ratified spec leg (there, the new public projection-returning
+    surface over the private resume-tree walks), never inherited by an internal field happening to be reachable.
+    Minting one here would be an X-AL-3 silent design extension. THE MECHANISM HALF IS REAL AND STAYS TRUE: DurablePauseResumeProtocol.capture_pause_snapshot
+    calls self._store.capture(snapshot) SYNCHRONOUSLY inside the async method (lifecycle/durable_pause_resume_protocol.py:124),
+    and the flock inside would block a live loop -- codex measured a 300ms sleep delayed to ~2s. That measurement
+    is not disputed and is not being explained away; it is simply a measurement of a path outside the contract.
+    THE DAEMON WAS CHECKED rather than assumed: its captures also route through workflow_driver._run_protocol_method_sync''s
+    private single-task loop, so B-103''s falsification survives it and the embedder path is the SOLE live-loop
+    route -- which is exactly why closing it as out-of-contract closes the whole question. WHAT SHIPPED (documentation
+    only, zero logic, impl-discretion -- it restates the cleared section 4 invariant and mints nothing): an AUDIENCE
+    paragraph on run_bootstrap''s docstring (bootstrap/__init__.py) naming the internal-type ruling, the three contracted
+    functions, the caller''s own-loop obligation, and the pause_requested_flag route; and the concrete blocking-flock
+    fact on the pause_resume_protocol field comment (types.py). NO SPEC TEXT OWED -- confirmed by B-103''s own recorded
+    confirmation for the mechanism half (section 14.8.1''s "The wrap chain above pins composition, not execution
+    venue"), and by this row adding no contract, no config scalar, no failure class and no observable surface. THE
+    B-103 OFFLOAD STAYS SHELVED, preserved at PR #1172''s pre-rework commits (3636762c-era head of b103-off-loop-journal-lock
+    -- dedicated executor, join-on-cancel, 12-test witness). B-103''s REOPENING TRIGGER IS UNCHANGED: a future arc
+    replacing _run_protocol_method_sync''s asyncio.run with a captured-loop bridge (the evolution that helper''s
+    own docstring anticipates at :2598-2601). ADDED HERE: RE-CHECK B-106 ALONGSIDE B-103 AT ANY CHANGE TO THAT HELPER
+    -- if the bridge lands, the SHIPPED path joins the embedder path in being loop-co-resident, the harness itself
+    acquires an in-house benefit from the offload, and the SUPPORTED branch reopens on that benefit rather than
+    on the embedder''s. The two rows share one trigger and must be evaluated together. NAMED, NOT ABSORBED -- THE
+    STRUCTURAL OPTION, an OPERATOR-DECIDABLE follow-up: run_bootstrap sits in harness_runtime.__all__ (__init__.py:266,
+    re-exported at :44-49) with ZERO in-repo package-root consumers -- 215 occurrences across 40 files, and EVERY
+    import site is ''from harness_runtime.bootstrap import run_bootstrap'' (28 import lines; the two non-test callers
+    are api.py and cli/app.py, both intra-package). Dropping the package-root export would make this ruling STRUCTURAL
+    at ZERO call-site cost -- the embedder would have to reach into a private submodule to get the context at all.
+    IT IS NOT ABSORBED HERE because it is a PUBLIC-SURFACE NARROWING, major-bump-shaped by the corpus''s own version-evolution
+    grammar (section 9 :3343: "Removing a field is always a major bump"; section 4 :3093: "field-removals or type-changes
+    are major (consumers break)"), and because the spec itself references harness_runtime.run_bootstrap(...) illustratively
+    at :6262 (inside an implementation-discretion note, so not a contract -- but not nothing either). A major-bump-shaped
+    narrowing of a public surface is an operator call, not an impl-discretion one. DEFAULT = LEAVE THE EXPORT; the
+    docstrings carry the ruling without it.'
+  council: no -- the mechanism is settled (built + preserved); the open question is support-surface scope, a grounding
+    question against the spec's own embedding contract, with advisor() + out-of- family review at the leg. Councilable
+    only if grounding finds the embedding contract itself ambiguous.
+  heading: '### B-106 · Embedder-path event-loop exposure for `capture_pause_snapshot` *(surfaced by the out-of-family
+    confirming round on the `B-103` rework, PR #1172 codex [P2], delivered post-merge, 2026-07-31)*'

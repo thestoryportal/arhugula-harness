@@ -2682,6 +2682,14 @@ class HarnessContext(BaseModel):
     # produces this; `None` is the production-default (operator opt-out → driver
     # per-step pre-entry pause-trigger detection branch False arm).
     # See §14.14.1 + plan v2.20 U-RT-87 AC #2.
+    # B-106 — `capture_pause_snapshot` takes a BLOCKING cross-process `flock`
+    # (the durable subclass calls `JournalWorkflowPauseStore.capture` inline at
+    # `lifecycle/durable_pause_resume_protocol.py:124`), so it must NOT be
+    # awaited on a live event loop; every shipped caller reaches it through
+    # `workflow_driver._run_protocol_method_sync`'s private single-task loop.
+    # This field is not a caller API (§4: internal type) — registered
+    # adjudication at B-106; the contracted external pause route is
+    # `pause_requested_flag`.
     pause_resume_protocol: PauseResumeProtocol | None = None
 
     # U-RT-96 — Webhook delivery composer carrier. Populated at stage 5
