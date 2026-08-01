@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 105
+  total: 106
   open: 0
   design_substrate_gated: 0
   registered_finding: 21
   operator_gated: 0
   held: 1
-  closed: 83
-  identity_digest: 1e1a8944f368c7ca
+  closed: 84
+  identity_digest: 6ce96945edd0180b
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -808,7 +808,23 @@ items:
     pre-B-40 parity (same as before the module existed), not at feature parity with POSIX. The identical
     gap already exists, unregistered until now, at `harness_runtime.lifecycle.reconciler_pause_resume_substrate`''s
     own unconditional `fcntl` import (that module isn''t eagerly imported at package `__init__`, so it
-    doesn''t break basic import on Windows, but its lock is equally POSIX-only). 2026-07-30 post-#1159 re-check (gate-log LOW batch): TWO corrections, neither restructuring the close-out. (a) ENUMERATION -- recounted by direct read at HEAD (the row''s own count was of MODULES; what a Windows backend must actually cover is no-op SURFACES). THREE modules carry same-host POSIX `flock` locks -- unchanged, and correctly recorded at the 2026-07-27 update -- but they expose FIVE distinct `_IS_WINDOWS` no-op branches: `cross_process_write_lock` (`harness-is/src/harness_is/cross_process_ledger_lock.py:358`), `cross_process_replace_lock` (`:478`), `cross_process_read_lock` (`:560`), `cross_process_scope_lock` (`:205`), and `protected_result_store._cross_process_lock` (`harness-runtime/src/harness_runtime/lifecycle/protected_result_store.py:339`). `cross_process_scope_lock` -- added at U-MEM-27 for the memory store''s per-root guarded-write hold -- is the one this row has never named: it is neither a canonical-file lock nor a directory lock (it locks a provisioned lock FILE under a scope root), so the close-out''s "canonical-file/directory lock context managers and `_DirLock`" phrasing does not reach it. It is exclusive-only (it builds on `_DirLock`''s LOCK_EX face), so it maps cleanly onto `msvcrt.locking` and does NOT add to the LOCK_SH/LOCK_EX hard part. `_DirLock` itself has no guard of its own (callers gate), and `reconciler_pause_resume_substrate` still has none either -- its unconditional `fcntl` import is an import-time failure rather than a no-op, already recorded at (c) above. (b) URGENCY -- the "Windows sits at exact pre-B-40 parity" rationale is no longer whole. That framing holds while the no-op only withholds an improvement; U-MEM-27 made it withhold a CORRECTNESS guarantee. `CanonicalMemoryStore.write_record_guarded`''s commit binding is documented as cross-process (`memory_store.py`, the SCOPE paragraph) and witnessed against a genuine second OS process (`harness-is/tests/test_memory_store_cross_process_guard.py`); on Windows that binding silently degrades to in-process-only, so a promotion activation can commit against provenance a concurrent process already superseded -- a wrong durable write, not a missing optimization. Still not blocking (no Windows CI, no active Windows target), but the failure mode to state at build time is data correctness, not parity.'
+    doesn''t break basic import on Windows, but its lock is equally POSIX-only). 2026-07-30 post-#1159 re-check (gate-log LOW batch): TWO corrections, neither restructuring the close-out. (a) ENUMERATION -- recounted by direct read at HEAD (the row''s own count was of MODULES; what a Windows backend must actually cover is no-op SURFACES). THREE modules carry same-host POSIX `flock` locks -- unchanged, and correctly recorded at the 2026-07-27 update -- but they expose FIVE distinct `_IS_WINDOWS` no-op branches: `cross_process_write_lock` (`harness-is/src/harness_is/cross_process_ledger_lock.py:358`), `cross_process_replace_lock` (`:478`), `cross_process_read_lock` (`:560`), `cross_process_scope_lock` (`:205`), and `protected_result_store._cross_process_lock` (`harness-runtime/src/harness_runtime/lifecycle/protected_result_store.py:339`). `cross_process_scope_lock` -- added at U-MEM-27 for the memory store''s per-root guarded-write hold -- is the one this row has never named: it is neither a canonical-file lock nor a directory lock (it locks a provisioned lock FILE under a scope root), so the close-out''s "canonical-file/directory lock context managers and `_DirLock`" phrasing does not reach it. It is exclusive-only (it builds on `_DirLock`''s LOCK_EX face), so it maps cleanly onto `msvcrt.locking` and does NOT add to the LOCK_SH/LOCK_EX hard part. `_DirLock` itself has no guard of its own (callers gate), and `reconciler_pause_resume_substrate` still has none either -- its unconditional `fcntl` import is an import-time failure rather than a no-op, already recorded at (c) above. (b) URGENCY -- the "Windows sits at exact pre-B-40 parity" rationale is no longer whole. That framing holds while the no-op only withholds an improvement; U-MEM-27 made it withhold a CORRECTNESS guarantee. `CanonicalMemoryStore.write_record_guarded`''s commit binding is documented as cross-process (`memory_store.py`, the SCOPE paragraph) and witnessed against a genuine second OS process (`harness-is/tests/test_memory_store_cross_process_guard.py`); on Windows that binding silently degrades to in-process-only, so a promotion activation can commit against provenance a concurrent process already superseded -- a wrong durable write, not a missing optimization. Still not blocking (no Windows CI, no active Windows target), but the failure mode to state at build time is data correctness, not parity.
+    2026-07-31 re-check
+    (at the B-103 arc): ENUMERATION REFRESHED AGAIN -- FOUR modules / SIX surfaces. The B-97(a) leg
+    promoted `cross_process_journal_lock` to module scope in
+    `harness-runtime/src/harness_runtime/lifecycle/journal_workflow_pause_store.py`, and its Windows
+    branch (`:468`) is a SIXTH no-op surface in a FOURTH module -- same carve-out, same posture,
+    newly named. NOVEL POSTURE DATUM, worth recording because it is a first: that module also added
+    `journal_exclusion_is_degraded()` (`:402`), the FIRST NAMED PREDICATE anywhere over B-45''s
+    degradation -- callers ask "can this primitive exclude a straggler appender?" rather than
+    re-testing the platform, and the (3b) pause-journal adoption tool consults it to REFUSE BY
+    DEFAULT where the lock degrades (`admin/pause_journal_adoption.py:412`). That is the first place
+    the codebase ACTS on this row''s carve-out instead of merely documenting it. O-1 (lens-1,
+    B-97(b) arc, 2026-07-31 -- recorded here because it is a lock-identity residual of the same
+    primitive and was recoverable from no durable surface): pause-journal DISPOSAL unlinks the lock
+    file and takes no lock, so a holder of the OLD inode does not exclude a re-creator (which gets a
+    fresh O_CREAT inode); gated behind `--acknowledge-discarding-recoverable-state`, ACCEPTED
+    RESIDUAL. STATUS UNCHANGED -- still registered, still not built.'
   close_out: Registered, not built — deliberate scope call (advisor()-reviewed during B-40's own PR),
     not an oversight. `msvcrt.locking` is byte-range and exclusive-only; it does not cleanly provide the
     shared-reader/exclusive-writer (`LOCK_SH`/`LOCK_EX`) split both `cross_process_ledger_lock` and `reconciler_pause_resume_substrate`
@@ -1736,7 +1752,9 @@ items:
     TTL floor as a mechanical fix and advisor() rejected it too -- it is this row''s own
     close_out option ("reject TTLs below a guaranteed timestamp resolution"), already flagged as
     a genuine design decision, and the field is a spec''d deployment-configurable surface
-    (Runtime v1.103 SS14.8.11 AC 7) Phase-7 impl discretion should not narrow unilaterally.
+    (Runtime SS14.8.11''s bounded-retention bullet, :4883 at v1.108 -- CITE CORRECTED 2026-07-31:
+    SS14.8.11 carries NO AC numbering at all, so the prior "AC 7" resolved to nothing) Phase-7 impl
+    discretion should not narrow unilaterally.
     Remains open, not dormant, not built this arc. NARROWED AGAIN 2026-07-30 (dated
     re-check against the landed B-77 fix, PR #pending): B-77''s first-observation grace
     covers this row''s reachable loss case but does NOT subsume the row. What is now
@@ -2850,8 +2868,14 @@ items:
     root -- which closes B-77''s named defect (a crash-recovered entry carrying the
     pre-commit stamp is never reclaimed BY THE SWEEP THAT FIRST SEES IT, i.e. never by the
     bootstrap sweep of the recovering process). The residue Codex names is the grace''s
-    PRACTICAL DURATION: every `run()`/`resume()` sweeps twice by construction -- once at
-    `bootstrap/stage_4_od.py:123` and once, unconditionally, at `shutdown.py` step 5b -- so
+    PRACTICAL DURATION: every `run()`/`resume()` sweeps AT LEAST twice by construction -- once at
+    `bootstrap/stage_4_od.py:123` and once, unconditionally, at `shutdown.py` step 5b -- and a
+    THIRD trigger the original count MISSED (corrected 2026-07-31): `_maybe_opportunistic_gc_sweep`
+    (`protected_result_store.py:882`) fires from inside `write_once` at most once per
+    `_OPPORTUNISTIC_GC_INTERVAL_SECONDS` (300s, `:72`), so a long-lived process also sweeps on
+    WRITE cadence. "Twice by construction" was therefore a FLOOR, not the count. This SHARPENS
+    rather than weakens the finding -- a third trigger can only SHORTEN the first-to-second
+    interval -- but the premise is corrected rather than left as written. So
     the interval between the first and second observation is the RUN''s own duration, which
     for a short or immediately-failing run is milliseconds. A genuinely-live,
     crash-recovered entry therefore still survives only to that same run''s shutdown, not
@@ -2875,7 +2899,8 @@ items:
     tradeoff that makes this a ratification-owned decision rather than a mechanical patch:
     the conservative rule lengthens worst-case retention of a genuine crash orphan by up to
     one full TTL (a day at the factory default), which trades against the spec''s own
-    bounded-retention term (Runtime v1.106 SS14.8.11 -- "a signing outage must not grow an
+    bounded-retention term (Runtime v1.108 SS14.8.11 -- version label refreshed 2026-07-31; the
+    bullet text is unchanged across v1.106->v1.108 -- "a signing outage must not grow an
     unbounded store of sensitive payloads"). Pick the bound deliberately; do not narrow
     `ttl_seconds` itself (B-74''s declined option). Witness by driving a full
     bootstrap-then-shutdown pair against a crash-window entry and asserting it survives
@@ -2936,8 +2961,11 @@ items:
     not assumed: the arc is wholly intra-harness-runtime and the one candidate crossing (tenant
     normalization) is a deliberate non-crossing.'
   close_out: 'HALF (b): CLOSED at PR #1167 -- 13 mutation-probed witnesses at
-    harness-runtime/tests/test_journal_pause_store_cross_process_append_b97.py. HALF (a): SPEC LEG
-    APPLIED; IMPL LEG OWED, and it is the ONLY thing between this row and closure. CLOSURE
+    harness-runtime/tests/test_journal_pause_store_cross_process_append_b97.py. HALF (a): CLOSED at
+    PR #1171 -- the spec leg (Runtime v1.108) AND the impl leg (U-RT-149) both landed, and the
+    conjunctive criterion below was met in FULL, not in part. THE ROW IS CLOSED; the criterion is
+    retained verbatim below as the record of what closure required, not as outstanding work.
+    CLOSURE
     CRITERION, carried verbatim from Implementation_Plan_Harness_Runtime_v2_56.md U-RT-149: B-97
     half (a) closes iff (tenant-composite keying landed AND injectivity witnessed across all THREE
     hazards) AND (the section 13.7 enumeration surface landed) AND ((3a) disposition + the orphan
@@ -3028,8 +3056,11 @@ items:
     pause_context_reader deferral is discharged
   status: registered_finding
   summary: 'A NAMED REOPENING CONDITION, not a defect and not a gate -- filed so the B-69
-    projection''s own justification cannot go stale silently. Runtime spec v1.107 section 31.2
-    excludes StateSummary.summary_text from the caller-facing projection. That exclusion originally
+    projection''s own justification cannot go stale silently. Runtime spec v1.107 section 14.14.9.2
+    excludes StateSummary.summary_text from the caller-facing projection (CITE CORRECTED 2026-07-31:
+    this row read "section 31.2", which resolves to NOTHING -- the spec has no section 31, its
+    highest is section 30; the exclusion is the state_summary.summary_text table row inside
+    section 14.14.9.2, and the prose register already carried the correct cite). That exclusion originally
     rested on TWO legs; one was falsified at the convening''s own adversarial pass. The FALSIFIED
     leg: "the exclusion is free, since summary_text is empty everywhere" -- true today, but only
     because the MVP binding is the injected placeholder pause_context_reader that Runtime spec
@@ -3047,7 +3078,13 @@ items:
     the field is excluded, so there is nothing to redact, and gating an absent channel is textbook
     over-gating. Also re-examine at the same trigger: Runtime plan v2.55 U-RT-148 AC #5 (the W4
     characterization witness) asserts a PLACEHOLDER property and will fail for a good reason once a
-    real reader lands -- its correct disposition is then DELETION or INVERSION, never repair.'
+    real reader lands -- its correct disposition is then DELETION or INVERSION, never repair.
+    DATED RE-CHECK 2026-07-31 (post-#1170/#1171, at the B-103 arc): THE TRIGGER HAS NOT FIRED. The
+    section 14.14.7 pause_context_reader deferral is intact and unamended (spec :5865 heading,
+    :5868 the deferral bullet itself), the MVP constant-sentinel binding still stands (:5949), and
+    Runtime spec v1.108 preserves sections 14.14.9.2-.5 VERBATIM -- so neither the exclusion nor
+    the redaction posture it pairs with has moved. Nothing owed; re-check again when a real reader
+    is composed.'
   council: 'no -- the tension was already convened and adjudicated at the B-69 record (C10 vs C11 on
     payload boundary); this row records the condition under which that adjudication must be re-run,
     and the re-run inherits the same voice pair without needing a fresh activation decision.'
@@ -3062,7 +3099,8 @@ items:
   summary: 'Surfaced at the B-69 IMPL leg (2026-07-31), NOT absorbed. CP spec v1.112 section 2.1
     and Runtime spec v1.107 section 14.14.9.2 both scope the empty-key / key-field-ABSENT source
     shape to EffectFencePausedBranchResumeState -- the fan-out crash-reconstruction carrier, which
-    the spec leg verified constructs idempotency_key="" deliberately (workflow_driver.py:4078). The
+    the spec leg verified constructs idempotency_key="" deliberately (workflow_driver.py:4074 --
+    ANCHOR CORRECTED 2026-07-31; :4078 is the `else:` four lines past it). The
     shipped LINEAR site constructs EffectFenceResumeState(idempotency_key=_fence_key) whenever
     isinstance(_fence_key, str) (workflow_driver.py:5456), which ADMITS "", and the orchestrator
     site is unconstrained the same way. Both real resume sites consult a fence resolution only when
@@ -3186,7 +3224,7 @@ items:
   heading: '### B-102 · `corrupt-latest` is presented as decisive, but a torn in-flight append tail is cross-process reachable exactly as `empty-journal` is *(surfaced at the `B-97`(b) arc, lens-1 F1, 2026-07-31; spec half DISCHARGED at Runtime spec v1.108, 2026-07-31 — the read-side attribution flip rides the `B-97`(a) impl leg)*'
 - id: B-103
   title: The B-97(b) pause-journal append lock is a blocking flock taken on the event loop
-  status: registered_finding
+  status: closed
   pr: '#pending'
   summary: 'The B-97(b) cross-process append lock is a BLOCKING fcntl.flock syscall taken ON THE EVENT
     LOOP: JournalWorkflowPauseStore.capture() is called synchronously from the async
@@ -3223,7 +3261,42 @@ items:
     same per-workflow granularity, same Windows no-op), the acquisition is still BLOCKING and still
     taken synchronously from capture(), and the READ path still takes no lock. The two things this
     row forbids -- changing the lock''s GRANULARITY and changing the READ path -- were both
-    preserved. STILL OPEN, unchanged in substance.'
+    preserved. STILL OPEN, unchanged in substance. CLOSED 2026-07-31 (PR #pending): the ONE async
+    caller -- DurablePauseResumeProtocol.capture_pause_snapshot -- now dispatches capture() via
+    run_audit_off_loop (lifecycle/audit_offload.py) instead of calling it inline. PRIMITIVE CHOICE,
+    on the source and not on the analogy: asyncio.to_thread was REJECTED (it queues onto the loop''s
+    DEFAULT executor, where the CP driver''s sync execute_workflow already blocks awaiting loop
+    coroutines -- the exhaustion deadlock that module exists to avoid), and
+    run_off_loop_detach_on_cancel was REJECTED because it is for effects with NO durability
+    requirement (shutdown''s opportunistic GC sweep); a pause capture''s whole contract is
+    durable-before-return, so the JOIN-on-cancel variant is the fitting one -- the same property
+    resolve_result_ref_off_loop already relies on. WITNESSED BY EXECUTION at
+    harness-runtime/tests/test_pause_capture_off_loop_b103.py (11 tests): an unrelated coroutine
+    and a pending loop timer both advance while a genuine second OS process holds the lock, and the
+    MUTATION PROBE SHIPS AS A PERMANENT ARM rather than a prose claim -- the direct synchronous call
+    is parametrized alongside the shipped path with INVERTED expectations, and reproduces loop
+    starvation exactly (sample latency 2.98s vs the 0.6s sample window; 1 unrelated-coroutine tick
+    vs ~30; timer 2.98s late). Cancellation is witnessed against a detach-on-cancel mutant the same
+    way. NEITHER FORBIDDEN THING MOVED: granularity is pinned by a same-target/same-inode witness,
+    and the read path is pinned lockless AND still synchronous. NO SPEC TEXT OWED, confirmed by
+    direct read before building: Runtime spec v1.108 section 14.8.1''s v1.102 paragraph states the
+    governing principle verbatim -- "The wrap chain above pins composition, not execution venue" --
+    and selects an off-loop venue for a blocking sync inner with no contract-surface change. This
+    arc is the same class; no config scalar, failure class, record shape or observable surface
+    moves, so no fork was owed and none was filed. OUT-OF-FAMILY REVIEW ROUND 1 RAISED TWO [P1]s,
+    BOTH ANSWERED RATHER THAN ARGUED DOWN. (1) POOL ISOLATION -- the capture originally reused the
+    SHARED 4-worker audit-offload pool, where four contended captures would occupy every slot and
+    stall unrelated audit-signing / ref-resolution work. Corrected: a DEDICATED pool
+    (_PAUSE_JOURNAL_OFFLOAD_EXECUTOR, a second instance of the same reviewed hand-rolled executor,
+    with its own thread-name prefix), which is also what Runtime spec v1.102 section 14.8.10.1
+    already implies -- it ruled that same 4-worker pool INELIGIBLE for B-48''s offload on identical
+    reasoning. Witnessed as an EXCLUSION at
+    test_the_capture_never_occupies_the_shared_audit_pool. (2) CANCELLATION PAST THE JOIN GRACE --
+    the join guarantee is bounded, and past the grace an append may land after cancellation is
+    observed. That window is NEW at this arc; it is REGISTERED at B-105 (co-scheduled with B-93,
+    which owns the acquisition mechanism whose change would close it) rather than absorbed
+    silently, and the docstrings now state the bound instead of claiming an unconditional
+    guarantee.'
   council: 'no -- a single-axis execution-venue question with no nameable cross-domain tension. The
     granularity decision that WOULD have carried one is already settled and is explicitly out of
     this row''s scope; route to C9 (reliability/recovery) directly plus advisor() if the offload
@@ -3232,6 +3305,14 @@ items:
 - id: B-104
   title: The pause journal has no pause-resolved marker, so an outstanding pause is not
     distinguishable from a resolved one
+  notes: 'O-3 (lens-1, B-97(b) arc, 2026-07-31 -- recorded here because this is the section 13.7
+    enumeration row and it was recoverable from no durable surface): LINE-COUNT SEMANTICS DIFFER
+    ACROSS SURFACES -- str.splitlines() splits on \x0b, \x85 and \u2028 while bytes.splitlines()
+    does not, so two surfaces counting "records" over the same journal can disagree. UNREACHABLE
+    for store-written records: json.dumps escapes control characters, so no record the store itself
+    writes can contain a byte either splitter would treat as a line break. Recorded as a bound on
+    the enumeration''s arithmetic under HAND-EDITED or foreign-written journals, not as a live
+    defect.'
   status: registered_finding
   pr: '#pending'
   summary: 'The pause journal is append-only and NEVER TRUNCATED (Runtime spec section 14.14.8''s v1.107
@@ -3280,3 +3361,43 @@ items:
     dyadic convened. Convene only if shape (a) is taken, since that is where the closed-vocabulary
     and record-shape questions bite; a pure documentation close needs no convening.'
   heading: '### B-104 · The pause journal writes no pause-RESOLVED marker, so the §13.7 enumeration can only bound the at-risk set from ABOVE *(surfaced at the `B-97`(a) spec leg, out-of-family review round 1 [P1], reported not absorbed, 2026-07-31)*'
+- id: B-105
+  title: A pause capture cancelled past the off-loop join grace can append after the
+    cancellation is observed
+  status: registered_finding
+  pr: '#pending'
+  summary: 'Surfaced by out-of-family Codex [P1] round 1 at the B-103 arc (2026-07-31) and
+    DELIBERATELY NOT SMOOTHED OVER. B-103 moved the pause journal''s blocking flock off the event
+    loop; run_pause_journal_off_loop JOINS the uninterruptible worker on cancellation so the append
+    is durable BEFORE the caller observes CancelledError -- the ordering the pre-B-103 synchronous
+    call had FOR FREE, because a loop blocked inside flock could not deliver a cancellation at all.
+    That join is BOUNDED by PAUSE_JOURNAL_CANCEL_JOIN_GRACE_SECONDS (30s). Past the grace the
+    worker is DETACHED with a loud ERROR and its append MAY land after the run was abandoned --
+    journaling a pause api.resume would then honour. THIS WINDOW IS NEW: it is introduced by the
+    B-103 offload, not inherited, and that is stated plainly rather than argued away. The bound
+    cannot simply be removed: the grace exists because asyncio.run''s cancellation cleanup awaits
+    the pending task, so an unbounded join lets a wedged peer hold process exit (the codex round-10
+    P1 that put the bound on the sibling audit helper in the first place). SEVERITY, STATED
+    HONESTLY: bounded by a property the substrate already documents rather than by luck -- the
+    journal writes NO pause-resolved marker (B-104), so Runtime spec v1.108 section 13.7 already
+    scopes the enumeration to an UPPER BOUND that can over-report outstanding pauses. A
+    late-landing record falls inside that documented imprecision; it is not a new corruption class.
+    Reaching it also requires a peer process to hold one workflow''s journal lock for over 30s
+    WHILE that workflow''s capture is cancelled -- no such stall has been observed.'
+  close_out: 'Make the ordering unconditional rather than grace-bounded. The grounded candidate is
+    NOT a longer grace (it only moves the boundary): convert the acquisition from a blocking
+    flock(LOCK_EX) into LOCK_NB plus a bounded retry loop, so a cancelled capture can abandon
+    BEFORE it holds the lock, and every join that does start is bounded by one append (milliseconds)
+    rather than by a peer''s arbitrary hold. NOTE THE OVERLAP AND DO NOT DUPLICATE IT: that is
+    exactly B-93''s close_out (no deadline on any blocking-flock acquisition site), which B-103
+    deliberately did NOT touch to avoid relitigating a settled acquisition mechanism. This row
+    should therefore be CO-SCHEDULED WITH B-93 and closed by the same change, not built separately.
+    If B-93 lands first, re-check this row against it before opening any work -- it may close for
+    free. Witness by cancelling a capture while a peer holds the lock past the grace and asserting
+    the record does NOT land afterwards (the current shipped behaviour is the opposite, and the
+    within-grace half is already witnessed at
+    harness-runtime/tests/test_pause_capture_off_loop_b103.py).'
+  council: 'no -- a mechanism question inside one axis with no nameable cross-domain tension. The
+    tradeoff (cancellation promptness against write ordering) is real but is an implementation
+    bound, and the acquisition-mechanism decision it depends on belongs to B-93.'
+  heading: '### B-105 · A pause capture cancelled past the off-loop join grace can append AFTER the cancellation is observed *(surfaced by out-of-family Codex [P1] at the `B-103` arc, 2026-07-31)*'

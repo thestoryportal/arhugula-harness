@@ -454,11 +454,16 @@ def cross_process_journal_lock(journal_path: Path) -> Generator[None, None, None
     REFUSES BY DEFAULT where this degrades** (spec §14.14.8 *"REFUSE WHERE THE
     PRIMITIVE DEGRADES"*) rather than proceeding on a declaration.
 
-    **KNOWN + REGISTERED, deliberately not built here: this ``flock`` blocks
-    the event loop** on the capture path. Registered at ``B-103``; explicitly
-    out of scope for ``B-97`` half (a) (a mechanism/latency question with no
-    keying content). Re-raised by every transcript-less reviewer — it is a
-    DEFERRAL, not an oversight.
+    **This acquisition BLOCKS, and callers on the event loop must not take it
+    directly (``B-103``, CLOSED).** ``flock(LOCK_EX)`` holds the calling THREAD
+    until the holder releases. The one async caller —
+    :meth:`DurablePauseResumeProtocol.capture_pause_snapshot` — therefore
+    dispatches ``capture()`` off-loop via ``run_audit_off_loop`` rather than
+    calling it inline; see that method's docstring for the venue + cancellation
+    rationale. Nothing about the lock ITSELF changed at ``B-103``: same
+    granularity, same construction, same inode, same Windows no-op. Any FUTURE
+    async caller owes the same offload — this primitive is loop-hostile by
+    nature, not by defect.
     """
     if _IS_WINDOWS:
         yield
