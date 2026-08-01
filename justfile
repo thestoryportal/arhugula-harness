@@ -487,15 +487,23 @@ codex-review base='main': _require-codex-subscription
 codex-review-uncommitted: _require-codex-subscription
     env -u OPENAI_API_KEY codex review -c preferred_auth_method="chatgpt" --uncommitted
 
-# Out-of-family diff review via Gemini CLI — the decorrelated artifact reviewer
-# when Codex is the AUTHOR (mirror of codex-review, which decorrelates Claude-authored
-# work). Reviews the diff of the current branch against BASE.
-gemini-review base='main': _require-gemini
-    git diff --merge-base {{base}} | gemini -p "You are an out-of-family code reviewer for a Python 3.12 asyncio + Pydantic v2 monorepo. Review this diff for real defects: correctness, concurrency (lock windows, cancellation, cross-process file races), contract drift, and tests that would stay green if the change were reverted. Number findings F1..Fn tagged [P1]/[P2]/[P3] with file:line; no style nits. End with exactly 'VERDICT: APPROVE' or 'VERDICT: BLOCK'."
+# Out-of-family diff review via Google Antigravity CLI (agy) — the decorrelated
+# artifact reviewer when Codex is the AUTHOR (mirror of codex-review, which
+# decorrelates Claude-authored work). Reviews the diff of the current branch vs BASE.
+# Subscription path: agy serves the Google AI Ultra plan (Google-account login) —
+# gemini-cli's consumer OAuth tiers were retired 2026-06-18 (IneligibleTierError);
+# empirically verified 2026-08-01: `agy -p` headless works on the subscription.
+# GEMINI_API_KEY/GOOGLE_API_KEY are stripped as insurance — justfile dotenv loads
+# .env, which carries the harness runtime's own provider keys; those must never
+# leak into review billing.
+gemini-review base='main': _require-antigravity
+    git diff --merge-base {{base}} | env -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GOOGLE_GENAI_USE_VERTEXAI agy -p "You are an out-of-family code reviewer for a Python 3.12 asyncio + Pydantic v2 monorepo. Review this diff for real defects: correctness, concurrency (lock windows, cancellation, cross-process file races), contract drift, and tests that would stay green if the change were reverted. Number findings F1..Fn tagged [P1]/[P2]/[P3] with file:line; no style nits. End with exactly 'VERDICT: APPROVE' or 'VERDICT: BLOCK'."
 
-_require-gemini:
-    @if ! command -v gemini >/dev/null 2>&1; then \
-        echo "ERROR: gemini CLI not found on PATH."; exit 1; \
+_require-antigravity:
+    @if ! command -v agy >/dev/null 2>&1; then \
+        echo "ERROR: agy (Antigravity CLI) not found on PATH."; \
+        echo "  Install per https://antigravity.google (Google AI Ultra subscription auth)."; \
+        exit 1; \
     fi
 
 # Advisory CodeRabbit review. This is optional and complements, not replaces,
