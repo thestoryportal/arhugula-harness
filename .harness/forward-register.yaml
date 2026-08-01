@@ -60,12 +60,12 @@
 snapshot:
   total: 107
   open: 0
-  design_substrate_gated: 0
-  registered_finding: 19
+  design_substrate_gated: 1
+  registered_finding: 18
   operator_gated: 0
   held: 1
   closed: 87
-  identity_digest: 6f96170a7a4edfe0
+  identity_digest: 02cfe1685214426e
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -3095,7 +3095,7 @@ items:
   title: The empty-idempotency_key key-ABSENT carve-out is scoped to the fan-out crash-reconstruction
     carrier, but the LINEAR and orchestrator fence capture sites admit an empty key too
   status: closed
-  pr: '#pending'
+  pr: '#1174'
   summary: 'Surfaced at the B-69 IMPL leg (2026-07-31), NOT absorbed. CP spec v1.112 section 2.1
     and Runtime spec v1.107 section 14.14.9.2 both scope the empty-key / key-field-ABSENT source
     shape to EffectFencePausedBranchResumeState -- the fan-out crash-reconstruction carrier, which
@@ -3123,8 +3123,8 @@ items:
     the default recommendation. Note the exposure is currently DEFENSIVE-ONLY at both sites (the
     key is read by name off a runtime error, and no production path is known to yield ""), so this
     is a soundness gap rather than a live defect -- which is why it is registered rather than
-    treated as a halt. SPEC LEG APPLIED 2026-07-31 -- disposition (a), SPEC-SIDE, at the B-100 spec leg (PR ''#pending''). CP spec v1.112->v1.113 (ONE amendment site: section 2.1 key-ABSENT treatment generalized from a PROVENANCE scope to a STATE scope -- any effect-fence source shape whose captured key is EMPTY carries NO key field) + Runtime spec v1.108->v1.109 (identical amendment inside section 14.14.9.2) + CP plan v2.47->v2.48 (U-CP-64, ONE ADDED AC #A11; #A1-#A10 preserved verbatim) + Runtime plan v2.56->v2.57 (U-RT-148, AC #15(b) + #16(a) WIDENED; sixteen ACs stay sixteen). VARIANT set UNCHANGED at FOUR; effect-fence-addressable source shapes 4->6, union 8->10, distinct source CARRIERS UNCHANGED at SEVEN. ZERO new contract numbers, ZERO carriers retyped, ZERO fields added, ZERO snapshot_hash impact, ZERO new CXA rows (v2.23 UNCHANGED, aggregate frozen at 111), ZERO new units/clusters/DAG edges. Disposition (b) NOT applied, per this close-out. FOUR findings surfaced at the leg rather than absorbed. (1) THIS ROW''S GROUND FOR THE ORCHESTRATOR HALF IS FALSIFIED: OrchestratorEffectFencePausedResumeState has exactly ONE construction site (workflow_driver.py:12392) whose guard chain at :12376-:12381 ends with `and _orch_fence_key` -- a TRUTHINESS test excluding "". The keyless orchestrator shape is applied anyway on a CORRECTED ground (TYPE TOTALITY: the carrier type declares idempotency_key: str with no length constraint, and the projection is a total function over journaled records that outlive the capture-site code), and is UNREACHABLE in production -- its acceptance witness MUST be a constructed-snapshot test, never an e2e. (2) THIS ROW''S MECHANISM CLAIM is accurate for the fan-out per-branch dispatch sites AND for the ORCHESTRATOR consult (:12118, truthiness-gated the same way) and INACCURATE for the LINEAR consult ALONE (:4925-:4936), which calls _resolve_effect_fence_gated unconditionally; the real mechanism there is the runtime dispatcher applying a directive only when the RECOMPUTED per-(run, step, tool) key matches (runtime_tool_dispatcher.py:1042 against the key composed at :989), never "" -- plus compute_effect_fence_tree_wide_abort_present filtering all empty keys (workflow_driver.py:3054). Same DROP-not-refuse harm, different route. (3) The branch keyless shape was ALREADY under-scoped by its provenance naming: the ordinary fan-out fence-pause path coerces a missing key to "" at :9625/:9752/:14024/:14149, and the shipped projection already routes by EMPTINESS (pause_state_projection.py:621-:649) -- the generalization closes this as a side effect of the authorized fix. (4) A PRE-EXISTING count/table gap at CP section 2.1 / Runtime section 14.14.9.2 (seven rows for eight shapes; a stale "(3 shapes)" parenthetical), caused by a shape-vs-CARRIER conflation, refreshed here because the widening makes those numbers load-bearing. IMPL DELTA IS OWED AND IS NOT THIS LEG: walk_pause_tree constructs the LINEAR (pause_state_projection.py:509) and orchestrator (:522) projections UNCONDITIONALLY from the carrier key with no emptiness routing, so an empty key is surfaced TODAY as a "" key value -- the two new projection types plus the sibling of _effect_fence_branch_projection are owed at U-CP-64 (CP plan v2.48 AC #A11) and consumed at U-RT-148 (Runtime plan v2.57 AC #15(b)/#16(a)). THE ROW IS THEREFORE **NARROWED TO THAT IMPL REMAINDER AND FLIPPED registered_finding -> open**, NOT CLOSED -- the status enum at this file''s header defines `closed` as *built + merged, or foreclosed/superseded*, and neither holds while the two projection types and their emptiness routing are unbuilt. This follows the B-97 precedent exactly (its half (a) row stayed open through the v1.108 SPEC leg at PR #1168 and closed only at PR #1171 once U-RT-149 IMPL landed) and the B-102 precedent (*narrowed to that remainder rather than closed*). CLOSURE CRITERION FOR THE REMAINDER: B-100 closes iff (the LINEAR and orchestrator KEY-ABSENT projection types exist AND route by emptiness) AND (CP plan v2.48 AC #A11 (a)-(d) are witnessed green, with (b) as a CONSTRUCTED-SNAPSHOT test) AND (Runtime plan v2.57''s widened AC #15(b) + #16(a) are witnessed green). Partial is non-closure. A spec leg alone does not close this row. STATUS TRANSIT AT THIS LEG, stated so the snapshot bump is legible: registered_finding -> OPEN. The enum at this file''s header defines registered_finding as a gap that *opens for BUILD once grounding confirms a genuinely buildable slice*, and open as *actionable now, no blocker* -- the grounding is done and the slice is specified down to acceptance criteria (CP plan v2.48 AC #A11; Runtime plan v2.57''s widened AC #15(b) + #16(a)), so the row is actionable and must derive as such rather than await another grounding pass (out-of-family review round 9 [P2]).
-    IMPL LEG LANDED 2026-08-01 (PR ''#pending'') -- the remainder this row was NARROWED to at the spec leg.
+    treated as a halt. SPEC LEG APPLIED 2026-07-31 -- disposition (a), SPEC-SIDE, at the B-100 spec leg (PR #1173). CP spec v1.112->v1.113 (ONE amendment site: section 2.1 key-ABSENT treatment generalized from a PROVENANCE scope to a STATE scope -- any effect-fence source shape whose captured key is EMPTY carries NO key field) + Runtime spec v1.108->v1.109 (identical amendment inside section 14.14.9.2) + CP plan v2.47->v2.48 (U-CP-64, ONE ADDED AC #A11; #A1-#A10 preserved verbatim) + Runtime plan v2.56->v2.57 (U-RT-148, AC #15(b) + #16(a) WIDENED; sixteen ACs stay sixteen). VARIANT set UNCHANGED at FOUR; effect-fence-addressable source shapes 4->6, union 8->10, distinct source CARRIERS UNCHANGED at SEVEN. ZERO new contract numbers, ZERO carriers retyped, ZERO fields added, ZERO snapshot_hash impact, ZERO new CXA rows (v2.23 UNCHANGED, aggregate frozen at 111), ZERO new units/clusters/DAG edges. Disposition (b) NOT applied, per this close-out. FOUR findings surfaced at the leg rather than absorbed. (1) THIS ROW''S GROUND FOR THE ORCHESTRATOR HALF IS FALSIFIED: OrchestratorEffectFencePausedResumeState has exactly ONE construction site (workflow_driver.py:12392) whose guard chain at :12376-:12381 ends with `and _orch_fence_key` -- a TRUTHINESS test excluding "". The keyless orchestrator shape is applied anyway on a CORRECTED ground (TYPE TOTALITY: the carrier type declares idempotency_key: str with no length constraint, and the projection is a total function over journaled records that outlive the capture-site code), and is UNREACHABLE in production -- its acceptance witness MUST be a constructed-snapshot test, never an e2e. (2) THIS ROW''S MECHANISM CLAIM is accurate for the fan-out per-branch dispatch sites AND for the ORCHESTRATOR consult (:12118, truthiness-gated the same way) and INACCURATE for the LINEAR consult ALONE (:4925-:4936), which calls _resolve_effect_fence_gated unconditionally; the real mechanism there is the runtime dispatcher applying a directive only when the RECOMPUTED per-(run, step, tool) key matches (runtime_tool_dispatcher.py:1042 against the key composed at :989), never "" -- plus compute_effect_fence_tree_wide_abort_present filtering all empty keys (workflow_driver.py:3054). Same DROP-not-refuse harm, different route. (3) The branch keyless shape was ALREADY under-scoped by its provenance naming: the ordinary fan-out fence-pause path coerces a missing key to "" at :9625/:9752/:14024/:14149, and the shipped projection already routes by EMPTINESS (pause_state_projection.py:621-:649) -- the generalization closes this as a side effect of the authorized fix. (4) A PRE-EXISTING count/table gap at CP section 2.1 / Runtime section 14.14.9.2 (seven rows for eight shapes; a stale "(3 shapes)" parenthetical), caused by a shape-vs-CARRIER conflation, refreshed here because the widening makes those numbers load-bearing. IMPL DELTA IS OWED AND IS NOT THIS LEG: walk_pause_tree constructs the LINEAR (pause_state_projection.py:509) and orchestrator (:522) projections UNCONDITIONALLY from the carrier key with no emptiness routing, so an empty key is surfaced TODAY as a "" key value -- the two new projection types plus the sibling of _effect_fence_branch_projection are owed at U-CP-64 (CP plan v2.48 AC #A11) and consumed at U-RT-148 (Runtime plan v2.57 AC #15(b)/#16(a)). THE ROW IS THEREFORE **NARROWED TO THAT IMPL REMAINDER AND FLIPPED registered_finding -> open**, NOT CLOSED -- the status enum at this file''s header defines `closed` as *built + merged, or foreclosed/superseded*, and neither holds while the two projection types and their emptiness routing are unbuilt. This follows the B-97 precedent exactly (its half (a) row stayed open through the v1.108 SPEC leg at PR #1168 and closed only at PR #1171 once U-RT-149 IMPL landed) and the B-102 precedent (*narrowed to that remainder rather than closed*). CLOSURE CRITERION FOR THE REMAINDER: B-100 closes iff (the LINEAR and orchestrator KEY-ABSENT projection types exist AND route by emptiness) AND (CP plan v2.48 AC #A11 (a)-(d) are witnessed green, with (b) as a CONSTRUCTED-SNAPSHOT test) AND (Runtime plan v2.57''s widened AC #15(b) + #16(a) are witnessed green). Partial is non-closure. A spec leg alone does not close this row. STATUS TRANSIT AT THIS LEG, stated so the snapshot bump is legible: registered_finding -> OPEN. The enum at this file''s header defines registered_finding as a gap that *opens for BUILD once grounding confirms a genuinely buildable slice*, and open as *actionable now, no blocker* -- the grounding is done and the slice is specified down to acceptance criteria (CP plan v2.48 AC #A11; Runtime plan v2.57''s widened AC #15(b) + #16(a)), so the row is actionable and must derive as such rather than await another grounding pass (out-of-family review round 9 [P2]).
+    IMPL LEG LANDED 2026-08-01 (PR #1174) -- the remainder this row was NARROWED to at the spec leg.
     ONE file: harness-cp/src/harness_cp/pause_state_projection.py. TWO new source-shape members + TWO new
     projection types (KeyAbsentLinearEffectFenceAddressableLocation,
     KeyAbsentOrchestratorEffectFenceAddressableLocation) + TWO sibling routing helpers
@@ -3161,7 +3161,7 @@ items:
   title: Accessor-derived resume-context provenance is LOST through base-typed Pydantic
     serialization, and closing it requires a ResumeContext spec change
   status: closed
-  pr: '#pending'
+  pr: '#1175'
   summary: 'SPEC LEG APPLIED 2026-08-01, DISPOSITION (b)-PLUS -- CP spec v1.113->v1.114, ONE
     amendment site: section 1.2 constraint 3''s stated residual is APPENDED TO with ONE paragraph -- NO TEXT
     retracted or reworded, though section 1.3(c)''s reach IS made explicit where v1.112 left it implicit (it
@@ -3460,8 +3460,9 @@ items:
   heading: '### B-104 · The pause journal writes no pause-RESOLVED marker, so the §13.7 enumeration can only bound the at-risk set from ABOVE *(surfaced at the `B-97`(a) spec leg, out-of-family review round 1 [P1], reported not absorbed, 2026-07-31)*'
 - id: B-107
   title: No channel REFUSES an operator resolution addressed to an EMPTY effect-fence key --
-    both the response map and the scalar uniform fallback silently drop it, on all three carriers
-  status: registered_finding
+    the response map and the scalar uniform fallback DROP it on all three carriers, and the
+    level-local abort scans MIS-APPLY it to a keyed sibling
+  status: design_substrate_gated
   pr: '#pending'
   summary: 'ID NOTE: this row is B-107, NOT B-105 -- B-105 was minted and WITHDRAWN at PR #1172
     (the B-103 premise-falsified rework; see .harness/roadmap_status.md and
@@ -3470,7 +3471,11 @@ items:
     not absorbed -- it is ADJACENT to that leg''s authorized disposition (a), not part of it, and its
     SCOPE was corrected twice at review before filing. THE RESIDUAL: an EMPTY captured
     idempotency_key is reachable on the durable effect-fence carriers, and NO channel REFUSES an
-    operator resolution addressed to it -- every route drops it silently. TWO CHANNELS. (1) THE MAP
+    operator resolution addressed to it. TWO FAILURE MODES, not one -- the second ESTABLISHED at
+    the 2026-08-01 grounding pass (see close_out): most routes DROP it silently, and the
+    level-local _any_fence_abort scans MIS-APPLY it, since a {"": ABORT} suppresses a KEYED
+    sibling''s valid directive at :8238 / :12576 -- the cross-location misattribution CP spec
+    v1.107 section 1.1(a) forbids. TWO CHANNELS. (1) THE MAP
     CHANNEL. B-100''s projection change removes the ADVERTISEMENT -- an operator composing from the
     projection has no key to paste -- but it does NOT make the state unrepresentable:
     ResumeContext.effect_fence_resolutions is a dict[str, EffectFenceResolution] with UNCONSTRAINED
@@ -3489,7 +3494,9 @@ items:
     EffectFenceResolutionDirective(idempotency_key=""), which the runtime dispatcher then never
     matches (runtime_tool_dispatcher.py:1042 vs the key composed at :989, never ""); at the FAN-OUT
     PER-BRANCH and ORCHESTRATOR consults the truthiness guard means the resolution is never consulted
-    at all. Different mechanism, IDENTICAL outcome -- a silent INERT re-pause with no diagnostic.
+    at all (SCOPE-CORRECTED 2026-08-01: true of those per-branch/orchestrator DELIVERY consults ONLY --
+    the level-local _any_fence_abort scans at :7839 / :11708 DO consult the BRANCH carrier with an
+    empty key, UNGUARDED; see the CORRECTED SEVEN-SITE MAP at this row''s close_out). Different mechanism, IDENTICAL outcome -- a silent INERT re-pause with no diagnostic.
     REACHABILITY, per carrier: the BRANCH carrier reaches "" DELIBERATELY at crash reconstruction
     (:4074) and defensively through the ordinary fan-out coercion (:9625/:9752/:14024/:14149) -- a
     PRODUCTION shape, not a defensive-only one; the LINEAR carrier reaches it defensively (:5456);
@@ -3497,7 +3504,129 @@ items:
     exposure is type-level only. IT IS NOT A DEFECT IN THE B-100 LEG: read-side projection scoping is
     the whole of what disposition (a) authorizes, and a projection can constrain neither a scalar
     field nor a map the caller populates independently of it.'
-  close_out: 'FOUR candidate dispositions, and the choice is a real one. NONE of them is subsumed by
+  close_out: 'STATUS TRANSIT 2026-08-01, stated so the snapshot bump is legible: registered_finding ->
+    DESIGN_SUBSTRATE_GATED (out-of-family review round 4 [P2]). The enum at this file''s header
+    defines registered_finding as a gap that opens for BUILD once grounding confirms a genuinely
+    buildable slice; this grounding confirms there is NONE -- no existing contract term supports
+    a build-now refusal, and even the separable _any_fence_abort slice owes a v1.111 section 2
+    reconciliation -- so the row moves to the gate that actually blocks it: a Class 1
+    design-substrate change, FORK DOC OWED (not yet filed, not yet ratified).
+
+    GROUNDED 2026-08-01 (dedicated grounding pass; every cite below re-verified by direct read at
+    head c1afb225 -- NO anchor moved). VERDICT RECORDED: SPEC-LEG-FIRST, AND THE SPEC LEG IS ITSELF
+    FORK-SHAPED. NO EXISTING CONTRACT TERM SUPPORTS A BUILD-NOW REFUSAL. (i) CP spec v1.107 section
+    1.1 unaddressed-set membership INCLUDES "" -- membership is `not in resolutions` over an
+    enumeration that keeps "" BY DESIGN (workflow_driver.py:2965-:2967; section 1.1 words it "whose
+    own idempotency_key is NOT a key in effect_fence_resolutions"), and CP spec v1.112 section 2.1
+    states it outright -- "the authoritative effect-fence walk INCLUDES the empty key, the
+    uniform-fallback computation COUNTS it, and only the abort walk filters it". (ii) The "cannot
+    address" language (CP spec v1.113 section 1.2, the amended effect-fence-addressable row of
+    v1.112 section 2.1''s projection table) is PUBLICATION, and v1.112 section 2.4 disqualifies it
+    as a rule source in its own words -- "section 2 publishes; it does not decide ... MUST NOT
+    become a second place where classification semantics are stated". (iii) CP spec v1.114 holds
+    this row and B-101 SEPARATE (section 0.5 finding (v)). EMPIRICAL PIN: disposition (a) FLIPS
+    test_map_addressed_keyed_abort_activates_alongside_an_unrelated_keyless_pause
+    (harness-cp/tests/test_workflow_driver_effect_fence_tree_wide_abort_b80.py:222-257, the :254 `is
+    False` assert) -- filtering the keyless candidate leaves the KEYED location solely eligible, so
+    the uniform ABORT reaches it and that assert becomes True. It is the EXECUTABLE PIN of the rule
+    (a) would move, which is why (a) is a spec amendment and not an impl tweak.
+
+    CORRECTED SEVEN-SITE MAP (this REPLACES the round-11 (c) claim, which was FALSE for the BRANCH
+    carrier; (c) below is corrected in place). Exactly SEVEN _resolve_effect_fence_gated call sites
+    exist at head: #1 :3056 GUARDED (the `if k` filter at :3053); #2 :4926 LINEAR consult UNGUARDED;
+    #3 :7839 fan-out level-local _any_fence_abort scan UNGUARDED (:7841 iterates
+    _recovered_effect_fence_paused.values() with no filter); #4 :8216 GUARDED (`if
+    (_branch_fence_key and _ef_resume_ctx is not None)`); #5 :11708 orchestrator-workers level-local
+    _any_fence_abort scan UNGUARDED (:11710, no filter); #6 :12118 GUARDED (the ORCHESTRATOR''s OWN
+    carrier short-circuits on `_orch_fence_resume.idempotency_key`); #7 :12554 GUARDED. CONSEQUENCE:
+    a refusal placed inside _resolve_effect_fence_gated DOES reach the BRANCH/WORKER carrier''s
+    empty keys (sites #3 and #5 call the resolver with "" ungated) and does NOT reach the
+    ORCHESTRATOR''s OWN carrier (site #6 is its only consult, and it is guarded). "Misses BOTH
+    entirely" was wrong on the branch half; "misses the orchestrator entirely" stands.
+
+    NEW FINDING (i) -- THE any() IS POSITION-DEPENDENT, an INDEPENDENT reason the single-function
+    refusal shape is unsound. _recovered_effect_fence_paused is a dict built in carrier order off
+    effect_fence_paused_branches, and that tuple is tuple(sorted(keyed dispositions)) +
+    crash_pause_reconstruct_fence_paused (:10280; the orchestrator-workers twin at :14639) -- the
+    crash-reconstruction "" entries are appended LAST. A keyed sibling resolving ABORT therefore
+    SHORT-CIRCUITS the any() before the "" entry is ever evaluated, so a resolver-internal refusal
+    would fire or not fire depending on SIBLING RESOLUTION ORDER rather than on the presence of the
+    empty key. A refusal whose firing depends on iteration order is not a refusal.
+
+    NEW FINDING (ii) -- A FOURTH TERMINAL CONSUMPTION SITE this row had not named:
+    managed_agents_dispatch.py:300 performs the IDENTICAL key match to
+    runtime_tool_dispatcher.py:1042 (step_context.effect_fence_resolution.idempotency_key ==
+    idempotency_key). A programmatic sweep of the non-test tree finds EXACTLY these two terminal
+    key-match sites. This is the binding rule below doing its job, not an exception to it.
+
+    CLOSURE-CRITERION FLAG -- THE CRITERION AS WRITTEN UNDER-COVERS THE WORST CASE. The {"": ABORT}
+    suppression is OVER-APPLICATION, not a drop: a resolution addressed to "" reaches a DIFFERENT
+    location''s decision at :8238 / :12576 (the run-level ABORT guard suppresses a keyed sibling''s
+    valid directive) -- exactly the cross-location misattribution CP spec v1.107 section 1.1(a)
+    forbids ("never a cross-location misattribution of a SKIP_AS_FIRED/RE_FIRE/ABORT/ABORT_BRANCH
+    judgment intended for a different location"). But the criterion below says the row closes iff no
+    channel delivers a resolution "without either applying it or REFUSING it" -- and this case DOES
+    apply it, at the wrong location. LITERALLY READ, THE CRITERION IS SATISFIED BY THE DEFECT. THE WIDENING IS APPLIED AT THIS PASS rather than left to the opening arc (out-of-family review
+    round 1 [P1]) -- see the amended CLOSURE CRITERION below.
+
+    THE SEPARABLE _any_fence_abort SLICE IS NOT FREE IMPL DISCRETION. The two-line `if _k` filter at
+    :7841 / :11710 looks self-contained, but CP spec v1.111 section 2.1(b) requires the level-local
+    guard be combined with the tree-wide signal as "a strict widening of when suppression fires,
+    never a narrowing" -- and filtering empty keys OUT of the level-local scan is a NARROWING. Even
+    that slice therefore owes a stated reconciliation, plausibly a v1.111 section 2 amendment. It
+    COULD nonetheless ship as an INDEPENDENT NARROW LEG before the (a)/(c)/(d) fork settles: it is
+    the one piece that does not depend on the fork''s outcome.
+
+    THE FOUR FORK DECISIONS the eventual filing must put to the operator. (1) (a)+(d) VS (c) -- two
+    dispositions (one per channel) versus the one that converts DROP into REFUSE everywhere; not a
+    preference, since they amend different things (a CP classification rule vs a resume path''s
+    failure mode vs a ResumeContext field''s type). (2) FAIL-LOUD VS INERT -- the C9-shaped tension
+    this row''s council note already predicts; the bar is Runtime spec section 30 term 4, "a refusal
+    the operator cannot act on is a livelock with good manners", so a refusal on an empty key is
+    worth raising only if the operator has something to re-read and recompose from. (3) SEAM
+    PLACEMENT, RE-DECIDED AGAINST THE CORRECTED MAP -- the close_out''s "cheapest sound placement is
+    an ADMISSION-TIME check" was chosen against the FALSE map. Admission via api.py (where
+    _enforce_pause_state_staleness_precondition sits, :823) is BYPASSABLE: execute_workflow is a
+    public export of harness_cp.workflow_driver (its __all__), so a caller can reach the consults
+    without transiting api.resume(). THE NON-BYPASSABLE CHOKEPOINT IS execute_workflow ITSELF (workflow_driver.py:3061-:3076), which
+    ALREADY receives pause_snapshot_input, resume_context AND all three root-computed signals as
+    parameters -- every route (api.resume via mcp_server, a direct public caller, and the recursive
+    child re-entry at child_workflow_runner.py:261) transits it. (CORRECTED 2026-08-01 at
+    out-of-family review round 1 [P1]: an earlier draft of this bullet claimed mcp_server.py:378-403
+    was "the one place both objects exist together"; that is FALSE, and it would have left direct
+    execute_workflow callers unfenced.) THE REAL DISCRIMINANT IS TREE SCOPE, NOT REACHABILITY:
+    execute_workflow re-enters PER RECURSION LEVEL with a NARROWED pause_snapshot_input, so a check
+    placed there sees only its own subtree, whereas mcp_server.py:378-403 is the ONE site holding
+    the UN-NARROWED depth-0 root (which is exactly why the three tree-wide signals are computed
+    there once and threaded down unchanged). BUT THE DEPTH-0 SITE IS NOT A SAFE HOME EITHER (out-of-family review round 2 [P1]):
+    mcp_server.py:378-403 is merely where those signals HAPPEN to be computed today, and it is
+    bypassed by a direct execute_workflow caller exactly as api.py is. The OUTER execute_workflow
+    invocation itself receives the caller-supplied, UN-NARROWED pause_snapshot_input -- narrowing
+    happens only on RE-ENTRY (child_workflow_runner.py:261 passes the child cursor snapshot) -- so
+    BOTH a per-location AND a tree-wide check can be homed at, or explicitly propagated from, the
+    DRIVER ENTRY, which is the only non-bypassable one. Discriminating the outer entry from a
+    recursive re-entry is itself part of the fork''s design work; the driver already carries
+    sub_agent_descent and receives the three root-computed signals as parameters, and whether either
+    is a sound discriminator must be grounded rather than assumed. WHAT IS SETTLED: any placement
+    that leaves a direct execute_workflow caller unfenced is NOT a candidate. (4) ORCHESTRATOR
+    SCOPE IS TYPE-LEVEL ONLY -- that carrier is PRODUCTION-UNREACHABLE (its one construction site''s
+    guard chain at :12376-:12381 ends in a truthiness test), so its witnesses MUST be
+    constructed-snapshot detect-then-refuse tests per the B-100 precedent (recorded at CP plan v2.48
+    AC #A11 / Runtime plan v2.57 AC #16(a)), never an e2e run. WITNESS SHAPE (CORRECTED at out-of-family review round 2 [P2] -- a plain 2 x 3 grid
+    under-specifies it): the BRANCH carrier has TWO INDEPENDENT TOPOLOGY SITES with their own
+    _any_fence_abort scan and their own suppression consumer -- PARALLELIZATION at :7839 / :8238 and
+    ORCHESTRATOR_WORKERS (HIERARCHICAL_DELEGATION reuses it per CP spec v1.111 section 2.2) at
+    :11708 / :12576 -- so a matrix keyed on CARRIER alone can be satisfied by exercising one of them
+    while the other retains the cross-location suppression. The grid is therefore 2 CHANNELS (map,
+    scalar) x 4 CARRIER-SITES (LINEAR; PARALLELIZATION branch; ORCHESTRATOR_WORKERS worker; the
+    ORCHESTRATOR''s OWN carrier) = EIGHT cells, each branch cell exercising an empty-key location
+    ALONGSIDE a keyed sibling, and the two ORCHESTRATOR cells constructed-snapshot.
+
+    The (d) / B-101(a) SHARED-OBSTACLE CROSS-REF IS UNCHANGED, as recorded at CP spec v1.114 section
+    0.5 finding (v): the same ResumeContext field-set-preserved-verbatim obstacle would discharge
+    both, and the rows stay SEPARATE -- no merge is proposed and none is performed.
+
+    FOUR candidate dispositions, and the choice is a real one. NONE of them is subsumed by
     B-100''s own remainder, and TWO OF THEM ARE NEEDED FOR FULL CLOSURE (one per channel) unless (c)
     is taken. (a) RESOLVER-SIDE, closes the SCALAR channel only: filter empty keys out of
     compute_effect_fence_uniform_fallback_eligible_key''s candidate set, exactly as
@@ -3516,12 +3645,26 @@ items:
     earlier draft of this text (corrected at round 8 [P2]): refusing at the LINEAR site (:5456) leaves
     the BRANCH carrier''s empty key untouched, and that one is DELIBERATE (crash reconstruction
     constructs it at :4074 precisely because CP cannot derive the runtime fence key), so it would have
-    to be REDESIGNED, not merely refused. (c) REFUSE-AT-THE-SEAM: raise rather than silently skip or thread when a resolution is addressed to an empty key. This is the ONLY option that converts DROP into REFUSE. BUT ITS SEAM IS NOT ONE FUNCTION, corrected at round 11 [P2]: placing the refusal inside _resolve_effect_fence_gated alone MISSES the branch and orchestrator carriers entirely, because their consults SHORT-CIRCUIT on the truthiness guard (:12118 for the orchestrator) and never call it. Full coverage therefore needs EITHER an earlier validation seam that sees the location before any consult is skipped -- e.g. at resume-context admission or at the collector -- OR a per-consult refusal at each of the three sites. Cheapest sound placement is an ADMISSION-TIME check, which also subsumes (d)''s map channel; ground that before assuming the single-function version. It changes a resume path''s failure mode either way, which is a real contract change. (d) CONSTRAIN THE MAP KEY: give effect_fence_resolutions a min-length-1 key type so {"":
+    to be REDESIGNED, not merely refused. (c) REFUSE-AT-THE-SEAM: raise rather than silently skip or thread when a resolution is addressed to an empty key. This is the ONLY option that converts DROP into REFUSE. BUT ITS SEAM IS NOT ONE FUNCTION -- corrected at round 11 [P2], and CORRECTED AGAIN 2026-08-01 because the round-11 sentence was itself FALSE for the BRANCH carrier and contradicted this row''s OWN round-11 site finding: placing the refusal inside _resolve_effect_fence_gated alone misses the ORCHESTRATOR''s OWN carrier entirely (site #6, :12118, its only consult, truthiness-guarded) but DOES reach the BRANCH/WORKER carrier, whose level-local _any_fence_abort scans at :7839 and :11708 call the resolver with "" UNGUARDED -- per the CORRECTED SEVEN-SITE MAP at the top of this close_out. Full coverage therefore needs EITHER an earlier validation seam that sees the location before any consult is skipped -- e.g. at resume-context admission or at the collector -- OR a per-consult refusal at each of the three sites. Cheapest sound placement is an ADMISSION-TIME check, which also subsumes (d)''s map channel; ground that before assuming the single-function version. (RE-OPENED 2026-08-01: that placement was chosen against the FALSE map AND against an api.py admission point that the public harness_cp.workflow_driver.execute_workflow export bypasses -- see fork decision (3) at the top of this close_out.) It changes a resume path''s failure mode either way, which is a real contract change. (d) CONSTRAIN THE MAP KEY: give effect_fence_resolutions a min-length-1 key type so {"":
     ...} is unrepresentable. Closes the map channel BY TYPE, which is the strongest form -- but it is
     a shape change to a ResumeContext field that CP spec v1.112 section 0.4 guarantees PRESERVED
     VERBATIM, so it needs its own byte-compat argument (the same obstacle B-101 records for that
-    carrier). CLOSURE CRITERION: B-107 closes iff NO channel can deliver an operator resolution to an empty-key location without either applying it or REFUSING it -- witnessed per channel (map and scalar) and per carrier (branch, LINEAR, orchestrator). Partial is non-closure. GROUND (a)+(d) AGAINST (c) BEFORE OPENING ANY OF THEM. ENUMERATION IS BOUNDED BY RULE, NOT BY THIS LIST -- an explicit review-time-inventory note, since four successive out-of-family rounds each found one more empty-key consumption site (the scalar eligibility computation at round 3, the LINEAR runtime key-match at round 3, the level-local _any_fence_abort scans at :7838-:7842 / :11707-:11711 at round 11, the truthiness short-circuits at :12118 and the per-branch sites at round 11) and a fifth is not ruled out. THE BINDING RULE: **every site that reads a fence key off a resume carrier or off resume_context, on any path, is in this row''s scope whether or not it is named above** -- the sites enumerated here are the inventory AS OF 2026-07-31, not the definition. The arc that opens B-107 MUST re-derive the site set programmatically from the carriers and from resume_context''s two fence surfaces before selecting a disposition; a disposition chosen against this list alone is unsound by construction.
-    CROSS-REF 2026-08-01: the B-100 IMPL leg landed (PR ''#pending'') and DELIBERATELY did NOT touch this
+    carrier). CLOSURE CRITERION (WIDENED 2026-08-01 across TWO review rounds -- see the CLOSURE-CRITERION FLAG
+    at the top of this close_out; round 1 [P1] required the widening be applied HERE rather than
+    deferred to the opening arc, since the prior wording was LITERALLY SATISFIED BY THE DEFECT, and
+    round 5 [P2] found the first widening STILL permitted an empty key to be HONOURED as an address
+    locally -- which contradicts the ADJUDICATED RULE settled at the B-69 / B-100 records and
+    published at CP spec v1.113 section 1.2, that an empty fence key is POSITION-ONLY and the resume
+    path CANNOT address it). B-107 closes iff, on EVERY channel and EVERY carrier, an empty-key
+    location is either (i) REMOVED BY CONSTRUCTION from the addressable/eligible set, or (ii)
+    REFUSED -- and NEVER (a) silently DROPPED, NOR (b) HONOURED as an address (a resolution keyed to
+    "", or a scalar uniform value threaded at an empty-key location, is a forbidden outcome even
+    when it affects nothing else, since the directive it produces carries idempotency_key="" and no
+    runtime fence can ever match it), NOR (c) permitted to alter ANOTHER location''s decision (the
+    {"": ABORT} over-application at :8238 / :12576). Witnessed per channel (map and scalar) and per
+    carrier-SITE (see WITNESS SHAPE above). HONOURING AN EMPTY KEY LOCALLY, AND MIS-APPLICATION AT A
+    DIFFERENT LOCATION, ARE BOTH NON-CLOSURE, exactly as silent drop is. Partial is non-closure. GROUND (a)+(d) AGAINST (c) BEFORE OPENING ANY OF THEM. ENUMERATION IS BOUNDED BY RULE, NOT BY THIS LIST -- an explicit review-time-inventory note, since four successive out-of-family rounds each found one more empty-key consumption site (the scalar eligibility computation at round 3, the LINEAR runtime key-match at round 3, the level-local _any_fence_abort scans at :7838-:7842 / :11707-:11711 at round 11, the truthiness short-circuits at :12118 and the per-branch sites at round 11) and a fifth is not ruled out. THE BINDING RULE: **every site that reads a fence key off a resume carrier or off resume_context, on any path, is in this row''s scope whether or not it is named above** -- the sites enumerated here are the inventory AS OF 2026-08-01 -- extended by that day''s grounding pass with the CORRECTED SEVEN-SITE resolver map and a FOURTH terminal consumption site, managed_agents_dispatch.py:300 (the identical key match to runtime_tool_dispatcher.py:1042; a programmatic sweep of the non-test tree finds EXACTLY those two), both recorded at the top of this close_out -- not the definition. The arc that opens B-107 MUST re-derive the site set programmatically from the carriers and from resume_context''s two fence surfaces before selecting a disposition; a disposition chosen against this list alone is unsound by construction.
+    CROSS-REF 2026-08-01: the B-100 IMPL leg landed (PR #1174) and DELIBERATELY did NOT touch this
     row''s surfaces -- verified against that diff, which is confined to
     harness-cp/src/harness_cp/pause_state_projection.py. Both channels this row tracks remain exactly as
     described: the MAP channel (ResumeContext.effect_fence_resolutions is still dict[str, ...] with
@@ -3533,7 +3676,17 @@ items:
     this row''s site inventory is UNCHANGED by it and no classification rule moved. Read this row''s own
     close_out, not that leg, before selecting a disposition -- and honour its binding rule: re-derive the
     site set programmatically before choosing.'
-  council: 'no, and NO REOPENING TRIGGER IS ATTACHED. The adjudicated rule (an empty fence key must
+  council: 'CONDITIONAL as of 2026-08-01, REVISED FROM ''no'' (out-of-family review round 4 [P2]).
+    The grounding pass ELEVATES the disposition-(c) fail-loud-vs-INERT question from hypothetical
+    (''if a genuine tension appears'') to a NAMED fork decision the filing must put to the operator,
+    which trips the workspace nameable-tension discriminator. A DYADIC convening is therefore OWED
+    at the arc that opens (c) -- C9 (reliability: a silent INERT re-pause is an undiagnosable
+    livelock) against the operator-actionability half Runtime spec section 30 term 4 states as the
+    bar (''a refusal the operator cannot act on is a livelock with good manners''), for which C11
+    (operator loop) is the natural second voice. PROBE-FIRST still applies: if a direct read of the
+    section 30 refusal battery settles whether an empty-key refusal is operator-actionable, record
+    it as probe-resolved rather than convening. The PRIOR TEXT, still accurate on its own terms and
+    retained: no, and NO REOPENING TRIGGER IS ATTACHED. The adjudicated rule (an empty fence key must
     never be surfaced or honoured as an address) is settled at the B-69 / B-100 records; this row asks
     only which SEAM enforces it, which is a scoping question, not a fresh cross-domain tension. An
     earlier draft attached a reopen-if-(a)-is-taken trigger on a claimed LIVENESS COST; that cost was
@@ -3541,11 +3694,11 @@ items:
     left to fire a council gate on a stale rationale (out-of-family review round 5 [P2]). If a genuine
     tension appears it will be the disposition-(c) fail-loud-vs-INERT question -- a C9-shaped
     liveness-vs-diagnosability call -- which belongs to whichever arc opens (c).'
-  heading: '### B-107 · No channel REFUSES an operator resolution addressed to an EMPTY effect-fence key — the response map and the scalar uniform fallback both drop it silently, on all three carriers *(surfaced at the `B-100` spec leg, out-of-family review rounds 3 + 8, reported not absorbed, 2026-07-31)*'
+  heading: '### B-107 · No channel REFUSES an operator resolution addressed to an EMPTY effect-fence key — the response map and the scalar uniform fallback DROP it on all three carriers, and the level-local abort scans MIS-APPLY it to a keyed sibling *(surfaced at the `B-100` spec leg, out-of-family review rounds 3 + 8, reported not absorbed, 2026-07-31; the over-application half established at the 2026-08-01 grounding pass)*'
 - id: B-106
   title: Embedder-path event-loop exposure for capture_pause_snapshot (outside the shipped driver path)
   status: closed
-  pr: '#pending'
+  pr: '#1176'
   summary: 'Surfaced by the out-of-family confirming round on the B-103 rework (PR #1172, codex [P2], 2026-07-31,
     delivered AFTER the merge -- recorded here as the follow-up). B-103 was closed PREMISE-FALSIFIED for every SHIPPED
     call site (all production capture_pause_snapshot calls run under workflow_driver._run_protocol_method_sync ->
