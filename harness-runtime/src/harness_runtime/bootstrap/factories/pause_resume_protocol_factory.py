@@ -198,7 +198,16 @@ async def materialize_pause_resume_protocol_stage(
     # opt-in returns the bare CP protocol (v1.21 behavior preserved).
     if config.pause_resume_protocol_config.durable:
         state_ledger_dir = ctx.ledger_writer.handle.canonical_path.parent
-        store = JournalWorkflowPauseStore(journal_dir=pause_journal_dir_for(state_ledger_dir))
+        # The tenant scope enters the KEY from `config`, which this factory
+        # already holds — Runtime spec v1.108 §14.14.8: *"no new config field, no
+        # operator data entry, and no new caller burden is introduced by this
+        # amendment."* Capture-side and read-side (`api._read_durable_pause_snapshot`)
+        # therefore compute the SAME tenant-composite filename for the same
+        # `(config.tenant_id, workflow_id)`, preserving restart-survival.
+        store = JournalWorkflowPauseStore(
+            journal_dir=pause_journal_dir_for(state_ledger_dir),
+            tenant_id=config.tenant_id,
+        )
         return DurablePauseResumeProtocol(
             state_ledger_writer=ctx.ledger_writer,
             state_ledger_reader=ctx.ledger_reader,

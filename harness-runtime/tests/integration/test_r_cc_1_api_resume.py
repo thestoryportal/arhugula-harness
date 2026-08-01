@@ -503,7 +503,7 @@ def test_durable_store_capture_read_round_trip(tmp_path: Path) -> None:
         JournalWorkflowPauseStore,
     )
 
-    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     snap = _snapshot_for(_WORKFLOW_ID)
     store.capture(snap)
     assert store.read_latest(_WORKFLOW_ID) == snap
@@ -516,7 +516,7 @@ def test_durable_store_latest_record_wins(tmp_path: Path) -> None:
         JournalWorkflowPauseStore,
     )
 
-    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     first = _snapshot_for(_WORKFLOW_ID, step_index=0)
     second = _snapshot_for(_WORKFLOW_ID, step_index=0).model_copy(
         update={"run_id": "run-second", "created_at": 999}
@@ -534,7 +534,7 @@ def test_durable_store_missing_workflow_returns_none(tmp_path: Path) -> None:
         JournalWorkflowPauseStore,
     )
 
-    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     assert store.read_latest("never-captured") is None
 
 
@@ -542,17 +542,19 @@ def test_durable_store_corrupt_latest_fails_closed(tmp_path: Path) -> None:
     """A torn/garbage TRAILING line → `read_latest` fails closed (`None`) rather
     than resuming an older snapshot or raising. (A crash mid-append leaves a torn
     last line; only the latest record is consulted.)"""
-    import hashlib
-
     from harness_runtime.lifecycle.journal_workflow_pause_store import (
         JournalWorkflowPauseStore,
+        pause_journal_filename,
     )
 
-    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     store.capture(_snapshot_for(_WORKFLOW_ID))
-    # Append a torn trailing line directly to the workflow's journal file.
-    digest = hashlib.sha256(_WORKFLOW_ID.encode("utf-8")).hexdigest()
-    journal_file = tmp_path / "pj" / f"{digest}.jsonl"
+    # Append a torn trailing line directly to the pair's journal file. The
+    # filename derives from the TENANT-COMPOSITE key at `B-97` half (a) (Runtime
+    # spec v1.108 §14.14.8) — the store's own derivation is used rather than a
+    # re-derived `sha256(workflow_id)`, which would silently address a file the
+    # store no longer writes and make this witness pass vacuously.
+    journal_file = tmp_path / "pj" / pause_journal_filename(None, _WORKFLOW_ID)
     with journal_file.open("a", encoding="utf-8") as handle:
         handle.write('{"workflow_id": "wf", "pause_snapshot": {INCOMPLE\n')
     assert store.read_latest(_WORKFLOW_ID) is None
@@ -564,17 +566,19 @@ def test_durable_store_recovers_from_torn_unterminated_append(tmp_path: Path) ->
     would brick `read_latest` permanently). The store writes a leading newline so
     the fragment becomes its own (ignored) line and the new record is the clean
     latest line → resume self-heals. Codex-caught (round 3)."""
-    import hashlib
-
     from harness_runtime.lifecycle.journal_workflow_pause_store import (
         JournalWorkflowPauseStore,
+        pause_journal_filename,
     )
 
-    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     store.capture(_snapshot_for(_WORKFLOW_ID))
     # Simulate a crash mid-append: a partial record with NO trailing newline.
-    digest = hashlib.sha256(_WORKFLOW_ID.encode("utf-8")).hexdigest()
-    journal_file = tmp_path / "pj" / f"{digest}.jsonl"
+    # The path comes from the store's OWN derivation (tenant-composite at `B-97`
+    # half (a)). Re-deriving `sha256(workflow_id)` here would write the fragment
+    # to a file the store no longer touches, so the self-heal below would never
+    # be exercised and the witness would pass VACUOUSLY.
+    journal_file = tmp_path / "pj" / pause_journal_filename(None, _WORKFLOW_ID)
     with journal_file.open("a", encoding="utf-8") as handle:
         handle.write('{"workflow_id": "wf", "pause_snapshot": {TORN-NO-NEWLINE')
     # A valid capture after the torn append must be cleanly recoverable.
@@ -592,7 +596,7 @@ def test_durable_store_per_workflow_isolation(tmp_path: Path) -> None:
         JournalWorkflowPauseStore,
     )
 
-    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     snap_a = _snapshot_for("wf-a")
     snap_b = _snapshot_for("wf-b")
     store.capture(snap_a)
@@ -616,7 +620,7 @@ async def test_durable_wrapper_persists_on_capture(tmp_path: Path) -> None:
         JournalWorkflowPauseStore,
     )
 
-    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     protocol = DurablePauseResumeProtocol(
         state_ledger_writer=object(),
         state_ledger_reader=object(),
@@ -632,7 +636,10 @@ async def test_durable_wrapper_persists_on_capture(tmp_path: Path) -> None:
     # A fresh store over the same dir reads it back (durable across instances —
     # the same path api.resume uses post-restart, not the in-process protocol).
     assert (
-        JournalWorkflowPauseStore(journal_dir=tmp_path / "pj").read_latest(_WORKFLOW_ID) == returned
+        JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None).read_latest(
+            _WORKFLOW_ID
+        )
+        == returned
     )
 
 
@@ -652,7 +659,7 @@ async def test_durable_wrapper_forwards_handoff_resume(tmp_path: Path) -> None:
         JournalWorkflowPauseStore,
     )
 
-    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     protocol = DurablePauseResumeProtocol(
         state_ledger_writer=object(),
         state_ledger_reader=object(),
@@ -678,7 +685,9 @@ async def test_durable_wrapper_forwards_handoff_resume(tmp_path: Path) -> None:
     assert returned.fan_out_resume is None
     assert returned.peer_fan_out_resume is None
     # And it round-trips through the journal a fresh store (the cross-restart path).
-    read_back = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj").read_latest(_WORKFLOW_ID)
+    read_back = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None).read_latest(
+        _WORKFLOW_ID
+    )
     assert read_back == returned
     assert read_back is not None
     assert read_back.handoff_resume == handoff_resume
@@ -700,7 +709,7 @@ async def test_durable_wrapper_forwards_evaluator_optimizer_resume(tmp_path: Pat
         JournalWorkflowPauseStore,
     )
 
-    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     protocol = DurablePauseResumeProtocol(
         state_ledger_writer=object(),
         state_ledger_reader=object(),
@@ -734,7 +743,9 @@ async def test_durable_wrapper_forwards_evaluator_optimizer_resume(tmp_path: Pat
     assert returned.peer_fan_out_resume is None
     assert returned.handoff_resume is None
     # And it round-trips through the journal a fresh store (the cross-restart path).
-    read_back = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj").read_latest(_WORKFLOW_ID)
+    read_back = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None).read_latest(
+        _WORKFLOW_ID
+    )
     assert read_back == returned
     assert read_back is not None
     assert read_back.evaluator_optimizer_resume == eo_resume
@@ -775,7 +786,7 @@ async def test_api_resume_durable_handle_restart_proof(
     # the resolved STATE_LEDGER pause-journal dir reads it back across instances.
     state_ledger_dir = tmp_path / PathClass.STATE_LEDGER.value.lower()
     durable = JournalWorkflowPauseStore(
-        journal_dir=pause_journal_dir_for(state_ledger_dir)
+        journal_dir=pause_journal_dir_for(state_ledger_dir), tenant_id=None
     ).read_latest(_WORKFLOW_ID)
     assert durable == snapshot
 

@@ -34,15 +34,35 @@ def test_harness_top_help_lists_all_flat_subcommands() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     out = _plain(result.stdout)
-    # §13.4 flat namespace at v1.101 (B-53 adds migrate-audit-sidecar; the
-    # spec-side count invariant is 6, one row of which is not yet
-    # implemented at HEAD — pre-existing, outside the B-53 amendment).
-    for subcommand in ("run", "daemon", "inspect", "shutdown", "migrate-audit-sidecar"):
+    # §13.4 flat namespace at v1.108. B-53 added migrate-audit-sidecar; `B-97`
+    # half (a) adds the two pause-journal admin actions (the REQUIRED (3b)
+    # adoption and the OPTIONAL disposal, both declared at §13.4). The
+    # spec-side DECLARED-row count and the shipped registry remain SEPARATE
+    # FACTS — the `migrate-audit-sidecar` row was declared at v1.101 for an
+    # impl arc that has not yet registered its own `python -m` implementation
+    # under a distinct name; that pre-existing gap is NOT absorbed here.
+    for subcommand in (
+        "run",
+        "daemon",
+        "inspect",
+        "shutdown",
+        "migrate-audit-sidecar",
+        "adopt-pause-journals",
+        "dispose-pause-journals",
+    ):
         assert subcommand in out, f"parent app help missing {subcommand!r}"
     # EXACT registry names — a renamed/misregistered command must fail this,
     # not slip through a substring match.
     registered = {command.name for command in app.registered_commands}
-    assert registered == {"run", "daemon", "inspect", "shutdown", "migrate-audit-sidecar"}
+    assert registered == {
+        "run",
+        "daemon",
+        "inspect",
+        "shutdown",
+        "migrate-audit-sidecar",
+        "adopt-pause-journals",
+        "dispose-pause-journals",
+    }
 
 
 # PR #84 Reading A — `harness inspect --help` delegates to admin module's
