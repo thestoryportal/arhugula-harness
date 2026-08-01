@@ -941,3 +941,58 @@ position, and **the recommendation (C) and runner-up (A-1) did not move at any r
 arguments beneath them, which is the shape of a filing being ground rather than one oscillating.
 **Round 5 did not move this element at all** — its four findings landed on option *descriptions* and
 on A-2/B's *price*, which is the convergence signal the exit rests on.
+
+---
+
+## §11 RATIFICATION
+
+**Status: RATIFIED 2026-08-01 as READING C — DEFER. The ratification leg is this filing's ONLY
+remaining leg: §9's `C` column owes NO spec text and NO impl text, so there is no spec leg and no
+impl leg to follow.**
+
+The `B-92` / `B-97`(a) precedent is followed: the outcome is recorded here verbatim-in-substance
+rather than only at the register row, so the decision travels with the filing a later session
+actually reads.
+
+### §11.1 The gate — the reading (operator `AskUserQuestion`, 2026-08-01)
+
+> **Operator selected: READING C — DEFER, with the four-disjunct falsifiable demand test recorded so
+> the row reopens on evidence rather than on judgement.**
+>
+> Ratified with **D-0 DOMINANT** — *the HITL-pause class going production-reachable* (the FM-2
+> webhook-config arc landing, so that a durable `HITL_PENDING` pause can occur outside tests at all).
+> **D-1, D-2 and D-3 are ratified in the forms §4 states them**, D-1 in its round-2 tightened
+> two-disjunct form ((a) a description surface that the webhook does **not** already project, or
+> (b) the resumer ceasing to be the webhook recipient).
+>
+> **NO CARRIER CHANGE.** No field is added to `PauseSnapshot`, to
+> `PreDispatchGateOwningBranchResumeState`, or to any other durable pause carrier; the hash
+> disposition question is not reached; and the read-side projection is untouched.
+
+**Runner-up A-1 was NOT selected and is NOT partially adopted.** A deferral that quietly landed
+"just the cheap half" of A-1 would be the silent-absorption failure mode this filing exists to avoid.
+
+### §11.2 What the ratification carries, per §8's "carried by any answer" list
+
+| §8 obligation | Disposition at this leg |
+|---|---|
+| The **full** demand test — D-0, D-1, D-2 **and** D-3 — recorded on the row, D-0 marked dominant | **APPLIED.** All four are on the row's `close_out`, D-0 first and named dominant, D-1 in its round-2 tightened form. *(§8's own round-4 note is honoured: an earlier draft listed only D-1/D-2/D-3, so landing FM-2 could have failed to reopen the row it is sharpest for.)* |
+| `close_out` **amended** with §3's grounding, items (a) – (h) | **APPLIED** — the dormancy of the class, the webhook's contractual delivery of the TEXT (narrowing, not abolishing, the `B-71`-distinctness claim), the PLACEMENT being net-new by contrast, the **B / B′ distinction preserved**, the A-1 / A-2 split with the channel named as the undecided question, the two-carrier answer forced by cardinality, the pre-decided drop-when-`None` hash disposition, and additivity removing the decide-now pressure |
+| `council` field flipped from unconditional *"yes if opened"* to §7's **conditional** form | **APPLIED, in §7's FULL three-clause form** — (i) under the selected C, **none is owed now**; (ii) a C10 ⊥ C11 dyadic is owed **before the spec leg** if **A-2 or B** is later opened (C7 added as consultant under B); **and (iii) UNDER C, the convening is ADDITIONALLY OWED AT D-0 OR D-1** — D-0 because it makes the pause class real and so gives the tension a live surface, D-1 because it is precisely the condition under which free text the operator does *not* already hold starts to exist and the two positions separate. *(Clause (iii) was omitted from this addendum's first draft and from the register row; caught at out-of-family review round 1 [P2] — an omission that would have let a D-0 or D-1 reopening skip a convening §7 requires.)* **A-1 needs none** |
+| The Class 3 cite-hygiene item at `Spec_Control_Plane_v1_99.md:40` recorded on the row's cross-ref, **NOT patched here** | **APPLIED as recorded, NOT patched.** A design-substrate edit does not ride a doc-only ratification; the CP spec is untouched by this leg |
+| `status` stays `registered_finding`; row `pr:` pointer | **APPLIED** — `pr: '#1180 + #pending'` (the filing, then this ratification leg) |
+
+### §11.3 What this leg does NOT do — stated so each absence is a decision
+
+**No design-substrate edit is owed or made for `B-98`.** §9's `C` column says *"none owed — no design
+extension"*, and that is discharged by making none: CP spec §26.2 is untouched, Runtime §14.14.9.2's
+exclusion row is untouched, and no plan unit is opened, amended, or cited. **No plan cite anywhere
+contradicts this deferral** — `B-98` is cited at no implementation plan and at no acceptance
+criterion, so there is no plan-side obligation left dangling by not building it. *(The Runtime spec
+delta that DOES ride this PR belongs to `B-104`, a different row and a different ratified reading;
+the two share a PR, not a scope.)*
+
+**The §8 priority note is carried forward, not acted on.** `B-71` dominates `B-98` for the
+operator-loop win — the description already reaches the operator, and what is missing is the join
+`B-71` owns. This ratification does **not** re-open `B-71`; it records that the two rows are ordered,
+which the register now says.

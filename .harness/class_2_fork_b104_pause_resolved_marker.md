@@ -1216,3 +1216,95 @@ at §3(vi), the sink retrieval path, and the `LEGACY`-scoped consumers at §3(i)
 **verified-at-HEAD inventory, not a closed set**. Any surface of the same kind this filing did not
 list is bound **by the rule**, not excused by its absence from the list — the spec/impl leg
 inventories rather than inherits.
+
+---
+
+## §11 RATIFICATION
+
+**Status: RATIFIED 2026-08-01 as READING D — DECLARE + DEFER. Component 1 (the MANDATORY
+declaration) is APPLIED at the same PR as this addendum: Runtime spec v1.109 → v1.110. Component 2
+(the discriminator) is DEFERRED with the four-disjunct demand test on the register row. Per §9's `D`
+column there is NO impl leg.**
+
+The `B-92` / `B-97`(a) precedent is followed: the outcome is recorded here verbatim-in-substance
+rather than only at the register row, so the decision travels with the filing a later session
+actually reads.
+
+### §11.1 The gate — the reading (operator `AskUserQuestion`, 2026-08-01)
+
+> **Operator selected: READING D — DECLARE the resolved-ambiguity limit SYMMETRICALLY (Component 1,
+> MANDATORY), then DEFER the discriminator with the fork's falsifiable triggers (D-0…D-3).**
+>
+> **Component 1 is ratified in its amended, declaration-carrying form** — the round-2 amendment that
+> made the declaration mandatory rather than optional, on §3(vii)'s ground that the limit is contract
+> text at §13.7 term 3-bis and **undeclared on both tenant-facing surfaces that share
+> `_read_durable_pause_snapshot`**. A pure deferral was NOT ratified and is explicitly foreclosed.
+>
+> **Component 2 is ratified with D-0 DOMINANT** — *a retention / pruning-policy arc opening*, because
+> a pruner cannot be permitted to reclaim an outstanding pause and is therefore **unbuildable**
+> without the discriminator: format-keying gives it nothing, since post-cutover every journal is
+> `CURRENT_FORMAT`. **D-1, D-2 and D-3 are ratified in the forms §4 states them**, D-1 in its round-2
+> re-scoped form (a surface **branching** on liveness, or an observed stale re-resume in a fresh
+> process) — the first form having been already satisfied at HEAD by §3(vii) and therefore vacuous.
+>
+> **`status` stays `registered_finding`.** No sentinel record, no marker file, no OD event kind, no
+> sixth cause member.
+
+**Readings A, B and C were NOT selected and are NOT partially adopted.** The runner-up, **A, was
+registered-and-held** at §6 per `[[reviewer-oscillation-register-and-hold]]` and is **not** advanced
+by this ratification; the A-vs-B adjudication remains the operator's if D-0…D-3 ever fires.
+
+### §11.2 What Component 1 landed — the SPEC leg, applied at this PR
+
+**Runtime spec v1.109 → v1.110, TWO amendment sites, both pure declarations of an EXISTING limit.**
+
+| §9 obligation (the `D` spec-leg row) | Disposition |
+|---|---|
+| A §14.14.9 term declaring that the latest durable record may itself be an already-resolved pause, symmetric with §13.7 term 3-bis | **APPLIED** — a new closing paragraph at **§14.14.9.1**: the read reports the **latest durable record**, which is **not a liveness claim**; the projection is authority for *what the latest durable pause was waiting on*, **never** for *the workflow is paused right now* |
+| The same term on the **§30** read path | **APPLIED** — a NEW invariant bullet immediately after `Durable-handle read (v1.46)`, stating the substance **in full** rather than by pointer, plus the sharpening §14.14.9.1 does not need: `resume()`'s shipped guards validate **integrity and applicability, never outstandingness**, and the §30 staleness precondition fences a composed claim against a **CHANGED** record — so a re-resume of an **unchanged, already-resolved** record presents no mismatch and **is admitted** |
+| The matching docstrings on **BOTH** public surfaces — `read_paused_workflow_state` (`api.py:925`) **and** `resume()` (`:1170`, `:1197`/`:1223` — this filing's PRE-LEG anchors) | **APPLIED on both, and on `resume()` twice**: the durable-handle prose **and** the separately-consulted `resume_handle` parameter entry, per round 3 [P2]'s correction that disclosing on the accessor alone would warn the weaker surface and leave the one that **executes** unwarned. **ZERO logic changed.** **POST-EDIT anchors, recomputed in the landed tree because these very insertions shift `api.py`'s lower half:** `read_paused_workflow_state` `:925` (unchanged — the insertions sit below its `def`), `resume()` **`:1190`**, its `resume_handle` parameter entry **`:1260`**, and its durable read **`:1360`**. *(Caught at out-of-family review round 2 [P2] on this leg; the pre-leg cites in this filing's body stay as written, being correct against the version that authored them.)* |
+| Spec text + two docstrings; **zero code, zero contract numbers, zero hash impact**; no other design extension | **HELD EXACTLY.** No `C-RT-*` minted (a doc-only leg cannot); no carrier retyped; no field added; no `snapshot_hash` impact; the five-member `PauseJournalReadCause` vocabulary stays **CLOSED at five**; §13.7 / §13.7.1 / §14.14.8 / §14.14.9.2 – §14.14.9.6 / §30's cause table + failure-mode taxonomy **PRESERVED VERBATIM** |
+| Impl leg | **NONE OWED** — §9's `D` column says so, and nothing here creates one |
+| Plan deltas | **NONE OWED** — no Runtime unit, no OD unit, no CP unit. Verified, not assumed: `B-104` is cited at **no** implementation plan and at **no** acceptance criterion, so no plan cite contradicts the deferral |
+| CXA | **NO row, NO delta** — this leg introduces **no cross-package consumption at all**; aggregate stays frozen at 111 |
+| Clearance | `.harness/clearance/spec-harness-runtime-v1-110-cleared-2026-08-01.md` |
+
+### §11.3 What the ratification carries, per §8's "carried by any answer" list
+
+**The `close_out` is AMENDED**, items (a) – (i): the hypothesized derive-from-existing option is
+**FALSIFIED** with its two missing links and Reading C named as the near-miss; sub-decision (a)-1 is
+**FORCED, not open** (a `PauseSnapshot` sentinel is resumable); (a)-2 is **confirmed genuine with a
+default worse than unspecified** (`corrupt-latest` + `indeterminate=True`, empirically probed); the
+**second-authority objection to (b) does not hold as written**; the ambiguous-and-consequential set is
+**frozen, one-time and drainable**; the **NOT-IN-THE-ROW cross-axis cost** (a sixth cause member forces
+an OD spec + plan leg) is recorded; the **NOT-IN-THE-ROW occurrence-key requirement** is pinned to the
+shipped §30 staleness token's `(record_count, latest_record_digest)`; the disposal-brake re-key is
+recorded as **an explicit decision each build reading owes, NOT an argument for deferral**; and the
+**§3(vii) SCOPE CORRECTION** — the ambiguity is **NOT** confined to the legacy set.
+
+**Component 1's declaration is recorded on the row as OWED-AND-DISCHARGED**, not as an optional
+companion — the §8 bullet that forbids landing a pure deferral is honoured by having landed the spec
+delta in the same PR as this addendum.
+
+**The `council` field is NARROWED** to §7's per-reading form: under D, **none is owed now**, and one
+is owed at **D-0**.
+
+**PR #1170's scope is recorded correctly on the row** — a **strings-only** self-description refresh
+(78/16, zero logic) that removed a *phantom* blocker on the drain recourse and left this one
+untouched; the row must not be read as having been narrowed by it.
+
+### §11.4 The §9 priority note, carried forward and NOT acted on
+
+`[MODERATE]` The cheapest actionable operator-loop improvement is in none of the four readings: the
+drain recourse has **no `resume` ADMIN-CLI command** (§2 — the admin surface ships seven commands,
+none of them resume), so an operator driving pauses to resolution must call the **public
+package-root Python API `harness_runtime.resume()`** from their own code.
+
+**Precision carried by this addendum, corrected at out-of-family review round 4 [P2].** `resume()`
+**IS a SUPPORTED surface** — it is one of the **three** package-root async functions `B-106`'s own
+ruling enumerates as the operator-facing API (`run` / `resume` / `read_paused_workflow_state`). What
+`B-106` ruled **NOT SUPPORTED** is the distinct **embedder** path (direct `run_bootstrap()` /
+`ctx.pause_resume_protocol` access). §2's finding is therefore about an **absent CLI affordance, not
+an absent capability**, and an earlier draft of this section conflated the two. This ratification
+does **not** open that CLI surface; it records that the two are ordered, which the register now
+says.

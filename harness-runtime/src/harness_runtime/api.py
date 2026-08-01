@@ -928,7 +928,11 @@ async def read_paused_workflow_state(
     resume_handle: str,
     config: RuntimeConfig | None = None,
 ) -> PausedWorkflowState:
-    """Read what a paused workflow is waiting on, BEFORE composing a resume context.
+    """Read a workflow's LATEST DURABLE PAUSE record — what it was waiting on, NOT a liveness claim.
+
+    Intended use is pre-flight: read BEFORE composing a resume context. See the
+    limit below — an already-resolved pause is returned exactly like an
+    outstanding one, so this is not an "is it paused right now" query.
 
     Runtime spec v1.107 §14.14.9 (under C-RT-24) — the `B-69` durable-pause-state
     read accessor. A public async READ on the `harness_runtime` package root,
@@ -962,6 +966,22 @@ async def read_paused_workflow_state(
     a response the resolver refuses (livelock), while one that omitted a
     gate-owning branch the resolver counts would leave it unaddressed
     (misattribution — the exact property-4 harm).
+
+    **WHAT THIS READ CANNOT TELL YOU — it reports the LATEST DURABLE RECORD, which
+    is NOT a liveness claim.** Runtime spec v1.110 §14.14.9.1 (the RATIFIED `B-104`
+    Reading D, Component 1), symmetric with §13.7 term 3-bis. The journal store is
+    append-only, never truncated, and writes NO pause-resolved marker, so a workflow
+    that paused and was then successfully resumed leaves its journal behind
+    BYTE-INDISTINGUISHABLE from one whose pause is still outstanding. A successful
+    read therefore reports the latest journaled pause WHETHER OR NOT it has already
+    been resolved — in steady state, for a current-format journal, not merely for
+    pre-tenant-binding legacy journals. The result is authority for *what the
+    workflow's latest durable pause was waiting on*, and is the correct basis for
+    composing a `resume_context`; it is NOT authority for *the workflow is paused
+    right now*, and must not be presented to an operator, or consumed by a policy,
+    as an outstanding-pause assertion. The limit is DECLARED, not fixed: the
+    discriminator is capture-side and is deferred under register row `B-104`'s
+    four-disjunct demand test D-0…D-3.
 
     Parameters
     ----------
@@ -1202,6 +1222,22 @@ async def resume(
       snapshot — even a process that died holding (and never serializing) the
       `RunResult` can resume by workflow_id.
 
+    **THE DURABLE READ REPORTS THE LATEST RECORD, NOT A LIVENESS CLAIM — an
+    ALREADY-RESOLVED pause is indistinguishable from an outstanding one.** Runtime
+    spec v1.110 §30 (the RATIFIED `B-104` Reading D, Component 1), symmetric with
+    §14.14.9.1 and §13.7 term 3-bis. The journal store is append-only, never
+    truncated, and writes NO pause-resolved marker, so a `resume_handle` call reads
+    — and will RE-ENTER — the latest journaled pause whether or not that pause has
+    already been resolved, including in steady state for a current-format journal.
+    The guards below do NOT cover this: `snapshot_hash`, workflow-match and
+    step-index-range all validate the record's integrity and applicability, never
+    its outstandingness, and the staleness precondition fences a composed claim
+    against a CHANGED record — a re-resume of an UNCHANGED, already-resolved record
+    presents no mismatch and is admitted. Do not read the absence of a refusal as
+    evidence the pause is outstanding. The limit is DECLARED, not fixed: the
+    discriminator is capture-side and is deferred under register row `B-104`'s
+    four-disjunct demand test D-0…D-3.
+
     Like `run()`, this is bootstrap-per-call (a fresh `HarnessContext`): the
     fresh process re-bootstraps, the driver's entry-point resume detection
     (C-RT-24 §14.14.3 / `workflow_driver.py`) validates the snapshot via
@@ -1223,7 +1259,10 @@ async def resume(
     resume_handle
         The `workflow_id` to read the latest durable snapshot for, from the
         harness-owned store. Mutually exclusive with `pause_snapshot`; requires
-        `config.pause_resume_protocol_config.durable=True`.
+        `config.pause_resume_protocol_config.durable=True`. The read reports the
+        LATEST record, not a liveness claim — an already-resolved pause is
+        byte-indistinguishable from an outstanding one and is re-entered without
+        refusal (see the durable-read limit above; Runtime spec v1.110 §30).
     resume_context
         Operator-supplied resume-time context (e.g. the HITL response the
         paused gate awaits); delivered one-shot to the resumed-step gate.
