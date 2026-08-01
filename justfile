@@ -487,6 +487,17 @@ codex-review base='main': _require-codex-subscription
 codex-review-uncommitted: _require-codex-subscription
     env -u OPENAI_API_KEY codex review -c preferred_auth_method="chatgpt" --uncommitted
 
+# Out-of-family diff review via Gemini CLI — the decorrelated artifact reviewer
+# when Codex is the AUTHOR (mirror of codex-review, which decorrelates Claude-authored
+# work). Reviews the diff of the current branch against BASE.
+gemini-review base='main': _require-gemini
+    git diff --merge-base {{base}} | gemini -p "You are an out-of-family code reviewer for a Python 3.12 asyncio + Pydantic v2 monorepo. Review this diff for real defects: correctness, concurrency (lock windows, cancellation, cross-process file races), contract drift, and tests that would stay green if the change were reverted. Number findings F1..Fn tagged [P1]/[P2]/[P3] with file:line; no style nits. End with exactly 'VERDICT: APPROVE' or 'VERDICT: BLOCK'."
+
+_require-gemini:
+    @if ! command -v gemini >/dev/null 2>&1; then \
+        echo "ERROR: gemini CLI not found on PATH."; exit 1; \
+    fi
+
 # Advisory CodeRabbit review. This is optional and complements, not replaces,
 # `just codex-review` and CI. Run after a meaningful diff exists.
 _require-coderabbit:
