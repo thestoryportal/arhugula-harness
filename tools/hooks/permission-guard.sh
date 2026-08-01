@@ -319,6 +319,8 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
   # Force-push / history rewrite / remote branch delete.
   printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+push.*(--force|--force-with-lease|[[:space:]]-f([[:space:]]|$))' \
     && emit_deny "force-push"
+  printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+push.*(--mirror|--prune([[:space:]]|$))|git[[:space:]]+worktree[[:space:]]+add.*([[:space:]]-B([[:space:]]|$))' \
+    && emit_deny "ref-pruning or branch-reset mutation"
   printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+(reset[[:space:]]+--hard|rebase|filter-branch|filter-repo)' \
     && emit_deny "git history rewrite"
   printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+branch[[:space:]]+(-D|--delete[[:space:]]+--force)|git[[:space:]]+push.*(--delete|[[:space:]]+:)|git[[:space:]]+worktree[[:space:]]+(add|remove).*--force' \

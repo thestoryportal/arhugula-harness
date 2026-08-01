@@ -154,13 +154,48 @@ hook_session_key() {
   printf '%s' "${key:-shared}"
 }
 
+hook_checkpoint_generation() {
+  /usr/bin/python3 -c 'import time; print(time.time_ns())'
+}
+
+# Publish a completed checkpoint only when it is not older than the current
+# session-specific pointer. The generation travels inside the atomically renamed file,
+# so a process death cannot split pointer content from ordering metadata.
+hook_publish_checkpoint() {
+  local latest="$1" source="$2" generation="$3" lock current latest_tmp rc=0
+  lock="${latest}.lock"
+  exec 8>> "$lock" || return 1
+  if ! /usr/bin/python3 - 8 <<'PY'
+import fcntl
+import sys
+
+fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX)
+PY
+  then
+    exec 8>&-
+    return 1
+  fi
+  current=$(sed -nE '1s/^<!-- checkpoint-generation: ([0-9]+) -->$/\1/p' "$latest" 2>/dev/null)
+  if [ -n "$current" ] && [ "$current" -gt "$generation" ] 2>/dev/null; then
+    exec 8>&-
+    return 0
+  fi
+  latest_tmp="${latest}.tmp-$$-${generation}"
+  cp "$source" "$latest_tmp" 2>/dev/null \
+    && mv "$latest_tmp" "$latest" 2>/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || rm -f "$latest_tmp" 2>/dev/null
+  exec 8>&-
+  return "$rc"
+}
+
 # Write a lightweight state snapshot to a collision-free timestamped file plus an atomic,
 # session-specific `precompact-latest-<session>.md` pointer. Shared by the compaction hook
 # and context-recovery statusline. Args: <label> [skip_gh] [session_id]. With skip_gh
 # non-empty the open-PRs call is omitted because the statusline is a hot path.
 hook_write_checkpoint() {
-  local label="$1" skip_gh="${2:-}" session
+  local label="$1" skip_gh="${2:-}" session generation
   session=$(hook_session_key "${3:-shared}")
+  generation=$(hook_checkpoint_generation) || return 0
   local d; d=$(hook_project_dir); [ -n "$d" ] || return 0
   local ckdir="$d/.harness/.checkpoints"
   mkdir -p "$ckdir" 2>/dev/null || return 0
@@ -175,11 +210,11 @@ hook_write_checkpoint() {
     prs="(skipped — fast path)"
   fi
   dirty=$(git -C "$d" status --short 2>/dev/null | head -30)
-  local out="$ckdir/precompact-${ts}-${session}-$$.md"
+  local out="$ckdir/precompact-${ts}-${session}-${generation}.md"
   local out_tmp="${out}.tmp-$$"
   local latest="$ckdir/precompact-latest-${session}.md"
-  local latest_tmp="${latest}.tmp-$$"
   {
+    echo "<!-- checkpoint-generation: ${generation} -->"
     echo "# ${label} ${ts}"
     echo
     echo "- HEAD: \`${head}\` on \`${branch}\`"
@@ -190,8 +225,7 @@ hook_write_checkpoint() {
     printf '%s\n' "${dirty:-  (clean)}" | sed 's/^/  /'
   } > "$out_tmp" 2>/dev/null || { rm -f "$out_tmp" 2>/dev/null; return 0; }
   mv "$out_tmp" "$out" 2>/dev/null || { rm -f "$out_tmp" 2>/dev/null; return 0; }
-  cp "$out" "$latest_tmp" 2>/dev/null || { rm -f "$latest_tmp" 2>/dev/null; return 0; }
-  mv "$latest_tmp" "$latest" 2>/dev/null || rm -f "$latest_tmp" 2>/dev/null
+  hook_publish_checkpoint "$latest" "$out" "$generation" || true
 }
 
 # Loop-mode detection (Wave 2 autonomy gate). Returns 0 (true) when the autonomous
@@ -222,30 +256,45 @@ _hook_worktree_session_dir() {
   printf '%s/codex-worktree-sessions/%s' "$common" "$key"
 }
 
-# A single per-worktree mutex orders SessionStart lease registration against removal.
-# Empty lock directories older than two minutes are abandoned-process residue and can be
-# reclaimed. Callers must pair a successful acquire with release.
+# A kernel-owned per-worktree mutex orders SessionStart lease registration against
+# removal. The persistent file is only an inode; fcntl releases ownership on process
+# death, so no age-based pathname reclamation can steal a live remover's lock.
 hook_worktree_lock_acquire() {
-  local wt="$1" session_dir lock tries=0
+  local wt="$1" session_dir lock timeout
+  [ -z "${HOOK_WORKTREE_LOCK_FD:-}" ] || return 1
   session_dir=$(_hook_worktree_session_dir "$wt") || return 1
   mkdir -p "$session_dir" 2>/dev/null || return 1
   lock="$session_dir/remove.lock"
-  while ! mkdir "$lock" 2>/dev/null; do
-    if [ -d "$lock" ] \
-      && [ -n "$(find "$lock" -maxdepth 0 -mmin +2 2>/dev/null | head -n1)" ]; then
-      rmdir "$lock" 2>/dev/null || true
-    fi
-    tries=$((tries + 1)); [ "$tries" -lt 50 ] || return 1
-    sleep 0.1
-  done
-  HOOK_WORKTREE_LOCK_DIR="$lock"
+  timeout="${HARNESS_WORKTREE_LOCK_TIMEOUT_SECONDS:-30}"
+  exec 9>> "$lock" || return 1
+  if ! /usr/bin/python3 - 9 "$timeout" <<'PY'
+import fcntl
+import sys
+import time
+
+fd = int(sys.argv[1])
+deadline = time.monotonic() + float(sys.argv[2])
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        break
+    except BlockingIOError:
+        if time.monotonic() >= deadline:
+            raise SystemExit(1)
+        time.sleep(0.05)
+PY
+  then
+    exec 9>&-
+    return 1
+  fi
+  HOOK_WORKTREE_LOCK_FD=9
   return 0
 }
 
 hook_worktree_lock_release() {
-  [ -n "${HOOK_WORKTREE_LOCK_DIR:-}" ] || return 0
-  rmdir "$HOOK_WORKTREE_LOCK_DIR" 2>/dev/null
-  HOOK_WORKTREE_LOCK_DIR=""
+  [ -n "${HOOK_WORKTREE_LOCK_FD:-}" ] || return 0
+  exec 9>&-
+  HOOK_WORKTREE_LOCK_FD=""
 }
 
 _hook_session_pointer_file() {
@@ -258,11 +307,17 @@ _hook_session_pointer_file() {
 }
 
 hook_register_session_lease() {
-  local wt="$1" session session_dir lease tmp pointer pointer_tmp
+  local wt="$1" session session_dir registered_dir lease tmp pointer pointer_tmp
   session=$(hook_session_key "$2")
   session_dir=$(_hook_worktree_session_dir "$wt") || return 1
   pointer=$(_hook_session_pointer_file "$session") || return 1
   hook_worktree_lock_acquire "$wt" || return 1
+  registered_dir=$(_hook_worktree_session_dir "$wt" 2>/dev/null || true)
+  if [ -z "$registered_dir" ] || [ "$registered_dir" != "$session_dir" ] \
+    || [ "$(git -C "$wt" rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then
+    hook_worktree_lock_release || true
+    return 1
+  fi
   lease="$session_dir/session-${session}.lease"; tmp="${lease}.tmp-$$"
   printf '%s\n' "$(_hook_canonical_worktree "$wt")" > "$tmp" 2>/dev/null \
     && mv "$tmp" "$lease" 2>/dev/null
@@ -322,8 +377,9 @@ hook_safe_worktree_remove() {
 
 # Live-session detection covers both runners: Claude's encoded project transcripts,
 # Codex's date-partitioned rollout transcripts (`session_meta.payload.cwd`), and the
-# short-lived SessionStart/SessionEnd lease used to close the transcript check/remove
-# race. A recent artifact within the configurable window marks the worktree live.
+# SessionStart/SessionEnd lease used to close the transcript check/remove race. Lease
+# presence remains authoritative until explicit SessionEnd release; only transcript-only
+# evidence uses the freshness window.
 worktree_has_live_session() {
   local wt="$1"
   [ -n "$wt" ] || return 1
@@ -331,7 +387,7 @@ worktree_has_live_session() {
   local abs; abs=$(cd "$wt" 2>/dev/null && pwd -P) || abs="$wt"
   local session_dir
   session_dir=$(_hook_worktree_session_dir "$abs" 2>/dev/null || true)
-  if [ -n "$session_dir" ] && [ -n "$(find "$session_dir" -maxdepth 1 -name 'session-*.lease' -mmin "-${_WORKTREE_SESSION_WINDOW_MIN}" 2>/dev/null | head -n1)" ]; then
+  if [ -n "$session_dir" ] && [ -n "$(find "$session_dir" -maxdepth 1 -name 'session-*.lease' -print -quit 2>/dev/null)" ]; then
     return 0
   fi
 

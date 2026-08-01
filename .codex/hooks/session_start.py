@@ -11,7 +11,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 if os.environ.get("HARNESS_CODEX_REVIEW_ISOLATED") == "1":
-    print("Codex isolated merge-gate review: controller lifecycle hooks are inert.")
     raise SystemExit(0)
 
 

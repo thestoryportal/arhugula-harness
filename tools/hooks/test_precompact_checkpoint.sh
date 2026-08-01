@@ -47,5 +47,17 @@ COUNT=$(ls "$REPO/.harness/.checkpoints/"precompact-20*.md 2>/dev/null | wc -l |
 ls "$REPO/.harness/.checkpoints/"*.tmp-* >/dev/null 2>&1 \
   && bad "atomic checkpoint temp file leaked" || ok "atomic checkpoint leaves no temp files"
 
+# A delayed older same-session writer cannot replace a newer published checkpoint.
+. "$SCRIPT_DIR/lib.sh"
+OLDER="$REPO/.harness/.checkpoints/older.md"
+NEWER="$REPO/.harness/.checkpoints/newer.md"
+printf '<!-- checkpoint-generation: 100 -->\nolder\n' > "$OLDER"
+printf '<!-- checkpoint-generation: 200 -->\nnewer\n' > "$NEWER"
+TARGET="$REPO/.harness/.checkpoints/precompact-latest-ordering.md"
+hook_publish_checkpoint "$TARGET" "$NEWER" 200
+hook_publish_checkpoint "$TARGET" "$OLDER" 100
+grep -q '^newer$' "$TARGET" \
+  && ok "older same-session writer cannot regress latest" || bad "older writer replaced newer checkpoint"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

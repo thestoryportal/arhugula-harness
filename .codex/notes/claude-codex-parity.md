@@ -56,7 +56,8 @@ The operator granted standing authorization on 2026-08-01 for `just gemini-revie
 the OAuth-authenticated Antigravity `agy` CLI subscription and disclose the current repository
 diff on every forward arc; Codex must not ask for that approval again. Direct Gemini/Google
 API calls, API keys, service-account credentials, and Vertex project routing are forbidden for
-this review. `tools/agy_review.py` supplies tracked and untracked changes directly, strips those
+this review. `tools/agy_review.py` writes tracked and untracked changes to a private temporary
+review file added to the CLI workspace (never a size-limited command argument), strips those
 provider credential/routing variables, pins `gemini-3.6-flash-high`, stays in plan mode, and
 fails closed unless the final non-empty output line is an exact approval or block.
 
@@ -122,13 +123,16 @@ git add <explicit paths>
 git commit -m <message>
 git push
 git pull --ff-only
-git worktree add|list|remove <non-force args>
+git worktree add|list <non-force args>
+tools/hooks/safe-worktree-remove.sh <absolute registered worktree path>
 git branch -d <verified merged local branch>
 ```
 
 Do not use `git add -A`. Do not approve a broad push rule that would obscure a
-force push. The permission guard continues to deny force push, history rewrite,
-force worktree removal, force local-branch deletion, and remote-branch deletion.
+force or pruning push. The permission guard continues to deny force/pruning push,
+history rewrite, every direct worktree removal, branch-resetting worktree creation,
+force local-branch deletion, and remote-branch deletion. The mutex-backed wrapper
+is the only automatic worktree-removal path.
 
 ## Memory and restore rule
 

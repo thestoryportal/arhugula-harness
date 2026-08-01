@@ -33,11 +33,7 @@ def _commands(event: str) -> list[str]:
     [
         (
             "SessionStart",
-            [
-                "codex-session-start.sh",
-                "roadmap-audit/session-start.sh",
-                "loop-gc.sh",
-            ],
+            ["codex-session-start.sh"],
         ),
         (
             "PreToolUse",
@@ -54,7 +50,7 @@ def _commands(event: str) -> list[str]:
         ),
         ("PreCompact", ["precompact-checkpoint.sh"]),
         ("PostCompact", ["postcompact-reinject.sh"]),
-        ("SessionEnd", ["session-lease.sh end", "session-end-cleanup.sh"]),
+        ("SessionEnd", ["codex-session-end.sh"]),
         (
             "Stop",
             ["stop_gate.py", "stop-gate.sh", "git-arc-guard.sh", "stop-loop.sh"],
@@ -88,7 +84,20 @@ def test_codex_hook_map_tracks_every_canonical_claude_hook_command() -> None:
     codex_commands = "\n".join(
         hook["command"] for groups in codex.values() for group in groups for hook in group["hooks"]
     )
-    implementation = f"{codex_commands}\n{adapter}"
+    wrappers = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [
+            ROOT / "tools" / "hooks" / "codex-session-start.sh",
+            ROOT / "tools" / "hooks" / "codex-session-end.sh",
+        ]
+        if path.exists()
+    )
+    implementation = f"{codex_commands}\n{adapter}\n{wrappers}"
+    wrapper_targets = {
+        "tools/roadmap-audit/session-start.sh": "roadmap-audit/session-start.sh",
+        "tools/hooks/loop-gc.sh": "loop-gc.sh",
+        "tools/hooks/session-end-cleanup.sh": "session-end-cleanup.sh",
+    }
 
     assert set(claude) - set(codex) == {"PostToolUseFailure", "StopFailure"}
     for groups in claude.values():
@@ -97,7 +106,11 @@ def test_codex_hook_map_tracks_every_canonical_claude_hook_command() -> None:
                 command = hook["command"]
                 prefix = "${CLAUDE_PROJECT_DIR}/"
                 if command.startswith(prefix):
-                    assert command.removeprefix(prefix) in implementation
+                    relative = command.removeprefix(prefix)
+                    if relative in wrapper_targets:
+                        assert wrapper_targets[relative] in wrappers
+                    else:
+                        assert relative in implementation
                 else:
                     assert command == "uv run pyright && git rev-parse --show-toplevel"
                     assert '["uv", "run", "pyright"]' in adapter
@@ -318,7 +331,7 @@ def test_isolated_review_session_start_skips_shared_context_checkpoint() -> None
     )
 
     assert proc.returncode == 0, proc.stderr
-    assert "isolated merge-gate review" in proc.stdout
+    assert proc.stdout == ""
     assert "Codex context guard" not in proc.stdout
 
 
@@ -341,12 +354,12 @@ def test_session_start_wrapper_registers_lease_before_posture(tmp_path: Path) ->
     )
 
     assert start.returncode == 0, start.stderr
-    assert "isolated merge-gate review" in start.stdout
+    assert start.stdout == ""
     leases = list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
     assert [path.name for path in leases] == ["session-wrapper-session.lease"]
 
     end = subprocess.run(
-        ["bash", str(ROOT / "tools" / "hooks" / "session-lease.sh"), "end"],
+        ["bash", str(ROOT / "tools" / "hooks" / "codex-session-end.sh")],
         cwd=tmp_path,
         input=json.dumps(payload),
         capture_output=True,
@@ -357,6 +370,104 @@ def test_session_start_wrapper_registers_lease_before_posture(tmp_path: Path) ->
     )
     assert end.returncode == 0, end.stderr
     assert not list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
+
+
+def test_session_lifecycle_wrappers_order_registration_and_release() -> None:
+    start = (ROOT / "tools" / "hooks" / "codex-session-start.sh").read_text(encoding="utf-8")
+    end = (ROOT / "tools" / "hooks" / "codex-session-end.sh").read_text(encoding="utf-8")
+
+    assert start.index('session-lease.sh" start') < start.index("session_start.py")
+    assert start.index("session_start.py") < start.index("roadmap-audit/session-start.sh")
+    assert start.index("roadmap-audit/session-start.sh") < start.index("loop-gc.sh")
+    assert end.index('session-lease.sh" end') < end.index("session-end-cleanup.sh")
+
+
+def test_session_end_hook_uses_supported_timeout() -> None:
+    payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    hooks = [hook for group in payload["hooks"]["SessionEnd"] for hook in group["hooks"]]
+
+    assert len(hooks) == 1
+    assert hooks[0]["timeout"] <= 3
+
+
+def test_every_shared_state_hook_is_inert_for_isolated_review(tmp_path: Path) -> None:
+    shell_hooks = [
+        ROOT / path
+        for path in [
+            "tools/hooks/git-arc-guard.sh",
+            "tools/hooks/loop-gc.sh",
+            "tools/hooks/permission-guard.sh",
+            "tools/hooks/postcompact-reinject.sh",
+            "tools/hooks/precmd-clear-cache.sh",
+            "tools/hooks/precompact-checkpoint.sh",
+            "tools/hooks/prompt-context.sh",
+            "tools/hooks/prompt-lint.sh",
+            "tools/hooks/session-end-cleanup.sh",
+            "tools/hooks/skill-activation-check.sh",
+            "tools/hooks/stop-gate.sh",
+            "tools/hooks/stop-loop.sh",
+            "tools/roadmap-audit/post-merge-refresh.sh",
+            "tools/roadmap-audit/session-start.sh",
+        ]
+    ]
+    python_hooks = [
+        (ROOT / ".codex" / "hooks" / "codex_hook_adapter.py", ["post-tool-use"]),
+        (ROOT / ".codex" / "hooks" / "session_start.py", []),
+        (ROOT / ".codex" / "hooks" / "stop_gate.py", []),
+    ]
+    env = os.environ.copy()
+    env.update(
+        {
+            "HARNESS_CODEX_REVIEW_ISOLATED": "1",
+            "CLAUDE_PROJECT_DIR": str(tmp_path),
+            "HOME": str(tmp_path / "home"),
+        }
+    )
+    payload = json.dumps(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "isolated",
+            "cwd": str(tmp_path),
+            "tool_name": "Bash",
+            "tool_input": {"command": "git status"},
+            "tool_response": {"exit_code": 1},
+        }
+    )
+
+    for path in shell_hooks:
+        assert "hook_review_isolated && exit 0" in path.read_text(encoding="utf-8")
+        before = sorted(str(item.relative_to(tmp_path)) for item in tmp_path.rglob("*"))
+        proc = subprocess.run(
+            ["bash", str(path)],
+            cwd=tmp_path,
+            input=payload,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            env=env,
+        )
+        after = sorted(str(item.relative_to(tmp_path)) for item in tmp_path.rglob("*"))
+        assert proc.returncode == 0, (path, proc.stderr)
+        assert proc.stdout == "", path
+        assert after == before, path
+
+    for path, args in python_hooks:
+        before = sorted(str(item.relative_to(tmp_path)) for item in tmp_path.rglob("*"))
+        proc = subprocess.run(
+            [sys.executable, str(path), *args],
+            cwd=tmp_path,
+            input=payload,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            env=env,
+        )
+        after = sorted(str(item.relative_to(tmp_path)) for item in tmp_path.rglob("*"))
+        assert proc.returncode == 0, (path, proc.stderr)
+        assert proc.stdout == "", path
+        assert after == before, path
 
 
 def test_every_tracked_claude_skill_has_a_codex_entrypoint() -> None:

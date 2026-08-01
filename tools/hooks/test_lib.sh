@@ -142,6 +142,10 @@ touch -t 202001010000 "$CODEX_SESSION_DIR/rollout-live.jsonl"
 HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$REPO" hook_register_session_lease "$REPO" "session-a"
 ( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
   && ok "active Codex session lease marks worktree live" || bad "Codex session lease missed"
+LEASE_A=$(find "$REPO/.git/codex-worktree-sessions" -name 'session-session-a.lease' -print -quit)
+touch -t 202001010000 "$LEASE_A"
+( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
+  && ok "active Codex session lease does not expire" || bad "aged active lease stopped blocking removal"
 HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$REPO" hook_release_session_lease "$REPO" "session-a"
 ( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
   && bad "released Codex session lease stayed live" || ok "SessionEnd releases Codex lease"
@@ -156,6 +160,51 @@ git -C "$REPO" worktree remove "$LINKED"
 HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$LINKED" hook_release_session_lease "$LINKED" "session-deleted"
 LEASE_RESIDUE=$(find "$REPO/.git/codex-worktree-sessions" -name 'session-session-deleted.lease' 2>/dev/null | head -n1)
 [ -z "$LEASE_RESIDUE" ] && ok "SessionEnd releases lease after worktree deletion" || bad "deleted-worktree lease leaked: $LEASE_RESIDUE"
+
+# The worktree mutex is kernel-owned: aging its persistent lock file cannot steal it
+# from a live holder, and process exit releases it without pathname reclamation.
+LOCKED="$REPO-lock-held"
+git -C "$REPO" worktree add -q -b lock-held "$LOCKED"
+READY="$REPO/lock-ready"
+(
+  . "$SCRIPT_DIR/lib.sh"
+  HARNESS_WORKTREE_LOCK_TIMEOUT_SECONDS=1 hook_worktree_lock_acquire "$LOCKED" || exit 1
+  : > "$READY"
+  sleep 3
+  hook_worktree_lock_release
+) &
+LOCK_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$READY" ] && break; sleep 0.1; done
+LOCK_FILE=$(find "$REPO/.git/codex-worktree-sessions" -name remove.lock -print -quit)
+touch -t 202001010000 "$LOCK_FILE"
+if HARNESS_WORKTREE_LOCK_TIMEOUT_SECONDS=1 hook_worktree_lock_acquire "$LOCKED"; then
+  hook_worktree_lock_release
+  bad "aged live worktree lock was stolen"
+else
+  ok "aged live worktree lock remains owned"
+fi
+wait "$LOCK_PID"
+
+# A registration that queued behind removal must revalidate the worktree after acquiring.
+LATE="$REPO-late-register"
+git -C "$REPO" worktree add -q -b late-register "$LATE"
+READY="$REPO/remove-ready"
+(
+  . "$SCRIPT_DIR/lib.sh"
+  hook_worktree_lock_acquire "$LATE" || exit 1
+  : > "$READY"
+  sleep 1
+  git -C "$REPO" worktree remove "$LATE"
+  hook_worktree_lock_release
+) &
+REMOVE_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$READY" ] && break; sleep 0.1; done
+if HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$LATE" hook_register_session_lease "$LATE" "late"; then
+  bad "late SessionStart registered after worktree removal"
+else
+  ok "late SessionStart fails closed after worktree removal"
+fi
+wait "$REMOVE_PID"
 
 # hook_write_checkpoint (U-HK-27 writer): writes an atomic session-specific latest pointer
 # with the label; skip_gh omits the open-PRs gh lookup (fast path — no network in this test).

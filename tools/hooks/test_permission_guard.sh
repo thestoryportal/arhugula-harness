@@ -212,6 +212,10 @@ OUT=$(run_on "$(pl Bash 'git branch -d merged-feature' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "git branch -d → allow safe merged-branch cleanup" || bad "safe branch cleanup not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'git push origin feature' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "git push → allow normal arc publication" || bad "normal push not allowed: $OUT"
+for c in "git push --mirror" "git push --prune origin" "git worktree add -B existing /tmp/new-arc HEAD"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "deny" ] && ok "'$c' → deny destructive mutation" || bad "'$c' not denied: $OUT"
+done
 OUT=$(run_on "$(pl Bash 'git ls-remote --heads origin refs/heads/topic' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "git ls-remote → allow read-only branch hygiene probe" || bad "ls-remote not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'git pull --ff-only' '')")

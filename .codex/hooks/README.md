@@ -5,8 +5,8 @@ These hooks are a Codex-native compatibility layer for the Claude hooks in `.cla
 Every Claude hook behavior supported by Codex's lifecycle is wired here. The Codex-native guards remain additive:
 
 - `codex-session-start.sh` registers the session under the shared git directory before
-  `session_start.py` prints posture, so removal and SessionStart use one mutex and the
-  longer context guard cannot delay lease registration.
+  sequentially running posture, roadmap audit, and loop GC, so concurrent SessionStart
+  handlers cannot race lease registration against removal.
 - `pre_tool_use_policy.py` blocks only high-confidence boundary violations, especially X-AL-3 design/implementation mixing in a single command.
 - `permission_request.py` surfaces paid-provider, credential, destructive, and network-sensitive requests for operator review.
 - `stop_gate.py` reports worktree and verification posture without claiming success. An
@@ -24,12 +24,12 @@ Every Claude hook behavior supported by Codex's lifecycle is wired here. The Cod
 | `PreToolUse` | cache clear + permission guard + Codex boundary guard | Equivalent plus Codex guard |
 | `PreToolUse Bash(git commit*)` | `codex_hook_adapter.py pre-commit` runs pyright and root validation only for commit commands | Equivalent |
 | `PermissionRequest` | permission guard + Codex request classifier | Equivalent plus Codex classifier |
-| `PreCompact` / `PostCompact` | atomic session-specific checkpoint and reinjection scripts | Direct |
+| `PreCompact` / `PostCompact` | generation-ordered atomic session-specific checkpoint and reinjection scripts | Direct |
 | `PostToolUse` | roadmap refresh audit + adapter-driven edit lint | Equivalent; Codex `apply_patch` paths are parsed from `tool_input.command` |
 | `PostToolUseFailure` | Codex `PostToolUse` receives structured nonzero Bash results; the adapter normalizes them into `capture-failure.sh`'s Claude payload | Behavior-equivalent adapter |
 | `UserPromptSubmit` | prompt context + skill activation + prompt lint | Direct |
 | `SubagentStart` / `SubagentStop` | existing subagent validation | Direct |
-| `SessionEnd` | session lease release + existing cleanup | Direct |
+| `SessionEnd` | lease-first release + local-only cleanup in one three-second handler | Direct |
 | `Stop` | Claude stop gate + git arc guard + loop stop, followed by the Codex context gate | Direct plus Codex guard |
 | `StopFailure` | no dedicated Codex lifecycle event exists | Not event-exact; stop failures remain visible and recurring command failures still flow through the adapter |
 
@@ -55,8 +55,9 @@ Fresh merge-gate reviewers run with `HARNESS_CODEX_REVIEW_ISOLATED=1`. The permi
 guard accepts that marker only in the exact ephemeral/read-only lens command shape; inside
 the child, controller checkpoint, cleanup, prompt, and loop-mutating hooks are inert while
 the session lease remains active. Direct `git worktree remove` is denied because a hook
-cannot hold a mutex after it exits; use `tools/hooks/safe-worktree-remove.sh <path>` so the
-liveness recheck and removal are atomic relative to SessionStart registration.
+cannot hold a mutex after it exits; use `tools/hooks/safe-worktree-remove.sh <path>`. Its
+kernel-owned lock survives long removals without age-based theft, lease presence remains
+authoritative until SessionEnd, and registration revalidates the worktree after locking.
 
 Credential-gated work should advance to the exact credential boundary first. If
 no HIL/operator-approval surface is available, log the pending gate with

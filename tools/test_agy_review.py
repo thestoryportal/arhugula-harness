@@ -33,6 +33,7 @@ def _fake_commands(tmp_path: Path, *, agy_output: str, agy_exit: int = 0) -> tup
         "  printf '%s\\n' 'diff --git a/dev/null b/new.py' '+untracked witness'\n"
         "  exit 1\n"
         "fi\n"
+        'if [ -n "${AGY_DIFF_FILE:-}" ]; then cat "$AGY_DIFF_FILE"; exit 0; fi\n'
         "printf '%s\\n' 'diff --git a/a.py b/a.py' '+new line'\n",
         encoding="utf-8",
     )
@@ -44,10 +45,13 @@ def _fake_commands(tmp_path: Path, *, agy_output: str, agy_exit: int = 0) -> tup
         'pwd > "$AGY_CWD_CAPTURE"\n'
         'printf \'%s\\n\' "$@" > "$AGY_ARGS_CAPTURE"\n'
         "prev=''\n"
+        "add_dir=''\n"
         'for arg in "$@"; do\n'
-        '  if [ "$prev" = \'-p\' ]; then printf \'%s\' "$arg" > "$AGY_CAPTURE"; fi\n'
+        '  if [ "$prev" = \'-p\' ]; then printf \'%s\\n\' "$arg" > "$AGY_CAPTURE"; fi\n'
+        '  if [ "$prev" = \'--add-dir\' ]; then add_dir="$arg"; fi\n'
         '  prev="$arg"\n'
         "done\n"
+        'cat "$add_dir/review.diff" >> "$AGY_CAPTURE"\n'
         'if [ -n "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}${GOOGLE_GENAI_USE_VERTEXAI:-}'
         "${GOOGLE_APPLICATION_CREDENTIALS:-}${GOOGLE_CLOUD_PROJECT:-}"
         '${GOOGLE_CLOUD_LOCATION:-}" ]; then\n'
@@ -68,6 +72,7 @@ def _run(
     agy_output: str,
     agy_exit: int = 0,
     untracked_path: str = "",
+    diff_file: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     bin_dir, capture = _fake_commands(tmp_path, agy_output=agy_output, agy_exit=agy_exit)
     env = os.environ.copy()
@@ -79,6 +84,7 @@ def _run(
             "AGY_CWD_CAPTURE": str(tmp_path / "agy-cwd.txt"),
             "AGY_REVIEW_ROOT": str(tmp_path / "main-root"),
             "AGY_UNTRACKED_PATH": untracked_path,
+            "AGY_DIFF_FILE": str(diff_file) if diff_file is not None else "",
             "GEMINI_API_KEY": "must-not-leak",
             "GOOGLE_API_KEY": "must-not-leak",
             "GOOGLE_GENAI_USE_VERTEXAI": "must-not-leak",
@@ -109,10 +115,32 @@ def test_review_passes_actual_diff_and_accepts_exact_verdict(tmp_path: Path) -> 
     args = (tmp_path / "agy-args.txt").read_text(encoding="utf-8").splitlines()
     assert "--sandbox" in args
     assert "--dangerously-skip-permissions" in args
+    assert "--new-project" in args
     assert args[args.index("--model") + 1] == "gemini-3.6-flash-high"
     assert f"authoritative workspace root is {tmp_path}" in prompt
     assert (tmp_path / "agy-cwd.txt").read_text(encoding="utf-8").strip() == str(tmp_path)
     assert proc.stdout.rstrip().endswith("VERDICT: APPROVE")
+
+
+def test_review_streams_large_diff_without_putting_payload_in_argv(tmp_path: Path) -> None:
+    diff_file = tmp_path / "large.diff"
+    marker = "+large-diff-witness-"
+    diff_file.write_text(
+        "diff --git a/large.py b/large.py\n" + marker + ("x" * 150_000),
+        encoding="utf-8",
+    )
+
+    proc = _run(
+        tmp_path,
+        agy_output="F1 none\nVERDICT: APPROVE",
+        diff_file=diff_file,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    prompt = (tmp_path / "agy-prompt.txt").read_text(encoding="utf-8")
+    assert marker in prompt
+    args = (tmp_path / "agy-args.txt").read_text(encoding="utf-8")
+    assert marker not in args
 
 
 def test_review_rejects_permission_denial_even_when_agy_exits_zero(tmp_path: Path) -> None:

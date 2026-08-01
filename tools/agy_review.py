@@ -7,6 +7,7 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 LOG_PATH = "/tmp/arhugula-agy-review.log"
@@ -64,26 +65,22 @@ def collect_diff(repo: Path, base: str) -> str:
     return diff
 
 
-def review_prompt(repo: Path, diff: str) -> str:
-    return (
-        f"""You are an out-of-family code reviewer for an agent-harness monorepo.
+def review_prompt(repo: Path, diff_path: Path) -> str:
+    return f"""You are an out-of-family code reviewer for an agent-harness monorepo.
 The authoritative workspace root is {repo}. Read surrounding source only from that
 workspace; do not use a common checkout, sibling worktree, or other repository copy.
-Review the complete concrete diff below for real defects: correctness, hook and
+Read the complete concrete diff from {diff_path} using read-only file tools. Review it
+for real defects: correctness, hook and
 permission semantics, contract drift, unsafe state handling, and tests that
 would stay green if the change were reverted. Number findings F1..Fn tagged
 [P1]/[P2]/[P3] with file:line; no style nits. Do not edit files.
-Do not invoke terminal commands or request command permission: the complete diff is supplied
-below, and workspace read-only file tools are available if surrounding context
-is essential. Do not invoke URL, browser, or MCP tools. Do not read dotfiles,
-environment files, or user configuration. End with exactly VERDICT: APPROVE or
-VERDICT: BLOCK as the final non-empty line.
-
-<diff>
+Before reporting any finding, open the exact current file and verify every cited identifier;
+current workspace source overrides an inferred or stale reading of the diff.
+Do not invoke terminal commands or request command permission: the complete diff file and
+workspace read-only file tools are available. Do not invoke URL, browser, or MCP tools.
+Do not read dotfiles, environment files, or user configuration. End with exactly
+VERDICT: APPROVE or VERDICT: BLOCK as the final non-empty line.
 """
-        + diff
-        + "\n</diff>"
-    )
 
 
 def run_review(repo: Path, base: str) -> int:
@@ -97,30 +94,36 @@ def run_review(repo: Path, base: str) -> int:
     for name in PROVIDER_ENV:
         env.pop(name, None)
     try:
-        proc = subprocess.run(
-            [
-                "agy",
-                "--sandbox",
-                "--dangerously-skip-permissions",
-                "--mode",
-                "plan",
-                "--model",
-                "gemini-3.6-flash-high",
-                "--log-file",
-                LOG_PATH,
-                "--print-timeout",
-                "10m",
-                "-p",
-                review_prompt(repo, diff),
-            ],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            errors="replace",
-            check=False,
-            timeout=660,
-            env=env,
-        )
+        with tempfile.TemporaryDirectory(prefix="arhugula-agy-review-") as scratch:
+            diff_path = Path(scratch) / "review.diff"
+            diff_path.write_text(diff, encoding="utf-8")
+            proc = subprocess.run(
+                [
+                    "agy",
+                    "--sandbox",
+                    "--dangerously-skip-permissions",
+                    "--new-project",
+                    "--mode",
+                    "plan",
+                    "--model",
+                    "gemini-3.6-flash-high",
+                    "--add-dir",
+                    scratch,
+                    "--log-file",
+                    LOG_PATH,
+                    "--print-timeout",
+                    "10m",
+                    "-p",
+                    review_prompt(repo, diff_path),
+                ],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                check=False,
+                timeout=660,
+                env=env,
+            )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"agy-review: reviewer unavailable: {exc}", file=sys.stderr)
         return 2

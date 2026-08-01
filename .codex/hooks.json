@@ -11,22 +11,6 @@
             "timeout": 105
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/bin/bash \"$(git rev-parse --show-toplevel)/tools/roadmap-audit/session-start.sh\"",
-            "statusMessage": "Loading roadmap audit",
-            "timeout": 30
-          },
-          {
-            "type": "command",
-            "command": "/bin/bash \"$(git rev-parse --show-toplevel)/tools/hooks/loop-gc.sh\"",
-            "statusMessage": "Checking worktree hygiene",
-            "timeout": 30
-          }
-        ]
       }
     ],
     "PreToolUse": [
@@ -195,13 +179,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/bin/bash \"$(git rev-parse --show-toplevel)/tools/hooks/session-end-cleanup.sh\"",
-            "timeout": 30
-          },
-          {
-            "type": "command",
-            "command": "/bin/bash \"$(git rev-parse --show-toplevel)/tools/hooks/session-lease.sh\" end",
-            "timeout": 15
+            "command": "/bin/bash \"$(git rev-parse --show-toplevel)/tools/hooks/codex-session-end.sh\"",
+            "timeout": 3
           }
         ]
       }
