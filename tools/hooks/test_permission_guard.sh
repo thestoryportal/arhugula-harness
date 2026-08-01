@@ -201,13 +201,82 @@ OUT=$(run_on "$(jq -nc '{"hook_event_name":"PreToolUse","tool_name":"NotebookEdi
 [ -z "$OUT" ] && ok "outside NotebookEdit → ask" || bad "outside notebook auto-decided: $OUT"
 
 # 5m) Round-6 adversarial bypasses must NOT auto-allow (codex P1/P2).
-for c in "cat '/etc/passwd'" "echo \$ANTHROPIC_API_KEY" "awk 'BEGIN{system(\"git push origin main\")}'" "git branch -d feature" "git branch --delete --force x" "printf %s \$OPENAI_API_KEY"; do
+for c in "cat '/etc/passwd'" "echo \$ANTHROPIC_API_KEY" "awk 'BEGIN{system(\"git push origin main\")}'" "git branch --delete --force x" "printf %s \$OPENAI_API_KEY"; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
 done
 # git branch (list/create) still allowed
 OUT=$(run_on "$(pl Bash 'git branch' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "git branch (list) → allow" || bad "git branch list not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git branch -d merged-feature' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git branch -d → allow safe merged-branch cleanup" || bad "safe branch cleanup not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git push origin feature' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git push → allow normal arc publication" || bad "normal push not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git ls-remote --heads origin refs/heads/topic' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git ls-remote → allow read-only branch hygiene probe" || bad "ls-remote not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git pull --ff-only' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git pull --ff-only → allow main sync" || bad "ff-only pull not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git merge --no-edit main' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git merge --no-edit main → allow topic base sync" || bad "main merge not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git merge --no-edit origin/main' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git merge --no-edit origin/main → allow fetched base sync" || bad "origin/main merge not allowed: $OUT"
+for c in "git merge --abort" "git merge --strategy=ours main" "git merge --no-edit feature/unreviewed"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
+OUT=$(run_on "$(pl Bash 'git worktree remove /tmp/merged-clean' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git worktree remove → allow non-force cleanup" || bad "non-force worktree cleanup not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git worktree add /tmp/new-arc feature' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git worktree add → allow non-force arc creation" || bad "non-force worktree creation not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git worktree add -b feature /tmp/new-arc' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git worktree add -b → allow explicit /tmp arc creation" || bad "-b worktree creation not allowed: $OUT"
+for c in \
+  "git worktree add /tmp/new-arc feature; touch /tmp/escaped" \
+  "git worktree add /tmp/new-arc feature && touch /tmp/escaped" \
+  "git worktree remove /tmp/merged-clean | sh" \
+  'git worktree add /tmp/$(touch-escaped) feature'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
+for c in "git push origin --delete feature" "git worktree remove --force /tmp/dirty" "git worktree add --force /tmp/rebind feature"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "deny" ] && ok "'$c' → deny destructive cleanup" || bad "'$c' not denied: $OUT"
+done
+for c in "git worktree add \$HOME/escape feature" "git worktree add /etc/escape feature" "git worktree remove /etc/registered"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed outside bounded roots" || bad "'$c' auto-allowed: $OUT"
+done
+
+# 5n.1) The controller's own provider-free lifecycle and fresh read-only merge lenses
+# must not stop a headless loop for approval. Keep the allowlist recipe-specific and
+# require the nested Codex process to be ephemeral + read-only.
+for c in \
+  "just codex-preflight" \
+  "just codex-checkpoint after-review" \
+  "just codex-closeout" \
+  "just codex-autonomous-arc R-123" \
+  "just codex-loop-record --phase plan --status passed --command plan --evidence grounded" \
+  "just codex-loop-status" \
+  "just codex-loop-check" \
+  "just overlay-check"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "'$c' → allow controller lifecycle" || bad "'$c' not allowed: $OUT"
+done
+SAFE_CODEX_CMD="codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
+OUT=$(run_on "$(pl Bash "$SAFE_CODEX_CMD" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens" || bad "read-only codex exec not allowed: $OUT"
+OUT=$(run_on "$(pl Bash "codex exec -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens2-0123456789abcdef0123456789abcdef01234567.md --ephemeral --sandbox read-only -- 'read lens2 prompt'" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens with -C first" || bad "-C-first read-only codex exec not allowed: $OUT"
+for c in \
+  "codex exec --sandbox workspace-write -C /repo mutate" \
+  "codex exec --ephemeral --sandbox danger-full-access -C /repo mutate" \
+  "codex exec --ephemeral --sandbox read-only -C $REPO inspect --sandbox danger-full-access" \
+  "codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /etc/review.md -- 'inspect'" \
+  "codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens3-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'; touch /tmp/escaped" \
+  "just codex-autonomous-arc R-1; git push --force"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
 
 # 5n) Round-7: braced/any uppercase env expansion + relative design-substrate (codex P1).
 for c in "cat \${HOME}/.claude/settings.json" "mkdir \${HOME}/tmp" "cat \$TMPDIR/x"; do

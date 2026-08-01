@@ -9,7 +9,7 @@ just codex-autonomous-arc ARC_ID
 just codex-loop-record --phase red --status failed --command "..." --evidence "..."
 just codex-loop-status
 just codex-loop-check
-just coderabbit-review --base main
+just gemini-review
 ```
 
 The local state file is `.harness/codex_loop_state.json` and is gitignored. It is evidence for the current run, not a source file.
@@ -35,6 +35,12 @@ Required gates:
 16. `main_synced`
 17. `worktree_disposition`
 
+For Codex-authored work, `decorrelated_review` is the out-of-family Antigravity
+artifact review invoked through `just gemini-review`. For Claude-authored work it
+is `just codex-review`. Substantive code PRs additionally run the three
+fresh-context Codex lenses in `.codex/notes/merge-gate-lenses/`; all must approve
+and the log row must land before merge.
+
 `just codex-closeout` verifies the pre-closeout subset through
 `decorrelated_review`. `just codex-loop-check` verifies the full lifecycle,
 including commit, push, PR, CI, merge, post-merge refresh, main sync, and
@@ -43,4 +49,10 @@ a linked worktree; the final `worktree_disposition` gate must be recorded from
 synced `main` after the original arc worktree is no longer registered and the
 local topic branch has been pruned.
 
-`just codex-review` remains the mandatory out-of-family review gate. CodeRabbit is optional advisory review through `just coderabbit-review ...`.
+After final PR CI is green, re-read the head SHA, merge with
+`--match-head-commit`, and wait for that merge SHA's own `main` push CI to pass.
+Only then perform the terminating roadmap/ledger refresh. The refresh commit's
+own `main` CI must pass before forward work begins. Finish the arc with reflection
+and the gstack `context-save` workflow; restored checkpoint work lists remain
+advisory until verified against current repo state. CodeRabbit remains optional
+advisory review through `just coderabbit-review ...`.

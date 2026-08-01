@@ -61,8 +61,13 @@ def context_guard() -> str:
         proc.stdout.strip() or proc.stderr.strip() or "<codex context guard produced no output>"
     )
     if proc.returncode != 0:
-        print(output, file=sys.stderr)
-        sys.exit(proc.returncode)
+        return "\n".join(
+            [
+                output,
+                "- Stop is advisory for in-progress arcs and genuine operator gates; "
+                "`just codex-closeout` remains the hard completion/commit/PR gate.",
+            ]
+        )
     return output
 
 

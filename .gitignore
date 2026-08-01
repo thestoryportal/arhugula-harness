@@ -83,6 +83,18 @@ coverage.xml
 # Skill-eval run artifacts (regenerable; eval sets in .claude/skills/*/evals/ are version-controlled)
 .claude/skills/*-workspace/
 
+# Operator-installed Claude design skills. Their durable Codex discovery entrypoints
+# are tracked under .agents/skills; do not treat local marketplace payloads as repo source.
+.claude/skills/frontend-design/
+.claude/skills/impeccable/
+.claude/skills/taste-skill/
+.claude/skills/ui-ux-pro-max/
+
+# Local design-tool sessions and generated dashboard/memory artifacts.
+.impeccable/
+.harness/memory/
+tools/dashboard/public/
+
 # Claude Code runtime locks
 .claude/scheduled_tasks.lock
 
@@ -131,7 +143,7 @@ tools/semantic_overlay/overlay.json
 .agents/*
 !.agents/skills/
 .agents/skills/*
-!.agents/skills/codex-autonomous-loop/
-!.agents/skills/codex-autonomous-loop/**
+!.agents/skills/*/
+!.agents/skills/*/SKILL.md
 .codex/agents/
 .claude/agents/

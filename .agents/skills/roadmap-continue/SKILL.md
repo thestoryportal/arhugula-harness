@@ -1,30 +1,63 @@
 ---
 name: roadmap-continue
-description: "Use when the operator says /roadmap-continue, continue, next action, drive the roadmap, or otherwise asks Codex to advance the next arhugula-v2 roadmap item end to end."
+description: Use when the operator says /roadmap-continue, continue, next action, drive the roadmap, or asks Codex to advance the next arhugula-v2 item end to end.
 ---
 
 # Roadmap Continue
 
-Use this skill to run one concrete iteration of the workspace roadmap loop.
+Run the live roadmap loop through a verified fixed point. The canonical authorities are
+`AGENTS.md`, live `CLAUDE.md` §12, `.harness/roadmap_status.md`, and the current handoff;
+check them rather than trusting remembered or checkpointed remaining work.
 
-## Startup
+## Grounding
 
-1. Inspect `git status --short --branch`.
-2. Read `.harness/roadmap_status.md`, `AGENTS.md`, `justfile`, and any relevant axis `AGENTS.md`.
-3. Identify the next actionable item from the roadmap, not from memory alone.
-4. For cite-bearing work, use the `overlay-query` skill before making implementation claims.
+1. Verify absolute root, current branch, worktree registration, and status. Run
+   `just codex-preflight`; re-run it after a resume, merge, rebase, or compaction.
+2. Read `.harness/handoff/README-resume.md` for in-flight cross-runner state, then the
+   current roadmap status and relevant register/axis guidance.
+3. Treat gstack context-save checkpoints as decision/evidence aids, not current-state
+   authority. Reconcile their branch/PR claims against HEAD and GitHub.
+4. Take the live `## Next action`. If the automatic queue is empty, apply no-parking:
+   choose the highest-value implementable forward slice. A nominally gated item still owes
+   grounding and every buildable slice up to the genuine credential/operator boundary.
+5. Resolve formal cites with the `overlay-query` skill. Trace runtime premises to shipped
+   call sites; a resolving cite proves presence, not reachability or correctness.
 
-## Execution
+## Execute one arc
 
-1. Create or reuse an isolated worktree for substantive edits.
-2. Ground nearby code and tests with `rg`, direct reads, and targeted test discovery.
-3. If the next item is a design/spec/plan defect, route it as a back-flow arc and do not mix it with implementation.
-4. Implement the smallest complete slice that advances the roadmap item.
-5. Run narrow verification first, then `just check` when the change is PR-ready.
-6. Commit, push, open a PR, and watch CI when the operator has authorized shipping in this session.
+1. Create or reuse a clean isolated worktree based on current `main`. Never edit the shared
+   root checkout. Run `just codex-autonomous-arc <arc-id>` in that worktree.
+2. Record a concise plan with owned files, authority, RED witness, verification, and tracking
+   surfaces. If code contradicts the arc premise, stop and classify instead of reworking the
+   premise to save the arc.
+3. Write or preserve the failing witness and record `red` with `status=failed`. Implement
+   the smallest posture-correct slice; never mix `design-substrate/**` and implementation
+   without an explicit back-flow arc.
+4. Recount any stated condition/cardinality set programmatically after every review round.
+5. Run narrow verification, then `just codex-check`; add `just overlay-check`, shell tests,
+   or live/integration checks when the claim requires them.
+6. For a Codex-authored diff, use Antigravity through `just gemini-review` as the
+   out-of-family reviewer under the operator's standing all-forward-work authorization; do
+   not request per-run approval. This review uses the OAuth-authenticated `agy` CLI only—never
+   provider API keys, service-account/Vertex routing, or a direct API call. For a Claude-authored
+   diff, use `just codex-review`. Validate
+   exit status, non-empty output, and the final verdict before recording the review gate.
+7. Run `just codex-closeout`, then hand the complete arc to the `ship-pr` skill.
 
-## Stop Conditions
+## Genuine gates only
 
-- Stop and classify instead of coding when X-AL-3 would be violated.
-- Stop before paid provider calls, credential movement, or destructive commands unless explicitly authorized.
-- Preserve unrelated user changes.
+Ask only for an architectural/product choice that is the operator's, a credential or paid
+call, or an irreversible/outward action not already authorized. Build to that boundary and
+record the deferral with the repo wrapper. Reversible in-repo choices are resolved and
+reported; do not park on them.
+
+## Before the next arc
+
+The current arc is not complete at PR CI. `ship-pr` must finish the fresh three-lens gate,
+merge if authorized, wait for the substantive merge's main CI, land the immediate terminating
+refresh, wait for refresh main CI, sync main, dispose of the worktree/verified merged branch,
+run `just codex-loop-check`, reflect, and run the gstack `context-save` skill. Only then derive
+the next live action, create its isolated worktree, and start its new autonomous-arc ledger.
+
+If no forward slice remains after honest grounding, report the exact gate and resume command;
+do not invent work or silently stop an authorized loop.

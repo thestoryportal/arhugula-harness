@@ -1,120 +1,95 @@
 ---
 name: codex-autonomous-loop
-description: Use when driving an arhugula-v2 coding arc through the Codex controller/coder/validator/CI/GitHub shipping/closeout loop.
+description: Use when Codex must drive an arhugula-v2 coding arc through isolated implementation, validation, review, GitHub CI, merge, refresh, cleanup, and continuation.
 ---
 
 # Codex Autonomous Loop
 
-Use this skill when the operator asks Codex to run an implementation arc with autonomous loop discipline.
+Maintain one evidence-bound controller loop from live roadmap state through the next fixed
+point. Do not claim an arc complete merely because code or PR CI is green.
 
-## Roles
-
-- Controller: owns repo context, plans, HIL gates, integration, and final claims.
-- Coder: makes scoped edits and records the commands it ran.
-- Spec validator: reviews the diff against the stated requirements and rejects under-build or over-build.
-- Quality validator: reviews the diff for bugs, regressions, missing tests, and maintainability.
-- External reviewer: `just codex-review` is mandatory for PR-ready diffs; `just coderabbit-review ...` is optional advisory review.
-- Shipping controller: owns commit, push, PR, CI, merge, post-merge refresh, main sync, and worktree disposition evidence.
-
-Validators review artifacts and evidence, not the coder's summary.
-The review gate covers the concrete PR diff plus integration/blast-radius risk;
-whole-codebase protection comes from local and CI gates (`ruff`, `pyright`,
-provider-free pytest, overlay, ledger, and axis-isolation checks), not from a
-fresh manual whole-repo code review on every closure.
-
-## Invocation
-
-Start an arc:
+## Start
 
 ```bash
-just codex-autonomous-arc ARC_ID
+git rev-parse --show-toplevel
+git branch --show-current
+git status --short --branch
+just codex-autonomous-arc <arc-id>
 ```
 
-Record gates:
+Run this from a clean linked worktree, never the shared root. The untracked
+`.harness/codex_loop_state.json` is evidence for the current run. Each record is bound to
+branch, HEAD, linked-worktree identity, and worktree fingerprint.
+
+## Controller and implementers
+
+For a multi-leg arc, keep one interactive high-reasoning Codex controller. Give each fresh
+`codex exec` implementer exactly one brief based on `.codex/notes/leg-brief-template.md` and
+one isolated worktree. Cap concurrent implementers at two. Every brief includes the operator
+decision verbatim, authority, owned files, deliverables, negative examples, STOP-if-premise-
+false rule, tests, and report shape. The controller reads each actual diff; self-reports are
+not acceptance evidence.
+
+## Required gate order
+
+1. `worktree_ready`: prove clean linked worktree and current-main base.
+2. `preflight`: run `just codex-preflight`.
+3. `plan`: record owned scope, authority, RED witness, verification, and tracking surfaces.
+4. `red`: observe the expected failure; record `status=failed`.
+5. `implementation`: smallest complete scoped change.
+6. `narrow_verify`: targeted witness passes, including mutation/real-path proof where owed.
+7. `local_gate`: `just codex-check`, plus overlay/shell/live gates required by the claim.
+8. `decorrelated_review`: when Codex authored, run `just gemini-review` through the
+   OAuth-authenticated Antigravity `agy` CLI only and require the report to end
+   `VERDICT: APPROVE`; never use provider API keys, service-account/Vertex routing, or a direct
+   API call. Standing operator authorization covers the subscription and current-diff disclosure
+   for all forward work, so do not ask again. When Claude authored, use
+   `just codex-review`. Resolve real findings and re-run changed gates.
+9. `closeout`: run `just codex-closeout`.
+10. `commit`: explicit paths only; never `git add -A`; record commit SHA and scope.
+11. `push`: push the exact topic branch and validate remote state.
+12. `pr_opened`: PR body includes exact checks, skipped checks, and tracking surfaces.
+13. `ci_green`: every required check on final PR HEAD and the current base `main` HEAD is
+    terminal green. Inventory other open/remote topic branches before merge; if a stale prior
+    branch exists, reconcile its PR/worktree/unique-commit state without deleting work.
+14. Before merge, execute the `merge-gate` skill: three fresh Codex contexts, one per
+    concurrency, spec-conformance, and test-witness lens. All approve; append and commit the
+    `.harness/merge-gate-log.md` row; wait for final-HEAD CI again.
+15. `merged`: merge only with current authorization and `--match-head-commit`; never bypass.
+16. Wait for the merge SHA's own main CI to be green. No forward work starts before this.
+17. `post_merge_refresh`: land the immediate roadmap-status-only terminating refresh, or
+    record a narrowly justified non-applicability for a refresh itself.
+18. Wait for the refresh merge's own main CI to be green.
+19. `main_synced`: local `main` equals final `origin/main`.
+20. `worktree_disposition`: original worktree is unregistered; only the verified merged
+    local topic branch is pruned; remote branch hygiene is resolved without losing work.
+21. Run `just codex-loop-check`, reflect, and run the gstack `context-save` skill.
+
+Record gates with:
 
 ```bash
-just codex-loop-record --phase worktree_ready --status passed --command "git worktree ..." --evidence "linked worktree and branch based on current origin/main"
-just codex-loop-record --phase plan --status passed --command "plan accepted" --evidence "controller checklist written"
-just codex-loop-record --phase red --status failed --command "uv run pytest ..." --evidence "expected RED before implementation"
-just codex-loop-record --phase implementation --status passed --command "apply_patch ..." --evidence "scoped files changed"
-just codex-loop-record --phase narrow_verify --status passed --command "uv run pytest ..." --evidence "targeted tests passed"
-just codex-loop-record --phase local_gate --status passed --command "just codex-check" --evidence "provider-free PR gate passed"
-just codex-loop-record --phase decorrelated_review --status passed --command "just codex-review" --evidence "review issues resolved or none"
-just codex-loop-record --phase closeout --status passed --command "just codex-closeout" --evidence "context guard closeout passed"
-just codex-loop-record --phase commit --status passed --command "git commit ..." --evidence "commit sha and exact scope"
-just codex-loop-record --phase push --status passed --command "git push -u origin ..." --evidence "remote branch pushed"
-just codex-loop-record --phase pr_opened --status passed --command "gh pr create ..." --evidence "PR number and URL"
-just codex-loop-record --phase ci_green --status passed --command "gh pr checks --watch ..." --evidence "blocking CI checks green"
-just codex-loop-record --phase merged --status passed --command "gh pr merge ..." --evidence "merged PR number and merge sha"
-just codex-loop-record --phase post_merge_refresh --status passed --command "refresh PR or not-applicable note" --evidence "terminating refresh merged or explicitly not applicable"
-just codex-loop-record --phase main_synced --status passed --command "git pull --ff-only" --evidence "local main equals origin/main"
-just codex-loop-record --phase worktree_disposition --status passed --command "git worktree remove ...; git branch -D ..." --evidence "original arc worktree removed and local topic branch pruned"
+just codex-loop-record --phase <phase> --status <status> \
+  --command "<exact command>" --evidence "<result tied to current diff/HEAD>"
 ```
 
-Check readiness:
+If the diff changes after any pre-commit gate, re-record that gate and all downstream
+pre-commit gates. If the PR HEAD changes after a reviewer/lens approval, re-review the delta
+and wait for CI on the new head. Checkpoint prose never overrides current Git or GitHub state.
 
-```bash
-just codex-loop-check
-```
+## Review layers
 
-Loop records include branch, HEAD, linked-worktree status, and a worktree
-fingerprint. If code changes after implementation, verification, review, or
-closeout evidence is recorded, re-record that gate and every downstream
-pre-commit gate before committing. After commit, the shipping gates become the
-required downstream evidence before claiming the loop complete.
+- Implementer self-check is not independent.
+- The controller validates the diff and witnesses.
+- Antigravity is the out-of-family artifact reviewer for Codex-authored work.
+- The fresh three-lens merge gate is mandatory for substantive code/hook PRs and complements,
+  rather than replaces, Antigravity and CI.
+- Any BLOCK is reconciled against current HEAD, fixed if real, and re-gated. Malformed or
+  empty reviewer output fails closed.
 
-## Required Gate Order
+## Stop conditions
 
-1. `worktree_ready`: linked worktree and branch are confirmed before edits.
-2. `preflight`: `just codex-preflight` in the linked worktree.
-3. `plan`: concise controller plan with file scope, tests, and tracking surfaces.
-4. `red`: a failing test or witness before implementation. The recorded status must be `failed`.
-5. `implementation`: minimal scoped code/docs changes.
-6. `narrow_verify`: targeted tests proving the changed behavior.
-7. `local_gate`: `just codex-check` or a documented narrower gate for docs-only changes.
-8. `decorrelated_review`: `just codex-review`; optionally add `just coderabbit-review ...`.
-9. `closeout`: `just codex-closeout`.
-10. `commit`: intentional commit with explicit scope.
-11. `push`: branch pushed to origin with upstream set.
-12. `pr_opened`: PR opened with verification, skipped checks, and tracking-surface notes.
-13. `ci_green`: blocking PR checks observed green.
-14. `merged`: PR merged per GitHub discipline.
-15. `post_merge_refresh`: terminating refresh PR merged, or an explicit not-applicable note.
-16. `main_synced`: local main fast-forwarded to the merged remote state.
-17. `worktree_disposition`: from synced `main`, prove the original arc worktree is no longer registered and the local topic branch is pruned.
-
-## Prompt Templates
-
-Coder prompt:
-
-```text
-You are the coder for this arhugula-v2 arc. You are not alone in the codebase.
-Do not revert unrelated edits. Own only these files: <FILES>. Requirements:
-<REQUIREMENTS>. First add or preserve the RED witness, then make the smallest
-change that passes it. Return changed paths and exact commands run.
-```
-
-Spec validator prompt:
-
-```text
-Review the diff against these requirements only: <REQUIREMENTS>. Do not trust
-the coder summary. Check for missing requirements, extra behavior, design/impl
-mixing, tracking-surface obligations, and RED-without-fix evidence. Return
-blocking issues first with file/line references.
-```
-
-Quality validator prompt:
-
-```text
-Review the diff for bugs, regression risk, missing tests, unsafe state handling,
-and maintainability. Do not restate strengths unless no issues exist. Return
-critical/important/minor issues and concrete fixes.
-```
-
-## Stop Conditions
-
-- HIL/operator gate requested by the operator or required by repo policy.
-- Failed RED witness that does not fail for the expected reason.
-- Validator reports unresolved critical or important issues.
-- `just codex-loop-check`, `just codex-check`, `just codex-review`, `just codex-closeout`, PR CI, merge, main sync, or worktree disposition fails.
-- Paid provider, credential, destructive, or network-sensitive work lacks explicit authorization.
+Stop only for a genuine operator decision, a credential/paid-call boundary, an unauthorized
+irreversible/outward action, a falsified arc premise, or a gate that remains red after honest
+diagnosis. Unknown commands, missing evidence, pending CI, and reviewer parse failures are
+not success. Record the blocker and exact resume action; otherwise continue to the fixed
+point and then initialize the next roadmap arc.

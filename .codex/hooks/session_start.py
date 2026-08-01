@@ -45,4 +45,6 @@ print(f"- justfile is {exists('justfile')}; prefer just recipes for repo gates."
 print("- Use isolated worktrees for substantive edits and keep PRs reviewable.")
 print("- Do not mix design-substrate edits with implementation without explicit back-flow scope.")
 print("- Deterministic context workflow: .codex/notes/deterministic-context-workflow.md.")
+print("- Claude/Codex parity and trust map: .codex/notes/claude-codex-parity.md.")
+print("- Query task-relevant Claude memory and gstack checkpoints, then verify against HEAD.")
 print(run_guard())

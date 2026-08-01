@@ -497,7 +497,7 @@ codex-review-uncommitted: _require-codex-subscription
 # .env, which carries the harness runtime's own provider keys; those must never
 # leak into review billing.
 gemini-review base='main': _require-antigravity
-    git diff --merge-base {{base}} | env -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GOOGLE_GENAI_USE_VERTEXAI agy -p "You are an out-of-family code reviewer for a Python 3.12 asyncio + Pydantic v2 monorepo. Review this diff for real defects: correctness, concurrency (lock windows, cancellation, cross-process file races), contract drift, and tests that would stay green if the change were reverted. Number findings F1..Fn tagged [P1]/[P2]/[P3] with file:line; no style nits. End with exactly 'VERDICT: APPROVE' or 'VERDICT: BLOCK'."
+    /usr/bin/python3 tools/agy_review.py --base {{base}}
 
 _require-antigravity:
     @if ! command -v agy >/dev/null 2>&1; then \
