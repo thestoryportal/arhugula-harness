@@ -7,14 +7,6 @@ executor at `lifecycle/sub_agent_dispatch_executor.py`, U-RT-141). Beyond the
 B-47 audit-write venue, this module hosts `resolve_result_ref_off_loop` — the
 off-loop half of **U-RT-145**'s §14.8.11 protected-result-store resolution
 (B-65-A); see that function's own docstring for the codex round-4 P1 grounding.
-A THIRD tenant lives here but on its OWN pool: the durable pause-journal
-capture (`B-103`, `lifecycle/durable_pause_resume_protocol.py`) runs via
-`run_pause_journal_off_loop` against `_PAUSE_JOURNAL_OFFLOAD_EXECUTOR`. Its
-blocking `fcntl.flock` wait does NOT fit the audit pool's short-job profile,
-and reusing that pool would let contended captures stall audit signing — the
-same reasoning §14.8.10.1 applied when ruling it ineligible for B-48. Both
-pools share one join-on-cancel body (`_run_off_loop_join_on_cancel`); only the
-executor and the grace differ.
 
 Out-of-family Codex round-2 findings on the PR B2a landing:
 
@@ -66,12 +58,9 @@ from harness_runtime.lifecycle.protected_result_store import (
 
 __all__ = [
     "AUDIT_OFFLOAD_MAX_WORKERS",
-    "PAUSE_JOURNAL_CANCEL_JOIN_GRACE_SECONDS",
-    "PAUSE_JOURNAL_OFFLOAD_MAX_WORKERS",
     "resolve_result_ref_off_loop",
     "run_audit_off_loop",
     "run_off_loop_detach_on_cancel",
-    "run_pause_journal_off_loop",
 ]
 
 #: Small by design: audit jobs are short-lived (one signature + local file
@@ -91,24 +80,6 @@ AUDIT_CANCEL_JOIN_GRACE_SECONDS: Final[float] = 10.0
 #: stop releasing capacity — later audit jobs queue and their callers hit
 #: their own bounded timeouts instead of growing the pool.
 AUDIT_DETACHED_WORKER_CAP: Final[int] = 8
-
-#: Pause-journal capture runs on its OWN pool, never the audit pool
-#: (out-of-family Codex [P1] round 1 on the `B-103` arc). Its wait is a
-#: BLOCKING `fcntl.flock` on a peer process's append, which does not fit the
-#: "short-lived, one sign + local writes" profile `AUDIT_OFFLOAD_MAX_WORKERS`
-#: is sized for: four contended captures would occupy every audit slot and
-#: stall unrelated audit-signing / ref-resolution jobs. Runtime spec v1.102
-#: §14.8.10.1 already ruled this same 4-worker pool INELIGIBLE for `B-48`'s
-#: sub-agent offload on the identical reasoning — isolation here follows that
-#: ruling rather than re-testing it.
-PAUSE_JOURNAL_OFFLOAD_MAX_WORKERS: Final[int] = 4
-
-#: Cancellation-join grace for a pause capture. Longer than the audit grace:
-#: the audit bound is calibrated for a stalled remote KMS, whereas this wait is
-#: a same-host advisory lock held by a peer harness process for exactly one
-#: append — so waiting longer is far more likely to reach a durable record than
-#: to be waiting on something permanently wedged.
-PAUSE_JOURNAL_CANCEL_JOIN_GRACE_SECONDS: Final[float] = 30.0
 
 #: Hard bound on QUEUED-but-unserved audit jobs (codex round-16 P1): with
 #: every worker hung and the detach cap reached, each further dispatch
@@ -130,13 +101,8 @@ class _DaemonThreadAuditExecutor:
     still supports `Future.cancel()` via `set_running_or_notify_cancel`.
     """
 
-    def __init__(self, max_workers: int, thread_name_prefix: str = "harness-audit-offload") -> None:
+    def __init__(self, max_workers: int) -> None:
         self._max_workers = max_workers
-        # Per-INSTANCE thread naming (`B-103`): a second pool sharing the audit
-        # pool's thread-name prefix would make the two indistinguishable both to
-        # an operator reading a stack dump and to the thread-count assertions
-        # this module's own tests make against the audit pool.
-        self._thread_name_prefix = thread_name_prefix
         self._queue: queue.SimpleQueue[tuple[Future[Any], Callable[[], Any]]] = queue.SimpleQueue()
         self._lock = threading.Lock()
         self._spawned = 0
@@ -190,7 +156,7 @@ class _DaemonThreadAuditExecutor:
             threading.Thread(
                 target=self._worker,
                 daemon=True,
-                name=f"{self._thread_name_prefix}-{self._spawned}",
+                name=f"harness-audit-offload-{self._spawned}",
             ).start()
 
     def release_stalled_slot(self, stalled_future: Future[Any]) -> None:
@@ -286,40 +252,16 @@ _AUDIT_OFFLOAD_EXECUTOR: Final[_DaemonThreadAuditExecutor] = _DaemonThreadAuditE
     AUDIT_OFFLOAD_MAX_WORKERS
 )
 
-#: `B-103`'s dedicated pool. A SECOND INSTANCE of the same hand-rolled executor
-#: — not a new mechanism: every property that pool needs (daemon workers,
-#: cancel-a-queued-job, detach-and-replace, slot release, saturation refusal)
-#: is already built and reviewed here. What isolation buys is that a wedged
-#: peer holding a journal lock can exhaust ONLY pause-journal capacity.
-_PAUSE_JOURNAL_OFFLOAD_EXECUTOR: Final[_DaemonThreadAuditExecutor] = _DaemonThreadAuditExecutor(
-    PAUSE_JOURNAL_OFFLOAD_MAX_WORKERS,
-    thread_name_prefix="harness-pause-journal-offload",
-)
 
-
-async def _run_off_loop_join_on_cancel(
-    executor: _DaemonThreadAuditExecutor,
-    grace_seconds: float,
-    what: str,
-    fn: Callable[..., Any],
-    /,
-    *args: Any,
-    **kwargs: Any,
-) -> Any:
-    """Run `fn` on `executor`; on cancellation JOIN the worker, bounded by grace.
-
-    Extracted at the `B-103` arc so the pause-journal pool reuses this
-    already-reviewed body verbatim instead of growing a second copy of it. The
-    audit path's behaviour is unchanged — `run_audit_off_loop` is now a thin
-    binding of (audit executor, audit grace) onto this function.
-    """
+async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+    """Run sync audit composition on the dedicated executor; join on cancel."""
     context = contextvars.copy_context()
     call = functools.partial(context.run, functools.partial(fn, *args, **kwargs))
     # Submit DIRECTLY (not run_in_executor): task cancellation marks the
     # asyncio wrapper future cancelled even while the worker keeps running,
     # so the join below must hold the CONCURRENT future, which faithfully
     # reports the worker's real completion.
-    concurrent_future = executor.submit(call)
+    concurrent_future = _AUDIT_OFFLOAD_EXECUTOR.submit(call)
     try:
         return await asyncio.wrap_future(concurrent_future)
     except asyncio.CancelledError:
@@ -348,66 +290,19 @@ async def _run_off_loop_join_on_cancel(
             # (a possibly-late write) is then explicit and bounded, the
             # same unresolved semantics the facade flags via
             # audit_drain_incomplete.
-            deadline = time.monotonic() + grace_seconds
+            deadline = time.monotonic() + AUDIT_CANCEL_JOIN_GRACE_SECONDS
             while not concurrent_future.done() and time.monotonic() < deadline:
                 with contextlib.suppress(asyncio.CancelledError):
                     await asyncio.sleep(0.01)
             if not concurrent_future.done():
-                executor.release_stalled_slot(concurrent_future)
+                _AUDIT_OFFLOAD_EXECUTOR.release_stalled_slot(concurrent_future)
                 logging.getLogger("harness.runtime.audit_signing").error(
-                    "%s worker outlived the %.0fs cancellation "
+                    "audit offload worker outlived the %.0fs cancellation "
                     "join grace — detaching (daemon worker cannot hold "
-                    "process exit); its write may land late",
-                    what,
-                    grace_seconds,
+                    "process exit); its audit write may land late",
+                    AUDIT_CANCEL_JOIN_GRACE_SECONDS,
                 )
         raise
-
-
-async def run_audit_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
-    """Run sync audit composition on the dedicated executor; join on cancel."""
-    return await _run_off_loop_join_on_cancel(
-        _AUDIT_OFFLOAD_EXECUTOR,
-        AUDIT_CANCEL_JOIN_GRACE_SECONDS,
-        "audit offload",
-        fn,
-        *args,
-        **kwargs,
-    )
-
-
-async def run_pause_journal_off_loop(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
-    """Run the sync durable pause-journal capture off-loop; join on cancel (`B-103`).
-
-    Its own pool, deliberately (out-of-family Codex [P1] round 1 on this arc):
-    the wait here is a BLOCKING `fcntl.flock` on a peer process's append, and
-    running that on the shared 4-worker audit pool would let four contended
-    captures stall unrelated audit-signing and ref-resolution jobs. Runtime spec
-    v1.102 §14.8.10.1 already ruled that pool ineligible for `B-48`'s offload on
-    the same reasoning.
-
-    **Join-on-cancel, and its BOUNDED residual, stated exactly.** A cancelled
-    capture joins the worker so the append is durable BEFORE the cancellation is
-    observed — the ordering the pre-`B-103` synchronous call had for free (the
-    loop could not even deliver a cancellation while blocked in `flock`). That
-    guarantee holds *up to* `PAUSE_JOURNAL_CANCEL_JOIN_GRACE_SECONDS`. Past it
-    the worker is detached with a loud ERROR and its append MAY land after the
-    caller observed cancellation — journaling a pause for an abandoned run.
-    Registered at `B-105`, not silently absorbed. Severity is bounded by a
-    property the substrate already documents: the journal writes no
-    pause-resolved marker (`B-104`), so Runtime spec v1.108 §13.7 already scopes
-    the enumeration to an UPPER BOUND that can over-report outstanding pauses —
-    a late-landing record is within that documented imprecision, not a new
-    corruption class.
-    """
-    return await _run_off_loop_join_on_cancel(
-        _PAUSE_JOURNAL_OFFLOAD_EXECUTOR,
-        PAUSE_JOURNAL_CANCEL_JOIN_GRACE_SECONDS,
-        "pause-journal offload",
-        fn,
-        *args,
-        **kwargs,
-    )
 
 
 async def run_off_loop_detach_on_cancel(

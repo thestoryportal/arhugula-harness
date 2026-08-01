@@ -24,9 +24,6 @@ the read side lives at the ``api.resume`` boundary.
 Authority: runtime spec v1.46 §14.14 (durable variant of the C-RT-24
 PauseResumeProtocol factory output); design
 ``r-cc-1-arc-3-workflow-durable-resume-design-v1.md`` §7b.
-
-``B-103``: the journaling call is dispatched OFF the event loop — see
-:meth:`DurablePauseResumeProtocol.capture_pause_snapshot`.
 """
 
 from __future__ import annotations
@@ -44,8 +41,6 @@ from harness_cp.pause_resume_protocol_types import (
     PeerFanOutResumeState,
     WorkflowPauseReason,
 )
-
-from harness_runtime.lifecycle.audit_offload import run_pause_journal_off_loop
 
 if TYPE_CHECKING:
     from harness_runtime.lifecycle.journal_workflow_pause_store import (
@@ -112,47 +107,6 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
         without forwarding, the durable resume path would silently drop it (and
         the new kwarg would raise `TypeError` at the driver's capture call under
         durable config).
-
-        **The journaling call runs OFF the event loop (`B-103`).** ``capture()``
-        is synchronous and its ``_append`` takes ``cross_process_journal_lock``
-        — a BLOCKING ``fcntl.flock(fd, LOCK_EX)``. Called directly from this
-        ``async def`` it blocked the loop THREAD for as long as a second OS
-        process held that lock: no other coroutine ran, no timer fired, the
-        whole runtime stalled on one workflow's journal. Offloading moves the
-        wait onto a worker; everything else about the write is byte-identical.
-        This changes NEITHER of the two things `B-103` forbids — the lock's
-        GRANULARITY is untouched (same per-workflow lock, same construction,
-        same inode) and the READ path still takes no lock and stays sync.
-
-        **Why not `asyncio.to_thread`.** ``to_thread`` queues onto the loop's
-        DEFAULT executor, which is where the CP driver's sync
-        ``execute_workflow`` already runs while awaiting loop coroutines — the
-        documented exhaustion deadlock at `audit_offload`'s module docstring. A
-        capture reached through that driver could queue behind the very drivers
-        waiting on it and never start.
-
-        **Why its OWN pool, not the shared audit one.** A journal-lock wait does
-        not fit the audit pool's "short-lived, one sign + local writes" profile;
-        four contended captures there would occupy every slot and stall
-        unrelated audit-signing and ref-resolution work. Runtime spec v1.102
-        §14.8.10.1 already ruled that same 4-worker pool INELIGIBLE for `B-48`'s
-        offload on identical reasoning. See `run_pause_journal_off_loop`.
-
-        **Why JOIN-on-cancel and not detach.** ``run_off_loop_detach_on_cancel``
-        exists for effects with NO durability requirement (``shutdown()``'s
-        opportunistic GC sweep — an incomplete one just leaves work for the next
-        sweep). A pause capture is the opposite: this method's whole contract is
-        that the snapshot is durable BEFORE it is returned. Joining preserves the
-        ordering the pre-`B-103` synchronous call had for free. The guarantee is
-        BOUNDED by ``PAUSE_JOURNAL_CANCEL_JOIN_GRACE_SECONDS``; past it the
-        append may land late — a NEW window this arc introduces, registered at
-        `B-105` rather than absorbed. See `run_pause_journal_off_loop` for the
-        full residual statement.
-
-        A saturated offload queue raises ``AuditSigningFailedError`` and is left
-        to PROPAGATE: the pause was not journaled, and a durability failure on
-        this path must be loud. Falling back to a direct synchronous call would
-        silently reinstate the loop stall this method exists to remove.
         """
         snapshot = await super().capture_pause_snapshot(
             workflow_id,
@@ -167,5 +121,5 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
             orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
             hitl_gate_config_hash=hitl_gate_config_hash,
         )
-        await run_pause_journal_off_loop(self._store.capture, snapshot)
+        self._store.capture(snapshot)
         return snapshot

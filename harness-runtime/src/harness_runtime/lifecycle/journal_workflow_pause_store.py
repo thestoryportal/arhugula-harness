@@ -454,17 +454,25 @@ def cross_process_journal_lock(journal_path: Path) -> Generator[None, None, None
     REFUSES BY DEFAULT where this degrades** (spec §14.14.8 *"REFUSE WHERE THE
     PRIMITIVE DEGRADES"*) rather than proceeding on a declaration.
 
-    **This acquisition BLOCKS, and callers on the event loop must not take it
-    directly (``B-103``, CLOSED).** ``flock(LOCK_EX)`` holds the calling THREAD
-    until the holder releases. The one async caller —
-    :meth:`DurablePauseResumeProtocol.capture_pause_snapshot` — therefore
-    dispatches ``capture()`` off-loop via ``run_pause_journal_off_loop`` (its
-    OWN executor, never the shared audit pool) rather than calling it inline;
-    see that method's docstring for the venue + cancellation rationale. Nothing
-    about the lock ITSELF changed at ``B-103``: same
-    granularity, same construction, same inode, same Windows no-op. Any FUTURE
-    async caller owes the same offload — this primitive is loop-hostile by
-    nature, not by defect.
+    **This acquisition BLOCKS the calling thread, but starves no event loop
+    today (``B-103``, CLOSED — PREMISE FALSIFIED).** ``flock(LOCK_EX)`` holds
+    the calling THREAD until the holder releases, and the sole async caller,
+    :meth:`DurablePauseResumeProtocol.capture_pause_snapshot`, does call
+    ``capture()`` inline. That looked like loop starvation and was registered as
+    such — but every production invocation reaches it through
+    ``workflow_driver._run_protocol_method_sync``, which runs the coroutine on a
+    PRIVATE single-task loop via ``asyncio.run`` inside the driver's own
+    ``asyncio.to_thread`` worker (that helper's docstring: *"no current event
+    loop is bound on the worker thread"*). The only thing this blocks is the
+    already-blocked worker thread; no co-resident coroutine or timer exists to
+    starve. An offload was BUILT and DECLINED at the merge gate: it would have
+    blocked a second thread and added a cancellation window for zero recovered
+    concurrency.
+
+    **Reopening trigger.** If a future arc replaces that helper's ``asyncio.run``
+    with a captured-loop bridge — the evolution its own docstring anticipates,
+    conditioned on the protocol body gaining real async I/O — this acquisition
+    becomes genuinely loop-co-resident and ``B-103``'s premise goes live.
     """
     if _IS_WINDOWS:
         yield
