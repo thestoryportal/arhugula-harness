@@ -105,7 +105,7 @@ The close_out's *"up to one full TTL"* pricing is therefore **true of the daemon
 is the finding that removes the close_out **as written** from the viable set: it does not trade
 against §14.8.11's bounded-retention term, it **violates** it.
 
-### (ii) THE PUBLICATION-BOUND LEMMA — an elapsed-time grace closes the wrongful-reclaim class ENTIRELY, for every Δ `[HIGH]`
+### (ii) THE PUBLICATION-BOUND LEMMA — an elapsed-time grace closes the wrongful-reclaim class for every Δ, subject to three named qualifications `[HIGH]`
 
 Let `t_pub` be the moment the entry became durably committed (`os.link` at `:570` + `_fsync_dir` at
 `:571`), `m` its stored mtime, and **Δ = t_pub − m ≥ 0** the mtime under-report. Three sources of Δ
@@ -385,7 +385,7 @@ point the required window is a stated requirement rather than an inferred one.
 
 ---
 
-## §5 The three decisions — and how they COLLAPSE to one
+## §5 The three decisions — how they COLLAPSE to one, and the ONE that does not
 
 ### §5.1 Decision (1) — the bound
 
