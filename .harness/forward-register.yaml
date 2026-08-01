@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 105
+  total: 106
   open: 0
   design_substrate_gated: 0
-  registered_finding: 20
+  registered_finding: 21
   operator_gated: 0
   held: 1
   closed: 84
-  identity_digest: 36332a5aa9cdcc2e
+  identity_digest: f8b43b4c09e0de60
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -3384,3 +3384,32 @@ items:
     dyadic convened. Convene only if shape (a) is taken, since that is where the closed-vocabulary
     and record-shape questions bite; a pure documentation close needs no convening.'
   heading: '### B-104 · The pause journal writes no pause-RESOLVED marker, so the §13.7 enumeration can only bound the at-risk set from ABOVE *(surfaced at the `B-97`(a) spec leg, out-of-family review round 1 [P1], reported not absorbed, 2026-07-31)*'
+- id: B-106
+  title: Embedder-path event-loop exposure for capture_pause_snapshot (outside the shipped driver path)
+  status: registered_finding
+  summary: 'Surfaced by the out-of-family confirming round on the B-103 rework (PR #1172, codex [P2],
+    2026-07-31, delivered AFTER the merge -- recorded here as the follow-up). B-103 was closed
+    PREMISE-FALSIFIED for every SHIPPED call site (all production capture_pause_snapshot calls run
+    under workflow_driver._run_protocol_method_sync -> asyncio.run on a private single-task loop in
+    the driver''s to_thread worker). Codex identified a path OUTSIDE that set: run_bootstrap() is a
+    public export (harness_runtime.__all__), ctx.pause_resume_protocol is a context field, and an
+    EMBEDDING application that directly awaits ctx.pause_resume_protocol.capture_pause_snapshot(...)
+    on its own live loop bypasses the private-loop helper entirely -- codex measured a 300ms loop
+    sleep delayed to ~2s while a second process held the journal lock. The B-103 close_out''s
+    shipped-call-site scoping stays literally true; THIS row carries the decorrelated-reviewer
+    disagreement (lens-1/orchestrator vs codex) instead of silently adjudicating it.'
+  close_out: 'GROUND FIRST: is the embedder path a SUPPORTED surface -- is ctx.pause_resume_protocol
+    part of the public embedding contract (spec section 14.14.x / the bootstrap context''s documented
+    fields), or an internal field an embedder reaches at their own risk? If SUPPORTED: the preserved
+    B-103 offload shape applies (built + gated at PR #1172''s pre-rework commits, 3636762c-era head
+    of b103-off-loop-journal-lock -- dedicated executor, join-on-cancel, measured witnesses) and
+    B-103''s reopening trigger fires for this surface; re-price the cancellation-window cost (the
+    withdrawn B-105 analysis) against a now-REAL benefit. If NOT supported: one sentence in the
+    embedding docs/context docstring stating the capture path is loop-blocking and embedders must
+    offload, and this row closes as documentation. Either way the adjudication is a scope question
+    (what does the harness SUPPORT), not a mechanism question -- the mechanism exists on the shelf.'
+  council: 'no -- the mechanism is settled (built + preserved); the open question is support-surface
+    scope, a grounding question against the spec''s own embedding contract, with advisor() + out-of-
+    family review at the leg. Councilable only if grounding finds the embedding contract itself
+    ambiguous.'
+  heading: '### B-106 · Embedder-path event-loop exposure for `capture_pause_snapshot` *(surfaced by the out-of-family confirming round on the `B-103` rework, PR #1172 codex [P2], delivered post-merge, 2026-07-31)*'
