@@ -6,6 +6,8 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 
 - Read `CONTEXT.md` (workspace root) first — the compact task router; it names the operative posture and that posture's entry points, and points back into `CLAUDE.md` for full governance.
 - Read `.harness/roadmap_status.md`, `justfile`, `.codex/notes/codex-compatibility-outline.md`, and the relevant local `AGENTS.md` before substantive work.
+- Read `.codex/notes/discipline-digest.md` — the runner-agnostic distillation of Claude-side memory disciplines (verification shapes, review-loop hygiene, repo git/CI mechanics). These bind Codex sessions identically.
+- If resuming in-flight work, check `.harness/handoff/README-resume.md` first — repo-committed cross-runner handoff state (in-flight branches, ratifications, fold instructions).
 - Read `.codex/notes/deterministic-context-workflow.md` and run `just codex-preflight` before substantive work. This writes the required local context checkpoint.
 - For axis-specific work, read the closest `harness-{is,as,cp,od}/AGENTS.md` first; consult the matching `CLAUDE.md` only when exact Claude lineage or axis posture is needed.
 - For `C-*`, `U-*`, `H_T-*`, ADR, or CXA seam claims, ground with the semantic overlay instead of free-form recall.
@@ -19,6 +21,13 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - Preserve user work. Do not revert unrelated changes.
 - Re-run `just codex-preflight` after long work, merges, rebases, resumes, or compaction; memory/checkpoints are advisory until re-grounded against HEAD. Use `just codex-checkpoint <label>` for explicit mid-arc context checkpoints.
 - For autonomous coding arcs, initialize the controller/coder/validator/GitHub-shipping evidence loop with `just codex-autonomous-arc <arc-id>`, record gates with `just codex-loop-record ...`, and require `just codex-loop-check` before claiming the loop complete. Gate evidence is branch/HEAD/linked-worktree/worktree-fingerprint-bound; after a pre-commit diff change, re-record the affected gate and downstream pre-commit gates. The full loop is not complete until commit, push, PR, CI, merge, post-merge refresh or explicit non-applicability, local main sync, and worktree disposition are recorded; final disposition must prove the original arc worktree is no longer registered and the local topic branch is pruned.
+
+## Orchestrator + Implementer Pattern
+
+- For multi-leg arcs, mirror the Claude Fable-orchestrator/Opus-implementer shape: ONE interactive orchestrator session (high reasoning) plans, writes leg briefs, gates, merges, refreshes; implementer legs run as non-interactive `codex exec` in isolated worktrees (`.codex-worktrees/<leg-id>`), one brief per leg.
+- Briefs follow `.codex/notes/leg-brief-template.md` — a leg sees ONLY its brief; put the operator decision verbatim, the authority list, deliverables, negative examples, and the report-back shape in it.
+- Cap concurrent implementer runs at 2 on the reference machine (Intel i5/16GB). The orchestrator reads each leg's DIFF, not its self-report, before gating.
+- Model tiering lives in user-level `~/.codex/config.toml` profiles (orchestrator: high reasoning; implementers: medium-high); this repo's `.codex/config.toml` stays project-scoped by Codex policy.
 
 ## Claude-Native Context Mapping
 
@@ -42,4 +51,6 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - Every substantive Codex setup change should land on a branch and open a PR.
 - Strict CI gates are required: lint, typecheck, tests, semantic overlay, substitution ledger, and axis isolation when CI provides them.
 - `just codex-review` is for out-of-family review of concrete diffs; it complements Claude advisor review and does not replace transcript-aware advisor judgment.
+- **Decorrelation flips with authorship**: when Codex is the AUTHOR, `codex review` is self-review — use `just gemini-review` as the out-of-family artifact reviewer, and reserve Claude (when quota permits) for gate-lens review rather than authoring.
+- Substantive code PRs transit the 3-lens merge gate before merge: run each lens prompt at `.codex/notes/merge-gate-lenses/` as a FRESH `codex exec` (never the authoring session); all-approve required; BLOCK → fix → scoped re-gate on the delta; append the row to `.harness/merge-gate-log.md` before merging. Doc-only PRs may take a logged proportional skip.
 - PR bodies must name tracking surfaces updated or explicitly state why roadmap/status/ledger updates were not applicable.
