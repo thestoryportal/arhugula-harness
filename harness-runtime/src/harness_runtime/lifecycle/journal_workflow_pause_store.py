@@ -458,9 +458,10 @@ def cross_process_journal_lock(journal_path: Path) -> Generator[None, None, None
     directly (``B-103``, CLOSED).** ``flock(LOCK_EX)`` holds the calling THREAD
     until the holder releases. The one async caller —
     :meth:`DurablePauseResumeProtocol.capture_pause_snapshot` — therefore
-    dispatches ``capture()`` off-loop via ``run_audit_off_loop`` rather than
-    calling it inline; see that method's docstring for the venue + cancellation
-    rationale. Nothing about the lock ITSELF changed at ``B-103``: same
+    dispatches ``capture()`` off-loop via ``run_pause_journal_off_loop`` (its
+    OWN executor, never the shared audit pool) rather than calling it inline;
+    see that method's docstring for the venue + cancellation rationale. Nothing
+    about the lock ITSELF changed at ``B-103``: same
     granularity, same construction, same inode, same Windows no-op. Any FUTURE
     async caller owes the same offload — this primitive is loop-hostile by
     nature, not by defect.

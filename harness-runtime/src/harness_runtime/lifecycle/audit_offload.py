@@ -7,10 +7,14 @@ executor at `lifecycle/sub_agent_dispatch_executor.py`, U-RT-141). Beyond the
 B-47 audit-write venue, this module hosts `resolve_result_ref_off_loop` — the
 off-loop half of **U-RT-145**'s §14.8.11 protected-result-store resolution
 (B-65-A); see that function's own docstring for the codex round-4 P1 grounding.
-A THIRD tenant calls `run_audit_off_loop` directly: the durable pause-journal
-capture (`B-103`, `lifecycle/durable_pause_resume_protocol.py`), whose blocking
-`fcntl.flock` is exactly this pool's profile — short, local, durable-before-
-observation file I/O that must never run on the loop thread.
+A THIRD tenant lives here but on its OWN pool: the durable pause-journal
+capture (`B-103`, `lifecycle/durable_pause_resume_protocol.py`) runs via
+`run_pause_journal_off_loop` against `_PAUSE_JOURNAL_OFFLOAD_EXECUTOR`. Its
+blocking `fcntl.flock` wait does NOT fit the audit pool's short-job profile,
+and reusing that pool would let contended captures stall audit signing — the
+same reasoning §14.8.10.1 applied when ruling it ineligible for B-48. Both
+pools share one join-on-cancel body (`_run_off_loop_join_on_cancel`); only the
+executor and the grace differ.
 
 Out-of-family Codex round-2 findings on the PR B2a landing:
 
