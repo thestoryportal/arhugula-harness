@@ -2,9 +2,12 @@
 
 The in-family round-3 pass ran to completion after the fold was interrupted; its full report lived only in the orchestrator session, so the actionable content is preserved here for the finisher. **Disposition: cleared with current-phase revision — ZERO Class-3; the C-2 verdict and all TWELVE conditions verified CLEAN** (condition counts, per-pass arithmetic, all round-2 empirical claims re-verified by direct read, anchor-drift note exactly right incl. the +14/+17 split, B-108 row schema-clean and tool-verified, X-AL-3 clean).
 
+**Absorption status: COMPLETE.** All seven findings below are upheld and folded in the council record at
+§11.2d; no finding in this handoff remains open and this file is retained as the pass's durable evidence.
+
 **The shared shape of all three Class-2s — fix as ONE propagation sweep, not three point edits:** each is a correction applied to the output but not propagated to the text that supports it. After fixing, sweep: "does any OTHER text in the record still assert what a fold retired?"
 
-## Class 2 (fix before ready-for-review)
+## Class 2 (absorbed before ready-for-review)
 
 - **F2-01** — §4A.1 (line ~267 + supporting ~260–265) still asserts verbatim the round-2-falsified premise "the report log survives process exit" AND the retired trend argument ("oldest-entry age strictly growing at each reset"), contradicting folded conditions #6/#7(c)/#8(b)/#12. Line ~262's "stops growing past the condition-#7 bound" is doubly stale (C3-1: #7 states no evaluable bound). Fix: mark the superseded step in place (the record's own discipline at §4.2b/§4.3(2)/P8/condition #4), don't silently delete.
 - **F2-02** — condition #8 (line ~418) carries BOTH the retired three-way attribution table sentence ("Crossed with the age... discriminates... ⇒ the repeating sidecar-loss loop") AND its round-3 replacement forbidding exactly that ("CANDIDATE readings the operator discriminates, never an attribution the surface asserts"; "'age over bound' is NOT a predicate the store can evaluate"). Reconcile or mark the earlier sentence superseded — a spec-writer transcribing top-down currently encodes the forbidden form first.
@@ -20,3 +23,15 @@ The in-family round-3 pass ran to completion after the fold was interrupted; its
 ## Verified-clean list (do NOT re-litigate)
 
 Condition set = 12 everywhere; per-pass header arithmetic; nothing load-bearing lost in the round-2 replacement; #5↔#6↔#9↔#12 candidate-class union consistent; #6↔#7(c)↔#8(b)↔#12 durability-consistent (sole inconsistency is F2-01's turn text); all round-2 code claims byte-verified (`:797`–`:802`, `:543`, `:590`, zero handler config in all seven src trees, emissions `:830/:839/:849/:855`); B-108 row + snapshot + `--check` green (108 items / 19 registered_finding); mkstemp name-reuse cannot break the grace (fresh mtime fails past-TTL at `:777`); anchor map v1.109→v1.110 byte-exact. B-108's "30 emission sites" vs a 29 measurement is a regex artifact, not a finding. External-canon mode: un-run, concurred low-yield — keep recorded as such.
+
+## Final absorption-verification pass (finisher)
+
+A second dedicated in-family pass over the absorbed text and the canonical resume handoff found three
+Class-2 propagation defects and did not reopen C-2 or alter the twelve-condition set:
+
+- **V2-01 — UPHELD and FOLDED:** §4A.4 retained the retired claim that #8 substitutes for `I` and falsifies boundedness without cadence knowledge. It now states the narrower current-level/expected-cadence contract.
+- **V2-02 — UPHELD and FOLDED:** conditions #6/#8 and §9 called candidate-reading evidence an authoritative diagnosis. Their live terms now say inspection/evidence and preserve first-cutover indistinguishability.
+- **V2-03 — UPHELD and FOLDED:** canonical `README-resume.md` still advertised three WIPs, no round 3 and ten conditions. It now records ready-for-review, six passes and twelve conditions.
+
+**Final disposition: APPROVE after fold.** Review-row arithmetic is `6 + 12 + 3 + 5 + 7 + 3 = 36`;
+condition rows remain contiguous 1–12; no literal WIP marker remains; `B-108` remains schema-clean.
