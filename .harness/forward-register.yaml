@@ -2891,9 +2891,11 @@ items:
     unserialized across processes (half (b), CLOSED)
   status: closed
   pr: '#1171'
-  summary: 'HALF (b) CLOSED at PR #1167; HALF (a) RATIFIED AND SPEC-APPLIED at this leg, IMPL OWED -- the
-    row moves off registered_finding to open because its design question is answered and what
-    remains is ordinary implementation work. HALF (a) RATIFICATION (operator, 2026-07-31, two gates,
+  summary: 'HALF (b) CLOSED at PR #1167; HALF (a) CLOSED at PR #1171 -- RATIFIED, SPEC-APPLIED **and IMPL
+    LANDED**. U-RT-149''s ONE CONJUNCTIVE closure criterion is satisfied across all 12 ACs, with
+    the section 13.7 enumeration surface shipped as the PRECONDITION of the (3a) disposition
+    rather than an optional companion. NOTHING REMAINS OWED ON THIS ROW; the two dated
+    re-checks it spawned (B-103, B-104) stay open on their own rows. HALF (a) RATIFICATION (operator, 2026-07-31, two gates,
     recorded verbatim at the fork''s section 11): GATE 1 selected READING A -- per-tenant PATH
     SEGREGATION, a contractually injective CONSTANT encoding, the record shape UNCHANGED, the
     five-member PauseJournalReadCause vocabulary STAYS AT FIVE, a MANDATORY quiesced cutover, and

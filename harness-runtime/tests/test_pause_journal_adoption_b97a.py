@@ -1375,3 +1375,143 @@ def test_round4_disposal_fsyncs_the_journal_directory_after_the_unlinks(
         "the directory fsync ran BEFORE the unlinks, which persists nothing that "
         "the removals changed"
     )
+
+
+def test_round4_disposal_removes_the_lock_sibling_with_its_journal(tmp_path: Path) -> None:
+    """The advisory-lock sibling is removed WITH the journal it guards.
+
+    The append path creates `<digest>.jsonl.lock` with `O_CREAT` and never
+    unlinks it, so a disposal that removed only the journal would strand a lock
+    file guarding a file that no longer exists — and the §13.7 enumeration, which
+    deliberately excludes lock files from the canonical name shape, would never
+    surface the residue. Deleting the unlink line failed nothing before this.
+    """
+    journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
+    legacy = _legacy(journal_dir, "wf-legacy")
+    lock = legacy.with_name(legacy.name + PAUSE_JOURNAL_LOCK_SUFFIX)
+    lock.touch()
+
+    assert (
+        disposal_main(
+            [
+                str(journal_dir),
+                "--tenant-id",
+                _TENANT,
+                "--delete",
+                "--acknowledge-discarding-recoverable-state",
+            ]
+        )
+        == 0
+    )
+
+    assert not legacy.exists()
+    assert not lock.exists(), (
+        "the lock sibling outlived its journal — a stranded lock file guarding a "
+        "path that no longer exists"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The SUCCESS paths of the two typer wrappers + the exit-code property that
+# justifies the CURRENT-FORMAT disposition being a SKIP rather than a refusal.
+# ---------------------------------------------------------------------------
+
+
+@requires_posix_flock
+def test_the_typer_wrapper_forwards_arguments_on_the_success_path(tmp_path: Path) -> None:
+    """The wrappers' argument forwarding, asserted on the path that USES the args.
+
+    The only shipped wrapper witness drives a PARSE FAILURE, which exits 3 via
+    the argparse remap — and it exits 3 just the same if the wrapper forwards
+    `[]` instead of `ctx.args`, because an empty argv fails to parse too. So the
+    forwarding itself was unwitnessed: only a success path whose OUTCOME depends
+    on the forwarded values can distinguish the two.
+    """
+    from harness_runtime.cli.app import app
+    from typer.testing import CliRunner
+
+    journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
+    _legacy(journal_dir, "wf-legacy")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "adopt-pause-journals",
+            str(journal_dir),
+            "--tenant-id",
+            _TENANT,
+            "--account-path",
+            str(tmp_path / "account.jsonl"),
+        ],
+    )
+
+    assert result.exit_code == 0, f"expected a successful adoption, got {result.exit_code}"
+    # The OUTCOME depends on BOTH forwarded values: the positional directory and
+    # the `--tenant-id` that decides the target key.
+    assert (journal_dir / pause_journal_filename(_TENANT, "wf-legacy")).is_file(), (
+        "no target was published at the forwarded tenant's key — the wrapper did "
+        "not forward its arguments"
+    )
+    assert (tmp_path / "account.jsonl").is_file()
+
+
+def test_the_disposal_typer_wrapper_forwards_arguments_on_the_success_path(
+    tmp_path: Path,
+) -> None:
+    """The disposal wrapper's forwarding, on its own default (DRY RUN) success path."""
+    from harness_runtime.cli.app import app
+    from typer.testing import CliRunner
+
+    journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
+    legacy = _legacy(journal_dir, "wf-legacy")
+
+    result = CliRunner().invoke(
+        app, ["dispose-pause-journals", str(journal_dir), "--tenant-id", _TENANT]
+    )
+
+    assert result.exit_code == 0, f"expected a successful dry run, got {result.exit_code}"
+    assert f"would remove: {legacy.name}" in result.output
+    assert legacy.is_file(), "the DRY RUN removed something"
+
+
+@requires_posix_flock
+def test_a_current_format_journal_does_not_make_an_idempotent_rerun_exit_nonzero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The EXIT-CODE property that justifies `SKIPPED_NOT_ADOPTABLE` existing.
+
+    §13.7.1 calls a current-format journal *"ordinary state"*, and the run's exit
+    code is derived from the disposition set — so folding that case into a
+    refusal would make **every idempotent re-run on a HEALTHY deployment exit
+    1**, since such a deployment's own journals are exactly what the enumeration
+    finds. That property is the whole argument for the one disposition this arc
+    added beyond the spec's minimum vocabulary, and nothing asserted it: adding
+    `SKIPPED_NOT_ADOPTABLE` to `_REFUSAL_DISPOSITIONS` slipped through green.
+
+    Driven through `main()`, because the exit code — not the disposition — is
+    the property being claimed.
+    """
+    journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
+    # A HEALTHY deployment: this tenant's own CURRENT-FORMAT journal, nothing legacy.
+    JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT).capture(
+        _snapshot("wf-current")
+    )
+
+    exit_code = adoption_module.main(
+        [
+            str(journal_dir),
+            "--tenant-id",
+            _TENANT,
+            "--account-path",
+            str(tmp_path / "account.jsonl"),
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 0, (
+        "an idempotent re-run over a healthy deployment exited nonzero — the "
+        "CURRENT-FORMAT case is being treated as a refusal"
+    )
+    # ... and the journal is still REPORTED, not silently dropped.
+    assert AdoptionDisposition.SKIPPED_NOT_ADOPTABLE.value in out
+    assert AdoptionDisposition.SKIPPED_NOT_ADOPTABLE not in adoption_module._REFUSAL_DISPOSITIONS
