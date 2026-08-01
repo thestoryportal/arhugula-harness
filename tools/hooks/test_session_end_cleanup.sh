@@ -18,15 +18,17 @@ git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "
 git -C "$REPO" commit -q --allow-empty -m base
 CK="$REPO/.harness/.checkpoints"; mkdir -p "$CK"
 
-# 15 timestamped snapshots + the latest pointer.
+# 15 timestamped snapshots + two session-specific latest pointers.
 for i in $(seq -w 1 15); do : > "$CK/precompact-20260101-0000${i}.md"; done
-: > "$CK/precompact-latest.md"
+: > "$CK/precompact-latest-session-a.md"
+: > "$CK/precompact-latest-session-b.md"
 
 printf '%s' '{"hook_event_name":"SessionEnd","end_reason":"clear"}' | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK"
 
 KEPT=$(ls -1 "$CK"/precompact-2*.md 2>/dev/null | wc -l | tr -d ' ')
 [ "$KEPT" = "10" ] && ok "prunes to 10 newest snapshots (kept=$KEPT)" || bad "expected 10 kept, got $KEPT"
-[ -f "$CK/precompact-latest.md" ] && ok "preserves precompact-latest.md" || bad "deleted latest pointer"
+[ -f "$CK/precompact-latest-session-a.md" ] && [ -f "$CK/precompact-latest-session-b.md" ] \
+  && ok "preserves session-specific latest pointers" || bad "deleted a latest pointer"
 # The 5 oldest (00001..00005) should be gone; the 5 newest (00011..00015) kept.
 [ ! -f "$CK/precompact-20260101-000001.md" ] && ok "oldest snapshot pruned" || bad "oldest snapshot survived"
 [ -f "$CK/precompact-20260101-000015.md" ] && ok "newest snapshot kept" || bad "newest snapshot pruned"

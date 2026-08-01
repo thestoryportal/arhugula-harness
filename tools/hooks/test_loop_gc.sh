@@ -136,6 +136,17 @@ loop_gc_worktrees reap
 export HOME="$OLDHOME"
 wt_present wt-merged && bad "stale transcript wrongly blocked the reap" || ok "stale-transcript worktree still reaped (window-bounded)"
 
+# Codex transcript venue: session_meta.cwd in ~/.codex/sessions must protect the same
+# worktree, not only Claude's encoded project transcript directory.
+build_fixture
+mkdir -p "$FH/.codex/sessions/2026/08/01"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$BASE/wt-merged\"}}" \
+  > "$FH/.codex/sessions/2026/08/01/rollout-live.jsonl"
+export HOME="$FH"
+loop_gc_worktrees reap
+export HOME="$OLDHOME"
+wt_present wt-merged && ok "Codex live-session worktree kept" || bad "reaped a worktree with a live Codex session"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

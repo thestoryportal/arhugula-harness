@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,24 @@ def test_stop_gate_emits_valid_stop_hook_json() -> None:
     assert payload["continue"] is True
     assert "Codex stop posture:" in payload["systemMessage"]
     assert "Codex context guard" in payload["systemMessage"]
+
+
+def test_stop_gate_is_inert_for_isolated_merge_gate_review() -> None:
+    env = os.environ.copy()
+    env["HARNESS_CODEX_REVIEW_ISOLATED"] = "1"
+
+    proc = subprocess.run(
+        [sys.executable, ".codex/hooks/stop_gate.py"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ""
 
 
 def test_stop_gate_reports_incomplete_loop_without_failing_hook(tmp_path: Path) -> None:

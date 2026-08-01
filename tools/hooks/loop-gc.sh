@@ -15,15 +15,16 @@
 #                candidates + their `git branch -d` refs + a MEMORY.md over-cap flag.
 #                Never deletes (destructive ops stay explicit off-loop).
 #
-# Runs as deterministic hook bash → bypasses permission-guard (which denies
-# `git worktree remove` for a Claude TOOL call). The safe-subset gate inside
-# loop_gc_worktrees is the backstop. Always exit 0. Test: tools/hooks/test_loop_gc.sh.
+# Runs as deterministic hook bash → bypasses permission-guard (which routes direct
+# tool-issued removal through the mutex-backed wrapper). The safe-subset gate and
+# SessionStart/removal mutex inside loop_gc_worktrees are the backstops. Always exit 0.
 
 set -uo pipefail
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -f "$_DIR/lib.sh" ] || exit 0
 # shellcheck source=lib.sh
 . "$_DIR/lib.sh"
+hook_review_isolated && exit 0
 [ -f "$_DIR/loop_lib.sh" ] || exit 0
 # shellcheck source=loop_lib.sh
 . "$_DIR/loop_lib.sh"

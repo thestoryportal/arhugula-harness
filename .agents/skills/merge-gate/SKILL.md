@@ -28,7 +28,7 @@ Read `.codex/notes/merge-gate-lenses/README.md` and all three lens prompts compl
 - `lens2-spec-conformance.md`
 - `lens3-test-witness.md`
 
-Launch one fresh, ephemeral, read-only `codex exec` per lens, preferably in parallel. Each
+Launch one fresh, ephemeral, lifecycle-isolated, read-only `codex exec` per lens, preferably in parallel. Each
 gets only its lens prompt plus this self-contained tail:
 
 ```text
@@ -45,7 +45,7 @@ one single-quoted literal with no embedded single quote; newlines and shell-look
 text inside that literal remain data:
 
 ```text
-codex exec --ephemeral --sandbox read-only -C <arc-worktree> \
+env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C <arc-worktree> \
   --output-last-message /tmp/arhugula-pr-<N>-lens<1|2|3>-<40-char-head>.md \
   -- '<short instruction to read the named lens file, plus the self-contained tail above>'
 ```

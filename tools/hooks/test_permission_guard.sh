@@ -225,7 +225,11 @@ for c in "git merge --abort" "git merge --strategy=ours main" "git merge --no-ed
   [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
 done
 OUT=$(run_on "$(pl Bash 'git worktree remove /tmp/merged-clean' '')")
-[ "$(dec "$OUT")" = "allow" ] && ok "git worktree remove → allow non-force cleanup" || bad "non-force worktree cleanup not allowed: $OUT"
+[ "$(dec "$OUT")" = "deny" ] && ok "direct git worktree remove → deny (must use mutex wrapper)" || bad "direct worktree removal not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'tools/hooks/safe-worktree-remove.sh /tmp/merged-clean' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "mutex-backed worktree remove wrapper → allow" || bad "safe worktree wrapper not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'tools/hooks/safe-worktree-remove.sh "/tmp/merged-clean"' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "quoted mutex-backed worktree path → allow" || bad "quoted safe worktree path not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'git worktree add /tmp/new-arc feature' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "git worktree add → allow non-force arc creation" || bad "non-force worktree creation not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'git worktree add -b feature /tmp/new-arc' '')")
@@ -262,17 +266,27 @@ for c in \
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" = "allow" ] && ok "'$c' → allow controller lifecycle" || bad "'$c' not allowed: $OUT"
 done
-SAFE_CODEX_CMD="codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
+SAFE_CODEX_CMD="env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
 OUT=$(run_on "$(pl Bash "$SAFE_CODEX_CMD" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens" || bad "read-only codex exec not allowed: $OUT"
-OUT=$(run_on "$(pl Bash "codex exec -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens2-0123456789abcdef0123456789abcdef01234567.md --ephemeral --sandbox read-only -- 'read lens2 prompt'" '')")
+OUT=$(run_on "$(pl Bash "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens2-0123456789abcdef0123456789abcdef01234567.md --ephemeral --sandbox read-only -- 'read lens2 prompt'" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens with -C first" || bad "-C-first read-only codex exec not allowed: $OUT"
 for c in \
-  "codex exec --sandbox workspace-write -C /repo mutate" \
-  "codex exec --ephemeral --sandbox danger-full-access -C /repo mutate" \
-  "codex exec --ephemeral --sandbox read-only -C $REPO inspect --sandbox danger-full-access" \
-  "codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /etc/review.md -- 'inspect'" \
-  "codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens3-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'; touch /tmp/escaped" \
+  "codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env OTHER=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox workspace-write -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox danger-full-access -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C /repo --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /etc/review.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens3-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'; touch /tmp/escaped" \
   "just codex-autonomous-arc R-1; git push --force"; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
@@ -362,15 +376,16 @@ OUT=$(runh "$(pl Bash "git worktree remove --force $WTL" '')" HARNESS_LOOP=1)  #
 [ "$(dec "$OUT")" = "deny" ] && ok "live-session worktree remove --force → deny (loop ON)" || bad "live --force not denied: $OUT"
 OUT=$(runh "$(pl Bash "git worktree remove $WTL" '')" HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1)
 [ "$(dec "$OUT")" != "deny" ] && ok "override env → not denied" || bad "override still denied: $OUT"
-# stale transcript (older than window) → not a live session → not denied (inert off-mode → no output)
+# stale/no transcript still requires the mutex-backed wrapper because a session can start
+# between a negative check and the eventual tool execution.
 WTS="$REPO/wt-stale"; mkdir -p "$WTS"; SDS="$FH/.claude/projects/$(encof "$WTS")"; mkdir -p "$SDS"
 : > "$SDS/old.jsonl"; touch -t 202001010000 "$SDS/old.jsonl"
 OUT=$(runh "$(pl Bash "git worktree remove $WTS" '')")
-[ -z "$OUT" ] && ok "stale-transcript worktree remove → not denied" || bad "stale worktree decided: $OUT"
+[ "$(dec "$OUT")" = "deny" ] && ok "stale-transcript direct removal → denied for race safety" || bad "stale direct removal not denied: $OUT"
 # no transcript dir at all → not denied
 WTN="$REPO/wt-none"; mkdir -p "$WTN"
 OUT=$(runh "$(pl Bash "git worktree remove $WTN" '')")
-[ -z "$OUT" ] && ok "no-transcript worktree remove → not denied" || bad "no-transcript decided: $OUT"
+[ "$(dec "$OUT")" = "deny" ] && ok "no-transcript direct removal → denied for race safety" || bad "no-transcript direct removal not denied: $OUT"
 
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"

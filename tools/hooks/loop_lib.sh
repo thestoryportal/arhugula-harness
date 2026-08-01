@@ -300,21 +300,19 @@ _loop_gc_consider() {
     [ "$mode" = "reap" ] && loop_log GC "skipped $path ($branch) — has local state: $(printf '%s' "$residue" | tr '\n' ',' | sed 's/^,//;s/,$//' | cut -c1-160)"
     return 0
   fi
-  # A merged+clean worktree can still have a LIVE session attached — reaping it would
-  # orphan that session (Edit/Write pinned to the deleted root). Never reap a live one.
-  if worktree_has_live_session "$cpath"; then
-    [ "$mode" = "reap" ] && loop_log GC "skipped $path ($branch) — live Claude session (recent transcript)"
-    return 0
-  fi
   if [ "$mode" = "report" ]; then
+    worktree_has_live_session "$cpath" && return 0
     printf '%s (%s)\n' "$path" "$branch"
     return 0
   fi
-  if git -C "$root" worktree remove "$path" 2>/dev/null; then
-    loop_log GC "reaped worktree $path (branch $branch merged+clean; branch ref left for operator)"
-  else
-    loop_log GC "skipped $path ($branch) — git worktree remove refused (locked/untracked)"
-  fi
+  hook_safe_worktree_remove "$root" "$path" 2>/dev/null
+  local remove_rc=$?
+  case "$remove_rc" in
+    0) loop_log GC "reaped worktree $path (branch $branch merged+clean; branch ref left for operator)" ;;
+    3) loop_log GC "skipped $path ($branch) — live Claude/Codex session" ;;
+    2) loop_log GC "skipped $path ($branch) — session/removal mutex unavailable" ;;
+    *) loop_log GC "skipped $path ($branch) — git worktree remove refused (locked/untracked)" ;;
+  esac
 }
 
 # Garbage-collect stale worktrees. WORKTREES ONLY; fail-safe to zero removals when the

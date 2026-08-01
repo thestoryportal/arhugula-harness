@@ -16,6 +16,7 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 [ -f "$_LIB" ] || exit 0
 # shellcheck source=lib.sh
 . "$_LIB"
+hook_review_isolated && exit 0
 
 PROJECT_DIR=$(hook_project_dir)
 [ -z "$PROJECT_DIR" ] && exit 0
@@ -25,7 +26,7 @@ CKDIR=".harness/.checkpoints"
 mkdir -p "$CKDIR" 2>/dev/null || true
 
 # 1) Prune timestamped precompact snapshots, keep the 10 newest (lexical = chrono).
-#    precompact-latest.md does not match precompact-2* so it is always preserved.
+#    session-specific precompact-latest-*.md pointers do not match precompact-2*.
 ls -1 "$CKDIR"/precompact-2*.md 2>/dev/null | sort -r | tail -n +11 | while IFS= read -r f; do
   rm -f "$f" 2>/dev/null || true
 done

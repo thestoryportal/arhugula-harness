@@ -28,6 +28,7 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 . "$_LIB"
 # shellcheck source=loop_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/loop_lib.sh"
+hook_review_isolated && exit 0
 
 # Read the payload UP FRONT (before the loop-mode inert gate) so the §0 worktree-live-
 # session guard below can fire in BOTH interactive and loop mode. stdin is consumed once.
@@ -43,7 +44,7 @@ GPATH=$(hook_json "$PAYLOAD" '.tool_input.path')   # Grep/Glob search root
 NPATH=$(hook_json "$PAYLOAD" '.tool_input.notebook_path')  # Notebook tools
 [ -z "$FPATH" ] && FPATH="$NPATH"   # notebook tools carry the path here, not file_path
 
-# ─── 0) ALWAYS-ON: never remove a worktree that has a LIVE Claude session ───────
+# ─── 0) ALWAYS-ON: direct removal cannot close the check/remove race ───────────
 # Hoisted ABOVE the loop-mode inert gate — the ONLY auto-decision this guard makes in an
 # interactive session, and it is a DENY (never an approve), so the "no interactive auto-
 # APPROVAL" contract holds. Removing a worktree out from under a live session orphans it:
@@ -56,12 +57,15 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] && [ "${HARNESS_ALLOW_LIVE_WORKTREE_REM
    && printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+worktree[[:space:]]+remove'; then
   # Last non-flag token after `worktree remove` = the target path.
   _WT=$(printf '%s' "$CMD" | sed -E 's/.*worktree[[:space:]]+remove//' | tr ' \t' '\n' | grep -vE '^(-.*)?$' | tail -n1)
-  if [ -n "$_WT" ] && worktree_has_live_session "$_WT"; then
-    loop_log DENY "Bash: live-session worktree removal blocked :: $CMD"
+  if [ -n "$_WT" ]; then
+    _REMOVE_REASON="direct git worktree removal is race-prone; use tools/hooks/safe-worktree-remove.sh so SessionStart lease registration and removal share one mutex"
+    worktree_has_live_session "$_WT" \
+      && _REMOVE_REASON="target worktree has a live Claude/Codex session"
+    loop_log DENY "Bash: worktree removal blocked :: $CMD"
     if [ "$EVENT" = "PermissionRequest" ]; then
       jq -nc '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}'
     else
-      jq -nc '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[permission-guard] HARD-STOP: target worktree has a live Claude session — removing it would orphan that session. Close the session first, or override with HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1."}}'
+      jq -nc --arg r "$_REMOVE_REASON" '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":("[permission-guard] HARD-STOP: "+$r+". Override only with HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1.")}}'
     fi
     exit 0
   fi
@@ -151,7 +155,7 @@ _safe_worktree_command() {
   printf '%s' "$cmd" | grep -Eq '(~|\.\.|\$\{?[A-Za-z_])' && return 1
   sub=$(printf '%s' "$cmd" | sed -E 's/^[[:space:]]*git[[:space:]]+worktree[[:space:]]+([^[:space:]]+).*/\1/')
   [ "$sub" = "list" ] && return 0
-  case "$sub" in add|remove) ;; *) return 1 ;; esac
+  case "$sub" in add) ;; *) return 1 ;; esac
 
   rest=$(printf '%s' "$cmd" | sed -E "s/^[[:space:]]*git[[:space:]]+worktree[[:space:]]+$sub[[:space:]]*//")
   set -f
@@ -176,7 +180,32 @@ _safe_worktree_command() {
   esac
 }
 
-# A merge-gate lens may spawn a fresh Codex process only in ephemeral read-only mode.
+_safe_worktree_remove_wrapper() {
+  local cmd="$1" target common repo_root
+  printf '%s' "$cmd" | grep -q '[;&|<>`\\()]' && return 1
+  [[ "$cmd" == *$'\n'* ]] && return 1
+  printf '%s' "$cmd" | grep -Eq '(~|\.\.|\$\{?[A-Za-z_])' && return 1
+  set -f; set -- $cmd; set +f
+  if [ "${1:-}" = "bash" ]; then shift; fi
+  [ "$#" -eq 2 ] && [ "$1" = "tools/hooks/safe-worktree-remove.sh" ] || return 1
+  target="$2"
+  case "$target" in
+    \"*\") target=${target#\"}; target=${target%\"} ;;
+    \'*\') target=${target#\'}; target=${target%\'} ;;
+  esac
+  printf '%s' "$target" | grep -qE "['\"]" && return 1
+  case "$target" in /tmp/*|/private/tmp/*) return 0 ;; /*) ;; *) return 1 ;; esac
+  common=$(git -C "$PROJECT_DIR" rev-parse --git-common-dir 2>/dev/null) || return 1
+  case "$common" in /*) ;; *) common="$PROJECT_DIR/$common" ;; esac
+  repo_root=$(cd "$(dirname "$common")" 2>/dev/null && pwd -P) || return 1
+  case "$target" in
+    "$repo_root"/.codex-worktrees/*|"$repo_root"/.claude/worktrees/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# A merge-gate lens may spawn a fresh Codex process only in lifecycle-isolated,
+# ephemeral read-only mode.
 # Require `--` before the prompt so option validation never scans prompt or reviewed text.
 # The only out-of-worktree path is the exact /tmp report shape required by merge-gate.
 _safe_codex_exec_command() {
@@ -193,8 +222,11 @@ _safe_codex_exec_command() {
   set -f
   set -- $options
   set +f
-  [ "${1:-}" = "codex" ] && [ "${2:-}" = "exec" ] || return 1
-  shift 2
+  [ "${1:-}" = "env" ] \
+    && [ "${2:-}" = "HARNESS_CODEX_REVIEW_ISOLATED=1" ] \
+    && [ "${3:-}" = "codex" ] \
+    && [ "${4:-}" = "exec" ] || return 1
+  shift 4
   while [ "$#" -gt 0 ]; do
     tok="$1"; shift
     case "$tok" in
@@ -250,6 +282,9 @@ emit_deny() { # $1 = reason
 # the generic raw control-operator scan, which intentionally cannot distinguish quoted
 # prompt text from active shell syntax.
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] && _safe_codex_exec_command "$CMD"; then
+  emit_allow
+fi
+if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] && _safe_worktree_remove_wrapper "$CMD"; then
   emit_allow
 fi
 
@@ -378,13 +413,12 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # A topic branch may absorb the verified local/fetched default branch without a
       # prompt. Keep this exact: no arbitrary ref, strategy, abort, squash, or extra flag.
       emit_allow
-    elif printf '%s' "$TRIM" | grep -Eq '^git[[:space:]]+worktree[[:space:]]+(add|list|remove)([[:space:]]|$)' \
+    elif printf '%s' "$TRIM" | grep -Eq '^git[[:space:]]+worktree[[:space:]]+(add|list)([[:space:]]|$)' \
        && _safe_worktree_command "$CMD"; then
       # Worktrees are normally siblings of the current linked worktree, so their absolute
       # paths intentionally fail _bash_args_safe's current-worktree containment test.
-      # Git scopes these operations to this repository; this path helper limits destinations,
-      # non-force remove refuses dirty worktrees, §0 protects live sessions, and the deny-list
-      # blocks --force.
+      # Git scopes these operations to this repository; this path helper limits destinations.
+      # Removal uses the separately allowlisted mutex-backed wrapper.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|check|context-check|credential-gate|review|review-uncommitted)|gemini-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment|merge)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then

@@ -25,7 +25,14 @@ def _fake_commands(tmp_path: Path, *, agy_output: str, agy_exit: int = 0) -> tup
         "  printf '%s\\n' \"$AGY_REVIEW_ROOT/.git\"\n"
         "  exit 0\n"
         "fi\n"
-        "if [ \"$1\" = 'ls-files' ]; then exit 0; fi\n"
+        "if [ \"$1\" = 'ls-files' ]; then\n"
+        '  [ -n "${AGY_UNTRACKED_PATH:-}" ] && printf \'%s\\0\' "$AGY_UNTRACKED_PATH"\n'
+        "  exit 0\n"
+        "fi\n"
+        "if [ \"$1 $2\" = 'diff --no-index' ]; then\n"
+        "  printf '%s\\n' 'diff --git a/dev/null b/new.py' '+untracked witness'\n"
+        "  exit 1\n"
+        "fi\n"
         "printf '%s\\n' 'diff --git a/a.py b/a.py' '+new line'\n",
         encoding="utf-8",
     )
@@ -55,7 +62,13 @@ def _fake_commands(tmp_path: Path, *, agy_output: str, agy_exit: int = 0) -> tup
     return bin_dir, capture
 
 
-def _run(tmp_path: Path, *, agy_output: str, agy_exit: int = 0) -> subprocess.CompletedProcess[str]:
+def _run(
+    tmp_path: Path,
+    *,
+    agy_output: str,
+    agy_exit: int = 0,
+    untracked_path: str = "",
+) -> subprocess.CompletedProcess[str]:
     bin_dir, capture = _fake_commands(tmp_path, agy_output=agy_output, agy_exit=agy_exit)
     env = os.environ.copy()
     env.update(
@@ -65,6 +78,7 @@ def _run(tmp_path: Path, *, agy_output: str, agy_exit: int = 0) -> subprocess.Co
             "AGY_ARGS_CAPTURE": str(tmp_path / "agy-args.txt"),
             "AGY_CWD_CAPTURE": str(tmp_path / "agy-cwd.txt"),
             "AGY_REVIEW_ROOT": str(tmp_path / "main-root"),
+            "AGY_UNTRACKED_PATH": untracked_path,
             "GEMINI_API_KEY": "must-not-leak",
             "GOOGLE_API_KEY": "must-not-leak",
             "GOOGLE_GENAI_USE_VERTEXAI": "must-not-leak",
@@ -95,6 +109,7 @@ def test_review_passes_actual_diff_and_accepts_exact_verdict(tmp_path: Path) -> 
     args = (tmp_path / "agy-args.txt").read_text(encoding="utf-8").splitlines()
     assert "--sandbox" in args
     assert "--dangerously-skip-permissions" in args
+    assert args[args.index("--model") + 1] == "gemini-3.6-flash-high"
     assert f"authoritative workspace root is {tmp_path}" in prompt
     assert (tmp_path / "agy-cwd.txt").read_text(encoding="utf-8").strip() == str(tmp_path)
     assert proc.stdout.rstrip().endswith("VERDICT: APPROVE")
@@ -123,3 +138,28 @@ def test_review_preserves_findings_on_nonzero_agy_exit(tmp_path: Path) -> None:
     assert proc.returncode == 7
     assert proc.stdout.rstrip().endswith("VERDICT: BLOCK")
     assert "agy-review: reviewer failed: exit 7" in proc.stderr
+
+
+def test_review_rejects_exact_block_verdict(tmp_path: Path) -> None:
+    proc = _run(
+        tmp_path,
+        agy_output="F1 [P1] concrete defect\nVERDICT: BLOCK",
+        agy_exit=0,
+    )
+
+    assert proc.returncode != 0
+    assert proc.stdout.rstrip().endswith("VERDICT: BLOCK")
+    assert "blocking findings require resolution" in proc.stderr
+
+
+def test_review_includes_untracked_file_patch(tmp_path: Path) -> None:
+    proc = _run(
+        tmp_path,
+        agy_output="F1 none\nVERDICT: APPROVE",
+        untracked_path="new.py",
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    prompt = (tmp_path / "agy-prompt.txt").read_text(encoding="utf-8")
+    assert "diff --git a/dev/null b/new.py" in prompt
+    assert "+untracked witness" in prompt

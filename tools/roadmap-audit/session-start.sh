@@ -17,6 +17,7 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/../hooks/lib.sh"
 [ -f "$_LIB" ] || exit 0
 # shellcheck source=../hooks/lib.sh
 . "$_LIB"
+hook_review_isolated && exit 0
 # Loop ledger lib (optional) — used only to surface pending DEFERRED-HIL at engagement.
 _LOOPLIB="$(dirname "${BASH_SOURCE[0]}")/../hooks/loop_lib.sh"
 # shellcheck source=../hooks/loop_lib.sh

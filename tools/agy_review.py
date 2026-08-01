@@ -104,6 +104,8 @@ def run_review(repo: Path, base: str) -> int:
                 "--dangerously-skip-permissions",
                 "--mode",
                 "plan",
+                "--model",
+                "gemini-3.6-flash-high",
                 "--log-file",
                 LOG_PATH,
                 "--print-timeout",

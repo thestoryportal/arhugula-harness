@@ -119,11 +119,49 @@ mkdir -p "$REPO/.harness"; : > "$REPO/.harness/.loop-active"
 ( cd "$REPO"; unset HARNESS_LOOP; CLAUDE_PROJECT_DIR="$REPO" loop_mode_active ) \
   && ok "loop_mode_active on via marker file" || bad "loop_mode_active marker ignored"
 
-# hook_write_checkpoint (U-HK-27 shared snapshot writer): writes precompact-latest.md with
-# the label; skip_gh omits the open-PRs gh lookup (fast path — no network in this test).
-CLAUDE_PROJECT_DIR="$REPO" hook_write_checkpoint "Test snapshot" skip_gh
-LATEST="$REPO/.harness/.checkpoints/precompact-latest.md"
-[ -f "$LATEST" ] && ok "hook_write_checkpoint wrote precompact-latest.md" || bad "no checkpoint file"
+# Merge-gate review isolation is an exact, opt-in environment contract.
+( HARNESS_CODEX_REVIEW_ISOLATED=1 hook_review_isolated ) \
+  && ok "review isolation marker recognized" || bad "review isolation marker ignored"
+( HARNESS_CODEX_REVIEW_ISOLATED=0 hook_review_isolated ) \
+  && bad "non-exact review isolation marker accepted" || ok "review isolation requires exact marker"
+
+# Codex stores transcripts in date-partitioned ~/.codex/sessions trees and records cwd
+# in session_meta. A recent transcript for this exact worktree must block removal.
+FAKE_HOME="$REPO/fake-home"
+CODEX_SESSION_DIR="$FAKE_HOME/.codex/sessions/2026/08/01"
+mkdir -p "$CODEX_SESSION_DIR"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$REPO\"}}" \
+  > "$CODEX_SESSION_DIR/rollout-live.jsonl"
+( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
+  && ok "recent Codex transcript marks worktree live" || bad "Codex transcript liveness missed"
+touch -t 202001010000 "$CODEX_SESSION_DIR/rollout-live.jsonl"
+( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
+  && bad "stale Codex transcript marked live" || ok "stale Codex transcript does not block"
+
+# SessionStart leases share the worktree-removal lock and SessionEnd releases them.
+HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$REPO" hook_register_session_lease "$REPO" "session-a"
+( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
+  && ok "active Codex session lease marks worktree live" || bad "Codex session lease missed"
+HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$REPO" hook_release_session_lease "$REPO" "session-a"
+( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
+  && bad "released Codex session lease stayed live" || ok "SessionEnd releases Codex lease"
+
+# If an external actor already removed a linked worktree, SessionEnd can no longer run
+# git -C there. Its session pointer must still locate and remove the lease in the shared
+# common directory.
+LINKED="$REPO-linked"
+git -C "$REPO" worktree add -q -b lease-linked "$LINKED"
+HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$LINKED" hook_register_session_lease "$LINKED" "session-deleted"
+git -C "$REPO" worktree remove "$LINKED"
+HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$LINKED" hook_release_session_lease "$LINKED" "session-deleted"
+LEASE_RESIDUE=$(find "$REPO/.git/codex-worktree-sessions" -name 'session-session-deleted.lease' 2>/dev/null | head -n1)
+[ -z "$LEASE_RESIDUE" ] && ok "SessionEnd releases lease after worktree deletion" || bad "deleted-worktree lease leaked: $LEASE_RESIDUE"
+
+# hook_write_checkpoint (U-HK-27 writer): writes an atomic session-specific latest pointer
+# with the label; skip_gh omits the open-PRs gh lookup (fast path — no network in this test).
+CLAUDE_PROJECT_DIR="$REPO" hook_write_checkpoint "Test snapshot" skip_gh session-a
+LATEST="$REPO/.harness/.checkpoints/precompact-latest-session-a.md"
+[ -f "$LATEST" ] && ok "hook_write_checkpoint wrote session-specific latest" || bad "no checkpoint file"
 grep -q "Test snapshot" "$LATEST" 2>/dev/null && ok "checkpoint carries the label" || bad "label missing"
 grep -q "skipped — fast path" "$LATEST" 2>/dev/null && ok "skip_gh omits gh PR lookup" || bad "skip_gh not honored"
 

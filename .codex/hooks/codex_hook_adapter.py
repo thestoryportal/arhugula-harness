@@ -14,7 +14,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_UV_CACHE_DIR = "/tmp/arhugula-uv-cache"
 PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Add|Update) File:\s+(.+?)\s*$", re.MULTILINE)
-COMMIT_RE = re.compile(r"^\s*(?:/usr/bin/)?git\s+commit(?:\s|$)")
+COMMIT_RE = re.compile(r"^\s*(?:(?:/usr/local/bin/)?rtk\s+)?(?:/usr/bin/)?git\s+commit(?:\s|$)")
 
 
 def read_payload() -> dict[str, Any]:
@@ -120,9 +120,10 @@ def edited_files(payload: dict[str, Any]) -> list[str]:
     if isinstance(path, str) and path:
         return [path]
     if payload.get("tool_name") == "apply_patch":
-        patch = tool_input.get("patch", tool_input.get("patch_content"))
-        if isinstance(patch, str):
-            return list(dict.fromkeys(PATCH_FILE_RE.findall(patch)))
+        for key in ("command", "patch", "patch_content"):
+            patch = tool_input.get(key)
+            if isinstance(patch, str):
+                return list(dict.fromkeys(PATCH_FILE_RE.findall(patch)))
     return []
 
 
@@ -177,6 +178,8 @@ def pre_commit(payload: dict[str, Any]) -> int:
     cwd = project_dir(payload)
     env = os.environ.copy()
     env.setdefault("UV_CACHE_DIR", DEFAULT_UV_CACHE_DIR)
+    # Preserve the canonical Claude hook's two independent gates: static typing and an
+    # explicit proof that the command runs inside the intended Git worktree.
     for argv in (["uv", "run", "pyright"], ["git", "rev-parse", "--show-toplevel"]):
         proc = subprocess.run(
             argv,
@@ -198,6 +201,8 @@ def main() -> int:
     if len(sys.argv) != 2 or sys.argv[1] not in {"post-tool-use", "pre-commit"}:
         print("usage: codex_hook_adapter.py post-tool-use|pre-commit", file=sys.stderr)
         return 2
+    if os.environ.get("HARNESS_CODEX_REVIEW_ISOLATED") == "1":
+        return 0
     payload = read_payload()
     return post_tool_use(payload) if sys.argv[1] == "post-tool-use" else pre_commit(payload)
 

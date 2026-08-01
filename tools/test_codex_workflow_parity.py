@@ -33,7 +33,11 @@ def _commands(event: str) -> list[str]:
     [
         (
             "SessionStart",
-            ["session_start.py", "roadmap-audit/session-start.sh", "loop-gc.sh"],
+            [
+                "codex-session-start.sh",
+                "roadmap-audit/session-start.sh",
+                "loop-gc.sh",
+            ],
         ),
         (
             "PreToolUse",
@@ -50,7 +54,7 @@ def _commands(event: str) -> list[str]:
         ),
         ("PreCompact", ["precompact-checkpoint.sh"]),
         ("PostCompact", ["postcompact-reinject.sh"]),
-        ("SessionEnd", ["session-end-cleanup.sh"]),
+        ("SessionEnd", ["session-lease.sh end", "session-end-cleanup.sh"]),
         (
             "Stop",
             ["stop_gate.py", "stop-gate.sh", "git-arc-guard.sh", "stop-loop.sh"],
@@ -189,7 +193,7 @@ def test_post_tool_adapter_lints_python_files_from_apply_patch(tmp_path: Path) -
     payload = {
         "hook_event_name": "PostToolUse",
         "tool_name": "apply_patch",
-        "tool_input": {"patch": "*** Update File: sample.py\n@@\n"},
+        "tool_input": {"command": "*** Update File: sample.py\n@@\n"},
         "tool_response": {"status": "completed"},
     }
 
@@ -206,7 +210,41 @@ def test_post_tool_adapter_lints_python_files_from_apply_patch(tmp_path: Path) -
     assert "ruff findings on sample.py" in context["additionalContext"]
 
 
-def test_pre_commit_adapter_blocks_when_pyright_fails(tmp_path: Path) -> None:
+def test_post_tool_adapter_lints_python_files_from_direct_path(tmp_path: Path) -> None:
+    target = tmp_path / "direct.py"
+    target.write_text("print('x')\n", encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ruff = bin_dir / "ruff"
+    ruff.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = check ]; then echo 'direct.py:1:1: E999 broken'; exit 1; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    ruff.chmod(0o755)
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "direct.py"},
+        "tool_response": {"status": "completed"},
+    }
+
+    proc = _run_adapter(
+        "post-tool-use",
+        payload,
+        cwd=tmp_path,
+        path=f"{bin_dir}:{os.environ['PATH']}",
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    context = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert context["hookEventName"] == "PostToolUse"
+    assert "ruff findings on direct.py" in context["additionalContext"]
+
+
+@pytest.mark.parametrize("command", ["git commit -m test", "rtk git commit -m test"])
+def test_pre_commit_adapter_blocks_when_pyright_fails(tmp_path: Path, command: str) -> None:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -216,7 +254,7 @@ def test_pre_commit_adapter_blocks_when_pyright_fails(tmp_path: Path) -> None:
     payload = {
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
-        "tool_input": {"command": "git commit -m test"},
+        "tool_input": {"command": command},
         "cwd": str(tmp_path),
     }
 
@@ -262,6 +300,63 @@ def test_pre_commit_adapter_uses_repo_safe_uv_cache(
     assert (tmp_path / "uv-cache-observed").read_text(encoding="utf-8") == (
         "/tmp/arhugula-uv-cache"
     )
+
+
+def test_isolated_review_session_start_skips_shared_context_checkpoint() -> None:
+    env = os.environ.copy()
+    env["HARNESS_CODEX_REVIEW_ISOLATED"] = "1"
+
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / ".codex" / "hooks" / "session_start.py")],
+        cwd=ROOT,
+        input=json.dumps({"session_id": "review-session", "cwd": str(ROOT)}),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "isolated merge-gate review" in proc.stdout
+    assert "Codex context guard" not in proc.stdout
+
+
+def test_session_start_wrapper_registers_lease_before_posture(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    payload = {"session_id": "wrapper-session", "cwd": str(tmp_path)}
+    env = os.environ.copy()
+    env["HARNESS_CODEX_REVIEW_ISOLATED"] = "1"
+    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
+
+    start = subprocess.run(
+        ["bash", str(ROOT / "tools" / "hooks" / "codex-session-start.sh")],
+        cwd=tmp_path,
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert start.returncode == 0, start.stderr
+    assert "isolated merge-gate review" in start.stdout
+    leases = list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
+    assert [path.name for path in leases] == ["session-wrapper-session.lease"]
+
+    end = subprocess.run(
+        ["bash", str(ROOT / "tools" / "hooks" / "session-lease.sh"), "end"],
+        cwd=tmp_path,
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+    assert end.returncode == 0, end.stderr
+    assert not list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
 
 
 def test_every_tracked_claude_skill_has_a_codex_entrypoint() -> None:

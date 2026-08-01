@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+if os.environ.get("HARNESS_CODEX_REVIEW_ISOLATED") == "1":
+    raise SystemExit(0)
 
 
 def run(args: list[str]) -> str:

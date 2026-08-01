@@ -6,9 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/session_start.py\"",
-            "statusMessage": "Loading Codex project posture",
-            "timeout": 90
+            "command": "/bin/bash \"$(git rev-parse --show-toplevel)/tools/hooks/codex-session-start.sh\"",
+            "statusMessage": "Registering session lease and loading Codex posture",
+            "timeout": 105
           }
         ]
       },
@@ -197,6 +197,11 @@
             "type": "command",
             "command": "/bin/bash \"$(git rev-parse --show-toplevel)/tools/hooks/session-end-cleanup.sh\"",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "/bin/bash \"$(git rev-parse --show-toplevel)/tools/hooks/session-lease.sh\" end",
+            "timeout": 15
           }
         ]
       }

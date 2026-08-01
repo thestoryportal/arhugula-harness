@@ -37,6 +37,7 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 [ -f "$_LIB" ] || exit 0
 # shellcheck source=lib.sh
 . "$_LIB"
+hook_review_isolated && exit 0
 # shellcheck source=loop_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/loop_lib.sh"
 

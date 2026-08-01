@@ -9,14 +9,14 @@ repo churn; it does not mean reduced parity.
 | Surface | Claude posture immediately before handoff | Codex adoption |
 |---|---|---|
 | Project governance | `CLAUDE.md`, axis files, `CONTEXT.md` | `AGENTS.md` compact projections plus targeted canonical `CLAUDE.md` lineage |
-| Hooks | 12 lifecycle groups in `.claude/settings.json` | Every Codex-supported behavior is wired in `.codex/hooks.json`; see `.codex/hooks/README.md` |
+| Hooks | 13 event types, 16 matcher groups, and 21 command handlers in `.claude/settings.json` | Every Codex-supported behavior is wired in `.codex/hooks.json`; see `.codex/hooks/README.md` |
 | Tracked project skills | 35 canonical skills, including council and shipping workflows | 35/35 discovery entrypoints; native workflow skills where runner mechanics differ, full-body bridges elsewhere |
 | Operator-installed design skills | `frontend-design`, `impeccable`, `taste-skill`, `ui-ux-pro-max` under the root checkout's project `.claude/skills/` | Same source bodies adopted through tracked Codex bridge entrypoints; no copy, deletion, shortening, or deprecation |
 | Global gstack skills | Claude skill catalog | Same gstack packages are already present in Codex's discovered skill catalog |
 | Project memory | Claude project `memory/MEMORY.md` plus linked topic files | Mandatory discipline digest at startup; task-relevant index/topic lookup remains available and required |
 | Context checkpoints | gstack `context-save` / `context-restore` and repo handoffs | Same gstack skills plus `.harness/handoff/README-resume.md` and Codex deterministic checkpoints; all advisory until HEAD verification |
-| Out-of-family review | Codex reviewed Claude-authored diffs | Antigravity (`agy`) through `just gemini-review` reviews Codex-authored diffs |
-| Pre-merge review | Three fresh agent lenses | Three fresh ephemeral read-only `codex exec` lenses; all-approve and logged |
+| Out-of-family review | Codex reviewed Claude-authored diffs | OAuth-authenticated Antigravity (`agy`) pinned to Gemini 3.6 Flash High through `just gemini-review` reviews Codex-authored diffs |
+| Pre-merge review | Three fresh agent lenses | Three fresh ephemeral, lifecycle-isolated, read-only `codex exec` lenses; all-approve and logged |
 | CI | Green PR CI, then green `main` CI | Same, including merge-SHA pinning and terminating-refresh `main` CI before forward work |
 | Git autonomy | Safe scoped commands with destructive operations guarded | Same scoped approvals plus permission guard; force push, history rewrite, remote delete, and force cleanup remain denied |
 | Session UI | Claude status line and lifecycle output | Codex user-level TUI `status_line` provides model/context/branch/usage state; hook lifecycle output remains visible |
@@ -57,8 +57,8 @@ the OAuth-authenticated Antigravity `agy` CLI subscription and disclose the curr
 diff on every forward arc; Codex must not ask for that approval again. Direct Gemini/Google
 API calls, API keys, service-account credentials, and Vertex project routing are forbidden for
 this review. `tools/agy_review.py` supplies tracked and untracked changes directly, strips those
-provider credential/routing variables, stays in plan mode, and fails closed unless the final
-non-empty output line is an exact approval or block.
+provider credential/routing variables, pins `gemini-3.6-flash-high`, stays in plan mode, and
+fails closed unless the final non-empty output line is an exact approval or block.
 
 ## Permissions and safe Git command shape
 
