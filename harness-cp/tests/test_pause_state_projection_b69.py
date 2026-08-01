@@ -41,6 +41,8 @@ from harness_cp.pause_state_projection import (
     CrashReconstructionEffectFenceAddressableLocation,
     DepthZeroRootUniformFallbackOnlyLocation,
     HitlAddressableLocation,
+    KeyAbsentLinearEffectFenceAddressableLocation,
+    KeyAbsentOrchestratorEffectFenceAddressableLocation,
     LinearEffectFenceAddressableLocation,
     OrchestratorEffectFenceAddressableLocation,
     PausedWorkflowState,
@@ -372,7 +374,9 @@ def test_a10_projection_is_not_shaped_like_the_hitl_approval_queue() -> None:
         BranchEffectFenceAddressableLocation,
         CrashReconstructionEffectFenceAddressableLocation,
         OrchestratorEffectFenceAddressableLocation,
+        KeyAbsentOrchestratorEffectFenceAddressableLocation,
         LinearEffectFenceAddressableLocation,
+        KeyAbsentLinearEffectFenceAddressableLocation,
         PreDispatchUniformFallbackOnlyLocation,
         DepthZeroRootUniformFallbackOnlyLocation,
         TransitivelyPausedLocation,
@@ -530,6 +534,204 @@ def test_a7_orchestrator_and_linear_fence_shapes_project_from_their_own_carriers
     assert "branch_index" not in type(linear).model_fields
     assert orch.step_kind is StepKind.TOOL_STEP
     assert "branch_index" not in type(orch).model_fields
+
+
+# --------------------------------------------------------------------------
+# AC #A11 — the KEY-ABSENT sibling source shapes, ALL THREE effect-fence carriers
+# (`B-100` impl remainder; CP spec v1.113 §1.1, CP plan v2.48 §1.2)
+# --------------------------------------------------------------------------
+
+
+def test_a11a_empty_linear_key_projects_with_the_key_field_absent() -> None:
+    """AC #A11(a) — a LINEAR `EffectFenceResumeState` carrying `idempotency_key=""`
+    projects as `effect-fence-addressable` with the key field ABSENT.
+
+    Never a `""` key VALUE, and never omitted from the enumeration. This state is
+    GENUINELY REACHABLE: the LINEAR capture site's guard is
+    `isinstance(_fence_key, str)` alone (`workflow_driver.py:5456`), with no
+    truthiness test — so this witness is NOT downgraded to the orchestrator shape's
+    constructed-snapshot-only posture (CP plan v2.48 AC #A11 witness constraint 2).
+    """
+    root = _snapshot(
+        run_id="root-run",
+        pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+        effect_fence_resume=EffectFenceResumeState(idempotency_key=""),
+    )
+    locations = project_pause_locations(root)
+    fence = next(
+        loc for loc in locations if loc.variant is PauseLocationVariant.EFFECT_FENCE_ADDRESSABLE
+    )
+    assert isinstance(fence, KeyAbsentLinearEffectFenceAddressableLocation)
+    assert fence.source_shape is PauseLocationSourceShape.EFFECT_FENCE_LINEAR_KEY_ABSENT
+    assert "idempotency_key" not in type(fence).model_fields
+    assert "" not in set(fence.model_dump().values())
+    # ... and NOT omitted — the enumeration stays total over gate-owning locations.
+    assert len(locations) == 1
+
+
+def test_a11b_empty_orchestrator_key_projects_with_the_key_field_absent() -> None:
+    """AC #A11(b) — the same for `OrchestratorEffectFencePausedResumeState`.
+
+    **CONSTRUCTED-SNAPSHOT, never an e2e — deliberately.** The orchestrator carrier's
+    sole shipped capture site (`workflow_driver.py:12392`) guards on a TRUTHY key at
+    `:12376`-`:12381`, so NO production path can produce this state. The shape is
+    declared on TYPE-TOTALITY grounds: the carrier declares `idempotency_key: str`
+    with no length constraint, and the projection is a total function over journaled
+    records that outlive the capture-site code. An acceptance closeout demanding an
+    e2e witness here is demanding an unbuildable one (CP plan v2.48 AC #A11 witness
+    constraint 1).
+
+    *Register row `B-100` asserted the OPPOSITE of that guard's presence; the premise
+    was checked at the spec leg and found FALSE. The disposition is unchanged; only
+    its ground is (CP spec v1.113 §0.4 finding (i)).*
+    """
+    root = _snapshot(
+        run_id="root-run",
+        pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+        orchestrator_effect_fence_resume=OrchestratorEffectFencePausedResumeState(
+            idempotency_key="",
+            step_id="orchestrator",
+            step_kind=StepKind.TOOL_STEP.value,
+        ),
+    )
+    fence = next(
+        loc
+        for loc in project_pause_locations(root)
+        if loc.variant is PauseLocationVariant.EFFECT_FENCE_ADDRESSABLE
+    )
+    assert isinstance(fence, KeyAbsentOrchestratorEffectFenceAddressableLocation)
+    assert fence.source_shape is PauseLocationSourceShape.EFFECT_FENCE_ORCHESTRATOR_KEY_ABSENT
+    assert "idempotency_key" not in type(fence).model_fields
+    assert "" not in set(fence.model_dump().values())
+    # No `step_kind` capture is added anywhere — the shape inherits its carrier's
+    # field set EXACTLY, minus the key.
+    assert fence.step_kind is StepKind.TOOL_STEP
+    assert fence.step_id == "orchestrator"
+
+
+def test_a11c1_key_absent_shapes_cannot_be_constructed_carrying_a_key() -> None:
+    """AC #A11(c1) — unrepresentability, not merely absence, direction ONE.
+
+    Assert the REFUSAL. An absence-only assertion cannot tell a type invariant from
+    a happens-to-be-`None`.
+    """
+    with pytest.raises(ValidationError):  # LINEAR key-absent shape cannot carry a key
+        KeyAbsentLinearEffectFenceAddressableLocation(
+            pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+            step_index=0,
+            idempotency_key="k",  # pyright: ignore[reportCallIssue]
+        )
+    with pytest.raises(ValidationError):  # orchestrator key-absent shape cannot carry a key
+        KeyAbsentOrchestratorEffectFenceAddressableLocation(
+            pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+            step_index=0,
+            step_id="s",
+            step_kind=StepKind.TOOL_STEP,
+            idempotency_key="k",  # pyright: ignore[reportCallIssue]
+        )
+
+
+def test_a11c2_key_bearing_shapes_cannot_be_constructed_carrying_an_empty_key() -> None:
+    """AC #A11(c2) — direction TWO, the load-bearing half this widening adds.
+
+    A key-bearing shape that accepts `""` reintroduces exactly the value the
+    key-absent shapes exist to keep off the boundary, while passing an absence-only
+    assertion.
+    """
+    with pytest.raises(ValidationError):
+        LinearEffectFenceAddressableLocation(
+            pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+            step_index=0,
+            idempotency_key="",
+        )
+    with pytest.raises(ValidationError):
+        OrchestratorEffectFenceAddressableLocation(
+            pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+            step_index=0,
+            step_id="s",
+            step_kind=StepKind.TOOL_STEP,
+            idempotency_key="",
+        )
+
+
+def test_a11c3_key_bearing_shapes_cannot_be_constructed_with_the_key_omitted() -> None:
+    """AC #A11(c3) — direction THREE, and NOT redundant with (c2).
+
+    An implementation using one key-bearing type with an **optional but
+    length-constrained** field passes (c2) — it does reject `""` — while still
+    admitting a key-bearing projection with NO key at all, which is exactly the
+    illegal state this union exists to close. *(Its omission from an earlier draft
+    was caught at the spec leg's out-of-family review round 5 [P1].)*
+    """
+    with pytest.raises(ValidationError):
+        LinearEffectFenceAddressableLocation(  # pyright: ignore[reportCallIssue]
+            pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+            step_index=0,
+        )
+    with pytest.raises(ValidationError):
+        OrchestratorEffectFenceAddressableLocation(  # pyright: ignore[reportCallIssue]
+            pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+            step_index=0,
+            step_id="s",
+            step_kind=StepKind.TOOL_STEP,
+        )
+
+
+def test_a11d_branch_carrier_behaviour_is_unchanged() -> None:
+    """AC #A11(d) — the branch carrier's existing behaviour is UNCHANGED.
+
+    Its key-absent shape is now a SPECIAL CASE of the general rule, not a separate
+    rule. AC #A4's crash-reconstruction witness re-runs green, unmodified (see
+    `test_a4_crash_reconstruction_projects_with_the_key_field_absent`); this asserts
+    the key-BEARING branch shape is equally untouched.
+    """
+    root = _snapshot(
+        run_id="root-run",
+        pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=1,
+            effect_fence_paused_branches=(
+                EffectFencePausedBranchResumeState(
+                    branch_index=0,
+                    step_id="p0",
+                    step_kind=StepKind.TOOL_STEP.value,
+                    idempotency_key="branch-key",
+                ),
+            ),
+        ),
+    )
+    fence = next(
+        loc
+        for loc in project_pause_locations(root)
+        if loc.variant is PauseLocationVariant.EFFECT_FENCE_ADDRESSABLE
+    )
+    assert isinstance(fence, BranchEffectFenceAddressableLocation)
+    assert fence.idempotency_key == "branch-key"
+
+
+def test_a11_resolver_enumeration_is_unchanged_by_the_keyless_routing() -> None:
+    """AC #A11 / #A9 — §2 publishes the classification; it defines NONE of it.
+
+    The projection now hides the empty LINEAR and orchestrator keys, but the
+    RESOLVER-only half of the walk still enumerates `""` for every key-absent shape,
+    byte-for-byte as before. Narrowing `effect_fence_key` to `None` here would
+    silently change a CP CLASSIFICATION RULE (which locations the sole-member
+    uniform-fallback test counts) — which CP spec v1.113 §2 forbids this surface
+    from doing, and which is `B-107`'s scope, not this row's.
+    """
+    root = _snapshot(
+        run_id="root-run",
+        pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+        effect_fence_resume=EffectFenceResumeState(idempotency_key=""),
+        orchestrator_effect_fence_resume=OrchestratorEffectFencePausedResumeState(
+            idempotency_key="",
+            step_id="orchestrator",
+            step_kind=StepKind.TOOL_STEP.value,
+        ),
+    )
+    assert _collect_effect_fence_idempotency_keys(root) == ["", ""]
+    assert [entry.effect_fence_key for entry in walk_pause_tree(root)] == ["", ""]
 
 
 # --------------------------------------------------------------------------

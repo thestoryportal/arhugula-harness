@@ -18,27 +18,42 @@ for it at all (CP spec v1.112 §2.2 constraint 2 — absent, not opaque, not
 redacted). That absence is a type invariant here, not a convention: the variant
 classes that must not carry an identity simply do not declare one.
 
-**Four variants, eight source shapes.** The variant set is exactly the council
-record's FOUR (CP spec v1.112 §2.1); the SOURCE column is what widened. A variant
-spanning more than one source shape carries a source-shape sub-discriminator so a
-field absent on one shape is *unrepresentable* there rather than merely optional
-— modelling `step_kind` (or the fence key) as a plain optional field would readmit
-the illegal states the closed union exists to close.
+**Four variants, TEN source shapes across SEVEN carriers.** The variant set is
+exactly the council record's FOUR (CP spec v1.113 §1.1); the SOURCE column is what
+widened. A variant spanning more than one source shape carries a source-shape
+sub-discriminator so a field absent on one shape is *unrepresentable* there rather
+than merely optional — modelling `step_kind` (or the fence key) as a plain optional
+field would readmit the illegal states the closed union exists to close.
+
+**Shape ≠ carrier.** THREE of the seven carriers yield TWO shapes each — key-bearing
+and key-absent — so 4 single-shape + 3 dual-shape carriers span 10 shapes
+(CP spec v1.113 §1.3).
 
 | Variant | Source shape | `step_kind` | key field |
 |---|---|---|---|
 | HITL-addressable | paused child branch | absent | child `run_id` |
 | effect-fence-addressable | branch | present | `idempotency_key` |
-| effect-fence-addressable | branch (crash reconstruction) | present | **absent** |
+| effect-fence-addressable | branch, **captured key EMPTY** | present | **absent** |
 | effect-fence-addressable | orchestrator | present | `idempotency_key` |
+| effect-fence-addressable | orchestrator, **captured key EMPTY** | present | **absent** |
 | effect-fence-addressable | LINEAR | absent | `idempotency_key` |
+| effect-fence-addressable | LINEAR, **captured key EMPTY** | absent | **absent** |
 | uniform-fallback-only | pre-dispatch gate-owning branch | present | **absent** |
 | uniform-fallback-only | depth-0 root gate-owning pause | absent | **absent** |
 | transitively-paused | container node | absent | **absent** |
 
-Authority: `Spec_Control_Plane_v1_112.md` §1 + §2;
-`Implementation_Plan_Control_Plane_v2_47.md` §1; consumed cross-axis by
-`Spec_Harness_Runtime_v1.md` v1.107 §14.14.9.
+`step_kind` is present on FIVE shapes and absent from FIVE. **No `step_kind`
+capture is added anywhere** — each key-absent shape inherits its carrier's existing
+field set exactly, minus the key.
+
+**The discriminating fact is the STATE of the captured key, not the PROVENANCE of
+the carrier** (`B-100`, CP spec v1.113 §1.1). Wherever an effect-fence carrier can
+hold an empty key, surfacing that key would advertise an address the resume path
+never honours — the operator's response is DROPPED, not refused.
+
+Authority: `Spec_Control_Plane_v1_113.md` §1 (amending `Spec_Control_Plane_v1_112.md`
+§2.1); `Implementation_Plan_Control_Plane_v2_48.md` §1 (U-CP-64 AC #A11); consumed
+cross-axis by `Spec_Harness_Runtime_v1.md` v1.109 §14.14.9.2.
 """
 
 from __future__ import annotations
@@ -63,6 +78,8 @@ __all__ = [
     "CrashReconstructionEffectFenceAddressableLocation",
     "DepthZeroRootUniformFallbackOnlyLocation",
     "HitlAddressableLocation",
+    "KeyAbsentLinearEffectFenceAddressableLocation",
+    "KeyAbsentOrchestratorEffectFenceAddressableLocation",
     "LinearEffectFenceAddressableLocation",
     "OrchestratorEffectFenceAddressableLocation",
     "PauseLocationProjection",
@@ -100,14 +117,32 @@ class PauseLocationVariant(StrEnum):
 
 
 class PauseLocationSourceShape(StrEnum):
-    """The source carrier a projection was read off — the sub-discriminator that
-    makes a per-shape-absent field unrepresentable rather than optional."""
+    """The source SHAPE a projection was read off — the sub-discriminator that
+    makes a per-shape-absent field unrepresentable rather than optional.
+
+    **Shape, not carrier.** The three effect-fence carriers each yield TWO members
+    here — one key-bearing, one key-absent — because the discriminating fact is the
+    STATE of the captured key (CP spec v1.113 §1.1). The key-absent members are what
+    make "no key field at all" a type invariant rather than a convention.
+    """
 
     PAUSED_CHILD_BRANCH = "paused-child-branch"
     EFFECT_FENCE_BRANCH = "effect-fence-branch"
     EFFECT_FENCE_BRANCH_CRASH_RECONSTRUCTION = "effect-fence-branch-crash-reconstruction"
+    """The branch carrier with an EMPTY captured key.
+
+    Named for its DELIBERATE producer (fan-out crash reconstruction, which
+    constructs `idempotency_key=""` at `workflow_driver.py:4074`), but the routing
+    has always keyed on EMPTINESS, so the ordinary fan-out path's defensive
+    coercion reaches it too. The spelling is retained rather than renamed: CP spec
+    v1.113 §0.2 generalizes this shape's DEFINITION without renaming it, and its
+    impl-side spelling is impl discretion under §2.1's sub-discriminator rule.
+    """
+
     EFFECT_FENCE_ORCHESTRATOR = "effect-fence-orchestrator"
+    EFFECT_FENCE_ORCHESTRATOR_KEY_ABSENT = "effect-fence-orchestrator-key-absent"
     EFFECT_FENCE_LINEAR = "effect-fence-linear"
+    EFFECT_FENCE_LINEAR_KEY_ABSENT = "effect-fence-linear-key-absent"
     PRE_DISPATCH_GATE_OWNING_BRANCH = "pre-dispatch-gate-owning-branch"
     DEPTH_ZERO_ROOT_GATE_OWNING = "depth-zero-root-gate-owning"
     CONTAINER_NODE = "container-node"
@@ -167,13 +202,21 @@ class BranchEffectFenceAddressableLocation(_LocationBase):
 
 
 class CrashReconstructionEffectFenceAddressableLocation(_LocationBase):
-    """The fan-out CRASH-RECONSTRUCTION fence carrier — key field ABSENT, by type.
+    """The BRANCH fence carrier whose captured key is EMPTY — key field ABSENT, by type.
 
-    Crash reconstruction constructs `EffectFencePausedBranchResumeState(...,
-    idempotency_key="")`; both real resume sites consult a fence resolution only
-    when the key is truthy, so surfacing `""` would advertise a key the resolver
-    silently IGNORES — the operator's response would be DROPPED, not refused
-    (CP spec v1.112 §2.1). This shape therefore declares no key field at all.
+    Fan-out crash reconstruction is this shape's DELIBERATE producer (it constructs
+    `EffectFencePausedBranchResumeState(..., idempotency_key="")` at
+    `workflow_driver.py:4074` precisely because CP cannot derive the runtime fence
+    key), and the ordinary fan-out fence-pause path's defensive coercion is a
+    second, already-reachable producer. The fan-out per-branch dispatch sites
+    consult a fence resolution only when the key is TRUTHY, so surfacing `""` would
+    advertise a key the resolver silently IGNORES — the operator's response would be
+    DROPPED, not refused (CP spec v1.113 §1.1). This shape therefore declares no key
+    field at all.
+
+    *The class name is retained from its provenance-scoped authoring; the ROUTING
+    has always keyed on emptiness. CP spec v1.113 §0.2 generalizes the definition
+    without renaming the shape.*
     """
 
     variant: Literal[PauseLocationVariant.EFFECT_FENCE_ADDRESSABLE] = (
@@ -200,20 +243,38 @@ class OrchestratorEffectFenceAddressableLocation(_LocationBase):
     source_shape: Literal[PauseLocationSourceShape.EFFECT_FENCE_ORCHESTRATOR] = (
         PauseLocationSourceShape.EFFECT_FENCE_ORCHESTRATOR
     )
-    idempotency_key: str
-    """The held reserve's key.
+    idempotency_key: str = Field(min_length=1)
+    """The held reserve's key — the `effect_fence_resolutions` key. NEVER empty:
+    an empty captured key is the KEY-ABSENT orchestrator source shape, which carries
+    none (CP spec v1.113 §1.1, closing `B-100`)."""
 
-    **NOT length-constrained, and the residual is REGISTERED rather than absorbed
-    (`B-100`).** CP spec v1.112 §2.1 scopes the empty-key key-ABSENT carve-out to
-    the fan-out crash-reconstruction carrier — the site the spec leg verified
-    constructs `""` deliberately — and tables this orchestrator shape as carrying
-    its key. The shipped capture site permits an empty key here too, and both real
-    resume sites consult a fence resolution only when the key is TRUTHY, so an
-    empty key surfaced here is the same drop-not-refuse hazard one door over.
-    Widening the carve-out would add source shapes the cleared enumeration does not
-    contain — an X-AL-3 design extension this impl leg must not make silently — so
-    the projection conforms to the spec exactly and the gap is filed."""
+    step_id: str
+    step_kind: StepKind
 
+
+class KeyAbsentOrchestratorEffectFenceAddressableLocation(_LocationBase):
+    """The ORCHESTRATOR fence carrier whose captured key is EMPTY — key field ABSENT.
+
+    **UNREACHABLE from the sole shipped capture site, and declared anyway.** The
+    orchestrator capture site (`workflow_driver.py:12392`) guards on a TRUTHY key at
+    `:12376`–`:12381`, so no production path can produce this state. The shape rests
+    on TYPE TOTALITY: the carrier declares `idempotency_key: str` with no length
+    constraint, and the projection is a TOTAL function over journaled records that
+    outlive the capture-site code that wrote them (`Spec_Harness_Runtime_v1.md`
+    v1.109 §14.14.8). A closed union whose totality depends on a capture-site `if`
+    is a convention, not a type invariant.
+
+    *Its acceptance witness is therefore a CONSTRUCTED-SNAPSHOT test, never an
+    end-to-end run — there is no production path to drive (CP plan v2.48 AC #A11
+    witness constraint 1).*
+    """
+
+    variant: Literal[PauseLocationVariant.EFFECT_FENCE_ADDRESSABLE] = (
+        PauseLocationVariant.EFFECT_FENCE_ADDRESSABLE
+    )
+    source_shape: Literal[PauseLocationSourceShape.EFFECT_FENCE_ORCHESTRATOR_KEY_ABSENT] = (
+        PauseLocationSourceShape.EFFECT_FENCE_ORCHESTRATOR_KEY_ABSENT
+    )
     step_id: str
     step_kind: StepKind
 
@@ -230,12 +291,45 @@ class LinearEffectFenceAddressableLocation(_LocationBase):
     source_shape: Literal[PauseLocationSourceShape.EFFECT_FENCE_LINEAR] = (
         PauseLocationSourceShape.EFFECT_FENCE_LINEAR
     )
-    idempotency_key: str
-    """The held reserve's key. **NOT length-constrained — see
-    `OrchestratorEffectFenceAddressableLocation.idempotency_key` for the same
-    registered residual (`B-100`).** The shipped LINEAR capture site constructs
-    this carrier whenever the runtime error's `idempotency_key` attribute
-    `isinstance(_, str)`, which admits `""`."""
+    idempotency_key: str = Field(min_length=1)
+    """The held reserve's key — the `effect_fence_resolutions` key. NEVER empty:
+    an empty captured key is the KEY-ABSENT LINEAR source shape, which carries none
+    (CP spec v1.113 §1.1, closing `B-100`)."""
+
+
+class KeyAbsentLinearEffectFenceAddressableLocation(_LocationBase):
+    """The LINEAR fence carrier whose captured key is EMPTY — key field ABSENT.
+
+    **GENUINELY REACHABLE, unlike its orchestrator sibling.** The shipped LINEAR
+    capture site constructs `EffectFenceResumeState(idempotency_key=_fence_key)`
+    whenever the runtime error's `idempotency_key` attribute is
+    `isinstance(_, str)` (`workflow_driver.py:5456`), which ADMITS `""` — an
+    isinstance-only guard, with no truthiness test. Its exposure is defensive rather
+    than a known live defect, but the state is reachable and its witness MUST NOT be
+    downgraded to the orchestrator shape's constructed-snapshot-only posture
+    (CP plan v2.48 AC #A11 witness constraint 2).
+
+    **The harm this shape forecloses arrives by a DIFFERENT mechanism than at the
+    other two carriers.** The LINEAR consult (`workflow_driver.py:4925`–`:4936`) is
+    the ONE site with no truthiness gate — it calls `_resolve_effect_fence_gated`
+    unconditionally, so a resolution keyed `""` IS looked up and threaded. The
+    directive is then applied only when the runtime's RECOMPUTED per-`(run, step,
+    tool)` dispatch key equals it (`runtime_tool_dispatcher.py:1042`, against the key
+    composed at `:989`) — never `""` — so it is silently discarded and the dispatch
+    re-pauses INERT. Same DROP-not-refuse harm, different route (CP spec v1.113
+    §1.1).
+
+    Declaring no key field removes the ADVERTISEMENT. It does NOT make an
+    operator resolution addressed to an empty key refusable — no channel refuses one
+    today, on any carrier, which is registered as `B-107` and is NOT closed here.
+    """
+
+    variant: Literal[PauseLocationVariant.EFFECT_FENCE_ADDRESSABLE] = (
+        PauseLocationVariant.EFFECT_FENCE_ADDRESSABLE
+    )
+    source_shape: Literal[PauseLocationSourceShape.EFFECT_FENCE_LINEAR_KEY_ABSENT] = (
+        PauseLocationSourceShape.EFFECT_FENCE_LINEAR_KEY_ABSENT
+    )
 
 
 class PreDispatchUniformFallbackOnlyLocation(_LocationBase):
@@ -294,14 +388,16 @@ PauseLocationProjection = Annotated[
     | BranchEffectFenceAddressableLocation
     | CrashReconstructionEffectFenceAddressableLocation
     | OrchestratorEffectFenceAddressableLocation
+    | KeyAbsentOrchestratorEffectFenceAddressableLocation
     | LinearEffectFenceAddressableLocation
+    | KeyAbsentLinearEffectFenceAddressableLocation
     | PreDispatchUniformFallbackOnlyLocation
     | DepthZeroRootUniformFallbackOnlyLocation
     | TransitivelyPausedLocation,
     Field(discriminator="source_shape"),
 ]
-"""The CLOSED discriminated union of location projections (four variants across
-eight source shapes)."""
+"""The CLOSED discriminated union of location projections — FOUR variants across
+TEN source shapes borne by SEVEN carriers (CP spec v1.113 §1.3)."""
 
 
 class PausedWorkflowState(BaseModel):
@@ -442,9 +538,18 @@ class PauseTreeWalkEntry(NamedTuple):
     a location that is not gate-owning."""
 
     effect_fence_key: str | None
-    """The effect-fence key the fence resolver enumerates — `""` for the
-    crash-reconstruction shape (whose projection carries NO key), `None` for a
-    location that is not an effect-fence pause."""
+    """The effect-fence key the fence resolver enumerates — `""` for ANY key-absent
+    source shape (whose PROJECTION carries no key), `None` for a location that is
+    not an effect-fence pause.
+
+    **The `""` is deliberate and MUST NOT be narrowed to `None` here.** This is the
+    RESOLVER-only half of the split, and the resolvers' pre-`B-69` enumeration is
+    reproduced byte-for-byte — `compute_effect_fence_tree_wide_abort_present` filters
+    empty keys itself, downstream of this walk. Suppressing the empty key at this
+    field would silently change a CP CLASSIFICATION RULE (which locations the
+    sole-member uniform-fallback test counts), which CP spec v1.113 §2 forbids the
+    projection surface from doing. That the resolver channels ACCEPT rather than
+    REFUSE an empty key is registered as `B-107`, and is NOT closed here."""
 
 
 def walk_pause_tree(root_snapshot: PauseSnapshot) -> tuple[PauseTreeWalkEntry, ...]:
@@ -506,8 +611,7 @@ def _walk(
     if snapshot.effect_fence_resume is not None:
         entries.append(
             PauseTreeWalkEntry(
-                projection=LinearEffectFenceAddressableLocation(
-                    pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+                projection=_effect_fence_linear_projection(
                     step_index=step_index,
                     idempotency_key=snapshot.effect_fence_resume.idempotency_key,
                 ),
@@ -519,8 +623,7 @@ def _walk(
         _orch = snapshot.orchestrator_effect_fence_resume
         entries.append(
             PauseTreeWalkEntry(
-                projection=OrchestratorEffectFenceAddressableLocation(
-                    pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+                projection=_effect_fence_orchestrator_projection(
                     step_index=step_index,
                     idempotency_key=_orch.idempotency_key,
                     step_id=_orch.step_id,
@@ -629,8 +732,8 @@ def _effect_fence_branch_projection(
 ) -> PauseLocationProjection:
     """Route an `EffectFencePausedBranchResumeState` to its own SOURCE SHAPE.
 
-    An EMPTY key is the crash-reconstruction shape, whose projection carries no key
-    field at all — never a `""` key value both resume sites would silently ignore.
+    An EMPTY key yields the key-absent branch shape, whose projection carries no key
+    field at all — never a `""` key value the resume path would silently ignore.
     """
     if idempotency_key:
         return BranchEffectFenceAddressableLocation(
@@ -647,6 +750,66 @@ def _effect_fence_branch_projection(
         step_id=step_id,
         step_kind=step_kind,
         branch_index=branch_index,
+    )
+
+
+def _effect_fence_orchestrator_projection(
+    *,
+    step_index: int,
+    idempotency_key: str,
+    step_id: str,
+    step_kind: StepKind,
+) -> PauseLocationProjection:
+    """Route an `OrchestratorEffectFencePausedResumeState` to its own SOURCE SHAPE.
+
+    The sibling of :func:`_effect_fence_branch_projection`, on the same rule: the
+    discriminating fact is the STATE of the captured key, not the PROVENANCE of the
+    carrier (CP spec v1.113 §1.1). The empty branch is UNREACHABLE from the sole
+    shipped capture site, which guards on a truthy key — it exists because the
+    carrier TYPE admits `""` and this projection is total over journaled records
+    that outlive that capture site.
+    """
+    if idempotency_key:
+        return OrchestratorEffectFenceAddressableLocation(
+            pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+            step_index=step_index,
+            idempotency_key=idempotency_key,
+            step_id=step_id,
+            step_kind=step_kind,
+        )
+    return KeyAbsentOrchestratorEffectFenceAddressableLocation(
+        pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+        step_index=step_index,
+        step_id=step_id,
+        step_kind=step_kind,
+    )
+
+
+def _effect_fence_linear_projection(
+    *,
+    step_index: int,
+    idempotency_key: str,
+) -> PauseLocationProjection:
+    """Route an `EffectFenceResumeState` to its own SOURCE SHAPE.
+
+    The sibling of :func:`_effect_fence_branch_projection`, on the same rule. Unlike
+    the orchestrator one, the empty branch here is GENUINELY REACHABLE: the LINEAR
+    capture site's guard is `isinstance(_fence_key, str)` alone
+    (`workflow_driver.py:5456`), with no truthiness test.
+
+    The carrier declares exactly ONE field, so the key-absent shape carries only the
+    common fields. That is not an exception to the per-source-shape rule; it is that
+    rule working.
+    """
+    if idempotency_key:
+        return LinearEffectFenceAddressableLocation(
+            pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+            step_index=step_index,
+            idempotency_key=idempotency_key,
+        )
+    return KeyAbsentLinearEffectFenceAddressableLocation(
+        pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+        step_index=step_index,
     )
 
 
