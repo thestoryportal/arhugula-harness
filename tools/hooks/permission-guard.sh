@@ -49,12 +49,12 @@ NPATH=$(hook_json "$PAYLOAD" '.tool_input.notebook_path')  # Notebook tools
 # interactive session, and it is a DENY (never an approve), so the "no interactive auto-
 # APPROVAL" contract holds. Removing a worktree out from under a live session orphans it:
 # the session's Edit/Write tools stay pinned to the deleted worktree root and reject every
-# shared-checkout path (operator hit this 2026-06-04). Liveness = a Claude transcript for
-# that worktree touched within the window (lib.sh worktree_has_live_session). Fail-open:
-# unknown target / no recent transcript → no-op → falls through to the normal flow below.
+# shared-checkout path (operator hit this 2026-06-04). Every parsed direct removal is
+# denied because even a negative liveness check can race a new SessionStart; the shared
+# liveness helper only makes the denial reason more specific.
 # Escape hatch: HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1.
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] && [ "${HARNESS_ALLOW_LIVE_WORKTREE_REMOVE:-}" != "1" ] \
-   && printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+worktree[[:space:]]+remove'; then
+   && printf '%s' "$CMD" | grep -Eq 'git[^;&|]*[[:space:]]worktree[[:space:]]+remove'; then
   # Last non-flag token after `worktree remove` = the target path.
   _WT=$(printf '%s' "$CMD" | sed -E 's/.*worktree[[:space:]]+remove//' | tr ' \t' '\n' | grep -vE '^(-.*)?$' | tail -n1)
   if [ -n "$_WT" ]; then
@@ -145,8 +145,9 @@ _bash_args_safe() {
 
 # Worktree paths intentionally sit outside the CURRENT linked worktree, so they cannot use
 # _bash_args_safe's normal containment rule. Permit only the explicit, non-expanded path
-# shapes used by this repo's isolated-arc workflow. `list` is read-only; `add`/`remove`
-# accept an absolute path under the repo-local worktree roots or a throwaway /tmp root.
+# shapes used by this repo's isolated-arc workflow. `list` is read-only; `add` accepts an
+# absolute path under the repo-local worktree roots or a throwaway /tmp root. Removal uses
+# the separately allowlisted mutex-backed wrapper.
 # Returns 0 safe.
 _safe_worktree_command() {
   local cmd="$1" sub rest target common repo_root skip_next=0 tok

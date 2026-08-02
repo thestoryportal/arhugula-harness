@@ -6,7 +6,9 @@ Every Claude hook behavior supported by Codex's lifecycle is wired here. The Cod
 
 - `codex-session-start.sh` registers the session under the shared git directory before
   sequentially running posture, roadmap audit, and loop GC, so concurrent SessionStart
-  handlers cannot race lease registration against removal.
+  handlers cannot race lease registration against removal. It activates the lease only
+  after startup succeeds; normal failures release immediately and an abandoned starting
+  lease expires after a three-minute grace window, longer than the 105-second hook timeout.
 - `pre_tool_use_policy.py` blocks only high-confidence boundary violations, especially X-AL-3 design/implementation mixing in a single command.
 - `permission_request.py` surfaces paid-provider, credential, destructive, and network-sensitive requests for operator review.
 - `stop_gate.py` reports worktree and verification posture without claiming success. An
@@ -56,8 +58,10 @@ guard accepts that marker only in the exact ephemeral/read-only lens command sha
 the child, controller checkpoint, cleanup, prompt, and loop-mutating hooks are inert while
 the session lease remains active. Direct `git worktree remove` is denied because a hook
 cannot hold a mutex after it exits; use `tools/hooks/safe-worktree-remove.sh <path>`. Its
-kernel-owned lock survives long removals without age-based theft, lease presence remains
-authoritative until SessionEnd, and registration revalidates the worktree after locking.
+kernel-owned lock survives long removals without age-based theft, active leases remain
+authoritative until SessionEnd, and registration/activation revalidate the worktree after
+locking. `just codex-worktree-gc --reap` uses this same status and removal entrypoint; it
+cannot bypass Codex leases or the shared mutex.
 
 Credential-gated work should advance to the exact credential boundary first. If
 no HIL/operator-approval surface is available, log the pending gate with

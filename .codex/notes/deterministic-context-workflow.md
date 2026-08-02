@@ -202,7 +202,7 @@ Related Codex-local optimization commands:
 
 ```bash
 just codex-worktree-gc          # dry-run safe stale-worktree cleanup
-just codex-worktree-gc --reap   # remove only clean merged worktree candidates
+just codex-worktree-gc --reap   # mutex/lease-safe removal of clean merged candidates
 just codex-test                 # provider-free non-e2e pytest lane
 just codex-check                # sync + lint + typecheck + provider-free non-e2e pytest
 just codex-autonomous-arc       # initialize autonomous-loop evidence state

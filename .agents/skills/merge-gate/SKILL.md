@@ -61,8 +61,9 @@ ambiguous output is `BLOCK`.
 - Any block: reconcile it against current HEAD. If real and mechanical, fix it, add the
   appropriate witness, re-run Antigravity and local/CI gates, then re-run the blocking lens
   against the delta. A broad code change invalidates all three approvals.
-- Cap automatic fix/re-gate at two rounds. A third substantive disagreement is a genuine
-  decision point; surface all verdicts together rather than looping or choosing silently.
+- Cap automatic fix/re-gate at ten rounds (operator decision, 2026-08-01). An eleventh
+  substantive disagreement is a genuine decision point; surface all verdicts together
+  rather than looping or choosing silently.
 
 Commit and push the gate-log row before merge, then wait for CI on that final PR HEAD to be
 green. The log-only commit does not require re-running approved lenses, but any code, test,

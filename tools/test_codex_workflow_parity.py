@@ -376,9 +376,11 @@ def test_session_lifecycle_wrappers_order_registration_and_release() -> None:
     start = (ROOT / "tools" / "hooks" / "codex-session-start.sh").read_text(encoding="utf-8")
     end = (ROOT / "tools" / "hooks" / "codex-session-end.sh").read_text(encoding="utf-8")
 
-    assert start.index('session-lease.sh" start') < start.index("session_start.py")
+    assert start.index("lease_action start") < start.index("session_start.py")
     assert start.index("session_start.py") < start.index("roadmap-audit/session-start.sh")
     assert start.index("roadmap-audit/session-start.sh") < start.index("loop-gc.sh")
+    assert start.index("loop-gc.sh") < start.rindex("lease_action activate")
+    assert "lease_action end" in start
     assert end.index('session-lease.sh" end') < end.index("session-end-cleanup.sh")
 
 
@@ -388,6 +390,16 @@ def test_session_end_hook_uses_supported_timeout() -> None:
 
     assert len(hooks) == 1
     assert hooks[0]["timeout"] <= 3
+
+
+def test_merge_gate_honors_operator_authorized_ten_pass_ceiling() -> None:
+    merge_gate = (ROOT / ".agents" / "skills" / "merge-gate" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ten rounds" in merge_gate
+    assert "An eleventh" in merge_gate
+    assert "substantive disagreement" in merge_gate
 
 
 def test_every_shared_state_hook_is_inert_for_isolated_review(tmp_path: Path) -> None:

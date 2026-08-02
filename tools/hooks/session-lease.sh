@@ -18,6 +18,7 @@ WORKTREE=$(hook_json "$PAYLOAD" '.cwd')
 
 case "$ACTION" in
   start) hook_register_session_lease "$WORKTREE" "$SESSION_ID" ;;
+  activate) hook_activate_session_lease "$WORKTREE" "$SESSION_ID" ;;
   end) hook_release_session_lease "$WORKTREE" "$SESSION_ID" ;;
   *) exit 2 ;;
 esac

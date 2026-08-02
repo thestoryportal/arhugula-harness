@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Race-safe worktree removal entrypoint for agent-issued cleanup.
+# Race-safe worktree status/removal entrypoint for GC and agent-issued cleanup.
 
 set -uo pipefail
 
@@ -8,11 +8,25 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=lib.sh
 . "$_LIB"
 
-[ "$#" -eq 1 ] || { echo "usage: safe-worktree-remove.sh <worktree>" >&2; exit 2; }
+MODE=remove
+if [ "$#" -eq 2 ] && [ "$1" = "--status" ]; then
+  MODE=status
+  shift
+fi
+[ "$#" -eq 1 ] || { echo "usage: safe-worktree-remove.sh [--status] <worktree>" >&2; exit 2; }
+TARGET="$1"
+
+if [ "$MODE" = "status" ]; then
+  [ "$(git -C "$TARGET" rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] \
+    || { echo "safe-worktree-remove: target is not a registered worktree" >&2; exit 2; }
+  worktree_has_live_session "$TARGET"
+  exit $?
+fi
+
 PROJECT_DIR=$(hook_project_dir)
 [ -n "$PROJECT_DIR" ] || { echo "safe-worktree-remove: project root unavailable" >&2; exit 2; }
 
-hook_safe_worktree_remove "$PROJECT_DIR" "$1"
+hook_safe_worktree_remove "$PROJECT_DIR" "$TARGET"
 rc=$?
 case "$rc" in
   0) exit 0 ;;

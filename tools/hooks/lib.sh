@@ -240,6 +240,7 @@ loop_mode_active() {
 }
 
 _WORKTREE_SESSION_WINDOW_MIN="${HARNESS_WORKTREE_SESSION_WINDOW_MIN:-30}"
+_WORKTREE_STARTING_LEASE_WINDOW_MIN="${HARNESS_WORKTREE_STARTING_LEASE_WINDOW_MIN:-3}"
 
 _hook_canonical_worktree() {
   local wt="$1"
@@ -319,7 +320,7 @@ hook_register_session_lease() {
     return 1
   fi
   lease="$session_dir/session-${session}.lease"; tmp="${lease}.tmp-$$"
-  printf '%s\n' "$(_hook_canonical_worktree "$wt")" > "$tmp" 2>/dev/null \
+  printf 'starting\n%s\n' "$(_hook_canonical_worktree "$wt")" > "$tmp" 2>/dev/null \
     && mv "$tmp" "$lease" 2>/dev/null
   local rc=$?
   [ "$rc" -eq 0 ] || rm -f "$tmp" 2>/dev/null
@@ -330,6 +331,34 @@ hook_register_session_lease() {
     rc=$?
     [ "$rc" -eq 0 ] || rm -f "$pointer_tmp" 2>/dev/null
   fi
+  hook_worktree_lock_release || true
+  return "$rc"
+}
+
+hook_activate_session_lease() {
+  local wt="$1" session session_dir registered_dir lease tmp phase rc=0
+  session=$(hook_session_key "$2")
+  session_dir=$(_hook_worktree_session_dir "$wt") || return 1
+  hook_worktree_lock_acquire "$wt" || return 1
+  registered_dir=$(_hook_worktree_session_dir "$wt" 2>/dev/null || true)
+  if [ -z "$registered_dir" ] || [ "$registered_dir" != "$session_dir" ] \
+    || [ "$(git -C "$wt" rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then
+    hook_worktree_lock_release || true
+    return 1
+  fi
+  lease="$session_dir/session-${session}.lease"
+  [ -f "$lease" ] || { hook_worktree_lock_release || true; return 1; }
+  phase=$(head -n1 "$lease" 2>/dev/null)
+  case "$phase" in
+    active) ;;
+    starting)
+      tmp="${lease}.tmp-$$"
+      printf 'active\n%s\n' "$(_hook_canonical_worktree "$wt")" > "$tmp" 2>/dev/null \
+        && mv "$tmp" "$lease" 2>/dev/null || rc=$?
+      [ "$rc" -eq 0 ] || rm -f "$tmp" 2>/dev/null
+      ;;
+    *) rc=1 ;;
+  esac
   hook_worktree_lock_release || true
   return "$rc"
 }
@@ -365,6 +394,7 @@ hook_release_session_lease() {
 hook_safe_worktree_remove() {
   local root="$1" wt="$2" rc
   hook_worktree_lock_acquire "$wt" || return 2
+  hook_prune_stale_starting_leases "$wt"
   if worktree_has_live_session "$wt"; then
     hook_worktree_lock_release || true
     return 3
@@ -375,20 +405,48 @@ hook_safe_worktree_remove() {
   return "$rc"
 }
 
+hook_prune_stale_starting_leases() {
+  local wt="$1" session_dir lease phase session pointer
+  session_dir=$(_hook_worktree_session_dir "$wt" 2>/dev/null || true)
+  [ -n "$session_dir" ] || return 0
+  for lease in "$session_dir"/session-*.lease; do
+    [ -f "$lease" ] || continue
+    phase=$(head -n1 "$lease" 2>/dev/null)
+    [ "$phase" = "starting" ] || continue
+    find "$lease" -maxdepth 0 -mmin "-${_WORKTREE_STARTING_LEASE_WINDOW_MIN}" -print -quit \
+      2>/dev/null | grep -q . && continue
+    session=${lease##*/session-}; session=${session%.lease}
+    pointer=$(_hook_session_pointer_file "$session" 2>/dev/null || true)
+    rm -f "$lease" "$pointer" 2>/dev/null
+  done
+}
+
 # Live-session detection covers both runners: Claude's encoded project transcripts,
 # Codex's date-partitioned rollout transcripts (`session_meta.payload.cwd`), and the
-# SessionStart/SessionEnd lease used to close the transcript check/remove race. Lease
-# presence remains authoritative until explicit SessionEnd release; only transcript-only
-# evidence uses the freshness window.
+# SessionStart/SessionEnd lease used to close the transcript check/remove race. Active
+# leases remain authoritative until explicit SessionEnd release. A starting lease uses a
+# bounded grace window longer than the host's SessionStart timeout, so a killed startup
+# cannot strand the worktree forever; only the lock holder prunes an abandoned start.
 worktree_has_live_session() {
   local wt="$1"
   [ -n "$wt" ] || return 1
   command -v find >/dev/null 2>&1 || return 1
   local abs; abs=$(cd "$wt" 2>/dev/null && pwd -P) || abs="$wt"
-  local session_dir
+  local session_dir lease phase
   session_dir=$(_hook_worktree_session_dir "$abs" 2>/dev/null || true)
-  if [ -n "$session_dir" ] && [ -n "$(find "$session_dir" -maxdepth 1 -name 'session-*.lease' -print -quit 2>/dev/null)" ]; then
-    return 0
+  if [ -n "$session_dir" ]; then
+    for lease in "$session_dir"/session-*.lease; do
+      [ -f "$lease" ] || continue
+      phase=$(head -n1 "$lease" 2>/dev/null)
+      case "$phase" in
+        starting)
+          find "$lease" -maxdepth 0 -mmin "-${_WORKTREE_STARTING_LEASE_WINDOW_MIN}" \
+            -print -quit 2>/dev/null | grep -q . && return 0
+          ;;
+        active) return 0 ;;
+        *) return 0 ;; # pre-phase lease files are active for backward compatibility
+      esac
+    done
   fi
 
   local enc; enc=$(printf '%s' "$abs" | tr -c '[:alnum:]' '-')

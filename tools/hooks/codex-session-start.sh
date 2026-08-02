@@ -9,13 +9,39 @@ _LIB="$_DIR/lib.sh"
 # shellcheck source=lib.sh
 . "$_LIB"
 PAYLOAD=$(cat 2>/dev/null || true)
+LEASE_REGISTERED=0
+LEASE_ACTIVATED=0
 
-if ! printf '%s' "$PAYLOAD" | /bin/bash "$_DIR/session-lease.sh" start; then
+lease_action() {
+  printf '%s' "$PAYLOAD" | /bin/bash "$_DIR/session-lease.sh" "$1"
+}
+
+cleanup_starting_lease() {
+  local rc=$?
+  trap - EXIT
+  if [ "$LEASE_REGISTERED" -eq 1 ] && [ "$LEASE_ACTIVATED" -eq 0 ]; then
+    lease_action end || true
+  fi
+  exit "$rc"
+}
+
+trap cleanup_starting_lease EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if ! lease_action start; then
   echo "codex-session-start: could not register the worktree session lease" >&2
   exit 2
 fi
+LEASE_REGISTERED=1
 
 if hook_review_isolated; then
+  if ! lease_action activate; then
+    echo "codex-session-start: could not activate the worktree session lease" >&2
+    exit 2
+  fi
+  LEASE_ACTIVATED=1
   exit 0
 fi
 
@@ -34,4 +60,9 @@ CONTEXT="$POSTURE"
 ${ROADMAP_CONTEXT}"
 [ -z "$HYGIENE_CONTEXT" ] || CONTEXT="${CONTEXT}
 ${HYGIENE_CONTEXT}"
+if ! lease_action activate; then
+  echo "codex-session-start: could not activate the worktree session lease" >&2
+  exit 2
+fi
+LEASE_ACTIVATED=1
 hook_emit SessionStart "$CONTEXT"

@@ -138,10 +138,14 @@ touch -t 202001010000 "$CODEX_SESSION_DIR/rollout-live.jsonl"
 ( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
   && bad "stale Codex transcript marked live" || ok "stale Codex transcript does not block"
 
-# SessionStart leases share the worktree-removal lock and SessionEnd releases them.
+# SessionStart leases share the worktree-removal lock. Fresh starting leases block during
+# the host timeout; activation makes them authoritative until SessionEnd releases them.
 HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$REPO" hook_register_session_lease "$REPO" "session-a"
 ( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
-  && ok "active Codex session lease marks worktree live" || bad "Codex session lease missed"
+  && ok "fresh starting Codex lease marks worktree live" || bad "starting lease missed"
+HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$REPO" hook_activate_session_lease "$REPO" "session-a"
+( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
+  && ok "active Codex session lease marks worktree live" || bad "active lease missed"
 LEASE_A=$(find "$REPO/.git/codex-worktree-sessions" -name 'session-session-a.lease' -print -quit)
 touch -t 202001010000 "$LEASE_A"
 ( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \

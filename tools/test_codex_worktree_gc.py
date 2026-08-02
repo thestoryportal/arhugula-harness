@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import codex_worktree_gc as gc
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -40,6 +45,34 @@ def _add_worktree(repo: Path, tmp_path: Path, branch: str) -> Path:
     _git(repo, "branch", branch)
     _git(repo, "worktree", "add", str(path), branch)
     return path
+
+
+def _run_hook(
+    script: str,
+    worktree: Path,
+    session_id: str,
+    *,
+    home: Path,
+    action: str | None = None,
+    isolated: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.update({"CLAUDE_PROJECT_DIR": str(worktree), "HOME": str(home)})
+    if isolated:
+        env["HARNESS_CODEX_REVIEW_ISOLATED"] = "1"
+    args = ["bash", str(ROOT / "tools" / "hooks" / script)]
+    if action is not None:
+        args.append(action)
+    return subprocess.run(
+        args,
+        cwd=worktree,
+        input=json.dumps({"session_id": session_id, "cwd": str(worktree)}),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
 
 
 def _dispositions(repo: Path) -> list[gc.Disposition]:
@@ -155,3 +188,98 @@ def test_reap_removes_only_candidates_and_keeps_branches(tmp_path: Path) -> None
     assert not done.exists()
     assert dirty.exists()
     assert _git(repo, "rev-parse", "--verify", "codex/done")
+
+
+def test_production_gc_refuses_aged_active_session_until_session_end(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = _init_repo(tmp_path)
+    worktree = _add_worktree(repo, tmp_path, "codex/live")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    start = _run_hook(
+        "codex-session-start.sh",
+        worktree,
+        "gc-live",
+        home=home,
+        isolated=True,
+    )
+    assert start.returncode == 0, start.stderr
+    lease = next((repo / ".git" / "codex-worktree-sessions").rglob("session-gc-live.lease"))
+    assert lease.read_text(encoding="utf-8").splitlines()[0] == "active"
+    os.utime(lease, (0, 0))
+
+    assert gc.main(["--repo", str(repo), "--reap", "--no-gh", "--no-size"]) == 0
+    assert worktree.exists()
+
+    end = _run_hook(
+        "codex-session-end.sh",
+        worktree,
+        "gc-live",
+        home=home,
+        isolated=True,
+    )
+    assert end.returncode == 0, end.stderr
+    assert gc.main(["--repo", str(repo), "--reap", "--no-gh", "--no-size"]) == 0
+    assert not worktree.exists()
+
+
+def test_production_gc_recovers_abandoned_starting_lease_after_grace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = _init_repo(tmp_path)
+    worktree = _add_worktree(repo, tmp_path, "codex/abandoned-start")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("HARNESS_WORKTREE_STARTING_LEASE_WINDOW_MIN", "3")
+
+    start = _run_hook(
+        "session-lease.sh",
+        worktree,
+        "gc-abandoned",
+        home=home,
+        action="start",
+    )
+    assert start.returncode == 0, start.stderr
+    lease = next((repo / ".git" / "codex-worktree-sessions").rglob("session-gc-abandoned.lease"))
+    assert lease.read_text(encoding="utf-8").splitlines()[0] == "starting"
+
+    assert gc.main(["--repo", str(repo), "--reap", "--no-gh", "--no-size"]) == 0
+    assert worktree.exists()
+
+    os.utime(lease, (0, 0))
+    assert gc.main(["--repo", str(repo), "--reap", "--no-gh", "--no-size"]) == 0
+    assert not worktree.exists()
+
+
+def test_session_start_posture_failure_releases_starting_lease(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    hook_root = tmp_path / "hook-root"
+    hook_dir = hook_root / "tools" / "hooks"
+    posture_dir = hook_root / ".codex" / "hooks"
+    hook_dir.mkdir(parents=True)
+    posture_dir.mkdir(parents=True)
+    for name in ("codex-session-start.sh", "session-lease.sh", "lib.sh"):
+        shutil.copy2(ROOT / "tools" / "hooks" / name, hook_dir / name)
+    (posture_dir / "session_start.py").write_text("raise SystemExit(9)\n", encoding="utf-8")
+
+    env = os.environ.copy()
+    env.update({"CLAUDE_PROJECT_DIR": str(repo), "HOME": str(home)})
+    proc = subprocess.run(
+        ["bash", str(hook_dir / "codex-session-start.sh")],
+        cwd=repo,
+        input=json.dumps({"session_id": "posture-failed", "cwd": str(repo)}),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert proc.returncode == 9
+    assert not list((repo / ".git" / "codex-worktree-sessions").rglob("*.lease"))

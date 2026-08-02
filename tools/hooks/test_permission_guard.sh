@@ -230,6 +230,8 @@ for c in "git merge --abort" "git merge --strategy=ours main" "git merge --no-ed
 done
 OUT=$(run_on "$(pl Bash 'git worktree remove /tmp/merged-clean' '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "direct git worktree remove → deny (must use mutex wrapper)" || bad "direct worktree removal not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git -C /tmp/repo worktree remove /tmp/merged-clean' '')")
+[ "$(dec "$OUT")" = "deny" ] && ok "git -C direct worktree remove → deny" || bad "git -C worktree removal not denied: $OUT"
 OUT=$(run_on "$(pl Bash 'tools/hooks/safe-worktree-remove.sh /tmp/merged-clean' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "mutex-backed worktree remove wrapper → allow" || bad "safe worktree wrapper not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'tools/hooks/safe-worktree-remove.sh "/tmp/merged-clean"' '')")
@@ -376,6 +378,8 @@ SD="$FH/.claude/projects/$(encof "$WTL")"; mkdir -p "$SD"; : > "$SD/s.jsonl"   #
 runh() { printf '%s' "$1" | env HOME="$FH" CLAUDE_PROJECT_DIR="$REPO" ${2:-} bash "$HOOK"; }
 OUT=$(runh "$(pl Bash "git worktree remove $WTL" '')")                       # loop OFF
 [ "$(dec "$OUT")" = "deny" ] && ok "live-session worktree remove → deny (loop OFF, hoisted)" || bad "live remove not denied off-mode: $OUT"
+OUT=$(runh "$(pl Bash "git -C $REPO worktree remove $WTL" '')")
+[ "$(dec "$OUT")" = "deny" ] && ok "live-session git -C worktree remove → deny" || bad "live git -C remove not denied: $OUT"
 OUT=$(runh "$(pl Bash "git worktree remove --force $WTL" '')" HARNESS_LOOP=1)  # loop ON, --force
 [ "$(dec "$OUT")" = "deny" ] && ok "live-session worktree remove --force → deny (loop ON)" || bad "live --force not denied: $OUT"
 OUT=$(runh "$(pl Bash "git worktree remove $WTL" '')" HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1)

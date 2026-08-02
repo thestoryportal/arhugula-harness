@@ -132,7 +132,9 @@ Do not use `git add -A`. Do not approve a broad push rule that would obscure a
 force or pruning push. The permission guard continues to deny force/pruning push,
 history rewrite, every direct worktree removal, branch-resetting worktree creation,
 force local-branch deletion, and remote-branch deletion. The mutex-backed wrapper
-is the only automatic worktree-removal path.
+is the only automatic worktree-removal path, including for `just codex-worktree-gc
+--reap`. Active session leases never expire; only the pre-activation startup state has
+a bounded recovery window, so a killed SessionStart cannot strand a worktree forever.
 
 ## Memory and restore rule
 
