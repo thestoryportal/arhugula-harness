@@ -35,6 +35,11 @@ def _commands(event: str, matcher: str) -> list[str]:
     ]
 
 
+def _event_commands(event: str) -> list[str]:
+    payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    return [hook["command"] for group in payload["hooks"][event] for hook in group["hooks"]]
+
+
 @pytest.mark.parametrize(
     ("event", "matcher", "fragments"),
     [
@@ -392,6 +397,52 @@ def test_session_start_wrapper_registers_lease_before_posture(tmp_path: Path) ->
     assert not list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
 
 
+def test_registered_session_lifecycle_round_trips_active_lease(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    (tmp_path / "tools").symlink_to(ROOT / "tools", target_is_directory=True)
+    payload = json.dumps({"session_id": "registered-round-trip", "cwd": str(tmp_path)})
+    env = os.environ.copy()
+    env.update(
+        {
+            "HARNESS_CODEX_REVIEW_ISOLATED": "1",
+            "CLAUDE_PROJECT_DIR": str(tmp_path),
+            "HOME": str(tmp_path / "home"),
+        }
+    )
+
+    for command in _event_commands("SessionStart"):
+        proc = subprocess.run(
+            ["/bin/bash", "-lc", command],
+            cwd=tmp_path,
+            input=payload,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env=env,
+        )
+        assert proc.returncode == 0, (command, proc.stderr)
+
+    leases = list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
+    assert len(leases) == 1
+    assert leases[0].read_text(encoding="utf-8").splitlines()[0] == "active"
+
+    for command in _event_commands("SessionEnd"):
+        proc = subprocess.run(
+            ["/bin/bash", "-lc", command],
+            cwd=tmp_path,
+            input=payload,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env=env,
+        )
+        assert proc.returncode == 0, (command, proc.stderr)
+
+    assert not list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
+
+
 def test_session_lifecycle_wrappers_order_registration_and_release() -> None:
     start = (ROOT / "tools" / "hooks" / "codex-session-start.sh").read_text(encoding="utf-8")
     end = (ROOT / "tools" / "hooks" / "codex-session-end.sh").read_text(encoding="utf-8")
@@ -409,6 +460,15 @@ def test_session_start_hygiene_is_report_only_and_never_reaps() -> None:
 
     assert "loop_gc_worktrees report" in hygiene
     assert "loop_gc_worktrees reap" not in hygiene
+
+
+def test_parity_regressions_are_blocking_locally_and_in_ci() -> None:
+    justfile = (ROOT / "justfile").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "codex-parity-check" in justfile
+    assert "bash tools/codex-parity-check.sh" in justfile
+    assert "bash tools/codex-parity-check.sh" in workflow
 
 
 def test_session_end_hook_uses_supported_timeout() -> None:

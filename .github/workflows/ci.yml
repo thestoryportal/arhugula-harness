@@ -69,6 +69,9 @@ jobs:
       - name: Pytest (excludes e2e)
         run: uv run pytest -m "not e2e"
 
+      - name: Codex compatibility regressions — blocking
+        run: bash tools/codex-parity-check.sh
+
   lint:
     runs-on: ubuntu-latest
     name: ruff (lint + format) — blocking

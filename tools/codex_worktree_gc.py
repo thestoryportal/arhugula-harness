@@ -394,7 +394,15 @@ def reap_candidates(repo: Path, dispositions: list[Disposition]) -> int:
         if d.action != "candidate":
             continue
         proc = _run(
-            ["/bin/bash", str(SAFE_WORKTREE_REMOVE), str(d.worktree.path)],
+            [
+                "/bin/bash",
+                str(SAFE_WORKTREE_REMOVE),
+                "--expect-branch",
+                d.worktree.branch,
+                "--expect-head",
+                d.worktree.head,
+                str(d.worktree.path),
+            ],
             cwd=repo,
             timeout=60,
             env=env,
@@ -413,6 +421,9 @@ def reap_candidates(repo: Path, dispositions: list[Disposition]) -> int:
             continue
         if proc.returncode == 9:
             print(f"skipped removal of {d.worktree.path}: process-reference state unavailable")
+            continue
+        if proc.returncode == 10:
+            print(f"skipped removal of {d.worktree.path}: branch or HEAD changed")
             continue
         if proc.returncode != 0:
             failures += 1

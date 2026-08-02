@@ -162,16 +162,26 @@ hook_checkpoint_generation() {
 # session-specific pointer. The generation travels inside the atomically renamed file,
 # so a process death cannot split pointer content from ordering metadata.
 hook_publish_checkpoint() {
-  local latest="$1" source="$2" generation="$3" lock current latest_tmp rc=0
+  local latest="$1" source="$2" generation="$3" lock_timeout="${4:-5}" lock current latest_tmp rc=0
   lock="${latest}.lock"
   exec 8>> "$lock" || return 1
   # The helper and Bash share fd 8's inherited open-file description. The lock
   # therefore remains held by Bash until the explicit close below.
-  if ! /usr/bin/python3 - 8 <<'PY'
+  if ! /usr/bin/python3 - 8 "$lock_timeout" <<'PY'
 import fcntl
 import sys
+import time
 
-fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX)
+fd = int(sys.argv[1])
+deadline = time.monotonic() + float(sys.argv[2])
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        break
+    except BlockingIOError:
+        if time.monotonic() >= deadline:
+            raise SystemExit(75)
+        time.sleep(0.01)
 PY
   then
     exec 8>&-
@@ -192,10 +202,10 @@ PY
 
 # Write a lightweight state snapshot to a collision-free timestamped file plus an atomic,
 # session-specific `precompact-latest-<session>.md` pointer. Shared by the compaction hook
-# and context-recovery statusline. Args: <label> [skip_gh] [session_id]. With skip_gh
-# non-empty the open-PRs call is omitted because the statusline is a hot path.
+# and context-recovery statusline. Args: <label> [skip_gh] [session_id] [publish_timeout].
+# With skip_gh non-empty the open-PRs call is omitted because the statusline is a hot path.
 hook_write_checkpoint() {
-  local label="$1" skip_gh="${2:-}" session generation
+  local label="$1" skip_gh="${2:-}" session publish_timeout="${4:-5}" generation
   session=$(hook_session_key "${3:-shared}")
   generation=$(hook_checkpoint_generation) || return 0
   local d; d=$(hook_project_dir); [ -n "$d" ] || return 0
@@ -227,7 +237,7 @@ hook_write_checkpoint() {
     printf '%s\n' "${dirty:-  (clean)}" | sed 's/^/  /'
   } > "$out_tmp" 2>/dev/null || { rm -f "$out_tmp" 2>/dev/null; return 0; }
   mv "$out_tmp" "$out" 2>/dev/null || { rm -f "$out_tmp" 2>/dev/null; return 0; }
-  hook_publish_checkpoint "$latest" "$out" "$generation" || true
+  hook_publish_checkpoint "$latest" "$out" "$generation" "$publish_timeout" || true
 }
 
 # Loop-mode detection (Wave 2 autonomy gate). Returns 0 (true) when the autonomous
@@ -607,7 +617,7 @@ _hook_worktree_write_transaction() {
     }
 }
 
-# Restore a durable in-flight transaction. Return 0 after restoring a moved worktree,
+# Restore a process-death-recoverable in-flight transaction. Return 0 after restoring a moved worktree,
 # 1 when a pre-move marker was merely cleared, and 2 when recovery is unsafe.
 _hook_worktree_restore_transaction() {
   local root="$1" transaction="$2" original quarantine third original_rc quarantine_rc
@@ -657,14 +667,24 @@ _hook_worktree_interrupted() {
   exit "$rc"
 }
 
+_hook_worktree_matches_expected_identity() {
+  local wt="$1" expected_branch="$2" expected_head="$3" branch head
+  [ -n "$expected_branch" ] && [ -n "$expected_head" ] || return 0
+  branch=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 2
+  head=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || return 2
+  [ "$branch" = "$expected_branch" ] && [ "$head" = "$expected_head" ]
+}
+
 # Remove a registered worktree only while holding the same mutex used by SessionStart
 # lease registration. The worktree is moved to an unpublished sibling quarantine before
 # the final status and open-reference scans. Return 2 when the mutex is unavailable, 3
 # for a live session, 4 for local state, 5 when status is unavailable, 6 when quarantine
 # restoration fails, 7 for a retained process reference, 8 after recovering an interrupted
-# quarantine, 9 when open-reference status is unavailable, otherwise return git's status.
+# quarantine, 9 when open-reference status is unavailable, 10 when the branch or HEAD
+# changed after candidate classification, otherwise return git's status.
 hook_safe_worktree_remove() {
-  local root="$1" wt="$2" rc state_rc quarantine restore_rc transaction reference_rc session_dir
+  local root="$1" wt="$2" expected_branch="${3:-}" expected_head="${4:-}"
+  local rc state_rc quarantine restore_rc transaction reference_rc session_dir identity_rc
   root=$(_hook_canonical_worktree "$root")
   wt=$(_hook_canonical_worktree "$wt")
   if [ ! -e "$wt" ]; then
@@ -693,6 +713,13 @@ hook_safe_worktree_remove() {
       1) return 8 ;;
       *) return 6 ;;
     esac
+  fi
+  _hook_worktree_matches_expected_identity "$wt" "$expected_branch" "$expected_head"
+  identity_rc=$?
+  if [ "$identity_rc" -ne 0 ]; then
+    hook_worktree_lock_release || true
+    [ "$identity_rc" -eq 1 ] && return 10
+    return 5
   fi
   hook_prune_stale_starting_leases "$wt"
   if worktree_has_live_session "$wt"; then
@@ -743,9 +770,17 @@ hook_safe_worktree_remove() {
       case "$state_rc" in
         0) rc=4 ;;
         1)
-        git -C "$root" worktree remove "$quarantine"
-        rc=$?
-        ;;
+          _hook_worktree_matches_expected_identity "$quarantine" "$expected_branch" "$expected_head"
+          identity_rc=$?
+          case "$identity_rc" in
+            0)
+              git -C "$root" worktree remove "$quarantine"
+              rc=$?
+              ;;
+            1) rc=10 ;;
+            *) rc=5 ;;
+          esac
+          ;;
         *) rc=5 ;;
       esac
       ;;

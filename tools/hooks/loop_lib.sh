@@ -196,9 +196,9 @@ loop_activate() {
   # NOTE: worktree GC is intentionally NOT called here. `tools/04-loop/run.sh` installs its
   # `.loop-active`-cleanup EXIT/INT/TERM trap only AFTER loop_activate returns, so a slow
   # gh/GC step here would open a pre-trap interruption window that could leave loop mode
-  # armed on Ctrl-C (codex P2). GC fires from the SessionStart hook (loop-gc.sh, covering
-  # headless children + live re-opens + /clear) and from the /loop-start skill (covering
-  # in-session activation) — both outside the runner's pre-trap path.
+  # armed on Ctrl-C (codex P2). SessionStart only reports candidates; explicit
+  # post-merge/closeout worktree disposition performs the removal after the runner trap
+  # is installed and no active session owns the candidate.
 }
 
 # Turn loop mode OFF: remove the marker + log the deactivation. Usage: loop_deactivate [reason]
@@ -214,8 +214,8 @@ loop_deactivate() {
 # ── Worktree garbage collection (U-HK-26) ─────────────────────────────────────
 # The autonomous loop ships PRs whose worktrees go stale after merge, and nothing
 # reaps them (git-arc-guard checks commits/branches; session-end-cleanup is
-# advisory-only; a hook can't remove the worktree it runs INSIDE). loop_gc_worktrees
-# collects them at the next session's start, self-excluding the current worktree.
+# advisory-only; a hook can't remove the worktree it runs INSIDE). SessionStart reports
+# candidates; explicit post-merge/closeout disposition calls loop_gc_worktrees reap.
 #
 # WORKTREES ONLY — never `git branch -d/-D`. `git worktree remove` on a clean tree is
 # REVERSIBLE (branch + commits persist; `git worktree add` re-creates it); a merged
@@ -255,7 +255,7 @@ _loop_gc_local_state() {
 
 # Decide the disposition of ONE worktree and act per MODE.
 # Args: <path> <branch> <current_toplevel> <default_branch> <mode> <root>
-#   mode=reap   → `git worktree remove` + log to the ledger (loop mode).
+#   mode=reap   → mutex-backed worktree removal + log to the ledger (loop mode).
 #   mode=report → echo "<path> (<branch>)" for a reapable candidate (HIL, read-only).
 # Safe-subset gate (ALL must hold): not the current worktree; has a branch (not
 # detached); not the default branch; branch's PR merged at the worktree's exact HEAD
@@ -298,7 +298,7 @@ _loop_gc_consider() {
     printf '%s (%s)\n' "$path" "$branch"
     return 0
   fi
-  hook_safe_worktree_remove "$root" "$path" 2>/dev/null
+  hook_safe_worktree_remove "$root" "$path" "$branch" "$head_oid" 2>/dev/null
   local remove_rc=$?
   case "$remove_rc" in
     0) loop_log GC "reaped worktree $path (branch $branch merged+clean; branch ref left for operator)" ;;
@@ -310,13 +310,15 @@ _loop_gc_consider() {
     7) loop_log GC "skipped $path ($branch) — process retains a reference into the worktree" ;;
     8) loop_log GC "restored interrupted quarantine for $path ($branch); retry deferred" ;;
     9) loop_log GC "skipped $path ($branch) — process-reference state unavailable" ;;
+    10) loop_log GC "skipped $path ($branch) — branch or HEAD changed after classification" ;;
     *) loop_log GC "skipped $path ($branch) — git worktree remove refused (locked/untracked)" ;;
   esac
 }
 
-# Garbage-collect stale worktrees. WORKTREES ONLY; fail-safe to zero removals when the
-# merged set is unavailable. Deterministic bash (NOT a Claude tool call) → bypasses
-# permission-guard; the safe-subset gate above is the backstop. Always returns 0.
+# Garbage-collect stale worktrees only when invoked explicitly after merge/closeout.
+# WORKTREES ONLY; fail-safe to zero removals when the merged set is unavailable.
+# Deterministic bash (NOT a Claude tool call) → bypasses permission-guard; the
+# safe-subset gate above is the backstop. Always returns 0.
 #   mode=reap   (default) → remove + log each disposition.
 #   mode=report           → echo "<path> (<branch>)" per reapable candidate (read-only).
 # Usage: loop_gc_worktrees [reap|report]

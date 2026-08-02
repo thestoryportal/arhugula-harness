@@ -68,7 +68,7 @@ so a quarantine move cannot split their authority. The explicit remover alone mo
 candidate to an unpublished sibling quarantine before its authoritative scans. This
 closes new lookups through the original pathname; retained cwd, file-descriptor, and Linux
 mapping references are detected fail-closed before a final local-state scan and deletion.
-The macOS `lsof` observation is time-bounded and timeout is unknown/fail-closed. A durable transaction restores interrupted
+The macOS `lsof` observation is time-bounded and timeout is unknown/fail-closed. A process-death recovery transaction restores interrupted
 quarantines on TERM and lets a later removal pass recover after untrappable process death.
 `just codex-worktree-gc --reap` uses this same status and removal entrypoint; it cannot
 bypass Codex leases, quarantine, or the shared mutex.

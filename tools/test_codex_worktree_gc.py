@@ -288,6 +288,7 @@ assert proc.returncode == 124, proc
         (7, "retained process reference"),
         (8, "restored interrupted quarantine"),
         (9, "process-reference state unavailable"),
+        (10, "branch or HEAD changed"),
     ],
 )
 def test_reap_candidates_maps_safe_refusal_outcomes_without_failure(
@@ -315,6 +316,38 @@ def test_reap_candidates_maps_safe_refusal_outcomes_without_failure(
 
     assert gc.reap_candidates(tmp_path, [disposition]) == 0
     assert message in capsys.readouterr().out
+
+
+def test_reap_passes_classified_branch_and_head_to_locked_remover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worktree = gc.Worktree(tmp_path / "candidate", "b" * 40, "codex/candidate")
+    disposition = gc.Disposition(worktree, "candidate", "merged-by-ancestry")
+    calls: list[list[str]] = []
+
+    def fake_run(
+        args: list[str],
+        *,
+        cwd: Path,
+        timeout: int = 30,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, timeout, env
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(gc, "_run", fake_run)
+
+    assert gc.reap_candidates(tmp_path, [disposition]) == 0
+    assert calls[0] == [
+        "/bin/bash",
+        str(gc.SAFE_WORKTREE_REMOVE),
+        "--expect-branch",
+        "codex/candidate",
+        "--expect-head",
+        "b" * 40,
+        str(worktree.path),
+    ]
 
 
 def test_reap_rechecks_session_lease_after_candidate_classification(

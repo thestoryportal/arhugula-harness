@@ -50,8 +50,12 @@ codex-test *args:
 codex-sync:
     uv sync --all-packages
 
+# Blocking provider-free regression lane for Codex hooks, permissions, lifecycle, and GC.
+codex-parity-check:
+    bash tools/codex-parity-check.sh
+
 # Codex PR-ready local gate without live provider credentials.
-codex-check: codex-sync lint typecheck docs-completeness-check memory-closeout-check closure-certification-check
+codex-check: codex-sync lint typecheck docs-completeness-check memory-closeout-check closure-certification-check codex-parity-check
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"
 
 # ─── Codex deterministic context guard ─────────────────────────────────────

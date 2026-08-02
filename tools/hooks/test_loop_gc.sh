@@ -163,11 +163,12 @@ loop_gc_worktrees reap
 export HOME="$OLDHOME"
 wt_present wt-merged && ok "Codex live-session worktree kept" || bad "reaped a worktree with a live Codex session"
 
-# The public loop GC entrypoint must preserve safe refusal/recovery dispositions 7/8/9.
+# The public loop GC entrypoint must preserve safe refusal/recovery dispositions 7/8/9/10.
 for REMOVE_CASE in \
   '7:process retains a reference' \
   '8:restored interrupted quarantine' \
-  '9:process-reference state unavailable'; do
+  '9:process-reference state unavailable' \
+  '10:branch or HEAD changed after classification'; do
   build_fixture
   export CLAUDE_PROJECT_DIR="$BASE/main"
   FORCED_REMOVE_RC=${REMOVE_CASE%%:*}

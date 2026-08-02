@@ -12,6 +12,17 @@ PASS=0; FAIL=0
 ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 eq()  { [ "$2" = "$3" ] && ok "$1 ($2)" || bad "$1: got '$2' want '$3'"; }
+wait_bounded() {
+  local pid="$1" seconds="$2" watchdog rc
+  ( sleep "$seconds"; kill -KILL "$pid" 2>/dev/null ) &
+  watchdog=$!
+  wait "$pid" 2>/dev/null
+  rc=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  [ "$rc" -eq 137 ] && return 124
+  return "$rc"
+}
 
 # hook_state_hash — deterministic 12-hex, matches the raw recipe.
 WANT=$(printf '%s|%s|%s|%s' a b c d | shasum -a 256 | head -c 12)
@@ -256,6 +267,18 @@ eq "under-lock local-state recheck refuses removal" "$(cat "$RESULT")" "4"
 [ -f "$LOCAL_RACE/.env" ] && ok "under-lock local-state recheck preserves ignored file" \
   || bad "under-lock local-state recheck deleted ignored file"
 
+# Candidate merge proof names an exact branch and HEAD. Advancing that branch after
+# classification but before the mutex is acquired must refuse removal.
+IDENTITY_RACE="$REPO-identity-race"
+git -C "$REPO" worktree add -q -b identity-race "$IDENTITY_RACE"
+IDENTITY_EXPECTED=$(git -C "$IDENTITY_RACE" rev-parse HEAD)
+git -C "$IDENTITY_RACE" commit -q --allow-empty -m "late unmerged work"
+hook_safe_worktree_remove "$REPO" "$IDENTITY_RACE" identity-race "$IDENTITY_EXPECTED"
+IDENTITY_RC=$?
+eq "under-lock identity recheck refuses advanced HEAD" "$IDENTITY_RC" "10"
+[ -d "$IDENTITY_RACE" ] && ok "advanced worktree is preserved" \
+  || bad "advanced worktree was removed"
+
 # A pathname writer that runs after the authoritative status scan must not be able to
 # place ignored state inside the directory being deleted. The remover must quarantine
 # the registered worktree first, so a recreated original path remains untouched.
@@ -443,7 +466,7 @@ for SIGNAL_CASE in HUP:129 INT:130 TERM:143; do
     sleep 0.1
   done
   kill "-$CANCEL_SIGNAL" "$CANCEL_PID"
-  wait "$CANCEL_PID" 2>/dev/null
+  wait_bounded "$CANCEL_PID" 10
   CANCEL_RC=$?
   eq "$CANCEL_SIGNAL recovery preserves signal status" "$CANCEL_RC" "$CANCEL_EXPECTED"
   [ -d "$CANCELLED" ] && ok "$CANCEL_SIGNAL restores quarantined worktree" \
@@ -454,7 +477,39 @@ for SIGNAL_CASE in HUP:129 INT:130 TERM:143; do
     || bad "$CANCEL_SIGNAL left registered quarantine: $CANCEL_HIDDEN"
 done
 
-# SIGKILL cannot run a shell trap. The durable transaction must let the next GC pass
+# A commit that lands after quarantine but before the final deletion check must also
+# restore the worktree and preserve the new commit.
+POST_IDENTITY="$REPO-post-quarantine-identity"
+POST_IDENTITY_RESULT="$REPO/post-quarantine-identity-result"
+POST_IDENTITY_COMMITTED="$REPO/post-quarantine-identity-committed"
+git -C "$REPO" worktree add -q -b post-quarantine-identity "$POST_IDENTITY"
+POST_IDENTITY_EXPECTED=$(git -C "$POST_IDENTITY" rev-parse HEAD)
+(
+  trap - EXIT
+  . "$SCRIPT_DIR/lib.sh"
+  git() {
+    command git "$@"
+    local git_rc=$?
+    if [ "$git_rc" -eq 0 ] && [ "${1:-}" = "-C" ] && [ "${3:-}" = "worktree" ] \
+      && [ "${4:-}" = "move" ] && [ ! -f "$POST_IDENTITY_COMMITTED" ]; then
+      command git -C "$6" commit -q --allow-empty -m "late quarantined work"
+      : > "$POST_IDENTITY_COMMITTED"
+    fi
+    return "$git_rc"
+  }
+  hook_safe_worktree_remove "$REPO" "$POST_IDENTITY" \
+    post-quarantine-identity "$POST_IDENTITY_EXPECTED"
+  printf '%s' "$?" > "$POST_IDENTITY_RESULT"
+)
+eq "post-quarantine identity recheck refuses advanced HEAD" \
+  "$(cat "$POST_IDENTITY_RESULT")" "10"
+[ -d "$POST_IDENTITY" ] && ok "post-quarantine advanced worktree is restored" \
+  || bad "post-quarantine advanced worktree was stranded"
+[ "$(git -C "$POST_IDENTITY" rev-list --count "$POST_IDENTITY_EXPECTED"..HEAD)" = "1" ] \
+  && ok "post-quarantine new commit is preserved" \
+  || bad "post-quarantine new commit was lost"
+
+# SIGKILL cannot run a shell trap. The process-death recovery transaction must let the next GC pass
 # restore the hidden registered worktree instead of deleting or permanently stranding it.
 KILLED="$REPO-killed-quarantine"
 KILLED_READY="$REPO/killed-quarantine-ready"
@@ -498,7 +553,7 @@ KILLED_STILL_HIDDEN=$(git -C "$REPO" worktree list --porcelain | sed -n 's/^work
 [ -z "$KILLED_STILL_HIDDEN" ] && ok "SIGKILL recovery leaves no registered quarantine" \
   || bad "SIGKILL recovery left registered quarantine: $KILLED_STILL_HIDDEN"
 
-# A kill after the durable marker is written but before Git moves the worktree leaves a
+# A kill after the recovery marker is written but before Git moves the worktree leaves a
 # pre-move transaction. The next pass must clear/report recovery without deleting it.
 PRE_MOVE="$REPO-pre-move-transaction"
 PRE_MOVE_RESULT="$REPO/pre-move-transaction-result"
@@ -518,7 +573,7 @@ eq "pre-move transaction recovery defers deletion" "$(cat "$PRE_MOVE_RESULT")" "
 [ -d "$PRE_MOVE" ] && ok "pre-move transaction recovery preserves worktree" \
   || bad "pre-move transaction recovery deleted worktree"
 
-# If the remover dies after Git deletes the worktree but before unlinking the durable
+# If the remover dies after Git deletes the worktree but before unlinking the recovery
 # transaction, the public entrypoint must find and clear the both-paths-absent marker.
 POST_DELETE="$REPO-post-delete-transaction"
 POST_DELETE_READY="$REPO/post-delete-transaction-ready"
@@ -546,7 +601,7 @@ kill -KILL "$POST_DELETE_PID"
 wait "$POST_DELETE_PID" 2>/dev/null
 [ ! -e "$POST_DELETE" ] && ok "post-delete interruption occurs after worktree removal" \
   || bad "post-delete interruption did not remove worktree"
-[ -f "$POST_DELETE_TRANSACTION" ] && ok "post-delete interruption leaves durable marker" \
+[ -f "$POST_DELETE_TRANSACTION" ] && ok "post-delete interruption leaves recovery marker" \
   || bad "post-delete interruption did not leave transaction marker"
 (
   . "$SCRIPT_DIR/lib.sh"
@@ -596,7 +651,8 @@ EOF
 for WRAPPER_CASE in \
   '7:retained process references' \
   '8:restored an interrupted quarantine' \
-  '9:process-reference state unavailable'; do
+  '9:process-reference state unavailable' \
+  '10:branch or HEAD changed after classification'; do
   WRAPPER_RC=${WRAPPER_CASE%%:*}
   WRAPPER_MESSAGE=${WRAPPER_CASE#*:}
   WRAPPER_STDERR="$REPO/wrapper-${WRAPPER_RC}.stderr"
@@ -649,6 +705,29 @@ if grep -q '^new$' "$RACE_LATEST" 2>/dev/null; then
 else
   bad "checkpoint lock released with helper process"
 fi
+
+# A hot-path publisher must not wait indefinitely behind a suspended writer.
+(
+  exec 9>> "${RACE_LATEST}.lock"
+  /usr/bin/python3 - 9 <<'PY'
+import fcntl
+import sys
+import time
+
+fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX)
+time.sleep(3)
+PY
+) &
+LOCK_HOLDER_PID=$!
+sleep 0.1
+SECONDS=0
+hook_publish_checkpoint "$RACE_LATEST" "$NEW_SOURCE" 3 0.2
+BOUNDED_PUBLISH_RC=$?
+BOUNDED_PUBLISH_ELAPSED=$SECONDS
+wait "$LOCK_HOLDER_PID"
+{ [ "$BOUNDED_PUBLISH_RC" -ne 0 ] && [ "$BOUNDED_PUBLISH_ELAPSED" -lt 2 ]; } \
+  && ok "checkpoint publisher lock wait is bounded" \
+  || bad "checkpoint publisher blocked: elapsed=${BOUNDED_PUBLISH_ELAPSED}s rc=${BOUNDED_PUBLISH_RC}"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

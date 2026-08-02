@@ -36,7 +36,7 @@ if [ -n "$input" ] && command -v jq >/dev/null 2>&1; then
         mark="$proj/.harness/.checkpoints/.ctxmarks/${sid:-s}-${T}"
         if [ ! -e "$mark" ]; then
           mkdir -p "$(dirname "$mark")" 2>/dev/null && : > "$mark" 2>/dev/null
-          hook_write_checkpoint "Context-threshold ${T}% proactive save (session ${sid:-?})" skip_gh "${sid:-s}"
+          hook_write_checkpoint "Context-threshold ${T}% proactive save (session ${sid:-?})" skip_gh "${sid:-s}" 0.2
         fi
       fi
     fi
