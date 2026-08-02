@@ -8,6 +8,15 @@ unset HARNESS_CODEX_REVIEW_ISOLATED
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib.sh"
 
+# Safe-removal tests exercise the transaction, mutex, identity, and quarantine
+# paths with a deterministic clean reference scan. The dedicated retained-cwd,
+# mmap, unavailable-observer, and lsof-timeout witnesses below exercise the real
+# production observer separately. This keeps the suite portable to Linux CI
+# runners whose ptrace policy makes unrelated same-user /proc entries unreadable.
+eval "$(declare -f _hook_worktree_open_references | \
+  sed '1s/_hook_worktree_open_references/_hook_worktree_open_references_production/')"
+_hook_worktree_open_references() { return 1; }
+
 PASS=0; FAIL=0
 ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
@@ -429,7 +438,7 @@ PY
     [ -f "$MMAP_READY" ] && break
     sleep 0.1
   done
-  _hook_worktree_open_references "$MMAP_TARGET" >/dev/null
+  _hook_worktree_open_references_production "$MMAP_TARGET" >/dev/null
   MMAP_RC=$?
   : > "$MMAP_RELEASE"
   wait "$MMAP_PID"

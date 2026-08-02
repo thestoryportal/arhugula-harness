@@ -22,6 +22,20 @@ ROOT = Path(__file__).resolve().parents[1]
 os.environ.pop("HARNESS_CODEX_REVIEW_ISOLATED", None)
 
 
+@pytest.fixture(autouse=True)
+def _deterministic_clean_reference_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep safe-removal integration tests independent of host ptrace policy."""
+    fixture = tmp_path / "safe-remover-fixture"
+    fixture.mkdir()
+    wrapper = fixture / "safe-worktree-remove.sh"
+    library = fixture / "lib.sh"
+    shutil.copy2(gc.SAFE_WORKTREE_REMOVE, wrapper)
+    shutil.copy2(ROOT / "tools" / "hooks" / "lib.sh", library)
+    with library.open("a", encoding="utf-8") as stream:
+        stream.write("\n_hook_worktree_open_references() { return 1; }\n")
+    monkeypatch.setattr(gc, "SAFE_WORKTREE_REMOVE", wrapper)
+
+
 def _git(cwd: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", *args],
