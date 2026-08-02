@@ -306,6 +306,7 @@ _loop_gc_consider() {
     2) loop_log GC "skipped $path ($branch) — session/removal mutex unavailable" ;;
     4) loop_log GC "skipped $path ($branch) — local state appeared before removal" ;;
     5) loop_log GC "skipped $path ($branch) — local state unavailable under removal mutex" ;;
+    6) loop_log GC "skipped $path ($branch) — quarantined worktree restore failed" ;;
     *) loop_log GC "skipped $path ($branch) — git worktree remove refused (locked/untracked)" ;;
   esac
 }

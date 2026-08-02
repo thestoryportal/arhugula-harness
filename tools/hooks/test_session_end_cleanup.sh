@@ -4,6 +4,8 @@
 # a repo with no GitHub remote, so the merged-branch section is empty (fine).
 
 set -uo pipefail
+# This suite exercises the normal SessionEnd path, not the inert reviewer child path.
+unset HARNESS_CODEX_REVIEW_ISOLATED
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/session-end-cleanup.sh"
 

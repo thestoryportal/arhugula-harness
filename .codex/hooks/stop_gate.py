@@ -53,7 +53,7 @@ def render_guard(payload: object) -> tuple[str, set[str]]:
             message = finding.get("message")
             if (
                 not isinstance(severity, str)
-                or not severity
+                or severity not in {"hard", "warn", "info"}
                 or not isinstance(code, str)
                 or not code
                 or not isinstance(message, str)

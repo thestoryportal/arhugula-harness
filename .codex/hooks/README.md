@@ -62,8 +62,11 @@ the session lease remains active. Direct `git worktree remove` is denied because
 cannot hold a mutex after it exits; use `tools/hooks/safe-worktree-remove.sh <path>`. Its
 kernel-owned lock survives long removals without age-based theft, active leases remain
 authoritative until SessionEnd, and registration/activation revalidate the worktree after
-locking. `just codex-worktree-gc --reap` uses this same status and removal entrypoint; it
-cannot bypass Codex leases or the shared mutex.
+locking. The remover atomically moves a clean candidate to an unpublished sibling
+quarantine before its authoritative status scan, so writes through the original pathname
+cannot enter the directory Git deletes; any state found inside quarantine is restored.
+`just codex-worktree-gc --reap` uses this same status and removal entrypoint; it cannot
+bypass Codex leases, quarantine, or the shared mutex.
 
 Credential-gated work should advance to the exact credential boundary first. If
 no HIL/operator-approval surface is available, log the pending gate with

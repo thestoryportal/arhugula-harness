@@ -428,11 +428,32 @@ EOF
   return 0
 }
 
+# Choose an unpublished sibling path on the same filesystem. Moving the registered
+# worktree here closes the original pathname before the authoritative scan, so a
+# non-participating writer cannot place new state inside the directory being deleted.
+_hook_worktree_quarantine_path() {
+  local wt="$1" parent base candidate attempt=0
+  parent=$(dirname "$wt")
+  base=$(basename "$wt")
+  while [ "$attempt" -lt 100 ]; do
+    candidate="${parent}/.harness-removing-${base}-$$-${attempt}"
+    if [ ! -e "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
 # Remove a registered worktree only while holding the same mutex used by SessionStart
-# lease registration. Return 2 when the mutex is unavailable, 3 for a live session,
-# 4 for local state, 5 when status is unavailable, otherwise return git's status.
+# lease registration. The worktree is moved to an unpublished sibling quarantine before
+# the final status scan; writes through the original pathname are thereby preserved
+# outside the directory Git removes. Return 2 when the mutex is unavailable, 3 for a
+# live session, 4 for local state, 5 when status is unavailable, 6 when quarantine
+# restoration fails, otherwise return git's status.
 hook_safe_worktree_remove() {
-  local root="$1" wt="$2" rc state_rc
+  local root="$1" wt="$2" rc state_rc quarantine restore_rc
   hook_worktree_lock_acquire "$wt" || return 2
   hook_prune_stale_starting_leases "$wt"
   if worktree_has_live_session "$wt"; then
@@ -452,8 +473,37 @@ hook_safe_worktree_remove() {
       return 5
       ;;
   esac
-  git -C "$root" worktree remove "$wt"
+  quarantine=$(_hook_worktree_quarantine_path "$wt") || {
+    hook_worktree_lock_release || true
+    return 6
+  }
+  git -C "$root" worktree move "$wt" "$quarantine"
   rc=$?
+  if [ "$rc" -ne 0 ]; then
+    hook_worktree_lock_release || true
+    return "$rc"
+  fi
+  hook_worktree_local_state "$quarantine" >/dev/null
+  state_rc=$?
+  case "$state_rc" in
+    0|1) ;;
+    *) state_rc=2 ;;
+  esac
+  if [ "$state_rc" -ne 1 ]; then
+    git -C "$root" worktree move "$quarantine" "$wt"
+    restore_rc=$?
+    hook_worktree_lock_release || true
+    [ "$restore_rc" -eq 0 ] || return 6
+    [ "$state_rc" -eq 0 ] && return 4
+    return 5
+  fi
+  git -C "$root" worktree remove "$quarantine"
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ -d "$quarantine" ]; then
+    git -C "$root" worktree move "$quarantine" "$wt"
+    restore_rc=$?
+    [ "$restore_rc" -eq 0 ] || rc=6
+  fi
   hook_worktree_lock_release || true
   return "$rc"
 }

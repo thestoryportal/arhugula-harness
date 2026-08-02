@@ -4,7 +4,8 @@
 Dry-run is the default. The reap path removes only linked worktrees that are
 clean, not current/default, have no live Claude/Codex session, and are proven
 merged either by ancestry or exact merged-PR head SHA. Removal uses the same
-mutex and session lease authority as SessionStart. Branch refs are never deleted.
+mutex, session lease authority, and quarantine protocol as SessionStart. Branch
+refs are never deleted.
 """
 
 from __future__ import annotations

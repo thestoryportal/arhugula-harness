@@ -233,4 +233,6 @@ unavailable, the guard emits `OPEN_PRS_UNAVAILABLE` instead of silently
 treating the open-PR set as authoritative.
 
 The Codex `SessionStart` and `Stop` hooks invoke the same guard. Hook failures
-propagate nonzero when the guard reports a hard finding or cannot run.
+propagate nonzero when the guard cannot run or reports a hard finding, except that
+`CODEX_LOOP_INCOMPLETE` alone is advisory at `Stop` while the explicit
+`just codex-closeout` completion/commit/PR gate remains hard.

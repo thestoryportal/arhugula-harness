@@ -239,6 +239,51 @@ eq "under-lock local-state recheck refuses removal" "$(cat "$RESULT")" "4"
 [ -f "$LOCAL_RACE/.env" ] && ok "under-lock local-state recheck preserves ignored file" \
   || bad "under-lock local-state recheck deleted ignored file"
 
+# A pathname writer that runs after the authoritative status scan must not be able to
+# place ignored state inside the directory being deleted. The remover must quarantine
+# the registered worktree first, so a recreated original path remains untouched.
+POST_SCAN="$REPO-post-scan-race"
+git -C "$REPO" worktree add -q -b post-scan-race "$POST_SCAN"
+POST_SCAN_RESULT="$REPO/post-scan-remove-result"
+(
+  . "$SCRIPT_DIR/lib.sh"
+  git() {
+    if [ "${1:-}" = "-C" ] && [ "${3:-}" = "worktree" ] && [ "${4:-}" = "remove" ]; then
+      mkdir -p "$POST_SCAN"
+      printf 'SECRET\n' > "$POST_SCAN/.env"
+    fi
+    command git "$@"
+  }
+  hook_safe_worktree_remove "$REPO" "$POST_SCAN"
+  printf '%s' "$?" > "$POST_SCAN_RESULT"
+)
+eq "quarantine removal succeeds despite late original-path writer" "$(cat "$POST_SCAN_RESULT")" "0"
+[ -f "$POST_SCAN/.env" ] && ok "quarantine preserves post-scan original-path state" \
+  || bad "quarantine deleted post-scan original-path state"
+
+# State appearing inside the quarantine before its scan must abort removal and restore
+# both the registered worktree and its local state at the original path.
+QUARANTINE_RACE="$REPO-quarantine-race"
+git -C "$REPO" worktree add -q -b quarantine-race "$QUARANTINE_RACE"
+QUARANTINE_RESULT="$REPO/quarantine-remove-result"
+(
+  . "$SCRIPT_DIR/lib.sh"
+  git() {
+    if [ "${1:-}" = "-C" ] && [ "${3:-}" = "worktree" ] && [ "${4:-}" = "move" ]; then
+      command git "$@"
+      local move_rc=$?
+      [ "$move_rc" -eq 0 ] && printf 'SECRET\n' > "$6/.env"
+      return "$move_rc"
+    fi
+    command git "$@"
+  }
+  hook_safe_worktree_remove "$REPO" "$QUARANTINE_RACE"
+  printf '%s' "$?" > "$QUARANTINE_RESULT"
+)
+eq "quarantine scan refuses newly appeared state" "$(cat "$QUARANTINE_RESULT")" "4"
+[ -f "$QUARANTINE_RACE/.env" ] && ok "quarantine restores newly appeared state" \
+  || bad "quarantine failed to restore newly appeared state"
+
 STATUS_FAIL="$REPO-status-failure"
 git -C "$REPO" worktree add -q -b status-failure "$STATUS_FAIL"
 STATUS_RESULT="$REPO/status-failure-result"

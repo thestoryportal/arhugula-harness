@@ -6,6 +6,9 @@
 # never blocks (exit 0, even on empty stdin). No network — the save uses skip_gh.
 
 set -uo pipefail
+# This suite exercises normal production hooks, even when launched by an isolated
+# merge-gate reviewer whose own hook processes must remain inert.
+unset HARNESS_CODEX_REVIEW_ISOLATED
 SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/context-recovery.sh"
 PASS=0; FAIL=0
 ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }

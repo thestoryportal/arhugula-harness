@@ -213,6 +213,9 @@ def test_reap_rechecks_session_lease_after_candidate_classification(
         isolated=True,
     )
     assert start.returncode == 0, start.stderr
+    lease = next((repo / ".git" / "codex-worktree-sessions").rglob("session-classified-live.lease"))
+    assert lease.read_text(encoding="utf-8").splitlines()[0] == "active"
+    os.utime(lease, (0, 0))
 
     assert gc.reap_candidates(repo, dispositions) == 0
     assert worktree.exists()
