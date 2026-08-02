@@ -15,7 +15,7 @@ repo churn; it does not mean reduced parity.
 | Global gstack skills | Claude skill catalog | Same gstack packages are already present in Codex's discovered skill catalog |
 | Project memory | Claude project `memory/MEMORY.md` plus linked topic files | Mandatory discipline digest at startup; task-relevant index/topic lookup remains available and required |
 | Context checkpoints | gstack `context-save` / `context-restore` and repo handoffs | Same gstack skills plus `.harness/handoff/README-resume.md` and Codex deterministic checkpoints; all advisory until HEAD verification |
-| Out-of-family review | Codex reviewed Claude-authored diffs | OAuth-authenticated Antigravity (`agy`) pinned to Gemini 3.6 Flash High through `just gemini-review` reviews Codex-authored diffs |
+| Out-of-family review | Codex reviewed Claude-authored diffs | OAuth-authenticated Antigravity (`agy`) pinned to Gemini 3.1 Pro High through `just gemini-review` reviews Codex-authored diffs |
 | Pre-merge review | Three fresh agent lenses | Three fresh ephemeral, lifecycle-isolated, read-only `codex exec` lenses; all-approve and logged |
 | CI | Green PR CI, then green `main` CI | Same, including merge-SHA pinning and terminating-refresh `main` CI before forward work |
 | Git autonomy | Safe scoped commands with destructive operations guarded | Same scoped approvals plus permission guard; force push, history rewrite, remote delete, and force cleanup remain denied |
@@ -58,7 +58,7 @@ diff on every forward arc; Codex must not ask for that approval again. Direct Ge
 API calls, API keys, service-account credentials, and Vertex project routing are forbidden for
 this review. `tools/agy_review.py` writes tracked and untracked changes to a private temporary
 review file added to the CLI workspace (never a size-limited command argument), strips those
-provider credential/routing variables, pins `gemini-3.6-flash-high`, stays in plan mode, and
+provider credential/routing variables, pins `gemini-3.1-pro-high`, stays in plan mode, and
 fails closed unless the final non-empty output line is an exact approval or block.
 
 ## Permissions and safe Git command shape

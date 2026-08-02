@@ -115,9 +115,10 @@ printf '%s' "${UV_CACHE_DIR:-}" > "${UV_CACHE_OBS:?}"
 exit 0
 EOF
 chmod +x "$REPO/bin/uv"
+ln -s "$(command -v jq)" "$REPO/bin/jq"
 printf 'cache_probe = 1\n' > "$REPO/mod.py"
 unset UV_CACHE_DIR
-OUT=$(UV_CACHE_OBS="$REPO/uv-cache-observed" run false)
+OUT=$(PATH="$REPO/bin:/usr/bin:/bin" UV_CACHE_OBS="$REPO/uv-cache-observed" run false)
 [ -z "$OUT" ] && ok "uv-backed clean lint allows stop" || bad "uv-backed lint blocked: $OUT"
 [ "$(cat "$REPO/uv-cache-observed")" = "/tmp/arhugula-uv-cache" ] \
   && ok "uv-backed lint uses repo-safe cache" \

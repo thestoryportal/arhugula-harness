@@ -116,7 +116,7 @@ def test_review_passes_actual_diff_and_accepts_exact_verdict(tmp_path: Path) -> 
     assert "--sandbox" in args
     assert "--dangerously-skip-permissions" in args
     assert "--new-project" in args
-    assert args[args.index("--model") + 1] == "gemini-3.6-flash-high"
+    assert args[args.index("--model") + 1] == "gemini-3.1-pro-high"
     assert f"authoritative workspace root is {tmp_path}" in prompt
     assert (tmp_path / "agy-cwd.txt").read_text(encoding="utf-8").strip() == str(tmp_path)
     assert proc.stdout.rstrip().endswith("VERDICT: APPROVE")

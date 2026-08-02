@@ -106,7 +106,7 @@ def run_review(repo: Path, base: str) -> int:
                     "--mode",
                     "plan",
                     "--model",
-                    "gemini-3.6-flash-high",
+                    "gemini-3.1-pro-high",
                     "--add-dir",
                     scratch,
                     "--log-file",
