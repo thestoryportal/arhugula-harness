@@ -365,6 +365,9 @@ def reap_candidates(repo: Path, dispositions: list[Disposition]) -> int:
         if proc.returncode == 3:
             print(f"skipped removal of {d.worktree.path}: live Claude/Codex session")
             continue
+        if proc.returncode == 4:
+            print(f"skipped removal of {d.worktree.path}: local state appeared")
+            continue
         if proc.returncode != 0:
             failures += 1
             print(

@@ -32,6 +32,8 @@ case "$rc" in
   0) exit 0 ;;
   3) echo "safe-worktree-remove: target has a live Claude/Codex session" >&2 ;;
   2) echo "safe-worktree-remove: session/removal mutex unavailable" >&2 ;;
+  4) echo "safe-worktree-remove: target has local state" >&2 ;;
+  5) echo "safe-worktree-remove: target local state unavailable" >&2 ;;
   *) echo "safe-worktree-remove: git refused removal" >&2 ;;
 esac
 exit "$rc"

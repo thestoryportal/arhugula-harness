@@ -193,6 +193,102 @@ def test_reap_removes_only_candidates_and_keeps_branches(tmp_path: Path) -> None
     assert _git(repo, "rev-parse", "--verify", "codex/done")
 
 
+def test_reap_rechecks_session_lease_after_candidate_classification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _init_repo(tmp_path)
+    worktree = _add_worktree(repo, tmp_path, "codex/classified-live")
+    dispositions = _dispositions(repo)
+    candidate = next(d for d in dispositions if d.worktree.path == worktree)
+    assert candidate.action == "candidate"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    start = _run_hook(
+        "codex-session-start.sh",
+        worktree,
+        "classified-live",
+        home=home,
+        isolated=True,
+    )
+    assert start.returncode == 0, start.stderr
+
+    assert gc.reap_candidates(repo, dispositions) == 0
+    assert worktree.exists()
+
+    end = _run_hook(
+        "codex-session-end.sh",
+        worktree,
+        "classified-live",
+        home=home,
+        isolated=True,
+    )
+    assert end.returncode == 0, end.stderr
+
+
+def test_normal_session_start_activates_lease_until_session_end(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    hook_root = tmp_path / "normal-hook-root"
+    hook_dir = hook_root / "tools" / "hooks"
+    posture_dir = hook_root / ".codex" / "hooks"
+    roadmap_dir = hook_root / "tools" / "roadmap-audit"
+    hook_dir.mkdir(parents=True)
+    posture_dir.mkdir(parents=True)
+    roadmap_dir.mkdir(parents=True)
+    for name in (
+        "codex-session-start.sh",
+        "codex-session-end.sh",
+        "session-lease.sh",
+        "lib.sh",
+    ):
+        shutil.copy2(ROOT / "tools" / "hooks" / name, hook_dir / name)
+    (posture_dir / "session_start.py").write_text("print('posture ready')\n", encoding="utf-8")
+    (roadmap_dir / "session-start.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (hook_dir / "loop-gc.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (hook_dir / "session-end-cleanup.sh").write_text(
+        "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
+    )
+    env = os.environ.copy()
+    env.pop("HARNESS_CODEX_REVIEW_ISOLATED", None)
+    env.update({"CLAUDE_PROJECT_DIR": str(repo), "HOME": str(home)})
+    payload = json.dumps({"session_id": "normal-activation", "cwd": str(repo)})
+
+    start = subprocess.run(
+        ["bash", str(hook_dir / "codex-session-start.sh")],
+        cwd=repo,
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert start.returncode == 0, start.stderr
+    assert json.loads(start.stdout)["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    lease = next(
+        (repo / ".git" / "codex-worktree-sessions").rglob("session-normal-activation.lease")
+    )
+    assert lease.read_text(encoding="utf-8").splitlines()[0] == "active"
+
+    end = subprocess.run(
+        ["bash", str(hook_dir / "codex-session-end.sh")],
+        cwd=repo,
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert end.returncode == 0, end.stderr
+    assert not lease.exists()
+
+
 def test_reap_from_linked_worktree_never_removes_that_worktree(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

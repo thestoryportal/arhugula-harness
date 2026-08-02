@@ -56,12 +56,18 @@ def test_stop_gate_reports_incomplete_loop_without_failing_hook(tmp_path: Path) 
     guard.parent.mkdir()
     guard.write_text(
         """#!/usr/bin/env python3
+import json
 import sys
 
 if len(sys.argv) > 1 and sys.argv[1] == "checkpoint":
     print("checkpoint written")
     raise SystemExit(0)
-print("HARD CODEX_LOOP_INCOMPLETE: decorrelated_review missing")
+finding = {
+    "severity": "hard",
+    "code": "CODEX_LOOP_INCOMPLETE",
+    "message": "decorrelated_review missing",
+}
+print(json.dumps({"root": ".", "branch": "main", "findings": [finding]}))
 raise SystemExit(1)
 """,
         encoding="utf-8",
@@ -83,6 +89,47 @@ raise SystemExit(1)
     payload = json.loads(proc.stdout)
     assert payload["continue"] is True
     assert "HARD CODEX_LOOP_INCOMPLETE" in payload["systemMessage"]
+
+
+def test_stop_gate_propagates_non_loop_hard_closeout(tmp_path: Path) -> None:
+    hook = tmp_path / ".codex" / "hooks" / "stop_gate.py"
+    hook.parent.mkdir(parents=True)
+    shutil.copy2(ROOT / ".codex" / "hooks" / "stop_gate.py", hook)
+
+    guard = tmp_path / "tools" / "codex_context_guard.py"
+    guard.parent.mkdir()
+    guard.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+
+if len(sys.argv) > 1 and sys.argv[1] == "checkpoint":
+    print("checkpoint written")
+    raise SystemExit(0)
+finding = {
+    "severity": "hard",
+    "code": "ROADMAP_STATUS_DRIFT",
+    "message": "roadmap drift",
+}
+print(json.dumps({"root": ".", "branch": "main", "findings": [finding]}))
+raise SystemExit(1)
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+
+    proc = subprocess.run(
+        [sys.executable, str(hook)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert proc.returncode == 1
+    assert "ROADMAP_STATUS_DRIFT" in proc.stderr
+    assert proc.stdout == ""
 
 
 def test_stop_gate_keeps_checkpoint_creation_failure_hard(tmp_path: Path) -> None:

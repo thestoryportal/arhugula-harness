@@ -34,7 +34,7 @@ Every Claude hook behavior supported by Codex's lifecycle is wired here. The Cod
 | `UserPromptSubmit` | prompt context + skill activation + prompt lint | Direct |
 | `SubagentStart` / `SubagentStop` | existing subagent validation | Direct |
 | `SessionEnd` | lease-first release + local-only cleanup in one three-second handler | Direct |
-| `Stop` | Claude stop gate + git arc guard + loop stop, followed by the Codex context gate | Direct plus Codex guard |
+| `Stop` | Claude stop gate + git arc guard + loop stop, alongside the Codex context gate | Direct plus Codex guard |
 | `StopFailure` | no dedicated Codex lifecycle event exists | Not event-exact; stop failures remain visible and recurring command failures still flow through the adapter |
 
 Codex has no dedicated `PostToolUseFailure` or `StopFailure` event. The first is covered for

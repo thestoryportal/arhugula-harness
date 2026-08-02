@@ -402,17 +402,56 @@ hook_release_session_lease() {
   return "$rc"
 }
 
+# Ignored entries matching this regenerable allowlist are safe to discard with a completed
+# worktree. Everything else is local state because `git worktree remove` deletes ignored
+# files without requiring --force. This is the single filter used before and under the
+# removal mutex.
+_HOOK_REGEN_IGNORED='^!! (.*/)?(\.harness/|__pycache__/|.*\.py[co]|.*\.egg-info/|\.pytest_cache/|\.ruff_cache/|\.pyright/|\.mypy_cache/|\.venv/|venv/|env/|dist/|build/|htmlcov/|coverage\.xml|\.coverage|\.DS_Store|.*\.swp|\.vscode/|\.idea/|node_modules/)|^!! (\.claude/(skills/|settings\.local\.json|scheduled_tasks\.lock)|\.impeccable/)'
+
+# Print reap-blocking local state. Return 0 when residue exists, 1 when clean, and 2 when
+# status cannot be established. Callers must treat 2 as fail-closed.
+hook_worktree_local_state() {
+  local wt="$1" raw line residue=""
+  raw=$(git -C "$wt" status --porcelain --ignored 2>/dev/null) || return 2
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if printf '%s\n' "$line" | grep -Eq "$_HOOK_REGEN_IGNORED"; then
+      continue
+    fi
+    residue="${residue}${residue:+
+}${line}"
+  done <<EOF
+$raw
+EOF
+  [ -n "$residue" ] || return 1
+  printf '%s\n' "$residue"
+  return 0
+}
+
 # Remove a registered worktree only while holding the same mutex used by SessionStart
-# lease registration. Return 3 when a live session wins the race, 2 when the mutex cannot
-# be acquired, otherwise return git's status.
+# lease registration. Return 2 when the mutex is unavailable, 3 for a live session,
+# 4 for local state, 5 when status is unavailable, otherwise return git's status.
 hook_safe_worktree_remove() {
-  local root="$1" wt="$2" rc
+  local root="$1" wt="$2" rc state_rc
   hook_worktree_lock_acquire "$wt" || return 2
   hook_prune_stale_starting_leases "$wt"
   if worktree_has_live_session "$wt"; then
     hook_worktree_lock_release || true
     return 3
   fi
+  hook_worktree_local_state "$wt" >/dev/null
+  state_rc=$?
+  case "$state_rc" in
+    0)
+      hook_worktree_lock_release || true
+      return 4
+      ;;
+    1) ;;
+    *)
+      hook_worktree_lock_release || true
+      return 5
+      ;;
+  esac
   git -C "$root" worktree remove "$wt"
   rc=$?
   hook_worktree_lock_release || true

@@ -97,6 +97,18 @@ printf '%s\n' "$OUT" | grep -qF "$BASE/wt-merged (feat-merged)" && ok "report li
 printf '%s\n' "$OUT" | grep -qE "wt-dirty|wt-unmerged|wt-precious" && bad "report listed a non-candidate" || ok "report excludes non-candidates"
 wt_present wt-merged && ok "report removed nothing (read-only)" || bad "report deleted a worktree"
 
+# Candidate observation is not removal authority: a SessionStart lease registered after
+# report/classification must still be rechecked by the real loop reap path.
+LIVE_HOME="$BASE/live-home"; mkdir -p "$LIVE_HOME"
+OLDHOME="$HOME"; export HOME="$LIVE_HOME"
+hook_register_session_lease "$BASE/wt-merged" "classified-live"
+hook_activate_session_lease "$BASE/wt-merged" "classified-live"
+loop_gc_worktrees reap
+wt_present wt-merged && ok "loop reap rechecks lease after candidate report" \
+  || bad "loop reap removed candidate after SessionStart lease"
+hook_release_session_lease "$BASE/wt-merged" "classified-live"
+export HOME="$OLDHOME"
+
 # ── 4) self-exclusion: current worktree is never reaped ───────────────────────
 build_fixture
 export CLAUDE_PROJECT_DIR="$BASE/wt-merged"   # we ARE the merged+clean worktree now

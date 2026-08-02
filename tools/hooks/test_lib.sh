@@ -210,6 +210,48 @@ else
 fi
 wait "$REMOVE_PID"
 
+# A precious ignored file can appear after an outer candidate check. Hold the mutex so
+# removal queues, create the file, then prove the under-lock check preserves both.
+LOCAL_RACE="$REPO-local-state-race"
+git -C "$REPO" worktree add -q -b local-state-race "$LOCAL_RACE"
+printf '.env\n' >> "$REPO/.git/info/exclude"
+READY="$REPO/local-state-lock-ready"
+RESULT="$REPO/local-state-remove-result"
+(
+  . "$SCRIPT_DIR/lib.sh"
+  hook_worktree_lock_acquire "$LOCAL_RACE" || exit 1
+  : > "$READY"
+  sleep 2
+  hook_worktree_lock_release
+) &
+LOCAL_LOCK_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$READY" ] && break; sleep 0.1; done
+(
+  . "$SCRIPT_DIR/lib.sh"
+  hook_safe_worktree_remove "$REPO" "$LOCAL_RACE"
+  printf '%s' "$?" > "$RESULT"
+) &
+LOCAL_REMOVE_PID=$!
+printf 'SECRET\n' > "$LOCAL_RACE/.env"
+wait "$LOCAL_LOCK_PID"
+wait "$LOCAL_REMOVE_PID"
+eq "under-lock local-state recheck refuses removal" "$(cat "$RESULT")" "4"
+[ -f "$LOCAL_RACE/.env" ] && ok "under-lock local-state recheck preserves ignored file" \
+  || bad "under-lock local-state recheck deleted ignored file"
+
+STATUS_FAIL="$REPO-status-failure"
+git -C "$REPO" worktree add -q -b status-failure "$STATUS_FAIL"
+STATUS_RESULT="$REPO/status-failure-result"
+(
+  . "$SCRIPT_DIR/lib.sh"
+  hook_worktree_local_state() { return 2; }
+  hook_safe_worktree_remove "$REPO" "$STATUS_FAIL"
+  printf '%s' "$?" > "$STATUS_RESULT"
+)
+eq "under-lock status failure refuses removal" "$(cat "$STATUS_RESULT")" "5"
+[ -d "$STATUS_FAIL" ] && ok "under-lock status failure preserves worktree" \
+  || bad "under-lock status failure removed worktree"
+
 # hook_write_checkpoint (U-HK-27 writer): writes an atomic session-specific latest pointer
 # with the label; skip_gh omits the open-PRs gh lookup (fast path — no network in this test).
 CLAUDE_PROJECT_DIR="$REPO" hook_write_checkpoint "Test snapshot" skip_gh session-a

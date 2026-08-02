@@ -16,6 +16,10 @@ REPO="$(mktemp -d)"
 trap 'rm -rf "$REPO"' EXIT
 git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "$REPO" config user.name t
 git -C "$REPO" commit -q --allow-empty -m base
+git -C "$REPO" branch merged-local
+git -C "$REPO" checkout -q -b unmerged-local
+git -C "$REPO" commit -q --allow-empty -m unmerged
+git -C "$REPO" checkout -q main
 CK="$REPO/.harness/.checkpoints"; mkdir -p "$CK"
 BIN="$REPO/bin"; mkdir -p "$BIN"
 printf '#!/usr/bin/env bash\ntouch "$GH_CALLED"\nsleep 10\n' > "$BIN/gh"
@@ -42,6 +46,10 @@ KEPT=$(ls -1 "$CK"/precompact-2*.md 2>/dev/null | wc -l | tr -d ' ')
 [ -f "$CK/precompact-20260101-000015.md" ] && ok "newest snapshot kept" || bad "newest snapshot pruned"
 [ -f "$CK/session-end-report.md" ] && ok "writes hygiene report" || bad "no report"
 grep -q "MEMORY.md cap" "$CK/session-end-report.md" 2>/dev/null && ok "report has sections" || bad "report missing sections"
+grep -q '^- merged-local$' "$CK/session-end-report.md" 2>/dev/null \
+  && ok "report lists ancestry-merged branch" || bad "report missed merged branch"
+grep -q '^- unmerged-local$' "$CK/session-end-report.md" 2>/dev/null \
+  && bad "report lists unmerged branch" || ok "report excludes unmerged branch"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
