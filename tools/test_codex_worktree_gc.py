@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import codex_worktree_gc as gc
@@ -189,6 +191,25 @@ def test_reap_removes_only_candidates_and_keeps_branches(tmp_path: Path) -> None
     assert not done.exists()
     assert dirty.exists()
     assert _git(repo, "rev-parse", "--verify", "codex/done")
+
+
+def test_reap_from_linked_worktree_never_removes_that_worktree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _init_repo(tmp_path)
+    worktree = _add_worktree(repo, tmp_path, "codex/current")
+    previous = Path.cwd()
+
+    try:
+        os.chdir(worktree)
+        assert gc.repo_root(Path(".")) == worktree.resolve()
+        rc = gc.main(["--repo", ".", "--reap", "--no-gh", "--no-size"])
+    finally:
+        os.chdir(previous)
+
+    assert rc == 0
+    assert worktree.exists()
+    assert "current-worktree" in capsys.readouterr().out
 
 
 def test_production_gc_refuses_aged_active_session_until_session_end(

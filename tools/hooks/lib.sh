@@ -165,6 +165,8 @@ hook_publish_checkpoint() {
   local latest="$1" source="$2" generation="$3" lock current latest_tmp rc=0
   lock="${latest}.lock"
   exec 8>> "$lock" || return 1
+  # The helper and Bash share fd 8's inherited open-file description. The lock
+  # therefore remains held by Bash until the explicit close below.
   if ! /usr/bin/python3 - 8 <<'PY'
 import fcntl
 import sys
@@ -268,6 +270,8 @@ hook_worktree_lock_acquire() {
   lock="$session_dir/remove.lock"
   timeout="${HARNESS_WORKTREE_LOCK_TIMEOUT_SECONDS:-30}"
   exec 9>> "$lock" || return 1
+  # The helper and Bash share fd 9's inherited open-file description. The lock
+  # therefore remains held by Bash until hook_worktree_lock_release closes it.
   if ! /usr/bin/python3 - 9 "$timeout" <<'PY'
 import fcntl
 import sys

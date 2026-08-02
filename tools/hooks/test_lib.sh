@@ -218,5 +218,38 @@ LATEST="$REPO/.harness/.checkpoints/precompact-latest-session-a.md"
 grep -q "Test snapshot" "$LATEST" 2>/dev/null && ok "checkpoint carries the label" || bad "label missing"
 grep -q "skipped — fast path" "$LATEST" 2>/dev/null && ok "skip_gh omits gh PR lookup" || bad "skip_gh not honored"
 
+# The Python flock helper exits before the critical section, but Bash retains the
+# inherited open-file description. A deliberately slow older publish must therefore
+# finish before a newer generation can enter and become the final pointer.
+CHECKPOINT_RACE="$REPO/checkpoint-race"
+SLOW_BIN="$CHECKPOINT_RACE/bin"
+mkdir -p "$SLOW_BIN"
+cat > "$SLOW_BIN/cp" <<'EOF'
+#!/usr/bin/env bash
+: > "$CHECKPOINT_READY"
+sleep 2
+exec /bin/cp "$@"
+EOF
+chmod +x "$SLOW_BIN/cp"
+OLD_SOURCE="$CHECKPOINT_RACE/old.md"
+NEW_SOURCE="$CHECKPOINT_RACE/new.md"
+RACE_LATEST="$CHECKPOINT_RACE/latest.md"
+CHECKPOINT_READY="$CHECKPOINT_RACE/copy-ready"
+printf '<!-- checkpoint-generation: 1 -->\nold\n' > "$OLD_SOURCE"
+printf '<!-- checkpoint-generation: 2 -->\nnew\n' > "$NEW_SOURCE"
+(
+  export CHECKPOINT_READY
+  PATH="$SLOW_BIN:$PATH" hook_publish_checkpoint "$RACE_LATEST" "$OLD_SOURCE" 1
+) &
+OLD_PUBLISH_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$CHECKPOINT_READY" ] && break; sleep 0.1; done
+hook_publish_checkpoint "$RACE_LATEST" "$NEW_SOURCE" 2
+wait "$OLD_PUBLISH_PID"
+if grep -q '^new$' "$RACE_LATEST" 2>/dev/null; then
+  ok "checkpoint lock survives helper exit and orders publishers"
+else
+  bad "checkpoint lock released with helper process"
+fi
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
