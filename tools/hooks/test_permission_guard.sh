@@ -268,6 +268,8 @@ for c in \
   "just codex-loop-record --phase plan --status passed --command plan --evidence grounded" \
   "just codex-loop-status" \
   "just codex-loop-check" \
+  "just codex-worktree-gc" \
+  "just codex-worktree-gc --reap" \
   "just overlay-check"; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" = "allow" ] && ok "'$c' → allow controller lifecycle" || bad "'$c' not allowed: $OUT"
