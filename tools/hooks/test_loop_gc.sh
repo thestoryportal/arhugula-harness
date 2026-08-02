@@ -25,6 +25,12 @@ trap 'rm -rf "$BASE"' EXIT
 # shellcheck source=loop_lib.sh
 . "$SCRIPT_DIR/loop_lib.sh"
 
+# GC classification/recheck tests need a deterministic clean reference scan on
+# Linux runners whose ptrace policy makes unrelated same-user /proc entries
+# unreadable. Real retained/unavailable observer behavior is covered by test_lib.sh;
+# this suite separately preserves the public rc 7/8/9/10 mapping witnesses below.
+_hook_worktree_open_references() { return 1; }
+
 # Build the fixture: a main repo (with .gitignore) + linked worktrees.
 build_fixture() {
   rm -rf "$BASE"/* "$BASE"/.[!.]* 2>/dev/null || true
