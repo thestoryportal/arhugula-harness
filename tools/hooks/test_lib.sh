@@ -296,6 +296,7 @@ git -C "$REPO" worktree add -q -b post-scan-race "$POST_SCAN"
 POST_SCAN_RESULT="$REPO/post-scan-remove-result"
 (
   . "$SCRIPT_DIR/lib.sh"
+  _hook_worktree_open_references() { return 1; }
   git() {
     if [ "${1:-}" = "-C" ] && [ "${3:-}" = "worktree" ] && [ "${4:-}" = "remove" ]; then
       mkdir -p "$POST_SCAN"
@@ -317,6 +318,7 @@ git -C "$REPO" worktree add -q -b quarantine-race "$QUARANTINE_RACE"
 QUARANTINE_RESULT="$REPO/quarantine-remove-result"
 (
   . "$SCRIPT_DIR/lib.sh"
+  _hook_worktree_open_references() { return 1; }
   git() {
     if [ "${1:-}" = "-C" ] && [ "${3:-}" = "worktree" ] && [ "${4:-}" = "move" ]; then
       command git "$@"
@@ -496,6 +498,7 @@ POST_IDENTITY_EXPECTED=$(git -C "$POST_IDENTITY" rev-parse HEAD)
 (
   trap - EXIT
   . "$SCRIPT_DIR/lib.sh"
+  _hook_worktree_open_references() { return 1; }
   git() {
     command git "$@"
     local git_rc=$?
@@ -592,6 +595,7 @@ POST_DELETE_TRANSACTION=$(_hook_worktree_transaction_file "$POST_DELETE")
 (
   trap - EXIT
   . "$SCRIPT_DIR/lib.sh"
+  _hook_worktree_open_references() { return 1; }
   rm() {
     if [ "${1:-}" = "-f" ] && [ "${2:-}" = "$POST_DELETE_TRANSACTION" ]; then
       : > "$POST_DELETE_READY"
