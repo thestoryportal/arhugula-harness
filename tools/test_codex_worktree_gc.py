@@ -55,6 +55,7 @@ def _run_hook(
     home: Path,
     action: str | None = None,
     isolated: bool = False,
+    source: str = "startup",
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update({"CLAUDE_PROJECT_DIR": str(worktree), "HOME": str(home)})
@@ -66,7 +67,7 @@ def _run_hook(
     return subprocess.run(
         args,
         cwd=worktree,
-        input=json.dumps({"session_id": session_id, "cwd": str(worktree)}),
+        input=json.dumps({"session_id": session_id, "cwd": str(worktree), "source": source}),
         capture_output=True,
         text=True,
         check=False,
@@ -283,3 +284,96 @@ def test_session_start_posture_failure_releases_starting_lease(tmp_path: Path) -
 
     assert proc.returncode == 9
     assert not list((repo / ".git" / "codex-worktree-sessions").rglob("*.lease"))
+
+
+def test_failed_repeated_compact_start_preserves_active_lease_until_session_end(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path)
+    worktree = _add_worktree(repo, tmp_path, "codex/compact-failure")
+    home = tmp_path / "home"
+    home.mkdir()
+
+    first = _run_hook(
+        "codex-session-start.sh",
+        worktree,
+        "same-root",
+        home=home,
+        isolated=True,
+    )
+    assert first.returncode == 0, first.stderr
+    lease = next((repo / ".git" / "codex-worktree-sessions").rglob("session-same-root.lease"))
+    assert lease.read_text(encoding="utf-8").splitlines()[0] == "active"
+
+    hook_root = tmp_path / "failing-hook-root"
+    hook_dir = hook_root / "tools" / "hooks"
+    posture_dir = hook_root / ".codex" / "hooks"
+    hook_dir.mkdir(parents=True)
+    posture_dir.mkdir(parents=True)
+    for name in ("codex-session-start.sh", "session-lease.sh", "lib.sh"):
+        shutil.copy2(ROOT / "tools" / "hooks" / name, hook_dir / name)
+    (posture_dir / "session_start.py").write_text("raise SystemExit(9)\n", encoding="utf-8")
+
+    env = os.environ.copy()
+    env.update({"CLAUDE_PROJECT_DIR": str(worktree), "HOME": str(home)})
+    repeated = subprocess.run(
+        ["bash", str(hook_dir / "codex-session-start.sh")],
+        cwd=worktree,
+        input=json.dumps({"session_id": "same-root", "cwd": str(worktree), "source": "compact"}),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert repeated.returncode == 9
+    assert lease.read_text(encoding="utf-8").splitlines()[0] == "active"
+    os.utime(lease, (0, 0))
+    assert gc.main(["--repo", str(repo), "--reap", "--no-gh", "--no-size"]) == 0
+    assert worktree.exists()
+
+    end = _run_hook(
+        "codex-session-end.sh",
+        worktree,
+        "same-root",
+        home=home,
+        isolated=True,
+    )
+    assert end.returncode == 0, end.stderr
+    assert gc.main(["--repo", str(repo), "--reap", "--no-gh", "--no-size"]) == 0
+    assert not worktree.exists()
+
+
+def test_successful_repeated_compact_start_preserves_active_lease_identity(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    worktree = _add_worktree(repo, tmp_path, "codex/compact-success")
+    home = tmp_path / "home"
+    home.mkdir()
+
+    first = _run_hook(
+        "codex-session-start.sh",
+        worktree,
+        "same-root-success",
+        home=home,
+        isolated=True,
+    )
+    assert first.returncode == 0, first.stderr
+    lease = next(
+        (repo / ".git" / "codex-worktree-sessions").rglob("session-same-root-success.lease")
+    )
+    original_inode = lease.stat().st_ino
+    original_content = lease.read_text(encoding="utf-8")
+
+    repeated = _run_hook(
+        "codex-session-start.sh",
+        worktree,
+        "same-root-success",
+        home=home,
+        isolated=True,
+        source="compact",
+    )
+
+    assert repeated.returncode == 0, repeated.stderr
+    assert lease.stat().st_ino == original_inode
+    assert lease.read_text(encoding="utf-8") == original_content

@@ -9,6 +9,8 @@ Every Claude hook behavior supported by Codex's lifecycle is wired here. The Cod
   handlers cannot race lease registration against removal. It activates the lease only
   after startup succeeds; normal failures release immediately and an abandoned starting
   lease expires after a three-minute grace window, longer than the 105-second hook timeout.
+  A repeated `SessionStart(source=compact)` for the same root session preserves the active
+  lease, so failure or interruption of the compact-start cannot make that session reapable.
 - `pre_tool_use_policy.py` blocks only high-confidence boundary violations, especially X-AL-3 design/implementation mixing in a single command.
 - `permission_request.py` surfaces paid-provider, credential, destructive, and network-sensitive requests for operator review.
 - `stop_gate.py` reports worktree and verification posture without claiming success. An

@@ -309,6 +309,7 @@ _hook_session_pointer_file() {
 
 hook_register_session_lease() {
   local wt="$1" session session_dir registered_dir lease tmp pointer pointer_tmp
+  local canonical phase registered_worktree rc=0
   session=$(hook_session_key "$2")
   session_dir=$(_hook_worktree_session_dir "$wt") || return 1
   pointer=$(_hook_session_pointer_file "$session") || return 1
@@ -319,17 +320,26 @@ hook_register_session_lease() {
     hook_worktree_lock_release || true
     return 1
   fi
+  canonical=$(_hook_canonical_worktree "$wt")
   lease="$session_dir/session-${session}.lease"; tmp="${lease}.tmp-$$"
-  printf 'starting\n%s\n' "$(_hook_canonical_worktree "$wt")" > "$tmp" 2>/dev/null \
-    && mv "$tmp" "$lease" 2>/dev/null
-  local rc=$?
-  [ "$rc" -eq 0 ] || rm -f "$tmp" 2>/dev/null
-  if [ "$rc" -eq 0 ]; then
+  phase=$(head -n1 "$lease" 2>/dev/null || true)
+  registered_worktree=$(sed -n '2p' "$lease" 2>/dev/null || true)
+  if [ "$phase" = "active" ] && [ "$registered_worktree" = "$canonical" ]; then
+    # SessionStart fires again after compact for the same root session. Preserve the
+    # already-active lease and tell the wrapper it does not own startup cleanup.
+    rc=10
+  else
+    printf 'starting\n%s\n' "$canonical" > "$tmp" 2>/dev/null \
+      && mv "$tmp" "$lease" 2>/dev/null || rc=$?
+    [ "$rc" -eq 0 ] || rm -f "$tmp" 2>/dev/null
+  fi
+  if [ "$rc" -eq 0 ] || [ "$rc" -eq 10 ]; then
     pointer_tmp="${pointer}.tmp-$$"
     printf '%s\n' "$lease" > "$pointer_tmp" 2>/dev/null \
-      && mv "$pointer_tmp" "$pointer" 2>/dev/null
-    rc=$?
-    [ "$rc" -eq 0 ] || rm -f "$pointer_tmp" 2>/dev/null
+      && mv "$pointer_tmp" "$pointer" 2>/dev/null || {
+        rc=1
+        rm -f "$pointer_tmp" 2>/dev/null
+      }
   fi
   hook_worktree_lock_release || true
   return "$rc"

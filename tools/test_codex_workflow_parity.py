@@ -23,52 +23,70 @@ def _adapter_module():
     return module
 
 
-def _commands(event: str) -> list[str]:
+def _commands(event: str, matcher: str) -> list[str]:
     payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
-    return [hook["command"] for group in payload["hooks"].get(event, []) for hook in group["hooks"]]
+    return [
+        hook["command"]
+        for group in payload["hooks"].get(event, [])
+        if group.get("matcher", "") == matcher
+        for hook in group["hooks"]
+    ]
 
 
 @pytest.mark.parametrize(
-    ("event", "fragments"),
+    ("event", "matcher", "fragments"),
     [
         (
             "SessionStart",
+            "startup|resume|clear|compact",
             ["codex-session-start.sh"],
         ),
         (
             "PreToolUse",
+            "Bash|apply_patch|Edit|Write",
+            ["pre_tool_use_policy.py"],
+        ),
+        (
+            "PreToolUse",
+            "Bash",
             [
-                "pre_tool_use_policy.py",
                 "precmd-clear-cache.sh",
-                "permission-guard.sh",
                 "codex_hook_adapter.py pre-commit",
             ],
         ),
+        ("PreToolUse", "*", ["permission-guard.sh"]),
         (
             "PermissionRequest",
+            "*",
             ["permission_request.py", "permission-guard.sh"],
         ),
-        ("PreCompact", ["precompact-checkpoint.sh"]),
-        ("PostCompact", ["postcompact-reinject.sh"]),
-        ("SessionEnd", ["codex-session-end.sh"]),
+        ("PreCompact", "*", ["precompact-checkpoint.sh"]),
+        ("PostCompact", "*", ["postcompact-reinject.sh"]),
+        ("SessionEnd", "*", ["codex-session-end.sh"]),
         (
             "Stop",
+            "",
             ["stop_gate.py", "stop-gate.sh", "git-arc-guard.sh", "stop-loop.sh"],
         ),
-        ("SubagentStart", ["subagent-validate.sh"]),
-        ("SubagentStop", ["subagent-validate.sh"]),
+        ("SubagentStart", "*", ["subagent-validate.sh"]),
+        ("SubagentStop", "*", ["subagent-validate.sh"]),
         (
             "UserPromptSubmit",
+            "",
             ["prompt-context.sh", "skill-activation-check.sh", "prompt-lint.sh"],
         ),
         (
             "PostToolUse",
-            ["roadmap-audit/post-merge-refresh.sh", "codex_hook_adapter.py post-tool-use"],
+            "Bash",
+            ["roadmap-audit/post-merge-refresh.sh"],
         ),
+        ("PostToolUse", "*", ["codex_hook_adapter.py post-tool-use"]),
     ],
 )
-def test_codex_hooks_cover_supported_claude_lifecycle(event: str, fragments: list[str]) -> None:
-    commands = _commands(event)
+def test_codex_hooks_cover_supported_claude_lifecycle(
+    event: str, matcher: str, fragments: list[str]
+) -> None:
+    commands = _commands(event, matcher)
     for fragment in fragments:
         assert any(fragment in command.replace('"', "") for command in commands), (
             event,
@@ -393,13 +411,14 @@ def test_session_end_hook_uses_supported_timeout() -> None:
 
 
 def test_merge_gate_honors_operator_authorized_ten_pass_ceiling() -> None:
-    merge_gate = (ROOT / ".agents" / "skills" / "merge-gate" / "SKILL.md").read_text(
-        encoding="utf-8"
-    )
-
-    assert "ten rounds" in merge_gate
-    assert "An eleventh" in merge_gate
-    assert "substantive disagreement" in merge_gate
+    for path in [
+        ROOT / ".agents" / "skills" / "merge-gate" / "SKILL.md",
+        ROOT / ".claude" / "skills" / "merge-gate" / "SKILL.md",
+    ]:
+        merge_gate = path.read_text(encoding="utf-8")
+        assert "ten rounds" in merge_gate, path
+        assert "eleventh" in merge_gate.lower(), path
+        assert "disagreement" in merge_gate, path
 
 
 def test_every_shared_state_hook_is_inert_for_isolated_review(tmp_path: Path) -> None:
@@ -503,6 +522,41 @@ def test_every_tracked_claude_skill_has_a_codex_entrypoint() -> None:
     codex_names = {declared_name(path) for path in (ROOT / ".agents" / "skills").glob("*/SKILL.md")}
 
     assert claude_names <= codex_names
+
+
+def test_every_non_native_skill_bridge_preserves_its_canonical_source_contract() -> None:
+    def declared_name(path: Path) -> str:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("name:"):
+                return line.removeprefix("name:").strip()
+        raise AssertionError(f"missing skill name: {path}")
+
+    claude_skills = {
+        declared_name(path): path
+        for path in (ROOT / ".claude" / "skills").rglob("SKILL.md")
+        if subprocess.run(
+            ["git", "ls-files", "--error-unmatch", str(path.relative_to(ROOT))],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    }
+    codex_skills = {
+        declared_name(path): path for path in (ROOT / ".agents" / "skills").glob("*/SKILL.md")
+    }
+    native_codex_workflows = {"merge-gate", "roadmap-continue", "ship-pr"}
+
+    for name, canonical in claude_skills.items():
+        if name in native_codex_workflows:
+            continue
+        bridge = codex_skills[name].read_text(encoding="utf-8")
+        canonical_relative = str(canonical.relative_to(ROOT))
+        assert canonical_relative in bridge, (name, canonical_relative)
+        lowered = bridge.lower()
+        assert "complete" in lowered, name
+        assert "source of truth" in lowered or "full workflow" in lowered, name
+        assert "runner translations only" in lowered or "translate only runner" in lowered, name
 
 
 @pytest.mark.parametrize(
