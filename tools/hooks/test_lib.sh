@@ -66,6 +66,21 @@ trap 'rm -rf "$REPO"' EXIT
 git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "$REPO" config user.name t
 ( cd "$REPO" && echo x > f && git add -A && git commit -qm base )
 
+# The macOS lsof observation must have a hard bound and fail closed on timeout.
+SLOW_LSOF="$REPO/slow-lsof"
+cat > "$SLOW_LSOF" <<'EOF'
+#!/usr/bin/env bash
+trap '' TERM
+sleep 30
+EOF
+chmod +x "$SLOW_LSOF"
+SECONDS=0
+_hook_worktree_lsof_references "$REPO" "$SLOW_LSOF" >/dev/null 2>&1
+LSOF_RC=$?; LSOF_ELAPSED=$SECONDS
+{ [ "$LSOF_RC" -eq 2 ] && [ "$LSOF_ELAPSED" -lt 8 ]; } \
+  && ok "lsof reference observation is bounded and fails closed" \
+  || bad "lsof reference observation was not bounded: elapsed=${LSOF_ELAPSED}s rc=$LSOF_RC"
+
 # hook_default_branch — falls back to main when no origin/HEAD symref.
 eq "hook_default_branch fallback main" "$(cd "$REPO" && hook_default_branch)" "main"
 
@@ -286,6 +301,24 @@ eq "quarantine scan refuses newly appeared state" "$(cat "$QUARANTINE_RESULT")" 
 [ -f "$QUARANTINE_RACE/.env" ] && ok "quarantine restores newly appeared state" \
   || bad "quarantine failed to restore newly appeared state"
 
+# A pre-resolved writer can write and exit after reference observation. Reference
+# observation must therefore precede the final state scan so that write is preserved.
+LATE_IGNORED="$REPO-late-ignored-write"
+LATE_IGNORED_RESULT="$REPO/late-ignored-write-result"
+git -C "$REPO" worktree add -q -b late-ignored-write "$LATE_IGNORED"
+(
+  . "$SCRIPT_DIR/lib.sh"
+  _hook_worktree_open_references() {
+    printf 'SECRET\n' > "$1/.env"
+    return 1
+  }
+  hook_safe_worktree_remove "$REPO" "$LATE_IGNORED"
+  printf '%s' "$?" > "$LATE_IGNORED_RESULT"
+)
+eq "post-reference late write refuses deletion" "$(cat "$LATE_IGNORED_RESULT")" "4"
+[ -f "$LATE_IGNORED/.env" ] && ok "post-reference late write is restored" \
+  || bad "post-reference late write was deleted"
+
 # Moving a registered worktree must not change its mutex/lease namespace. A SessionStart
 # launched from a process already inside the moved tree must queue on the remover's lock,
 # not create an unseen lease under a second pathname-derived key.
@@ -346,38 +379,80 @@ eq "pre-resolved cwd refuses quarantine deletion" "$(cat "$HELD_RESULT")" "7"
 [ -f "$HELD_CWD/.env" ] && ok "pre-resolved cwd state is preserved" \
   || bad "pre-resolved cwd state was deleted"
 
-# TERM after the move must restore the registered path before the remover exits.
-CANCELLED="$REPO-cancelled-quarantine"
-CANCEL_READY="$REPO/cancelled-quarantine-ready"
-git -C "$REPO" worktree add -q -b cancelled-quarantine "$CANCELLED"
-(
-  trap - EXIT
-  . "$SCRIPT_DIR/lib.sh"
-  git() {
-    command git "$@"
-    local git_rc=$?
-    if [ "$git_rc" -eq 0 ] && [ "${1:-}" = "-C" ] && [ "${3:-}" = "worktree" ] \
-      && [ "${4:-}" = "move" ] && [ ! -f "$CANCEL_READY" ]; then
-      : > "$CANCEL_READY"
-      while :; do sleep 1; done
-    fi
-    return "$git_rc"
-  }
-  hook_safe_worktree_remove "$REPO" "$CANCELLED"
-) &
-CANCEL_PID=$!
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-  [ -f "$CANCEL_READY" ] && break
-  sleep 0.1
+# Linux: a writable shared mapping remains a kernel reference after its fd closes.
+# The procfs observer must detect it before deletion.
+if [ -d /proc/self/fd ]; then
+  MMAP_TARGET="$REPO/mmap-target"
+  MMAP_READY="$REPO/mmap-ready"
+  MMAP_RELEASE="$REPO/mmap-release"
+  mkdir -p "$MMAP_TARGET"
+  printf '0123456789abcdef\n' > "$MMAP_TARGET/data.bin"
+  /usr/bin/python3 - "$MMAP_TARGET/data.bin" "$MMAP_READY" "$MMAP_RELEASE" <<'PY' &
+import mmap
+import sys
+import time
+from pathlib import Path
+
+with Path(sys.argv[1]).open("r+b") as stream:
+    mapped = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_WRITE)
+Path(sys.argv[2]).touch()
+while not Path(sys.argv[3]).exists():
+    time.sleep(0.05)
+mapped[0:1] = b"X"
+mapped.close()
+PY
+  MMAP_PID=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ -f "$MMAP_READY" ] && break
+    sleep 0.1
+  done
+  _hook_worktree_open_references "$MMAP_TARGET" >/dev/null
+  MMAP_RC=$?
+  : > "$MMAP_RELEASE"
+  wait "$MMAP_PID"
+  eq "writable mmap is a retained worktree reference" "$MMAP_RC" "0"
+fi
+
+# HUP, INT, and TERM after the move must each restore the path and preserve the
+# signal-specific shell status promised by the public remover.
+for SIGNAL_CASE in HUP:129 INT:130 TERM:143; do
+  CANCEL_SIGNAL=${SIGNAL_CASE%%:*}
+  CANCEL_EXPECTED=${SIGNAL_CASE##*:}
+  CANCEL_BRANCH=$(printf '%s' "$CANCEL_SIGNAL" | tr '[:upper:]' '[:lower:]')
+  CANCELLED="$REPO-cancelled-${CANCEL_BRANCH}-quarantine"
+  CANCEL_READY="$REPO/cancelled-${CANCEL_BRANCH}-ready"
+  git -C "$REPO" worktree add -q -b "cancelled-${CANCEL_BRANCH}-quarantine" "$CANCELLED"
+  (
+    trap - EXIT
+    . "$SCRIPT_DIR/lib.sh"
+    git() {
+      command git "$@"
+      local git_rc=$?
+      if [ "$git_rc" -eq 0 ] && [ "${1:-}" = "-C" ] && [ "${3:-}" = "worktree" ] \
+        && [ "${4:-}" = "move" ] && [ ! -f "$CANCEL_READY" ]; then
+        : > "$CANCEL_READY"
+        while :; do sleep 1; done
+      fi
+      return "$git_rc"
+    }
+    hook_safe_worktree_remove "$REPO" "$CANCELLED"
+  ) &
+  CANCEL_PID=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ -f "$CANCEL_READY" ] && break
+    sleep 0.1
+  done
+  kill "-$CANCEL_SIGNAL" "$CANCEL_PID"
+  wait "$CANCEL_PID" 2>/dev/null
+  CANCEL_RC=$?
+  eq "$CANCEL_SIGNAL recovery preserves signal status" "$CANCEL_RC" "$CANCEL_EXPECTED"
+  [ -d "$CANCELLED" ] && ok "$CANCEL_SIGNAL restores quarantined worktree" \
+    || bad "$CANCEL_SIGNAL stranded quarantined worktree"
+  CANCEL_HIDDEN=$(git -C "$REPO" worktree list --porcelain | sed -n 's/^worktree //p' \
+    | grep '/\.harness-removing-' | head -n1)
+  [ -z "$CANCEL_HIDDEN" ] && ok "$CANCEL_SIGNAL leaves no registered quarantine" \
+    || bad "$CANCEL_SIGNAL left registered quarantine: $CANCEL_HIDDEN"
 done
-kill -TERM "$CANCEL_PID"
-wait "$CANCEL_PID" 2>/dev/null
-[ -d "$CANCELLED" ] && ok "TERM restores quarantined worktree" \
-  || bad "TERM stranded quarantined worktree"
-CANCEL_HIDDEN=$(git -C "$REPO" worktree list --porcelain | sed -n 's/^worktree //p' \
-  | grep '/\.harness-removing-' | head -n1)
-[ -z "$CANCEL_HIDDEN" ] && ok "TERM leaves no registered quarantine" \
-  || bad "TERM left registered quarantine: $CANCEL_HIDDEN"
 
 # SIGKILL cannot run a shell trap. The durable transaction must let the next GC pass
 # restore the hidden registered worktree instead of deleting or permanently stranding it.
@@ -443,6 +518,45 @@ eq "pre-move transaction recovery defers deletion" "$(cat "$PRE_MOVE_RESULT")" "
 [ -d "$PRE_MOVE" ] && ok "pre-move transaction recovery preserves worktree" \
   || bad "pre-move transaction recovery deleted worktree"
 
+# If the remover dies after Git deletes the worktree but before unlinking the durable
+# transaction, the public entrypoint must find and clear the both-paths-absent marker.
+POST_DELETE="$REPO-post-delete-transaction"
+POST_DELETE_READY="$REPO/post-delete-transaction-ready"
+POST_DELETE_RESULT="$REPO/post-delete-transaction-result"
+git -C "$REPO" worktree add -q -b post-delete-transaction "$POST_DELETE"
+POST_DELETE_TRANSACTION=$(_hook_worktree_transaction_file "$POST_DELETE")
+(
+  trap - EXIT
+  . "$SCRIPT_DIR/lib.sh"
+  rm() {
+    if [ "${1:-}" = "-f" ] && [ "${2:-}" = "$POST_DELETE_TRANSACTION" ]; then
+      : > "$POST_DELETE_READY"
+      while :; do sleep 1; done
+    fi
+    command rm "$@"
+  }
+  hook_safe_worktree_remove "$REPO" "$POST_DELETE"
+) &
+POST_DELETE_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [ -f "$POST_DELETE_READY" ] && break
+  sleep 0.1
+done
+kill -KILL "$POST_DELETE_PID"
+wait "$POST_DELETE_PID" 2>/dev/null
+[ ! -e "$POST_DELETE" ] && ok "post-delete interruption occurs after worktree removal" \
+  || bad "post-delete interruption did not remove worktree"
+[ -f "$POST_DELETE_TRANSACTION" ] && ok "post-delete interruption leaves durable marker" \
+  || bad "post-delete interruption did not leave transaction marker"
+(
+  . "$SCRIPT_DIR/lib.sh"
+  hook_safe_worktree_remove "$REPO" "$POST_DELETE"
+  printf '%s' "$?" > "$POST_DELETE_RESULT"
+)
+eq "public remover recovers post-delete transaction" "$(cat "$POST_DELETE_RESULT")" "8"
+[ ! -f "$POST_DELETE_TRANSACTION" ] && ok "post-delete recovery clears transaction" \
+  || bad "post-delete recovery left transaction residue"
+
 OPEN_UNKNOWN="$REPO-open-reference-unknown"
 OPEN_UNKNOWN_RESULT="$REPO/open-reference-unknown-result"
 git -C "$REPO" worktree add -q -b open-reference-unknown "$OPEN_UNKNOWN"
@@ -469,6 +583,31 @@ STATUS_RESULT="$REPO/status-failure-result"
 eq "under-lock status failure refuses removal" "$(cat "$STATUS_RESULT")" "5"
 [ -d "$STATUS_FAIL" ] && ok "under-lock status failure preserves worktree" \
   || bad "under-lock status failure removed worktree"
+
+# The executable public wrapper must preserve the three nonfailure refusal/recovery
+# diagnostics instead of collapsing them into a generic error.
+WRAPPER_FIXTURE="$REPO/wrapper-fixture"
+mkdir -p "$WRAPPER_FIXTURE"
+cp "$SCRIPT_DIR/safe-worktree-remove.sh" "$WRAPPER_FIXTURE/safe-worktree-remove.sh"
+cat > "$WRAPPER_FIXTURE/lib.sh" <<'EOF'
+hook_project_dir() { printf '/tmp'; }
+hook_safe_worktree_remove() { return "${FAKE_REMOVE_RC:?}"; }
+EOF
+for WRAPPER_CASE in \
+  '7:retained process references' \
+  '8:restored an interrupted quarantine' \
+  '9:process-reference state unavailable'; do
+  WRAPPER_RC=${WRAPPER_CASE%%:*}
+  WRAPPER_MESSAGE=${WRAPPER_CASE#*:}
+  WRAPPER_STDERR="$REPO/wrapper-${WRAPPER_RC}.stderr"
+  FAKE_REMOVE_RC="$WRAPPER_RC" /bin/bash "$WRAPPER_FIXTURE/safe-worktree-remove.sh" \
+    /tmp/candidate 2> "$WRAPPER_STDERR"
+  WRAPPER_ACTUAL=$?
+  eq "public wrapper preserves rc $WRAPPER_RC" "$WRAPPER_ACTUAL" "$WRAPPER_RC"
+  grep -qF "$WRAPPER_MESSAGE" "$WRAPPER_STDERR" \
+    && ok "public wrapper maps rc $WRAPPER_RC diagnostic" \
+    || bad "public wrapper lost rc $WRAPPER_RC diagnostic"
+done
 
 # hook_write_checkpoint (U-HK-27 writer): writes an atomic session-specific latest pointer
 # with the label; skip_gh omits the open-PRs gh lookup (fast path — no network in this test).

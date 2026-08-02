@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -213,6 +215,106 @@ def test_run_timeout_delivers_term_before_forced_kill(tmp_path: Path) -> None:
 
     assert proc.returncode == 124
     assert marker.read_text(encoding="utf-8") == "term"
+
+
+def test_run_timeout_force_kills_term_ignoring_process_tree(tmp_path: Path) -> None:
+    parent_pid_file = tmp_path / "parent.pid"
+    child_pid_file = tmp_path / "child.pid"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PARENT_PID_FILE": str(parent_pid_file),
+            "CHILD_PID_FILE": str(child_pid_file),
+        }
+    )
+    command = (
+        'printf %s $$ > "$PARENT_PID_FILE"; '
+        "trap '' TERM; "
+        "bash -c 'trap \"\" TERM; while :; do sleep 1; done' & "
+        'printf %s $! > "$CHILD_PID_FILE"; wait'
+    )
+    probe = f"""
+import sys
+from pathlib import Path
+sys.path.insert(0, {str(ROOT / "tools")!r})
+import codex_worktree_gc as gc
+proc = gc._run(
+    ["bash", "-c", {command!r}],
+    cwd=Path({str(tmp_path)!r}),
+    timeout=1,
+    env={env!r},
+)
+assert proc.returncode == 124, proc
+"""
+    controller = subprocess.Popen(
+        [sys.executable, "-c", probe],
+        cwd=tmp_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = controller.communicate(timeout=12)
+    except subprocess.TimeoutExpired:
+        if parent_pid_file.exists():
+            try:
+                os.killpg(int(parent_pid_file.read_text(encoding="utf-8")), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            os.killpg(controller.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        controller.communicate()
+        pytest.fail("_run() did not bound the final pipe drain after forced kill")
+
+    assert controller.returncode == 0, (stdout, stderr)
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"forced-kill descendant survived: pid={child_pid}")
+
+
+@pytest.mark.parametrize(
+    ("returncode", "message"),
+    [
+        (7, "retained process reference"),
+        (8, "restored interrupted quarantine"),
+        (9, "process-reference state unavailable"),
+    ],
+)
+def test_reap_candidates_maps_safe_refusal_outcomes_without_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    returncode: int,
+    message: str,
+) -> None:
+    worktree = gc.Worktree(tmp_path / "candidate", "a" * 40, "codex/candidate")
+    disposition = gc.Disposition(worktree, "candidate", "merged-by-ancestry")
+
+    def fake_run(
+        args: list[str],
+        *,
+        cwd: Path,
+        timeout: int = 30,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, timeout, env
+        rc = returncode if args[:2] == ["/bin/bash", str(gc.SAFE_WORKTREE_REMOVE)] else 0
+        return subprocess.CompletedProcess(args, rc, "", "")
+
+    monkeypatch.setattr(gc, "_run", fake_run)
+
+    assert gc.reap_candidates(tmp_path, [disposition]) == 0
+    assert message in capsys.readouterr().out
 
 
 def test_reap_rechecks_session_lease_after_candidate_classification(

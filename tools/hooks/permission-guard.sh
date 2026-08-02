@@ -396,6 +396,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--raw-field|--input|-f[[:space:]]|-F[[:space:]])' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+merge.*--admin' \
      || printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+commit.*--amend' \
+     || printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+fetch([[:space:]]+[^[:space:]]+)*[[:space:]]+(-u([[:space:]]|$)|--upload-pack(=|[[:space:]]|$))' \
      || printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+branch[[:space:]]+(-f|--force|-m|-M|--move|-c|-C|--copy)'; then
     :  # chained / nested / redirected / destructive submode (incl. git commit --amend) → ask
   else

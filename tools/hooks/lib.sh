@@ -245,8 +245,12 @@ _WORKTREE_SESSION_WINDOW_MIN="${HARNESS_WORKTREE_SESSION_WINDOW_MIN:-30}"
 _WORKTREE_STARTING_LEASE_WINDOW_MIN="${HARNESS_WORKTREE_STARTING_LEASE_WINDOW_MIN:-3}"
 
 _hook_canonical_worktree() {
-  local wt="$1"
-  (cd "$wt" 2>/dev/null && pwd -P) || printf '%s' "$wt"
+  local wt="$1" parent base
+  (cd "$wt" 2>/dev/null && pwd -P) && return 0
+  parent=$(dirname "$wt")
+  base=$(basename "$wt")
+  parent=$(cd "$parent" 2>/dev/null && pwd -P) || { printf '%s' "$wt"; return 0; }
+  printf '%s/%s' "$parent" "$base"
 }
 
 _hook_worktree_session_dir() {
@@ -265,9 +269,15 @@ _hook_worktree_session_dir() {
 # removal. The persistent file is only an inode; fcntl releases ownership on process
 # death, so no age-based pathname reclamation can steal a live remover's lock.
 hook_worktree_lock_acquire() {
-  local wt="$1" session_dir lock timeout
+  local wt="$1" session_dir
   [ -z "${HOOK_WORKTREE_LOCK_FD:-}" ] || return 1
   session_dir=$(_hook_worktree_session_dir "$wt") || return 1
+  _hook_worktree_lock_acquire_session_dir "$session_dir"
+}
+
+_hook_worktree_lock_acquire_session_dir() {
+  local session_dir="$1" lock timeout
+  [ -z "${HOOK_WORKTREE_LOCK_FD:-}" ] || return 1
   mkdir -p "$session_dir" 2>/dev/null || return 1
   lock="$session_dir/remove.lock"
   timeout="${HARNESS_WORKTREE_LOCK_TIMEOUT_SECONDS:-30}"
@@ -448,7 +458,7 @@ _hook_worktree_quarantine_path() {
   return 1
 }
 
-# Return 0 when a same-user process retains a cwd/root/fd inside the quarantined tree,
+# Return 0 when a same-user process retains a cwd/root/fd/mapping inside the quarantined tree,
 # 1 when none do, and 2 when the observation cannot be completed. Namespace closure
 # means every writer that can still reach the moved tree must retain such a kernel
 # reference. Linux exposes those references through procfs; macOS uses its system lsof.
@@ -464,6 +474,18 @@ from pathlib import Path
 target = os.path.realpath(sys.argv[1])
 uid = os.geteuid()
 unknown = False
+
+
+def inside_target(candidate: str) -> bool:
+    if candidate.endswith(" (deleted)"):
+        candidate = candidate[: -len(" (deleted)")]
+    if not os.path.isabs(candidate):
+        return False
+    candidate = os.path.normpath(candidate)
+    try:
+        return os.path.commonpath((target, candidate)) == target
+    except ValueError:
+        return False
 
 for process in Path("/proc").iterdir():
     if not process.name.isdigit():
@@ -491,16 +513,19 @@ for process in Path("/proc").iterdir():
         except OSError:
             unknown = True
             continue
-        if candidate.endswith(" (deleted)"):
-            candidate = candidate[: -len(" (deleted)")]
-        if not os.path.isabs(candidate):
-            continue
-        candidate = os.path.normpath(candidate)
-        try:
-            inside = os.path.commonpath((target, candidate)) == target
-        except ValueError:
-            inside = False
-        if inside:
+        if inside_target(candidate):
+            print(process.name)
+            raise SystemExit(0)
+    try:
+        maps = (process / "maps").read_text(encoding="utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        continue
+    except OSError:
+        unknown = True
+        continue
+    for mapping in maps:
+        fields = mapping.split(maxsplit=5)
+        if len(fields) == 6 and inside_target(fields[5]):
             print(process.name)
             raise SystemExit(0)
 
@@ -520,7 +545,14 @@ PY
   else
     return 2
   fi
-  output=$("$lsof_bin" -w -nP -t +D "$abs" 2>&1)
+  _hook_worktree_lsof_references "$abs" "$lsof_bin"
+  return $?
+}
+
+_hook_worktree_lsof_references() {
+  local abs="$1" lsof_bin="$2" output rc
+  output=$(hook_bounded "${HARNESS_WORKTREE_REFERENCE_SCAN_TIMEOUT_SECONDS:-5}" \
+    "$lsof_bin" -w -nP -t +D "$abs" 2>&1)
   rc=$?
   if [ -n "$output" ]; then
     printf '%s\n' "$output" | grep -Eqv '^[0-9]+$' && return 2
@@ -536,6 +568,21 @@ _hook_worktree_transaction_file() {
   local session_dir
   session_dir=$(_hook_worktree_session_dir "$1") || return 1
   printf '%s/remove.transaction' "$session_dir"
+}
+
+_hook_worktree_transaction_for_original() {
+  local root="$1" original="$2" common transaction recorded
+  common=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
+    || return 1
+  for transaction in "$common"/codex-worktree-sessions/*/remove.transaction; do
+    [ -f "$transaction" ] || continue
+    recorded=$(sed -n '1p' "$transaction" 2>/dev/null)
+    if [ "$recorded" = "$original" ]; then
+      printf '%s' "$transaction"
+      return 0
+    fi
+  done
+  return 1
 }
 
 _hook_worktree_registered_path() {
@@ -617,9 +664,21 @@ _hook_worktree_interrupted() {
 # restoration fails, 7 for a retained process reference, 8 after recovering an interrupted
 # quarantine, 9 when open-reference status is unavailable, otherwise return git's status.
 hook_safe_worktree_remove() {
-  local root="$1" wt="$2" rc state_rc quarantine restore_rc transaction reference_rc
+  local root="$1" wt="$2" rc state_rc quarantine restore_rc transaction reference_rc session_dir
   root=$(_hook_canonical_worktree "$root")
   wt=$(_hook_canonical_worktree "$wt")
+  if [ ! -e "$wt" ]; then
+    transaction=$(_hook_worktree_transaction_for_original "$root" "$wt") || return 2
+    session_dir=$(dirname "$transaction")
+    _hook_worktree_lock_acquire_session_dir "$session_dir" || return 2
+    _hook_worktree_restore_transaction "$root" "$transaction" >/dev/null
+    rc=$?
+    hook_worktree_lock_release || true
+    case "$rc" in
+      0|1) return 8 ;;
+      *) return 6 ;;
+    esac
+  fi
   hook_worktree_lock_acquire "$wt" || return 2
   transaction=$(_hook_worktree_transaction_file "$wt") || {
     hook_worktree_lock_release || true
@@ -674,28 +733,24 @@ hook_safe_worktree_remove() {
     hook_worktree_lock_release || true
     return "$rc"
   fi
-  hook_worktree_local_state "$quarantine" >/dev/null
-  state_rc=$?
-  case "$state_rc" in
-    0|1) ;;
-    *) state_rc=2 ;;
-  esac
-  if [ "$state_rc" -eq 1 ]; then
-    _hook_worktree_open_references "$quarantine" >/dev/null
-    reference_rc=$?
-    case "$reference_rc" in
-      0) rc=7 ;;
-      1)
+  _hook_worktree_open_references "$quarantine" >/dev/null
+  reference_rc=$?
+  case "$reference_rc" in
+    0) rc=7 ;;
+    1)
+      hook_worktree_local_state "$quarantine" >/dev/null
+      state_rc=$?
+      case "$state_rc" in
+        0) rc=4 ;;
+        1)
         git -C "$root" worktree remove "$quarantine"
         rc=$?
         ;;
-      *) rc=9 ;;
-    esac
-  elif [ "$state_rc" -eq 0 ]; then
-    rc=4
-  else
-    rc=5
-  fi
+        *) rc=5 ;;
+      esac
+      ;;
+    *) rc=9 ;;
+  esac
   if [ "$rc" -eq 0 ]; then
     rm -f "$transaction" 2>/dev/null || rc=6
   elif [ -d "$quarantine" ]; then

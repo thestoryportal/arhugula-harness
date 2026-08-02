@@ -163,6 +163,24 @@ loop_gc_worktrees reap
 export HOME="$OLDHOME"
 wt_present wt-merged && ok "Codex live-session worktree kept" || bad "reaped a worktree with a live Codex session"
 
+# The public loop GC entrypoint must preserve safe refusal/recovery dispositions 7/8/9.
+for REMOVE_CASE in \
+  '7:process retains a reference' \
+  '8:restored interrupted quarantine' \
+  '9:process-reference state unavailable'; do
+  build_fixture
+  export CLAUDE_PROJECT_DIR="$BASE/main"
+  FORCED_REMOVE_RC=${REMOVE_CASE%%:*}
+  EXPECTED_LOG=${REMOVE_CASE#*:}
+  REMOVE_LOG="$BASE/remove-${FORCED_REMOVE_RC}.log"
+  hook_safe_worktree_remove() { return "$FORCED_REMOVE_RC"; }
+  loop_log() { printf '%s\n' "$*" >> "$REMOVE_LOG"; }
+  loop_gc_worktrees reap
+  grep -qF "$EXPECTED_LOG" "$REMOVE_LOG" \
+    && ok "loop GC maps safe removal rc $FORCED_REMOVE_RC" \
+    || bad "loop GC lost safe removal rc $FORCED_REMOVE_RC"
+done
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

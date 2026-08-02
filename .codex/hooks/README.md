@@ -5,8 +5,9 @@ These hooks are a Codex-native compatibility layer for the Claude hooks in `.cla
 Every Claude hook behavior supported by Codex's lifecycle is wired here. The Codex-native guards remain additive:
 
 - `codex-session-start.sh` registers the session under the shared git directory before
-  sequentially running posture, roadmap audit, and loop GC, so concurrent SessionStart
-  handlers cannot race lease registration against removal. It activates the lease only
+  sequentially running posture, roadmap audit, and read-only worktree hygiene reporting.
+  Destructive GC is an explicit post-merge/closeout action, never a SessionStart action.
+  The wrapper activates the lease only
   after startup succeeds; normal failures release immediately and an abandoned starting
   lease expires after a three-minute grace window, longer than the 105-second hook timeout.
   A repeated `SessionStart(source=compact)` for the same root session preserves the active
@@ -24,7 +25,7 @@ Every Claude hook behavior supported by Codex's lifecycle is wired here. The Cod
 
 | Claude lifecycle | Codex mapping | Status |
 |---|---|---|
-| `SessionStart` | session lease + roadmap audit + loop GC + Codex context guard | Equivalent plus Codex guard |
+| `SessionStart` | session lease + roadmap audit + read-only hygiene report + Codex context guard | Equivalent plus Codex guard |
 | `PreToolUse` | cache clear + permission guard + Codex boundary guard | Equivalent plus Codex guard |
 | `PreToolUse Bash(git commit*)` | `codex_hook_adapter.py pre-commit` runs pyright and root validation only for commit commands | Equivalent |
 | `PermissionRequest` | permission guard + Codex request classifier | Equivalent plus Codex classifier |
@@ -63,10 +64,11 @@ cannot hold a mutex after it exits; use `tools/hooks/safe-worktree-remove.sh <pa
 kernel-owned lock survives long removals without age-based theft, active leases remain
 authoritative until SessionEnd, and registration/activation revalidate the worktree after
 locking. The mutex and leases are keyed by stable Git worktree administration identity,
-so a quarantine move cannot split their authority. The remover alone moves a clean
+so a quarantine move cannot split their authority. The explicit remover alone moves a clean
 candidate to an unpublished sibling quarantine before its authoritative scans. This
-closes new lookups through the original pathname; retained cwd/file-descriptor references
-are detected fail-closed before deletion. A durable transaction restores interrupted
+closes new lookups through the original pathname; retained cwd, file-descriptor, and Linux
+mapping references are detected fail-closed before a final local-state scan and deletion.
+The macOS `lsof` observation is time-bounded and timeout is unknown/fail-closed. A durable transaction restores interrupted
 quarantines on TERM and lets a later removal pass recover after untrappable process death.
 `just codex-worktree-gc --reap` uses this same status and removal entrypoint; it cannot
 bypass Codex leases, quarantine, or the shared mutex.

@@ -216,6 +216,15 @@ for c in "git push --mirror" "git push --prune origin" "git worktree add -B exis
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" = "deny" ] && ok "'$c' → deny destructive mutation" || bad "'$c' not denied: $OUT"
 done
+for c in \
+  "git fetch --upload-pack=/tmp/attacker origin" \
+  "git fetch -u /tmp/attacker origin" \
+  "git fetch origin --upload-pack=/tmp/attacker"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] \
+    && ok "'$c' → not auto-allowed (execution-bearing fetch option)" \
+    || bad "'$c' auto-allowed: $OUT"
+done
 OUT=$(run_on "$(pl Bash 'git ls-remote --heads origin refs/heads/topic' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "git ls-remote → allow read-only branch hygiene probe" || bad "ls-remote not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'git pull --ff-only' '')")

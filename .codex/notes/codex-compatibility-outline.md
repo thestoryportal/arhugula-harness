@@ -13,7 +13,9 @@ This note codifies the operator-approved Codex setup direction for this reposito
    `.codex/hooks/README.md` and `.codex/notes/claude-codex-parity.md`.
    `SessionStart` and `Stop` run `tools/codex_context_guard.py` so context
    freshness, worktree isolation, roadmap status drift, and closeout obligations
-   are materialized from HEAD instead of remembered. `SessionStart` preflight and
+   are materialized from HEAD instead of remembered. SessionStart worktree hygiene
+   is read-only; destructive reaping is an explicit post-merge/closeout controller action.
+   `SessionStart` preflight and
    failure to create the Stop checkpoint remain hard; an incomplete in-progress
    closeout is advisory at Stop and hard at explicit `just codex-closeout`.
 5. Keep reusable workflows as Codex skills under `.agents/skills` or installed user skills. Package as plugins only for distribution.

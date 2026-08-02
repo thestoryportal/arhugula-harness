@@ -404,6 +404,13 @@ def test_session_lifecycle_wrappers_order_registration_and_release() -> None:
     assert end.index('session-lease.sh" end') < end.index("session-end-cleanup.sh")
 
 
+def test_session_start_hygiene_is_report_only_and_never_reaps() -> None:
+    hygiene = (ROOT / "tools" / "hooks" / "loop-gc.sh").read_text(encoding="utf-8")
+
+    assert "loop_gc_worktrees report" in hygiene
+    assert "loop_gc_worktrees reap" not in hygiene
+
+
 def test_session_end_hook_uses_supported_timeout() -> None:
     payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
     hooks = [hook for group in payload["hooks"]["SessionEnd"] for hook in group["hooks"]]
@@ -416,6 +423,7 @@ def test_merge_gate_honors_operator_authorized_ten_pass_ceiling() -> None:
     for path in [
         ROOT / ".agents" / "skills" / "merge-gate" / "SKILL.md",
         ROOT / ".claude" / "skills" / "merge-gate" / "SKILL.md",
+        ROOT / ".claude" / "skills" / "ship-pr" / "SKILL.md",
     ]:
         merge_gate = path.read_text(encoding="utf-8")
         assert "ten rounds" in merge_gate, path

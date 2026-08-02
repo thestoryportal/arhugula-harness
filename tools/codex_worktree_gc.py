@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -81,17 +82,40 @@ def _run(
             stderr=subprocess.PIPE,
             text=True,
             env=env,
+            start_new_session=os.name == "posix",
         )
         try:
             stdout, stderr = process.communicate(timeout=timeout)
             return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
         except subprocess.TimeoutExpired:
-            process.terminate()
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            else:
+                process.terminate()
             try:
                 stdout, stderr = process.communicate(timeout=5)
             except subprocess.TimeoutExpired:
-                process.kill()
-                stdout, stderr = process.communicate()
+                if os.name == "posix":
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    process.kill()
+                try:
+                    stdout, stderr = process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    for stream in (process.stdout, process.stderr):
+                        if stream is not None:
+                            stream.close()
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    stdout, stderr = "", ""
             message = f"command timed out after {timeout} seconds"
             stderr = f"{stderr.rstrip()}\n{message}".lstrip()
             return subprocess.CompletedProcess(args, 124, stdout, stderr)
@@ -386,6 +410,9 @@ def reap_candidates(repo: Path, dispositions: list[Disposition]) -> int:
             continue
         if proc.returncode == 8:
             print(f"restored interrupted quarantine for {d.worktree.path}; retry later")
+            continue
+        if proc.returncode == 9:
+            print(f"skipped removal of {d.worktree.path}: process-reference state unavailable")
             continue
         if proc.returncode != 0:
             failures += 1
