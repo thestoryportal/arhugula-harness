@@ -73,9 +73,14 @@ printf '%s' "${UV_CACHE_DIR:-}" > "${UV_CACHE_OBS:?}"
 exit 0
 EOF
 chmod +x "$REPO/bin/uv"
+ln -s "$(command -v jq)" "$REPO/bin/jq"
 printf 'cache_probe = 1\n' > "$REPO/cache.py"
 unset UV_CACHE_DIR
-OUT=$(UV_CACHE_OBS="$REPO/uv-cache-observed" run "$REPO/cache.py")
+OUT=$(printf '%s' \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$REPO/cache.py\"}}" \
+  | env PATH="$REPO/bin:/usr/bin:/bin" CLAUDE_PROJECT_DIR="$REPO" \
+    UV_CACHE_OBS="$REPO/uv-cache-observed" bash "$HOOK" \
+  | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
 [ -z "$OUT" ] && ok "uv-backed clean post-edit lint stays silent" || bad "uv-backed lint emitted: $OUT"
 [ "$(cat "$REPO/uv-cache-observed")" = "/tmp/arhugula-uv-cache" ] \
   && ok "uv-backed post-edit lint uses repo-safe cache" \
