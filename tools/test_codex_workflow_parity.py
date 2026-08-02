@@ -13,6 +13,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTER = ROOT / ".codex" / "hooks" / "codex_hook_adapter.py"
+# This module exercises normal adapters even when invoked from an isolated reviewer.
+os.environ.pop("HARNESS_CODEX_REVIEW_ISOLATED", None)
 
 
 def _adapter_module():

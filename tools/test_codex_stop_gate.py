@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# This module exercises normal hooks even when invoked from an isolated reviewer.
+os.environ.pop("HARNESS_CODEX_REVIEW_ISOLATED", None)
 
 
 def test_stop_gate_emits_valid_stop_hook_json() -> None:

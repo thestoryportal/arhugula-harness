@@ -3,6 +3,8 @@
 # branch/loop-marker cases). Exits non-zero on any failed assertion (CI-friendly).
 
 set -uo pipefail
+# This suite exercises production behavior even when a merge-gate reviewer launches it.
+unset HARNESS_CODEX_REVIEW_ISOLATED
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib.sh"
 
@@ -283,6 +285,177 @@ QUARANTINE_RESULT="$REPO/quarantine-remove-result"
 eq "quarantine scan refuses newly appeared state" "$(cat "$QUARANTINE_RESULT")" "4"
 [ -f "$QUARANTINE_RACE/.env" ] && ok "quarantine restores newly appeared state" \
   || bad "quarantine failed to restore newly appeared state"
+
+# Moving a registered worktree must not change its mutex/lease namespace. A SessionStart
+# launched from a process already inside the moved tree must queue on the remover's lock,
+# not create an unseen lease under a second pathname-derived key.
+STABLE_ID="$REPO-stable-worktree-identity"
+STABLE_QUARANTINE="$REPO-stable-worktree-identity-moved"
+STABLE_RESULT="$REPO/stable-worktree-register-result"
+git -C "$REPO" worktree add -q -b stable-worktree-identity "$STABLE_ID"
+STABLE_BEFORE=$(_hook_worktree_session_dir "$STABLE_ID")
+hook_worktree_lock_acquire "$STABLE_ID"
+git -C "$REPO" worktree move "$STABLE_ID" "$STABLE_QUARANTINE"
+STABLE_AFTER=$(_hook_worktree_session_dir "$STABLE_QUARANTINE")
+eq "quarantine move preserves worktree session identity" "$STABLE_AFTER" "$STABLE_BEFORE"
+HOME="$FAKE_HOME" HARNESS_WORKTREE_LOCK_TIMEOUT_SECONDS=1 /bin/bash -c '
+  . "$1"
+  hook_register_session_lease "$2" "moved-start"
+  printf "%s" "$?" > "$3"
+' _ "$SCRIPT_DIR/lib.sh" "$STABLE_QUARANTINE" "$STABLE_RESULT"
+eq "moved-path SessionStart cannot acquire a distinct mutex" "$(cat "$STABLE_RESULT")" "1"
+git -C "$REPO" worktree move "$STABLE_QUARANTINE" "$STABLE_ID"
+hook_worktree_lock_release
+
+# A writer can retain the original worktree as its cwd across the quarantine rename.
+# Removal must detect that pre-resolved kernel reference and restore/refuse before Git
+# can delete an ignored file written after the authoritative status scan.
+HELD_CWD="$REPO-held-cwd-race"
+HELD_READY="$REPO/held-cwd-ready"
+HELD_WRITE="$REPO/held-cwd-write"
+HELD_WROTE="$REPO/held-cwd-wrote"
+HELD_RELEASE="$REPO/held-cwd-release"
+HELD_RESULT="$REPO/held-cwd-remove-result"
+git -C "$REPO" worktree add -q -b held-cwd-race "$HELD_CWD"
+(
+  cd "$HELD_CWD" || exit 1
+  : > "$HELD_READY"
+  while [ ! -f "$HELD_WRITE" ]; do sleep 0.05; done
+  printf 'SECRET\n' > .env
+  : > "$HELD_WROTE"
+  while [ ! -f "$HELD_RELEASE" ]; do sleep 0.05; done
+) &
+HELD_WRITER_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$HELD_READY" ] && break; sleep 0.1; done
+(
+  . "$SCRIPT_DIR/lib.sh"
+  git() {
+    if [ "${1:-}" = "-C" ] && [ "${3:-}" = "worktree" ] && [ "${4:-}" = "remove" ]; then
+      : > "$HELD_WRITE"
+      while [ ! -f "$HELD_WROTE" ]; do sleep 0.05; done
+    fi
+    command git "$@"
+  }
+  hook_safe_worktree_remove "$REPO" "$HELD_CWD"
+  printf '%s' "$?" > "$HELD_RESULT"
+)
+: > "$HELD_WRITE"
+: > "$HELD_RELEASE"
+wait "$HELD_WRITER_PID"
+eq "pre-resolved cwd refuses quarantine deletion" "$(cat "$HELD_RESULT")" "7"
+[ -f "$HELD_CWD/.env" ] && ok "pre-resolved cwd state is preserved" \
+  || bad "pre-resolved cwd state was deleted"
+
+# TERM after the move must restore the registered path before the remover exits.
+CANCELLED="$REPO-cancelled-quarantine"
+CANCEL_READY="$REPO/cancelled-quarantine-ready"
+git -C "$REPO" worktree add -q -b cancelled-quarantine "$CANCELLED"
+(
+  trap - EXIT
+  . "$SCRIPT_DIR/lib.sh"
+  git() {
+    command git "$@"
+    local git_rc=$?
+    if [ "$git_rc" -eq 0 ] && [ "${1:-}" = "-C" ] && [ "${3:-}" = "worktree" ] \
+      && [ "${4:-}" = "move" ] && [ ! -f "$CANCEL_READY" ]; then
+      : > "$CANCEL_READY"
+      while :; do sleep 1; done
+    fi
+    return "$git_rc"
+  }
+  hook_safe_worktree_remove "$REPO" "$CANCELLED"
+) &
+CANCEL_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [ -f "$CANCEL_READY" ] && break
+  sleep 0.1
+done
+kill -TERM "$CANCEL_PID"
+wait "$CANCEL_PID" 2>/dev/null
+[ -d "$CANCELLED" ] && ok "TERM restores quarantined worktree" \
+  || bad "TERM stranded quarantined worktree"
+CANCEL_HIDDEN=$(git -C "$REPO" worktree list --porcelain | sed -n 's/^worktree //p' \
+  | grep '/\.harness-removing-' | head -n1)
+[ -z "$CANCEL_HIDDEN" ] && ok "TERM leaves no registered quarantine" \
+  || bad "TERM left registered quarantine: $CANCEL_HIDDEN"
+
+# SIGKILL cannot run a shell trap. The durable transaction must let the next GC pass
+# restore the hidden registered worktree instead of deleting or permanently stranding it.
+KILLED="$REPO-killed-quarantine"
+KILLED_READY="$REPO/killed-quarantine-ready"
+KILLED_RESULT="$REPO/killed-quarantine-recovery-result"
+git -C "$REPO" worktree add -q -b killed-quarantine "$KILLED"
+(
+  trap - EXIT
+  . "$SCRIPT_DIR/lib.sh"
+  git() {
+    command git "$@"
+    local git_rc=$?
+    if [ "$git_rc" -eq 0 ] && [ "${1:-}" = "-C" ] && [ "${3:-}" = "worktree" ] \
+      && [ "${4:-}" = "move" ]; then
+      : > "$KILLED_READY"
+      while :; do sleep 1; done
+    fi
+    return "$git_rc"
+  }
+  hook_safe_worktree_remove "$REPO" "$KILLED"
+) &
+KILLED_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [ -f "$KILLED_READY" ] && break
+  sleep 0.1
+done
+kill -KILL "$KILLED_PID"
+wait "$KILLED_PID" 2>/dev/null
+KILLED_HIDDEN=$(git -C "$REPO" worktree list --porcelain | sed -n 's/^worktree //p' \
+  | grep '/\.harness-removing-' | head -n1)
+(
+  . "$SCRIPT_DIR/lib.sh"
+  hook_safe_worktree_remove "$REPO" "$KILLED_HIDDEN"
+  printf '%s' "$?" > "$KILLED_RESULT"
+)
+eq "next removal pass reports interrupted-quarantine recovery" \
+  "$(cat "$KILLED_RESULT")" "8"
+[ -d "$KILLED" ] && ok "next removal pass restores SIGKILL quarantine" \
+  || bad "SIGKILL quarantine was not restored"
+KILLED_STILL_HIDDEN=$(git -C "$REPO" worktree list --porcelain | sed -n 's/^worktree //p' \
+  | grep '/\.harness-removing-' | head -n1)
+[ -z "$KILLED_STILL_HIDDEN" ] && ok "SIGKILL recovery leaves no registered quarantine" \
+  || bad "SIGKILL recovery left registered quarantine: $KILLED_STILL_HIDDEN"
+
+# A kill after the durable marker is written but before Git moves the worktree leaves a
+# pre-move transaction. The next pass must clear/report recovery without deleting it.
+PRE_MOVE="$REPO-pre-move-transaction"
+PRE_MOVE_RESULT="$REPO/pre-move-transaction-result"
+git -C "$REPO" worktree add -q -b pre-move-transaction "$PRE_MOVE"
+PRE_MOVE=$(_hook_canonical_worktree "$PRE_MOVE")
+PRE_MOVE_QUARANTINE=$(_hook_worktree_quarantine_path "$PRE_MOVE")
+PRE_MOVE_TRANSACTION=$(_hook_worktree_transaction_file "$PRE_MOVE")
+mkdir -p "$(dirname "$PRE_MOVE_TRANSACTION")"
+_hook_worktree_write_transaction \
+  "$PRE_MOVE_TRANSACTION" "$PRE_MOVE" "$PRE_MOVE_QUARANTINE"
+(
+  . "$SCRIPT_DIR/lib.sh"
+  hook_safe_worktree_remove "$REPO" "$PRE_MOVE"
+  printf '%s' "$?" > "$PRE_MOVE_RESULT"
+)
+eq "pre-move transaction recovery defers deletion" "$(cat "$PRE_MOVE_RESULT")" "8"
+[ -d "$PRE_MOVE" ] && ok "pre-move transaction recovery preserves worktree" \
+  || bad "pre-move transaction recovery deleted worktree"
+
+OPEN_UNKNOWN="$REPO-open-reference-unknown"
+OPEN_UNKNOWN_RESULT="$REPO/open-reference-unknown-result"
+git -C "$REPO" worktree add -q -b open-reference-unknown "$OPEN_UNKNOWN"
+(
+  . "$SCRIPT_DIR/lib.sh"
+  _hook_worktree_open_references() { return 2; }
+  hook_safe_worktree_remove "$REPO" "$OPEN_UNKNOWN"
+  printf '%s' "$?" > "$OPEN_UNKNOWN_RESULT"
+)
+eq "unavailable open-reference observation refuses deletion" \
+  "$(cat "$OPEN_UNKNOWN_RESULT")" "9"
+[ -d "$OPEN_UNKNOWN" ] && ok "unavailable open-reference observation restores worktree" \
+  || bad "unavailable open-reference observation deleted worktree"
 
 STATUS_FAIL="$REPO-status-failure"
 git -C "$REPO" worktree add -q -b status-failure "$STATUS_FAIL"

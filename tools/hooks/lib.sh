@@ -250,11 +250,13 @@ _hook_canonical_worktree() {
 }
 
 _hook_worktree_session_dir() {
-  local wt abs common key
+  local wt abs common git_dir key
   wt="$1"; abs=$(_hook_canonical_worktree "$wt")
   common=$(git -C "$abs" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
     || return 1
-  key=$(printf '%s' "$abs" | shasum -a 256 2>/dev/null | cut -d' ' -f1)
+  git_dir=$(git -C "$abs" rev-parse --path-format=absolute --absolute-git-dir 2>/dev/null) \
+    || return 1
+  key=$(printf '%s' "$git_dir" | shasum -a 256 2>/dev/null | cut -d' ' -f1)
   [ -n "$key" ] || return 1
   printf '%s/codex-worktree-sessions/%s' "$common" "$key"
 }
@@ -429,8 +431,8 @@ EOF
 }
 
 # Choose an unpublished sibling path on the same filesystem. Moving the registered
-# worktree here closes the original pathname before the authoritative scan, so a
-# non-participating writer cannot place new state inside the directory being deleted.
+# worktree here closes new lookups through the original pathname before the authoritative
+# scan. Pre-resolved process references are checked separately before deletion.
 _hook_worktree_quarantine_path() {
   local wt="$1" parent base candidate attempt=0
   parent=$(dirname "$wt")
@@ -446,15 +448,193 @@ _hook_worktree_quarantine_path() {
   return 1
 }
 
+# Return 0 when a same-user process retains a cwd/root/fd inside the quarantined tree,
+# 1 when none do, and 2 when the observation cannot be completed. Namespace closure
+# means every writer that can still reach the moved tree must retain such a kernel
+# reference. Linux exposes those references through procfs; macOS uses its system lsof.
+_hook_worktree_open_references() {
+  local wt="$1" abs output rc lsof_bin=""
+  abs=$(_hook_canonical_worktree "$wt")
+  if [ -d /proc/self/fd ]; then
+    /usr/bin/python3 - "$abs" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+target = os.path.realpath(sys.argv[1])
+uid = os.geteuid()
+unknown = False
+
+for process in Path("/proc").iterdir():
+    if not process.name.isdigit():
+        continue
+    try:
+        if process.stat().st_uid != uid:
+            continue
+    except FileNotFoundError:
+        continue
+    except OSError:
+        unknown = True
+        continue
+    links = [process / "cwd", process / "root"]
+    try:
+        links.extend((process / "fd").iterdir())
+    except FileNotFoundError:
+        continue
+    except OSError:
+        unknown = True
+    for link in links:
+        try:
+            candidate = os.readlink(link)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            unknown = True
+            continue
+        if candidate.endswith(" (deleted)"):
+            candidate = candidate[: -len(" (deleted)")]
+        if not os.path.isabs(candidate):
+            continue
+        candidate = os.path.normpath(candidate)
+        try:
+            inside = os.path.commonpath((target, candidate)) == target
+        except ValueError:
+            inside = False
+        if inside:
+            print(process.name)
+            raise SystemExit(0)
+
+raise SystemExit(20 if unknown else 10)
+PY
+    rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      10) return 1 ;;
+      *) return 2 ;;
+    esac
+  fi
+  if [ -x /usr/sbin/lsof ]; then
+    lsof_bin=/usr/sbin/lsof
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof_bin=$(command -v lsof)
+  else
+    return 2
+  fi
+  output=$("$lsof_bin" -w -nP -t +D "$abs" 2>&1)
+  rc=$?
+  if [ -n "$output" ]; then
+    printf '%s\n' "$output" | grep -Eqv '^[0-9]+$' && return 2
+    return 0
+  fi
+  case "$rc" in
+    0|1) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+_hook_worktree_transaction_file() {
+  local session_dir
+  session_dir=$(_hook_worktree_session_dir "$1") || return 1
+  printf '%s/remove.transaction' "$session_dir"
+}
+
+_hook_worktree_registered_path() {
+  local root="$1" wanted="$2" line raw
+  raw=$(git -C "$root" worktree list --porcelain 2>/dev/null) || return 2
+  while IFS= read -r line; do
+    [ "$line" = "worktree $wanted" ] && return 0
+  done <<EOF
+$raw
+EOF
+  return 1
+}
+
+_hook_worktree_write_transaction() {
+  local transaction="$1" original="$2" quarantine="$3" tmp
+  case "${original}${quarantine}" in *$'\n'*) return 1 ;; esac
+  tmp="${transaction}.tmp-$$"
+  printf '%s\n%s\n' "$original" "$quarantine" > "$tmp" 2>/dev/null \
+    && mv "$tmp" "$transaction" 2>/dev/null || {
+      rm -f "$tmp" 2>/dev/null
+      return 1
+    }
+}
+
+# Restore a durable in-flight transaction. Return 0 after restoring a moved worktree,
+# 1 when a pre-move marker was merely cleared, and 2 when recovery is unsafe.
+_hook_worktree_restore_transaction() {
+  local root="$1" transaction="$2" original quarantine third original_rc quarantine_rc
+  [ -f "$transaction" ] || return 1
+  original=$(sed -n '1p' "$transaction" 2>/dev/null)
+  quarantine=$(sed -n '2p' "$transaction" 2>/dev/null)
+  third=$(sed -n '3p' "$transaction" 2>/dev/null)
+  [ -n "$original" ] && [ -n "$quarantine" ] && [ -z "$third" ] || return 2
+  case "$original" in /*) ;; *) return 2 ;; esac
+  case "$quarantine" in
+    "$(dirname "$original")"/.harness-removing-*) ;;
+    *) return 2 ;;
+  esac
+  [ "$original" != "$quarantine" ] || return 2
+
+  _hook_worktree_registered_path "$root" "$quarantine"
+  quarantine_rc=$?
+  _hook_worktree_registered_path "$root" "$original"
+  original_rc=$?
+  [ "$quarantine_rc" -ne 2 ] && [ "$original_rc" -ne 2 ] || return 2
+
+  if [ "$quarantine_rc" -eq 0 ]; then
+    [ ! -e "$original" ] || return 2
+    git -C "$root" worktree move "$quarantine" "$original" >/dev/null 2>&1 || return 2
+    rm -f "$transaction" 2>/dev/null || return 2
+    printf '%s' "$original"
+    return 0
+  fi
+  if [ "$original_rc" -eq 0 ] && [ ! -e "$quarantine" ]; then
+    rm -f "$transaction" 2>/dev/null || return 2
+    return 1
+  fi
+  if [ "$original_rc" -eq 1 ] && [ "$quarantine_rc" -eq 1 ] \
+    && [ ! -e "$original" ] && [ ! -e "$quarantine" ]; then
+    rm -f "$transaction" 2>/dev/null || return 2
+    return 1
+  fi
+  return 2
+}
+
+_hook_worktree_interrupted() {
+  local rc="$1"
+  trap - HUP INT TERM
+  _hook_worktree_restore_transaction "$_HOOK_REMOVE_ROOT" \
+    "$_HOOK_REMOVE_TRANSACTION" >/dev/null 2>&1 || rc=6
+  hook_worktree_lock_release || true
+  exit "$rc"
+}
+
 # Remove a registered worktree only while holding the same mutex used by SessionStart
 # lease registration. The worktree is moved to an unpublished sibling quarantine before
-# the final status scan; writes through the original pathname are thereby preserved
-# outside the directory Git removes. Return 2 when the mutex is unavailable, 3 for a
-# live session, 4 for local state, 5 when status is unavailable, 6 when quarantine
-# restoration fails, otherwise return git's status.
+# the final status and open-reference scans. Return 2 when the mutex is unavailable, 3
+# for a live session, 4 for local state, 5 when status is unavailable, 6 when quarantine
+# restoration fails, 7 for a retained process reference, 8 after recovering an interrupted
+# quarantine, 9 when open-reference status is unavailable, otherwise return git's status.
 hook_safe_worktree_remove() {
-  local root="$1" wt="$2" rc state_rc quarantine restore_rc
+  local root="$1" wt="$2" rc state_rc quarantine restore_rc transaction reference_rc
+  root=$(_hook_canonical_worktree "$root")
+  wt=$(_hook_canonical_worktree "$wt")
   hook_worktree_lock_acquire "$wt" || return 2
+  transaction=$(_hook_worktree_transaction_file "$wt") || {
+    hook_worktree_lock_release || true
+    return 2
+  }
+  if [ -f "$transaction" ]; then
+    _hook_worktree_restore_transaction "$root" "$transaction" >/dev/null
+    rc=$?
+    hook_worktree_lock_release || true
+    case "$rc" in
+      0) return 8 ;;
+      1) return 8 ;;
+      *) return 6 ;;
+    esac
+  fi
   hook_prune_stale_starting_leases "$wt"
   if worktree_has_live_session "$wt"; then
     hook_worktree_lock_release || true
@@ -477,9 +657,20 @@ hook_safe_worktree_remove() {
     hook_worktree_lock_release || true
     return 6
   }
+  _hook_worktree_write_transaction "$transaction" "$wt" "$quarantine" || {
+    hook_worktree_lock_release || true
+    return 6
+  }
+  _HOOK_REMOVE_ROOT="$root"
+  _HOOK_REMOVE_TRANSACTION="$transaction"
+  trap '_hook_worktree_interrupted 129' HUP
+  trap '_hook_worktree_interrupted 130' INT
+  trap '_hook_worktree_interrupted 143' TERM
   git -C "$root" worktree move "$wt" "$quarantine"
   rc=$?
   if [ "$rc" -ne 0 ]; then
+    rm -f "$transaction" 2>/dev/null
+    trap - HUP INT TERM
     hook_worktree_lock_release || true
     return "$rc"
   fi
@@ -489,21 +680,30 @@ hook_safe_worktree_remove() {
     0|1) ;;
     *) state_rc=2 ;;
   esac
-  if [ "$state_rc" -ne 1 ]; then
-    git -C "$root" worktree move "$quarantine" "$wt"
-    restore_rc=$?
-    hook_worktree_lock_release || true
-    [ "$restore_rc" -eq 0 ] || return 6
-    [ "$state_rc" -eq 0 ] && return 4
-    return 5
+  if [ "$state_rc" -eq 1 ]; then
+    _hook_worktree_open_references "$quarantine" >/dev/null
+    reference_rc=$?
+    case "$reference_rc" in
+      0) rc=7 ;;
+      1)
+        git -C "$root" worktree remove "$quarantine"
+        rc=$?
+        ;;
+      *) rc=9 ;;
+    esac
+  elif [ "$state_rc" -eq 0 ]; then
+    rc=4
+  else
+    rc=5
   fi
-  git -C "$root" worktree remove "$quarantine"
-  rc=$?
-  if [ "$rc" -ne 0 ] && [ -d "$quarantine" ]; then
-    git -C "$root" worktree move "$quarantine" "$wt"
+  if [ "$rc" -eq 0 ]; then
+    rm -f "$transaction" 2>/dev/null || rc=6
+  elif [ -d "$quarantine" ]; then
+    _hook_worktree_restore_transaction "$root" "$transaction" >/dev/null
     restore_rc=$?
     [ "$restore_rc" -eq 0 ] || rc=6
   fi
+  trap - HUP INT TERM
   hook_worktree_lock_release || true
   return "$rc"
 }

@@ -307,6 +307,9 @@ _loop_gc_consider() {
     4) loop_log GC "skipped $path ($branch) — local state appeared before removal" ;;
     5) loop_log GC "skipped $path ($branch) — local state unavailable under removal mutex" ;;
     6) loop_log GC "skipped $path ($branch) — quarantined worktree restore failed" ;;
+    7) loop_log GC "skipped $path ($branch) — process retains a reference into the worktree" ;;
+    8) loop_log GC "restored interrupted quarantine for $path ($branch); retry deferred" ;;
+    9) loop_log GC "skipped $path ($branch) — process-reference state unavailable" ;;
     *) loop_log GC "skipped $path ($branch) — git worktree remove refused (locked/untracked)" ;;
   esac
 }

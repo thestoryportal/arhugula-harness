@@ -4,8 +4,8 @@
 Dry-run is the default. The reap path removes only linked worktrees that are
 clean, not current/default, have no live Claude/Codex session, and are proven
 merged either by ancestry or exact merged-PR head SHA. Removal uses the same
-mutex, session lease authority, and quarantine protocol as SessionStart. Branch
-refs are never deleted.
+mutex and session-lease authority as SessionStart, plus a removal-side quarantine
+transaction. Branch refs are never deleted.
 """
 
 from __future__ import annotations
@@ -74,15 +74,27 @@ def _run(
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(
+        process = subprocess.Popen(
             args,
             cwd=cwd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
-            check=False,
             env=env,
         )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+            message = f"command timed out after {timeout} seconds"
+            stderr = f"{stderr.rstrip()}\n{message}".lstrip()
+            return subprocess.CompletedProcess(args, 124, stdout, stderr)
     except (OSError, subprocess.SubprocessError) as exc:
         return subprocess.CompletedProcess(args=args, returncode=127, stdout="", stderr=str(exc))
 
@@ -368,6 +380,12 @@ def reap_candidates(repo: Path, dispositions: list[Disposition]) -> int:
             continue
         if proc.returncode == 4:
             print(f"skipped removal of {d.worktree.path}: local state appeared")
+            continue
+        if proc.returncode == 7:
+            print(f"skipped removal of {d.worktree.path}: retained process reference")
+            continue
+        if proc.returncode == 8:
+            print(f"restored interrupted quarantine for {d.worktree.path}; retry later")
             continue
         if proc.returncode != 0:
             failures += 1

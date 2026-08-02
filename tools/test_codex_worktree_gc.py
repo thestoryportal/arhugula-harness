@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import codex_worktree_gc as gc
 
 ROOT = Path(__file__).resolve().parents[1]
+# This module exercises normal hooks even when invoked from an isolated reviewer.
+os.environ.pop("HARNESS_CODEX_REVIEW_ISOLATED", None)
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -191,6 +193,26 @@ def test_reap_removes_only_candidates_and_keeps_branches(tmp_path: Path) -> None
     assert not done.exists()
     assert dirty.exists()
     assert _git(repo, "rev-parse", "--verify", "codex/done")
+
+
+def test_run_timeout_delivers_term_before_forced_kill(tmp_path: Path) -> None:
+    marker = tmp_path / "term-delivered"
+    env = os.environ.copy()
+    env["TERM_MARKER"] = str(marker)
+
+    proc = gc._run(
+        [
+            "bash",
+            "-c",
+            "trap 'printf term > \"$TERM_MARKER\"; exit 42' TERM; while :; do sleep 1; done",
+        ],
+        cwd=tmp_path,
+        timeout=1,
+        env=env,
+    )
+
+    assert proc.returncode == 124
+    assert marker.read_text(encoding="utf-8") == "term"
 
 
 def test_reap_rechecks_session_lease_after_candidate_classification(

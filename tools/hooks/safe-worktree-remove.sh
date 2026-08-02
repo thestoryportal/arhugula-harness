@@ -35,6 +35,9 @@ case "$rc" in
   4) echo "safe-worktree-remove: target has local state" >&2 ;;
   5) echo "safe-worktree-remove: target local state unavailable" >&2 ;;
   6) echo "safe-worktree-remove: quarantined worktree could not be restored" >&2 ;;
+  7) echo "safe-worktree-remove: target has retained process references" >&2 ;;
+  8) echo "safe-worktree-remove: restored an interrupted quarantine; retry later" >&2 ;;
+  9) echo "safe-worktree-remove: target process-reference state unavailable" >&2 ;;
   *) echo "safe-worktree-remove: git refused removal" >&2 ;;
 esac
 exit "$rc"
