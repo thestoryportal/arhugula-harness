@@ -420,6 +420,26 @@ R-IF-115:
     close track or remain deliberately represented in the live arc ledger / closure-gate residual
     review instead of this stale ACTIVE entry. No new build arc is opened here.
 
+R-IF-116:
+  title: Insights-residue workspace tooling program (U-WT-01..08 + U-HK-42..44)
+  surface: VII
+  status: ACTIVE
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [tools/hooks/**, tools/*.py, .claude/skills/**, .agents/skills/**, justfile, .gitignore, .harness/hardening-workflow/HARDENING_PLAN.md, .harness/wave5-hooks-status.md, .harness/r-if-116-insights-residue-plan.md, Project_Roadmap_v1.md], contracts: [], cross_axis: no }
+  skills: { primary: roadmap-continue, secondary: [ship-pr, merge-gate] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: e2e, must_pass: ["tools/codex-parity-check.sh", "just check"] }
+  close_shape: { type: PR-merge, artifact: ".harness/wave5-hooks-status.md", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: >
+    Program from the 2026-08-03 insights-residue plan (~8 PRs: grounding clause, YAML hook branch,
+    subagent registry+sweep, arc exit report, mutation-probe runner, red-first skill, two-lane recipe);
+    plan at `.harness/r-if-116-insights-residue-plan.md`; U-WT-02/U-WT-07 deferred behind named
+    trigger conditions.
+
 R-IF-roadmap-refresh:
   title: Refresh roadmap status dashboard after PR merge
   surface: VII
