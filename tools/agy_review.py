@@ -15,6 +15,8 @@ from pathlib import Path
 
 MODEL_ARGUMENT = "Gemini 3.1 Pro (High)"
 EXPECTED_MODEL_LABEL = "Gemini 3.1 Pro (High)"
+MAX_DIFF_PART_BYTES = 32 * 1024
+ARTIFACT_COMPLETE_MARKER = "ARTIFACT: COMPLETE"
 PROVIDER_ENV = (
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
@@ -182,12 +184,36 @@ def collect_diff(repo: Path, base: str) -> str:
     return diff
 
 
-def review_prompt(repo: Path, diff_path: Path) -> str:
+def write_diff_parts(directory: Path, diff: str) -> list[Path]:
+    """Write ordered UTF-8 chunks small enough for Antigravity's file viewer."""
+    encoded = diff.encode("utf-8")
+    parts: list[Path] = []
+    start = 0
+    while start < len(encoded):
+        end = min(start + MAX_DIFF_PART_BYTES, len(encoded))
+        while True:
+            try:
+                encoded[start:end].decode("utf-8")
+                break
+            except UnicodeDecodeError as exc:
+                end = start + exc.start
+        path = directory / f"review-part-{len(parts) + 1:03d}.diff"
+        path.write_bytes(encoded[start:end])
+        parts.append(path)
+        start = end
+    return parts
+
+
+def review_prompt(repo: Path, diff_paths: list[Path]) -> str:
+    numbered_paths = "\n".join(f"{index}. {path}" for index, path in enumerate(diff_paths, start=1))
     return (
         "You are an out-of-family code reviewer for an agent-harness monorepo.\n"
-        f"The authoritative workspace root is {repo}. Use exactly one read-only view_file "
-        "call to read the complete diff\n"
-        f"from {diff_path}. Do not open surrounding workspace files, grep or search, or "
+        f"The authoritative workspace root is {repo}. The complete diff is split into "
+        f"{len(diff_paths)} ordered parts so every read stays below the file-view limit. Use "
+        f"exactly {len(diff_paths)} read-only view_file calls, one for each numbered part in "
+        "order. The parts concatenate byte-for-byte into the complete diff:\n"
+        f"{numbered_paths}\n"
+        "Do not open surrounding workspace files, grep or search, or "
         "inspect any other path.\n"
         "Review that concrete artifact for real defects: correctness, hook and permission "
         "semantics, contract drift, unsafe state handling, and tests that would stay green if "
@@ -201,7 +227,11 @@ def review_prompt(repo: Path, diff_path: Path) -> str:
         "access to this artifact is required before analysis.\n"
         "Do not invoke terminal commands or request command permission. Do not invoke URL, "
         "browser, or MCP tools.\n"
-        "Do not read dotfiles, environment files, or user configuration. End with exactly\n"
+        "Do not read dotfiles, environment files, or user configuration. Only after every "
+        "numbered part was read completely without truncation, emit the exact line\n"
+        f"{ARTIFACT_COMPLETE_MARKER}\n"
+        "immediately before the verdict. If any part is incomplete or unreadable, omit that "
+        "marker and use VERDICT: BLOCK. End with exactly\n"
         "VERDICT: APPROVE or VERDICT: BLOCK as the final non-empty line.\n\n"
         "Apply the current official Codex hook protocol when reviewing hook code:\n"
         "Shell and unified-exec hooks match as Bash; apply_patch matches apply_patch, Edit, "
@@ -263,9 +293,8 @@ def run_review(repo: Path, base: str) -> int:
     model_error: str | None = None
     try:
         with tempfile.TemporaryDirectory(prefix="arhugula-agy-review-") as scratch:
-            diff_path = Path(scratch) / "review.diff"
+            diff_paths = write_diff_parts(Path(scratch), diff)
             log_path = Path(scratch) / "route.log"
-            diff_path.write_text(diff, encoding="utf-8")
             # The reviewed artifact is outside the workspace sandbox, so the agy command
             # below exposes this exact scratch directory with --add-dir.
             proc = run_bounded(
@@ -285,7 +314,7 @@ def run_review(repo: Path, base: str) -> int:
                     "--print-timeout",
                     "20m",
                     "-p",
-                    review_prompt(repo, diff_path),
+                    review_prompt(repo, diff_paths),
                 ],
                 cwd=repo,
                 timeout=1260,
@@ -314,7 +343,22 @@ def run_review(repo: Path, base: str) -> int:
         print(f"agy-review: {model_error}", file=sys.stderr)
         return 2
 
-    final_line = next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "")
+    output_lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if ARTIFACT_COMPLETE_MARKER not in output_lines:
+        if output:
+            print(output, file=sys.stderr)
+        print("agy-review: missing exact artifact-completeness marker", file=sys.stderr)
+        return 2
+    if len(output_lines) < 2 or output_lines[-2] != ARTIFACT_COMPLETE_MARKER:
+        if output:
+            print(output, file=sys.stderr)
+        print(
+            "agy-review: artifact-completeness marker must immediately precede verdict",
+            file=sys.stderr,
+        )
+        return 2
+
+    final_line = output_lines[-1] if output_lines else ""
     if final_line not in VERDICTS:
         if output:
             print(output, file=sys.stderr)

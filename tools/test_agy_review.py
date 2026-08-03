@@ -198,6 +198,7 @@ def _fake_commands(
     agy_output: str,
     agy_exit: int = 0,
     effective_model: str = "Gemini 3.1 Pro (High)",
+    emit_completeness: bool = True,
 ) -> tuple[Path, Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -227,6 +228,11 @@ def _fake_commands(
     git.chmod(0o755)
 
     agy = bin_dir / "agy"
+    rendered_agy_output = agy_output
+    if emit_completeness:
+        output_lines = agy_output.splitlines()
+        output_lines.insert(-1, "ARTIFACT: COMPLETE")
+        rendered_agy_output = "\n".join(output_lines)
     agy.write_text(
         "#!/bin/sh\n"
         'pwd > "$AGY_CWD_CAPTURE"\n'
@@ -242,14 +248,20 @@ def _fake_commands(
         "done\n"
         f"printf 'Propagating selected model override to backend: label=\"{effective_model}\"\\n' "
         '  > "$log_file"\n'
-        'cat "$add_dir/review.diff" >> "$AGY_CAPTURE"\n'
+        'sed -n \'s/^[0-9][0-9]*\\. //p\' "$AGY_CAPTURE" > "$AGY_MANIFEST_CAPTURE"\n'
+        '[ -s "$AGY_MANIFEST_CAPTURE" ] || exit 8\n'
+        ': > "$AGY_DIFF_CAPTURE"\n'
+        "while IFS= read -r diff_part; do "
+        '[ -f "$diff_part" ] || exit 8; cat "$diff_part" >> "$AGY_DIFF_CAPTURE"; '
+        'done < "$AGY_MANIFEST_CAPTURE"\n'
+        'cat "$AGY_DIFF_CAPTURE" >> "$AGY_CAPTURE"\n'
         'if [ -n "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}${GOOGLE_GENAI_USE_VERTEXAI:-}'
         "${GOOGLE_APPLICATION_CREDENTIALS:-}${GOOGLE_CLOUD_PROJECT:-}"
         '${GOOGLE_CLOUD_LOCATION:-}" ]; then\n'
         "  echo 'provider environment leaked'\n"
         "  exit 9\n"
         "fi\n"
-        f"printf '%b\\n' {agy_output!r}\n"
+        f"printf '%b\\n' {rendered_agy_output!r}\n"
         f"exit {agy_exit}\n",
         encoding="utf-8",
     )
@@ -265,18 +277,22 @@ def _run(
     untracked_path: str = "",
     diff_file: Path | None = None,
     effective_model: str = "Gemini 3.1 Pro (High)",
+    emit_completeness: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     bin_dir, capture = _fake_commands(
         tmp_path,
         agy_output=agy_output,
         agy_exit=agy_exit,
         effective_model=effective_model,
+        emit_completeness=emit_completeness,
     )
     env = os.environ.copy()
     env.update(
         {
             "PATH": f"{bin_dir}:{env['PATH']}",
             "AGY_CAPTURE": str(capture),
+            "AGY_DIFF_CAPTURE": str(tmp_path / "agy-diff.txt"),
+            "AGY_MANIFEST_CAPTURE": str(tmp_path / "agy-manifest.txt"),
             "AGY_ARGS_CAPTURE": str(tmp_path / "agy-args.txt"),
             "AGY_CWD_CAPTURE": str(tmp_path / "agy-cwd.txt"),
             "AGY_REVIEW_ROOT": str(tmp_path / "main-root"),
@@ -309,7 +325,9 @@ def test_review_passes_actual_diff_and_accepts_exact_verdict(tmp_path: Path) -> 
     assert "diff --git a/a.py b/a.py" in prompt
     assert "Do not invoke terminal commands" in prompt
     assert "Do not invoke URL, browser, or MCP tools" in prompt
-    assert "Use exactly one read-only view_file call to read the complete diff" in prompt
+    assert "read-only view_file calls, one for each numbered part" in prompt
+    assert "parts concatenate byte-for-byte into the complete diff" in prompt
+    assert "ARTIFACT: COMPLETE" in prompt
     assert "Do not open surrounding workspace files" in prompt
     assert "Report at most 5 findings" in prompt
     assert "Finish immediately after analyzing that diff" in prompt
@@ -348,6 +366,52 @@ def test_review_passes_actual_diff_and_accepts_exact_verdict(tmp_path: Path) -> 
     assert proc.stdout.rstrip().endswith("VERDICT: APPROVE")
 
 
+def test_review_rejects_approval_without_complete_artifact_marker(tmp_path: Path) -> None:
+    proc = _run(
+        tmp_path,
+        agy_output=(
+            "The system truncated the file reading at 46,080 bytes; no defects in the "
+            "visible portion.\nVERDICT: APPROVE"
+        ),
+        emit_completeness=False,
+    )
+
+    assert proc.returncode == 2
+    assert "missing exact artifact-completeness marker" in proc.stderr
+
+
+def test_diff_parts_are_bounded_and_reconstruct_the_exact_utf8_diff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reviewer = _reviewer_module()
+    diff = "diff --git a/a b/a\n+" + ("abc🙂\n" * 20_000)
+    monkeypatch.setattr(
+        Path,
+        "write_text",
+        lambda *_args, **_kwargs: pytest.fail("diff parts must be written as raw bytes"),
+    )
+
+    paths = reviewer.write_diff_parts(tmp_path, diff)
+
+    assert len(paths) > 1
+    assert reviewer.MAX_DIFF_PART_BYTES == 32 * 1024
+    assert all(len(path.read_bytes()) <= reviewer.MAX_DIFF_PART_BYTES for path in paths)
+    assert b"".join(path.read_bytes() for path in paths) == diff.encode("utf-8")
+
+
+def test_review_requires_completeness_marker_immediately_before_verdict(
+    tmp_path: Path,
+) -> None:
+    proc = _run(
+        tmp_path,
+        agy_output=("ARTIFACT: COMPLETE\nunexpected line after marker\nVERDICT: APPROVE"),
+        emit_completeness=False,
+    )
+
+    assert proc.returncode == 2
+    assert "artifact-completeness marker must immediately precede verdict" in proc.stderr
+
+
 def test_review_fails_closed_when_backend_selects_another_model(tmp_path: Path) -> None:
     proc = _run(
         tmp_path,
@@ -377,6 +441,12 @@ def test_review_streams_large_diff_without_putting_payload_in_argv(tmp_path: Pat
     assert proc.returncode == 0, proc.stderr
     prompt = (tmp_path / "agy-prompt.txt").read_text(encoding="utf-8")
     assert marker in prompt
+    manifest = (tmp_path / "agy-manifest.txt").read_text(encoding="utf-8").splitlines()
+    assert [Path(path).name for path in manifest] == [
+        f"review-part-{index:03d}.diff" for index in range(1, len(manifest) + 1)
+    ]
+    assert len(manifest) > 1
+    assert (tmp_path / "agy-diff.txt").read_bytes() == diff_file.read_bytes()
     args = (tmp_path / "agy-args.txt").read_text(encoding="utf-8")
     assert marker not in args
 
