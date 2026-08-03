@@ -38,7 +38,8 @@ check them rather than trusting remembered or checkpointed remaining work.
    or live/integration checks when the claim requires them.
 6. Grounding pass (U-WT-01) first: re-read every `file:line` cite at HEAD, recompute
    every count/arithmetic claim from source, verify every `#NNN` reference is the PR it
-   claims. Then, for a Codex-authored diff, use Antigravity through `just gemini-review` as the
+   claims, confirm local gates ran at the *current* HEAD (not an earlier one), and record
+   in the PR body that the pass ran. Then, for a Codex-authored diff, use Antigravity through `just gemini-review` as the
    out-of-family reviewer under the operator's standing all-forward-work authorization; do
    not request per-run approval. This review uses the OAuth-authenticated `agy` CLI only—never
    provider API keys, service-account/Vertex routing, or a direct API call. For a Claude-authored
