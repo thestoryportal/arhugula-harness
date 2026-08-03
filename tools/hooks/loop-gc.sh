@@ -146,6 +146,17 @@ def sweep(text):
     # starts-minus-stops aggregate lets a surplus stop — e.g. one whose own start
     # append was skipped by the appender's lock deadline — bank credit against a
     # FUTURE sibling's start on the same fallback key, silently masking it.
+    #
+    # DOCUMENTED STRUCTURAL RESIDUAL (codex round-5, accepted-not-fixed): the mirror
+    # ordering — recorded start A, skipped start B, stop B — masks A on a SHARED
+    # fallback key, and no sweep-side algorithm can discriminate it: with agent_id
+    # absent, sibling rows carry no per-sibling identity, and no join key exists at
+    # Start time (agent_transcript_path is not in Start payloads). Rejecting count-
+    # matched stops would just convert the false-negative into a standing false-
+    # positive on every legitimate shared-key reconcile. Bounded: requires agent_id
+    # absent AND a pathological (>2s lock-starved) skipped start AND a sibling
+    # collision; blast radius is one missed ADVISORY hygiene line, never a hard-gate
+    # loss. Reopen trigger: agent_id observed absent in real fan-out payloads.
     balance, paths = {}, {}
     for _, row in parsed(text):
         key, transcript = row_key(row)
