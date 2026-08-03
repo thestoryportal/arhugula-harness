@@ -427,13 +427,13 @@ R-IF-116:
   depends_on: []
   blocks: []
   posture: mode-agnostic
-  scope: { files: [tools/hooks/**, tools/*.py, .claude/skills/**], contracts: [], cross_axis: no }
+  scope: { files: [tools/hooks/**, tools/*.py, .claude/skills/**, justfile, .gitignore, .harness/hardening-workflow/HARDENING_PLAN.md, .harness/wave5-hooks-status.md], contracts: [], cross_axis: no }
   skills: { primary: ship-pr, secondary: [roadmap-continue, merge-gate] }
   advisor_required: no
   council_required: no
   verification: { shape: e2e, must_pass: ["tools/codex-parity-check.sh", "just check"] }
   close_shape: { type: PR-merge, artifact: ".harness/wave5-hooks-status.md", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: U-WT-01
+  next_pointer: null
   notes: >
     Program from the 2026-08-03 insights-residue plan (~8 PRs: grounding clause, YAML hook branch,
     subagent registry+sweep, arc exit report, mutation-probe runner, red-first skill, two-lane recipe);
