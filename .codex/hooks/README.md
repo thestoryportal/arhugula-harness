@@ -44,6 +44,13 @@ structured Bash results because `PostToolUse` fires for failed Bash calls. Its d
 successful local tools may also return model-facing text. The second cannot be reproduced
 exactly until Codex exposes that lifecycle event; it is the only hook-level compatibility gap.
 
+Run `just codex-hook-runtime-witness` to verify the installed Codex CLI host itself. The
+witness derives its matcher groups from `.codex/hooks.json`, removes provider credentials,
+serves three deterministic Responses exchanges from `127.0.0.1`, and proves SessionStart,
+Bash and apply_patch Pre/PostToolUse, Stop, SessionEnd, and both tool effects. It uses
+`--dangerously-bypass-hook-trust` only inside that vetted temporary fixture; normal sessions
+still require explicit trust through `/hooks`.
+
 ## Trust and startup failures
 
 Codex trusts command hooks by exact definition hash. After `.codex/hooks.json` changes land, open `/hooks` in the Codex TUI, review the project hook definitions, and trust them. Do not use `--dangerously-bypass-hook-trust` as the durable setup.
@@ -65,11 +72,16 @@ kernel-owned lock survives long removals without age-based theft, active leases 
 authoritative until SessionEnd, and registration/activation revalidate the worktree after
 locking. The mutex and leases are keyed by stable Git worktree administration identity,
 so a quarantine move cannot split their authority. The explicit remover alone moves a clean
-candidate to an unpublished sibling quarantine before its authoritative scans. This
-closes new lookups through the original pathname; retained cwd, file-descriptor, and Linux
+candidate to an opaque sibling quarantine before its authoritative scans. This closes normal
+lookups through the original pathname; retained cwd, file-descriptor, and Linux
 mapping references are detected fail-closed before a final local-state scan and deletion.
 The macOS `lsof` observation is time-bounded and timeout is unknown/fail-closed. A process-death recovery transaction restores interrupted
-quarantines on TERM and lets a later removal pass recover after untrappable process death.
+quarantines on TERM and lets a later removal pass recover after untrappable process death,
+including a death between Git's directory rename and administrative-path update. The safety
+boundary covers cooperative Claude/Codex writers that use the session lease plus processes
+that already retain a kernel reference. It is not a security boundary against an
+uncooperative same-UID process that deliberately discovers and writes into the opaque
+quarantine; such a process can also rewrite repository metadata and permissions directly.
 `just codex-worktree-gc --reap` uses this same status and removal entrypoint; it cannot
 bypass Codex leases, quarantine, or the shared mutex.
 

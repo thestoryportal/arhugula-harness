@@ -54,6 +54,10 @@ codex-sync:
 codex-parity-check:
     bash tools/codex-parity-check.sh
 
+# Exercise hook dispatch through the installed Codex CLI using only a loopback model double.
+codex-hook-runtime-witness:
+    /usr/bin/python3 tools/codex_hook_runtime_witness.py
+
 # Codex PR-ready local gate without live provider credentials.
 codex-check: codex-sync lint typecheck docs-completeness-check memory-closeout-check closure-certification-check codex-parity-check
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"

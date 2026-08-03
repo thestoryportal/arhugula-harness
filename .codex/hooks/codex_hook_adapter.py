@@ -6,8 +6,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +18,122 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_UV_CACHE_DIR = "/tmp/arhugula-uv-cache"
 PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Add|Update) File:\s+(.+?)\s*$", re.MULTILINE)
 COMMIT_RE = re.compile(r"^\s*(?:(?:/usr/local/bin/)?rtk\s+)?(?:/usr/bin/)?git\s+commit(?:\s|$)")
+TERMINATION_GRACE_SECONDS = 5.0
+
+
+def terminate_bounded(process: subprocess.Popen[str]) -> None:
+    """Terminate the direct child and its original process group without an unbounded wait."""
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        direct_alive = process.poll() is None
+        group_alive = False
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, 0)
+                group_alive = True
+            except ProcessLookupError:
+                pass
+        if not direct_alive and not group_alive:
+            return
+        remaining = deadline - time.monotonic()
+        if direct_alive:
+            try:
+                process.wait(timeout=min(0.05, remaining))
+            except subprocess.TimeoutExpired:
+                pass
+        else:
+            time.sleep(min(0.05, remaining))
+    # The leader may exit on TERM while a background descendant ignores it. Escalate
+    # the still-live original process group only after the real group grace period.
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def run_bounded(
+    args: list[str],
+    *,
+    cwd: Path,
+    timeout: float,
+    env: dict[str, str],
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run one hook command with bounded waits and best-effort process-group cleanup."""
+    streams = []
+    try:
+        stdin_stream = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+        streams.append(stdin_stream)
+        stdout_stream = tempfile.TemporaryFile(
+            mode="w+", encoding="utf-8", errors="replace"
+        )
+        streams.append(stdout_stream)
+        stderr_stream = tempfile.TemporaryFile(
+            mode="w+", encoding="utf-8", errors="replace"
+        )
+        streams.append(stderr_stream)
+        if input_text is not None:
+            stdin_stream.write(input_text)
+            stdin_stream.seek(0)
+        try:
+            process = subprocess.Popen(
+                args,
+                cwd=cwd,
+                stdin=stdin_stream,
+                stdout=stdout_stream,
+                stderr=stderr_stream,
+                text=True,
+                errors="replace",
+                env=env,
+                start_new_session=os.name == "posix",
+            )
+        except OSError as exc:
+            return subprocess.CompletedProcess(args, 127, "", str(exc))
+        timed_out = False
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            terminate_bounded(process)
+        except BaseException:
+            terminate_bounded(process)
+            raise
+        else:
+            # Hooks are one-shot commands: a successful leader must not leave a background
+            # descendant holding the temporary stdio files open.
+            terminate_bounded(process)
+        stdout_stream.seek(0)
+        stderr_stream.seek(0)
+        stdout = stdout_stream.read()
+        stderr = stderr_stream.read()
+        if timed_out:
+            detail = f"command timed out after {timeout} seconds"
+            stderr = f"{stderr.rstrip()}\n{detail}".lstrip()
+            return subprocess.CompletedProcess(args, 124, stdout, stderr)
+        return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+    finally:
+        for stream in streams:
+            stream.close()
 
 
 def read_payload() -> dict[str, Any]:
@@ -36,13 +155,10 @@ def run_claude_hook(
     env = os.environ.copy()
     env["CLAUDE_PROJECT_DIR"] = str(cwd)
     env.setdefault("UV_CACHE_DIR", DEFAULT_UV_CACHE_DIR)
-    proc = subprocess.run(
+    proc = run_bounded(
         ["/bin/bash", str(ROOT / relative_path)],
         cwd=cwd,
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        check=False,
+        input_text=json.dumps(payload),
         timeout=30,
         env=env,
     )
@@ -181,12 +297,9 @@ def pre_commit(payload: dict[str, Any]) -> int:
     # Preserve the canonical Claude hook's two independent gates: static typing and an
     # explicit proof that the command runs inside the intended Git worktree.
     for argv in (["uv", "run", "pyright"], ["git", "rev-parse", "--show-toplevel"]):
-        proc = subprocess.run(
+        proc = run_bounded(
             argv,
             cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
             timeout=120,
             env=env,
         )

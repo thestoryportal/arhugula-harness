@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 MODEL_ARGUMENT = "Gemini 3.1 Pro (High)"
@@ -23,6 +25,122 @@ PROVIDER_ENV = (
 )
 VERDICTS = {"VERDICT: APPROVE", "VERDICT: BLOCK"}
 MODEL_LABEL_RE = re.compile(r'Propagating selected model override to backend: label="([^"]+)"')
+TERMINATION_GRACE_SECONDS = 5.0
+
+
+def terminate_bounded(process: subprocess.Popen[str]) -> None:
+    """Terminate the direct child and its original process group without an unbounded wait."""
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        direct_alive = process.poll() is None
+        group_alive = False
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, 0)
+                group_alive = True
+            except ProcessLookupError:
+                pass
+        if not direct_alive and not group_alive:
+            return
+        remaining = deadline - time.monotonic()
+        if direct_alive:
+            try:
+                process.wait(timeout=min(0.05, remaining))
+            except subprocess.TimeoutExpired:
+                pass
+        else:
+            time.sleep(min(0.05, remaining))
+    # The leader may exit on TERM while a background descendant ignores it. Escalate
+    # the still-live original process group only after the real group grace period.
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def run_bounded(
+    args: list[str],
+    *,
+    cwd: Path,
+    timeout: float,
+    env: dict[str, str],
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run one command with bounded waits and best-effort process-group cleanup."""
+    streams = []
+    try:
+        stdin_stream = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+        streams.append(stdin_stream)
+        stdout_stream = tempfile.TemporaryFile(
+            mode="w+", encoding="utf-8", errors="replace"
+        )
+        streams.append(stdout_stream)
+        stderr_stream = tempfile.TemporaryFile(
+            mode="w+", encoding="utf-8", errors="replace"
+        )
+        streams.append(stderr_stream)
+        if input_text is not None:
+            stdin_stream.write(input_text)
+            stdin_stream.seek(0)
+        try:
+            process = subprocess.Popen(
+                args,
+                cwd=cwd,
+                stdin=stdin_stream,
+                stdout=stdout_stream,
+                stderr=stderr_stream,
+                text=True,
+                errors="replace",
+                env=env,
+                start_new_session=os.name == "posix",
+            )
+        except OSError as exc:
+            return subprocess.CompletedProcess(args, 127, "", str(exc))
+        timed_out = False
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            terminate_bounded(process)
+        except BaseException:
+            terminate_bounded(process)
+            raise
+        else:
+            # Hooks/reviewers are one-shot commands: a successful leader must not leave a
+            # background descendant holding the temporary stdio files open.
+            terminate_bounded(process)
+        stdout_stream.seek(0)
+        stderr_stream.seek(0)
+        stdout = stdout_stream.read()
+        stderr = stderr_stream.read()
+        if timed_out:
+            detail = f"command timed out after {timeout} seconds"
+            stderr = f"{stderr.rstrip()}\n{detail}".lstrip()
+            return subprocess.CompletedProcess(args, 124, stdout, stderr)
+        return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+    finally:
+        for stream in streams:
+            stream.close()
 
 
 def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -100,6 +218,10 @@ def review_prompt(repo: Path, diff_path: Path) -> str:
         "The *** Add File: and *** Update File: markers are Codex apply_patch command syntax, "
         "not Antigravity schema.\n"
         "Bash/apply_patch arguments are in tool_input.command.\n"
+        "The provider-free Codex runtime witness is also a local Responses API model double. "
+        "At that model wire boundary, an apply_patch custom_tool_call correctly carries the raw "
+        "patch string in item.input; Codex then normalizes it into hook tool_input.command. Do "
+        "not require the Responses custom-tool input string to be a JSON object.\n"
         "The common cwd is a runtime-supplied common field for the session, not a value inside "
         "agent-supplied tool_input. A successful git rev-parse check mirrors the Claude "
         "pre-commit gate; root comparison is optional hardening, not a Claude-parity requirement "
@@ -148,7 +270,9 @@ def run_review(repo: Path, base: str) -> int:
             diff_path = Path(scratch) / "review.diff"
             log_path = Path(scratch) / "route.log"
             diff_path.write_text(diff, encoding="utf-8")
-            proc = subprocess.run(
+            # The reviewed artifact is outside the workspace sandbox, so the agy command
+            # below exposes this exact scratch directory with --add-dir.
+            proc = run_bounded(
                 [
                     "agy",
                     "--sandbox",
@@ -168,16 +292,13 @@ def run_review(repo: Path, base: str) -> int:
                     review_prompt(repo, diff_path),
                 ],
                 cwd=repo,
-                capture_output=True,
-                text=True,
-                errors="replace",
-                check=False,
                 timeout=1260,
                 env=env,
             )
             if proc.returncode == 0:
+                # This value is enforced below after the temporary route log is read.
                 model_error = verify_effective_model(log_path)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except OSError as exc:
         print(f"agy-review: reviewer unavailable: {exc}", file=sys.stderr)
         return 2
 
@@ -186,10 +307,14 @@ def run_review(repo: Path, base: str) -> int:
         if output:
             print(output)
         detail = proc.stderr.strip() or f"exit {proc.returncode}"
+        if proc.returncode in {124, 127}:
+            print(f"agy-review: reviewer unavailable: {detail}", file=sys.stderr)
+            return 2
         print(f"agy-review: reviewer failed: {detail}", file=sys.stderr)
         return proc.returncode
 
     if model_error is not None:
+        # Fail closed if Antigravity routed anywhere except the required Pro tier.
         print(f"agy-review: {model_error}", file=sys.stderr)
         return 2
 

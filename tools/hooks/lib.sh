@@ -155,7 +155,37 @@ hook_session_key() {
 }
 
 hook_checkpoint_generation() {
-  /usr/bin/python3 -c 'import time; print(time.time_ns())'
+  local ckdir="$1" lock_timeout="${2:-5}"
+  /usr/bin/python3 - "$ckdir/.checkpoint-generation" "$lock_timeout" <<'PY'
+import fcntl
+import os
+import sys
+import time
+from pathlib import Path
+
+counter = Path(sys.argv[1])
+lock = counter.with_name(counter.name + ".lock")
+deadline = time.monotonic() + float(sys.argv[2])
+counter.parent.mkdir(parents=True, exist_ok=True)
+with lock.open("a+") as stream:
+    while True:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise SystemExit(75)
+            time.sleep(0.01)
+    try:
+        current = int(counter.read_text(encoding="utf-8").strip())
+    except (FileNotFoundError, OSError, ValueError):
+        current = 0
+    generation = current + 1
+    temporary = counter.with_name(f"{counter.name}.tmp-{os.getpid()}")
+    temporary.write_text(f"{generation}\n", encoding="utf-8")
+    os.replace(temporary, counter)
+    print(generation)
+PY
 }
 
 # Publish a completed checkpoint only when it is not older than the current
@@ -207,10 +237,10 @@ PY
 hook_write_checkpoint() {
   local label="$1" skip_gh="${2:-}" session publish_timeout="${4:-5}" generation
   session=$(hook_session_key "${3:-shared}")
-  generation=$(hook_checkpoint_generation) || return 0
   local d; d=$(hook_project_dir); [ -n "$d" ] || return 0
   local ckdir="$d/.harness/.checkpoints"
   mkdir -p "$ckdir" 2>/dev/null || return 0
+  generation=$(hook_checkpoint_generation "$ckdir" "$publish_timeout") || return 0
   local ts head branch next prs dirty
   ts=$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo now)
   head=$(git -C "$d" rev-parse --short HEAD 2>/dev/null || echo "?")
@@ -642,6 +672,17 @@ _hook_worktree_restore_transaction() {
   if [ "$quarantine_rc" -eq 0 ]; then
     [ ! -e "$original" ] || return 2
     git -C "$root" worktree move "$quarantine" "$original" >/dev/null 2>&1 || return 2
+    rm -f "$transaction" 2>/dev/null || return 2
+    printf '%s' "$original"
+    return 0
+  fi
+  if [ "$original_rc" -eq 0 ] && [ "$quarantine_rc" -eq 1 ] \
+    && [ ! -e "$original" ] && [ -d "$quarantine" ]; then
+    # Git may die after its filesystem rename but before updating the worktree admin
+    # path. Restore the physical tree to the still-registered original path directly;
+    # `git worktree move` cannot address this split-brain state.
+    /bin/mv "$quarantine" "$original" 2>/dev/null || return 2
+    _hook_worktree_registered_path "$root" "$original" || return 2
     rm -f "$transaction" 2>/dev/null || return 2
     printf '%s' "$original"
     return 0

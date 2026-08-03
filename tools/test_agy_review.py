@@ -2,13 +2,196 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 REVIEWER = ROOT / "tools" / "agy_review.py"
+
+
+def _reviewer_module():
+    spec = importlib.util.spec_from_file_location("agy_review_test", REVIEWER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group witness requires POSIX")
+def test_reviewer_timeout_terminates_descendant_process_tree(tmp_path: Path) -> None:
+    reviewer = _reviewer_module()
+    reviewer.TERMINATION_GRACE_SECONDS = 0.2
+    child_pid_file = tmp_path / "child.pid"
+    env = os.environ.copy()
+    env["CHILD_PID_FILE"] = str(child_pid_file)
+
+    proc = reviewer.run_bounded(
+        [
+            "/bin/sh",
+            "-c",
+            (
+                '(trap "" TERM; sleep 30) & child=$!; '
+                'printf "%s" "$child" > "$CHILD_PID_FILE"; wait "$child"'
+            ),
+        ],
+        cwd=tmp_path,
+        timeout=2,
+        env=env,
+    )
+
+    assert proc.returncode == 124
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"reviewer timeout left descendant alive: pid={child_pid}")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group witness requires POSIX")
+def test_reviewer_success_terminates_background_descendant(tmp_path: Path) -> None:
+    reviewer = _reviewer_module()
+    reviewer.TERMINATION_GRACE_SECONDS = 0.2
+    child_pid_file = tmp_path / "successful-child.pid"
+    env = os.environ.copy()
+    env["CHILD_PID_FILE"] = str(child_pid_file)
+
+    proc = reviewer.run_bounded(
+        [
+            "/bin/sh",
+            "-c",
+            (
+                '(trap "" TERM; sleep 30) & child=$!; '
+                'printf "%s" "$child" > "$CHILD_PID_FILE"; exit 0'
+            ),
+        ],
+        cwd=tmp_path,
+        timeout=5,
+        env=env,
+    )
+
+    assert proc.returncode == 0
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"successful reviewer left descendant alive: pid={child_pid}")
+
+
+def test_reviewer_interrupt_terminates_detached_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reviewer = _reviewer_module()
+    reviewer.TERMINATION_GRACE_SECONDS = 0
+
+    class InterruptingProcess:
+        pid = 424242
+        returncode: int | None = None
+
+        def wait(self, timeout: float) -> int:
+            _ = timeout
+            if self.returncode is None:
+                raise KeyboardInterrupt
+            return self.returncode
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    process = InterruptingProcess()
+    signals: list[tuple[int, signal.Signals]] = []
+    monkeypatch.setattr(reviewer.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(
+        reviewer.os,
+        "killpg",
+        lambda pid, sent_signal: (
+            signals.append((pid, sent_signal)) if sent_signal != 0 else None
+        ),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        reviewer.run_bounded(["agy"], cwd=tmp_path, timeout=30, env=os.environ.copy())
+
+    assert signals == [
+        (process.pid, reviewer.signal.SIGTERM),
+        (process.pid, reviewer.signal.SIGKILL),
+    ]
+    assert process.returncode == -15
+
+
+def test_reviewer_closes_partial_temp_streams_when_input_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reviewer = _reviewer_module()
+
+    class FailingStream:
+        def __init__(self, fail_write: bool) -> None:
+            self.fail_write = fail_write
+            self.closed = False
+
+        def write(self, _value: str) -> int:
+            if self.fail_write:
+                raise OSError("disk full")
+            return 0
+
+        def seek(self, _offset: int) -> int:
+            return 0
+
+        def close(self) -> None:
+            self.closed = True
+
+    streams = [FailingStream(True), FailingStream(False), FailingStream(False)]
+    pending = iter(streams)
+    monkeypatch.setattr(reviewer.tempfile, "TemporaryFile", lambda **_kwargs: next(pending))
+
+    with pytest.raises(OSError, match="disk full"):
+        reviewer.run_bounded(
+            ["agy"], cwd=tmp_path, timeout=30, env=os.environ.copy(), input_text="review"
+        )
+
+    assert all(stream.closed for stream in streams)
+
+
+@pytest.mark.parametrize("reviewer_returncode", [124, 127])
+def test_reviewer_unavailable_exit_maps_to_two(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    reviewer_returncode: int,
+) -> None:
+    reviewer = _reviewer_module()
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+bounded timeout")
+    monkeypatch.setattr(
+        reviewer,
+        "run_bounded",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["agy"], reviewer_returncode, "", "reviewer unavailable"
+        ),
+    )
+
+    assert reviewer.run_review(tmp_path, "HEAD") == 2
+    assert "agy-review: reviewer unavailable:" in capsys.readouterr().err
 
 
 def _fake_commands(
@@ -143,6 +326,8 @@ def test_review_passes_actual_diff_and_accepts_exact_verdict(tmp_path: Path) -> 
     assert 'A matcher of "Bash" already covers Shell and unified-exec aliases' in prompt
     assert "Both canonical names and documented aliases are valid in matcher regexes" in prompt
     assert "Codex apply_patch command syntax, not Antigravity schema" in prompt
+    assert "apply_patch custom_tool_call correctly carries the raw patch string" in prompt
+    assert "Codex then normalizes it into hook tool_input.command" in prompt
     assert "cwd is a runtime-supplied common field for the session" in prompt
     assert "root comparison is optional hardening, not a Claude-parity requirement" in prompt
     assert "display label is intentional and empirically required" in prompt
@@ -152,6 +337,8 @@ def test_review_passes_actual_diff_and_accepts_exact_verdict(tmp_path: Path) -> 
     assert "--sandbox" in args
     assert "--dangerously-skip-permissions" in args
     assert "--new-project" in args
+    assert "--add-dir" in args
+    assert Path(args[args.index("--add-dir") + 1]).name.startswith("arhugula-agy-review-")
     assert args[args.index("--model") + 1] == "Gemini 3.1 Pro (High)"
     assert args[args.index("--print-timeout") + 1] == "20m"
     route_log = Path(args[args.index("--log-file") + 1])

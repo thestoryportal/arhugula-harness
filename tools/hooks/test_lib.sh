@@ -603,6 +603,37 @@ eq "pre-move transaction recovery defers deletion" "$(cat "$PRE_MOVE_RESULT")" "
 [ -d "$PRE_MOVE" ] && ok "pre-move transaction recovery preserves worktree" \
   || bad "pre-move transaction recovery deleted worktree"
 
+# Git can die after the directory rename but before updating its administrative path.
+# That leaves the original path registered while the physical tree is at quarantine.
+# Recovery must move the tree back without pruning or losing it.
+PARTIAL_MOVE="$REPO-partial-move-transaction"
+PARTIAL_MOVE_RESULT="$REPO/partial-move-transaction-result"
+git -C "$REPO" worktree add -q -b partial-move-transaction "$PARTIAL_MOVE"
+PARTIAL_MOVE=$(_hook_canonical_worktree "$PARTIAL_MOVE")
+PARTIAL_MOVE_QUARANTINE=$(_hook_worktree_quarantine_path "$PARTIAL_MOVE")
+PARTIAL_MOVE_TRANSACTION=$(_hook_worktree_transaction_file "$PARTIAL_MOVE")
+mkdir -p "$(dirname "$PARTIAL_MOVE_TRANSACTION")"
+_hook_worktree_write_transaction \
+  "$PARTIAL_MOVE_TRANSACTION" "$PARTIAL_MOVE" "$PARTIAL_MOVE_QUARANTINE"
+/bin/mv "$PARTIAL_MOVE" "$PARTIAL_MOVE_QUARANTINE"
+(
+  . "$SCRIPT_DIR/lib.sh"
+  hook_safe_worktree_remove "$REPO" "$PARTIAL_MOVE"
+  printf '%s' "$?" > "$PARTIAL_MOVE_RESULT"
+)
+eq "partial move transaction recovery defers deletion" \
+  "$(cat "$PARTIAL_MOVE_RESULT")" "8"
+[ -d "$PARTIAL_MOVE" ] && ok "partial move recovery restores physical worktree" \
+  || bad "partial move recovery stranded physical worktree"
+[ ! -e "$PARTIAL_MOVE_QUARANTINE" ] \
+  && ok "partial move recovery clears quarantine path" \
+  || bad "partial move recovery left quarantine path"
+PARTIAL_REGISTERED=$(git -C "$REPO" worktree list --porcelain \
+  | sed -n 's/^worktree //p' | grep -Fx "$PARTIAL_MOVE" || true)
+[ "$PARTIAL_REGISTERED" = "$PARTIAL_MOVE" ] \
+  && ok "partial move recovery preserves registration" \
+  || bad "partial move recovery lost registration"
+
 # If the remover dies after Git deletes the worktree but before unlinking the recovery
 # transaction, the public entrypoint must find and clear the both-paths-absent marker.
 POST_DELETE="$REPO-post-delete-transaction"
@@ -703,6 +734,18 @@ LATEST="$REPO/.harness/.checkpoints/precompact-latest-session-a.md"
 [ -f "$LATEST" ] && ok "hook_write_checkpoint wrote session-specific latest" || bad "no checkpoint file"
 grep -q "Test snapshot" "$LATEST" 2>/dev/null && ok "checkpoint carries the label" || bad "label missing"
 grep -q "skipped — fast path" "$LATEST" 2>/dev/null && ok "skip_gh omits gh PR lookup" || bad "skip_gh not honored"
+
+# Generation numbers come from one persistent counter, not a wall clock that can move
+# backward. The counter is the ordering authority across concurrent checkpoint writers.
+GENERATION_DIR="$REPO/checkpoint-generation"
+mkdir -p "$GENERATION_DIR"
+eq "checkpoint generation starts at one" \
+  "$(hook_checkpoint_generation "$GENERATION_DIR")" "1"
+eq "checkpoint generation increments durably" \
+  "$(hook_checkpoint_generation "$GENERATION_DIR")" "2"
+printf '40\n' > "$GENERATION_DIR/.checkpoint-generation"
+eq "checkpoint generation resumes above persisted state" \
+  "$(hook_checkpoint_generation "$GENERATION_DIR")" "41"
 
 # The Python flock helper exits before the critical section, but Bash retains the
 # inherited open-file description. A deliberately slow older publish must therefore

@@ -332,6 +332,31 @@ def test_reap_candidates_maps_safe_refusal_outcomes_without_failure(
     assert message in capsys.readouterr().out
 
 
+def test_reap_does_not_prune_after_failed_transaction_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worktree = gc.Worktree(tmp_path / "candidate", "a" * 40, "codex/candidate")
+    disposition = gc.Disposition(worktree, "candidate", "merged-by-ancestry")
+    calls: list[list[str]] = []
+
+    def fake_run(
+        args: list[str],
+        *,
+        cwd: Path,
+        timeout: int = 30,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, timeout, env
+        calls.append(args)
+        rc = 6 if args[:2] == ["/bin/bash", str(gc.SAFE_WORKTREE_REMOVE)] else 0
+        return subprocess.CompletedProcess(args, rc, "", "unsafe recovery")
+
+    monkeypatch.setattr(gc, "_run", fake_run)
+
+    assert gc.reap_candidates(tmp_path, [disposition]) == 1
+    assert ["git", "worktree", "prune"] not in calls
+
+
 def test_reap_passes_classified_branch_and_head_to_locked_remover(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

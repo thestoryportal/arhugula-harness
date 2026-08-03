@@ -431,7 +431,12 @@ def reap_candidates(repo: Path, dispositions: list[Disposition]) -> int:
                 f"failed to remove {d.worktree.path}: {proc.stderr.strip() or proc.stdout.strip()}",
                 file=sys.stderr,
             )
-    _run(["git", "worktree", "prune"], cwd=repo, timeout=30)
+    # A failed transaction recovery can leave Git's registered path temporarily absent
+    # while the physical worktree still exists at quarantine. Pruning in that state can
+    # erase the only administrative registration and strand the worktree. Only prune
+    # after every candidate reached a safe terminal outcome.
+    if failures == 0:
+        _run(["git", "worktree", "prune"], cwd=repo, timeout=30)
     return failures
 
 

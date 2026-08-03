@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -15,8 +16,40 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTER = ROOT / ".codex" / "hooks" / "codex_hook_adapter.py"
+RUNTIME_WITNESS = ROOT / "tools" / "codex_hook_runtime_witness.py"
 # This module exercises normal adapters even when invoked from an isolated reviewer.
 os.environ.pop("HARNESS_CODEX_REVIEW_ISOLATED", None)
+
+
+def test_live_runtime_witness_is_provider_free_and_operator_runnable() -> None:
+    source = RUNTIME_WITNESS.read_text(encoding="utf-8")
+    justfile = (ROOT / "justfile").read_text(encoding="utf-8")
+
+    assert 'base_url = "http://127.0.0.1:' in source
+    assert "requires_openai_auth = false" in source
+    assert '"SessionStart", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"' in source
+    assert 'for tool in ("Bash", "apply_patch")' in source
+    assert "codex-hook-runtime-witness:" in justfile
+    assert "/usr/bin/python3 tools/codex_hook_runtime_witness.py" in justfile
+
+
+def _runtime_witness_module():
+    spec = importlib.util.spec_from_file_location(
+        "codex_hook_runtime_witness_test", RUNTIME_WITNESS
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_live_runtime_witness_reports_empty_hook_stream(tmp_path: Path) -> None:
+    witness = _runtime_witness_module()
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="no hook events"):
+        witness._assert_witness(tmp_path, events_path, 0)
 
 
 def _adapter_module():
@@ -25,6 +58,122 @@ def _adapter_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group witness requires POSIX")
+def test_hook_adapter_timeout_terminates_descendant_process_tree(tmp_path: Path) -> None:
+    adapter = _adapter_module()
+    adapter.TERMINATION_GRACE_SECONDS = 0.2
+    child_pid_file = tmp_path / "child.pid"
+    env = os.environ.copy()
+    env["CHILD_PID_FILE"] = str(child_pid_file)
+
+    proc = adapter.run_bounded(
+        [
+            "/bin/sh",
+            "-c",
+            (
+                '(trap "" TERM; sleep 30) & child=$!; '
+                'printf "%s" "$child" > "$CHILD_PID_FILE"; wait "$child"'
+            ),
+        ],
+        cwd=tmp_path,
+        timeout=2,
+        env=env,
+    )
+
+    assert proc.returncode == 124
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"hook timeout left descendant alive: pid={child_pid}")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group witness requires POSIX")
+def test_hook_adapter_success_terminates_background_descendant(tmp_path: Path) -> None:
+    adapter = _adapter_module()
+    adapter.TERMINATION_GRACE_SECONDS = 0.2
+    child_pid_file = tmp_path / "successful-child.pid"
+    env = os.environ.copy()
+    env["CHILD_PID_FILE"] = str(child_pid_file)
+
+    proc = adapter.run_bounded(
+        [
+            "/bin/sh",
+            "-c",
+            (
+                '(trap "" TERM; sleep 30) & child=$!; '
+                'printf "%s" "$child" > "$CHILD_PID_FILE"; exit 0'
+            ),
+        ],
+        cwd=tmp_path,
+        timeout=5,
+        env=env,
+    )
+
+    assert proc.returncode == 0
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"successful hook left descendant alive: pid={child_pid}")
+
+
+def test_hook_adapter_interrupt_terminates_detached_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _adapter_module()
+    adapter.TERMINATION_GRACE_SECONDS = 0
+
+    class InterruptingProcess:
+        pid = 434343
+        returncode: int | None = None
+
+        def wait(self, timeout: float) -> int:
+            _ = timeout
+            if self.returncode is None:
+                raise KeyboardInterrupt
+            return self.returncode
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    process = InterruptingProcess()
+    signals: list[tuple[int, signal.Signals]] = []
+    monkeypatch.setattr(adapter.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(
+        adapter.os,
+        "killpg",
+        lambda pid, sent_signal: (
+            signals.append((pid, sent_signal)) if sent_signal != 0 else None
+        ),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        adapter.run_bounded(["hook"], cwd=tmp_path, timeout=30, env=os.environ.copy())
+
+    assert signals == [
+        (process.pid, adapter.signal.SIGTERM),
+        (process.pid, adapter.signal.SIGKILL),
+    ]
+    assert process.returncode == -15
 
 
 def _commands(event: str, matcher: str) -> list[str]:
@@ -767,6 +916,32 @@ def test_controller_and_implementer_profiles_pin_parity_models() -> None:
         assert "gpt-5.6-sol" in text
         assert "gpt-5.6-terra" in text
         assert "arhugula-implementer" in text
+
+    brief = (ROOT / ".codex" / "notes" / "leg-brief-template.md").read_text(
+        encoding="utf-8"
+    )
+    assert "codex exec --profile arhugula-implementer" in brief
+    assert "gpt-5.6-sol" in brief
+    assert "gpt-5.6-terra" in brief
+    assert "gpt-5.6-codex" not in brief
+
+
+def test_reconciled_hardening_docs_do_not_preserve_superseded_gc_or_path_claims() -> None:
+    review = (
+        ROOT / ".harness" / "hardening-workflow" / "hook-advisor-workflow-review.md"
+    ).read_text(encoding="utf-8")
+    inventory = (
+        ROOT
+        / ".harness"
+        / "hardening-workflow"
+        / "inventory-hooks-skills-disciplines.md"
+    ).read_text(encoding="utf-8")
+
+    assert "it reaps at the *next* session's **SessionStart**" not in review
+    assert "tools/loop/run.sh" not in inventory
+    assert "tools/loop/defer.sh" not in inventory
+    assert "tools/loop/halt.sh" not in inventory
+    assert "## B. LOOP RUNNER (`tools/04-loop/`)" in inventory
 
 
 def test_antigravity_review_is_read_only_and_uses_writable_operational_log() -> None:
