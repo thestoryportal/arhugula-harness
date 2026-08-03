@@ -51,8 +51,15 @@ if hook_review_isolated; then
 fi
 
 POSTURE=$(printf '%s' "$PAYLOAD" | /usr/bin/python3 "$_DIR/../../.codex/hooks/session_start.py") || exit $?
-ROADMAP=$(printf '%s' "$PAYLOAD" | /bin/bash "$_DIR/../roadmap-audit/session-start.sh") || true
-HYGIENE=$(printf '%s' "$PAYLOAD" | /bin/bash "$_DIR/loop-gc.sh") || true
+# SessionStart has a 105-second host budget and posture may consume 75 seconds. Keep
+# both advisory companions inside explicit aggregate slices so worktree cardinality or
+# a slow remote cannot make the wrapper exceed the host deadline.
+ROADMAP=$(printf '%s' "$PAYLOAD" \
+  | hook_bounded "${HARNESS_SESSION_START_ROADMAP_SECONDS:-8}" \
+      /bin/bash "$_DIR/../roadmap-audit/session-start.sh") || true
+HYGIENE=$(printf '%s' "$PAYLOAD" \
+  | hook_bounded "${HARNESS_SESSION_START_HYGIENE_SECONDS:-8}" \
+      /bin/bash "$_DIR/loop-gc.sh") || true
 
 context_from_hook() {
   printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null

@@ -5,6 +5,8 @@
 # local command sandbox so Git metadata, localhost test fixtures, GitHub, and agy can
 # operate, while retaining on-request/auto-review and the repo's trusted hooks.
 
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
 approval_policy = "on-request"
 approvals_reviewer = "auto_review"
 sandbox_mode = "danger-full-access"

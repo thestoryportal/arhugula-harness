@@ -1,0 +1,10 @@
+# Copy to ~/.codex/arhugula-implementer.config.toml. Multi-leg controller sessions
+# launch one non-interactive implementer per isolated worktree with:
+# codex exec --profile arhugula-implementer --cd <leg-worktree> < <leg-brief>
+#
+# This is the Codex counterpart to the Claude Opus 5 implementer lane. It changes
+# only the model/effort tier; the current primary Codex home, auth, rules, hooks,
+# skills, and project sandbox policy remain inherited.
+
+model = "gpt-5.6-terra"
+model_reasoning_effort = "high"

@@ -10,7 +10,7 @@
 
 ### Libraries (sourced by hooks; not wired directly)
 - `tools/hooks/lib.sh` — anti-drift keystone. `hook_project_dir()` (`:20-23`, `$CLAUDE_PROJECT_DIR` or git toplevel), `hook_emit()` (`:27-31`, additionalContext JSON), `hook_bounded()` (`:54-81`, portable watchdog), `hook_state_hash()` (`:85-87`, §12.1 recipe), `hook_roadmap_next()` (`:97-102`), `hook_write_checkpoint()` (`:110-138`), `loop_mode_active()` (`:145-149`, gate = `HARNESS_LOOP=1` env OR `.harness/.loop-active` marker — **all autonomy hooks are inert unless this is true**).
-- `tools/hooks/loop_lib.sh` — ledger substrate (U-HK-11). `loop_log/loop_defer/loop_activate/loop_deactivate`, `loop_skip_set()` (`:101-116`, run-scoped DEFERRED-HIL item-IDs), `loop_pending_hil_summary()` (`:121-136`), `loop_gc_worktrees()` (`:271-299`, reap merged+clean+non-current worktrees).
+- `tools/hooks/loop_lib.sh` — ledger substrate (U-HK-11). `loop_log/loop_defer/loop_activate/loop_deactivate`, `loop_skip_set()` (`:101-116`, run-scoped DEFERRED-HIL item-IDs), `loop_pending_hil_summary()` (`:121-136`), `loop_gc_worktrees()` (report candidates at SessionStart; reap only from an explicit post-merge/closeout or loop-start call).
 - `tools/hooks/resolve_lib.sh` — `/resolve` substrate (U-HK-13). `resolve_codex()` (`:15-19`, $0 subscription codex), `resolve_record/resolve_split`.
 
 ### Wired hooks (classification is the key column)
@@ -30,7 +30,7 @@
 | U-HK-21 | `skill-activation-check.sh` | UserPromptSubmit | **ADVISORY** | `/cmd` typo → "did you mean" near-miss hint; SILENT on knowns (load-bearing). |
 | U-HK-22 | `prompt-lint.sh` | UserPromptSubmit | **ADVISORY** | Flags ~18 bare-deictic prompts (`it`/`this`/`fix-it`); SILENT on idioms/`continue`/context. |
 | U-HK-25 | `postedit-lint.sh` | PostToolUse(Edit\|Write\|MultiEdit) | **ADVISORY** | ruff on the just-edited `.py`; inject findings (non-blocking; PostToolUse can't undo). |
-| U-HK-26 | `loop-gc.sh` | SessionStart | MIXED | Loop mode: REAP merged+clean+non-current worktrees (action). HIL mode: LIST stale candidates + MEMORY.md cap (visibility, no delete). |
+| U-HK-26 | `loop-gc.sh` | SessionStart | ADVISORY | LIST stale candidates + MEMORY.md cap in every mode; SessionStart never deletes. Explicit post-merge/closeout or `/loop-start` owns reaping. |
 | U-HK-27 | `context-recovery.sh` | statusLine | NON-BLOCKING | Proactive `hook_write_checkpoint` at 60/75/85% context; chains operator statusline. **Only place `context_window.used_percentage` is exposed.** |
 | U-HK-28 | `session-start.sh` (roadmap-audit) | SessionStart | **ENFORCING** | §12.1 hash audit + §12.2.1 fixed-point carve-out. Emits `[ROADMAP] ok/lag-expected/DRIFT`. Appends `loop_pending_hil_summary`. |
 | U-HK-29 | `post-merge-refresh.sh` (roadmap-audit) | PostToolUse(Bash; only on `gh pr merge`) | **ADVISORY** | Detects substantive merge → pre-computes new hash → injects §12.2 refresh checklist. Does NOT edit the dashboard. |
@@ -71,7 +71,7 @@
 | D9 | §12.1 session-start hash audit + §12.2.1 carve-out | §12.1 | **AUTO** | `session-start.sh` hook (+ manual fallback) |
 | — | §14.3 cache-clear before no-output conclusions | §14.3 | **AUTO+manual** | `precmd-clear-cache.sh` + Claude habit |
 | — | lint on edit / at stop | — | **AUTO** | `postedit-lint.sh` (advisory) + `stop-gate.sh` (enforcing) |
-| — | worktree GC at session start | §12.5.3 | **AUTO (loop) / advisory (HIL)** | `loop-gc.sh` |
+| — | worktree GC visibility at session start | §12.5.3 | **ADVISORY** | `loop-gc.sh`; explicit controller/`loop-start` owns reaping |
 | — | paid-call / secret / destructive-git deny | §12.4.1 | **AUTO (loop)** | `permission-guard.sh` deny-list |
 | D8 | §12.2 post-merge refresh + §12.2.1 fixed-point | §12.2 | **MANUAL** (hook only reminds) | `post-merge-refresh.sh` advisory + Claude/`ship-pr` |
 | D1 | codex-review = default pre-merge reviewer | §13.1/§13.2 | **MANUAL** | Claude recall / `ship-pr` pre-flight |

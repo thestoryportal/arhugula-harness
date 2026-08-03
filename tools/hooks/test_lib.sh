@@ -88,18 +88,36 @@ git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "
 
 # The macOS lsof observation must have a hard bound and fail closed on timeout.
 SLOW_LSOF="$REPO/slow-lsof"
+LSOF_READY="$REPO/slow-lsof.ready"
 cat > "$SLOW_LSOF" <<'EOF'
 #!/usr/bin/env bash
 trap '' TERM
+: > "$LSOF_READY"
 sleep 30
 EOF
 chmod +x "$SLOW_LSOF"
-SECONDS=0
-_hook_worktree_lsof_references "$REPO" "$SLOW_LSOF" >/dev/null 2>&1
-LSOF_RC=$?; LSOF_ELAPSED=$SECONDS
-{ [ "$LSOF_RC" -eq 2 ] && [ "$LSOF_ELAPSED" -lt 8 ]; } \
+export LSOF_READY
+LSOF_STARTED=$(/usr/bin/python3 -c 'import time; print(time.monotonic_ns())')
+_hook_worktree_lsof_references "$REPO" "$SLOW_LSOF" >/dev/null 2>&1 &
+LSOF_PID=$!
+for _ in $(seq 1 100); do
+  [ -f "$LSOF_READY" ] && break
+  sleep 0.01
+done
+if [ ! -f "$LSOF_READY" ]; then
+  kill -KILL "$LSOF_PID" 2>/dev/null || true
+  wait "$LSOF_PID" 2>/dev/null || true
+  bad "lsof timeout fixture did not reach its TERM-resistant state"
+  LSOF_RC=1
+else
+  wait_bounded "$LSOF_PID" 12
+  LSOF_RC=$?
+fi
+LSOF_FINISHED=$(/usr/bin/python3 -c 'import time; print(time.monotonic_ns())')
+LSOF_ELAPSED_MS=$(( (LSOF_FINISHED - LSOF_STARTED) / 1000000 ))
+{ [ "$LSOF_RC" -eq 2 ] && [ "$LSOF_ELAPSED_MS" -lt 11000 ]; } \
   && ok "lsof reference observation is bounded and fails closed" \
-  || bad "lsof reference observation was not bounded: elapsed=${LSOF_ELAPSED}s rc=$LSOF_RC"
+  || bad "lsof reference observation was not bounded: elapsed=${LSOF_ELAPSED_MS}ms rc=$LSOF_RC"
 
 # hook_default_branch — falls back to main when no origin/HEAD symref.
 eq "hook_default_branch fallback main" "$(cd "$REPO" && hook_default_branch)" "main"

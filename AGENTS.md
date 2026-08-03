@@ -26,10 +26,10 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 
 ## Orchestrator + Implementer Pattern
 
-- For multi-leg arcs, mirror the Claude Fable-orchestrator/Opus-implementer shape: ONE interactive orchestrator session (high reasoning) plans, writes leg briefs, gates, merges, refreshes; implementer legs run as non-interactive `codex exec` in isolated worktrees (`.codex-worktrees/<leg-id>`), one brief per leg.
+- For multi-leg arcs, mirror the Claude Fable 5 orchestrator/Opus 5 implementer shape: ONE interactive `gpt-5.6-sol` orchestrator session (high reasoning, `--profile arhugula-forward`) plans, writes leg briefs, gates, merges, refreshes; `gpt-5.6-terra` implementer legs run as non-interactive `codex exec --profile arhugula-implementer` processes in isolated worktrees (`.codex-worktrees/<leg-id>`), one brief per leg.
 - Briefs follow `.codex/notes/leg-brief-template.md` — a leg sees ONLY its brief; put the operator decision verbatim, the authority list, deliverables, negative examples, and the report-back shape in it.
 - Cap concurrent implementer runs at 2 on the reference machine (Intel i5/16GB). The orchestrator reads each leg's DIFF, not its self-report, before gating.
-- Model tiering lives in user-level `~/.codex/config.toml` profiles (orchestrator: high reasoning; implementers: medium-high); this repo's `.codex/config.toml` stays project-scoped by Codex policy.
+- Model tiering lives in user-level profile overlays: `~/.codex/arhugula-forward.config.toml` pins the Fable 5-equivalent controller to `gpt-5.6-sol`/high, and `~/.codex/arhugula-implementer.config.toml` pins the Opus 5-equivalent implementer to `gpt-5.6-terra`/high. The tracked templates live under `.codex/notes/`; this repo's `.codex/config.toml` stays project-scoped by Codex policy.
 
 ## Claude-Native Context Mapping
 

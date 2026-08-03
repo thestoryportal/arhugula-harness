@@ -15,6 +15,7 @@ repo churn; it does not mean reduced parity.
 | Global gstack skills | Claude skill catalog | Same gstack packages are already present in Codex's discovered skill catalog |
 | Project memory | Claude project `memory/MEMORY.md` plus linked topic files | Mandatory discipline digest at startup; task-relevant index/topic lookup remains available and required |
 | Context checkpoints | gstack `context-save` / `context-restore` and repo handoffs | Same gstack skills plus `.harness/handoff/README-resume.md` and Codex deterministic checkpoints; all advisory until HEAD verification |
+| Orchestration models | Fable 5 interactive orchestrator/planner with Opus 5 subagent implementers | `gpt-5.6-sol` high controller via `arhugula-forward`; `gpt-5.6-terra` high implementer legs via `arhugula-implementer` |
 | Out-of-family review | Codex reviewed Claude-authored diffs | OAuth-authenticated Antigravity (`agy`) pinned to Gemini 3.1 Pro High through `just gemini-review` reviews Codex-authored diffs |
 | Pre-merge review | Three fresh agent lenses | Three fresh ephemeral, lifecycle-isolated, read-only `codex exec` lenses; all-approve and logged |
 | CI | Green PR CI, then green `main` CI | Same, including merge-SHA pinning and terminating-refresh `main` CI before forward work |
@@ -58,7 +59,8 @@ diff on every forward arc; Codex must not ask for that approval again. Direct Ge
 API calls, API keys, service-account credentials, and Vertex project routing are forbidden for
 this review. `tools/agy_review.py` writes tracked and untracked changes to a private temporary
 review file added to the CLI workspace (never a size-limited command argument), strips those
-provider credential/routing variables, pins `gemini-3.1-pro-high`, stays in plan mode, and
+provider credential/routing variables, selects `Gemini 3.1 Pro (High)`, verifies that exact
+effective backend label from Antigravity's route log, stays in plan mode, and
 fails closed unless the final non-empty output line is an exact approval or block.
 
 ## Permissions and safe Git command shape
@@ -88,6 +90,8 @@ opt-in profile template at
 ```bash
 cp .codex/notes/arhugula-forward.config.toml.example \
   ~/.codex/arhugula-forward.config.toml
+cp .codex/notes/arhugula-implementer.config.toml.example \
+  ~/.codex/arhugula-implementer.config.toml
 codex --profile arhugula-forward --cd /Users/robertrhu/Projects/arhugula-v2
 ```
 
@@ -106,6 +110,12 @@ rules and project hooks cannot broaden a managed tenant ceiling. If `codex
 doctor --summary` still reports restricted filesystem/network after launching
 the profile, restart in a non-managed local CLI environment or have the tenant
 requirements changed—the repository cannot override it.
+
+The controller profile pins `gpt-5.6-sol` at high reasoning so a later global default
+cannot silently weaken the Fable 5-equivalent planning lane. Multi-leg implementers must
+launch with `codex exec --profile arhugula-implementer`, whose separate overlay pins
+`gpt-5.6-terra` at high reasoning as the Opus 5-equivalent coding lane. Both overlays retain
+the primary Codex home and OAuth/auth state; neither creates a separate `CODEX_HOME`.
 
 The early-June profile remains valuable evidence rather than a deprecated
 dead end. Its exact sessions, history, state and copied skills remain under

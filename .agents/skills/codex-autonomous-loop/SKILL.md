@@ -23,9 +23,12 @@ branch, HEAD, linked-worktree identity, and worktree fingerprint.
 
 ## Controller and implementers
 
-For a multi-leg arc, keep one interactive high-reasoning Codex controller. Give each fresh
-`codex exec` implementer exactly one brief based on `.codex/notes/leg-brief-template.md` and
-one isolated worktree. Cap concurrent implementers at two. Every brief includes the operator
+For a multi-leg arc, preserve the Claude Fable 5-orchestrator/Opus 5-implementer split:
+the interactive controller runs `gpt-5.6-sol` at high reasoning through
+`--profile arhugula-forward`, while each fresh implementer runs `gpt-5.6-terra` at high
+reasoning through `codex exec --profile arhugula-implementer`. Give each implementer exactly
+one brief based on `.codex/notes/leg-brief-template.md` and one isolated worktree. Cap
+concurrent implementers at two. Every brief includes the operator
 decision verbatim, authority, owned files, deliverables, negative examples, STOP-if-premise-
 false rule, tests, and report shape. The controller reads each actual diff; self-reports are
 not acceptance evidence.

@@ -44,6 +44,9 @@ This note codifies the operator-approved Codex setup direction for this reposito
      push, PR, CI, merge, post-merge refresh or explicit non-applicability,
      local main sync, and worktree disposition.
 7. Run substantive Codex work in isolated worktrees and land changes through reviewable PRs with strict CI.
+   - Preserve Claude's Fable 5 orchestrator/Opus 5 implementer separation with a
+     `gpt-5.6-sol` high-reasoning `arhugula-forward` controller and fresh
+     `gpt-5.6-terra` high-reasoning `arhugula-implementer` legs.
 8. Validate instruction discovery with `codex --ask-for-approval never "Summarize the current instructions."` and nested `--cd` checks.
 9. Query Claude's project memory index and gstack context checkpoints for relevant
    historical lessons, then verify every load-bearing claim against HEAD and the

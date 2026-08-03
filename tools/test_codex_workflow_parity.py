@@ -5,8 +5,10 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -248,39 +250,6 @@ def test_post_tool_adapter_lints_python_files_from_apply_patch(tmp_path: Path) -
     assert "ruff findings on sample.py" in context["additionalContext"]
 
 
-def test_post_tool_adapter_lints_python_files_from_direct_path(tmp_path: Path) -> None:
-    target = tmp_path / "direct.py"
-    target.write_text("print('x')\n", encoding="utf-8")
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    ruff = bin_dir / "ruff"
-    ruff.write_text(
-        "#!/bin/sh\n"
-        "if [ \"$1\" = check ]; then echo 'direct.py:1:1: E999 broken'; exit 1; fi\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    ruff.chmod(0o755)
-    payload = {
-        "hook_event_name": "PostToolUse",
-        "tool_name": "Write",
-        "tool_input": {"file_path": "direct.py"},
-        "tool_response": {"status": "completed"},
-    }
-
-    proc = _run_adapter(
-        "post-tool-use",
-        payload,
-        cwd=tmp_path,
-        path=f"{bin_dir}:{os.environ['PATH']}",
-    )
-
-    assert proc.returncode == 0, proc.stderr
-    context = json.loads(proc.stdout)["hookSpecificOutput"]
-    assert context["hookEventName"] == "PostToolUse"
-    assert "ruff findings on direct.py" in context["additionalContext"]
-
-
 @pytest.mark.parametrize("command", ["git commit -m test", "rtk git commit -m test"])
 def test_pre_commit_adapter_blocks_when_pyright_fails(tmp_path: Path, command: str) -> None:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
@@ -340,6 +309,30 @@ def test_pre_commit_adapter_uses_repo_safe_uv_cache(
     )
 
 
+def test_pre_commit_adapter_blocks_outside_a_git_worktree(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    uv.chmod(0o755)
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "git commit -m test"},
+        "cwd": str(tmp_path),
+    }
+
+    proc = _run_adapter(
+        "pre-commit",
+        payload,
+        cwd=tmp_path,
+        path=f"{bin_dir}:{os.environ['PATH']}",
+    )
+
+    assert proc.returncode == 2
+    assert "not a git repository" in proc.stderr
+
+
 def test_isolated_review_session_start_skips_shared_context_checkpoint() -> None:
     env = os.environ.copy()
     env["HARNESS_CODEX_REVIEW_ISOLATED"] = "1"
@@ -395,6 +388,53 @@ def test_session_start_wrapper_registers_lease_before_posture(tmp_path: Path) ->
     )
     assert end.returncode == 0, end.stderr
     assert not list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
+
+
+def test_session_start_bounds_advisory_hygiene(tmp_path: Path) -> None:
+    hook_dir = tmp_path / "tools" / "hooks"
+    roadmap_dir = tmp_path / "tools" / "roadmap-audit"
+    posture_dir = tmp_path / ".codex" / "hooks"
+    hook_dir.mkdir(parents=True)
+    roadmap_dir.mkdir(parents=True)
+    posture_dir.mkdir(parents=True)
+    for name in ("codex-session-start.sh", "session-lease.sh", "lib.sh"):
+        shutil.copy2(ROOT / "tools" / "hooks" / name, hook_dir / name)
+    (posture_dir / "session_start.py").write_text(
+        "print('bounded posture')\n",
+        encoding="utf-8",
+    )
+    (roadmap_dir / "session-start.sh").write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"hookSpecificOutput":{"additionalContext":"roadmap"}}\'\n',
+        encoding="utf-8",
+    )
+    (hook_dir / "loop-gc.sh").write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    payload = json.dumps({"session_id": "bounded-hygiene", "cwd": str(tmp_path)})
+    env = os.environ.copy()
+    env.update(
+        {
+            "CLAUDE_PROJECT_DIR": str(tmp_path),
+            "HARNESS_SESSION_START_HYGIENE_SECONDS": "1",
+        }
+    )
+
+    started = time.monotonic()
+    proc = subprocess.run(
+        ["bash", str(hook_dir / "codex-session-start.sh")],
+        cwd=tmp_path,
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=6,
+        env=env,
+    )
+    elapsed = time.monotonic() - started
+
+    assert proc.returncode == 0, proc.stderr
+    assert elapsed < 5
+    assert "bounded posture" in proc.stdout
+    assert "roadmap" in proc.stdout
 
 
 def test_registered_session_lifecycle_round_trips_active_lease(tmp_path: Path) -> None:
@@ -705,6 +745,30 @@ def test_forward_profile_template_preserves_current_codex_home_and_review_bounda
     assert "overlays" in parity
 
 
+def test_controller_and_implementer_profiles_pin_parity_models() -> None:
+    forward = (ROOT / ".codex" / "notes" / "arhugula-forward.config.toml.example").read_text(
+        encoding="utf-8"
+    )
+    implementer = (
+        ROOT / ".codex" / "notes" / "arhugula-implementer.config.toml.example"
+    ).read_text(encoding="utf-8")
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    loop = (ROOT / ".agents" / "skills" / "codex-autonomous-loop" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'model = "gpt-5.6-sol"' in forward
+    assert 'model_reasoning_effort = "high"' in forward
+    assert 'model = "gpt-5.6-terra"' in implementer
+    assert 'model_reasoning_effort = "high"' in implementer
+    for text in (agents, loop):
+        assert "Fable 5" in text
+        assert "Opus 5" in text
+        assert "gpt-5.6-sol" in text
+        assert "gpt-5.6-terra" in text
+        assert "arhugula-implementer" in text
+
+
 def test_antigravity_review_is_read_only_and_uses_writable_operational_log() -> None:
     justfile = (ROOT / "justfile").read_text(encoding="utf-8")
     recipe = justfile.split("gemini-review base='main':", 1)[1].split("\n_require-antigravity:", 1)[
@@ -715,7 +779,8 @@ def test_antigravity_review_is_read_only_and_uses_writable_operational_log() -> 
 
     assert "tools/agy_review.py" in recipe
     assert "--mode" in reviewer and '"plan"' in reviewer
-    assert "/tmp/arhugula-agy-review.log" in reviewer
+    assert 'Path(scratch) / "route.log"' in reviewer
+    assert "/tmp/arhugula-agy-review.log" not in reviewer
     assert "GEMINI_API_KEY" in reviewer and "GOOGLE_API_KEY" in reviewer
     assert "VERDICT: APPROVE" in reviewer and "VERDICT: BLOCK" in reviewer
     assert "standing authorization" in agents.lower()

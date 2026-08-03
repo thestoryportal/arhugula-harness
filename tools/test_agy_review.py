@@ -11,7 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 REVIEWER = ROOT / "tools" / "agy_review.py"
 
 
-def _fake_commands(tmp_path: Path, *, agy_output: str, agy_exit: int = 0) -> tuple[Path, Path]:
+def _fake_commands(
+    tmp_path: Path,
+    *,
+    agy_output: str,
+    agy_exit: int = 0,
+    effective_model: str = "Gemini 3.1 Pro (High)",
+) -> tuple[Path, Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     capture = tmp_path / "agy-prompt.txt"
@@ -46,11 +52,15 @@ def _fake_commands(tmp_path: Path, *, agy_output: str, agy_exit: int = 0) -> tup
         'printf \'%s\\n\' "$@" > "$AGY_ARGS_CAPTURE"\n'
         "prev=''\n"
         "add_dir=''\n"
+        "log_file=''\n"
         'for arg in "$@"; do\n'
         '  if [ "$prev" = \'-p\' ]; then printf \'%s\\n\' "$arg" > "$AGY_CAPTURE"; fi\n'
         '  if [ "$prev" = \'--add-dir\' ]; then add_dir="$arg"; fi\n'
+        '  if [ "$prev" = \'--log-file\' ]; then log_file="$arg"; fi\n'
         '  prev="$arg"\n'
         "done\n"
+        f"printf 'Propagating selected model override to backend: label=\"{effective_model}\"\\n' "
+        '  > "$log_file"\n'
         'cat "$add_dir/review.diff" >> "$AGY_CAPTURE"\n'
         'if [ -n "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}${GOOGLE_GENAI_USE_VERTEXAI:-}'
         "${GOOGLE_APPLICATION_CREDENTIALS:-}${GOOGLE_CLOUD_PROJECT:-}"
@@ -73,8 +83,14 @@ def _run(
     agy_exit: int = 0,
     untracked_path: str = "",
     diff_file: Path | None = None,
+    effective_model: str = "Gemini 3.1 Pro (High)",
 ) -> subprocess.CompletedProcess[str]:
-    bin_dir, capture = _fake_commands(tmp_path, agy_output=agy_output, agy_exit=agy_exit)
+    bin_dir, capture = _fake_commands(
+        tmp_path,
+        agy_output=agy_output,
+        agy_exit=agy_exit,
+        effective_model=effective_model,
+    )
     env = os.environ.copy()
     env.update(
         {
@@ -112,14 +128,51 @@ def test_review_passes_actual_diff_and_accepts_exact_verdict(tmp_path: Path) -> 
     assert "diff --git a/a.py b/a.py" in prompt
     assert "Do not invoke terminal commands" in prompt
     assert "Do not invoke URL, browser, or MCP tools" in prompt
+    assert "Use exactly one read-only view_file call to read the complete diff" in prompt
+    assert "Do not open surrounding workspace files" in prompt
+    assert "Report at most 5 findings" in prompt
+    assert "Finish immediately after analyzing that diff" in prompt
+    assert "Only report a finding proven entirely by the supplied diff" in prompt
+    assert "Test-only regression coverage for behavior outside a scoped delta is valid" in prompt
+    assert "Do not infer helper semantics when its definition is absent from the diff" in prompt
+    assert "--add-dir exposes the absolute diff path inside the Antigravity sandbox" in prompt
+    assert "Shell and unified-exec hooks match as Bash" in prompt
+    assert "tool_input.command" in prompt
+    assert "aliases affect matcher selection only" in prompt
+    assert 'payload still reports exactly tool_name: "apply_patch" or "Bash"' in prompt
+    assert 'A matcher of "Bash" already covers Shell and unified-exec aliases' in prompt
+    assert "Both canonical names and documented aliases are valid in matcher regexes" in prompt
+    assert "Codex apply_patch command syntax, not Antigravity schema" in prompt
+    assert "cwd is a runtime-supplied common field for the session" in prompt
+    assert "root comparison is optional hardening, not a Claude-parity requirement" in prompt
+    assert "display label is intentional and empirically required" in prompt
+    assert "standing operator authorization" in prompt
+    assert "concrete sandbox escape" in prompt
     args = (tmp_path / "agy-args.txt").read_text(encoding="utf-8").splitlines()
     assert "--sandbox" in args
     assert "--dangerously-skip-permissions" in args
     assert "--new-project" in args
-    assert args[args.index("--model") + 1] == "gemini-3.1-pro-high"
+    assert args[args.index("--model") + 1] == "Gemini 3.1 Pro (High)"
+    assert args[args.index("--print-timeout") + 1] == "20m"
+    route_log = Path(args[args.index("--log-file") + 1])
+    assert route_log.name == "route.log"
+    assert route_log.parent.name.startswith("arhugula-agy-review-")
     assert f"authoritative workspace root is {tmp_path}" in prompt
     assert (tmp_path / "agy-cwd.txt").read_text(encoding="utf-8").strip() == str(tmp_path)
+    assert "agy-review: effective model: Gemini 3.1 Pro (High)" in proc.stdout
     assert proc.stdout.rstrip().endswith("VERDICT: APPROVE")
+
+
+def test_review_fails_closed_when_backend_selects_another_model(tmp_path: Path) -> None:
+    proc = _run(
+        tmp_path,
+        agy_output="F1 none\nVERDICT: APPROVE",
+        effective_model="Gemini 3.6 Flash (High)",
+    )
+
+    assert proc.returncode == 2
+    assert "effective model mismatch" in proc.stderr
+    assert "Gemini 3.6 Flash (High)" in proc.stderr
 
 
 def test_review_streams_large_diff_without_putting_payload_in_argv(tmp_path: Path) -> None:
