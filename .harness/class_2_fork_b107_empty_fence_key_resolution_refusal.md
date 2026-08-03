@@ -981,3 +981,40 @@ Each move followed a **verified factual correction**, not reviewer preference.
 
 *(The exit criterion is **soundness, not reviewer silence**, per
 `[[deferred-mechanism-spec-leg-exit-on-soundness]]`.)*
+
+## §11 RATIFICATION
+
+**Operator ratification (2026-08-03): Reading A-hybrid is selected.** The operator approved the
+fork's recommendations and remaining blockers and directed the B-107 spec/plan pass. The reading
+is applied exactly as a hybrid: the **scalar** channel removes an empty captured key from the
+uniform-fallback eligible/unaddressed membership; the **map** channel refuses an empty key at
+ordinary `ResumeContext` construction. It is not a pure removal on both channels.
+
+1. **b80 pin.** The `is False → is True` change is a ratified consequence of the scalar membership
+   amendment, not test drift.
+2. **B-101 adjacency — NO joint discharge.** The two-axis
+   `ResumeContext.effect_fence_resolutions` narrowing pays the same field-set compatibility-cost
+   category recorded by B-101(a), but it does **not** add B-101(a)'s closed variant discriminator
+   and does not alter base-schema serialization. B-101 remains separately closed under (b)-PLUS,
+   its promotion trigger remains unchanged, and the rows are not merged.
+3. **Witness scope.** Implementation owes the eight-cell grid: two channels × LINEAR,
+   PARALLELIZATION branch, ORCHESTRATOR_WORKERS worker, and ORCHESTRATOR-own carrier. Branch/worker
+   cells include a keyed sibling in both carrier orders; orchestrator-own cells are constructed
+   snapshots.
+4. **Validated immutable copy.** The map is validated and copied before becoming immutable. A
+   read-only view over caller-held state is insufficient; constructor empty-key rejection,
+   post-construction mutation refusal, and caller-alias isolation are required witnesses.
+5. **Resolver boundary.** Every `_resolve_effect_fence_gated` consult treats `idempotency_key == ""`
+   as unresolvable before map-hit and eligibility branches. The caller-supplied
+   `effect_fence_uniform_fallback_eligible_key` parameter remains an input, not a second
+   classification authority.
+6. **Runtime and counts.** No Runtime §30 delta or failure class is owed. The four variants, ten
+   source shapes, and seven carriers remain unchanged.
+7. **Threat boundary.** A validation-bypassed forged instance is outside the closure criterion;
+   defence in depth requires it to be inert (no directive honoured and no keyed sibling altered),
+   not diagnosed.
+8. **Council.** Every reading is probe-resolved; no council convening is owed.
+
+**Disposition.** The design gate is discharged and the B-107 row is narrowed to its separately
+owed implementation remainder: CP implementation and tests for the ratified contract. It is not
+closed.
