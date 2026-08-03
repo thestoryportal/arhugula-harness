@@ -481,6 +481,19 @@ printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
   && ok "S14 the genuinely-unreconciled old key is still reported" \
   || bad "S14 lost the real unreconciled key: '$OUT'"
 
+# ── S15) Surplus-stop credit (codex round-4): a stop whose own start append was skipped
+#        (appender lock deadline) must not bank credit against a LATER sibling's start
+#        on the same fallback key. Chronological fold floors at zero; the plain
+#        aggregate would compute 1−1=0 and mask the dead sibling.
+sw_reset
+T15="$SW/t15.jsonl"; : > "$T15"; touch -t "$(date -v-2H +%Y%m%d%H%M 2>/dev/null || date -d '2 hours ago' +%Y%m%d%H%M)" "$T15"
+sw_row "$(sw_ts 10800)" stop  '' "$T15" >> "$SREG"   # surplus stop (its start was skipped)
+sw_row "$(sw_ts 7200)"  start '' "$T15" >> "$SREG"   # later sibling; died; stale >30min
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
+  && ok "S15 surplus stop does not mask the later start" \
+  || bad "S15 masked by banked stop credit: '$OUT'"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

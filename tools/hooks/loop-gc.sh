@@ -141,7 +141,12 @@ def sweep(text):
     re-read when the lock was acquired, else the unlocked pre-read (codex round-3 —
     a terminal stop appended between the unlocked read and the lock acquisition must
     not be reported as unreconciled)."""
-    starts, stops, paths = {}, {}, {}
+    # CHRONOLOGICAL per-key fold (codex round-4): rows are processed in append order
+    # and a stop only offsets starts that PRECEDE it (balance floors at zero). A plain
+    # starts-minus-stops aggregate lets a surplus stop — e.g. one whose own start
+    # append was skipped by the appender's lock deadline — bank credit against a
+    # FUTURE sibling's start on the same fallback key, silently masking it.
+    balance, paths = {}, {}
     for _, row in parsed(text):
         key, transcript = row_key(row)
         if not key:
@@ -150,13 +155,12 @@ def sweep(text):
             paths.setdefault(key, transcript)
         event = row.get("event")
         if event == "start":
-            starts[key] = starts.get(key, 0) + 1
+            balance[key] = balance.get(key, 0) + 1
         elif event == "stop":
-            stops[key] = stops.get(key, 0) + 1
+            balance[key] = max(0, balance.get(key, 0) - 1)
 
     stale = []
-    for key, count in starts.items():
-        deficit = count - stops.get(key, 0)
+    for key, deficit in balance.items():
         if deficit <= 0:
             continue
         path = paths.get(key, "")
