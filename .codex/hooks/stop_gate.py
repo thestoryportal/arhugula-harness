@@ -67,6 +67,12 @@ def render_guard(payload: object) -> tuple[str, set[str]]:
 
 
 def context_guard() -> str:
+    allow_roadmap_drift = (
+        os.environ.get("GITHUB_ACTIONS") == "true"
+        and os.environ.get("GITHUB_EVENT_NAME") == "push"
+        and os.environ.get("GITHUB_REF") == "refs/heads/main"
+    )
+    roadmap_drift_args = ["--allow-roadmap-drift"] if allow_roadmap_drift else []
     try:
         checkpoint = subprocess.run(
             [
@@ -76,6 +82,7 @@ def context_guard() -> str:
                 "--label",
                 "hook-stop",
                 "--include-branch-diff",
+                *roadmap_drift_args,
             ],
             cwd=ROOT,
             capture_output=True,
@@ -95,6 +102,7 @@ def context_guard() -> str:
                 "--require-fresh-checkpoint",
                 "--include-branch-diff",
                 "--json",
+                *roadmap_drift_args,
             ],
             cwd=ROOT,
             capture_output=True,
