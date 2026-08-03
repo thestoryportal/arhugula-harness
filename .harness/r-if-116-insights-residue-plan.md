@@ -18,7 +18,7 @@ Grounding corrections discovered during design (vs. the naive insights suggestio
 - Hook units **U-HK-42/43/44** appended to `.harness/hardening-workflow/HARDENING_PLAN.md` §5 table (ends at U-HK-41, line ~376); wave outcome recorded in a `.harness/wave5-hooks-status.md` at close.
 - Non-hook units use a new **U-WT-NN** (workspace-tooling) scheme — verified unused.
 - **Do NOT touch `.harness/arc-ledger.yaml`** (any open row is a CI hard-fail; `arc_ledger.py:207-208`).
-- Every PR follows ship-pr: CI green → codex-review convergence → merge-gate 3-lens (code-touching) → serial merge → §12.2 terminating refresh. Build sessions start with the §12.1 audit (drift was flagged at plan time: local HEAD had moved past the recorded hash — reconcile first).
+- Every PR follows ship-pr: CI green → **authorship-dependent out-of-family review** to convergence (`codex-review` for Claude-authored diffs; `gemini-review` for Codex-authored — a Codex-authored unit reviewed by codex would be self-review) → merge-gate 3-lens (code-touching) → serial merge → §12.2 terminating refresh. Build sessions start with the §12.1 audit (drift was flagged at plan time: local HEAD had moved past the recorded hash — reconcile first).
 
 ## Atomic units
 
@@ -72,7 +72,7 @@ Honesty framing (goes in the header comment): Agent-tool subagents are API tasks
 - AC: (1) real test + load-bearing lines → pass; (2) vacuous test → fail with named message; (3) dirty file → refuse, file untouched; (4) test killed mid-run → file byte-identical afterward (signal-exit fixture proves the `finally`); (5) already-red test → exit 2 distinct, not false pass; (6) range whose removal breaks syntax (e.g. sole statement of a suite) → exit 2 rejected-range, NOT probe-pass, and a vacuous test paired with such a range must not be reported as killed.
 - Test: `tools/test_mutation_probe.py` — throwaway `git init` repo in `tmp_path`, real + vacuous test fixtures, subprocess-driven, asserts cwd is `tmp_path` in every case. Justfile recipe `mutation-probe`.
 
-**U-WT-05 — `.claude/skills/red-first/SKILL.md`** (S–M) — depends on U-WT-06
+**U-WT-05 — `.claude/skills/red-first/SKILL.md` + `.agents/skills/red-first/` Codex projection** (S–M) — depends on U-WT-06; both trees, tested (parity: a Claude-only skill is undiscoverable from the Codex flow)
 - Roles: **Adversary** (plain Agent-tool subagent; writes failing tests + one `# mutation-probe: <file>:<lines>` annotation per test from the unit's ACs only — must NOT be the `harness-adversarial-reviewer` skill, which is review-only by hard rule; state this explicitly). **Implementer** (iterates to green; may not edit the test file — enforced by **recording the test file's `sha256` at Adversary handoff and comparing at completion** (a bare `git diff --name-only` cannot distinguish an untouched adversary test from an edited one, since the adversary's own writes are already in the diff; codex round-5), NOT by a permission-guard deny). **Completion gate**: every probe annotation passes under `just mutation-probe`; red evidence = failing output pasted in PR body (no Claude-side red ledger — `codex_loop.py` already has one; pasted output is the witness). Verdict lines follow merge-gate's fail-closed protocol.
 - **CUT: no Breaker role** (merge-gate reviewer 3 already does reasoned probes on every code PR).
 - Opt-in only — never auto-invoked from roadmap-continue/ship-pr. Dogfood: run `just mutation-probe` against U-HK-42's shipped tests and record the result in the PR body.
@@ -81,7 +81,7 @@ Honesty framing (goes in the header comment): Agent-tool subagents are API tasks
 ### Feature 6 — Parallel arcs, staged v1 (per operator decision)
 
 **U-WT-08 — 2-lane pilot recipe** (S)
-- Files: small `.claude/skills/two-lane/SKILL.md` + grep test.
+- Files: small `.claude/skills/two-lane/SKILL.md` + `.agents/skills/two-lane/SKILL.md` Codex projection + grep test covering both trees.
 - Content: run two arcs in `.codex-worktrees/<slug-a>`/`<slug-b>` (existing machinery); **merges + refreshes strictly serial** through ship-pr — §12 unchanged, stated explicitly; on conflict → abandon second lane's branch and rebase, no merge-order heuristics; reap via `tools/hooks/safe-worktree-remove.sh` only; one lane holds the ship-pr fixed point at a time.
 - No spawner script, no merge-queue lock (the §12 fixed point makes the queue structurally depth-1 — a lock is ceremony), no conflict automation. Follow-on orchestration registered only after ≥3 manual pilot runs surface a named recurring pain.
 

@@ -427,7 +427,7 @@ R-IF-116:
   depends_on: []
   blocks: []
   posture: mode-agnostic
-  scope: { files: [tools/hooks/**, tools/*.py, .claude/skills/**, .agents/skills/**, justfile, .gitignore, .harness/hardening-workflow/HARDENING_PLAN.md, .harness/wave5-hooks-status.md, .harness/r-if-116-insights-residue-plan.md], contracts: [], cross_axis: no }
+  scope: { files: [tools/hooks/**, tools/*.py, .claude/skills/**, .agents/skills/**, justfile, .gitignore, .harness/hardening-workflow/HARDENING_PLAN.md, .harness/wave5-hooks-status.md, .harness/r-if-116-insights-residue-plan.md, Project_Roadmap_v1.md], contracts: [], cross_axis: no }
   skills: { primary: roadmap-continue, secondary: [ship-pr, merge-gate] }
   advisor_required: no
   council_required: no
