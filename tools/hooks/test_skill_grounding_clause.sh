@@ -63,5 +63,28 @@ check_names 'file:line' 'the file:line cite re-read'
 check_names 'recompute' 'count/arithmetic recomputation'
 check_names '#NNN'      'the #NNN PR-reference check'
 
+# --- 5. Codex-native mirrors (.agents tree encodes its rituals independently) ---
+ASKILLS="$SCRIPT_DIR/../../.agents/skills"
+ASHIP="$ASKILLS/ship-pr/SKILL.md"
+ACONT="$ASKILLS/roadmap-continue/SKILL.md"
+
+L_AGROUND=$(lineno "$ASHIP" 'Grounding pass (U-WT-01)')
+L_AREVIEW=$(lineno "$ASHIP" '## Authorship-dependent out-of-family review')
+if [ -n "$L_AGROUND" ] && [ -n "$L_AREVIEW" ] && [ "$L_AGROUND" -lt "$L_AREVIEW" ]; then
+  ok "codex-native ship-pr mirrors the pass before the out-of-family review section"
+else
+  bad "codex-native ship-pr mirror: grounding='$L_AGROUND' review-section='$L_AREVIEW'"
+fi
+
+# scoped to step 6's block (from "6. " to "7. "), pass must precede the reviewer clause
+ASTEP6=$(awk '/^6\. /{f=1} /^7\. /{f=0} f' "$ACONT")
+A6_GROUND=$(printf '%s\n' "$ASTEP6" | grep -n -- 'Grounding pass (U-WT-01)' | head -1 | cut -d: -f1)
+A6_REVIEW=$(printf '%s\n' "$ASTEP6" | grep -n -- 'gemini-review' | head -1 | cut -d: -f1)
+if [ -n "$A6_GROUND" ] && [ -n "$A6_REVIEW" ] && [ "$A6_GROUND" -lt "$A6_REVIEW" ]; then
+  ok "codex-native roadmap-continue step 6 runs the pass before the review"
+else
+  bad "codex-native step-6 scoping: grounding='$A6_GROUND' review='$A6_REVIEW'"
+fi
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

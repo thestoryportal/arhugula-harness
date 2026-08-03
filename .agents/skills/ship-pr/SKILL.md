@@ -32,6 +32,14 @@ git diff --cached --stat
 git diff --cached
 ```
 
+## Grounding pass (U-WT-01)
+
+Before the first out-of-family review round: re-read every `file:line` cite in the diff
+and PR body at HEAD — never from recall; recompute every count/arithmetic claim from the
+actual source rather than restating it; confirm every `#NNN` reference actually is that
+PR; confirm local gates ran at the *current* HEAD; state in the PR body that this pass
+ran. First drafts historically burn 5–10 review rounds on exactly these defect classes.
+
 ## Authorship-dependent out-of-family review
 
 - When Codex authored the change, run `just gemini-review`. Despite its legacy recipe
