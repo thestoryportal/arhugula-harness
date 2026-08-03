@@ -11,6 +11,10 @@
 # appends untorn; a lock held past the in-process deadline skips the write and still
 # exits promptly).
 #
+# U-HK-44 folds in three appender properties #1200 specified but left untested: the
+# 4000-byte bounded-line guard, the deadline LOWER bound (a hold inside the budget must
+# NOT skip the write), and the pinned `cwd` field.
+#
 # CLAUDE_PROJECT_DIR is exported to a throwaway dir so `hook_project_dir` resolves the
 # registry INSIDE the scratch tree — no case may touch the real workspace `.harness/`.
 
@@ -247,6 +251,60 @@ kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
 printf '%s' '{"hook_event_name":"SubagentStart","agent_id":"after"}' | bash "$HOOK" >/dev/null 2>&1
 { [ "$(reg_rows)" = "1" ] && jq -e '.agent_id=="after"' "$REG" >/dev/null 2>&1; } \
   && ok "AC5b registry usable again once the lock frees" || bad "AC5b post-release rows: $(cat "$REG")"
+
+# ---------------------------------------------------------------------------
+# U-HK-44 gate residue: three appender properties #1200 specified but left untested
+# (they are the preconditions the U-HK-44 sweep/prune builds on).
+
+LOCKF="$PROJ/.harness/.agents-registry.lock"
+hold_lock() {  # hold_lock <seconds> <outfile> — announces "held" on stdout once flock is held
+  /usr/bin/python3 -c '
+import fcntl, sys, time
+f = open(sys.argv[1], "a+")
+fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+sys.stdout.write("held\n"); sys.stdout.flush()
+time.sleep(float(sys.argv[2]))
+' "$LOCKF" "$1" > "$2" 2>/dev/null &
+  HOLDER_PID=$!
+  for _ in $(seq 1 200); do [ -s "$2" ] && break; sleep 0.05; done
+}
+
+# 16) Bounded-line guard: a row whose serialization reaches 4000 bytes is DROPPED (the
+#     atomicity guarantee comes from the lock, not PIPE_BUF, so an over-long row is not
+#     risked). Gate output must stay byte-identical and the registry must stay valid.
+: > "$REG"
+BIGSESSION=$(/usr/bin/python3 -c 'print("s" * 5000)')
+printf '%s' "$(jq -nc --arg s "$BIGSESSION" '{"hook_event_name":"SubagentStart","agent_id":"big","session_id":$s}')" \
+  | bash "$HOOK" > "$TMP/big.out" 2>"$TMP/big.err"
+RC=$?
+{ [ "$RC" -eq 0 ] && [ ! -s "$TMP/big.err" ] && cmp -s "$TMP/big.out" "$EXP_START"; } \
+  && ok "4000-byte guard: gate byte-identical, exit 0, no stderr" || bad "oversize rc=$RC err=$(cat "$TMP/big.err")"
+[ ! -s "$REG" ] && ok "4000-byte guard: oversize row dropped, registry still valid" \
+  || bad "oversize row written: $(wc -c < "$REG") bytes"
+# A normal row still lands right after (the guard is per-row, not a latch).
+printf '%s' '{"hook_event_name":"SubagentStart","agent_id":"small"}' | bash "$HOOK" >/dev/null 2>&1
+{ [ "$(reg_rows)" = "1" ] && jq -e '.agent_id=="small"' "$REG" >/dev/null 2>&1; } \
+  && ok "4000-byte guard is per-row (next append lands)" || bad "post-oversize rows: $(cat "$REG")"
+
+# 17) Deadline LOWER bound (the complement of 15b's skip path): a lock held ~0.5s — well
+#     INSIDE the ~2s acquisition budget — must NOT skip the write. Deterministic: the
+#     holder announces once flock is held and releases on its own timer.
+: > "$REG"
+hold_lock 0.5 "$TMP/h17.out"
+[ -s "$TMP/h17.out" ] && ok "deadline lower bound: holder acquired flock" || bad "holder never acquired lock"
+printf '%s' '{"hook_event_name":"SubagentStart","agent_id":"waited"}' | bash "$HOOK" >/dev/null 2>"$TMP/h17.err"
+RC=$?
+wait "$HOLDER_PID" 2>/dev/null
+{ [ "$RC" -eq 0 ] && [ "$(reg_rows)" = "1" ] && jq -e '.agent_id=="waited"' "$REG" >/dev/null 2>&1; } \
+  && ok "row lands after a 0.5s hold (inside the 2s deadline)" \
+  || bad "row lost inside the deadline: rc=$RC rows=$(reg_rows) $(cat "$REG")"
+
+# 18) The `cwd` field is the hook process's working directory (pinned, not incidental).
+: > "$REG"
+CWDPIN="$TMP/cwdpin"; mkdir -p "$CWDPIN"
+( cd "$CWDPIN" && printf '%s' '{"hook_event_name":"SubagentStart","agent_id":"cw"}' | bash "$HOOK" >/dev/null 2>&1 )
+jq -e --arg d "$CWDPIN" '.cwd==$d' "$REG" >/dev/null 2>&1 \
+  && ok "cwd field pinned to the hook's working directory" || bad "cwd=$(jq -r '.cwd' "$REG" 2>/dev/null) want=$CWDPIN"
 
 echo "----"
 echo "subagent_validate: $PASS passed, $FAIL failed"

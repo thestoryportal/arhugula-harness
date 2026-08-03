@@ -189,6 +189,221 @@ for REMOVE_CASE in \
     || bad "loop GC lost safe removal rc $FORCED_REMOVE_RC"
 done
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# U-HK-44 — unreconciled-subagent sweep + prune of .harness/.agents-registry.jsonl.
+#
+# These cases drive the HOOK itself (`bash loop-gc.sh`) as a subprocess against a
+# throwaway CLAUDE_PROJECT_DIR: a NON-git scratch dir, so the worktree arm sees zero
+# worktrees and stays inert, and HOME is redirected so the real MEMORY.md can never
+# flag. The sweep clause is therefore the ONLY [hygiene] part in play.
+HOOK="$SCRIPT_DIR/loop-gc.sh"
+SW="$BASE/sweep"; mkdir -p "$SW/home"
+SPROJ="$SW/proj"
+SREG="$SPROJ/.harness/.agents-registry.jsonl"
+SLOCK="$SPROJ/.harness/.agents-registry.lock"
+
+sw_reset() { rm -rf "$SPROJ"; mkdir -p "$SPROJ/.harness"; : > "$SREG"; }
+# ts N-seconds-ago, in the registry's UTC format.
+sw_ts() { /usr/bin/python3 -c 'import sys,time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()-float(sys.argv[1]))))' "$1"; }
+# one registry row: sw_row <ts> <event> <agent_id> <transcript>
+sw_row() { printf '{"ts":"%s","event":"%s","session":"s1","agent_id":"%s","transcript":"%s","cwd":"/w"}\n' "$1" "$2" "$3" "$4"; }
+# inode + mtime, as one comparable string.
+sw_ino() { /usr/bin/python3 -c 'import os,sys; s=os.stat(sys.argv[1]); print(s.st_ino, int(s.st_mtime))' "$1"; }
+sw_run() { HOME="$SW/home" CLAUDE_PROJECT_DIR="$SPROJ" bash "$HOOK"; }
+sw_ctx() { sw_run | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null; }
+sw_rows() { jq -s 'length' "$SREG" 2>/dev/null || echo -1; }   # -1 ⇒ a line is unparseable
+
+NOW_TS=$(sw_ts 0)
+OLD_TS=$(sw_ts $((8 * 86400)))   # 8 days → past the 7-day prune horizon
+
+# ── S1) AC1: two stale unreconciled keys → clause names the count and the oldest ──
+sw_reset
+: > "$SW/t-a.jsonl"; touch -t 202001010000 "$SW/t-a.jsonl"   # oldest
+: > "$SW/t-b.jsonl"; touch -t 202006010000 "$SW/t-b.jsonl"
+{ sw_row "$NOW_TS" start ag-a "$SW/t-a.jsonl"; sw_row "$NOW_TS" start ag-b "$SW/t-b.jsonl"; } > "$SREG"
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -qF "2 unreconciled subagent(s)" \
+  && ok "S1 two stale unreconciled keys → clause with count" || bad "S1 clause: $OUT"
+printf '%s' "$OUT" | grep -qF "oldest: ag-a" \
+  && ok "S1 clause names the oldest key" || bad "S1 oldest: $OUT"
+printf '%s' "$OUT" | grep -qF "[hygiene]" \
+  && ok "S1 clause composed into the existing [hygiene] message" || bad "S1 not composed: $OUT"
+
+# ── S2) AC2: fully reconciled → clause absent; nothing else flagged → hook silent ──
+sw_reset
+: > "$SW/t-c.jsonl"; touch -t 202001010000 "$SW/t-c.jsonl"
+{ sw_row "$NOW_TS" start ag-c "$SW/t-c.jsonl"; sw_row "$NOW_TS" stop ag-c "$SW/t-c.jsonl"; } > "$SREG"
+OUT=$(sw_run); RC=$?
+{ [ -z "$OUT" ] && [ "$RC" -eq 0 ]; } && ok "S2 all reconciled → hook silent, exit 0" || bad "S2 rc=$RC out=$OUT"
+
+# ── S3) AC3: fresh (<30 min) unreconciled → NOT flagged (live fan-outs must not alarm) ──
+sw_reset
+: > "$SW/t-d.jsonl"   # freshly created ⇒ mtime = now
+{ sw_row "$NOW_TS" start ag-d "$SW/t-d.jsonl"; } > "$SREG"
+OUT=$(sw_run)
+[ -z "$OUT" ] && ok "S3 fresh unreconciled not flagged (live fan-out)" || bad "S3 alarmed on a live fan-out: $OUT"
+
+# ── S4) AC4: 8-day rows pruned; JSONL stays valid; REGISTRY inode replaced but the
+#            LOCK file is never unlinked/recreated/renamed (two holders could otherwise
+#            each believe they hold exclusivity on different inodes). ────────────────
+sw_reset
+: > "$SLOCK"; touch -t 202001010000 "$SLOCK"
+LOCK_BEFORE=$(sw_ino "$SLOCK")
+: > "$SW/t-e.jsonl"
+{ sw_row "$OLD_TS" start ag-old "$SW/t-old.jsonl"
+  sw_row "$OLD_TS" stop  ag-old "$SW/t-old.jsonl"
+  sw_row "$NOW_TS" start ag-e   "$SW/t-e.jsonl"
+  sw_row "$NOW_TS" stop  ag-e   "$SW/t-e.jsonl"; } > "$SREG"
+REG_INO_BEFORE=$(sw_ino "$SREG")
+sw_run >/dev/null 2>&1
+[ "$(sw_rows)" = "2" ] && ok "S4 8-day rows pruned, file remains valid JSONL" || bad "S4 rows=$(sw_rows): $(cat "$SREG")"
+jq -e 'select(.agent_id=="ag-old")' "$SREG" >/dev/null 2>&1 && bad "S4 pruned row survived" || ok "S4 the 8-day key is gone"
+jq -e 'select(.agent_id=="ag-e")' "$SREG" >/dev/null 2>&1 && ok "S4 in-horizon rows retained" || bad "S4 dropped a fresh row"
+[ "$(sw_ino "$SREG")" != "$REG_INO_BEFORE" ] && ok "S4 registry inode replaced (tmp-file + rename)" || bad "S4 registry rewritten in place"
+[ "$(sw_ino "$SLOCK")" = "$LOCK_BEFORE" ] && ok "S4 LOCK file untouched across the prune (inode + mtime)" \
+  || bad "S4 lock changed: $LOCK_BEFORE → $(sw_ino "$SLOCK")"
+
+# ── S5) AC5: one torn trailing line (SIGKILL mid-write) → sweep completes, other keys
+#            still counted, malformed line dropped by the prune rewrite. ────────────
+sw_reset
+: > "$SW/t-f.jsonl"; touch -t 202001010000 "$SW/t-f.jsonl"
+{ sw_row "$NOW_TS" start ag-f "$SW/t-f.jsonl"; printf '{"ts":"%s","event":"star' "$NOW_TS"; } > "$SREG"
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -qF "1 unreconciled subagent(s)" \
+  && ok "S5 torn tail line skipped; other keys still counted" || bad "S5 sweep aborted: $OUT"
+[ "$(sw_rows)" = "1" ] && ok "S5 malformed line dropped by the prune rewrite" || bad "S5 rows=$(sw_rows): $(cat "$SREG")"
+
+# ── S6) AC6: `stop_blocked` is NONTERMINAL — it never reconciles a start. ──────────
+sw_reset
+: > "$SW/t-h.jsonl"; touch -t 202001010000 "$SW/t-h.jsonl"
+{ sw_row "$NOW_TS" start ag-h "$SW/t-h.jsonl"; sw_row "$NOW_TS" stop_blocked ag-h "$SW/t-h.jsonl"; } > "$SREG"
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -qF "1 unreconciled subagent(s)" \
+  && ok "S6 stop_blocked does not reconcile (still flagged)" || bad "S6 stop_blocked wrongly reconciled: $OUT"
+
+# ── S7) AC7: PER-KEY counting — three fan-out siblings sharing one fallback transcript
+#            key plus ONE accepted stop → 2 unreconciled, never zeroed to 0. ────────
+sw_reset
+: > "$SW/t-parent.jsonl"; touch -t 202001010000 "$SW/t-parent.jsonl"
+{ sw_row "$NOW_TS" start "" "$SW/t-parent.jsonl"
+  sw_row "$NOW_TS" start "" "$SW/t-parent.jsonl"
+  sw_row "$NOW_TS" start "" "$SW/t-parent.jsonl"
+  sw_row "$NOW_TS" stop  "" "$SW/t-parent.jsonl"; } > "$SREG"
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -qF "2 unreconciled subagent(s)" \
+  && ok "S7 per-key counting: 3 starts − 1 stop = 2 (siblings not zeroed)" || bad "S7 count: $OUT"
+printf '%s' "$OUT" | grep -qF "oldest: $SW/t-parent.jsonl" \
+  && ok "S7 fallback key is the transcript path when agent_id is empty" || bad "S7 key: $OUT"
+
+# ── S7b) A recorded-but-MISSING transcript counts as stale (the agent is certainly not
+#         live), and a recorded-but-FRESH one still does not. ──────────────────────
+sw_reset
+{ sw_row "$NOW_TS" start ag-gone "$SW/never-existed.jsonl"; } > "$SREG"
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -qF "1 unreconciled subagent(s)" \
+  && ok "S7b missing transcript file counts as stale" || bad "S7b missing transcript not flagged: $OUT"
+
+# ── S7c) A key with NO recorded transcript at all is a different case from S7b's
+#         recorded-but-gone path: there is no liveness proxy to age against, so the
+#         sweep stays QUIET rather than alarming on a possibly-live agent. (The
+#         contract keys reporting on transcript-file mtime; its stale exception is
+#         scoped to "path recorded but file gone".) Pinned so the choice is explicit.
+sw_reset
+{ sw_row "$NOW_TS" start ag-notrans ""; } > "$SREG"
+OUT=$(sw_run)
+[ -z "$OUT" ] && ok "S7c key with no recorded transcript stays quiet (no liveness proxy)" \
+  || bad "S7c alarmed without a transcript: $OUT"
+
+# ── S8) AC8: registry lock held elsewhere → the PRUNE is skipped this tick (registry
+#            byte-identical), the sweep clause is still produced (the read needs no
+#            lock), and SessionStart is never blocked past the ~2s budget. ─────────
+sw_reset
+: > "$SW/t-i.jsonl"; touch -t 202001010000 "$SW/t-i.jsonl"
+{ sw_row "$OLD_TS" start ag-oldi "$SW/t-i.jsonl"; sw_row "$NOW_TS" start ag-i "$SW/t-i.jsonl"; } > "$SREG"
+REG_SHA_BEFORE=$(shasum "$SREG" | awk '{print $1}')
+/usr/bin/python3 -c '
+import fcntl, sys, time
+f = open(sys.argv[1], "a+")
+fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+sys.stdout.write("held\n"); sys.stdout.flush()
+time.sleep(8)
+' "$SLOCK" > "$SW/holder.out" 2>/dev/null &
+HOLDER=$!
+for _ in $(seq 1 200); do [ -s "$SW/holder.out" ] && break; sleep 0.05; done
+[ -s "$SW/holder.out" ] && ok "S8 lock holder acquired flock" || bad "S8 holder never acquired lock"
+S=$(date +%s); OUT=$(sw_ctx); ELAPSED=$(( $(date +%s) - S ))
+kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
+[ "$ELAPSED" -le 4 ] && ok "S8 hook exits promptly under a held lock (${ELAPSED}s ≤ 4s, holder holds 8s)" \
+  || bad "S8 SessionStart blocked ${ELAPSED}s on the lock"
+[ "$(shasum "$SREG" | awk '{print $1}')" = "$REG_SHA_BEFORE" ] \
+  && ok "S8 prune skipped this tick (registry byte-identical)" || bad "S8 pruned without the lock"
+printf '%s' "$OUT" | grep -qF "2 unreconciled subagent(s)" \
+  && ok "S8 sweep clause still produced (the read needs no lock)" || bad "S8 clause lost under a held lock: $OUT"
+
+# ── S9) Lock witness (inherited #1200 gate debt): concurrent APPENDS × the prune's
+#       tmp-file + rename must lose NO accepted row. Made deterministic by the lock —
+#       a holder forces every party to contend, then releases; whichever order they
+#       serialize in, the prune re-reads INSIDE the locked region, so every appended
+#       row survives the rename. An UNLOCKED prune reads before the appends land and
+#       renames over them. Run three times consecutively.
+APPENDER="$SCRIPT_DIR/subagent-validate.sh"
+for ROUND in 1 2 3; do
+  sw_reset
+  # A large registry: 1 pruneable row + 20000 in-horizon rows, so the prune's re-read +
+  # rewrite is a real window rather than an instant. Only `stop` events → no sweep clause.
+  /usr/bin/python3 - "$SREG" "$OLD_TS" "$NOW_TS" 20000 <<'PY'
+import json
+import sys
+
+reg, old_ts, now_ts, n = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+
+
+def row(ts, agent):
+    return json.dumps({"ts": ts, "event": "stop", "session": "s", "agent_id": agent,
+                       "transcript": "/t", "cwd": "/w"}, separators=(",", ":")) + "\n"
+
+
+with open(reg, "w", encoding="utf-8") as fh:
+    fh.write(row(old_ts, "pruneme"))
+    for i in range(n):
+        fh.write(row(now_ts, "keep%d" % i))
+PY
+  : > "$SLOCK"
+  /usr/bin/python3 -c '
+import fcntl, sys, time
+f = open(sys.argv[1], "a+")
+fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+sys.stdout.write("held\n"); sys.stdout.flush()
+time.sleep(0.4)
+' "$SLOCK" > "$SW/h9.out" 2>/dev/null &
+  H9=$!
+  for _ in $(seq 1 200); do [ -s "$SW/h9.out" ] && break; sleep 0.05; done
+  for i in 1 2 3 4; do
+    printf '%s' "$(jq -nc --arg a "conc$i" '{"hook_event_name":"SubagentStart","agent_id":$a}')" \
+      | CLAUDE_PROJECT_DIR="$SPROJ" bash "$APPENDER" >/dev/null 2>&1 &
+  done
+  sw_run >/dev/null 2>&1 &
+  SWEEPER=$!
+  wait "$H9" 2>/dev/null; wait "$SWEEPER" 2>/dev/null; wait
+  GOT=$(sw_rows)
+  [ "$GOT" = "20004" ] && ok "S9 round $ROUND: no row lost across append × prune-rename (20000 kept + 4 appended)" \
+    || bad "S9 round $ROUND: rows=$GOT want 20004"
+  MISSING=""
+  for i in 1 2 3 4; do
+    jq -e --arg a "conc$i" 'select(.agent_id==$a)' "$SREG" >/dev/null 2>&1 || MISSING="$MISSING conc$i"
+  done
+  [ -z "$MISSING" ] && ok "S9 round $ROUND: every concurrently-appended row present" \
+    || bad "S9 round $ROUND: lost rows:$MISSING"
+  jq -e 'select(.agent_id=="pruneme")' "$SREG" >/dev/null 2>&1 \
+    && bad "S9 round $ROUND: prune never ran (false green)" || ok "S9 round $ROUND: the prune did run (8-day row gone)"
+done
+
+# ── S10) Absent registry → the whole feature is skipped silently (cheap pre-check). ──
+sw_reset
+rm -f "$SREG"
+OUT=$(sw_run); RC=$?
+{ [ -z "$OUT" ] && [ "$RC" -eq 0 ]; } && ok "S10 absent registry → feature skipped, exit 0" || bad "S10 rc=$RC out=$OUT"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
