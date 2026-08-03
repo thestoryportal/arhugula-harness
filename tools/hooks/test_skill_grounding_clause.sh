@@ -28,20 +28,23 @@ done
 # line number of the first line matching a fixed string, empty if absent
 lineno() { grep -nF -- "$2" "$1" | head -1 | cut -d: -f1; }
 
-# All five U-WT-01 checks present in a carrier block. Two needles are per-carrier because
-# generic tokens are satisfied by sibling prose (merge-gate lens-3 mutation matrix):
-#   $3 flow needle — flow correctness of check (a): HEAD (Claude, committed diff) vs
-#      staged/worktree (Codex, pre-commit). Satisfiable by check (a) prose BY DESIGN.
+# All five U-WT-01 checks present in a carrier block. Needles are per-carrier because
+# generic tokens are satisfied by sibling prose (merge-gate lens-3 + codex mutation runs):
+#   $3 cite-and-source phrase — check (a) COUPLED to its flow source (HEAD for the Claude
+#      committed-diff flow; staged/worktree content for the Codex pre-commit flow). A bare
+#      'file:line' + separate flow token lets "re-read from memory" mutants pass because
+#      the flow word survives in the check-(d) sentence. Matched whitespace-normalized
+#      (the phrases wrap across hard-wrapped lines).
 #   literal '*current*' — the check-(d) gate-freshness discriminator; occurs exactly once
 #      per block, only inside check (d), in all four carriers.
 #   $4 stated-in-PR-body needle — check (e)'s distinctive phrase for this carrier (the
 #      generic 'PR body' is duplicated by check (a)'s "diff and PR body" in ship-pr).
-five_checks() { # $1 = block text, $2 = label, $3 = flow needle, $4 = check-(e) needle
-  local blk="$1" lbl="$2" fresh="$3" ebody="$4" miss=""
-  printf '%s' "$blk" | grep -qF -- 'file:line'  || miss="$miss file:line"
+five_checks() { # $1 = block text, $2 = label, $3 = cite-and-source phrase, $4 = check-(e) needle
+  local blk="$1" lbl="$2" cite="$3" ebody="$4" miss=""
+  local norm; norm=$(printf '%s' "$blk" | tr '\n' ' ' | tr -s ' ')
+  printf '%s' "$norm" | grep -qF -- "$cite"     || miss="$miss cite-and-source($cite)"
   printf '%s' "$blk" | grep -qiF -- 'recompute' || miss="$miss recompute"
   printf '%s' "$blk" | grep -qF -- '#NNN'       || miss="$miss #NNN"
-  printf '%s' "$blk" | grep -qF -- "$fresh"     || miss="$miss flow($fresh)"
   printf '%s' "$blk" | grep -qF -- '*current*'  || miss="$miss gate-freshness(*current*)"
   printf '%s' "$blk" | grep -qF -- "$ebody"     || miss="$miss stated-in-PR-body($ebody)"
   if [ -z "$miss" ]; then ok "$lbl carries all five checks"; else bad "$lbl missing:$miss"; fi
@@ -66,7 +69,7 @@ if [ -n "$L_GROUND" ] && [ -n "$L_CODEX" ]; then
 else
   CLAUSE=""
 fi
-five_checks "$CLAUSE" "claude ship-pr grounding bullet" 'HEAD' 'state in the PR body'
+five_checks "$CLAUSE" "claude ship-pr grounding bullet" 're-read every `file:line` cite in the diff and PR body at HEAD' 'state in the PR body'
 
 # --- 3. Claude roadmap-continue: scoped to step 4, pass precedes codex-review ---
 STEP4=$(awk '/^4\. \*\*/{f=1} /^5\. \*\*/{f=0} f' "$CONT")
@@ -79,7 +82,7 @@ else
 fi
 
 # --- 4. Claude roadmap-continue: full five-check contract in step 4 ---
-five_checks "$STEP4" "claude roadmap-continue step 4" 'HEAD' 'state the pass in the PR body'
+five_checks "$STEP4" "claude roadmap-continue step 4" 're-read every file:line cite at the now-current HEAD' 'state the pass in the PR body'
 
 # --- 5. Codex ship-pr: pass section precedes the out-of-family review section ---
 L_AGROUND=$(lineno "$ASHIP" 'Grounding pass (U-WT-01)')
@@ -92,7 +95,7 @@ fi
 
 # --- 6. Codex ship-pr: full five-check contract in the grounding section ---
 ASHIP_BLK=$(awk '/^## Grounding pass \(U-WT-01\)/{f=1;next} /^## /{f=0} f' "$ASHIP")
-five_checks "$ASHIP_BLK" "codex-native ship-pr grounding section" 'staged/worktree' 'state in the PR body'
+five_checks "$ASHIP_BLK" "codex-native ship-pr grounding section" 'cite in the diff and PR body against the exact content under review (the staged/worktree diff' 'state in the PR body'
 
 # --- 7. Codex roadmap-continue: scoped to step 6, pass precedes the reviewer clause ---
 ASTEP6=$(awk '/^6\. /{f=1} /^7\. /{f=0} f' "$ACONT")
@@ -105,7 +108,7 @@ else
 fi
 
 # --- 8. Codex roadmap-continue: full five-check contract in step 6 ---
-five_checks "$ASTEP6" "codex-native roadmap-continue step 6" 'staged/worktree' 'PR body at ship-pr'
+five_checks "$ASTEP6" "codex-native roadmap-continue step 6" 'cite against the staged/worktree content under review' 'PR body at ship-pr'
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
