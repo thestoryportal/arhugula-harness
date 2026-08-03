@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shlex
@@ -11,12 +12,38 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, ClassVar
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET_EVENTS = ("SessionStart", "PreToolUse", "PostToolUse", "Stop", "SessionEnd")
+
+
+def _remove_temp_tree(path: Path, *, attempts: int = 40, delay: float = 0.1) -> None:
+    """Remove a witness tree after delayed Codex background writers have exited."""
+    for attempt in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            if exc.errno != errno.ENOTEMPTY or attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
+@contextmanager
+def _temporary_witness_root() -> Iterator[Path]:
+    root = Path(tempfile.mkdtemp(prefix="codex-hook-runtime-"))
+    try:
+        yield root
+    finally:
+        _remove_temp_tree(root)
 
 
 def _sse(events: list[dict[str, Any]]) -> bytes:
@@ -188,8 +215,7 @@ def main() -> int:
         print("codex-hook-runtime-witness: Codex CLI not found", file=sys.stderr)
         return 2
 
-    with tempfile.TemporaryDirectory(prefix="codex-hook-runtime-") as temp:
-        witness_root = Path(temp)
+    with _temporary_witness_root() as witness_root:
         codex_home = witness_root / "codex-home"
         repo = witness_root / "repo"
         events_path = witness_root / "events.jsonl"

@@ -19,6 +19,10 @@ Antigravity and CI; it replaces neither.
 4. Inspect the closed changed-file set. Substantive runtime, test, hook, or tool logic uses
    all three lenses. A documentation-only or terminating roadmap refresh may take a logged
    `GATE SKIPPED-PROPORTIONAL`; do not pretend a skip is an approval.
+5. If the diff changes `.codex/hooks.json`, `.codex/hooks/**`, `tools/hooks/**`, or the Codex
+   hook adapter/witness, run `just codex-hook-runtime-witness` on the final code HEAD and
+   require its provider-free report to prove all lifecycle events, both tool phase pairs,
+   one session identity, three model requests, and both tool effects before launching lenses.
 
 ## Three fresh reviewers
 

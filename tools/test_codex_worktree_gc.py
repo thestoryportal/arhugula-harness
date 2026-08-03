@@ -543,6 +543,52 @@ def test_production_gc_refuses_aged_active_session_until_session_end(
     assert not worktree.exists()
 
 
+def test_production_gc_reaps_active_lease_after_owner_process_exits(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = _init_repo(tmp_path)
+    worktree = _add_worktree(repo, tmp_path, "codex/abnormal-exit")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    env = os.environ.copy()
+    env.update(
+        {
+            "CLAUDE_PROJECT_DIR": str(worktree),
+            "HOME": str(home),
+            "HARNESS_CODEX_REVIEW_ISOLATED": "1",
+        }
+    )
+    start_hook = ROOT / "tools" / "hooks" / "codex-session-start.sh"
+    helper = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json,subprocess,sys; "
+                f"payload=json.dumps({{'session_id':'gc-abnormal','cwd':{str(worktree)!r}}}); "
+                f"result=subprocess.run(['bash',{str(start_hook)!r}],"
+                f"cwd={str(worktree)!r},input=payload,text=True,capture_output=True); "
+                "sys.stderr.write(result.stderr); raise SystemExit(result.returncode)"
+            ),
+        ],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+    assert helper.returncode == 0, helper.stderr
+    lease = next((repo / ".git" / "codex-worktree-sessions").rglob("session-gc-abnormal.lease"))
+    lines = lease.read_text(encoding="utf-8").splitlines()
+    assert lines[:2] == ["active", str(worktree.resolve())]
+    assert lines[2].isdigit()
+
+    assert gc.main(["--repo", str(repo), "--reap", "--no-gh", "--no-size"]) == 0
+    assert not worktree.exists()
+
+
 def test_production_gc_recovers_abandoned_starting_lease_after_grace(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import importlib.util
 import json
 import os
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -50,6 +52,115 @@ def test_live_runtime_witness_reports_empty_hook_stream(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="no hook events"):
         witness._assert_witness(tmp_path, events_path, 0)
+
+
+def test_live_runtime_witness_retries_directory_not_empty_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    witness = _runtime_witness_module()
+    calls = 0
+    real_rmtree = witness.shutil.rmtree
+
+    def racing_rmtree(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError(errno.ENOTEMPTY, "Directory not empty", path)
+        real_rmtree(path)
+
+    monkeypatch.setattr(witness.shutil, "rmtree", racing_rmtree)
+    witness._remove_temp_tree(tmp_path, attempts=2, delay=0)
+
+    assert calls == 2
+    assert not tmp_path.exists()
+
+
+def _valid_runtime_witness_fixture(tmp_path: Path) -> tuple[Any, Path, list[dict[str, str]]]:
+    witness = _runtime_witness_module()
+    events = [
+        {"hook_event_name": "SessionStart", "session_id": "one"},
+        {"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "one"},
+        {"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": "one"},
+        {"hook_event_name": "PreToolUse", "tool_name": "apply_patch", "session_id": "one"},
+        {"hook_event_name": "PostToolUse", "tool_name": "apply_patch", "session_id": "one"},
+        {"hook_event_name": "Stop", "session_id": "one"},
+        {"hook_event_name": "SessionEnd", "session_id": "one"},
+    ]
+    (tmp_path / "shell-marker.txt").write_text("codex-shell-witness", encoding="utf-8")
+    (tmp_path / "patch-marker.txt").write_text("codex-patch-witness\n", encoding="utf-8")
+    return witness, tmp_path / "events.jsonl", events
+
+
+def _write_runtime_events(path: Path, events: list[dict[str, str]]) -> None:
+    path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+
+
+def test_live_runtime_witness_accepts_complete_fixture(tmp_path: Path) -> None:
+    witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
+    _write_runtime_events(events_path, events)
+
+    assert witness._assert_witness(tmp_path, events_path, 3)["status"] == "PASS"
+
+
+@pytest.mark.parametrize("missing", ["SessionStart", "Stop", "SessionEnd"])
+def test_live_runtime_witness_rejects_each_missing_lifecycle_event(
+    tmp_path: Path, missing: str
+) -> None:
+    witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
+    _write_runtime_events(
+        events_path, [event for event in events if event["hook_event_name"] != missing]
+    )
+
+    with pytest.raises(RuntimeError):
+        witness._assert_witness(tmp_path, events_path, 3)
+
+
+@pytest.mark.parametrize(
+    ("phase", "tool"),
+    [(phase, tool) for phase in ("PreToolUse", "PostToolUse") for tool in ("Bash", "apply_patch")],
+)
+def test_live_runtime_witness_rejects_each_missing_tool_phase(
+    tmp_path: Path, phase: str, tool: str
+) -> None:
+    witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
+    _write_runtime_events(
+        events_path,
+        [
+            event
+            for event in events
+            if (event["hook_event_name"], event.get("tool_name")) != (phase, tool)
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="missing tool hook dispatch"):
+        witness._assert_witness(tmp_path, events_path, 3)
+
+
+def test_live_runtime_witness_rejects_wrong_request_count(tmp_path: Path) -> None:
+    witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
+    _write_runtime_events(events_path, events)
+
+    with pytest.raises(RuntimeError, match="expected 3"):
+        witness._assert_witness(tmp_path, events_path, 2)
+
+
+@pytest.mark.parametrize("marker", ["shell-marker.txt", "patch-marker.txt"])
+def test_live_runtime_witness_rejects_each_missing_effect(tmp_path: Path, marker: str) -> None:
+    witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
+    _write_runtime_events(events_path, events)
+    (tmp_path / marker).unlink()
+
+    with pytest.raises((RuntimeError, FileNotFoundError)):
+        witness._assert_witness(tmp_path, events_path, 3)
+
+
+def test_live_runtime_witness_rejects_multiple_session_identities(tmp_path: Path) -> None:
+    witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
+    events[-1]["session_id"] = "two"
+    _write_runtime_events(events_path, events)
+
+    with pytest.raises(RuntimeError, match="multiple sessions"):
+        witness._assert_witness(tmp_path, events_path, 3)
 
 
 def _adapter_module():
@@ -684,6 +795,12 @@ def test_merge_gate_honors_operator_authorized_ten_pass_ceiling() -> None:
         assert "ten rounds" in merge_gate, path
         assert "eleventh" in merge_gate.lower(), path
         assert "disagreement" in merge_gate, path
+
+    codex_merge_gate = (ROOT / ".agents" / "skills" / "merge-gate" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "just codex-hook-runtime-witness" in codex_merge_gate
+    assert "both tool phase pairs" in codex_merge_gate
 
 
 def test_every_shared_state_hook_is_inert_for_isolated_review(tmp_path: Path) -> None:

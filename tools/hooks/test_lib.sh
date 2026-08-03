@@ -198,7 +198,8 @@ touch -t 202001010000 "$CODEX_SESSION_DIR/rollout-live.jsonl"
 HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$REPO" hook_register_session_lease "$REPO" "session-a"
 ( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
   && ok "fresh starting Codex lease marks worktree live" || bad "starting lease missed"
-HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$REPO" hook_activate_session_lease "$REPO" "session-a"
+HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$REPO" HARNESS_CODEX_SESSION_OWNER_PID="$$" \
+  hook_activate_session_lease "$REPO" "session-a"
 ( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
   && ok "active Codex session lease marks worktree live" || bad "active lease missed"
 LEASE_A=$(find "$REPO/.git/codex-worktree-sessions" -name 'session-session-a.lease' -print -quit)
@@ -208,6 +209,13 @@ touch -t 202001010000 "$LEASE_A"
 HOME="$FAKE_HOME" CLAUDE_PROJECT_DIR="$REPO" hook_release_session_lease "$REPO" "session-a"
 ( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
   && bad "released Codex session lease stayed live" || ok "SessionEnd releases Codex lease"
+DEAD_LEASE="$REPO/.git/codex-worktree-sessions/dead-owner/session-dead.lease"
+mkdir -p "$(dirname "$DEAD_LEASE")"
+printf 'active\n%s\n99999999\n' "$REPO" > "$DEAD_LEASE"
+( HOME="$FAKE_HOME" worktree_has_live_session "$REPO" ) \
+  && bad "dead owner active lease stayed live" || ok "abnormal owner exit retires active lease"
+rm -f "$DEAD_LEASE"
+rmdir "$(dirname "$DEAD_LEASE")"
 
 # If an external actor already removed a linked worktree, SessionEnd can no longer run
 # git -C there. Its session pointer must still locate and remove the lease in the shared

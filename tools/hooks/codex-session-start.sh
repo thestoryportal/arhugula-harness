@@ -13,7 +13,8 @@ LEASE_STARTING_OWNED=0
 LEASE_ACTIVATED=0
 
 lease_action() {
-  printf '%s' "$PAYLOAD" | /bin/bash "$_DIR/session-lease.sh" "$1"
+  printf '%s' "$PAYLOAD" \
+    | HARNESS_CODEX_SESSION_OWNER_PID="$PPID" /bin/bash "$_DIR/session-lease.sh" "$1"
 }
 
 cleanup_starting_lease() {

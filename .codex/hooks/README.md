@@ -12,6 +12,8 @@ Every Claude hook behavior supported by Codex's lifecycle is wired here. The Cod
   lease expires after a three-minute grace window, longer than the 105-second hook timeout.
   A repeated `SessionStart(source=compact)` for the same root session preserves the active
   lease, so failure or interruption of the compact-start cannot make that session reapable.
+  Active leases record the Codex owner process identity; an abnormal owner exit makes the
+  lease inactive without weakening live-session protection or requiring SessionEnd.
 - `pre_tool_use_policy.py` blocks only high-confidence boundary violations, especially X-AL-3 design/implementation mixing in a single command.
 - `permission_request.py` surfaces paid-provider, credential, destructive, and network-sensitive requests for operator review.
 - `stop_gate.py` reports worktree and verification posture without claiming success. An
@@ -69,7 +71,7 @@ the child, controller checkpoint, cleanup, prompt, and loop-mutating hooks are i
 the session lease remains active. Direct `git worktree remove` is denied because a hook
 cannot hold a mutex after it exits; use `tools/hooks/safe-worktree-remove.sh <path>`. Its
 kernel-owned lock survives long removals without age-based theft, active leases remain
-authoritative until SessionEnd, and registration/activation revalidate the worktree after
+authoritative until SessionEnd or owner-process death, and registration/activation revalidate the worktree after
 locking. The mutex and leases are keyed by stable Git worktree administration identity,
 so a quarantine move cannot split their authority. The explicit remover alone moves a clean
 candidate to an opaque sibling quarantine before its authoritative scans. This closes normal

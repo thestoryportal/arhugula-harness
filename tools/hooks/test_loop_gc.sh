@@ -108,7 +108,8 @@ wt_present wt-merged && ok "report removed nothing (read-only)" || bad "report d
 LIVE_HOME="$BASE/live-home"; mkdir -p "$LIVE_HOME"
 OLDHOME="$HOME"; export HOME="$LIVE_HOME"
 hook_register_session_lease "$BASE/wt-merged" "classified-live"
-hook_activate_session_lease "$BASE/wt-merged" "classified-live"
+HARNESS_CODEX_SESSION_OWNER_PID="$$" \
+  hook_activate_session_lease "$BASE/wt-merged" "classified-live"
 CLASSIFIED_LEASE=$(find "$BASE/main/.git/codex-worktree-sessions" -name 'session-classified-live.lease' -print -quit)
 [ "$(head -n1 "$CLASSIFIED_LEASE" 2>/dev/null)" = "active" ] \
   && ok "loop reap witness reaches active lease" || bad "loop reap witness did not activate lease"

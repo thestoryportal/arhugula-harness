@@ -354,6 +354,17 @@ hook_worktree_lock_release() {
   HOOK_WORKTREE_LOCK_FD=""
 }
 
+_hook_active_lease_live() {
+  local lease="$1" owner_pid
+  owner_pid=$(sed -n '3p' "$lease" 2>/dev/null || true)
+  # Legacy active leases did not record an owner and remain fail-closed.
+  [ -n "$owner_pid" ] || return 0
+  case "$owner_pid" in *[!0-9]*) return 0 ;; esac
+  # PID reuse is conservative: it can retain a stale lease longer, never make a live
+  # session reapable. Once the recorded process is absent, the lease is inactive.
+  kill -0 "$owner_pid" 2>/dev/null
+}
+
 _hook_session_pointer_file() {
   local session base
   session=$(hook_session_key "$1")
@@ -380,7 +391,8 @@ hook_register_session_lease() {
   lease="$session_dir/session-${session}.lease"; tmp="${lease}.tmp-$$"
   phase=$(head -n1 "$lease" 2>/dev/null || true)
   registered_worktree=$(sed -n '2p' "$lease" 2>/dev/null || true)
-  if [ "$phase" = "active" ] && [ "$registered_worktree" = "$canonical" ]; then
+  if [ "$phase" = "active" ] && [ "$registered_worktree" = "$canonical" ] \
+    && _hook_active_lease_live "$lease"; then
     # SessionStart fires again after compact for the same root session. Preserve the
     # already-active lease and tell the wrapper it does not own startup cleanup.
     rc=10
@@ -403,6 +415,7 @@ hook_register_session_lease() {
 
 hook_activate_session_lease() {
   local wt="$1" session session_dir registered_dir lease tmp phase rc=0
+  local owner_pid
   session=$(hook_session_key "$2")
   session_dir=$(_hook_worktree_session_dir "$wt") || return 1
   hook_worktree_lock_acquire "$wt" || return 1
@@ -418,9 +431,14 @@ hook_activate_session_lease() {
   case "$phase" in
     active) ;;
     starting)
+      owner_pid="${HARNESS_CODEX_SESSION_OWNER_PID:-}"
+      case "$owner_pid" in ''|*[!0-9]*) rc=1 ;; esac
       tmp="${lease}.tmp-$$"
-      printf 'active\n%s\n' "$(_hook_canonical_worktree "$wt")" > "$tmp" 2>/dev/null \
-        && mv "$tmp" "$lease" 2>/dev/null || rc=$?
+      if [ "$rc" -eq 0 ]; then
+        printf 'active\n%s\n%s\n' \
+          "$(_hook_canonical_worktree "$wt")" "$owner_pid" \
+          > "$tmp" 2>/dev/null && mv "$tmp" "$lease" 2>/dev/null || rc=$?
+      fi
       [ "$rc" -eq 0 ] || rm -f "$tmp" 2>/dev/null
       ;;
     *) rc=1 ;;
@@ -858,7 +876,8 @@ hook_prune_stale_starting_leases() {
 # Live-session detection covers both runners: Claude's encoded project transcripts,
 # Codex's date-partitioned rollout transcripts (`session_meta.payload.cwd`), and the
 # SessionStart/SessionEnd lease used to close the transcript check/remove race. Active
-# leases remain authoritative until explicit SessionEnd release. A starting lease uses a
+# leases remain authoritative while their recorded Codex owner process identity is live;
+# abnormal owner exit makes a new-format active lease inactive. A starting lease uses a
 # bounded grace window longer than the host's SessionStart timeout, so a killed startup
 # cannot strand the worktree forever; only the lock holder prunes an abandoned start.
 worktree_has_live_session() {
@@ -877,7 +896,7 @@ worktree_has_live_session() {
           find "$lease" -maxdepth 0 -mmin "-${_WORKTREE_STARTING_LEASE_WINDOW_MIN}" \
             -print -quit 2>/dev/null | grep -q . && return 0
           ;;
-        active) return 0 ;;
+        active) _hook_active_lease_live "$lease" && return 0 ;;
         *) return 0 ;; # pre-phase lease files are active for backward compatibility
       esac
     done
