@@ -450,6 +450,37 @@ printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
 [ "$(sw_rows)" = "3" ] && ok "S13 whole-key rule retained the straddling history" \
   || bad "S13 rows=$(sw_rows) want 3 (row-by-row prune broke the balance)"
 
+# ── S14) TOCTOU (codex round-3): a terminal stop appended AFTER the hook's unlocked
+#        pre-read but BEFORE the prune acquires the lock must NOT be reported. The
+#        holder pins the hook at lock acquisition; the stop is appended directly into
+#        that window; the sweep must use the prune's LOCKED re-read.
+sw_reset
+T14="$SW/t14.jsonl"; : > "$T14"; touch -t "$(date -v-2H +%Y%m%d%H%M 2>/dev/null || date -d '2 hours ago' +%Y%m%d%H%M)" "$T14"
+sw_row "$(sw_ts 7200)" start s14agent "$T14" >> "$SREG"
+sw_row "$(sw_ts 700000)" start oldkey14 /tmp/gone14.jsonl >> "$SREG"   # forces the prune arm to engage
+: > "$SLOCK"
+/usr/bin/python3 -c '
+import fcntl, sys, time
+f = open(sys.argv[1], "a+")
+fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+sys.stdout.write("held\n"); sys.stdout.flush()
+time.sleep(1.2)
+' "$SLOCK" > "$SW/h14.out" 2>/dev/null &
+H14=$!
+for _ in $(seq 1 200); do [ -s "$SW/h14.out" ] && break; sleep 0.05; done
+sw_run > "$SW/s14.out" 2>/dev/null &
+S14PID=$!
+sleep 0.4   # hook's unlocked pre-read has happened; it is now blocked on the lock
+sw_row "$(sw_ts 1)" stop s14agent "$T14" >> "$SREG"   # the reconciling stop lands in the window
+wait "$H14" 2>/dev/null; wait "$S14PID" 2>/dev/null
+OUT=$(jq -r '.hookSpecificOutput.additionalContext // ""' "$SW/s14.out" 2>/dev/null)
+printf '%s' "$OUT" | grep -q "s14agent" \
+  && bad "S14 stale pre-read reported an already-reconciled agent: '$OUT'" \
+  || ok "S14 sweep used the locked snapshot: reconciled agent not reported"
+printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
+  && ok "S14 the genuinely-unreconciled old key is still reported" \
+  || bad "S14 lost the real unreconciled key: '$OUT'"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

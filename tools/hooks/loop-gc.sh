@@ -134,40 +134,47 @@ def row_key(row):
     return ((agent or "").strip() or transcript), transcript
 
 
-starts, stops, paths = {}, {}, {}
-for _, row in parsed(raw):
-    key, transcript = row_key(row)
-    if not key:
-        continue
-    if transcript:
-        paths.setdefault(key, transcript)
-    event = row.get("event")
-    if event == "start":
-        starts[key] = starts.get(key, 0) + 1
-    elif event == "stop":
-        stops[key] = stops.get(key, 0) + 1
+def sweep(text):
+    """Clause (or "") computed from a registry snapshot.
 
-stale = []
-for key, count in starts.items():
-    deficit = count - stops.get(key, 0)
-    if deficit <= 0:
-        continue
-    path = paths.get(key, "")
-    if not path:
-        continue  # no recorded transcript → nothing to age against → stay quiet
-    try:
-        age = now - os.stat(path).st_mtime
-    except OSError:
-        # Path recorded but the file is GONE — the agent is certainly not live → stale.
-        age = float("inf")
-    if age > STALE:
-        stale.append((age, key, deficit))
+    Called AFTER prune() with the freshest snapshot available: the prune's LOCKED
+    re-read when the lock was acquired, else the unlocked pre-read (codex round-3 —
+    a terminal stop appended between the unlocked read and the lock acquisition must
+    not be reported as unreconciled)."""
+    starts, stops, paths = {}, {}, {}
+    for _, row in parsed(text):
+        key, transcript = row_key(row)
+        if not key:
+            continue
+        if transcript:
+            paths.setdefault(key, transcript)
+        event = row.get("event")
+        if event == "start":
+            starts[key] = starts.get(key, 0) + 1
+        elif event == "stop":
+            stops[key] = stops.get(key, 0) + 1
 
-clause = ""
-if stale:
+    stale = []
+    for key, count in starts.items():
+        deficit = count - stops.get(key, 0)
+        if deficit <= 0:
+            continue
+        path = paths.get(key, "")
+        if not path:
+            continue  # no recorded transcript → nothing to age against → stay quiet
+        try:
+            age = now - os.stat(path).st_mtime
+        except OSError:
+            # Path recorded but the file is GONE — the agent is certainly not live → stale.
+            age = float("inf")
+        if age > STALE:
+            stale.append((age, key, deficit))
+
+    if not stale:
+        return ""
     total = sum(deficit for _, _, deficit in stale)
     age, key, _ = max(stale, key=lambda entry: entry[0])
-    clause = "%d unreconciled subagent(s) (oldest: %s, %s)." % (total, key, human(age))
+    return "%d unreconciled subagent(s) (oldest: %s, %s)." % (total, key, human(age))
 
 # ── prune (REWRITE — takes the SAME advisory lock the U-HK-43 appender takes) ──
 # An unlocked tmp-file + rename swap races a concurrent append onto the replaced inode and
@@ -176,11 +183,15 @@ if stale:
 
 
 def prune():
+    # Returns the LOCKED registry snapshot when the lock was acquired and read, else
+    # None. The caller sweeps from this snapshot when available (codex round-3): a
+    # terminal stop appended between the unlocked pre-read and this acquisition must
+    # not be reported as unreconciled.
     lock = registry.with_suffix(".lock")
     try:
         stream = lock.open("a+")
     except Exception:
-        return
+        return None
     with stream:
         deadline = time.monotonic() + DEADLINE
         while True:
@@ -189,7 +200,7 @@ def prune():
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
-                    return  # lock held elsewhere → skip the prune, report anyway
+                    return None  # lock held elsewhere → skip; sweep falls back to pre-read
                 time.sleep(0.01)
         # Lock held. Abandoned-tmp cleanup (codex round-1): tmp files are only ever
         # created UNDER this lock, so any tmp visible while WE hold it was abandoned by
@@ -205,7 +216,7 @@ def prune():
         try:
             current = registry.read_text(encoding="utf-8", errors="replace")
         except Exception:
-            return
+            return None
         # WHOLE-KEY-HISTORY pruning (codex round-2): dropping rows one-by-one on age can
         # remove an old `start` while keeping its newer `stop` on a reused fallback key —
         # the surplus stop then masks a later unreconciled start. A key is pruned only
@@ -253,7 +264,7 @@ def prune():
                 kept.append(line)
         present = [line for line in current.splitlines() if line.strip()]
         if dropped == 0 and len(kept) == len(present):
-            return  # nothing to drop → no rewrite, no inode churn
+            return current  # nothing to drop → no rewrite, no inode churn
         tmp = registry.with_name(registry.name + ".tmp.%d" % os.getpid())
         try:
             with tmp.open("w", encoding="utf-8") as out:
@@ -270,9 +281,11 @@ def prune():
                 tmp.unlink()
             except Exception:
                 pass
+        return current
 
 
-prune()
+locked = prune()
+clause = sweep(locked if locked is not None else raw)
 if clause:
     sys.stdout.write(clause + "\n")
 PY
