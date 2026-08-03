@@ -154,9 +154,7 @@ def _assert_witness(repo: Path, events_path: Path, request_count: int) -> dict[s
         if event["hook_event_name"] in {"PreToolUse", "PostToolUse"}
     }
     required_tools = {
-        (phase, tool)
-        for phase in ("PreToolUse", "PostToolUse")
-        for tool in ("Bash", "apply_patch")
+        (phase, tool) for phase in ("PreToolUse", "PostToolUse") for tool in ("Bash", "apply_patch")
     }
     if event_names[0] != "SessionStart":
         raise RuntimeError(f"first hook was {event_names[0]!r}, not SessionStart")
@@ -272,9 +270,7 @@ def main() -> int:
             print("; ".join(_LoopbackResponsesHandler.errors), file=sys.stderr)
             return 1
         try:
-            evidence = _assert_witness(
-                repo, events_path, _LoopbackResponsesHandler.request_count
-            )
+            evidence = _assert_witness(repo, events_path, _LoopbackResponsesHandler.request_count)
         except (FileNotFoundError, KeyError, RuntimeError, json.JSONDecodeError) as exc:
             print(result.stderr, file=sys.stderr)
             print(f"codex-hook-runtime-witness: {exc}", file=sys.stderr)

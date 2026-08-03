@@ -39,8 +39,12 @@ lint:
 fmt:
     uv run ruff format .
 
+# Check Ruff formatting without changing files.
+fmt-check:
+    uv run ruff format --check .
+
 # Full pre-merge gate: workspace sync + lint + typecheck + docs/closure + provider-free tests.
-check: codex-sync lint typecheck docs-completeness-check memory-closeout-check closure-certification-check test
+check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check test
 
 # Codex provider-free pytest lane. Strips live provider env and mirrors CI's non-e2e gate.
 codex-test *args:
@@ -59,7 +63,7 @@ codex-hook-runtime-witness:
     /usr/bin/python3 tools/codex_hook_runtime_witness.py
 
 # Codex PR-ready local gate without live provider credentials.
-codex-check: codex-sync lint typecheck docs-completeness-check memory-closeout-check closure-certification-check codex-parity-check
+codex-check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check codex-parity-check
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"
 
 # ─── Codex deterministic context guard ─────────────────────────────────────

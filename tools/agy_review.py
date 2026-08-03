@@ -91,13 +91,9 @@ def run_bounded(
     try:
         stdin_stream = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
         streams.append(stdin_stream)
-        stdout_stream = tempfile.TemporaryFile(
-            mode="w+", encoding="utf-8", errors="replace"
-        )
+        stdout_stream = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
         streams.append(stdout_stream)
-        stderr_stream = tempfile.TemporaryFile(
-            mode="w+", encoding="utf-8", errors="replace"
-        )
+        stderr_stream = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
         streams.append(stderr_stream)
         if input_text is not None:
             stdin_stream.write(input_text)

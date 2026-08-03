@@ -161,9 +161,7 @@ def test_hook_adapter_interrupt_terminates_detached_process_group(
     monkeypatch.setattr(
         adapter.os,
         "killpg",
-        lambda pid, sent_signal: (
-            signals.append((pid, sent_signal)) if sent_signal != 0 else None
-        ),
+        lambda pid, sent_signal: signals.append((pid, sent_signal)) if sent_signal != 0 else None,
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -660,6 +658,14 @@ def test_parity_regressions_are_blocking_locally_and_in_ci() -> None:
     assert "bash tools/codex-parity-check.sh" in workflow
 
 
+def test_local_premerge_gates_match_ci_format_check() -> None:
+    justfile = (ROOT / "justfile").read_text(encoding="utf-8")
+
+    assert "fmt-check:\n    uv run ruff format --check ." in justfile
+    assert "check: codex-sync lint fmt-check typecheck" in justfile
+    assert "codex-check: codex-sync lint fmt-check typecheck" in justfile
+
+
 def test_session_end_hook_uses_supported_timeout() -> None:
     payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
     hooks = [hook for group in payload["hooks"]["SessionEnd"] for hook in group["hooks"]]
@@ -917,9 +923,7 @@ def test_controller_and_implementer_profiles_pin_parity_models() -> None:
         assert "gpt-5.6-terra" in text
         assert "arhugula-implementer" in text
 
-    brief = (ROOT / ".codex" / "notes" / "leg-brief-template.md").read_text(
-        encoding="utf-8"
-    )
+    brief = (ROOT / ".codex" / "notes" / "leg-brief-template.md").read_text(encoding="utf-8")
     assert "codex exec --profile arhugula-implementer" in brief
     assert "gpt-5.6-sol" in brief
     assert "gpt-5.6-terra" in brief
@@ -931,10 +935,7 @@ def test_reconciled_hardening_docs_do_not_preserve_superseded_gc_or_path_claims(
         ROOT / ".harness" / "hardening-workflow" / "hook-advisor-workflow-review.md"
     ).read_text(encoding="utf-8")
     inventory = (
-        ROOT
-        / ".harness"
-        / "hardening-workflow"
-        / "inventory-hooks-skills-disciplines.md"
+        ROOT / ".harness" / "hardening-workflow" / "inventory-hooks-skills-disciplines.md"
     ).read_text(encoding="utf-8")
 
     assert "it reaps at the *next* session's **SessionStart**" not in review

@@ -125,9 +125,7 @@ def test_reviewer_interrupt_terminates_detached_process_group(
     monkeypatch.setattr(
         reviewer.os,
         "killpg",
-        lambda pid, sent_signal: (
-            signals.append((pid, sent_signal)) if sent_signal != 0 else None
-        ),
+        lambda pid, sent_signal: signals.append((pid, sent_signal)) if sent_signal != 0 else None,
     )
 
     with pytest.raises(KeyboardInterrupt):
