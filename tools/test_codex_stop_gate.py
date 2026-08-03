@@ -31,6 +31,66 @@ def test_stop_gate_emits_valid_stop_hook_json() -> None:
     assert "Codex context guard" in payload["systemMessage"]
 
 
+def test_stop_gate_allows_owed_roadmap_lag_only_for_main_push_ci(tmp_path: Path) -> None:
+    hook = tmp_path / ".codex" / "hooks" / "stop_gate.py"
+    hook.parent.mkdir(parents=True)
+    shutil.copy2(ROOT / ".codex" / "hooks" / "stop_gate.py", hook)
+
+    guard = tmp_path / "tools" / "codex_context_guard.py"
+    guard.parent.mkdir()
+    guard.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+
+allowed = "--allow-roadmap-drift" in sys.argv
+if len(sys.argv) > 1 and sys.argv[1] == "checkpoint":
+    # The real guard reports on stdout; stop_gate forwards a failed report to stderr.
+    print("checkpoint written" if allowed else "roadmap drift")
+    raise SystemExit(0 if allowed else 1)
+print(json.dumps({"root": ".", "branch": "main", "findings": []}))
+raise SystemExit(0)
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/heads/main",
+        }
+    )
+    proc = subprocess.run(
+        [sys.executable, str(hook)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["continue"] is True
+
+    env["GITHUB_EVENT_NAME"] = "pull_request"
+    proc = subprocess.run(
+        [sys.executable, str(hook)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert proc.returncode == 1
+    assert "roadmap drift" in proc.stderr
+
+
 def test_stop_gate_is_inert_for_isolated_merge_gate_review() -> None:
     env = os.environ.copy()
     env["HARNESS_CODEX_REVIEW_ISOLATED"] = "1"
