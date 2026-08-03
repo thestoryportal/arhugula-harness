@@ -89,17 +89,19 @@ fi
 # --- 6. both continue mirrors carry ALL FIVE checks (round-5: stale-evidence gap) ---
 # The two later checks — gates-at-current-HEAD and stated-in-PR-body — must live in the
 # continue skills too, since both run review round 1 BEFORE the ship-pr handoff.
-five_checks() { # $1 = block text, $2 = label
-  local blk="$1" lbl="$2" miss=""
+# Freshness needle differs by flow: the Claude flow reviews the committed diff (HEAD);
+# the Codex flow reviews the staged/worktree diff pre-commit (round-7 finding).
+five_checks() { # $1 = block text, $2 = label, $3 = freshness needle
+  local blk="$1" lbl="$2" fresh="$3" miss=""
   printf '%s' "$blk" | grep -qF -- 'file:line'  || miss="$miss file:line"
   printf '%s' "$blk" | grep -qiF -- 'recompute' || miss="$miss recompute"
   printf '%s' "$blk" | grep -qF -- '#NNN'       || miss="$miss #NNN"
-  printf '%s' "$blk" | grep -qF -- 'HEAD'       || miss="$miss current-HEAD"
+  printf '%s' "$blk" | grep -qF -- "$fresh"     || miss="$miss freshness($fresh)"
   printf '%s' "$blk" | grep -qiF -- 'PR body'   || miss="$miss PR-body"
   if [ -z "$miss" ]; then ok "$lbl carries all five checks"; else bad "$lbl missing:$miss"; fi
 }
-five_checks "$STEP4"  "claude roadmap-continue step 4"
-five_checks "$ASTEP6" "codex-native roadmap-continue step 6"
+five_checks "$STEP4"  "claude roadmap-continue step 4"       'HEAD'
+five_checks "$ASTEP6" "codex-native roadmap-continue step 6" 'staged/worktree'
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -35,10 +35,13 @@ git diff --cached
 ## Grounding pass (U-WT-01)
 
 Before the first out-of-family review round: re-read every `file:line` cite in the diff
-and PR body at HEAD — never from recall; recompute every count/arithmetic claim from the
-actual source rather than restating it; confirm every `#NNN` reference actually is that
-PR; confirm local gates ran at the *current* HEAD; state in the PR body that this pass
-ran. First drafts historically burn 5–10 review rounds on exactly these defect classes.
+and PR body against the exact content under review (the staged/worktree diff — in this
+flow local gates and review precede the commit, so HEAD does not yet contain it) — never
+from recall; recompute every count/arithmetic claim from the actual source rather than
+restating it; confirm every `#NNN` reference actually is that PR; confirm local gates ran
+against the *current* staged/worktree fingerprint and re-record the pass if the diff
+changes afterward; state in the PR body that this pass ran. First drafts historically
+burn 5–10 review rounds on exactly these defect classes.
 
 ## Authorship-dependent out-of-family review
 

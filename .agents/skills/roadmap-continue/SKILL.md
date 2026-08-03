@@ -36,10 +36,12 @@ check them rather than trusting remembered or checkpointed remaining work.
 4. Recount any stated condition/cardinality set programmatically after every review round.
 5. Run narrow verification, then `just codex-check`; add `just overlay-check`, shell tests,
    or live/integration checks when the claim requires them.
-6. Grounding pass (U-WT-01) first: re-read every `file:line` cite at HEAD, recompute
+6. Grounding pass (U-WT-01) first: re-read every `file:line` cite against the
+   staged/worktree content under review (the commit lands later, in ship-pr), recompute
    every count/arithmetic claim from source, verify every `#NNN` reference is the PR it
-   claims, confirm local gates ran at the *current* HEAD (not an earlier one), and record
-   in the PR body that the pass ran. Then, for a Codex-authored diff, use Antigravity through `just gemini-review` as the
+   claims, confirm local gates ran against the *current* staged/worktree fingerprint
+   (re-record if the diff changes), and record that the pass ran — carried into the
+   PR body at ship-pr. Then, for a Codex-authored diff, use Antigravity through `just gemini-review` as the
    out-of-family reviewer under the operator's standing all-forward-work authorization; do
    not request per-run approval. This review uses the OAuth-authenticated `agy` CLI only—never
    provider API keys, service-account/Vertex routing, or a direct API call. For a Claude-authored
