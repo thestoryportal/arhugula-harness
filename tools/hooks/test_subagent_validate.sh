@@ -122,12 +122,27 @@ jq -e '.event=="start" and .agent_id=="a1" and .session=="s1" and .transcript=="
        and (.ts|test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and (.cwd|length>0)' \
   "$REG" >/dev/null 2>&1 && ok "AC1 start row well-formed (6 fields)" || bad "AC1 malformed row: $(cat "$REG")"
 
-# 10b) Start resolves the transcript IDENTICALLY to Stop: agent_transcript_path first,
-#      transcript_path as fallback (asymmetric keys would never reconcile).
+# 10b) Registry fallback is PARENT-FIRST (transcript_path, then agent_transcript_path):
+#      Start payloads never carry agent_transcript_path, so child-first would record a
+#      start and its stop under unmatchable keys (codex round-1 on #1200).
 : > "$REG"
 printf '%s' '{"hook_event_name":"SubagentStart","transcript_path":"/tmp/parent.jsonl"}' | bash "$HOOK" >/dev/null 2>&1
 jq -e '.transcript=="/tmp/parent.jsonl" and .agent_id==""' "$REG" >/dev/null 2>&1 \
   && ok "AC1 start falls back to transcript_path; empty agent_id tolerated" || bad "AC1 fallback: $(cat "$REG")"
+
+# 10c) Same-key discriminator: a realistic Start (parent path only) + its accepted Stop
+#      (BOTH paths, no agent_id) must land on the SAME transcript key. Kills a
+#      child-first regression: under child-first the stop row would carry the child
+#      path and never reconcile the start.
+: > "$REG"
+TC="$TMP/child10c.jsonl"; echo '{"message":{"role":"assistant","content":"done"}}' > "$TC"
+printf '%s' '{"hook_event_name":"SubagentStart","transcript_path":"/tmp/parent10c.jsonl"}' | bash "$HOOK" >/dev/null 2>&1
+printf '%s' "$(jq -nc --arg t "$TC" '{"hook_event_name":"SubagentStop","transcript_path":"/tmp/parent10c.jsonl","agent_transcript_path":$t}')" \
+  | bash "$HOOK" >/dev/null 2>&1
+K1=$(jq -r 'select(.event=="start") | .transcript' "$REG"); K2=$(jq -r 'select(.event=="stop") | .transcript' "$REG")
+{ [ -n "$K1" ] && [ "$K1" = "$K2" ]; } \
+  && ok "AC1/AC2 start and stop share one fallback key ($K1)" \
+  || bad "asymmetric fallback keys: start='$K1' stop='$K2'"
 
 # 11) AC2 — Stop with a non-empty (accepted) result → one terminal `stop` row, silent.
 : > "$REG"

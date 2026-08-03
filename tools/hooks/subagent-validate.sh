@@ -42,9 +42,13 @@ EVENT=$(hook_json "$PAYLOAD" '.hook_event_name')
 #   stop         — SubagentStop the gate ACCEPTED (terminal; reconciles a start).
 #   stop_blocked — SubagentStop the gate BLOCKED (NONTERMINAL: the subagent retries, so
 #                  the key stays unreconciled until an accepted result lands).
-# `agent_id` is the correlation key (empty tolerated); BOTH branches resolve the
-# transcript fallback identically (`.agent_transcript_path // .transcript_path`) so a
-# start and its stop land on the same key.
+# `agent_id` is the correlation key (empty tolerated); the transcript fallback is
+# PARENT-FIRST (`.transcript_path // .agent_transcript_path`) because SubagentStart
+# payloads never carry `agent_transcript_path` (hooks-events reference) — child-first
+# would record a start and its stop under UNMATCHABLE keys. Fan-out siblings sharing
+# the parent path is expected: U-HK-44 counts per-key (starts − stops), never zeroing
+# N starts on one stop. (The GATE's transcript read below stays child-first — that is
+# about reading the right transcript, not about key identity.)
 #
 # The whole acquire→append→release runs inside ONE /usr/bin/python3 invocation that
 # enforces its OWN ~2s deadline: this hook has no `hook_bounded` wrapper and the
@@ -60,8 +64,8 @@ _registry_append() {
   [ -n "$dir" ] || return 0
   agent=$(hook_json "$PAYLOAD" '.agent_id')
   session=$(hook_json "$PAYLOAD" '.session_id')
-  transcript=$(hook_json "$PAYLOAD" '.agent_transcript_path')
-  [ -z "$transcript" ] && transcript=$(hook_json "$PAYLOAD" '.transcript_path')
+  transcript=$(hook_json "$PAYLOAD" '.transcript_path')
+  [ -z "$transcript" ] && transcript=$(hook_json "$PAYLOAD" '.agent_transcript_path')
   # Payload data travels by argv — NEVER stdin (stdin already delivered the hook payload
   # to hook_read_stdin; the heredoc only carries the script, per lib.sh:157-189).
   /usr/bin/python3 - "$dir/.harness/.agents-registry.jsonl" "$event" "$session" "$agent" \
