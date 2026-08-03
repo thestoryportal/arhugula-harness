@@ -427,7 +427,7 @@ R-IF-116:
   depends_on: []
   blocks: []
   posture: mode-agnostic
-  scope: { files: [tools/hooks/**, tools/*.py, .claude/skills/**, justfile, .gitignore, .harness/hardening-workflow/HARDENING_PLAN.md, .harness/wave5-hooks-status.md], contracts: [], cross_axis: no }
+  scope: { files: [tools/hooks/**, tools/*.py, .claude/skills/**, justfile, .gitignore, .harness/hardening-workflow/HARDENING_PLAN.md, .harness/wave5-hooks-status.md, .harness/r-if-116-insights-residue-plan.md], contracts: [], cross_axis: no }
   skills: { primary: ship-pr, secondary: [roadmap-continue, merge-gate] }
   advisor_required: no
   council_required: no
@@ -437,7 +437,7 @@ R-IF-116:
   notes: >
     Program from the 2026-08-03 insights-residue plan (~8 PRs: grounding clause, YAML hook branch,
     subagent registry+sweep, arc exit report, mutation-probe runner, red-first skill, two-lane recipe);
-    plan at `~/.claude/plans/swirling-bouncing-walrus.md`; U-WT-02/U-WT-07 deferred behind named
+    plan at `.harness/r-if-116-insights-residue-plan.md`; U-WT-02/U-WT-07 deferred behind named
     trigger conditions.
 
 R-IF-roadmap-refresh:

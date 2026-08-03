@@ -41,11 +41,16 @@ else
   bad "bad ordering: Green='$L_GREEN' grounding='$L_GROUND' out-of-family='$L_CODEX'"
 fi
 
-# --- 3. roadmap-continue step 4 mirrors the clause ---
-if grep -qiF -- 'grounding pass' "$CONT"; then
-  ok "roadmap-continue names the grounding pass"
+# --- 3. roadmap-continue step 4 mirrors the clause, BEFORE its codex-review clause ---
+# Scoped to the step-4 block (from "4. **" to the next "5. **") so the phrase drifting
+# elsewhere in the file cannot keep this green (codex round-2 mutation finding).
+STEP4=$(awk '/^4\. \*\*/{f=1} /^5\. \*\*/{f=0} f' "$CONT")
+S4_GROUND=$(printf '%s\n' "$STEP4" | grep -in -- 'grounding pass' | head -1 | cut -d: -f1)
+S4_CODEX=$(printf '%s\n' "$STEP4" | grep -n -- 'codex-review' | head -1 | cut -d: -f1)
+if [ -n "$S4_GROUND" ] && [ -n "$S4_CODEX" ] && [ "$S4_GROUND" -lt "$S4_CODEX" ]; then
+  ok "roadmap-continue step 4 names the grounding pass before codex-review"
 else
-  bad "roadmap-continue missing the grounding-pass clause"
+  bad "step-4 scoping: grounding='$S4_GROUND' codex-review='$S4_CODEX' (grounding must exist and precede)"
 fi
 
 # --- 4. all three mechanical checks are named in the ship-pr bullet ---
