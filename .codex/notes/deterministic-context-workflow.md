@@ -202,7 +202,7 @@ Related Codex-local optimization commands:
 
 ```bash
 just codex-worktree-gc          # dry-run safe stale-worktree cleanup
-just codex-worktree-gc --reap   # remove only clean merged worktree candidates
+just codex-worktree-gc --reap   # explicit mutex/lease-safe removal after merge/closeout
 just codex-test                 # provider-free non-e2e pytest lane
 just codex-check                # sync + lint + typecheck + provider-free non-e2e pytest
 just codex-autonomous-arc       # initialize autonomous-loop evidence state
@@ -233,4 +233,6 @@ unavailable, the guard emits `OPEN_PRS_UNAVAILABLE` instead of silently
 treating the open-PR set as authoritative.
 
 The Codex `SessionStart` and `Stop` hooks invoke the same guard. Hook failures
-propagate nonzero when the guard reports a hard finding or cannot run.
+propagate nonzero when the guard cannot run or reports a hard finding, except that
+`CODEX_LOOP_INCOMPLETE` alone is advisory at `Stop` while the explicit
+`just codex-closeout` completion/commit/PR gate remains hard.

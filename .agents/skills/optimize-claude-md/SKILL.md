@@ -1,40 +1,17 @@
 ---
 name: optimize-claude-md
-description: "Use when the operator asks to optimize, prune, trim, shrink, declutter, or context-budget audit arhugula-v2 CLAUDE.md governance files, including /optimize-claude-md."
+description: Use when optimizing or auditing CLAUDE.md governance for clarity, drift, contradiction, or byte pressure.
 ---
 
-# Optimize CLAUDE.md
+# Canonical Claude Workflow Bridge
 
-Use this skill for governance-context pruning only. Do not edit design substrate, specs, plans, ADRs, or fork docs under this skill.
+Read `.claude/skills/optimize-claude-md/SKILL.md` completely from the workspace root before acting, including every reference it routes for the task. That canonical skill body is the full workflow; this Codex entrypoint does not summarize, trim, or replace it. Resolve its relative references from the canonical skill directory.
 
-## Scope
+Apply these runner translations only:
 
-Allowed targets:
-
-- root `CLAUDE.md`
-- root `CONTEXT.md` (the L1 task router; `R-ICM-2`, 2026-07-30)
-- per-axis `harness-{is,as,cp,od}/CLAUDE.md`
-- pointer/index files under `.harness/` that preserve relocated context
-- Codex projections such as `AGENTS.md` when the task explicitly includes Codex compatibility
-
-Out of scope:
-
-- `design-substrate/**`
-- implementation code
-- formal specs, plans, ADRs, and fork docs
-
-## Workflow
-
-1. Inspect `git status --short --branch`.
-2. Read `AGENTS.md`, `.harness/roadmap_status.md`, and the target governance file.
-3. Measure the target size with a stable local command such as `wc -w` or a tokenizer script if one exists.
-4. Relocate or summarize verbose lineage into a pointer file when needed; keep load-bearing rules in the active guidance.
-5. Preserve authoritative pointers and exact filenames for relocated material.
-6. Verify pointer integrity with `rg` and a targeted read of the relocated file.
-7. Open a reviewable PR; do not make silent governance edits on `main`.
-
-## Quality Bar
-
-- The active guidance should remain sufficient for a fresh Codex session to avoid X-AL-3, destructive git, paid-provider, and verification mistakes.
-- Relocation beats deletion when lineage may still be operationally useful.
-- Report before/after size and the verification command used.
+- Root `AGENTS.md` is the Codex instruction entrypoint; targeted `CLAUDE.md` sections remain canonical lineage.
+- Claude `Agent` or `Task` fan-out means fresh Codex subagents or `codex exec` contexts with self-contained briefs, subject to current delegation policy.
+- `AskUserQuestion` means the available Codex user-input surface, and only for a genuine operator-owned fork.
+- When Codex is the author, any canonical claim that Codex is out-of-family translates to Antigravity via `just gemini-review`; when Claude is the author, `just codex-review` remains out-of-family.
+- Claude `advisor()` transcript judgment translates to the interactive Codex controller's transcript-aware judgment plus the required out-of-family artifact review; never silently drop either function.
+- Claude-only scratch paths translate to a safe `/tmp` or ignored workspace scratch path. All Git, CI, worktree, paid-call, secret, and destructive-action guardrails remain binding.

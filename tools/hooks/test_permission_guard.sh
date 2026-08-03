@@ -201,13 +201,113 @@ OUT=$(run_on "$(jq -nc '{"hook_event_name":"PreToolUse","tool_name":"NotebookEdi
 [ -z "$OUT" ] && ok "outside NotebookEdit → ask" || bad "outside notebook auto-decided: $OUT"
 
 # 5m) Round-6 adversarial bypasses must NOT auto-allow (codex P1/P2).
-for c in "cat '/etc/passwd'" "echo \$ANTHROPIC_API_KEY" "awk 'BEGIN{system(\"git push origin main\")}'" "git branch -d feature" "git branch --delete --force x" "printf %s \$OPENAI_API_KEY"; do
+for c in "cat '/etc/passwd'" "echo \$ANTHROPIC_API_KEY" "awk 'BEGIN{system(\"git push origin main\")}'" "git branch --delete --force x" "printf %s \$OPENAI_API_KEY"; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
 done
 # git branch (list/create) still allowed
 OUT=$(run_on "$(pl Bash 'git branch' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "git branch (list) → allow" || bad "git branch list not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git branch -d merged-feature' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git branch -d → allow safe merged-branch cleanup" || bad "safe branch cleanup not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git push origin feature' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git push → allow normal arc publication" || bad "normal push not allowed: $OUT"
+for c in "git push --mirror" "git push --prune origin" "git worktree add -B existing /tmp/new-arc HEAD"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "deny" ] && ok "'$c' → deny destructive mutation" || bad "'$c' not denied: $OUT"
+done
+for c in \
+  "git fetch --upload-pack=/tmp/attacker origin" \
+  "git fetch -u /tmp/attacker origin" \
+  "git fetch origin --upload-pack=/tmp/attacker"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] \
+    && ok "'$c' → not auto-allowed (execution-bearing fetch option)" \
+    || bad "'$c' auto-allowed: $OUT"
+done
+OUT=$(run_on "$(pl Bash 'git ls-remote --heads origin refs/heads/topic' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git ls-remote → allow read-only branch hygiene probe" || bad "ls-remote not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git pull --ff-only' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git pull --ff-only → allow main sync" || bad "ff-only pull not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git merge --no-edit main' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git merge --no-edit main → allow topic base sync" || bad "main merge not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git merge --no-edit origin/main' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git merge --no-edit origin/main → allow fetched base sync" || bad "origin/main merge not allowed: $OUT"
+for c in "git merge --abort" "git merge --strategy=ours main" "git merge --no-edit feature/unreviewed"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
+OUT=$(run_on "$(pl Bash 'git worktree remove /tmp/merged-clean' '')")
+[ "$(dec "$OUT")" = "deny" ] && ok "direct git worktree remove → deny (must use mutex wrapper)" || bad "direct worktree removal not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git -C /tmp/repo worktree remove /tmp/merged-clean' '')")
+[ "$(dec "$OUT")" = "deny" ] && ok "git -C direct worktree remove → deny" || bad "git -C worktree removal not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'tools/hooks/safe-worktree-remove.sh /tmp/merged-clean' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "mutex-backed worktree remove wrapper → allow" || bad "safe worktree wrapper not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'tools/hooks/safe-worktree-remove.sh "/tmp/merged-clean"' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "quoted mutex-backed worktree path → allow" || bad "quoted safe worktree path not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git worktree add /tmp/new-arc feature' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git worktree add → allow non-force arc creation" || bad "non-force worktree creation not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git worktree add -b feature /tmp/new-arc' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git worktree add -b → allow explicit /tmp arc creation" || bad "-b worktree creation not allowed: $OUT"
+for c in \
+  "git worktree add /tmp/new-arc feature; touch /tmp/escaped" \
+  "git worktree add /tmp/new-arc feature && touch /tmp/escaped" \
+  "git worktree remove /tmp/merged-clean | sh" \
+  'git worktree add /tmp/$(touch-escaped) feature'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
+for c in "git push origin --delete feature" "git worktree remove --force /tmp/dirty" "git worktree add --force /tmp/rebind feature"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "deny" ] && ok "'$c' → deny destructive cleanup" || bad "'$c' not denied: $OUT"
+done
+for c in "git worktree add \$HOME/escape feature" "git worktree add /etc/escape feature" "git worktree remove /etc/registered"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed outside bounded roots" || bad "'$c' auto-allowed: $OUT"
+done
+
+# 5n.1) The controller's own provider-free lifecycle and fresh read-only merge lenses
+# must not stop a headless loop for approval. Keep the allowlist recipe-specific and
+# require the nested Codex process to be ephemeral + read-only.
+for c in \
+  "just codex-preflight" \
+  "just codex-checkpoint after-review" \
+  "just codex-closeout" \
+  "just codex-autonomous-arc R-123" \
+  "just codex-loop-record --phase plan --status passed --command plan --evidence grounded" \
+  "just codex-loop-status" \
+  "just codex-loop-check" \
+  "just codex-worktree-gc" \
+  "just codex-worktree-gc --reap" \
+  "just overlay-check"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "'$c' → allow controller lifecycle" || bad "'$c' not allowed: $OUT"
+done
+SAFE_CODEX_CMD="env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
+OUT=$(run_on "$(pl Bash "$SAFE_CODEX_CMD" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens" || bad "read-only codex exec not allowed: $OUT"
+OUT=$(run_on "$(pl Bash "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens2-0123456789abcdef0123456789abcdef01234567.md --ephemeral --sandbox read-only -- 'read lens2 prompt'" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens with -C first" || bad "-C-first read-only codex exec not allowed: $OUT"
+for c in \
+  "codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env OTHER=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox workspace-write -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox danger-full-access -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C /repo --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /etc/review.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens3-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'; touch /tmp/escaped" \
+  "just codex-autonomous-arc R-1; git push --force"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
 
 # 5n) Round-7: braced/any uppercase env expansion + relative design-substrate (codex P1).
 for c in "cat \${HOME}/.claude/settings.json" "mkdir \${HOME}/tmp" "cat \$TMPDIR/x"; do
@@ -289,19 +389,22 @@ SD="$FH/.claude/projects/$(encof "$WTL")"; mkdir -p "$SD"; : > "$SD/s.jsonl"   #
 runh() { printf '%s' "$1" | env HOME="$FH" CLAUDE_PROJECT_DIR="$REPO" ${2:-} bash "$HOOK"; }
 OUT=$(runh "$(pl Bash "git worktree remove $WTL" '')")                       # loop OFF
 [ "$(dec "$OUT")" = "deny" ] && ok "live-session worktree remove → deny (loop OFF, hoisted)" || bad "live remove not denied off-mode: $OUT"
+OUT=$(runh "$(pl Bash "git -C $REPO worktree remove $WTL" '')")
+[ "$(dec "$OUT")" = "deny" ] && ok "live-session git -C worktree remove → deny" || bad "live git -C remove not denied: $OUT"
 OUT=$(runh "$(pl Bash "git worktree remove --force $WTL" '')" HARNESS_LOOP=1)  # loop ON, --force
 [ "$(dec "$OUT")" = "deny" ] && ok "live-session worktree remove --force → deny (loop ON)" || bad "live --force not denied: $OUT"
 OUT=$(runh "$(pl Bash "git worktree remove $WTL" '')" HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1)
 [ "$(dec "$OUT")" != "deny" ] && ok "override env → not denied" || bad "override still denied: $OUT"
-# stale transcript (older than window) → not a live session → not denied (inert off-mode → no output)
+# stale/no transcript still requires the mutex-backed wrapper because a session can start
+# between a negative check and the eventual tool execution.
 WTS="$REPO/wt-stale"; mkdir -p "$WTS"; SDS="$FH/.claude/projects/$(encof "$WTS")"; mkdir -p "$SDS"
 : > "$SDS/old.jsonl"; touch -t 202001010000 "$SDS/old.jsonl"
 OUT=$(runh "$(pl Bash "git worktree remove $WTS" '')")
-[ -z "$OUT" ] && ok "stale-transcript worktree remove → not denied" || bad "stale worktree decided: $OUT"
+[ "$(dec "$OUT")" = "deny" ] && ok "stale-transcript direct removal → denied for race safety" || bad "stale direct removal not denied: $OUT"
 # no transcript dir at all → not denied
 WTN="$REPO/wt-none"; mkdir -p "$WTN"
 OUT=$(runh "$(pl Bash "git worktree remove $WTN" '')")
-[ -z "$OUT" ] && ok "no-transcript worktree remove → not denied" || bad "no-transcript decided: $OUT"
+[ "$(dec "$OUT")" = "deny" ] && ok "no-transcript direct removal → denied for race safety" || bad "no-transcript direct removal not denied: $OUT"
 
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"

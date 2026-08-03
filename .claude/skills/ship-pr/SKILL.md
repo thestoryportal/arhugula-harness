@@ -42,9 +42,10 @@ spec-conformance-against-ledgers, test-witness-adequacy), each returning a struc
 `VERDICT: APPROVE`/`VERDICT: BLOCK: <reason>` line. All-approve → merge without HIL, per
 `[[feedback-merge-without-hil-once-ci-green]]` (CI-green remains the base precondition; this
 gate is an additional one for code-touching PRs, not a replacement). Any block or split
-verdict → do not merge; fix-and-re-gate is capped at 2 rounds, then surface the verdicts to
-the operator via one `AskUserQuestion` — see the skill for the full procedure, parse-failure
-handling, and the audit-log append.
+verdict → do not merge; automatic fix-and-re-gate is capped at ten rounds. An eleventh
+substantive disagreement is the decision point surfaced to the operator via one
+`AskUserQuestion` — see the skill for the full procedure, parse-failure handling, and the
+audit-log append.
 
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 

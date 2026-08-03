@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `500d1ae9a9c9` |
-| `last_refreshed` | 2026-08-01T11:07:49Z |
-| `git_head` | `4e4b702f` —  |
+| `workspace_state_hash` | `9b33a1fd8198` |
+| `last_refreshed` | 2026-08-03T08:01:48Z |
+| `git_head` | `cf495aaf` — PR #1189 Stop main-push CI caller-context fix merged |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 106 |
 
@@ -21,6 +21,8 @@
 ## Next action
 
 **Purpose.** Section 02 names the next Claude/Codex-executable frontier. Completion history lives in `Recently completed`; the full remaining itemization lives in `Remaining forward work` (next section).
+
+**Current next action (post-#1189).** Reconcile `main` into B-96 draft PR #1183, re-run its condition/count/register witnesses, push the updated head, mark it ready, and require all CI green without merging it. Then launch the B-107 A-hybrid spec leg from the committed handoff using the Codex GPT-5.6 Sol orchestrator / GPT-5.6 Terra implementer pattern. The older Round 73 narrative below is retained as historical derivation; its embedded ratification-batch next action is superseded by the completed 2026-08-01 ratifications and this explicit transport sequence.
 
 **Round 73 — the B-104 Class 2 fork FILED 2026-08-01 at PR #1181 (doc-only, 1218 lines; the filing queue is COMPLETE and the loop's authorable frontier is exhausted to the RATIFICATION BATCH).** The demand gate answered in layers: the discrimination IS structurally required by the drain recourse's confirmation half (resolution writes nothing — the enumeration is monotone non-decreasing under a perfect drain; only the zero case self-confirms; the spec concedes the shape at `:5944`), BUT every flow that branches on it is LEGACY-scoped and frozen post-cutover, and disposal fails conservative. **Shape (c) "derive from existing records" GROUNDED AND FALSIFIED** (the resume-specific IS-ledger write is constant-`action_id`, fires BEFORE the success test, and carries no tenant while the journal address does — co-tenant resume would produce a false all-clear); **a FOURTH shape found** (a resume event in the existing OD §C-OD-30.5 pause-state sink, carried as Reading C, priced with the sink's missing locking + tenant qualifier). **Two empirical probes:** both sentinel shapes route to `CORRUPT_LATEST` → `indeterminate=True` at HEAD (a resolved journal would report as an in-flight torn append — the row's (a)-2 default is actively wrong); the sixth cause member forces a CROSS-AXIS OD LEG (harness-od re-declares the five values; `api.py:1163` converts by value and raises on unknown). Plus: the ambiguity is NOT legacy-confined (both public read surfaces report an already-resolved pause as current, the limit declared at §13.7 and undeclared on both — Reading D's mandatory Component 1 fixes exactly that asymmetry). **Recommendation D (declare + defer with D-0..D-3); runner-up A NARROWLY and HELD** (the A-vs-B element moved three times on three grounds → [[reviewer-oscillation-register-and-hold]], routed to ratification). Council: probe-resolved for D; dyadic C3⊥C11 only under A; +C7/C8 under C. Codex 3 rounds, 13 findings incl. THREE absorbed against the filing's own interest. **Next action — THE RATIFICATION BATCH (the loop's genuine operator gate):** B-107 (A-hybrid/B/C/D), B-96 (A-or-C + the held C-1/C-2 ceiling), B-98 (C/A-1/A-2/B), B-104 (D/A/B/C), plus the standing `run_bootstrap` `__all__` preference. Post-ratification: the chosen spec legs resume the chain (B-96's council convening if C; B-107's leg; etc.); B-74-residue unblocks at B-96's answer. held=1 honored.
 
@@ -177,7 +179,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(none)* | — | — | No open PRs at refresh time. |
+| #1183 | `b96-council-ceiling` | — | — |
 
 ---
 
@@ -185,11 +187,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| 1181 | 2026-08-01 | B-104 Class 2 fork FILED — shape (c) grounded AND falsified, a fourth shape (OD sink event) found and carried as Reading C; recommendation D declare-symmetric-then-defer; A-vs-B runner-up HELD under the oscillation rule; two empirical probes (sentinel reports as torn append; sixth cause member forces a cross-axis OD leg); 3 codex rounds, 13 findings, soundness exit |
-| 1180 | 2026-08-01 | B-98 Class 2 fork FILED — codex R1 falsified the filing's own central premise (the HITL-pause class is production-DORMANT in stock bootstrap: the webhook precondition raises before the pause fires; the description text already reaches the operator contractually); recommendation C defer-with-falsifiable-demand-test (D-0..D-3); council reversed to probe-resolved; 6 codex rounds, 17 findings, recommendation never moved |
-| 1179 | 2026-08-01 | B-96 Class 2 fork FILED — finding 3 decisive: the close_out's per-process elapsed-time design has UNBOUNDED retention in the one-shot shape and does not survive as written; Reading C (durable observation state) recommended, runner-up A (keep sweep-count + document); council REVERSED to convene (dyadic C3+C7, scoped C-1 vs C-2 ceiling); one sub-decision held under the oscillation rule; 6 codex rounds to soundness exit |
-| 1178 | 2026-08-01 | B-107 Class 2 fork FILED — hybrid Reading A recommended (scalar membership amendment + map-construction refusal + resolver-boundary enforcement) vs input-keyed B; empirical find: frozen=True does not freeze the nested resolutions dict (live mutation hole at HEAD); 4 codex rounds, zero recommendation flips, soundness exit; ratification batches to the operator |
-| 1177 | 2026-08-01 | B-107 grounding absorbed — row self-contradiction fixed with the corrected seven-site map; verdict SPEC-LEG-FIRST/fork-shaped; status transited to design_substrate_gated (no buildable slice); closure criterion amended (was satisfiable by the defect); B-100/B-101/B-106 pr reconciles + stale inline promises cleared; 6 codex rounds |
+| PR #1189 | 2026-08-03 | Stop hook now passes the existing caller-gated one-commit owed-roadmap-lag allowance only for exact GitHub Actions pushes to main; exact post-merge main CI run 30795486854 passed. Next: reconcile B-96 PR #1183, mark it ready, and require all CI green without merging it, then launch the B-107 A-hybrid Codex autonomous arc. |
+| PR #1188 | 2026-08-03 | Stop parity full-history checkout landed; post-merge main CI exposed the remaining caller-context gap, tracked in PR #1189. This prepend advances the explicitly capped five-row Recently completed window, so 1181 leaves the derived dashboard by design. Next: land this terminating refresh, rebase and close #1189, then bring B-96 PR #1183 to ready and green without merging before launching B-107. |
+| 1186 | 2026-08-03 | Codex-Claude parity landed: SessionStart/SessionStop lifecycle repairs, owner-PID lease cleanup, OAuth-only Antigravity Gemini 3.1 Pro review, 10-round repair ceiling, and three-lens merge gate; all 16 PR checks green. B-96 remains draft #1183 with a do-not-merge boundary pending post-parity reconciliation. |
+| 1185 | 2026-08-01 | Round 76: gemini-review rewired to Antigravity CLI (#1185). Live probes falsified the gemini-cli path (consumer OAuth retired 2026-06-18, IneligibleTierError on 0.49.0 and 0.53.1); operator's Google AI Ultra 5x is served by agy — headless agy -p positive control PASSED on subscription auth; recipe + guard landed, API-key strips retained (billing insurance vs dotenv .env). Codex handoff bundle now COMPLETE (#1184 + #1185). IN FLIGHT (paused, durable): b96-council-ceiling @ 035395b9 draft #1183 (C-2, fold owed); b107-spec-leg-a-hybrid @ dc825591. NEXT: HIL runner-split gate (operator checks Claude quota): B-96 fold in Claude + B-107 to Codex [REC] / both-Claude / both-Codex — then execute per .harness/handoff/README-resume.md. |
+| 1184 | 2026-08-01 | Round 75: Codex handoff bundle merged (#1184, operator-directed transition prep under 2% Claude quota). Repo-committed handoff at .harness/handoff/ (both pause checkpoints + README-resume covering the two in-flight legs); .codex/notes/ gains discipline-digest (memory bridge), leg-brief-template (orchestrator/implementer pattern), merge-gate-lenses/ (3 fresh-context lens prompts); just gemini-review added as the out-of-family reviewer when Codex authors; AGENTS.md wired (startup pointers, orchestrator section, decorrelation-flip PR discipline). IN FLIGHT (paused, durable): b96-council-ceiling @ 035395b9 draft #1183 (verdict C-2, fold owed); b107-spec-leg-a-hybrid @ dc825591 (grounding notes only). NEXT: HIL gate on remaining Claude quota — continue B-96 fold + B-107 spec leg in Claude if viable, else Codex takes over per .harness/handoff/README-resume.md. |
 ---
 
 ---

@@ -19,6 +19,7 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 [ -f "$_LIB" ] || exit 0
 # shellcheck source=lib.sh
 . "$_LIB"
+hook_review_isolated && exit 0
 
 PAYLOAD=$(hook_read_stdin)
 PROMPT=$(hook_json "$PAYLOAD" '.prompt')

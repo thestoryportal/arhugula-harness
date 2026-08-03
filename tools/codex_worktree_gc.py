@@ -2,9 +2,10 @@
 """Codex-facing safe git worktree garbage collector.
 
 Dry-run is the default. The reap path removes only linked worktrees that are
-clean, not current/default, have no recent Claude transcript, and are proven
-merged either by ancestry or exact merged-PR head SHA. Branch refs are never
-deleted.
+clean, not current/default, have no live Claude/Codex session, and are proven
+merged either by ancestry or exact merged-PR head SHA. Removal uses the same
+mutex and session-lease authority as SessionStart, plus a removal-side quarantine
+transaction. Branch refs are never deleted.
 """
 
 from __future__ import annotations
@@ -13,11 +14,15 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
+
+SAFE_WORKTREE_REMOVE = Path(__file__).resolve().parent / "hooks" / "safe-worktree-remove.sh"
 
 REGENERABLE_IGNORED = re.compile(
     r"^!! ("
@@ -56,16 +61,64 @@ class Disposition:
     size_bytes: int = 0
 
 
-def _run(args: list[str], *, cwd: Path, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+class SessionState(Enum):
+    INACTIVE = "inactive"
+    LIVE = "live"
+    UNKNOWN = "unknown"
+
+
+def _run(
+    args: list[str],
+    *,
+    cwd: Path,
+    timeout: int = 30,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(
+        process = subprocess.Popen(
             args,
             cwd=cwd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
-            check=False,
+            env=env,
+            start_new_session=os.name == "posix",
         )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            else:
+                process.terminate()
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                if os.name == "posix":
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    process.kill()
+                try:
+                    stdout, stderr = process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    for stream in (process.stdout, process.stderr):
+                        if stream is not None:
+                            stream.close()
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    stdout, stderr = "", ""
+            message = f"command timed out after {timeout} seconds"
+            stderr = f"{stderr.rstrip()}\n{message}".lstrip()
+            return subprocess.CompletedProcess(args, 124, stdout, stderr)
     except (OSError, subprocess.SubprocessError) as exc:
         return subprocess.CompletedProcess(args=args, returncode=127, stdout="", stderr=str(exc))
 
@@ -182,18 +235,20 @@ def is_ancestor(repo: Path, head: str, ref: str) -> bool:
     return _run(["git", "merge-base", "--is-ancestor", head, ref], cwd=repo).returncode == 0
 
 
-def has_live_claude_session(path: Path, *, home: Path) -> bool:
-    window = int(os.environ.get("HARNESS_WORKTREE_SESSION_WINDOW_MIN", "30"))
-    encoded = re.sub(r"[^A-Za-z0-9]", "-", str(physical(path)))
-    session_dir = home / ".claude" / "projects" / encoded
-    if not session_dir.is_dir():
-        return False
+def session_state(path: Path, *, home: Path) -> SessionState:
+    env = os.environ.copy()
+    env.update({"CLAUDE_PROJECT_DIR": str(path), "HOME": str(home)})
     proc = _run(
-        ["find", str(session_dir), "-maxdepth", "1", "-name", "*.jsonl", "-mmin", f"-{window}"],
-        cwd=Path("/"),
-        timeout=5,
+        ["/bin/bash", str(SAFE_WORKTREE_REMOVE), "--status", str(path)],
+        cwd=path,
+        timeout=10,
+        env=env,
     )
-    return bool(proc.stdout.strip()) if proc.returncode == 0 else False
+    if proc.returncode == 0:
+        return SessionState.LIVE
+    if proc.returncode == 1:
+        return SessionState.INACTIVE
+    return SessionState.UNKNOWN
 
 
 def tree_size(path: Path) -> int:
@@ -241,8 +296,16 @@ def classify(
             reason = "local-state: " + ", ".join(residue[:3])
             dispositions.append(Disposition(wt, "skip", reason[:220], size_bytes=size))
             continue
-        if has_live_claude_session(wt.path, home=home):
-            dispositions.append(Disposition(wt, "skip", "live-claude-session", size_bytes=size))
+        state = session_state(wt.path, home=home)
+        if state is SessionState.LIVE:
+            dispositions.append(
+                Disposition(wt, "skip", "live-claude-codex-session", size_bytes=size)
+            )
+            continue
+        if state is SessionState.UNKNOWN:
+            dispositions.append(
+                Disposition(wt, "skip", "session-state-unavailable", size_bytes=size)
+            )
             continue
         if is_ancestor(repo, wt.head, base_ref):
             dispositions.append(
@@ -325,17 +388,55 @@ def to_json(dispositions: list[Disposition], *, gh_available: bool) -> str:
 
 def reap_candidates(repo: Path, dispositions: list[Disposition]) -> int:
     failures = 0
+    env = os.environ.copy()
+    env["CLAUDE_PROJECT_DIR"] = str(repo)
     for d in dispositions:
         if d.action != "candidate":
             continue
-        proc = _run(["git", "worktree", "remove", str(d.worktree.path)], cwd=repo, timeout=60)
+        proc = _run(
+            [
+                "/bin/bash",
+                str(SAFE_WORKTREE_REMOVE),
+                "--expect-branch",
+                d.worktree.branch,
+                "--expect-head",
+                d.worktree.head,
+                str(d.worktree.path),
+            ],
+            cwd=repo,
+            timeout=60,
+            env=env,
+        )
+        if proc.returncode == 3:
+            print(f"skipped removal of {d.worktree.path}: live Claude/Codex session")
+            continue
+        if proc.returncode == 4:
+            print(f"skipped removal of {d.worktree.path}: local state appeared")
+            continue
+        if proc.returncode == 7:
+            print(f"skipped removal of {d.worktree.path}: retained process reference")
+            continue
+        if proc.returncode == 8:
+            print(f"restored interrupted quarantine for {d.worktree.path}; retry later")
+            continue
+        if proc.returncode == 9:
+            print(f"skipped removal of {d.worktree.path}: process-reference state unavailable")
+            continue
+        if proc.returncode == 10:
+            print(f"skipped removal of {d.worktree.path}: branch or HEAD changed")
+            continue
         if proc.returncode != 0:
             failures += 1
             print(
                 f"failed to remove {d.worktree.path}: {proc.stderr.strip() or proc.stdout.strip()}",
                 file=sys.stderr,
             )
-    _run(["git", "worktree", "prune"], cwd=repo, timeout=30)
+    # A failed transaction recovery can leave Git's registered path temporarily absent
+    # while the physical worktree still exists at quarantine. Pruning in that state can
+    # erase the only administrative registration and strand the worktree. Only prune
+    # after every candidate reached a safe terminal outcome.
+    if failures == 0:
+        _run(["git", "worktree", "prune"], cwd=repo, timeout=30)
     return failures
 
 

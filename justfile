@@ -39,8 +39,12 @@ lint:
 fmt:
     uv run ruff format .
 
+# Check Ruff formatting without changing files.
+fmt-check:
+    uv run ruff format --check .
+
 # Full pre-merge gate: workspace sync + lint + typecheck + docs/closure + provider-free tests.
-check: codex-sync lint typecheck docs-completeness-check memory-closeout-check closure-certification-check test
+check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check test
 
 # Codex provider-free pytest lane. Strips live provider env and mirrors CI's non-e2e gate.
 codex-test *args:
@@ -50,8 +54,16 @@ codex-test *args:
 codex-sync:
     uv sync --all-packages
 
+# Blocking provider-free regression lane for Codex hooks, permissions, lifecycle, and GC.
+codex-parity-check:
+    bash tools/codex-parity-check.sh
+
+# Exercise hook dispatch through the installed Codex CLI using only a loopback model double.
+codex-hook-runtime-witness:
+    /usr/bin/python3 tools/codex_hook_runtime_witness.py
+
 # Codex PR-ready local gate without live provider credentials.
-codex-check: codex-sync lint typecheck docs-completeness-check memory-closeout-check closure-certification-check
+codex-check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check codex-parity-check
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"
 
 # ─── Codex deterministic context guard ─────────────────────────────────────
@@ -486,6 +498,25 @@ codex-review base='main': _require-codex-subscription
 # Out-of-family review of staged + unstaged + untracked changes, subscription auth.
 codex-review-uncommitted: _require-codex-subscription
     env -u OPENAI_API_KEY codex review -c preferred_auth_method="chatgpt" --uncommitted
+
+# Out-of-family diff review via Google Antigravity CLI (agy) — the decorrelated
+# artifact reviewer when Codex is the AUTHOR (mirror of codex-review, which
+# decorrelates Claude-authored work). Reviews the diff of the current branch vs BASE.
+# Subscription path: agy serves the Google AI Ultra plan (Google-account login) —
+# gemini-cli's consumer OAuth tiers were retired 2026-06-18 (IneligibleTierError);
+# empirically verified 2026-08-01: `agy -p` headless works on the subscription.
+# GEMINI_API_KEY/GOOGLE_API_KEY are stripped as insurance — justfile dotenv loads
+# .env, which carries the harness runtime's own provider keys; those must never
+# leak into review billing.
+gemini-review base='main': _require-antigravity
+    /usr/bin/python3 tools/agy_review.py --base {{base}}
+
+_require-antigravity:
+    @if ! command -v agy >/dev/null 2>&1; then \
+        echo "ERROR: agy (Antigravity CLI) not found on PATH."; \
+        echo "  Install per https://antigravity.google (Google AI Ultra subscription auth)."; \
+        exit 1; \
+    fi
 
 # Advisory CodeRabbit review. This is optional and complements, not replaces,
 # `just codex-review` and CI. Run after a meaningful diff exists.

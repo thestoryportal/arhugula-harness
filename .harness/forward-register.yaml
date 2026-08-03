@@ -3026,6 +3026,7 @@ items:
 - id: B-98
   title: Gate description / question text is absent from every durable pause carrier
   status: registered_finding
+  pr: '#1180 (the Class 2 fork filing) + #pending (the ratification leg)'
   summary: 'An operator inspecting durable pause state can learn WHERE a workflow is paused and
     through WHICH resolution channel, but not WHAT was asked. Verified across every PauseSnapshot
     field at the B-69 convening, and symmetrically for the closed-vocabulary counter-proposal:
@@ -3042,15 +3043,83 @@ items:
     with what hash disposition per the drop-when-empty precedent) before any read-side projection
     field is added. DISTINCT FROM B-71, which adds a run-instance correlation id to
     HITLEscalationBrief and the webhook payload -- B-71 is about DISAMBIGUATING two identical-looking
-    escalations; this row is about DESCRIBING one. Open only if the operator loop demands it: the
+    escalations; this row is about DESCRIBING one. [SUPERSEDED 2026-08-01, struck in place: the
+    reopening rule here read "Open only if the operator loop demands it" and is REPLACED -- not
+    supplemented -- by the falsifiable D-0..D-3 demand test below. It was unfalsifiable as written
+    and MUST NOT be applied as a second, parallel reopening criterion. Caught at out-of-family
+    review round 2 [P2].] The
     B-69 projection deliberately ships without it, and position plus pause_reason were judged
-    sufficient for the map-composition task.'
-  council: 'yes if opened -- a nameable C10 vs C11 tension (action-safety wanting a closed vocabulary
-    and no unbounded free-text channel in durable state, against operator-loop wanting a description
-    a human can actually act on), and the B-69 convening surfaced exactly that tension without
-    resolving it, because the empirical absence closed the seam first.'
+    sufficient for the map-composition task.
+    RATIFIED 2026-08-01 (operator AskUserQuestion) as READING C -- DEFER, with NO CARRIER CHANGE.
+    The fork doc .harness/class_2_fork_b98_gate_description_durable_carrier.md is FILED (#1180) and
+    its section 11 RATIFICATION addendum records the outcome verbatim-in-substance. Reading C owes
+    NO spec text and NO impl text (fork section 9, column C), so no design-substrate edit and no
+    plan delta ride this ratification, and no plan cite anywhere contradicts it -- B-98 is cited at
+    NO implementation plan and at NO acceptance criterion. Runner-up A-1 was NOT selected and is NOT
+    partially adopted. THE REOPENING TRIGGERS -- a FALSIFIABLE four-disjunct demand test, any one
+    disjunct fires, replacing the prior unfalsifiable "open only if the operator loop demands it":
+    D-0 (DOMINANT) -- THE HITL-PAUSE CLASS BECOMES PRODUCTION-REACHABLE: the FM-2 webhook-config arc
+    lands (operator-supplied WebhookConfig, deferred at webhook_delivery_composer_factory.py lines
+    17-22), so a durable HITL_PENDING pause can occur outside tests at all. Until D-0 this row is a
+    finding about a DORMANT class, which is why D-0 dominates the other three.
+    D-1 -- A DESCRIPTION EXISTS THAT THE WEBHOOK DOES NOT ALREADY DELIVER to the resuming operator
+    (round-2 tightened form; the untightened first form over-triggered). Two disjuncts: (a) a
+    description surface lands that is NOT projected into WebhookPayload.payload_body
+    (webhook_brief_adapter.py lines 76-84) -- e.g. HITLPlacement (hitl_placement.py:176) gains an
+    author-written text field; or (b) the resumer ceases to be the webhook recipient (the webhook
+    stops being the delivery channel, or a supported flow resumes a pause through an operator who
+    never received it -- i.e. the workspace advances past solo-developer on the committed bridging
+    arc, root CLAUDE.md section 10.2). EXPLICITLY NOT A D-1 ON ITS OWN: HITLEscalationBrief.
+    escalation_reason (validator_framework_types.py:150) acquiring a non-literal production value,
+    since that value is projected into every webhook at webhook_brief_adapter.py:77 -- it fires D-1
+    only in conjunction with (b).
+    D-2 -- THE CHANNEL OPENS ANYWAY: any arc threads content off HITLPauseRequestedSignal
+    (hitl_gate_composer.py:381) across the workflow_driver.py:5375 drop point, at which point the
+    carrier-home cost B-98 would pay is already paid and A-2/B become marginal.
+    D-3 -- AN OBSERVED MISDESCRIPTION: an operator-loop report of a response composed against the
+    wrong gate that pause_reason + position + step_kind did not prevent. The harm class, not the
+    convenience.
+    GROUNDING CARRIED BY THE RATIFICATION (fork section 3, absorbed into this close-out): (a) the
+    durable HITL_PENDING pause class is NOT production-reachable in stock bootstrap at HEAD, so the
+    row describes a dormant class; (b) the description ALREADY REACHES THE OPERATOR contractually
+    via the webhook, delivery being a code-order precondition of the pause -- so the durable gap for
+    the TEXT is CORRELATION, which NARROWS (does not abolish) this row''s own B-71-distinctness
+    claim; (c) the PLACEMENT is by contrast NOT contractually available, because compose_hitl_
+    action_id''s shape is explicitly discretionary, so a typed placement field is net-new; (d) B and
+    B-prime are DISTINCT and stay distinct -- B carries the already-existing exc.brief.escalation_
+    reason and needs NO authoring surface, while B-prime (this row''s literal "free-text
+    description") needs one MINTED FIRST, since no author-written description exists and a system
+    reason is not a substitute; (e) the undecided question is the CHANNEL, not the field (the A-1 /
+    A-2 split); (f) the carrier answer is TWO sites -- PauseSnapshot top-level PLUS a per-row
+    PreDispatchGateOwningBranchResumeState sibling, the split forced by CARDINALITY (several
+    pre-dispatch rows per snapshot), not by taste; (g) the hash disposition is FULLY PRE-DECIDED by
+    the five-instance drop-when-None precedent (nearest bare-scalar template at
+    pause_resume_protocol.py:835); and (h) ADDITIVITY removes the decide-now pressure -- the B-99
+    exclusion asymmetry does not transfer to an inclusion.
+    ORDERING RECORDED, NOT ACTED ON: B-71 DOMINATES B-98 for the operator-loop win -- the
+    description already reaches the operator, and what is missing is the join B-71 owns. This
+    ratification does NOT re-open B-71.
+    CLASS 3 CITE-HYGIENE ITEM, RECORDED NOT PATCHED: Spec_Control_Plane_v1_99.md:40 ("v1.94''s
+    synthesis_step_id") is FALSIFIED -- first occurrence is v1.58. A design-substrate edit does not
+    ride a doc-only ratification; the CP spec is untouched by this leg.'
+  council: 'CONDITIONAL as of the 2026-08-01 Reading C ratification -- NARROWED from the prior
+    unconditional "yes if opened" to the fork''s section 7 per-reading form. Under the RATIFIED
+    Reading C (DEFER): NONE is owed now, AND ONE IS ADDITIONALLY OWED AT D-0 OR D-1 EVEN IF C IS
+    STILL THE STANDING DISPOSITION -- D-0 because it makes the pause class real and so gives the
+    tension a live surface, D-1 because it is precisely the condition under which free text the
+    operator does NOT already hold starts to exist and the two positions separate. If instead a
+    build reading is opened, the convening is owed BEFORE THE SPEC LEG for A-2 or B (C7 added as
+    consultant under B) -- the nameable C10 vs C11 tension (action-safety wanting a closed
+    vocabulary and no unbounded free-text channel in durable state, against operator-loop wanting a
+    description a human can actually act on) bites on the CHANNEL question those two readings open.
+    A-1 needs NO convening: it opens no cross-axis channel and carries a pre-decided hash
+    disposition. The B-69 convening surfaced exactly that tension without resolving it, because the
+    empirical absence closed the seam first.'
   heading: '### B-98 · Gate description / question text is absent from every durable pause carrier
-    *(surfaced at the B-69 council convening, SEAM 3, routed OUT of that arc, 2026-07-30)*'
+    *(surfaced at the B-69 council convening, SEAM 3, routed OUT of that arc, 2026-07-30; Class 2
+    fork FILED 2026-08-01 at PR #1180; RATIFIED 2026-08-01 as READING C — DEFER with the
+    four-disjunct falsifiable demand test D-0…D-3, D-0 dominant; NO carrier change, NO spec leg,
+    NO impl leg)*'
 - id: B-99
   title: The B-69 projection's summary_text exclusion must be re-adjudicated when the
     pause_context_reader deferral is discharged
@@ -3411,7 +3480,7 @@ items:
     the enumeration''s arithmetic under HAND-EDITED or foreign-written journals, not as a live
     defect.'
   status: registered_finding
-  pr: '#pending'
+  pr: '#1181 (the Class 2 fork filing) + #pending (the ratification + Component 1 spec leg)'
   summary: 'The pause journal is append-only and NEVER TRUNCATED (Runtime spec section 14.14.8''s v1.107
     substrate invariant), and NOTHING is written when a resume succeeds -- there is no
     pause-resolved marker, no status field, and no removal path anywhere in the store. A journal
@@ -3451,13 +3520,113 @@ items:
     it MUST NOT be cited as proof a cutover is safe -- witnessed at
     test_pause_journal_enumeration_b97a.py AC #7(d-bis). The row''s ceiling is therefore now VISIBLE
     to the operator rather than latent, which does not close it: the discrimination itself remains
-    absent and capture-side. STILL OPEN, unchanged in substance.'
-  council: 'conditional -- if opened, it carries a nameable C3 (state/persistence integrity, wanting the
-    record shape and the append-only invariant left alone) vs C11 (operator loop, wanting an
-    answerable ''is anything actually outstanding'') tension, which is the same pair the B-97(a)
-    dyadic convened. Convene only if shape (a) is taken, since that is where the closed-vocabulary
-    and record-shape questions bite; a pure documentation close needs no convening.'
-  heading: '### B-104 · The pause journal writes no pause-RESOLVED marker, so the §13.7 enumeration can only bound the at-risk set from ABOVE *(surfaced at the `B-97`(a) spec leg, out-of-family review round 1 [P1], reported not absorbed, 2026-07-31)*'
+    absent and capture-side. STILL OPEN, unchanged in substance.
+    RATIFIED 2026-08-01 (operator AskUserQuestion) as READING D -- DECLARE the resolved-ambiguity
+    limit SYMMETRICALLY (Component 1, MANDATORY), then DEFER the discriminator. The fork doc
+    .harness/class_2_fork_b104_pause_resolved_marker.md is FILED (#1181) and its section 11
+    RATIFICATION addendum records the outcome verbatim-in-substance. Readings A, B and C were NOT
+    selected and are NOT partially adopted; runner-up A is REGISTERED-AND-HELD at the fork''s
+    section 6 and is NOT advanced by this ratification.
+    COMPONENT 1 -- DISCHARGED AT THIS LEG''S SPEC DELTA. Runtime spec v1.109 -> v1.110, TWO
+    amendment sites, both pure DECLARATIONS of an EXISTING limit and symmetric with section 13.7
+    term 3-bis: a new closing paragraph at section 14.14.9.1 (the accessor) and a NEW invariant
+    bullet in section 30 immediately after "Durable-handle read (v1.46)". Both state that the store
+    is append-only, never truncated and writes NO pause-resolved marker, so a resolved journal is
+    BYTE-INDISTINGUISHABLE from an outstanding one and the read reports the LATEST DURABLE RECORD,
+    which is NOT a liveness claim -- and that the limit holds IN STEADY STATE for a current-format
+    journal, NOT merely for the pre-v1.108 legacy set (the fork''s section 3(vii) scope correction).
+    The section 30 bullet additionally states what section 14.14.9.1 does not need: resume()''s
+    shipped guards validate INTEGRITY AND APPLICABILITY, never OUTSTANDINGNESS, and the section 30
+    staleness precondition fences a composed claim against a CHANGED record -- so a re-resume of an
+    UNCHANGED, already-resolved record presents no mismatch and IS ADMITTED. The MANDATORY docstring
+    companions land on both public surfaces (harness-runtime/src/harness_runtime/api.py -- read_
+    paused_workflow_state:925, and resume() at :1190 POST-EDIT on BOTH its durable-handle prose and
+    its separately-consulted resume_handle parameter entry at :1260 POST-EDIT), ZERO logic changed.
+    ANCHORS ARE STATED POST-EDIT deliberately: this leg''s own docstrings shift api.py''s lower
+    half, so the fork''s pre-leg :1170 / :1197 / :1223 / :1321 cites do not resolve in the landed
+    tree (caught at out-of-family review round 2 [P2]). THE LIMIT IS DECLARED,
+    NOT FIXED: it closes the DISCLOSURE half of section 3(vii); it does NOT close the blindness.
+    ZERO contract numbers minted (a doc-only leg cannot), ZERO carriers retyped, ZERO fields added,
+    ZERO snapshot_hash impact, the five-member PauseJournalReadCause vocabulary stays CLOSED at
+    five, ZERO plan units owed at the Runtime, OD or CP plans, and ZERO CXA rows (aggregate frozen
+    at 111 -- this leg introduces no cross-package consumption at all). VERIFIED, not assumed: B-104
+    is cited at NO implementation plan and at NO acceptance criterion, so no plan cite contradicts
+    the deferral. Clearance marker
+    .harness/clearance/spec-harness-runtime-v1-110-cleared-2026-08-01.md.
+    COMPONENT 2 -- THE DISCRIMINATOR IS DEFERRED, status stays registered_finding, and the
+    reopening triggers are a FALSIFIABLE four-disjunct demand test, any one disjunct fires:
+    D-0 (DOMINANT) -- A RETENTION / PRUNING POLICY ARC OPENS. Section 14.14.8 declares a retention
+    policy a FOLLOW-ON ARC explicitly not owed there (pause_journal_disposal.py lines 14-17). A
+    PRUNER IS UNBUILDABLE WITHOUT THIS DISCRIMINATOR: it cannot be permitted to reclaim an
+    outstanding pause, and format-keying gives it nothing, since post-cutover every journal is
+    CURRENT_FORMAT. This is the one condition under which the absence becomes a HARD BLOCKER rather
+    than a ceiling, which is why it dominates the other three.
+    D-1 -- ANY SURFACE BRANCHES ON LIVENESS, OR A STALE RE-RESUME IS OBSERVED (round-2 re-scoped
+    form; the first form -- "a second flow acts on the distinction for a current-format journal" --
+    was ALREADY SATISFIED AT HEAD by section 3(vii) and would have been vacuous on the day it was
+    written). Two disjuncts: (a) any code path makes a CONTROL-FLOW decision conditioned on whether
+    a durable pause is outstanding, as opposed to merely reading the latest record and being blind
+    to it (which is HEAD''s shipped behaviour and is what Component 1 declares); or (b) an
+    operator-loop report of a resume(resume_handle=...) re-entering an ALREADY-RESOLVED snapshot in
+    a fresh process. The HARM class, not the asymmetry -- the asymmetry is discharged by Component 1.
+    D-2 -- A SECOND KEYING CHANGE IS OPENED. Section 14.14.8 contemplates one ("A future encoding
+    change is a KEYING change and MUST take this arc''s fork path"); it would re-run the whole
+    (3a)/(3b) cutover over an accumulated directory holding one journal per workflow that ever
+    paused, where the upper bound approaches vacuity.
+    D-3 -- THE RESUMER CEASES TO BE THE PARTY PERFORMING THE CUTOVER. The workspace advances past
+    solo-developer on the committed bridging arc (root CLAUDE.md section 10.2), so the operator
+    confirming a drain is not the party who ran the resume() calls and cannot supply the
+    confirmation out-of-band. Same shape as B-98''s D-1(b), and the same premise.
+    EXPLICITLY NOT A TRIGGER ON ITS OWN: the section 13.7 listing merely being loose. That is this
+    row''s already-disclosed, already-contract-stated condition (term 3-bis) and is what the
+    UPPER_BOUND_DISCLAIMER exists to communicate.
+    GROUNDING CARRIED BY THE RATIFICATION (fork section 3, absorbed here): (a) the hypothesized
+    derive-from-existing option is FALSIFIED -- no resume-specific record carries a re-derivable
+    identity, and no identity-bearing record is tenant-qualified; the near-miss is Reading C, not an
+    unexplored possibility. (b) Sub-decision (a)-1 is FORCED, NOT OPEN: a PauseSnapshot sentinel is
+    RESUMABLE, so the only non-defective sentinel form is a WRAPPER-level record. (c) Sub-decision
+    (a)-2 is CONFIRMED GENUINE and its no-decision default is WORSE than unspecified --
+    corrupt-latest with indeterminate=True, an in-flight-torn-append diagnosis for a cleanly
+    resolved journal (empirically probed); a SIXTH cause member is MANDATORY under Reading A. (d)
+    The second-authority objection to shape (b) DOES NOT HOLD AS WRITTEN: the journal is not a first
+    authority over a question it cannot answer, and the divergence hazard is common to all three
+    build readings. (e) The ambiguous-and-consequential set is FROZEN, ONE-TIME AND DRAINABLE --
+    every consumer is LEGACY-scoped and no path creates a legacy journal post-cutover. (f)
+    NOT-IN-THE-ROW CROSS-AXIS COST: the sixth cause member FORCES an OD spec + plan leg, because
+    harness-od re-declares the vocabulary independently (pause_resume_namespace.py lines 482-498)
+    and api.py:1183 (POST-EDIT anchor) converts BY VALUE, so a Runtime-only member breaks the
+    section C-OD-30.5
+    accessor emission -- this is what makes A more expensive than B and inverted the filing''s
+    runner-up. (g) NOT-IN-THE-ROW OCCURRENCE-KEY REQUIREMENT common to all three build readings:
+    workflow-keyed resolution admits a FALSE ALL-CLEAR on re-pause; the composition is NOT open --
+    it is pinned to the shipped section 30 staleness token''s (record_count, latest_record_digest),
+    the digest alone being insufficient. (h) Any build reading MAY re-key disposal''s
+    acknowledgement gate from unconditional to conditional -- AN EXPLICIT DECISION EACH OWES, NOT an
+    automatic consequence and NOT an argument for deferral.
+    PR #1170''S SCOPE, RECORDED CORRECTLY: it was a STRINGS-ONLY self-description refresh (78/16,
+    zero logic) that removed a PHANTOM blocker on the drain recourse and left this one untouched --
+    this row must NOT be read as having been narrowed by it.
+    ORDERING RECORDED, NOT ACTED ON: the cheapest actionable operator-loop improvement is in NONE of
+    the four readings -- the drain recourse has NO resume ADMIN-CLI command (the admin surface ships
+    seven commands, none of them resume), so an operator driving pauses to resolution must call the
+    PUBLIC PACKAGE-ROOT PYTHON API harness_runtime.resume() from their own code. PRECISION,
+    corrected at out-of-family review round 4 [P2]: resume() IS a SUPPORTED surface -- it is one of
+    the THREE package-root async functions B-106''s own ruling enumerates as the operator-facing API
+    (run / resume / read_paused_workflow_state). What B-106 ruled NOT SUPPORTED is the distinct
+    EMBEDDER path -- direct run_bootstrap() / ctx.pause_resume_protocol access -- so the gap here is
+    an ABSENT CLI AFFORDANCE, not an absent capability, and an earlier draft of this line conflated
+    the two. This ratification does NOT open that CLI surface.'
+  council: 'NARROWED at the 2026-08-01 Reading D ratification to the fork''s section 7 per-reading
+    form, replacing the prior "convene only if shape (a)". Under the RATIFIED Reading D: NONE is
+    owed now -- Component 1 is a pure declaration and a documentation close needs no convening --
+    and ONE IS OWED AT D-0, the retention/pruning-policy trigger. If a build reading is later
+    opened: Reading A -> a dyadic C3 vs C11 SCOPED to the sixth cause member plus the disposal
+    brake; Reading B -> C11 plus advisor(), no convening; Reading C -> a convening PLUS C7/C8
+    (OD-owned schema + tenant/disclosure). The tension itself is unchanged and nameable: C3
+    (state/persistence integrity, wanting the record shape and the append-only invariant left alone)
+    vs C11 (operator loop, wanting an answerable ''is anything actually outstanding''), the same
+    pair the B-97(a) dyadic convened.'
+  heading: '### B-104 · The pause journal writes no pause-RESOLVED marker, so the §13.7 enumeration can only bound the at-risk set from ABOVE *(surfaced at the `B-97`(a) spec leg, out-of-family review round 1 [P1], reported not absorbed, 2026-07-31; Class 2 fork FILED 2026-08-01 at PR #1181; RATIFIED 2026-08-01 as READING D — DECLARE + DEFER: Component 1 DISCHARGED at Runtime spec v1.110, the discriminator DEFERRED with the four-disjunct demand test D-0…D-3, D-0 dominant)*'
 - id: B-107
   title: No channel REFUSES an operator resolution addressed to an EMPTY effect-fence key --
     the response map and the scalar uniform fallback DROP it on all three carriers, and the

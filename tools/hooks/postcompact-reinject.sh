@@ -16,16 +16,21 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 [ -f "$_LIB" ] || exit 0
 # shellcheck source=lib.sh
 . "$_LIB"
+hook_review_isolated && exit 0
 
 PROJECT_DIR=$(hook_project_dir)
 [ -z "$PROJECT_DIR" ] && exit 0
 cd "$PROJECT_DIR" || exit 0
 
+PAYLOAD=$(hook_read_stdin)
+SESSION_ID=$(hook_json "$PAYLOAD" '.session_id')
+SESSION_KEY=$(hook_session_key "$SESSION_ID")
+
 NEXT=$(hook_roadmap_next .harness/roadmap_status.md)
 HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
 BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "?")
 
-CK=".harness/.checkpoints/precompact-latest.md"
+CK=".harness/.checkpoints/precompact-latest-${SESSION_KEY}.md"
 CKNOTE=""
 [ -f "$CK" ] && CKNOTE=" Pre-compaction snapshot (in-flight/uncommitted state): ${CK} — read it to recover the thread."
 

@@ -16,7 +16,7 @@ code changed.*
 | **Skills** | Slash-command playbooks Claude *invokes* (`/loop-start`, `/resolve`, …). | **Claude** (on operator command or skill-trigger). | They drive Claude's behavior; they don't intercept events. |
 | **Advisor / Codex / Council** | Decorrelated *reviewers* Claude calls at decision-forks (§13). | **Claude** (a tool call / skill). | Advisory — they inform Claude's decision; they never auto-act. |
 
-The load-bearing distinction: **hooks are the harness reacting to events; skills + advisor are Claude reaching for help.** Pre-Wave-4, only **two** hooks changed behavior between HIL and loop mode (`permission-guard`, `stop-loop`). **Wave 4 adds a third mode-sensitive hook — `loop-gc.sh`** (loop mode: *reaps* merged+clean worktrees; HIL: advisory report only) — the one hook that performs destructive cleanup in loop mode (see §10). Everything else fires identically in both.
+The load-bearing distinction: **hooks are the harness reacting to events; skills + advisor are Claude reaching for help.** Pre-Wave-4, only **two** hooks changed behavior between HIL and loop mode (`permission-guard`, `stop-loop`). Wave 4 originally made `loop-gc.sh` mode-sensitive; later parity hardening superseded that behavior: SessionStart is report-only in every mode, while explicit post-merge/closeout and `/loop-start` calls own safe reaping (see §10).
 
 ---
 
@@ -26,7 +26,7 @@ The load-bearing distinction: **hooks are the harness reacting to events; skills
 
 | Lifecycle event | Hook(s), in order | Loop-gated? |
 |---|---|---|
-| **SessionStart** `*` | `roadmap-audit/session-start.sh` (no) → **`loop-gc.sh`** *(Wave 4)* | session-start no; **loop-gc YES** (loop: reap / HIL: advisory) |
+| **SessionStart** `*` | `roadmap-audit/session-start.sh` (no) → **`loop-gc.sh`** *(Wave 4, later hardened)* | no; **loop-gc is report-only in every mode** |
 | **UserPromptSubmit** | `prompt-context.sh` → `skill-activation-check.sh` → `prompt-lint.sh` | no |
 | **PreToolUse** `Bash` | `precmd-clear-cache.sh` | no |
 | **PreToolUse** `*` | `permission-guard.sh` | **YES — inert off-loop** |
@@ -203,7 +203,7 @@ flowchart TD
 |---|---|---|
 | `permission-guard` | inert → operator approves each tool | auto-allow safe / hard-deny dangerous / ask unknown |
 | `stop-loop` | inert → turn ends, awaits operator | auto-continue to next-action until halt/cap |
-| **`loop-gc.sh`** *(Wave 4)* | advisory report only (stale-worktree candidates + MEMORY cap) | **reaps** merged+clean+non-current worktrees (deterministic bash; ledger-logged) |
+| **`loop-gc.sh`** *(Wave 4, current)* | advisory report only (stale-worktree candidates + MEMORY cap) | advisory report only; explicit post-merge/closeout or `/loop-start` performs deterministic, ledger-logged reaping |
 | Reversible decision fork | advisor/codex → **AskUserQuestion** (operator) | **`/resolve`** (Codex+advisor auto-decide) |
 | Genuine gate (cred/paid/decision) | **AskUserQuestion** (operator) | **`defer.sh`** (log + advance) or halt marker |
 | Everything else (the remaining hooks) | identical | identical |
@@ -266,7 +266,7 @@ The §8 worktree-GC gap is **not an isolated miss** — it is the headline of a 
 ### 10.1 Corrections to the §9-era analysis
 
 - **R-3 was NOT infeasible.** A mid-review hypothesis (sourced from an Explore-subagent summary, never the primary docs) held that "no token signal is exposed to a script." That is true of **hook** events but false in general: the **StatusLine** command receives `context_window.used_percentage` on stdin every turn (`code.claude.com/docs/statusline`; the claudefa.st §8 context-recovery pattern). R-3 is therefore a **build**, shipped at U-HK-27.
-- **`SessionEnd` on `/clear` is unreliable — and U-HK-26 deliberately does not depend on it.** An earlier draft of this section claimed "`/clear` fires `SessionEnd(reason=clear)`." The docs *list* a `clear` matcher, but empirically `SessionEnd` is unreliable on `/clear`: it may not fire, and `SessionEnd` only reliably fires when the parent CLI process is *killed* — by which point the transcript is already wiped (authoritative source: GitHub `anthropics/claude-code#6428`; surfaced via operator-supplied Gemini research, not committed here). There is also **no `PreClear` hook** (feature request #26052). U-HK-26 is robust to all of this *by construction*: it hooks neither `/clear` nor `SessionEnd` — it reaps at the *next* session's **SessionStart** (which fires reliably, including `source=clear`), self-excluding the current worktree. The worktree gap's real cause was narrower than "cleanup didn't fire": `session-end-cleanup` is advisory-by-design **and** a hook cannot remove the worktree it runs inside. *(The research also validates the existing loop architecture: the headless `tools/loop/run.sh` orchestrator spawning `claude -p` per iteration is exactly the recommended "external orchestrator, fresh process = implicit clear" pattern, and the in-session loop correctly uses the `Stop` hook, not `SessionEnd`.)*
+- **`SessionEnd` on `/clear` is unreliable — and U-HK-26 deliberately does not depend on it.** An earlier draft of this section claimed "`/clear` fires `SessionEnd(reason=clear)`." The docs *list* a `clear` matcher, but empirically `SessionEnd` is unreliable on `/clear`: it may not fire, and `SessionEnd` only reliably fires when the parent CLI process is *killed* — by which point the transcript is already wiped (authoritative source: GitHub `anthropics/claude-code#6428`; surfaced via operator-supplied Gemini research, not committed here). There is also **no `PreClear` hook** (feature request #26052). U-HK-26 is robust to all of this *by construction*: SessionStart is report-only, while the explicit post-merge/closeout and `/loop-start` paths reap the same self-excluding safe subset. The worktree gap's real cause was narrower than "cleanup didn't fire": `session-end-cleanup` is advisory-by-design **and** a hook cannot remove the worktree it runs inside. *(The research also validates the existing loop architecture: the headless `tools/04-loop/run.sh` orchestrator spawning `claude -p` per iteration is exactly the recommended "external orchestrator, fresh process = implicit clear" pattern, and the in-session loop correctly uses the `Stop` hook, not `SessionEnd`.)*
 - **`UserPromptExpansion` is a real event** (R-11) — the semantically-precise trigger for command expansion, not a phantom. As-built `UserPromptSubmit` works; moving is an optional refinement.
 
 ### 10.2 Disposition of every finding
@@ -287,4 +287,4 @@ The §8 worktree-GC gap is **not an isolated miss** — it is the headline of a 
 
 ### 10.3 The cluster, resolved
 
-§9.2 framed the gaps as one **cleanup-family under-delivery** caused by applying the "destructive ops stay explicit" posture *uniformly* — right for HIL, wrong for the autonomous loop. Wave 4 resolves it the way §9.3 predicted: a **loop-mode-gated, safe-subset, autonomous janitor** (U-HK-26) that reaps only merged + clean + non-current worktrees, plus the proactive context-recovery save (U-HK-27) the cluster also needed. The guardrail is preserved exactly — the hard-stop still denies *un-merged* deletion; only the provably-safe subset is auto-collected, as deterministic hook bash (never a Claude tool call, so the permission guard is not bypassed by the agent). Operator decisions D1 (worktrees-only) + D2 (arc-guard stays advisory) ratified at plan approval.
+§9.2 framed the gaps as one **cleanup-family under-delivery** caused by applying the "destructive ops stay explicit" posture *uniformly*. Wave 4 initially resolved it with a loop-mode SessionStart janitor. Later parity hardening superseded that trigger because SessionStart is a latency-sensitive lease/context boundary: it now reports only, while explicit post-merge/closeout and `/loop-start` calls collect the same provably-safe merged + clean + non-current subset. The hard-stop still denies *un-merged* deletion, and deterministic hook bash retains the safe-removal implementation. Operator decisions D1 (worktrees-only) + D2 (arc-guard stays advisory) remain ratified.

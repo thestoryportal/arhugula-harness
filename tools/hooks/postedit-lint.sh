@@ -24,6 +24,8 @@ FILE=$(hook_json "$PAYLOAD" '.tool_input.file_path')
 case "$FILE" in *.py) ;; *) exit 0 ;; esac
 [ -f "$FILE" ] || exit 0
 
+export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/arhugula-uv-cache}"
+
 # Lint the single file (concise). Bounded; prefer a direct ruff, else uv run ruff.
 # `ruff format --check` reports files that would be reformatted; combine with check
 # findings (the CI ruff job runs both). grep/sed keep format's exit off RUFF_OUT.

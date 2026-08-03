@@ -19,10 +19,12 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 [ -f "$_LIB" ] || exit 0
 # shellcheck source=lib.sh
 . "$_LIB"
+hook_review_isolated && exit 0
 
 PROJECT_DIR=$(hook_project_dir)
 [ -z "$PROJECT_DIR" ] && exit 0
 cd "$PROJECT_DIR" || exit 0
+export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/arhugula-uv-cache}"
 
 PAYLOAD=$(hook_read_stdin)
 

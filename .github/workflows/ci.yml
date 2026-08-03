@@ -51,6 +51,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Stop-hook parity verifies terminating-refresh file shape against HEAD's parent.
+          fetch-depth: 0
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -68,6 +71,9 @@ jobs:
       # harness-core + harness-runtime).
       - name: Pytest (excludes e2e)
         run: uv run pytest -m "not e2e"
+
+      - name: Codex compatibility regressions — blocking
+        run: bash tools/codex-parity-check.sh
 
   lint:
     runs-on: ubuntu-latest
