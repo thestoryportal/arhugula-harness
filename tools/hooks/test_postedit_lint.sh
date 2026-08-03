@@ -132,6 +132,31 @@ OUT=$(run "$REPO/data.json")
 OUT=$(run "$REPO/nonexistent.yaml")
 [ -z "$OUT" ] && ok "silent for a missing .yaml" || bad "emitted for missing .yaml: '$OUT'"
 
+# 9b) checker-unavailable is DISTINGUISHED from clean (codex round-1): a fake venv
+# python that dies rc=3 with no output (import-failure shape) must produce the
+# UNAVAILABLE advisory, never the silent clean path.
+cat > "$REPO/.venv/bin/python" <<'EOF'
+#!/usr/bin/env bash
+exit 3
+EOF
+chmod +x "$REPO/.venv/bin/python"
+printf 'plain: fine\n' > "$REPO/ok.yaml"
+OUT=$(run "$REPO/ok.yaml")
+printf '%s' "$OUT" | grep -q "parse-check UNAVAILABLE" && printf '%s' "$OUT" | grep -q "rc=3" \
+  && ok "checker failure emits UNAVAILABLE (not silent clean)" \
+  || bad "checker failure took the clean path: '$OUT'"
+# restore the working fake for any later cases
+cat > "$REPO/.venv/bin/python" <<'EOF'
+#!/usr/bin/env bash
+f="${@: -1}"
+printf '%s\n' "$f" >> yaml-py-invocations
+if grep -q 'YAML_BAD' "$f" 2>/dev/null; then
+  echo "bad.yaml: mapping values are not allowed here (line 2, column 8)"
+fi
+exit 0
+EOF
+chmod +x "$REPO/.venv/bin/python"
+
 # 10) regression guard: widening the extension gate must not change the .py branch.
 mv "$REPO/bin/ruff.saved" "$REPO/bin/ruff"
 printf 'import os  # LINT_BAD\n' > "$REPO/bad2.py"

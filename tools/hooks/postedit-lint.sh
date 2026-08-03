@@ -53,8 +53,17 @@ try:
 except yaml.YAMLError as e:
     print(str(e))
 ' "$FILE" 2>/dev/null)
+  YAML_RC=$?
 
-  [ -z "$YAML_OUT" ] && exit 0   # parses → stay silent (no noise on good edits)
+  # The checker body always exits 0 (YAMLError is reported on stdout), so a nonzero
+  # rc means the CHECKER itself failed — stale .venv without pyyaml, missing uv, or
+  # a hook_bounded timeout. Say so instead of silently taking the clean path: a
+  # checker-unavailable "clean" is a lie that disables the advisory unnoticed.
+  if [ "$YAML_RC" -ne 0 ]; then
+    hook_emit "PostToolUse" "[yaml] parse-check UNAVAILABLE for ${FILE} (checker rc=${YAML_RC}: stale .venv missing pyyaml, missing uv, or timeout — file NOT verified; CI ledger checks are the hard gate)"
+  fi
+
+  [ -z "$YAML_OUT" ] && exit 0   # checker ran and parses → stay silent
 
   hook_emit "PostToolUse" "[yaml] parse error in ${FILE}:
 ${YAML_OUT}
