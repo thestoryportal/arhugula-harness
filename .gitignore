@@ -111,6 +111,7 @@ tools/dashboard/public/
 # Hook-written subagent lifecycle registry + its advisory-lock sibling (U-HK-43).
 # Local observability substrate only — transient per-machine state, never tracked.
 .harness/.agents-registry.jsonl
+.harness/.agents-registry.jsonl.tmp.*
 .harness/.agents-registry.lock
 
 # Loop-mode runtime artifacts (U-HK-11): the active-marker + append-only ledger

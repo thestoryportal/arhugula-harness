@@ -174,7 +174,16 @@ def prune():
                 if time.monotonic() >= deadline:
                     return  # lock held elsewhere → skip the prune, report anyway
                 time.sleep(0.01)
-        # Lock held. Re-read INSIDE the locked region: rows appended between the sweep's
+        # Lock held. Abandoned-tmp cleanup (codex round-1): tmp files are only ever
+        # created UNDER this lock, so any tmp visible while WE hold it was abandoned by
+        # a crashed prune (killed between tmp.open() and os.replace()). Unlink them —
+        # they are unignored registry copies that would dirty the checkout forever.
+        for stale_tmp in registry.parent.glob(registry.name + ".tmp.*"):
+            try:
+                stale_tmp.unlink()
+            except Exception:
+                pass
+        # Re-read INSIDE the locked region: rows appended between the sweep's
         # unlocked read and this acquisition MUST survive the rewrite.
         try:
             current = registry.read_text(encoding="utf-8", errors="replace")

@@ -404,6 +404,20 @@ rm -f "$SREG"
 OUT=$(sw_run); RC=$?
 { [ -z "$OUT" ] && [ "$RC" -eq 0 ]; } && ok "S10 absent registry → feature skipped, exit 0" || bad "S10 rc=$RC out=$OUT"
 
+# ── S11) Abandoned prune tmp files are cleaned under the lock (codex round-1). A crash
+#        between tmp.open() and os.replace() leaves an unignored registry copy; tmp files
+#        are only created under the lock, so any tmp visible to a lock holder is
+#        abandoned by construction and must be unlinked.
+sw_reset
+sw_row "$(sw_ts 700000)" start prunee /tmp/gone.jsonl >> "$SREG"   # 8-day row forces a rewrite
+printf 'abandoned junk\n' > "$SREG.tmp.99999"
+printf 'more junk\n' > "$SREG.tmp.4242"
+sw_run >/dev/null 2>&1
+{ [ ! -e "$SREG.tmp.99999" ] && [ ! -e "$SREG.tmp.4242" ]; } \
+  && ok "S11 abandoned tmp files unlinked under the lock" \
+  || bad "S11 tmp residue: $(ls "$SPROJ/.harness" 2>/dev/null | tr '\n' ' ')"
+[ "$(sw_rows)" = "0" ] && ok "S11 registry still valid after cleanup+prune" || bad "S11 rows=$(sw_rows)"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
