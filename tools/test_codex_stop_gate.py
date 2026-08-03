@@ -44,10 +44,13 @@ import json
 import sys
 
 allowed = "--allow-roadmap-drift" in sys.argv
-if len(sys.argv) > 1 and sys.argv[1] == "checkpoint":
+if not allowed:
     # The real guard reports on stdout; stop_gate forwards a failed report to stderr.
-    print("checkpoint written" if allowed else "roadmap drift")
-    raise SystemExit(0 if allowed else 1)
+    print("roadmap drift")
+    raise SystemExit(1)
+if len(sys.argv) > 1 and sys.argv[1] == "checkpoint":
+    print("checkpoint written")
+    raise SystemExit(0)
 print(json.dumps({"root": ".", "branch": "main", "findings": []}))
 raise SystemExit(0)
 """,
@@ -76,19 +79,31 @@ raise SystemExit(0)
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["continue"] is True
 
-    env["GITHUB_EVENT_NAME"] = "pull_request"
-    proc = subprocess.run(
-        [sys.executable, str(hook)],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-        env=env,
+    invalid_ci_contexts = (
+        {"GITHUB_ACTIONS": None},
+        {"GITHUB_ACTIONS": "false"},
+        {"GITHUB_EVENT_NAME": "pull_request"},
+        {"GITHUB_REF": "refs/heads/feature"},
     )
+    for changes in invalid_ci_contexts:
+        invalid_env = env.copy()
+        for name, value in changes.items():
+            if value is None:
+                invalid_env.pop(name, None)
+            else:
+                invalid_env[name] = value
+        proc = subprocess.run(
+            [sys.executable, str(hook)],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env=invalid_env,
+        )
 
-    assert proc.returncode == 1
-    assert "roadmap drift" in proc.stderr
+        assert proc.returncode == 1, changes
+        assert "roadmap drift" in proc.stderr, changes
 
 
 def test_stop_gate_is_inert_for_isolated_merge_gate_review() -> None:
