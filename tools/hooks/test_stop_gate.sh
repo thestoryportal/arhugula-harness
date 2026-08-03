@@ -105,5 +105,24 @@ echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "blocks on format
 echo "$OUT" | jq -e '.reason | test("format:")' >/dev/null 2>&1 && ok "block reason names the format finding" || bad "reason missing format text: $OUT"
 git -C "$REPO" checkout -q -- mod.py
 
+# 10) Codex hooks do not inherit the justfile's UV_CACHE_DIR export. When ruff is
+#     available only through uv, the hook must select the repo-safe /tmp cache
+#     rather than failing against an unwritable ~/.cache/uv.
+mv "$REPO/bin/ruff" "$REPO/bin/ruff.saved"
+cat > "$REPO/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+printf '%s' "${UV_CACHE_DIR:-}" > "${UV_CACHE_OBS:?}"
+exit 0
+EOF
+chmod +x "$REPO/bin/uv"
+ln -s "$(command -v jq)" "$REPO/bin/jq"
+printf 'cache_probe = 1\n' > "$REPO/mod.py"
+unset UV_CACHE_DIR
+OUT=$(PATH="$REPO/bin:/usr/bin:/bin" UV_CACHE_OBS="$REPO/uv-cache-observed" run false)
+[ -z "$OUT" ] && ok "uv-backed clean lint allows stop" || bad "uv-backed lint blocked: $OUT"
+[ "$(cat "$REPO/uv-cache-observed")" = "/tmp/arhugula-uv-cache" ] \
+  && ok "uv-backed lint uses repo-safe cache" \
+  || bad "unsafe uv cache: $(cat "$REPO/uv-cache-observed")"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

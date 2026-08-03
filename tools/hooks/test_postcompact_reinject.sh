@@ -18,18 +18,20 @@ mkdir -p "$REPO/.harness"
 printf '# dash\n## Next action\n**`R-BAR`** go.\n' > "$REPO/.harness/roadmap_status.md"
 git -C "$REPO" add -A; git -C "$REPO" commit -qm base
 
-run() { printf '%s' '{"hook_event_name":"PostCompact"}' | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" | jq -r '.hookSpecificOutput.additionalContext // empty'; }
+run() { printf '%s' "{\"hook_event_name\":\"PostCompact\",\"session_id\":\"$1\"}" | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" | jq -r '.hookSpecificOutput.additionalContext // empty'; }
 
 # 1) without a checkpoint file → emits next-action + audit nudge, no pointer.
-OUT=$(run)
+OUT=$(run session-a)
 printf '%s' "$OUT" | grep -q "R-BAR" && ok "carries next-action" || bad "missing next-action: $OUT"
 printf '%s' "$OUT" | grep -q "§12.1" && ok "nudges audit" || bad "missing audit nudge"
 printf '%s' "$OUT" | grep -q "snapshot" && bad "claims snapshot when none exists" || ok "no pointer when no checkpoint"
 
 # 2) with a checkpoint file → includes the pointer.
-mkdir -p "$REPO/.harness/.checkpoints"; : > "$REPO/.harness/.checkpoints/precompact-latest.md"
-OUT=$(run)
-printf '%s' "$OUT" | grep -q "precompact-latest.md" && ok "surfaces checkpoint pointer" || bad "missing pointer: $OUT"
+mkdir -p "$REPO/.harness/.checkpoints"; : > "$REPO/.harness/.checkpoints/precompact-latest-session-a.md"
+: > "$REPO/.harness/.checkpoints/precompact-latest-session-b.md"
+OUT=$(run session-a)
+printf '%s' "$OUT" | grep -q "precompact-latest-session-a.md" && ok "surfaces own session checkpoint pointer" || bad "missing own pointer: $OUT"
+printf '%s' "$OUT" | grep -q "precompact-latest-session-b.md" && bad "surfaces another session pointer" || ok "does not surface another session pointer"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

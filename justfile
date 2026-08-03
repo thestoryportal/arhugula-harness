@@ -39,8 +39,12 @@ lint:
 fmt:
     uv run ruff format .
 
+# Check Ruff formatting without changing files.
+fmt-check:
+    uv run ruff format --check .
+
 # Full pre-merge gate: workspace sync + lint + typecheck + docs/closure + provider-free tests.
-check: codex-sync lint typecheck docs-completeness-check memory-closeout-check closure-certification-check test
+check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check test
 
 # Codex provider-free pytest lane. Strips live provider env and mirrors CI's non-e2e gate.
 codex-test *args:
@@ -50,8 +54,16 @@ codex-test *args:
 codex-sync:
     uv sync --all-packages
 
+# Blocking provider-free regression lane for Codex hooks, permissions, lifecycle, and GC.
+codex-parity-check:
+    bash tools/codex-parity-check.sh
+
+# Exercise hook dispatch through the installed Codex CLI using only a loopback model double.
+codex-hook-runtime-witness:
+    /usr/bin/python3 tools/codex_hook_runtime_witness.py
+
 # Codex PR-ready local gate without live provider credentials.
-codex-check: codex-sync lint typecheck docs-completeness-check memory-closeout-check closure-certification-check
+codex-check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check codex-parity-check
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"
 
 # ─── Codex deterministic context guard ─────────────────────────────────────
@@ -497,7 +509,7 @@ codex-review-uncommitted: _require-codex-subscription
 # .env, which carries the harness runtime's own provider keys; those must never
 # leak into review billing.
 gemini-review base='main': _require-antigravity
-    git diff --merge-base {{base}} | env -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GOOGLE_GENAI_USE_VERTEXAI agy -p "You are an out-of-family code reviewer for a Python 3.12 asyncio + Pydantic v2 monorepo. Review this diff for real defects: correctness, concurrency (lock windows, cancellation, cross-process file races), contract drift, and tests that would stay green if the change were reverted. Number findings F1..Fn tagged [P1]/[P2]/[P3] with file:line; no style nits. End with exactly 'VERDICT: APPROVE' or 'VERDICT: BLOCK'."
+    /usr/bin/python3 tools/agy_review.py --base {{base}}
 
 _require-antigravity:
     @if ! command -v agy >/dev/null 2>&1; then \

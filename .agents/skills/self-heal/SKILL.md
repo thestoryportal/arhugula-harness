@@ -1,23 +1,17 @@
 ---
 name: self-heal
-description: "Use when the operator says /self-heal, get the suite green, fix the build, tests are flaky, or asks Codex to restore a verified green state for arhugula-v2."
+description: Use when restoring the test suite or build to a verified green fixed point without adding features.
 ---
 
-# Self Heal
+# Canonical Claude Workflow Bridge
 
-Use this skill only to restore or verify a green fixed point, not to add features.
+Read `.claude/skills/self-heal/SKILL.md` completely from the workspace root before acting, including every reference it routes for the task. That canonical skill body is the full workflow; this Codex entrypoint does not summarize, trim, or replace it. Resolve its relative references from the canonical skill directory.
 
-## Workflow
+Apply these runner translations only:
 
-1. Inspect `git status --short --branch` and avoid touching unrelated user changes.
-2. Read `AGENTS.md`, `justfile`, and relevant axis `AGENTS.md`.
-3. Reproduce the failure with the narrowest command that shows it.
-4. Classify failures as environment artifact, stale generated state, test bug, or genuine logic defect.
-5. Fix only genuine defects or stale test expectations that are contradicted by current authoritative guidance.
-6. Re-run the failing target until stable, then broaden to `just check` for PR-ready changes.
-
-## Evidence Standard
-
-- Capture the exact failing command and the exact passing command.
-- Do not claim flakiness without repeat evidence.
-- If sandbox/network restrictions prevent a meaningful check, report the blocked command and why.
+- Root `AGENTS.md` is the Codex instruction entrypoint; targeted `CLAUDE.md` sections remain canonical lineage.
+- Claude `Agent` or `Task` fan-out means fresh Codex subagents or `codex exec` contexts with self-contained briefs, subject to current delegation policy.
+- `AskUserQuestion` means the available Codex user-input surface, and only for a genuine operator-owned fork.
+- When Codex is the author, any canonical claim that Codex is out-of-family translates to Antigravity via `just gemini-review`; when Claude is the author, `just codex-review` remains out-of-family.
+- Claude `advisor()` transcript judgment translates to the interactive Codex controller's transcript-aware judgment plus the required out-of-family artifact review; never silently drop either function.
+- Claude-only scratch paths translate to a safe `/tmp` or ignored workspace scratch path. All Git, CI, worktree, paid-call, secret, and destructive-action guardrails remain binding.

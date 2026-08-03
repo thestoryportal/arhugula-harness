@@ -1,5 +1,9 @@
 # Plan — Wave 4: cleanup-family + context-recovery closure (U-HK-26..29)
 
+> **Historical implementation plan.** U-HK-26 originally specified loop-mode reaping at
+> SessionStart. Later parity hardening superseded that trigger: SessionStart is report-only
+> in every mode; explicit post-merge/closeout and `/loop-start` calls own safe reaping.
+
 ## Context
 
 **Why.** The §9 reconciliation in `.harness/hook-advisor-workflow-review.md` found the shipped hooks-autonomy infra (Waves 1–3, U-HK-01..25) robustly handles the *forward-drive* half (auto-approve, resolver, Stop-continue) but uniformly under-delivers the *cleanup / hygiene / context-recovery back-half* — because the correct "destructive ops stay explicit" posture was applied even to janitorial units, collapsing them all to advisory-only. That is right for HIL (a human reads the report) and wrong for the autonomous loop (no human; cruft accumulates — proven by this very session sitting in a stale merged worktree).
@@ -36,7 +40,7 @@ Net: **4 units.** All `tools/**` + `.claude/settings.json` + docs — mode-agnos
 ## Atomic units
 
 ### U-HK-26 — Loop-mode worktree GC + hygiene visibility  *(closes R-1, R-5-worktree-half, N-3)*
-**What.** A `loop_gc_worktrees()` function + a `loop-gc.sh` hook on **SessionStart** (the uniform reaping point — fires for live-loop sessions, each headless `claude -p` child, and post-`/clear`; self-excludes the current worktree so it only reaps *prior* sessions' leftovers).
+**What (historical design; current trigger superseded by the banner above).** A `loop_gc_worktrees()` function + a `loop-gc.sh` hook on **SessionStart** (the originally proposed uniform reaping point — fires for live-loop sessions, each headless `claude -p` child, and post-`/clear`; self-excludes the current worktree so it only reaps *prior* sessions' leftovers).
 - **Loop mode (`loop_mode_active`) → ACTION:** for each worktree in `git worktree list --porcelain` that is (a) **not** the current `git rev-parse --show-toplevel`, (b) **not** main, (c) its branch ∈ the merged set, (d) clean (`git -C <wt> status --porcelain` empty) → `git worktree remove <path>`. **Worktrees only — never `git branch -d/-D`** (worktree removal is reversible; merged branch refs are harmless and the irreversible force-delete is left to the operator). Append each removal/skip to `.harness/loop_status.md` via `loop_log`.
 - **HIL mode → VISIBILITY:** emit `additionalContext` listing stale-merged-worktree count + merged-branch `git branch -d` candidates + a MEMORY.md over-cap flag (fixes the invisible-SessionEnd-report problem).
 - **Fail-safe:** if `gh` is empty/errors (offline, no remote), the merged set is empty → **zero removals** (never delete on uncertainty).

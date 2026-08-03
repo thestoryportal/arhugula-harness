@@ -25,6 +25,12 @@ trap 'rm -rf "$BASE"' EXIT
 # shellcheck source=loop_lib.sh
 . "$SCRIPT_DIR/loop_lib.sh"
 
+# GC classification/recheck tests need a deterministic clean reference scan on
+# Linux runners whose ptrace policy makes unrelated same-user /proc entries
+# unreadable. Real retained/unavailable observer behavior is covered by test_lib.sh;
+# this suite separately preserves the public rc 7/8/9/10 mapping witnesses below.
+_hook_worktree_open_references() { return 1; }
+
 # Build the fixture: a main repo (with .gitignore) + linked worktrees.
 build_fixture() {
   rm -rf "$BASE"/* "$BASE"/.[!.]* 2>/dev/null || true
@@ -97,6 +103,23 @@ printf '%s\n' "$OUT" | grep -qF "$BASE/wt-merged (feat-merged)" && ok "report li
 printf '%s\n' "$OUT" | grep -qE "wt-dirty|wt-unmerged|wt-precious" && bad "report listed a non-candidate" || ok "report excludes non-candidates"
 wt_present wt-merged && ok "report removed nothing (read-only)" || bad "report deleted a worktree"
 
+# Candidate observation is not removal authority: a SessionStart lease registered after
+# report/classification must still be rechecked by the real loop reap path.
+LIVE_HOME="$BASE/live-home"; mkdir -p "$LIVE_HOME"
+OLDHOME="$HOME"; export HOME="$LIVE_HOME"
+hook_register_session_lease "$BASE/wt-merged" "classified-live"
+HARNESS_CODEX_SESSION_OWNER_PID="$$" \
+  hook_activate_session_lease "$BASE/wt-merged" "classified-live"
+CLASSIFIED_LEASE=$(find "$BASE/main/.git/codex-worktree-sessions" -name 'session-classified-live.lease' -print -quit)
+[ "$(head -n1 "$CLASSIFIED_LEASE" 2>/dev/null)" = "active" ] \
+  && ok "loop reap witness reaches active lease" || bad "loop reap witness did not activate lease"
+touch -t 202001010000 "$CLASSIFIED_LEASE"
+loop_gc_worktrees reap
+wt_present wt-merged && ok "loop reap rechecks lease after candidate report" \
+  || bad "loop reap removed candidate after SessionStart lease"
+hook_release_session_lease "$BASE/wt-merged" "classified-live"
+export HOME="$OLDHOME"
+
 # ── 4) self-exclusion: current worktree is never reaped ───────────────────────
 build_fixture
 export CLAUDE_PROJECT_DIR="$BASE/wt-merged"   # we ARE the merged+clean worktree now
@@ -135,6 +158,36 @@ export HOME="$FH"
 loop_gc_worktrees reap
 export HOME="$OLDHOME"
 wt_present wt-merged && bad "stale transcript wrongly blocked the reap" || ok "stale-transcript worktree still reaped (window-bounded)"
+
+# Codex transcript venue: session_meta.cwd in ~/.codex/sessions must protect the same
+# worktree, not only Claude's encoded project transcript directory.
+build_fixture
+mkdir -p "$FH/.codex/sessions/2026/08/01"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$BASE/wt-merged\"}}" \
+  > "$FH/.codex/sessions/2026/08/01/rollout-live.jsonl"
+export HOME="$FH"
+loop_gc_worktrees reap
+export HOME="$OLDHOME"
+wt_present wt-merged && ok "Codex live-session worktree kept" || bad "reaped a worktree with a live Codex session"
+
+# The public loop GC entrypoint must preserve safe refusal/recovery dispositions 7/8/9/10.
+for REMOVE_CASE in \
+  '7:process retains a reference' \
+  '8:restored interrupted quarantine' \
+  '9:process-reference state unavailable' \
+  '10:branch or HEAD changed after classification'; do
+  build_fixture
+  export CLAUDE_PROJECT_DIR="$BASE/main"
+  FORCED_REMOVE_RC=${REMOVE_CASE%%:*}
+  EXPECTED_LOG=${REMOVE_CASE#*:}
+  REMOVE_LOG="$BASE/remove-${FORCED_REMOVE_RC}.log"
+  hook_safe_worktree_remove() { return "$FORCED_REMOVE_RC"; }
+  loop_log() { printf '%s\n' "$*" >> "$REMOVE_LOG"; }
+  loop_gc_worktrees reap
+  grep -qF "$EXPECTED_LOG" "$REMOVE_LOG" \
+    && ok "loop GC maps safe removal rc $FORCED_REMOVE_RC" \
+    || bad "loop GC lost safe removal rc $FORCED_REMOVE_RC"
+done
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"

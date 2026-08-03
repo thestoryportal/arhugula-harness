@@ -97,7 +97,8 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   gate is now an additional one for code-touching PRs).
 - **Any `BLOCK`, or a split verdict** → do **not** merge. If the block names a concrete,
   narrow, fixable defect: fix it, then re-run `just codex-review` to convergence and re-run
-  this gate. **Cap this at 2 rounds total** — a third disagreement is a genuine decision point,
+  this gate. **Cap this at ten rounds total** (operator decision, 2026-08-01) — an eleventh
+  substantive disagreement is a genuine decision point,
   not a bug to keep iterating on; auto-fix-and-re-gate without a cap is an infinite loop in
   autonomous mode.
 - After the cap, or immediately for a judgment-call disagreement (not a mechanical defect):

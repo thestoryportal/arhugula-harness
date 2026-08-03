@@ -6,10 +6,10 @@ The transferable core of the 2026-07/08 Fable-orchestrator + Opus-implementer se
 
 ```sh
 git worktree add .codex-worktrees/<leg-id> -b <branch> origin/main
-codex exec --cd .codex-worktrees/<leg-id> "$(cat .codex/briefs/<leg-id>.md)"
+codex exec --profile arhugula-implementer --cd .codex-worktrees/<leg-id> "$(cat .codex/briefs/<leg-id>.md)"
 ```
 
-Orchestrator profile: gpt-5.6, reasoning high (interactive session). Implementer runs: gpt-5.6-codex, reasoning medium-high. Max 2 concurrent on this machine (Intel i5/16GB). Profiles are user-level (`~/.codex/config.toml`) per Codex policy — the repo `.codex/config.toml` carries only project-scoped settings.
+Orchestrator profile: `gpt-5.6-sol`, reasoning high (interactive session through `arhugula-forward`). Implementer runs: `gpt-5.6-terra`, reasoning high through `arhugula-implementer`. Max 2 concurrent on this machine (Intel i5/16GB). Profiles are user-level overlays (`~/.codex/arhugula-forward.config.toml` and `~/.codex/arhugula-implementer.config.toml`) per Codex policy — the repo `.codex/config.toml` carries only project-scoped settings.
 
 ## Brief skeleton
 

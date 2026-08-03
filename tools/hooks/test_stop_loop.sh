@@ -28,6 +28,13 @@ unset HARNESS_LOOP
 # 1) INERT off-mode.
 OUT=$(run_off); [ -z "$OUT" ] && ok "inert off-mode" || bad "spoke off-mode: $OUT"
 
+# Merge-gate reviewers inherit loop mode but are lifecycle-isolated and must not mutate
+# the controller's counter or force another turn.
+OUT=$(printf '{}' | HARNESS_LOOP=1 HARNESS_CODEX_REVIEW_ISOLATED=1 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
+[ -z "$OUT" ] && [ ! -f "$REPO/.harness/.loop-iter" ] \
+  && ok "isolated reviewer neither blocks nor touches loop counter" \
+  || bad "isolated reviewer affected loop state: $OUT"
+
 # 2) Continue: blocks + injects next-action; counter → 1.
 OUT=$(run_on)
 echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "blocks to continue in loop mode" || bad "did not block: $OUT"

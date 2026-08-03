@@ -35,7 +35,12 @@ Runner-agnostic distillation of the operative disciplines that live in Claude's 
 ## Git/CI mechanics (this repo)
 
 - **NEVER `git add -A`** — stage explicit paths (a `-A` once leaked 327 untracked files to main).
+- **Use worktree `workdir`, not `git -C`, for approved Git prefixes.** Codex evaluates command prefixes from the actual argv; run `git add <explicit paths>`, `git commit`, and `git push` with the isolated worktree as the command working directory. Leaving the worktree is not the durable permission fix.
 - **Refresh must be the immediate next commit after a substantive merge** (a non-refresh follow-up hard-fails the CI drift check). Merge-gate log row lands BEFORE the merge; refresh right after.
+- **CI is a two-branch fixed point.** Final PR-head CI and current base-main CI must both be green before merge; first inventory and reconcile any stale prior CI branch without losing work. Then the merge SHA's own `main` push CI must be green before refresh or forward work. If a terminating refresh is owed, its own `main` CI must also be green before the next arc.
+- **Review decorrelation flips with authorship.** Claude-authored diff → `just codex-review`; Codex-authored diff → Antigravity through `just gemini-review`. Every substantive code PR still takes the three fresh-context Codex merge-gate lenses; neither artifact review nor the three lenses replaces the other.
+- **Invoke behavioral skills in fresh dedicated contexts.** Reading a skill as reference is not adoption. Council/review/merge-gate legs receive the full brief and genuinely follow the skill; the controller validates their artifact or diff rather than trusting self-report.
+- **Arc close means reflection plus context-save.** At each completed arc, record reusable learning and run the gstack `context-save` workflow. Checkpoint "remaining work" is advisory on restore and must be re-grounded against HEAD.
 - **Squash-merge branch prune** via `gh pr list --state merged` head-ref cross-ref, never `--is-ancestor`.
 - **`main` history floor is 2026-07-25** (whole-tree re-add at d45ce125): per-file `git log`/`merge-base`/`--since` before it silently misfire.
 - **rtk wrapper hazards**: it rewrites grep→rg (escaping/paren breakage) and its test summary mislabels xfail as failed — verify with `grep -c FAILED` or `rtk proxy`. `just` variadic `*ARGS` loses quoting on `#`/spaces — call scripts directly.

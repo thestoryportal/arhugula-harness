@@ -4,19 +4,17 @@ Repo-committed projection of the two gstack checkpoints in this directory, so a 
 
 ## State at pause
 
-- Main clean at `cfa60f4a` (Round 74 refresh, post-#1182). Rounds 52–74; PRs #1161–#1182 merged.
+- Main at `aefd055f` (post-#1185 Codex-handoff/Antigravity refresh). PRs #1184–#1185 added the durable Codex handoff, three-lens prompts and the verified `agy` review path; this parity arc completes their operational projection.
 - The five-item ratification batch is ANSWERED (2026-08-01, operator): **B-107 → Reading A-hybrid; B-96 → Reading C; B-98 → Reading C (landed #1182); B-104 → Reading D (landed #1182); `run_bootstrap` `__all__` → leave.** Full text in `20260801-093000-*.md`.
 
 ## In-flight leg 1 — B-96 council record (fold + finish)
 
-- Branch `b96-council-ceiling` @ `035395b9`, **draft PR #1183**, deliverable `.harness/council-b96-grace-ceiling-2026-08-01.md`.
+- Remote branch `b96-council-ceiling` is represented locally by `b96-fold-worktree` @ `a44e1971`, **draft PR #1183**, deliverable `.harness/council-b96-grace-ceiling-2026-08-01.md`. Local and remote heads are synchronized and the current PR checks are green; reconcile the post-parity `main`, push that merge, and un-draft only after those new checks pass. **Do not merge #1183 in the finishing session.**
 - Verdict **C-2** (elapsed-time grace alone, no ceiling) — stable, unanimous (C3 primary, C10 consultant, C7 Layer-D add), survives everything below. B-74-residue closes structurally under C-2 (its close_out's second option; `:1982` flips to `== []`).
-- Three WIP findings are marked `<!-- WIP: resume here -->` in the record (§11.2b):
-  1. `[P1]` condition #5's closed set omits `.tmp-*` names — routed to C10, **still unanswered**: the resume agent must author C10's response (adopt the C10 skill voice) or fold the fix directly.
-  2. `[P1]` condition #6 log-durability — **ANSWERED**: C7's full round-2 response (conceded; option (c); verbatim replacement text for #6, #7(c), #8(b), #12) is in `20260801-094500-*.md`. Fold it.
-  3. `[P2]` §6 TENSION-1 records a position no voice held — orchestrator-owned reclassification.
-- Also owed from C7 §5: a **NEW register row** (Class-3, workspace-wide): §14.8.11's typed-report-log term has no configured logging sink in any deployment shape (`logging.lastResort` → stderr only). Same shape as the write-driven-cadence-gap row; cross-ref from the council record. Register at the next register touch.
-- Finish: fold → adversarial/codex reconcile-to-zero (round 3 was NOT run; external-canon mode declined as low-yield — re-judge) → un-draft #1183 → merge under standing gate discipline → §12.2 refresh.
+- **Round-3 absorption is complete.** The record carries six review passes and `6 + 12 + 3 + 5 + 7 + 3 = 36` absorbed finding rows; the final dedicated in-family absorption-verification pass found three Class-2 propagation defects, all folded without reopening C-2. The condition table was programmatically recounted as the contiguous set **1–12** after every final edit.
+- **No WIP markers remain.** The former condition-#5 candidate-class omission, condition-#6 durability premise and false TENSION-1 classification are folded. The final pass also removed the stale claim that the pull level substitutes for cadence knowledge and replaced diagnostic/detection overclaims with operator-discriminated inspection/evidence.
+- C7's Class-3 residue is registered as **B-108** with harness-configured-sink scope and shape-specific closure witnesses. `python3 tools/forward_register.py --check` passes at 108 items (`87 closed`, `19 registered_finding`, `1 design_substrate_gated`, `1 held`).
+- Finish only the transport gates: reconcile current `main` into the isolated topic worktree, re-run the condition/count/register checks, push `b96-fold-worktree` to `origin/b96-council-ceiling`, mark #1183 ready and require its CI green. **Stop there; do not merge #1183.** External-canon mode remains explicitly un-run by the council record's low-yield judgment.
 
 ## In-flight leg 2 — B-107 A-hybrid spec leg
 
@@ -27,8 +25,8 @@ Repo-committed projection of the two gstack checkpoints in this directory, so a 
 
 ## After both legs
 
-- **B-96 spec leg** on the council verdict (the ten-condition set in `20260801-093000-*.md`, amended by C7's round-2 replacements) → then its impl leg. **B-74-residue filing** unblocks at B-96's answer.
-- Remaining pool: B-99 (trigger-gated), elders (verified dormant), held=1 (R-1). Register at pause: 107 items / 87 closed / 18 registered_finding / 1 design_substrate_gated / 1 held.
+- **B-96 spec leg** on the settled C-2 council verdict and the final **twelve-condition** set in `.harness/council-b96-grace-ceiling-2026-08-01.md` → then its impl leg. **B-74-residue filing** unblocks at B-96's answer.
+- Remaining pool: B-99 (trigger-gated), elders (verified dormant), held=1 (R-1). Register after B-108: 108 items / 87 closed / 19 registered_finding / 1 design_substrate_gated / 1 held.
 
 ## Hygiene carries
 

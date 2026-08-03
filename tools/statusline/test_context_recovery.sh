@@ -6,6 +6,9 @@
 # never blocks (exit 0, even on empty stdin). No network — the save uses skip_gh.
 
 set -uo pipefail
+# This suite exercises normal production hooks, even when launched by an isolated
+# merge-gate reviewer whose own hook processes must remain inert.
+unset HARNESS_CODEX_REVIEW_ISOLATED
 SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/context-recovery.sh"
 PASS=0; FAIL=0
 ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
@@ -56,6 +59,16 @@ run 65 >/dev/null
 # 4) 80% → next threshold T=75 saves (independent of the 60 marker).
 run 80 >/dev/null
 mark sess1-75 && ok "saved at 75% threshold" || bad "no marker at 75%"
+
+# The proactive writer and PostCompact reader must agree on the normalized session key.
+# Drive the real statusline writer, then the real reinjection hook as one round-trip.
+POSTCOMPACT="$(dirname "$SCRIPT")/../hooks/postcompact-reinject.sh"
+OUT=$(printf '%s' '{"hook_event_name":"PostCompact","session_id":"sess1"}' \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$POSTCOMPACT" \
+  | jq -r '.hookSpecificOutput.additionalContext // empty')
+printf '%s' "$OUT" | grep -q 'precompact-latest-sess1.md' \
+  && ok "statusline checkpoint round-trips through PostCompact" \
+  || bad "PostCompact missed statusline checkpoint: [$OUT]"
 
 # 5) fallback: no user statusline configured → minimal 'ctx N%'.
 rm -f "$HOMEDIR/.claude/settings.json"

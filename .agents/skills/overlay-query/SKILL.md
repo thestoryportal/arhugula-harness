@@ -1,27 +1,17 @@
 ---
 name: overlay-query
-description: "Use for arhugula-v2 semantic-overlay cite grounding: resolving C-*, U-*, H_T-*, ADR-*, CXA, or section cites to implementation files, checking seam producer/consumer grounding, or verifying cross-spec drift before claims."
+description: Use when grounding C-*, U-*, ADR-*, H_T-*, section, substitution, or CXA seam claims through the semantic overlay.
 ---
 
-# Overlay Query
+# Canonical Claude Workflow Bridge
 
-Use this skill instead of free-text search when the task depends on a formal design cite, atomic unit, substitution row, or CXA seam.
+Read `.claude/skills/overlay-query/SKILL.md` completely from the workspace root before acting, including every reference it routes for the task. That canonical skill body is the full workflow; this Codex entrypoint does not summarize, trim, or replace it. Resolve its relative references from the canonical skill directory.
 
-## Workflow
+Apply these runner translations only:
 
-1. Read root `AGENTS.md` startup rules and the nearest axis `AGENTS.md` if the cite is axis-specific.
-2. Prefer the repo overlay command:
-
-```bash
-just overlay-query <cite-or-pattern>
-```
-
-3. If the command needs a different syntax, inspect `justfile` and the relevant overlay script before retrying.
-4. Use raw `rg` only for non-cite text searches or after the overlay has identified candidate files.
-5. In the answer, distinguish overlay-grounded facts from inferences made from nearby code.
-
-## Guardrails
-
-- Do not claim that a file implements a `C-*`, `U-*`, `H_T-*`, or CXA contract without overlay grounding or direct file evidence.
-- If overlay results contradict a spec, plan, or `CLAUDE.md` carry, stop and classify the drift instead of absorbing it silently into implementation.
-- For PR-ready work, include the relevant overlay/targeted test evidence in the PR body or final report.
+- Root `AGENTS.md` is the Codex instruction entrypoint; targeted `CLAUDE.md` sections remain canonical lineage.
+- Claude `Agent` or `Task` fan-out means fresh Codex subagents or `codex exec` contexts with self-contained briefs, subject to current delegation policy.
+- `AskUserQuestion` means the available Codex user-input surface, and only for a genuine operator-owned fork.
+- When Codex is the author, any canonical claim that Codex is out-of-family translates to Antigravity via `just gemini-review`; when Claude is the author, `just codex-review` remains out-of-family.
+- Claude `advisor()` transcript judgment translates to the interactive Codex controller's transcript-aware judgment plus the required out-of-family artifact review; never silently drop either function.
+- Claude-only scratch paths translate to a safe `/tmp` or ignored workspace scratch path. All Git, CI, worktree, paid-call, secret, and destructive-action guardrails remain binding.

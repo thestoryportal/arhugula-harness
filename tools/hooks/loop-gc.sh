@@ -1,42 +1,29 @@
 #!/usr/bin/env bash
-# SessionStart worktree GC + hygiene visibility (U-HK-26).
+# SessionStart worktree hygiene visibility (U-HK-26).
 #
 # The autonomous loop ships PRs whose worktrees go stale after merge; nothing reaps
-# them (git-arc-guard checks commits/branches, session-end-cleanup is advisory-only,
-# and a hook can't remove the worktree it runs INSIDE). This hook reaps them at the
-# NEXT session's start — the uniform point that covers a live-loop session, each
-# headless `claude -p` child, AND a post-/clear restart — self-excluding the current
-# worktree so it only collects what PRIOR sessions left.
+# them (git-arc-guard checks commits/branches and session-end-cleanup is advisory-only).
+# SessionStart is a latency-sensitive lease/context boundary, so this hook only reports
+# candidates. The controller performs explicit reaping after merge/closeout.
 #
-#   LOOP MODE  → ACTION: `git worktree remove` for each merged+clean+non-current+non-main
-#                worktree (worktrees only, never branches; fail-safe no-op when the
-#                merged set is unavailable). Each disposition logged to loop_status.md.
-#   HIL MODE   → VISIBILITY: inject an advisory additionalContext listing stale-worktree
-#                candidates + their `git branch -d` refs + a MEMORY.md over-cap flag.
-#                Never deletes (destructive ops stay explicit off-loop).
+#   ALL MODES → VISIBILITY: inject advisory additionalContext listing stale-worktree
+#               candidates + their branch refs + a MEMORY.md over-cap flag. Never delete.
 #
-# Runs as deterministic hook bash → bypasses permission-guard (which denies
-# `git worktree remove` for a Claude TOOL call). The safe-subset gate inside
-# loop_gc_worktrees is the backstop. Always exit 0. Test: tools/hooks/test_loop_gc.sh.
+# Runs as deterministic hook bash and always exits 0.
 
 set -uo pipefail
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -f "$_DIR/lib.sh" ] || exit 0
 # shellcheck source=lib.sh
 . "$_DIR/lib.sh"
+hook_review_isolated && exit 0
 [ -f "$_DIR/loop_lib.sh" ] || exit 0
 # shellcheck source=loop_lib.sh
 . "$_DIR/loop_lib.sh"
 
 PROJECT_DIR=$(hook_project_dir); [ -z "$PROJECT_DIR" ] && exit 0
 
-# LOOP MODE → reap (logged; never blocks).
-if loop_mode_active; then
-  loop_gc_worktrees reap
-  exit 0
-fi
-
-# HIL MODE → advisory visibility only. Cheap pre-check: only pay for the gh
+# Advisory visibility only. Cheap pre-check: only pay for the gh
 # merged-set lookup when there is MORE than one worktree (the common case — sitting
 # in main with no linked worktrees — pays nothing and adds zero SessionStart latency).
 CANDS=""
@@ -65,7 +52,7 @@ if [ -n "$CANDS" ]; then
   # Branch refs are presented as a comma-separated DATA list, never an executable
   # `git branch -d ...` string — a ref name can contain shell metacharacters (codex P2).
   BRANCHES=$(printf '%s\n' "$CANDS" | sed -E 's/.*\(([^)]+)\)$/\1/' | paste -sd', ' -)
-  MSG="$MSG ${N} stale merged worktree(s) — /loop-start reaps them, or remove manually: ${LIST}. Their merged branch refs (prune each with git branch -d; listed as data): ${BRANCHES}."
+  MSG="$MSG ${N} stale merged worktree(s) — the explicit post-merge closeout reaps them, or remove manually: ${LIST}. Their merged branch refs (prune each with git branch -d; listed as data): ${BRANCHES}."
 fi
 [ -n "$MEMFLAG" ] && MSG="$MSG ${MEMFLAG}"
 

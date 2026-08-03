@@ -23,10 +23,10 @@ cat > "$REPO/.harness/roadmap_status.md" <<'EOF'
 EOF
 git -C "$REPO" add -A; git -C "$REPO" commit -qm "base"
 
-printf '%s' '{"hook_event_name":"PreCompact","trigger":"auto"}' \
+printf '%s' '{"hook_event_name":"PreCompact","session_id":"session-a","trigger":"auto"}' \
   | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK"
 
-LATEST="$REPO/.harness/.checkpoints/precompact-latest.md"
+LATEST="$REPO/.harness/.checkpoints/precompact-latest-session-a.md"
 [ -f "$LATEST" ] && ok "latest snapshot written" || bad "no latest snapshot"
 if [ -f "$LATEST" ]; then
   grep -q "Pre-compaction snapshot" "$LATEST" && ok "has header" || bad "no header"
@@ -34,8 +34,30 @@ if [ -f "$LATEST" ]; then
   grep -q "trigger=auto" "$LATEST" && ok "records trigger" || bad "missing trigger"
   grep -q "HEAD:" "$LATEST" && ok "records HEAD/branch" || bad "missing HEAD"
 fi
-# A timestamped file also exists.
-ls "$REPO/.harness/.checkpoints/"precompact-*.md >/dev/null 2>&1 && ok "timestamped snapshot exists" || bad "no timestamped snapshot"
+# A different session receives a different atomic latest pointer even in the same second.
+printf '%s' '{"hook_event_name":"PreCompact","session_id":"session-b","trigger":"manual"}' \
+  | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK"
+[ -f "$REPO/.harness/.checkpoints/precompact-latest-session-b.md" ] \
+  && ok "second session gets its own latest pointer" || bad "second session pointer missing"
+grep -q 'trigger=auto' "$LATEST" && ok "session-a pointer not overwritten by session-b" || bad "session-a pointer contaminated"
+grep -q 'trigger=manual' "$REPO/.harness/.checkpoints/precompact-latest-session-b.md" \
+  && ok "session-b pointer carries its own snapshot" || bad "session-b pointer contaminated"
+COUNT=$(ls "$REPO/.harness/.checkpoints/"precompact-20*.md 2>/dev/null | wc -l | tr -d ' ')
+[ "$COUNT" = "2" ] && ok "same-second snapshots have collision-free names" || bad "expected two timestamped snapshots, got $COUNT"
+ls "$REPO/.harness/.checkpoints/"*.tmp-* >/dev/null 2>&1 \
+  && bad "atomic checkpoint temp file leaked" || ok "atomic checkpoint leaves no temp files"
+
+# A delayed older same-session writer cannot replace a newer published checkpoint.
+. "$SCRIPT_DIR/lib.sh"
+OLDER="$REPO/.harness/.checkpoints/older.md"
+NEWER="$REPO/.harness/.checkpoints/newer.md"
+printf '<!-- checkpoint-generation: 100 -->\nolder\n' > "$OLDER"
+printf '<!-- checkpoint-generation: 200 -->\nnewer\n' > "$NEWER"
+TARGET="$REPO/.harness/.checkpoints/precompact-latest-ordering.md"
+hook_publish_checkpoint "$TARGET" "$NEWER" 200
+hook_publish_checkpoint "$TARGET" "$OLDER" 100
+grep -q '^newer$' "$TARGET" \
+  && ok "older same-session writer cannot regress latest" || bad "older writer replaced newer checkpoint"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

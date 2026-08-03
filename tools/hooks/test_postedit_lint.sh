@@ -64,5 +64,27 @@ OUT=$(run "$REPO/fmt.py")
 printf '%s' "$OUT" | grep -q "format:" && printf '%s' "$OUT" | grep -q "fmt.py" \
   && ok "emits a format finding for an unformatted .py" || bad "no format finding: '$OUT'"
 
+# 6) Hook subprocesses do not inherit the justfile cache fallback. When only uv
+# can provide ruff, use the repo-safe /tmp cache.
+mv "$REPO/bin/ruff" "$REPO/bin/ruff.saved"
+cat > "$REPO/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+printf '%s' "${UV_CACHE_DIR:-}" > "${UV_CACHE_OBS:?}"
+exit 0
+EOF
+chmod +x "$REPO/bin/uv"
+ln -s "$(command -v jq)" "$REPO/bin/jq"
+printf 'cache_probe = 1\n' > "$REPO/cache.py"
+unset UV_CACHE_DIR
+OUT=$(printf '%s' \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$REPO/cache.py\"}}" \
+  | env PATH="$REPO/bin:/usr/bin:/bin" CLAUDE_PROJECT_DIR="$REPO" \
+    UV_CACHE_OBS="$REPO/uv-cache-observed" bash "$HOOK" \
+  | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+[ -z "$OUT" ] && ok "uv-backed clean post-edit lint stays silent" || bad "uv-backed lint emitted: $OUT"
+[ "$(cat "$REPO/uv-cache-observed")" = "/tmp/arhugula-uv-cache" ] \
+  && ok "uv-backed post-edit lint uses repo-safe cache" \
+  || bad "unsafe uv cache: $(cat "$REPO/uv-cache-observed")"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

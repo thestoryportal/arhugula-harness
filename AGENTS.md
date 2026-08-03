@@ -7,7 +7,9 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - Read `CONTEXT.md` (workspace root) first — the compact task router; it names the operative posture and that posture's entry points, and points back into `CLAUDE.md` for full governance.
 - Read `.harness/roadmap_status.md`, `justfile`, `.codex/notes/codex-compatibility-outline.md`, and the relevant local `AGENTS.md` before substantive work.
 - Read `.codex/notes/discipline-digest.md` — the runner-agnostic distillation of Claude-side memory disciplines (verification shapes, review-loop hygiene, repo git/CI mechanics). These bind Codex sessions identically.
+- Read `.codex/notes/claude-codex-parity.md` when auditing runner parity, hook trust, permissions, reviewer routing, or skill discovery.
 - If resuming in-flight work, check `.harness/handoff/README-resume.md` first — repo-committed cross-runner handoff state (in-flight branches, ratifications, fold instructions).
+- For task-relevant historical lessons, query the Claude memory index at `~/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/MEMORY.md`, then read only the linked topic files needed for the task. Treat gstack checkpoints under `~/.gstack/projects/arhugula-v2/checkpoints/` as additional resume evidence. Both are advisory until verified against HEAD, the handoff, and live repo instruments.
 - Read `.codex/notes/deterministic-context-workflow.md` and run `just codex-preflight` before substantive work. This writes the required local context checkpoint.
 - For axis-specific work, read the closest `harness-{is,as,cp,od}/AGENTS.md` first; consult the matching `CLAUDE.md` only when exact Claude lineage or axis posture is needed.
 - For `C-*`, `U-*`, `H_T-*`, ADR, or CXA seam claims, ground with the semantic overlay instead of free-form recall.
@@ -24,17 +26,17 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 
 ## Orchestrator + Implementer Pattern
 
-- For multi-leg arcs, mirror the Claude Fable-orchestrator/Opus-implementer shape: ONE interactive orchestrator session (high reasoning) plans, writes leg briefs, gates, merges, refreshes; implementer legs run as non-interactive `codex exec` in isolated worktrees (`.codex-worktrees/<leg-id>`), one brief per leg.
+- For multi-leg arcs, mirror the Claude Fable 5 orchestrator/Opus 5 implementer shape: ONE interactive `gpt-5.6-sol` orchestrator session (high reasoning, `--profile arhugula-forward`) plans, writes leg briefs, gates, merges, refreshes; `gpt-5.6-terra` implementer legs run as non-interactive `codex exec --profile arhugula-implementer` processes in isolated worktrees (`.codex-worktrees/<leg-id>`), one brief per leg.
 - Briefs follow `.codex/notes/leg-brief-template.md` — a leg sees ONLY its brief; put the operator decision verbatim, the authority list, deliverables, negative examples, and the report-back shape in it.
 - Cap concurrent implementer runs at 2 on the reference machine (Intel i5/16GB). The orchestrator reads each leg's DIFF, not its self-report, before gating.
-- Model tiering lives in user-level `~/.codex/config.toml` profiles (orchestrator: high reasoning; implementers: medium-high); this repo's `.codex/config.toml` stays project-scoped by Codex policy.
+- Model tiering lives in user-level profile overlays: `~/.codex/arhugula-forward.config.toml` pins the Fable 5-equivalent controller to `gpt-5.6-sol`/high, and `~/.codex/arhugula-implementer.config.toml` pins the Opus 5-equivalent implementer to `gpt-5.6-terra`/high. The tracked templates live under `.codex/notes/`; this repo's `.codex/config.toml` stays project-scoped by Codex policy.
 
 ## Claude-Native Context Mapping
 
 - Claude `CLAUDE.md` files map to Codex `AGENTS.md` projections.
 - Claude hooks map to `.codex/hooks.json` plus scripts under `.codex/hooks/`.
 - Claude skills map to Codex repo/user skills under `.agents/skills` or installed Codex skills; package as plugins only when distribution is needed.
-- Claude memory remains Claude-owned. Codex durable team rules belong here; Codex local memories are optional generated state under `CODEX_HOME`.
+- Claude memory remains a queryable historical source rather than being discarded during the runner change. The mandatory runner-agnostic subset is distilled in `.codex/notes/discipline-digest.md`; task-specific details are retrieved from the Claude memory index and gstack checkpoints, then re-grounded against HEAD. Codex local memories are supplemental generated state under `CODEX_HOME`, not a replacement authority.
 
 ## Verification
 
@@ -52,5 +54,6 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - Strict CI gates are required: lint, typecheck, tests, semantic overlay, substitution ledger, and axis isolation when CI provides them.
 - `just codex-review` is for out-of-family review of concrete diffs; it complements Claude advisor review and does not replace transcript-aware advisor judgment.
 - **Decorrelation flips with authorship**: when Codex is the AUTHOR, `codex review` is self-review — use `just gemini-review` as the out-of-family artifact reviewer, and reserve Claude (when quota permits) for gate-lens review rather than authoring.
+- **Standing authorization — Antigravity (operator, 2026-08-01):** `just gemini-review` may use the operator's OAuth-authenticated `agy` CLI subscription and disclose the current repository diff for every forward arc. Do not request per-run approval. Never use Gemini/Google API keys, service-account credentials, Vertex project routing, or a direct provider API for this review. The wrapper must still fail closed on authentication, permission, empty-output, malformed-verdict, or reviewer-BLOCK outcomes.
 - Substantive code PRs transit the 3-lens merge gate before merge: run each lens prompt at `.codex/notes/merge-gate-lenses/` as a FRESH `codex exec` (never the authoring session); all-approve required; BLOCK → fix → scoped re-gate on the delta; append the row to `.harness/merge-gate-log.md` before merging. Doc-only PRs may take a logged proportional skip.
 - PR bodies must name tracking surfaces updated or explicitly state why roadmap/status/ledger updates were not applicable.
