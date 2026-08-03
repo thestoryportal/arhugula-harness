@@ -28,15 +28,22 @@ done
 # line number of the first line matching a fixed string, empty if absent
 lineno() { grep -nF -- "$2" "$1" | head -1 | cut -d: -f1; }
 
-# All five U-WT-01 checks present in a carrier block. Freshness needle differs by flow:
-# Claude reviews the committed diff (HEAD); Codex reviews staged/worktree pre-commit.
-five_checks() { # $1 = block text, $2 = label, $3 = freshness needle
-  local blk="$1" lbl="$2" fresh="$3" miss=""
+# All five U-WT-01 checks present in a carrier block. Two needles are per-carrier because
+# generic tokens are satisfied by sibling prose (merge-gate lens-3 mutation matrix):
+#   $3 flow needle — flow correctness of check (a): HEAD (Claude, committed diff) vs
+#      staged/worktree (Codex, pre-commit). Satisfiable by check (a) prose BY DESIGN.
+#   literal '*current*' — the check-(d) gate-freshness discriminator; occurs exactly once
+#      per block, only inside check (d), in all four carriers.
+#   $4 stated-in-PR-body needle — check (e)'s distinctive phrase for this carrier (the
+#      generic 'PR body' is duplicated by check (a)'s "diff and PR body" in ship-pr).
+five_checks() { # $1 = block text, $2 = label, $3 = flow needle, $4 = check-(e) needle
+  local blk="$1" lbl="$2" fresh="$3" ebody="$4" miss=""
   printf '%s' "$blk" | grep -qF -- 'file:line'  || miss="$miss file:line"
   printf '%s' "$blk" | grep -qiF -- 'recompute' || miss="$miss recompute"
   printf '%s' "$blk" | grep -qF -- '#NNN'       || miss="$miss #NNN"
-  printf '%s' "$blk" | grep -qF -- "$fresh"     || miss="$miss freshness($fresh)"
-  printf '%s' "$blk" | grep -qiF -- 'PR body'   || miss="$miss PR-body"
+  printf '%s' "$blk" | grep -qF -- "$fresh"     || miss="$miss flow($fresh)"
+  printf '%s' "$blk" | grep -qF -- '*current*'  || miss="$miss gate-freshness(*current*)"
+  printf '%s' "$blk" | grep -qF -- "$ebody"     || miss="$miss stated-in-PR-body($ebody)"
   if [ -z "$miss" ]; then ok "$lbl carries all five checks"; else bad "$lbl missing:$miss"; fi
 }
 
@@ -52,8 +59,14 @@ else
 fi
 
 # --- 2. Claude ship-pr: full five-check contract in the clause block ---
-CLAUSE=$(awk -v s="${L_GROUND:-0}" -v e="${L_CODEX:-0}" 'NR>=s && NR<e' "$SHIP")
-five_checks "$CLAUSE" "claude ship-pr grounding bullet" 'HEAD'
+# Guard the anchors explicitly: a :-0 default would fail OPEN with an over-wide block
+# (lines 1..L_CODEX) that sibling preamble text could satisfy (lens-3 finding).
+if [ -n "$L_GROUND" ] && [ -n "$L_CODEX" ]; then
+  CLAUSE=$(awk -v s="$L_GROUND" -v e="$L_CODEX" 'NR>=s && NR<e' "$SHIP")
+else
+  CLAUSE=""
+fi
+five_checks "$CLAUSE" "claude ship-pr grounding bullet" 'HEAD' 'state in the PR body'
 
 # --- 3. Claude roadmap-continue: scoped to step 4, pass precedes codex-review ---
 STEP4=$(awk '/^4\. \*\*/{f=1} /^5\. \*\*/{f=0} f' "$CONT")
@@ -66,7 +79,7 @@ else
 fi
 
 # --- 4. Claude roadmap-continue: full five-check contract in step 4 ---
-five_checks "$STEP4" "claude roadmap-continue step 4" 'HEAD'
+five_checks "$STEP4" "claude roadmap-continue step 4" 'HEAD' 'state the pass in the PR body'
 
 # --- 5. Codex ship-pr: pass section precedes the out-of-family review section ---
 L_AGROUND=$(lineno "$ASHIP" 'Grounding pass (U-WT-01)')
@@ -79,7 +92,7 @@ fi
 
 # --- 6. Codex ship-pr: full five-check contract in the grounding section ---
 ASHIP_BLK=$(awk '/^## Grounding pass \(U-WT-01\)/{f=1;next} /^## /{f=0} f' "$ASHIP")
-five_checks "$ASHIP_BLK" "codex-native ship-pr grounding section" 'staged/worktree'
+five_checks "$ASHIP_BLK" "codex-native ship-pr grounding section" 'staged/worktree' 'state in the PR body'
 
 # --- 7. Codex roadmap-continue: scoped to step 6, pass precedes the reviewer clause ---
 ASTEP6=$(awk '/^6\. /{f=1} /^7\. /{f=0} f' "$ACONT")
@@ -92,7 +105,7 @@ else
 fi
 
 # --- 8. Codex roadmap-continue: full five-check contract in step 6 ---
-five_checks "$ASTEP6" "codex-native roadmap-continue step 6" 'staged/worktree'
+five_checks "$ASTEP6" "codex-native roadmap-continue step 6" 'staged/worktree' 'PR body at ship-pr'
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
