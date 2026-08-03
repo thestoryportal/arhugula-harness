@@ -12,6 +12,13 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 ## Pre-flight (before opening the PR)
 
 - **Green.** `just check` + the relevant test suites pass; `bash -n` on any new shell.
+- **Grounding pass (U-WT-01).** Before codex round 1: (a) re-read every `file:line` cite in
+  the diff and PR body at HEAD — never from recall; (b) recompute every count/arithmetic
+  claim from the actual source rather than restating it; (c) confirm every `#NNN` reference
+  actually is that PR (`gh pr view NNN --json title`); (d) confirm `just check` ran at the
+  *current* HEAD, not an earlier one; (e) state in the PR body that this pass ran. First
+  drafts historically burn 5–10 codex rounds on exactly these defect classes — this pass
+  collapses them before round 1.
 - **Out-of-family review.** `just codex-review` (branch-vs-`main`) to convergence — fix
   real findings, hermetically regression-test each (§13.1). Use `--base` here, NOT
   `-uncommitted`: `-uncommitted` reviews untracked files too, so any untracked WIP in the
