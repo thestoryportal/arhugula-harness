@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `35c75824883d` |
-| `last_refreshed` | 2026-08-03T04:25:47Z |
-| `git_head` | `54c8256d` — PR #1186 Codex-Claude parity merged |
+| `workspace_state_hash` | `f3a2f6ca505e` |
+| `last_refreshed` | 2026-08-03T06:46:59Z |
+| `git_head` | `6b8398bf` — PR #1188 Stop parity full-history fix merged |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 106 |
 
@@ -180,6 +180,7 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1183 | `b96-council-ceiling` | — | — |
+| #1189 | `fix-stop-gate-ci-context` | — | — |
 
 ---
 
@@ -187,11 +188,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1188 | 2026-08-03 | Stop parity full-history checkout landed; post-merge main CI exposed the remaining caller-context gap, tracked in PR #1189. This prepend advances the explicitly capped five-row Recently completed window, so 1181 leaves the derived dashboard by design. Next: land this terminating refresh, rebase and close #1189, then bring B-96 PR #1183 to ready and green without merging before launching B-107. |
 | 1186 | 2026-08-03 | Codex-Claude parity landed: SessionStart/SessionStop lifecycle repairs, owner-PID lease cleanup, OAuth-only Antigravity Gemini 3.1 Pro review, 10-round repair ceiling, and three-lens merge gate; all 16 PR checks green. B-96 remains draft #1183 with a do-not-merge boundary pending post-parity reconciliation. |
 | 1185 | 2026-08-01 | Round 76: gemini-review rewired to Antigravity CLI (#1185). Live probes falsified the gemini-cli path (consumer OAuth retired 2026-06-18, IneligibleTierError on 0.49.0 and 0.53.1); operator's Google AI Ultra 5x is served by agy — headless agy -p positive control PASSED on subscription auth; recipe + guard landed, API-key strips retained (billing insurance vs dotenv .env). Codex handoff bundle now COMPLETE (#1184 + #1185). IN FLIGHT (paused, durable): b96-council-ceiling @ 035395b9 draft #1183 (C-2, fold owed); b107-spec-leg-a-hybrid @ dc825591. NEXT: HIL runner-split gate (operator checks Claude quota): B-96 fold in Claude + B-107 to Codex [REC] / both-Claude / both-Codex — then execute per .harness/handoff/README-resume.md. |
 | 1184 | 2026-08-01 | Round 75: Codex handoff bundle merged (#1184, operator-directed transition prep under 2% Claude quota). Repo-committed handoff at .harness/handoff/ (both pause checkpoints + README-resume covering the two in-flight legs); .codex/notes/ gains discipline-digest (memory bridge), leg-brief-template (orchestrator/implementer pattern), merge-gate-lenses/ (3 fresh-context lens prompts); just gemini-review added as the out-of-family reviewer when Codex authors; AGENTS.md wired (startup pointers, orchestrator section, decorrelation-flip PR discipline). IN FLIGHT (paused, durable): b96-council-ceiling @ 035395b9 draft #1183 (verdict C-2, fold owed); b107-spec-leg-a-hybrid @ dc825591 (grounding notes only). NEXT: HIL gate on remaining Claude quota — continue B-96 fold + B-107 spec leg in Claude if viable, else Codex takes over per .harness/handoff/README-resume.md. |
 | 1182 | 2026-08-01 | Round 74: B-98+B-104 ratified-defer legs merged (#1182). Runtime v1.110 — two declaration-only sites (§14.14.9.1 latest-durable-record-not-liveness; §30 invariant bullet + resume-guards-never-outstandingness sharpening) + api.py docstring companions per fork Component 1. Both rows stay registered_finding with D-0..D-3 falsifiable triggers; superseded reopening rules struck in place; clearance marker + head-pointer + lineage landed; codex 6 rounds converged; gate proportional-skip logged. RATIFICATION BATCH fully recorded: B-107→A-hybrid, B-96→C, B-98→C, B-104→D, __all__→leave. IN FLIGHT: B-96 dyadic C3+C10 council convening (C-2 converged in confirm-back, zero contested; orchestrator folding + reconcile-to-zero; PR pending). NEXT: B-107 A-hybrid spec leg (register now free); then B-96 spec leg on the council verdict; B-74-residue filing unblocks at B-96's answer. |
-| 1181 | 2026-08-01 | B-104 Class 2 fork FILED — shape (c) grounded AND falsified, a fourth shape (OD sink event) found and carried as Reading C; recommendation D declare-symmetric-then-defer; A-vs-B runner-up HELD under the oscillation rule; two empirical probes (sentinel reports as torn append; sixth cause member forces a cross-axis OD leg); 3 codex rounds, 13 findings, soundness exit |
 ---
 
 ---
