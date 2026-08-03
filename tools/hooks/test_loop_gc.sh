@@ -418,6 +418,38 @@ sw_run >/dev/null 2>&1
   || bad "S11 tmp residue: $(ls "$SPROJ/.harness" 2>/dev/null | tr '\n' ' ')"
 [ "$(sw_rows)" = "0" ] && ok "S11 registry still valid after cleanup+prune" || bad "S11 rows=$(sw_rows)"
 
+# ── S12) Schema-invalid row (non-string agent_id) is tolerated by the sweep and dropped
+#        by the prune — it must not crash the whole feature (codex round-2).
+sw_reset
+printf '{"ts":"%s","event":"start","session":"s1","agent_id":[1],"transcript":"/tmp/x.jsonl","cwd":"/w"}\n' "$(sw_ts 60)" >> "$SREG"
+T12="$SW/t12.jsonl"; : > "$T12"; touch -t "$(date -v-2H +%Y%m%d%H%M 2>/dev/null || date -d '2 hours ago' +%Y%m%d%H%M)" "$T12"
+sw_row "$(sw_ts 7200)" start s12agent "$T12" >> "$SREG"
+sw_row "$(sw_ts 700000)" start oldkey12 /tmp/gone12.jsonl >> "$SREG"   # forces a rewrite
+OUT=$(sw_ctx)
+# 2 = s12agent (2h, stale) + oldkey12 (8d, transcript gone → stale); the schema-invalid
+# row contributes nothing and, critically, does not crash the sweep to silence.
+printf '%s' "$OUT" | grep -q "2 unreconciled subagent" \
+  && ok "S12 sweep survives a schema-invalid row and still counts valid keys" \
+  || bad "S12 sweep crashed or miscounted: '$OUT'"
+jq -e 'select(.agent_id==[1])' "$SREG" >/dev/null 2>&1 \
+  && bad "S12 schema-invalid row survived the prune" || ok "S12 schema-invalid row dropped by the rewrite"
+
+# ── S13) Horizon-straddle balance: an old reconciled pair (start 8d, stop 6d) + a fresh
+#        stale start on the SAME fallback key. Row-by-row pruning would drop only the old
+#        start, and the surplus stop would mask the fresh unreconciled start; whole-key
+#        pruning keeps the balance and the clause reports 1 (codex round-2).
+sw_reset
+T13="$SW/t13.jsonl"; : > "$T13"; touch -t "$(date -v-2H +%Y%m%d%H%M 2>/dev/null || date -d '2 hours ago' +%Y%m%d%H%M)" "$T13"
+sw_row "$(sw_ts 700000)" start '' "$T13" >> "$SREG"    # 8d — outside horizon
+sw_row "$(sw_ts 520000)" stop  '' "$T13" >> "$SREG"    # 6d — inside horizon
+sw_row "$(sw_ts 7200)"   start '' "$T13" >> "$SREG"    # 2h — stale, unreconciled
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
+  && ok "S13 straddling key keeps balance: fresh start reported, not masked" \
+  || bad "S13 surplus stop masked the unreconciled start: '$OUT'"
+[ "$(sw_rows)" = "3" ] && ok "S13 whole-key rule retained the straddling history" \
+  || bad "S13 rows=$(sw_rows) want 3 (row-by-row prune broke the balance)"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

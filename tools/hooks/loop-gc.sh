@@ -116,10 +116,27 @@ except Exception:
 # dedup) and offsets ONLY its own key, so N fan-out siblings sharing one fallback key are
 # never zeroed by a single stop. `stop_blocked` is NONTERMINAL — the subagent retries, so
 # it never reconciles anything.
+def row_key(row):
+    """Key + transcript for a row, or (None, None) for a SCHEMA-INVALID row.
+
+    A syntactically-valid JSON object can still carry non-string fields (e.g.
+    `"agent_id": [1]`); calling .strip() on those would crash the whole sweep+prune
+    silently (codex round-2). Non-string agent_id/transcript demotes the row to
+    malformed: skipped by the sweep, dropped by the prune rewrite.
+    """
+    agent = row.get("agent_id")
+    transcript = row.get("transcript")
+    if agent is not None and not isinstance(agent, str):
+        return None, None
+    if transcript is not None and not isinstance(transcript, str):
+        return None, None
+    transcript = (transcript or "").strip()
+    return ((agent or "").strip() or transcript), transcript
+
+
 starts, stops, paths = {}, {}, {}
 for _, row in parsed(raw):
-    transcript = (row.get("transcript") or "").strip()
-    key = (row.get("agent_id") or "").strip() or transcript
+    key, transcript = row_key(row)
     if not key:
         continue
     if transcript:
@@ -189,14 +206,47 @@ def prune():
             current = registry.read_text(encoding="utf-8", errors="replace")
         except Exception:
             return
-        kept, dropped = [], 0
-        for line, row in parsed(current):
+        # WHOLE-KEY-HISTORY pruning (codex round-2): dropping rows one-by-one on age can
+        # remove an old `start` while keeping its newer `stop` on a reused fallback key —
+        # the surplus stop then masks a later unreconciled start. A key is pruned only
+        # when its NEWEST parseable row is past the horizon, so per-key lifecycle balance
+        # is preserved by construction. A key carrying any unparseable ts is never pruned
+        # (conservative); keyless rows age individually (they join no balance); schema-
+        # invalid rows are dropped as malformed.
+        def row_age(row):
             try:
-                old = now - calendar.timegm(
+                return now - calendar.timegm(
                     time.strptime(row["ts"], "%Y-%m-%dT%H:%M:%SZ")
-                ) > KEEP
+                )
             except Exception:
-                old = False  # missing/unparseable ts → conservatively KEEP
+                return None  # unparseable ts
+
+        rows = parsed(current)
+        key_min_age = {}  # key → age of its newest row (None = has unparseable ts)
+        for _, row in rows:
+            key, _t = row_key(row)
+            if not key:
+                continue
+            age = row_age(row)
+            if key in key_min_age and key_min_age[key] is None:
+                continue
+            if age is None:
+                key_min_age[key] = None
+            else:
+                key_min_age[key] = min(key_min_age.get(key, age), age)
+
+        kept, dropped = [], 0
+        for line, row in rows:
+            key, _t = row_key(row)
+            if key is None:  # schema-invalid → malformed → drop
+                dropped += 1
+                continue
+            if key:
+                newest = key_min_age.get(key)
+                old = newest is not None and newest > KEEP
+            else:
+                age = row_age(row)
+                old = age is not None and age > KEEP
             if old:
                 dropped += 1
             else:
