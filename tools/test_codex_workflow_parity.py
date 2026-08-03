@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTER = ROOT / ".codex" / "hooks" / "codex_hook_adapter.py"
@@ -762,11 +763,21 @@ def test_session_start_hygiene_is_report_only_and_never_reaps() -> None:
 
 def test_parity_regressions_are_blocking_locally_and_in_ci() -> None:
     justfile = (ROOT / "justfile").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    test_steps = workflow["jobs"]["test"]["steps"]
 
     assert "codex-parity-check" in justfile
     assert "bash tools/codex-parity-check.sh" in justfile
-    assert "bash tools/codex-parity-check.sh" in workflow
+    assert any(
+        "bash tools/codex-parity-check.sh" in str(step.get("run") or "") for step in test_steps
+    )
+    assert any(
+        str(step.get("uses") or "").startswith("actions/checkout@")
+        and str((step.get("with") or {}).get("fetch-depth")) == "0"
+        for step in test_steps
+    )
 
 
 def test_local_premerge_gates_match_ci_format_check() -> None:
