@@ -171,7 +171,7 @@ needle "$CODEX_SKILL" "codex-native red-first" "the no-file-level-probe rule" \
 needle "$CODEX_SKILL" "codex-native red-first" "the operator-request-only invocation rule" \
   'never chain this skill automatically from roadmap-continue or ship-pr'
 needle "$CODEX_SKILL" "codex-native red-first" "the pre-commit throwaway-worktree probe path" \
-  'materialize the arc'"'"'s WIP as a temporary commit on a discardable branch'
+  'materialize the arc'"'"'s WIP as a DETACHED temporary commit in a temporary worktree'
 needle "$CODEX_SKILL" "codex-native red-first" "the probe-evidence content binding" \
   'byte-identical to the shipping WIP'
 needle "$CLAUDE_SKILL" "claude red-first" "the unsupported-target-type invocation block" \
