@@ -119,7 +119,13 @@ def make_run(sc, toplevel: Path, real_bash: bool = False):
             if cmd[1] == "log":
                 return 0, "\n".join(f"{s}\t{p}\t{m}" for s, p, m in sc["log"])
             if cmd[1] == "show" and "--name-only" in cmd:
-                return 0, "\n".join(sc["files"].get(cmd[-1], []))
+                # A files value of None means the QUERY ITSELF fails (rc != 0) — distinct
+                # from "no files changed" ([]), so `_refresh_shape_ok`'s could-not-verify
+                # branch is reachable from a fixture (merge-gate lens-3 item 6).
+                entry = sc["files"].get(cmd[-1], [])
+                if entry is None:
+                    return 128, ""
+                return 0, "\n".join(entry)
             if cmd[1] == "show" and "-s" in cmd:
                 ts = sc["ts"].get(cmd[-1])
                 return (0, ts) if ts is not None else (128, "")
@@ -354,7 +360,62 @@ def test_r4f1_scan_is_first_parent_only(repo, gstack, monkeypatch):
     log_calls = [c for c in fake.calls if c[:2] == ["git", "log"]]
     assert log_calls, "no git log call issued"
     assert "--first-parent" in log_calls[0]
+    # --reverse is load-bearing, not cosmetic: without it `entries[0]` is the branch TIP,
+    # the first-parent check then fails for every non-tip arc, refresh_commit nulls, and
+    # checkpoint confirmation silently re-anchors on the merge — reopening round-4 P1 and
+    # its F2 consequence with the whole suite still green (merge-gate lens-3).
+    assert "--reverse" in log_calls[0], (
+        "oldest-first ordering is what makes entries[0] the immediate successor"
+    )
     assert "%H%x09%P%x09%s" in " ".join(log_calls[0]), "parents must be in the log format"
+
+
+def test_r4f1_unverifiable_shape_query_never_binds(repo, gstack, monkeypatch):
+    """`_refresh_shape_ok` returning None (the `git show --name-only` query itself failed)
+    must yield refresh_commit null — could-not-verify is not a licence to bind. Binding on
+    an unverified shape would re-admit exactly the commits the §12.2.1 file-set rule
+    excludes (merge-gate lens-3 item 6)."""
+    sc = scenario(files={REFRESH: None})  # the shape query fails for the successor
+    data = collect_with(sc, repo, gstack, monkeypatch)
+    assert data["refresh_commit"] is None, "an unverifiable shape must never bind"
+    assert any("could not be verified" in n for n in data["notes"])
+
+
+# --- ARGV FIDELITY: the fake can only be as faithful as the command shapes it sees -------
+# Every assertion below pins a flag whose loss is SILENT under the behavioural suite: the
+# fake keeps answering, the code keeps running, and a field quietly goes wrong (merge-gate
+# lens-3, HIGH/MEDIUM fake-fidelity items 3-5).
+
+
+def test_argv_fidelity_of_the_external_queries(repo, gstack, tmp_path, monkeypatch):
+    fake = make_run(scenario(), repo)
+    monkeypatch.setattr(aer, "run", fake)
+    aer.collect(1202, MERGE, repo, gstack_root=gstack, checkpoint=mk_ckpt(tmp_path, REFRESH_TS + 5))
+
+    def one(pred, label):
+        hits = [c for c in fake.calls if pred(c)]
+        assert hits, f"no {label} call issued"
+        return hits[0]
+
+    # 3. `git show -s` must ask for %ct (epoch seconds). A drift to %cI returns an ISO
+    #    string, `ts.isdigit()` is False, the anchor time is None, and checkpoint.confirmed
+    #    becomes unconditionally false — with every behavioural test still green.
+    ts_call = one(lambda c: c[:3] == ["git", "show", "-s"], "git show -s")
+    assert "--format=%ct" in ts_call, "the anchor time must be epoch seconds"
+
+    # 4. `git show --name-only` must ask for an EMPTY format. Without it git prepends the
+    #    commit header, the changed-file list never equals [REFRESH_ONLY_FILE], and
+    #    refresh_commit is permanently null.
+    files_call = one(
+        lambda c: c[:2] == ["git", "show"] and "--name-only" in c, "git show --name-only"
+    )
+    assert "--format=" in files_call, "commit headers must be suppressed from the file list"
+
+    # 5. `gh pr view --json` must request BOTH fields. Dropping mergeCommit silently
+    #    disables the oid half of the identity check (round-3 P2) — no test would notice.
+    pr_call = one(lambda c: c[:3] == ["gh", "pr", "view"], "gh pr view")
+    fields = pr_call[pr_call.index("--json") + 1].split(",")
+    assert "state" in fields and "mergeCommit" in fields, f"pr view --json fields: {fields}"
 
 
 # --- AC3: a non-success CI conclusion is reported VERBATIM ------------------------------
@@ -506,6 +567,44 @@ def test_ac4_todo_collection_failure_is_unknown_null_never_empty(repo, gstack, m
     assert "UNKNOWN" in rendered
     assert "No pending DEFERRED-HIL items — nothing is waiting on a human." not in rendered
     monkeypatch.undo()
+    assert aer.append_ledger_row(repo, data, "p.md") is True
+    assert "todos=unknown" in (repo / aer.LEDGER_REL).read_text(encoding="utf-8")
+
+
+def test_ac4_missing_helper_libs_are_unknown_not_empty(tmp_path):
+    """The OTHER arm of the same round-2 finding, and the one the behavioural suite could
+    not reach: when `code_root` has no `tools/hooks/` libs, `_todos` must report UNKNOWN.
+    Returning [] there is a confident 'nothing is waiting' derived from never having
+    looked — mutating this branch to `return []` survived the entire suite (merge-gate
+    lens-3 BLOCK item 2). Direct unit call: no fake, no monkeypatch, real filesystem."""
+    bare = tmp_path / "no-hooks"
+    (bare / ".harness").mkdir(parents=True)
+    assert not (bare / "tools" / "hooks" / "loop_lib.sh").exists()
+    notes: list[str] = []
+    assert aer._todos(bare, bare, notes) is None, "never [] — that would claim we looked"
+    assert any("UNKNOWN" in n and "loop_lib.sh not found" in n for n in notes)
+
+
+def test_ac4_missing_helper_libs_render_as_null_and_todos_unknown(repo, tmp_path):
+    """…and it propagates: the yaml carries null, the prose warns, the index row says
+    unknown — the same end-to-end shape as the nonzero-exit arm above."""
+    bare = tmp_path / "no-hooks"
+    (bare / ".harness").mkdir(parents=True)
+    notes: list[str] = []
+    data = {
+        "pr": 1202,
+        "merge_state": "MERGED",
+        "merge_commit": MERGE,
+        "main_ci": {"commit": MERGE, "conclusion": "success", "run_url": "u"},
+        "refresh_commit": REFRESH,
+        "checkpoint": {"path": None, "confirmed": False},
+        "todo_for_human": aer._todos(bare, bare, notes),
+        "notes": notes,
+    }
+    rendered = aer.render(data)
+    assert yaml.safe_load(yaml_block(rendered))["todo_for_human"] is None
+    assert "UNKNOWN" in rendered
+    assert "No pending DEFERRED-HIL items — nothing is waiting on a human." not in rendered
     assert aer.append_ledger_row(repo, data, "p.md") is True
     assert "todos=unknown" in (repo / aer.LEDGER_REL).read_text(encoding="utf-8")
 
