@@ -74,12 +74,13 @@ the target file plus a **prose anchor**
 Implementer is green, runs **one post-green, Adversary-owned resolution pass that re-resolves
 EVERY annotation's numeric range against the final implementation**: the anchors and the
 originally-numeric ones alike, with no exemption for a range that "looks untouched". That pass
-is a re-open by the rules below, with a fence check on BOTH sides: **before** touching the
-file, verify it still equals the previous Adversary digest (a mismatch means the Implementer
-edited the tests — that is a `RED-FIRST: BLOCK`, not something the resolution pass absorbs);
-the resolution edit itself may change **only `# mutation-probe:` annotation lines**, nothing
-else — and that rule is verified **mechanically, not by trust**: copy the pre-resolution file
-aside first, and after the edit require every changed line in
+is a re-open by the rules below, with a fence check on BOTH sides pinned to **one snapshot**:
+copy the pre-resolution file aside FIRST, then verify it still equals the previous Adversary
+digest — **digest the copy, not the live file**, so the bytes that pass the check are the
+bytes the diff below baselines against (a mismatch means the Implementer edited the tests —
+that is a `RED-FIRST: BLOCK`, not something the resolution pass absorbs); the resolution edit
+itself may change **only `# mutation-probe:` annotation lines**, nothing else — and that rule
+is verified **mechanically, not by trust**: after the edit require every changed line in
 `diff <pre-resolution-copy> <test-file>` to be a `# mutation-probe:` line (record that diff
 next to the new digest in the arc notes / PR body — it is the evidence that the resolver,
 having seen the green implementation, changed no assertion); then a **NEW digest is

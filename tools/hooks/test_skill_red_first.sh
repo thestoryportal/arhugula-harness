@@ -96,14 +96,20 @@ needle "$CLAUDE_SKILL" "claude red-first" "the every-annotation scope of the res
   "EVERY annotation's numeric range against the final implementation"
 needle "$CLAUDE_SKILL" "claude red-first" "the new-digest rule for a resolution pass" \
   'to supersede the previous one'
+needle "$CLAUDE_SKILL" "claude red-first" "the mandatory NEW-digest emphasis (pre-wrap)" \
+  'then a **NEW digest is'
 needle "$CLAUDE_SKILL" "claude red-first" "the latest-digest comparison at the gate" \
   'latest Adversary-recorded digest'
 needle "$CLAUDE_SKILL" "claude red-first" "the pre-resolution old-digest verification" \
-  'verify it still equals the previous Adversary digest'
+  'verify it still equals the previous Adversary'
+needle "$CLAUDE_SKILL" "claude red-first" "the digest-the-copy single-snapshot rule" \
+  '**digest the copy, not the live file**'
 needle "$CLAUDE_SKILL" "claude red-first" "the annotation-lines-only resolution delta rule" \
   'only `# mutation-probe:` annotation lines'
 needle "$CLAUDE_SKILL" "claude red-first" "the preserved-bytes mechanical delta check" \
   'copy the pre-resolution file'
+needle "$CLAUDE_SKILL" "claude red-first" "the annotation-only diff enforcement itself" \
+  'to be a `# mutation-probe:` line (record that diff'
 needle "$CLAUDE_SKILL" "claude red-first" "the exit-1 misresolved-range correction path" \
   'misresolved range gets an annotation-only correction'
 
@@ -117,6 +123,8 @@ needle "$CLAUDE_SKILL" "claude red-first" "the node-specific command the Adversa
   '**per test, the narrowest command that runs ONLY that test**'
 needle "$CLAUDE_SKILL" "claude red-first" "the cannot-isolate-is-a-BLOCK rule" \
   'A test whose command cannot isolate it is itself a'
+needle "$CLAUDE_SKILL" "claude red-first" "the cannot-isolate BLOCK consequence (post-wrap)" \
+  '`RED-FIRST: BLOCK`**: the gate below cannot be run honestly without one.'
 needle "$CLAUDE_SKILL" "claude red-first" "the no-file-level-probe rule" \
   "**Use that annotation's own node-specific command, never a file-level one.**"
 needle "$CLAUDE_SKILL" "claude red-first" "why a file-level probe is vacuous" \
