@@ -68,9 +68,13 @@ the target file plus a **prose anchor**
 Implementer is green, runs **one post-green, Adversary-owned resolution pass that re-resolves
 EVERY annotation's numeric range against the final implementation**: the anchors and the
 originally-numeric ones alike, with no exemption for a range that "looks untouched". That pass
-is a re-open by the rules below: the Adversary edits the test file, and a **NEW digest is
-recorded** to supersede the previous one. The Implementer never resolves an annotation. Probes
-run only against post-resolution ranges — never an anchor, never a pre-implementation number.
+is a re-open by the rules below, with a fence check on BOTH sides: **before** touching the
+file, verify it still equals the previous Adversary digest (a mismatch means the Implementer
+edited the tests — that is a `RED-FIRST: BLOCK`, not something the resolution pass absorbs);
+the resolution edit itself may change **only `# mutation-probe:` annotation lines**, nothing
+else; then a **NEW digest is recorded** to supersede the previous one. The Implementer never
+resolves an annotation. Probes run only against post-resolution ranges — never an anchor,
+never a pre-implementation number.
 
 ## The handoff fence (sha256)
 

@@ -98,6 +98,10 @@ needle "$CLAUDE_SKILL" "claude red-first" "the new-digest rule for a resolution 
   'to supersede the previous one'
 needle "$CLAUDE_SKILL" "claude red-first" "the latest-digest comparison at the gate" \
   'latest Adversary-recorded digest'
+needle "$CLAUDE_SKILL" "claude red-first" "the pre-resolution old-digest verification" \
+  'verify it still equals the previous Adversary digest'
+needle "$CLAUDE_SKILL" "claude red-first" "the annotation-lines-only resolution delta rule" \
+  'only `# mutation-probe:` annotation lines'
 
 # --- 4. Claude carrier: gate mechanics + verdict protocol -------------------------------
 # The probe MUST be run per-test, not per-file: mutation_probe.py accepts ANY test failure in
@@ -174,6 +178,12 @@ absent "$CODEX_SKILL" "codex-native red-first" "a duplicated Implementer phase s
   '## Implementer phase'
 absent "$CODEX_SKILL" "codex-native red-first" "a duplicated completion gate section" \
   '## Completion gate'
+# ...and the CANONICAL carrier's own headings (a bridge could copy those verbatim instead;
+# the three needles above only catch the bridge's former native-shape headings).
+absent "$CODEX_SKILL" "codex-native red-first" "a copied canonical Adversary heading" \
+  '## Phase 1 — Adversary'
+absent "$CODEX_SKILL" "codex-native red-first" "a copied canonical Implementer heading" \
+  '## Phase 2 — Implementer'
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
