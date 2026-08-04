@@ -14,10 +14,11 @@ is fenced out of the test file, and the unit closes on a mechanical witness
 ## Opt-in only
 
 **Opt-in only — never auto-invoked from `roadmap-continue` or `ship-pr`.** Neither of those
-flows calls this skill, and neither should be edited to. It fires only when the operator asks
-for it by name, or when this session deliberately chooses it for a unit whose ACs are crisp
-enough to test blind. Running it on a unit whose ACs are vague produces an Adversary guessing
-at the implementation — the exact failure this ritual exists to prevent.
+flows calls this skill, and neither should be edited to. **It fires only on an operator
+request** — this session never self-selects it. Note the precondition when accepting one:
+running the ritual on a unit whose ACs are vague produces an Adversary guessing at the
+implementation, the exact failure this ritual exists to prevent, so say so rather than
+proceeding on ACs too soft to test blind.
 
 ## Phase 1 — Adversary (a plain Agent-tool subagent)
 
@@ -51,6 +52,15 @@ The Adversary's contract:
    lines. This annotation is the completion gate's input; a test without one cannot close.
 4. Report the exact command that runs the test file, and the verbatim failing output.
 
+**When the lines do not exist yet.** For an additive unit, the source the test pins is not
+written at authoring time, so a numeric range would be a guess that goes stale the moment the
+Implementer writes anything. The Adversary instead records the annotation as the target file
+plus a **prose anchor** (`# mutation-probe: harness-cp/src/foo.py:<the retry-budget guard>`)
+and resolves every anchor to a numeric `A-B` in a **post-green, Adversary-owned resolution
+pass**. That pass is a re-open by the rules above: the Adversary edits the test file, and a
+**NEW digest is recorded** to supersede the handoff one. The Implementer never resolves an
+annotation. Probes run against the resolved numeric ranges, never against an anchor.
+
 ## The handoff fence (sha256)
 
 At the moment the Adversary hands off,
@@ -60,12 +70,14 @@ At the moment the Adversary hands off,
 shasum -a 256 <test-file>            # record this digest in the arc's notes and the PR body
 ```
 
-The Implementer may not edit that file. `git diff --name-only` is **not** an adequate fence:
-an Implementer who edits a test and then reverts the edit, or who rewrites it to an
-equivalent-looking form, leaves the same clean name list as one who never touched it. Only the
-recorded digest distinguishes an untouched adversary test from an edited one. This is a
+The Implementer may not edit that file. What the digest proves is exactly one thing: **the
+final test file is byte-identical to what the Adversary handed off.** That is the contract —
+an edit reverted to the identical bytes is, by definition, contract-satisfying, and the digest
+does not claim to detect it. What it does beat is `git diff --name-only`, which passes any
+edit the Implementer commits and so proves nothing at all about content. This is a
 **recorded-digest fence, not a permission-guard deny** — no hook blocks the write; the gate
-below catches it, and a mismatch is a `RED-FIRST: BLOCK`, not something to explain away.
+below catches a divergent file, and a mismatch is a `RED-FIRST: BLOCK`, not something to
+explain away.
 
 If the ACs genuinely require a test change (the Adversary misread a criterion), that is a
 **re-open**: go back to the Adversary with the correction, let it rewrite, and record a NEW
@@ -87,8 +99,12 @@ The unit closes only when **all** of these hold:
 3. **Every** `# mutation-probe:` annotation in the file has been executed and exited 0:
 
    ```bash
-   just mutation-probe --file F --lines A-B --test "<the command that runs that test>"
+   uv run python tools/mutation_probe.py --file F --lines A-B --test "<the command that runs that test>"
    ```
+
+   Call the script directly. `just mutation-probe` is the same runner, but a `just` recipe's
+   variadic `*ARGS` loses quoting on arguments containing `#` or spaces, which is exactly the
+   shape a `--test` command takes.
 
    Exit 0 = the range is pinned. Exit 1 = the test stayed green with those lines removed (the
    test does not pin what it claims — fix the test through the Adversary, not the range). Exit
