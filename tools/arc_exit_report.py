@@ -17,6 +17,10 @@ with zero CI/ledger surface. One `EXIT-REPORT` row is also appended to
 `.harness/loop_status.md` as the index, through `loop_lib.sh`'s own `loop_log` (a bash
 shim — NOT a second copy of the row format).
 
+Both land under the MAIN checkout, not the (disposable) arc worktree a Codex-flow run is
+normally invoked from — see `resolve_repo_root`. All three consumers (report path, ledger,
+pending-HIL read) use that one resolved root.
+
 Design: a PURE `render(data) -> str` plus a thin `collect()` that shells `gh`/`git`. Every
 external call is validated (exit code + non-empty + parses) before its output flows
 anywhere; a missing/unauthenticated `gh` degrades to explicit nulls plus a note in the
@@ -154,6 +158,70 @@ def _gh_json(args: list[str], cwd: Path, notes: list[str], what: str) -> object:
     except json.JSONDecodeError:
         notes.append(f"`gh {' '.join(args[:2])}` output did not parse as JSON — {what} unresolved.")
         return None
+
+
+def resolve_repo_root(start: Path, redirect: bool = True) -> tuple[Path | None, list[str]]:
+    """The STABLE root to write into, plus any notes about how it was resolved.
+
+    Returns `(None, notes)` when `start` is not inside a git repository at all.
+
+    The Codex flow's normal shape is an isolated arc worktree (`AGENTS.md`), which is
+    DISPOSABLE — `git rev-parse --show-toplevel` there points at a directory that the
+    worktree-disposition step deletes. Writing the report + ledger index into it means the
+    artifacts vanish, and a later controller rerun writes a DIFFERENT file instead of
+    overwriting the PR-keyed one, defeating idempotency (codex round-6 P1).
+
+    So the root is redirected to the MAIN checkout: a linked worktree's
+    `--git-common-dir` lives inside the main checkout's `.git`, so its parent is that
+    checkout. The redirect is only taken when the resolved root actually looks like this
+    workspace (`.harness/` present) — otherwise the worktree toplevel is kept and a note
+    says the location may be worktree-local. `redirect=False` (an explicit `--repo-root`)
+    always wins.
+    """
+    notes: list[str] = []
+    rc, top = run(["git", "rev-parse", "--show-toplevel"], start)
+    if rc != 0 or not top:
+        return None, notes
+    toplevel = Path(top)
+    if not redirect:
+        return toplevel, notes
+
+    # Ask for an ABSOLUTE path: the plain form is CWD-relative (`../../.git` from a
+    # subdirectory — grounded live on git 2.39), so resolving it against anything but the
+    # exact cwd git ran in is wrong. `--path-format` needs git >= 2.31; fall back to the
+    # plain form resolved against that same cwd.
+    rc, common = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], start)
+    if rc != 0 or not common:
+        rc, common = run(["git", "rev-parse", "--git-common-dir"], start)
+    if rc != 0 or not common:
+        notes.append(
+            "`git rev-parse --git-common-dir` did not resolve — writing to the current "
+            f"worktree ({toplevel}); if this is a disposable arc worktree, this report's "
+            "location is worktree-local and will not survive worktree disposition."
+        )
+        return toplevel, notes
+    cdir = Path(common)
+    if not cdir.is_absolute():
+        cdir = start / cdir  # git reports it relative to the cwd we ran it in
+    try:
+        main_root = cdir.resolve().parent
+    except OSError:
+        return toplevel, notes
+    if main_root == toplevel:
+        return toplevel, notes  # already the main checkout — nothing to say
+    if (main_root / ".harness").is_dir():
+        notes.append(
+            f"invoked from a linked worktree ({toplevel}); the report and its ledger row "
+            f"were written to the MAIN checkout ({main_root}) so they survive worktree "
+            "disposition and a rerun overwrites the same PR-keyed file."
+        )
+        return main_root, notes
+    notes.append(
+        f"invoked from a linked worktree ({toplevel}) but the resolved main checkout "
+        f"({main_root}) has no .harness/ — writing to the worktree instead; this report's "
+        "location may be worktree-local and will not survive worktree disposition."
+    )
+    return toplevel, notes
 
 
 def _resolve_commit(sha: str, cwd: Path) -> str:
@@ -435,11 +503,18 @@ def _todos(repo_root: Path, notes: list[str]) -> list[str] | None:
     if not (lib.is_file() and loop_lib.is_file()):
         notes.append("tools/hooks/loop_lib.sh not found — todo_for_human is UNKNOWN (null).")
         return None
+    # The bash source is a CONSTANT; every path travels as an argv value read through "$N"
+    # (codex round-6 P2). Interpolating the paths into the source made a metacharacter-
+    # bearing repo path — `…/re"po; touch /tmp/x; #` — execute as code.
     rc, out = run(
         [
             "bash",
             "-c",
-            f'CLAUDE_PROJECT_DIR="{repo_root}"; . "{lib}"; . "{loop_lib}"; loop_pending_hil_list',
+            'CLAUDE_PROJECT_DIR="$1"; . "$2"; . "$3"; loop_pending_hil_list',
+            "arc_exit_report",  # $0
+            str(repo_root),
+            str(lib),
+            str(loop_lib),
         ],
         repo_root,
     )
@@ -480,14 +555,18 @@ def collect(
     repo_root: Path,
     gstack_root: Path | None = None,
     checkpoint: Path | None = None,
+    seed_notes: list[str] | None = None,
 ) -> dict[str, Any]:
     """Gather the arc's closure facts. Degrades to nulls + notes; never raises, never fabricates.
+
+    `seed_notes` carries observations made BEFORE collection began (currently the repo-root
+    resolution's) so they reach the report's prose tail through the one notes channel.
 
     One non-degrading outcome exists: `identity_error` (a PR that is not this merged arc).
     It is returned as data under `identity_error`, not acted on here — `main()` turns it
     into exit 2 without writing anything, keeping the effect at the boundary.
     """
-    notes: list[str] = []
+    notes: list[str] = list(seed_notes or [])
     pr_view = _as_dict(
         _gh_json(
             ["pr", "view", str(pr), "--json", "state,mergeCommit"], repo_root, notes, "merge_state"
@@ -662,13 +741,16 @@ def append_ledger_row(repo_root: Path, data: dict[str, Any], rel_path: str) -> b
         before = len(ledger.read_text(encoding="utf-8")) if ledger.is_file() else 0
     except OSError:
         before = 0
+    # Constant bash source; paths + detail all travel as argv values (codex round-6 P2).
     rc, _ = run(
         [
             "bash",
             "-c",
-            f'CLAUDE_PROJECT_DIR="{repo_root}"; . "{lib}"; . "{loop_lib}"; '
-            'loop_log EXIT-REPORT "$1"',
-            "loop_log",
+            'CLAUDE_PROJECT_DIR="$1"; . "$2"; . "$3"; loop_log EXIT-REPORT "$4"',
+            "arc_exit_report",  # $0
+            str(repo_root),
+            str(lib),
+            str(loop_lib),
             detail,
         ],
         repo_root,
@@ -698,7 +780,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     ap.add_argument(
-        "--repo-root", default=None, help="repository root (defaults to the enclosing repo)"
+        "--repo-root",
+        default=None,
+        help=(
+            "repository root to write into. Defaults to the MAIN checkout of the enclosing "
+            "repo (not a disposable arc worktree). An explicit value always wins."
+        ),
     )
     args = ap.parse_args(argv)
 
@@ -706,15 +793,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: --pr must be a positive PR number (got {args.pr}).", file=sys.stderr)
         return 2
 
-    root = Path(args.repo_root).resolve() if args.repo_root else Path.cwd()
-    rc, top = run(["git", "rev-parse", "--show-toplevel"], root)
-    if rc != 0 or not top:
-        print(
-            f"ERROR: {root} is not inside a git repository (git rev-parse exited {rc}).",
-            file=sys.stderr,
-        )
+    start = Path(args.repo_root).resolve() if args.repo_root else Path.cwd()
+    # An explicit --repo-root is authoritative: no main-checkout redirect.
+    resolved, root_notes = resolve_repo_root(start, redirect=not args.repo_root)
+    if resolved is None:
+        print(f"ERROR: {start} is not inside a git repository.", file=sys.stderr)
         return 2
-    root = Path(top)
+    root = resolved
 
     if args.merge_sha and not _resolve_commit(args.merge_sha, root):
         print(
@@ -730,7 +815,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: --checkpoint {ckpt} is not an existing file.", file=sys.stderr)
             return 2
 
-    data = collect(args.pr, args.merge_sha, root, checkpoint=ckpt)
+    data = collect(args.pr, args.merge_sha, root, checkpoint=ckpt, seed_notes=root_notes)
     if data.get("identity_error"):
         # Write NOTHING: a report naming this PR while carrying another arc's facts is
         # worse than no report at all.

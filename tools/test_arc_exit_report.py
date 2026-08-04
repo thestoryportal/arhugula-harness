@@ -59,6 +59,10 @@ def scenario(**over):
         # Per-commit committer times — the anchor for checkpoint.confirmed is the REFRESH
         # commit when one is verified, the merge otherwise.
         "ts": {MERGE: str(MERGE_TS), REFRESH: str(REFRESH_TS), OTHER: str(REFRESH_TS)},
+        # `git rev-parse --git-common-dir`. A MAIN checkout answers the relative ".git"; a
+        # linked worktree answers an absolute path inside the main checkout's .git, which is
+        # what redirects the write location (codex round-6 P1). (rc, stdout).
+        "common_dir": (0, ".git"),
         "todos": "",
         "todos_rc": 0,
     }
@@ -66,8 +70,16 @@ def scenario(**over):
     return base
 
 
-def make_run(sc, toplevel: Path):
-    """A fake `arc_exit_report.run` — every command shape the tool actually issues."""
+_REAL_RUN = aer.run  # captured before any monkeypatching, for the real-bash fixtures
+
+
+def make_run(sc, toplevel: Path, real_bash: bool = False):
+    """A fake `arc_exit_report.run` — every command shape the tool actually issues.
+
+    `real_bash=True` lets the `loop_lib.sh` shims run for real (the ledger append + the
+    pending-HIL read), which is what makes the round-6 root-resolution tests witness where
+    the artifacts ACTUALLY land rather than only where the code says it would write.
+    """
     calls: list[list[str]] = []
 
     def fake(cmd, cwd, timeout=20):
@@ -94,6 +106,8 @@ def make_run(sc, toplevel: Path):
         if cmd[0] == "git":
             if cmd[1] == "rev-parse" and "--show-toplevel" in cmd:
                 return 0, str(toplevel)
+            if cmd[1] == "rev-parse" and "--git-common-dir" in cmd:
+                return sc["common_dir"]
             if cmd[1] == "rev-parse":
                 want = cmd[-1].replace("^{commit}", "")
                 for full in sc["commits"]:
@@ -113,6 +127,8 @@ def make_run(sc, toplevel: Path):
                 return 0, "https://github.com/thestoryportal/arhugula-harness.git"
             return 1, ""
         if cmd[0] == "bash":
+            if real_bash:
+                return _REAL_RUN(cmd, cwd)
             return sc["todos_rc"], sc["todos"]
         return 1, ""
 
@@ -120,16 +136,19 @@ def make_run(sc, toplevel: Path):
     return fake
 
 
-@pytest.fixture
-def repo(tmp_path):
-    """A throwaway 'repo' with the two hook libs the shim sources, and a checkpoints dir."""
-    root = tmp_path / "repo"
-    (root / "tools" / "hooks").mkdir(parents=True)
-    (root / ".harness").mkdir()
+def mk_repo(root: Path) -> Path:
+    """A throwaway 'repo' with the two hook libs the shim sources, and a .harness dir."""
+    (root / "tools" / "hooks").mkdir(parents=True, exist_ok=True)
+    (root / ".harness").mkdir(exist_ok=True)
     real = Path(__file__).resolve().parent / "hooks"
     for name in ("lib.sh", "loop_lib.sh"):
         shutil.copy(real / name, root / "tools" / "hooks" / name)
     return root
+
+
+@pytest.fixture
+def repo(tmp_path):
+    return mk_repo(tmp_path / "repo")
 
 
 @pytest.fixture
@@ -835,6 +854,188 @@ def test_main_still_exits_0_when_the_ledger_row_cannot_be_written(tmp_path, gsta
     monkeypatch.setattr(aer, "run", make_run(scenario(), root))
     assert aer.main(["--pr", "5", "--merge-sha", MERGE, "--repo-root", str(root)]) == 0
     assert aer.report_path(root, 5).is_file()
+
+
+# --- ROUND-6 FINDING 1: artifacts land in the MAIN checkout, not a disposable worktree ---
+# The Codex flow runs inside an isolated arc worktree that worktree-disposition deletes. A
+# toplevel-rooted write vanishes with it, and a controller rerun then writes a DIFFERENT
+# file instead of overwriting the PR-keyed one.
+
+
+@pytest.fixture
+def worktree_pair(tmp_path):
+    """(main_checkout, linked_worktree) — the worktree's `--git-common-dir` points into the
+    main checkout's .git, exactly as real git reports it."""
+    main = mk_repo(tmp_path / "main-checkout")
+    (main / ".git").mkdir(exist_ok=True)
+    wt = mk_repo(tmp_path / "arc-worktree")
+    return main, wt
+
+
+def test_r6f1_linked_worktree_writes_to_the_main_checkout(worktree_pair, gstack, monkeypatch):
+    main, wt = worktree_pair
+    sc = scenario(common_dir=(0, str(main / ".git")))
+    monkeypatch.chdir(wt)  # invoked FROM the arc worktree, as the Codex flow does
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    # real_bash: let loop_log actually append, so this witnesses where the ledger LANDS.
+    monkeypatch.setattr(aer, "run", make_run(sc, wt, real_bash=True))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+
+    assert aer.report_path(main, 1202).is_file(), "report must land in the MAIN checkout"
+    assert not aer.report_path(wt, 1202).exists(), "nothing may be left in the disposable worktree"
+    assert (main / aer.LEDGER_REL).is_file(), "ledger index must land in the MAIN checkout"
+    assert not (wt / aer.LEDGER_REL).exists()
+    assert "MAIN checkout" in aer.report_path(main, 1202).read_text(encoding="utf-8")
+
+
+def test_r6f1_rerun_from_the_worktree_overwrites_the_same_main_file(
+    worktree_pair, gstack, monkeypatch
+):
+    """The defect's actual cost: idempotency. Two runs must produce ONE report file."""
+    main, wt = worktree_pair
+    sc = scenario(common_dir=(0, str(main / ".git")))
+    monkeypatch.chdir(wt)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, wt))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+    written = sorted((main / aer.REPORT_DIR).glob("arc-exit-report-pr*.md"))
+    assert [p.name for p in written] == ["arc-exit-report-pr1202.md"]
+
+
+def test_r6f1_pending_hil_read_uses_the_same_resolved_root(worktree_pair, gstack, monkeypatch):
+    """All three consumers share one root — a todo written in the MAIN ledger must be read."""
+    main, wt = worktree_pair
+    ledger = main / aer.LEDGER_REL
+    ledger.write_text(
+        "| ts | kind | detail |\n|---|---|---|\n"
+        "| 2026-08-04T00:00:00Z | ACTIVATE | run |\n"
+        "| 2026-08-04T00:01:00Z | DEFERRED-HIL | R-999 — needs the operator |\n",
+        encoding="utf-8",
+    )
+    sc = scenario(common_dir=(0, str(main / ".git")))
+    monkeypatch.chdir(wt)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, wt, real_bash=True))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+    body = aer.report_path(main, 1202).read_text(encoding="utf-8")
+    assert "R-999 — needs the operator" in body, "HIL read must use the main-checkout ledger"
+
+
+def test_r6f1_main_checkout_invocation_is_unchanged(repo, gstack, monkeypatch):
+    """A main checkout: `--git-common-dir`'s parent IS the toplevel → no redirect, no note."""
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(scenario(common_dir=(0, str(repo / ".git"))), repo))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+    assert aer.report_path(repo, 1202).is_file()
+    body = aer.report_path(repo, 1202).read_text(encoding="utf-8")
+    assert "linked worktree" not in body
+
+
+def test_r6f1_unresolvable_common_dir_falls_back_to_toplevel_with_a_note(repo, gstack, monkeypatch):
+    sc = scenario(common_dir=(128, ""))
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, repo))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+    body = aer.report_path(repo, 1202).read_text(encoding="utf-8")
+    assert "did not resolve" in body and "worktree-local" in body
+
+
+def test_r6f1_main_root_without_harness_is_not_trusted(
+    worktree_pair, tmp_path, gstack, monkeypatch
+):
+    """Resolution must be VALIDATED, not assumed — a common-dir parent that is not this
+    workspace falls back to the worktree, with a note."""
+    _main, wt = worktree_pair
+    stranger = tmp_path / "stranger"
+    (stranger / ".git").mkdir(parents=True)  # no .harness/
+    sc = scenario(common_dir=(0, str(stranger / ".git")))
+    monkeypatch.chdir(wt)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, wt))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+    assert aer.report_path(wt, 1202).is_file(), "untrusted resolution falls back to the worktree"
+    assert not aer.report_path(stranger, 1202).exists()
+    assert "has no .harness/" in aer.report_path(wt, 1202).read_text(encoding="utf-8")
+
+
+def test_r6f1_explicit_repo_root_wins_over_the_redirect(worktree_pair, gstack, monkeypatch):
+    main, wt = worktree_pair
+    sc = scenario(common_dir=(0, str(main / ".git")))
+    monkeypatch.chdir(wt)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, wt))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE, "--repo-root", str(wt)]) == 0
+    assert aer.report_path(wt, 1202).is_file(), "an explicit --repo-root is authoritative"
+    assert not aer.report_path(main, 1202).exists()
+
+
+def test_r6f1_not_a_git_repo_still_exits_2(tmp_path, monkeypatch):
+    monkeypatch.setattr(aer, "run", lambda cmd, cwd, timeout=20: (128, ""))
+    assert aer.main(["--pr", "1", "--repo-root", str(tmp_path)]) == 2
+
+
+# --- ROUND-6 FINDING 2: repo paths are argv values, never bash source -------------------
+# `…/re"po; touch /tmp/x; #` interpolated into the shim's source executed as code.
+
+EVIL_DIR = 'ev"il; touch SENTINEL; #'
+
+
+@pytest.fixture
+def evil_repo(tmp_path):
+    """A repo whose PATH carries shell metacharacters, plus the sentinel an injection
+    would create. Both live under tmp_path — nothing outside is ever touched."""
+    sentinel = tmp_path / "pwned"
+    root = mk_repo(tmp_path / EVIL_DIR.replace("SENTINEL", str(sentinel)))
+    return root, sentinel
+
+
+def test_r6f2_metacharacter_repo_path_does_not_execute_in_the_hil_read(evil_repo):
+    root, sentinel = evil_repo
+    notes: list[str] = []
+    todos = aer._todos(root, notes)
+    assert not sentinel.exists(), f"INJECTION EXECUTED: {sentinel} was created"
+    assert todos == [], "the shim must still work on a metacharacter-bearing path"
+    assert notes == []
+
+
+def test_r6f2_metacharacter_repo_path_does_not_execute_in_the_ledger_append(evil_repo):
+    root, sentinel = evil_repo
+    data = {
+        "pr": 1202,
+        "main_ci": {"commit": MERGE, "conclusion": "success"},
+        "refresh_commit": REFRESH,
+        "todo_for_human": [],
+    }
+    assert aer.append_ledger_row(root, data, "p.md") is True
+    assert not sentinel.exists(), f"INJECTION EXECUTED: {sentinel} was created"
+    assert "EXIT-REPORT" in (root / aer.LEDGER_REL).read_text(encoding="utf-8")
+
+
+def test_r6f2_shim_sources_are_constant_strings(evil_repo, monkeypatch):
+    """Structural: the `bash -c` SOURCE must carry no interpolated path — every value
+    travels in argv. A source string containing the repo path is the defect itself."""
+    root, _sentinel = evil_repo
+    seen: list[list[str]] = []
+
+    def spy(cmd, cwd, timeout=20):
+        seen.append(list(cmd))
+        return 0, ""
+
+    monkeypatch.setattr(aer, "run", spy)
+    aer._todos(root, [])
+    aer.append_ledger_row(
+        root, {"pr": 1, "main_ci": {}, "refresh_commit": None, "todo_for_human": []}, "p.md"
+    )
+    bash_calls = [c for c in seen if c[0] == "bash"]
+    assert len(bash_calls) == 2
+    for cmd in bash_calls:
+        source = cmd[2]
+        assert str(root) not in source, "the repo path leaked into the bash SOURCE"
+        assert '"$1"' in source and '"$2"' in source and '"$3"' in source
+        assert str(root) in cmd[3:], "the repo path must travel as an argv value"
 
 
 # --- render purity ----------------------------------------------------------------------
