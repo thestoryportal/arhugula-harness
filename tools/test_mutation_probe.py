@@ -14,6 +14,7 @@ directly, since those are where the honesty of the verdict lives.
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import shlex
@@ -237,6 +238,19 @@ def test_classify_step3_pytest_needs_a_reported_failure():
     assert mp.classify_step3(1, "= 1 failed, 1 passed in 0.1s =", True)[0] == mp.KILLED
     assert mp.classify_step3(4, "ERROR: usage error", True)[0] == mp.INDETERMINATE
     assert mp.classify_step3(5, "no tests ran in 0.01s", True)[0] == mp.INDETERMINATE
+
+
+@pytest.mark.parametrize("rc", [2, 3, 4, 5])
+def test_p1_pytest_abort_codes_with_a_stale_failed_summary_are_not_kills(rc):
+    """codex round-1 P1: pytest 2/3/4 (interrupt / internal error / usage error) can still
+    PRINT an `N failed` summary accumulated before the abort. Only rc 1
+    (`ExitCode.TESTS_FAILED`) means "tests ran and some failed"; anything else with a
+    failed count is an aborted run, and attributing it to the mutation is a false
+    PROBE PASSED."""
+    verdict, why = mp.classify_step3(rc, "= 1 failed, 3 passed in 0.4s =", True)
+    assert verdict == mp.INDETERMINATE
+    assert f"exited {rc}, not 1" in why
+    assert "before aborting" in why
 
 
 def test_classify_step3_pytest_collection_errors_are_indeterminate():
@@ -487,6 +501,21 @@ def test_ac6_shell_syntax_breaking_range_is_rejected(repo):
     assert (repo / "script.sh").read_text(encoding="utf-8") == SCRIPT_SH
 
 
+def test_p1_pytest_abort_with_a_stale_failed_summary_is_refused_end_to_end(repo):
+    """The P1 defect end to end: a pytest run that PRINTS `1 failed` and then exits 2 must
+    come out as exit 2, never as a PROBE PASSED. The shim is named so that
+    `looks_like_pytest` takes the strict pytest path (the `/pytest` token)."""
+    before = (repo / "src.py").read_bytes()
+    cmd = counting_script(repo, "pytest-shim.sh", "echo '= 1 failed, 3 passed in 0.4s ='\nexit 2")
+    assert mp.looks_like_pytest(f"bash ./{cmd.split()[-1]}")
+    res = run_probe(repo, "src.py", PINNED, f"bash ./{cmd.split()[-1]}")
+    assert res.returncode == 2, res.stdout + res.stderr
+    assert "PROBE PASSED" not in res.stdout
+    assert "exited 2, not 1" in res.stderr
+    assert (repo / "src.py").read_bytes() == before
+    assert sidecars(repo) == []
+
+
 def test_ac6_import_breaking_range_is_indeterminate_not_killed(repo):
     """Syntactically valid but collection-breaking: pytest reports an ERROR, not a failed
     test, so no kill may be claimed."""
@@ -527,7 +556,74 @@ def test_ac7_concurrent_writer_restoring_the_original_is_accepted(repo):
     assert sidecars(repo) == []
 
 
+def test_p2b_git_verification_runs_on_the_no_write_restore_path(repo):
+    """codex round-1 P2b: matching CONTENT is not the same claim as a clean working tree.
+
+    A concurrent process puts the original bytes back but leaves the index holding a
+    different version. The no-bytes-to-write success path must still run `git diff --quiet`
+    before releasing the sidecar — otherwise the probe drops the only remaining copy of the
+    original while printing a verification it never ran.
+    """
+    (repo / "src.py.orig").write_text(SRC, encoding="utf-8")
+    body = (
+        "printf '# STAGED\\n' >> src.py\n"  # index will hold mutated + this
+        "git add src.py\n"
+        "cat src.py.orig > src.py\n"  # worktree back to the ORIGINAL bytes
+        "exit 1"
+    )
+    cmd = counting_script(repo, "stager.sh", body)
+    res = run_probe(repo, "src.py", PINNED, cmd)
+    assert res.returncode == 3, res.stdout + res.stderr
+    assert "RESTORE FAILED" in res.stderr
+    assert "git diff --quiet" in res.stderr
+    assert (repo / "src.py").read_text(encoding="utf-8") == SRC
+    kept = sidecars(repo)
+    assert len(kept) == 1, "the sidecar was released without a passing git verification"
+    assert kept[0].read_bytes() == SRC.encode()
+
+
 # --- input gates + no-collateral-damage ---------------------------------------------------
+
+
+def test_p2a_the_mutating_write_is_inside_the_restoring_try():
+    """codex round-1 P2a, asserted STRUCTURALLY over the AST.
+
+    A signal landing between the mutating write and the entry of the protected region would
+    unwind past every restoration branch, leaving the file mutated until the next
+    invocation's sidecar reconcile — breaking AC4b's immediate guarantee. The fix is an
+    ORDERING one: `target.write_bytes` moved inside the `try` whose `finally` restores. That
+    closes the window BY CONSTRUCTION, which leaves no observable behaviour to test — so
+    the ordering itself is what this asserts, and reverting it kills this test.
+    """
+    tree = ast.parse(PROBE.read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "probe")
+    guards = [
+        node
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Try)
+        and any(
+            isinstance(c, ast.Call) and getattr(c.func, "id", "") == "restore"
+            for stmt in node.finalbody
+            for c in ast.walk(stmt)
+        )
+    ]
+    assert len(guards) == 1, "probe() must have exactly one restoring try/finally"
+    protected = {id(c) for stmt in guards[0].body for c in ast.walk(stmt)}
+
+    writes = [
+        c
+        for c in ast.walk(fn)
+        if isinstance(c, ast.Call)
+        and isinstance(c.func, ast.Attribute)
+        and c.func.attr == "write_bytes"
+        and getattr(c.func.value, "id", "") == "target"
+    ]
+    assert writes, "no `target.write_bytes(...)` call found in probe()"
+    for w in writes:
+        assert id(w) in protected, (
+            "a `target.write_bytes` in probe() sits OUTSIDE the restoring try/finally — a "
+            "signal in that window leaves the file mutated"
+        )
 
 
 def test_unprobeable_extension_is_refused(repo):

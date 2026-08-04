@@ -99,6 +99,10 @@ INDETERMINATE = "INDETERMINATE"
 # the shell's not-executable / not-found codes; >= 128 is a shell reporting 128+signal, and
 # < 0 is Python reporting a directly-signalled child.
 TIMEOUT_RC = 124
+# pytest's `ExitCode.TESTS_FAILED`. The ONLY pytest rc that means "tests ran and some
+# failed"; 2/3/4/5 are interrupt / internal error / usage error / empty collection, and any
+# of them can still print a stale `N failed` summary.
+PYTEST_TESTS_FAILED_RC = 1
 
 
 class TerminatedError(RuntimeError):
@@ -265,10 +269,13 @@ def classify_step3(rc: int, output: str, is_pytest: bool) -> tuple[str, str]:
       Heuristic limit, stated: a runner that deliberately exits >= 128 to mean "tests
       failed" would be misread as abnormal — none is used here, and the failure direction
       is the safe one (exit 2, not a false pass).
-    * pytest → require a reported `N failed` count AND no `N error` count. Errors mean
-      collection/import breakage rather than a test-level failure; because step 1 required
-      the suite green, any error here was CAUSED by the mutation and is not a witness that
-      a test pins the lines.
+    * pytest → require rc EXACTLY 1 (`ExitCode.TESTS_FAILED`) AND a reported `N failed`
+      count AND no `N error` count. All three are load-bearing. rc 2/3/4 (interrupt /
+      internal error / usage error) can still PRINT an `N failed` summary accumulated
+      before the abort, so a count-only check would read an aborted run as a kill (codex
+      round-1 P1); rc 5 is an empty collection. Errors mean collection/import breakage
+      rather than a test-level failure; because step 1 required the suite green, any error
+      here was CAUSED by the mutation and is not a witness that a test pins the lines.
     * any other command → nonzero is taken as a kill. This is honestly a weaker claim: an
       arbitrary script's nonzero rc cannot be attributed to an assertion. What IS excluded
       is launch failure, timeout and signal death (above) plus, by gate 2b, the dominant
@@ -288,6 +295,14 @@ def classify_step3(rc: int, output: str, is_pytest: bool) -> tuple[str, str]:
     if is_pytest:
         failed = _last_count(PYTEST_FAILED_RE, output)
         errors = _last_count(PYTEST_ERROR_RE, output)
+        if rc != PYTEST_TESTS_FAILED_RC:
+            seen = f", though it printed '{failed} failed' before aborting" if failed else ""
+            return (
+                INDETERMINATE,
+                f"pytest exited {rc}, not {PYTEST_TESTS_FAILED_RC} — an interrupt (2), "
+                f"internal error (3), usage error (4) or empty collection (5) is not a "
+                f"test-level failure{seen}",
+            )
         if errors:
             return (
                 INDETERMINATE,
@@ -422,7 +437,12 @@ def restore(
 
     On success the restore is verified twice — the on-disk bytes AND `git diff --quiet`
     (the same predicate step 0 gated on) — and only then is the sidecar unlinked, so no
-    success-path sidecar survives for a later reconcile to replay.
+    success-path sidecar survives for a later reconcile to replay. BOTH success paths take
+    that verification, including the one where no bytes needed writing (codex round-1 P2b):
+    matching content is not the same claim as a clean working tree — another process can
+    put the original bytes back while leaving the index or the file's git state dirty, and
+    releasing the sidecar there would drop the only remaining copy while the caller printed
+    a verification it never ran.
     """
     try:
         current = target.read_bytes()
@@ -433,9 +453,8 @@ def restore(
         )
     if current == original:
         # Already the original (a concurrent writer restored it, or the mutation never
-        # landed). Nothing to write; the desired end state holds.
-        _unlink(sidecar)
-        return RestoreOutcome(True, "")
+        # landed). Nothing to WRITE — but the git verification below still applies.
+        return _verify_and_release(target, sidecar, cwd)
     if current != written:
         return RestoreOutcome(
             False,
@@ -465,6 +484,13 @@ def restore(
             f"RESTORE FAILED: {target} does not match the original after rewriting it; the "
             f"original is preserved at {sidecar}",
         )
+    return _verify_and_release(target, sidecar, cwd)
+
+
+def _verify_and_release(target: Path, sidecar: Path, cwd: Path) -> RestoreOutcome:
+    """The shared restore tail: git must agree the file is back, and only then is the
+    sidecar released. Reached from BOTH success paths — the one that rewrote the bytes and
+    the one that found them already correct."""
     diff = run(["git", "diff", "--quiet", "--", str(target)], cwd)
     if diff.rc != 0:
         return RestoreOutcome(
@@ -571,49 +597,69 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
         )
 
     # Step 2 — sidecar first, then the mutation.
+    #
+    # ORDERING (codex round-1 P2a). The mutating write happens INSIDE the `try` whose
+    # `finally` restores, not before it. Publishing the mutation first and only then
+    # entering the protected region leaves a window in which a SIGTERM/SIGINT/SIGHUP —
+    # which the handler turns into an exception — unwinds past every restoration branch and
+    # leaves the file mutated until the NEXT invocation's sidecar reconcile, breaking AC4b's
+    # immediate guarantee. With the write inside, the window is closed BY CONSTRUCTION:
+    # there is no point at which the target's bytes differ from `original` and an exception
+    # can escape without running `restore`. (`test_p2a_the_mutating_write_is_inside_the_
+    # restoring_try` asserts this structurally over the AST, since a closed window has no
+    # observable behaviour left to test.)
+    #
+    # The remaining pre-`try` window writes only the SIDECAR, while the target still holds
+    # its original bytes: a signal there leaves a stale sidecar that matches its file, which
+    # the next reconcile removes without rewriting anything.
     sidecar = sidecar_for(target, os.getpid())
+    written = mutated_text.encode("utf-8")
     try:
         sidecar.write_bytes(original)
     except OSError as e:
         return _refuse(f"cannot write the crash-recovery sidecar {sidecar} ({e}).")
-    written = mutated_text.encode("utf-8")
-    try:
-        target.write_bytes(written)
-    except OSError as e:
-        _unlink(sidecar)
-        return _refuse(f"cannot write {target} ({e}); the file was left unchanged.")
 
     verdict = INDETERMINATE
     reason = "the probe did not complete"
     mutation_output = ""
+    write_error: str | None = None
+    signal_error: str | None = None
+    outcome = RestoreOutcome(False, "RESTORE FAILED: the restore step did not run")
     try:
-        print(f"[2/3] mutated {target}:{start}-{end} ({end - start + 1} line(s) commented out)")
-        print(f"[3/3] re-running: {test_cmd}")
-        res = run_shell(test_cmd, repo_root, timeout)
-        mutation_output = res.combined
-        verdict, reason = classify_step3(res.rc, mutation_output, looks_like_pytest(test_cmd))
+        try:
+            target.write_bytes(written)
+        except OSError as e:
+            write_error = f"cannot write {target} ({e})"
+        else:
+            print(f"[2/3] mutated {target}:{start}-{end} ({end - start + 1} line(s) commented out)")
+            print(f"[3/3] re-running: {test_cmd}")
+            res = run_shell(test_cmd, repo_root, timeout)
+            mutation_output = res.combined
+            verdict, reason = classify_step3(res.rc, mutation_output, looks_like_pytest(test_cmd))
     except TerminatedError as e:
+        signal_error = str(e)
+    finally:
+        # Unconditional: also runs when a BaseException this function does not name is on
+        # its way out, which is the only way that path's restore ever happens.
         outcome = restore(target, original, written, sidecar, repo_root)
         if not outcome.ok:
             print(outcome.message, file=sys.stderr)
-            return 3
-        print(f"REFUSED: {e} — {target} was restored and verified; no verdict.", file=sys.stderr)
-        return 2
-    except BaseException:
-        outcome = restore(target, original, written, sidecar, repo_root)
-        if not outcome.ok:
-            print(outcome.message, file=sys.stderr)
-        raise
-    else:
-        outcome = restore(target, original, written, sidecar, repo_root)
 
     if not outcome.ok:
         # A restore failure outranks the verdict: exit 2 promises "the file is untouched",
         # and that promise is exactly what no longer holds.
-        print(outcome.message, file=sys.stderr)
         if verdict != INDETERMINATE:
             print(f"(the probe's own verdict was {verdict}: {reason})", file=sys.stderr)
         return 3
+
+    if write_error is not None:
+        return _refuse(f"{write_error}; the file was left unchanged.")
+    if signal_error is not None:
+        print(
+            f"REFUSED: {signal_error} — {target} was restored and verified; no verdict.",
+            file=sys.stderr,
+        )
+        return 2
 
     print(f"restored {target} (verified byte-identical + `git diff --quiet`)")
     if verdict == KILLED:
