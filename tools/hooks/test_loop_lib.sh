@@ -178,6 +178,49 @@ loop_defer R-410 "regressed — needs container runtime again"
 SKIP=$(loop_skip_set)
 [ "$SKIP" = "R-300 R-410" ] && ok "re-deferral after resolve re-flags the item ($SKIP)" || bad "re-deferral not re-flagged: [$SKIP]"
 
+# 17) loop_pending_hil_list (U-WT-03): EVERY pending deferral, one FULL row each — no
+#     3-item cap, no "+N more" elision. This is what makes a machine-readable
+#     todo_for_human[] possible; the bounded summary structurally cannot supply it.
+: > "$(loop_status_path)"; loop_activate "list test" >/dev/null
+loop_defer R-101 "needs creds A"
+loop_defer R-102 "needs creds B"
+loop_defer R-103 "needs creds C"
+loop_defer R-104 "needs creds D"
+loop_defer R-105 "needs creds E"
+LIST=$(loop_pending_hil_list)
+LN=$(printf '%s\n' "$LIST" | grep -c .)
+[ "$LN" -eq 5 ] && ok "loop_pending_hil_list emits one row per pending item (5)" || bad "list row count $LN != 5"
+printf '%s' "$LIST" | grep -q 'R-105 — needs creds E' && ok "list carries the FULL detail of the 5th item (uncapped)" || bad "list truncated/malformed: [$LIST]"
+printf '%s' "$LIST" | grep -q 'more)' && bad "list carries the summary's '+N more' elision" || ok "list has no '+N more' elision"
+
+# 17b) NO-REGRESSION: the bounded summary still caps at 3 + '+N more' over the SAME ledger.
+SUM=$(loop_pending_hil_summary)
+printf '%s' "$SUM" | grep -q '(+2 more)' && ok "summary still caps at 3 details + '+2 more'" || bad "summary cap regressed: $SUM"
+printf '%s' "$SUM" | grep -q '⏸ 5 item(s) await your input' && ok "summary still reports the full pending count (5)" || bad "summary count regressed: $SUM"
+
+# 17c) STRUCTURAL: both consumers go through the ONE shared extraction — the plan forbids
+#      forking a second ledger parser (a second parser is a second authority free to
+#      drift on the last-write-wins / run-boundary / leading-token rules).
+LIST_BODY=$(declare -f loop_pending_hil_list)
+SUM_BODY=$(declare -f loop_pending_hil_summary)
+printf '%s' "$LIST_BODY" | grep -q '_loop_pending_hil_rows' && ok "loop_pending_hil_list uses the shared extraction" || bad "loop_pending_hil_list does not call _loop_pending_hil_rows"
+printf '%s' "$SUM_BODY" | grep -q '_loop_pending_hil_rows' && ok "loop_pending_hil_summary uses the shared extraction" || bad "loop_pending_hil_summary does not call _loop_pending_hil_rows"
+printf '%s' "$SUM_BODY" | grep -q 'awk' && bad "loop_pending_hil_summary still carries its own awk parser (forked parse)" || ok "loop_pending_hil_summary carries no second awk parser"
+
+# 17d) The list obeys the SAME semantics as the summary/skip-set: RESOLVED clears, a new
+#      ACTIVATE scopes to the current run, and only the leading token keys the item.
+loop_resolve R-103 "answered" >/dev/null
+LIST=$(loop_pending_hil_list)
+printf '%s' "$LIST" | grep -q 'R-103' && bad "resolved item still in the list: [$LIST]" || ok "loop_pending_hil_list drops a RESOLVED item"
+[ "$(printf '%s\n' "$LIST" | grep -c .)" -eq 4 ] && ok "list count drops to 4 after the resolve" || bad "list count after resolve: $(printf '%s\n' "$LIST" | grep -c .)"
+loop_activate "list run 2" >/dev/null
+[ -z "$(loop_pending_hil_list)" ] && ok "a new ACTIVATE scopes the list to the new run (empty)" || bad "list not run-scoped: [$(loop_pending_hil_list)]"
+
+# 17e) Empty ledger → empty list (the exit report must then emit `todo_for_human: []`,
+#      not a phantom row).
+: > "$(loop_status_path)"
+[ -z "$(loop_pending_hil_list)" ] && ok "loop_pending_hil_list empty on an empty ledger" || bad "list non-empty on an empty ledger"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

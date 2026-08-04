@@ -114,3 +114,22 @@ memory policy permits it; context-save itself remains mandatory. A checkpoint's 
 prose is advisory, so verify it against HEAD when resuming. After the fixed point, create the
 next isolated worktree and run `just codex-autonomous-arc <next-arc-id>`. Skip reflection only
 for a pure terminating-refresh PR.
+
+## Arc exit report (U-WT-03/04)
+
+Run this last, after the reflect and `context-save` step above — never before it. Only at
+that point do the merge SHA, the post-merge main CI conclusion, the terminating refresh
+commit, and the checkpoint just written all exist, so the report records the arc's real
+final checkpoint instead of a stale one.
+
+```bash
+just arc-exit-report --pr <NNN> --merge-sha <merge-sha>
+```
+
+Validate the call before using its output: require exit 0 and the named report path. The
+recipe writes `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` (gitignored, PR-keyed, so a
+re-run overwrites rather than orphaning a sibling) and appends one `EXIT-REPORT` row to
+`.harness/loop_status.md`. Paste the emitted `yaml` block into the final response as the
+arc's machine-readable closure record. Every field is collected or explicitly null — a null
+`refresh_commit`, a `main_ci.conclusion` other than `success`, or `checkpoint.confirmed:
+false` each mean a closeout obligation above is still open.

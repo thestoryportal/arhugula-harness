@@ -218,6 +218,26 @@ ending the turn):
 Skip only when this PR was itself the terminating roadmap-status refresh (§12.2.1) — a
 refresh-only commit has no new learnings to reflect on.
 
+## Arc exit report — the LAST step (U-WT-03/04)
+
+**After** the reflect + `/context-save` block above, not before it. That ordering is the
+whole point: the merge SHA, the post-merge main-CI conclusion, the §12.2.1 refresh commit
+**and** the checkpoint you just wrote all exist only at this point, so the report records
+the arc's *real* final checkpoint rather than a stale or fabricated one. Run:
+
+```
+just arc-exit-report --pr <NNN> --merge-sha <merge-sha>
+```
+
+It writes `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` (gitignored, PR-keyed — a
+re-run overwrites it) and indexes one `EXIT-REPORT` row into `.harness/loop_status.md`.
+Paste the emitted `yaml` block into this turn's final message: it is the arc's
+machine-readable closure record, and every field is collected or explicitly null — a
+missing refresh reads `refresh_commit: null` and a non-green CI reads its conclusion
+verbatim, so the block is evidence, not narration. Read what it says before pasting: a
+null `refresh_commit`, a `main_ci.conclusion` that is not `success`, or
+`checkpoint.confirmed: false` each mean an obligation above is still open.
+
 ## Notes
 
 - The Wave-1 `post-merge-refresh.sh` hook pre-computes the new hash + injects the §12.2

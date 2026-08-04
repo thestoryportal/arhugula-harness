@@ -157,17 +157,15 @@ loop_skip_set() {
   ' "$p" 2>/dev/null | grep -E '^(R|B)-[A-Za-z0-9._-]+$' | sort -u | tr '\n' ' ' | sed 's/ $//'
 }
 
-# Operator-facing summary of the LAST run's still-PENDING deferrals (a RESOLVED-HIL row
-# clears an item per the same last-write-wins rule as loop_skip_set), for SessionStart
-# surfacing ("clearly presented when they engage next"). Compact one line; empty when
-# there are none. Lists up to 3 items + a "+N more" tail so the SessionStart context
-# stays bounded. Item order among >3 pending items is not chronologically guaranteed
-# (awk associative-array iteration) — acceptable for advisory summary text.
-loop_pending_hil_summary() {
+# THE ledger parse for still-PENDING deferrals — one line per pending item, carrying its
+# FULL "<item-id> — <reason>" detail, sorted by item-id for a deterministic order. Private:
+# both public consumers below (the bounded operator summary and the structured list) share
+# this single extraction so the last-write-wins rule, the run-boundary reset and the
+# leading-token keying can never diverge between them.
+_loop_pending_hil_rows() {
   local p; p=$(loop_status_path)
   [ -f "$p" ] || return 0
-  local rows n
-  rows=$(awk -F'|' '
+  awk -F'|' '
     { k = $3; gsub(/^[ \t]+|[ \t]+$/, "", k) }
     k == "ACTIVATE" { delete state; delete detail }
     k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
@@ -176,7 +174,28 @@ loop_pending_hil_summary() {
       else { state[tok] = "RESOLVED" }
     }
     END { for (t in state) if (state[t] == "PENDING") print detail[t] }
-  ' "$p" 2>/dev/null)
+  ' "$p" 2>/dev/null | sed 's/[ \t]*$//' | sort
+}
+
+# Structured sibling of loop_pending_hil_summary (U-WT-03): EVERY pending deferral, one
+# full untruncated row each, nothing elided. The summary below is deliberately bounded to
+# 3 details + a "+N more" tail for SessionStart context economy, which makes it unable to
+# faithfully populate a machine-readable list — so `tools/arc_exit_report.py` consumes this
+# instead for the exit report's `todo_for_human[]`. Same parse, different presentation:
+# a second parser would be a second authority free to drift.
+loop_pending_hil_list() {
+  _loop_pending_hil_rows
+}
+
+# Operator-facing summary of the LAST run's still-PENDING deferrals (a RESOLVED-HIL row
+# clears an item per the same last-write-wins rule as loop_skip_set), for SessionStart
+# surfacing ("clearly presented when they engage next"). Compact one line; empty when
+# there are none. Lists up to 3 items + a "+N more" tail so the SessionStart context
+# stays bounded. Item order is item-ID-sorted (the shared extraction sorts), so which 3
+# items head the summary is deterministic rather than awk-iteration-order dependent.
+loop_pending_hil_summary() {
+  local rows n
+  rows=$(_loop_pending_hil_rows)
   [ -z "$rows" ] && return 0
   n=$(printf '%s\n' "$rows" | grep -c .)
   local head3; head3=$(printf '%s\n' "$rows" | head -3 | paste -sd';' - | sed 's/;/; /g')
