@@ -244,11 +244,13 @@ def resolve_repo_root(start: Path, redirect: bool = True) -> tuple[Roots | None,
     wt_ledger = (toplevel / LEDGER_REL).is_file()
     main_ledger = (main_root / LEDGER_REL).is_file()
     if not wt_ledger and main_ledger:
-        read_root = main_root
+        # A ledger-less worktree is the NORMAL no-deferral case. Borrowing main's ledger
+        # here would serialize a PARALLEL session's pending rows as THIS arc's
+        # todo_for_human (codex round-10) — the honest answer is the arc's own truth:
+        # it deferred nothing. read_root stays on the worktree; the read yields [].
         notes.append(
-            f"the invoking worktree has no {LEDGER_REL} — pending-HIL rows were read from "
-            "the main checkout's ledger instead (a worktree that never deferred has none of "
-            "its own to lose)."
+            f"the invoking worktree has no {LEDGER_REL} — this arc recorded no deferrals; "
+            "the main checkout's SEPARATE ledger (a parallel session's) was NOT borrowed."
         )
     elif wt_ledger and main_ledger:
         notes.append(

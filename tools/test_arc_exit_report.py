@@ -952,10 +952,12 @@ def test_r7_worktree_rows_win_over_the_main_checkouts(worktree_pair, gstack, mon
     assert "NOT merged into this report" in body, "the split must be stated honestly"
 
 
-def test_r7_worktree_without_a_ledger_falls_back_to_main_with_a_note(
+def test_r7_worktree_without_a_ledger_is_an_honest_empty_never_borrowed(
     worktree_pair, gstack, monkeypatch
 ):
-    """(b) a worktree that never deferred has nothing of its own to lose."""
+    """(b, re-cut at codex round-10) a ledger-less worktree is the NORMAL no-deferral
+    case; borrowing main's ledger would serialize a PARALLEL session's rows as this
+    arc's obligations. The honest answer is []: this arc deferred nothing."""
     main, wt = worktree_pair
     write_ledger(main, "R-999 — needs the operator")
     sc = scenario(common_dir=(0, str(main / ".git")))
@@ -965,8 +967,9 @@ def test_r7_worktree_without_a_ledger_falls_back_to_main_with_a_note(
     assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
 
     body = aer.report_path(main, 1202).read_text(encoding="utf-8")
-    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == ["R-999 — needs the operator"]
-    assert "has no .harness/loop_status.md" in body
+    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == []
+    assert "R-999" not in body, "a parallel session's row must never be borrowed"
+    assert "NOT borrowed" in body
 
 
 def test_r7_neither_ledger_present_is_an_honest_empty(worktree_pair, gstack, monkeypatch):
