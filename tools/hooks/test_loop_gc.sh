@@ -459,23 +459,33 @@ T14="$SW/t14.jsonl"; : > "$T14"; touch -t "$(date -v-2H +%Y%m%d%H%M 2>/dev/null 
 sw_row "$(sw_ts 7200)" start s14agent "$T14" >> "$SREG"
 sw_row "$(sw_ts 700000)" start oldkey14 /tmp/gone14.jsonl >> "$SREG"   # forces the prune arm to engage
 : > "$SLOCK"
+# Holder releases on a MARKER FILE, not a timer (codex delta-pass): append-before-release
+# is thereby STRUCTURAL — the marker is created only after the append lands — so the
+# false-red direction (stop landing after the locked re-read) cannot occur on any host,
+# however slow. The direct `>>` is deliberate: routing through the real appender here
+# would contend with the holder and skip past its own 2s deadline (the appender's lock
+# path has its own witness in S9).
 /usr/bin/python3 -c '
-import fcntl, sys, time
+import fcntl, os, sys, time
 f = open(sys.argv[1], "a+")
 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
 sys.stdout.write("held\n"); sys.stdout.flush()
-time.sleep(1.2)
-' "$SLOCK" > "$SW/h14.out" 2>/dev/null &
+deadline = time.monotonic() + 10.0
+while not os.path.exists(sys.argv[2]) and time.monotonic() < deadline:
+    time.sleep(0.02)
+' "$SLOCK" "$SW/h14.release" > "$SW/h14.out" 2>/dev/null &
 H14=$!
 for _ in $(seq 1 200); do [ -s "$SW/h14.out" ] && break; sleep 0.05; done
 sw_run > "$SW/s14.out" 2>/dev/null &
 S14PID=$!
-# 0.9s: the hook's COLD-START latency to its unlocked pre-read is ~0.47s (bash + 54KB of
-# lib sourcing + git worktree list + python spawn), so a 0.4s sleep raced it and left the
-# witness vacuous on most runs — the stop was already in the pre-read (gate lens-3,
-# measured; 0.9s = 12/12 exercised, still 0.3s inside the holder's 1.2s hold).
+# 0.9s pre-read margin: the hook's COLD-START latency to its unlocked pre-read is ~0.47s
+# (bash + 54KB of lib sourcing + git worktree list + python spawn); a 0.4s sleep raced it
+# and left the witness vacuous most runs (gate lens-3, measured; 0.9s = 12/12 exercised).
+# Mis-timing here only degrades toward vacuous-pass on a pathologically slow host —
+# never a false red, since release is marker-gated below.
 sleep 0.9
 sw_row "$(sw_ts 1)" stop s14agent "$T14" >> "$SREG"   # the reconciling stop lands in the window
+: > "$SW/h14.release"   # ONLY NOW may the holder release → locked re-read sees the stop
 wait "$H14" 2>/dev/null; wait "$S14PID" 2>/dev/null
 OUT=$(jq -r '.hookSpecificOutput.additionalContext // ""' "$SW/s14.out" 2>/dev/null)
 # The count is the sole live discriminator: the clause names only the OLDEST key
