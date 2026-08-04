@@ -122,10 +122,12 @@ failing adversary assertion.
 
 The unit closes only when **all** of these hold:
 
-1. `shasum -a 256 <test-file>` equals the **latest Adversary-recorded digest** — the handoff
-   digest if no resolution pass occurred, the resolution-pass digest otherwise. Only the
-   Adversary ever moves the digest forward; a mismatch against the latest Adversary digest is
-   a `RED-FIRST: BLOCK`.
+1. `shasum -a 256 <test-file>` equals the **latest Adversary-recorded digest** — which is
+   always the **resolution-pass digest**, since the resolution pass is mandatory for every
+   invocation (a close against the bare handoff digest means the pass was skipped — that is
+   itself a `RED-FIRST: BLOCK`), accompanied by the pass's annotation-only diff evidence.
+   Only the Adversary ever moves the digest forward; a mismatch against the latest Adversary
+   digest is a `RED-FIRST: BLOCK`.
 2. The adversary test command exits 0.
 3. **Every** `# mutation-probe:` annotation in the file has been executed and exited 0:
 
@@ -133,10 +135,12 @@ The unit closes only when **all** of these hold:
    just mutation-probe --file F --lines A-B --test "<that test's node-specific command>"
    ```
 
-   **Use that annotation's own node-specific command, never a file-level one.**
-   `mutation_probe.py` accepts *any* test failure in the command it is given, so a file-level
-   run clears the probe when a **sibling** test in the same file goes red — the annotated test
-   can stay green and the vacuous annotation still passes.
+   **Use that annotation's own node-specific command — never a command that executes sibling
+   tests.** `mutation_probe.py` accepts *any* test failure in the command it is given, so a
+   run covering siblings clears the probe when a **sibling** goes red — the annotated test
+   can stay green and the vacuous annotation still passes. (A file that contains exactly the
+   one annotated test — the sanctioned bash fallback above — is an honest node command: there
+   is no sibling to leak red.)
 
    Exit 0 = the range is pinned. Exit 1 = the test stayed green with those lines removed —
    which proves only that the test does not pin **those particular lines**. The Adversary

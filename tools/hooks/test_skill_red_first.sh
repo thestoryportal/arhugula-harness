@@ -125,10 +125,14 @@ needle "$CLAUDE_SKILL" "claude red-first" "the cannot-isolate-is-a-BLOCK rule" \
   'A test whose command cannot isolate it is itself a'
 needle "$CLAUDE_SKILL" "claude red-first" "the cannot-isolate BLOCK consequence (post-wrap)" \
   '`RED-FIRST: BLOCK`**: the gate below cannot be run honestly without one.'
-needle "$CLAUDE_SKILL" "claude red-first" "the no-file-level-probe rule" \
-  "**Use that annotation's own node-specific command, never a file-level one.**"
+needle "$CLAUDE_SKILL" "claude red-first" "the no-sibling-probe rule" \
+  "**Use that annotation's own node-specific command — never a command that executes sibling"
+needle "$CLAUDE_SKILL" "claude red-first" "the single-test-file honest-node carve-out" \
+  'is an honest node command: there'
+needle "$CLAUDE_SKILL" "claude red-first" "the mandatory resolution-pass digest at the gate" \
+  'always the **resolution-pass digest**'
 needle "$CLAUDE_SKILL" "claude red-first" "why a file-level probe is vacuous" \
-  'run clears the probe when a **sibling** test in the same file goes red'
+  'run covering siblings clears the probe when a **sibling** goes red'
 needle "$CLAUDE_SKILL" "claude red-first" "the red-evidence-in-PR-body requirement" \
   'paste the failing output verbatim into the PR body'
 needle "$CLAUDE_SKILL" "claude red-first" "the CUT-no-Breaker statement" \
@@ -174,8 +178,10 @@ needle "$CODEX_SKILL" "codex-native red-first" "the separate-session Implementer
   'Implementer phase runs in its own separate session'
 needle "$CODEX_SKILL" "codex-native red-first" "the probe invocation" \
   'just mutation-probe --file F --lines A-B --test'
-needle "$CODEX_SKILL" "codex-native red-first" "the no-file-level-probe rule" \
-  "Use the annotation's own node-specific command and never a file-level one"
+needle "$CODEX_SKILL" "codex-native red-first" "the no-sibling-probe rule" \
+  "Use the annotation's own node-specific command and never a command that executes sibling tests"
+needle "$CODEX_SKILL" "codex-native red-first" "the second-fresh-Adversary resolution session" \
+  'second fresh Adversary `codex exec` session'
 needle "$CODEX_SKILL" "codex-native red-first" "the operator-request-only invocation rule" \
   'never chain this skill automatically from roadmap-continue or ship-pr'
 needle "$CODEX_SKILL" "codex-native red-first" "the pre-commit throwaway-worktree probe path" \
