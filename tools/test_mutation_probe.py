@@ -110,7 +110,37 @@ out=$(bash script.sh world)
 exit 0
 """
 
+# A module whose line 2 can be commented out leaving GRAMMAR-valid but UNCOMPILABLE source
+# (the `nonlocal` loses its binding). `ast.parse` accepts it; `compile` does not.
+#   1 def counter():
+#   2     count = 0
+NONLOCAL_SRC = """def counter():
+    count = 0
+
+    def bump():
+        nonlocal count
+        count += 1
+        return count
+
+    return bump
+"""
+NONLOCAL_ORPHAN_LINE = "2"
+
 PY = shlex.quote(sys.executable)
+
+
+def plant_sidecar(path: Path, payload: bytes) -> None:
+    """Write a sidecar in the tool's real on-disk format (header + payload), the way a
+    crashed probe would have left it. Tests must never hand-roll the format."""
+    path.write_bytes(mp.sidecar_bytes(payload))
+
+
+def sidecar_payload(path: Path) -> bytes:
+    """The verified payload of a sidecar on disk; fails the test if integrity is broken."""
+    payload, err = mp.parse_sidecar(path.read_bytes())
+    assert err is None, f"sidecar {path} failed its integrity check: {err}"
+    assert payload is not None
+    return payload
 
 
 def pytest_cmd(*files: str) -> str:
@@ -144,6 +174,13 @@ def repo(tmp_path: Path) -> Iterator[Path]:
         # touching the repo root (where the test scripts and their counters live).
         "pkg/mod.py": SRC,
         "test_pkg.py": TEST_PKG,
+        "nonlocal_mod.py": NONLOCAL_SRC,
+        # A NON-pytest checker, deliberately: the compile-stage defect is only a false
+        # PROBE PASSED under the generic heuristic, where any nonzero reads as a kill.
+        "check_nonlocal.sh": (
+            "#!/usr/bin/env bash\n"
+            f"{PY} -c 'import nonlocal_mod; b = nonlocal_mod.counter(); assert b() == 1'\n"
+        ),
         # `secret.py` is IGNORED and never created here — the gitignore test creates it.
         ".gitignore": "secret.py\n",
     }
@@ -184,8 +221,10 @@ def _no_stray_sidecars_in_the_real_repo():
     Scan for them once per session (scoped to `tools/`, where every probeable file this
     suite could plausibly reach lives — a repo-wide glob would walk `.venv`)."""
     yield
-    assert not list((REAL_REPO / "tools").rglob("*.mutprobe.*.bak"))
-    assert not list(REAL_REPO.glob("*.mutprobe.*.bak"))
+    # `*.mutprobe.*` covers BOTH names — the published `.bak` and the unpublished `.tmp`
+    # staging fragment (codex round-3 P1).
+    assert not list((REAL_REPO / "tools").rglob("*.mutprobe.*"))
+    assert not list(REAL_REPO.glob("*.mutprobe.*"))
 
 
 def run_probe(
@@ -475,7 +514,7 @@ def test_ac4c_dead_pid_sidecar_is_reconciled_at_startup(repo):
     dead.wait()
     src = repo / "src.py"
     sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
-    sidecar.write_bytes(SRC.encode())
+    plant_sidecar(sidecar, SRC.encode())
     src.write_text(mp.comment_out(SRC, 2, 3), encoding="utf-8")  # the abandoned mutation
 
     res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
@@ -493,7 +532,7 @@ def test_ac4c_dead_pid_sidecar_matching_the_file_is_just_removed(repo):
     dead = subprocess.Popen([sys.executable, "-c", "pass"])
     dead.wait()
     sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
-    sidecar.write_bytes(SRC.encode())
+    plant_sidecar(sidecar, SRC.encode())
     res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
     assert "RECONCILED: removed stale sidecar" in res.stdout
     assert not sidecar.exists()
@@ -508,11 +547,11 @@ def test_ac8_live_pid_sidecar_is_never_touched(repo):
         other = repo / "consts.py"
         other.write_text("LIMIT = 999\n", encoding="utf-8")  # a concurrent probe's mutation
         sidecar = repo / f"consts.py.mutprobe.{live.pid}.bak"
-        sidecar.write_bytes(CONSTS.encode())
+        plant_sidecar(sidecar, CONSTS.encode())
         res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
         assert res.returncode == 0, res.stdout + res.stderr
         assert "RECONCILED" not in res.stdout
-        assert sidecar.read_bytes() == CONSTS.encode()
+        assert sidecar_payload(sidecar) == CONSTS.encode()
         assert other.read_text(encoding="utf-8") == "LIMIT = 999\n"
     finally:
         live.kill()
@@ -577,6 +616,34 @@ def test_p1_pytest_abort_with_a_stale_failed_summary_is_refused_end_to_end(repo)
     assert sidecars(repo) == []
 
 
+def test_p2_compile_stage_error_is_rejected_not_killed(repo):
+    """codex round-3 P2: `ast.parse` stops at the grammar. Commenting out the binding line
+    leaves an orphaned `nonlocal` — well-formed source that only the COMPILE stage rejects.
+    The mutated file then failed at import, and under a non-pytest command that nonzero read
+    as a kill: a false PROBE PASSED on lines nothing pins."""
+    mutated = mp.comment_out(NONLOCAL_SRC, 2, 2)
+    ast.parse(mutated)  # precondition: grammar-valid, so this is NOT a plain SyntaxError
+    with pytest.raises(SyntaxError):
+        compile(mutated, "t.py", "exec", dont_inherit=True)
+
+    before = (repo / "nonlocal_mod.py").read_bytes()
+    res = run_probe(repo, "nonlocal_mod.py", NONLOCAL_ORPHAN_LINE, "bash check_nonlocal.sh")
+    assert res.returncode == 2, res.stdout + res.stderr
+    assert "REJECTED RANGE" in res.stderr
+    assert "nonlocal" in res.stderr
+    assert "PROBE PASSED" not in res.stdout
+    assert (repo / "nonlocal_mod.py").read_bytes() == before
+    assert sidecars(repo) == []
+
+
+def test_p2_syntax_gate_runs_the_full_compile_not_just_the_grammar():
+    """The pure half, over both classic compile-stage errors."""
+    orphan_nonlocal = mp.comment_out(NONLOCAL_SRC, 2, 2)
+    assert mp.syntax_error("py", orphan_nonlocal, "t.py") is not None
+    assert mp.syntax_error("py", "for i in [1]:\n    pass\n\nbreak\n", "t.py") is not None
+    assert mp.syntax_error("py", "def f():\n    return 1\n", "t.py") is None
+
+
 def test_ac6_import_breaking_range_is_indeterminate_not_killed(repo):
     """Syntactically valid but collection-breaking: pytest reports an ERROR, not a failed
     test, so no kill may be claimed."""
@@ -602,7 +669,7 @@ def test_ac7_concurrent_writer_makes_the_restore_refuse_loudly(repo):
     assert "#     if n < 0:" in after, "the probe's own mutation vanished — restore ran anyway"
     kept = sidecars(repo)
     assert len(kept) == 1, "the sidecar is the only surviving copy of the original"
-    assert kept[0].read_bytes() == SRC.encode()
+    assert sidecar_payload(kept[0]) == SRC.encode()
 
 
 def test_ac7_concurrent_writer_restoring_the_original_is_accepted(repo):
@@ -640,7 +707,7 @@ def test_p2b_git_verification_runs_on_the_no_write_restore_path(repo):
     assert (repo / "src.py").read_text(encoding="utf-8") == SRC
     kept = sidecars(repo)
     assert len(kept) == 1, "the sidecar was released without a passing git verification"
-    assert kept[0].read_bytes() == SRC.encode()
+    assert sidecar_payload(kept[0]) == SRC.encode()
 
 
 def test_p2a_sidecar_release_failure_is_loud_and_nonzero(repo):
@@ -682,6 +749,145 @@ def test_p2a_a_clean_run_reports_the_released_state(repo):
     assert res.returncode == 0, res.stdout + res.stderr
     assert "SIDECAR NOT RELEASED" not in res.stderr
     assert sorted((repo / "pkg").glob("*.mutprobe.*.bak")) == []
+
+
+def test_p1_sidecar_round_trips_through_its_integrity_header():
+    assert mp.parse_sidecar(mp.sidecar_bytes(b"")) == (b"", None)
+    payload = SRC.encode()
+    assert mp.parse_sidecar(mp.sidecar_bytes(payload)) == (payload, None)
+    # Binary and embedded-newline payloads must survive verbatim.
+    blob = b"\x00\xff\nline\r\n"
+    assert mp.parse_sidecar(mp.sidecar_bytes(blob)) == (blob, None)
+
+
+@pytest.mark.parametrize(
+    ("mangle", "needle"),
+    [
+        (lambda b: b[: len(b) // 2], "truncated"),  # the P1 scenario
+        (lambda b: b + b"extra", "truncated or padded"),
+        (lambda b: b.replace(b"\n", b"X"), "no header line"),  # no newline at all
+        (lambda b: b.replace(b"\n", b"X", 1), "not a mutation-probe sidecar"),  # header eaten
+        (lambda b: b"raw file with no header at all\n", "not a mutation-probe sidecar"),
+        (lambda b: b.replace(b"v1", b"v9", 1), "unsupported sidecar version"),
+    ],
+)
+def test_p1_damaged_sidecars_never_parse(mangle, needle):
+    payload, err = mp.parse_sidecar(mangle(mp.sidecar_bytes(SRC.encode())))
+    assert payload is None
+    assert err is not None and needle in err
+
+
+def test_p1_sha256_mismatch_is_caught_even_at_the_right_length():
+    """Length alone is not integrity: a same-length corruption must still be refused."""
+    blob = bytearray(mp.sidecar_bytes(SRC.encode()))
+    blob[-1] ^= 0xFF
+    payload, err = mp.parse_sidecar(bytes(blob))
+    assert payload is None
+    assert err is not None and "sha256 mismatch" in err
+
+
+def test_p1_truncated_dead_pid_sidecar_is_refused_never_replayed(repo):
+    """codex round-3 P1, the reconcile-side defence: a corrupt sidecar must NEVER be written
+    over live source. There is no way to recover the true original from a truncated payload,
+    so the only sound behaviour is to refuse, retain, and tell the operator."""
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    src = repo / "src.py"
+    sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
+    full = mp.sidecar_bytes(SRC.encode())
+    sidecar.write_bytes(full[: len(full) // 2])  # a partial write, as a crash would leave
+    live_edit = SRC + "\n# work done since the crash\n"
+    src.write_text(live_edit, encoding="utf-8")
+
+    res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
+    assert "RECONCILE REFUSED" in res.stdout
+    assert "truncated" in res.stdout
+    assert sidecar.exists(), "a sidecar that failed integrity must be RETAINED"
+    assert src.read_text(encoding="utf-8") == live_edit, (
+        "the corrupt sidecar was replayed over live source — the exact P1 defect"
+    )
+    # The probe then refuses on its own (the file the reconcile did not touch is dirty).
+    assert res.returncode == 2
+
+
+def test_p1_headerless_legacy_sidecar_is_refused_not_treated_as_raw(repo):
+    """A sidecar from a pre-integrity build has no header. Falling back to 'treat the blob
+    as the original' would reinstate the blind write, so it is refused too."""
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
+    sidecar.write_bytes(SRC.encode())  # the OLD raw format
+    res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
+    assert "RECONCILE REFUSED" in res.stdout
+    assert sidecar.exists()
+
+
+def test_p1_dead_pid_tmp_fragment_is_removed_and_never_restored(repo):
+    """A `.tmp` exists only BEFORE the atomic publish, and the mutation is written strictly
+    after it — so a fragment proves the target was never mutated. Nothing to restore."""
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    frag = repo / f"src.py.mutprobe.{dead.pid}.tmp"
+    frag.write_bytes(b"half a sidecar, no header")
+    res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
+    assert "removed unpublished sidecar fragment" in res.stdout
+    assert "never mutated" in res.stdout
+    assert not frag.exists()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (repo / "src.py").read_text(encoding="utf-8") == SRC
+
+
+def test_p1_live_pid_tmp_fragment_is_left_alone(repo):
+    """A live pid's `.tmp` belongs to a probe mid-publish."""
+    live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        frag = repo / f"consts.py.mutprobe.{live.pid}.tmp"
+        frag.write_bytes(b"in flight")
+        res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
+        assert res.returncode == 0, res.stdout + res.stderr
+        # Match the MESSAGE, not the bare word — pytest's tmp_path carries the test's name.
+        assert "removed unpublished sidecar fragment" not in res.stdout
+        assert frag.read_bytes() == b"in flight"
+    finally:
+        live.kill()
+        live.wait()
+
+
+def test_p1_the_recognized_sidecar_name_is_only_ever_published_atomically():
+    """Structural witness, mirroring the P2a ordering test: the `.bak` name must be reachable
+    ONLY through `os.replace`, never through a direct write. A direct write truncates first,
+    so a crash mid-write leaves a partial file under the name the reconcile trusts."""
+    source = PROBE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    replaces = [
+        (fn, call)
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.FunctionDef)
+        for call in ast.walk(fn)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "replace"
+        and getattr(call.func.value, "id", "") == "os"
+    ]
+    assert len(replaces) == 1, "expected exactly one os.replace, in publish_sidecar"
+    assert replaces[0][0].name == "publish_sidecar"
+
+    # No `<name>.write_bytes(...)` may target a variable that holds the .bak path.
+    bak_holders = {"sidecar", "sc", "bak"}
+    offenders = [
+        call.func.value.id
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "write_bytes"
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id in bak_holders
+    ]
+    assert offenders == [], (
+        f"the recognized sidecar name is written directly via {offenders} — a crash "
+        "mid-write would leave a partial file that the reconcile trusts"
+    )
 
 
 def test_p2a_release_treats_an_already_gone_sidecar_as_released():

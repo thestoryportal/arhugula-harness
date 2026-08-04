@@ -20,10 +20,12 @@ below is therefore the load-bearing part of the design — not the mutation:
      step-3 red would be the pre-existing red, so a vacuous test would be reported as a
      kill. Already-red exits 2 with its own message, never a probe verdict.
   2. Read the original bytes into memory, then comment lines A-B out (`# ` at column 0).
-  2b. REQUIRE the mutated text to remain SYNTACTICALLY VALID (`ast.parse` for .py, `bash -n`
-     for .sh, `yaml.safe_load_all` for .yaml/.yml). A syntax-invalid mutation makes even a
-     VACUOUS test fail at import/collection time, which would fake a kill. Such a range is
-     rejected (exit 2) BEFORE anything is written, so the file is never touched.
+  2b. REQUIRE the mutated text to remain VALID — `compile(..., "exec")` for .py (the full
+     compile, not just `ast.parse`: the grammar-only check misses `break` outside a loop, an
+     orphaned `nonlocal`, and friends), `bash -n` for .sh, `yaml.safe_load_all` for
+     .yaml/.yml. An invalid mutation makes even a VACUOUS test fail at import/collection
+     time, which would fake a kill. Such a range is rejected (exit 2) BEFORE anything is
+     written, so the file is never touched.
   3. Re-run `<cmd>` and require a FAIL that is identifiable as TEST-LEVEL — see
      `classify_step3`. Any other nonzero (collection error, missing binary, timeout, a
      signal-killed child) is INDETERMINATE and exits 2. A probe must never report PASS on
@@ -72,7 +74,7 @@ Plan: `.harness/r-if-116-insights-residue-plan.md` Feature 5 / U-WT-06.
 from __future__ import annotations
 
 import argparse
-import ast
+import hashlib
 import os
 import re
 import signal
@@ -91,7 +93,13 @@ import yaml
 COMMENT_PREFIX = "# "
 KINDS: dict[str, str] = {".py": "py", ".sh": "sh", ".yaml": "yaml", ".yml": "yaml"}
 
-SIDECAR_RE = re.compile(r"^(?P<base>.+)\.mutprobe\.(?P<pid>\d+)\.bak$")
+# The sidecar's two names. `.bak` is the RECOGNIZED one the reconcile acts on and is only
+# ever produced by an `os.replace` from `.tmp`, so it is atomic-or-absent; `.tmp` is the
+# unpublished staging name and is never restorable (see `reconcile_sidecars`).
+SIDECAR_TMP_SUFFIX = ".tmp"
+SIDECAR_MAGIC = "mutation-probe-sidecar"
+SIDECAR_VERSION = "v1"
+SIDECAR_RE = re.compile(r"^(?P<base>.+)\.mutprobe\.(?P<pid>\d+)\.(?P<kind>bak|tmp)$")
 # pytest's summary counts. `\s+failed\b` deliberately does NOT match "1 xfailed" (no word
 # boundary before "failed" there) — an xfail is not a failure.
 PYTEST_FAILED_RE = re.compile(r"(\d+)\s+failed\b")
@@ -342,10 +350,22 @@ def syntax_error(kind: str, text: str, name: str) -> str | None:
     `bash -n`; the others are checked in-process. Checked BEFORE anything is written, so a
     rejected range leaves the file untouched."""
     if kind == "py":
+        # `compile(..., "exec")`, NOT `ast.parse` (codex round-3 P2). `ast.parse` stops at
+        # the grammar; a whole class of errors is only raised by the later symbol-table /
+        # code-generation pass — `break`/`continue` outside a loop, `return`/`yield` outside
+        # a function, an orphaned `nonlocal`. Commenting out an enclosing header or a
+        # binding line produces exactly those, with the indentation still well-formed, so
+        # the grammar-only gate waved them through: the file then failed at IMPORT, and
+        # under a non-pytest command that nonzero read as a kill — a false PROBE PASSED.
+        # `dont_inherit=True` keeps this module's own `__future__` flags from deciding
+        # whether the TARGET is valid.
         try:
-            ast.parse(text, filename=name)
+            compile(text, name, "exec", dont_inherit=True)
         except SyntaxError as e:
             return f"{type(e).__name__}: {e}"
+        except ValueError as e:
+            # `compile` raises ValueError (not SyntaxError) for e.g. embedded null bytes.
+            return f"ValueError: {e}"
         return None
     if kind == "yaml":
         try:
@@ -366,7 +386,99 @@ def syntax_error(kind: str, text: str, name: str) -> str | None:
     return f"no syntax checker for kind {kind!r}"
 
 
-# --- sidecar reconcile -------------------------------------------------------------------
+# --- sidecar publish + reconcile ---------------------------------------------------------
+
+
+def sidecar_bytes(original: bytes) -> bytes:
+    """The sidecar's on-disk form: one ASCII header line, then the original bytes verbatim.
+
+    The header carries an INTEGRITY WITNESS (codex round-3 P1). Without one, a truncated
+    sidecar is indistinguishable from a short file, and the reconcile — which is the one
+    code path that writes bytes it did not itself produce this run — would blind-write a
+    corrupt "original" over live source. There is no way to recover the true length from a
+    truncated payload, so the length and digest have to be recorded up front, next to the
+    payload, in a form a partial write cannot fake.
+    """
+    digest = hashlib.sha256(original).hexdigest()
+    header = f"{SIDECAR_MAGIC} {SIDECAR_VERSION} sha256={digest} bytes={len(original)}\n"
+    return header.encode("ascii") + original
+
+
+def parse_sidecar(blob: bytes) -> tuple[bytes | None, str | None]:
+    """(payload, error) for a sidecar's on-disk bytes. Never raises.
+
+    Any failure — missing/short header, wrong magic, unknown version, unparseable fields,
+    length mismatch, digest mismatch — returns an error. The caller must REFUSE to restore
+    on an error rather than fall back to treating the blob as a raw copy: that fallback is
+    precisely the blind-write this witness exists to prevent, and it would also silently
+    swallow a pre-integrity (headerless) sidecar left by an older build.
+    """
+    head, sep, payload = blob.partition(b"\n")
+    if not sep:
+        return None, "no header line"
+    try:
+        fields = head.decode("ascii").split()
+    except UnicodeDecodeError:
+        return None, "header is not ASCII"
+    if len(fields) != 4 or fields[0] != SIDECAR_MAGIC:
+        return None, "not a mutation-probe sidecar header"
+    if fields[1] != SIDECAR_VERSION:
+        return None, f"unsupported sidecar version {fields[1]!r}"
+    if not fields[2].startswith("sha256=") or not fields[3].startswith("bytes="):
+        return None, "malformed header fields"
+    want_digest = fields[2].removeprefix("sha256=")
+    want_len_text = fields[3].removeprefix("bytes=")
+    if not want_len_text.isdigit():
+        return None, "malformed byte count in header"
+    want_len = int(want_len_text)
+    if len(payload) != want_len:
+        return None, f"truncated or padded payload ({len(payload)} bytes, header says {want_len})"
+    if hashlib.sha256(payload).hexdigest() != want_digest:
+        return None, "sha256 mismatch — the payload is corrupt"
+    return payload, None
+
+
+def publish_sidecar(target: Path, pid: int, original: bytes) -> tuple[Path, str | None]:
+    """Put the crash-recovery sidecar in place ATOMICALLY. Returns (bak_path, error).
+
+    Writing straight to the recognized `.bak` name was the defect (codex round-3 P1):
+    `write_bytes` truncates and then writes, so a SIGKILL or power loss between those two
+    steps leaves an EMPTY or PARTIAL file under the name the reconcile trusts — and the next
+    run would write those bytes over the source. Here the payload goes to a `.tmp` sibling,
+    is flushed + fsynced, is read back and compared against what we meant to write, and only
+    then is `os.replace`d onto the `.bak` name. `os.replace` is atomic, so the recognized
+    name is atomic-or-absent: a reader either sees the whole sidecar or no sidecar.
+
+    Bound, stated rather than overclaimed: the directory entry is not fsynced, so across a
+    power loss the RENAME's durability is the filesystem's business. That is exactly why the
+    reconcile ALSO verifies the header's digest instead of trusting the name's presence —
+    the two defences are independent on purpose.
+    """
+    bak = sidecar_for(target, pid)
+    tmp = bak.with_suffix(SIDECAR_TMP_SUFFIX)
+    body = sidecar_bytes(original)
+    try:
+        with tmp.open("wb") as fh:
+            fh.write(body)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError as e:
+        _unlink(tmp)
+        return bak, f"cannot write {tmp} ({e})"
+    try:
+        landed = tmp.read_bytes()
+    except OSError as e:
+        _unlink(tmp)
+        return bak, f"cannot read back {tmp} ({e})"
+    if landed != body:
+        _unlink(tmp)
+        return bak, f"{tmp} did not read back as written — refusing to publish it"
+    try:
+        os.replace(tmp, bak)
+    except OSError as e:
+        _unlink(tmp)
+        return bak, f"cannot publish {bak} ({e})"
+    return bak, None
 
 
 def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
@@ -376,10 +488,23 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
     that is mid-run and whose file must not be rewritten under it. A sidecar whose file
     already matches it is merely stale (the probe restored, then died before unlinking) —
     it is removed without rewriting anything.
+
+    Two integrity rules govern the one path in this tool that writes bytes it did not
+    produce this run (codex round-3 P1):
+
+      * `.tmp` fragments are NEVER restorable. A `.tmp` exists only between the sidecar's
+        write and its `os.replace`, and the mutation is published strictly AFTER that
+        replace — so a dead probe's leftover `.tmp` proves the target was never mutated.
+        There is nothing to restore; the fragment is simply removed.
+      * a `.bak` is restored only if its header's length AND sha256 match its payload.
+        On any mismatch — truncation, corruption, or a headerless sidecar from an older
+        build — the reconcile REFUSES loudly and RETAINS the file for the operator. It must
+        never fall back to "treat the blob as the original", which is the blind-write this
+        whole mechanism exists to prevent.
     """
     msgs: list[str] = []
     try:
-        candidates = sorted(directory.glob("*.mutprobe.*.bak"))
+        candidates = sorted(directory.glob("*.mutprobe.*"))
     except OSError:
         return msgs
     for sc in candidates:
@@ -390,10 +515,30 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
         if pid == self_pid or pid_alive(pid):
             continue
         original = directory / m.group("base")
+        if m.group("kind") == "tmp":
+            try:
+                sc.unlink()
+                msgs.append(
+                    f"RECONCILED: removed unpublished sidecar fragment {sc.name} (pid {pid} "
+                    f"dead). A fragment proves the probe died BEFORE publishing, so "
+                    f"{original.name} was never mutated and nothing needed restoring."
+                )
+            except OSError as e:
+                msgs.append(f"RECONCILE SKIPPED: cannot remove fragment {sc.name} ({e})")
+            continue
         try:
-            saved = sc.read_bytes()
+            blob = sc.read_bytes()
         except OSError as e:
             msgs.append(f"RECONCILE SKIPPED: cannot read sidecar {sc.name} ({e})")
+            continue
+        saved, integrity_error = parse_sidecar(blob)
+        if saved is None:
+            msgs.append(
+                f"RECONCILE REFUSED: sidecar {sc.name} failed its integrity check "
+                f"({integrity_error}). It is RETAINED and {original.name} was NOT written. "
+                "Do not copy the sidecar back blindly — its payload is not trustworthy; "
+                "recover from git or your editor's history instead, then delete the sidecar."
+            )
             continue
         current: bytes | None
         try:
@@ -735,12 +880,13 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
     # The remaining pre-`try` window writes only the SIDECAR, while the target still holds
     # its original bytes: a signal there leaves a stale sidecar that matches its file, which
     # the next reconcile removes without rewriting anything.
-    sidecar = sidecar_for(target, os.getpid())
     written = mutated_text.encode("utf-8")
-    try:
-        sidecar.write_bytes(original)
-    except OSError as e:
-        return _refuse(f"cannot write the crash-recovery sidecar {sidecar} ({e}).")
+    sidecar, publish_error = publish_sidecar(target, os.getpid(), original)
+    if publish_error is not None:
+        return _refuse(
+            f"the crash-recovery sidecar could not be published ({publish_error}); "
+            f"{target} was NOT touched."
+        )
 
     verdict = INDETERMINATE
     reason = "the probe did not complete"

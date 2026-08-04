@@ -157,5 +157,8 @@ tools/semantic_overlay/overlay.json
 # Mutation-probe crash-recovery sidecars (tools/mutation_probe.py, U-WT-06). Written next
 # to the probed source file before it is mutated and removed on a verified restore — one
 # only survives a SIGKILL'd / crashed probe, and the next invocation reconciles it. They
-# are transient recovery state, never source.
-*.mutprobe.*.bak
+# are transient recovery state, never source. BOTH names are covered: the published `.bak`
+# and the `.tmp` staging fragment the atomic publish renames from (codex round-3 P1) — a
+# crash can leave either, and an unignored artifact next to source is one `git add -A`
+# away from being committed.
+*.mutprobe.*
