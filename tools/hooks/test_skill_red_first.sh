@@ -104,6 +104,8 @@ needle "$CLAUDE_SKILL" "claude red-first" "the annotation-lines-only resolution 
   'only `# mutation-probe:` annotation lines'
 needle "$CLAUDE_SKILL" "claude red-first" "the preserved-bytes mechanical delta check" \
   'copy the pre-resolution file'
+needle "$CLAUDE_SKILL" "claude red-first" "the exit-1 misresolved-range correction path" \
+  'misresolved range gets an annotation-only correction'
 
 # --- 4. Claude carrier: gate mechanics + verdict protocol -------------------------------
 # The probe MUST be run per-test, not per-file: mutation_probe.py accepts ANY test failure in

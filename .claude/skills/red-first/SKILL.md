@@ -131,8 +131,11 @@ The unit closes only when **all** of these hold:
    run clears the probe when a **sibling** test in the same file goes red — the annotated test
    can stay green and the vacuous annotation still passes.
 
-   Exit 0 = the range is pinned. Exit 1 = the test stayed green with those lines removed (the
-   test does not pin what it claims — fix the test through the Adversary, not the range). Exit
+   Exit 0 = the range is pinned. Exit 1 = the test stayed green with those lines removed —
+   which proves only that the test does not pin **those particular lines**. The Adversary
+   re-opens and diagnoses which half is wrong: a weak test is rewritten (full re-open, new
+   red), while a **misresolved range gets an annotation-only correction** under the same
+   digest/diff fence as any resolution pass. The Implementer touches neither. Exit
    2 = refused or indeterminate (dirty target file, already-red suite, syntax-breaking range) —
    that is **not** a pass; resolve it and re-run. Exit 3 = the restore did not complete; stop
    and repair the tree before anything else.
