@@ -22,14 +22,20 @@ external call is validated (exit code + non-empty + parses) before its output fl
 anywhere; a missing/unauthenticated `gh` degrades to explicit nulls plus a note in the
 prose tail — it never crashes and never fabricates a value. In particular:
 
-  * `refresh_commit` is null unless a commit after the merge is verified to be a
-    terminating refresh per CLAUDE.md §12.2.1 — subject prefix AND a changed-file set of
-    exactly `.harness/roadmap_status.md`. Never guessed from position.
-  * `main_ci.conclusion` is copied VERBATIM from `gh` — never coerced to "success", never
-    normalized. When several workflow runs share the merge commit, the reported run is
-    the FIRST non-success one (any of failure / cancelled / null-while-pending); only when
-    every run concluded `success` is `success` reported. A single red auxiliary workflow
-    can therefore never be masked by a green one.
+  * `refresh_commit` is bound by POSITION as well as shape: only the merge's IMMEDIATE
+    first-parent successor on the default branch may qualify (both ship-pr carriers
+    require the refresh to land as the immediate next commit), and it must also match
+    CLAUDE.md §12.2.1's shape — subject prefix AND a changed-file set of exactly
+    `.harness/roadmap_status.md`. A shape-match anywhere else belongs to a LATER arc and
+    is reported as a note, never bound (codex round-4 P1).
+  * `main_ci` is the merge commit's own `--branch <default> --event push` run — the
+    post-merge verdict both carriers require, not the PR's pre-merge checks and not a
+    manual dispatch that happens to share the SHA. Zero matching runs is UNRESOLVED, never
+    a verdict. `conclusion` is copied VERBATIM from `gh` — never coerced to "success",
+    never normalized. When several qualifying runs share the commit, the reported run is
+    the FIRST non-success one (failure / cancelled / null-while-pending); only when every
+    run concluded `success` is `success` reported, so a red workflow can never be masked
+    by a green sibling.
   * `checkpoint` is BOUND, not guessed. `--checkpoint PATH` names the exact file the
     arc's own `/context-save` just wrote; only a bound checkpoint can ever be
     `confirmed: true`. Without it the newest workspace checkpoint is reported as a
@@ -156,18 +162,39 @@ def _resolve_commit(sha: str, cwd: Path) -> str:
     return out if rc == 0 and len(out) == 40 else ""
 
 
+def _default_branch(cwd: Path) -> str:
+    """The default branch NAME (not a ref) — `origin/HEAD`'s target when known, else `main`."""
+    rc, out = run(["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], cwd)
+    if rc == 0 and "/" in out:
+        return out.split("/", 1)[1]
+    return "main"
+
+
 def _main_ci(commit: str, cwd: Path, notes: list[str]) -> dict[str, Any]:
-    """The post-merge CI verdict for `commit`. Conclusion copied verbatim; worst-first
-    selection across the commit's runs (see module docstring)."""
+    """The POST-MERGE CI verdict for `commit`. Conclusion copied verbatim; worst-first
+    selection across the commit's runs (see module docstring).
+
+    Scoped to `--branch <default> --event push` — the exact run both ship-pr carriers
+    require ("the merge commit's own main CI run", not the PR's pre-merge checks). Querying
+    by `--commit` alone mixes in manually-dispatched / non-main runs on the same SHA, so an
+    unrelated `workflow_dispatch` success could fake green when the real push run is absent,
+    and an unrelated failure could fake red (codex round-4 P2). Zero matching runs is
+    UNRESOLVED (null + note), never a verdict.
+    """
     blank: dict[str, Any] = {"commit": commit or None, "conclusion": None, "run_url": None}
     if not commit:
         return blank
+    branch = _default_branch(cwd)
     raw = _gh_json(
         [
             "run",
             "list",
             "--commit",
             commit,
+            "--branch",
+            branch,
+            "--event",
+            "push",
             "--limit",
             "20",
             "--json",
@@ -181,7 +208,10 @@ def _main_ci(commit: str, cwd: Path, notes: list[str]) -> dict[str, Any]:
         return blank
     runs = _as_dicts(raw)
     if not runs:
-        notes.append(f"No workflow runs found for merge commit {commit[:8]} — main_ci unresolved.")
+        notes.append(
+            f"No push-event workflow run on {branch} for merge commit {commit[:8]} — main_ci "
+            "unresolved (a dispatch-only or PR-only run is not the post-merge verdict)."
+        )
         return blank
     bad = [r for r in runs if r.get("conclusion") != "success"]
     chosen = bad[0] if bad else runs[0]
@@ -208,44 +238,95 @@ def _default_ref(cwd: Path) -> str:
     return "HEAD"
 
 
-def _refresh_commit(merge_commit: str, cwd: Path, notes: list[str]) -> str | None:
-    """The FIRST §12.2.1 terminating-refresh commit landed after `merge_commit`, or None.
+def _refresh_shape_ok(sha: str, cwd: Path) -> bool | None:
+    """Does `sha` change exactly `.harness/roadmap_status.md`? None = could not verify."""
+    rc, files = run(["git", "show", "--name-only", "--format=", sha], cwd)
+    if rc != 0:
+        return None
+    return [f for f in files.splitlines() if f.strip()] == [REFRESH_ONLY_FILE]
 
-    Verified, not inferred: subject must start with the reserved prefix AND the commit's
-    changed-file set must be exactly `.harness/roadmap_status.md`. A refresh-titled commit
-    that touches anything else is NOT terminating and is deliberately not reported.
+
+def _refresh_commit(merge_commit: str, cwd: Path, notes: list[str]) -> str | None:
+    """THIS merge's §12.2.1 terminating-refresh commit, or None.
+
+    Bound by POSITION, not merely by shape (codex round-4 P1). Both ship-pr carriers
+    require the refresh to land as the **immediate next commit**, so only the merge's
+    IMMEDIATE first-parent successor on the default branch is a candidate — and it must
+    additionally match the shape (reserved subject prefix AND a changed-file set of exactly
+    `.harness/roadmap_status.md`).
+
+    Scanning the whole history for the first shape-match was the defect: when THIS arc's
+    refresh is missing but a LATER arc lands its own one-file refresh, a shape-only scan
+    binds the other arc's commit — which then also mis-anchors `checkpoint.confirmed`
+    (`_checkpoint` anchors on the refresh). A shape-match anywhere else now yields None
+    plus a note naming what was found, so a missing refresh reads as missing.
     """
     if not merge_commit:
         return None
     ref = _default_ref(cwd)
-    rc, out = run(["git", "log", "--reverse", "--format=%H%x09%s", f"{merge_commit}..{ref}"], cwd)
+    rc, out = run(
+        [
+            "git",
+            "log",
+            "--first-parent",
+            "--reverse",
+            "--format=%H%x09%P%x09%s",
+            f"{merge_commit}..{ref}",
+        ],
+        cwd,
+    )
     if rc != 0:
         notes.append(
             f"`git log {merge_commit[:8]}..{ref}` exited {rc} — refresh_commit unresolved."
         )
         return None
-    for line in out.splitlines():
-        sha, _, subject = line.partition("\t")
-        if not subject.startswith(REFRESH_PREFIX):
-            continue
-        frc, files = run(["git", "show", "--name-only", "--format=", sha], cwd)
-        if frc != 0:
+    entries = [ln.split("\t", 2) for ln in out.splitlines() if ln.count("\t") >= 2]
+    if not entries:
+        notes.append(
+            f"No commits after the merge on {ref} — the merge is the tip; no refresh has "
+            "landed yet."
+        )
+        return None
+
+    sha, parents, subject = entries[0]
+    first_parent = parents.split(" ")[0] if parents else ""
+    if first_parent != merge_commit:
+        notes.append(
+            f"{sha[:8]} is the oldest commit after the merge on {ref} but its first parent is "
+            f"{first_parent[:8] or 'none'}, not the merge — the merge is not on this branch's "
+            "first-parent chain; refresh not bound."
+        )
+        return None
+
+    if subject.startswith(REFRESH_PREFIX):
+        ok = _refresh_shape_ok(sha, cwd)
+        if ok is None:
             notes.append(
-                f"`git show --name-only {sha[:8]}` exited {frc} — candidate refresh not verifiable."
+                f"`git show --name-only {sha[:8]}` failed — the immediate successor's shape "
+                "could not be verified; refresh_commit is null."
             )
-            continue
-        changed = [f for f in files.splitlines() if f.strip()]
-        if changed == [REFRESH_ONLY_FILE]:
+            return None
+        if ok:
             return sha
         notes.append(
-            f"{sha[:8]} carries the refresh title but changed {len(changed)} file(s) — not a "
-            "§12.2.1 terminating refresh; not reported."
+            f"{sha[:8]} is the immediate successor and carries the refresh title, but is not "
+            "roadmap-status-only — not a §12.2.1 terminating refresh."
         )
-    if not out:
+    else:
         notes.append(
-            "No commits after the merge on the default branch — no refresh owed yet, or "
-            "not yet landed."
+            f"the merge's immediate successor {sha[:8]} is not a refresh commit — this arc's "
+            "terminating refresh is missing or has not landed yet."
         )
+
+    # A shape-match further down the history belongs to a LATER arc. Name it rather than
+    # silently reporting null, so the reader can tell "missing" from "not looked for".
+    for later_sha, _p, later_subject in entries[1:]:
+        if later_subject.startswith(REFRESH_PREFIX) and _refresh_shape_ok(later_sha, cwd):
+            notes.append(
+                f"a later refresh-shaped commit exists ({later_sha[:8]}) but is not this "
+                "merge's immediate successor — not this arc's refresh."
+            )
+            break
     return None
 
 

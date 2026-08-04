@@ -29,6 +29,7 @@ import arc_exit_report as aer
 MERGE = "995517e5990bf6d05069501a784b4d43ebcdf168"
 REFRESH = "f7285f65344116c82a8ed92a74a7b0a5594df0b6"
 OTHER = "aaaaaaaa1111111111111111111111111111aaaa"
+LATER = "bbbbbbbb2222222222222222222222222222bbbb"
 MERGE_TS = 1_754_000_000
 # The terminating refresh lands AFTER the merge — the window between them is exactly where
 # a not-yet-final checkpoint can be written (codex round-3 P1 finding 2).
@@ -49,8 +50,11 @@ def scenario(**over):
                 "workflowName": "CI",
             }
         ],
-        "commits": {MERGE, REFRESH, OTHER},
-        "log": [(REFRESH, "ops: roadmap status refresh post-#1202 (#1203)")],
+        "commits": {MERGE, REFRESH, OTHER, LATER},
+        # First-parent history AFTER the merge, oldest first: (sha, parents, subject). The
+        # PARENTS column is load-bearing — only the merge's immediate first-parent successor
+        # may be bound as this arc's refresh (codex round-4 P1).
+        "log": [(REFRESH, MERGE, "ops: roadmap status refresh post-#1202 (#1203)")],
         "files": {REFRESH: [".harness/roadmap_status.md"]},
         # Per-commit committer times — the anchor for checkpoint.confirmed is the REFRESH
         # commit when one is verified, the merge otherwise.
@@ -74,7 +78,18 @@ def make_run(sc, toplevel: Path):
             if cmd[1] == "pr":
                 return (0, json.dumps(sc["pr_view"])) if sc["pr_view"] is not None else (1, "")
             if cmd[1] == "run":
-                return (0, json.dumps(sc["runs"])) if sc["runs"] is not None else (1, "")
+                if sc["runs"] is None:
+                    return 1, ""
+                # Honour the SERVER-SIDE filters the tool passes. Dropping `--branch`/
+                # `--event` from the argv therefore changes what comes back, which is what
+                # makes the dispatch-only case a real discriminator (codex round-4 P2).
+                rows = sc["runs"]
+                filters = (("--event", "event", "push"), ("--branch", "branch", "main"))
+                for flag, field, default in filters:
+                    if flag in cmd:
+                        want = cmd[cmd.index(flag) + 1]
+                        rows = [r for r in rows if r.get(field, default) == want]
+                return 0, json.dumps(rows)
             return 1, ""
         if cmd[0] == "git":
             if cmd[1] == "rev-parse" and "--show-toplevel" in cmd:
@@ -88,7 +103,7 @@ def make_run(sc, toplevel: Path):
             if cmd[1] == "symbolic-ref":
                 return 0, "origin/main"
             if cmd[1] == "log":
-                return 0, "\n".join(f"{s}\t{m}" for s, m in sc["log"])
+                return 0, "\n".join(f"{s}\t{p}\t{m}" for s, p, m in sc["log"])
             if cmd[1] == "show" and "--name-only" in cmd:
                 return 0, "\n".join(sc["files"].get(cmd[-1], []))
             if cmd[1] == "show" and "-s" in cmd:
@@ -211,7 +226,7 @@ def test_ac2_refresh_titled_but_multifile_commit_is_not_reported(repo, gstack, m
     roadmap_status.md — a bundled commit carrying the prefix is not a terminating refresh
     and must not be reported as one."""
     sc = scenario(
-        log=[(OTHER, "ops: roadmap status refresh post-#9 (#10)")],
+        log=[(OTHER, MERGE, "ops: roadmap status refresh post-#9 (#10)")],
         files={OTHER: [".harness/roadmap_status.md", "tools/other.py"]},
     )
     data = collect_with(sc, repo, gstack, monkeypatch)
@@ -222,6 +237,105 @@ def test_ac2_refresh_titled_but_multifile_commit_is_not_reported(repo, gstack, m
 def test_ac2_verified_refresh_is_reported(repo, gstack, monkeypatch):
     data = collect_with(scenario(), repo, gstack, monkeypatch)
     assert data["refresh_commit"] == REFRESH
+
+
+# --- ROUND-4 FINDING 1: the refresh is bound by POSITION, not merely by shape -----------
+# Both ship-pr carriers require the refresh to land as the IMMEDIATE next commit. A
+# shape-only scan of the whole history binds a LATER arc's refresh when this arc's is
+# missing — and, because `_checkpoint` anchors on the refresh, mis-anchors confirmation too.
+
+
+def test_r4f1_immediate_successor_matching_the_shape_is_bound(repo, gstack, monkeypatch):
+    """(a) the green path: the refresh IS the merge's immediate first-parent successor."""
+    sc = scenario(log=[(REFRESH, MERGE, "ops: roadmap status refresh post-#1202 (#1203)")])
+    data = collect_with(sc, repo, gstack, monkeypatch)
+    assert data["refresh_commit"] == REFRESH
+    assert not any("not this arc's refresh" in n for n in data["notes"])
+
+
+def test_r4f1_later_arcs_refresh_is_never_bound(repo, gstack, monkeypatch):
+    """(b) THE round-4 defect: this arc's refresh is missing, a LATER arc lands its own
+    perfectly-shaped one-file refresh. A whole-history shape scan binds it; the positional
+    rule must report null + name what it found."""
+    sc = scenario(
+        log=[
+            (OTHER, MERGE, "feat(x): a substantive commit that is NOT a refresh"),
+            (LATER, OTHER, "ops: roadmap status refresh post-#1300 (#1301)"),
+        ],
+        files={OTHER: ["tools/x.py"], LATER: [".harness/roadmap_status.md"]},
+    )
+    data = collect_with(sc, repo, gstack, monkeypatch)
+    assert data["refresh_commit"] is None, "a later arc's refresh must never be bound here"
+    assert any("immediate successor" in n and "not a refresh commit" in n for n in data["notes"])
+    assert any(
+        "a later refresh-shaped commit exists" in n and "not this arc's refresh" in n
+        for n in data["notes"]
+    )
+
+
+def test_r4f1_later_refresh_does_not_leak_into_the_checkpoint_anchor(
+    repo, gstack, tmp_path, monkeypatch
+):
+    """The mis-binding's second-order harm: a later arc's refresh would move the anchor and
+    wrongly REJECT (or accept) this arc's checkpoint. With refresh null, the merge anchors."""
+    sc = scenario(
+        log=[
+            (OTHER, MERGE, "feat(x): substantive"),
+            (LATER, OTHER, "ops: roadmap status refresh post-#1300 (#1301)"),
+        ],
+        files={OTHER: ["tools/x.py"], LATER: [".harness/roadmap_status.md"]},
+        ts={MERGE: str(MERGE_TS), OTHER: str(REFRESH_TS), LATER: str(REFRESH_TS + 5_000)},
+    )
+    bound = mk_ckpt(tmp_path, MERGE_TS + 1)  # after THIS merge, before the later arc's refresh
+    data = collect_with(sc, repo, gstack, monkeypatch, checkpoint=bound)
+    assert data["refresh_commit"] is None
+    assert data["checkpoint"]["confirmed"] is True, "merge is the anchor when no refresh is bound"
+
+
+def test_r4f1_merge_is_tip_reports_null(repo, gstack, monkeypatch):
+    """(c) nothing after the merge yet."""
+    data = collect_with(scenario(log=[]), repo, gstack, monkeypatch)
+    assert data["refresh_commit"] is None
+    assert any("the merge is the tip" in n for n in data["notes"])
+
+
+def test_r4f1_successor_not_first_parent_child_of_the_merge_is_not_bound(repo, gstack, monkeypatch):
+    """Non-linear history: the oldest commit after the merge does not descend from it on
+    the first-parent chain — refuse rather than bind by position alone."""
+    sc = scenario(log=[(REFRESH, OTHER, "ops: roadmap status refresh post-#1202 (#1203)")])
+    data = collect_with(sc, repo, gstack, monkeypatch)
+    assert data["refresh_commit"] is None
+    assert any("first-parent chain" in n for n in data["notes"])
+
+
+def test_r4f1_later_refresh_titled_but_multifile_does_not_earn_the_later_note(
+    repo, gstack, monkeypatch
+):
+    """The 'a later refresh-shaped commit exists' note is itself shape-verified — a
+    refresh-TITLED bundled commit later on is not 'refresh-shaped'."""
+    sc = scenario(
+        log=[
+            (OTHER, MERGE, "feat(x): substantive"),
+            (LATER, OTHER, "ops: roadmap status refresh post-#1300 (#1301)"),
+        ],
+        files={OTHER: ["tools/x.py"], LATER: [".harness/roadmap_status.md", "tools/y.py"]},
+    )
+    data = collect_with(sc, repo, gstack, monkeypatch)
+    assert data["refresh_commit"] is None
+    assert not any("a later refresh-shaped commit exists" in n for n in data["notes"])
+
+
+def test_r4f1_scan_is_first_parent_only(repo, gstack, monkeypatch):
+    """The git query must walk the FIRST-PARENT chain — a full walk re-admits merged-in
+    side-branch commits as 'the immediate successor'."""
+    sc = scenario()
+    fake = make_run(sc, repo)
+    monkeypatch.setattr(aer, "run", fake)
+    aer.collect(1202, MERGE, repo, gstack_root=gstack)
+    log_calls = [c for c in fake.calls if c[:2] == ["git", "log"]]
+    assert log_calls, "no git log call issued"
+    assert "--first-parent" in log_calls[0]
+    assert "%H%x09%P%x09%s" in " ".join(log_calls[0]), "parents must be in the log format"
 
 
 # --- AC3: a non-success CI conclusion is reported VERBATIM ------------------------------
@@ -244,6 +358,86 @@ def test_ac3_pending_run_stays_null_not_coerced(repo, gstack, monkeypatch):
     data = collect_with(sc, repo, gstack, monkeypatch)
     assert data["main_ci"]["conclusion"] is None
     assert "conclusion: null" in yaml_block(aer.render(data))
+
+
+# --- ROUND-4 FINDING 2: main_ci is the merge's own push run on the default branch -------
+# Querying by --commit alone mixes manually-dispatched / non-main runs into the verdict.
+
+
+def test_r4f2_dispatch_only_run_is_unresolved_not_a_verdict(repo, gstack, monkeypatch):
+    """A `workflow_dispatch` success on the same SHA must NOT be reported as the post-merge
+    verdict when the real push run is absent — that is a faked green."""
+    sc = scenario(
+        runs=[
+            {
+                "conclusion": "success",
+                "status": "completed",
+                "url": "u",
+                "workflowName": "Manual",
+                "event": "workflow_dispatch",
+            }
+        ]
+    )
+    data = collect_with(sc, repo, gstack, monkeypatch)
+    assert data["main_ci"]["conclusion"] is None, "a dispatch run is not the post-merge verdict"
+    assert data["main_ci"]["run_url"] is None
+    assert any("No push-event workflow run on main" in n for n in data["notes"])
+
+
+def test_r4f2_non_default_branch_run_is_unresolved(repo, gstack, monkeypatch):
+    """A run of the same SHA on a topic branch (the PR's pre-merge checks) is not main CI."""
+    sc = scenario(
+        runs=[
+            {
+                "conclusion": "failure",
+                "status": "completed",
+                "url": "u",
+                "workflowName": "CI",
+                "branch": "some-topic-branch",
+            }
+        ]
+    )
+    data = collect_with(sc, repo, gstack, monkeypatch)
+    assert data["main_ci"]["conclusion"] is None, "an off-main run must not fake a red verdict"
+    assert any("No push-event workflow run on main" in n for n in data["notes"])
+
+
+def test_r4f2_push_run_on_main_is_still_reported(repo, gstack, monkeypatch):
+    sc = scenario(
+        runs=[
+            {
+                "conclusion": "success",
+                "status": "completed",
+                "url": "u",
+                "workflowName": "Manual",
+                "event": "workflow_dispatch",
+            },
+            {
+                "conclusion": "failure",
+                "status": "completed",
+                "url": "real",
+                "workflowName": "CI",
+                "event": "push",
+                "branch": "main",
+            },
+        ]
+    )
+    data = collect_with(sc, repo, gstack, monkeypatch)
+    assert data["main_ci"]["conclusion"] == "failure", "the push run is the verdict, verbatim"
+    assert data["main_ci"]["run_url"] == "real"
+
+
+def test_r4f2_gh_argv_carries_the_branch_and_event_filters(repo, gstack, monkeypatch):
+    sc = scenario()
+    fake = make_run(sc, repo)
+    monkeypatch.setattr(aer, "run", fake)
+    aer.collect(1202, MERGE, repo, gstack_root=gstack)
+    run_calls = [c for c in fake.calls if c[:3] == ["gh", "run", "list"]]
+    assert run_calls, "no `gh run list` call issued"
+    argv = run_calls[0]
+    assert argv[argv.index("--commit") + 1] == MERGE
+    assert argv[argv.index("--branch") + 1] == "main"
+    assert argv[argv.index("--event") + 1] == "push"
 
 
 def test_ac3_one_red_run_is_not_masked_by_a_green_sibling(repo, gstack, monkeypatch):
