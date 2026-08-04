@@ -87,6 +87,8 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the wait-for-refresh-CI-green precondi
   'AND its `main`-push CI has concluded green'
 needle "$CLAUDE_SKILL" "claude two-lane" "the replacement-PR requirement" \
   '**replacement PR** (the original PR is attached to the abandoned branch'
+needle "$CLAUDE_SKILL" "claude two-lane" "the close-the-original-PR-first rule" \
+  '**close the original PR first**'
 needle "$CLAUDE_SKILL" "claude two-lane" "the wait-for-the-REFRESH (not the content PR) rule" \
   "terminating refresh PR has merged* — not merely lane A's content"
 needle "$CLAUDE_SKILL" "claude two-lane" "the explicit landing order" \
@@ -151,6 +153,8 @@ needle "$CODEX_SKILL" "codex-native two-lane" "the fresh-ledger full-sequence re
   '**NEW loop, not a patched one**'
 needle "$CODEX_SKILL" "codex-native two-lane" "the complete-gate-sequence-from-preflight rule" \
   '**complete ordered gate sequence from `preflight` onward**'
+needle "$CODEX_SKILL" "codex-native two-lane" "the uncommitted-reapply-after-bootstrap rule" \
+  '**bootstrapping the loop FIRST and reapplying the work as UNCOMMITTED changes**'
 needle "$CODEX_SKILL" "codex-native two-lane" "the abandoned-branch-outside-loop-state disposition" \
   'The abandoned original branch then sits OUTSIDE the loop state'
 needle "$CODEX_SKILL" "codex-native two-lane" "the defer-to-canonical contract" \

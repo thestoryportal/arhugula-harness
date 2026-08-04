@@ -61,7 +61,10 @@ section below — this is unconditional, not just for visible conflicts: lane A'
 appended the shared `.harness/merge-gate-log.md`, so stale lane B's own log append would
 conflict at the table tail every time). Then lane B restarts the whole `ship-pr` sequence on
 the replayed branch: a **replacement PR** (the original PR is attached to the abandoned branch
-and never merges), out-of-family review of the **current** diff (conflict-driven redone edits
+and never merges — **close the original PR first** with a comment pointing at the replacement,
+and reconcile its stale remote branch per ship-pr's stale-branch flow, operator-handed where
+deletion is privileged, so the replacement doesn't merge around an open ghost in the in-flight
+inventory), out-of-family review of the **current** diff (conflict-driven redone edits
 were never covered by the pre-replay review), `merge-gate`, and final-head CI. Gate approvals,
 reviews, and CI are branch-and-HEAD-bound evidence; recording any of them before the replay
 would attest to a branch that never merges.
