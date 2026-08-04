@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import hashlib
 import os
 import re
 import shlex
@@ -126,13 +127,19 @@ NONLOCAL_SRC = """def counter():
 """
 NONLOCAL_ORPHAN_LINE = "2"
 
+# The bytes a probe of SRC:2-3 would have put on disk — the mutation witness a crash-shaped
+# sidecar must record for the reconcile to consider itself applicable.
+MUTATED_FIXTURE = mp.comment_out(SRC, 2, 3).encode()
+
 PY = shlex.quote(sys.executable)
 
 
-def plant_sidecar(path: Path, payload: bytes) -> None:
-    """Write a sidecar in the tool's real on-disk format (header + payload), the way a
-    crashed probe would have left it. Tests must never hand-roll the format."""
-    path.write_bytes(mp.sidecar_bytes(payload))
+def plant_sidecar(path: Path, payload: bytes, mutated: bytes) -> None:
+    """Write a sidecar in the tool's real on-disk format, the way a crashed probe would have
+    left it. Tests must never hand-roll the format. `mutated` is the APPLICABILITY witness —
+    the bytes the crashed probe had put on the target — and the reconcile restores only
+    while the target still matches it."""
+    path.write_bytes(mp.sidecar_bytes(payload, mutated))
 
 
 def reap_grandchild(repo: Path) -> None:
@@ -149,10 +156,10 @@ def reap_grandchild(repo: Path) -> None:
 
 def sidecar_payload(path: Path) -> bytes:
     """The verified payload of a sidecar on disk; fails the test if integrity is broken."""
-    payload, err = mp.parse_sidecar(path.read_bytes())
+    sidecar, err = mp.parse_sidecar(path.read_bytes())
     assert err is None, f"sidecar {path} failed its integrity check: {err}"
-    assert payload is not None
-    return payload
+    assert sidecar is not None
+    return sidecar.original
 
 
 def pytest_cmd(*files: str) -> str:
@@ -557,8 +564,9 @@ def test_ac4c_dead_pid_sidecar_is_reconciled_at_startup(repo):
     dead.wait()
     src = repo / "src.py"
     sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
-    plant_sidecar(sidecar, SRC.encode())
-    src.write_text(mp.comment_out(SRC, 2, 3), encoding="utf-8")  # the abandoned mutation
+    abandoned = mp.comment_out(SRC, 2, 3).encode()
+    plant_sidecar(sidecar, SRC.encode(), abandoned)
+    src.write_bytes(abandoned)  # the target still holds the abandoned mutation
 
     res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
     assert "RECONCILED: restored" in res.stdout
@@ -575,7 +583,9 @@ def test_ac4c_dead_pid_sidecar_matching_the_file_is_just_removed(repo):
     dead = subprocess.Popen([sys.executable, "-c", "pass"])
     dead.wait()
     sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
-    plant_sidecar(sidecar, SRC.encode())
+    # The target matches the sidecar's ORIGINAL, so the stale branch must fire before the
+    # applicability gate — the recorded mutation deliberately matches nothing on disk.
+    plant_sidecar(sidecar, SRC.encode(), mp.comment_out(SRC, 2, 3).encode())
     res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
     assert "RECONCILED: removed stale sidecar" in res.stdout
     assert not sidecar.exists()
@@ -590,7 +600,7 @@ def test_ac8_live_pid_sidecar_is_never_touched(repo):
         other = repo / "consts.py"
         other.write_text("LIMIT = 999\n", encoding="utf-8")  # a concurrent probe's mutation
         sidecar = repo / f"consts.py.mutprobe.{live.pid}.bak"
-        plant_sidecar(sidecar, CONSTS.encode())
+        plant_sidecar(sidecar, CONSTS.encode(), b"LIMIT = 999\n")
         res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
         assert res.returncode == 0, res.stdout + res.stderr
         assert "RECONCILED" not in res.stdout
@@ -882,34 +892,38 @@ def test_p2_no_wait_in_the_tool_is_unbounded():
 
 
 def test_p1_sidecar_round_trips_through_its_integrity_header():
-    assert mp.parse_sidecar(mp.sidecar_bytes(b"")) == (b"", None)
-    payload = SRC.encode()
-    assert mp.parse_sidecar(mp.sidecar_bytes(payload)) == (payload, None)
-    # Binary and embedded-newline payloads must survive verbatim.
-    blob = b"\x00\xff\nline\r\n"
-    assert mp.parse_sidecar(mp.sidecar_bytes(blob)) == (blob, None)
+    mutated = b"# MUTATED\n"
+    for payload in (b"", SRC.encode(), b"\x00\xff\nline\r\n"):
+        parsed, err = mp.parse_sidecar(mp.sidecar_bytes(payload, mutated))
+        assert err is None
+        assert parsed is not None
+        assert parsed.original == payload  # binary + embedded newlines survive verbatim
+        assert parsed.mutated_sha256 == hashlib.sha256(mutated).hexdigest()
+        assert parsed.mutated_len == len(mutated)
 
 
 @pytest.mark.parametrize(
     ("mangle", "needle"),
     [
-        (lambda b: b[: len(b) // 2], "truncated"),  # the P1 scenario
+        (lambda b: b[:-10], "truncated"),  # the P1 scenario: a short payload
         (lambda b: b + b"extra", "truncated or padded"),
         (lambda b: b.replace(b"\n", b"X"), "no header line"),  # no newline at all
-        (lambda b: b.replace(b"\n", b"X", 1), "not a mutation-probe sidecar"),  # header eaten
+        # Header's terminator eaten: magic and version still parse, the field count does
+        # not — the reordered checks name that precisely instead of "not a sidecar".
+        (lambda b: b.replace(b"\n", b"X", 1), "malformed header fields"),
         (lambda b: b"raw file with no header at all\n", "not a mutation-probe sidecar"),
-        (lambda b: b.replace(b"v1", b"v9", 1), "unsupported sidecar version"),
+        (lambda b: b.replace(b"v2", b"v9", 1), "unsupported sidecar version"),
     ],
 )
 def test_p1_damaged_sidecars_never_parse(mangle, needle):
-    payload, err = mp.parse_sidecar(mangle(mp.sidecar_bytes(SRC.encode())))
+    payload, err = mp.parse_sidecar(mangle(mp.sidecar_bytes(SRC.encode(), MUTATED_FIXTURE)))
     assert payload is None
     assert err is not None and needle in err
 
 
 def test_p1_sha256_mismatch_is_caught_even_at_the_right_length():
     """Length alone is not integrity: a same-length corruption must still be refused."""
-    blob = bytearray(mp.sidecar_bytes(SRC.encode()))
+    blob = bytearray(mp.sidecar_bytes(SRC.encode(), MUTATED_FIXTURE))
     blob[-1] ^= 0xFF
     payload, err = mp.parse_sidecar(bytes(blob))
     assert payload is None
@@ -924,8 +938,9 @@ def test_p1_truncated_dead_pid_sidecar_is_refused_never_replayed(repo):
     dead.wait()
     src = repo / "src.py"
     sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
-    full = mp.sidecar_bytes(SRC.encode())
-    sidecar.write_bytes(full[: len(full) // 2])  # a partial write, as a crash would leave
+    full = mp.sidecar_bytes(SRC.encode(), MUTATED_FIXTURE)
+    # Truncate into the PAYLOAD (a header-level cut is the separate 'no header' case).
+    sidecar.write_bytes(full[:-10])  # a partial write, as a crash would leave
     live_edit = SRC + "\n# work done since the crash\n"
     src.write_text(live_edit, encoding="utf-8")
 
@@ -950,6 +965,113 @@ def test_p1_headerless_legacy_sidecar_is_refused_not_treated_as_raw(repo):
     res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
     assert "RECONCILE REFUSED" in res.stdout
     assert sidecar.exists()
+
+
+def test_p1_reconcile_restores_only_the_mutation_it_recorded(repo):
+    """codex round-5 P1, the applicability witness — the SAFE case (a).
+
+    Crash-shaped exactly as it would be found on disk: a dead-pid v2 sidecar whose recorded
+    mutation is precisely what the target still holds. Undoing it is safe, so it is undone
+    and the sidecar released."""
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    src = repo / "src.py"
+    sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
+    plant_sidecar(sidecar, SRC.encode(), MUTATED_FIXTURE)
+    src.write_bytes(MUTATED_FIXTURE)
+
+    res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
+    assert "RECONCILED: restored" in res.stdout
+    assert not sidecar.exists(), "a consumed sidecar must be released"
+    assert src.read_text(encoding="utf-8") == SRC
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+@pytest.mark.parametrize(
+    ("post_crash", "label"),
+    [
+        (SRC + "\n# work done after the crash\n", "operator edited the file"),
+        ("COMPLETELY = 'different'\n", "operator replaced the file"),
+        (SRC.replace("negative", "NEGATIVE"), "operator fixed it by hand"),
+    ],
+)
+def test_p1_reconcile_refuses_when_the_target_moved_on_after_the_crash(repo, post_crash, label):
+    """codex round-5 P1 — the UNSAFE case (b), which is why the witness exists.
+
+    The sidecar records the ORIGINAL and the mutation. If the file no longer holds that
+    mutation, the crash is over and something else has happened to it: restoring the
+    original would DESTROY that work. Worse, this reconcile runs when probing ANY sibling
+    file in the directory, so the blast radius reaches files the operator never probed.
+    """
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    src = repo / "src.py"
+    sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
+    plant_sidecar(sidecar, SRC.encode(), MUTATED_FIXTURE)
+    src.write_text(post_crash, encoding="utf-8")
+
+    # Probe a DIFFERENT file: the reconcile still sweeps the whole directory.
+    res = run_probe(repo, "consts.py", "1", pytest_cmd("test_consts.py"))
+    assert "RECONCILE REFUSED" in res.stdout, label
+    assert "does not hold the mutation" in res.stdout
+    assert src.read_text(encoding="utf-8") == post_crash, f"post-crash work destroyed: {label}"
+    assert sidecar.exists(), "the sidecar must be RETAINED for the operator"
+    # Both digests are named so the operator can tell what was expected from what is there.
+    assert mp.parse_sidecar(sidecar.read_bytes())[0].mutated_sha256[:12] in res.stdout
+    assert hashlib.sha256(post_crash.encode()).hexdigest()[:12] in res.stdout
+
+
+def test_p1_v1_sidecar_is_refused_for_lacking_the_mutation_witness(repo):
+    """codex round-5 P1, case (c): a v1 sidecar carries integrity but no applicability
+    witness, so it cannot answer "does the target still hold that mutation?". Refused —
+    never read as if it could."""
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    src = repo / "src.py"
+    sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
+    original = SRC.encode()
+    v1 = (
+        f"{mp.SIDECAR_MAGIC} v1 sha256={hashlib.sha256(original).hexdigest()} "
+        f"bytes={len(original)}\n"
+    ).encode() + original
+    sidecar.write_bytes(v1)
+    src.write_bytes(MUTATED_FIXTURE)
+
+    res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
+    assert "RECONCILE REFUSED" in res.stdout
+    assert "unsupported sidecar version" in res.stdout
+    assert sidecar.exists()
+    assert src.read_bytes() == MUTATED_FIXTURE, "a refused sidecar must write nothing"
+
+
+def test_p2_dead_pid_mutation_fragment_is_removed_and_never_restored(repo):
+    """A `.new` fragment is an unpublished MUTATION: `os.replace` never ran, so the target
+    still holds its original bytes and there is nothing to undo."""
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    frag = repo / f"src.py.mutprobe.{dead.pid}.new"
+    frag.write_bytes(b"a half-written mutation")
+    res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
+    assert "removed unpublished mutation fragment" in res.stdout
+    assert "never mutated" in res.stdout
+    assert not frag.exists()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (repo / "src.py").read_text(encoding="utf-8") == SRC
+
+
+def test_p2_the_mutation_publish_preserves_the_file_mode(repo):
+    """`os.replace` swaps in a NEW INODE, so the staging file's permissions become the
+    target's. Losing an executable bit is not cosmetic — git tracks it, so the restore would
+    then be reported broken. (Verified live before this was built.)"""
+    script = repo / "script.sh"
+    script.chmod(0o755)
+    git(repo, "update-index", "--chmod=+x", "script.sh")
+    git(repo, "commit", "-q", "-m", "exec bit")
+    before = script.stat().st_mode
+    res = run_probe(repo, "script.sh", "5", "bash test_script.sh")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert script.stat().st_mode == before, "the executable bit did not survive the probe"
+    assert git(repo, "status", "--porcelain", "--", "script.sh").stdout == ""
 
 
 def test_p1_dead_pid_tmp_fragment_is_removed_and_never_restored(repo):
@@ -1000,8 +1122,17 @@ def test_p1_the_recognized_sidecar_name_is_only_ever_published_atomically():
         and call.func.attr == "replace"
         and getattr(call.func.value, "id", "") == "os"
     ]
-    assert len(replaces) == 1, "expected exactly one os.replace, in publish_sidecar"
-    assert replaces[0][0].name == "publish_sidecar"
+    # One shared implementation, reached by both publishers (sidecar and mutation).
+    assert len(replaces) == 1, "the atomic publish must have ONE implementation"
+    assert replaces[0][0].name == "_atomic_publish"
+    callers = {
+        fn.name
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.FunctionDef)
+        for call in ast.walk(fn)
+        if isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_atomic_publish"
+    }
+    assert callers == {"publish_sidecar", "publish_mutation"}, callers
 
     # No `<name>.write_bytes(...)` may target a variable that holds the .bak path.
     bak_holders = {"sidecar", "sc", "bak"}
@@ -1028,15 +1159,23 @@ def test_p2a_release_treats_an_already_gone_sidecar_as_released():
 # --- input gates + no-collateral-damage ---------------------------------------------------
 
 
-def test_p2a_the_mutating_write_is_inside_the_restoring_try():
-    """codex round-1 P2a, asserted STRUCTURALLY over the AST.
+def test_p2a_the_mutation_is_published_atomically_inside_the_restoring_try():
+    """codex round-1 P2a + round-5 P2, asserted STRUCTURALLY over the AST.
 
-    A signal landing between the mutating write and the entry of the protected region would
-    unwind past every restoration branch, leaving the file mutated until the next
-    invocation's sidecar reconcile — breaking AC4b's immediate guarantee. The fix is an
-    ORDERING one: `target.write_bytes` moved inside the `try` whose `finally` restores. That
-    closes the window BY CONSTRUCTION, which leaves no observable behaviour to test — so
-    the ordering itself is what this asserts, and reverting it kills this test.
+    Two properties, both closed BY CONSTRUCTION, so neither has observable behaviour left
+    to test — the structure itself is the witness, and reverting either kills this:
+
+      * ORDERING (round-1 P2a): the mutation is published INSIDE the `try` whose `finally`
+        restores. Publishing first and entering the guard after left a window where a
+        signal unwound past every restoration branch.
+      * ATOMICITY (round-5 P2): the target is never written with `write_bytes` in `probe()`
+        at all. `write_bytes` truncates then writes, so a signal in THAT window left bytes
+        that were neither the original nor the mutation — which the restore's own
+        bytes-verify then (correctly) refused to touch, stranding a damaged file.
+
+    The RESTORE's `write_bytes` in `restore()` is deliberately untouched: it writes
+    known-good original bytes, a torn restore is exactly what the sidecar + reconcile
+    recover, and it needs no directory write permission.
     """
     tree = ast.parse(PROBE.read_text(encoding="utf-8"))
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "probe")
@@ -1053,7 +1192,7 @@ def test_p2a_the_mutating_write_is_inside_the_restoring_try():
     assert len(guards) == 1, "probe() must have exactly one restoring try/finally"
     protected = {id(c) for stmt in guards[0].body for c in ast.walk(stmt)}
 
-    writes = [
+    direct = [
         c
         for c in ast.walk(fn)
         if isinstance(c, ast.Call)
@@ -1061,12 +1200,21 @@ def test_p2a_the_mutating_write_is_inside_the_restoring_try():
         and c.func.attr == "write_bytes"
         and getattr(c.func.value, "id", "") == "target"
     ]
-    assert writes, "no `target.write_bytes(...)` call found in probe()"
-    for w in writes:
-        assert id(w) in protected, (
-            "a `target.write_bytes` in probe() sits OUTSIDE the restoring try/finally — a "
-            "signal in that window leaves the file mutated"
-        )
+    assert direct == [], (
+        "probe() writes the target directly — the mutation must go through the atomic "
+        "publish, or a signal mid-write strands a torn file"
+    )
+
+    publishes = [
+        c
+        for c in ast.walk(fn)
+        if isinstance(c, ast.Call) and getattr(c.func, "id", "") == "publish_mutation"
+    ]
+    assert len(publishes) == 1, "probe() must publish the mutation exactly once"
+    assert id(publishes[0]) in protected, (
+        "the mutation publish sits OUTSIDE the restoring try/finally — a signal in that "
+        "window leaves the file mutated"
+    )
 
 
 def test_unprobeable_extension_is_refused(repo):

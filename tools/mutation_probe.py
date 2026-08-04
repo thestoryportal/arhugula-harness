@@ -43,8 +43,15 @@ below is therefore the load-bearing part of the design — not the mutation:
      mutation) or `SIDECAR NOT RELEASED` (the file IS back and verified, but its sidecar
      survives and must be deleted by hand before it is replayed over later edits).
 
-Crash safety (the sidecar). `F.mutprobe.<pid>.bak` is written BEFORE the mutation and
-REMOVED atomically once a restore is verified. Retaining it on the success path would be a
+Crash safety (the sidecar). `F.mutprobe.<pid>.bak` is published — atomically, via
+`os.replace` from a staging sibling — BEFORE the mutation, and REMOVED once a restore is
+verified. It records the original bytes plus TWO witnesses: an INTEGRITY one (digest +
+length of the original, so a truncated sidecar can never be replayed as if whole) and an
+APPLICABILITY one (digest + length of the mutation this probe was about to publish, so the
+reconcile restores ONLY while the target still holds exactly that mutation — if the file
+moved on after the crash, undoing the mutation would destroy the newer work). The mutation
+itself is published the same atomic way, so the target is only ever fully original or fully
+mutated. Retaining it on the success path would be a
 defect, not belt-and-braces: a later dead-pid reconcile would restore it over whatever
 valid edits the file had accumulated since — which is also why a FAILED removal is a loud
 nonzero outcome of its own rather than a swallowed error. At startup the probe reconciles
@@ -79,6 +86,7 @@ import hashlib
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -94,13 +102,18 @@ import yaml
 COMMENT_PREFIX = "# "
 KINDS: dict[str, str] = {".py": "py", ".sh": "sh", ".yaml": "yaml", ".yml": "yaml"}
 
-# The sidecar's two names. `.bak` is the RECOGNIZED one the reconcile acts on and is only
-# ever produced by an `os.replace` from `.tmp`, so it is atomic-or-absent; `.tmp` is the
-# unpublished staging name and is never restorable (see `reconcile_sidecars`).
-SIDECAR_TMP_SUFFIX = ".tmp"
+# The three `.mutprobe.<pid>.` names, one recognized and two staging. `.bak` is the
+# RECOGNIZED sidecar the reconcile may restore FROM; it is only ever produced by an
+# `os.replace`, so it is atomic-or-absent. `.tmp` stages the sidecar and `.new` stages the
+# MUTATION — neither is ever restorable, and a dead pid's leftovers are simply removed
+# (see `reconcile_sidecars`). All three share the one grammar so a single ignore pattern
+# and a single glob already cover them.
 SIDECAR_MAGIC = "mutation-probe-sidecar"
-SIDECAR_VERSION = "v1"
-SIDECAR_RE = re.compile(r"^(?P<base>.+)\.mutprobe\.(?P<pid>\d+)\.(?P<kind>bak|tmp)$")
+# v2 adds the mutation witness (`mutated_sha256` / `mutated_bytes`) so the reconcile can
+# tell "the target still holds THIS probe's mutation" from "it changed after the crash".
+# v1 sidecars are refused, not read: they cannot answer that question (codex round-5 P1).
+SIDECAR_VERSION = "v2"
+SIDECAR_RE = re.compile(r"^(?P<base>.+)\.mutprobe\.(?P<pid>\d+)\.(?P<kind>bak|tmp|new)$")
 # pytest's summary counts. `\s+failed\b` deliberately does NOT match "1 xfailed" (no word
 # boundary before "failed" there) — an xfail is not a failure.
 PYTEST_FAILED_RE = re.compile(r"(\d+)\s+failed\b")
@@ -410,6 +423,13 @@ def sidecar_for(target: Path, pid: int) -> Path:
     return target.with_name(f"{target.name}.mutprobe.{pid}.bak")
 
 
+def staging_for(target: Path, pid: int, kind: str) -> Path:
+    """The staging name an atomic publish renames FROM. Deliberately inside the
+    `.mutprobe.<pid>.` grammar so the existing ignore pattern and the reconcile's own glob
+    both already cover it — only the trailing kind distinguishes it."""
+    return target.with_name(f"{target.name}.mutprobe.{pid}.{kind}")
+
+
 def kind_for(target: Path) -> str | None:
     return KINDS.get(target.suffix)
 
@@ -461,29 +481,49 @@ def syntax_error(kind: str, text: str, name: str) -> str | None:
 # --- sidecar publish + reconcile ---------------------------------------------------------
 
 
-def sidecar_bytes(original: bytes) -> bytes:
+class Sidecar(NamedTuple):
+    """A parsed, integrity-verified sidecar."""
+
+    original: bytes  # the payload — the target's bytes before the probe touched it
+    mutated_sha256: str  # witness for the mutation this probe was about to publish
+    mutated_len: int
+
+
+def sidecar_bytes(original: bytes, mutated: bytes) -> bytes:
     """The sidecar's on-disk form: one ASCII header line, then the original bytes verbatim.
 
-    The header carries an INTEGRITY WITNESS (codex round-3 P1). Without one, a truncated
-    sidecar is indistinguishable from a short file, and the reconcile — which is the one
+    The header carries TWO witnesses, and they answer different questions.
+
+    The ORIGINAL's length + digest are an INTEGRITY witness (codex round-3 P1): a truncated
+    sidecar is otherwise indistinguishable from a short file, and the reconcile — the one
     code path that writes bytes it did not itself produce this run — would blind-write a
-    corrupt "original" over live source. There is no way to recover the true length from a
-    truncated payload, so the length and digest have to be recorded up front, next to the
-    payload, in a form a partial write cannot fake.
+    corrupt "original" over live source. The true length cannot be recovered from a
+    truncated payload, so it has to be recorded up front.
+
+    The MUTATED bytes' length + digest are an APPLICABILITY witness (codex round-4/5 P1):
+    they record what the probe was about to put on disk, so the reconcile can tell "the
+    target still holds exactly this probe's mutation" (safe to undo) from "the file has
+    changed since the crash" (restoring would destroy post-crash work). Without it the
+    reconcile restored on ANY divergence — and because it runs when probing any SIBLING
+    file in the directory, that blast radius reached files the operator was never probing.
     """
-    digest = hashlib.sha256(original).hexdigest()
-    header = f"{SIDECAR_MAGIC} {SIDECAR_VERSION} sha256={digest} bytes={len(original)}\n"
+    header = (
+        f"{SIDECAR_MAGIC} {SIDECAR_VERSION} "
+        f"sha256={hashlib.sha256(original).hexdigest()} bytes={len(original)} "
+        f"mutated_sha256={hashlib.sha256(mutated).hexdigest()} mutated_bytes={len(mutated)}\n"
+    )
     return header.encode("ascii") + original
 
 
-def parse_sidecar(blob: bytes) -> tuple[bytes | None, str | None]:
-    """(payload, error) for a sidecar's on-disk bytes. Never raises.
+def parse_sidecar(blob: bytes) -> tuple[Sidecar | None, str | None]:
+    """(sidecar, error) for a sidecar's on-disk bytes. Never raises.
 
     Any failure — missing/short header, wrong magic, unknown version, unparseable fields,
     length mismatch, digest mismatch — returns an error. The caller must REFUSE to restore
     on an error rather than fall back to treating the blob as a raw copy: that fallback is
-    precisely the blind-write this witness exists to prevent, and it would also silently
-    swallow a pre-integrity (headerless) sidecar left by an older build.
+    precisely the blind-write these witnesses exist to prevent. A `v1` sidecar (integrity
+    but no applicability witness) and a headerless one are both refused for the same reason
+    — neither can answer "does the target still hold the mutation this recorded?".
     """
     head, sep, payload = blob.partition(b"\n")
     if not sep:
@@ -492,43 +532,59 @@ def parse_sidecar(blob: bytes) -> tuple[bytes | None, str | None]:
         fields = head.decode("ascii").split()
     except UnicodeDecodeError:
         return None, "header is not ASCII"
-    if len(fields) != 4 or fields[0] != SIDECAR_MAGIC:
+    # Magic, then VERSION, then shape. Order matters for the diagnostic: a v1 sidecar has
+    # four fields, so a field-count check first would report the recognizable thing as "not
+    # a sidecar at all" and send the operator looking for the wrong problem.
+    if not fields or fields[0] != SIDECAR_MAGIC:
         return None, "not a mutation-probe sidecar header"
+    if len(fields) < 2:
+        return None, "header carries no version"
     if fields[1] != SIDECAR_VERSION:
-        return None, f"unsupported sidecar version {fields[1]!r}"
-    if not fields[2].startswith("sha256=") or not fields[3].startswith("bytes="):
+        return None, (
+            f"unsupported sidecar version {fields[1]!r} (this build writes "
+            f"{SIDECAR_VERSION}, which also records the mutation it was about to publish, "
+            "so an older sidecar cannot say whether it still applies)"
+        )
+    if len(fields) != 6:
         return None, "malformed header fields"
-    want_digest = fields[2].removeprefix("sha256=")
-    want_len_text = fields[3].removeprefix("bytes=")
-    if not want_len_text.isdigit():
+    prefixes = ("sha256=", "bytes=", "mutated_sha256=", "mutated_bytes=")
+    if not all(f.startswith(pre) for f, pre in zip(fields[2:], prefixes, strict=True)):
+        return None, "malformed header fields"
+    want_digest, want_len_text, mutated_digest, mutated_len_text = (
+        f.split("=", 1)[1] for f in fields[2:]
+    )
+    if not want_len_text.isdigit() or not mutated_len_text.isdigit():
         return None, "malformed byte count in header"
     want_len = int(want_len_text)
     if len(payload) != want_len:
         return None, f"truncated or padded payload ({len(payload)} bytes, header says {want_len})"
     if hashlib.sha256(payload).hexdigest() != want_digest:
         return None, "sha256 mismatch — the payload is corrupt"
-    return payload, None
+    return Sidecar(payload, mutated_digest, int(mutated_len_text)), None
 
 
-def publish_sidecar(target: Path, pid: int, original: bytes) -> tuple[Path, str | None]:
-    """Put the crash-recovery sidecar in place ATOMICALLY. Returns (bak_path, error).
+def _atomic_publish(tmp: Path, dest: Path, body: bytes, mode: int | None) -> str | None:
+    """Put `body` at `dest` atomically, or return an error string. Never raises.
 
-    Writing straight to the recognized `.bak` name was the defect (codex round-3 P1):
-    `write_bytes` truncates and then writes, so a SIGKILL or power loss between those two
-    steps leaves an EMPTY or PARTIAL file under the name the reconcile trusts — and the next
-    run would write those bytes over the source. Here the payload goes to a `.tmp` sibling,
-    is flushed + fsynced, is read back and compared against what we meant to write, and only
-    then is `os.replace`d onto the `.bak` name. `os.replace` is atomic, so the recognized
-    name is atomic-or-absent: a reader either sees the whole sidecar or no sidecar.
+    The single implementation of this tool's publish discipline, shared by the sidecar and
+    the mutation: write to a staging sibling, flush + fsync, READ BACK and compare against
+    what we meant to write, optionally stamp the destination's mode, then `os.replace`.
+    Because `os.replace` is atomic, `dest` is always either its previous content or the new
+    content in full — never a truncated in-between (codex round-3 P1, round-5 P2).
 
-    Bound, stated rather than overclaimed: the directory entry is not fsynced, so across a
-    power loss the RENAME's durability is the filesystem's business. That is exactly why the
-    reconcile ALSO verifies the header's digest instead of trusting the name's presence —
-    the two defences are independent on purpose.
+    `mode` matters whenever `dest` already existed: `os.replace` swaps in a NEW INODE, so
+    the staging file's permissions become the destination's. Losing an executable bit that
+    way is not cosmetic — git tracks it, so `git diff --quiet` would fail afterwards and the
+    restore would be reported as broken (verified live). Passing the destination's current
+    mode keeps the swap invisible.
+
+    Bounds, stated rather than overclaimed: the directory entry is not fsynced, so the
+    RENAME's durability across a power loss is the filesystem's business — which is exactly
+    why the reconcile ALSO verifies the header digests instead of trusting a name's
+    presence. And `os.replace` breaks any hard link to `dest` (the other link keeps the old
+    content); git does not track hard links, so this is accepted and noted, not silently
+    assumed away.
     """
-    bak = sidecar_for(target, pid)
-    tmp = bak.with_suffix(SIDECAR_TMP_SUFFIX)
-    body = sidecar_bytes(original)
     try:
         with tmp.open("wb") as fh:
             fh.write(body)
@@ -536,21 +592,64 @@ def publish_sidecar(target: Path, pid: int, original: bytes) -> tuple[Path, str 
             os.fsync(fh.fileno())
     except OSError as e:
         _unlink(tmp)
-        return bak, f"cannot write {tmp} ({e})"
+        return f"cannot write {tmp} ({e})"
     try:
         landed = tmp.read_bytes()
     except OSError as e:
         _unlink(tmp)
-        return bak, f"cannot read back {tmp} ({e})"
+        return f"cannot read back {tmp} ({e})"
     if landed != body:
         _unlink(tmp)
-        return bak, f"{tmp} did not read back as written — refusing to publish it"
+        return f"{tmp} did not read back as written — refusing to publish it"
+    if mode is not None:
+        try:
+            os.chmod(tmp, mode)
+        except OSError as e:
+            _unlink(tmp)
+            return f"cannot preserve the mode of {dest} ({e})"
     try:
-        os.replace(tmp, bak)
+        os.replace(tmp, dest)
     except OSError as e:
         _unlink(tmp)
-        return bak, f"cannot publish {bak} ({e})"
-    return bak, None
+        return f"cannot publish {dest} ({e})"
+    return None
+
+
+def publish_sidecar(
+    target: Path, pid: int, original: bytes, mutated: bytes
+) -> tuple[Path, str | None]:
+    """Put the crash-recovery sidecar in place ATOMICALLY. Returns (bak_path, error).
+
+    Writing straight to the recognized `.bak` name was the defect (codex round-3 P1): a
+    `write_bytes` truncates and then writes, so a crash between those steps leaves a PARTIAL
+    file under the name the reconcile trusts. The sidecar carries no mode of its own worth
+    preserving, so `mode` is None — it is a transient artifact, not source.
+    """
+    bak = sidecar_for(target, pid)
+    tmp = staging_for(target, pid, "tmp")
+    return bak, _atomic_publish(tmp, bak, sidecar_bytes(original, mutated), None)
+
+
+def publish_mutation(target: Path, pid: int, mutated: bytes) -> str | None:
+    """Replace the target's content with the mutation ATOMICALLY, or return an error.
+
+    `Path.write_bytes` truncates and then writes (codex round-5 P2). A handled signal in
+    that window left the target holding bytes that were neither the original nor what the
+    probe meant to write — and the restore's own bytes-verify (round-1) then correctly
+    REFUSED to touch it, so the file stayed damaged until a later reconcile. Publishing
+    through `os.replace` closes the window by construction: the target is always either
+    fully original or fully mutated, so there is no torn state for a signal to expose.
+
+    The restore path deliberately keeps its plain `write_bytes`: it writes known-good
+    original bytes, a torn restore is exactly what the sidecar + reconcile recover, and
+    `write_bytes` needs no directory write permission — which the read-only-directory
+    release-failure test depends on.
+    """
+    try:
+        mode = stat.S_IMODE(target.stat().st_mode)
+    except OSError as e:
+        return f"cannot read the mode of {target} ({e})"
+    return _atomic_publish(staging_for(target, pid, "new"), target, mutated, mode)
 
 
 def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
@@ -561,18 +660,26 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
     already matches it is merely stale (the probe restored, then died before unlinking) —
     it is removed without rewriting anything.
 
-    Two integrity rules govern the one path in this tool that writes bytes it did not
-    produce this run (codex round-3 P1):
+    Three rules govern the one path in this tool that writes bytes it did not produce this
+    run. This function runs at the START of every probe, against every sidecar in the
+    directory — so it can reach files the operator is not probing at all, which is why each
+    rule is a REFUSAL by default:
 
-      * `.tmp` fragments are NEVER restorable. A `.tmp` exists only between the sidecar's
-        write and its `os.replace`, and the mutation is published strictly AFTER that
-        replace — so a dead probe's leftover `.tmp` proves the target was never mutated.
-        There is nothing to restore; the fragment is simply removed.
-      * a `.bak` is restored only if its header's length AND sha256 match its payload.
-        On any mismatch — truncation, corruption, or a headerless sidecar from an older
-        build — the reconcile REFUSES loudly and RETAINS the file for the operator. It must
-        never fall back to "treat the blob as the original", which is the blind-write this
-        whole mechanism exists to prevent.
+      * `.tmp` and `.new` staging fragments are NEVER restorable. Both exist only before
+        their `os.replace`, so a dead probe's leftover proves that publish never happened:
+        `.tmp` means the sidecar was never published, `.new` means the MUTATION was never
+        published and the target still holds its original bytes. Nothing to restore; the
+        fragment is simply removed (codex round-3 P1, round-5 P2).
+      * INTEGRITY: a `.bak` is read only if its header's length AND sha256 match its
+        payload. On truncation, corruption, a headerless sidecar or a `v1` one, the
+        reconcile REFUSES loudly and RETAINS the file. It must never fall back to "treat
+        the blob as the original" (codex round-3 P1).
+      * APPLICABILITY: even a perfectly intact sidecar is applied only when the target
+        STILL HOLDS EXACTLY THE MUTATION it recorded — the `mutated_sha256` witness
+        (codex round-5 P1). Undoing a mutation is only safe while that mutation is what is
+        actually on disk. If the operator edited, restored or replaced the file after the
+        crash, "restore the original" means "destroy the post-crash work", so any
+        divergence is refused with both digests named.
     """
     msgs: list[str] = []
     try:
@@ -587,12 +694,14 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
         if pid == self_pid or pid_alive(pid):
             continue
         original = directory / m.group("base")
-        if m.group("kind") == "tmp":
+        kind = m.group("kind")
+        if kind in ("tmp", "new"):
+            what = "sidecar" if kind == "tmp" else "mutation"
             try:
                 sc.unlink()
                 msgs.append(
-                    f"RECONCILED: removed unpublished sidecar fragment {sc.name} (pid {pid} "
-                    f"dead). A fragment proves the probe died BEFORE publishing, so "
+                    f"RECONCILED: removed unpublished {what} fragment {sc.name} (pid {pid} "
+                    f"dead). A fragment proves the probe died BEFORE that publish, so "
                     f"{original.name} was never mutated and nothing needed restoring."
                 )
             except OSError as e:
@@ -603,8 +712,8 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
         except OSError as e:
             msgs.append(f"RECONCILE SKIPPED: cannot read sidecar {sc.name} ({e})")
             continue
-        saved, integrity_error = parse_sidecar(blob)
-        if saved is None:
+        sidecar, integrity_error = parse_sidecar(blob)
+        if sidecar is None:
             msgs.append(
                 f"RECONCILE REFUSED: sidecar {sc.name} failed its integrity check "
                 f"({integrity_error}). It is RETAINED and {original.name} was NOT written. "
@@ -612,6 +721,7 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
                 "recover from git or your editor's history instead, then delete the sidecar."
             )
             continue
+        saved = sidecar.original
         current: bytes | None
         try:
             current = original.read_bytes()
@@ -626,6 +736,24 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
                 )
             except OSError as e:
                 msgs.append(f"RECONCILE SKIPPED: cannot remove stale sidecar {sc.name} ({e})")
+            continue
+        # APPLICABILITY. Undoing a mutation is only safe while that mutation is what is
+        # actually on disk; anything else means the file moved on after the crash.
+        actual = hashlib.sha256(current).hexdigest() if current is not None else None
+        if current is None or actual != sidecar.mutated_sha256:
+            msgs.append(
+                f"RECONCILE REFUSED: {original.name} does not hold the mutation that sidecar "
+                f"{sc.name} recorded (recorded mutation sha256={sidecar.mutated_sha256[:12]}…"
+                f"/{sidecar.mutated_len} bytes; the file on disk is "
+                + (
+                    f"sha256={actual[:12]}…/{len(current)} bytes"
+                    if current is not None and actual is not None
+                    else "unreadable"
+                )
+                + "). The file changed after that probe died, so restoring the original would "
+                "DESTROY whatever was done since. The sidecar is RETAINED and nothing was "
+                "written — recover from git if you do want the original back, then delete it."
+            )
             continue
         try:
             original.write_bytes(saved)
@@ -953,7 +1081,7 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
     # its original bytes: a signal there leaves a stale sidecar that matches its file, which
     # the next reconcile removes without rewriting anything.
     written = mutated_text.encode("utf-8")
-    sidecar, publish_error = publish_sidecar(target, os.getpid(), original)
+    sidecar, publish_error = publish_sidecar(target, os.getpid(), original, written)
     if publish_error is not None:
         return _refuse(
             f"the crash-recovery sidecar could not be published ({publish_error}); "
@@ -967,11 +1095,11 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
     signal_error: str | None = None
     outcome = RestoreOutcome(NOT_RESTORED, "RESTORE FAILED: the restore step did not run")
     try:
-        try:
-            target.write_bytes(written)
-        except OSError as e:
-            write_error = f"cannot write {target} ({e})"
-        else:
+        # The mutation is published ATOMICALLY and INSIDE this try (codex round-5 P2 +
+        # round-1 P2a): `os.replace` leaves no torn in-between for a signal to expose, and
+        # the enclosing `finally` covers the publish itself, not just the test run.
+        write_error = publish_mutation(target, os.getpid(), written)
+        if write_error is None:
             print(f"[2/3] mutated {target}:{start}-{end} ({end - start + 1} line(s) commented out)")
             print(f"[3/3] re-running: {test_cmd}")
             res = run_shell(test_cmd, repo_root, timeout)
