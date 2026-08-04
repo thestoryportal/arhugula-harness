@@ -102,9 +102,12 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
 4. Land the terminating refresh as the immediate next commit/PR. Its title starts exactly
    `ops: roadmap status refresh ` and its closed changed-file set is only
    `.harness/roadmap_status.md`. Do not recurse on a terminating refresh.
-5. Wait for the refresh merge's own main CI to be green, fast-forward local `main`, remove
-   the clean arc worktree, and prune only the verified merged local topic branch.
-6. Record loop gates through `worktree_disposition` and require `just codex-loop-check`.
+5. Wait for the refresh merge's own main CI to be green and fast-forward local `main`.
+   DEFER removing the arc worktree and pruning the topic branch until AFTER the arc exit
+   report below — the report reads the arc worktree's `.harness/loop_status.md` for this
+   arc's pending-HIL rows, and disposition deletes that ledger.
+6. Record loop gates through `worktree_disposition` (the disposition itself now happens
+   after the exit report) and require `just codex-loop-check`.
 
 ## Reflect and checkpoint
 
@@ -120,10 +123,12 @@ for a pure terminating-refresh PR.
 ## Arc exit report (U-WT-03/04)
 
 Run this last within the arc — after the reflect and `context-save` step above, never
-before it, and BEFORE launching the next arc. Only at that point do the merge SHA, the
-post-merge main CI conclusion, the terminating refresh commit, and the checkpoint just
-written all exist, so the report records the arc's real final checkpoint instead of a
-stale one. Skip entirely for a pure terminating-refresh PR (not an arc; no report owed).
+before it, BEFORE the arc worktree's disposition (the report reads that worktree's
+pending-HIL ledger, which disposition deletes), and BEFORE launching the next arc. Only
+at that point do the merge SHA, the post-merge main CI conclusion, the terminating
+refresh commit, and the checkpoint just written all exist, so the report records the
+arc's real final checkpoint instead of a stale one. Skip entirely for a pure
+terminating-refresh PR (not an arc; no report owed).
 
 ```bash
 just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-context-save-just-reported>

@@ -144,6 +144,26 @@ printf '%s' "$AREFL" | tr '\n' ' ' | tr -s ' ' | grep -qF -- 'and the arc exit r
   && ok "codex carrier defers next-arc launch until after the report" \
   || bad "codex carrier launches the next arc before the exit report"
 
+# --- 6e. Codex carrier: the report runs BEFORE worktree disposition (codex round-8 P1:
+#         disposition deletes the arc worktree ledger the report reads), and the
+#         direct autonomous-loop flow carries its own report gate (round-8 P2: that
+#         flow never routes through ship-pr, so a ship-pr-only step is unreachable).
+printf '%s' "$ANORM" | grep -qF -- "BEFORE the arc worktree's disposition" \
+  && ok "codex ship-pr orders the report before worktree disposition" \
+  || bad "codex ship-pr missing the before-disposition ordering"
+ALOOP="$SCRIPT_DIR/../../.agents/skills/codex-autonomous-loop/SKILL.md"
+if [ -f "$ALOOP" ]; then
+  L_LCMD=$(lineno "$ALOOP" 'just arc-exit-report --pr')
+  L_LDISP=$(lineno "$ALOOP" '`worktree_disposition`: original worktree is unregistered')
+  if [ -n "$L_LCMD" ] && [ -n "$L_LDISP" ] && [ "$L_LCMD" -lt "$L_LDISP" ]; then
+    ok "autonomous-loop carries the report gate before disposition ($L_LCMD < $L_LDISP)"
+  else
+    bad "autonomous-loop report gate missing/misordered: cmd='$L_LCMD' disposition='$L_LDISP'"
+  fi
+else
+  bad "codex-autonomous-loop SKILL.md missing"
+fi
+
 # --- 7. The recipe the skills name actually exists in the justfile ---
 JUSTFILE="$SCRIPT_DIR/../../justfile"
 if [ -f "$JUSTFILE" ] && grep -qE '^arc-exit-report \*ARGS:' "$JUSTFILE"; then
