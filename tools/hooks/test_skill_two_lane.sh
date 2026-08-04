@@ -118,7 +118,7 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the abandon-means-do-not-merge-it clar
 needle "$CLAUDE_SKILL" "claude two-lane" "the safe-worktree-remove-ONLY reaping rule" \
   '**reaped ONLY via `tools/hooks/safe-worktree-remove.sh`**'
 needle "$CLAUDE_SKILL" "claude two-lane" "the direct-removal-is-denied fact" \
-  'Direct `git worktree remove` is denied for live-session-registered worktrees'
+  'Direct `git worktree remove` is denied for **every** parsed removal'
 needle "$CLAUDE_SKILL" "claude two-lane" "the nonzero-exit-is-a-real-refusal rule" \
   'A nonzero exit is a real refusal, not a retry prompt'
 needle "$CLAUDE_SKILL" "claude two-lane" "the three deliberate CUTs" \

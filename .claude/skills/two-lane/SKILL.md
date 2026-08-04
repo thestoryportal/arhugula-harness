@@ -107,10 +107,12 @@ A finished lane's worktree is **reaped ONLY via `tools/hooks/safe-worktree-remov
 bash tools/hooks/safe-worktree-remove.sh <repo-root>/.codex-worktrees/<slug>
 ```
 
-Direct `git worktree remove` is denied for live-session-registered worktrees
-(`tools/hooks/permission-guard.sh:56-70`; the deny is session-scoped, with a deliberate
-`HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1` escape hatch — not unconditional) — removal
-and SessionStart lease registration must share one mutex, or the removal orphans a live session.
+Direct `git worktree remove` is denied for **every** parsed removal
+(`tools/hooks/permission-guard.sh:56-70`; the only bypass is the deliberate
+`HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1` escape hatch) — the liveness check refines only the
+denial *reason*, never gates the deny, because a negative liveness check can itself race a new
+SessionStart (`:52-54`). Removal and SessionStart lease registration must share one mutex, or
+the removal orphans a live session.
 A nonzero exit is a real refusal, not a retry prompt: 3 = live session, 4 = local state,
 7 = retained process references (`tools/hooks/safe-worktree-remove.sh:45-57`). Surface it; never
 force it.
