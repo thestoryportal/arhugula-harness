@@ -171,7 +171,7 @@ roadmap-status-check:
 # indexes one EXIT-REPORT row into .harness/loop_status.md.
 #   just arc-exit-report --pr 1202 --merge-sha 995517e5
 arc-exit-report *ARGS:
-    uv run python tools/arc_exit_report.py {{ARGS}}
+    uv run python tools/arc_exit_report.py "$@"
 
 # ─── MEMORY.md — byte-cap gate + idempotent index upsert ────────────────────
 # NOT a semantic compactor (that stays the agent's call) — a deterministic
