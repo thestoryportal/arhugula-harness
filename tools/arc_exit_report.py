@@ -271,18 +271,23 @@ def _checkpoint(
     return {"path": str(newest), "confirmed": confirmed}
 
 
-def _todos(repo_root: Path, notes: list[str]) -> list[str]:
-    """Still-pending DEFERRED-HIL rows, one per entry, via `loop_pending_hil_list`.
+def _todos(repo_root: Path, notes: list[str]) -> list[str] | None:
+    """Still-pending DEFERRED-HIL rows via `loop_pending_hil_list`, or None when UNKNOWN.
 
     Shells the real `loop_lib.sh` helper rather than re-parsing the ledger here — the
     ledger parse has exactly one implementation (`_loop_pending_hil_rows`), shared with
     the bounded `loop_pending_hil_summary` the SessionStart hook surfaces.
+
+    Collection failure (helper missing or nonzero) returns None → rendered as
+    `todo_for_human: null` + a prose note. An UNKNOWN list must never be rendered as
+    an authoritative empty [] (codex round-2): "nothing is waiting" and "could not
+    look" are different claims.
     """
     lib = repo_root / "tools" / "hooks" / "lib.sh"
     loop_lib = repo_root / "tools" / "hooks" / "loop_lib.sh"
     if not (lib.is_file() and loop_lib.is_file()):
-        notes.append("tools/hooks/loop_lib.sh not found — todo_for_human could not be collected.")
-        return []
+        notes.append("tools/hooks/loop_lib.sh not found — todo_for_human is UNKNOWN (null).")
+        return None
     rc, out = run(
         [
             "bash",
@@ -292,10 +297,8 @@ def _todos(repo_root: Path, notes: list[str]) -> list[str]:
         repo_root,
     )
     if rc != 0:
-        notes.append(
-            f"`loop_pending_hil_list` exited {rc} — todo_for_human could not be collected."
-        )
-        return []
+        notes.append(f"`loop_pending_hil_list` exited {rc} — todo_for_human is UNKNOWN (null).")
+        return None
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
@@ -364,7 +367,10 @@ def render(data: dict[str, Any]) -> str:
     )
     ci = _as_dict(data.get("main_ci"))
     ckpt = _as_dict(data.get("checkpoint"))
-    todos: list[Any] = list(data.get("todo_for_human") or [])
+    # None = collection FAILED (rendered `todo_for_human: null` by the block above);
+    # [] = genuinely nothing pending. The prose must keep the two claims apart.
+    todos_raw = data.get("todo_for_human")
+    todos: list[Any] | None = None if todos_raw is None else list(todos_raw)
     collect_notes: list[Any] = list(data.get("notes") or [])
 
     lines: list[str] = [
@@ -398,7 +404,13 @@ def render(data: dict[str, Any]) -> str:
         if ckpt.get("path")
         else "No gstack checkpoint was found for this workspace."
     )
-    if todos:
+    if todos is None:
+        lines += [
+            "",
+            "todo_for_human is UNKNOWN — the pending-HIL ledger could not be read "
+            "(see notes); do NOT read this as 'nothing is waiting'.",
+        ]
+    elif todos:
         lines += ["", f"**{len(todos)} item(s) await a human** (still-pending DEFERRED-HIL rows):"]
         lines += [f"- {t}" for t in todos]
     else:
@@ -432,12 +444,14 @@ def append_ledger_row(repo_root: Path, data: dict[str, Any], rel_path: str) -> b
     report itself is the deliverable, the index row is a convenience.
     """
     ci = _as_dict(data.get("main_ci"))
-    todos: list[Any] = list(data.get("todo_for_human") or [])
+    todos_raw = data.get("todo_for_human")
+    # None = collection failed → `todos=unknown`, never a confident 0 (codex round-2).
+    todos_field = "unknown" if todos_raw is None else str(len(list(todos_raw)))
     detail = (
         f"pr=#{data.get('pr')} "
         f"ci={_sha8(ci.get('commit'))}:{ci.get('conclusion') or 'none'} "
         f"refresh={_sha8(data.get('refresh_commit'))} "
-        f"todos={len(todos)} "
+        f"todos={todos_field} "
         f"path={rel_path}"
     )
     lib = repo_root / "tools" / "hooks" / "lib.sh"

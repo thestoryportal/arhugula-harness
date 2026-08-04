@@ -264,10 +264,21 @@ def test_ac4_populated_todos_carry_full_rows(repo, gstack, monkeypatch):
     ]
 
 
-def test_ac4_todo_collection_failure_degrades_to_empty_with_a_note(repo, gstack, monkeypatch):
+def test_ac4_todo_collection_failure_is_unknown_null_never_empty(repo, gstack, monkeypatch):
+    """codex round-2: an UNREADABLE ledger must render `todo_for_human: null` + an UNKNOWN
+    note — never an authoritative [] ('nothing is waiting' and 'could not look' are
+    different claims). The ledger index row mirrors it as todos=unknown."""
     data = collect_with(scenario(todos_rc=3, todos=""), repo, gstack, monkeypatch)
-    assert data["todo_for_human"] == []
-    assert any("loop_pending_hil_list" in n for n in data["notes"])
+    assert data["todo_for_human"] is None
+    assert any("UNKNOWN" in n for n in data["notes"])
+    rendered = aer.render(data)
+    loaded = yaml.safe_load(yaml_block(rendered))
+    assert "todo_for_human" in loaded and loaded["todo_for_human"] is None
+    assert "UNKNOWN" in rendered
+    assert "No pending DEFERRED-HIL items — nothing is waiting on a human." not in rendered
+    monkeypatch.undo()
+    assert aer.append_ledger_row(repo, data, "p.md") is True
+    assert "todos=unknown" in (repo / aer.LEDGER_REL).read_text(encoding="utf-8")
 
 
 # --- AC5: idempotent per-PR re-run ------------------------------------------------------

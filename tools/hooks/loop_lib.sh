@@ -165,16 +165,27 @@ loop_skip_set() {
 _loop_pending_hil_rows() {
   local p; p=$(loop_status_path)
   [ -f "$p" ] || return 0
-  awk -F'|' '
+  # awk runs FIRST, alone, so its exit status is preserved — a pipeline would return
+  # sort's status and make an unreadable ledger indistinguishable from an empty one
+  # (codex: the report must never render an UNKNOWN list as []). The detail field is
+  # rejoined from $4..NF-1: loop_log escapes literal pipes as `\|`, which -F'|' still
+  # splits, so taking $4 alone truncated any reason containing a pipe; the rejoin
+  # restores the escaped text and the final sed unescapes it.
+  local out
+  out=$(awk -F'|' '
     { k = $3; gsub(/^[ \t]+|[ \t]+$/, "", k) }
     k == "ACTIVATE" { delete state; delete detail }
     k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
-      s = $4; sub(/^[ \t]+/, "", s); split(s, a, /[ \t]/); tok = a[1]
+      s = $4
+      for (i = 5; i < NF; i++) s = s "|" $i
+      sub(/^[ \t]+/, "", s); split(s, a, /[ \t]/); tok = a[1]
       if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; detail[tok] = s }
       else { state[tok] = "RESOLVED" }
     }
     END { for (t in state) if (state[t] == "PENDING") print detail[t] }
-  ' "$p" 2>/dev/null | sed 's/[ \t]*$//' | sort
+  ' "$p" 2>/dev/null) || return 1
+  printf '%s\n' "$out" | sed 's/[ \t]*$//; s/\\|/|/g' | grep -v '^$' | sort
+  return 0
 }
 
 # Structured sibling of loop_pending_hil_summary (U-WT-03): EVERY pending deferral, one

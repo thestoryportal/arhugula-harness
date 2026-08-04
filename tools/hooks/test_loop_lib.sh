@@ -221,6 +221,27 @@ loop_activate "list run 2" >/dev/null
 : > "$(loop_status_path)"
 [ -z "$(loop_pending_hil_list)" ] && ok "loop_pending_hil_list empty on an empty ledger" || bad "list non-empty on an empty ledger"
 
+# 17d) A deferral reason containing a literal pipe survives intact (codex round-2: awk -F'|'
+#      split the escaped \| and truncated everything after it).
+: > "$(loop_status_path)"
+loop_status_ensure; loop_log ACTIVATE "run"
+loop_log DEFERRED-HIL "R-PIPE — choose A | B carefully"
+LP=$(loop_pending_hil_list)
+[ "$LP" = "R-PIPE — choose A | B carefully" ] \
+  && ok "escaped pipe in a deferral detail round-trips intact" \
+  || bad "pipe detail truncated or mangled: [$LP]"
+
+# 17e) An unreadable ledger propagates FAILURE (rc!=0), never a confident empty list
+#      (codex round-2: pipefail-less pipeline returned sort's 0).
+P=$(loop_status_path)
+chmod 000 "$P" 2>/dev/null
+if loop_pending_hil_list >/dev/null 2>&1; then
+  bad "unreadable ledger reported success (unknown rendered as empty)"
+else
+  ok "unreadable ledger propagates nonzero from the parser"
+fi
+chmod 644 "$P" 2>/dev/null
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
