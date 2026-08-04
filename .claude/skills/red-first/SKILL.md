@@ -50,7 +50,11 @@ The Adversary's contract:
    `<file>` is the **source** file the test claims to pin (repo-relative) and `<lines>` is
    `A-B` or a single `A` — the lines whose removal that test must turn red. Not the test's own
    lines. This annotation is the completion gate's input; a test without one cannot close.
-4. Report the exact command that runs the test file, and the verbatim failing output.
+4. Report, **per test, the narrowest command that runs ONLY that test** — its node-specific
+   command (pytest: `pytest path::test_name`; a bash suite with no case selection: one test
+   per file, or whatever case-selector argument or env var the suite supports) — plus the
+   verbatim failing output. **A test whose command cannot isolate it is itself a
+   `RED-FIRST: BLOCK`**: the gate below cannot be run honestly without one.
 
 **When the lines do not exist yet.** For an additive unit, the source the test pins is not
 written at authoring time, so a numeric range would be a guess that goes stale the moment the
@@ -99,12 +103,13 @@ The unit closes only when **all** of these hold:
 3. **Every** `# mutation-probe:` annotation in the file has been executed and exited 0:
 
    ```bash
-   uv run python tools/mutation_probe.py --file F --lines A-B --test "<the command that runs that test>"
+   just mutation-probe --file F --lines A-B --test "<that test's node-specific command>"
    ```
 
-   Call the script directly. `just mutation-probe` is the same runner, but a `just` recipe's
-   variadic `*ARGS` loses quoting on arguments containing `#` or spaces, which is exactly the
-   shape a `--test` command takes.
+   **Use that annotation's own node-specific command, never a file-level one.**
+   `mutation_probe.py` accepts *any* test failure in the command it is given, so a file-level
+   run clears the probe when a **sibling** test in the same file goes red — the annotated test
+   can stay green and the vacuous annotation still passes.
 
    Exit 0 = the range is pinned. Exit 1 = the test stayed green with those lines removed (the
    test does not pin what it claims — fix the test through the Adversary, not the range). Exit

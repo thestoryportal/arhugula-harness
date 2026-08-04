@@ -91,12 +91,19 @@ needle "$CLAUDE_SKILL" "claude red-first" "the new-digest rule for a resolution 
   '**NEW digest is recorded** to supersede the handoff one'
 
 # --- 4. Claude carrier: gate mechanics + verdict protocol -------------------------------
-# The gate invokes the script DIRECTLY: just's variadic `*ARGS` loses quoting on `#`/spaces,
-# which is exactly the shape of a `--test` command.
-needle "$CLAUDE_SKILL" "claude red-first" "the direct probe invocation" \
-  'uv run python tools/mutation_probe.py --file F --lines A-B --test'
-needle "$CLAUDE_SKILL" "claude red-first" "the just-variadic-quoting caveat" \
-  'variadic `*ARGS` loses quoting on arguments containing `#` or spaces'
+# The probe MUST be run per-test, not per-file: mutation_probe.py accepts ANY test failure in
+# the command it is given, so a file-level `--test` clears the probe on a SIBLING test's red
+# while the annotated test stays green — a vacuous annotation passing the gate.
+needle "$CLAUDE_SKILL" "claude red-first" "the probe invocation" \
+  'just mutation-probe --file F --lines A-B --test'
+needle "$CLAUDE_SKILL" "claude red-first" "the node-specific command the Adversary must report" \
+  '**per test, the narrowest command that runs ONLY that test**'
+needle "$CLAUDE_SKILL" "claude red-first" "the cannot-isolate-is-a-BLOCK rule" \
+  'A test whose command cannot isolate it is itself a'
+needle "$CLAUDE_SKILL" "claude red-first" "the no-file-level-probe rule" \
+  "**Use that annotation's own node-specific command, never a file-level one.**"
+needle "$CLAUDE_SKILL" "claude red-first" "why a file-level probe is vacuous" \
+  'run clears the probe when a **sibling** test in the same file goes red'
 needle "$CLAUDE_SKILL" "claude red-first" "the red-evidence-in-PR-body requirement" \
   'paste the failing output verbatim into the PR body'
 needle "$CLAUDE_SKILL" "claude red-first" "the CUT-no-Breaker statement" \
@@ -140,10 +147,10 @@ needle "$CODEX_SKILL" "codex-native red-first" "the not-the-adversarial-reviewer
   'never the `harness-adversarial-reviewer` skill'
 needle "$CODEX_SKILL" "codex-native red-first" "the separate-session Implementer translation" \
   'Implementer phase runs in its own separate session'
-needle "$CODEX_SKILL" "codex-native red-first" "the direct probe invocation" \
-  'uv run python tools/mutation_probe.py --file F --lines A-B --test'
-needle "$CODEX_SKILL" "codex-native red-first" "the just-variadic-quoting caveat" \
-  'variadic `*ARGS` loses quoting on arguments containing `#` or spaces'
+needle "$CODEX_SKILL" "codex-native red-first" "the probe invocation" \
+  'just mutation-probe --file F --lines A-B --test'
+needle "$CODEX_SKILL" "codex-native red-first" "the no-file-level-probe rule" \
+  "Use the annotation's own node-specific command and never a file-level one"
 needle "$CODEX_SKILL" "codex-native red-first" "the operator-request-only invocation rule" \
   'never chain this skill automatically from roadmap-continue or ship-pr'
 needle "$CODEX_SKILL" "codex-native red-first" "the annotation format it routes to" \
