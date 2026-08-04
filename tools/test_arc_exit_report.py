@@ -903,14 +903,118 @@ def test_r6f1_rerun_from_the_worktree_overwrites_the_same_main_file(
     assert [p.name for p in written] == ["arc-exit-report-pr1202.md"]
 
 
-def test_r6f1_pending_hil_read_uses_the_same_resolved_root(worktree_pair, gstack, monkeypatch):
-    """All three consumers share one root — a todo written in the MAIN ledger must be read."""
+# --- ROUND-7 FINDING: the WRITE redirect must not drag the pending-HIL READ with it -----
+# `loop_defer` writes through `hook_project_dir` → CLAUDE_PROJECT_DIR → the INVOKING
+# worktree, so this arc's DEFERRED-HIL rows live in the worktree's own ignored ledger.
+# Reading them from the redirected main root reports this arc's outstanding obligations as
+# `todo_for_human: []`, or surfaces a different session's items.
+
+
+def write_ledger(root: Path, *details: str) -> Path:
+    """A minimal loop ledger carrying one DEFERRED-HIL row per `details` entry."""
+    p = root / aer.LEDGER_REL
+    p.parent.mkdir(parents=True, exist_ok=True)
+    rows = "".join(f"| 2026-08-04T00:01:00Z | DEFERRED-HIL | {d} |\n" for d in details)
+    p.write_text(
+        "| timestamp | kind | detail |\n|---|---|---|\n"
+        "| 2026-08-04T00:00:00Z | ACTIVATE | run |\n" + rows,
+        encoding="utf-8",
+    )
+    return p
+
+
+def test_r7_worktree_rows_win_over_the_main_checkouts(worktree_pair, gstack, monkeypatch):
+    """(a) THE discriminator: both ledgers exist and DIFFER. The report must carry THIS
+    arc's rows (the worktree's), never the main checkout's unrelated ones."""
     main, wt = worktree_pair
-    ledger = main / aer.LEDGER_REL
-    ledger.write_text(
-        "| ts | kind | detail |\n|---|---|---|\n"
-        "| 2026-08-04T00:00:00Z | ACTIVATE | run |\n"
-        "| 2026-08-04T00:01:00Z | DEFERRED-HIL | R-999 — needs the operator |\n",
+    write_ledger(wt, "R-501 — needs a vendor pick", "B-77 — needs paid-call authorization")
+    write_ledger(main, "R-999 — another session's item")
+    sc = scenario(common_dir=(0, str(main / ".git")))
+    monkeypatch.chdir(wt)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, wt, real_bash=True))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+
+    body = aer.report_path(main, 1202).read_text(encoding="utf-8")  # still written to MAIN
+    loaded = yaml.safe_load(yaml_block(body))
+    assert loaded["todo_for_human"] == [
+        "B-77 — needs paid-call authorization",
+        "R-501 — needs a vendor pick",
+    ], "this arc's own deferrals must be reported"
+    assert "R-999" not in body, "another session's ledger must not leak in"
+    assert "NOT merged into this report" in body, "the split must be stated honestly"
+
+
+def test_r7_worktree_without_a_ledger_falls_back_to_main_with_a_note(
+    worktree_pair, gstack, monkeypatch
+):
+    """(b) a worktree that never deferred has nothing of its own to lose."""
+    main, wt = worktree_pair
+    write_ledger(main, "R-999 — needs the operator")
+    sc = scenario(common_dir=(0, str(main / ".git")))
+    monkeypatch.chdir(wt)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, wt, real_bash=True))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+
+    body = aer.report_path(main, 1202).read_text(encoding="utf-8")
+    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == ["R-999 — needs the operator"]
+    assert "has no .harness/loop_status.md" in body
+
+
+def test_r7_neither_ledger_present_is_an_honest_empty(worktree_pair, gstack, monkeypatch):
+    main, wt = worktree_pair
+    sc = scenario(common_dir=(0, str(main / ".git")))
+    monkeypatch.chdir(wt)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, wt, real_bash=True))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+    body = aer.report_path(main, 1202).read_text(encoding="utf-8")
+    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == []
+
+
+def test_r7_main_checkout_invocation_reads_and_writes_one_root(repo, gstack, monkeypatch):
+    """(c) unchanged for a main-checkout run: both roots are the same, no split note."""
+    write_ledger(repo, "R-410 — needs container runtime")
+    sc = scenario(common_dir=(0, str(repo / ".git")))
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, repo, real_bash=True))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+    body = aer.report_path(repo, 1202).read_text(encoding="utf-8")
+    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == ["R-410 — needs container runtime"]
+    assert "NOT merged into this report" not in body
+    assert "linked worktree" not in body
+
+
+def test_r7_explicit_repo_root_sets_both_roots(worktree_pair, gstack, monkeypatch):
+    """An explicit --repo-root wins entirely — it is the read root as well as the write one."""
+    main, wt = worktree_pair
+    write_ledger(wt, "R-501 — the worktree's row")
+    write_ledger(main, "R-999 — the main checkout's row")
+    sc = scenario(common_dir=(0, str(main / ".git")))
+    monkeypatch.chdir(wt)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    # `--repo-root main` makes git run with cwd=main, so `--show-toplevel` answers main —
+    # the fake mirrors that rather than the (now irrelevant) process cwd.
+    monkeypatch.setattr(aer, "run", make_run(sc, main, real_bash=True))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE, "--repo-root", str(main)]) == 0
+    body = aer.report_path(main, 1202).read_text(encoding="utf-8")
+    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == ["R-999 — the main checkout's row"]
+    assert "R-501" not in body
+
+
+def test_r7_stale_worktree_loop_lib_does_not_break_the_read(worktree_pair, gstack, monkeypatch):
+    """Witnessed LIVE against a real worktree checked out at an older revision: sourcing the
+    WORKTREE's `loop_lib.sh` exited 127 because that copy predates `loop_pending_hil_list`,
+    degrading the whole field to UNKNOWN. The ledger LOCATION comes from the worktree; the
+    parser CODE must come from the main checkout, whose helper set is current."""
+    main, wt = worktree_pair
+    write_ledger(wt, "R-501 — this arc's obligation")
+    # Simulate the stale worktree: its loop_lib.sh has no loop_pending_hil_list.
+    stale = (wt / "tools" / "hooks" / "loop_lib.sh").read_text(encoding="utf-8")
+    (wt / "tools" / "hooks" / "loop_lib.sh").write_text(
+        stale.replace("loop_pending_hil_list()", "loop_pending_hil_list_RENAMED()"),
         encoding="utf-8",
     )
     sc = scenario(common_dir=(0, str(main / ".git")))
@@ -918,8 +1022,22 @@ def test_r6f1_pending_hil_read_uses_the_same_resolved_root(worktree_pair, gstack
     monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
     monkeypatch.setattr(aer, "run", make_run(sc, wt, real_bash=True))
     assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+
     body = aer.report_path(main, 1202).read_text(encoding="utf-8")
-    assert "R-999 — needs the operator" in body, "HIL read must use the main-checkout ledger"
+    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == ["R-501 — this arc's obligation"]
+    assert "UNKNOWN" not in body, "a stale worktree helper set must not blank the field"
+
+
+def test_r7_resolve_repo_root_returns_both_roots(worktree_pair, monkeypatch):
+    """Structural: the resolver's contract is a (write, read) pair, not one path."""
+    main, wt = worktree_pair
+    write_ledger(wt, "R-501 — x")
+    write_ledger(main, "R-999 — y")
+    monkeypatch.setattr(aer, "run", make_run(scenario(common_dir=(0, str(main / ".git"))), wt))
+    roots, notes = aer.resolve_repo_root(wt)
+    assert roots is not None
+    assert roots.write == main and roots.read == wt
+    assert any("NOT merged" in n for n in notes)
 
 
 def test_r6f1_main_checkout_invocation_is_unchanged(repo, gstack, monkeypatch):
@@ -995,7 +1113,7 @@ def evil_repo(tmp_path):
 def test_r6f2_metacharacter_repo_path_does_not_execute_in_the_hil_read(evil_repo):
     root, sentinel = evil_repo
     notes: list[str] = []
-    todos = aer._todos(root, notes)
+    todos = aer._todos(root, root, notes)
     assert not sentinel.exists(), f"INJECTION EXECUTED: {sentinel} was created"
     assert todos == [], "the shim must still work on a metacharacter-bearing path"
     assert notes == []
@@ -1025,7 +1143,7 @@ def test_r6f2_shim_sources_are_constant_strings(evil_repo, monkeypatch):
         return 0, ""
 
     monkeypatch.setattr(aer, "run", spy)
-    aer._todos(root, [])
+    aer._todos(root, root, [])
     aer.append_ledger_row(
         root, {"pr": 1, "main_ci": {}, "refresh_commit": None, "todo_for_human": []}, "p.md"
     )

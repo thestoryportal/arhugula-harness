@@ -18,8 +18,10 @@ with zero CI/ledger surface. One `EXIT-REPORT` row is also appended to
 shim — NOT a second copy of the row format).
 
 Both land under the MAIN checkout, not the (disposable) arc worktree a Codex-flow run is
-normally invoked from — see `resolve_repo_root`. All three consumers (report path, ledger,
-pending-HIL read) use that one resolved root.
+normally invoked from — see `resolve_repo_root`. The pending-HIL read deliberately does NOT
+follow that redirect: this arc's `loop_defer` rows are in the INVOKING worktree's own
+ledger, so reads stay there while writes go to the durable root. The parser CODE is still
+sourced from the main checkout (a worktree can be checked out at an older revision).
 
 Design: a PURE `render(data) -> str` plus a thin `collect()` that shells `gh`/`git`. Every
 external call is validated (exit code + non-empty + parses) before its output flows
@@ -75,7 +77,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import yaml
 
@@ -160,8 +162,15 @@ def _gh_json(args: list[str], cwd: Path, notes: list[str], what: str) -> object:
         return None
 
 
-def resolve_repo_root(start: Path, redirect: bool = True) -> tuple[Path | None, list[str]]:
-    """The STABLE root to write into, plus any notes about how it was resolved.
+class Roots(NamedTuple):
+    """Where to WRITE and where to READ. Equal for a main-checkout invocation."""
+
+    write: Path  # durable artifacts (report + ledger index) and every git/gh query
+    read: Path  # the loop ledger THIS arc's DEFERRED-HIL rows landed in
+
+
+def resolve_repo_root(start: Path, redirect: bool = True) -> tuple[Roots | None, list[str]]:
+    """The roots to write into and read the pending-HIL ledger from, plus resolution notes.
 
     Returns `(None, notes)` when `start` is not inside a git repository at all.
 
@@ -169,14 +178,21 @@ def resolve_repo_root(start: Path, redirect: bool = True) -> tuple[Path | None, 
     DISPOSABLE — `git rev-parse --show-toplevel` there points at a directory that the
     worktree-disposition step deletes. Writing the report + ledger index into it means the
     artifacts vanish, and a later controller rerun writes a DIFFERENT file instead of
-    overwriting the PR-keyed one, defeating idempotency (codex round-6 P1).
+    overwriting the PR-keyed one, defeating idempotency (codex round-6 P1). So the WRITE
+    root is redirected to the MAIN checkout: a linked worktree's `--git-common-dir` lives
+    inside the main checkout's `.git`, so its parent is that checkout. The redirect is only
+    taken when the resolved root actually looks like this workspace (`.harness/` present).
 
-    So the root is redirected to the MAIN checkout: a linked worktree's
-    `--git-common-dir` lives inside the main checkout's `.git`, so its parent is that
-    checkout. The redirect is only taken when the resolved root actually looks like this
-    workspace (`.harness/` present) — otherwise the worktree toplevel is kept and a note
-    says the location may be worktree-local. `redirect=False` (an explicit `--repo-root`)
-    always wins.
+    The READ root does NOT follow it (codex round-7 P1). `loop_defer` writes through
+    `hook_project_dir`, which honours `CLAUDE_PROJECT_DIR` — during the arc that is the
+    INVOKING worktree, so this arc's DEFERRED-HIL rows are in the worktree's own ignored
+    ledger. Reading pending HILs from the redirected main root would render this arc's
+    outstanding obligations as `todo_for_human: []` (or surface another session's items),
+    which is precisely the claim the report must not get wrong. Exceptions, both noted:
+    a worktree with NO ledger has nothing to lose, so main's is read instead; when BOTH
+    exist the worktree's win and the note says main's was not merged.
+
+    `redirect=False` (an explicit `--repo-root`) sets BOTH roots — explicit wins entirely.
     """
     notes: list[str] = []
     rc, top = run(["git", "rev-parse", "--show-toplevel"], start)
@@ -184,7 +200,7 @@ def resolve_repo_root(start: Path, redirect: bool = True) -> tuple[Path | None, 
         return None, notes
     toplevel = Path(top)
     if not redirect:
-        return toplevel, notes
+        return Roots(toplevel, toplevel), notes
 
     # Ask for an ABSOLUTE path: the plain form is CWD-relative (`../../.git` from a
     # subdirectory — grounded live on git 2.39), so resolving it against anything but the
@@ -199,29 +215,48 @@ def resolve_repo_root(start: Path, redirect: bool = True) -> tuple[Path | None, 
             f"worktree ({toplevel}); if this is a disposable arc worktree, this report's "
             "location is worktree-local and will not survive worktree disposition."
         )
-        return toplevel, notes
+        return Roots(toplevel, toplevel), notes
     cdir = Path(common)
     if not cdir.is_absolute():
         cdir = start / cdir  # git reports it relative to the cwd we ran it in
     try:
         main_root = cdir.resolve().parent
     except OSError:
-        return toplevel, notes
+        return Roots(toplevel, toplevel), notes
     if main_root == toplevel:
-        return toplevel, notes  # already the main checkout — nothing to say
-    if (main_root / ".harness").is_dir():
+        return Roots(toplevel, toplevel), notes  # already the main checkout — nothing to say
+    if not (main_root / ".harness").is_dir():
         notes.append(
-            f"invoked from a linked worktree ({toplevel}); the report and its ledger row "
-            f"were written to the MAIN checkout ({main_root}) so they survive worktree "
-            "disposition and a rerun overwrites the same PR-keyed file."
+            f"invoked from a linked worktree ({toplevel}) but the resolved main checkout "
+            f"({main_root}) has no .harness/ — writing to the worktree instead; this report's "
+            "location may be worktree-local and will not survive worktree disposition."
         )
-        return main_root, notes
+        return Roots(toplevel, toplevel), notes
+
     notes.append(
-        f"invoked from a linked worktree ({toplevel}) but the resolved main checkout "
-        f"({main_root}) has no .harness/ — writing to the worktree instead; this report's "
-        "location may be worktree-local and will not survive worktree disposition."
+        f"invoked from a linked worktree ({toplevel}); the report and its ledger row "
+        f"were written to the MAIN checkout ({main_root}) so they survive worktree "
+        "disposition and a rerun overwrites the same PR-keyed file."
     )
-    return toplevel, notes
+    # The READ root stays on the worktree — that is where this arc's own loop_defer rows
+    # landed. Only the two honest exceptions move it (see the docstring).
+    read_root = toplevel
+    wt_ledger = (toplevel / LEDGER_REL).is_file()
+    main_ledger = (main_root / LEDGER_REL).is_file()
+    if not wt_ledger and main_ledger:
+        read_root = main_root
+        notes.append(
+            f"the invoking worktree has no {LEDGER_REL} — pending-HIL rows were read from "
+            "the main checkout's ledger instead (a worktree that never deferred has none of "
+            "its own to lose)."
+        )
+    elif wt_ledger and main_ledger:
+        notes.append(
+            f"pending-HIL rows were read from the INVOKING worktree's {LEDGER_REL} (where "
+            "this arc's deferrals landed); the main checkout keeps a SEPARATE ledger whose "
+            "rows were NOT merged into this report."
+        )
+    return Roots(main_root, read_root), notes
 
 
 def _resolve_commit(sha: str, cwd: Path) -> str:
@@ -486,22 +521,34 @@ def _checkpoint(
     return {"path": str(explicit), "confirmed": True}
 
 
-def _todos(repo_root: Path, notes: list[str]) -> list[str] | None:
+def _todos(ledger_root: Path, code_root: Path, notes: list[str]) -> list[str] | None:
     """Still-pending DEFERRED-HIL rows via `loop_pending_hil_list`, or None when UNKNOWN.
 
     Shells the real `loop_lib.sh` helper rather than re-parsing the ledger here — the
     ledger parse has exactly one implementation (`_loop_pending_hil_rows`), shared with
     the bounded `loop_pending_hil_summary` the SessionStart hook surfaces.
 
+    The two roots are deliberately independent. `ledger_root` becomes `CLAUDE_PROJECT_DIR`,
+    which is what `hook_project_dir` keys the ledger LOCATION off — for a linked-worktree
+    closeout that is the worktree, where this arc's `loop_defer` rows landed. The helper
+    CODE is sourced from `code_root` (the main checkout) instead, because a linked worktree
+    is checked out at whatever revision its arc used: witnessed live against a real
+    worktree whose `loop_lib.sh` predates `loop_pending_hil_list`, sourcing the worktree's
+    copy exited 127 and degraded the whole field to UNKNOWN. The ledger FORMAT is stable
+    across revisions; the helper set is not.
+
     Collection failure (helper missing or nonzero) returns None → rendered as
     `todo_for_human: null` + a prose note. An UNKNOWN list must never be rendered as
     an authoritative empty [] (codex round-2): "nothing is waiting" and "could not
     look" are different claims.
     """
-    lib = repo_root / "tools" / "hooks" / "lib.sh"
-    loop_lib = repo_root / "tools" / "hooks" / "loop_lib.sh"
+    lib = code_root / "tools" / "hooks" / "lib.sh"
+    loop_lib = code_root / "tools" / "hooks" / "loop_lib.sh"
     if not (lib.is_file() and loop_lib.is_file()):
-        notes.append("tools/hooks/loop_lib.sh not found — todo_for_human is UNKNOWN (null).")
+        notes.append(
+            f"tools/hooks/loop_lib.sh not found under {code_root} — todo_for_human is "
+            "UNKNOWN (null)."
+        )
         return None
     # The bash source is a CONSTANT; every path travels as an argv value read through "$N"
     # (codex round-6 P2). Interpolating the paths into the source made a metacharacter-
@@ -512,11 +559,11 @@ def _todos(repo_root: Path, notes: list[str]) -> list[str] | None:
             "-c",
             'CLAUDE_PROJECT_DIR="$1"; . "$2"; . "$3"; loop_pending_hil_list',
             "arc_exit_report",  # $0
-            str(repo_root),
+            str(ledger_root),
             str(lib),
             str(loop_lib),
         ],
-        repo_root,
+        code_root,
     )
     if rc != 0:
         notes.append(f"`loop_pending_hil_list` exited {rc} — todo_for_human is UNKNOWN (null).")
@@ -556,8 +603,14 @@ def collect(
     gstack_root: Path | None = None,
     checkpoint: Path | None = None,
     seed_notes: list[str] | None = None,
+    read_root: Path | None = None,
 ) -> dict[str, Any]:
     """Gather the arc's closure facts. Degrades to nulls + notes; never raises, never fabricates.
+
+    `repo_root` is the WRITE root — every git/gh query and the durable artifacts. `read_root`
+    (defaulting to it) is where the pending-HIL ledger is read from; the two differ only for
+    a linked-worktree invocation, where this arc's `loop_defer` rows are in the worktree's
+    own ledger rather than the main checkout's (codex round-7 P1).
 
     `seed_notes` carries observations made BEFORE collection began (currently the repo-root
     resolution's) so they reach the report's prose tail through the one notes channel.
@@ -610,7 +663,7 @@ def collect(
         "checkpoint": _checkpoint(
             anchor, anchor_kind, repo_root, repo_root, gstack_root, checkpoint, notes
         ),
-        "todo_for_human": _todos(repo_root, notes),
+        "todo_for_human": _todos(read_root or repo_root, repo_root, notes),
         "notes": notes,
         "identity_error": None,
     }
@@ -784,7 +837,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "repository root to write into. Defaults to the MAIN checkout of the enclosing "
-            "repo (not a disposable arc worktree). An explicit value always wins."
+            "repo (not a disposable arc worktree), while pending-HIL rows are still read "
+            "from the invoking worktree. An explicit value sets both and always wins."
         ),
     )
     args = ap.parse_args(argv)
@@ -794,12 +848,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     start = Path(args.repo_root).resolve() if args.repo_root else Path.cwd()
-    # An explicit --repo-root is authoritative: no main-checkout redirect.
-    resolved, root_notes = resolve_repo_root(start, redirect=not args.repo_root)
-    if resolved is None:
+    # An explicit --repo-root is authoritative: no main-checkout redirect, and it sets BOTH
+    # the write and the read root.
+    roots, root_notes = resolve_repo_root(start, redirect=not args.repo_root)
+    if roots is None:
         print(f"ERROR: {start} is not inside a git repository.", file=sys.stderr)
         return 2
-    root = resolved
+    root = roots.write
 
     if args.merge_sha and not _resolve_commit(args.merge_sha, root):
         print(
@@ -815,7 +870,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: --checkpoint {ckpt} is not an existing file.", file=sys.stderr)
             return 2
 
-    data = collect(args.pr, args.merge_sha, root, checkpoint=ckpt, seed_notes=root_notes)
+    data = collect(
+        args.pr,
+        args.merge_sha,
+        root,
+        checkpoint=ckpt,
+        seed_notes=root_notes,
+        read_root=roots.read,
+    )
     if data.get("identity_error"):
         # Write NOTHING: a report naming this PR while carrying another arc's facts is
         # worse than no report at all.
