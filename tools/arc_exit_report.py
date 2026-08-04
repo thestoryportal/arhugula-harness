@@ -893,10 +893,17 @@ def main(argv: list[str] | None = None) -> int:
 
     rel = str(out.relative_to(root))
     if not append_ledger_row(root, data, rel):
+        # Fail CLOSED (codex round-9): both skill carriers treat exit 0 + the report path
+        # as closure, so a warn-and-return-0 here would let an arc claim closure without
+        # its required EXIT-REPORT index row. The report file itself IS written (it is
+        # the deliverable; the message says so) — exit 3 distinguishes index-append
+        # failure from unusable-inputs (2) so the runner repairs the ledger and re-runs.
         print(
-            f"WARNING: EXIT-REPORT ledger row could not be appended to {LEDGER_REL}.",
+            f"ERROR: EXIT-REPORT index row could not be appended to {LEDGER_REL} "
+            f"(report itself written at {rel}) — failing closed; repair the ledger and re-run.",
             file=sys.stderr,
         )
+        return 3
     print(f"wrote {rel}")
     return 0
 

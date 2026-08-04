@@ -514,6 +514,7 @@ def test_ac4_todo_collection_failure_is_unknown_null_never_empty(repo, gstack, m
 
 
 def test_ac5_rerun_overwrites_the_same_file(repo, gstack, monkeypatch):
+    monkeypatch.setattr(aer, "append_ledger_row", lambda *_a, **_k: True)
     monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
     monkeypatch.setattr(aer, "run", make_run(scenario(), repo))
     assert aer.main(["--pr", "1202", "--merge-sha", MERGE, "--repo-root", str(repo)]) == 0
@@ -529,6 +530,20 @@ def test_ac5_rerun_overwrites_the_same_file(repo, gstack, monkeypatch):
     assert [p.name for p in written] == ["arc-exit-report-pr1202.md"], "PR-keyed: no dated sibling"
     second = written[0].read_text(encoding="utf-8")
     assert first != second and "conclusion: failure" in second, "re-run overwrites with fresh facts"
+
+
+def test_r9_failed_index_append_fails_closed_with_exit_3(repo, gstack, monkeypatch, capsys):
+    """codex round-9: both skill carriers treat exit 0 + report path as closure, so a
+    failed EXIT-REPORT index append must exit nonzero (3) — while the report file itself
+    is still written (it is the deliverable the runner repairs-and-reruns around)."""
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(scenario(), repo))
+    monkeypatch.setattr(aer, "append_ledger_row", lambda *_a, **_k: False)
+    rc = aer.main(["--pr", "1202", "--merge-sha", MERGE, "--repo-root", str(repo)])
+    assert rc == 3
+    assert aer.report_path(repo, 1202).is_file(), "the report itself is still written"
+    err = capsys.readouterr().err
+    assert "failing closed" in err and "index row" in err
 
 
 def test_ac5_filename_is_pr_keyed_and_date_free():
@@ -724,6 +739,7 @@ def test_f3_matching_merge_sha_is_accepted(repo, gstack, monkeypatch):
 def test_f3_gh_absent_still_degrades_to_success(repo, gstack, monkeypatch):
     """No PR data = nothing to contradict: identity checking must not turn a degraded run
     into a refusal."""
+    monkeypatch.setattr(aer, "append_ledger_row", lambda *_a, **_k: True)
     sc = scenario(gh_absent=True)
     monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
     monkeypatch.setattr(aer, "run", make_run(sc, repo))
@@ -846,16 +862,6 @@ def test_ledger_failure_never_breaks_the_caller(tmp_path, gstack, monkeypatch, r
     assert aer.append_ledger_row(bare, data, "p.md") is False
 
 
-def test_main_still_exits_0_when_the_ledger_row_cannot_be_written(tmp_path, gstack, monkeypatch):
-    """Full path: hook libs absent → warning on stderr, report still written, exit 0."""
-    root = tmp_path / "noledger"
-    root.mkdir()
-    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
-    monkeypatch.setattr(aer, "run", make_run(scenario(), root))
-    assert aer.main(["--pr", "5", "--merge-sha", MERGE, "--repo-root", str(root)]) == 0
-    assert aer.report_path(root, 5).is_file()
-
-
 # --- ROUND-6 FINDING 1: artifacts land in the MAIN checkout, not a disposable worktree ---
 # The Codex flow runs inside an isolated arc worktree that worktree-disposition deletes. A
 # toplevel-rooted write vanishes with it, and a controller rerun then writes a DIFFERENT
@@ -892,6 +898,7 @@ def test_r6f1_rerun_from_the_worktree_overwrites_the_same_main_file(
     worktree_pair, gstack, monkeypatch
 ):
     """The defect's actual cost: idempotency. Two runs must produce ONE report file."""
+    monkeypatch.setattr(aer, "append_ledger_row", lambda *_a, **_k: True)
     main, wt = worktree_pair
     sc = scenario(common_dir=(0, str(main / ".git")))
     monkeypatch.chdir(wt)
@@ -1042,6 +1049,7 @@ def test_r7_resolve_repo_root_returns_both_roots(worktree_pair, monkeypatch):
 
 def test_r6f1_main_checkout_invocation_is_unchanged(repo, gstack, monkeypatch):
     """A main checkout: `--git-common-dir`'s parent IS the toplevel → no redirect, no note."""
+    monkeypatch.setattr(aer, "append_ledger_row", lambda *_a, **_k: True)
     monkeypatch.chdir(repo)
     monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
     monkeypatch.setattr(aer, "run", make_run(scenario(common_dir=(0, str(repo / ".git"))), repo))
@@ -1052,6 +1060,7 @@ def test_r6f1_main_checkout_invocation_is_unchanged(repo, gstack, monkeypatch):
 
 
 def test_r6f1_unresolvable_common_dir_falls_back_to_toplevel_with_a_note(repo, gstack, monkeypatch):
+    monkeypatch.setattr(aer, "append_ledger_row", lambda *_a, **_k: True)
     sc = scenario(common_dir=(128, ""))
     monkeypatch.chdir(repo)
     monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
@@ -1066,6 +1075,7 @@ def test_r6f1_main_root_without_harness_is_not_trusted(
 ):
     """Resolution must be VALIDATED, not assumed — a common-dir parent that is not this
     workspace falls back to the worktree, with a note."""
+    monkeypatch.setattr(aer, "append_ledger_row", lambda *_a, **_k: True)
     _main, wt = worktree_pair
     stranger = tmp_path / "stranger"
     (stranger / ".git").mkdir(parents=True)  # no .harness/
@@ -1080,6 +1090,7 @@ def test_r6f1_main_root_without_harness_is_not_trusted(
 
 
 def test_r6f1_explicit_repo_root_wins_over_the_redirect(worktree_pair, gstack, monkeypatch):
+    monkeypatch.setattr(aer, "append_ledger_row", lambda *_a, **_k: True)
     main, wt = worktree_pair
     sc = scenario(common_dir=(0, str(main / ".git")))
     monkeypatch.chdir(wt)

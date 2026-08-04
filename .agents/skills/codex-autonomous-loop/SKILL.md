@@ -64,15 +64,19 @@ not acceptance evidence.
     record a narrowly justified non-applicability for a refresh itself.
 18. Wait for the refresh merge's own main CI to be green.
 19. `main_synced`: local `main` equals final `origin/main`.
-20. Run `just codex-loop-check` for the pre-disposition gates, reflect, and run the gstack
-    `context-save` skill.
+20. Reflect and run the gstack `context-save` skill.
 21. Emit the arc exit report (U-WT-03/04) WHILE the arc worktree still exists — its
     ledger carries this arc's pending-HIL rows, which disposition deletes:
     `just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-context-save-just-reported>`
     (run from the arc worktree; the report and its index land in the MAIN checkout).
-    Require exit 0 and the named report path. Skip only for a pure terminating-refresh PR.
+    Require exit 0 and the named report path — a nonzero exit includes a failed
+    `EXIT-REPORT` index append and fails this gate closed. Skip only for a pure
+    terminating-refresh PR.
 22. `worktree_disposition`: original worktree is unregistered; only the verified merged
     local topic branch is pruned; remote branch hygiene is resolved without losing work.
+23. Run the full `just codex-loop-check` — it unconditionally requires the
+    `worktree_disposition` gate, so it can only pass AFTER step 22 (running it earlier
+    always exits 1).
 
 Record gates with:
 
