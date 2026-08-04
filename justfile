@@ -163,6 +163,27 @@ roadmap-status *ARGS:
 roadmap-status-check:
     uv run python tools/roadmap_status_refresh.py --check
 
+# ─── arc EXIT REPORT — machine-readable arc-closure record (U-WT-03) ────────
+# Run as the FINAL ship-pr step, AFTER the reflect / context-save block: only there do
+# the merge SHA, post-merge main-CI conclusion, terminating-refresh commit and the
+# just-written checkpoint all exist. Writes the gitignored
+# .harness/.checkpoints/arc-exit-report-pr<NNN>.md (PR-keyed, overwritten on re-run) and
+# indexes one EXIT-REPORT row into .harness/loop_status.md.
+#   just arc-exit-report --pr 1202 --merge-sha 995517e5
+arc-exit-report *ARGS:
+    uv run python tools/arc_exit_report.py "$@"
+
+# ─── mutation probe — prove a test PINS named source lines (U-WT-06) ────────
+# Comments the range out, re-runs the test, and restores from memory (never git
+# stash / git checkout). Refuses a dirty file, an already-red test, or a range whose
+# removal breaks syntax. Exit 0 pinned / 1 PROBE FAILED (test stayed green) /
+# 2 refused-or-indeterminate / 3 restore/release failure (file may be mutated, or restored with the sidecar retained). THIS WRITES SOURCE FILES — read
+# tools/mutation_probe.py's header before using it.
+#   just mutation-probe --file tools/hooks/postedit-lint.sh --lines 34 \
+#     --test "bash tools/hooks/test_postedit_lint.sh"
+mutation-probe *ARGS:
+    uv run python tools/mutation_probe.py "$@"
+
 # ─── MEMORY.md — byte-cap gate + idempotent index upsert ────────────────────
 # NOT a semantic compactor (that stays the agent's call) — a deterministic
 # byte-exact cap gate + idempotent upsert. See tools/memory_compact.py's header.

@@ -358,7 +358,7 @@ PreToolUse most-restrictive-wins: **deny > ask > allow** (`claude-code-hooks.md 
 
 ## 5. ORDERED IMPLEMENTATION SEQUENCE
 
-High-leverage × low-risk first; one-unit-per-PR; each unit ships with a NAMED hermetic `test_*.sh` fixture mirroring the U-HK test pattern (e.g. `test_stop_loop.sh`, `test_permission_guard.sh`, `test_subagent_validate.sh`). New ids U-HK-30…U-HK-41.
+High-leverage × low-risk first; one-unit-per-PR; each unit ships with a NAMED hermetic `test_*.sh` fixture mirroring the U-HK test pattern (e.g. `test_stop_loop.sh`, `test_permission_guard.sh`, `test_subagent_validate.sh`). New ids U-HK-30…U-HK-44.
 
 | Unit | Discipline | One-line scope | Hermetic test | Leverage | Risk | Deps |
 |---|---|---|---|---|---|---|
@@ -374,6 +374,9 @@ High-leverage × low-risk first; one-unit-per-PR; each unit ships with a NAMED h
 | **U-HK-39** | D11 memory | escalate loop-gc.sh SessionStart surface to imperative >~26 KB; extend capture-failure ≥2 cardinality nudge | `test_loop_gc_memory_cap.sh`: 27 KB MEMORY.md → imperative additionalContext; 24 KB → passive/none | med | low | — |
 | **U-HK-40** | D14 Piece B | post-truncation recovery in session-start.sh + prompt-context.sh (trigger `"event":"StopFailure"` + freshness window) | `test_stopfailure_recovery.sh`: recent StopFailure row + checkpoint → re-inject pointer; stale/none → silent | high | low | U-HK-30 |
 | **U-HK-41** | D2/D3/D5/D12/D13/D14/§14.5 skills | skill-strengthen pass (loop-start, roadmap-continue, ship-pr, resolve, doc-authoring roles) — command-agnostic, zero-risk | `test_skill_strengthen.sh` (grep assertions on SKILL.md clauses) OR doc-only review | high | low | — |
+| **U-HK-42** | insights-residue (no D-finding) — postedit-lint | YAML parse branch (`*.yaml`/`*.yml`, `.venv`-python `safe_load_all`, advisory) | `test_postedit_lint.sh` (cases 7–11) | med | low | — |
+| **U-HK-43** | insights-residue (no D-finding) — subagent-validate | subagent registry JSONL append (start/stop, atomic single-line) | `test_subagent_validate.sh` (+5) | med | low | — |
+| **U-HK-44** | insights-residue (no D-finding) — loop-gc | unreconciled-subagent sweep + 7d prune in `[hygiene]` report | `test_loop_gc.sh` (+3) | med | low | U-HK-43 |
 | **U-HK-D6** | D6 paid-call | (HELD) narrow operator-named allowlist short-circuit + 4 required mods — **applied ONLY post-ratification** | `test_paid_allowlist_gate.sh`: listed zero-arg recipe → allow+ALLOW-PAID row; `<recipe> extra` → ask; unlisted/raw → deny | high | high | §6 ratification, U-HK-31 |
 
 Notes: **U-HK-41 (skill-strengthen) and U-HK-30 (durability) are the cheapest high-leverage wins — ship them first** (the skill pass is the PRIMARY fix for D2/D3/D5/D12/D13 and is zero-risk; U-HK-30 is cheap loss-window insurance). The D1 marker-gate (U-HK-34/35), D7 cwd-guard (U-HK-31→33), and the D4/D2 Stop work follow. **Ordering invariant:** the D1 deny-gate (U-HK-35) must NOT land before U-HK-34 (the runner that earns the marker) AND U-HK-41's D1 clause (which teaches the loop to RUN `codex-review-gated`) — else a strict-DENY denies the first merge with no taught path to satisfy it; hence U-HK-35 deps both. **U-HK-D6 is gated on the §6 ratification point and is NOT applied until then.**

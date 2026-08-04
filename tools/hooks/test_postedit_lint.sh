@@ -86,5 +86,113 @@ OUT=$(printf '%s' \
   && ok "uv-backed post-edit lint uses repo-safe cache" \
   || bad "unsafe uv cache: $(cat "$REPO/uv-cache-observed")"
 
+# --- U-HK-42: the .yaml|.yml parse-check branch -------------------------------
+# Fake venv python: prints a pyyaml-shaped error for files containing "YAML_BAD",
+# silent otherwise. Same marker-file discipline as the fake ruff above, so the
+# cases below assert the HOOK's plumbing, not pyyaml's behaviour. It also logs each
+# invocation (the hook cd's to PROJECT_DIR, so a bare relative path lands in $REPO)
+# — that log is what makes the CLEAN case load-bearing: asserting silence alone
+# would also pass if the hook never ran a YAML check at all.
+mkdir -p "$REPO/.venv/bin"
+cat > "$REPO/.venv/bin/python" <<'EOF'
+#!/usr/bin/env bash
+f="${@: -1}"             # last arg = the file path
+printf '%s\n' "$f" >> yaml-py-invocations
+if grep -q 'YAML_BAD' "$f" 2>/dev/null; then
+  echo "bad.yaml: mapping values are not allowed here (line 2, column 8)"
+fi
+exit 0
+EOF
+chmod +x "$REPO/.venv/bin/python"
+
+# 7) a .yaml the checker reports on → emits the path AND the parser's error text.
+printf 'title: fix: thing  # YAML_BAD\n' > "$REPO/bad.yaml"
+OUT=$(run "$REPO/bad.yaml")
+printf '%s' "$OUT" | grep -q "\[yaml\] parse error" \
+  && printf '%s' "$OUT" | grep -q "bad.yaml" \
+  && printf '%s' "$OUT" | grep -q "mapping values are not allowed here" \
+  && printf '%s' "$OUT" | grep -q "line 2, column 8" \
+  && ok "emits path + parser error for a bad .yaml" || bad "no emit for bad .yaml: '$OUT'"
+
+# 8) a clean multi-document .yml → checker RAN (witnessed) and stayed silent.
+printf -- '---\na: 1\n---\nb: 2\n' > "$REPO/clean.yml"
+OUT=$(run "$REPO/clean.yml")
+[ -z "$OUT" ] && ok "silent for a clean multi-doc .yml" || bad "emitted for clean .yml: '$OUT'"
+grep -qx "$REPO/clean.yml" "$REPO/yaml-py-invocations" 2>/dev/null \
+  && ok "the clean .yml was actually parse-checked (not just skipped)" \
+  || bad "no YAML check ran for the clean .yml"
+
+# 9) extensions the gate must not claim, and a missing .yaml → silent.
+printf 'YAML_BAD\n' > "$REPO/notes2.txt"
+OUT=$(run "$REPO/notes2.txt")
+[ -z "$OUT" ] && ok "silent for a .txt carrying the YAML marker" || bad "emitted for .txt: '$OUT'"
+printf '{"YAML_BAD": 1}\n' > "$REPO/data.json"
+OUT=$(run "$REPO/data.json")
+[ -z "$OUT" ] && ok "silent for a .json carrying the YAML marker" || bad "emitted for .json: '$OUT'"
+OUT=$(run "$REPO/nonexistent.yaml")
+[ -z "$OUT" ] && ok "silent for a missing .yaml" || bad "emitted for missing .yaml: '$OUT'"
+
+# 9b) checker-unavailable is DISTINGUISHED from clean (codex round-1): a fake venv
+# python that dies rc=3 with no output (import-failure shape) must produce the
+# UNAVAILABLE advisory, never the silent clean path.
+cat > "$REPO/.venv/bin/python" <<'EOF'
+#!/usr/bin/env bash
+exit 3
+EOF
+chmod +x "$REPO/.venv/bin/python"
+printf 'plain: fine\n' > "$REPO/ok.yaml"
+OUT=$(run "$REPO/ok.yaml")
+printf '%s' "$OUT" | grep -q "parse-check UNAVAILABLE" && printf '%s' "$OUT" | grep -q "rc=3" \
+  && ok "checker failure emits UNAVAILABLE (not silent clean)" \
+  || bad "checker failure took the clean path: '$OUT'"
+# restore the working fake for any later cases
+cat > "$REPO/.venv/bin/python" <<'EOF'
+#!/usr/bin/env bash
+f="${@: -1}"
+printf '%s\n' "$f" >> yaml-py-invocations
+if grep -q 'YAML_BAD' "$f" 2>/dev/null; then
+  echo "bad.yaml: mapping values are not allowed here (line 2, column 8)"
+fi
+exit 0
+EOF
+chmod +x "$REPO/.venv/bin/python"
+
+# 10) regression guard: widening the extension gate must not change the .py branch.
+mv "$REPO/bin/ruff.saved" "$REPO/bin/ruff"
+printf 'import os  # LINT_BAD\n' > "$REPO/bad2.py"
+OUT=$(run "$REPO/bad2.py")
+printf '%s' "$OUT" | grep -q "ruff findings" && printf '%s' "$OUT" | grep -q "bad2.py" \
+  && ok "the .py ruff branch still emits after the gate widening" || bad "ruff branch regressed: '$OUT'"
+
+# 11) no repo venv → fall back to `uv run --quiet python`, never `uv run --with`
+# (an ephemeral env on every edit), and still under the repo-safe /tmp uv cache.
+rm -rf "$REPO/.venv"
+cat > "$REPO/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+printf '%s' "${UV_CACHE_DIR:-}" > "${UV_CACHE_OBS:?}"
+printf '%s' "$*" > "${UV_ARGV_OBS:-/dev/null}"
+exit 0
+EOF
+chmod +x "$REPO/bin/uv"
+printf 'a: 1\n' > "$REPO/fallback.yaml"
+unset UV_CACHE_DIR
+OUT=$(printf '%s' \
+  "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$REPO/fallback.yaml\"}}" \
+  | env PATH="$REPO/bin:/usr/bin:/bin" CLAUDE_PROJECT_DIR="$REPO" \
+    UV_CACHE_OBS="$REPO/uv-cache-observed-yaml" UV_ARGV_OBS="$REPO/uv-argv-observed" \
+    bash "$HOOK" \
+  | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+[ -z "$OUT" ] && ok "uv-backed clean yaml parse-check stays silent" || bad "uv-backed yaml emitted: $OUT"
+UV_ARGV=$(cat "$REPO/uv-argv-observed" 2>/dev/null)
+printf '%s' "$UV_ARGV" | grep -q -- "run --quiet python" \
+  && ok "yaml fallback goes through \`uv run --quiet python\`" \
+  || bad "yaml fallback argv wrong: '$UV_ARGV'"
+printf '%s' "$UV_ARGV" | grep -q -- "--with" \
+  && bad "yaml fallback used an ephemeral \`uv run --with\` env: '$UV_ARGV'" \
+  || ok "yaml fallback never passes --with"
+[ "$(cat "$REPO/uv-cache-observed-yaml")" = "/tmp/arhugula-uv-cache" ] \
+  && ok "uv-backed yaml parse-check uses repo-safe cache" \
+  || bad "unsafe uv cache: $(cat "$REPO/uv-cache-observed-yaml")"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

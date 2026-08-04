@@ -420,6 +420,36 @@ R-IF-115:
     close track or remain deliberately represented in the live arc ledger / closure-gate residual
     review instead of this stale ACTIVE entry. No new build arc is opened here.
 
+R-IF-116:
+  title: Insights-residue workspace tooling program (U-WT-01..08 + U-HK-42..44)
+  surface: VII
+  status: RESOLVED
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [tools/hooks/**, tools/*.py, .claude/skills/**, .agents/skills/**, justfile, .gitignore, .harness/hardening-workflow/HARDENING_PLAN.md, .harness/wave5-hooks-status.md, .harness/r-if-116-insights-residue-plan.md, Project_Roadmap_v1.md, tools/codex-parity-check.sh], contracts: [], cross_axis: no }
+  skills: { primary: roadmap-continue, secondary: [ship-pr, merge-gate] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: e2e, must_pass: ["tools/codex-parity-check.sh", "just check"] }
+  close_shape: { type: PR-merge, artifact: ".harness/wave5-hooks-status.md", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: >
+    RESOLVED 2026-08-04 — all 8 planned PRs landed: #1196 (U-WT-01 grounding-pass clause +
+    this registration), #1198 (U-HK-42 YAML parse-check branch in postedit-lint), #1200
+    (U-HK-43 subagent lifecycle registry), #1202 (U-HK-44 unreconciled sweep + locked prune),
+    #1204 (U-WT-03 + U-WT-04 arc exit report + ship-pr closeout wiring), #1206 (U-WT-06
+    mutation-probe runner), #1208 (U-WT-05 red-first skill + dogfood record), and #pending
+    (U-WT-08 two-lane pilot recipe + wave5 status doc + this close). Close artifact
+    `.harness/wave5-hooks-status.md` records the wave-5 hook outcomes with their two
+    accepted-and-documented residuals and reopen triggers. U-WT-02 (`tools/grounding_pass.py`)
+    and U-WT-07 (`tools/arc_disjoint_check.py`) remain DEFERRED-BY-DESIGN, carried as
+    plan-documented conditional follow-ons at `.harness/r-if-116-insights-residue-plan.md`
+    (U-WT-02 under Feature 2, U-WT-07 under Feature 6) with their trigger conditions recorded
+    there, and both are named on that plan's standing cut list —
+    they are deliberately NOT open register rows, and neither is opened here. Per-unit as-built
+    notes live in that plan; no new arc is opened by this close.
+
 R-IF-roadmap-refresh:
   title: Refresh roadmap status dashboard after PR merge
   surface: VII
