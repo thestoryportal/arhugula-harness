@@ -13,7 +13,8 @@ uv run pytest -q \
   tools/test_agy_review.py \
   tools/test_codex_stop_gate.py \
   tools/test_codex_workflow_parity.py \
-  tools/test_codex_worktree_gc.py
+  tools/test_codex_worktree_gc.py \
+tools/test_arc_exit_report.py
 
 for test_script in tools/hooks/test_*.sh tools/statusline/test_*.sh; do
   bash "$test_script"

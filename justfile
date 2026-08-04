@@ -163,6 +163,16 @@ roadmap-status *ARGS:
 roadmap-status-check:
     uv run python tools/roadmap_status_refresh.py --check
 
+# ─── arc EXIT REPORT — machine-readable arc-closure record (U-WT-03) ────────
+# Run as the FINAL ship-pr step, AFTER the reflect / context-save block: only there do
+# the merge SHA, post-merge main-CI conclusion, terminating-refresh commit and the
+# just-written checkpoint all exist. Writes the gitignored
+# .harness/.checkpoints/arc-exit-report-pr<NNN>.md (PR-keyed, overwritten on re-run) and
+# indexes one EXIT-REPORT row into .harness/loop_status.md.
+#   just arc-exit-report --pr 1202 --merge-sha 995517e5
+arc-exit-report *ARGS:
+    uv run python tools/arc_exit_report.py "$@"
+
 # ─── MEMORY.md — byte-cap gate + idempotent index upsert ────────────────────
 # NOT a semantic compactor (that stays the agent's call) — a deterministic
 # byte-exact cap gate + idempotent upsert. See tools/memory_compact.py's header.
