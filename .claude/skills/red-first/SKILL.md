@@ -56,14 +56,21 @@ The Adversary's contract:
    verbatim failing output. **A test whose command cannot isolate it is itself a
    `RED-FIRST: BLOCK`**: the gate below cannot be run honestly without one.
 
-**When the lines do not exist yet.** For an additive unit, the source the test pins is not
-written at authoring time, so a numeric range would be a guess that goes stale the moment the
-Implementer writes anything. The Adversary instead records the annotation as the target file
-plus a **prose anchor** (`# mutation-probe: harness-cp/src/foo.py:<the retry-budget guard>`)
-and resolves every anchor to a numeric `A-B` in a **post-green, Adversary-owned resolution
-pass**. That pass is a re-open by the rules above: the Adversary edits the test file, and a
-**NEW digest is recorded** to supersede the handoff one. The Implementer never resolves an
-annotation. Probes run against the resolved numeric ranges, never against an anchor.
+**Every annotation is resolved after green, not at authoring time.** `mutation_probe.py` reads
+`<lines>` as literal *current* line numbers, and any range written before the implementation
+lands is stale by the time the gate runs — in both directions. For an additive unit the source
+does not exist yet, so a number would be pure guess; for an existing file, one insertion or
+deletion **above** the range shifts it, and the probe then mutates unrelated code (a false pass
+or a false block, indistinguishable from the real thing). So the Adversary writes whatever it
+can honestly name at authoring time — a numeric `A-B` where the lines already exist, otherwise
+the target file plus a **prose anchor**
+(`# mutation-probe: harness-cp/src/foo.py:<the retry-budget guard>`) — and then, once the
+Implementer is green, runs **one post-green, Adversary-owned resolution pass that re-resolves
+EVERY annotation's numeric range against the final implementation**: the anchors and the
+originally-numeric ones alike, with no exemption for a range that "looks untouched". That pass
+is a re-open by the rules below: the Adversary edits the test file, and a **NEW digest is
+recorded** to supersede the previous one. The Implementer never resolves an annotation. Probes
+run only against post-resolution ranges — never an anchor, never a pre-implementation number.
 
 ## The handoff fence (sha256)
 
@@ -75,7 +82,8 @@ shasum -a 256 <test-file>            # record this digest in the arc's notes and
 ```
 
 The Implementer may not edit that file. What the digest proves is exactly one thing: **the
-final test file is byte-identical to what the Adversary handed off.** That is the contract —
+final test file is byte-identical to what the Adversary handed off** (or, after a resolution
+pass, to what the Adversary last recorded). That is the contract —
 an edit reverted to the identical bytes is, by definition, contract-satisfying, and the digest
 does not claim to detect it. What it does beat is `git diff --name-only`, which passes any
 edit the Implementer commits and so proves nothing at all about content. This is a
@@ -98,7 +106,10 @@ failing adversary assertion.
 
 The unit closes only when **all** of these hold:
 
-1. `shasum -a 256 <test-file>` equals the digest recorded at handoff.
+1. `shasum -a 256 <test-file>` equals the **latest Adversary-recorded digest** — the handoff
+   digest if no resolution pass occurred, the resolution-pass digest otherwise. Only the
+   Adversary ever moves the digest forward; a mismatch against the latest Adversary digest is
+   a `RED-FIRST: BLOCK`.
 2. The adversary test command exits 0.
 3. **Every** `# mutation-probe:` annotation in the file has been executed and exited 0:
 
@@ -120,7 +131,7 @@ The unit closes only when **all** of these hold:
    `mutation_probe.py` refuses a target file with uncommitted changes, so **commit the arc's
    source work before running the gate**.
 4. **Red evidence is in the PR body**: paste the failing output verbatim into the PR body,
-   alongside the handoff digest and the per-annotation probe results. There is no Claude-side
+   alongside the latest Adversary digest and the per-annotation probe results. There is no Claude-side
    red ledger to write — `codex_loop.py` already carries one for the Codex flow, and pasted
    output is the witness here.
 

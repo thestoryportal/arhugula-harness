@@ -82,13 +82,22 @@ needle "$CLAUDE_SKILL" "claude red-first" "the fence-is-not-a-permission-deny st
 absent "$CLAUDE_SKILL" "claude red-first" "the falsified edit-detection claim" \
   'distinguishes an untouched adversary test from an edited one'
 
-# --- 3. Claude carrier: annotation resolution for not-yet-written source ----------------
+# --- 3. Claude carrier: post-green resolution of EVERY annotation ------------------------
+# Ranges are literal current line numbers to mutation_probe.py, so ANY pre-implementation
+# number is stale by gate time (additive units: the lines don't exist; existing files: an
+# insertion above the range shifts it). The resolution pass therefore covers every
+# annotation, and it moves the digest forward — the gate compares against the LATEST
+# Adversary-recorded digest, not the handoff one.
 needle "$CLAUDE_SKILL" "claude red-first" "the prose-anchor form for absent line numbers" \
   'prose anchor'
 needle "$CLAUDE_SKILL" "claude red-first" "the post-green Adversary-owned resolution pass" \
   'post-green, Adversary-owned resolution'
+needle "$CLAUDE_SKILL" "claude red-first" "the every-annotation scope of the resolution pass" \
+  "EVERY annotation's numeric range against the final implementation"
 needle "$CLAUDE_SKILL" "claude red-first" "the new-digest rule for a resolution pass" \
-  '**NEW digest is recorded** to supersede the handoff one'
+  'to supersede the previous one'
+needle "$CLAUDE_SKILL" "claude red-first" "the latest-digest comparison at the gate" \
+  'latest Adversary-recorded digest'
 
 # --- 4. Claude carrier: gate mechanics + verdict protocol -------------------------------
 # The probe MUST be run per-test, not per-file: mutation_probe.py accepts ANY test failure in
