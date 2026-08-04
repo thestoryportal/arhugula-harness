@@ -98,7 +98,7 @@ fi
 ABLK=$(awk '/^## Arc exit report/{f=1;next} /^## /{f=0} f' "$ASHIP")
 ANORM=$(printf '%s' "$ABLK" | tr '\n' ' ' | tr -s ' ')
 amiss=""
-printf '%s' "$ANORM" | grep -qF -- 'after the reflect and `context-save` step above — never before it' \
+printf '%s' "$ANORM" | grep -qF -- 'after the reflect and `context-save` step above, never before it' \
   || amiss="$amiss after-context-save-rationale"
 printf '%s' "$ANORM" | grep -qF -- 'Paste the emitted `yaml` block' || amiss="$amiss paste-yaml-block"
 printf '%s' "$ANORM" | grep -qF -- 'machine-readable closure record' || amiss="$amiss closure-record"
@@ -108,6 +108,23 @@ if [ -z "$amiss" ]; then
 else
   bad "codex-native exit-report section missing:$amiss"
 fi
+
+# --- 6b. Both carriers skip the report for a terminating-refresh PR (codex round-1):
+#         a refresh-only PR is not an arc; running the report there would mislabel its
+#         structurally-absent refresh as an open obligation.
+printf '%s' "$NORM" | grep -qF -- 'Skip this step entirely when the PR was itself the terminating roadmap-status refresh' \
+  && ok "claude carrier skips the report on a terminating-refresh PR" \
+  || bad "claude carrier missing the refresh-PR skip clause"
+printf '%s' "$ANORM" | grep -qF -- 'Skip entirely for a pure terminating-refresh PR' \
+  && ok "codex carrier skips the report on a terminating-refresh PR" \
+  || bad "codex carrier missing the refresh-PR skip clause"
+
+# --- 6c. Codex carrier: next-arc launch is deferred until AFTER the report (codex
+#         round-1) — the reflect section's launch sentence must name the report gate.
+AREFL=$(awk '/^## Reflect and checkpoint/{f=1;next} /^## /{f=0} f' "$ASHIP")
+printf '%s' "$AREFL" | tr '\n' ' ' | tr -s ' ' | grep -qF -- 'and the arc exit report below' \
+  && ok "codex carrier defers next-arc launch until after the report" \
+  || bad "codex carrier launches the next arc before the exit report"
 
 # --- 7. The recipe the skills name actually exists in the justfile ---
 JUSTFILE="$SCRIPT_DIR/../../justfile"

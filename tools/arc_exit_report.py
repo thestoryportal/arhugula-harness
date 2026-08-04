@@ -444,6 +444,15 @@ def append_ledger_row(repo_root: Path, data: dict[str, Any], rel_path: str) -> b
     loop_lib = repo_root / "tools" / "hooks" / "loop_lib.sh"
     if not (lib.is_file() and loop_lib.is_file()):
         return False
+    ledger = repo_root / LEDGER_REL
+    # Pre/post growth check (codex round-1 P3): a substring match alone can false-pass on
+    # an idempotent rerun by matching the PREVIOUS invocation's identical row while
+    # loop_log's failure-invisible append silently did nothing (unwritable ledger, full
+    # disk). Success = the file GREW this invocation AND the new tail carries the detail.
+    try:
+        before = len(ledger.read_text(encoding="utf-8")) if ledger.is_file() else 0
+    except OSError:
+        before = 0
     rc, _ = run(
         [
             "bash",
@@ -457,11 +466,11 @@ def append_ledger_row(repo_root: Path, data: dict[str, Any], rel_path: str) -> b
     )
     if rc != 0:
         return False
-    ledger = repo_root / LEDGER_REL
     try:
-        return ledger.is_file() and detail.replace("|", "\\|") in ledger.read_text(encoding="utf-8")
+        text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
     except OSError:
         return False
+    return len(text) > before and detail.replace("|", "\\|") in text[before:]
 
 
 def main(argv: list[str] | None = None) -> int:

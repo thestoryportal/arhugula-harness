@@ -223,7 +223,10 @@ refresh-only commit has no new learnings to reflect on.
 **After** the reflect + `/context-save` block above, not before it. That ordering is the
 whole point: the merge SHA, the post-merge main-CI conclusion, the §12.2.1 refresh commit
 **and** the checkpoint you just wrote all exist only at this point, so the report records
-the arc's *real* final checkpoint rather than a stale or fabricated one. Run:
+the arc's *real* final checkpoint rather than a stale or fabricated one. **Skip this step
+entirely when the PR was itself the terminating roadmap-status refresh (§12.2.1)** — the
+same rule as the reflect block above: a refresh-only PR is not an arc, owes no report, and
+running it would mislabel its structurally-absent refresh as an open obligation. Run:
 
 ```
 just arc-exit-report --pr <NNN> --merge-sha <merge-sha>

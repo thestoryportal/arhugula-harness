@@ -111,16 +111,19 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
 Before the next arc, reflect on new recurrent lessons and run the gstack `context-save` skill.
 Update durable agent memory only when the operator explicitly requests it and the active host
 memory policy permits it; context-save itself remains mandatory. A checkpoint's remaining-work
-prose is advisory, so verify it against HEAD when resuming. After the fixed point, create the
-next isolated worktree and run `just codex-autonomous-arc <next-arc-id>`. Skip reflection only
+prose is advisory, so verify it against HEAD when resuming. After the fixed point **and the
+arc exit report below**, create the next isolated worktree and run
+`just codex-autonomous-arc <next-arc-id>` — launching the next arc first would let it alter
+loop/checkpoint state before the prior arc's report is collected. Skip reflection only
 for a pure terminating-refresh PR.
 
 ## Arc exit report (U-WT-03/04)
 
-Run this last, after the reflect and `context-save` step above — never before it. Only at
-that point do the merge SHA, the post-merge main CI conclusion, the terminating refresh
-commit, and the checkpoint just written all exist, so the report records the arc's real
-final checkpoint instead of a stale one.
+Run this last within the arc — after the reflect and `context-save` step above, never
+before it, and BEFORE launching the next arc. Only at that point do the merge SHA, the
+post-merge main CI conclusion, the terminating refresh commit, and the checkpoint just
+written all exist, so the report records the arc's real final checkpoint instead of a
+stale one. Skip entirely for a pure terminating-refresh PR (not an arc; no report owed).
 
 ```bash
 just arc-exit-report --pr <NNN> --merge-sha <merge-sha>

@@ -392,6 +392,28 @@ def test_ledger_row_marks_a_missing_refresh_as_none(repo, gstack, monkeypatch):
     assert REFRESH[:8] not in text
 
 
+def test_ledger_rerun_with_silent_append_failure_is_not_a_false_pass(repo, gstack, monkeypatch):
+    """codex round-1 P3: on an idempotent rerun, a substring match against the PREVIOUS
+    invocation's identical row must not mask a silently failed append. Success requires
+    the ledger to GROW this invocation."""
+    data = collect_with(scenario(todos=""), repo, gstack, monkeypatch)
+    monkeypatch.undo()
+    rel = f"{aer.REPORT_DIR}/arc-exit-report-pr1202.md"
+    assert aer.append_ledger_row(repo, data, rel) is True  # first run really appends
+
+    # Rerun with loop_log neutered to a silent no-op (rc 0, no write) — the prior
+    # identical row is still present, so a substring check would false-pass.
+    real_run = aer.run
+
+    def neutered(cmd, cwd):
+        if any("loop_log" in str(part) for part in cmd):
+            return 0, ""
+        return real_run(cmd, cwd)
+
+    monkeypatch.setattr(aer, "run", neutered)
+    assert aer.append_ledger_row(repo, data, rel) is False
+
+
 def test_ledger_row_pipes_are_escaped_so_one_row_stays_one_row(repo, gstack, monkeypatch):
     data = collect_with(scenario(), repo, gstack, monkeypatch)
     monkeypatch.undo()
