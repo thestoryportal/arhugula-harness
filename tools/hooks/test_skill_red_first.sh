@@ -190,6 +190,8 @@ needle "$CODEX_SKILL" "codex-native red-first" "the probe-evidence content bindi
   'byte-identical to the shipping WIP'
 needle "$CODEX_SKILL" "codex-native red-first" "the guard-approved worktree cleanup" \
   'safe-worktree-remove.sh'
+needle "$CODEX_SKILL" "codex-native red-first" "the temp-worktree lock-file pre-clean" \
+  'delete the probe'"'"'s regenerable `*.mutprobe.lock` files inside the TEMP worktree'
 needle "$CLAUDE_SKILL" "claude red-first" "the unsupported-target-type invocation block" \
   'RED-FIRST: BLOCK: unsupported target type'
 needle "$CODEX_SKILL" "codex-native red-first" "the annotation format it routes to" \
