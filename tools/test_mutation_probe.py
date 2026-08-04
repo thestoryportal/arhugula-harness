@@ -614,6 +614,62 @@ def test_ac8_live_pid_sidecar_is_never_touched(repo):
 # --- AC5: an already-red test -------------------------------------------------------------
 
 
+def test_p1a_a_baseline_that_writes_the_target_is_refused(repo):
+    """codex round-6 P1a: an autofixer/generator/snapshot-updating test can PASS while
+    rewriting the very file being probed. With the snapshot taken before the baseline, the
+    mutation overwrote the test's edit and the restore put back the already-stale bytes —
+    the test's work silently discarded behind an exit 0."""
+    (repo / "autofix.sh").write_text(
+        "#!/usr/bin/env bash\nprintf '# autofixed by the test\\n' >> src.py\nexit 0\n",
+        encoding="utf-8",
+    )
+    res = run_probe(repo, "src.py", PINNED, "bash autofix.sh")
+    assert res.returncode == 2, res.stdout + res.stderr
+    assert "TEST COMMAND modified" in res.stderr
+    # The file is left EXACTLY as the test wrote it — nothing restored over the top.
+    assert (repo / "src.py").read_text(encoding="utf-8") == SRC + "# autofixed by the test\n"
+    assert sidecars(repo) == [], "nothing may be published before this refusal"
+
+
+def test_p1a_the_snapshot_is_read_after_the_baseline_runs():
+    """The ordering half of P1a, asserted STRUCTURALLY.
+
+    There is deliberately no behavioural case for the ordering ALONE: git compares content,
+    so any baseline edit the ordering would matter for is exactly the edit the step-1b
+    re-check already refuses. The ordering is defence in depth — it makes "the snapshot is
+    what is on disk at mutation time" true by construction rather than by the git check
+    happening to notice. So the construction itself is the witness.
+    """
+    tree = ast.parse(PROBE.read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "probe")
+    baselines = [
+        c.lineno
+        for c in ast.walk(fn)
+        if isinstance(c, ast.Call) and getattr(c.func, "id", "") == "run_shell"
+    ]
+    snapshots = [
+        c.lineno
+        for c in ast.walk(fn)
+        if isinstance(c, ast.Call)
+        and isinstance(c.func, ast.Attribute)
+        and c.func.attr == "read_bytes"
+        and getattr(c.func.value, "id", "") == "target"
+    ]
+    assert baselines, "probe() must run the baseline through run_shell"
+    assert snapshots, "probe() must snapshot the target"
+    assert min(snapshots) > min(baselines), (
+        "the restore snapshot is read BEFORE the baseline runs — a baseline that writes the "
+        "target would make it stale"
+    )
+
+
+def test_p1a_a_readonly_baseline_still_probes_normally(repo):
+    """The positive control: a baseline that merely READS the target is unaffected."""
+    res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "TEST COMMAND modified" not in res.stderr
+
+
 def test_ac5_already_red_test_is_refused_with_a_distinct_message(repo):
     before = (repo / "src.py").read_bytes()
     res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_red.py"))
@@ -786,6 +842,12 @@ def test_p2a_sidecar_release_failure_is_loud_and_nonzero(repo):
         # NOT misreported as a restore failure — the file really is back.
         assert "RESTORE FAILED" not in res.stderr
         assert "RESTORE REFUSED" not in res.stderr
+        # codex round-6 P1b: this fixture now ALSO exercises the documented fallback — the
+        # read-only directory forbids the atomic rename, so the restore degrades to a
+        # verified direct write and must SAY so rather than degrade silently. The outcome
+        # of the original witness is unchanged, which is why it was kept as-is.
+        assert "denies new entries" in res.stderr
+        assert "direct write instead of an atomic replace" in res.stderr
         assert (pkg / "mod.py").read_text(encoding="utf-8") == SRC
         kept = sorted(pkg.glob("*.mutprobe.*.bak"))
         assert len(kept) == 1
@@ -1053,7 +1115,7 @@ def test_p2_dead_pid_mutation_fragment_is_removed_and_never_restored(repo):
     frag.write_bytes(b"a half-written mutation")
     res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
     assert "removed unpublished mutation fragment" in res.stdout
-    assert "never mutated" in res.stdout
+    assert "that write never landed" in res.stdout
     assert not frag.exists()
     assert res.returncode == 0, res.stdout + res.stderr
     assert (repo / "src.py").read_text(encoding="utf-8") == SRC
@@ -1083,7 +1145,7 @@ def test_p1_dead_pid_tmp_fragment_is_removed_and_never_restored(repo):
     frag.write_bytes(b"half a sidecar, no header")
     res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
     assert "removed unpublished sidecar fragment" in res.stdout
-    assert "never mutated" in res.stdout
+    assert "that write never landed" in res.stdout
     assert not frag.exists()
     assert res.returncode == 0, res.stdout + res.stderr
     assert (repo / "src.py").read_text(encoding="utf-8") == SRC
@@ -1122,17 +1184,43 @@ def test_p1_the_recognized_sidecar_name_is_only_ever_published_atomically():
         and call.func.attr == "replace"
         and getattr(call.func.value, "id", "") == "os"
     ]
-    # One shared implementation, reached by both publishers (sidecar and mutation).
+    # One shared implementation of the atomic publish...
     assert len(replaces) == 1, "the atomic publish must have ONE implementation"
     assert replaces[0][0].name == "_atomic_publish"
-    callers = {
+
+    def callers_of(name: str) -> set[str]:
+        return {
+            fn.name
+            for fn in ast.walk(tree)
+            if isinstance(fn, ast.FunctionDef)
+            for call in ast.walk(fn)
+            if isinstance(call, ast.Call) and getattr(call.func, "id", "") == name
+        }
+
+    # ...reached by the sidecar publish directly, and by every write to a REAL target
+    # through the one `write_target` gateway (codex round-6 P1b).
+    assert callers_of("_atomic_publish") == {"publish_sidecar", "write_target"}
+    assert callers_of("write_target") == {
+        "publish_mutation",
+        "restore",
+        "reconcile_sidecars",
+    }, callers_of("write_target")
+
+    # The ONLY truncating write left in the tool is the documented read-only-directory
+    # fallback, and it lives in exactly one named function.
+    direct_writers = {
         fn.name
         for fn in ast.walk(tree)
         if isinstance(fn, ast.FunctionDef)
         for call in ast.walk(fn)
-        if isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_atomic_publish"
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "write_bytes"
     }
-    assert callers == {"publish_sidecar", "publish_mutation"}, callers
+    assert direct_writers == {"_direct_write"}, (
+        f"a truncating write_bytes escaped the atomic path in {direct_writers} — only the "
+        "named read-only-directory fallback may write that way"
+    )
 
     # No `<name>.write_bytes(...)` may target a variable that holds the .bak path.
     bak_holders = {"sidecar", "sc", "bak"}

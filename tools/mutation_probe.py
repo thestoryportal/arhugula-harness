@@ -19,7 +19,13 @@ below is therefore the load-bearing part of the design — not the mutation:
   1. Run `<cmd>` and require rc 0. Probing against an already-red test is meaningless: the
      step-3 red would be the pre-existing red, so a vacuous test would be reported as a
      kill. Already-red exits 2 with its own message, never a probe verdict.
-  2. Read the original bytes into memory, then comment lines A-B out (`# ` at column 0).
+  1b. REFUSE if the baseline WROTE the target. A generator/autofixer/snapshot-updating test
+     can pass while rewriting the very file being probed; the snapshot would then be stale,
+     the mutation would overwrite the test's edit, and the restore would silently discard
+     it behind an exit 0. The file is left exactly as the test wrote it.
+  2. Read the original bytes into memory — AFTER the baseline, so the snapshot is always
+     what is actually on disk at mutation time — then comment lines A-B out (`# ` at
+     column 0).
   2b. REQUIRE the mutated text to remain VALID — `compile(..., "exec")` for .py (the full
      compile, not just `ast.parse`: the grammar-only check misses `break` outside a loop, an
      orphaned `nonlocal`, and friends), `bash -n` for .sh, `yaml.safe_load_all` for
@@ -615,6 +621,76 @@ def _atomic_publish(tmp: Path, dest: Path, body: bytes, mode: int | None) -> str
     return None
 
 
+class WriteOutcome(NamedTuple):
+    """How a write to a real file went. `degraded` records that the atomic path was not
+    available and a direct truncating write was used instead — the caller must SAY SO."""
+
+    error: str | None
+    degraded: bool = False
+
+
+def _current_mode(dest: Path) -> tuple[int | None, str | None]:
+    """(mode, error) for an existing file. The mode has to be carried across an atomic
+    replace by hand — the new inode does not inherit it."""
+    try:
+        return stat.S_IMODE(dest.stat().st_mode), None
+    except OSError as e:
+        return None, f"cannot read the mode of {dest} ({e})"
+
+
+def write_target(
+    dest: Path, pid: int, body: bytes, mode: int | None, *, allow_direct: bool
+) -> WriteOutcome:
+    """Put `body` at `dest`, atomically when the filesystem allows it.
+
+    Every write this tool makes to a REAL file goes through here (codex round-6 P1b) — the
+    mutation, the restore, and the reconcile's restore. `Path.write_bytes` truncates and
+    then writes, so a SIGKILL in that window leaves bytes that are neither the old nor the
+    new content. For the RESTORE that was the sharpest version of the bug: the torn file
+    matches neither the sidecar's original nor its recorded mutation, so the next
+    invocation's reconcile correctly REFUSES it — and the promised crash recovery ends with
+    truncated source on disk.
+
+    THE DIRECTORY-PERMISSION TENSION, resolved explicitly rather than assumed away.
+    `os.replace` needs write permission on the containing DIRECTORY; a plain write to an
+    existing file does not. A restore into a read-only directory is therefore possible
+    non-atomically and impossible atomically. Refusing outright would make the tool unable
+    to put back a file it had already mutated (the directory can be locked down between the
+    mutation and the restore) — strictly worse than a degraded restore. So when
+    `allow_direct` is set and the directory denies new entries, the write degrades to a
+    direct one and REPORTS it. The publishes (sidecar, mutation) never take that path: they
+    happen before anything is at risk, so refusing there costs nothing.
+
+    Residual of the degraded path, stated: a crash DURING the direct write still tears the
+    file, and the reconcile will refuse the torn state (it cannot distinguish a torn restore
+    from an operator edit — no witness exists). The outcome is then a retained sidecar plus
+    a loud RESTORE FAILED pointing at git. That is confined to the read-only-directory case
+    and is reported, not silent.
+    """
+    if allow_direct and not os.access(dest.parent, os.W_OK):
+        # No new directory entries → `os.replace` cannot work. Degrade, and say so.
+        # (If this check is wrong and the atomic path would have worked, we only lose
+        # atomicity for one write; if it is wrong the other way, the atomic path below
+        # fails loudly rather than silently degrading — the safe direction.)
+        return WriteOutcome(_direct_write(dest, body), degraded=True)
+    return WriteOutcome(_atomic_publish(staging_for(dest, pid, "new"), dest, body, mode))
+
+
+def _direct_write(dest: Path, body: bytes) -> str | None:
+    """The degraded write: truncate-then-write, then VERIFY it landed. The verification is
+    what keeps a torn result from being reported as success."""
+    try:
+        dest.write_bytes(body)
+    except OSError as e:
+        return f"cannot write {dest} ({e})"
+    try:
+        if dest.read_bytes() != body:
+            return f"{dest} did not read back as written after a non-atomic restore"
+    except OSError as e:
+        return f"cannot read back {dest} ({e})"
+    return None
+
+
 def publish_sidecar(
     target: Path, pid: int, original: bytes, mutated: bytes
 ) -> tuple[Path, str | None]:
@@ -640,16 +716,14 @@ def publish_mutation(target: Path, pid: int, mutated: bytes) -> str | None:
     through `os.replace` closes the window by construction: the target is always either
     fully original or fully mutated, so there is no torn state for a signal to expose.
 
-    The restore path deliberately keeps its plain `write_bytes`: it writes known-good
-    original bytes, a torn restore is exactly what the sidecar + reconcile recover, and
-    `write_bytes` needs no directory write permission — which the read-only-directory
-    release-failure test depends on.
+    The restore takes the same atomic path (codex round-6 P1b), with one documented
+    exception: a read-only directory forbids the rename, so the restore — and only the
+    restore — may degrade to a verified direct write and report it. See `write_target`.
     """
-    try:
-        mode = stat.S_IMODE(target.stat().st_mode)
-    except OSError as e:
-        return f"cannot read the mode of {target} ({e})"
-    return _atomic_publish(staging_for(target, pid, "new"), target, mutated, mode)
+    mode, mode_error = _current_mode(target)
+    if mode_error is not None:
+        return mode_error
+    return write_target(target, pid, mutated, mode, allow_direct=False).error
 
 
 def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
@@ -666,10 +740,13 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
     rule is a REFUSAL by default:
 
       * `.tmp` and `.new` staging fragments are NEVER restorable. Both exist only before
-        their `os.replace`, so a dead probe's leftover proves that publish never happened:
-        `.tmp` means the sidecar was never published, `.new` means the MUTATION was never
-        published and the target still holds its original bytes. Nothing to restore; the
-        fragment is simply removed (codex round-3 P1, round-5 P2).
+        their `os.replace`, so a leftover proves THAT WRITE never completed — nothing more.
+        `.tmp` means the sidecar was never published. `.new` stages every write to the
+        target (the mutation AND the restore), so its survival says only that one of those
+        did not land; whether anything needs restoring is then decided by the `.bak`
+        sidecar's own witnesses below, not by the fragment. Either way the fragment itself
+        is never a restore source; it is simply removed (codex round-3 P1, round-5 P2,
+        round-6 P1b).
       * INTEGRITY: a `.bak` is read only if its header's length AND sha256 match its
         payload. On truncation, corruption, a headerless sidecar or a `v1` one, the
         reconcile REFUSES loudly and RETAINS the file. It must never fall back to "treat
@@ -701,8 +778,8 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
                 sc.unlink()
                 msgs.append(
                     f"RECONCILED: removed unpublished {what} fragment {sc.name} (pid {pid} "
-                    f"dead). A fragment proves the probe died BEFORE that publish, so "
-                    f"{original.name} was never mutated and nothing needed restoring."
+                    f"dead). A fragment proves that write never landed; whether "
+                    f"{original.name} itself needs restoring is decided by its sidecar."
                 )
             except OSError as e:
                 msgs.append(f"RECONCILE SKIPPED: cannot remove fragment {sc.name} ({e})")
@@ -755,11 +832,25 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
                 "written — recover from git if you do want the original back, then delete it."
             )
             continue
+        mode, mode_error = _current_mode(original)
+        if mode_error is not None:
+            msgs.append(f"RECONCILE FAILED: {mode_error}; {sc.name} is RETAINED")
+            continue
+        recovered = write_target(original, self_pid, saved, mode, allow_direct=True)
+        if recovered.error is not None:
+            msgs.append(
+                f"RECONCILE FAILED: could not restore {original} from {sc.name} "
+                f"({recovered.error}); the sidecar is RETAINED"
+            )
+            continue
         try:
-            original.write_bytes(saved)
             sc.unlink()
         except OSError as e:
-            msgs.append(f"RECONCILE FAILED: could not restore {original} from {sc.name} ({e})")
+            msgs.append(
+                f"RECONCILE PARTIAL: {original.name} was restored from {sc.name} but the "
+                f"sidecar could not be removed ({e}) — delete it by hand, or the NEXT run "
+                "will consider replaying it."
+            )
             continue
         msgs.append(
             f"RECONCILED: restored {original} from {sc.name} — a probe (pid {pid}) died "
@@ -833,27 +924,25 @@ def restore(
             "this probe wrote nor the original, so a concurrent writer edited it. Refusing to "
             f"overwrite that edit. The original is preserved at {sidecar}; reconcile by hand.",
         )
-    try:
-        target.write_bytes(original)
-    except OSError as e:
+    mode, mode_error = _current_mode(target)
+    if mode_error is not None:
         return RestoreOutcome(
-            NOT_RESTORED,
-            f"RESTORE FAILED: could not write {target} ({e}); the original is preserved at "
-            f"{sidecar}",
+            NOT_RESTORED, f"RESTORE FAILED: {mode_error}; the original is preserved at {sidecar}"
         )
-    try:
-        after = target.read_bytes()
-    except OSError as e:
+    written_back = write_target(target, os.getpid(), original, mode, allow_direct=True)
+    if written_back.error is not None:
         return RestoreOutcome(
             NOT_RESTORED,
-            f"RESTORE FAILED: could not re-read {target} ({e}); the original is preserved at "
-            f"{sidecar}",
+            f"RESTORE FAILED: {written_back.error}; the original is preserved at {sidecar}",
         )
-    if after != original:
-        return RestoreOutcome(
-            NOT_RESTORED,
-            f"RESTORE FAILED: {target} does not match the original after rewriting it; the "
-            f"original is preserved at {sidecar}",
+    if written_back.degraded:
+        # Succeeded, but not atomically — the operator should know the crash-safety
+        # guarantee was reduced for this one write (codex round-6 P1b).
+        print(
+            f"[mutation-probe] {target.parent} denies new entries, so the restore used a "
+            "direct write instead of an atomic replace; it is verified, but a crash DURING "
+            "it would have left a torn file.",
+            file=sys.stderr,
         )
     return _verify_and_release(target, sidecar, cwd)
 
@@ -989,6 +1078,17 @@ def git_witness_refusal(target: Path, repo_root: Path) -> str | None:
     return None
 
 
+def _read_text(target: Path) -> tuple[str, str | None]:
+    """(text, error) — a UTF-8 read used for cheap pre-validation. The RESTORE's snapshot is
+    read separately and later; do not reuse this one for it."""
+    try:
+        return target.read_bytes().decode("utf-8"), None
+    except OSError as e:
+        return "", f"cannot read {target} ({e})."
+    except UnicodeDecodeError:
+        return "", f"{target} is not UTF-8 text — refusing to mutate it."
+
+
 def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> int:
     """The five steps. Returns the process exit code; see the module docstring."""
     # Step 0 — the repo, then the git-can-witness-it gate, then the clean-file gate.
@@ -1030,16 +1130,15 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
             "language-specific."
         )
 
+    # A CHEAP pre-validation, so an obviously bad range refuses without paying for a full
+    # test run. Its bytes are deliberately NOT kept — the authoritative snapshot is taken
+    # after the baseline (see below), and using this one for the restore is the very defect
+    # being fixed.
+    preview, read_error = _read_text(target)
+    if read_error is not None:
+        return _refuse(read_error)
     try:
-        original = target.read_bytes()
-        text = original.decode("utf-8")
-    except OSError as e:
-        return _refuse(f"cannot read {target} ({e}).")
-    except UnicodeDecodeError:
-        return _refuse(f"{target} is not UTF-8 text — refusing to mutate it.")
-
-    try:
-        mutated_text = comment_out(text, start, end)
+        comment_out(preview, start, end)
     except ValueError as e:
         return _refuse(str(e))
 
@@ -1053,6 +1152,46 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
             "against a red test proves nothing — its step-3 failure would be the pre-existing "
             f"one. Fix the test first. {target} was NOT touched."
         )
+
+    # Step 1b — the baseline must not have WRITTEN the target (codex round-6 P1a).
+    # A generator, autofixer or snapshot-updating test can modify the very file being
+    # probed while still passing. Everything this tool promises rests on a baseline that is
+    # clean and reproducible: if the suite rewrites the target, the "original" is a moving
+    # value, the mutation overwrites the test's edit, and the restore would put back bytes
+    # that were already superseded — silently discarding the test's work behind an exit 0.
+    after_baseline = run(["git", "status", "--porcelain", "--", str(target)], repo_root)
+    if after_baseline.rc != 0:
+        return _refuse(
+            f"`git status --porcelain -- {target}` exited {after_baseline.rc} after the "
+            "baseline — cannot establish that the test left the file alone."
+        )
+    if after_baseline.out:
+        return _refuse(
+            f"the TEST COMMAND modified {target} during its baseline run "
+            f"({after_baseline.out.splitlines()[0].strip()}). A probe needs a baseline that "
+            "leaves the target alone — otherwise the snapshot it would restore is already "
+            "stale and the test's own edit would be silently discarded. The file has been "
+            "left EXACTLY as the test wrote it; nothing was restored over it. Point --test "
+            "at a command that does not rewrite the file it is pinning."
+        )
+
+    # Step 2 — the AUTHORITATIVE snapshot, taken AFTER the baseline (codex round-6 P1a).
+    # Ordering is the point: whatever is on disk at this moment is what the restore must
+    # put back. Step 1b has just established that the baseline did not change it, so this
+    # is belt-and-braces — but it is the belt that makes the property hold by construction
+    # rather than by the git check happening to see everything.
+    try:
+        original = target.read_bytes()
+        text = original.decode("utf-8")
+    except OSError as e:
+        return _refuse(f"cannot read {target} ({e}).")
+    except UnicodeDecodeError:
+        return _refuse(f"{target} is not UTF-8 text — refusing to mutate it.")
+
+    try:
+        mutated_text = comment_out(text, start, end)
+    except ValueError as e:
+        return _refuse(str(e))
 
     # Step 2b — reject an unprobeable range BEFORE writing anything.
     err = syntax_error(kind, mutated_text, str(target))
