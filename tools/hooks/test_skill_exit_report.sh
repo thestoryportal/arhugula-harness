@@ -119,6 +119,24 @@ printf '%s' "$ANORM" | grep -qF -- 'Skip entirely for a pure terminating-refresh
   && ok "codex carrier skips the report on a terminating-refresh PR" \
   || bad "codex carrier missing the refresh-PR skip clause"
 
+# --- 6d. Both carriers BIND the checkpoint explicitly (codex round-3 P1): the roadmap
+#         authorizes a parallel frontier, so an unbound run can only report the
+#         workspace-newest file as an unconfirmed heuristic. The command shape must carry
+#         --checkpoint, and the rationale must name the parallel frontier — a bare flag
+#         with no reason gets dropped by the next editor.
+printf '%s' "$NORM" | grep -qF -- '--checkpoint <the-path-/context-save-just-reported>' \
+  && ok "claude carrier binds the checkpoint on the command line" \
+  || bad "claude carrier command omits --checkpoint"
+printf '%s' "$NORM" | grep -qF -- 'parallel frontier' \
+  && ok "claude carrier states WHY the checkpoint must be bound" \
+  || bad "claude carrier missing the parallel-frontier rationale"
+printf '%s' "$ANORM" | grep -qF -- '--checkpoint <the-path-context-save-just-reported>' \
+  && ok "codex carrier binds the checkpoint on the command line" \
+  || bad "codex carrier command omits --checkpoint"
+printf '%s' "$ANORM" | grep -qF -- 'parallel frontier' \
+  && ok "codex carrier states WHY the checkpoint must be bound" \
+  || bad "codex carrier missing the parallel-frontier rationale"
+
 # --- 6c. Codex carrier: next-arc launch is deferred until AFTER the report (codex
 #         round-1) — the reflect section's launch sentence must name the report gate.
 AREFL=$(awk '/^## Reflect and checkpoint/{f=1;next} /^## /{f=0} f' "$ASHIP")

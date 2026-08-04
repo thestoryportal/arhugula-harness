@@ -229,8 +229,14 @@ same rule as the reflect block above: a refresh-only PR is not an arc, owes no r
 running it would mislabel its structurally-absent refresh as an open obligation. Run:
 
 ```
-just arc-exit-report --pr <NNN> --merge-sha <merge-sha>
+just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-/context-save-just-reported>
 ```
+
+Pass `--checkpoint` explicitly — the roadmap authorizes a **parallel frontier**, so another
+live session can `/context-save` between your save and this collection; mtime cannot tell
+whose checkpoint is whose, so an unbound run reports the workspace-newest file as an
+unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path *your*
+`/context-save` step just reported binds the report to this arc.
 
 It writes `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` (gitignored, PR-keyed — a
 re-run overwrites it) and indexes one `EXIT-REPORT` row into `.harness/loop_status.md`.

@@ -126,8 +126,14 @@ written all exist, so the report records the arc's real final checkpoint instead
 stale one. Skip entirely for a pure terminating-refresh PR (not an arc; no report owed).
 
 ```bash
-just arc-exit-report --pr <NNN> --merge-sha <merge-sha>
+just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-context-save-just-reported>
 ```
+
+Pass `--checkpoint` explicitly. The roadmap authorizes a parallel frontier, so another live
+session can write a checkpoint between this arc's save and this collection; mtime cannot
+discriminate ownership, so an unbound run reports the workspace-newest file as an
+unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path this arc's own
+`context-save` step reported binds the report to this arc.
 
 Validate the call before using its output: require exit 0 and the named report path. The
 recipe writes `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` (gitignored, PR-keyed, so a

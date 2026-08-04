@@ -13,6 +13,7 @@ the shim exists to avoid.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sys
@@ -29,6 +30,9 @@ MERGE = "995517e5990bf6d05069501a784b4d43ebcdf168"
 REFRESH = "f7285f65344116c82a8ed92a74a7b0a5594df0b6"
 OTHER = "aaaaaaaa1111111111111111111111111111aaaa"
 MERGE_TS = 1_754_000_000
+# The terminating refresh lands AFTER the merge — the window between them is exactly where
+# a not-yet-final checkpoint can be written (codex round-3 P1 finding 2).
+REFRESH_TS = MERGE_TS + 1_000
 
 
 def scenario(**over):
@@ -48,7 +52,9 @@ def scenario(**over):
         "commits": {MERGE, REFRESH, OTHER},
         "log": [(REFRESH, "ops: roadmap status refresh post-#1202 (#1203)")],
         "files": {REFRESH: [".harness/roadmap_status.md"]},
-        "merge_ts": str(MERGE_TS),
+        # Per-commit committer times — the anchor for checkpoint.confirmed is the REFRESH
+        # commit when one is verified, the merge otherwise.
+        "ts": {MERGE: str(MERGE_TS), REFRESH: str(REFRESH_TS), OTHER: str(REFRESH_TS)},
         "todos": "",
         "todos_rc": 0,
     }
@@ -86,7 +92,8 @@ def make_run(sc, toplevel: Path):
             if cmd[1] == "show" and "--name-only" in cmd:
                 return 0, "\n".join(sc["files"].get(cmd[-1], []))
             if cmd[1] == "show" and "-s" in cmd:
-                return 0, sc["merge_ts"]
+                ts = sc["ts"].get(cmd[-1])
+                return (0, ts) if ts is not None else (128, "")
             if cmd[1] == "remote":
                 return 0, "https://github.com/thestoryportal/arhugula-harness.git"
             return 1, ""
@@ -112,23 +119,32 @@ def repo(tmp_path):
 
 @pytest.fixture
 def gstack(tmp_path):
-    """A fake ~/.gstack/projects tree whose newest checkpoint post-dates the merge."""
+    """A fake ~/.gstack/projects tree whose newest checkpoint post-dates BOTH commits —
+    so any `confirmed: false` in an unbound run is attributable to the binding rule, never
+    to the timestamps."""
     d = tmp_path / "gstack" / "repo" / "checkpoints"
     d.mkdir(parents=True)
     old = d / "20260801-000000-older.md"
     new = d / "20260803-210500-final.md"
     old.write_text("old", encoding="utf-8")
     new.write_text("new", encoding="utf-8")
-    import os
-
     os.utime(old, (MERGE_TS - 500, MERGE_TS - 500))
-    os.utime(new, (MERGE_TS + 500, MERGE_TS + 500))
+    os.utime(new, (REFRESH_TS + 500, REFRESH_TS + 500))
     return tmp_path / "gstack"
 
 
-def collect_with(sc, repo, gstack, monkeypatch, pr=1202, merge_sha=MERGE):
+def mk_ckpt(tmp_path, mtime: int, name: str = "bound.md") -> Path:
+    """A checkpoint file at a controlled mtime, standing in for the one this arc's own
+    `/context-save` step reported."""
+    p = tmp_path / name
+    p.write_text("bound checkpoint", encoding="utf-8")
+    os.utime(p, (mtime, mtime))
+    return p
+
+
+def collect_with(sc, repo, gstack, monkeypatch, pr=1202, merge_sha=MERGE, checkpoint=None):
     monkeypatch.setattr(aer, "run", make_run(sc, repo))
-    return aer.collect(pr, merge_sha, repo, gstack_root=gstack)
+    return aer.collect(pr, merge_sha, repo, gstack_root=gstack, checkpoint=checkpoint)
 
 
 def yaml_block(text: str) -> str:
@@ -330,24 +346,193 @@ def test_gh_absent_but_merge_sha_supplied_still_resolves_git_side_fields(repo, g
     assert data["main_ci"]["conclusion"] is None
 
 
-# --- checkpoint honesty -----------------------------------------------------------------
+# --- FINDING 1: checkpoint ownership is BOUND, never guessed ----------------------------
+# The roadmap authorizes a parallel frontier (another live session can /context-save between
+# this arc's save and this collection). mtime cannot discriminate ownership, so an unbound
+# run must report the workspace-newest file as an explicitly UNCONFIRMED heuristic.
 
 
-def test_checkpoint_picks_the_newest_and_confirms_against_the_merge_time(repo, gstack, monkeypatch):
-    data = collect_with(scenario(), repo, gstack, monkeypatch)
+def test_f1_unbound_run_reports_the_newest_but_never_confirms(repo, gstack, monkeypatch):
+    data = collect_with(scenario(), repo, gstack, monkeypatch)  # no checkpoint= → heuristic
     assert data["checkpoint"]["path"].endswith("20260803-210500-final.md")
-    assert data["checkpoint"]["confirmed"] is True
+    assert data["checkpoint"]["confirmed"] is False, (
+        "an unbound checkpoint can never be confirmed — ownership is undecidable by mtime"
+    )
+    assert any("heuristically (workspace-newest)" in n for n in data["notes"])
+    assert any("pass --checkpoint" in n for n in data["notes"])
 
 
-def test_checkpoint_before_the_merge_is_not_confirmed(repo, gstack, monkeypatch):
-    data = collect_with(scenario(merge_ts=str(MERGE_TS + 10_000)), repo, gstack, monkeypatch)
+def test_f1_unbound_stays_unconfirmed_even_though_mtime_beats_both_commits(
+    repo, gstack, monkeypatch
+):
+    """The fixture's newest checkpoint post-dates merge AND refresh — so `confirmed: false`
+    here is attributable to the binding rule alone, not to a timestamp accident."""
+    data = collect_with(scenario(), repo, gstack, monkeypatch)
+    newest_mtime = Path(data["checkpoint"]["path"]).stat().st_mtime
+    assert newest_mtime > REFRESH_TS > MERGE_TS
     assert data["checkpoint"]["confirmed"] is False
+
+
+def test_f1_bound_checkpoint_is_used_verbatim_and_confirms(repo, gstack, tmp_path, monkeypatch):
+    bound = mk_ckpt(tmp_path, REFRESH_TS + 5)
+    data = collect_with(scenario(), repo, gstack, monkeypatch, checkpoint=bound)
+    assert data["checkpoint"] == {"path": str(bound), "confirmed": True}
+    assert not any("heuristically" in n for n in data["notes"])
+
+
+def test_f1_bound_checkpoint_wins_over_a_newer_parallel_arc_file(
+    repo, gstack, tmp_path, monkeypatch
+):
+    """A parallel arc's checkpoint being NEWER must not displace the bound one."""
+    parallel = gstack / "repo" / "checkpoints" / "20260804-000000-other-arc.md"
+    parallel.write_text("another arc", encoding="utf-8")
+    os.utime(parallel, (REFRESH_TS + 10_000, REFRESH_TS + 10_000))
+    bound = mk_ckpt(tmp_path, REFRESH_TS + 5)
+    data = collect_with(scenario(), repo, gstack, monkeypatch, checkpoint=bound)
+    assert data["checkpoint"]["path"] == str(bound)
+    assert "other-arc" not in data["checkpoint"]["path"]
+
+
+def test_f1_nonexistent_bound_checkpoint_exits_2(repo, gstack, tmp_path, monkeypatch):
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(scenario(), repo))
+    rc = aer.main(
+        [
+            "--pr",
+            "1202",
+            "--merge-sha",
+            MERGE,
+            "--repo-root",
+            str(repo),
+            "--checkpoint",
+            str(tmp_path / "nope.md"),
+        ]
+    )
+    assert rc == 2
+    assert not aer.report_path(repo, 1202).exists()
+
+
+def test_f1_unreadable_bound_checkpoint_degrades_not_crashes(repo, gstack, tmp_path, monkeypatch):
+    data = collect_with(scenario(), repo, gstack, monkeypatch, checkpoint=tmp_path / "vanished.md")
+    assert data["checkpoint"]["confirmed"] is False
+    assert any("could not be read" in n for n in data["notes"])
 
 
 def test_checkpoint_absent_is_null_and_false(repo, tmp_path, monkeypatch):
     data = collect_with(scenario(), repo, tmp_path / "no-gstack", monkeypatch)
     assert data["checkpoint"] == {"path": None, "confirmed": False}
     assert "checkpoint:\n  path: null\n  confirmed: false" in yaml_block(aer.render(data))
+
+
+# --- FINDING 2: the confirmation anchor is the arc's CLOSING commit ----------------------
+# The report is emitted after the §12.2.1 fixed point, so a checkpoint written between the
+# merge and the terminating refresh is NOT the arc's final checkpoint and must not confirm.
+
+
+def test_f2_checkpoint_between_merge_and_refresh_does_not_confirm(
+    repo, gstack, tmp_path, monkeypatch
+):
+    mid = mk_ckpt(tmp_path, MERGE_TS + 1)  # after the merge, before the refresh
+    assert MERGE_TS < MERGE_TS + 1 < REFRESH_TS
+    data = collect_with(scenario(), repo, gstack, monkeypatch, checkpoint=mid)
+    assert data["refresh_commit"] == REFRESH
+    assert data["checkpoint"]["confirmed"] is False, (
+        "merge-time anchoring would wrongly confirm a pre-refresh checkpoint"
+    )
+    assert any("predates the refresh commit" in n for n in data["notes"])
+
+
+def test_f2_checkpoint_after_the_refresh_confirms(repo, gstack, tmp_path, monkeypatch):
+    after = mk_ckpt(tmp_path, REFRESH_TS + 1)
+    data = collect_with(scenario(), repo, gstack, monkeypatch, checkpoint=after)
+    assert data["checkpoint"]["confirmed"] is True
+
+
+def test_f2_no_refresh_falls_back_to_the_merge_anchor(repo, gstack, tmp_path, monkeypatch):
+    sc = scenario(log=[], files={})  # no terminating refresh landed yet
+    after_merge = mk_ckpt(tmp_path, MERGE_TS + 1)
+    data = collect_with(sc, repo, gstack, monkeypatch, checkpoint=after_merge)
+    assert data["refresh_commit"] is None
+    assert data["checkpoint"]["confirmed"] is True, "merge is the anchor when no refresh exists"
+
+    before_merge = mk_ckpt(tmp_path, MERGE_TS - 1, name="early.md")
+    data = collect_with(sc, repo, gstack, monkeypatch, checkpoint=before_merge)
+    assert data["checkpoint"]["confirmed"] is False
+    assert any("predates the merge commit" in n for n in data["notes"])
+
+
+def test_f2_unreadable_anchor_time_is_not_confirmed(repo, gstack, tmp_path, monkeypatch):
+    sc = scenario(ts={})  # `git show -s --format=%ct` fails for every commit
+    bound = mk_ckpt(tmp_path, REFRESH_TS + 5)
+    data = collect_with(sc, repo, gstack, monkeypatch, checkpoint=bound)
+    assert data["checkpoint"]["confirmed"] is False
+    assert any("closing commit time could not be read" in n for n in data["notes"])
+
+
+def test_f2_render_names_the_anchor_it_confirmed_against(repo, gstack, tmp_path, monkeypatch):
+    data = collect_with(
+        scenario(), repo, gstack, monkeypatch, checkpoint=mk_ckpt(tmp_path, REFRESH_TS + 5)
+    )
+    assert "written after the terminating refresh" in aer.render(data)
+    sc = scenario(log=[], files={})
+    data = collect_with(
+        sc, repo, gstack, monkeypatch, checkpoint=mk_ckpt(tmp_path, MERGE_TS + 5, "m.md")
+    )
+    assert "written after the merge" in aer.render(data)
+
+
+# --- FINDING 3: PR identity is verified before any fact is attached ---------------------
+
+
+def test_f3_unmerged_pr_exits_2_and_writes_nothing(repo, gstack, monkeypatch):
+    sc = scenario(pr_view={"state": "OPEN", "mergeCommit": None})
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, repo))
+    assert aer.main(["--pr", "1202", "--repo-root", str(repo)]) == 2
+    assert not aer.report_path(repo, 1202).exists()
+
+
+def test_f3_merge_sha_disagreeing_with_the_pr_exits_2(repo, gstack, monkeypatch):
+    """A mistyped SHA that still resolves to SOME commit must not silently attach another
+    arc's CI / refresh / checkpoint facts to this PR's report."""
+    sc = scenario()  # PR 1202 merged at MERGE
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, repo))
+    assert aer.main(["--pr", "1202", "--merge-sha", OTHER, "--repo-root", str(repo)]) == 2
+    assert not aer.report_path(repo, 1202).exists()
+
+
+def test_f3_matching_merge_sha_is_accepted(repo, gstack, monkeypatch):
+    data = collect_with(scenario(), repo, gstack, monkeypatch)
+    assert data["identity_error"] is None
+    assert data["merge_commit"] == MERGE
+
+
+def test_f3_gh_absent_still_degrades_to_success(repo, gstack, monkeypatch):
+    """No PR data = nothing to contradict: identity checking must not turn a degraded run
+    into a refusal."""
+    sc = scenario(gh_absent=True)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, repo))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE, "--repo-root", str(repo)]) == 0
+    assert aer.report_path(repo, 1202).is_file()
+
+
+@pytest.mark.parametrize(
+    "state,oid,sha,expected_none",
+    [
+        (None, "", "", True),  # gh silent → no check
+        ("", "", "", True),
+        ("MERGED", MERGE, MERGE, True),
+        ("MERGED", MERGE, "", True),  # no --merge-sha supplied → oid half not applicable
+        ("MERGED", "", MERGE, True),  # gh gave no oid → nothing to compare
+        ("OPEN", "", "", False),
+        ("CLOSED", "", "", False),
+        ("MERGED", MERGE, OTHER, False),
+    ],
+)
+def test_f3_identity_error_truth_table(state, oid, sha, expected_none):
+    assert (aer.identity_error(1202, state, oid, sha) is None) is expected_none
 
 
 # --- exit codes -------------------------------------------------------------------------

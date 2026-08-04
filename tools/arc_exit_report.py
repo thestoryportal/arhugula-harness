@@ -30,14 +30,30 @@ prose tail — it never crashes and never fabricates a value. In particular:
     the FIRST non-success one (any of failure / cancelled / null-while-pending); only when
     every run concluded `success` is `success` reported. A single red auxiliary workflow
     can therefore never be masked by a green one.
-  * `checkpoint.confirmed` is true only when the newest gstack checkpoint's mtime is
-    strictly newer than the merge commit's commit time; unknown → false, never assumed.
+  * `checkpoint` is BOUND, not guessed. `--checkpoint PATH` names the exact file the
+    arc's own `/context-save` just wrote; only a bound checkpoint can ever be
+    `confirmed: true`. Without it the newest workspace checkpoint is reported as a
+    heuristic with `confirmed: false` and a note, because the roadmap authorizes a
+    PARALLEL frontier — another live session can `/context-save` between this arc's save
+    and this collection, and checkpoint OWNERSHIP is not discriminable by mtime (codex
+    round-3 P1).
+  * `checkpoint.confirmed` compares the bound checkpoint's mtime against the arc's
+    CLOSING commit: the terminating-refresh commit's committer time when a refresh was
+    verified, else the merge commit's. The report is emitted after the §12.2.1 fixed
+    point, so a checkpoint written between merge and refresh is NOT the final one and
+    must not confirm. Unknown anchor time → false, never assumed.
+  * The PR's identity is checked before any of it is written: when `gh` answers, the PR
+    must be `MERGED` and — if `--merge-sha` was supplied — must match its
+    `mergeCommit.oid`. A mismatch exits 2 rather than attaching another PR's facts to
+    this report. `gh` absent/failing degrades to nulls as before (nothing to contradict).
 
 Usage:
-    uv run python tools/arc_exit_report.py --pr 1202 [--merge-sha SHA] [--repo-root PATH]
+    uv run python tools/arc_exit_report.py --pr 1202 [--merge-sha SHA] \
+        [--checkpoint PATH] [--repo-root PATH]
 
 Exit codes: 0 success (including degraded-with-nulls), 2 unusable inputs (not a git repo,
-unresolvable `--merge-sha`, unwritable output). Re-running for the same PR is idempotent:
+unresolvable `--merge-sha`, nonexistent `--checkpoint`, PR not merged / merge-sha
+disagreeing with the PR, unwritable output). Re-running for the same PR is idempotent:
 same filename, overwritten in place. One ledger row is appended per invocation (the ledger
 is append-only by design, so a re-run leaves two index rows pointing at the same report).
 """
@@ -233,16 +249,9 @@ def _refresh_commit(merge_commit: str, cwd: Path, notes: list[str]) -> str | Non
     return None
 
 
-def _checkpoint(
-    repo_root: Path, merge_commit: str, cwd: Path, gstack_root: Path | None
-) -> dict[str, Any]:
-    """The newest gstack `/context-save` checkpoint, and whether it post-dates the merge.
-
-    Both slug spellings this workspace has produced are scanned (`<repo-dir-name>` and
-    `<owner>-<repo>`); the globally newest file across them wins. `confirmed` is true only
-    when the checkpoint's mtime is strictly after the merge commit's commit time — an
-    unknown merge time yields false, never an assumption.
-    """
+def _newest_checkpoint(repo_root: Path, cwd: Path, gstack_root: Path | None) -> Path | None:
+    """The workspace-newest gstack checkpoint across both slug spellings this workspace has
+    produced (`<repo-dir-name>` and `<owner>-<repo>`). A HEURISTIC — see `_checkpoint`."""
     root = gstack_root if gstack_root is not None else GSTACK_PROJECTS
     slugs = [repo_root.name]
     rc, url = run(["git", "remote", "get-url", "origin"], cwd)
@@ -260,15 +269,72 @@ def _checkpoint(
                 continue
             if newest is None or f.stat().st_mtime > newest.stat().st_mtime:
                 newest = f
-    if newest is None:
-        return {"path": None, "confirmed": False}
-    merge_ts = None
-    if merge_commit:
-        trc, ts = run(["git", "show", "-s", "--format=%ct", merge_commit], cwd)
-        if trc == 0 and ts.isdigit():
-            merge_ts = int(ts)
-    confirmed = merge_ts is not None and newest.stat().st_mtime > merge_ts
-    return {"path": str(newest), "confirmed": confirmed}
+    return newest
+
+
+def _commit_ts(commit: str, cwd: Path) -> int | None:
+    """A commit's committer time as an epoch int, or None if it cannot be read."""
+    if not commit:
+        return None
+    rc, ts = run(["git", "show", "-s", "--format=%ct", commit], cwd)
+    return int(ts) if rc == 0 and ts.isdigit() else None
+
+
+def _checkpoint(
+    anchor_commit: str,
+    anchor_kind: str,
+    repo_root: Path,
+    cwd: Path,
+    gstack_root: Path | None,
+    explicit: Path | None,
+    notes: list[str],
+) -> dict[str, Any]:
+    """The arc's final checkpoint, and whether it post-dates the arc's CLOSING commit.
+
+    Two modes, deliberately asymmetric (codex round-3 P1):
+
+    * `explicit` (from `--checkpoint`) is a BINDING: the caller names the file its own
+      `/context-save` step just reported, so ownership is known and `confirmed` is a real
+      claim — mtime strictly after `anchor_commit`'s committer time.
+    * Without it, the workspace-newest checkpoint is a HEURISTIC and `confirmed` is
+      UNCONDITIONALLY false with a note. The roadmap authorizes a parallel frontier, so
+      another live session's `/context-save` can be the newest file here; mtime cannot
+      discriminate ownership, and a heuristic guess must never be dressed as confirmation.
+
+    `anchor_kind` names which commit the anchor is (`refresh` / `merge`) for the note text;
+    the caller picks the refresh commit when one was verified, since this report is emitted
+    only after the §12.2.1 fixed point (a checkpoint written between merge and refresh is
+    not the arc's final one).
+    """
+    if explicit is None:
+        newest = _newest_checkpoint(repo_root, cwd, gstack_root)
+        if newest is None:
+            return {"path": None, "confirmed": False}
+        notes.append(
+            "checkpoint selected heuristically (workspace-newest) — pass --checkpoint to "
+            "bind to this arc; not confirmed"
+        )
+        return {"path": str(newest), "confirmed": False}
+
+    try:
+        mtime = explicit.stat().st_mtime
+    except OSError as e:
+        notes.append(f"bound checkpoint {explicit} could not be read ({e}) — not confirmed.")
+        return {"path": str(explicit), "confirmed": False}
+    anchor_ts = _commit_ts(anchor_commit, cwd)
+    if anchor_ts is None:
+        notes.append(
+            "checkpoint confirmation unavailable — the arc's closing commit time could not "
+            "be read; not confirmed."
+        )
+        return {"path": str(explicit), "confirmed": False}
+    if mtime <= anchor_ts:
+        notes.append(
+            f"bound checkpoint predates the {anchor_kind} commit {anchor_commit[:8]} — it is "
+            "not this arc's FINAL checkpoint; not confirmed."
+        )
+        return {"path": str(explicit), "confirmed": False}
+    return {"path": str(explicit), "confirmed": True}
 
 
 def _todos(repo_root: Path, notes: list[str]) -> list[str] | None:
@@ -302,10 +368,44 @@ def _todos(repo_root: Path, notes: list[str]) -> list[str] | None:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+def identity_error(pr: int, merge_state: str | None, pr_oid: str, resolved_sha: str) -> str | None:
+    """Why this PR's facts must NOT be written, or None. Pure — the effect is the caller's.
+
+    Only fires when `gh` actually answered (`merge_state` non-empty): with no PR data there
+    is nothing to contradict and the tool degrades as before. Otherwise the arc must be
+    MERGED, and an explicitly supplied merge SHA must be the one the PR merged at — a
+    mistyped SHA that happens to resolve to some OTHER commit would otherwise silently
+    attach a different arc's CI, refresh and checkpoint facts to this report (codex
+    round-3 P2).
+    """
+    if not merge_state:
+        return None
+    if merge_state != "MERGED":
+        return (
+            f"PR #{pr} is {merge_state}, not MERGED — an exit report is an arc-CLOSURE "
+            "record; refusing to write one for an unmerged PR."
+        )
+    if resolved_sha and pr_oid and resolved_sha != pr_oid:
+        return (
+            f"--merge-sha resolves to {resolved_sha[:8]} but PR #{pr} merged at "
+            f"{pr_oid[:8]} — refusing to attach another commit's facts to this report."
+        )
+    return None
+
+
 def collect(
-    pr: int, merge_sha: str | None, repo_root: Path, gstack_root: Path | None = None
+    pr: int,
+    merge_sha: str | None,
+    repo_root: Path,
+    gstack_root: Path | None = None,
+    checkpoint: Path | None = None,
 ) -> dict[str, Any]:
-    """Gather the arc's closure facts. Degrades to nulls + notes; never raises, never fabricates."""
+    """Gather the arc's closure facts. Degrades to nulls + notes; never raises, never fabricates.
+
+    One non-degrading outcome exists: `identity_error` (a PR that is not this merged arc).
+    It is returned as data under `identity_error`, not acted on here — `main()` turns it
+    into exit 2 without writing anything, keeping the effect at the boundary.
+    """
     notes: list[str] = []
     pr_view = _as_dict(
         _gh_json(
@@ -313,34 +413,46 @@ def collect(
         )
     )
     merge_state: str | None = pr_view.get("state")
+    pr_oid: str = _as_dict(pr_view.get("mergeCommit")).get("oid") or ""
 
     merge_commit = ""
     if merge_sha:
         merge_commit = _resolve_commit(merge_sha, repo_root)  # validated by the caller already
-    if not merge_commit:
-        oid: str = _as_dict(pr_view.get("mergeCommit")).get("oid") or ""
-        if oid:
-            merge_commit = _resolve_commit(oid, repo_root)
-            if not merge_commit:
-                notes.append(
-                    f"gh reports merge commit {oid[:8]} but it is not present locally "
-                    "(fetch needed?)."
-                )
+    fatal = identity_error(pr, merge_state, pr_oid, merge_commit)
+    if fatal:
+        return {"pr": pr, "identity_error": fatal, "notes": notes}
+
+    if not merge_commit and pr_oid:
+        merge_commit = _resolve_commit(pr_oid, repo_root)
+        if not merge_commit:
+            notes.append(
+                f"gh reports merge commit {pr_oid[:8]} but it is not present locally "
+                "(fetch needed?)."
+            )
     if not merge_commit:
         notes.append(
             "Merge commit unresolved — main_ci, refresh_commit and checkpoint confirmation "
             "are unavailable."
         )
 
+    refresh = _refresh_commit(merge_commit, repo_root, notes)
+    # The arc's CLOSING commit: the terminating refresh when one landed (this report is
+    # emitted after the §12.2.1 fixed point), else the merge. Anything written before it is
+    # not the arc's final checkpoint.
+    anchor, anchor_kind = (refresh, "refresh") if refresh else (merge_commit, "merge")
+
     return {
         "pr": pr,
         "merge_state": merge_state,
         "merge_commit": merge_commit or None,
         "main_ci": _main_ci(merge_commit, repo_root, notes),
-        "refresh_commit": _refresh_commit(merge_commit, repo_root, notes),
-        "checkpoint": _checkpoint(repo_root, merge_commit, repo_root, gstack_root),
+        "refresh_commit": refresh,
+        "checkpoint": _checkpoint(
+            anchor, anchor_kind, repo_root, repo_root, gstack_root, checkpoint, notes
+        ),
         "todo_for_human": _todos(repo_root, notes),
         "notes": notes,
+        "identity_error": None,
     }
 
 
@@ -394,12 +506,14 @@ def render(data: dict[str, Any]) -> str:
         else "No §12.2.1 terminating refresh commit was verified after the merge — one may "
         "still be owed."
     )
+    anchor_word = "terminating refresh" if data.get("refresh_commit") else "merge"
     lines.append(
         f"Final checkpoint: `{ckpt.get('path')}`"
         + (
-            " (written after the merge)."
+            f" (bound to this arc, written after the {anchor_word})."
             if ckpt.get("confirmed")
-            else " — NOT confirmed to post-date the merge."
+            else f" — NOT confirmed as this arc's final checkpoint (see notes); it is not"
+            f" established to post-date the {anchor_word}."
         )
         if ckpt.get("path")
         else "No gstack checkpoint was found for this workspace."
@@ -494,6 +608,15 @@ def main(argv: list[str] | None = None) -> int:
         "--merge-sha", default=None, help="merge commit (defaults to gh's answer for --pr)"
     )
     ap.add_argument(
+        "--checkpoint",
+        default=None,
+        help=(
+            "the checkpoint file this arc's /context-save just wrote. Required for "
+            "checkpoint.confirmed to be true — without it the workspace-newest file is "
+            "reported as an unconfirmed heuristic (a parallel arc may own it)."
+        ),
+    )
+    ap.add_argument(
         "--repo-root", default=None, help="repository root (defaults to the enclosing repo)"
     )
     args = ap.parse_args(argv)
@@ -519,7 +642,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    data = collect(args.pr, args.merge_sha, root)
+    ckpt: Path | None = None
+    if args.checkpoint:
+        ckpt = Path(args.checkpoint).expanduser()
+        if not ckpt.is_file():
+            print(f"ERROR: --checkpoint {ckpt} is not an existing file.", file=sys.stderr)
+            return 2
+
+    data = collect(args.pr, args.merge_sha, root, checkpoint=ckpt)
+    if data.get("identity_error"):
+        # Write NOTHING: a report naming this PR while carrying another arc's facts is
+        # worse than no report at all.
+        print(f"ERROR: {data['identity_error']}", file=sys.stderr)
+        return 2
     out = report_path(root, args.pr)
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
