@@ -30,9 +30,13 @@ git worktree add <repo-root>/.codex-worktrees/<slug-a> -b <branch-a> origin/main
 git worktree add <repo-root>/.codex-worktrees/<slug-b> -b <branch-b> origin/main
 ```
 
-Both lanes branch off the **same** fresh `origin/main`. Each lane then runs its arc normally —
-build, test, `just check`, grounding pass, out-of-family review, `merge-gate` — entirely inside
-its own worktree. Nothing about the build half is serialized.
+Both lanes branch off the **same** fresh `origin/main`. Each lane then runs its arc's BUILD
+half normally — build, test, `just check`, grounding pass, out-of-family review — entirely
+inside its own worktree. Nothing about the build half is serialized. **`merge-gate` and the
+final-head CI check are NOT build-half steps**: the gate runs immediately before merge, appends
+the shared `.harness/merge-gate-log.md`, and its approvals must cover the branch that will
+actually merge — so lane B runs them only inside its own merge sequence, after lane A's
+terminating refresh has landed (below).
 
 ## The merge lane — strictly serial
 

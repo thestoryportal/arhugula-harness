@@ -79,6 +79,8 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the adds-no-governance clause" \
   'this recipe adds no governance, weakens no gate, and introduces no alternative'
 needle "$CLAUDE_SKILL" "claude two-lane" "the one-lane-holds-the-fixed-point rule" \
   '**One lane holds the `ship-pr` fixed point at a time.**'
+needle "$CLAUDE_SKILL" "claude two-lane" "the merge-gate-is-not-a-build-half-step rule" \
+  '**`merge-gate` and the'
 needle "$CLAUDE_SKILL" "claude two-lane" "the wait-for-the-REFRESH (not the content PR) rule" \
   "terminating refresh PR has merged* — not merely lane A's content"
 needle "$CLAUDE_SKILL" "claude two-lane" "the explicit landing order" \
@@ -95,7 +97,7 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the no-heuristics / no-rescue clause" 
   'no merge-order heuristics, no cherry-pick rescue'
 needle "$CLAUDE_SKILL" "claude two-lane" "the do-not-reorder-the-lanes prohibition" \
   'Do not reorder the lanes to make the conflict go away'
-needle "$CLAUDE_SKILL" "claude two-lane" "the guard-denied `git rebase` fact" \
+needle "$CLAUDE_SKILL" "claude two-lane" 'the guard-denied git-rebase fact' \
   '`git rebase` is hard-denied by the permission guard'
 needle "$CLAUDE_SKILL" "claude two-lane" "the abandon-means-do-not-merge-it clarification" \
   'Abandoning'
