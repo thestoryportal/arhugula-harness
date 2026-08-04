@@ -177,7 +177,7 @@ arc-exit-report *ARGS:
 # Comments the range out, re-runs the test, and restores from memory (never git
 # stash / git checkout). Refuses a dirty file, an already-red test, or a range whose
 # removal breaks syntax. Exit 0 pinned / 1 PROBE FAILED (test stayed green) /
-# 2 refused-or-indeterminate / 3 restore failure. THIS WRITES SOURCE FILES — read
+# 2 refused-or-indeterminate / 3 restore/release failure (file may be mutated, or restored with the sidecar retained). THIS WRITES SOURCE FILES — read
 # tools/mutation_probe.py's header before using it.
 #   just mutation-probe --file tools/hooks/postedit-lint.sh --lines 34 \
 #     --test "bash tools/hooks/test_postedit_lint.sh"

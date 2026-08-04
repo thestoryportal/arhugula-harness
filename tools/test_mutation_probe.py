@@ -15,6 +15,7 @@ directly, since those are where the honesty of the verdict lives.
 from __future__ import annotations
 
 import ast
+import contextlib
 import os
 import re
 import shlex
@@ -22,6 +23,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -73,6 +75,13 @@ def test_module_imports():
 TEST_RED = """def test_always_fails():
     assert False
 """
+# The subdirectory target's own real test (implicit namespace package — no __init__.py).
+TEST_PKG = """import pkg.mod
+
+
+def test_negative():
+    assert pkg.mod.classify(-1) == "negative"
+"""
 # A module-level constant whose removal breaks the test file's IMPORT — pytest reports it
 # as an error, not a failed test, so the probe must call it INDETERMINATE.
 CONSTS = "LIMIT = 5\n"
@@ -117,7 +126,7 @@ def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> Path:
+def repo(tmp_path: Path) -> Iterator[Path]:
     """A throwaway git repo carrying the probe fixtures, all committed (so the probe's
     clean-file gate passes and `git diff --quiet` is a meaningful restore witness)."""
     root = (tmp_path / "repo").resolve()
@@ -131,9 +140,17 @@ def repo(tmp_path: Path) -> Path:
         "test_consts.py": TEST_CONSTS,
         "script.sh": SCRIPT_SH,
         "test_script.sh": TEST_SCRIPT_SH,
+        # A target in a SUBDIRECTORY, so a test can make that directory read-only without
+        # touching the repo root (where the test scripts and their counters live).
+        "pkg/mod.py": SRC,
+        "test_pkg.py": TEST_PKG,
+        # `secret.py` is IGNORED and never created here — the gitignore test creates it.
+        ".gitignore": "secret.py\n",
     }
     for name, body in files.items():
-        (root / name).write_text(body, encoding="utf-8")
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
     assert git(root, "init", "-q", "-b", "main").returncode == 0
     # LOCAL identity only — a global git config must never be read or written by a test.
     assert git(root, "config", "user.email", "probe@test.invalid").returncode == 0
@@ -142,7 +159,11 @@ def repo(tmp_path: Path) -> Path:
     assert git(root, "add", *files).returncode == 0
     commit = git(root, "commit", "-q", "-m", "fixtures")
     assert commit.returncode == 0, commit.stderr
-    return root
+    yield root
+    # A test that made a directory read-only must not break tmp_path teardown.
+    for d in [root, *(p for p in root.rglob("*") if p.is_dir())]:
+        with contextlib.suppress(OSError):
+            d.chmod(0o755)
 
 
 @pytest.fixture(autouse=True)
@@ -347,12 +368,52 @@ def test_ac3_dirty_target_is_refused_untouched(repo):
     assert sidecars(repo) == []
 
 
-def test_ac3_untracked_target_is_refused(repo):
+def test_p2b_untracked_target_is_refused_by_the_witness_gate(repo):
+    """codex round-2 P2b: an untracked file has no ordinary index entry, so both of the
+    probe's witnesses would compare against nothing."""
     (repo / "extra.py").write_text("X = 1\n", encoding="utf-8")
     res = run_probe(repo, "extra.py", "1", pytest_cmd("test_real.py"))
     assert res.returncode == 2
-    assert "dirty" in res.stderr
+    assert "not tracked by git" in res.stderr
+    assert "untracked" in res.stderr
     assert (repo / "extra.py").read_text(encoding="utf-8") == "X = 1\n"
+
+
+def test_p2b_gitignored_target_is_refused(repo):
+    """The sharpest of the four: `git status --porcelain` reports NOTHING for an ignored
+    file (asserted below as the actual hole), so the dirty gate alone waves it straight
+    through and the probe would mutate it while both witnesses passed vacuously."""
+    secret = repo / "secret.py"
+    secret.write_text(SRC, encoding="utf-8")
+    assert git(repo, "status", "--porcelain", "--", "secret.py").stdout == "", (
+        "fixture precondition: an ignored file must be INVISIBLE to the dirty gate"
+    )
+    res = run_probe(repo, "secret.py", PINNED, pytest_cmd("test_real.py"))
+    assert res.returncode == 2
+    assert "not tracked by git" in res.stderr
+    assert "IGNORED" in res.stderr
+    assert secret.read_text(encoding="utf-8") == SRC
+    assert sidecars(repo) == []
+
+
+@pytest.mark.parametrize(
+    ("flag", "needle", "clear"),
+    [
+        ("--skip-worktree", "SKIP-WORKTREE", "--no-skip-worktree"),
+        ("--assume-unchanged", "ASSUME-UNCHANGED", "--no-assume-unchanged"),
+    ],
+)
+def test_p2b_index_suppression_flags_are_refused(repo, flag, needle, clear):
+    """Tracked, clean, and still unwitnessable: both flags tell git to stop looking at the
+    worktree copy, so `status` and `diff` answer clean no matter what the probe writes."""
+    assert git(repo, "update-index", flag, "src.py").returncode == 0
+    before = (repo / "src.py").read_bytes()
+    res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
+    assert res.returncode == 2, res.stdout + res.stderr
+    assert needle in res.stderr
+    assert clear in res.stderr, "the refusal must tell the operator how to clear the flag"
+    assert (repo / "src.py").read_bytes() == before
+    assert sidecars(repo) == []
 
 
 def test_ac3_outside_a_git_repo_is_refused(tmp_path):
@@ -580,6 +641,52 @@ def test_p2b_git_verification_runs_on_the_no_write_restore_path(repo):
     kept = sidecars(repo)
     assert len(kept) == 1, "the sidecar was released without a passing git verification"
     assert kept[0].read_bytes() == SRC.encode()
+
+
+def test_p2a_sidecar_release_failure_is_loud_and_nonzero(repo):
+    """codex round-2 P2a: the file IS restored and git-verified, but the sidecar SURVIVES.
+
+    Swallowing that leaves a dead-pid sidecar which the NEXT run's reconcile replays over
+    whatever legitimate edits the file has accumulated since — so it must be loud and
+    nonzero, while still not being misreported as a restore failure.
+
+    Honest filesystem fixture, no monkeypatching and no test-only hook: the test command
+    runs while the mutation is on disk and the sidecar already exists, and makes the
+    TARGET'S DIRECTORY read-only. POSIX then still permits rewriting the EXISTING target
+    file — directory write permission governs creating and removing ENTRIES, not modifying
+    a file's contents — so the restore write and `git diff --quiet` both succeed and ONLY
+    the unlink fails. (Verified live: write OK, unlink EACCES, `git diff` unaffected.)
+    """
+    pkg = repo / "pkg"
+    cmd = counting_script(repo, "lockdir.sh", "chmod a-w pkg\nexit 1")
+    try:
+        res = run_probe(repo, "pkg/mod.py", PINNED, cmd)
+        assert res.returncode == 3, res.stdout + res.stderr
+        assert "SIDECAR NOT RELEASED" in res.stderr
+        # NOT misreported as a restore failure — the file really is back.
+        assert "RESTORE FAILED" not in res.stderr
+        assert "RESTORE REFUSED" not in res.stderr
+        assert (pkg / "mod.py").read_text(encoding="utf-8") == SRC
+        kept = sorted(pkg.glob("*.mutprobe.*.bak"))
+        assert len(kept) == 1
+        assert str(kept[0]) in res.stderr, "the message must name the retained sidecar"
+        assert "DELETE" in res.stderr, "the message must tell the operator what to do"
+    finally:
+        pkg.chmod(0o755)
+
+
+def test_p2a_a_clean_run_reports_the_released_state(repo):
+    """The positive control for the state machine: an ordinary pass ends RESTORED, so the
+    nonzero release path above is not simply always-on."""
+    res = run_probe(repo, "pkg/mod.py", PINNED, pytest_cmd("test_pkg.py"))
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "SIDECAR NOT RELEASED" not in res.stderr
+    assert sorted((repo / "pkg").glob("*.mutprobe.*.bak")) == []
+
+
+def test_p2a_release_treats_an_already_gone_sidecar_as_released():
+    """`released is released` — a vanished sidecar is the desired end state, not an error."""
+    assert mp._release(Path("/nonexistent/dir/gone.mutprobe.1.bak")) is None
 
 
 # --- input gates + no-collateral-damage ---------------------------------------------------

@@ -10,9 +10,12 @@ line back. This tool automates exactly that loop, and nothing else:
 THIS TOOL WRITES SOURCE FILES BY DESIGN. That is the whole point, and the safety envelope
 below is therefore the load-bearing part of the design — not the mutation:
 
-  0. REFUSE if `git status --porcelain -- F` is non-empty. A dirty file has uncommitted
-     work the restore step could not distinguish from the probe's own edit, and git could
-     not witness a correct restore. Never mutate a dirty file.
+  0. REFUSE unless git can actually witness F: it must be ORDINARILY TRACKED (not
+     untracked, not gitignored, not `--skip-worktree`, not `--assume-unchanged` — see
+     `git_witness_refusal`; for those shapes both witnesses below pass VACUOUSLY), and
+     `git status --porcelain -- F` must be empty. A dirty file has uncommitted work the
+     restore step could not distinguish from the probe's own edit. Never mutate a file whose
+     restore cannot be proven.
   1. Run `<cmd>` and require rc 0. Probing against an already-red test is meaningless: the
      step-3 red would be the pre-existing red, so a vacuous test would be reported as a
      kill. Already-red exits 2 with its own message, never a probe verdict.
@@ -33,15 +36,19 @@ below is therefore the load-bearing part of the design — not the mutation:
      if either disagrees. There is NO `git stash` and NO `git checkout --` anywhere in this
      file — the only restore authority is the in-memory copy plus its on-disk sidecar.
   5. Exit 0 probe-pass / 1 `PROBE FAILED: test stayed green with F:A-B removed` /
-     2 refused-or-indeterminate (file untouched or already restored) / 3 restore failure.
+     2 refused-or-indeterminate (file untouched or already restored) / 3 the restore did not
+     fully complete — either `RESTORE FAILED`/`RESTORE REFUSED` (the file may still carry the
+     mutation) or `SIDECAR NOT RELEASED` (the file IS back and verified, but its sidecar
+     survives and must be deleted by hand before it is replayed over later edits).
 
 Crash safety (the sidecar). `F.mutprobe.<pid>.bak` is written BEFORE the mutation and
 REMOVED atomically once a restore is verified. Retaining it on the success path would be a
 defect, not belt-and-braces: a later dead-pid reconcile would restore it over whatever
-valid edits the file had accumulated since. At startup the probe reconciles sidecars in the
-target's directory whose embedded pid is DEAD (`kill(pid, 0)` raises `ProcessLookupError`);
-a LIVE pid is another probe mid-run and is never touched — an unconditional reconcile would
-restore a concurrent probe's file out from under it.
+valid edits the file had accumulated since — which is also why a FAILED removal is a loud
+nonzero outcome of its own rather than a swallowed error. At startup the probe reconciles
+sidecars in the target's directory whose embedded pid is DEAD (`kill(pid, 0)` raises
+`ProcessLookupError`); a LIVE pid is another probe mid-run and is never touched — an
+unconditional reconcile would restore a concurrent probe's file out from under it.
 
 Termination guarantees, honestly bounded:
   * the test CHILD dying (any signal) → the runner's `finally` restores immediately;
@@ -419,9 +426,28 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
 # --- restore -----------------------------------------------------------------------------
 
 
+# The closed set of restore outcomes. Three, not two (codex round-2 P2a): "the file is
+# back" and "the crash-recovery sidecar is gone" are DIFFERENT claims, and collapsing them
+# into one boolean is what let a failed unlink be reported as full success.
+RESTORED = "RESTORED"  # file back + git agrees + sidecar released — nothing outstanding
+SIDECAR_RETAINED = "SIDECAR_RETAINED"  # file back + git agrees, but the sidecar SURVIVES
+NOT_RESTORED = "NOT_RESTORED"  # the file may still carry the mutation
+
+
 class RestoreOutcome(NamedTuple):
-    ok: bool
+    state: str
     message: str
+
+    @property
+    def file_is_back(self) -> bool:
+        """Is the target's content restored and git-verified? True for SIDECAR_RETAINED too
+        — that outcome's problem is the leftover artifact, not the file."""
+        return self.state in (RESTORED, SIDECAR_RETAINED)
+
+    @property
+    def clean(self) -> bool:
+        """Nothing outstanding: the file is back AND no sidecar was left behind."""
+        return self.state == RESTORED
 
 
 def restore(
@@ -448,7 +474,7 @@ def restore(
         current = target.read_bytes()
     except OSError as e:
         return RestoreOutcome(
-            False,
+            NOT_RESTORED,
             f"RESTORE FAILED: cannot read {target} ({e}); the original is preserved at {sidecar}",
         )
     if current == original:
@@ -457,7 +483,7 @@ def restore(
         return _verify_and_release(target, sidecar, cwd)
     if current != written:
         return RestoreOutcome(
-            False,
+            NOT_RESTORED,
             f"RESTORE REFUSED: {target} changed on disk during the probe — it is neither what "
             "this probe wrote nor the original, so a concurrent writer edited it. Refusing to "
             f"overwrite that edit. The original is preserved at {sidecar}; reconcile by hand.",
@@ -466,7 +492,7 @@ def restore(
         target.write_bytes(original)
     except OSError as e:
         return RestoreOutcome(
-            False,
+            NOT_RESTORED,
             f"RESTORE FAILED: could not write {target} ({e}); the original is preserved at "
             f"{sidecar}",
         )
@@ -474,13 +500,13 @@ def restore(
         after = target.read_bytes()
     except OSError as e:
         return RestoreOutcome(
-            False,
+            NOT_RESTORED,
             f"RESTORE FAILED: could not re-read {target} ({e}); the original is preserved at "
             f"{sidecar}",
         )
     if after != original:
         return RestoreOutcome(
-            False,
+            NOT_RESTORED,
             f"RESTORE FAILED: {target} does not match the original after rewriting it; the "
             f"original is preserved at {sidecar}",
         )
@@ -490,19 +516,51 @@ def restore(
 def _verify_and_release(target: Path, sidecar: Path, cwd: Path) -> RestoreOutcome:
     """The shared restore tail: git must agree the file is back, and only then is the
     sidecar released. Reached from BOTH success paths — the one that rewrote the bytes and
-    the one that found them already correct."""
+    the one that found them already correct.
+
+    A failed RELEASE is reported, never swallowed (codex round-2 P2a). A surviving
+    success-path sidecar is not a harmless leftover: the next probe's startup reconcile sees
+    a dead pid and REPLAYS those now-stale bytes over whatever legitimate edits the file has
+    accumulated since. So the release gets its own outcome — the restore itself succeeded
+    and is not misreported as failed, but the run still ends nonzero with an instruction to
+    delete the file.
+    """
     diff = run(["git", "diff", "--quiet", "--", str(target)], cwd)
     if diff.rc != 0:
         return RestoreOutcome(
-            False,
+            NOT_RESTORED,
             f"RESTORE FAILED: `git diff --quiet -- {target}` exited {diff.rc} after restoring — "
             f"the working tree still differs. The original is preserved at {sidecar}.",
         )
-    _unlink(sidecar)
-    return RestoreOutcome(True, "")
+    release_error = _release(sidecar)
+    if release_error is not None:
+        return RestoreOutcome(
+            SIDECAR_RETAINED,
+            f"SIDECAR NOT RELEASED: {target} IS restored and git-verified, but its "
+            f"crash-recovery sidecar could not be removed ({release_error}). DELETE "
+            f"{sidecar} BY HAND: it now holds STALE bytes, and the next probe run in this "
+            "directory will see its dead pid, treat it as an abandoned mutation, and write "
+            "those bytes back over any edits made in the meantime.",
+        )
+    return RestoreOutcome(RESTORED, "")
+
+
+def _release(sidecar: Path) -> str | None:
+    """Remove the sidecar. Returns None when it is gone (including "already gone"), else the
+    OS error text — the caller decides how loud to be."""
+    try:
+        sidecar.unlink()
+    except FileNotFoundError:
+        return None  # already gone: released is released
+    except OSError as e:
+        return str(e)
+    return None
 
 
 def _unlink(path: Path) -> None:
+    """Best-effort removal for paths whose survival is HARMLESS — currently only the
+    abandon-the-sidecar path when the mutation never landed. Never use this to release a
+    sidecar that a `finally` is accounting for; that is `_release`'s job."""
     try:
         path.unlink()
     except OSError:
@@ -528,9 +586,67 @@ def _refuse(msg: str) -> int:
     return 2
 
 
+def git_witness_refusal(target: Path, repo_root: Path) -> str | None:
+    """Why git cannot witness this file's state, or None if it can (codex round-2 P2b).
+
+    Both of the probe's safety witnesses — the step-0 `git status --porcelain` clean gate
+    and the post-restore `git diff --quiet` — are answers ABOUT THE INDEX. For a file the
+    index holds no ordinary entry for, they are not "clean", they are VACUOUS: they come
+    back empty/zero because there is nothing to compare, and the probe would mutate a file
+    entirely outside its advertised envelope while printing verifications that assert
+    nothing. Three shapes do this:
+
+      * untracked (including gitignored, which `status --porcelain` does not even list, so
+        the dirty gate alone would wave it straight through);
+      * `--skip-worktree` (`S`), which tells git to pretend the worktree copy matches;
+      * `--assume-unchanged` (a LOWERCASE tag), which tells git not to look at the file.
+
+    All three are REFUSED. This is not the tool being fussy — it is refusing to write to a
+    file whose restore it could not prove.
+    """
+    listed = run(["git", "ls-files", "--error-unmatch", "--", str(target)], repo_root)
+    if listed.rc == 127:
+        return "`git` is not available — the restore could not be witnessed."
+    if listed.rc != 0:
+        ignored = run(["git", "check-ignore", "-q", "--", str(target)], repo_root)
+        why = (
+            "it is IGNORED by a gitignore rule, so `git status` reports nothing for it at all"
+            if ignored.rc == 0
+            else "it is untracked"
+        )
+        return (
+            f"{target} is not tracked by git ({why}). Both of this tool's safety witnesses "
+            "are index comparisons, so for an untracked file they would pass VACUOUSLY — the "
+            "probe cannot prove it restored the file, and will not mutate what it cannot "
+            "restore verifiably. `git add` it first (a commit is not required)."
+        )
+    flags = run(["git", "ls-files", "-v", "--", str(target)], repo_root)
+    if flags.rc != 0 or not flags.out:
+        return (
+            f"`git ls-files -v -- {target}` did not report the file's index flags "
+            f"(rc {flags.rc}) — cannot establish that git is actually tracking its content."
+        )
+    tag = flags.out.splitlines()[0][:1]
+    if tag == "S":
+        return (
+            f"{target} is marked SKIP-WORKTREE in the index — git deliberately ignores the "
+            "worktree copy, so `git status` and `git diff` would both report clean no matter "
+            "what this probe wrote. Clear it first: "
+            f"`git update-index --no-skip-worktree -- {target}`."
+        )
+    if tag.islower():
+        return (
+            f"{target} is marked ASSUME-UNCHANGED in the index (`git ls-files -v` tag "
+            f"'{tag}') — git will not examine the file, so both of this probe's witnesses "
+            "would pass without looking. Clear it first: "
+            f"`git update-index --no-assume-unchanged -- {target}`."
+        )
+    return None
+
+
 def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> int:
     """The five steps. Returns the process exit code; see the module docstring."""
-    # Step 0 — the repo, then the clean-file gate.
+    # Step 0 — the repo, then the git-can-witness-it gate, then the clean-file gate.
     top = run(["git", "rev-parse", "--show-toplevel"], target.parent)
     if top.rc != 0 or not top.out:
         return _refuse(
@@ -540,6 +656,13 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
 
     for msg in reconcile_sidecars(target.parent, os.getpid()):
         print(msg)
+
+    # BEFORE the dirty gate, deliberately: an untracked file shows up as `??` and would
+    # otherwise be refused as "dirty" (right outcome, misleading reason), while a GITIGNORED
+    # one shows up as nothing at all and would sail through.
+    witness_refusal = git_witness_refusal(target, repo_root)
+    if witness_refusal is not None:
+        return _refuse(witness_refusal)
 
     status = run(["git", "status", "--porcelain", "--", str(target)], repo_root)
     if status.rc != 0:
@@ -624,7 +747,7 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
     mutation_output = ""
     write_error: str | None = None
     signal_error: str | None = None
-    outcome = RestoreOutcome(False, "RESTORE FAILED: the restore step did not run")
+    outcome = RestoreOutcome(NOT_RESTORED, "RESTORE FAILED: the restore step did not run")
     try:
         try:
             target.write_bytes(written)
@@ -642,12 +765,16 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
         # Unconditional: also runs when a BaseException this function does not name is on
         # its way out, which is the only way that path's restore ever happens.
         outcome = restore(target, original, written, sidecar, repo_root)
-        if not outcome.ok:
+        if not outcome.clean:
             print(outcome.message, file=sys.stderr)
 
-    if not outcome.ok:
-        # A restore failure outranks the verdict: exit 2 promises "the file is untouched",
-        # and that promise is exactly what no longer holds.
+    if not outcome.clean:
+        # Both non-clean outcomes end the run nonzero, for different reasons. NOT_RESTORED:
+        # exit 2 promises "the file is untouched" and that promise no longer holds.
+        # SIDECAR_RETAINED: the file IS back, but a stale sidecar survives that a later
+        # dead-pid reconcile would replay over future edits — leaving THAT unremarked
+        # behind an exit 0 is the same silent-failure class (codex round-2 P2a). The verdict
+        # is still reported, because it was validly computed; it just cannot be the exit.
         if verdict != INDETERMINATE:
             print(f"(the probe's own verdict was {verdict}: {reason})", file=sys.stderr)
         return 3
