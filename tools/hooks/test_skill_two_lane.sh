@@ -81,8 +81,12 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the one-lane-holds-the-fixed-point rul
   '**One lane holds the `ship-pr` fixed point at a time.**'
 needle "$CLAUDE_SKILL" "claude two-lane" "the merge-gate-is-not-a-build-half-step rule" \
   '**`merge-gate` and the'
-needle "$CLAUDE_SKILL" "claude two-lane" "the replay-before-gate rule for lane B" \
-  "**Lane B's merge sequence starts with a replay, not a gate.**"
+needle "$CLAUDE_SKILL" "claude two-lane" "the replay-then-full-ship-pr rule for lane B" \
+  "**Lane B's merge sequence starts with a replay, then the FULL ship-pr flow — not a jump to the"
+needle "$CLAUDE_SKILL" "claude two-lane" "the wait-for-refresh-CI-green precondition" \
+  'AND its `main`-push CI has concluded green'
+needle "$CLAUDE_SKILL" "claude two-lane" "the replacement-PR requirement" \
+  '**replacement PR** (the original PR is attached to the abandoned branch'
 needle "$CLAUDE_SKILL" "claude two-lane" "the wait-for-the-REFRESH (not the content PR) rule" \
   "terminating refresh PR has merged* — not merely lane A's content"
 needle "$CLAUDE_SKILL" "claude two-lane" "the explicit landing order" \
@@ -143,8 +147,10 @@ needle "$CODEX_SKILL" "codex-native two-lane" "the bridge heading" \
   '# Canonical Claude Workflow Bridge'
 needle "$CODEX_SKILL" "codex-native two-lane" "the canonical source path" \
   'Read `.claude/skills/two-lane/SKILL.md` completely'
-needle "$CODEX_SKILL" "codex-native two-lane" "the re-record-from-worktree_ready-after-replay rule" \
-  '**re-run and re-record ALL gates from `worktree_ready` onward**'
+needle "$CODEX_SKILL" "codex-native two-lane" "the fresh-ledger full-sequence replay rule" \
+  '**NEW loop, not a patched one**'
+needle "$CODEX_SKILL" "codex-native two-lane" "the complete-gate-sequence-from-preflight rule" \
+  '**complete ordered gate sequence from `preflight` onward**'
 needle "$CODEX_SKILL" "codex-native two-lane" "the abandoned-branch-outside-loop-state disposition" \
   'The abandoned original branch then sits OUTSIDE the loop state'
 needle "$CODEX_SKILL" "codex-native two-lane" "the defer-to-canonical contract" \

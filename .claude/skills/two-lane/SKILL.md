@@ -53,13 +53,18 @@ hard-fails `tools/codex_context_guard.py` for everyone (CLAUDE.md §12.2.1, CI-s
 generalization). So the order is: A content → A refresh → B content → B refresh. Lane B keeps
 building while it waits; only its merge sequence blocks.
 
-**Lane B's merge sequence starts with a replay, not a gate.** Once lane A's refresh has merged,
-lane B FIRST replays onto the refreshed `origin/main` (fresh branch off refreshed main + re-apply,
-per the conflict section below — this is unconditional, not just for visible conflicts: lane A's
-merge-gate run appended the shared `.harness/merge-gate-log.md`, so stale lane B's own log append
-would conflict at the table tail every time), and only THEN runs `merge-gate` and final-head CI on
-the replayed branch. Gate approvals and CI are branch-and-HEAD-bound evidence; recording them
-before the replay would attest to a branch that never merges.
+**Lane B's merge sequence starts with a replay, then the FULL ship-pr flow — not a jump to the
+gate.** Once lane A's terminating refresh has merged AND its `main`-push CI has concluded green
+(a pending or red refresh CI means the base is unverified — wait), lane B fetches and replays
+onto the refreshed `origin/main` (fresh branch off refreshed main + re-apply, per the conflict
+section below — this is unconditional, not just for visible conflicts: lane A's merge-gate run
+appended the shared `.harness/merge-gate-log.md`, so stale lane B's own log append would
+conflict at the table tail every time). Then lane B restarts the whole `ship-pr` sequence on
+the replayed branch: a **replacement PR** (the original PR is attached to the abandoned branch
+and never merges), out-of-family review of the **current** diff (conflict-driven redone edits
+were never covered by the pre-replay review), `merge-gate`, and final-head CI. Gate approvals,
+reviews, and CI are branch-and-HEAD-bound evidence; recording any of them before the replay
+would attest to a branch that never merges.
 
 ## On merge conflict — abandon and rebase
 
