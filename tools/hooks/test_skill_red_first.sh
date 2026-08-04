@@ -174,6 +174,8 @@ needle "$CODEX_SKILL" "codex-native red-first" "the pre-commit throwaway-worktre
   'materialize the arc'"'"'s WIP as a DETACHED temporary commit in a temporary worktree'
 needle "$CODEX_SKILL" "codex-native red-first" "the probe-evidence content binding" \
   'byte-identical to the shipping WIP'
+needle "$CODEX_SKILL" "codex-native red-first" "the guard-approved worktree cleanup" \
+  'safe-worktree-remove.sh'
 needle "$CLAUDE_SKILL" "claude red-first" "the unsupported-target-type invocation block" \
   'RED-FIRST: BLOCK: unsupported target type'
 needle "$CODEX_SKILL" "codex-native red-first" "the annotation format it routes to" \
