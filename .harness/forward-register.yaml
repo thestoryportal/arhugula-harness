@@ -3863,7 +3863,7 @@ items:
     left to fire a council gate on a stale rationale (out-of-family review round 5 [P2]). If a genuine
     tension appears it will be the disposition-(c) fail-loud-vs-INERT question -- a C9-shaped
     liveness-vs-diagnosability call -- which belongs to whichever arc opens (c).'
-  heading: '### B-107 · Ratified A-hybrid: empty effect-fence keys are excluded from scalar eligibility, refused in the map at construction, and inert at the resolver boundary *(design gate discharged 2026-08-03; separately owed U-CP-64 implementation remainder remains open)*'
+  heading: '### B-107 · No channel REFUSES an operator resolution addressed to an EMPTY effect-fence key — the response map and the scalar uniform fallback DROP it on all three carriers, and the level-local abort scans MIS-APPLY it to a keyed sibling *(surfaced at the `B-100` spec leg, out-of-family review rounds 3 + 8, reported not absorbed, 2026-07-31; the over-application half established at the 2026-08-01 grounding pass)*'
 - id: B-106
   title: Embedder-path event-loop exposure for capture_pause_snapshot (outside the shipped driver path)
   status: closed
