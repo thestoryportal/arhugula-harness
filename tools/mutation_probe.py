@@ -74,6 +74,7 @@ Plan: `.harness/r-if-116-insights-residue-plan.md` Feature 5 / U-WT-06.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import os
 import re
@@ -104,7 +105,12 @@ SIDECAR_RE = re.compile(r"^(?P<base>.+)\.mutprobe\.(?P<pid>\d+)\.(?P<kind>bak|tm
 # boundary before "failed" there) — an xfail is not a failure.
 PYTEST_FAILED_RE = re.compile(r"(\d+)\s+failed\b")
 PYTEST_ERROR_RE = re.compile(r"(\d+)\s+errors?\b")
-PYTEST_CMD_RE = re.compile(r"(?:^|[\s/])pytest\b")
+# Does `--test` invoke pytest? Both spellings of the entry point (`pytest` and the legacy
+# `py.test` alias), at the start of the string or after whitespace or a path separator — so
+# `py.test`, `.venv/bin/py.test`, `python -m pytest` and `Scripts\pytest.exe` all match,
+# while `my_pytest_helper.sh` (the token does not START with the name) does not.
+# The matching rule ERRS TOWARD MATCHING, on purpose — see `looks_like_pytest`.
+PYTEST_CMD_RE = re.compile(r"(?:^|[\s/\\])(?:pytest|py\.test)\b")
 
 KILLED = "KILLED"
 SURVIVED = "SURVIVED"
@@ -114,6 +120,14 @@ INDETERMINATE = "INDETERMINATE"
 # the shell's not-executable / not-found codes; >= 128 is a shell reporting 128+signal, and
 # < 0 is Python reporting a directly-signalled child.
 TIMEOUT_RC = 124
+# How long to wait for a killed process group to release the pipes, per escalation step.
+# Two steps (SIGTERM then SIGKILL) bound the post-kill wait at ~2 * KILL_GRACE.
+KILL_GRACE = 2.0
+ABANDONED_OUTPUT_NOTE = (
+    "[mutation-probe] the test command's process group did not release its pipes after "
+    "SIGTERM and SIGKILL — a grandchild outlived it (possibly in its own session). Its "
+    "output was ABANDONED so the source file could be restored without further delay."
+)
 # pytest's `ExitCode.TESTS_FAILED`. The ONLY pytest rc that means "tests ran and some
 # failed"; 2/3/4/5 are interrupt / internal error / usage error / empty collection, and any
 # of them can still print a stale `N failed` summary.
@@ -154,27 +168,69 @@ def run(cmd: list[str], cwd: Path, timeout: int = 30) -> Ran:
         return Ran(126, "", "")
 
 
-def _kill_group(p: subprocess.Popen[str]) -> None:
-    """SIGKILL the child's whole process group. `--test` is a SHELL command, so the thing
-    that must die is the group (a `bash -c 'pytest ...'` may have grandchildren); killing
-    only the shell would leave the real test running against a file we are about to
-    restore."""
+def _kill_group(p: subprocess.Popen[str], sig: int) -> None:
+    """Signal the test command's whole process GROUP. `--test` is a SHELL command, so the
+    thing that must die is the group (a `bash -c 'pytest ...'` may have grandchildren);
+    killing only the shell would leave the real test running against a file we are about
+    to restore.
+
+    The group id is `p.pid` BY CONSTRUCTION and is never re-read (codex round-4 P2):
+    `start_new_session=True` makes the child a session AND process-group leader, so its
+    pgid equals its pid. Calling `os.getpgid(p.pid)` at KILL time was the defect — once the
+    leader has exited, that lookup can fail, and the fallback ("signal the leader alone")
+    cannot reach a surviving grandchild, which then keeps the pipes open. The pid cannot
+    have been recycled here because this `Popen` has not reaped it yet.
+    """
     try:
-        os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        os.killpg(p.pid, sig)
     except (ProcessLookupError, PermissionError, OSError):
-        try:
-            p.kill()
-        except OSError:
-            pass
+        # The group is already gone (or not ours). Last resort: the leader alone.
+        with contextlib.suppress(OSError):
+            p.send_signal(sig)
+
+
+def _drain(p: subprocess.Popen[str], grace: float) -> tuple[str, str] | None:
+    """Collect the child's buffered output within `grace` seconds, or None on timeout.
+    `communicate` accumulates across calls, so a later call still returns everything."""
+    try:
+        out, err = p.communicate(timeout=grace)
+    except subprocess.TimeoutExpired:
+        return None
+    return out or "", err or ""
+
+
+def _terminate_and_drain(p: subprocess.Popen[str], rc: int) -> Ran:
+    """Kill the test command's process group and collect its output in BOUNDED time.
+
+    Unbounded was the defect (codex round-4 P2). `communicate()` reads to EOF, and EOF only
+    arrives when EVERY holder of the pipe write-end is gone — a backgrounded grandchild that
+    outlives the shell (worse, one that `setsid`s out of the group so no kill can reach it)
+    keeps them open for as long as it runs. Waiting on that meant waiting with the SOURCE
+    FILE STILL MUTATED, which inverts this tool's whole priority order: the restore matters
+    more than the output. So the wait is bounded, escalated once, and then ABANDONED with a
+    note — a lost stdout tail is a cosmetic loss, a mutated file left on disk is not.
+    """
+    _kill_group(p, signal.SIGTERM)
+    drained = _drain(p, KILL_GRACE)
+    if drained is None:
+        _kill_group(p, signal.SIGKILL)
+        drained = _drain(p, KILL_GRACE)
+    if drained is None:
+        return Ran(rc, "", ABANDONED_OUTPUT_NOTE)
+    return Ran(rc, drained[0], drained[1])
 
 
 def run_shell(cmd: str, cwd: Path, timeout: int) -> Ran:
     """Run the operator's `--test` string through a shell, in its own process group.
 
-    `start_new_session=True` is what makes `_kill_group` correct AND keeps a terminal
-    SIGINT from reaching the test independently of the runner. On timeout, and on ANY
-    exception (notably `TerminatedError` from the SIGTERM handler), the whole group is killed
-    before the exception is re-raised — the restore must never race a live test process.
+    `start_new_session=True` is what makes `_kill_group` correct (the child's pgid is then
+    exactly its pid) AND keeps a terminal SIGINT from reaching the test independently of the
+    runner. On timeout, and on ANY exception (notably `TerminatedError` from the SIGTERM
+    handler), the whole group is killed before the exception is re-raised — the restore must
+    never race a live test process.
+
+    EVERY wait here is bounded. Nothing in this function may block indefinitely, because the
+    caller holds a MUTATED source file the whole time it runs (codex round-4 P2).
     """
     try:
         # A shell command string IS this tool's interface (`--test "<cmd>"`).
@@ -193,12 +249,13 @@ def run_shell(cmd: str, cwd: Path, timeout: int) -> Ran:
         out, err = p.communicate(timeout=timeout)
         return Ran(p.returncode, out or "", err or "")
     except subprocess.TimeoutExpired:
-        _kill_group(p)
-        out, err = p.communicate()
-        return Ran(TIMEOUT_RC, out or "", err or "")
+        return _terminate_and_drain(p, TIMEOUT_RC)
     except BaseException:
-        _kill_group(p)
-        p.wait()
+        # Propagating (a signal, typically) — the output is irrelevant, only the reaping is.
+        # Bounded for the same reason: the `finally` upstream still has a file to restore.
+        _kill_group(p, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            p.wait(timeout=KILL_GRACE)
         raise
 
 
@@ -260,7 +317,22 @@ def comment_out(text: str, start: int, end: int, prefix: str = COMMENT_PREFIX) -
 
 
 def looks_like_pytest(cmd: str) -> bool:
-    """Does `--test` invoke pytest? Drives the strict step-3 classifier below."""
+    """Does `--test` invoke pytest? Selects the STRICT step-3 classifier below.
+
+    Matches both entry-point spellings — `pytest` and the legacy `py.test` alias — at the
+    start of the command or after whitespace or a path separator. Missing `py.test` was the
+    defect (codex round-4 P1): a collection error under `py.test` exits 2, fell through to
+    the GENERIC branch where any nonzero counts as a kill, and produced a false PROBE
+    PASSED.
+
+    The rule deliberately ERRS TOWARD MATCHING, and the asymmetry is why. The pytest branch
+    is the STRICTER one (it demands rc 1 AND a reported `N failed` AND no errors), so a
+    false positive can only ever turn a KILLED into an INDETERMINATE — a visible refusal,
+    exit 2, never a fabricated pass. A false NEGATIVE drops to the lenient branch, which is
+    exactly how this defect produced a wrong PROBE PASSED. So a wrapper that merely has
+    pytest in its name (`pytest-shim.sh`, `npm run pytest:ci`) is treated as pytest on
+    purpose; only a token that does not START with the name (`my_pytest_helper.sh`) is not.
+    """
     return bool(PYTEST_CMD_RE.search(cmd))
 
 

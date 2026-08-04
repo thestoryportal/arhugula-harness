@@ -135,6 +135,18 @@ def plant_sidecar(path: Path, payload: bytes) -> None:
     path.write_bytes(mp.sidecar_bytes(payload))
 
 
+def reap_grandchild(repo: Path) -> None:
+    """Kill the escaped grandchild `grandchild.py` spawned. It is in its own session, so
+    nothing else will reap it — the test owns that cleanup."""
+    marker = repo / "grandchild.pid"
+    for _ in range(100):
+        if marker.exists():
+            break
+        time.sleep(0.05)
+    with contextlib.suppress(OSError, ValueError):
+        os.kill(int(marker.read_text().strip()), signal.SIGKILL)
+
+
 def sidecar_payload(path: Path) -> bytes:
     """The verified payload of a sidecar on disk; fails the test if integrity is broken."""
     payload, err = mp.parse_sidecar(path.read_bytes())
@@ -175,6 +187,15 @@ def repo(tmp_path: Path) -> Iterator[Path]:
         "pkg/mod.py": SRC,
         "test_pkg.py": TEST_PKG,
         "nonlocal_mod.py": NONLOCAL_SRC,
+        # A grandchild that ESCAPES the test command's process group (its own session) and
+        # keeps the inherited stdout/stderr pipes open long after the shell exits.
+        "grandchild.py": (
+            "import os\nimport time\n\n"
+            "os.setsid()\n"
+            'with open("grandchild.pid", "w") as fh:\n'
+            "    fh.write(str(os.getpid()))\n"
+            "time.sleep(300)\n"
+        ),
         # A NON-pytest checker, deliberately: the compile-stage defect is only a false
         # PROBE PASSED under the generic heuristic, where any nonzero reads as a kill.
         "check_nonlocal.sh": (
@@ -228,12 +249,20 @@ def _no_stray_sidecars_in_the_real_repo():
 
 
 def run_probe(
-    repo: Path, file: str, lines: str, test: str, timeout: int | None = None
+    repo: Path,
+    file: str,
+    lines: str,
+    test: str,
+    timeout: int | None = None,
+    wall_timeout: float = 300,
 ) -> subprocess.CompletedProcess[str]:
+    """Drive the probe as a subprocess. `timeout` is the probe's own `--timeout`;
+    `wall_timeout` bounds OUR wait on it, so a probe that hangs fails the test instead of
+    hanging the suite."""
     cmd = [sys.executable, str(PROBE), "--file", file, "--lines", lines, "--test", test]
     if timeout is not None:
         cmd += ["--timeout", str(timeout)]
-    return subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True, timeout=300)
+    return subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True, timeout=wall_timeout)
 
 
 def sidecars(repo: Path) -> list[Path]:
@@ -336,7 +365,21 @@ def test_classify_step3_generic_nonzero_is_a_kill_with_a_stated_caveat():
     [
         ("uv run pytest -q x.py", True),
         ("/usr/bin/python3 -m pytest tools/", True),
+        # codex round-4 P1: the `py.test` entry-point alias. Missing these meant a
+        # collection error under py.test fell through to the LENIENT generic branch.
+        ("py.test -q x.py", True),
+        (".venv/bin/py.test -q", True),
+        ("uv run py.test", True),
+        ("bash ./py.test", True),
+        (r"Scripts\pytest.exe -q", True),
+        # Over-matching is deliberate and SAFE — the pytest branch is the stricter one, so
+        # a false positive can only downgrade a kill to a refusal, never invent a pass.
+        ("bash ./pytest-shim.sh", True),
+        ("npm run pytest:ci", True),
+        # A token that does not START with the entry-point name is not pytest.
         ("bash tools/hooks/test_postedit_lint.sh", False),
+        ("bash my_pytest_helper.sh", False),
+        ("bash copy.test", False),
         ("./run-pytests.sh", False),
     ],
 )
@@ -749,6 +792,93 @@ def test_p2a_a_clean_run_reports_the_released_state(repo):
     assert res.returncode == 0, res.stdout + res.stderr
     assert "SIDECAR NOT RELEASED" not in res.stderr
     assert sorted((repo / "pkg").glob("*.mutprobe.*.bak")) == []
+
+
+def test_p1_py_test_alias_takes_the_strict_classifier_end_to_end(repo):
+    """codex round-4 P1: a collection error under the `py.test` entry-point alias exits 2.
+    Unrecognized, it fell through to the GENERIC branch where any nonzero is a kill — a
+    false PROBE PASSED. Recognized, rc 2 is not `TESTS_FAILED` and the run is
+    INDETERMINATE."""
+    before = (repo / "src.py").read_bytes()
+    cmd = counting_script(repo, "py.test", "echo '= 1 error in 0.12s ='\nexit 2")
+    assert mp.looks_like_pytest(cmd), "the fixture must exercise the pytest branch"
+    res = run_probe(repo, "src.py", PINNED, cmd)
+    assert res.returncode == 2, res.stdout + res.stderr
+    assert "PROBE PASSED" not in res.stdout
+    assert "exited 2, not 1" in res.stderr
+    assert (repo / "src.py").read_bytes() == before
+    assert sidecars(repo) == []
+
+
+def test_p2_kill_group_signals_the_known_pgid_and_never_re_reads_it(repo, monkeypatch):
+    """codex round-4 P2: with `start_new_session=True` the pgid IS the pid, by construction.
+    Re-reading it with `os.getpgid` at kill time can fail once the leader has exited, and
+    the fallback cannot reach a surviving grandchild."""
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(mp.os, "killpg", lambda pgid, sig: calls.append((pgid, sig)))
+
+    def exploding_getpgid(_pid):
+        raise AssertionError("os.getpgid must not be consulted at kill time")
+
+    monkeypatch.setattr(mp.os, "getpgid", exploding_getpgid)
+
+    class FakePopen:
+        pid = 4242
+
+        def send_signal(self, _sig):
+            raise AssertionError("the group signal succeeded; no fallback should run")
+
+    mp._kill_group(FakePopen(), signal.SIGTERM)
+    assert calls == [(4242, signal.SIGTERM)]
+
+
+def test_p2_a_pipe_holding_grandchild_cannot_postpone_the_restore(repo):
+    """The hazard end to end: a grandchild that `setsid`s out of the group inherits the
+    stdout/stderr pipes, so no kill can reach it and EOF never arrives. Reading to EOF would
+    block for the grandchild's whole lifetime (300s) WITH THE SOURCE MUTATED. The drain must
+    give up and let the restore proceed."""
+    before = (repo / "src.py").read_bytes()
+    cmd = counting_script(repo, "orphan.sh", f"{PY} grandchild.py &\nexit 0")
+    started = time.monotonic()
+    try:
+        res = run_probe(repo, "src.py", PINNED, cmd, timeout=3, wall_timeout=60)
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            "the probe never returned — it waited on a grandchild's pipes while the "
+            "source file stayed mutated"
+        )
+    finally:
+        reap_grandchild(repo)
+    elapsed = time.monotonic() - started
+    assert res.returncode == 2, res.stdout + res.stderr
+    assert "timed out" in res.stderr
+    assert elapsed < 45, f"the probe waited {elapsed:.1f}s on a pipe-holding grandchild"
+    assert (repo / "src.py").read_bytes() == before
+    assert sidecars(repo) == []
+
+
+def test_p2_no_wait_in_the_tool_is_unbounded():
+    """Structural witness: every `communicate`/`wait` on the test child carries a timeout,
+    and `os.getpgid` is never CALLED. Nothing may block while a mutation is on disk."""
+    tree = ast.parse(PROBE.read_text(encoding="utf-8"))
+    unbounded = [
+        call.func.attr
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr in {"communicate", "wait"}
+        and not any(kw.arg == "timeout" for kw in call.keywords)
+    ]
+    assert unbounded == [], f"unbounded wait(s) on the test child: {unbounded}"
+
+    getpgid_calls = [
+        call
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "getpgid"
+    ]
+    assert getpgid_calls == [], "the process group must be signalled by the pgid we know"
 
 
 def test_p1_sidecar_round_trips_through_its_integrity_header():
