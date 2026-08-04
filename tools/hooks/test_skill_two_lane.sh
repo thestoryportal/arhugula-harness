@@ -157,6 +157,8 @@ needle "$CODEX_SKILL" "codex-native two-lane" "the uncommitted-reapply-after-boo
   '**bootstrapping the loop FIRST and reapplying the work as UNCOMMITTED changes**'
 needle "$CODEX_SKILL" "codex-native two-lane" "the abandoned-branch-outside-loop-state disposition" \
   'The abandoned original branch then sits OUTSIDE the loop state'
+needle "$CODEX_SKILL" "codex-native two-lane" "the durable DEFERRED-HIL prune reminder" \
+  '**DEFERRED-HIL ledger row**'
 needle "$CODEX_SKILL" "codex-native two-lane" "the defer-to-canonical contract" \
   'full workflow and the source of truth'
 needle "$CODEX_SKILL" "codex-native two-lane" "the translations-only limit" \
