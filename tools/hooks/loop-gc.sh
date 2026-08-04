@@ -154,9 +154,10 @@ def sweep(text):
     # Start time (agent_transcript_path is not in Start payloads). Rejecting count-
     # matched stops would just convert the false-negative into a standing false-
     # positive on every legitimate shared-key reconcile. Bounded: requires agent_id
-    # absent AND a pathological (>2s lock-starved) skipped start AND a sibling
-    # collision; blast radius is one missed ADVISORY hygiene line, never a hard-gate
-    # loss. Reopen trigger: agent_id observed absent in real fan-out payloads.
+    # absent AND a skipped start (pathological >2s lock starvation, or the appender's
+    # 4000-byte over-long-row drop) AND a sibling collision; blast radius is one
+    # missed ADVISORY hygiene line, never a hard-gate loss. Reopen trigger: agent_id
+    # observed absent in real fan-out payloads.
     balance, paths = {}, {}
     for _, row in parsed(text):
         key, transcript = row_key(row)

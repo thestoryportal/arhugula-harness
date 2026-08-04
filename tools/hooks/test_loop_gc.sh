@@ -470,16 +470,49 @@ H14=$!
 for _ in $(seq 1 200); do [ -s "$SW/h14.out" ] && break; sleep 0.05; done
 sw_run > "$SW/s14.out" 2>/dev/null &
 S14PID=$!
-sleep 0.4   # hook's unlocked pre-read has happened; it is now blocked on the lock
+# 0.9s: the hook's COLD-START latency to its unlocked pre-read is ~0.47s (bash + 54KB of
+# lib sourcing + git worktree list + python spawn), so a 0.4s sleep raced it and left the
+# witness vacuous on most runs — the stop was already in the pre-read (gate lens-3,
+# measured; 0.9s = 12/12 exercised, still 0.3s inside the holder's 1.2s hold).
+sleep 0.9
 sw_row "$(sw_ts 1)" stop s14agent "$T14" >> "$SREG"   # the reconciling stop lands in the window
 wait "$H14" 2>/dev/null; wait "$S14PID" 2>/dev/null
 OUT=$(jq -r '.hookSpecificOutput.additionalContext // ""' "$SW/s14.out" 2>/dev/null)
-printf '%s' "$OUT" | grep -q "s14agent" \
-  && bad "S14 stale pre-read reported an already-reconciled agent: '$OUT'" \
-  || ok "S14 sweep used the locked snapshot: reconciled agent not reported"
+# The count is the sole live discriminator: the clause names only the OLDEST key
+# (oldkey14, transcript-missing → age inf), so s14agent's name can never appear and a
+# name-grep would be a dead assertion (gate lens-3). Pre-read mutant reports 2.
 printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
-  && ok "S14 the genuinely-unreconciled old key is still reported" \
-  || bad "S14 lost the real unreconciled key: '$OUT'"
+  && ok "S14 locked snapshot used: reconciled agent not counted, real key still reported" \
+  || bad "S14 stale pre-read counted the reconciled agent (or lost the real key): '$OUT'"
+
+# ── S16) STALE boundary pin (gate lens-3): 29min unreconciled → quiet; 31min → flagged.
+#        Without this pair any STALE in (~2s, 2h) passed the suite.
+sw_reset
+T16A="$SW/t16a.jsonl"; : > "$T16A"; touch -t "$(date -v-29M +%Y%m%d%H%M 2>/dev/null || date -d '29 minutes ago' +%Y%m%d%H%M)" "$T16A"
+sw_row "$(sw_ts 1740)" start s16fresh "$T16A" >> "$SREG"
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -q "unreconciled" \
+  && bad "S16 29-min agent flagged (STALE boundary drifted low): '$OUT'" \
+  || ok "S16 29-min unreconciled stays quiet"
+T16B="$SW/t16b.jsonl"; : > "$T16B"; touch -t "$(date -v-31M +%Y%m%d%H%M 2>/dev/null || date -d '31 minutes ago' +%Y%m%d%H%M)" "$T16B"
+sw_row "$(sw_ts 1860)" start s16stale "$T16B" >> "$SREG"
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
+  && ok "S16 31-min unreconciled is flagged" \
+  || bad "S16 31-min agent missed (STALE boundary drifted high): '$OUT'"
+
+# ── S17) KEEP near-side pin (gate lens-3): a 6-day whole-key history survives the prune.
+#        Without this, KEEP could drift down to ~2h undetected (far side pinned by S4).
+sw_reset
+sw_row "$(sw_ts 518400)" start s17mid /tmp/gone17.jsonl >> "$SREG"   # 6d — inside horizon
+sw_row "$(sw_ts 518300)" stop  s17mid /tmp/gone17.jsonl >> "$SREG"
+sw_row "$(sw_ts 700000)" start s17old /tmp/gone17b.jsonl >> "$SREG"  # 8d — forces rewrite
+sw_run >/dev/null 2>&1
+jq -e 'select(.agent_id=="s17mid")' "$SREG" >/dev/null 2>&1 \
+  && ok "S17 6-day key survives the prune (KEEP near side pinned)" \
+  || bad "S17 6-day key pruned early: $(cat "$SREG")"
+jq -e 'select(.agent_id=="s17old")' "$SREG" >/dev/null 2>&1 \
+  && bad "S17 8-day key survived (prune did not run)" || ok "S17 8-day key pruned (far side intact)"
 
 # ── S15) Surplus-stop credit (codex round-4): a stop whose own start append was skipped
 #        (appender lock deadline) must not bank credit against a LATER sibling's start
