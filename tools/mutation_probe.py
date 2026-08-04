@@ -74,6 +74,15 @@ Termination guarantees, honestly bounded:
     so. This exclusion is explicit; it is not an oversight.
 
 Residual limits, stated rather than hidden:
+  * METADATA BEYOND THE PERMISSION MODE IS NOT PRESERVED (codex round-7, registered as a
+    documented residual rather than fixed). Writes go through `os.replace`, which swaps in
+    a new inode: extended attributes, ACLs and ownership do NOT survive, and git cannot see
+    their loss, so nothing downstream will flag it. A target whose behaviour depends on
+    such metadata is OUTSIDE this tool's envelope. It is deliberately not probed for and
+    not refused on: macOS attaches `com.apple.quarantine` and similar xattrs to ordinary
+    files constantly, so refusing on xattr presence would reject normal use, and copying
+    them portably across macOS/Linux is a platform-specific project of its own. The
+    permission mode — the one piece git DOES track — is carried across explicitly.
   * reconcile scans the TARGET's directory only (bounded and predictable — no walk of
     `.venv`/`.git`). A sidecar left elsewhere by a SIGKILL'd probe of a different file is
     recovered the next time a probe runs against THAT directory.
@@ -115,10 +124,12 @@ KINDS: dict[str, str] = {".py": "py", ".sh": "sh", ".yaml": "yaml", ".yml": "yam
 # (see `reconcile_sidecars`). All three share the one grammar so a single ignore pattern
 # and a single glob already cover them.
 SIDECAR_MAGIC = "mutation-probe-sidecar"
-# v2 adds the mutation witness (`mutated_sha256` / `mutated_bytes`) so the reconcile can
+# v2 added the mutation witness (`mutated_sha256` / `mutated_bytes`) so the reconcile can
 # tell "the target still holds THIS probe's mutation" from "it changed after the crash".
-# v1 sidecars are refused, not read: they cannot answer that question (codex round-5 P1).
-SIDECAR_VERSION = "v2"
+# v3 adds the GIT identity (`index_oid`) so it can also tell "…and this is still the same
+# file git had then" from "the branch/index moved under it". Older sidecars are refused,
+# not read: they cannot answer the newer question (codex round-5 P1, round-7 fix 1).
+SIDECAR_VERSION = "v3"
 SIDECAR_RE = re.compile(r"^(?P<base>.+)\.mutprobe\.(?P<pid>\d+)\.(?P<kind>bak|tmp|new)$")
 # pytest's summary counts. `\s+failed\b` deliberately does NOT match "1 xfailed" (no word
 # boundary before "failed" there) — an xfail is not a failure.
@@ -493,9 +504,31 @@ class Sidecar(NamedTuple):
     original: bytes  # the payload — the target's bytes before the probe touched it
     mutated_sha256: str  # witness for the mutation this probe was about to publish
     mutated_len: int
+    index_oid: str  # the target's git INDEX blob oid at probe time
 
 
-def sidecar_bytes(original: bytes, mutated: bytes) -> bytes:
+def index_oid(target: Path, cwd: Path) -> str | None:
+    """The target's blob oid in git's INDEX, or None if git cannot name one.
+
+    This is the tool's GIT-IDENTITY witness (codex round-7 fix 1). Content digests alone
+    cannot tell "this is the same file git was tracking" from "the branch moved and the new
+    committed bytes happen to coincide" — and on a coincidence the reconcile would replay
+    the OLD branch's original and dirty the NEW one.
+    """
+    res = run(["git", "ls-files", "-s", "--", str(target)], cwd)
+    if res.rc != 0 or not res.out:
+        return None
+    # `<mode> <oid> <stage>\t<path>` — split() also splits the tab, so the oid is field 1.
+    fields = res.out.splitlines()[0].split()
+    if len(fields) < 2:
+        return None
+    oid = fields[1]
+    if len(oid) not in (40, 64) or not all(c in "0123456789abcdef" for c in oid):
+        return None
+    return oid
+
+
+def sidecar_bytes(original: bytes, mutated: bytes, oid: str) -> bytes:
     """The sidecar's on-disk form: one ASCII header line, then the original bytes verbatim.
 
     The header carries TWO witnesses, and they answer different questions.
@@ -505,6 +538,12 @@ def sidecar_bytes(original: bytes, mutated: bytes) -> bytes:
     code path that writes bytes it did not itself produce this run — would blind-write a
     corrupt "original" over live source. The true length cannot be recovered from a
     truncated payload, so it has to be recorded up front.
+
+    The `index_oid` is a GIT-IDENTITY witness (codex round-7 fix 1): the digests below say
+    "the bytes still match", but bytes can coincide across branches. If the operator reset
+    or switched branches after the crash and the new COMMITTED content happens to equal the
+    recorded mutation, replaying the old branch's original would dirty the new branch with
+    a file nobody asked for. The index oid pins which file git was tracking at probe time.
 
     The MUTATED bytes' length + digest are an APPLICABILITY witness (codex round-4/5 P1):
     they record what the probe was about to put on disk, so the reconcile can tell "the
@@ -516,7 +555,8 @@ def sidecar_bytes(original: bytes, mutated: bytes) -> bytes:
     header = (
         f"{SIDECAR_MAGIC} {SIDECAR_VERSION} "
         f"sha256={hashlib.sha256(original).hexdigest()} bytes={len(original)} "
-        f"mutated_sha256={hashlib.sha256(mutated).hexdigest()} mutated_bytes={len(mutated)}\n"
+        f"mutated_sha256={hashlib.sha256(mutated).hexdigest()} mutated_bytes={len(mutated)} "
+        f"index_oid={oid}\n"
     )
     return header.encode("ascii") + original
 
@@ -551,12 +591,12 @@ def parse_sidecar(blob: bytes) -> tuple[Sidecar | None, str | None]:
             f"{SIDECAR_VERSION}, which also records the mutation it was about to publish, "
             "so an older sidecar cannot say whether it still applies)"
         )
-    if len(fields) != 6:
+    if len(fields) != 7:
         return None, "malformed header fields"
-    prefixes = ("sha256=", "bytes=", "mutated_sha256=", "mutated_bytes=")
+    prefixes = ("sha256=", "bytes=", "mutated_sha256=", "mutated_bytes=", "index_oid=")
     if not all(f.startswith(pre) for f, pre in zip(fields[2:], prefixes, strict=True)):
         return None, "malformed header fields"
-    want_digest, want_len_text, mutated_digest, mutated_len_text = (
+    want_digest, want_len_text, mutated_digest, mutated_len_text, oid = (
         f.split("=", 1)[1] for f in fields[2:]
     )
     if not want_len_text.isdigit() or not mutated_len_text.isdigit():
@@ -566,7 +606,34 @@ def parse_sidecar(blob: bytes) -> tuple[Sidecar | None, str | None]:
         return None, f"truncated or padded payload ({len(payload)} bytes, header says {want_len})"
     if hashlib.sha256(payload).hexdigest() != want_digest:
         return None, "sha256 mismatch — the payload is corrupt"
-    return Sidecar(payload, mutated_digest, int(mutated_len_text)), None
+    return Sidecar(payload, mutated_digest, int(mutated_len_text), oid), None
+
+
+def _write_private(path: Path, body: bytes) -> str | None:
+    """Write `body` to `path`, creating it 0600 REGARDLESS of the ambient umask, then fsync.
+
+    Every staging file this tool creates goes through here (codex round-7 fix 3). A plain
+    `open(..., "wb")` requests 0666 and lets the umask decide, so under the common 022 a
+    staging file — and therefore the PUBLISHED SIDECAR, which is a complete copy of the
+    source — lands 0644. That silently widens access to a 0600 target's contents, and the
+    sidecar is exactly the artifact that PERSISTS after a crash. The explicit `fchmod` after
+    the open is not redundant with the `os.open` mode: `O_CREAT` only applies its mode when
+    the file did not already exist, so a staging fragment left by an earlier crash would
+    otherwise keep whatever mode it had.
+
+    The TARGET's own mode is applied separately and only just before the replace, so a
+    private staging file never leaks the target's (possibly wider) permissions either.
+    """
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            os.fchmod(fh.fileno(), 0o600)
+            fh.write(body)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError as e:
+        return f"cannot write {path} ({e})"
+    return None
 
 
 def _atomic_publish(tmp: Path, dest: Path, body: bytes, mode: int | None) -> str | None:
@@ -591,14 +658,10 @@ def _atomic_publish(tmp: Path, dest: Path, body: bytes, mode: int | None) -> str
     content); git does not track hard links, so this is accepted and noted, not silently
     assumed away.
     """
-    try:
-        with tmp.open("wb") as fh:
-            fh.write(body)
-            fh.flush()
-            os.fsync(fh.fileno())
-    except OSError as e:
+    write_error = _write_private(tmp, body)
+    if write_error is not None:
         _unlink(tmp)
-        return f"cannot write {tmp} ({e})"
+        return write_error
     try:
         landed = tmp.read_bytes()
     except OSError as e:
@@ -692,7 +755,7 @@ def _direct_write(dest: Path, body: bytes) -> str | None:
 
 
 def publish_sidecar(
-    target: Path, pid: int, original: bytes, mutated: bytes
+    target: Path, pid: int, original: bytes, mutated: bytes, oid: str
 ) -> tuple[Path, str | None]:
     """Put the crash-recovery sidecar in place ATOMICALLY. Returns (bak_path, error).
 
@@ -703,7 +766,7 @@ def publish_sidecar(
     """
     bak = sidecar_for(target, pid)
     tmp = staging_for(target, pid, "tmp")
-    return bak, _atomic_publish(tmp, bak, sidecar_bytes(original, mutated), None)
+    return bak, _atomic_publish(tmp, bak, sidecar_bytes(original, mutated, oid), None)
 
 
 def publish_mutation(target: Path, pid: int, mutated: bytes) -> str | None:
@@ -726,7 +789,7 @@ def publish_mutation(target: Path, pid: int, mutated: bytes) -> str | None:
     return write_target(target, pid, mutated, mode, allow_direct=False).error
 
 
-def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
+def reconcile_sidecars(directory: Path, self_pid: int, repo_root: Path) -> list[str]:
     """Restore originals left behind by SIGKILL'd probes. Returns human messages.
 
     ONLY sidecars whose embedded pid is dead are acted on: a live pid belongs to a probe
@@ -751,6 +814,11 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
         payload. On truncation, corruption, a headerless sidecar or a `v1` one, the
         reconcile REFUSES loudly and RETAINS the file. It must never fall back to "treat
         the blob as the original" (codex round-3 P1).
+      * GIT IDENTITY: the target's current INDEX blob oid must equal the recorded one
+        (codex round-7 fix 1). Bytes can coincide across branches: after a reset or branch
+        switch the new COMMITTED content may happen to equal the recorded mutation, and
+        replaying then dirties the new branch with the old branch's file. The oid says
+        whether git is still tracking the same thing.
       * APPLICABILITY: even a perfectly intact sidecar is applied only when the target
         STILL HOLDS EXACTLY THE MUTATION it recorded — the `mutated_sha256` witness
         (codex round-5 P1). Undoing a mutation is only safe while that mutation is what is
@@ -830,6 +898,17 @@ def reconcile_sidecars(directory: Path, self_pid: int) -> list[str]:
                 + "). The file changed after that probe died, so restoring the original would "
                 "DESTROY whatever was done since. The sidecar is RETAINED and nothing was "
                 "written — recover from git if you do want the original back, then delete it."
+            )
+            continue
+        current_oid = index_oid(original, repo_root)
+        if current_oid != sidecar.index_oid:
+            msgs.append(
+                f"RECONCILE REFUSED: {original.name} is no longer the file git was tracking "
+                f"when sidecar {sc.name} was written (recorded index blob "
+                f"{sidecar.index_oid[:12]}…, now {(current_oid or 'absent')[:12]}…). Its bytes "
+                "coincide with the recorded mutation, but the branch or index has moved — "
+                "restoring would dirty the CURRENT branch with the old one's file. The "
+                "sidecar is RETAINED and nothing was written."
             )
             continue
         mode, mode_error = _current_mode(original)
@@ -1099,7 +1178,7 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
         )
     repo_root = Path(top.out)
 
-    for msg in reconcile_sidecars(target.parent, os.getpid()):
+    for msg in reconcile_sidecars(target.parent, os.getpid(), repo_root):
         print(msg)
 
     # BEFORE the dirty gate, deliberately: an untracked file shows up as `??` and would
@@ -1220,7 +1299,14 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
     # its original bytes: a signal there leaves a stale sidecar that matches its file, which
     # the next reconcile removes without rewriting anything.
     written = mutated_text.encode("utf-8")
-    sidecar, publish_error = publish_sidecar(target, os.getpid(), original, written)
+    oid = index_oid(target, repo_root)
+    if oid is None:
+        return _refuse(
+            f"git could not name an index blob for {target} — without that identity the "
+            "crash-recovery sidecar could not tell a later branch switch from this file. "
+            f"{target} was NOT touched."
+        )
+    sidecar, publish_error = publish_sidecar(target, os.getpid(), original, written, oid)
     if publish_error is not None:
         return _refuse(
             f"the crash-recovery sidecar could not be published ({publish_error}); "
@@ -1297,7 +1383,10 @@ def main(argv: list[str] | None = None) -> int:
             "Exit codes: 0 probe-pass (the test went red) / 1 PROBE FAILED (the test stayed "
             "green) / 2 refused or indeterminate (file untouched or verifiably restored) / "
             "3 restore failure (the file may still be mutated — read the message). "
-            "A non-pytest --test yields a weaker kill claim; see the module docstring."
+            "A non-pytest --test yields a weaker kill claim; see the module docstring. "
+            "NOTE: writes go through an atomic replace, so extended attributes, ACLs and "
+            "ownership are NOT preserved (the permission mode is); targets depending on "
+            "that metadata are outside this tool's envelope."
         ),
     )
     ap.add_argument("--file", required=True, help="source file to mutate (.py/.sh/.yaml/.yml)")

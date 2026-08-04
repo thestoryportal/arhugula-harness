@@ -21,6 +21,7 @@ import os
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -130,16 +131,26 @@ NONLOCAL_ORPHAN_LINE = "2"
 # The bytes a probe of SRC:2-3 would have put on disk — the mutation witness a crash-shaped
 # sidecar must record for the reconcile to consider itself applicable.
 MUTATED_FIXTURE = mp.comment_out(SRC, 2, 3).encode()
+# A stand-in git blob oid for the PURE tests (they never touch a repo).
+OID = "0" * 40
 
 PY = shlex.quote(sys.executable)
 
 
-def plant_sidecar(path: Path, payload: bytes, mutated: bytes) -> None:
+def plant_sidecar(path: Path, payload: bytes, mutated: bytes, index_oid: str | None = None) -> None:
     """Write a sidecar in the tool's real on-disk format, the way a crashed probe would have
-    left it. Tests must never hand-roll the format. `mutated` is the APPLICABILITY witness —
-    the bytes the crashed probe had put on the target — and the reconcile restores only
-    while the target still matches it."""
-    path.write_bytes(mp.sidecar_bytes(payload, mutated))
+    left it. Tests must never hand-roll the format.
+
+    `mutated` is the APPLICABILITY witness — the bytes the crashed probe had put on the
+    target — and the reconcile restores only while the target still matches it.
+    `index_oid` is the GIT-IDENTITY witness; when omitted it is read from the repo for the
+    target this sidecar names, i.e. exactly what a real probe would have recorded. The
+    mismatch cases pass it explicitly."""
+    if index_oid is None:
+        m = mp.SIDECAR_RE.match(path.name)
+        assert m is not None, f"{path.name} is not a sidecar name"
+        index_oid = mp.index_oid(path.parent / m.group("base"), path.parent) or ""
+    path.write_bytes(mp.sidecar_bytes(payload, mutated, index_oid))
 
 
 def reap_grandchild(repo: Path) -> None:
@@ -956,7 +967,7 @@ def test_p2_no_wait_in_the_tool_is_unbounded():
 def test_p1_sidecar_round_trips_through_its_integrity_header():
     mutated = b"# MUTATED\n"
     for payload in (b"", SRC.encode(), b"\x00\xff\nline\r\n"):
-        parsed, err = mp.parse_sidecar(mp.sidecar_bytes(payload, mutated))
+        parsed, err = mp.parse_sidecar(mp.sidecar_bytes(payload, mutated, OID))
         assert err is None
         assert parsed is not None
         assert parsed.original == payload  # binary + embedded newlines survive verbatim
@@ -974,18 +985,18 @@ def test_p1_sidecar_round_trips_through_its_integrity_header():
         # not — the reordered checks name that precisely instead of "not a sidecar".
         (lambda b: b.replace(b"\n", b"X", 1), "malformed header fields"),
         (lambda b: b"raw file with no header at all\n", "not a mutation-probe sidecar"),
-        (lambda b: b.replace(b"v2", b"v9", 1), "unsupported sidecar version"),
+        (lambda b: b.replace(b"v3", b"v9", 1), "unsupported sidecar version"),
     ],
 )
 def test_p1_damaged_sidecars_never_parse(mangle, needle):
-    payload, err = mp.parse_sidecar(mangle(mp.sidecar_bytes(SRC.encode(), MUTATED_FIXTURE)))
+    payload, err = mp.parse_sidecar(mangle(mp.sidecar_bytes(SRC.encode(), MUTATED_FIXTURE, OID)))
     assert payload is None
     assert err is not None and needle in err
 
 
 def test_p1_sha256_mismatch_is_caught_even_at_the_right_length():
     """Length alone is not integrity: a same-length corruption must still be refused."""
-    blob = bytearray(mp.sidecar_bytes(SRC.encode(), MUTATED_FIXTURE))
+    blob = bytearray(mp.sidecar_bytes(SRC.encode(), MUTATED_FIXTURE, OID))
     blob[-1] ^= 0xFF
     payload, err = mp.parse_sidecar(bytes(blob))
     assert payload is None
@@ -1000,7 +1011,7 @@ def test_p1_truncated_dead_pid_sidecar_is_refused_never_replayed(repo):
     dead.wait()
     src = repo / "src.py"
     sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
-    full = mp.sidecar_bytes(SRC.encode(), MUTATED_FIXTURE)
+    full = mp.sidecar_bytes(SRC.encode(), MUTATED_FIXTURE, OID)
     # Truncate into the PAYLOAD (a header-level cut is the separate 'no header' case).
     sidecar.write_bytes(full[:-10])  # a partial write, as a crash would leave
     live_edit = SRC + "\n# work done since the crash\n"
@@ -1081,6 +1092,104 @@ def test_p1_reconcile_refuses_when_the_target_moved_on_after_the_crash(repo, pos
     # Both digests are named so the operator can tell what was expected from what is there.
     assert mp.parse_sidecar(sidecar.read_bytes())[0].mutated_sha256[:12] in res.stdout
     assert hashlib.sha256(post_crash.encode()).hexdigest()[:12] in res.stdout
+
+
+def test_fix1_reconcile_refuses_when_the_branch_moved_under_it(repo):
+    """codex round-7 fix 1: the byte digests can COINCIDE across branches.
+
+    A killed probe leaves a sidecar. The operator then switches to a branch whose COMMITTED
+    src.py happens to equal the recorded mutation exactly. Digest-only, the reconcile would
+    call that "still mutated", replay the OLD branch's original, and dirty the NEW branch
+    with a file nobody asked for. The index blob oid is what distinguishes them.
+    """
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    src = repo / "src.py"
+    main_oid = git(repo, "ls-files", "-s", "--", "src.py").stdout.split()[1]
+
+    # A branch whose committed content coincides byte-for-byte with the recorded mutation.
+    assert git(repo, "checkout", "-q", "-b", "other").returncode == 0
+    src.write_bytes(MUTATED_FIXTURE)
+    assert git(repo, "add", "src.py").returncode == 0
+    assert git(repo, "commit", "-q", "-m", "coincidence").returncode == 0
+    other_oid = git(repo, "ls-files", "-s", "--", "src.py").stdout.split()[1]
+    assert other_oid != main_oid, "fixture precondition: the two branches differ in git"
+    assert git(repo, "status", "--porcelain", "--", "src.py").stdout == ""
+
+    sidecar = repo / f"src.py.mutprobe.{dead.pid}.bak"
+    plant_sidecar(sidecar, SRC.encode(), MUTATED_FIXTURE, index_oid=main_oid)
+
+    # Probe a DIFFERENT file — the reconcile sweeps the directory regardless.
+    res = run_probe(repo, "consts.py", "1", pytest_cmd("test_consts.py"))
+    assert "RECONCILE REFUSED" in res.stdout
+    assert "no longer the file git was tracking" in res.stdout
+    assert main_oid[:12] in res.stdout and other_oid[:12] in res.stdout
+    assert src.read_bytes() == MUTATED_FIXTURE, "the new branch was dirtied — the fix1 defect"
+    assert git(repo, "status", "--porcelain", "--", "src.py").stdout == ""
+    assert sidecar.exists(), "a refused sidecar must be RETAINED"
+
+
+def test_fix3_staging_and_sidecar_are_private_under_a_permissive_umask(repo):
+    """codex round-7 fix 3: the sidecar is a COMPLETE copy of the source and it is the
+    artifact that survives a crash. Created through a plain open(), umask 022 lands it 0644
+    — silently widening access to a 0600 target's contents."""
+    old_umask = os.umask(0o022)
+    try:
+        src = repo / "src.py"
+        src.chmod(0o600)
+        # The test command records the live sidecar's mode from inside step 3.
+        cmd = counting_script(
+            repo,
+            "peek.sh",
+            f'{PY} -c "import glob,os,stat,pathlib;'
+            "pathlib.Path('modes').write_text(''.join("
+            "f'{p}:{oct(stat.S_IMODE(os.stat(p).st_mode))}\\n' "
+            "for p in sorted(glob.glob('*.mutprobe.*'))))\"\n" + pytest_cmd("test_real.py"),
+        )
+        res = run_probe(repo, "src.py", PINNED, cmd)
+        assert res.returncode == 0, res.stdout + res.stderr
+        observed = (repo / "modes").read_text().strip()
+        assert observed, "no sidecar was visible during step 3"
+        for line in observed.splitlines():
+            assert line.endswith(":0o600"), f"world-readable probe artifact: {line}"
+        assert stat.S_IMODE(src.stat().st_mode) == 0o600, "the target's own mode was widened"
+    finally:
+        os.umask(old_umask)
+
+
+def test_fix3_private_write_ignores_the_umask_and_a_stale_mode(tmp_path):
+    """The unit half: 0600 on creation, and 0600 even when a crash left the staging name
+    behind with a wider mode (O_CREAT would not have re-applied it)."""
+    old_umask = os.umask(0o022)
+    try:
+        fresh = tmp_path / "fresh.tmp"
+        assert mp._write_private(fresh, b"x") is None
+        assert stat.S_IMODE(fresh.stat().st_mode) == 0o600
+
+        stale = tmp_path / "stale.tmp"
+        stale.write_bytes(b"old")
+        stale.chmod(0o644)
+        assert mp._write_private(stale, b"y") is None
+        assert stat.S_IMODE(stale.stat().st_mode) == 0o600
+        assert stale.read_bytes() == b"y"
+    finally:
+        os.umask(old_umask)
+
+
+def test_register2_the_metadata_bound_is_stated(repo):
+    """codex round-7 item 2, REGISTERED not fixed: `os.replace` cannot preserve xattrs/ACLs/
+    ownership, and git cannot see their loss. Probing for them would over-refuse on macOS's
+    ubiquitous quarantine xattrs, so the bound is documented in both operator-facing
+    surfaces instead."""
+    source = PROBE.read_text(encoding="utf-8")
+    docstring = source.split('"""')[1]
+    for phrase in ("extended attributes", "ACL", "ownership", "quarantine"):
+        assert phrase in docstring, f"the metadata bound omits {phrase!r}"
+    helped = subprocess.run(
+        [sys.executable, str(PROBE), "--help"], capture_output=True, text=True, timeout=60
+    )
+    assert helped.returncode == 0
+    assert "extended attributes" in helped.stdout
 
 
 def test_p1_v1_sidecar_is_refused_for_lacking_the_mutation_witness(repo):
