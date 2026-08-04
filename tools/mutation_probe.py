@@ -10,7 +10,12 @@ line back. This tool automates exactly that loop, and nothing else:
 THIS TOOL WRITES SOURCE FILES BY DESIGN. That is the whole point, and the safety envelope
 below is therefore the load-bearing part of the design — not the mutation:
 
-  0. REFUSE unless git can actually witness F: it must be ORDINARILY TRACKED (not
+  0. Take the target's exclusive lock (`F.mutprobe.lock`, `flock`, refuse-don't-wait), so
+     two probes can never run against one file. This is NOT belt-and-braces: the git gates
+     below are point-in-time, two simultaneous probes clear them both, and the loser then
+     measures the winner's restore and reports a PINNED range as unpinned — silently, with
+     a clean tree (merge-gate lens 1, reproduced 5 times in 6). Then REFUSE unless git can
+     actually witness F: it must be ORDINARILY TRACKED (not
      untracked, not gitignored, not `--skip-worktree`, not `--assume-unchanged` — see
      `git_witness_refusal`; for those shapes both witnesses below pass VACUOUSLY), and
      `git status --porcelain -- F` must be empty. A dirty file has uncommitted work the
@@ -74,6 +79,17 @@ Termination guarantees, honestly bounded:
     so. This exclusion is explicit; it is not an oversight.
 
 Residual limits, stated rather than hidden:
+  * AN ABANDONED TEST PROCESS IS STILL ALIVE. When a grandchild escapes the process group
+    and outlives the SIGTERM/SIGKILL escalation, `_terminate_and_drain` gives up on its
+    output so the restore can proceed. What is abandoned is not merely a stdout tail: it is
+    a LIVE, UNREACHABLE process that can still write the target — including AFTER the final
+    restore verification has passed. The probe's exit-0 therefore attests to the state it
+    verified at that instant, not to a file nobody will touch afterwards.
+  * The exclusive lock scopes to ONE TARGET. Concurrent probes of DIFFERENT files in the
+    same directory are allowed and safe (each holds its own lock); what is excluded is two
+    probes of the SAME file. A non-probe writer — an editor, a formatter, a `git add` — is
+    not excluded by anything and is instead DETECTED, by the step-3 interference check and
+    the restore's bytes-verify.
   * METADATA BEYOND THE PERMISSION MODE IS NOT PRESERVED (codex round-7, registered as a
     documented residual rather than fixed). Writes go through `os.replace`, which swaps in
     a new inode: extended attributes, ACLs and ownership do NOT survive, and git cannot see
@@ -97,6 +113,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import hashlib
 import os
 import re
@@ -156,7 +173,9 @@ KILL_GRACE = 2.0
 ABANDONED_OUTPUT_NOTE = (
     "[mutation-probe] the test command's process group did not release its pipes after "
     "SIGTERM and SIGKILL — a grandchild outlived it (possibly in its own session). Its "
-    "output was ABANDONED so the source file could be restored without further delay."
+    "output was ABANDONED so the source file could be restored without further delay. "
+    "NOTE: that process is still RUNNING and out of this probe's reach; it can write the "
+    "target again, including after the restore has been verified."
 )
 # pytest's `ExitCode.TESTS_FAILED`. The ONLY pytest rc that means "tests ran and some
 # failed"; 2/3/4/5 are interrupt / internal error / usage error / empty collection, and any
@@ -434,6 +453,71 @@ def classify_step3(rc: int, output: str, is_pytest: bool) -> tuple[str, str]:
             "error, or no tests ran)",
         )
     return KILLED, f"the test command exited {rc} (non-pytest heuristic — see --help)"
+
+
+def lock_for(target: Path) -> Path:
+    """The target-scoped mutual-exclusion lock. CANONICAL, not pid-named: two probes must
+    contend for the SAME path. It sits inside the `.mutprobe.` grammar so the existing
+    ignore pattern already covers it."""
+    return target.with_name(f"{target.name}.mutprobe.lock")
+
+
+def acquire_target_lock(target: Path) -> tuple[int | None, str | None]:
+    """Take the exclusive lock for `target`, or explain who has it. Returns (fd, error).
+
+    WHY THIS EXISTS (merge-gate lens 1, empirically reproduced — 5 of 6 simultaneous
+    same-target launches misbehaved). Both point-in-time `git status` gates are exactly
+    that: point-in-time. Two probes launched together clear both within milliseconds,
+    snapshot the same original, and both publish. The loser's step 3 then runs against the
+    file the WINNER has already restored, sees green, and reports `PROBE FAILED: test stayed
+    green` for a range that is in fact pinned — with the tree git-clean, no sidecar left and
+    no warning. A wrong verdict delivered silently is the worst output this tool can
+    produce, so same-target concurrency is now excluded rather than detected.
+
+    MECHANISM: `fcntl.flock(LOCK_EX | LOCK_NB)`, the house pattern (`lib.sh`'s
+    `hook_checkpoint_generation`, `subagent-validate.sh`, `loop-gc.sh`). REFUSE, never wait
+    — matching the tool's posture everywhere else, and a probe that blocked would silently
+    serialize behind a suite that might run for minutes.
+
+    CRASH CLEANUP, stated because it is the part people get wrong: an flock lives on the
+    OPEN FILE DESCRIPTION, so the kernel drops it when the holder dies — SIGKILL, crash and
+    power loss included. There is therefore NO stale-lock problem to clean up and no
+    dead-pid rule needed here (unlike the sidecar, whose bytes outlive their process). The
+    lock FILE is deliberately never unlinked: removing it is the classic flock race, where
+    a second probe creates a fresh inode and locks that while the first still holds the old
+    one, and both believe they are exclusive. So the file persists — empty but for a
+    diagnostic pid line, gitignored, one per probed target. That litter is the price of
+    correctness and is cheaper than the race.
+
+    The fd is intentionally kept open for the rest of the process's life; exit releases it.
+    `subprocess` defaults to `close_fds=True`, so the `--test` command never inherits it —
+    load-bearing, or a long-lived grandchild could hold the lock after this probe exits.
+    """
+    path = lock_for(target)
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as e:
+        return None, f"cannot open the probe lock {path} ({e})"
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        holder = ""
+        try:
+            holder = os.pread(fd, 64, 0).decode("ascii", "replace").strip()
+        except OSError:
+            pass
+        os.close(fd)
+        return None, (
+            f"another mutation probe is already running against {target}"
+            + (f" ({holder})" if holder else "")
+            + ". Two probes on one file cannot both be right: the second would measure the "
+            "first's mutation and restore, and could report a pinned range as unpinned. "
+            f"Refusing rather than waiting. {target} was NOT touched."
+        )
+    with contextlib.suppress(OSError):
+        os.ftruncate(fd, 0)
+        os.write(fd, f"pid={os.getpid()}\n".encode())
+    return fd, None
 
 
 def sidecar_for(target: Path, pid: int) -> Path:
@@ -842,15 +926,17 @@ def reconcile_sidecars(directory: Path, self_pid: int, repo_root: Path) -> list[
         kind = m.group("kind")
         if kind in ("tmp", "new"):
             what = "sidecar" if kind == "tmp" else "mutation"
-            try:
-                sc.unlink()
+            release_error = _release(sc)
+            if release_error is not None:
+                msgs.append(
+                    f"RECONCILE SKIPPED: cannot remove fragment {sc.name} ({release_error})"
+                )
+            else:
                 msgs.append(
                     f"RECONCILED: removed unpublished {what} fragment {sc.name} (pid {pid} "
                     f"dead). A fragment proves that write never landed; whether "
                     f"{original.name} itself needs restoring is decided by its sidecar."
                 )
-            except OSError as e:
-                msgs.append(f"RECONCILE SKIPPED: cannot remove fragment {sc.name} ({e})")
             continue
         try:
             blob = sc.read_bytes()
@@ -873,14 +959,16 @@ def reconcile_sidecars(directory: Path, self_pid: int, repo_root: Path) -> list[
         except OSError:
             current = None
         if current == saved:
-            try:
-                sc.unlink()
+            release_error = _release(sc)
+            if release_error is not None:
+                msgs.append(
+                    f"RECONCILE SKIPPED: cannot remove stale sidecar {sc.name} ({release_error})"
+                )
+            else:
                 msgs.append(
                     f"RECONCILED: removed stale sidecar {sc.name} (pid {pid} dead, "
                     f"{original.name} already matches it)"
                 )
-            except OSError as e:
-                msgs.append(f"RECONCILE SKIPPED: cannot remove stale sidecar {sc.name} ({e})")
             continue
         # APPLICABILITY. Undoing a mutation is only safe while that mutation is what is
         # actually on disk; anything else means the file moved on after the crash.
@@ -922,13 +1010,15 @@ def reconcile_sidecars(directory: Path, self_pid: int, repo_root: Path) -> list[
                 f"({recovered.error}); the sidecar is RETAINED"
             )
             continue
-        try:
-            sc.unlink()
-        except OSError as e:
+        # `_release` is the ONE definition of "released" in this tool: an already-gone
+        # sidecar counts as released. Reporting PARTIAL for a file that is correctly absent
+        # sent the operator hunting for something to delete that was not there.
+        release_error = _release(sc)
+        if release_error is not None:
             msgs.append(
                 f"RECONCILE PARTIAL: {original.name} was restored from {sc.name} but the "
-                f"sidecar could not be removed ({e}) — delete it by hand, or the NEXT run "
-                "will consider replaying it."
+                f"sidecar could not be removed ({release_error}) — delete it by hand, or the "
+                "NEXT run will consider replaying it."
             )
             continue
         msgs.append(
@@ -995,7 +1085,7 @@ def restore(
     if current == original:
         # Already the original (a concurrent writer restored it, or the mutation never
         # landed). Nothing to WRITE — but the git verification below still applies.
-        return _verify_and_release(target, sidecar, cwd)
+        return _verify_and_release(target, sidecar, cwd, original)
     if current != written:
         return RestoreOutcome(
             NOT_RESTORED,
@@ -1023,10 +1113,21 @@ def restore(
             "it would have left a torn file.",
             file=sys.stderr,
         )
-    return _verify_and_release(target, sidecar, cwd)
+    return _verify_and_release(target, sidecar, cwd, original)
 
 
-def _verify_and_release(target: Path, sidecar: Path, cwd: Path) -> RestoreOutcome:
+def _bytes_match(path: Path, expected: bytes) -> bool:
+    """Does `path` hold exactly `expected`? False if it cannot be read — the caller uses
+    this only to SHARPEN a diagnosis, never to soften a verdict."""
+    try:
+        return path.read_bytes() == expected
+    except OSError:
+        return False
+
+
+def _verify_and_release(
+    target: Path, sidecar: Path, cwd: Path, original: bytes | None = None
+) -> RestoreOutcome:
     """The shared restore tail: git must agree the file is back, and only then is the
     sidecar released. Reached from BOTH success paths — the one that rewrote the bytes and
     the one that found them already correct.
@@ -1040,10 +1141,24 @@ def _verify_and_release(target: Path, sidecar: Path, cwd: Path) -> RestoreOutcom
     """
     diff = run(["git", "diff", "--quiet", "--", str(target)], cwd)
     if diff.rc != 0:
+        # `git diff --quiet` compares the WORKTREE against the INDEX, so a concurrent
+        # `git add` of the mutated file makes it fail even though the worktree is exactly
+        # right. Blaming the worktree there was simply wrong; discriminate with the bytes we
+        # actually restored, and name the side that really differs. Still a FAILURE either
+        # way (a staged mutation is a real problem the operator must clear) — only the
+        # diagnosis changes.
+        worktree_ok = original is not None and _bytes_match(target, original)
+        detail = (
+            "the WORKTREE holds the original bytes exactly, so it is the INDEX that "
+            "differs — something staged the mutated file mid-probe (a concurrent "
+            f"`git add`). Unstage it with `git restore --staged -- {target}`"
+            if worktree_ok
+            else "the working tree still differs"
+        )
         return RestoreOutcome(
             NOT_RESTORED,
-            f"RESTORE FAILED: `git diff --quiet -- {target}` exited {diff.rc} after restoring — "
-            f"the working tree still differs. The original is preserved at {sidecar}.",
+            f"RESTORE FAILED: `git diff --quiet -- {target}` exited {diff.rc} after restoring "
+            f"— {detail}. The original is preserved at {sidecar}.",
         )
     release_error = _release(sidecar)
     if release_error is not None:
@@ -1081,6 +1196,30 @@ def _unlink(path: Path) -> None:
 
 
 # --- the probe ---------------------------------------------------------------------------
+
+
+def _interference(target: Path, written: bytes) -> str | None:
+    """Did anything other than this probe write the target during step 3? Returns the reason
+    or None.
+
+    The cheap half of the same-target-concurrency fix. When a second probe (or an editor, or
+    the test itself) restores or rewrites the file mid-run, step 3 measures bytes this probe
+    did not put there — and the most dangerous shape is the benign-looking one: the file is
+    back to its ORIGINAL, the suite passes, and the run would otherwise report `PROBE FAILED:
+    test stayed green` for a range that is genuinely pinned.
+    """
+    try:
+        on_disk = target.read_bytes()
+    except OSError as e:
+        return f"{target} could not be re-read after the test ran ({e})"
+    if on_disk != written:
+        return (
+            "the target no longer held this probe's mutation when the test finished — "
+            "something else wrote it (a concurrent probe, an editor, or the test command "
+            "itself), so this run measured a different file and its result cannot be "
+            "attributed to the removed lines"
+        )
+    return None
 
 
 def _install_signal_handlers() -> None:
@@ -1188,6 +1327,24 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
     if witness_refusal is not None:
         return _refuse(witness_refusal)
 
+    kind = kind_for(target)
+    if kind is None:
+        return _refuse(
+            f"{target.suffix or '(no extension)'} is not a probeable extension "
+            f"({', '.join(sorted(KINDS))}) — the comment prefix and the syntax gate are "
+            "language-specific."
+        )
+
+    # The lock comes BEFORE the dirty gate, deliberately (see `acquire_target_lock`). A
+    # second probe arriving mid-run would otherwise see the FIRST probe's mutation and be
+    # refused as "dirty" — true but actively misleading, sending the operator to look for
+    # uncommitted work that does not exist. Placing it after the cheap extension check keeps
+    # lock files from appearing next to files this tool would never probe anyway. The fd is
+    # held for the rest of the process; exit releases the lock.
+    _lock_fd, lock_error = acquire_target_lock(target)
+    if lock_error is not None:
+        return _refuse(lock_error)
+
     status = run(["git", "status", "--porcelain", "--", str(target)], repo_root)
     if status.rc != 0:
         return _refuse(
@@ -1199,14 +1356,6 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
             f"{target} is dirty ({status.out.splitlines()[0].strip()}) — refusing to mutate a "
             "file with uncommitted changes. The file was NOT touched. Commit or stash your "
             "own work first (this tool never runs git stash / git checkout on your behalf)."
-        )
-
-    kind = kind_for(target)
-    if kind is None:
-        return _refuse(
-            f"{target.suffix or '(no extension)'} is not a probeable extension "
-            f"({', '.join(sorted(KINDS))}) — the comment prefix and the syntax gate are "
-            "language-specific."
         )
 
     # A CHEAP pre-validation, so an obviously bad range refuses without paying for a full
@@ -1330,6 +1479,13 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
             res = run_shell(test_cmd, repo_root, timeout)
             mutation_output = res.combined
             verdict, reason = classify_step3(res.rc, mutation_output, looks_like_pytest(test_cmd))
+            # SECOND GUARD (merge-gate lens 1). Independent of the lock and deliberately
+            # kept alongside it: a verdict is only about the removed lines if the removed
+            # lines were still gone when the test finished. Anything else on disk means the
+            # run measured a different file than the one this probe mutated.
+            interference = _interference(target, written)
+            if interference is not None:
+                verdict, reason = INDETERMINATE, interference
     except TerminatedError as e:
         signal_error = str(e)
     finally:

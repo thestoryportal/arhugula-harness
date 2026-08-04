@@ -260,10 +260,17 @@ def _no_stray_sidecars_in_the_real_repo():
     Scan for them once per session (scoped to `tools/`, where every probeable file this
     suite could plausibly reach lives — a repo-wide glob would walk `.venv`)."""
     yield
-    # `*.mutprobe.*` covers BOTH names — the published `.bak` and the unpublished `.tmp`
+    # `*.mutprobe.*` covers ALL THREE names — the published `.bak`, the sidecar-staging
+    # `.tmp`, and the mutation/restore-staging `.new`
     # staging fragment (codex round-3 P1).
-    assert not list((REAL_REPO / "tools").rglob("*.mutprobe.*"))
-    assert not list(REAL_REPO.glob("*.mutprobe.*"))
+    # `.lock` files are PERMANENT BY DESIGN (never unlinked — removing a held flock's file
+    # is the classic re-create race). Everything else must be gone.
+    leftover = [
+        f
+        for f in [*(REAL_REPO / "tools").rglob("*.mutprobe.*"), *REAL_REPO.glob("*.mutprobe.*")]
+        if f.suffix != ".lock"
+    ]
+    assert leftover == [], leftover
 
 
 def run_probe(
@@ -681,6 +688,135 @@ def test_p1a_a_readonly_baseline_still_probes_normally(repo):
     assert "TEST COMMAND modified" not in res.stderr
 
 
+@pytest.mark.parametrize("attempt", range(3))
+def test_primary_simultaneous_probes_of_one_target_cannot_both_proceed(repo, attempt):
+    """merge-gate lens 1, the REPRODUCED defect (5 of 6 pre-fix launches misbehaved).
+
+    Two probes of the SAME file launched together used to clear both point-in-time git gates
+    within milliseconds, both snapshot the same original and both publish. The loser's step 3
+    then ran against the file the winner had already RESTORED, saw green, and reported
+    `PROBE FAILED: test stayed green` for a genuinely pinned range — tree clean, no sidecar,
+    no warning. Exactly one probe may now proceed; the other is refused at the lock.
+
+    The baseline is slowed so the second launch reliably arrives while the first still holds
+    the lock — otherwise the two could legitimately serialize and the race would not be
+    exercised at all.
+    """
+    (repo / "slow_real.sh").write_text(
+        f"#!/usr/bin/env bash\nsleep 2\n{pytest_cmd('test_real.py')}\n", encoding="utf-8"
+    )
+    argv = [
+        sys.executable, str(PROBE),
+        "--file", "src.py", "--lines", PINNED, "--test", "bash slow_real.sh",
+    ]  # fmt: skip
+    launched = [
+        subprocess.Popen(argv, cwd=str(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True)
+        for _ in range(2)
+    ]  # fmt: skip
+    outputs = [pr.communicate(timeout=180) for pr in launched]
+    codes = [pr.returncode for pr in launched]
+
+    assert 1 not in codes, (
+        "a probe reported PROBE FAILED while another was mutating the same file — the "
+        f"silent false verdict this lock exists to prevent (codes={codes})"
+    )
+    assert sorted(codes) == [0, 2], f"expected one winner and one lock-refusal, got {codes}"
+    refused = outputs[codes.index(2)][1]
+    assert "another mutation probe is already running" in refused, refused
+    assert (repo / "src.py").read_text(encoding="utf-8") == SRC
+    assert sidecars(repo) == []
+    assert git(repo, "status", "--porcelain", "--", "src.py").stdout == ""
+
+
+def test_primary_the_lock_is_target_scoped_not_global(repo):
+    """Different files must still probe concurrently — the lock excludes same-target runs,
+    not parallelism."""
+    (repo / "slow_real.sh").write_text(
+        f"#!/usr/bin/env bash\nsleep 2\n{pytest_cmd('test_real.py')}\n", encoding="utf-8"
+    )
+    (repo / "slow_consts.sh").write_text(
+        f"#!/usr/bin/env bash\nsleep 2\n{pytest_cmd('test_consts.py')}\n", encoding="utf-8"
+    )
+
+    def launch(target: str, lines: str, script: str):
+        return subprocess.Popen(
+            [sys.executable, str(PROBE), "--file", target, "--lines", lines,
+             "--test", f"bash {script}"],
+            cwd=str(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )  # fmt: skip
+
+    a = launch("src.py", PINNED, "slow_real.sh")
+    b = launch("consts.py", "1", "slow_consts.sh")
+    out_a, out_b = a.communicate(timeout=180), b.communicate(timeout=180)
+    assert a.returncode == 0, out_a
+    assert b.returncode == 0, out_b
+
+
+def test_primary_a_stale_lock_file_does_not_block_a_later_probe(repo):
+    """An flock dies with its holder, so a lock FILE left by a SIGKILLed probe is inert.
+    (This is why there is no dead-pid rule for the lock, unlike the sidecar.)"""
+    stale = repo / "src.py.mutprobe.lock"
+    stale.write_text("pid=999999\n", encoding="utf-8")
+    res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_real.py"))
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert stale.exists(), "the lock file is never unlinked (re-create race)"
+
+
+def test_second_guard_interference_downgrades_a_green_step3_to_indeterminate(repo):
+    """The cheap half, independent of the lock: if the target no longer holds THIS probe's
+    mutation when the test finishes, the run measured a different file. The dangerous shape
+    is exactly this one — bytes back to the original, suite green, which would otherwise be
+    reported as `PROBE FAILED` for a pinned range."""
+    (repo / "src.py.orig").write_text(SRC, encoding="utf-8")
+    cmd = counting_script(repo, "restorer.sh", "cat src.py.orig > src.py\nexit 0")
+    res = run_probe(repo, "src.py", PINNED, cmd)
+    assert res.returncode == 2, res.stdout + res.stderr
+    assert "PROBE FAILED" not in res.stdout, "a false unpinned verdict escaped the guard"
+    assert "no longer held this probe's mutation" in res.stderr
+    assert (repo / "src.py").read_text(encoding="utf-8") == SRC
+
+
+def test_secondary_c2_an_already_gone_sidecar_is_not_reported_as_partial(repo):
+    """`_release` is the one definition of "released": already-gone counts. The reconcile
+    used to call that a RECONCILE PARTIAL and send the operator hunting for a file that was
+    correctly absent."""
+    assert mp._release(repo / "nothing-here.mutprobe.1.bak") is None
+    source = PROBE.read_text(encoding="utf-8")
+    fn_start = source.index("def reconcile_sidecars(")
+    fn_end = source.index("\ndef ", fn_start + 1)
+    assert "sc.unlink()" not in source[fn_start:fn_end], (
+        "reconcile removes sidecars directly instead of through _release, so "
+        "already-gone is reported as a failure again"
+    )
+
+
+def test_secondary_f_a_staged_mutation_names_the_index_not_the_worktree(repo):
+    """`git diff --quiet` compares worktree-vs-index, so a concurrent `git add` of the
+    mutated file fails it even though the worktree is exactly right. Still a failure — a
+    staged mutation is a real problem — but the diagnosis must name the INDEX."""
+    cmd = counting_script(repo, "stager.sh", "git add src.py\nexit 1")
+    res = run_probe(repo, "src.py", PINNED, cmd)
+    assert res.returncode == 3, res.stdout + res.stderr
+    assert "RESTORE FAILED" in res.stderr
+    assert "it is the INDEX that differs" in res.stderr
+    assert "the working tree still differs" not in res.stderr
+    # The worktree really is correct — which is what makes the old message wrong.
+    assert (repo / "src.py").read_text(encoding="utf-8") == SRC
+
+
+def test_secondary_d_the_abandoned_process_note_is_honest():
+    """Doc-only: what is abandoned is a LIVE unreachable process that can still write the
+    target after the final verify — not merely a stdout tail."""
+    assert "still RUNNING" in mp.ABANDONED_OUTPUT_NOTE
+    # Collapse the wrapping — these are prose assertions, and the docstring is hard-wrapped.
+    docstring = " ".join(PROBE.read_text(encoding="utf-8").split('"""')[1].split())
+    assert "AFTER the final restore verification has passed" in docstring
+    # gate 0 must no longer imply the git gates alone make simultaneous probes safe.
+    assert "F.mutprobe.lock" in docstring
+    assert "reproduced 5 times in 6" in docstring
+
+
 def test_ac5_already_red_test_is_refused_with_a_distinct_message(repo):
     before = (repo / "src.py").read_bytes()
     res = run_probe(repo, "src.py", PINNED, pytest_cmd("test_red.py"))
@@ -944,13 +1080,23 @@ def test_p2_no_wait_in_the_tool_is_unbounded():
     """Structural witness: every `communicate`/`wait` on the test child carries a timeout,
     and `os.getpgid` is never CALLED. Nothing may block while a mutation is on disk."""
     tree = ast.parse(PROBE.read_text(encoding="utf-8"))
+
+    def bounded(call: ast.Call) -> bool:
+        """A `timeout=` kwarg only counts if it is not the literal None — `timeout=None`
+        is the API's own spelling of "wait forever" and would launder this witness
+        (merge-gate lens 3, slip 3)."""
+        for kw in call.keywords:
+            if kw.arg == "timeout":
+                return not (isinstance(kw.value, ast.Constant) and kw.value.value is None)
+        return False
+
     unbounded = [
         call.func.attr
         for call in ast.walk(tree)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Attribute)
         and call.func.attr in {"communicate", "wait"}
-        and not any(kw.arg == "timeout" for kw in call.keywords)
+        and not bounded(call)
     ]
     assert unbounded == [], f"unbounded wait(s) on the test child: {unbounded}"
 
@@ -962,6 +1108,61 @@ def test_p2_no_wait_in_the_tool_is_unbounded():
         and call.func.attr == "getpgid"
     ]
     assert getpgid_calls == [], "the process group must be signalled by the pgid we know"
+
+
+def test_slip1_the_published_sidecar_records_the_real_witnesses(repo):
+    """merge-gate lens 3 slip 1: the tool's own sidecar AUTHORING was never round-tripped.
+
+    Every reconcile test PLANTS its sidecar, so the consumer side was thoroughly witnessed
+    while the producer side was not: making `publish_sidecar` record the ORIGINAL as the
+    mutation witness, or a bogus index oid, passed the whole suite — and every real SIGKILL
+    recovery would then refuse, silently killing the crash recovery that rounds 5-7 exist
+    for. This captures the LIVE sidecar from inside step 3 and checks what it actually says.
+    """
+    cmd = counting_script(
+        repo,
+        "grab.sh",
+        "command cp -f src.py.mutprobe.*.bak captured.bak\n" + pytest_cmd("test_real.py"),
+    )
+    res = run_probe(repo, "src.py", PINNED, cmd)
+    assert res.returncode == 0, res.stdout + res.stderr
+
+    captured = repo / "captured.bak"
+    assert captured.is_file(), "no sidecar existed on disk during step 3"
+    sidecar, err = mp.parse_sidecar(captured.read_bytes())
+    assert err is None, err
+    assert sidecar is not None
+    # The payload is the pre-mutation source...
+    assert sidecar.original == SRC.encode()
+    # ...the applicability witness is the MUTATION, not the original (mutation M28)...
+    assert sidecar.mutated_sha256 == hashlib.sha256(MUTATED_FIXTURE).hexdigest()
+    assert sidecar.mutated_sha256 != hashlib.sha256(SRC.encode()).hexdigest()
+    assert sidecar.mutated_len == len(MUTATED_FIXTURE)
+    # ...and the identity witness is git's real index oid (mutation M29).
+    assert sidecar.index_oid == git(repo, "ls-files", "-s", "--", "src.py").stdout.split()[1]
+
+
+def test_slip2_the_atomic_publish_really_renames(tmp_path, monkeypatch):
+    """merge-gate lens 3 slip 2: the AST witness alone is launderable — park the literal
+    `os.replace` under an unreachable branch and write through `_write_private`, and all
+    four structural facts still hold while nothing is atomic. This anchors the rename on
+    the LIVE path behaviourally; keep BOTH."""
+    calls: list[tuple[str, str]] = []
+
+    def boom(src, dst):
+        calls.append((str(src), str(dst)))
+        raise OSError(13, "permission denied")
+
+    monkeypatch.setattr(mp.os, "replace", boom)
+    dest = tmp_path / "dest.txt"
+    dest.write_bytes(b"old")
+    staging = tmp_path / "dest.txt.mutprobe.1.new"
+
+    err = mp._atomic_publish(staging, dest, b"new", None)
+    assert err is not None and "cannot publish" in err, err
+    assert calls == [(str(staging), str(dest))], "os.replace was never on the live path"
+    assert dest.read_bytes() == b"old", "content changed without the rename succeeding"
+    assert not staging.exists(), "the staging file must be cleaned up on failure"
 
 
 def test_p1_sidecar_round_trips_through_its_integrity_header():
