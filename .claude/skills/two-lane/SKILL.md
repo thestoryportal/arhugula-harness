@@ -67,8 +67,11 @@ onto the refreshed `origin/main` (fresh branch off refreshed main + re-apply, pe
 section below — this is unconditional, not just for visible conflicts: lane A's merge-gate run
 appended the shared `.harness/merge-gate-log.md`, so stale lane B's own log append would
 conflict at the table tail every time). Then lane B restarts the whole `ship-pr` sequence on
-the replayed branch: a **replacement PR** (the original PR is attached to the abandoned branch
-and never merges — **close the original PR first** with a comment pointing at the replacement,
+the replayed branch: a **replacement PR** — where an original PR exists at all (a lane B that
+had not yet reached ship-pr's open-PR phase has none, and these close/replacement steps then
+reduce to simply opening the PR on the replayed branch); the original PR is attached to the
+abandoned branch and never merges — **close the original PR first** with a comment pointing at
+the replacement,
 and route its stale REMOTE branch to the operator via the tracked prune row — which carries
 BOTH the local and the remote deletion commands — because ship-pr's stale-branch flow requires
 a MERGED PR with a merge commit and structurally cannot reconcile a closed unmerged one; so

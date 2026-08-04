@@ -88,7 +88,9 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the replay-then-full-ship-pr rule for 
 needle "$CLAUDE_SKILL" "claude two-lane" "the wait-for-refresh-CI-green precondition" \
   'AND its `main`-push CI has concluded green'
 needle "$CLAUDE_SKILL" "claude two-lane" "the replacement-PR requirement" \
-  '**replacement PR** (the original PR is attached to the abandoned branch'
+  '**replacement PR** — where an original PR exists at all'
+needle "$CLAUDE_SKILL" "claude two-lane" "the no-original-PR reduction case" \
+  'reduce to simply opening the PR on the replayed branch'
 needle "$CLAUDE_SKILL" "claude two-lane" "the close-the-original-PR-first rule" \
   '**close the original PR first**'
 needle "$CLAUDE_SKILL" "claude two-lane" "the wait-for-the-REFRESH (not the content PR) rule" \
@@ -167,6 +169,8 @@ needle "$CODEX_SKILL" "codex-native two-lane" "the tracked durable prune reminde
   '**TRACKED `.harness/two-lane-pending-prunes.md` row shipped in the replacement PR**'
 needle "$CODEX_SKILL" "codex-native two-lane" "the loop-ledger-is-not-durable fact" \
   'it is an in-run convenience, never the durable home'
+needle "$CODEX_SKILL" "codex-native two-lane" "the per-lane loop-mode activation rule" \
+  '**activate loop mode separately in each lane**'
 needle "$CODEX_SKILL" "codex-native two-lane" "the loop-marker cross-lane scoping warning" \
   'never stop loop mode while the other lane is mid-run'
 needle "$CLAUDE_SKILL" "claude two-lane" "the tracked prune ledger rule (canonical)" \
