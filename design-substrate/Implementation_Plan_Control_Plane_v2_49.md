@@ -34,9 +34,15 @@ this plan has no new edge and its dependency graph remains unchanged and acyclic
    ORCHESTRATOR_WORKERS worker, and ORCHESTRATOR-own carrier. Every PARALLELIZATION and
    ORCHESTRATOR_WORKERS case includes an empty-key location alongside a keyed sibling in both
    carrier orders; neither empty-key case may suppress the keyed sibling. Both ORCHESTRATOR-own
-   cases are constructed-snapshot tests, not e2e tests.
+   cases are constructed-snapshot tests, not e2e tests. The two ORCHESTRATOR-own cells witness
+   construction and classification semantics only — the shipped orchestrator consult is
+   truthiness-gated on the captured key, so those cells cannot discriminate the §1.3
+   resolver-boundary guard; §1.3 discrimination binds at the LINEAR and branch-scan cells (whose
+   consults are ungated), and clause 5's mutation claim is carried there, never by these two cells.
 2. Prove scalar membership removal: the uniform-fallback candidate computation excludes `""`, the
-   b80 assertion flips to `True`, and a direct caller-supplied
+   b80 assertion (`test_map_addressed_keyed_abort_activates_alongside_an_unrelated_keyless_pause`'s
+   final `is False` assert in `test_workflow_driver_effect_fence_tree_wide_abort_b80.py`; its
+   sole-keyless and two-keyed sibling asserts stay `False`) flips to `True`, and a direct caller-supplied
    `effect_fence_uniform_fallback_eligible_key=""` produces no directive.
 3. Prove map construction, compatibility, and copy semantics (PD-8): construction with
    `{"": …}` rejects; item assignment through the stored mapping (including
