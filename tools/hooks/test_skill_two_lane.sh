@@ -81,6 +81,8 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the one-lane-holds-the-fixed-point rul
   '**One lane holds the `ship-pr` fixed point at a time.**'
 needle "$CLAUDE_SKILL" "claude two-lane" "the merge-gate-is-not-a-build-half-step rule" \
   '**`merge-gate` and the'
+needle "$CLAUDE_SKILL" "claude two-lane" "the replay-before-gate rule for lane B" \
+  "**Lane B's merge sequence starts with a replay, not a gate.**"
 needle "$CLAUDE_SKILL" "claude two-lane" "the wait-for-the-REFRESH (not the content PR) rule" \
   "terminating refresh PR has merged* — not merely lane A's content"
 needle "$CLAUDE_SKILL" "claude two-lane" "the explicit landing order" \
