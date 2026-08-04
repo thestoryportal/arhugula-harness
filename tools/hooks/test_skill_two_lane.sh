@@ -157,8 +157,10 @@ needle "$CODEX_SKILL" "codex-native two-lane" "the fresh-ledger full-sequence re
   '**NEW loop, not a patched one**'
 needle "$CODEX_SKILL" "codex-native two-lane" "the complete-gate-sequence-from-preflight rule" \
   '**complete ordered gate sequence from `preflight` onward**'
-needle "$CODEX_SKILL" "codex-native two-lane" "the uncommitted-reapply-after-bootstrap rule" \
-  '**bootstrapping the loop FIRST and reapplying the work as UNCOMMITTED changes**'
+needle "$CODEX_SKILL" "codex-native two-lane" "the two-stage uncommitted-reapply rule" \
+  '**bootstrapping the loop FIRST and reapplying the work as UNCOMMITTED changes in TWO stages**'
+needle "$CODEX_SKILL" "codex-native two-lane" "the tests-first honest-red replay order" \
+  'replay the TESTS first so `red` records an honest failure'
 needle "$CODEX_SKILL" "codex-native two-lane" "the abandoned-branch-outside-loop-state disposition" \
   'The abandoned original branch then sits OUTSIDE the loop state'
 needle "$CODEX_SKILL" "codex-native two-lane" "the tracked durable prune reminder" \
@@ -172,7 +174,11 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the tracked prune ledger rule (canonic
 needle "$CLAUDE_SKILL" "claude two-lane" "the tracked prune ledger file (canonical)" \
   '`.harness/two-lane-pending-prunes.md` (create the file on first use; the operator deletes'
 needle "$CLAUDE_SKILL" "claude two-lane" "the pinned-base lane setup" \
-  'base=$(git rev-parse origin/main)   # pin ONCE'
+  'git rev-parse origin/main           # pin ONCE'
+needle "$CLAUDE_SKILL" "claude two-lane" "the literal-SHA-not-shell-variable rule" \
+  'Use the LITERAL SHA in both adds, not a shell variable'
+needle "$CLAUDE_SKILL" "claude two-lane" "the closed-PR-cannot-use-ship-pr-cleanup fact" \
+  'structurally cannot reconcile a closed unmerged one'
 needle "$CODEX_SKILL" "codex-native two-lane" "the defer-to-canonical contract" \
   'full workflow and the source of truth'
 needle "$CODEX_SKILL" "codex-native two-lane" "the translations-only limit" \

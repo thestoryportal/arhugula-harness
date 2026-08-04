@@ -26,10 +26,14 @@ worktree creation and guarded removal (`tools/hooks/permission-guard.sh:179` and
 
 ```bash
 git fetch origin
-base=$(git rev-parse origin/main)   # pin ONCE — a concurrent session's fetch can advance
-git worktree add <repo-root>/.codex-worktrees/<slug-a> -b <branch-a> "$base"
-git worktree add <repo-root>/.codex-worktrees/<slug-b> -b <branch-b> "$base"
+git rev-parse origin/main           # pin ONCE — note the SHA it prints
+git worktree add <repo-root>/.codex-worktrees/<slug-a> -b <branch-a> <that-literal-sha>
+git worktree add <repo-root>/.codex-worktrees/<slug-b> -b <branch-b> <that-literal-sha>
 ```
+
+Use the LITERAL SHA in both adds, not a shell variable: in loop mode the permission guard
+rejects multiline commands and `$var`/command-substitution forms, and separate Bash calls do
+not share shell locals — a `"$base"` setup stalls non-interactively even on an admitted path.
 
 Both lanes branch off the **same** pinned base SHA (resolving `origin/main` twice is a TOCTOU:
 any other session's SessionStart hook fetches on every start and can advance the ref between
@@ -65,9 +69,10 @@ appended the shared `.harness/merge-gate-log.md`, so stale lane B's own log appe
 conflict at the table tail every time). Then lane B restarts the whole `ship-pr` sequence on
 the replayed branch: a **replacement PR** (the original PR is attached to the abandoned branch
 and never merges — **close the original PR first** with a comment pointing at the replacement,
-and reconcile its stale remote branch per ship-pr's stale-branch flow, operator-handed where
-deletion is privileged, so the replacement doesn't merge around an open ghost in the in-flight
-inventory), out-of-family review of the **current** diff (conflict-driven redone edits
+and route its stale REMOTE branch to the operator via the tracked prune row — which carries
+BOTH the local and the remote deletion commands — because ship-pr's stale-branch flow requires
+a MERGED PR with a merge commit and structurally cannot reconcile a closed unmerged one; so
+the replacement doesn't merge around an open ghost in the in-flight inventory), out-of-family review of the **current** diff (conflict-driven redone edits
 were never covered by the pre-replay review), `merge-gate`, and final-head CI. Gate approvals,
 reviews, and CI are branch-and-HEAD-bound evidence; recording any of them before the replay
 would attest to a branch that never merges.
