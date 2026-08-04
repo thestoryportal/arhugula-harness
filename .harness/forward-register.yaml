@@ -59,13 +59,13 @@
 
 snapshot:
   total: 107
-  open: 0
-  design_substrate_gated: 1
+  open: 1
+  design_substrate_gated: 0
   registered_finding: 18
   operator_gated: 0
   held: 1
   closed: 87
-  identity_digest: 02cfe1685214426e
+  identity_digest: d902f930d8b8b114
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -3631,9 +3631,9 @@ items:
   title: No channel REFUSES an operator resolution addressed to an EMPTY effect-fence key --
     the response map and the scalar uniform fallback DROP it on all three carriers, and the
     level-local abort scans MIS-APPLY it to a keyed sibling
-  status: design_substrate_gated
+  status: open
   pr: '#pending'
-  summary: 'ID NOTE: this row is B-107, NOT B-105 -- B-105 was minted and WITHDRAWN at PR #1172
+  summary: 'RATIFIED 2026-08-03: Reading A-hybrid is selected. The design-substrate gate is discharged; B-107 remains OPEN only for the separately owed U-CP-64 implementation, b80 update, eight-cell witness grid, and PD-8 probes. Scalar membership removes empty keys; the map refuses them at ordinary construction via a validated immutable copy; resolver-boundary removal makes validation-bypassed empty keys inert. B-101(a) is NOT jointly discharged -- this map-field change pays the same compatibility-cost category but does not add B-101(a)''s closed variant discriminator; B-101 remains separately closed under (b)-PLUS with its promotion trigger unchanged, and the rows remain separate. ID NOTE: this row is B-107, NOT B-105 -- B-105 was minted and WITHDRAWN at PR #1172
     (the B-103 premise-falsified rework; see .harness/roadmap_status.md and
     .harness/merge-gate-log.md row #1172), -- reusing it would make register lookup and the historical record resolve to two different issues; caught at out-of-family review round 5 [P1]) and NOT B-106 (minted CONCURRENTLY on main at commit d9f68b02 for the embedder-path event-loop exposure, while this leg was in flight; renumbered at the merge rather than contested, since that row landed first).
     SURFACED at the B-100 SPEC leg by out-of-family review rounds 3 and 8, 2026-07-31, and REPORTED
@@ -3673,7 +3673,7 @@ items:
     exposure is type-level only. IT IS NOT A DEFECT IN THE B-100 LEG: read-side projection scoping is
     the whole of what disposition (a) authorizes, and a projection can constrain neither a scalar
     field nor a map the caller populates independently of it.'
-  close_out: 'STATUS TRANSIT 2026-08-01, stated so the snapshot bump is legible: registered_finding ->
+  close_out: 'RATIFICATION SUPERSEDES the unratified alternative framing below: A-hybrid is applied; no Runtime section 30 delta or fail class, no CXA row, and no council are owed. The four variants, ten source shapes, and seven carriers remain unchanged. Implementation remains separately owed; this row is not closed. The 2026-08-01 transit note''s Class-1-fork-owed wording below was the pre-filing forecast; the actual instrument is the CLASS 2 fork (class_2_fork_b107_empty_fence_key_resolution_refusal.md, PR #1178) whose section 11 ratification authorizes the apply pass; no Class 1 doc exists or is owed. STATUS TRANSIT 2026-08-01, stated so the snapshot bump is legible: registered_finding ->
     DESIGN_SUBSTRATE_GATED (out-of-family review round 4 [P2]). The enum at this file''s header
     defines registered_finding as a gap that opens for BUILD once grounding confirms a genuinely
     buildable slice; this grounding confirms there is NONE -- no existing contract term supports
@@ -3845,7 +3845,7 @@ items:
     this row''s site inventory is UNCHANGED by it and no classification rule moved. Read this row''s own
     close_out, not that leg, before selecting a disposition -- and honour its binding rule: re-derive the
     site set programmatically before choosing.'
-  council: 'CONDITIONAL as of 2026-08-01, REVISED FROM ''no'' (out-of-family review round 4 [P2]).
+  council: 'PROBE-RESOLVED 2026-08-03: no convening is owed under the ratified A-hybrid reading; this supersedes the conditional historical text below. CONDITIONAL as of 2026-08-01, REVISED FROM ''no'' (out-of-family review round 4 [P2]).
     The grounding pass ELEVATES the disposition-(c) fail-loud-vs-INERT question from hypothetical
     (''if a genuine tension appears'') to a NAMED fork decision the filing must put to the operator,
     which trips the workspace nameable-tension discriminator. A DYADIC convening is therefore OWED
