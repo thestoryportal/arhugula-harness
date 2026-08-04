@@ -65,7 +65,7 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the opt-in-only statement" \
 needle "$CLAUDE_SKILL" "claude two-lane" "the ignored lane-root path" \
   'own worktree under `.codex-worktrees/<slug>`'
 needle "$CLAUDE_SKILL" "claude two-lane" "the both-lanes-off-one-main rule" \
-  'Both lanes branch off the **same** fresh `origin/main`'
+  'Both lanes branch off the **same** pinned base SHA'
 needle "$CLAUDE_SKILL" "claude two-lane" "the build-half-is-not-serialized statement" \
   'Nothing about the build half is serialized.'
 
@@ -81,6 +81,8 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the one-lane-holds-the-fixed-point rul
   '**One lane holds the `ship-pr` fixed point at a time.**'
 needle "$CLAUDE_SKILL" "claude two-lane" "the merge-gate-is-not-a-build-half-step rule" \
   '**`merge-gate` and the'
+needle "$CLAUDE_SKILL" "claude two-lane" "the NOT-build-half-steps object (post-wrap)" \
+  'final-head CI check are NOT build-half steps'
 needle "$CLAUDE_SKILL" "claude two-lane" "the replay-then-full-ship-pr rule for lane B" \
   "**Lane B's merge sequence starts with a replay, then the FULL ship-pr flow — not a jump to the"
 needle "$CLAUDE_SKILL" "claude two-lane" "the wait-for-refresh-CI-green precondition" \
@@ -101,6 +103,8 @@ needle "$CLAUDE_SKILL" "claude two-lane" "why interleaving breaks (accumulated d
 # a RULE rather than a suggestion, so it must not be separable from it.
 needle "$CLAUDE_SKILL" "claude two-lane" "the abandon-and-rebase conflict rule" \
   "abandon the second lane's branch and"
+needle "$CLAUDE_SKILL" "claude two-lane" "the rebase-onto-refreshed-main object (post-wrap)" \
+  'rebase it on the refreshed main'
 needle "$CLAUDE_SKILL" "claude two-lane" "the no-heuristics / no-rescue clause" \
   'no merge-order heuristics, no cherry-pick rescue'
 needle "$CLAUDE_SKILL" "claude two-lane" "the do-not-reorder-the-lanes prohibition" \
@@ -108,13 +112,13 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the do-not-reorder-the-lanes prohibiti
 needle "$CLAUDE_SKILL" "claude two-lane" 'the guard-denied git-rebase fact' \
   '`git rebase` is hard-denied by the permission guard'
 needle "$CLAUDE_SKILL" "claude two-lane" "the abandon-means-do-not-merge-it clarification" \
-  'Abandoning'
+  'means *not merging it*; leave the branch in place'
 
 # --- 4. Claude carrier: reaping + the deliberate CUTs ------------------------------------
 needle "$CLAUDE_SKILL" "claude two-lane" "the safe-worktree-remove-ONLY reaping rule" \
   '**reaped ONLY via `tools/hooks/safe-worktree-remove.sh`**'
 needle "$CLAUDE_SKILL" "claude two-lane" "the direct-removal-is-denied fact" \
-  'Direct `git worktree remove` is hard-denied'
+  'Direct `git worktree remove` is denied for live-session-registered worktrees'
 needle "$CLAUDE_SKILL" "claude two-lane" "the nonzero-exit-is-a-real-refusal rule" \
   'A nonzero exit is a real refusal, not a retry prompt'
 needle "$CLAUDE_SKILL" "claude two-lane" "the three deliberate CUTs" \
@@ -122,7 +126,7 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the three deliberate CUTs" \
 needle "$CLAUDE_SKILL" "claude two-lane" "the depth-1 / lock-is-ceremony rationale" \
   'structurally depth-1 — a lock is ceremony'
 needle "$CLAUDE_SKILL" "claude two-lane" "the no-conflict-automation rationale" \
-  'automating it would'
+  'encode merge-order heuristics, which is precisely what the rule forbids'
 needle "$CLAUDE_SKILL" "claude two-lane" "the >=3-pilot-runs follow-on trigger" \
   'registered only after ≥3 manual pilot runs surface a named'
 needle "$CLAUDE_SKILL" "claude two-lane" "the named-not-hypothetical qualifier" \
@@ -157,8 +161,18 @@ needle "$CODEX_SKILL" "codex-native two-lane" "the uncommitted-reapply-after-boo
   '**bootstrapping the loop FIRST and reapplying the work as UNCOMMITTED changes**'
 needle "$CODEX_SKILL" "codex-native two-lane" "the abandoned-branch-outside-loop-state disposition" \
   'The abandoned original branch then sits OUTSIDE the loop state'
-needle "$CODEX_SKILL" "codex-native two-lane" "the durable DEFERRED-HIL prune reminder" \
-  '**DEFERRED-HIL ledger row**'
+needle "$CODEX_SKILL" "codex-native two-lane" "the tracked durable prune reminder" \
+  '**TRACKED `.harness/two-lane-pending-prunes.md` row shipped in the replacement PR**'
+needle "$CODEX_SKILL" "codex-native two-lane" "the loop-ledger-is-not-durable fact" \
+  'it is an in-run convenience, never the durable home'
+needle "$CODEX_SKILL" "codex-native two-lane" "the loop-marker cross-lane scoping warning" \
+  'never stop loop mode while the other lane is mid-run'
+needle "$CLAUDE_SKILL" "claude two-lane" "the tracked prune ledger rule (canonical)" \
+  'append the'
+needle "$CLAUDE_SKILL" "claude two-lane" "the tracked prune ledger file (canonical)" \
+  '`.harness/two-lane-pending-prunes.md` (create the file on first use; the operator deletes'
+needle "$CLAUDE_SKILL" "claude two-lane" "the pinned-base lane setup" \
+  'base=$(git rev-parse origin/main)   # pin ONCE'
 needle "$CODEX_SKILL" "codex-native two-lane" "the defer-to-canonical contract" \
   'full workflow and the source of truth'
 needle "$CODEX_SKILL" "codex-native two-lane" "the translations-only limit" \
@@ -174,11 +188,13 @@ needle "$CODEX_SKILL" "codex-native two-lane" "the concurrency-cap-of-2 groundin
 needle "$CODEX_SKILL" "codex-native two-lane" "the fixed-point-to-loop-gates mapping" \
   "maps to this flow's autonomous-loop gates"
 needle "$CODEX_SKILL" "codex-native two-lane" "the serial constraint restated in gate terms" \
-  'lane B records no merge gate until lane A'
+  'lane B records no merge gate until lane A'"'"'s post-merge-refresh gate is recorded'
 needle "$CODEX_SKILL" "codex-native two-lane" "the AskUserQuestion surface translation" \
   'use this runner'"'"'s operator-input surface instead'
 needle "$CODEX_SKILL" "codex-native two-lane" "the guard-approved worktree cleanup" \
   'safe-worktree-remove.sh'
+needle "$CODEX_SKILL" "codex-native two-lane" "the nonzero-is-a-real-refusal rule" \
+  'treat a nonzero exit as a real refusal'
 needle "$CODEX_SKILL" "codex-native two-lane" "the §12-unchanged restatement" \
   '§12 is unchanged by this skill in either runner'
 needle "$CODEX_SKILL" "codex-native two-lane" "the operator-request-only invocation rule" \

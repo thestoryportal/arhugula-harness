@@ -26,11 +26,14 @@ worktree creation and guarded removal (`tools/hooks/permission-guard.sh:179` and
 
 ```bash
 git fetch origin
-git worktree add <repo-root>/.codex-worktrees/<slug-a> -b <branch-a> origin/main
-git worktree add <repo-root>/.codex-worktrees/<slug-b> -b <branch-b> origin/main
+base=$(git rev-parse origin/main)   # pin ONCE — a concurrent session's fetch can advance
+git worktree add <repo-root>/.codex-worktrees/<slug-a> -b <branch-a> "$base"
+git worktree add <repo-root>/.codex-worktrees/<slug-b> -b <branch-b> "$base"
 ```
 
-Both lanes branch off the **same** fresh `origin/main`. Each lane then runs its arc's BUILD
+Both lanes branch off the **same** pinned base SHA (resolving `origin/main` twice is a TOCTOU:
+any other session's SessionStart hook fetches on every start and can advance the ref between
+the two adds). Each lane then runs its arc's BUILD
 half normally — build, test, `just check`, grounding pass, out-of-family review — entirely
 inside its own worktree. Nothing about the build half is serialized. **`merge-gate` and the
 final-head CI check are NOT build-half steps**: the gate runs immediately before merge, appends
@@ -86,6 +89,15 @@ Two guard facts shape how that is actually executed:
   branch and forced `-D` is hard-denied (`tools/hooks/permission-guard.sh:327-328`). Abandoning
   means *not merging it*; leave the branch in place and hand the operator the deletion command
   if it needs to go.
+- **The durable prune reminder is a TRACKED row, shipped in the replacement PR:** append the
+  abandoned branch's name + the operator's exact prune command to
+  `.harness/two-lane-pending-prunes.md` (create the file on first use; the operator deletes
+  the row when pruning). No gitignored, worktree-local surface can carry this reminder — the
+  loop ledger in particular is deleted with the reaped worktree or wiped at the next loop
+  activation, and the merged-refs-only hygiene sweeps cannot see an unmerged branch — so a
+  tracked file in the repo is the only home that survives until the operator acts. Until the
+  row is cleared, it also answers the pre-merge branch-hygiene precondition: the branch is
+  accounted for, not stray.
 
 ## Reaping a lane
 
@@ -95,7 +107,9 @@ A finished lane's worktree is **reaped ONLY via `tools/hooks/safe-worktree-remov
 bash tools/hooks/safe-worktree-remove.sh <repo-root>/.codex-worktrees/<slug>
 ```
 
-Direct `git worktree remove` is hard-denied (`tools/hooks/permission-guard.sh:56-70`) — removal
+Direct `git worktree remove` is denied for live-session-registered worktrees
+(`tools/hooks/permission-guard.sh:56-70`; the deny is session-scoped, with a deliberate
+`HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1` escape hatch — not unconditional) — removal
 and SessionStart lease registration must share one mutex, or the removal orphans a live session.
 A nonzero exit is a real refusal, not a retry prompt: 3 = live session, 4 = local state,
 7 = retained process references (`tools/hooks/safe-worktree-remove.sh:45-57`). Surface it; never
