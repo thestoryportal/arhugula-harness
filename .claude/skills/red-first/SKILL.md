@@ -22,6 +22,12 @@ proceeding on ACs too soft to test blind.
 
 ## Phase 1 — Adversary (a plain Agent-tool subagent)
 
+**Before spawning, check the probe can mutate what the unit pins.** `mutation_probe.py`
+refuses any extension outside its probeable set (`.py` / `.sh` / `.yaml` / `.yml` today — its
+refusal message lists the current set). A unit whose pinned source lives in an unsupported
+file type is a `RED-FIRST: BLOCK: unsupported target type` **at invocation**, before any
+authoring work — not a surprise exit 2 at the completion gate after both phases have run.
+
 Spawn **one plain `Agent`-tool subagent**. Its prompt is self-contained (a subagent sees no
 conversation context) and carries: the unit ID, its acceptance criteria **verbatim from the
 plan**, the repo path, the test-file path to write, and the house test conventions. It does

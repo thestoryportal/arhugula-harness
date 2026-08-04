@@ -170,8 +170,10 @@ needle "$CODEX_SKILL" "codex-native red-first" "the no-file-level-probe rule" \
   "Use the annotation's own node-specific command and never a file-level one"
 needle "$CODEX_SKILL" "codex-native red-first" "the operator-request-only invocation rule" \
   'never chain this skill automatically from roadmap-continue or ship-pr'
-needle "$CODEX_SKILL" "codex-native red-first" "the closeout-lifecycle probe sequencing" \
-  "run the completion gate's probes AFTER the shipping commit exists"
+needle "$CODEX_SKILL" "codex-native red-first" "the pre-commit throwaway-worktree probe path" \
+  'materialize the arc'"'"'s WIP as a temporary commit on a discardable branch'
+needle "$CLAUDE_SKILL" "claude red-first" "the unsupported-target-type invocation block" \
+  'RED-FIRST: BLOCK: unsupported target type'
 needle "$CODEX_SKILL" "codex-native red-first" "the annotation format it routes to" \
   '`# mutation-probe: <file>:<lines>`'
 
