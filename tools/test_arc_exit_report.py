@@ -532,6 +532,19 @@ def test_ac5_rerun_overwrites_the_same_file(repo, gstack, monkeypatch):
     assert first != second and "conclusion: failure" in second, "re-run overwrites with fresh facts"
 
 
+def test_gate_l1_vanished_ledger_is_unknown_not_empty(repo, monkeypatch, tmp_path):
+    """merge-gate lens-1 on #1204: the ledger existed at root resolution but vanished
+    before the read (concurrent worktree disposition) — the field must degrade to
+    UNKNOWN (None), never an authoritative [] under a rows-were-read note."""
+    notes: list[str] = []
+    gone = tmp_path / "goneroot"
+    (gone / ".harness").mkdir(parents=True)
+    # ledger_was_present=True but no loop_status.md on disk at read time
+    got = aer._todos(gone, repo, notes, ledger_was_present=True)
+    assert got is None
+    assert any("vanished" in n for n in notes)
+
+
 def test_r9_failed_index_append_fails_closed_with_exit_3(repo, gstack, monkeypatch, capsys):
     """codex round-9: both skill carriers treat exit 0 + report path as closure, so a
     failed EXIT-REPORT index append must exit nonzero (3) — while the report file itself

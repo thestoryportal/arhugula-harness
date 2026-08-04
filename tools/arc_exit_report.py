@@ -523,7 +523,12 @@ def _checkpoint(
     return {"path": str(explicit), "confirmed": True}
 
 
-def _todos(ledger_root: Path, code_root: Path, notes: list[str]) -> list[str] | None:
+def _todos(
+    ledger_root: Path,
+    code_root: Path,
+    notes: list[str],
+    ledger_was_present: bool = False,
+) -> list[str] | None:
     """Still-pending DEFERRED-HIL rows via `loop_pending_hil_list`, or None when UNKNOWN.
 
     Shells the real `loop_lib.sh` helper rather than re-parsing the ledger here — the
@@ -550,6 +555,17 @@ def _todos(ledger_root: Path, code_root: Path, notes: list[str]) -> list[str] | 
         notes.append(
             f"tools/hooks/loop_lib.sh not found under {code_root} — todo_for_human is "
             "UNKNOWN (null)."
+        )
+        return None
+    # Vanish window (merge-gate lens-1 on #1204): the ledger existed when the roots were
+    # resolved but is gone now (e.g. a concurrent disposition reaped the worktree in the
+    # seconds the CI/refresh queries took). The helper would return rc 0 + empty for a
+    # missing file — an authoritative [] under a note claiming the rows "were read",
+    # which is the one false claim this design could otherwise make. UNKNOWN instead.
+    if ledger_was_present and not (ledger_root / LEDGER_REL).is_file():
+        notes.append(
+            "the pending-HIL ledger vanished between root resolution and this read "
+            "(concurrent worktree disposition?) — todo_for_human is UNKNOWN (null)."
         )
         return None
     # The bash source is a CONSTANT; every path travels as an argv value read through "$N"
@@ -622,6 +638,10 @@ def collect(
     into exit 2 without writing anything, keeping the effect at the boundary.
     """
     notes: list[str] = list(seed_notes or [])
+    # Snapshot NOW, before the (seconds-long) gh/git queries: if the ledger exists here
+    # but is gone by the _todos read, that is the vanish window (merge-gate lens-1) and
+    # the field must degrade to UNKNOWN rather than an authoritative [].
+    ledger_was_present = ((read_root or repo_root) / LEDGER_REL).is_file()
     pr_view = _as_dict(
         _gh_json(
             ["pr", "view", str(pr), "--json", "state,mergeCommit"], repo_root, notes, "merge_state"
@@ -665,7 +685,9 @@ def collect(
         "checkpoint": _checkpoint(
             anchor, anchor_kind, repo_root, repo_root, gstack_root, checkpoint, notes
         ),
-        "todo_for_human": _todos(read_root or repo_root, repo_root, notes),
+        "todo_for_human": _todos(
+            read_root or repo_root, repo_root, notes, ledger_was_present=ledger_was_present
+        ),
         "notes": notes,
         "identity_error": None,
     }
