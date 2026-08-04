@@ -143,6 +143,8 @@ needle "$CODEX_SKILL" "codex-native two-lane" "the bridge heading" \
   '# Canonical Claude Workflow Bridge'
 needle "$CODEX_SKILL" "codex-native two-lane" "the canonical source path" \
   'Read `.claude/skills/two-lane/SKILL.md` completely'
+needle "$CODEX_SKILL" "codex-native two-lane" "the re-record-ALL-gates-after-replay rule" \
+  '**re-run and re-record ALL HEAD-bound gates**'
 needle "$CODEX_SKILL" "codex-native two-lane" "the defer-to-canonical contract" \
   'full workflow and the source of truth'
 needle "$CODEX_SKILL" "codex-native two-lane" "the translations-only limit" \
