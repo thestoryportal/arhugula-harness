@@ -376,8 +376,12 @@ already imports the executor), zero durable-write ordering change.
 memory-operation ledger as the journal, with the per-root `cross_process_scope_lock` held across the
 whole batch.
 
-**Strictly stronger.** It covers every mid-batch failure — argument, policy flip, store I/O,
-idempotency conflict — because it constrains the *outcome*, not the *prediction*.
+**Stronger, with two stated limits.** It covers every mid-batch *recoverable* failure — argument,
+policy flip, store I/O, idempotency conflict — because it constrains the *outcome*, not the
+*prediction*. **But it does not automatically cover process INTERRUPTION** (a crash between
+`write_record` and its journal entry reinstates the exact partial effect B prevents — W-10), and its
+cross-process force is **POSIX-only** (§3(iii) item 4). B must carry durable-intent recovery and
+declare a platform posture, or narrow its guarantee accordingly.
 
 **Priced honestly at HEAD (§3(iii)–(iv)):** `[MODERATE]`
 - The reentrant scope lock genuinely enables a hold across N writes. That part of the re-price is
@@ -398,9 +402,20 @@ and compose beneath it).
 ### Reading C — a dispatch-side positional constraint: at most one durable-effecting call, and it must be last
 
 **Shape.** In the existing pre-pass — where `tool_name` is already resolved and nothing has executed
-— refuse any batch in which a **durable-effecting** tool (`write_note`, `propose_promotion`,
-`request_redaction`; the C-MEM-14 *"Write-like tools append durable memory operation entries."*
-partition, `Spec_Memory_Substrate_v1.md:732`) appears anywhere but last, or appears more than once.
+— refuse any batch in which a **durable-effecting** tool appears anywhere but last, or appears more
+than once.
+
+**The predicate MUST derive its tool set from contract metadata, not a literal list** (codex R10
+[P2-c], accepted). The partition already exists as declared data:
+`MemoryToolContract.requires_durable_memory_operation`
+(`harness-as/src/harness_as/memory_tool_contracts.py:51`), cross-validated against
+`MemoryToolPolicyRequirement.DURABLE_MEMORY_OPERATION` and a mandatory `durable_operation_kind` by
+the model validator at `:54`–`:63` — the realization of C-MEM-14's *"Write-like tools append durable
+memory operation entries."* (`Spec_Memory_Substrate_v1.md:732`). At HEAD that set is
+`write_note` / `propose_promotion` / `request_redaction`, **but hard-coding those three identities
+would let a future write-like tool slip past a still-green predicate**. Deriving from
+`MEMORY_TOOL_CONTRACTS` makes the constraint total by construction, and W-3 owes a parity witness
+pinning that the predicate's set **equals** the metadata-derived set.
 Raise `MemoryToolExecutionInputError` — already fail-fast — before executing anything.
 
 **Why it is genuinely cheaper than A, and structurally different.** It mirrors **zero** executor
@@ -554,7 +569,7 @@ ordering is B (council + spec leg). The four answers therefore map onto §10.1's
 |---|---|---|---|---|---|---|
 | **A** *(rec.)* | 1 method (`validate`) on the executor | none | build leg (§10.1) | no (§7) | W-1, W-2, W-4, W-5, **W-7**, **W-8** *(inverted)* | policy-flip TOCTOU; store errors incl. the **intra-call** window (§3(vi)); §3(iv). **Plus a retry-precedence CHANGE it must own (§4)** |
 | **C** *(runner-up)* | none (2 pre-pass predicates) | none | build leg (§10.1) | no (§7) | W-1, W-3, W-5, W-6, **W-8** *(residual pin)* | read-like `STANDARD_TOOL_CALL` rows (§3(i)); the **intra-call** window (§3(vi)); **§3(vii)'s single-call input-error commit, which C cannot see**; model-visible refusals |
-| **B** | executor batch surface | **yes** — compensation semantics on C-MEM-08 / C-MEM-14 | **opens a SPEC LEG** (§1) — not buildable under this filing | **YES, before the spec leg** | **W-1** *(as pre-fix baseline)*, **W-5, W-6** *(inverted AND parameterized across every durable family — codex R6 [P2-d])*, **W-9** *(cross-process ledger isolation + Windows arm — codex R9 [P1])* + ledger-compensation + migration witnesses. **NOT W-2/W-3/W-4/W-7** — those pin A's `validate()` wiring, its retry-precedence change, and C's positional refusal, behaviours a correct transactional B may deliberately not have (codex R2 [P2-b]) | none in principle — **but only on POSIX**: the exclusion primitive is a no-op on Windows (§3(iii) item 4), so B must declare its platform posture. Largest execution risk |
+| **B** | executor batch surface | **yes** — compensation semantics on C-MEM-08 / C-MEM-14 | **opens a SPEC LEG** (§1) — not buildable under this filing | **YES, before the spec leg** | **W-1** *(as pre-fix baseline)*, **W-5, W-6** *(inverted AND parameterized across every durable family — codex R6 [P2-d])*, **W-9** *(cross-process ledger isolation + Windows arm — codex R9 [P1])*, **W-10** *(crash + compensation-failure recovery — codex R10 [P2-a])* + ledger-compensation + migration witnesses. **NOT W-2/W-3/W-4/W-7** — those pin A's `validate()` wiring, its retry-precedence change, and C's positional refusal, behaviours a correct transactional B may deliberately not have (codex R2 [P2-b]) | **NOT "none"**: (a) only on POSIX — the exclusion primitive is a no-op on Windows (§3(iii) item 4); (b) **crash-window recovery is unproven** until W-10 — a termination between `write_record` and its journal entry leaves exactly the partial effect B claims to prevent, so B must carry durable-intent recovery or narrow its guarantee to non-crash failures. Largest execution risk |
 | **D** | none | none | docstring qualification at ratification (§4) | no | none (but D-2 wants the §3(iv) case-(3) probe) | the whole class, under a stated reopening test |
 
 ---
@@ -600,8 +615,9 @@ Owed per reading (see §6). All are new tests unless noted; none exists at HEAD.
 |---|---|---|---|
 | **W-1** *(PRE-FIX BASELINE + mutation evidence — NOT a final acceptance witness; corrected at codex R9 [P2-a])* | **The harm, made visible.** Drive a real `StandardMemoryToolExecutor` through the real pre-pass + batch loop with `[memory.write_note (valid), memory.read (no `memory_ref`)]`; assert the batch raises **and** that the tool-events ledger gained a record — i.e. the partial commit is asserted as **present**, not merely inferred | End-to-end through `_openai_memory_tool_result_messages`, not a unit call to `execute()`. **It is the baseline the fix FLIPS, so under A and C its final-state expectation INVERTS** (both reject `[write_note, invalid read]` before the record is written): W-1 is discharged as *pre-fix evidence retained in the PR record* plus a post-fix inverted assertion, never as a final witness asserting the record is present — §6/§10.1 previously mandated the un-inverted form, which no correct A or C implementation could satisfy | A *(inverted post-fix)*, B, C *(inverted post-fix)*. **NOT D** — codex R5 [P2-d]: D owes no build witness, and D-2's reopening test asks for the §3(iv) case-(3) probe, which is **W-5** |
 | **W-2** | **A's closure — PARAMETERIZED over BOTH provider arms** (codex R9 [P2-b]). Same batch, with `validate()` wired, run end-to-end through **`_openai_memory_tool_result_messages` AND `_ollama_memory_tool_result_messages`**: assert the batch raises **before** any durable write — the ledger and the tool-events file are **unchanged** (assert on the durable surface, not on a call count) | The two pre-passes are **separate code paths** (`llm_dispatch.py:4187` and `:4823`). W-1's route is OpenAI-only, so an un-parameterized W-2 inheriting it stays green when only the ollama `validate()` call is removed — a one-provider implementation escapes the gate. Assert absence on the durable artifact; a mock-call-count assertion would pass on a path the store never sees | A |
-| **W-3** | **C's closure + its stated cost — PARAMETERIZED over the full durable-effecting identity set** (widened at codex R3 [P2-c], accepted). **Parameterized over BOTH provider arms** (codex R9 [P2-b]) and, for **each** of `write_note`, `propose_promotion`, `request_redaction`: (a) `[<tool>, search]` is REFUSED before execution with the durable surface unchanged; (b) `[search, <tool>]` still SUCCEEDS (the constraint is positional, not a ban); (c) `[<tool>, <tool>]` is refused. Plus one **mixed** case, `[write_note, request_redaction]`, which (c) alone would not catch | The first pass named only `write_note`. A predicate recognizing just that tool would pass every original arm while leaving **two of the three** declared durable-effecting tools unbounded — the exact gap the parameterization closes. Arm (b) is what stops the constraint from silently becoming "no writes in batches" | C |
+| **W-3** | **C's closure + its stated cost — PARAMETERIZED over the full durable-effecting identity set** (widened at codex R3 [P2-c], accepted). **Parameterized over BOTH provider arms** (codex R9 [P2-b]) and, for **each** of `write_note`, `propose_promotion`, `request_redaction`: (a) `[<tool>, search]` is REFUSED before execution with the durable surface unchanged; (b) `[search, <tool>]` still SUCCEEDS (the constraint is positional, not a ban); (c) `[<tool>, <tool>]` is refused. Plus one **mixed** case, `[write_note, request_redaction]`, which (c) alone would not catch. **Plus a metadata-parity arm** (codex R10 [P2-c]): assert the predicate's tool set **equals** the set derived from `MEMORY_TOOL_CONTRACTS` via `requires_durable_memory_operation`, so a future write-like tool cannot slip past a hard-coded list | The first pass named only `write_note`. A predicate recognizing just that tool would pass every original arm while leaving **two of the three** declared durable-effecting tools unbounded — the exact gap the parameterization closes. Arm (b) is what stops the constraint from silently becoming "no writes in batches" | C |
 | **W-4** | **A's parity pin — structural, and scoped to the per-tool ARGUMENT/BRANCH matrix, not to raise statements** (rewritten across codex R1 [P2-c] and R2 [P2-a], both accepted). The **preferred** discharge makes parity *unfalsifiable by construction*: `validate()` and `_execute_authorized` consume **one shared parsed/validated request representation**, so there is no second path to drift from — and under that discharge **no site cap applies**. Where it is not taken, the witness must cover the **per-tool argument matrix**: the same helper serves many fields (`_string_arg` alone is called for `query`, `note`, `memory_ref`, …), so a `validate()` can cover all **9** model-reachable *raise statements* while omitting an entire field's path. Enumerate **(tool × argument × branch)**, not raise sites and not helper names | Corrected twice, and the second correction matters: R1 fixed "helper names → call sites", R2 caught that the **9-site scope I then wrote is the wrong denominator** — 9 counts syntactic raises, which is not the coverage unit. Reading A's whole value rests on permanent parity, so this witness is load-bearing, not hygiene | A |
+| **W-10** | **B's crash + compensation-failure recovery** (new at codex R10 [P2-a]). Terminate the process **after** `write_record` succeeds but **before** the ledger or compensation entry lands, then restart and assert the durable state is reconciled — no orphaned partial effect survives. Second arm: make the **compensation write itself fail** and assert the declared outcome | Every other witness injects a *recoverable exception*; none exercises **interruption**. Without W-10, B's "covers every store-I/O failure" claim is unsupported at exactly the point it matters — a crash between the record and its journal entry leaves the very partial effect B exists to prevent. B must either carry a durable-intent/recovery mechanism and witness it, or **narrow its stated guarantee to non-crash failures** | B |
 | **W-9** | **B's cross-process ledger isolation, probed with TWO processes** (new at codex R9 [P1]). While a Reading-B batch holds `cross_process_scope_lock(root)`, a second OS process appends to the memory-operation ledger; assert whether the append is excluded or interleaves. **At HEAD it interleaves** — `append_memory_operation` takes only `cross_process_write_lock(ledger_path)` (`memory_operation_ledger.py:530`), never the scope lock. B must therefore witness its chosen repair (a defined lock order that brings ledger appends under the scope lock) rather than assume the journal is isolated. **Plus a Windows arm** asserting the declared platform posture, since the primitive is a no-op there (`cross_process_ledger_lock.py:205`–`:207`) | Without this, B ships a transactional guarantee resting on an exclusion that does not hold cross-process for the ledger, and silently has no cross-process force on Windows at all | B |
 | **W-7** | **A's retry-precedence change, pinned** (new at codex R6 [P1]). Batch `[denied call, malformed call]`: assert that **before** A the surfacing exception is `MemoryToolExecutionDeniedError` and `_classify_provider_exception` returns `TRANSIENT_RETRY`; **after** A it is `MemoryToolExecutionInputError` returning `None` (fail-fast). The point is not that either is wrong — it is that A **changes** it, and the change must be visible in a test rather than discovered in production | Without this, A silently alters retry semantics for a class the workspace deliberately kept retryable (`retry_breaker_fallback.py:312`–`:316`) | A |
 | **W-8** | **§3(vii)'s single-call `memory.search` input-error partial commit** (new at codex R6 [P2-a]). Single call, valid `query`, `limit=0`: assert a durable retrieval operation IS appended and the call THEN raises `MemoryToolExecutionInputError`. Under **A** the assertion inverts — no durable operation, because `validate()` rejects `limit` first. Under **C** it stays as-is: C cannot see this case, and that is C's stated residual | This is the discriminating witness between A and C, so it belongs to both, with opposite expectations | A *(inverted)*, C *(residual pin)* |
@@ -681,7 +697,7 @@ exceptionless-B unless the two are separate options.)*
 | **A** *(recommended)* | INPUT | Build leg: the executor's pure `validate()` pre-pass | W-1, W-2, W-4, W-5, **W-7**, **W-8** *(inverted)* + probes |
 | **A + C** | INPUT **and** bounded ORDERING | Build leg: both, in one arc (they compose — §4) | W-1, W-2, W-3, W-4, W-5, W-6, **W-7**, and **W-8 in A's INVERTED form ONLY** + probes. *(Codex R8 [P2]: the naive "union of A's and C's rows" was **unsatisfiable** — A's W-8 requires `limit=0` to be rejected before any retrieval event, C's residual pin requires that event to remain. In the combined route A's `validate()` runs first, so A's expectation is the one that can hold; C's residual-pin form is dropped, not merged.)* |
 | **C** *(runner-up)* | ORDERING, **bounded** — accept the intra-call residual (§3(vi)) **and §3(vii)'s single-call input-error commit** | Build leg: the dispatch-side positional constraint | W-1, W-3, W-5, W-6, **W-8** *(residual pin)* + probes |
-| **B** | ORDERING, **without exception** | **NOT a build.** Opens the spec leg at §1 (the `B-97`(a)/`B-104`/`B-107` route), council first (§7) | W-1, W-5, W-6 *(inverted + per-family)* + compensation + migration. **NOT W-7** |
+| **B** | ORDERING, **without exception** | **NOT a build.** Opens the spec leg at §1 (the `B-97`(a)/`B-104`/`B-107` route), council first (§7) | W-1 *(pre-fix baseline)*, W-5, W-6 *(inverted + per-family)*, **W-9** *(cross-process ledger isolation + Windows arm)*, **W-10** *(crash/compensation recovery)* + compensation + migration. **NOT W-7** |
 | **D** | Not worth paying for yet — on SEVERITY (§5) | **NO build of any kind.** Documentation only: the docstring qualification + `close_out`, both at the ratification leg | none (D-2 wants the §3(iv) case-(3) probe) |
 
 **Carried by any answer** (no separate gate): the §9 items 3–7 shipped-source cite repairs ride
@@ -920,3 +936,64 @@ whichever leg next touches those files; under D they stay recorded-not-repaired.
     escape C's gate. The two pre-passes are separate code paths (`llm_dispatch.py:4187` / `:4823`).
     W-2 and W-3 are now parameterized end-to-end across both arms, and the mutation probes mutate
     each branch independently.
+
+- **R10 — 3 findings, all [P2], ALL accepted and fixed. ZERO [P1]; nothing touched the readings, the
+  recommendation, the runner-up, or the discriminator.**
+  - **[P2-a] ACCEPTED — Reading B's guarantee was overstated for the crash window.** Every witness so
+    far injects a *recoverable exception*; none exercises **interruption**. A process terminating
+    after `write_record` succeeds but before its ledger or compensation entry lands reinstates
+    exactly the partial effect B exists to prevent. Reading B's "strictly stronger / covers every
+    mid-batch failure" wording is now qualified to *recoverable* failures, with **new witness W-10**
+    (crash arm + compensation-write-failure arm) and an explicit instruction to either carry
+    durable-intent recovery or **narrow the guarantee**. §6's "none in principle" residual cell is
+    corrected accordingly.
+  - **[P2-b] ACCEPTED.** §10.1's **B** row omitted **W-9**, so a build brief derived from the
+    ratification table could have authorized B without the cross-process ledger-isolation and
+    Windows witnesses that R9 made mandatory. Added (along with W-10).
+  - **[P2-c] ACCEPTED — Reading C's predicate must derive from contract METADATA, not a literal
+    list.** `MemoryToolContract.requires_durable_memory_operation`
+    (`harness-as/src/harness_as/memory_tool_contracts.py:51`, cross-validated at `:54`–`:63`) already
+    owns the write-like partition. Enumerating `write_note`/`propose_promotion`/`request_redaction`
+    as literals would leave a hard-coded predicate green while a **future** write-like tool slipped
+    through. C now derives the set from `MEMORY_TOOL_CONTRACTS`, and W-3 gains a **metadata-parity
+    arm** asserting predicate-set == metadata-derived-set.
+
+---
+
+### Review disposition and exit
+
+**Rounds run: 10** (the pre-committed cap). One additional R9 attempt was killed mid-stream by a
+network drop, returned no verdict, and is **not** counted.
+
+| Round | Findings | Accepted | Declined | Partial |
+|---|---|---|---|---|
+| R1 | 4 | 4 | 0 | 0 |
+| R2 | 4 | 3 | 0 | 1 |
+| R3 | 6 | 5 | 0 | 1 *(the [P1] re-engaged)* |
+| R4 | 3 | 3 | 0 | 0 |
+| R5 | 4 | 4 | 0 | 0 |
+| R6 | 4 | 4 | 0 | 0 |
+| R7 | 2 | 2 | 0 | 0 |
+| R8 | 1 | 1 | 0 | 0 |
+| R9 | 4 | 4 | 0 | 0 |
+| R10 | 3 | 3 | 0 | 0 |
+| **Total** | **35** | **33** | **0 outright** | **2 partial (one element, R2+R3)** |
+
+**EXIT AT THE 10-ROUND CAP, on the soundness criterion** — not on review-quiet, and stated with its
+limits. `[HIGH]`
+
+- **The decision surface never moved.** The recommendation (**A**), the runner-up (**C**), and the
+  INPUT-vs-ORDERING discriminator are as first written, across all ten rounds and 35 findings. What
+  changed was *accuracy* — of premises, costs, and witnesses.
+- **Substantive findings clustered early-to-middle and stopped changing direction**: R2's §3(vi)
+  (intra-call window), R6's §3(vii) (single-call `search` partial commit) and R6's retry-precedence
+  cost were the last findings to alter a reading's *substance*. R9's [P1] and R10's findings sharpen
+  **Reading B's** price and witnesses — the reading this filing does **not** recommend and which
+  cannot be built under this filing's authority anyway (§1).
+- **Honest residual:** this is a cap exit, not a convergence-to-zero. R10 still produced three
+  accepted findings, all confined to B's acceptance surface and C's predicate derivation. **A further
+  round would likely find more of the same class**, and the build leg — not this filing — is where
+  those are discharged. **Contract-level findings still reopen this record at ratification.**
+- **One sub-decision remains routed rather than settled:** the Class-2-vs-Class-1 classification
+  (R2 [P1-a] / R3 [P1]), held under the pre-committed hold notice and surfaced at §1 with an
+  explicit operator override sentence.
