@@ -592,4 +592,11 @@ reading; it is recorded so a later arc does not inherit "all four are pinned" as
 - **R5 — 2 [P2], both accepted and fixed** (`d8fab8a7` + this SHA-repair amendment): this record ended at R3 while HEAD was the
   R4 commit — extended; the A-ii text cited a phantom "§0 ungrounded-claim 2" — replaced with the
   inline statement of what was and was not verified.
-- Later rounds, if any, append below before ratification.
+- **R6 — 1 [P2] fixed** (`130a2270`): Reading C's paragraph contradicted §8/§9's immediate
+  docstring-rewrite requirement — aligned. **R7 — 1 [P2] fixed** (`16e31032`): §1's "every failure
+  IS emitted" scoped to the classify-routed population. **R8 — 1 [P2] fixed** (this commit): this
+  record extended through R6/R7. **SOUNDNESS EXIT DECLARED at R8** per the workspace's
+  deferred-mechanism review-exit discipline: the recommendation, runner-up, and discriminator never
+  moved across eight rounds; substantive findings ended at R4 (A-ii); R5–R8 are
+  consistency-of-the-record corrections — the self-referential-drift discriminator. Contract-level
+  findings still reopen this record at ratification.
