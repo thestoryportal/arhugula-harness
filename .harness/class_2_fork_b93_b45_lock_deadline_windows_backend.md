@@ -651,7 +651,7 @@ that do not require a council to see.
 |---|---|---|---|
 | **1** | Windows serialization backend — build now? | **Yes** (A or C) → routes to a **C3 ⊥ C11 dyadic convening** first (§7). **No** (B or D) → `B-45` stays `registered_finding` with demand tests **D-1** (Windows CI) and **D-2** (a declared Windows target) | **No.** Gated on witnessability, not on backend choice (§6, discriminator 1) |
 | **2** | Liveness deadline — build now? | **Yes** (A or B) → nine sites, one typed exception, the hold-time contract, plus the §3(ii) import repair. **No** (C or D) → `B-93` stays `registered_finding` with demand tests **D-0**, **D-3**, **D-4** | **Yes**, at moderate confidence; **D is a defensible answer** (§6, discriminator 2) |
-| **3** *(only if 1 or 2 is Yes)* | Vehicle | Hand-rolled `LOCK_NB`+retry, **or** adopt `filelock` — which also settles the never-recorded Session-6 GUARDRAIL binding (§3(v)) | Hand-rolled for decision 2 alone (eight of nine sites are exclusive-only and need no shared face); revisit `filelock` if decision 1 later goes Yes |
+| **3** *(only if 1 or 2 is Yes)* | Vehicle | Hand-rolled `LOCK_NB`+retry, **or** adopt `filelock` — which also settles the never-recorded Session-6 GUARDRAIL binding (§3(v)) | Hand-rolled for decision 2 alone (SEVEN of nine sites are exclusive-only and need no shared face — `_acquire_legacy_sidecar_if_present(exclusive=False)` and `cross_process_read_lock` both require shared semantics, per §3(v)); revisit `filelock` if decision 1 later goes Yes |
 
 **The recommended combination is (1 = No, 2 = Yes, 3 = hand-rolled) — i.e. Reading B.**
 
