@@ -40,6 +40,7 @@ import re
 from collections.abc import Mapping
 from enum import Enum, StrEnum
 from pathlib import Path
+from types import MappingProxyType  # stdlib `types`, not this module (absolute import)
 from typing import TYPE_CHECKING, Any, ClassVar, NewType, Protocol, Self, runtime_checkable
 from urllib.parse import urlsplit
 
@@ -470,14 +471,65 @@ class AuditSigningBackendKind(StrEnum):
     AWS_KMS = "aws-kms"
 
 
+_EMPTY_KEY_ARNS: Mapping[str, str] = MappingProxyType({})
+"""Read-only default for `_ImmutableKeyArns.__init__` (`B-109`) — a shared
+mutable `{}` default would be a live class-level container."""
+
+
 class _ImmutableKeyArns(dict[str, str]):
-    """Immutable `key_arns` carrier (rounds 9 + 34).
+    """Immutable `key_arns` carrier (rounds 9 + 34 + 35; sealed at `B-109`).
 
     A `dict` subclass with every mutation method disabled — unlike
     `MappingProxyType` it pickles, so `copy.deepcopy` and
     `model_copy(deep=True)` of a `RuntimeConfig` keep working while a
     post-validation mutation to a blank/mislabeled value stays impossible.
+
+    `B-109` back-ports the seal the `_ImmutableEffectFenceResolutions` sibling
+    (`harness-cp/src/harness_cp/pause_resume_protocol_types.py`, B-107 impl
+    leg) built against this very type as its precedent: the disabled item /
+    update methods left the INHERITED `dict.__init__` open, and `dict.__init__`
+    on a live instance UPDATES it in place rather than clearing, so
+    `cfg.key_arns.__init__({...})` re-populated a validated, frozen config's
+    signing map post-validation — injecting an unvalidated `key_id → ARN`
+    entry the field validator had no chance to reject. That route resolves
+    through this type's own MRO with NO base class named, so it is a route the
+    type EXPOSES, and it is sealed below. The seal itself lives in a
+    `__slots__` slot behind a refusing `__setattr__`/`__delattr__`: without
+    that, a plain `obj._sealed = False` would reopen it (the sibling's round-3
+    lesson, carried rather than re-learned — this type had an instance
+    `__dict__` to write into before `__slots__` removed it).
+
+    **Where this line terminates, stated so it is a decision and not an
+    omission.** The remaining routes — `dict.__setitem__(obj, k, v)`,
+    `object.__setattr__(obj, "_sealed", False)` — both NAME A BASE CLASS
+    explicitly. Python cannot seal an object against a caller willing to do
+    that, so "no mutation route" is necessarily read as "no route reachable
+    through this type's own surface" (the same boundary the sibling draws at
+    B-107 §6.1).
     """
+
+    __slots__ = ("_sealed",)
+
+    def __init__(self, supplied: Mapping[str, str] = _EMPTY_KEY_ARNS, /) -> None:
+        # ONE initialization per instance. Sealing AFTER the first populate
+        # keeps `__reduce__`'s reconstruction path (a FRESH object, whose slot
+        # is unset) working — the pickle/deepcopy compatibility this carrier
+        # exists for — while refusing re-population of an existing one. The
+        # default is a read-only empty mapping that is never mutated, matching
+        # `dict.__init__`'s own signature shape so `cls()` stays valid.
+        if getattr(self, "_sealed", False):
+            self._refuse()
+        super().__init__(supplied)
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        # The seal must not be resettable through ordinary assignment, or
+        # `stored._sealed = False; stored.__init__({...})` walks straight back
+        # into the hole the seal closes.
+        self._refuse()
+
+    def __delattr__(self, name: str) -> None:
+        self._refuse()
 
     def _refuse(self, *args: object, **kwargs: object) -> None:
         raise TypeError(
