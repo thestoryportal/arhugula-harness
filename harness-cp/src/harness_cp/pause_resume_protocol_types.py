@@ -36,9 +36,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer, PrivateAttr
 
 from harness_cp.handoff_context import StateSummary
 
@@ -157,6 +158,71 @@ class EffectFenceResolution(StrEnum):
     the decline-mirror, NEVER an auto-action) — use `ABORT` for a linear run-terminal abort. On
     a fan-out pause the scoped-abort branch's output is discarded (a degraded non-contributor)
     → the run folds to PARTIAL with the surviving branches (FAILED if NO survivor)."""
+
+
+def _validate_effect_fence_resolution_map(
+    supplied: Mapping[str, EffectFenceResolution],
+) -> Mapping[str, EffectFenceResolution]:
+    """Validate + COPY + freeze an operator-supplied `effect_fence_resolutions` map.
+
+    B-107 impl leg (CP spec v1.115 §1.2) — the map-domain amendment. On ORDINARY
+    construction every key MUST be non-empty, and the stored field MUST be a
+    validated immutable **copy** of what the caller supplied: validate keys and
+    values, copy them, then expose no mutation route. A proxy or view over a
+    CALLER-RETAINED mapping does not satisfy the term, so the `MappingProxyType`
+    must wrap a mapping only this model holds.
+
+    The `dict(supplied)` copy makes that true LOCALLY rather than by inheritance
+    from an implementation detail. Verified empirically at this leg: pydantic's
+    own `Mapping[str, EffectFenceResolution]` validation already materializes a
+    fresh mapping before this validator runs, so on the ordinary construction path
+    `supplied` is pydantic's object, not the caller's, and isolation is
+    over-determined. That is a property of pydantic's dict validator, NOT of this
+    contract — an annotation change (a `BeforeValidator`, a passthrough type) would
+    silently hand the caller's own object straight through. The copy is therefore
+    kept, and the PD-8 probe exercises this function DIRECTLY with a
+    caller-retained mapping so the term is witnessed where it is actually stated.
+
+    An empty key is the position-only, key-ABSENT effect-fence source shape (CP
+    spec v1.113 §2.1): it addresses no held reserve, so it can never be the target
+    of a per-key resolution. Admitting `""` here would let map content the
+    resolver must treat as unresolvable (§1.3) sit in the address domain.
+    """
+    for key in supplied:
+        if not key:
+            raise ValueError(
+                "effect_fence_resolutions keys MUST be non-empty (CP spec v1.115 §1.2): "
+                "an empty captured `idempotency_key` is position-only and addresses no "
+                "held reserve, so it can never carry a per-key resolution"
+            )
+    return MappingProxyType(dict(supplied))
+
+
+def _serialize_effect_fence_resolution_map(
+    stored: Mapping[str, EffectFenceResolution],
+) -> dict[str, EffectFenceResolution]:
+    """Serialize the frozen map as the plain `dict` shape it has always had.
+
+    B-107 impl leg (CP spec v1.115 §0.3) — the amendment changes the field's
+    admissible key domain and its nested-container behaviour, NOT its serialized
+    logical content: an existing VALID map keeps byte-identical dumps in both
+    `python` and `json` modes. `MappingProxyType` has no pydantic-core serializer
+    of its own, so without this the amendment would silently break every dump.
+    """
+    return dict(stored)
+
+
+EffectFenceResolutionMap = Annotated[
+    Mapping[str, EffectFenceResolution],
+    AfterValidator(_validate_effect_fence_resolution_map),
+    PlainSerializer(
+        _serialize_effect_fence_resolution_map,
+        return_type=dict[str, EffectFenceResolution],
+    ),
+]
+"""The validated, copied, immutable `effect_fence_resolutions` address domain
+(CP spec v1.115 §1.2). Applies to `ResumeContext` and — by inheritance — to
+`AccessorDerivedResumeContext` and every other `ResumeContext` subclass."""
 
 
 class FanOutBranchResumeState(BaseModel):
@@ -1076,7 +1142,7 @@ class ResumeContext(BaseModel):
     supply `effect_fence_resolutions` (below); a per-key entry there OVERRIDES this
     default for its branch (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION)."""
 
-    effect_fence_resolutions: dict[str, EffectFenceResolution] | None = None
+    effect_fence_resolutions: EffectFenceResolutionMap | None = None
     """Per-branch-DISTINCT effect-fence resolutions, keyed by held-reserve
     `idempotency_key` (B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION, R-FS-1). `None`
     (the default) → every fence-paused branch resolves to the uniform
@@ -1103,7 +1169,23 @@ class ResumeContext(BaseModel):
     (B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT, CP spec v1.73 §1): fail JUST that
     branch (record it terminal, never re-dispatched) while the SIBLINGS the operator
     vouched for (SKIP_AS_FIRED / RE_FIRE) fire and the run folds survivors per
-    `cascade_policy`. So all four resolutions compose freely across branches in one map."""
+    `cascade_policy`. So all four resolutions compose freely across branches in one map.
+
+    **Address domain + container behaviour (B-107 impl leg, CP spec v1.115 §1.2).**
+    On ordinary construction every key MUST be non-empty — an empty captured
+    `idempotency_key` is the position-only, key-ABSENT source shape (v1.113 §2.1)
+    that addresses no held reserve, so `{"": ...}` is REFUSED rather than stored as
+    a dead address. The stored value is a validated immutable COPY of what the
+    caller supplied (`_validate_effect_fence_resolution_map`): item assignment
+    through the stored mapping raises, and mutating the caller's own original
+    mapping after construction cannot change what this field holds. Name,
+    optionality, values, map-over-scalar precedence and the serialized logical
+    content of every VALID map are preserved byte-for-byte (§0.3); only callers who
+    supplied `""` or relied on post-construction mutation are affected, which is the
+    ratified compatibility cost. The contract applies by inheritance to
+    `AccessorDerivedResumeContext` and any other `ResumeContext` subclass. A
+    validation-bypassed instance (`model_construct`) is outside the term but is made
+    inert by the resolver boundary (§1.3 / §1.5)."""
 
     hitl_responses: dict[str, HITLResult] | None = None
     """Per-branch-DISTINCT HITL responses, keyed by the paused CHILD's own
