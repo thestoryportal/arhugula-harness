@@ -11,6 +11,8 @@ and any status change riding the **ratification** leg, not this one. The row sta
 **Register row.** `B-84` at `.harness/forward-register.yaml` (`status: registered_finding`, no `pr:`
 field) + prose at `.harness/post-phase-8-forward-register.md` `### B-84`.
 
+**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-84` is now `status: open` with a `pr:` pointer naming PR #1233; the *"no `.harness/forward-register.yaml` … edit rides this PR"* scoping in the header describes the FILING leg only — the ratification leg is precisely where those edits land. The row's `council` disposition is likewise settled: **none owed** (§7 is probe-resolved for A). See `## §12 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
+
 **Grounding HEAD.** `496f0f4b`. Every `§`/file:line cite below was re-resolved by **direct read** at
 this HEAD; every count was **recomputed** (`git grep -c` / AST / direct enumeration), never copied
 from the row. **Two premise qualifications and seven stale cites** were found and are recorded at §9

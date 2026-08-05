@@ -13,6 +13,8 @@ registered_finding`, no `pr:` field) + prose at `.harness/post-phase-8-forward-r
 ride the ratification leg. **No snapshot/digest change** (the digest is over `id:status` pairs and
 neither status moves).
 
+**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-93` is now `status: open` (its half is a YES) and `B-45` stays `registered_finding` (its half is a NO); both carry a `pr:` pointer naming PR #1233, and the snapshot/digest DID move at the ratification leg because `B-93`'s status changed. See `## §12 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
+
 **Why the two rows are filed together.** Each row already names the other as its natural co-rider
 (`B-93` prose `:983`, `B-45` prose `:562`), on the ground that both traverse the *identical* primitive
 set — nine blocking `flock` acquisition sites across four modules — so doing them together costs one
@@ -778,8 +780,9 @@ demand tests written in.**
 ### §12.1 The gate — the three decisions (operator `AskUserQuestion`, 2026-08-05)
 
 > **Decision 1 — Windows serialization backend, build now? NO.** `B-45` stays
-> `registered_finding`, with demand tests **D-1** (Windows CI exists) and **D-2** (a declared Windows
-> target) as its re-open triggers.
+> `registered_finding`, with demand tests **D-1** (Windows CI exists) and **D-2** (an operator or
+> deployment **asks for** a Windows host, or any packaging surface **declares** one — §4's exact
+> observable form, **not** the §8 shorthand *"a declared Windows target"*) as its re-open triggers.
 >
 > **Decision 2 — liveness deadline, build now? YES.** Nine sites, one typed exception, the hold-time
 > contract, plus the §3(ii) import repair.
@@ -796,7 +799,12 @@ no Windows CI, landing a backend flips `journal_exclusion_is_degraded()`
 (`journal_workflow_pause_store.py:414`) to `False` and **disarms** the refuse-by-default consult at
 `admin/pause_journal_adoption.py:412` — replacing a **declared safe degradation** with an
 **unverified exclusion claim**, which is strictly worse than today. **D-1 requires an EXECUTING
-BEHAVIOURAL witness** (codex R8): a lint-only `windows-latest` job does **not** satisfy it.
+BEHAVIOURAL witness** (codex R8): a lint-only `windows-latest` job does **not** satisfy it. **D-2 is carried
+in §4's observable form** — *an operator or deployment asks for a Windows host, or any packaging surface
+declares one (an `Operating System ::` classifier or a `sys_platform` marker in a harness
+`pyproject.toml` — today: zero)* — and **not** in §8's shorthand *"a declared Windows target"*, which
+§3(i) would already satisfy (Windows is a design-time **committed** host-OS surface), making the
+deferral reopen the moment it was granted. *(Out-of-family review round 1 [P2], accepted.)*
 
 ### §12.3 The vehicle, and why hand-rolled carries decision 2 alone
 

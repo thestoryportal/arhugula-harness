@@ -847,10 +847,15 @@ items:
     at `admin/pause_journal_adoption.py:412`, replacing a DECLARED SAFE DEGRADATION with an UNVERIFIED
     exclusion claim -- strictly worse than today. RE-OPEN TRIGGERS (either alone fires): D-1 --
     Windows CI exists, and it must be an EXECUTING BEHAVIOURAL witness (a lint-only `windows-latest`
-    job does NOT satisfy it, codex R8); D-2 -- a declared Windows target. NO COUNCIL is owed unless
-    decision 1 later flips (the C3 x C11 dyadic was conditional on YES). If it ever flips, the
-    B-93 deadline leg MUST LAND FIRST, and the close is a MULTI-SURFACE DOC SWEEP across the 6+
-    sites citing this row as the workspace''s Windows posture. Registered, not built — deliberate
+    job does NOT satisfy it, codex R8); D-2 -- an operator or deployment ASKS FOR a Windows host,
+    OR any packaging surface DECLARES one (an `Operating System ::` classifier or a `sys_platform`
+    marker in a harness pyproject.toml -- today: ZERO). D-2 is deliberately kept in the fork section
+    4 OBSERVABLE form and NOT abbreviated to ''a declared Windows target'': section 3(i) already
+    establishes Windows as a design-time COMMITTED host-OS surface, so the abbreviated form would
+    be satisfied at filing time and this deferral would reopen immediately. NO COUNCIL is owed
+    unless decision 1 later flips (the C3 x C11 dyadic was conditional on YES). If it ever flips,
+    the B-93 deadline leg MUST LAND FIRST, and the close is a MULTI-SURFACE DOC SWEEP across the
+    6+ sites citing this row as the workspace''s Windows posture. Registered, not built — deliberate
     scope call (advisor()-reviewed during B-40''s own PR), not an oversight. THE FIX IS A REAL
     DECISION AND THE DECISION IS WHICH VEHICLE, with three arms — not whether the shared face
     must be degraded (rewritten current-first 2026-08-05 at the B-93+B-45 combined fork filing)
@@ -3228,31 +3233,36 @@ items:
     it from provider-adapter and serialization failure. SUB-DECISION A-ii (surfaced at codex R4)
     is ratified in its RE-TYPE form: the `llm_dispatch.py` raise sites that raise `MemoryToolExecutionInputError`
     for INTERNAL `MEMORY_TOOL_CONTRACTS` schema faults contradict the boundary invariant and are
-    RE-TYPED at the spec leg -- they are NOT recorded as mis-typed-at-birth and left in place;
-    the dispatch population''s classification reachability is established at the spec leg and
-    witnessed at the impl rider. READINGS B and C were NOT selected and are NOT partially adopted
-    -- in particular C''s docstring-rewrite-at-ratification obligation DOES NOT FIRE, because
-    under A the `memory_tool_executor.py:149`-`:171` stopgap docstring is rewritten to match the
-    ratified outcome AT THE IMPL LEG (fork section 9, impl row), and no `harness-*/src` edit rides
-    a doc-only ratification. STATUS design_substrate_gated (fork section 9: status flips to design_substrate_gated
-    under A or B): OWED are the SPEC leg -- `Spec_Memory_Substrate_v1.md` v1.2 -> v1.3 by a dedicated
-    spec-writer AND `Implementation_Plan_Memory_Substrate_v1.md` v1.2 -> v1.3 (U-MEM-22 :829 extended,
-    NO new unit), with BOTH clearance markers per root CLAUDE.md section 4.5 -- and then the IMPL
-    leg (1 enum member + 1 declaration flip + 1 docstring rewrite + 1 fixture re-key; 8 witness
-    rows flip + 2 added negative rows + the mutation probe). ZERO hash / CXA / contract-number
-    impact. NO COUNCIL is owed: the convening was conditional on Reading B only, and B was not
-    selected. DRIFT REPAIRS APPLIED IN PLACE AT THIS LEG (fork section 10''s six items, which
-    section 8 routes to the ratification leg''s register touch; none changes any disposition):
-    (1) the scope-value-domain declaration cites are `memory_capture.py:286`-`:288` (`MemoryCaptureScopeValueDomainError`,
-    class :271) and `:307`-`:309` (`MemoryCaptureReservedActorError`, class :291) -- the previously
-    recorded `:215`/`:236` were a blank line and a docstring; (2) `MemoryToolExecutionInputError`
-    is 10 sites IN `memory_tool_executor.py` (correct as scoped to the classified population)
-    but 18 REPO-WIDE, the extra 8 being the `llm_dispatch.py` internal-fault sites that A-ii re-types;
-    (3) `MemoryToolExecutionDeniedError` has 15 raise sites at HEAD, not 14 (growth from later
-    arcs, not a regression); (4) the classification table is 39 parametrized rows (AST count),
-    not 37; (5) the mutation probes are SEVEN, enumerated (a)-(g) -- the ''all five'' header undercounted
-    its own body, no probe is missing; (6) `_NativeMemoryPolicyDeniedError` has 6 raise sites
-    at HEAD, not 4 (`_require_scope_family_in_domain:305` and a third `_require_retrieval_allowed`
+    RE-TYPED -- they are NOT recorded as mis-typed-at-birth and left in place. LEG OWNERSHIP,
+    made explicit (out-of-family review round 1 [P2], accepted -- an earlier draft said ''RE-TYPED
+    at the spec leg'' while also forbidding any src edit at the spec leg, leaving the re-typing
+    with NO owning leg): the SPEC leg records the boundary invariant and the re-type DECISION
+    in contract text and establishes the dispatch population''s classification REACHABILITY; the
+    IMPL leg performs the SOURCE re-typing at the llm_dispatch.py sites and carries its reachability
+    WITNESS (the fork''s ''impl rider''). READINGS B and C were NOT selected and are NOT partially
+    adopted -- in particular C''s docstring-rewrite-at-ratification obligation DOES NOT FIRE,
+    because under A the `memory_tool_executor.py:149`-`:171` stopgap docstring is rewritten to
+    match the ratified outcome AT THE IMPL LEG (fork section 9, impl row), and no `harness-*/src`
+    edit rides a doc-only ratification. STATUS design_substrate_gated (fork section 9: status
+    flips to design_substrate_gated under A or B): OWED are the SPEC leg -- `Spec_Memory_Substrate_v1.md`
+    v1.2 -> v1.3 by a dedicated spec-writer AND `Implementation_Plan_Memory_Substrate_v1.md` v1.2
+    -> v1.3 (U-MEM-22 :829 extended, NO new unit), with BOTH clearance markers per root CLAUDE.md
+    section 4.5 -- and then the IMPL leg (1 enum member + 1 declaration flip + 1 docstring rewrite
+    + 1 fixture re-key; 8 witness rows flip + 2 added negative rows + the mutation probe; PLUS
+    the A-ii source re-typing at the llm_dispatch.py internal-fault sites and its reachability
+    witness). ZERO hash / CXA / contract-number impact. NO COUNCIL is owed: the convening was
+    conditional on Reading B only, and B was not selected. DRIFT REPAIRS APPLIED IN PLACE AT THIS
+    LEG (fork section 10''s six items, which section 8 routes to the ratification leg''s register
+    touch; none changes any disposition): (1) the scope-value-domain declaration cites are `memory_capture.py:286`-`:288`
+    (`MemoryCaptureScopeValueDomainError`, class :271) and `:307`-`:309` (`MemoryCaptureReservedActorError`,
+    class :291) -- the previously recorded `:215`/`:236` were a blank line and a docstring; (2)
+    `MemoryToolExecutionInputError` is 10 sites IN `memory_tool_executor.py` (correct as scoped
+    to the classified population) but 18 REPO-WIDE, the extra 8 being the `llm_dispatch.py` internal-fault
+    sites that A-ii re-types; (3) `MemoryToolExecutionDeniedError` has 15 raise sites at HEAD,
+    not 14 (growth from later arcs, not a regression); (4) the classification table is 39 parametrized
+    rows (AST count), not 37; (5) the mutation probes are SEVEN, enumerated (a)-(g) -- the ''all
+    five'' header undercounted its own body, no probe is missing; (6) `_NativeMemoryPolicyDeniedError`
+    has 6 raise sites at HEAD, not 4 (`_require_scope_family_in_domain:305` and a third `_require_retrieval_allowed`
     branch at `:334` added by later arcs) -- and whether those two newcomers are span-pinned was
     NOT verified by the fork and is recorded as UNVERIFIED rather than assumed, so no later arc
     inherits ''all four are pinned'' as covering six sites. IMPL HALF LANDED 2026-07-28; the SPEC

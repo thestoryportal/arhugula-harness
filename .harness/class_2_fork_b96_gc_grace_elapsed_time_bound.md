@@ -9,6 +9,8 @@ spec leg (if owed) → impl leg.**
 registered_finding`, no `pr:`) + prose at `.harness/post-phase-8-forward-register.md:1002`. The row's
 `pr:` pointer and any status change ride the **ratification** leg, not this PR.
 
+**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-96` is now `status: design_substrate_gated` with `pr: '#1179 + #1183 + #1233'`, and the *"no `design-substrate/**` edit rides this PR"* scoping above describes the FILING leg — it remains true of the ratification leg too, and stops being true at the spec leg. See `## §11 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
+
 **Grounding HEAD.** `6d557c26`. Every `§`/line cite below was re-resolved by direct read at this
 HEAD. **One anchor moved from the row's grounding and is recorded rather than silently normalized:**
 the row cites the Runtime spec's bounded-retention bullet as *"Runtime v1.108 §14.8.11 … `:4883`"*;

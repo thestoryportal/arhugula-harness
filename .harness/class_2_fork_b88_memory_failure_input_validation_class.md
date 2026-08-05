@@ -11,6 +11,8 @@ field) + prose at `.harness/post-phase-8-forward-register.md` `### B-88` (`:859`
 class — REMAINS OPEN, spec-side"* — is the fork this filing carries. The row's `pr:` pointer and any
 status change ride the **ratification** leg, not this PR; the row stays `registered_finding` here.
 
+**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-88` is now `status: design_substrate_gated` with a `pr:` pointer naming PR #1233, and the six §10 drift items are REPAIRED IN PLACE on both register surfaces. See `## §11 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
+
 **Grounding HEAD.** `4f914159`. Every `§`/line cite below was re-resolved by direct read at this HEAD
 and every count was recounted programmatically. **Five count claims and one file:line cite on the
 row itself have drifted since the impl leg** — all six are recorded at §10 rather than silently
@@ -621,10 +623,16 @@ verbatim-in-substance rather than only at the register row.
 >
 > **Sub-decision A-ii is ratified in its RE-TYPE form** (the §6/§10 R4 sub-decision): the
 > `llm_dispatch.py` sites that raise `MemoryToolExecutionInputError` for **INTERNAL**
-> `MEMORY_TOOL_CONTRACTS` schema faults contradict the boundary invariant and are **re-typed at the
-> spec leg** — they are **not** recorded as mis-typed-at-birth and left in place. The dispatch
-> population's classification reachability is established at the spec leg and witnessed at the impl
-> rider.
+> `MEMORY_TOOL_CONTRACTS` schema faults contradict the boundary invariant and are **re-typed** — they
+> are **not** recorded as mis-typed-at-birth and left in place.
+>
+> **Leg ownership, stated explicitly so the work has an owner** *(out-of-family review round 1 [P2],
+> accepted — an earlier draft of this section said "re-typed at the spec leg" while §11.2 also
+> forbids any `harness-*/src` edit at a doc leg, which left the re-typing owned by no leg at all)*:
+> the **spec leg** records the boundary invariant and the re-type **decision** in contract text, and
+> establishes the dispatch population's classification **reachability**; the **impl leg** performs
+> the **source** re-typing at the `llm_dispatch.py` internal-fault sites and carries its
+> reachability **witness** — the *impl rider* the fork names.
 
 **Readings B and C were NOT selected and are NOT partially adopted.**
 
@@ -666,6 +674,7 @@ ratification.**
 by a dedicated `spec-writer`, with **both** clearance markers per root `CLAUDE.md` §4.5 (under A the
 plan does change, so the plan marker is owed too). **Impl leg (owed after it):** 1 enum member + 1
 declaration flip + 1 docstring rewrite + 1 fixture re-key; 8 witness rows flip + the two added
-negative rows + the mutation probe. **Zero hash / CXA / contract-number impact.**
+negative rows + the mutation probe; **plus the A-ii source re-typing at the `llm_dispatch.py`
+internal-fault sites, with its classification-reachability witness** (§11.1). **Zero hash / CXA / contract-number impact.**
 
 **No council is owed.** §7's convening was probe-resolved and conditional on **Reading B** only.
