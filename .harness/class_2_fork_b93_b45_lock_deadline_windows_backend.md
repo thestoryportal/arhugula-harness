@@ -97,7 +97,7 @@ classification `B-88`, `B-98`, `B-104` and `B-107` carry.
 | **Windows primitive in tree** | **ZERO** `msvcrt` references in any `.py` file repo-wide. The only `msvcrt` occurrences anywhere are the register's own prose (`forward-register.yaml` ×7, `post-phase-8-forward-register.md` ×8) |
 | **The one predicate over the carve-out** | `journal_exclusion_is_degraded()` (`journal_workflow_pause_store.py:402`, `return _IS_WINDOWS` at `:414`), consulted to **refuse by default** at `admin/pause_journal_adoption.py:412`. The only place the codebase *acts* on the carve-out |
 | **Guarded-write production callers** | **ONE**: `memory_promotion.py:911`. Test callers: `test_memory_store.py:523`/`:539`/`:564`/`:618`, `test_memory_store_cross_process_guard.py:168`, plus three delegating doubles in `test_u_mem_27_activation_boundary.py` (`:348`, `:397`, `:638`). None supplies an unbounded precondition |
-| **Real-second-OS-process contention witnesses** | **TEN**, enumerated at §3(vi) |
+| **Real-second-OS-process contention witnesses** | **NINE lock witnesses** (a tenth test spawns a second process but proves the independent `os.link` CAS, not the lock — codex R9/R10), enumerated at §3(vi) |
 | **CI platform coverage** | `ubuntu-latest` only — the sole `runs-on:` value across `.github/workflows/` (12 occurrences); `grep -rn -i "windows" .github/` returns **ZERO hits** |
 | **Spec constraint on the mechanism** | **NONE.** C-IS-09 §9.4 defers it (`Spec_Information_Substrate_v1.md:900`); C-IS-07 §7.4 defers it again (`:756`). Across the whole IS spec: `timeout` **0**, `deadline` **0**, `platform` **0**, `cross-process` **0** |
 
@@ -318,7 +318,7 @@ face must be degraded*.
 
 ### (vi) **THE WITNESS AND FOOTPRINT, measured** `[HIGH]`
 
-**Ten** tests spawn a real second OS process and assert lock behaviour:
+**Nine** tests spawn a real second OS process and assert LOCK behaviour (a tenth, `test_cas_concurrent_resume_across_os_processes_exactly_one_wins`, spawns a second process but proves the independent `os.link` CAS and survives removal of `_workflow_lock` — counted separately, NOT a lock witness; the reconciler lock is UNWITNESSED at HEAD):
 
 | Carrier | Witnesses |
 |---|---|
@@ -438,7 +438,7 @@ crashing at import. B-45's serialization backend is **not** built; `B-45` re-reg
 sharpened demand test at §4/Reading D and with its "no active Windows target" framing corrected per
 §3(i).
 
-- **For.** `[HIGH]` Everything in B is **verifiable on the CI that exists** — ten process-based
+- **For.** `[HIGH]` Everything in B is **verifiable on the CI that exists** — nine process-based
   contention witnesses already run on `ubuntu-latest` (§3(vi)). It preserves the safe declared
   degradation: `journal_exclusion_is_degraded()` keeps returning `True` on Windows, so the adoption
   tool keeps refusing by default. It performs the code motion the later Windows leg needs, making that
@@ -717,7 +717,7 @@ carried from it unverified.
 | C-IS-09 §9.4 heading `Spec_Information_Substrate_v1.md:896`, deferral footer `:900`; C-IS-07 §7.4 `:756` | ✓ verbatim |
 | `Target_Stack_Commitment_v1.md:42` (C-STK-10); `ADR-F4.md:21`, `:48` | ✓ verbatim |
 | `Plan_Executability_Audit_v1.md:84` (`filelock` GUARDRAIL), `:230` (Session-6 routing), `:58` (GUARDRAIL contract) | ✓ verbatim |
-| Ten real-second-OS-process witnesses (§3(vi)) | ✓ each `def test_` line + spawn call |
+| Nine real-second-OS-process lock witnesses + the separately-counted CAS test (§3(vi)) | ✓ each `def test_` line + spawn call |
 | Exception homes — `MemoryStoreGuardedWriteConflictError` `memory_store.py:91` (`RuntimeError`); `harness-core` precedent `validator_escalation_errors.py:43` + rationale `:1`–`:13` | ✓ |
 | Import direction — `harness-is` → `harness_runtime` **zero** imports; `harness-runtime` → `harness_is` **124** | ✓ |
 
