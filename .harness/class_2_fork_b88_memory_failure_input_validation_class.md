@@ -636,6 +636,26 @@ verbatim-in-substance rather than only at the register row.
 > `input_validation_failure` class exists for; re-typing them would deny the new class its two
 > clearest dispatch-side emitters and contradict the very boundary invariant A-ii serves.
 >
+> **COVERAGE, NARROWED HONESTLY** *(out-of-family review round 6 [P2], accepted after direct
+> grounding — not argued down)*. `classify_memory_failure` has **four** production call sites —
+> `memory_redaction.py:273`, `memory_capture.py:778`, `memory_tool_executor.py:255` and
+> `lifecycle/native_memory_adapter.py:556` — and **ZERO in `lifecycle/llm_dispatch.py`**. The two
+> retained raises live in `_standard_memory_tool_context` (`:4323`), called from
+> `_openai_prepared_memory_tool_calls` (`:4213`) and `_ollama_prepared_memory_tool_calls` (`:4845`)
+> — the dispatch **prepare** path, which runs **before** `StandardMemoryToolExecutor.execute()`
+> opens its telemetry span. **They emit no `memory.failure_class` today, and the six-site re-type
+> does not change that.** What A-ii establishes is reachability for the **classify-routed
+> population** (the executor's ten sites); the spec leg MUST state coverage in exactly those terms
+> and MUST NOT promise dispatch-side emission it does not wire.
+>
+> **Cross-fork interaction with `B-84`, recorded so neither leg widens the gap silently.** `B-84`'s
+> ratified pure `validate()` pre-pass moves **more** malformed-model-argument failures onto this
+> same unclassified prepare path. The residue — whether the prepare path should carry memory
+> failure telemetry at all — is **pre-existing at HEAD**, is created by **neither** ratification,
+> and is **not decided here**. It is a build-time question for whichever leg lands first, and only
+> an **end-to-end** witness could close it, because the gap is precisely that the production path
+> never reaches the classifier.
+>
 > **Leg ownership, stated explicitly so the work has an owner** *(out-of-family review round 1 [P2],
 > accepted — an earlier draft of this section said "re-typed at the spec leg" while §11.2 also
 > forbids any `harness-*/src` edit at a doc leg, which left the re-typing owned by no leg at all)*:
@@ -684,7 +704,9 @@ ratification.**
 by a dedicated `spec-writer`, with **both** clearance markers per root `CLAUDE.md` §4.5 (under A the
 plan does change, so the plan marker is owed too). **Impl leg (owed after it):** 1 enum member + 1
 declaration flip + 1 docstring rewrite + 1 fixture re-key; 8 witness rows flip + the two added
-negative rows + the mutation probe; **plus the A-ii source re-typing at the `llm_dispatch.py`
-internal-fault sites, with its classification-reachability witness** (§11.1). **Zero hash / CXA / contract-number impact.**
+negative rows + the mutation probe; **plus the A-ii source re-typing at the SIX `llm_dispatch.py`
+internal-fault sites, with a classification-reachability witness SCOPED TO THE CLASSIFY-ROUTED
+POPULATION** — the dispatch prepare path is outside that scope per §11.1's coverage narrowing, and
+must not be promised by this leg. **Zero hash / CXA / contract-number impact.**
 
 **No council is owed.** §7's convening was probe-resolved and conditional on **Reading B** only.

@@ -2944,7 +2944,15 @@ items:
     W-1, W-2, W-4, W-5, W-7 and W-8 IN ITS INVERTED FORM (`limit=0` rejected BEFORE any retrieval
     event -- NOT C''s residual pin), the section 8 mutation probes, W-5''s four-cell matrix EXECUTED
     with its answers recorded back on this row, and the section 9 items 3-7 shipped-source cite
-    repairs in the touched files. ACCEPTED COSTS, stated so the build leg does not re-litigate
+    repairs in the touched files. CROSS-FORK NOTE (out-of-family review round 6 [P2]), recorded
+    so the build leg does not widen a gap silently: the `validate()` pre-pass raises malformed-model-argument
+    failures on the dispatch PREPARE path (`_standard_memory_tool_context`, reached from `_openai_prepared_memory_tool_calls:4213`
+    / `_ollama_prepared_memory_tool_calls:4845`), which runs BEFORE `StandardMemoryToolExecutor.execute()`
+    opens its telemetry span -- and `lifecycle/llm_dispatch.py` contains ZERO `classify_memory_failure`
+    calls, so those failures emit NO `memory.failure_class`. This moves MORE of that class onto
+    an unclassified path, which interacts with B-88''s ratified seventh class. The residue is
+    PRE-EXISTING at HEAD and created by neither ratification; it is NOT decided here, and only
+    an END-TO-END witness could close it. ACCEPTED COSTS, stated so the build leg does not re-litigate
     them: the policy-flip TOCTOU and intra-call windows remain, and retry precedence changes.
     STATUS -> `open` (the fork''s section 10.2 ratification row prescribes the `pr:` stamp and
     the close_out outcome but is SILENT on status; the enum decides it -- ratifying a build reading
@@ -3264,13 +3272,30 @@ items:
     at `:4344` and context-mismatched at `:4346`, which is exactly the malformed-model-argument
     case the ratified `input_validation_failure` class EXISTS for; re-typing them would deny the
     new class its two clearest dispatch-side emitters -- they are NOT recorded as mis-typed-at-birth
-    and left in place. LEG OWNERSHIP, made explicit (out-of-family review round 1 [P2], accepted
-    -- an earlier draft said ''RE-TYPED at the spec leg'' while also forbidding any src edit at
-    the spec leg, leaving the re-typing with NO owning leg): the SPEC leg records the boundary
-    invariant and the re-type DECISION in contract text and establishes the dispatch population''s
-    classification REACHABILITY; the IMPL leg performs the SOURCE re-typing at the llm_dispatch.py
-    sites and carries its reachability WITNESS (the fork''s ''impl rider''). READINGS B and C
-    were NOT selected and are NOT partially adopted -- in particular C''s docstring-rewrite-at-ratification
+    and left in place. CLASSIFICATION-REACHABILITY COVERAGE, NARROWED HONESTLY at out-of-family
+    review round 6 [P2] after direct grounding: `classify_memory_failure` has FOUR production
+    call sites -- memory_redaction.py:273, memory_capture.py:778, memory_tool_executor.py:255
+    and lifecycle/native_memory_adapter.py:556 -- and **ZERO in lifecycle/llm_dispatch.py**. The
+    two RETAINED model-input raises (`:4344`/`:4346`) sit in `_standard_memory_tool_context`,
+    called from `_openai_prepared_memory_tool_calls:4213` and `_ollama_prepared_memory_tool_calls:4845`
+    -- the dispatch PREPARE path, which runs BEFORE `StandardMemoryToolExecutor.execute()` opens
+    its telemetry span. They therefore emit NO `memory.failure_class` today, and the six-site
+    re-type does NOT change that. **What A-ii establishes is reachability for the CLASSIFY-ROUTED
+    population (the executor''s ten sites), NOT for the dispatch prepare path.** The spec leg
+    MUST state the coverage in exactly those terms and MUST NOT promise dispatch-side emission
+    it does not wire. **CROSS-FORK INTERACTION, recorded so neither leg widens the gap silently:**
+    B-84''s ratified `validate()` pre-pass moves MORE malformed-model-argument failures onto this
+    same unclassified prepare path. The residue -- whether the dispatch prepare path should carry
+    memory failure telemetry at all -- is PRE-EXISTING at HEAD, is NOT created by either ratification,
+    and is NOT decided here: it is a build-time question for whichever leg lands first, and an
+    end-to-end witness (not a unit test) is what would close it, since the gap is precisely that
+    the production path never reaches the classifier. LEG OWNERSHIP, made explicit (out-of-family
+    review round 1 [P2], accepted -- an earlier draft said ''RE-TYPED at the spec leg'' while
+    also forbidding any src edit at the spec leg, leaving the re-typing with NO owning leg): the
+    SPEC leg records the boundary invariant and the re-type DECISION in contract text and establishes
+    the dispatch population''s classification REACHABILITY; the IMPL leg performs the SOURCE re-typing
+    at the llm_dispatch.py sites and carries its reachability WITNESS (the fork''s ''impl rider'').
+    READINGS B and C were NOT selected and are NOT partially adopted -- in particular C''s docstring-rewrite-at-ratification
     obligation DOES NOT FIRE, because under A the `memory_tool_executor.py:149`-`:171` stopgap
     docstring is rewritten to match the ratified outcome AT THE IMPL LEG (fork section 9, impl
     row), and no `harness-*/src` edit rides a doc-only ratification. STATUS design_substrate_gated
@@ -3279,21 +3304,22 @@ items:
     v1.2 -> v1.3 (U-MEM-22 :829 extended, NO new unit), with BOTH clearance markers per root CLAUDE.md
     section 4.5 -- and then the IMPL leg (1 enum member + 1 declaration flip + 1 docstring rewrite
     + 1 fixture re-key; 8 witness rows flip + 2 added negative rows + the mutation probe; PLUS
-    the A-ii source re-typing at the llm_dispatch.py internal-fault sites and its reachability
-    witness). ZERO hash / CXA / contract-number impact. NO COUNCIL is owed: the convening was
-    conditional on Reading B only, and B was not selected. DRIFT REPAIRS APPLIED IN PLACE AT THIS
-    LEG (fork section 10''s six items, which section 8 routes to the ratification leg''s register
-    touch; none changes any disposition): (1) the scope-value-domain declaration cites are `memory_capture.py:286`-`:288`
-    (`MemoryCaptureScopeValueDomainError`, class :271) and `:307`-`:309` (`MemoryCaptureReservedActorError`,
-    class :291) -- the previously recorded `:215`/`:236` were a blank line and a docstring; (2)
-    `MemoryToolExecutionInputError` is 10 sites IN `memory_tool_executor.py` (correct as scoped
-    to the classified population) but 18 REPO-WIDE; of the extra 8 in `llm_dispatch.py`, SIX are
-    internal-fault sites A-ii re-types (`:4334`, `:4338`, `:4450`, `:4458`, `:4947`, `:4958`)
-    and TWO -- `:4344` and `:4346` -- validate the MODEL-SUPPLIED `scope_ref` argument and KEEP
-    the new class (round-4 scoping); (3) `MemoryToolExecutionDeniedError` has 15 raise sites at
-    HEAD, not 14 (growth from later arcs, not a regression); (4) the classification table is 39
-    parametrized rows (AST count), not 37; (5) the mutation probes are SEVEN, enumerated (a)-(g)
-    -- the ''all five'' header undercounted its own body, no probe is missing; (6) `_NativeMemoryPolicyDeniedError`
+    the A-ii source re-typing at the SIX llm_dispatch.py internal-fault sites, and a reachability
+    witness SCOPED TO THE CLASSIFY-ROUTED POPULATION -- the dispatch prepare path is out of that
+    scope per the coverage narrowing above). ZERO hash / CXA / contract-number impact. NO COUNCIL
+    is owed: the convening was conditional on Reading B only, and B was not selected. DRIFT REPAIRS
+    APPLIED IN PLACE AT THIS LEG (fork section 10''s six items, which section 8 routes to the
+    ratification leg''s register touch; none changes any disposition): (1) the scope-value-domain
+    declaration cites are `memory_capture.py:286`-`:288` (`MemoryCaptureScopeValueDomainError`,
+    class :271) and `:307`-`:309` (`MemoryCaptureReservedActorError`, class :291) -- the previously
+    recorded `:215`/`:236` were a blank line and a docstring; (2) `MemoryToolExecutionInputError`
+    is 10 sites IN `memory_tool_executor.py` (correct as scoped to the classified population)
+    but 18 REPO-WIDE; of the extra 8 in `llm_dispatch.py`, SIX are internal-fault sites A-ii re-types
+    (`:4334`, `:4338`, `:4450`, `:4458`, `:4947`, `:4958`) and TWO -- `:4344` and `:4346` -- validate
+    the MODEL-SUPPLIED `scope_ref` argument and KEEP the new class (round-4 scoping); (3) `MemoryToolExecutionDeniedError`
+    has 15 raise sites at HEAD, not 14 (growth from later arcs, not a regression); (4) the classification
+    table is 39 parametrized rows (AST count), not 37; (5) the mutation probes are SEVEN, enumerated
+    (a)-(g) -- the ''all five'' header undercounted its own body, no probe is missing; (6) `_NativeMemoryPolicyDeniedError`
     has 6 raise sites at HEAD, not 4 (`_require_scope_family_in_domain:305` and a third `_require_retrieval_allowed`
     branch at `:334` added by later arcs) -- and whether those two newcomers are span-pinned was
     NOT verified by the fork and is recorded as UNVERIFIED rather than assumed, so no later arc
