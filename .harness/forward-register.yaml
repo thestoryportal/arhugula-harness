@@ -61,11 +61,11 @@ snapshot:
   total: 108
   open: 0
   design_substrate_gated: 0
-  registered_finding: 19
+  registered_finding: 18
   operator_gated: 0
   held: 1
-  closed: 88
-  identity_digest: 762f0486202ee718
+  closed: 89
+  identity_digest: e65ccbb3c0159384
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -3944,7 +3944,8 @@ items:
     confirming round on the `B-103` rework, PR #1172 codex [P2], delivered post-merge, 2026-07-31)*'
 - id: B-109
   title: Sibling immutable-map carrier _ImmutableKeyArns retains the inherited dict.__init__ re-population hole
-  status: registered_finding
+  status: closed
+  pr: '#pending'
   summary: 'SURFACED at the B-107 impl leg (codex round 2, 2026-08-04): the B-107 carrier
     _ImmutableEffectFenceResolutions had its inherited dict.__init__ re-population route sealed
     (calling __init__ on the already-constructed instance silently repopulated the sealed map
