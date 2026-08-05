@@ -3463,7 +3463,11 @@ items:
     (PREMISE FALSIFIED -- the shipped call path has no event loop to block)
   status: closed
   pr: '#1172'
-  summary: 'The B-97(b) cross-process append lock is a BLOCKING fcntl.flock syscall taken ON THE EVENT
+  summary: '[SUPERSEDED 2026-08-04 -- the premise below was FALSIFIED at the PR #1172 merge gate: no production
+    capture site runs on a live event loop (every one reaches the store through
+    workflow_driver._run_protocol_method_sync -> asyncio.run on a private single-task loop in a to_thread
+    worker), so the loop this row describes does not exist at any shipped call site; text preserved as the
+    registration-time claim.] The B-97(b) cross-process append lock is a BLOCKING fcntl.flock syscall taken ON THE EVENT
     LOOP: JournalWorkflowPauseStore.capture() is called synchronously from the async
     capture_pause_snapshot, so a contended acquisition stalls the whole loop -- every other
     workflow, every pending timer -- for the duration of another process''s append. PRECEDENTED,
@@ -3477,7 +3481,10 @@ items:
     have mixed two unrelated review surfaces. SEVERITY, STATED HONESTLY: a durable pause is a
     human-latency event and the lock is held for one append, so the contention window is small and
     no live stall has been observed -- this is a soundness/latency gap, not a live defect.'
-  close_out: 'Move the blocking acquisition off the event loop, on the sibling''s own precedent (an
+  close_out: '[SUPERSEDED 2026-08-04 -- this directive was BUILT, then DECLINED at the PR #1172 merge gate and
+    STRIPPED (premise falsified: the rescued loop does not exist at any shipped call site); retained as history,
+    NOT operative guidance. Reopening trigger: a captured-loop bridge replacing the private-loop asyncio.run --
+    see the closing record at the end of this field.] Move the blocking acquisition off the event loop, on the sibling''s own precedent (an
     asyncio.to_thread-shaped offload of the locked append, or an equivalent off-loop resolution
     path), and witness it by EXECUTION: an unrelated concurrent workflow and a pending loop timer
     demonstrably advance while a second process holds the journal lock -- with the mutation probe
