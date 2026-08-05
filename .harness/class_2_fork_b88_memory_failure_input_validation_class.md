@@ -281,8 +281,25 @@ under-specified and the next arc re-litigates it:
 `memory_observability.py:41`-ish and a rewrite of the `:150`–`:167` stopgap docstring (which
 explicitly names itself the flip site).
 
-**Populations that move: the `MemoryToolExecutionInputError` family, and ONLY it.** The base
-`MemoryToolExecutionError`'s `provider_adapter_failure` (`:100`–`:101`), the classifier residual
+**Populations that move: the `MemoryToolExecutionInputError` family, and ONLY it — with one
+population split the spec leg MUST resolve (codex R4, accepted).** The declaration lives on the
+TYPE, so all **18** repo-wide raise sites' instances carry it — but the type is raised for TWO
+distinct fault kinds. The executor's 10 sites are genuine caller/model argument validation (inside
+the boundary sentence above). The `llm_dispatch.py` population includes at least two sites —
+`:4458` and `:4958`, raised when the internal `MEMORY_TOOL_CONTRACTS` schema itself lacks
+`properties` — plus missing-runtime-context sites, which are INTERNAL configuration/wiring faults,
+not caller-supplied-argument refusals; labeling those `input_validation_failure` would contradict
+the boundary invariant on its face. **Sub-decision A-ii, owed at the spec leg (impl rider):**
+either (a) re-type the internal-fault raise sites to a type outside the family (e.g. the base or a
+dispatch-local subtype declaring `provider_adapter_failure`) so the family boundary IS the type
+boundary — the recommended shape, keeping declaration-at-the-definition-site honest — or (b)
+accept the family-wide declaration and record the internal-fault sites as mis-typed at birth (a
+pre-existing typing choice, arguably its own defect row). Either way the spec leg MUST first
+establish empirically whether the dispatch population reaches `classify_memory_failure` at all
+(`llm_dispatch.py` contains no call to it; only the executor's 10 sites are demonstrably
+classified — §0's ungrounded-claim 2), and the impl rider MUST witness the dispatch population's
+emitted class (or its unreachability) explicitly, per the production-path verification rule. The
+base `MemoryToolExecutionError`'s `provider_adapter_failure` (`:100`–`:101`), the classifier residual
 (`memory_observability.py:200`), and every other declared class stay exactly where they are. Reading
 A does **not** touch the residual — see §5's dominated variant A′.
 
