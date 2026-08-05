@@ -749,8 +749,18 @@ on BOTH register surfaces in this same commit.**
   distinction. "Exclusive-only" is therefore recorded at `[MODERATE]` as a statement about what the
   docs *guarantee*, not at `[HIGH]` as a documented prohibition.
 
-**Review record.** *(R0 — initial authoring, this commit. Out-of-family `just codex-review` and the
-`merge-gate` lenses run at the orchestrator's leg; rounds are appended here.)*
+**Review record (out-of-family `just codex-review`, branch-vs-main, TEN rounds to the cap — every finding accepted, the recommendation/runner-up/discriminators never contested).**
+- **R1** [P1] `FileLock` is an identity migration, not a drop-in (create/truncate semantics cannot target the canonical inode; sidecar changes lock identity at every converted site) + [P3] carrier split is 1+3 not 2+2 (`0890ce76`-era commits; SHAs in `git log`).
+- **R2** exclusive-only count 7-not-8 (`_acquire_legacy_sidecar_if_present(exclusive=False)` + `cross_process_read_lock` need shared semantics) + the build leg's reviewer gate made authorship-dependent.
+- **R3** the Windows build leg carries the same authorship-selected out-of-family review gate.
+- **R4** the decision-3 row's surviving eight-of-nine twin corrected.
+- **R5** the vehicle discriminator carries the every-site identity migration, not only the `LOCK_SH` face.
+- **R6** B-45's stale-first clauses inverted in place on both register surfaces (current truth leads).
+- **R7** B-45's YAML `close_out` — a third surface of the same clause — rewritten current-first (one plain-scalar colon-space parse breakage self-caught and redone).
+- **R8** D-0 widened to MODIFIED preconditions (call-site counting missed an in-place `_provenance_unchanged` change); D-1 requires an EXECUTING BEHAVIORAL witness (lint-only Windows CI must not satisfy it); Reading A reframed gated-but-self-dischargeable (its PR can carry the `windows-latest` contention witness).
+- **R9** lock-witness count 9-not-10 (the reconciler CAS test proves `os.link`, not `_workflow_lock` — that carrier is UNWITNESSED at HEAD and the build leg must add its witness); D-4 narrowed to genuinely-future rows (the old phrasing was satisfied at filing time).
+- **R10 (cap)** the remaining ten-witness inventory twins corrected across §2/§3(vi)/§6/§10.
+**CAP REACHED at ten rounds; shipped per the enumeration-variant capping discipline** — substance concentrated in R1/R2/R8/R9; R3–R7 and R10 propagated those findings into every dependent passage; any residual claim-precision long tail on this 735-line filing is bounded by §10's own verification inventory. Contract-level findings still reopen this record at ratification.
 
 
 
