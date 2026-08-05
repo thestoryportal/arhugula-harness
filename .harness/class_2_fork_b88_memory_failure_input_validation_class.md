@@ -52,8 +52,10 @@ That value is a **declared stopgap, on the record, in the shipped code**. `memor
   (in-execution operator decision) rather than Class 1 (halt-execution defect) per root `CLAUDE.md`
   §4.3 — the same classification `B-98`, `B-104` and `B-107` carry.
 
-**The harm, stated precisely and against interest.** Nothing is broken. Every failure IS emitted, on
-the right span, with a value from the six-member vocabulary. The harm is **triage resolution**: an
+**The harm, stated precisely and against interest.** Nothing is broken. Every failure on the
+CLASSIFY-ROUTED population — the executor's 10 raise sites plus the four classifier call sites'
+paths — IS emitted, on the right span, with a value from the six-member vocabulary (the dispatch
+population's telemetry fate is unverified; §4 Reading A's A-ii sub-decision states it). The harm is **triage resolution**: an
 operator filtering `memory.failure_class = provider_adapter_failure` to find provider/adapter faults
 gets, mixed in, every model-authored argument error — and (see §3(iv)) also gets every *unclassified*
 failure, because `provider_adapter_failure` is simultaneously the classifier's **residual**.
