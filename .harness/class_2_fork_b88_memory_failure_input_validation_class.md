@@ -296,8 +296,10 @@ boundary — the recommended shape, keeping declaration-at-the-definition-site h
 accept the family-wide declaration and record the internal-fault sites as mis-typed at birth (a
 pre-existing typing choice, arguably its own defect row). Either way the spec leg MUST first
 establish empirically whether the dispatch population reaches `classify_memory_failure` at all
-(`llm_dispatch.py` contains no call to it; only the executor's 10 sites are demonstrably
-classified — §0's ungrounded-claim 2), and the impl rider MUST witness the dispatch population's
+(`llm_dispatch.py` contains no call to `classify_memory_failure` — this filing verified the
+absence by direct search but did NOT trace whether those raises reach any other classifying span,
+so their telemetry fate is stated here as UNVERIFIED rather than assumed; only the executor's 10
+sites are demonstrably classified), and the impl rider MUST witness the dispatch population's
 emitted class (or its unreachability) explicitly, per the production-path verification rule. The
 base `MemoryToolExecutionError`'s `provider_adapter_failure` (`:100`–`:101`), the classifier residual
 (`memory_observability.py:200`), and every other declared class stay exactly where they are. Reading
@@ -570,8 +572,19 @@ reading; it is recorded so a later arc does not inherit "all four are pinned" as
   parenthetically; the Reading-A witness recipe's single fixture contradicted its own re-key
   requirement — split into two negative rows with distinct literals (b1 non-member re-key, b2
   plain-str-of-the-new-member type-gate pin).
-- **R3 — 2 findings, both accepted and fixed** (this commit): Reading B's owed docstring rewrite had
+- **R3 — 2 findings, both accepted and fixed** (`e02d5be3`): Reading B's owed docstring rewrite had
   no terminal leg (§9's impl leg was A-only) — B now carries its own terminal leg and status
   transition; this review record itself still held the R0 placeholder while R1/R2 commits existed —
-  replaced with the round-by-round account you are reading.
+  replaced with a round-by-round account.
+- **R4 — 2 findings, both accepted and fixed** (`8f0175f7`): [substantive] Reading A treated all 18
+  `MemoryToolExecutionInputError` raise sites as one population while `llm_dispatch.py:4458`/`:4958`
+  raise the type for INTERNAL `MEMORY_TOOL_CONTRACTS` schema faults that contradict the boundary
+  invariant — NEW sub-decision **A-ii** (re-type the internal-fault sites, recommended, or record
+  them mis-typed at birth; dispatch population's classification reachability to be established at
+  the spec leg, witnessed at the impl rider); [replace-not-append, third instance] the register's
+  early bullets carried stale classifier (`:150-163` → `:166`–`:200`) and spec-invariant (`:641` →
+  `:870`) cites plus an unqualified "closed" — corrected in place, date-stamped.
+- **R5 — 2 [P2], both accepted and fixed** (this commit): this record ended at R3 while HEAD was the
+  R4 commit — extended; the A-ii text cited a phantom "§0 ungrounded-claim 2" — replaced with the
+  inline statement of what was and was not verified.
 - Later rounds, if any, append below before ratification.
