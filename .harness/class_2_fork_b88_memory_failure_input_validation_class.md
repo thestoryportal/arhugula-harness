@@ -648,13 +648,44 @@ verbatim-in-substance rather than only at the register row.
 > population** (the executor's ten sites); the spec leg MUST state coverage in exactly those terms
 > and MUST NOT promise dispatch-side emission it does not wire.
 >
-> **Cross-fork interaction with `B-84`, recorded so neither leg widens the gap silently.** `B-84`'s
-> ratified pure `validate()` pre-pass moves **more** malformed-model-argument failures onto this
-> same unclassified prepare path. The residue — whether the prepare path should carry memory
-> failure telemetry at all — is **pre-existing at HEAD**, is created by **neither** ratification,
-> and is **not decided here**. It is a build-time question for whichever leg lands first, and only
-> an **end-to-end** witness could close it, because the gap is precisely that the production path
-> never reaches the classifier.
+> **Cross-fork interaction with `B-84` — in TWO parts, recorded so neither leg widens the gap
+> silently.** *(Separated at out-of-family review round 7 [P2]; an earlier revision of this
+> paragraph called the whole residue pre-existing, which **over-claimed**, and is corrected here
+> rather than defended.)*
+>
+> **(i) PRE-EXISTING.** The `:4344` / `:4346` context-and-argument raises already sit on the
+> unclassified prepare path at HEAD; neither ratification put them there.
+>
+> **(ii) NEWLY INTRODUCED by `B-84`'s ratified pre-pass.** Checks that **today** raise *inside*
+> `_execute_authorized()` — **`limit=0` among them** — **are** classified today, because
+> `StandardMemoryToolExecutor.execute()`'s catch calls `classify_memory_failure`
+> (`memory_tool_executor.py:255`). Relocating them into `_openai_prepared_memory_tool_calls` /
+> `_ollama_prepared_memory_tool_calls` **removes that emission**, and **none** of `B-84`'s ratified
+> witnesses (W-1 / W-2 / W-4 / W-5 / W-7 / W-8) asserts it. **The `B-84` build leg therefore owes
+> ONE of two things and may not simply inherit the loss:** either **preserve classification** for
+> the relocated checks on the prepare path, or **ratify the telemetry loss explicitly and witness
+> it end-to-end** (assert the attribute's absence, so the absence is a decision on the record
+> rather than a silent regression).
+>
+> The unclassified prepare path itself stays a build-time question, closable only **end-to-end**,
+> because the gap is precisely that the production path never reaches the classifier.
+>
+> **RETRY-EXIT-CLASS CONSEQUENCE OF THE RE-TYPE** *(out-of-family review round 7 [P2], grounded by
+> direct read **and** an empirical probe)*. `_classify_provider_exception`
+> (`lifecycle/retry_breaker_fallback.py:269`) returns `None` — **fail-fast** — only for an
+> `isinstance` match against `(LLMDispatchProviderUnreachableError, LLMDispatchPayloadShapeError,
+> MemoryToolExecutionInputError)` at `:325`–`:333`; **everything else falls through to
+> `TRANSIENT_RETRY`** at `:337`. Probed: `MemoryToolExecutionInputError` → `None`, base
+> `MemoryToolExecutionError` → `transient-retry`. **So re-typing the six internal sites AWAY from
+> `MemoryToolExecutionInputError` FLIPS them from fail-fast to transient-retry unless the new type
+> is ALSO admitted to that tuple** — internal missing-context and schema faults would begin
+> **retrying and advancing candidates**. This is a control-flow change the re-type **introduces**,
+> not one it inherits. **The SPEC leg MUST record the intended exit classification** for the new
+> type explicitly (fail-fast or retry — a real choice; an internal wiring fault that retries
+> against a different candidate is not obviously wrong), **and the IMPL leg owes an END-TO-END
+> dispatch/retry witness** at the re-typed sites. **This obligation is IN SCOPE for the re-type and
+> is NOT covered by the classify-routed-population narrowing above**, which scopes *telemetry*
+> reachability, not *retry* behaviour.
 >
 > **Leg ownership, stated explicitly so the work has an owner** *(out-of-family review round 1 [P2],
 > accepted — an earlier draft of this section said "re-typed at the spec leg" while §11.2 also
@@ -662,7 +693,8 @@ verbatim-in-substance rather than only at the register row.
 > the **spec leg** records the boundary invariant and the re-type **decision** in contract text, and
 > establishes the dispatch population's classification **reachability**; the **impl leg** performs
 > the **source** re-typing at the **six** `llm_dispatch.py` internal-fault sites and carries its
-> reachability **witness** — the *impl rider* the fork names.
+> reachability **witness** — the *impl rider* the fork names — **plus the end-to-end dispatch/retry
+> witness** the retry-exit-class consequence above makes owed.
 
 **Readings B and C were NOT selected and are NOT partially adopted.**
 
@@ -707,6 +739,10 @@ declaration flip + 1 docstring rewrite + 1 fixture re-key; 8 witness rows flip +
 negative rows + the mutation probe; **plus the A-ii source re-typing at the SIX `llm_dispatch.py`
 internal-fault sites, with a classification-reachability witness SCOPED TO THE CLASSIFY-ROUTED
 POPULATION** — the dispatch prepare path is outside that scope per §11.1's coverage narrowing, and
-must not be promised by this leg. **Zero hash / CXA / contract-number impact.**
+must not be promised by this leg — **plus an END-TO-END dispatch/retry witness for the re-typed
+sites**, owed because the re-type flips them out of `_classify_provider_exception`'s fail-fast
+tuple (§11.1). **The spec leg additionally owes the new type's intended exit classification**,
+recorded in contract text; a re-type that leaves it unstated ships a control-flow change nobody
+chose. **Zero hash / CXA / contract-number impact.**
 
 **No council is owed.** §7's convening was probe-resolved and conditional on **Reading B** only.

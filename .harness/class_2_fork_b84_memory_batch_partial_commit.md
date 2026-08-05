@@ -1055,7 +1055,8 @@ defect in the routing skill, belonging to whoever next revises it, not to this f
 - **W-5's four-cell matrix EXECUTED, with its answers recorded back on the register row.**
 - The **§9 items 3–7 shipped-source cite repairs**, in the files the leg touches.
 
-**Telemetry obligation, added at out-of-family review round 7 [P2].** Checks the pre-pass relocates out of
+**Telemetry obligation — a loss this pre-pass NEWLY INTRODUCES, not one it inherits** *(added at
+out-of-family review round 7 [P2])*. Checks the pre-pass relocates out of
 `_execute_authorized()` — `limit=0` among them — **are classified today**, because
 `StandardMemoryToolExecutor.execute()`'s catch calls `classify_memory_failure`
 (`memory_tool_executor.py:255`). Raising them from `_openai_prepared_memory_tool_calls` /
