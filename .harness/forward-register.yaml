@@ -3508,7 +3508,7 @@ items:
     self._store.capture(snapshot) INLINE
     (harness-runtime/src/harness_runtime/lifecycle/durable_pause_resume_protocol.py:124) and the
     pause-capture path carries ZERO run_audit_off_loop references -- the helper exists at
-    lifecycle/audit_offload.py:256 but is consumed only by hitl_gate_composer.py:1363. The only src
+    lifecycle/audit_offload.py:256; the PAUSE-CAPTURE path has ZERO references to it (live consumers on OTHER paths at 2026-08-05: hitl_gate_composer.py:1363, llm_dispatch.py:5107, cost_attribution_validator_dispatch.py:419, webhook_delivery_composer.py:390, runtime_tool_dispatcher.py:590). The only src
     delta versus main is that module docstring, which carries the premise-falsified account. WHAT
     FOLLOWS TO THE END OF THIS PARAGRAPH IS THE HISTORY OF THE DECLINED, UNMERGED DESIGN, NOT A
     DESCRIPTION OF SHIPPED BEHAVIOUR -- PRIMITIVE CHOICE,
