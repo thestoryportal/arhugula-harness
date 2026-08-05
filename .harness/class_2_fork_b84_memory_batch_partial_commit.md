@@ -67,9 +67,17 @@ ratification is not read as authorizing more than it does.
 | **Batch execution** | `_openai_memory_tool_result_messages` (`:4229`–`:4249`) / `_ollama_memory_tool_result_messages` (`:4860`–`:4882`) | `for call in prepared: standard_memory_tool_executor.execute(call.request)` — `:4236`–`:4237` and `:4874`–`:4875`. **Sequential, unguarded, no rollback.** Both docstrings say "Execute an ALREADY-VALIDATED batch in order" |
 | **Per-call durable commit — record** | `StandardMemoryToolExecutor._write_note` → `capture_api.capture_tool_event(...)` (`memory_tool_executor.py:362`) → `EpisodicMemoryCapture._capture` → `store.write_record(record)` (`memory_capture.py:818`) then `store.append_memory_operation(payload)` (`:820`) | The record is written **before** its ledger entry, deliberately (`:809`–`:817`) |
 | **Per-call durable commit — ledger, EVERY tool** | `StandardMemoryToolExecutor.execute` `:247` → `_append_standard_tool_call` (`:616`–`:652`) | **On the success path of EVERY call**, including read-only `memory.search` / `memory.read`, a `MemoryOperationKind.STANDARD_TOOL_CALL` row is appended to the durable ledger (`:634`). See §3(i) — this widens the row's framing |
-| **The later raise** | `_string_arg` (`:678`–`:682`), `_optional_string_arg` (`:685`), `_positive_int_arg` (`:694`), `_allowed_kinds` (`:703`), `_kind_from_memory_ref` (`:764`), `_promotion_kind` (`:783`) | **10** `raise MemoryToolExecutionInputError(` sites in the executor (recounted: `git grep -c`), plus **8** in `lifecycle/llm_dispatch.py`. The executor's are the ones reachable *mid-batch* |
+| **The later raise** | `_string_arg` (`:678`–`:682`), `_optional_string_arg` (`:685`), `_positive_int_arg` (`:694`), `_allowed_kinds` (`:703`), `_kind_from_memory_ref` (`:764`), `_promotion_kind` (`:783`) | **10** syntactic `raise MemoryToolExecutionInputError(` sites in the executor (recounted: `git grep -c`), plus **8** in `lifecycle/llm_dispatch.py`. The executor's are the ones reachable *mid-batch* — see the count note below |
 | **Retry disposition (LANDED half)** | `_classify_provider_exception` (`retry_breaker_fallback.py:269`, fail-fast tuple `:325`–`:333`) | Returns `None` → `_PerCandidateTerminal(result=None, …)` (`:998`) → the outer loop does **not** retry the same candidate but **does** advance to the next (`:692`–`:706`) |
 | **Cross-candidate residual** | `_advance_or_exhaust` at `:699`; next candidate re-enters `self.inner.dispatch(rebound, step, …)` (`:948`) with the ORIGINAL `step` | The failed candidate's `prepared` batch is **local** to the inner dispatch and is never forwarded. The next candidate re-samples its own tool calls. **Duplication is CONTINGENT, not guaranteed** — confirmed |
+
+**Count note — 10 syntactic, 9 model-reachable (codex R1 [P3], accepted).** `[HIGH]` The tenth is
+`_execute_authorized`'s trailing `raise MemoryToolExecutionInputError(f"unsupported memory tool
+{tool_name!s}")` (`memory_tool_executor.py:271`). `request.tool_name` is typed `MemoryToolName`, all
+**five** members are dispatched at `:261`–`:270`, and the pre-pass only ever constructs a request
+from a resolved enum member (`llm_dispatch.py:4206`/`:4838`), so that branch is a defensive residual
+unreachable from model-supplied arguments. **9** is the number Reading A's coverage and W-4's scope
+are stated against.
 
 **Direction (1) and direction (2) are both confirmed UNBUILT at HEAD.** `git grep -n 'def validate'
 harness-runtime/src/harness_runtime/memory_tool_executor.py` returns **nothing** — the executor's
@@ -173,36 +181,47 @@ nothing" to "has a locking primitive it can build on," but the **compensation qu
 actually turns on is untouched**, and one obstacle the row did not know about was added: the write
 path in question bypasses the guarded seam entirely.
 
-### (iv) "ROLLBACK" FOR THIS RECORD SHAPE IS NOT DELETION, AND AN IDENTICAL REPLAY IS NOT BENIGN `[MODERATE]`
+### (iv) "ROLLBACK" HERE IS NOT DELETION, AND THE CROSS-CANDIDATE REPLAY SPLITS INTO THREE CASES — NOT ONE `[MODERATE]`
 
-`MemoryRecordKind.TOOL_EVENT` is in `_JSONL_BY_KIND` (`memory_store.py:195`–`:199`), so a
-`write_note` record is **appended** to the episodic tool-events JSONL by `_append_jsonl`
-(`:266`–`:267` → `:623`–`:627`), which is an unconditional `open("ab")` append with **no dedupe**.
-The `memory_id` is content-addressed (`memory_capture.py:1117` → `_memory_id_for` `:1269`–`:1278` →
-`derive_memory_id(EPISODIC, kind, content_hash)`), and the capture's ledger `idempotency_key` is
-derived from it (`:1084`–`:1087`).
+*(This subsection was materially rewritten at codex R1 [P2-a]; the first pass asserted a single
+"identical replay raises a conflict" outcome, which is **false as stated**. The corrected matrix is
+below, and it makes the aggravator narrower than the first pass claimed.)*
 
-Two consequences for the cross-candidate replay the row calls *"up to one extra copy per candidate
-when re-sampled alike"*:
+**The mechanics, verified.** `MemoryRecordKind.TOOL_EVENT` is in `_JSONL_BY_KIND`
+(`memory_store.py:195`–`:199`), so a `write_note` record is **appended** to the episodic tool-events
+JSONL by `_append_jsonl` (`:266`–`:267` → `:623`–`:627`) — an unconditional `open("ab")` append with
+**no dedupe**, and it runs **before** the ledger append (`memory_capture.py:818` then `:820`). The
+`memory_id` is content-addressed (`:1117` → `_memory_id_for` `:1269`–`:1278` →
+`derive_memory_id(EPISODIC, kind, content_hash)`) and the ledger `idempotency_key` is derived from it
+(`:1084`–`:1087`).
 
-- **Re-sampled DIFFERENTLY** (the likely case — an LLM re-sampling is stochastic, and §3(v)'s
-  aggravator makes malformed re-emission more likely): a different `content_hash` → a **different
-  `memory_id`** → a genuinely new, distinct record. Not a duplicate; an *extra note*.
-- **Re-sampled IDENTICALLY**: the same `memory_id` → `_append_jsonl` appends a **second physical
-  line** under that id (last-line-wins on read), and then `append_memory_operation` collides on the
-  idempotency key. `_capture`'s conflict handler re-raises for any `event_kind !=
-  RUN_START_EVENT_KIND` (`memory_capture.py:884`–`:885`); `"tool_event"` is not that kind, so the
-  broad handler at `:892`–`:903` converts it to `MemoryCaptureStatus.FAILED`, which `_write_note`
-  turns into `MemoryToolExecutionStoreError` (`memory_tool_executor.py:385`–`:387`) — a class that
-  is **NOT** in the fail-fast tuple and therefore classifies `TRANSIENT_RETRY`.
+**Two identity inputs the first pass missed.** (a) The hashed content includes
+`"summary_model": summary.model` (`memory_capture.py:542`), and `_write_note` supplies
+`SummaryProvenance(..., model=context.model)` (`memory_tool_executor.py:367`) where `context.model`
+is the **per-candidate rebound model** (`llm_dispatch.py:4213`–`:4220`). (b)
+`append_memory_operation` does **not** raise on every key collision: it compares an **18-field
+equivalence payload** — including `provider` and `model`, excluding `timestamp` —
+(`memory_operation_ledger.py:476`–`:519`) and returns `MemoryOperationWriteResult.IDEMPOTENT_NOOP`
+on a match (`:536`), raising `MemoryOperationIdempotencyConflictError` **only** when the same key
+carries a *different* payload (`:537`–`:539`).
 
-**Stated with its confidence, and against interest:** this second path is a **code-read inference,
-not an executed witness** — I did not run it. `[MODERATE]` If it holds, it is a **new aggravator on
-this row, not a new defect elsewhere**: an identical cross-candidate replay would leave a duplicate
-physical line *and* re-open a retry staircase on a different exception class than the one B-84's
-landed half closed. **The build leg MUST witness this path before relying on either reading of it**
-(§8), and if confirmed it should be recorded on the B-84 row at the ratification leg rather than
-absorbed silently.
+**The corrected matrix for a cross-candidate re-emission of "the same" `write_note`:**
+
+| Case | Record identity | Ledger outcome | Net effect |
+|---|---|---|---|
+| **(1) Re-sampled with different text** (likeliest — sampling is stochastic, and §3(v)'s aggravator raises malformed/varied re-emission) | different `content_hash` → **different `memory_id`** | new key → `APPENDED` | **An extra, distinct note.** Not a duplicate — a second memory the operator never asked for |
+| **(2) Same text, different MODEL** (the ordinary fallback shape — a chain advances to another model) | `summary_model` differs → **different `memory_id`** | new key → `APPENDED` | Same as (1): **an extra distinct note** |
+| **(3) Same text, same model NAME, different provider** (narrow: one model name served by two providers in the chain) | identical content → **same `memory_id`** → duplicate JSONL line appended at `:818` | same key, `provider` differs → **RAISES**; `_capture` re-raises for `event_kind != RUN_START_EVENT_KIND` (`:884`–`:885`) → broad handler `:892`–`:903` → `FAILED` → `MemoryToolExecutionStoreError` (`memory_tool_executor.py:385`–`:387`), which is **NOT** in the fail-fast tuple and classifies `TRANSIENT_RETRY` | **Duplicate physical line PLUS a re-opened retry staircase** on a different exception class than the one B-84's landed half closed |
+| **(4) Fully identical** (same provider, same model — degenerate across candidates) | same `memory_id` → duplicate JSONL line still appended | equivalence matches → `IDEMPOTENT_NOOP` (`:536`), no raise | Duplicate physical line, reported CAPTURED |
+
+**Stated with its confidence, and against interest.** `[MODERATE]` The whole matrix is a **code-read
+inference, not an executed witness** — none of the four cases was run. Cases (1)/(2) are the
+*ordinary* ones and produce an **extra note**, which is the honest statement of the harm; the first
+pass's "duplicate line + re-opened staircase" claim survives only as case **(3)**, which is narrow.
+Case (3), if real, is a **new aggravator on this row, not a defect elsewhere** — it would mean the
+landed fail-fast half can be re-entered through `MemoryToolExecutionStoreError`. **The build leg must
+witness the full four-cell matrix** (§8 W-5) and record the answers, rather than either reading being
+relied on as settled.
 
 ### (v) THE AGGRAVATOR IS UNCHANGED AND UNVERIFIED HERE `[SPECULATIVE]`
 
@@ -235,8 +254,8 @@ zero spec/plan version bump, zero CXA rows (no new cross-package consumption —
 already imports the executor), zero durable-write ordering change.
 
 **What it closes, and what it does NOT — stated precisely.** `[HIGH]`
-- **Closes** the demonstrated door: the argument-shape class, i.e. all **10** executor
-  `MemoryToolExecutionInputError` raise sites reachable from model-supplied arguments.
+- **Closes** the demonstrated door: the argument-shape class, i.e. the **9 model-reachable** of the
+  executor's 10 `MemoryToolExecutionInputError` raise sites (see §2's count note).
 - **Does NOT close** anything the pre-pass cannot predict. `_write_note` calls
   `self._policy_resolver.resolve_capture()` (`memory_tool_executor.py:345`) and `_propose_promotion`
   calls `resolve_promotion()` (`:404`); a resolver that flips between validate and execute reopens
@@ -304,18 +323,24 @@ requires choosing exactly one, and B subsumes both.
 Row stays `registered_finding` with an explicit reopening condition, per the `B-98` / `B-104`
 pattern. **Reopens on ANY of:**
 
+**Deferral is defensible only on a SEVERITY judgment, not on a reachability one — stated because
+codex R1 [P2-b] caught the first pass conflating the two.** `[HIGH]` The **partial commit itself is
+DETERMINISTIC on today's default single-candidate chain**: `[write_note (valid), read (invalid)]`
+commits the note and then aborts, every time, with no fallback chain involved (§1, §2, W-1). What is
+cross-candidate and contingent is only the **duplication** (§3(iv)). Choosing D therefore means
+judging that *a committed-but-unreported note is tolerable*, not that the harm is rare.
+
 - **D-0 — an OBSERVED partial commit.** A run leaves a `write_note` record (or a
   `STANDARD_TOOL_CALL` row) for a batch that reported failure, seen in a real ledger. *(Dominant
-  disjunct: it is the only one that converts the harm from inferred to observed. Today the whole
-  class is reasoned from code, not from an incident.)*
-- **D-1 — the multi-candidate chain becomes the default.** The residual is cross-candidate only
-  (§2, last row): the single-candidate chain, which is today's default, already consumes exactly one
-  dispatch. Any config change making multi-candidate chains ordinary raises the residual from
-  contingent to routine.
-- **D-2 — §3(iv) is confirmed by execution.** If the identical-replay path really does append a
-  duplicate physical line **and** re-open a `TRANSIENT_RETRY` staircase via
-  `MemoryToolExecutionStoreError`, the landed half is narrower than believed and the deferral is no
-  longer honest.
+  disjunct: it is the only one that converts the harm from inferred to observed. The class is
+  deterministic in code but has not been seen in a real ledger.)*
+- **D-1 — the multi-candidate chain becomes the default.** This raises only the **duplication**
+  residual from contingent to routine; it does not bear on the partial commit, which is already
+  deterministic. Any config change making multi-candidate chains ordinary trips it.
+- **D-2 — §3(iv) case (3) is confirmed by execution.** If the same-text/same-model-name/
+  different-provider replay really does append a duplicate physical line **and** re-open a
+  `TRANSIENT_RETRY` staircase via `MemoryToolExecutionStoreError`, the landed half is narrower than
+  believed and the deferral is no longer honest.
 - **D-3 — a write-like tool gains a non-idempotent side effect outside the memory store** (an
   outbound notification, a promotion activation with an external effect). Compensation stops being
   a ledger-local question and A/C stop being adequate.
@@ -432,8 +457,8 @@ Owed per reading (see §6). All are new tests unless noted; none exists at HEAD.
 | **W-1** | **The harm, made visible.** Drive a real `StandardMemoryToolExecutor` through the real pre-pass + batch loop with `[memory.write_note (valid), memory.read (no `memory_ref`)]`; assert the batch raises **and** that the tool-events ledger gained a record — i.e. the partial commit is asserted as **present**, not merely inferred | End-to-end through `_openai_memory_tool_result_messages`, not a unit call to `execute()`. This is the *baseline* the fix flips | A, B, C, D-2 |
 | **W-2** | **A's closure.** Same batch, with `validate()` wired: assert the batch raises **before** any durable write — the ledger and the tool-events file are **unchanged** (assert on the durable surface, not on a call count) | Assert absence on the durable artifact; a mock-call-count assertion would pass on a path the store never sees | A |
 | **W-3** | **C's closure + its stated cost.** (a) `[write_note, search]` is REFUSED before execution with the durable surface unchanged; (b) `[search, write_note]` still SUCCEEDS (the constraint is positional, not a ban); (c) `[write_note, write_note]` is refused | Both arms required — (b) is what stops the constraint from silently becoming "no writes in batches" | C |
-| **W-4** | **A's discipline pin.** A parity test asserting that every executor argument-validation raise site reachable from model input is reachable from `validate()` — enumerated from the helper set (`_string_arg`, `_optional_string_arg`, `_positive_int_arg`, `_allowed_kinds`, `_kind_from_memory_ref`, `_promotion_kind`) rather than hardcoded, so a new helper fails the test rather than silently escaping the pre-pass | Without this, A degrades to a snapshot the first time a check is added inline | A |
-| **W-5** | **§3(iv), executed rather than inferred.** Force an identical cross-candidate re-emission of one `write_note`; assert what actually happens to (a) the physical JSONL line count under that `memory_id` and (b) the resulting exception class and its `_classify_provider_exception` disposition | This is the one claim in this filing marked `[MODERATE]` for want of execution. **The build leg must run it and record the answer**, whichever way it falls | A, B, C, and D-2's falsifier |
+| **W-4** | **A's parity pin — structural, NOT a helper-name census** (rewritten at codex R1 [P2-c], accepted). The **preferred** discharge is to make parity *unfalsifiable by construction*: `validate()` and `_execute_authorized` consume **one shared parsed/validated request representation**, so there is no second path to drift from. Where that is not taken, the witness must compare **every validation call site and branch** — a new call to an *existing* helper for a *new* argument, and a new *inline* `raise MemoryToolExecutionInputError`, are both changes a helper-name enumeration cannot see. Scope: the **9 model-reachable** sites (§2 count note) | The first pass proposed enumerating the six helper *functions*; codex correctly showed that is insufficient — `execute()` could reject an input `validate()` accepts while the test stayed green. Reading A's whole value rests on permanent parity, so this witness is load-bearing, not hygiene | A |
+| **W-5** | **§3(iv)'s FOUR-CELL matrix, executed rather than inferred.** For each of cases (1) different text, (2) same text/different model, (3) same text/same model name/different provider, (4) fully identical: assert (a) whether a new `memory_id` is derived, (b) the physical JSONL line count under that `memory_id`, (c) the `append_memory_operation` outcome (`APPENDED` / `IDEMPOTENT_NOOP` / raise), and (d) for any raise, the surfacing exception class and its `_classify_provider_exception` disposition | The whole matrix is marked `[MODERATE]` for want of execution. Case (3) is the only cell carrying the duplicate-line-plus-re-opened-staircase claim; **it must be run, not assumed**, and cases (1)/(2) are the ordinary ones whose "extra distinct note" outcome is what the harm statement rests on | A, B, C, and D-2's falsifier |
 
 **Mutation probes (PD-8, Workflow v1.18 — green-alone is not proof).**
 
@@ -503,3 +528,31 @@ against the currently-locked SDK. No reading turns on it.
 ## §11 Out-of-family review record (`just codex-review`, branch-vs-main)
 
 *(Rounds are recorded here only after they have actually run.)*
+
+- **R1 — 4 findings (3 [P2] + 1 [P3]), ALL accepted and fixed.** Two were **premise-level**, not
+  presentation-level, and both corrected claims that would have biased ratification:
+  - **[P2-a] Replay identity was wrong.** The first pass asserted that an identical cross-candidate
+    `write_note` collides on the ledger idempotency key and raises. Verified false at
+    `memory_operation_ledger.py:476`–`:539`: the append compares an 18-field equivalence payload
+    (including `provider` and `model`, excluding `timestamp`) and returns `IDEMPOTENT_NOOP` on a
+    match, raising only on same-key/different-payload. Codex also identified an identity input the
+    first pass missed — `summary_model` participates in the hashed content
+    (`memory_capture.py:542`), and the model is rebound per candidate. §3(iv) rewritten as a
+    **four-cell matrix**; the ordinary cases produce an *extra distinct note*, and the original
+    duplicate-line-plus-re-opened-staircase claim survives only as the narrow same-model-name/
+    different-provider cell. W-5 and D-2 re-scoped to match.
+  - **[P2-b] "Cross-candidate only" understated the default-path harm.** Reading D's D-1 implied the
+    residual was contingent on a multi-candidate chain. The **partial commit is deterministic on the
+    default single-candidate chain**; only the *duplication* is cross-candidate. D-1 corrected and a
+    severity-vs-reachability paragraph added, because the conflation biased toward deferral.
+  - **[P2-c] W-4 could not enforce the invariant Reading A depends on.** A helper-name enumeration
+    cannot detect a new call to an existing helper for a new argument, nor a new inline raise —
+    either would let `execute()` reject what `validate()` accepts while the test stayed green. W-4
+    rewritten to prefer a **single shared parsed/validated request representation** (parity
+    unfalsifiable by construction), with a call-site-and-branch comparison as the fallback discharge.
+  - **[P3] Raise-site count.** `_execute_authorized:271`'s unsupported-tool branch is unreachable
+    from model input (`tool_name` is a `MemoryToolName`; all five members dispatch at `:261`–`:270`).
+    Filing now distinguishes **10 syntactic / 9 model-reachable**, and Reading A's coverage and W-4's
+    scope are stated against 9.
+  - **Zero findings declined at R1.** The recommendation (A), runner-up (C) and the INPUT-vs-ORDERING
+    discriminator were untouched by all four.
