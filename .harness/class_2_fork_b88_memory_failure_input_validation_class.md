@@ -492,7 +492,8 @@ cite at §10 ride the ratification leg's register touch; and under A or B the sh
 | **Ratification** | Operator selects A / B / C via `AskUserQuestion`; a `§11 RATIFICATION` section is appended to this filing; the register row's `pr:` pointer is set and (under A or B) status flips to `design_substrate_gated` | Operator |
 | **Council** *(B only)* | Dyadic C7/C8 ⊥ memory-contract-owner convening per §7, before spec text is authored | Follows ratification |
 | **Spec leg** *(A or B)* | `Spec_Memory_Substrate_v1.md` v1.2 → v1.3 by a dedicated spec-writer; under A also `Implementation_Plan_Memory_Substrate_v1.md` v1.2 → v1.3 (`:829`); clearance markers at `.harness/clearance/` per root `CLAUDE.md` §4.5, one per artifact actually changed — **under A both** (spec + plan), **under B the spec marker only** (the plan has zero delta and stays v1.2; the convention ties a marker to a changed, specifically versioned artifact, `.harness/clearance/README.md`). Memory-family precedent: `spec-memory-substrate-v1-2-cleared-2026-07-29.md` + `implementation-plan-memory-substrate-v1-2-cleared-2026-07-29.md` | X-AL-3 guard + adversarial review |
-| **Impl leg** *(A only)* | Enum member, the one-line declaration flip, the docstring rewrite, the fixture re-key, 8 flipped + 1 added witness rows, the mutation probe | CI + `merge-gate` 3-lens (code-touching) |
+| **Impl leg** *(A)* | Enum member, the one-line declaration flip, the docstring rewrite, the fixture re-key, 8 flipped + the two added negative witness rows, the mutation probe | CI + `merge-gate` 3-lens (code-touching) |
+| **Terminal leg** *(B)* | The one-line docstring rewrite at `memory_tool_executor.py` (the shipped text calls the classification a stopgap and promises a flip site; under B the spec BLESSES the value, so the docstring must say so) + the witness-comment refresh; lands WITH or immediately after B's spec leg, and closes the row — status transits `design_substrate_gated → closed` at this leg's merge | CI (docstring + test-comment only; `merge-gate` proportional-skip candidate) |
 
 Under **C**, only the docstring rewrite is owed — and it is owed **at the ratification leg itself**,
 not deferred: selecting C immediately falsifies the shipped docstring's "the single flip site when
@@ -540,6 +541,20 @@ numbers are what this filing uses.
 Item 6's unverified tail is the one claim in this document I did not ground. It does not bear on any
 reading; it is recorded so a later arc does not inherit "all four are pinned" as covering six sites.
 
-**Review record.** This filing has had no out-of-family review round at the time of writing;
-`just codex-review` runs against the committed branch and its findings will be appended here before
-ratification.
+**Review record (out-of-family `just codex-review`, branch-vs-main).**
+- **R1 — 3 [P2], all accepted and fixed** (`6b19ad2c`): the §8 carried-repairs sentence undercounted
+  ("four" → five count repairs + the stale cite); Reading B's spec-leg row over-mandated two
+  clearance markers where the convention ties a marker to a changed artifact (B → spec marker only,
+  A → both); Reading C's docstring repair was deferrable to an unspecified future arc — now owed at
+  the ratification leg itself (stale-as-described rule).
+- **R2 — 1 [P1] + 1 [P2], both accepted and fixed** (`1d02f554`): the register's B-88 prose/YAML
+  still told the pre-filing story ahead of the appended filing bullet (council "likely" + five
+  drifted counts) — reconciled IN PLACE per the replace-not-append discipline, history preserved
+  parenthetically; the Reading-A witness recipe's single fixture contradicted its own re-key
+  requirement — split into two negative rows with distinct literals (b1 non-member re-key, b2
+  plain-str-of-the-new-member type-gate pin).
+- **R3 — 2 findings, both accepted and fixed** (this commit): Reading B's owed docstring rewrite had
+  no terminal leg (§9's impl leg was A-only) — B now carries its own terminal leg and status
+  transition; this review record itself still held the R0 placeholder while R1/R2 commits existed —
+  replaced with the round-by-round account you are reading.
+- Later rounds, if any, append below before ratification.
