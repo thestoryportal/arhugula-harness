@@ -3953,21 +3953,29 @@ items:
     the PRECEDENT ITSELF, _ImmutableKeyArns at harness-runtime/src/harness_runtime/types.py,
     carries the IDENTICAL hole: obj.__init__({...}) bypasses its immutability posture. Observed
     and deliberately NOT fixed at the B-107 leg (out of surgical scope -- harness-runtime was
-    read-only for that arc). Grounding owed before build: confirm the hole is reachable at HEAD,
-    enumerate _ImmutableKeyArns construction/consumer sites, and check whether any additional
-    sealed-mapping siblings share the class. The B-107 carrier''s sealed form (__slots__ +
-    refusing __setattr__ + sealed __init__) is the template; the fix is bounded to the sibling
-    type. Explicit-base-class routes (dict.__setitem__(obj, ...)) remain out of scope per the
-    same threat-model boundary B-107 section 6.1 draws.'
+    read-only for that arc). GROUNDED at the closing arc (2026-08-04): the hole reproduced live
+    at HEAD on BOTH the raw carrier and a validated frozen AuditSigningConfig.key_arns field;
+    construction sites exactly two (__reduce__ + the field validator); the tree-wide sweep found
+    NO further sealed-mapping siblings. The B-107 carrier''s sealed form (__slots__ +
+    refusing __setattr__ + sealed __init__) was the template; the fix stayed bounded to the
+    sibling type. Explicit-base-class routes (dict.__setitem__(obj, ...)) remain out of scope
+    per the same threat-model boundary B-107 section 6.1 draws.'
   heading: '### B-109 · Sibling immutable-map carrier `_ImmutableKeyArns` retains the inherited `dict.__init__` re-population hole *(surfaced at the B-107 impl leg, out-of-family review round 2, 2026-08-04; observed and deliberately not fixed there — harness-runtime was read-only for that arc)*'
-  close_out: 'Grounding owed before build: confirm obj.__init__({...}) is reachable and mutates at
-    HEAD; enumerate _ImmutableKeyArns construction and consumer sites in harness-runtime; check for
-    additional sealed-mapping siblings. Fix template: the B-107 carrier _ImmutableEffectFenceResolutions
-    sealed form (__slots__ + refusing __setattr__ + sealed __init__) at
-    harness-cp/src/harness_cp/pause_resume_protocol_types.py. Explicit-base-class routes
-    (dict.__setitem__(obj, ...), object.__setattr__) stay out of scope per the B-107 section 6.1
-    threat-model boundary. Close when the sibling refuses re-initialization with a witness mirroring
-    test_pd8_probe_b/c and a mutation probe (revert seal, named test fails).'
+  close_out: 'CLOSED 2026-08-04, BUILT (pr reconciles at the next register touch). The closure
+    criterion -- the sibling refuses re-initialization with witnesses mirroring test_pd8_probe_b/c
+    and a mutation probe -- is MET: sealed per the B-107 template
+    (_ImmutableEffectFenceResolutions at harness-cp/src/harness_cp/pause_resume_protocol_types.py)
+    with a sealed positional-only __init__ over a read-only MappingProxyType({}) default,
+    __slots__ = ("_sealed",), refusing __setattr__/__delattr__, and __reduce__ byte-unchanged so
+    deepcopy/pickle/model_copy(deep=True) keep working with every copy itself sealed. Witnesses:
+    4 new tests in harness-runtime/tests/test_config_audit_signing.py (16 -> 20) -- re-init
+    refused + byte-unchanged on raw AND validated-field carriers; seal-reopen (_sealed
+    assignment/del) refused with no instance __dict__; copies sealed; no-arg construction valid.
+    PD-8 mutation probe PERFORMED, not asserted: the __init__ override deleted -> all four named
+    tests FAIL (DID NOT RAISE TypeError) -> restored -> green. Full just check green (7374
+    passed; pyright strict 0/0). Explicit-base-class routes (dict.__setitem__(obj, ...),
+    object.__setattr__) stay out of scope per the B-107 section 6.1 threat-model boundary,
+    restated in the type''s own docstring.'
   council: 'no -- single-axis mechanical hardening of an existing internal type; no cross-domain
     tension nameable in advance; route per the standing single-voice-plus-advisor default if a
     design question surfaces at grounding.'
