@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, PrivateAttr
@@ -159,6 +160,11 @@ class EffectFenceResolution(StrEnum):
     → the run folds to PARTIAL with the surviving branches (FAILED if NO survivor)."""
 
 
+_EMPTY_RESOLUTIONS: Mapping[str, EffectFenceResolution] = MappingProxyType({})
+"""Read-only default for `_ImmutableEffectFenceResolutions.__init__` — a shared
+mutable `{}` default would be a live class-level container."""
+
+
 class _ImmutableEffectFenceResolutions(dict[str, EffectFenceResolution]):
     """Immutable `effect_fence_resolutions` carrier (B-107 impl leg, CP spec v1.115 §1.2).
 
@@ -179,7 +185,29 @@ class _ImmutableEffectFenceResolutions(dict[str, EffectFenceResolution]):
     reaches the base implementation. That is an EXPLICIT base-class escape of the
     same species as `model_construct` (§1.5), which §1.3 already renders inert at
     the resolver; it is not a route this type "exposes" in the §1.2 sense.
+    `obj.__init__({...})` is NOT in that category — it resolves through this type's
+    own MRO with no base class named — so it is SEALED below (out-of-family Codex
+    round 2 [P2], reproduced before fixing: it re-populated the stored map in place
+    and changed a later `effect_fence_resolution_for` answer).
     """
+
+    _sealed: bool
+
+    def __init__(
+        self, supplied: Mapping[str, EffectFenceResolution] = _EMPTY_RESOLUTIONS, /
+    ) -> None:
+        # ONE initialization per instance. `dict.__init__` on a live instance
+        # UPDATES it in place (it does not clear first), so leaving it inherited
+        # left `ctx.effect_fence_resolutions.__init__({...})` as a mutation route
+        # that the disabled item/update methods did not cover. Sealing after the
+        # first populate keeps `__reduce__`'s reconstruction path (a FRESH object)
+        # working while refusing re-population of an existing one. The default is a
+        # read-only empty literal that is never mutated — `dict.__init__`'s own
+        # signature shape, kept so `cls()` stays valid for pickle protocols.
+        if getattr(self, "_sealed", False):
+            self._refuse()
+        super().__init__(supplied)
+        self._sealed = True
 
     def _refuse(self, *args: object, **kwargs: object) -> None:
         raise TypeError(

@@ -911,6 +911,47 @@ def test_caller_supplied_empty_eligible_key_cannot_abort_a_keyed_sibling_at_the_
     assert result.status is RunStatus.PAUSED
 
 
+def test_the_pure_lookup_method_is_deliberately_outside_the_ss1_3_resolver_boundary() -> None:
+    """§1.3 SCOPE PIN — the guard lives at the gated RESOLVER, not at the pure lookup.
+
+    Records a DECLINED out-of-family Codex round-2 [P2] finding rather than absorbing it
+    silently. The observation is factually correct — `ResumeContext(effect_fence_resolution=
+    ABORT).effect_fence_resolution_for("")` does return `ABORT` — but extending the empty-key
+    rule to that method is outside the ratified contract, for three grounded reasons:
+
+    1. Fork §11 item 5 names the site: *"Every `_resolve_effect_fence_gated` consult treats
+       `idempotency_key == ""` as unresolvable before map-hit and eligibility branches."*
+    2. §1.3's own wording describes that function's structure — "yields no DIRECTIVE" and
+       "before either a map-hit check or UNIFORM-ELIGIBILITY comparison". The pure lookup
+       builds no directive and has no eligibility comparison; only the gated resolver has both.
+    3. Spec v1.115 §0.1/§3 enumerate exactly THREE contract amendment sites. Narrowing a
+       public method published at v1.66 would be a FOURTH, and §0.3 enumerates the authorized
+       compatibility costs without it — an X-AL-3 silent design extension at impl time.
+
+    Safety is not left to that reading: the method has exactly ONE non-test caller in `src/`
+    (`_resolve_effect_fence_gated`, which now guards ahead of it), so no production path can
+    reach the unguarded answer. This test pins BOTH halves — the deliberate behaviour and the
+    single-caller premise it rests on — so a future arc that adds a second caller, or that
+    ratifies the narrowing, breaks here instead of drifting silently."""
+    plain = ResumeContext(effect_fence_resolution=EffectFenceResolution.ABORT)
+    assert plain.effect_fence_resolution_for(_EMPTY) is EffectFenceResolution.ABORT
+
+    source = inspect.getsource(_workflow_driver_module)
+    tree = ast.parse(source)
+    callers = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "effect_fence_resolution_for"
+    ]
+    assert len(callers) == 1, (
+        "the pure lookup's safety rests on having exactly ONE guarded caller in the driver; "
+        f"found {len(callers)} — re-decide the §1.3 boundary before adding another"
+    )
+    assert _resolve_effect_fence_gated(plain, _EMPTY, _EMPTY) is None
+
+
 def test_resolver_refuses_empty_key_before_map_hit_and_before_eligibility() -> None:
     """§1.3 ORDERING — the refusal precedes BOTH downstream branches.
 
@@ -1006,7 +1047,16 @@ def test_pd8_probe_b_item_assignment_through_the_stored_mapping_is_refused() -> 
     ):
         with pytest.raises(TypeError):
             mutate()
+    # out-of-family Codex round 2 [P2], reproduced before fixing: `dict.__init__` on a LIVE
+    # instance UPDATES it in place (it does not clear first), so leaving it inherited left
+    # `ctx.effect_fence_resolutions.__init__({...})` as a mutation route the disabled
+    # item/update methods did not cover — it really did inject a key and change a later
+    # `effect_fence_resolution_for` answer. Unlike `dict.__setitem__(obj, ...)` this names no
+    # base class, so it is a route the type EXPOSES in the §1.2 sense.
+    with pytest.raises(TypeError):
+        stored.__init__({"reinit": EffectFenceResolution.ABORT})  # type: ignore[misc]
     assert dict(stored) == {_KEYED: EffectFenceResolution.RE_FIRE}
+    assert context.effect_fence_resolution_for("reinit") is None
     assert context.effect_fence_resolution_for(_EMPTY) is None
 
 
