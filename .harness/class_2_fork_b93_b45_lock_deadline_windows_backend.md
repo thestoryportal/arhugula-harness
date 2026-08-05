@@ -473,7 +473,7 @@ Neither half is built. Both rows stay `registered_finding` with their premises r
 | **D-1** | A Windows CI job runs an **EXECUTING BEHAVIORAL WITNESS** — a genuine second-OS-process lock-contention test on `windows-latest` — not merely any Windows job (codex R8: a lint-only Windows job would satisfy a weaker phrasing while witnessing nothing; today: `runs-on: ubuntu-latest` ×12, zero Windows) | The gate on B-45's half is *witnessability*, not backend choice. A behavioral Windows witness is the precondition that makes any backend landable — and note a Reading-A selection can CARRY this witness in its own PR (the same PR adds the `windows-latest` contention job), so A is gated-but-self-dischargeable, not inherently unwitnessable |
 | **D-2** | An operator or deployment asks for a Windows host, OR any packaging surface declares one (an `Operating System ::` classifier or a `sys_platform` marker in a harness `pyproject.toml` — today: zero) | Converts the C-STK-10 commitment from a design-time constraint into an observable target |
 | **D-3** | An **observed stall** — any report or log of a same-host memory writer blocked indefinitely | The empirical falsifier of "no live hazard at HEAD" |
-| **D-4** | A **third** row is registered against this same lock substrate (today: `B-45`, `B-93`, plus `B-45`'s accepted O-1 lock-identity residual and `B-94`/`B-95` which inherit the `commit_seq` bound at §3(iii) Stake 2) | Accumulating rows against one primitive is itself evidence that the substrate, not the individual gaps, is the unit of work |
+| **D-4** | A **genuinely NEW** row is registered DIRECTLY against this lock substrate — i.e. a row whose defect is in the lock primitives themselves, registered AFTER this filing (codex R9: the earlier "a third row" phrasing was already satisfied at filing time — `B-94`/`B-95` inherit the `commit_seq` bound at §3(iii) Stake 2 and B-45's O-1 residual already exists — so it could not serve as a FUTURE trigger) | Accumulating NEW rows against one primitive is itself evidence that the substrate, not the individual gaps, is the unit of work |
 
 - **For.** Every harm in both rows is currently unreachable; the substrate has been through repeated
   adversarial hardening rounds (B-40, B-46, B-73, B-97) and carries documented ABBA/TOCTOU invariants,
@@ -523,7 +523,11 @@ Windows serialization deferred). `[MODERATE]`
 Grounds, in order of weight:
 
 1. **The witnessability asymmetry.** `[HIGH]` This is the decisive finding of the filing. B's half is
-   fully verifiable on `ubuntu-latest` against ten existing process-based witnesses. B-45's half is
+   fully verifiable on `ubuntu-latest` against NINE existing process-based witnesses (codex R9
+   corrected an earlier ten: the reconciler test counted asserts only that exactly one resume wins,
+   which `_claim_resume_revision`'s atomic `os.link` claim guarantees independently of the flock —
+   so `_workflow_lock` is UNWITNESSED at HEAD, and the deadline build leg MUST add a direct
+   process-blocking witness for that carrier rather than inheriting the count). B-45's half is
    **not verifiable at all** today, and landing an unverified exclusion claim is *worse than the
    documented no-op it replaces*, because `journal_exclusion_is_degraded()` → `False` disarms the one
    defensive consumer at `admin/pause_journal_adoption.py:412`. The Windows half is gated on **CI**,
