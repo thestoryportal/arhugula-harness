@@ -298,9 +298,17 @@ requires a `.db` lock file, which changes the **lock-file identity** the current
 elsewhere — `Spec_Harness_Runtime_v1.md:5971`: *"A directory-tree scope lock is explicitly NOT
 SUFFICIENT and MUST NOT be specified: `flock` contends only on the same inode, the house
 directory-tree lock uses a different file, and the pause-journal appender does not take it."* Adopting
-`ReadWriteLock` for the `LOCK_SH` face is therefore a **protocol migration**, not a substitution. The
-plain `FileLock` face (exclusive-only, `timeout=`) has no such problem and maps onto eight of the nine
-sites.
+`ReadWriteLock` for the `LOCK_SH` face is therefore a **protocol migration**, not a substitution.
+**And the plain `FileLock` face is an identity migration too, not a drop-in (codex R1 [P1], accepted):**
+`FileLock` treats its path as a LOCK FILE — its Unix backend opens with create/truncate semantics — so
+it cannot safely target the canonical ledger file's own inode that `cross_process_write_lock`
+deliberately locks (`:352`–`:356`); pointing it there risks truncating the ledger. The safe shape is a
+SIDECAR lock file — which CHANGES LOCK IDENTITY at every converted site (including the exclusive-only
+ones): during any rolling upgrade, an old process contending on the canonical inode and a new process
+contending on the sidecar do not exclude each other. Any `filelock` adoption therefore needs a
+cutover/interop story per site (the B-97(a) quiesced-cutover precedent is the reference shape), and
+"maps onto eight of the nine sites" must be read as *after* that migration, never as a direct
+substitution.
 
 **Net effect on the rows.** The sentence *"the fix stays a real decision: `msvcrt.locking` is
 exclusive-only and cannot express the `LOCK_SH` face"* (`forward-register.yaml:871`–`:872`) remains
@@ -399,8 +407,10 @@ One traversal, four modules.
   by an unverified exclusion claim.** That is a strictly worse posture than today's, and it is not
   fixed by choosing a better backend; it is fixed only by a Windows CI witness.
 - **Sub-decision A-i (naming + home).** `CrossProcessLockTimeoutError`, homed at **`harness-core`**.
-  Grounds: all four carriers must raise one nominal type, two of them in `harness-is` and two in
-  `harness-runtime`; `harness-core` has zero workspace dependencies (`harness-core/pyproject.toml:9`–`:11`)
+  Grounds: all four carriers must raise one nominal type — ONE in `harness-is`
+  (`cross_process_ledger_lock.py`, six of the nine sites) and THREE in `harness-runtime` (the
+  reconciler, protected-result, and journal stores; codex R1 [P3] corrected an earlier two-and-two
+  misstatement); `harness-core` has zero workspace dependencies (`harness-core/pyproject.toml:9`–`:11`)
   so nothing can cycle; and there is direct precedent —
   `ValidatorEscalationGateTimeoutError` (`harness-core/src/harness_core/validator_escalation_errors.py:43`),
   re-homed for exactly this carrier-home reason (`:1`–`:13`). **Fallback:** `harness-is`, alongside the
