@@ -839,9 +839,16 @@ items:
     fresh O_CREAT inode); gated behind `--acknowledge-discarding-recoverable-state`, ACCEPTED
     RESIDUAL. STATUS UNCHANGED -- still registered, still not built.'
   close_out: Registered, not built — deliberate scope call (advisor()-reviewed during B-40's own PR),
-    not an oversight. `msvcrt.locking` is byte-range and exclusive-only; it does not cleanly provide the
-    shared-reader/exclusive-writer (`LOCK_SH`/`LOCK_EX`) split both `cross_process_ledger_lock` and `reconciler_pause_resume_substrate`
-    rely on. (TRUE ABOUT msvcrt BUT INSUFFICIENT AS THE REASON THE FIX IS HARD -- corrected in place 2026-08-05 at the B-93+B-45 combined fork filing. msvcrt ALSO exposes the non-blocking LK_NBLCK, and the "portable third-party lock library" left generic below has a name the design substrate already recommended -- filelock, whose ReadWriteLock (3.21.0+) provides the shared-reader/exclusive-writer split PORTABLY, backed by SQLite rather than by either platform lock face, and which Plan_Executability_Audit_v1.md:84 recommended at [HIGH] for U-IS-11 with the binding decision routed to Session 6 at :230 and NEVER RECORDED anywhere in this workspace. The fix is still a real decision -- but the decision is WHICH VEHICLE, with three arms, not whether the shared face must be degraded.) A correct cross-platform abstraction preserving those semantics (e.g. a small shared/exclusive
+    not an oversight. THE FIX IS A REAL DECISION AND THE DECISION IS WHICH VEHICLE, with three arms — not
+    whether the shared face must be degraded (rewritten current-first 2026-08-05 at the B-93+B-45 combined
+    fork filing) — msvcrt exposes the non-blocking LK_NBLCK alongside LK_LOCK, and filelock's ReadWriteLock
+    (3.21.0+) provides the shared-reader/exclusive-writer split portably (SQLite-backed) — the vehicle
+    Plan_Executability_Audit_v1.md:84 recommended at [HIGH] for U-IS-11, binding decision routed to Session 6
+    at line 230 and NEVER RECORDED anywhere in this workspace; any filelock adoption is a lock-IDENTITY
+    migration at every converted site, not a drop-in (filing section 3(v)). (The original registration
+    reasoned only from msvcrt.locking being byte-range/exclusive-only and unable to provide the
+    LOCK_SH/LOCK_EX split both lock modules rely on — true about msvcrt, insufficient as the reason the
+    fix is hard.) A correct cross-platform abstraction preserving those semantics (e.g. a small shared/exclusive
     lock facade backed by `fcntl` on POSIX and a genuine Windows-native primitive, or a portable third-party
     lock library) is its own scoped arc, not a hasty `sys.platform` branch bolted onto a PR already touching
     hash-chain integrity. **Close-out steps:** (1) pick a Windows backend (`msvcrt`-based exclusive-only
