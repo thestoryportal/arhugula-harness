@@ -656,10 +656,10 @@ exceptionless-B unless the two are separate options.)*
 
 | Option | Discriminator answer it encodes (§5) | What it authorizes | Owed |
 |---|---|---|---|
-| **A** *(recommended)* | INPUT | Build leg: the executor's pure `validate()` pre-pass | W-1, W-2, W-4, W-5 + probes |
-| **A + C** | INPUT **and** bounded ORDERING | Build leg: both, in one arc (they compose — §4) | W-1…W-6 minus B-only items |
-| **C** *(runner-up)* | ORDERING, **bounded** — accept the intra-call residual (§3(vi)) | Build leg: the dispatch-side positional constraint | W-1, W-3, W-5, W-6 + probes |
-| **B** | ORDERING, **without exception** | **NOT a build.** Opens the spec leg at §1 (the `B-97`(a)/`B-104`/`B-107` route), council first (§7) | W-1, W-5, W-6 + compensation + migration |
+| **A** *(recommended)* | INPUT | Build leg: the executor's pure `validate()` pre-pass | W-1, W-2, W-4, W-5, **W-7**, **W-8** *(inverted)* + probes |
+| **A + C** | INPUT **and** bounded ORDERING | Build leg: both, in one arc (they compose — §4) | the union of A's and C's rows: W-1, W-2, W-3, W-4, W-5, W-6, **W-7**, **W-8** + probes |
+| **C** *(runner-up)* | ORDERING, **bounded** — accept the intra-call residual (§3(vi)) **and §3(vii)'s single-call input-error commit** | Build leg: the dispatch-side positional constraint | W-1, W-3, W-5, W-6, **W-8** *(residual pin)* + probes |
+| **B** | ORDERING, **without exception** | **NOT a build.** Opens the spec leg at §1 (the `B-97`(a)/`B-104`/`B-107` route), council first (§7) | W-1, W-5, W-6 *(inverted + per-family)* + compensation + migration. **NOT W-7** |
 | **D** | Not worth paying for yet — on SEVERITY (§5) | **NO build of any kind.** Documentation only: the docstring qualification + `close_out`, both at the ratification leg | none (D-2 wants the §3(iv) case-(3) probe) |
 
 **Carried by any answer** (no separate gate): the §9 items 3–7 shipped-source cite repairs ride
@@ -670,7 +670,7 @@ whichever leg next touches those files; under D they stay recorded-not-repaired.
 | Leg | Owes | Gate |
 |---|---|---|
 | **This filing** (doc-only) | This document. Row stays `registered_finding`; **no register edit, no `pr:` stamp, no snapshot change** | — |
-| **Ratification** | Operator selects one of the **five** options at §10.1's table via `AskUserQuestion` — **A**, **A+C**, **C**, **B**, or **D** (the surface is exhaustive and each maps to exactly one authorization; widened at codex R4 [P2-b] because §4 states A and C compose while the earlier single-select surface could not record that, and because a bare "ORDERING" answer is ambiguous between bounded-C and exceptionless-B). A **`§12 RATIFICATION`** section is appended here (§11 is the review record — codex R3 [P2-e]); the register row's `pr:` pointer is set and its `close_out` gains the outcome. **Under D, the `_PreparedMemoryToolCall` docstring qualification (§4, Reading D) is owed AT THIS LEG**, not deferred | Operator |
+| **Ratification** | Operator selects one of the **five** options at §10.1's table via a **TWO-STAGE `AskUserQuestion`** (codex R7 [P2-a]: a single menu cannot render five explicit options — the Claude surface caps at four and the Codex surface at three, so the five-way ask is not executable as one menu). **Stage 1** asks the §5 discriminator: *INPUT* / *ORDERING* / *not worth paying for yet*. **Stage 2** fires only on the first two answers and is binary — on INPUT: **A** or **A+C**; on ORDERING: **C** (bounded) or **B** (without exception). A *"not worth paying for yet"* answer resolves to **D** with no second stage. Every leaf is exactly one §10.1 row — **A**, **A+C**, **C**, **B**, or **D** (the surface is exhaustive and each maps to exactly one authorization; widened at codex R4 [P2-b] because §4 states A and C compose while the earlier single-select surface could not record that, and because a bare "ORDERING" answer is ambiguous between bounded-C and exceptionless-B). A **`§12 RATIFICATION`** section is appended here (§11 is the review record — codex R3 [P2-e]); the register row's `pr:` pointer is set and its `close_out` gains the outcome. **Under D, the `_PreparedMemoryToolCall` docstring qualification (§4, Reading D) is owed AT THIS LEG**, not deferred | Operator |
 | **Council** *(B only)* | Dyadic C10 ⊥ memory-ledger-owner convening per §7, **before** the spec leg is authored | Follows ratification |
 | **Spec leg** *(B only)* | Selecting B opens a spec leg, not a build (§1) — the `B-97`(a) / `B-104` / `B-107` route: `Spec_Memory_Substrate_v1.md` compensation semantics + `Implementation_Plan_Memory_Substrate_v1.md` U-MEM-16 amendment, authored by `spec-writer`, plus clearance markers per root `CLAUDE.md` §4.5, one per artifact actually changed | X-AL-3 guard + adversarial review |
 | **Build leg** *(A or C directly; B only after its spec leg clears)* | The code change + the §8 witnesses **for that reading** (§6's per-reading column, not all of W-1…W-6) + the §8 mutation probes + **W-5's four-cell matrix executed and its answers recorded on the row** + the §9 items 3–7 cite repairs in the touched files | CI + `merge-gate` 3-lens (code-touching) |
@@ -846,3 +846,13 @@ whichever leg next touches those files; under D they stay recorded-not-repaired.
     or none; an implementation compensating only the capture path would have passed. Parameterized
     across every durable family — capture record + capture ledger row, `propose_promotion`,
     `request_redaction`, §3(vii)'s retrieval event, and `execute()`'s `STANDARD_TOOL_CALL` append.
+
+- **R7 — 2 findings, both [P2], both accepted and fixed. ZERO substantive findings.**
+  - **[P2-a] ACCEPTED — the ratification procedure was not executable.** §10.2 mandated a five-way
+    `AskUserQuestion`, but that surface caps at four options (three on the Codex surface), so the
+    A/A+C/C/B/D menu could not be rendered as written. Replaced with a **two-stage** ask keyed on the
+    §5 discriminator (stage 1: INPUT / ORDERING / not-yet; stage 2: binary within the first two),
+    every leaf resolving to exactly one §10.1 row.
+  - **[P2-b] ACCEPTED.** §10.1's `Owed` cells predated W-7/W-8 and so contradicted §6 and §8 — a
+    build brief derived from that table would have dropped A's retry-precedence pin and the A-vs-C
+    discriminating witness. All rows reconciled to the canonical matrix.
