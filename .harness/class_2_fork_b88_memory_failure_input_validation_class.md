@@ -471,11 +471,12 @@ do not owe one.
 |---|---|---|
 | **A** *(recommended)* | C-MEM-19 gains `input_validation_failure` as a seventh failure class, plus the boundary invariant distinguishing it from provider-adapter and serialization failure. Name defaults to `input_validation_failure`; `input_error` is the stated fallback | Memory spec v1.2 → v1.3 (1 sentence extended + 1 invariant added); memory plan v1.2 → v1.3 (U-MEM-22 `:829` extended, **no new unit**); impl: 1 enum member + 1 declaration flip + 1 docstring rewrite + 1 fixture re-key; 8 witness rows flip + 1 added + 1 mutation probe. Zero hash / CXA / contract-number impact |
 | **B** | C-MEM-19 records `provider_adapter_failure` as the deliberate home for memory-tool input faults; vocabulary stays six | Memory spec v1.2 → v1.3 (1 paragraph appended); zero plan delta; zero impl delta beyond a docstring rewrite. **Routes to a dyadic council convening first (§7).** Ratifies the §3(iv) residual collision in contract text |
-| **C** | Defer under the D-0…D-3 demand test; row stays `registered_finding` | Zero now; one docstring rewrite so the shipped stopgap text stops promising a spec leg |
+| **C** | Defer under the D-0…D-3 demand test; row stays `registered_finding` | One docstring rewrite AT RATIFICATION (not deferred — see §9) so the shipped stopgap text stops promising a spec leg |
 
-**Carried by any answer** (no separate gate): the four count-drift repairs and the one stale file:line
+**Carried by any answer** (no separate gate): the five count-drift repairs and the one stale file:line
 cite at §10 ride the ratification leg's register touch; and under A or B the shipped
-`memory_tool_executor.py:150`–`:167` docstring is rewritten to match the ratified outcome.
+`memory_tool_executor.py:150`–`:167` docstring is rewritten to match the ratified outcome
+(under C that rewrite is owed at ratification itself — see §9's C row).
 
 ---
 
@@ -486,10 +487,14 @@ cite at §10 ride the ratification leg's register touch; and under A or B the sh
 | **This filing** (doc-only) | The filing + a `close_out` sentence + a prose bullet on `B-88`. Row stays `registered_finding`; **no snapshot change** (the digest is over `id:status` pairs, and status is unchanged) | — |
 | **Ratification** | Operator selects A / B / C via `AskUserQuestion`; a `§11 RATIFICATION` section is appended to this filing; the register row's `pr:` pointer is set and (under A or B) status flips to `design_substrate_gated` | Operator |
 | **Council** *(B only)* | Dyadic C7/C8 ⊥ memory-contract-owner convening per §7, before spec text is authored | Follows ratification |
-| **Spec leg** *(A or B)* | `Spec_Memory_Substrate_v1.md` v1.2 → v1.3 by a dedicated spec-writer; under A also `Implementation_Plan_Memory_Substrate_v1.md` v1.2 → v1.3 (`:829`); **two clearance markers** at `.harness/clearance/` per root `CLAUDE.md` §4.5 (the memory family's precedent: `spec-memory-substrate-v1-2-cleared-2026-07-29.md` + `implementation-plan-memory-substrate-v1-2-cleared-2026-07-29.md`) | X-AL-3 guard + adversarial review |
+| **Spec leg** *(A or B)* | `Spec_Memory_Substrate_v1.md` v1.2 → v1.3 by a dedicated spec-writer; under A also `Implementation_Plan_Memory_Substrate_v1.md` v1.2 → v1.3 (`:829`); clearance markers at `.harness/clearance/` per root `CLAUDE.md` §4.5, one per artifact actually changed — **under A both** (spec + plan), **under B the spec marker only** (the plan has zero delta and stays v1.2; the convention ties a marker to a changed, specifically versioned artifact, `.harness/clearance/README.md`). Memory-family precedent: `spec-memory-substrate-v1-2-cleared-2026-07-29.md` + `implementation-plan-memory-substrate-v1-2-cleared-2026-07-29.md` | X-AL-3 guard + adversarial review |
 | **Impl leg** *(A only)* | Enum member, the one-line declaration flip, the docstring rewrite, the fixture re-key, 8 flipped + 1 added witness rows, the mutation probe | CI + `merge-gate` 3-lens (code-touching) |
 
-Under **C**, only the docstring rewrite is owed and it can ride any later memory arc.
+Under **C**, only the docstring rewrite is owed — and it is owed **at the ratification leg itself**,
+not deferred: selecting C immediately falsifies the shipped docstring's "the single flip site when
+the vocabulary gains an input class" promise, and no later memory arc is guaranteed to exist, so
+deferring it would be exactly the stale-as-described carry the workspace's §10.5 rule forbids. The
+ratification PR (or an immediate explicit follow-on leg in the same batch) carries the rewrite.
 
 ---
 
