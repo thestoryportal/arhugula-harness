@@ -657,7 +657,7 @@ exceptionless-B unless the two are separate options.)*
 | Option | Discriminator answer it encodes (§5) | What it authorizes | Owed |
 |---|---|---|---|
 | **A** *(recommended)* | INPUT | Build leg: the executor's pure `validate()` pre-pass | W-1, W-2, W-4, W-5, **W-7**, **W-8** *(inverted)* + probes |
-| **A + C** | INPUT **and** bounded ORDERING | Build leg: both, in one arc (they compose — §4) | the union of A's and C's rows: W-1, W-2, W-3, W-4, W-5, W-6, **W-7**, **W-8** + probes |
+| **A + C** | INPUT **and** bounded ORDERING | Build leg: both, in one arc (they compose — §4) | W-1, W-2, W-3, W-4, W-5, W-6, **W-7**, and **W-8 in A's INVERTED form ONLY** + probes. *(Codex R8 [P2]: the naive "union of A's and C's rows" was **unsatisfiable** — A's W-8 requires `limit=0` to be rejected before any retrieval event, C's residual pin requires that event to remain. In the combined route A's `validate()` runs first, so A's expectation is the one that can hold; C's residual-pin form is dropped, not merged.)* |
 | **C** *(runner-up)* | ORDERING, **bounded** — accept the intra-call residual (§3(vi)) **and §3(vii)'s single-call input-error commit** | Build leg: the dispatch-side positional constraint | W-1, W-3, W-5, W-6, **W-8** *(residual pin)* + probes |
 | **B** | ORDERING, **without exception** | **NOT a build.** Opens the spec leg at §1 (the `B-97`(a)/`B-104`/`B-107` route), council first (§7) | W-1, W-5, W-6 *(inverted + per-family)* + compensation + migration. **NOT W-7** |
 | **D** | Not worth paying for yet — on SEVERITY (§5) | **NO build of any kind.** Documentation only: the docstring qualification + `close_out`, both at the ratification leg | none (D-2 wants the §3(iv) case-(3) probe) |
@@ -856,3 +856,12 @@ whichever leg next touches those files; under D they stay recorded-not-repaired.
   - **[P2-b] ACCEPTED.** §10.1's `Owed` cells predated W-7/W-8 and so contradicted §6 and §8 — a
     build brief derived from that table would have dropped A's retry-precedence pin and the A-vs-C
     discriminating witness. All rows reconciled to the canonical matrix.
+
+- **R8 — 1 finding, [P2], accepted and fixed. ZERO substantive findings.**
+  - **[P2] ACCEPTED.** §10.1's **A+C** row said its witnesses were "the union of A's and C's rows",
+    which made the combined route's acceptance criteria **unsatisfiable**: A's W-8 requires `limit=0`
+    to be rejected *before* any retrieval event, while C's residual pin requires that event to
+    *remain*. Since A's `validate()` runs before execution in the combined route, **A's inverted W-8
+    is the only form that can hold**; C's residual-pin form is now explicitly dropped rather than
+    merged. A build brief derived from the old cell could not have been satisfied by any
+    implementation.
