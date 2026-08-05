@@ -108,6 +108,12 @@ tools/dashboard/public/
 # Hook-written session issue log (U-HK-07)
 .harness/session-issues.jsonl
 
+# Hook-written subagent lifecycle registry + its advisory-lock sibling (U-HK-43).
+# Local observability substrate only — transient per-machine state, never tracked.
+.harness/.agents-registry.jsonl
+.harness/.agents-registry.jsonl.tmp.*
+.harness/.agents-registry.lock
+
 # Loop-mode runtime artifacts (U-HK-11): the active-marker + append-only ledger
 # are transient per-run state, written only while loop mode is on. Never tracked.
 .harness/.loop-active
@@ -147,3 +153,12 @@ tools/semantic_overlay/overlay.json
 !.agents/skills/*/SKILL.md
 .codex/agents/
 .claude/agents/
+
+# Mutation-probe crash-recovery sidecars (tools/mutation_probe.py, U-WT-06). Written next
+# to the probed source file before it is mutated and removed on a verified restore — one
+# only survives a SIGKILL'd / crashed probe, and the next invocation reconciles it. They
+# are transient recovery state, never source. ALL FOUR names are covered — the published `.bak`, the staging `.tmp`/`.new` (transient recovery state), and the permanent-by-design `.lock`; only the first three are ever auto-removed. The published `.bak`
+# and the `.tmp` staging fragment the atomic publish renames from (codex round-3 P1) — a
+# crash can leave either, and an unignored artifact next to source is one `git add -A`
+# away from being committed.
+*.mutprobe.*

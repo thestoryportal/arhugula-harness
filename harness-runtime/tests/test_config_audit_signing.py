@@ -177,6 +177,102 @@ def test_default_key_arns_is_immutable_too() -> None:
         config.key_arns["x"] = "y"  # type: ignore[index]
 
 
+# ---------------------------------------------------------------------------
+# `B-109` — the sealed `_ImmutableKeyArns` carrier.
+#
+# The disabled item/update methods above left the INHERITED `dict.__init__`
+# open, and `dict.__init__` on a live instance UPDATES it in place (it does not
+# clear first), so `cfg.key_arns.__init__({...})` re-populated a validated,
+# frozen config's signing map post-validation. Witness shapes mirror the
+# sibling PD-8 probes (b)/(c) at
+# `harness-cp/tests/test_workflow_driver_effect_fence_empty_key_b107.py`.
+# ---------------------------------------------------------------------------
+
+
+def test_b109_reinitializing_the_stored_key_arns_mapping_is_refused() -> None:
+    """`B-109` — `obj.__init__({...})` on an already-constructed carrier is
+    refused, and the mapping is byte-unchanged afterwards.
+
+    Witnessed on BOTH the raw carrier and through a validated config's field:
+    unlike `dict.__setitem__(obj, k, v)`, `obj.__init__(...)` names no base
+    class — it resolves through the type's own MRO — so it is a route the type
+    EXPOSES, not an explicit base-class escape."""
+    from harness_runtime.types import _ImmutableKeyArns
+
+    raw = _ImmutableKeyArns({"harness-runtime-redaction-token": _ARN})
+    with pytest.raises(TypeError, match="immutable after validation"):
+        raw.__init__({"injected": "arn:EVIL"})  # type: ignore[misc]
+    assert dict(raw) == {"harness-runtime-redaction-token": _ARN}
+
+    config = AuditSigningConfig(
+        backend=AuditSigningBackendKind.AWS_KMS,
+        key_arns={"harness-runtime-redaction-token": _ARN},
+    )
+    with pytest.raises(TypeError, match="immutable after validation"):
+        config.key_arns.__init__({"harness-runtime-redaction-token": "arn:EVIL"})  # type: ignore[misc]
+    assert dict(config.key_arns) == {"harness-runtime-redaction-token": _ARN}
+
+
+def test_b109_the_seal_itself_cannot_be_reopened_by_attribute_assignment() -> None:
+    """`B-109` — a naive `_sealed` flag would be reopenable via
+    `obj._sealed = False`, walking straight back into the hole the seal closes
+    (the sibling's round-3 lesson, carried rather than re-learned). `__slots__`
+    plus a refusing `__setattr__`/`__delattr__` closes it: there is no instance
+    `__dict__` to write into and no ordinary assignment that reaches the slot.
+
+    The residual `object.__setattr__(obj, "_sealed", False)` route explicitly
+    NAMES A BASE CLASS and is deliberately out of scope — Python cannot seal
+    against that."""
+    from harness_runtime.types import _ImmutableKeyArns
+
+    stored = _ImmutableKeyArns({"harness-runtime-redaction-token": _ARN})
+    with pytest.raises(TypeError):
+        stored._sealed = False  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        del stored._sealed  # type: ignore[attr-defined]
+    assert not hasattr(stored, "__dict__"), "a `__dict__` would reintroduce the writable seal"
+    with pytest.raises(TypeError, match="immutable after validation"):
+        stored.__init__({"injected": "arn:EVIL"})  # type: ignore[misc]
+    assert dict(stored) == {"harness-runtime-redaction-token": _ARN}
+
+
+def test_b109_copies_of_a_populated_config_succeed_and_are_themselves_sealed() -> None:
+    """`B-109` — the seal must not cost the compatibility the dict-subclass
+    choice exists to buy (round 34). `__reduce__` rebuilds a FRESH object whose
+    slot is unset, so `copy.deepcopy` / `pickle` / `model_copy(deep=True)` all
+    still succeed — and each copy ends up sealed in its own right."""
+    import copy
+    import pickle
+
+    config = AuditSigningConfig(
+        backend=AuditSigningBackendKind.AWS_KMS,
+        key_arns={"harness-runtime-redaction-token": _ARN},
+    )
+    for copied in (
+        copy.deepcopy(config),
+        pickle.loads(pickle.dumps(config)),
+        config.model_copy(deep=True),
+    ):
+        assert dict(copied.key_arns) == {"harness-runtime-redaction-token": _ARN}
+        with pytest.raises(TypeError, match="immutable after validation"):
+            copied.key_arns.__init__({"injected": "arn:EVIL"})  # type: ignore[misc]
+        assert dict(copied.key_arns) == {"harness-runtime-redaction-token": _ARN}
+
+
+def test_b109_no_arg_construction_still_works_and_is_sealed() -> None:
+    """`B-109` — the sealed `__init__`'s single positional-only parameter
+    defaults to a read-only empty mapping (a shared mutable `{}` default would
+    be a live class-level container), so `cls()` stays valid — the shape
+    `__reduce__` and the default-config path both depend on."""
+    from harness_runtime.types import _ImmutableKeyArns
+
+    empty = _ImmutableKeyArns()
+    assert dict(empty) == {}
+    with pytest.raises(TypeError, match="immutable after validation"):
+        empty.__init__({"injected": "arn:EVIL"})  # type: ignore[misc]
+    assert dict(empty) == {}
+
+
 class _FlakyBackend:
     """Scripted inner backend: raises while `failing` is True."""
 

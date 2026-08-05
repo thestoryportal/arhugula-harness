@@ -2919,9 +2919,12 @@ def _collect_effect_fence_idempotency_keys(snapshot: PauseSnapshot) -> list[str]
     sequential topologies with no fan-out barrier to pause at) and are not walked.
 
     B-69 impl leg (CP spec v1.112 §2.3 / plan AC #A8) — a FILTER over the ONE
-    shared `walk_pause_tree` traversal rather than a second recursion. The
-    empty-key crash-reconstruction entry is still enumerated here (its `""` key is
-    what `compute_effect_fence_tree_wide_abort_present` filters out downstream),
+    shared `walk_pause_tree` traversal rather than a second recursion. Every
+    key-ABSENT entry is still ENUMERATED here with its `""` placeholder key (B-107
+    impl leg, CP spec v1.115 §1.4: the walk may still publish position-only source
+    shapes; it is MEMBERSHIP in the unaddressed/eligible set that excludes them,
+    which BOTH `compute_effect_fence_uniform_fallback_eligible_key` and
+    `compute_effect_fence_tree_wide_abort_present` now do with the same filter),
     even though the PUBLIC projection of that same location carries no key field
     at all — the walk entry keeps the resolver's view and the caller-facing view
     distinct without duplicating the walk."""
@@ -2959,10 +2962,22 @@ def compute_effect_fence_uniform_fallback_eligible_key(
     case is needed: an `idempotency_key` is always a genuine per-held-reserve key
     (never a run_id standing in for "the run itself"), so `resume_context.
     effect_fence_resolutions` membership is tested directly against every collected
-    key with no exclusion."""
+    key with no exclusion.
+
+    B-107 impl leg (CP spec v1.115 §1.1) — the AUTHORITATIVE unaddressed set contains
+    only locations whose captured `idempotency_key` is NON-EMPTY. An empty captured key
+    is position-only (it addresses no held reserve, per v1.113 §2.1's key-ABSENT source
+    shapes) and is excluded BEFORE the sole-unaddressed-location computation, so the
+    scalar uniform fallback can never nominate `""`. Two consequences the walk keeps
+    distinct (§1.4): the tree walk still PUBLISHES key-absent locations — this filter is
+    membership, not enumeration — and a co-existing keyless pause no longer consumes a
+    slot in the count, so a lone keyed sibling beside it IS now the sole member. The
+    filter matches `compute_effect_fence_tree_wide_abort_present`'s own (already
+    shipped) candidate filter; the two now agree by construction rather than by the
+    downstream sibling compensating for this one."""
     if root_snapshot is None or resume_context is None:
         return None
-    candidate_keys = _collect_effect_fence_idempotency_keys(root_snapshot)
+    candidate_keys = [k for k in _collect_effect_fence_idempotency_keys(root_snapshot) if k]
     resolutions = resume_context.effect_fence_resolutions or {}
     unaddressed = [k for k in candidate_keys if k not in resolutions]
     if len(unaddressed) == 1:
@@ -2990,7 +3005,24 @@ def _resolve_effect_fence_gated(
     `effect_fence_resolution_for` method (a new call site, not a new or changed
     method) — `is_mapped` is checked FIRST, separately, only to decide whether the
     gate applies; `effect_fence_resolution_for`'s own return value (map hit or
-    uniform default) is what is actually returned in both safe branches."""
+    uniform default) is what is actually returned in both safe branches.
+
+    B-107 impl leg (CP spec v1.115 §1.3) — the CONSUMPTION-boundary term: an EMPTY
+    `idempotency_key` is unresolvable and yields no directive BEFORE either the map-hit
+    check or the uniform-eligibility comparison. An empty captured key addresses no held
+    reserve, so there is nothing for a resolution to be key-bound TO. Ordering is
+    load-bearing in both directions: refusing ahead of the map hit makes
+    validation-bypassed map content (`model_construct`, §1.5) INERT without needing a
+    diagnostic for the forged object, and refusing ahead of the eligibility comparison
+    means a caller-supplied `effect_fence_uniform_fallback_eligible_key=""` cannot make
+    an empty location resolvable — the public parameter stays an INPUT, never a second
+    classification authority beside §1.1. Three of the seven consult sites (the two
+    per-branch fan-out sites and the ORCHESTRATOR-own site) already truthiness-gate the
+    captured key at the call; this guard binds the remaining ungated ones (the LINEAR
+    reconstruction site and both level-local `_any_fence_abort` scans) and makes the
+    property total at the resolver rather than per-caller."""
+    if not idempotency_key:
+        return None
     if resume_context is None:
         return None
     is_mapped = bool(
@@ -3047,7 +3079,15 @@ def compute_effect_fence_tree_wide_abort_present(
     unfiltered could let a uniform ABORT default falsely activate the
     tree-wide signal from an entry no real consumer would ever resolve to
     ABORT, spuriously suppressing unrelated valid HITL delivery elsewhere in
-    the tree."""
+    the tree.
+
+    B-107 impl leg (CP spec v1.115 §1.1/§1.3) — this filter is no longer this
+    function's own local defence. `compute_effect_fence_uniform_fallback_eligible_
+    key` now applies the SAME membership filter, and `_resolve_effect_fence_gated`
+    refuses an empty `idempotency_key` outright, so the filter here is redundant
+    with (and consistent with) the two authorities rather than compensating for
+    them. It is RETAINED deliberately: dropping it would make this computation's
+    correctness depend on the resolver's guard rather than state it locally."""
     if root_snapshot is None or resume_context is None:
         return False
     candidate_keys = [k for k in _collect_effect_fence_idempotency_keys(root_snapshot) if k]

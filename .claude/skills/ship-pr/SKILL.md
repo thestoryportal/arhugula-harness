@@ -12,6 +12,13 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 ## Pre-flight (before opening the PR)
 
 - **Green.** `just check` + the relevant test suites pass; `bash -n` on any new shell.
+- **Grounding pass (U-WT-01).** Before codex round 1: (a) re-read every `file:line` cite in
+  the diff and PR body at HEAD — never from recall; (b) recompute every count/arithmetic
+  claim from the actual source rather than restating it; (c) confirm every `#NNN` reference
+  actually is that PR (`gh pr view NNN --json title`); (d) confirm `just check` ran at the
+  *current* HEAD, not an earlier one; (e) state in the PR body that this pass ran. First
+  drafts historically burn 5–10 codex rounds on exactly these defect classes — this pass
+  collapses them before round 1.
 - **Out-of-family review.** `just codex-review` (branch-vs-`main`) to convergence — fix
   real findings, hermetically regression-test each (§13.1). Use `--base` here, NOT
   `-uncommitted`: `-uncommitted` reviews untracked files too, so any untracked WIP in the
@@ -210,6 +217,35 @@ ending the turn):
 
 Skip only when this PR was itself the terminating roadmap-status refresh (§12.2.1) — a
 refresh-only commit has no new learnings to reflect on.
+
+## Arc exit report — the LAST step (U-WT-03/04)
+
+**After** the reflect + `/context-save` block above, not before it. That ordering is the
+whole point: the merge SHA, the post-merge main-CI conclusion, the §12.2.1 refresh commit
+**and** the checkpoint you just wrote all exist only at this point, so the report records
+the arc's *real* final checkpoint rather than a stale or fabricated one. **Skip this step
+entirely when the PR was itself the terminating roadmap-status refresh (§12.2.1)** — the
+same rule as the reflect block above: a refresh-only PR is not an arc, owes no report, and
+running it would mislabel its structurally-absent refresh as an open obligation. Run:
+
+```
+just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-/context-save-just-reported>
+```
+
+Pass `--checkpoint` explicitly — the roadmap authorizes a **parallel frontier**, so another
+live session can `/context-save` between your save and this collection; mtime cannot tell
+whose checkpoint is whose, so an unbound run reports the workspace-newest file as an
+unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path *your*
+`/context-save` step just reported binds the report to this arc.
+
+It writes `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` (gitignored, PR-keyed — a
+re-run overwrites it) and indexes one `EXIT-REPORT` row into `.harness/loop_status.md`.
+Paste the emitted `yaml` block into this turn's final message: it is the arc's
+machine-readable closure record, and every field is collected or explicitly null — a
+missing refresh reads `refresh_commit: null` and a non-green CI reads its conclusion
+verbatim, so the block is evidence, not narration. Read what it says before pasting: a
+null `refresh_commit`, a `main_ci.conclusion` that is not `success`, or
+`checkpoint.confirmed: false` each mean an obligation above is still open.
 
 ## Notes
 

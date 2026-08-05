@@ -32,6 +32,17 @@ git diff --cached --stat
 git diff --cached
 ```
 
+## Grounding pass (U-WT-01)
+
+Before the first out-of-family review round: re-read every `file:line` cite in the diff
+and PR body against the exact content under review (the staged/worktree diff — in this
+flow local gates and review precede the commit, so HEAD does not yet contain it) — never
+from recall; recompute every count/arithmetic claim from the actual source rather than
+restating it; confirm every `#NNN` reference actually is that PR; confirm local gates ran
+against the *current* staged/worktree fingerprint and re-record the pass if the diff
+changes afterward; state in the PR body that this pass ran. First drafts historically
+burn 5–10 review rounds on exactly these defect classes.
+
 ## Authorship-dependent out-of-family review
 
 - When Codex authored the change, run `just gemini-review`. Despite its legacy recipe
@@ -91,15 +102,48 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
 4. Land the terminating refresh as the immediate next commit/PR. Its title starts exactly
    `ops: roadmap status refresh ` and its closed changed-file set is only
    `.harness/roadmap_status.md`. Do not recurse on a terminating refresh.
-5. Wait for the refresh merge's own main CI to be green, fast-forward local `main`, remove
-   the clean arc worktree, and prune only the verified merged local topic branch.
-6. Record loop gates through `worktree_disposition` and require `just codex-loop-check`.
+5. Wait for the refresh merge's own main CI to be green and fast-forward local `main`.
+   DEFER removing the arc worktree and pruning the topic branch until AFTER the arc exit
+   report below — the report reads the arc worktree's `.harness/loop_status.md` for this
+   arc's pending-HIL rows, and disposition deletes that ledger.
+6. Record loop gates through `worktree_disposition` (the disposition itself now happens
+   after the exit report) and require `just codex-loop-check`.
 
 ## Reflect and checkpoint
 
 Before the next arc, reflect on new recurrent lessons and run the gstack `context-save` skill.
 Update durable agent memory only when the operator explicitly requests it and the active host
 memory policy permits it; context-save itself remains mandatory. A checkpoint's remaining-work
-prose is advisory, so verify it against HEAD when resuming. After the fixed point, create the
-next isolated worktree and run `just codex-autonomous-arc <next-arc-id>`. Skip reflection only
+prose is advisory, so verify it against HEAD when resuming. After the fixed point **and the
+arc exit report below**, create the next isolated worktree and run
+`just codex-autonomous-arc <next-arc-id>` — launching the next arc first would let it alter
+loop/checkpoint state before the prior arc's report is collected. Skip reflection only
 for a pure terminating-refresh PR.
+
+## Arc exit report (U-WT-03/04)
+
+Run this last within the arc — after the reflect and `context-save` step above, never
+before it, BEFORE the arc worktree's disposition (the report reads that worktree's
+pending-HIL ledger, which disposition deletes), and BEFORE launching the next arc. Only
+at that point do the merge SHA, the post-merge main CI conclusion, the terminating
+refresh commit, and the checkpoint just written all exist, so the report records the
+arc's real final checkpoint instead of a stale one. Skip entirely for a pure
+terminating-refresh PR (not an arc; no report owed).
+
+```bash
+just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-context-save-just-reported>
+```
+
+Pass `--checkpoint` explicitly. The roadmap authorizes a parallel frontier, so another live
+session can write a checkpoint between this arc's save and this collection; mtime cannot
+discriminate ownership, so an unbound run reports the workspace-newest file as an
+unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path this arc's own
+`context-save` step reported binds the report to this arc.
+
+Validate the call before using its output: require exit 0 and the named report path. The
+recipe writes `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` (gitignored, PR-keyed, so a
+re-run overwrites rather than orphaning a sibling) and appends one `EXIT-REPORT` row to
+`.harness/loop_status.md`. Paste the emitted `yaml` block into the final response as the
+arc's machine-readable closure record. Every field is collected or explicitly null — a null
+`refresh_commit`, a `main_ci.conclusion` other than `success`, or `checkpoint.confirmed:
+false` each mean a closeout obligation above is still open.

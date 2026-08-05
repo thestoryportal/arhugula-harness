@@ -209,9 +209,15 @@ def test_sole_keyless_pause_never_activates_tree_wide_signal() -> None:
     (`if (_branch_fence_key and ...)` guards both fan-out dispatch sites) —
     they treat it as unresolvable and re-pause INERT, never consulting the
     uniform fallback for it. A sole keyless pause with a uniform `ABORT`
-    default must NOT activate the tree-wide signal — even though it WOULD be
-    the sole unaddressed member per `compute_effect_fence_uniform_fallback_
-    eligible_key`'s own (unfiltered) 1-candidate reasoning."""
+    default must NOT activate the tree-wide signal.
+
+    Unchanged by B-107, and now over-determined: pre-B-107 the keyless location
+    WOULD have been the sole unaddressed member per `compute_effect_fence_uniform_
+    fallback_eligible_key`'s then-unfiltered 1-candidate reasoning, and only this
+    function's own candidate filter kept the signal `False`. Under CP spec v1.115
+    §1.1 it is excluded from that membership too (`eligible_key` is now `None`
+    here), and under §1.3 the resolver refuses the empty key outright — three
+    independent reasons for the same `False`."""
     root = _snapshot(
         run_id="run-keyless", effect_fence_resume=EffectFenceResumeState(idempotency_key="")
     )
@@ -220,15 +226,22 @@ def test_sole_keyless_pause_never_activates_tree_wide_signal() -> None:
 
 
 def test_map_addressed_keyed_abort_activates_alongside_an_unrelated_keyless_pause() -> None:
-    """The empty-key filter excludes the keyless candidate from the final ABORT
-    scan, but a co-existing keyless pause STILL occupies a slot in `compute_
-    effect_fence_uniform_fallback_eligible_key`'s own (unfiltered, pre-existing
-    B-70) unaddressed-count — so a UNIFORM default can never reach the keyed
-    pause here (2 unaddressed -> `eligible_key=None`), exactly matching what
-    the real per-branch consult site would ALSO do for the keyed branch in
-    this same scenario (both share the identical `eligible_key`). A MAP-
-    addressed resolution bypasses that restriction entirely (a map hit is
-    always safe, CP spec v1.107 §1.1) and correctly activates the signal."""
+    """The empty-key filter excludes the keyless candidate from the final ABORT scan.
+
+    **B-107 impl leg (CP spec v1.115 §1.1) — RATIFIED assertion flip.** Before
+    B-107 the co-existing keyless pause STILL occupied a slot in `compute_effect_
+    fence_uniform_fallback_eligible_key`'s own (then-unfiltered) unaddressed count,
+    so a UNIFORM default could not reach the keyed pause here (2 unaddressed ->
+    `eligible_key=None`) and this test asserted `is False`. §1.1 removes the empty
+    key from that membership, so the keyed pause is now genuinely the SOLE
+    unaddressed location and the uniform ABORT default DOES reach it -> `is True`.
+    This is the fork's ratified consequence (fork §11 item 1), not test drift: the
+    keyless location was never resolvable by any real consult site, so counting it
+    only ever suppressed a keyed sibling that had every right to the fallback. The
+    sole-keyless case (above) and the two-KEYED case (below) both still assert
+    `False` — the flip is scoped precisely to "a keyless location was inflating the
+    count". A MAP-addressed resolution remains unconditionally safe (a map hit is
+    always safe, CP spec v1.107 §1.1) and activates the signal in both eras."""
     keyless_child = _snapshot(
         run_id="run-keyless-child", effect_fence_resume=EffectFenceResumeState(idempotency_key="")
     )
@@ -248,10 +261,12 @@ def test_map_addressed_keyed_abort_activates_alongside_an_unrelated_keyless_paus
             ),
         ),
     )
-    # Uniform-only cannot reach the keyed pause (2 unaddressed candidates,
-    # including the keyless one, per the pre-existing eligible_key rule).
+    # B-107 (CP spec v1.115 §1.1): the keyless location is excluded from the
+    # unaddressed set, so the KEYED pause is the sole member and the uniform
+    # ABORT default reaches it. (Pre-B-107 this asserted `is False`, because the
+    # keyless location inflated the count to 2 -> `eligible_key=None`.)
     uniform_abort = ResumeContext(effect_fence_resolution=EffectFenceResolution.ABORT)
-    assert compute_effect_fence_tree_wide_abort_present(root, uniform_abort) is False
+    assert compute_effect_fence_tree_wide_abort_present(root, uniform_abort) is True
     # A map hit on the keyed key is unconditionally safe and activates it.
     mapped_abort = ResumeContext(effect_fence_resolutions={"key-real": EffectFenceResolution.ABORT})
     assert compute_effect_fence_tree_wide_abort_present(root, mapped_abort) is True

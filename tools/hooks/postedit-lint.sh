@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 # PostToolUse(Edit|Write) lint-on-edit. After Claude edits a .py file, run ruff on
-# JUST that file and inject any findings as additionalContext. NON-BLOCKING by
-# design (PostToolUse cannot undo — it only informs; the Stop gate / CI ruff job is
-# the hard enforcement). Silent when the file is clean. Bounded so it can't hang.
+# JUST that file and inject any findings as additionalContext; after a .yaml/.yml
+# edit, parse-check that file with pyyaml instead. NON-BLOCKING by design
+# (PostToolUse cannot undo — it only informs; the Stop gate / CI ruff + ledger jobs
+# are the hard enforcement). Silent when the file is clean. Bounded so it can't hang.
 #
-# Trigger: PostToolUse, matcher "Edit|Write|MultiEdit". Early-exits for non-.py
-# files. Prefers a `ruff` on PATH; falls back to `uv run ruff`.
+# Trigger: PostToolUse, matcher "Edit|Write|MultiEdit". Early-exits for every other
+# extension. The .py branch prefers a `ruff` on PATH; falls back to `uv run ruff`.
+# The .yaml branch prefers the repo `.venv/bin/python` (pyyaml is already a dev dep
+# at pyproject.toml) and falls back to `uv run --quiet python` — NEVER
+# `uv run --with`, which would build an ephemeral env on every single edit.
+#
+# The YAML check's limit, stated honestly: a parse check catches unquoted `: `
+# scalars (`title: fix: thing`) and indentation/tab errors. It does NOT catch
+# ` #NNN` comment-truncation — `notes: shipped in #1189` is VALID YAML whose value
+# silently truncates at the `#`. No `#`-regex advisory is added here on purpose: it
+# is false-positive-heavy, the same rejection class as HARDENING_PLAN D3/D13.
 
 set -uo pipefail
 
@@ -21,10 +31,44 @@ cd "$PROJECT_DIR" || exit 0
 PAYLOAD=$(hook_read_stdin)
 FILE=$(hook_json "$PAYLOAD" '.tool_input.file_path')
 [ -z "$FILE" ] && exit 0
-case "$FILE" in *.py) ;; *) exit 0 ;; esac
+case "$FILE" in *.py) KIND=py ;; *.yaml|*.yml) KIND=yaml ;; *) exit 0 ;; esac
 [ -f "$FILE" ] || exit 0
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/arhugula-uv-cache}"
+
+# Parse-check a single YAML file. Bounded; prefer the repo venv's python (pyyaml is
+# already installed there), else `uv run --quiet python`. The checker itself always
+# exits 0 — a YAMLError is reported on stdout (str(e) carries "line N, column M"),
+# so no rc ever leaks through hook_bounded and nothing else is treated as a finding.
+if [ "$KIND" = yaml ]; then
+  if [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
+    YAML_PY=("$PROJECT_DIR/.venv/bin/python")
+  else
+    YAML_PY=(uv run --quiet python)
+  fi
+  YAML_OUT=$(hook_bounded 10 "${YAML_PY[@]}" -c '
+import sys, yaml
+try:
+    list(yaml.safe_load_all(open(sys.argv[1])))
+except yaml.YAMLError as e:
+    print(str(e))
+' "$FILE" 2>/dev/null)
+  YAML_RC=$?
+
+  # The checker body always exits 0 (YAMLError is reported on stdout), so a nonzero
+  # rc means the CHECKER itself failed — stale .venv without pyyaml, missing uv, or
+  # a hook_bounded timeout. Say so instead of silently taking the clean path: a
+  # checker-unavailable "clean" is a lie that disables the advisory unnoticed.
+  if [ "$YAML_RC" -ne 0 ]; then
+    hook_emit "PostToolUse" "[yaml] parse-check UNAVAILABLE for ${FILE} (checker rc=${YAML_RC}: stale .venv missing pyyaml, missing uv, or timeout — file NOT verified; CI ledger checks are the hard gate)"
+  fi
+
+  [ -z "$YAML_OUT" ] && exit 0   # checker ran and parses → stay silent
+
+  hook_emit "PostToolUse" "[yaml] parse error in ${FILE}:
+${YAML_OUT}
+(advisory — CI ledger checks are the hard gate)"
+fi
 
 # Lint the single file (concise). Bounded; prefer a direct ruff, else uv run ruff.
 # `ruff format --check` reports files that would be reformatted; combine with check
