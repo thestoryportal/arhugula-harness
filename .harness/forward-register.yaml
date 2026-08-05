@@ -3521,9 +3521,9 @@ items:
     resolve_result_ref_off_loop already relies on. WITNESSED BY EXECUTION at
     the then-branch harness-runtime/tests/test_pause_capture_off_loop_b103.py (11 tests; NOT
     PRESENT AT HEAD -- stripped with the offload, absence re-verified 2026-08-05): an unrelated coroutine
-    and a pending loop timer both advance while a genuine second OS process holds the lock, and the
-    MUTATION PROBE SHIPS AS A PERMANENT ARM rather than a prose claim -- the direct synchronous call
-    is parametrized alongside the shipped path with INVERTED expectations, and reproduces loop
+    and a pending loop timer both advanced while a genuine second OS process held the lock, and the
+    mutation probe WAS BUILT AS A PERMANENT ARM rather than a prose claim -- the direct synchronous
+    call was parametrized alongside the offload path with INVERTED expectations, and reproduced loop
     starvation exactly (sample latency 2.98s vs the 0.6s sample window; 1 unrelated-coroutine tick
     vs ~30; timer 2.98s late). Cancellation is witnessed against a detach-on-cancel mutant the same
     way. NEITHER FORBIDDEN THING MOVED: granularity is pinned by a same-target/same-inode witness,
