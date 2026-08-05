@@ -287,11 +287,15 @@ explicitly names itself the flip site).
 A does **not** touch the residual — see §5's dominated variant A′.
 
 **Witness shape.** (a) The 8 table rows at `test_memory_failure_classification.py` flip their
-expected value; (b) **one detect-then-refuse row added** — a class declaring the new member is
-honoured, and a plain-`str` `"input_validation_failure"` declaration is still IGNORED (the re-keyed
-fixture from point 3, retargeted so the negative case remains a genuine non-member); (c) a
-**mutation probe**: revert the declaration at `memory_tool_executor.py:169`, confirm exactly the 8
-rows fail with `assert 'provider_adapter_failure' == 'input_validation_failure'`, restore.
+expected value; (b) **two negative rows, one per gate, with distinct literals** — (b1) the point-3
+fixture RE-KEYED to a genuinely non-member literal (e.g. `"not_a_c_mem_19_class"`), pinning that the
+closed vocabulary cannot be widened by an arbitrary declaration, and (b2) a NEW second fixture
+declaring the plain `str` `"input_validation_failure"` — the new member's VALUE but not the enum
+member — still IGNORED, pinning the `isinstance(declared, MemoryTelemetryFailureClass)` type gate
+(`memory_observability.py:218`) independently of membership. One fixture cannot serve both rows: b1
+must not name a real member's value and b2 must; (c) a **mutation probe**: revert the declaration at
+`memory_tool_executor.py:169`, confirm exactly the 8 rows fail with
+`assert 'provider_adapter_failure' == 'input_validation_failure'`, restore.
 
 **Plan rider.** `Implementation_Plan_Memory_Substrate_v1.md:829` acceptance line extended to seven
 values. **No new unit** — U-MEM-22 already owns the vocabulary and is already landed; this is an
