@@ -1,6 +1,6 @@
 # Class 2 Fork — B-104: the pause journal writes no pause-RESOLVED marker
 
-**Status: FILED 2026-08-01, awaiting operator ratification.** Doc-only filing per the workspace
+**Status: RATIFIED 2026-08-01 as READING D — DECLARE + DEFER, and RE-AFFIRMED in the 2026-08-05 operator ratification batch.** (Filed 2026-08-01 at PR #1181; Component 1 landed at Runtime spec v1.110, PR #1182.) See `## §11 RATIFICATION`, and `§11.5` for the re-affirmation. Doc-only filing per the workspace
 codex-context-guard rule (fork FILINGS ship doc-only FIRST; no `design-substrate/**` edit rides this
 PR). Chain mirrors `B-96`'s, `B-97`(a)'s, `B-107`'s and `B-98`'s: **filing (this PR) → operator
 ratification → spec leg (if owed) → impl leg.**
@@ -1308,3 +1308,20 @@ ruling enumerates as the operator-facing API (`run` / `resume` / `read_paused_wo
 an absent capability**, and an earlier draft of this section conflated the two. This ratification
 does **not** open that CLI surface; it records that the two are ordered, which the register now
 says.
+
+### §11.5 Re-affirmation in the 2026-08-05 ratification batch
+
+**`B-104` was carried into the standing eight-decision operator batch answered on 2026-08-05, and the
+operator's verdict is READING D — DECLARE + DEFER, unchanged.**
+
+- **Nothing new is owed.** **Component 1**, the mandatory symmetric declaration, already landed at
+  **Runtime spec v1.109 → v1.110** (PR #1182, clearance marker
+  `.harness/clearance/spec-harness-runtime-v1-110-cleared-2026-08-01.md`), and **Component 2**, the
+  capture-side discriminator, stays **DEFERRED** under the four-disjunct demand test with **D-0 (a
+  retention / pruning-policy arc) dominant**. `status` stays `registered_finding`; there is no impl
+  leg.
+- **Readings A, B and C remain NOT selected.** The runner-up **A** remains *registered-and-held* per
+  `[[reviewer-oscillation-register-and-hold]]` and is **not** advanced by this re-affirmation; the
+  A-vs-B adjudication remains the operator's if D-0…D-3 ever fires.
+- **One bookkeeping repair rides this leg.** The register row's `pr:` pointer still read `#pending`
+  for the ratification leg; it now names **#1182**, plus the 2026-08-05 batch record.

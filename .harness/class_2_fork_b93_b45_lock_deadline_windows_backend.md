@@ -1,6 +1,6 @@
 # Class 2 Fork — B-93 + B-45 (combined): the same-host lock substrate has neither a liveness deadline nor a Windows serialization backend, and the second gap now withholds a correctness guarantee
 
-**Status: FILED 2026-08-05, awaiting operator ratification.** Doc-only filing per the workspace
+**Status: RATIFIED 2026-08-05 as READING B** — the liveness deadline is built now on a HAND-ROLLED vehicle; the Windows serialization backend is DEFERRED on witnessability (filed 2026-08-05). See `## §12 RATIFICATION` at the foot of this file. Doc-only filing per the workspace
 codex-context-guard rule (fork FILINGS ship doc-only FIRST; no `design-substrate/**` edit rides this
 PR). Chain mirrors `B-88`'s, `B-107`'s, `B-98`'s and `B-97`(a)'s: **filing (this PR) → operator
 ratification → build leg(s).** Unlike those four, this filing concludes that **no spec leg is owed
@@ -762,5 +762,88 @@ on BOTH register surfaces in this same commit.**
 - **R10 (cap)** the remaining ten-witness inventory twins corrected across §2/§3(vi)/§6/§10.
 **CAP REACHED at ten rounds; shipped per the enumeration-variant capping discipline** — substance concentrated in R1/R2/R8/R9; R3–R7 and R10 propagated those findings into every dependent passage; any residual claim-precision long tail on this 735-line filing is bounded by §10's own verification inventory. Contract-level findings still reopen this record at ratification.
 
+---
 
+## §12 RATIFICATION
 
+*(§9 prescribes a `§12 RATIFICATION` section, and that prescription is honoured literally. There is
+no §11 in this document: §9's numbering anticipated a standalone out-of-family review-record section,
+which the filed document instead folded into §10. The gap is recorded rather than silently
+renumbered.)*
+
+**Status: RATIFIED 2026-08-05 as READING B. Decision 2 = YES, decision 1 = NO, decision 3 =
+HAND-ROLLED. `B-93` moves to `open` with a build leg owed; `B-45` stays `registered_finding` with its
+demand tests written in.**
+
+### §12.1 The gate — the three decisions (operator `AskUserQuestion`, 2026-08-05)
+
+> **Decision 1 — Windows serialization backend, build now? NO.** `B-45` stays
+> `registered_finding`, with demand tests **D-1** (Windows CI exists) and **D-2** (a declared Windows
+> target) as its re-open triggers.
+>
+> **Decision 2 — liveness deadline, build now? YES.** Nine sites, one typed exception, the hold-time
+> contract, plus the §3(ii) import repair.
+>
+> **Decision 3 — vehicle? HAND-ROLLED extension of the existing primitive. NOT `filelock`.**
+
+**The recommended combination — Reading B — is exactly what was selected.** Readings A, C and D were
+not selected and are not partially adopted.
+
+### §12.2 Why decision 1 is NO, restated so the build leg does not re-litigate it
+
+**The `B-45` half is gated on WITNESSABILITY, not on the backend pick** (§6, discriminator 1). With
+no Windows CI, landing a backend flips `journal_exclusion_is_degraded()`
+(`journal_workflow_pause_store.py:414`) to `False` and **disarms** the refuse-by-default consult at
+`admin/pause_journal_adoption.py:412` — replacing a **declared safe degradation** with an
+**unverified exclusion claim**, which is strictly worse than today. **D-1 requires an EXECUTING
+BEHAVIOURAL witness** (codex R8): a lint-only `windows-latest` job does **not** satisfy it.
+
+### §12.3 The vehicle, and why hand-rolled carries decision 2 alone
+
+**Seven of the nine sites are exclusive-only** and need no shared face — only
+`_acquire_legacy_sidecar_if_present(exclusive=False)` and `cross_process_read_lock` require shared
+semantics (§3(v)). A hand-rolled `LOCK_NB` + retry extension therefore covers decision 2 without
+adopting a dependency. **`filelock` is revisited only if decision 1 later goes YES**; the
+never-recorded Session-6 GUARDRAIL binding stays unsettled by this ratification, which is the honest
+outcome of not needing to settle it.
+
+**Variants E and F stay RECORDED AS DOMINATED** so they are not re-proposed: **F**, a deadline on
+`cross_process_scope_lock` alone (trap 1 defeats it — one entry surface blocks at up to three sites
+in sequence); **E**, adopting `filelock` without deciding either half.
+
+### §12.4 What the build leg owes
+
+1. **All nine acquisition sites bounded** by a deadline.
+2. **One typed `CrossProcessLockTimeoutError`, homed at `harness-core`** — settled by precedent, not
+   open: `harness-core` has zero workspace dependencies, and
+   `ValidatorEscalationGateTimeoutError` (`harness-core/src/harness_core/validator_escalation_errors.py:43`)
+   was re-homed for exactly this carrier-home reason. **Defining it in `harness-runtime` is ILLEGAL**,
+   inverting the IS 0-outbound invariant; `harness-is` is the legal fallback.
+3. **The ABBA release-before-blocking handoff PRESERVED** at all three probe arms.
+4. **The hold-time contract documented** at `write_record_guarded`.
+5. **The §3(ii) reconciler import repair.**
+6. **≥1 process-based deadline witness per site-class, plus a PD-8 mutation probe each** (revert the
+   bound, confirm the witness fails, restore) — **including the `_workflow_lock` carrier, which codex
+   R9 established is UNWITNESSED at HEAD** (the reconciler CAS test proves `os.link`, not
+   `_workflow_lock`).
+
+**Closes `B-93`** at its merge. **Gate:** CI + out-of-family artifact review **selected by
+authorship** (`just codex-review` for Claude-authored work; `just gemini-review` if Codex authors the
+leg — self-review is not out-of-family) + the `merge-gate` 3-lens, this being code-touching.
+
+### §12.5 What this leg does NOT do
+
+**No `design-substrate/**` edit is owed or made — under ANY reading.** §3(vii) establishes it and
+this ratification discharges it by making none: `C-IS-09` §9.4 and `C-IS-07` §7.4 both defer the
+mechanism, and the IS spec contains **zero** occurrences of *timeout*, *deadline*, *platform* or
+*cross-process*. **No `harness-*/src` or `harness-*/tests` edit rides this doc-only ratification** —
+every item at §12.4 belongs to the build leg. **No council is owed**: §7's C3 ⊥ C11 dyadic was
+conditional on decision 1 = YES. **Ordering, preserved:** if decision 1 ever flips, the deadline leg
+**must precede** the Windows leg (§6 ground 3) — reversing it re-traverses all nine sites twice.
+
+### §12.6 Status transitions
+
+| Row | Status | Rationale |
+|---|---|---|
+| `B-93` | `registered_finding` → **`open`** | §9: *"status flips only for a row whose half is a Yes."* The enum's `open` (*actionable now, no blocker*) is the value that fits: the build leg is authorized and **no design-substrate change gates it**. Flips to `closed` when the build leg merges. |
+| `B-45` | **`registered_finding` (unchanged)** | §9's re-registration leg: *"No status change."* Its demand tests D-1 / D-2 and the Windows-framing correction are carried on the row. |

@@ -1,6 +1,6 @@
 # Class 2 Fork — B-98: gate description / question text is absent from every durable pause carrier
 
-**Status: FILED 2026-08-01, awaiting operator ratification.** Doc-only filing per the workspace
+**Status: RATIFIED 2026-08-01 as READING C — DEFER, and RE-AFFIRMED in the 2026-08-05 operator ratification batch.** (Filed 2026-08-01 at PR #1180; the ratified-defer leg landed at PR #1182.) See `## §11 RATIFICATION`, and `§11.4` for the re-affirmation. Doc-only filing per the workspace
 codex-context-guard rule (fork FILINGS ship doc-only FIRST; no `design-substrate/**` edit rides this
 PR). Chain mirrors `B-96`'s, `B-97`(a)'s and `B-107`'s: **filing (this PR) → operator ratification →
 spec leg (if owed) → impl leg.**
@@ -996,3 +996,20 @@ the two share a PR, not a scope.)*
 operator-loop win — the description already reaches the operator, and what is missing is the join
 `B-71` owns. This ratification does **not** re-open `B-71`; it records that the two rows are ordered,
 which the register now says.
+
+### §11.4 Re-affirmation in the 2026-08-05 ratification batch
+
+**`B-98` was carried into the standing eight-decision operator batch answered on 2026-08-05, and the
+operator's verdict is READING C — DEFER, unchanged.**
+
+- **Nothing new is owed.** The substantive ratification ran on 2026-08-01 and is recorded at
+  §11.1–§11.3 above; its spec-side leg landed at **PR #1182**. The 2026-08-05 answer **re-affirms**
+  that disposition rather than reopening it: no carrier change, no spec leg, no impl leg, **D-0
+  dominant**, `status` stays `registered_finding`.
+- **One bookkeeping repair rides this leg.** §11.2's last row recorded `pr: '#1180 + #pending'` — the
+  `#pending` half was never replaced once the ratification leg merged. The register row now names
+  **#1182** for that leg, plus the 2026-08-05 batch record.
+- **No docstring rewrite is owed by this row.** The `PauseSnapshot` *"8-field"* class-docstring item
+  against a 15-field type is a Class 3 cite-hygiene item **already owned by the `B-69` impl arc**
+  (§10, *"noted here only to confirm it is unchanged at this HEAD, **not** re-registered"*), and it is
+  not re-registered here either.

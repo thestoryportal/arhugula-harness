@@ -1,6 +1,6 @@
 # Class 2 Fork — B-88 (spec half): the C-MEM-19 failure vocabulary has no input-validation class, so a malformed memory-tool argument has nowhere truthful to go
 
-**Status: FILED 2026-08-05, awaiting operator ratification.** Doc-only filing per the workspace
+**Status: RATIFIED 2026-08-05 as READING A, sub-decision A-ii = RE-TYPE** (filed 2026-08-05). See `## §11 RATIFICATION` at the foot of this file. Doc-only filing per the workspace
 codex-context-guard rule (fork FILINGS ship doc-only FIRST; no `design-substrate/**` edit rides this
 PR). Chain mirrors `B-107`'s, `B-98`'s and `B-97`(a)'s: **filing (this PR) → operator ratification →
 spec leg → impl leg.**
@@ -600,3 +600,72 @@ reading; it is recorded so a later arc does not inherit "all four are pinned" as
   moved across eight rounds; substantive findings ended at R4 (A-ii); R5–R8 are
   consistency-of-the-record corrections — the self-referential-drift discriminator. Contract-level
   findings still reopen this record at ratification.
+
+---
+
+## §11 RATIFICATION
+
+**Status: RATIFIED 2026-08-05 as READING A, with sub-decision A-ii resolved as RE-TYPE. The spec leg
+and the impl leg are both OWED; the row moves to `design_substrate_gated` per §9.**
+
+The `B-92` / `B-97`(a) / `B-107` precedent is followed: the outcome is recorded here
+verbatim-in-substance rather than only at the register row.
+
+### §11.1 The gate — the reading (operator `AskUserQuestion`, 2026-08-05)
+
+> **Operator selected: READING A — `C-MEM-19` gains `input_validation_failure` as a SEVENTH failure
+> class, plus the boundary invariant distinguishing it from provider-adapter and serialization
+> failure.**
+>
+> **The name is `input_validation_failure`.** The stated fallback `input_error` is **not** taken.
+>
+> **Sub-decision A-ii is ratified in its RE-TYPE form** (the §6/§10 R4 sub-decision): the
+> `llm_dispatch.py` sites that raise `MemoryToolExecutionInputError` for **INTERNAL**
+> `MEMORY_TOOL_CONTRACTS` schema faults contradict the boundary invariant and are **re-typed at the
+> spec leg** — they are **not** recorded as mis-typed-at-birth and left in place. The dispatch
+> population's classification reachability is established at the spec leg and witnessed at the impl
+> rider.
+
+**Readings B and C were NOT selected and are NOT partially adopted.**
+
+### §11.2 The one obligation that does NOT fire, stated because it is easy to mis-carry
+
+§8's option table and §9's tail make **one docstring rewrite owed AT RATIFICATION ITSELF — but only
+under Reading C**, on the ground that selecting C immediately falsifies the shipped
+`memory_tool_executor.py:149`–`:171` docstring's *"the single flip site when the vocabulary gains an
+input class"* promise.
+
+**C was not selected, so that obligation does not fire.** Under **A**, the same docstring rewrite is
+owed — but at the **impl leg** (§9's impl row: *"the docstring rewrite"*), together with the enum
+member, the declaration flip and the fixture re-key. **No `harness-*/src` edit rides this doc-only
+ratification.**
+
+### §11.3 What the ratification carries, per §8's "carried by any answer" list
+
+| §8 obligation | Disposition at this leg |
+|---|---|
+| The five count-drift repairs + the one stale `file:line` cite at §10 **ride the ratification leg's register touch** | **APPLIED IN PLACE** on both register surfaces (replace-not-append, history preserved parenthetically). See §11.4. |
+| The `memory_tool_executor.py` docstring rewritten to match the ratified outcome under A or B | **DEFERRED TO THE IMPL LEG by §9's own table** — not to an unspecified future arc. Owed at ratification only under C. |
+| Row `pr:` pointer set; status flips to `design_substrate_gated` under A or B | **APPLIED.** |
+
+### §11.4 The six §10 drift items, as repaired
+
+| # | Was | Now, at HEAD |
+|---|---|---|
+| 1 | scope-value-domain declarations at `memory_capture.py:215` / `:236` | **`:286`–`:288`** (`MemoryCaptureScopeValueDomainError`, class `:271`) and **`:307`–`:309`** (`MemoryCaptureReservedActorError`, class `:291`). The old cites were a blank line and a docstring. |
+| 2 | `MemoryToolExecutionInputError`, *"all 10 sites"* | **10 in `memory_tool_executor.py`** (correct as scoped to the classified population) but **18 repo-wide** — the extra 8 are the `llm_dispatch.py` internal-fault sites **A-ii re-types**. |
+| 3 | `MemoryToolExecutionDeniedError`, 14 raise sites | **15** (growth from later arcs, not a regression). |
+| 4 | 37 parametrized rows | **39** (AST count). |
+| 5 | Mutation probes *"all five"* | **SEVEN**, enumerated (a)–(g). The header undercounted its own body; **no probe is missing**. |
+| 6 | *"all four native-adapter denial sites span-pinned"* | **6** `_NativeMemoryPolicyDeniedError` raise sites (`_require_scope_family_in_domain:305` and a third `_require_retrieval_allowed` branch at `:334` added by later arcs). **Whether the two newcomers are span-pinned is recorded as UNVERIFIED**, so no later arc inherits *"all four are pinned"* as covering six sites. |
+
+### §11.5 Sequencing from here
+
+**Spec leg (owed, X-AL-3-gated):** `Spec_Memory_Substrate_v1.md` v1.2 → v1.3 **and**
+`Implementation_Plan_Memory_Substrate_v1.md` v1.2 → v1.3 (U-MEM-22 `:829` extended, **no new unit**),
+by a dedicated `spec-writer`, with **both** clearance markers per root `CLAUDE.md` §4.5 (under A the
+plan does change, so the plan marker is owed too). **Impl leg (owed after it):** 1 enum member + 1
+declaration flip + 1 docstring rewrite + 1 fixture re-key; 8 witness rows flip + the two added
+negative rows + the mutation probe. **Zero hash / CXA / contract-number impact.**
+
+**No council is owed.** §7's convening was probe-resolved and conditional on **Reading B** only.

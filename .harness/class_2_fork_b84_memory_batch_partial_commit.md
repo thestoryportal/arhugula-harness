@@ -1,6 +1,6 @@
 # Class 2 Fork — B-84 (partial-commit half): a memory-tool batch commits its earlier calls before a later call's executor-level argument failure aborts the batch
 
-**Status: FILED 2026-08-05, awaiting operator ratification.** Doc-only filing per the workspace
+**Status: RATIFIED 2026-08-05 as READING A** — the executor's pure `validate()` pre-pass; the held Class-2-vs-Class-1 element ratified as **Class 2** (filed 2026-08-05). See `## §12 RATIFICATION` at the foot of this file. Doc-only filing per the workspace
 codex-context-guard rule (fork FILINGS ship doc-only FIRST; no `design-substrate/**`, no
 `.harness/forward-register.yaml`, no `.harness/post-phase-8-forward-register.md`, and no
 `.harness/roadmap_status.md` edit rides this PR). Chain mirrors `B-88`'s, `B-107`'s and `B-98`'s:
@@ -997,3 +997,79 @@ limits. `[HIGH]`
 - **One sub-decision remains routed rather than settled:** the Class-2-vs-Class-1 classification
   (R2 [P1-a] / R3 [P1]), held under the pre-committed hold notice and surfaced at §1 with an
   explicit operator override sentence.
+
+---
+
+## §12 RATIFICATION
+
+**Status: RATIFIED 2026-08-05 as READING A — the executor's pure `validate()` pre-pass. The build leg
+is OWED; the row moves to `open`.**
+
+### §12.1 The gate — the two-stage ask (operator `AskUserQuestion`, 2026-08-05)
+
+> **Stage 1 — the §5 discriminator: INPUT.** The harm is an input problem, not an ordering problem.
+>
+> **Stage 2 — on INPUT, A or A+C: A.**
+>
+> **Selected: READING A — a build leg for the executor's PURE `validate()` pre-pass** (one method +
+> two dispatch call sites, zero contract text).
+
+**A+C, C, B and D were NOT selected and are NOT partially adopted.** Two consequences worth stating
+because they are easy to mis-carry:
+
+- **D's obligation does not fire.** §10.2 makes the `_PreparedMemoryToolCall` docstring qualification
+  owed **at the ratification leg** — *under D only*. D was not selected, so no `harness-*/src` edit
+  rides this doc-only ratification.
+- **B's spec leg is not opened.** Selecting B would have opened the
+  `B-97`(a) / `B-104` / `B-107` spec route at §1. It was not selected, so no `design-substrate/**`
+  amendment is owed by this row.
+
+### §12.2 The HELD sub-decision — resolved as CLASS 2
+
+§11's review record closes with *"one sub-decision remains routed rather than settled: the
+Class-2-vs-Class-1 classification (R2 [P1-a] / R3 [P1]), held under the pre-committed hold notice and
+surfaced at §1 with an explicit operator override sentence."*
+
+> **Operator answer: the filing's own position is RATIFIED. `B-84` is CLASS 2 — an in-execution
+> operator decision at implementation discretion — and does NOT re-file as Class 1.**
+
+**What that does and does not endorse.** It ratifies §1's reading that
+`.claude/skills/phase-7-back-flow-routing/SKILL.md` §2.2's **Trigger** row is the operative
+discriminator — *"in-session decision-point requiring operator selection between substantive
+alternatives (NOT an architectural defect)"* — satisfied exactly here, because §3(ii) establishes
+there is **no contract to violate** and what was owed was a selection among the five §10.1 options.
+It does **not** endorse §2.2's **Recording** row (*"sub-phase log only, no design-phase artifact
+revision"*), which three landed precedents plainly do not honour: **that divergence remains a real
+defect in the routing skill, belonging to whoever next revises it, not to this fork.**
+
+### §12.3 What the build leg owes
+
+- The executor's **pure `validate()` pre-pass** and its two dispatch call sites.
+- **Witnesses W-1, W-2, W-4, W-5, W-7 and W-8 — W-8 in its INVERTED form** (`limit=0` rejected
+  **before** any retrieval event), **not** C's residual-pin form. Per codex R8, the naive union of
+  A's and C's rows is *unsatisfiable*; under A the `validate()` runs first, so A's expectation is the
+  one that can hold.
+- The **§8 mutation probes** (PD-8: revert the fix, confirm the witness fails, restore).
+- **W-5's four-cell matrix EXECUTED, with its answers recorded back on the register row.**
+- The **§9 items 3–7 shipped-source cite repairs**, in the files the leg touches.
+
+**Accepted costs, ratified rather than re-opened at build time:** the policy-flip TOCTOU window and
+the intra-call window both remain, and retry precedence changes. These were priced in §5 and are part
+of what Reading A buys.
+
+### §12.4 Status
+
+**`registered_finding` → `open`.** §10.2's ratification row prescribes the `pr:` stamp and the
+`close_out` outcome but is **silent on status**; the register's own status enum decides it — a
+ratified build reading with **no design-substrate gate** is *actionable now, no blocker*. The row
+flips to `closed` when the build leg merges. **The silence is recorded rather than papered over**, so
+a later session can see this was an enum-derived call, not an invented one.
+
+**No council is owed** — §7 is probe-resolved for A / C / D, and owed only under B.
+
+### §12.5 The residual this ratification does not dissolve
+
+§11's honest cap-exit stands: this was a ten-round cap exit, not a convergence to zero, and *"a
+further round would likely find more of the same class"* — confined to **Reading B's** acceptance
+surface and **C's** predicate derivation, i.e. to readings that were **not** selected. The build leg,
+not this filing, is where any remainder is discharged.
