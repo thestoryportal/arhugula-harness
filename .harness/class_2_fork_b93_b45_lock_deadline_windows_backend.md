@@ -1,6 +1,6 @@
 # Class 2 Fork — B-93 + B-45 (combined): the same-host lock substrate has neither a liveness deadline nor a Windows serialization backend, and the second gap now withholds a correctness guarantee
 
-**Status: RATIFIED 2026-08-05 as READING B** — the liveness deadline is built now on a HAND-ROLLED vehicle; the Windows serialization backend is DEFERRED on witnessability (filed 2026-08-05). See `## §12 RATIFICATION` at the foot of this file. Doc-only filing per the workspace
+**Status: RATIFIED 2026-08-05 as READING B** — the liveness deadline is **AUTHORIZED to be built now**, on a HAND-ROLLED vehicle; the Windows serialization backend is DEFERRED on witnessability (filed 2026-08-05). **Nothing is built yet** — this is a doc-only ratification; §12.4 lists what the build leg still owes and §12.6 keeps `B-93` `open` until that leg merges. See `## §12 RATIFICATION` at the foot of this file. Doc-only filing per the workspace
 codex-context-guard rule (fork FILINGS ship doc-only FIRST; no `design-substrate/**` edit rides this
 PR). Chain mirrors `B-88`'s, `B-107`'s, `B-98`'s and `B-97`(a)'s: **filing (this PR) → operator
 ratification → build leg(s).** Unlike those four, this filing concludes that **no spec leg is owed

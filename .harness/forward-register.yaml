@@ -903,9 +903,13 @@ items:
     WHICH VEHICLE). NOT re-verified this pass — the full downstream doc-cite inventory a retirement
     sweep would need (only the six no-op surfaces themselves were re-read). FILED 2026-08-05 —
     combined Class 2 fork with B-93 at .harness/class_2_fork_b93_b45_lock_deadline_windows_backend.md
-    (grounding HEAD 966bc658), awaiting operator ratification; STATUS UNCHANGED (registered_finding).
-    Four readings — A full combined fix / B deadline-now with Windows serialization deferred (RECOMMENDED)
-    / C Windows-only (dominated) / D defer both under demand tests D-0 (a second write_record_guarded
+    (grounding HEAD 966bc658). RATIFIED-DEFERRED 2026-08-05 -- the ''awaiting operator ratification''
+    clause is SUPERSEDED; ''STATUS UNCHANGED (registered_finding)'' remains TRUE, and is now true
+    BY DECISION rather than by pendency. EVERYTHING FROM HERE ON IS THE PRE-RATIFICATION RECORD,
+    SUPERSEDED 2026-08-05 BY THE RATIFICATION PARAGRAPH ABOVE and kept only as history -- read
+    it as ''what this row said before the operator answered'', never as current state.  Four readings
+    — A full combined fix / B deadline-now with Windows serialization deferred (RECOMMENDED) /
+    C Windows-only (dominated) / D defer both under demand tests D-0 (a second write_record_guarded
     precondition), D-1 (Windows CI exists), D-2 (a declared Windows target), D-3 (an observed
     stall), D-4 (a third row against this substrate); runner-up D. THE DECISIVE FINDING FOR THIS
     ROW — its half is gated on WITNESSABILITY, not on the backend pick. With no Windows CI, landing
@@ -1912,10 +1916,16 @@ items:
     REGISTERED RESIDUAL (B-74) at harness-runtime/tests/test_lifecycle_protected_result_store.py:1943
     and :1978, inside test_coarse_filesystem_mtime_granularity_does_not_lose_a_live_entry_on_sight
     (:1924). Disposition FORK-SHAPED -- pick a concrete resolution floor, or move the age authority
-    off raw mtime entirely. LINKAGE CORRECTED at this pass: this row is NOT deferred pending B-96
-    ratification. Neither row surface records such a dependency -- B-96 names this row as a SIBLING
-    sharing one root question (does the age authority stay mtime), and this row is independently
-    actionable today.'
+    off raw mtime entirely. LINKAGE CORRECTED at the 2026-08-05 grounding pass, then SUPERSEDED
+    BY THE ANSWER at the ratification leg the same day: the pre-ratification statement was ''this
+    row is NOT deferred pending B-96 ratification ... and this row is independently actionable
+    today'', which was TRUE WHILE B-96 WAS UNANSWERED. B-96 IS NOW ANSWERED (Reading C, ceiling
+    C-2), and the shared root question -- does the age authority stay mtime -- is resolved NO.
+    This row is therefore no longer independently actionable in the sense that sentence meant:
+    its residue is DISSOLVED by C-2 and it CLOSES at the B-96 impl leg (see the disposition paragraph
+    at the head of this close_out). What survives from the old sentence is only that the two rows
+    were never in a formal blocking relation -- they shared a question, and that question now
+    has an answer.'
   council: no -- narrow, filesystem-dependent TTL-precondition gap; the fix requires picking a
     concrete resolution floor which is a design decision, not an immediate judgment call
   heading: '### B-74 · Protected result store''s mtime-based GC age authority can under-report
@@ -3029,11 +3039,21 @@ items:
     by roughly +129 lines): at HEAD the five argument helpers are _string_arg `:678`, _optional_string_arg
     `:685`, _positive_int_arg `:694`, _allowed_kinds `:703`, _kind_from_memory_ref `:764` and
     _promotion_kind `:783`, and the two denied-class sites are _allowed_index_entry `:516` and
-    _read_record_by_ref `:545`. Disposition FORK-SHAPED; the 2026-07-30 re-price note above stays
-    load-bearing -- U-MEM-27''s write_record_guarded (memory_store.py:298) and the reentrant cross_process_scope_lock
-    both exist at HEAD, so re-price BOTH directions at build time rather than reading the recorded
-    lean.'
-  council: 'Likely. Direction (2) is a durable-write-semantics decision (all-or-nothing across a batch, and what compensation means for an append-only store) with a blast-radius dimension -- C10 paired with whichever voice owns the IS-side memory operation ledger. Direction (1) and the fail-fast reclassification are closer to mechanical once the direction is chosen, but the choice between (1) and (2) is not: it is the difference between preventing the predictable case and making the whole batch atomic. Picking (1) forecloses nothing; picking (2) subsumes it.'
+    _read_record_by_ref `:545`. Disposition FORK-SHAPED -- RESOLVED 2026-08-05 as READING A (see
+    the ratification paragraph at the head of this close_out); the 2026-07-30 re-price note above
+    stays load-bearing -- U-MEM-27''s write_record_guarded (memory_store.py:298) and the reentrant
+    cross_process_scope_lock both exist at HEAD, so re-price BOTH directions at build time rather
+    than reading the recorded lean.'
+  council: 'NONE OWED -- SETTLED 2026-08-05. Reading A is ratified, and the fork''s section 7
+    is PROBE-RESOLVED for A (the C10 x memory-ledger-owner dyadic was owed under Reading B ONLY,
+    and B was not selected). The pre-ratification disposition below is SUPERSEDED and retained
+    only as the filing-time record: Likely. Direction (2) is a durable-write-semantics decision
+    (all-or-nothing across a batch, and what compensation means for an append-only store) with
+    a blast-radius dimension -- C10 paired with whichever voice owns the IS-side memory operation
+    ledger. Direction (1) and the fail-fast reclassification are closer to mechanical once the
+    direction is chosen, but the choice between (1) and (2) is not: it is the difference between
+    preventing the predictable case and making the whole batch atomic. Picking (1) forecloses
+    nothing; picking (2) subsumes it.'
   heading: '### B-84 · Memory tool batch: an executor-level argument failure mid-batch can commit earlier writes, then retry-duplicate them *(surfaced by out-of-family Codex round 4 on the B-82 arc, 2026-07-27)* *(**RATIFIED 2026-08-05 as READING A** — the pure `validate()` pre-pass; the held element ratified **Class 2**; build leg owed)*'
 - id: B-85
   title: A mixed memory+caller tool batch returns the advertised memory call unserved and un-ledgered
@@ -3429,18 +3449,21 @@ items:
     is unchanged). Disposition VERIFIED-DORMANT, with step (2) (the new typed timeout error, distinct
     from MemoryStoreGuardedWriteConflictError) the one genuine FORK-SHAPED decision -- everything
     else is fully enumerated. FILED 2026-08-05 -- combined Class 2 fork with B-45 at .harness/class_2_fork_b93_b45_lock_deadline_windows_backend.md
-    (grounding HEAD 966bc658), awaiting operator ratification; STATUS UNCHANGED (registered_finding).
-    Four readings -- A full combined fix / B deadline-now plus the minimal Windows import repair,
-    serialization deferred (RECOMMENDED) / C Windows-only (dominated) / D defer both under demand
-    tests D-0 (a second write_record_guarded precondition, this row own trigger unchanged), D-1
-    (Windows CI exists), D-2 (a declared Windows target), D-3 (an observed stall), D-4 (a third
-    row against this substrate); runner-up D, and the B-versus-D margin is genuinely narrow. TWO
-    VARIANTS RECORDED AS DOMINATED so they are not re-proposed -- variant F, a deadline on cross_process_scope_lock
-    alone, which trap 1 defeats (one entry surface blocks at up to three sites in sequence, verified
-    by direct read of cross_process_write_lock at `:363`-`:406`), and variant E, adopting filelock
-    without deciding either half. STEP (2) EXCEPTION HOME IS SETTLED BY PRECEDENT, NOT OPEN --
-    harness-core (zero workspace dependencies per harness-core/pyproject.toml:9-11; precedent
-    ValidatorEscalationGateTimeoutError at harness-core/src/harness_core/validator_escalation_errors.py:43,
+    (grounding HEAD 966bc658). RATIFIED 2026-08-05 -- the ''awaiting operator ratification; STATUS
+    UNCHANGED (registered_finding)'' clause this sentence used to carry is SUPERSEDED: this row
+    is now `open`. EVERYTHING FROM HERE ON IS THE PRE-RATIFICATION RECORD, SUPERSEDED 2026-08-05
+    BY THE RATIFICATION PARAGRAPH ABOVE and kept only as history -- read it as ''what this row
+    said before the operator answered'', never as current state.  Four readings -- A full combined
+    fix / B deadline-now plus the minimal Windows import repair, serialization deferred (RECOMMENDED)
+    / C Windows-only (dominated) / D defer both under demand tests D-0 (a second write_record_guarded
+    precondition, this row own trigger unchanged), D-1 (Windows CI exists), D-2 (a declared Windows
+    target), D-3 (an observed stall), D-4 (a third row against this substrate); runner-up D, and
+    the B-versus-D margin is genuinely narrow. TWO VARIANTS RECORDED AS DOMINATED so they are
+    not re-proposed -- variant F, a deadline on cross_process_scope_lock alone, which trap 1 defeats
+    (one entry surface blocks at up to three sites in sequence, verified by direct read of cross_process_write_lock
+    at `:363`-`:406`), and variant E, adopting filelock without deciding either half. STEP (2)
+    EXCEPTION HOME IS SETTLED BY PRECEDENT, NOT OPEN -- harness-core (zero workspace dependencies
+    per harness-core/pyproject.toml:9-11; precedent ValidatorEscalationGateTimeoutError at harness-core/src/harness_core/validator_escalation_errors.py:43,
     re-homed for exactly this carrier-home reason at `:1`-`:13`), fallback harness-is (legal because
     harness-runtime already imports harness_is 124 times while harness-is imports harness_runtime
     zero times); defining it in harness-runtime is ILLEGAL, inverting the IS 0-outbound invariant.
@@ -3506,9 +3529,12 @@ items:
     disposition (3) -- accept and document -- is FULLY EXECUTED at HEAD (the bound is stated in
     the memory_retrieval_index module docstring at `:19-20` and on `commit_seq` itself at memory_store.py:154-163,
     both citing this row), so this row is not open work but a ratified accepted bound with a documented
-    re-open trigger; it is a CLOSE CANDIDATE at the next operator ratification batch -- FLAGGED,
-    NOT FLIPPED (the accepted bound plus its re-open trigger make closure an operator call, and
-    the status is deliberately left unchanged here).'
+    re-open trigger; it was flagged a CLOSE CANDIDATE at the next operator ratification batch
+    -- FLAGGED, NOT FLIPPED at that pass (the accepted bound plus its re-open trigger made closure
+    an operator call, so the status was deliberately left unchanged there). THAT CANDIDACY IS
+    NOW ANSWERED: the operator flipped it at the 2026-08-05 batch and the row is `closed` (see
+    the closure paragraph at the head of this close_out). The ''NOT FLIPPED'' clause is the historical
+    record of the pass that deferred the call, not current state.'
   council: 'Not for the bound itself -- accepting a documented limit needs no deliberation. IF the version-fence direction (2) is ever taken it becomes council-eligible: refusing to write during an upgrade window is an operator-visible availability tradeoff (C11 operator-loop / local-deployment against C3 state-and-persistence integrity), and that IS a nameable cross-domain tension rather than an implementation detail.'
   heading: '### B-95 · Mixed-version ordering bound — a live PRE-B-93 **writer**''s untokenized stale markers cannot be ordered against a covered rebuild *(surfaced by out-of-family Codex R6 on the B-93 gate-log arc, 2026-07-30; REGISTER-AND-HOLD under the arc''s own stop rule)* *(**CLOSED 2026-08-05** — a ratified accepted bound; the re-open trigger is preserved verbatim)*'
 - id: B-96
