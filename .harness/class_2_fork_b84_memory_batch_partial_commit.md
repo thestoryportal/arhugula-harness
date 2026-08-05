@@ -52,27 +52,41 @@ order: the first call **commits durable state**, and then the second raises. Not
 **What ratification would authorize.** Under A, C or D: an **impl-discretion BUILD leg** only —
 **no spec leg is owed**, because no `C-MEM-*` or `C-RT-*` contract sentence changes.
 
-**Reading B is different, and its routing is stated explicitly (codex R2 [P1-a]).** `[HIGH]` B
-introduces durable-write ORDERING and compensation semantics for a hash-chained append-only ledger,
-which is a contract-shaped commitment against `C-MEM-08` / `C-MEM-14`. Per
-`.claude/skills/phase-7-back-flow-routing/SKILL.md` §2.2, a Class 2 fork's Recording row reads
-*"Sub-phase log only (no design-phase artifact revision)"*. **Selecting B therefore does not proceed
-under this filing's Class 2 authority: it OPENS a Class 1 back-flow route** — halt, operator-authorized
-routing to the Phase 5 memory-spec channel per root `CLAUDE.md` §4.3 — and the council convening at §7
-precedes even that. **A Reading-B selection is a decision to open a Class 1 fork, not a decision to
-build.** Nothing in this filing authorizes a contract edit.
+**Reading B is different, and its routing is named rather than invented (codex R2 [P1-a] and R3
+[P1], both engaged; see §11 for the disposition history).** `[HIGH]` B introduces durable-write
+ORDERING and compensation semantics for a hash-chained append-only ledger — a contract-shaped
+commitment against `C-MEM-08` / `C-MEM-14`. **Selecting B is therefore a decision to open a spec
+leg, not a decision to build**, and nothing in this filing authorizes a contract edit.
 
-**Why the FILING stays Class 2 (codex R2 [P1-a], partially declined — grounds recorded).** `[HIGH]`
-The §2.2 **trigger** row — *"In-session decision-point requiring operator selection between
-substantive alternatives (NOT an architectural defect)"* — is satisfied exactly: §3(ii) establishes
-there is no contract to violate, so there is no architectural defect to halt on, and what is owed is
-a selection among four substantive options. Reclassifying the whole filing as Class 1 would also
-contradict settled practice: **10 of the 19 `class_2_fork_b*` filings in `.harness/` carry a spec
-leg**, including every recent one (`B-88`, `B-93`/`B-45`, `B-96`, `B-97a`, `B-98`, `B-104`,
-`B-107`) — four of which sit in the same standing ratification batch. The correct repair is the
-paragraph above (name B's Class 1 route explicitly), not a reclassification that would silently
-relitigate nine siblings. *(The taxonomy-row-vs-practice divergence this surfaced is real but is not
-B-84's to settle; it is noted here and belongs to whoever next revises the routing skill.)*
+The route B takes is the one **three sibling Class 2 forks have already taken**, not a new mechanism:
+**ratification → spec leg authored by `spec-writer` → clearance marker at `.harness/clearance/` →
+build.** Verified in root `CLAUDE.md` §2.3's spec-head lineage, which records each of these as a
+Class 2 fork whose ratified reading became a design-substrate amendment:
+
+| Class 2 fork | Filing | Resulting design-substrate amendment (root `CLAUDE.md` §2.3) |
+|---|---|---|
+| `B-97`(a) | `.harness/class_2_fork_b97a_pause_journal_tenant_binding.md` | `Spec_Harness_Runtime_v1.md` **v1.108**, cleared 2026-07-31 — *"the RATIFIED `B-97` half (a) Runtime leg"* |
+| `B-104` | `.harness/class_2_fork_b104_pause_resolved_marker.md` | `Spec_Harness_Runtime_v1.md` **v1.110**, cleared 2026-08-01 — *"the RATIFIED `B-104` Reading D leg"* |
+| `B-107` | `.harness/class_2_fork_b107_empty_fence_key_resolution_refusal.md` | `Spec_Control_Plane_v1_115.md`, cleared 2026-08-03 — *"the ratified `B-107` Reading A-hybrid spec leg"* |
+
+**The doc tension, surfaced rather than resolved.** `[HIGH]`
+`.claude/skills/phase-7-back-flow-routing/SKILL.md` §2.2's **Recording** row says a Class 2 fork
+records *"Sub-phase log only (no design-phase artifact revision)"*, which the three landed
+precedents above plainly do not honour. This filing takes the position that §2.2's **Trigger** row
+is the operative discriminator — *"In-session decision-point requiring operator selection between
+substantive alternatives (NOT an architectural defect)"* — and it is satisfied exactly here: §3(ii)
+establishes there is **no contract to violate**, so there is no architectural defect to halt on, and
+what is owed is a selection among four options. **B-84 does not reclassify itself as Class 1 on the
+strength of a Recording-row phrase that three recent ratifications have already departed from; the
+Recording-row-vs-practice divergence is a real defect in the routing skill and belongs to whoever
+next revises it, not to this fork.** An operator who reads the Recording row as binding should say
+so at ratification, and B-84 will re-file as Class 1 — that is a one-line answer, and it is offered
+here precisely so the choice is visible rather than assumed.
+
+*(Count correction, codex R3 [P2-a], accepted: an earlier revision of this paragraph claimed "10 of
+19 `class_2_fork_b*` filings carry a spec leg". That number came from a bare `[Ss]pec leg` token
+census which matched negations — `B-93`/`B-45` and `B-98` in fact state that **no** spec leg is
+owed. The claim is replaced by the three **individually verified** landed precedents tabled above.)*
 
 ---
 
@@ -423,8 +437,8 @@ what a pure function can predict, and §4 names two classes it cannot (policy fl
 the operator's real objection to the status quo is *"a durable commit must never be followed by an
 abort"* — an outcome-shaped requirement — then A does not deliver it, **and neither does C**: §3(vi)
 establishes that the window is also **intra-call**, so no positional rule over a batch can reach it.
-**Only Reading B satisfies an outcome-shaped requirement**, and B is the reading that opens a Class 1
-route. That is the real cost of recommending A: it is the best *cheap* answer, not the *complete*
+**Only Reading B satisfies an outcome-shaped requirement**, and B is the reading that opens a spec
+leg (§1). That is the real cost of recommending A: it is the best *cheap* answer, not the *complete*
 one, and this filing does not pretend otherwise.
 
 **THE DISCRIMINATOR.** `[HIGH]`
@@ -438,10 +452,13 @@ one, and this filing does not pretend otherwise.
 - **ORDERING** → prediction is the wrong tool; the sequence itself must be forbidden. **C is right**
   for a cheap *inter-call* bound — but §3(vi) means C leaves the intra-call window open, so if the
   requirement is the ORDERING property **without exception**, only **B** delivers it, at the cost of
-  a Class 1 route (§1).
-- **Neither yet load-bearing** — the residual is cross-candidate and contingent, the default chain is
-  single-candidate, and no incident has been observed → **D is right**, and D-0 is precisely its
-  falsifier.
+  the spec leg at §1.
+- **Not worth paying for yet** → **D is right** — but the ground is **SEVERITY, not rarity** (codex
+  R3 [P2-b], accepted; this branch previously said "cross-candidate and contingent", contradicting
+  §4's own correction). Choosing D accepts a **deterministic** unreported durable commit — reachable
+  on today's default single-candidate chain and, per §3(vi), even in a **single-call** batch — on the
+  grounds that no incident has been observed and the residue is a note rather than an external
+  effect. Only the *duplication* (§3(iv)) is contingent. **D-0 is precisely this branch's falsifier.**
 
 **A single operator sentence choosing INPUT, ORDERING, or "not yet" decides this fork.**
 
@@ -453,7 +470,7 @@ one, and this filing does not pretend otherwise.
 |---|---|---|---|---|---|---|
 | **A** *(rec.)* | 1 method (`validate`) on the executor | none | build leg under this Class 2 ratification | no (§7) | W-1, W-2, W-4, W-5 | policy-flip TOCTOU; store errors incl. the **intra-call** window (§3(vi)); §3(iv) |
 | **C** *(runner-up)* | none (2 pre-pass predicates) | none | build leg under this Class 2 ratification | no (§7) | W-1, W-3, W-5, **W-6** | read-like `STANDARD_TOOL_CALL` rows (§3(i)); the **intra-call** window (§3(vi)); model-visible refusals |
-| **B** | executor batch surface | **yes** — compensation semantics on C-MEM-08 / C-MEM-14 | **opens a CLASS 1 back-flow** (§1) — not buildable under this filing | **YES, before the Class 1 route** | **W-1, W-5, W-6** + ledger-compensation + migration witnesses. **NOT W-2/W-3/W-4** — those pin A's `validate()` wiring and C's positional refusal, behaviours a correct transactional B may deliberately not have (codex R2 [P2-b]) | none in principle; largest execution risk |
+| **B** | executor batch surface | **yes** — compensation semantics on C-MEM-08 / C-MEM-14 | **opens a SPEC LEG** (§1) — not buildable under this filing | **YES, before the spec leg** | **W-1, W-5, W-6** + ledger-compensation + migration witnesses. **NOT W-2/W-3/W-4** — those pin A's `validate()` wiring and C's positional refusal, behaviours a correct transactional B may deliberately not have (codex R2 [P2-b]) | none in principle; largest execution risk |
 | **D** | none | none | docstring qualification at ratification (§4) | no | none (but D-2 wants the §3(iv) case-(3) probe) | the whole class, under a stated reopening test |
 
 ---
@@ -482,8 +499,8 @@ requires an empirical probe at the most specific primary source **before** emitt
   content-derived ledger idempotency key, so "rollback" must be **compensating entries on a
   hash-chained append-only ledger**. That is exactly the C10 ⊥ ledger-owner axis the row named:
   blast-radius containment wants an undo; ledger integrity forbids rewriting or deleting a chained
-  row. **A dyadic convening is OWED under Reading B, before its Class 1 back-flow route (§1) is
-  opened.** §3(vi) sharpens this further: because the window is intra-call, B's compensation design
+  row. **A dyadic convening is OWED under Reading B, before its spec leg (§1) is
+  authored.** §3(vi) sharpens this further: because the window is intra-call, B's compensation design
   must cover a *single* call's record-then-ledger ordering, not merely batch boundaries.
 
 This is the `B-88` §7 shape — probe-resolved for the readings that need no contract change, owed for
@@ -499,9 +516,9 @@ Owed per reading (see §6). All are new tests unless noted; none exists at HEAD.
 |---|---|---|---|
 | **W-1** | **The harm, made visible.** Drive a real `StandardMemoryToolExecutor` through the real pre-pass + batch loop with `[memory.write_note (valid), memory.read (no `memory_ref`)]`; assert the batch raises **and** that the tool-events ledger gained a record — i.e. the partial commit is asserted as **present**, not merely inferred | End-to-end through `_openai_memory_tool_result_messages`, not a unit call to `execute()`. This is the *baseline* the fix flips | A, B, C, D-2 |
 | **W-2** | **A's closure.** Same batch, with `validate()` wired: assert the batch raises **before** any durable write — the ledger and the tool-events file are **unchanged** (assert on the durable surface, not on a call count) | Assert absence on the durable artifact; a mock-call-count assertion would pass on a path the store never sees | A |
-| **W-3** | **C's closure + its stated cost.** (a) `[write_note, search]` is REFUSED before execution with the durable surface unchanged; (b) `[search, write_note]` still SUCCEEDS (the constraint is positional, not a ban); (c) `[write_note, write_note]` is refused | Both arms required — (b) is what stops the constraint from silently becoming "no writes in batches" | C |
+| **W-3** | **C's closure + its stated cost — PARAMETERIZED over the full durable-effecting identity set** (widened at codex R3 [P2-c], accepted). For **each** of `write_note`, `propose_promotion`, `request_redaction`: (a) `[<tool>, search]` is REFUSED before execution with the durable surface unchanged; (b) `[search, <tool>]` still SUCCEEDS (the constraint is positional, not a ban); (c) `[<tool>, <tool>]` is refused. Plus one **mixed** case, `[write_note, request_redaction]`, which (c) alone would not catch | The first pass named only `write_note`. A predicate recognizing just that tool would pass every original arm while leaving **two of the three** declared durable-effecting tools unbounded — the exact gap the parameterization closes. Arm (b) is what stops the constraint from silently becoming "no writes in batches" | C |
 | **W-4** | **A's parity pin — structural, and scoped to the per-tool ARGUMENT/BRANCH matrix, not to raise statements** (rewritten across codex R1 [P2-c] and R2 [P2-a], both accepted). The **preferred** discharge makes parity *unfalsifiable by construction*: `validate()` and `_execute_authorized` consume **one shared parsed/validated request representation**, so there is no second path to drift from — and under that discharge **no site cap applies**. Where it is not taken, the witness must cover the **per-tool argument matrix**: the same helper serves many fields (`_string_arg` alone is called for `query`, `note`, `memory_ref`, …), so a `validate()` can cover all **9** model-reachable *raise statements* while omitting an entire field's path. Enumerate **(tool × argument × branch)**, not raise sites and not helper names | Corrected twice, and the second correction matters: R1 fixed "helper names → call sites", R2 caught that the **9-site scope I then wrote is the wrong denominator** — 9 counts syntactic raises, which is not the coverage unit. Reading A's whole value rests on permanent parity, so this witness is load-bearing, not hygiene | A |
-| **W-6** | **The intra-call residual (§3(vi)), asserted rather than hand-waved.** With a **single-call** `[write_note]` batch, force the operation-ledger append to fail after `write_record` has landed; assert the record IS durable while `execute()` raises `MemoryToolExecutionStoreError`. Repeat for `_append_standard_tool_call` failing after a successful `_execute_authorized` | New at codex R2 [P1-b]. This is the witness that stops Reading C from being *described* as closing a residual it cannot reach, and it is the acceptance evidence Reading B's guarantee is actually judged against | B, C *(as C's retained-residual pin)* |
+| **W-6** | **The intra-call residual (§3(vi)) — TWO arms with DIFFERENT expected exception classes** (split at codex R3 [P2-d], accepted). **Arm 1 (capture-internal):** single-call `[write_note]`; fail the operation-ledger append *after* `write_record` lands; assert the record IS durable and `execute()` raises **`MemoryToolExecutionStoreError`** — the capture wraps it (`memory_capture.py:892`–`:903` → `memory_tool_executor.py:385`–`:387`). **Arm 2 (`_append_standard_tool_call`):** fail the append at `memory_tool_executor.py:634`, which calls the store **directly with no wrapping**; assert the tool's durable effect landed and `execute()` re-raises **the original store/ledger exception**, NOT `MemoryToolExecutionStoreError` (`execute()`'s handler at `:249`–`:257` classifies and re-raises unmodified) | New at R2 [P1-b]; corrected at R3. The first pass wrote "Repeat for …", which carried the arm-1 exception expectation into arm 2 and would have failed against current behaviour — or, worse, been "fixed" by an unrelated exception-semantics change nobody asked for | B, C *(as C's retained-residual pin)* |
 | **W-5** | **§3(iv)'s FOUR-CELL matrix, executed rather than inferred.** For each of cases (1) different text, (2) same text/different model, (3) same text/same model name/different provider, (4) fully identical: assert (a) whether a new `memory_id` is derived, (b) the physical JSONL line count under that `memory_id`, (c) the `append_memory_operation` outcome (`APPENDED` / `IDEMPOTENT_NOOP` / raise), and (d) for any raise, the surfacing exception class and its `_classify_provider_exception` disposition | The whole matrix is marked `[MODERATE]` for want of execution. Case (3) is the only cell carrying the duplicate-line-plus-re-opened-staircase claim; **it must be run, not assumed**, and cases (1)/(2) are the ordinary ones whose "extra distinct note" outcome is what the harm statement rests on | A, B, C, and D-2's falsifier |
 
 **Mutation probes (PD-8, Workflow v1.18 — green-alone is not proof).**
@@ -566,10 +583,10 @@ against the currently-locked SDK. No reading turns on it.
 | Leg | Owes | Gate |
 |---|---|---|
 | **This filing** (doc-only) | This document. Row stays `registered_finding`; **no register edit, no `pr:` stamp, no snapshot change** | — |
-| **Ratification** | Operator selects A / B / C / D via `AskUserQuestion`; a `§11 RATIFICATION` section is appended here; the register row's `pr:` pointer is set and its `close_out` gains the outcome. **Under D, the `_PreparedMemoryToolCall` docstring qualification (§4, Reading D) is owed AT THIS LEG**, not deferred | Operator |
-| **Council** *(B only)* | Dyadic C10 ⊥ memory-ledger-owner convening per §7, **before** the Class 1 route is opened | Follows ratification |
-| **Class 1 route** *(B only)* | Selecting B opens a **Class 1 back-flow** (§1), not a build: halt + operator-authorized routing to the Phase 5 memory-spec channel per root `CLAUDE.md` §4.3, then `Spec_Memory_Substrate_v1.md` compensation semantics + `Implementation_Plan_Memory_Substrate_v1.md` U-MEM-16 amendment + clearance markers per §4.5, one per artifact actually changed | Operator (back-flow authorization) → X-AL-3 guard + adversarial review |
-| **Build leg** *(A or C directly; B only after its Class 1 route clears)* | The code change + the §8 witnesses **for that reading** (§6's per-reading column, not all of W-1…W-6) + the §8 mutation probes + **W-5's four-cell matrix executed and its answers recorded on the row** + the §9 items 3–7 cite repairs in the touched files | CI + `merge-gate` 3-lens (code-touching) |
+| **Ratification** | Operator selects A / B / C / D via `AskUserQuestion`; a **`§12 RATIFICATION`** section is appended here (§11 is the review record — codex R3 [P2-e]); the register row's `pr:` pointer is set and its `close_out` gains the outcome. **Under D, the `_PreparedMemoryToolCall` docstring qualification (§4, Reading D) is owed AT THIS LEG**, not deferred | Operator |
+| **Council** *(B only)* | Dyadic C10 ⊥ memory-ledger-owner convening per §7, **before** the spec leg is authored | Follows ratification |
+| **Spec leg** *(B only)* | Selecting B opens a spec leg, not a build (§1) — the `B-97`(a) / `B-104` / `B-107` route: `Spec_Memory_Substrate_v1.md` compensation semantics + `Implementation_Plan_Memory_Substrate_v1.md` U-MEM-16 amendment, authored by `spec-writer`, plus clearance markers per root `CLAUDE.md` §4.5, one per artifact actually changed | X-AL-3 guard + adversarial review |
+| **Build leg** *(A or C directly; B only after its spec leg clears)* | The code change + the §8 witnesses **for that reading** (§6's per-reading column, not all of W-1…W-6) + the §8 mutation probes + **W-5's four-cell matrix executed and its answers recorded on the row** + the §9 items 3–7 cite repairs in the touched files | CI + `merge-gate` 3-lens (code-touching) |
 
 ---
 
@@ -634,12 +651,48 @@ against the currently-locked SDK. No reading turns on it.
   - **[P1-a] PARTIALLY ACCEPTED; the reclassification half DECLINED with grounds.** Codex is right on
     the citation: `.claude/skills/phase-7-back-flow-routing/SKILL.md` §2.2 says a Class 2 fork records
     *"no design-phase artifact revision"*, so Reading B's contract edit cannot ride this filing's
-    authority. **Accepted:** §1 now states explicitly that selecting B **opens a Class 1 back-flow
-    route** rather than a build leg, and §7/§10 were aligned. **Declined:** reclassifying the *filing*
+    authority. **Accepted:** §1 was amended to state that selecting B is not a build. *(The exact wording used at R2 — "opens a Class 1 back-flow route" — was itself **superseded at R3**, which correctly objected that Class-2-nesting-a-Class-1 is not a defined mechanism; §1 now names the `B-97`(a)/`B-104`/`B-107` **spec-leg** route instead. Recorded rather than rewritten, so the disposition history stays legible.)* **Declined:** reclassifying the *filing*
     as Class 1 — because (i) §2.2's **trigger** row is satisfied exactly (there is no architectural
     defect: §3(ii) shows there is no contract to violate, and what is owed is a selection among four
     options), and (ii) **10 of 19 `class_2_fork_b*` filings carry a spec leg**, including
     `B-88`/`B-93`/`B-96`/`B-97a`/`B-98`/`B-104`/`B-107`, four of them in this same standing
-    ratification batch — so reclassifying here would silently relitigate nine landed precedents on
-    one review comment. The taxonomy-row-vs-practice divergence is recorded at §1 as a real issue
-    belonging to the routing skill's next revision, not to B-84.
+    ratification batch — so reclassifying here would silently relitigate landed precedent on one
+    review comment. **The "10 of 19" figure was itself falsified at R3 and is retracted** — see R3
+    [P2-a].
+
+- **R3 — 6 findings (1 [P1] + 5 [P2]): 5 accepted, 1 re-engaged (the [P1] repeat).**
+  - **[P2-a] ACCEPTED, and it falsified my own R2 evidence.** The "10 of 19 Class 2 filings carry a
+    spec leg" figure came from a bare `[Ss]pec leg` token census that **matched negations** —
+    `B-93`/`B-45` and `B-98` in fact state that *no* spec leg is owed. Codex verified
+    `class_2_fork_b93_b45_lock_deadline_windows_backend.md:347` directly. The count is **retracted**
+    and replaced at §1 by **three individually verified landed precedents** (`B-97`(a) → Runtime spec
+    v1.108; `B-104` → Runtime spec v1.110; `B-107` → CP spec v1.115), each read out of root
+    `CLAUDE.md` §2.3's spec-head lineage. *(This is the `count-claims-drift-every-review-round`
+    failure mode, committed by me, in a paragraph whose whole purpose was to be evidence. Recorded
+    without softening.)*
+  - **[P2-b] ACCEPTED.** The §5 discriminator's third branch still justified D on "cross-candidate
+    and contingent", contradicting §4's own R2 correction. Rewritten to rest on **severity**: D
+    accepts a *deterministic* unreported commit, reachable without any batch at all per §3(vi).
+  - **[P2-c] ACCEPTED.** W-3 named only `write_note`, so a predicate recognizing that one tool would
+    pass every arm while leaving `propose_promotion` and `request_redaction` unbounded. Parameterized
+    across all three, plus a mixed-tool case.
+  - **[P2-d] ACCEPTED — the second arm was factually wrong.** W-6's "Repeat for …" carried arm 1's
+    `MemoryToolExecutionStoreError` expectation into arm 2, but `_append_standard_tool_call` calls
+    the store **directly** (`memory_tool_executor.py:634`) with no wrapping, so `execute()` re-raises
+    the original exception. Verified by direct read; the two arms now state separate expected classes.
+    Left unfixed, this would have failed against current behaviour — or been "fixed" by an unrelated
+    exception-semantics change.
+  - **[P2-e] ACCEPTED.** §10 told the ratification leg to append a `§11`, which this review record
+    already occupies. Ratification is now **§12**.
+  - **[P1] RE-ENGAGED (second raise of the same element; disposition CHANGED in shape, not in
+    outcome).** Codex's new argument is procedural and fair: *"Class 2 opens a Class 1" is not a
+    defined nesting mechanism*. **Accepted in substance** — that invented framing is gone. §1 now
+    names the route the workspace **actually uses**, evidenced by the three precedents above:
+    ratification → spec leg → clearance marker. **The reclassification of the filing itself remains
+    declined**, now on evidence that survives scrutiny (the three verified precedents + §2.2's
+    Trigger row), with the SKILL.md Recording-row-vs-practice divergence **surfaced explicitly at
+    §1** and an offered one-line operator override.
+    **HOLD NOTICE:** this is the **second** review round to raise this element. Per the
+    register-and-hold discipline, **a third raise will not be re-argued** — it will be recorded as an
+    unresolved sub-decision routed to the operator at ratification, alongside the §1 override
+    sentence. Flagged now so the escalation is pre-committed rather than improvised.
