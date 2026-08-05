@@ -139,14 +139,14 @@ overlay-check:
 
 # Agent reference lookup, e.g.: just overlay-query --contract C-IS-08
 overlay-query *ARGS:
-    uv run python tools/semantic_overlay/overlay.py query {{ARGS}}
+    uv run python tools/semantic_overlay/overlay.py query "$@"
 
 # ─── forward register — structured post-Phase-8 B-* forward-work schema ─────
 # Sibling to arc-ledger.yaml (see tools/forward_register.py's own header for why
 # arc-ledger.yaml itself cannot carry these rows). Prose home stays at
 # .harness/post-phase-8-forward-register.md; this is the queryable summary layer.
 forward-register *ARGS:
-    uv run python tools/forward_register.py {{ARGS}}
+    uv run python tools/forward_register.py "$@"
 
 # CI gate: impossible/stale tally or prose-heading drift = exit 1.
 forward-register-check:
@@ -157,7 +157,7 @@ forward-register-check:
 # drift-log tables. Does NOT touch the agent-authored Next-action prose.
 # See tools/roadmap_status_refresh.py's own header.
 roadmap-status *ARGS:
-    uv run python tools/roadmap_status_refresh.py {{ARGS}}
+    uv run python tools/roadmap_status_refresh.py "$@"
 
 # CI/pre-commit gate: cap violations or hash mismatch = exit 1.
 roadmap-status-check:
@@ -188,7 +188,7 @@ mutation-probe *ARGS:
 # NOT a semantic compactor (that stays the agent's call) — a deterministic
 # byte-exact cap gate + idempotent upsert. See tools/memory_compact.py's header.
 memory-compact *ARGS:
-    uv run python tools/memory_compact.py {{ARGS}}
+    uv run python tools/memory_compact.py "$@"
 
 # ─── closure gate (R-IF-115) — the "harness coding fully closed" predicate ──
 # Consolidates R-FS-1 + R-CL-Q1..Q4/D1/C1 must_pass into one report.
@@ -561,7 +561,7 @@ coderabbit-review *ARGS: _require-coderabbit
 # Approvals flow through the U-HK-12 permission guard (no --dangerously-skip-permissions).
 # `just loop` runs for real; `just loop --dry-run` exercises the loop without calling claude;
 # `just loop --max 10` caps iterations. Review .harness/loop_status.md after a run.
-# Custom multi-word prompt: use the env var (just variadic args don't preserve quoting):
+# Custom multi-word prompt: the env var route still works and predates the "$@" fix:
 #   HARNESS_LOOP_PROMPT="do X then Y" just loop
 loop *ARGS:
-    bash tools/04-loop/run.sh {{ARGS}}
+    bash tools/04-loop/run.sh "$@"
