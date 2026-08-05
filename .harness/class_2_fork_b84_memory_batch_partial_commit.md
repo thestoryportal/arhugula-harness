@@ -1,6 +1,6 @@
 # Class 2 Fork — B-84 (partial-commit half): a memory-tool batch commits its earlier calls before a later call's executor-level argument failure aborts the batch
 
-**Status: FILED 2026-08-05, awaiting operator ratification.** Doc-only filing per the workspace
+**Status: RATIFIED 2026-08-05 as READING A** — the executor's pure `validate()` pre-pass; the held Class-2-vs-Class-1 element ratified as **Class 2** (filed 2026-08-05). See `## §12 RATIFICATION` at the foot of this file. Doc-only filing per the workspace
 codex-context-guard rule (fork FILINGS ship doc-only FIRST; no `design-substrate/**`, no
 `.harness/forward-register.yaml`, no `.harness/post-phase-8-forward-register.md`, and no
 `.harness/roadmap_status.md` edit rides this PR). Chain mirrors `B-88`'s, `B-107`'s and `B-98`'s:
@@ -10,6 +10,8 @@ and any status change riding the **ratification** leg, not this one. The row sta
 
 **Register row.** `B-84` at `.harness/forward-register.yaml` (`status: registered_finding`, no `pr:`
 field) + prose at `.harness/post-phase-8-forward-register.md` `### B-84`.
+
+**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-84` is now `status: open` with a `pr:` pointer naming **#1228** (this filing) **+ #1233** (the ratification record); the *"no `.harness/forward-register.yaml` … edit rides this PR"* scoping in the header describes the FILING leg only — the ratification leg is precisely where those edits land. The row's `council` disposition is likewise settled: **none owed** (§7 is probe-resolved for A). See `## §12 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
 
 **Grounding HEAD.** `496f0f4b`. Every `§`/file:line cite below was re-resolved by **direct read** at
 this HEAD; every count was **recomputed** (`git grep -c` / AST / direct enumeration), never copied
@@ -997,3 +999,99 @@ limits. `[HIGH]`
 - **One sub-decision remains routed rather than settled:** the Class-2-vs-Class-1 classification
   (R2 [P1-a] / R3 [P1]), held under the pre-committed hold notice and surfaced at §1 with an
   explicit operator override sentence.
+
+---
+
+## §12 RATIFICATION
+
+**Status: RATIFIED 2026-08-05 as READING A — the executor's pure `validate()` pre-pass. The build leg
+is OWED; the row moves to `open`.**
+
+### §12.1 The gate — the two-stage ask (operator `AskUserQuestion`, 2026-08-05)
+
+> **Stage 1 — the §5 discriminator: INPUT.** The harm is an input problem, not an ordering problem.
+>
+> **Stage 2 — on INPUT, A or A+C: A.**
+>
+> **Selected: READING A — a build leg for the executor's PURE `validate()` pre-pass** (one method +
+> two dispatch call sites, zero contract text).
+
+**A+C, C, B and D were NOT selected and are NOT partially adopted.** Two consequences worth stating
+because they are easy to mis-carry:
+
+- **D's obligation does not fire.** §10.2 makes the `_PreparedMemoryToolCall` docstring qualification
+  owed **at the ratification leg** — *under D only*. D was not selected, so no `harness-*/src` edit
+  rides this doc-only ratification.
+- **B's spec leg is not opened.** Selecting B would have opened the
+  `B-97`(a) / `B-104` / `B-107` spec route at §1. It was not selected, so no `design-substrate/**`
+  amendment is owed by this row.
+
+### §12.2 The HELD sub-decision — resolved as CLASS 2
+
+§11's review record closes with *"one sub-decision remains routed rather than settled: the
+Class-2-vs-Class-1 classification (R2 [P1-a] / R3 [P1]), held under the pre-committed hold notice and
+surfaced at §1 with an explicit operator override sentence."*
+
+> **Operator answer: the filing's own position is RATIFIED. `B-84` is CLASS 2 — an in-execution
+> operator decision at implementation discretion — and does NOT re-file as Class 1.**
+
+**What that does and does not endorse.** It ratifies §1's reading that
+`.claude/skills/phase-7-back-flow-routing/SKILL.md` §2.2's **Trigger** row is the operative
+discriminator — *"in-session decision-point requiring operator selection between substantive
+alternatives (NOT an architectural defect)"* — satisfied exactly here, because §3(ii) establishes
+there is **no contract to violate** and what was owed was a selection among the five §10.1 options.
+It does **not** endorse §2.2's **Recording** row (*"sub-phase log only, no design-phase artifact
+revision"*), which three landed precedents plainly do not honour: **that divergence remains a real
+defect in the routing skill, belonging to whoever next revises it, not to this fork.**
+
+### §12.3 What the build leg owes
+
+- The executor's **pure `validate()` pre-pass** and its two dispatch call sites.
+- **Witnesses W-1, W-2, W-4, W-5, W-7 and W-8 — W-8 in its INVERTED form** (`limit=0` rejected
+  **before** any retrieval event), **not** C's residual-pin form. Per codex R8, the naive union of
+  A's and C's rows is *unsatisfiable*; under A the `validate()` runs first, so A's expectation is the
+  one that can hold.
+- The **§8 mutation probes** (PD-8: revert the fix, confirm the witness fails, restore).
+- **W-5's four-cell matrix EXECUTED, with its answers recorded back on the register row.**
+- The **§9 items 3–7 shipped-source cite repairs**, in the files the leg touches.
+
+**Telemetry obligation — a loss this pre-pass NEWLY INTRODUCES, not one it inherits** *(added at
+out-of-family review round 7 [P2])*. Checks the pre-pass relocates out of
+`_execute_authorized()` — `limit=0` among them — **are classified today**, because
+`StandardMemoryToolExecutor.execute()`'s catch calls `classify_memory_failure`
+(`memory_tool_executor.py:255`). Raising them from `_openai_prepared_memory_tool_calls` /
+`_ollama_prepared_memory_tool_calls` instead **removes that emission**, and **none of W-1 / W-2 / W-4 /
+W-5 / W-7 / W-8 asserts it**. **PRESERVATION IS MANDATORY.** *(The "or ratify the loss" arm this paragraph carried at round 7 is
+**WITHDRAWN at out-of-family review round 9 [P2]** — it would have authorized a contract weakening with
+no design-substrate change, and is corrected rather than defended.)* **Grounded:** `C-MEM-19`
+(`Spec_Memory_Substrate_v1.md:835`–`:870`) lists **"Standard memory tool call"** among the operations
+memory telemetry **covers**, and names **`memory.failure_class`** among its **required attributes**.
+**Reading A opened no spec leg** and this row is `open` with no blocker — so an impl leg **cannot elect**
+to drop that attribute on its own authority; doing so is precisely the **X-AL-3 silent-absorption**
+failure mode. **Therefore the build leg MUST preserve classification for every check it relocates off
+the executor's catch, and MUST witness the preserved emission end-to-end. If preservation proves
+infeasible, that is a CLASS 1 BACK-FLOW against `C-MEM-19` — filed and ratified BEFORE the code lands —
+not an impl-discretion call, and not closable by witnessing the absence.** This constrains **how**
+Reading A is built; it does not reopen **whether**. Interacts with `B-88`'s ratified seventh class and is
+cross-referenced on that row.
+
+**Accepted costs, ratified rather than re-opened at build time:** the policy-flip TOCTOU window and
+the intra-call window both remain, and retry precedence changes. These were priced in §5 and are part
+of what Reading A buys.
+
+### §12.4 Status
+
+**`registered_finding` → `open`.** §10.2's ratification row prescribes the `pr:` stamp and the
+`close_out` outcome but is **silent on status**; the register's own status enum decides it — a
+ratified build reading with **no design-substrate gate** is *actionable now, no blocker*. The row
+flips to `closed` when the build leg merges. **The silence is recorded rather than papered over**, so
+a later session can see this was an enum-derived call, not an invented one.
+
+**No council is owed** — §7 is probe-resolved for A / C / D, and owed only under B.
+
+### §12.5 The residual this ratification does not dissolve
+
+§11's honest cap-exit stands: this was a ten-round cap exit, not a convergence to zero, and *"a
+further round would likely find more of the same class"* — confined to **Reading B's** acceptance
+surface and **C's** predicate derivation, i.e. to readings that were **not** selected. The build leg,
+not this filing, is where any remainder is discharged.

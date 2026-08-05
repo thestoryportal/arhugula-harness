@@ -1,6 +1,6 @@
 # Class 2 Fork — B-96: the protected result store's `gc_sweep` grace bound — sweep-COUNT vs elapsed-TIME
 
-**Status: FILED 2026-08-01, awaiting operator ratification.** Doc-only filing per the workspace
+**Status: RATIFIED 2026-08-05 as READING C, ceiling sub-decision C-2** (filed 2026-08-01 at PR #1179; the held C-1/C-2 sub-decision resolved by the convening at `.harness/council-b96-grace-ceiling-2026-08-01.md`, merged at PR #1183). See `## §11 RATIFICATION` at the foot of this file. Doc-only filing per the workspace
 codex-context-guard rule (fork FILINGS ship doc-only FIRST; no `design-substrate/**` edit rides this
 PR). Chain mirrors `B-107`'s, `B-97`(a)'s and `B-65`'s: **filing (this PR) → operator ratification →
 spec leg (if owed) → impl leg.**
@@ -8,6 +8,8 @@ spec leg (if owed) → impl leg.**
 **Register row.** `B-96` at `.harness/forward-register.yaml:2860`–`:2911` (`status:
 registered_finding`, no `pr:`) + prose at `.harness/post-phase-8-forward-register.md:1002`. The row's
 `pr:` pointer and any status change ride the **ratification** leg, not this PR.
+
+**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-96` is now `status: design_substrate_gated` with `pr: '#1179 (the filing) + #1183 (the council record) + #1233 (the ratification record)'`, and the *"no `design-substrate/**` edit rides this PR"* scoping above describes the FILING leg — it remains true of the ratification leg too, and stops being true at the spec leg. See `## §11 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
 
 **Grounding HEAD.** `6d557c26`. Every `§`/line cite below was re-resolved by direct read at this
 HEAD. **One anchor moved from the row's grounding and is recorded rather than silently normalized:**
@@ -841,3 +843,120 @@ sub-decision with both sides' strongest arguments recorded (including the two th
 the recommendation), and a scoped convening to adjudicate it. Further pricing refinements are
 **inputs to the §7 convening and the impl leg**, and are to be raised there rather than by reopening
 this filing.
+
+---
+
+## §11 RATIFICATION
+
+**Status: RATIFIED 2026-08-05 as READING C, with the held ceiling sub-decision resolved as C-2 — the
+GRACE TERM ALONE, no absolute mtime-keyed reclaim ceiling. The spec leg and the impl leg are both
+still OWED; this filing's chain is at leg 3 of 4.**
+
+The `B-92` / `B-97`(a) / `B-107` precedent is followed: the outcome is recorded here
+verbatim-in-substance rather than only at the register row, so the decision travels with the filing a
+later session actually reads.
+
+### §11.1 The gate — the primary decision (operator `AskUserQuestion`, 2026-08-05)
+
+> **Operator selected: READING C — replace the sweep-COUNT bound with a DURABLE, publication-bounded
+> elapsed-time first-observation grace, on a dedicated **candidate-filename + timestamp** sidecar
+> published by `os.replace`, accepting the reversal of `B-77`'s ratified "no persisted sidecar"
+> judgment.**
+>
+> *(**Carrier wording, corrected at out-of-family review round 5 [P2].** §4's option text and §8's
+> ask use the shorthand *"digest+timestamp"*, which is **not** the ratified carrier: a
+> digest-keyed record cannot key `mkstemp`-drawn `.tmp-*` candidates, so it would leave that
+> class with no observation record at all — forcing first-sight reclaim or unbounded retention,
+> exactly what council condition #5 exists to forbid. **§11.3's table is the operative statement
+> of the ratified form**; the record is condition #5's closed set
+> `{candidate filename, first_observed_at}`, keyed over **both** sweep classes. The §4/§8
+> shorthand is left as filed, being the historical option text.)*
+>
+> **Reading A was NOT selected and is NOT partially adopted.** A deferral that quietly kept the
+> sweep-count bound while adopting C's vocabulary would be the silent-absorption failure mode this
+> filing exists to avoid.
+
+### §11.2 The held sub-decision — resolved as C-2, by convening, not by assertion
+
+§8 routed the C-1/C-2 ceiling question to the §7 dyadic rather than deciding it, under
+`[[reviewer-oscillation-register-and-hold]]`, because the element had moved three times under
+out-of-family review. **That convening ran on 2026-08-01** and its record is
+`.harness/council-b96-grace-ceiling-2026-08-01.md` (merged at PR #1183).
+
+> **VERDICT: C-2 — the grace term alone. UNANIMOUS across three voices, reached from
+> NON-OVERLAPPING grounds** (record §7): C3 on age-authority integrity, the implicit-floor identity
+> and the witness-inversion discriminator; C10 on under-gating / fail-open in a fail-closed section,
+> false audit emission, and the non-existence of the bound C-1 sells; C7 concurring, and adding that
+> the report log is this store's **sole** forensic artifact.
+
+**No third form was manufactured.** A third ceiling was actively hunted: C10 constructed and killed
+the **record-keyed** and **hybrid absent-record** variants, and the adversarial pass constructed a
+**fourth, `ctime`-keyed** variant C10 had missed — the strongest C-1 form found on this arc — which
+dies for the same reason (record §4.2b). They are recorded as **tested-and-dead rather than
+suppressed**, so a later session does not re-propose one as novel.
+
+**Each voice conceded against interest** (record §7): C3 withdrew *"the record may be discarded
+freely"* and accepted the §3.4 incompleteness; C10 declined three arguments its own brief invited and
+could not break C3's impossibility claim when it tried on its own side's behalf; C7 stated two limits
+against its own recommended option.
+
+### §11.3 The ratified form, stated so the spec and impl legs cannot drift from it
+
+| Element | Ratified value |
+|---|---|
+| Bound | **Elapsed-time first-observation grace, C-2 form** — the grace term alone. **No** absolute `k × ttl_seconds` reclaim ceiling. |
+| `first_observed_at` | **Wall-clock**, sampled at the observation point **under the lock** (§3(ii) qualification (c) — a named acceptance condition, not implementation discretion). |
+| Carrier | **(C-i)** — a dedicated **candidate-filename + timestamp** sidecar, whose content is council condition #5's **closed two-member set `{candidate filename, first_observed_at}`, keyed on the CANDIDATE FILENAME over BOTH sweep classes — `*.entry` AND `.tmp-*`.** *(Stated as candidate-filename, never "digest": a digest-only key leaves condition #1's second conjunct permanently unsatisfiable for `.tmp-*` crash orphans, forcing first-sight reclaim or unbounded retention. The permission ground is **independence-or-non-invertibility**, not "already a sha256" — that ground is true of `*.entry` and false of `mkstemp`-drawn `.tmp-*` names. Corrected at out-of-family review round 3 [P2].)* Carriers **(C-ii)** and **(C-iii)** are **not** owed by any leg. |
+| Publication | temp-write + `fsync` + `os.replace` + **directory `fsync`**. Explicitly **NOT** the write-once `O_EXCL` / `os.link` primitive, which is no-replace and would freeze the record at its first snapshot. |
+| Record absence | Reads as **no observation**. |
+| Retention | **CONDITIONAL, never an unconditional bound** (council condition #7). Typical worst case **2×TTL** plus **up to two** sweep-trigger intervals (one to the first post-TTL observation, one more to the post-grace reclaim); the trigger interval is **unbounded in the one-shot process shape** and is **pre-existing at HEAD**, not introduced by this grace; and the figure is conditional on the observation record being **present and readable** — a condition contemporaneously emitted per condition #6 and readable on demand per condition #8(b), the pull surface being authoritative. **Observability is NOT a term in the bound itself.** **No unconditional "bounded by N × TTL" claim is available under either form.** *(Corrected at out-of-family review round 3 [P2] — an earlier draft stated `2×TTL + 2I` flatly, which condition #7 forbids.)* |
+| Reading B | **RETIRED EXPLICITLY.** No impl leg may build per-process elapsed time as written. Owed under every answer per §8, and discharged here. |
+
+### §11.4 What the ratification carries, per §8's "carried by any answer" list
+
+| §8 obligation | Disposition at this leg |
+|---|---|
+| `close_out` **amended** to retire Reading B explicitly | **APPLIED** on both register surfaces. |
+| Under C: wall-clock `first_observed_at`, carrier **(C-i)**, `os.replace` publication, record-absence-as-no-observation | **APPLIED** — recorded on the row and tabled at §11.3. |
+| The *"no persisted sidecar"* **reversal** recorded on `B-77`'s row so it is not later read as unratified drift (council record §9) | **APPLIED** — `B-77`'s `close_out` and prose now carry the reversal, dated and attributed to this ratification. |
+| The `B-74` row cross-referenced to the council record and to the `B-96` impl leg | **APPLIED** — and its stale §14.8.11 anchor refreshed (§11.6). |
+| The `council` field flipped from *"convene if the elapsed-time variant is taken"* | **APPLIED** — it now records the convening as **run and resolved**, with the verdict and its three grounds; no further convening is owed at the spec or impl leg. |
+
+### §11.5 Status — `design_substrate_gated`, deliberately NOT `closed`
+
+Per §9 (out-of-family round 3 [P1]) the row moves to **`design_substrate_gated`**, not `closed`:
+under C both the spec leg and the impl leg are outstanding, and `closed` would drop live work out of
+the open-work inventory.
+
+- **Spec leg (owed):** a Runtime **§14.8.11** amendment carrying the council record's **twelve
+  conditions** at its §7.1, with §7.2's **expansion flag** surfaced in the clearance marker per root
+  `CLAUDE.md` §4.5. Landing the grace silently would be **X-AL-3** — §14.8.11's deferred-to-impl list
+  does not name a retention-extending grace.
+- **Spec and impl do NOT land together** (the `B-33`/`B-39`/`B-59`/`B-69`/`B-70`/`B-72`/`B-97`/`B-107`
+  precedent).
+- **CXA: no delta owed** — *determined, not assumed*: the council record's adversarial pass ran the
+  cross-spec probe and found CP v1.103 §1 row 6, CP v1.103 §14/§18, CP v1.112 §55 and Runtime plans
+  v2.51/v2.56 all cross-reference §14.8.11 as the **Runtime-owned definition site**, never restating
+  it, so no sibling text is stranded.
+- **`B-96`, the `B-77` residual and `B-74` all flip to `closed` ONLY when the impl leg merges.**
+
+### §11.6 One correction this leg makes rather than carries
+
+The council record's §9 prescribed refreshing the bounded-retention anchor to **`:4909` at v1.109**.
+**That prescription was itself already stale at the ratification HEAD** and is not applied as
+written. Re-resolved by direct read at HEAD `4815ebef`: the Runtime spec head is **v1.110**, the
+§14.8.11 heading is at **`:4915`**, and the bounded-retention bullet is at **`:4926`** — `v1.110`'s
+`B-104` Component 1 insertions having shifted the file. **The bullet TEXT is unchanged across
+v1.106 → v1.110**, verified by direct read. Both owed refreshes are applied to their correct homes:
+the stale `:4883`-at-v1.108 anchor lives in the **`B-74`** row, and the `B-96` row carried only a
+bare version label.
+
+### §11.7 What this leg does NOT do — stated so each absence is a decision
+
+**No `design-substrate/**` edit rides this ratification.** The Runtime §14.8.11 amendment is the
+**spec leg's** work and is owed separately, with its own clearance marker. **No `harness-*/src` or
+`harness-*/tests` edit rides it either** — the sidecar, the `_observe_expired` signature change, the
+`gc_sweep(now=…)` seam extension and the witness pass over the eleven `_sweep_past_grace` call sites
+and the four reclaim asserts all belong to the **impl leg**. **Explicitly not owed by any leg:**
+narrowing `ttl_seconds` or adding a TTL floor (`B-74`'s twice-declined option), and any fourth
+reordering of `_publish_atomic`'s two-stamp pipeline.
