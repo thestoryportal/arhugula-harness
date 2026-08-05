@@ -578,7 +578,10 @@ write nobody detects), D is the safer of the two.
 > by shipping `fcntl` twice?**
 >
 > - If **now**: `filelock` supplies deadline + Windows + shared face in one adoption, at the cost of a
->   lock-file-identity migration for the `LOCK_SH` face.
+>   lock-file-identity migration at EVERY converted site — not just the `LOCK_SH` face: per §3(v),
+>   plain `FileLock` cannot target the canonical inode either (create/truncate semantics), so each of
+>   the nine sites needs a sidecar plus an interop or quiesced-cutover plan (old canonical-inode
+>   lockers and new sidecar lockers do not exclude each other during a rolling upgrade).
 > - If **already made by conduct**: hand-roll the `LOCK_NB`+retry helper, and record the hand-roll as
 >   the Session-6 binding so the audit's GUARDRAIL row stops standing open.
 
