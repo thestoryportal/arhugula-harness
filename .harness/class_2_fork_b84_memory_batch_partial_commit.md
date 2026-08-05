@@ -49,12 +49,30 @@ order: the first call **commits durable state**, and then the second raises. Not
   precisely root `CLAUDE.md` §4.3's Class 2 discriminator, and the same classification `B-88`,
   `B-98`, `B-104` and `B-107` carry.
 
-**What ratification would authorize.** Under every reading below: an **impl-discretion BUILD leg**
-only — **no spec leg is owed**, because no `C-MEM-*` or `C-RT-*` contract sentence changes under A,
-C or D. **Reading B is the one exception**: it introduces durable-write ORDERING and compensation
-semantics for a hash-chained append-only ledger, which is a contract-shaped commitment, so B routes
-to a spec leg (and to a council convening — §7) *before* any build. Stated plainly so the
-ratification is not read as authorizing more than it does.
+**What ratification would authorize.** Under A, C or D: an **impl-discretion BUILD leg** only —
+**no spec leg is owed**, because no `C-MEM-*` or `C-RT-*` contract sentence changes.
+
+**Reading B is different, and its routing is stated explicitly (codex R2 [P1-a]).** `[HIGH]` B
+introduces durable-write ORDERING and compensation semantics for a hash-chained append-only ledger,
+which is a contract-shaped commitment against `C-MEM-08` / `C-MEM-14`. Per
+`.claude/skills/phase-7-back-flow-routing/SKILL.md` §2.2, a Class 2 fork's Recording row reads
+*"Sub-phase log only (no design-phase artifact revision)"*. **Selecting B therefore does not proceed
+under this filing's Class 2 authority: it OPENS a Class 1 back-flow route** — halt, operator-authorized
+routing to the Phase 5 memory-spec channel per root `CLAUDE.md` §4.3 — and the council convening at §7
+precedes even that. **A Reading-B selection is a decision to open a Class 1 fork, not a decision to
+build.** Nothing in this filing authorizes a contract edit.
+
+**Why the FILING stays Class 2 (codex R2 [P1-a], partially declined — grounds recorded).** `[HIGH]`
+The §2.2 **trigger** row — *"In-session decision-point requiring operator selection between
+substantive alternatives (NOT an architectural defect)"* — is satisfied exactly: §3(ii) establishes
+there is no contract to violate, so there is no architectural defect to halt on, and what is owed is
+a selection among four substantive options. Reclassifying the whole filing as Class 1 would also
+contradict settled practice: **10 of the 19 `class_2_fork_b*` filings in `.harness/` carry a spec
+leg**, including every recent one (`B-88`, `B-93`/`B-45`, `B-96`, `B-97a`, `B-98`, `B-104`,
+`B-107`) — four of which sit in the same standing ratification batch. The correct repair is the
+paragraph above (name B's Class 1 route explicitly), not a reclassification that would silently
+relitigate nine siblings. *(The taxonomy-row-vs-practice divergence this surfaced is real but is not
+B-84's to settle; it is noted here and belongs to whoever next revises the routing skill.)*
 
 ---
 
@@ -181,7 +199,7 @@ nothing" to "has a locking primitive it can build on," but the **compensation qu
 actually turns on is untouched**, and one obstacle the row did not know about was added: the write
 path in question bypasses the guarded seam entirely.
 
-### (iv) "ROLLBACK" HERE IS NOT DELETION, AND THE CROSS-CANDIDATE REPLAY SPLITS INTO THREE CASES — NOT ONE `[MODERATE]`
+### (iv) "ROLLBACK" HERE IS NOT DELETION, AND THE CROSS-CANDIDATE REPLAY SPLITS INTO FOUR CASES — NOT ONE `[MODERATE]`
 
 *(This subsection was materially rewritten at codex R1 [P2-a]; the first pass asserted a single
 "identical replay raises a conflict" outcome, which is **false as stated**. The corrected matrix is
@@ -301,16 +319,36 @@ Raise `MemoryToolExecutionInputError` — already fail-fast — before executing
 
 **Why it is genuinely cheaper than A, and structurally different.** It mirrors **zero** executor
 semantics: it keys only on the tool identity the pre-pass already computed. And it is **positional,
-not predictive** — it makes the record-level commit-then-raise shape unreachable regardless of *why*
-the later call fails, closing the policy-flip and store-error residuals A leaves open.
+not predictive** — it removes the *inter-call* commit-then-raise sequence regardless of *why* the
+later call fails, including the policy-flip class A cannot predict.
 
 **What it costs, stated plainly.** `[HIGH]`
 - **It is model-visible.** A batch the model legitimately emits — `write_note` then `search` — is
   refused outright, converting a partial success into a total failure. Under §3(v)'s aggravator,
   refusals may not be rare.
 - **It is harm-*reduction*, not elimination**, because of §3(i): earlier successful **read-like**
-  calls still append `STANDARD_TOOL_CALL` ledger rows before a later raise. The residual is defensible
-  (those rows truthfully attest calls that happened) but it must not be described as closed.
+  calls still append `STANDARD_TOOL_CALL` ledger rows before a later raise. That residual is
+  defensible (those rows truthfully attest calls that happened) but it must not be described as
+  closed.
+- **It does NOT close the store-error residual, and the first pass wrongly claimed it did** (codex
+  R2 [P1-b], accepted — the correction is load-bearing enough to state as its own finding):
+
+  > **§3(vi) — the commit-then-raise window is also INTRA-CALL, so no positional rule can close it.**
+  > `[HIGH]` `_capture` writes the record (`memory_capture.py:818`) **before** appending its
+  > operation-ledger entry (`:820`), both inside one `try`; a failing append lands in the broad
+  > handler (`:892`–`:903`) → `FAILED` → `MemoryToolExecutionStoreError`
+  > (`memory_tool_executor.py:385`–`:387`) **with the record already durable**. Independently,
+  > `execute()` runs `_execute_authorized` (`:240`) and only then `_append_standard_tool_call`
+  > (`:247`), so a failing ledger append there raises *after* the tool's durable effect. **Both
+  > windows exist inside a SINGLE call**, and therefore inside a single-call batch — which is the
+  > common shape the row calls unreachable.
+
+  **Consequences, stated because they cut across the whole filing.** (a) Reading C is bounded to the
+  *inter-call* sequence and must retain + witness the intra-call residual (§8, W-6). (b) Reading A
+  never claimed to close store errors, so A is unaffected. (c) **Reading B's relative value rises**:
+  it is the only reading whose guarantee is outcome-shaped and therefore the only one that reaches
+  the intra-call window. (d) Reading D's severity paragraph strengthens: the partial commit is
+  deterministic *and* reachable without any batch at all.
 
 **Blast radius.** One predicate + one refusal branch in each of the two pre-passes. Zero contract
 text, zero new public surface, zero ordering change.
@@ -380,12 +418,14 @@ which is a product judgment rather than a correctness one. An operator who weigh
 prefix" above "never refuse a batch the model legitimately emitted" should pick C, and that is a
 legitimate reading of the same facts.
 
-**A note against my own recommendation.** `[HIGH]` A's coverage is bounded by what a pure function
-can predict, and §4 names two classes it cannot (policy flip, store error). If the operator's real
-objection to the status quo is *"a durable commit must never be followed by an abort"* — an
-outcome-shaped requirement — then A does not deliver it at all and only C or B does. I recommend A
-because the **demonstrated** door is argument-shape and A closes exactly that; but the argument for
-C is not weak, and the discriminator below is what separates them.
+**A note against my own recommendation, sharpened at codex R2.** `[HIGH]` A's coverage is bounded by
+what a pure function can predict, and §4 names two classes it cannot (policy flip, store error). If
+the operator's real objection to the status quo is *"a durable commit must never be followed by an
+abort"* — an outcome-shaped requirement — then A does not deliver it, **and neither does C**: §3(vi)
+establishes that the window is also **intra-call**, so no positional rule over a batch can reach it.
+**Only Reading B satisfies an outcome-shaped requirement**, and B is the reading that opens a Class 1
+route. That is the real cost of recommending A: it is the best *cheap* answer, not the *complete*
+one, and this filing does not pretend otherwise.
 
 **THE DISCRIMINATOR.** `[HIGH]`
 
@@ -395,9 +435,10 @@ C is not weak, and the discriminator below is what separates them.
 
 - **INPUT** → the fault is that a knowably-bad call was executed after a good one. A pure pre-pass
   is exactly the right shape, and **A is right**.
-- **ORDERING** → prediction is the wrong tool; the batch shape itself must forbid the sequence.
-  **C is right** for a cheap structural bound, or **B** if the guarantee must hold for *all* durable
-  operations rather than just the record-level ones.
+- **ORDERING** → prediction is the wrong tool; the sequence itself must be forbidden. **C is right**
+  for a cheap *inter-call* bound — but §3(vi) means C leaves the intra-call window open, so if the
+  requirement is the ORDERING property **without exception**, only **B** delivers it, at the cost of
+  a Class 1 route (§1).
 - **Neither yet load-bearing** — the residual is cross-candidate and contingent, the default chain is
   single-candidate, and no incident has been observed → **D is right**, and D-0 is precisely its
   falsifier.
@@ -408,12 +449,12 @@ C is not weak, and the discriminator below is what separates them.
 
 ## §6 Pricing summary
 
-| Reading | New public surface | Contract delta | Spec/plan leg | Council | Witnesses owed | Residual left open |
+| Reading | New public surface | Contract delta | Routing | Council | Witnesses owed | Residual left open |
 |---|---|---|---|---|---|---|
-| **A** *(rec.)* | 1 method (`validate`) on the executor | none | none | no (§7) | W-1, W-2, W-4, W-5 | policy-flip TOCTOU; store errors; §3(iv) |
-| **C** *(runner-up)* | none (2 pre-pass predicates) | none | none | no (§7) | W-1, W-3, W-5 | read-like `STANDARD_TOOL_CALL` rows (§3(i)); model-visible refusals |
-| **B** | executor batch surface | **yes** — compensation semantics on C-MEM-08 / C-MEM-14 | **yes** | **YES, before the spec leg** | all of W-1…W-5 + ledger-compensation witnesses + migration | none in principle; largest execution risk |
-| **D** | none | none | none | no | none (but D-2 wants the §3(iv) probe) | the whole class, under a stated reopening test |
+| **A** *(rec.)* | 1 method (`validate`) on the executor | none | build leg under this Class 2 ratification | no (§7) | W-1, W-2, W-4, W-5 | policy-flip TOCTOU; store errors incl. the **intra-call** window (§3(vi)); §3(iv) |
+| **C** *(runner-up)* | none (2 pre-pass predicates) | none | build leg under this Class 2 ratification | no (§7) | W-1, W-3, W-5, **W-6** | read-like `STANDARD_TOOL_CALL` rows (§3(i)); the **intra-call** window (§3(vi)); model-visible refusals |
+| **B** | executor batch surface | **yes** — compensation semantics on C-MEM-08 / C-MEM-14 | **opens a CLASS 1 back-flow** (§1) — not buildable under this filing | **YES, before the Class 1 route** | **W-1, W-5, W-6** + ledger-compensation + migration witnesses. **NOT W-2/W-3/W-4** — those pin A's `validate()` wiring and C's positional refusal, behaviours a correct transactional B may deliberately not have (codex R2 [P2-b]) | none in principle; largest execution risk |
+| **D** | none | none | docstring qualification at ratification (§4) | no | none (but D-2 wants the §3(iv) case-(3) probe) | the whole class, under a stated reopening test |
 
 ---
 
@@ -441,7 +482,9 @@ requires an empirical probe at the most specific primary source **before** emitt
   content-derived ledger idempotency key, so "rollback" must be **compensating entries on a
   hash-chained append-only ledger**. That is exactly the C10 ⊥ ledger-owner axis the row named:
   blast-radius containment wants an undo; ledger integrity forbids rewriting or deleting a chained
-  row. **A dyadic convening is OWED under Reading B, before any spec text is authored.**
+  row. **A dyadic convening is OWED under Reading B, before its Class 1 back-flow route (§1) is
+  opened.** §3(vi) sharpens this further: because the window is intra-call, B's compensation design
+  must cover a *single* call's record-then-ledger ordering, not merely batch boundaries.
 
 This is the `B-88` §7 shape — probe-resolved for the readings that need no contract change, owed for
 the one that does.
@@ -457,7 +500,8 @@ Owed per reading (see §6). All are new tests unless noted; none exists at HEAD.
 | **W-1** | **The harm, made visible.** Drive a real `StandardMemoryToolExecutor` through the real pre-pass + batch loop with `[memory.write_note (valid), memory.read (no `memory_ref`)]`; assert the batch raises **and** that the tool-events ledger gained a record — i.e. the partial commit is asserted as **present**, not merely inferred | End-to-end through `_openai_memory_tool_result_messages`, not a unit call to `execute()`. This is the *baseline* the fix flips | A, B, C, D-2 |
 | **W-2** | **A's closure.** Same batch, with `validate()` wired: assert the batch raises **before** any durable write — the ledger and the tool-events file are **unchanged** (assert on the durable surface, not on a call count) | Assert absence on the durable artifact; a mock-call-count assertion would pass on a path the store never sees | A |
 | **W-3** | **C's closure + its stated cost.** (a) `[write_note, search]` is REFUSED before execution with the durable surface unchanged; (b) `[search, write_note]` still SUCCEEDS (the constraint is positional, not a ban); (c) `[write_note, write_note]` is refused | Both arms required — (b) is what stops the constraint from silently becoming "no writes in batches" | C |
-| **W-4** | **A's parity pin — structural, NOT a helper-name census** (rewritten at codex R1 [P2-c], accepted). The **preferred** discharge is to make parity *unfalsifiable by construction*: `validate()` and `_execute_authorized` consume **one shared parsed/validated request representation**, so there is no second path to drift from. Where that is not taken, the witness must compare **every validation call site and branch** — a new call to an *existing* helper for a *new* argument, and a new *inline* `raise MemoryToolExecutionInputError`, are both changes a helper-name enumeration cannot see. Scope: the **9 model-reachable** sites (§2 count note) | The first pass proposed enumerating the six helper *functions*; codex correctly showed that is insufficient — `execute()` could reject an input `validate()` accepts while the test stayed green. Reading A's whole value rests on permanent parity, so this witness is load-bearing, not hygiene | A |
+| **W-4** | **A's parity pin — structural, and scoped to the per-tool ARGUMENT/BRANCH matrix, not to raise statements** (rewritten across codex R1 [P2-c] and R2 [P2-a], both accepted). The **preferred** discharge makes parity *unfalsifiable by construction*: `validate()` and `_execute_authorized` consume **one shared parsed/validated request representation**, so there is no second path to drift from — and under that discharge **no site cap applies**. Where it is not taken, the witness must cover the **per-tool argument matrix**: the same helper serves many fields (`_string_arg` alone is called for `query`, `note`, `memory_ref`, …), so a `validate()` can cover all **9** model-reachable *raise statements* while omitting an entire field's path. Enumerate **(tool × argument × branch)**, not raise sites and not helper names | Corrected twice, and the second correction matters: R1 fixed "helper names → call sites", R2 caught that the **9-site scope I then wrote is the wrong denominator** — 9 counts syntactic raises, which is not the coverage unit. Reading A's whole value rests on permanent parity, so this witness is load-bearing, not hygiene | A |
+| **W-6** | **The intra-call residual (§3(vi)), asserted rather than hand-waved.** With a **single-call** `[write_note]` batch, force the operation-ledger append to fail after `write_record` has landed; assert the record IS durable while `execute()` raises `MemoryToolExecutionStoreError`. Repeat for `_append_standard_tool_call` failing after a successful `_execute_authorized` | New at codex R2 [P1-b]. This is the witness that stops Reading C from being *described* as closing a residual it cannot reach, and it is the acceptance evidence Reading B's guarantee is actually judged against | B, C *(as C's retained-residual pin)* |
 | **W-5** | **§3(iv)'s FOUR-CELL matrix, executed rather than inferred.** For each of cases (1) different text, (2) same text/different model, (3) same text/same model name/different provider, (4) fully identical: assert (a) whether a new `memory_id` is derived, (b) the physical JSONL line count under that `memory_id`, (c) the `append_memory_operation` outcome (`APPENDED` / `IDEMPOTENT_NOOP` / raise), and (d) for any raise, the surfacing exception class and its `_classify_provider_exception` disposition | The whole matrix is marked `[MODERATE]` for want of execution. Case (3) is the only cell carrying the duplicate-line-plus-re-opened-staircase claim; **it must be run, not assumed**, and cases (1)/(2) are the ordinary ones whose "extra distinct note" outcome is what the harm statement rests on | A, B, C, and D-2's falsifier |
 
 **Mutation probes (PD-8, Workflow v1.18 — green-alone is not proof).**
@@ -468,9 +512,13 @@ Owed per reading (see §6). All are new tests unless noted; none exists at HEAD.
   fix-one-arm-only regression is exactly the failure this workspace has hit before.
 - **For C:** revert the positional predicate and confirm **W-3(a)** fails while **W-3(b)** still
   passes — the probe must show the predicate is what refuses, not something upstream.
+- **For W-6:** the failure must be injected at the **ledger append**, with the record write left to
+  succeed. A probe that fails the whole capture proves nothing about ordering — the point is that the
+  record survives the ledger's failure, which only a targeted injection can show.
 - **For W-1:** it is the *pre-fix* baseline, so it must be shown to FAIL after the fix lands (or be
   re-keyed to the post-fix expectation with the pre-fix behaviour recorded), not left asserting a
-  harm that no longer occurs.
+  harm that no longer occurs. Note W-1 and W-6 are **different** harms — inter-call and intra-call —
+  and W-6 stays green under A and C by design, because neither closes it.
 
 ---
 
@@ -519,9 +567,9 @@ against the currently-locked SDK. No reading turns on it.
 |---|---|---|
 | **This filing** (doc-only) | This document. Row stays `registered_finding`; **no register edit, no `pr:` stamp, no snapshot change** | — |
 | **Ratification** | Operator selects A / B / C / D via `AskUserQuestion`; a `§11 RATIFICATION` section is appended here; the register row's `pr:` pointer is set and its `close_out` gains the outcome. **Under D, the `_PreparedMemoryToolCall` docstring qualification (§4, Reading D) is owed AT THIS LEG**, not deferred | Operator |
-| **Council** *(B only)* | Dyadic C10 ⊥ memory-ledger-owner convening per §7, **before** spec text is authored | Follows ratification |
-| **Spec leg** *(B only)* | `Spec_Memory_Substrate_v1.md` compensation semantics + `Implementation_Plan_Memory_Substrate_v1.md` U-MEM-16 amendment + clearance markers per root `CLAUDE.md` §4.5, one per artifact actually changed | X-AL-3 guard + adversarial review |
-| **Build leg** *(A, B or C)* | The code change + the §8 witnesses for that reading + the §8 mutation probes + **W-5 executed and its answer recorded on the row** + the §9 items 3–7 cite repairs in the touched files | CI + `merge-gate` 3-lens (code-touching) |
+| **Council** *(B only)* | Dyadic C10 ⊥ memory-ledger-owner convening per §7, **before** the Class 1 route is opened | Follows ratification |
+| **Class 1 route** *(B only)* | Selecting B opens a **Class 1 back-flow** (§1), not a build: halt + operator-authorized routing to the Phase 5 memory-spec channel per root `CLAUDE.md` §4.3, then `Spec_Memory_Substrate_v1.md` compensation semantics + `Implementation_Plan_Memory_Substrate_v1.md` U-MEM-16 amendment + clearance markers per §4.5, one per artifact actually changed | Operator (back-flow authorization) → X-AL-3 guard + adversarial review |
+| **Build leg** *(A or C directly; B only after its Class 1 route clears)* | The code change + the §8 witnesses **for that reading** (§6's per-reading column, not all of W-1…W-6) + the §8 mutation probes + **W-5's four-cell matrix executed and its answers recorded on the row** + the §9 items 3–7 cite repairs in the touched files | CI + `merge-gate` 3-lens (code-touching) |
 
 ---
 
@@ -556,3 +604,42 @@ against the currently-locked SDK. No reading turns on it.
     scope are stated against 9.
   - **Zero findings declined at R1.** The recommendation (A), runner-up (C) and the INPUT-vs-ORDERING
     discriminator were untouched by all four.
+  - *(Self-caught during the R1 pass, not a codex finding: §3(iv)'s heading said "THREE CASES" over a
+    four-row matrix. Recounted and fixed — the count-drift-per-round discipline applied to my own
+    edit.)*
+
+- **R2 — 4 findings (2 [P1] + 2 [P2]): 3 accepted, 1 PARTIALLY accepted with the decline half
+  grounded and pinned.** One was a genuine defect in a reading's central claim.
+  - **[P1-b] ACCEPTED — Reading C's safety claim was false, and the correction created a new
+    finding.** C claimed the positional rule made record-level commit-then-raise unreachable and
+    closed A's store-error residual. Codex showed the window is **intra-call**: `_capture` writes the
+    record (`memory_capture.py:818`) before appending its ledger entry (`:820`), and `execute()` runs
+    `_execute_authorized` (`:240`) before `_append_standard_tool_call` (`:247`) — so a **single-call**
+    batch can commit then raise, and no positional rule over a batch can reach it. Verified by direct
+    read. Promoted to its own finding **§3(vi)**, C's claim retracted and bounded to the *inter-call*
+    sequence, **new witness W-6** added as C's retained-residual pin, and the four downstream
+    consequences propagated (§5's note-against-recommendation, the ORDERING branch of the
+    discriminator, §6, §7, §10). **This raised Reading B's relative value** — B is now the only
+    reading that reaches the intra-call window.
+  - **[P2-a] ACCEPTED — W-4's scope was still the wrong denominator after R1's fix.** R1 moved W-4
+    from helper *names* to call sites, and I then scoped it to the **9** model-reachable *raise
+    statements*. Codex correctly caught that 9 raises is not the coverage unit: `_string_arg` alone
+    serves `query` / `note` / `memory_ref` / …, so a `validate()` can hit all 9 raises and still omit
+    a field's path. W-4 re-scoped to the **(tool × argument × branch)** matrix, with the shared-parser
+    discharge carrying **no** site cap.
+  - **[P2-b] ACCEPTED — §6 gave Reading B impossible acceptance criteria.** The summary said B owes
+    "all of W-1…W-5", but W-2 pins A's `validate()` wiring, W-3 pins C's positional refusal, and W-4
+    pins A's parser parity — none of which a correct transactional B need have. B's row now reads
+    **W-1, W-5, W-6 + compensation + migration**, consistent with the per-witness `Owed under` column.
+  - **[P1-a] PARTIALLY ACCEPTED; the reclassification half DECLINED with grounds.** Codex is right on
+    the citation: `.claude/skills/phase-7-back-flow-routing/SKILL.md` §2.2 says a Class 2 fork records
+    *"no design-phase artifact revision"*, so Reading B's contract edit cannot ride this filing's
+    authority. **Accepted:** §1 now states explicitly that selecting B **opens a Class 1 back-flow
+    route** rather than a build leg, and §7/§10 were aligned. **Declined:** reclassifying the *filing*
+    as Class 1 — because (i) §2.2's **trigger** row is satisfied exactly (there is no architectural
+    defect: §3(ii) shows there is no contract to violate, and what is owed is a selection among four
+    options), and (ii) **10 of 19 `class_2_fork_b*` filings carry a spec leg**, including
+    `B-88`/`B-93`/`B-96`/`B-97a`/`B-98`/`B-104`/`B-107`, four of them in this same standing
+    ratification batch — so reclassifying here would silently relitigate nine landed precedents on
+    one review comment. The taxonomy-row-vs-practice divergence is recorded at §1 as a real issue
+    belonging to the routing skill's next revision, not to B-84.
