@@ -671,7 +671,7 @@ ratification.**
 | # | Was | Now, at HEAD |
 |---|---|---|
 | 1 | scope-value-domain declarations at `memory_capture.py:215` / `:236` | **`:286`–`:288`** (`MemoryCaptureScopeValueDomainError`, class `:271`) and **`:307`–`:309`** (`MemoryCaptureReservedActorError`, class `:291`). The old cites were a blank line and a docstring. |
-| 2 | `MemoryToolExecutionInputError`, *"all 10 sites"* | **10 in `memory_tool_executor.py`** (correct as scoped to the classified population) but **18 repo-wide** — the extra 8 are the `llm_dispatch.py` internal-fault sites **A-ii re-types**. |
+| 2 | `MemoryToolExecutionInputError`, *"all 10 sites"* | **10 in `memory_tool_executor.py`** (correct as scoped to the classified population) but **18 repo-wide**. **Of the extra 8 in `llm_dispatch.py`, SIX are the internal-fault sites A-ii re-types** — `:4334`, `:4338`, `:4450`, `:4458`, `:4947`, `:4958` — **and TWO are NOT: `:4344` and `:4346`**, which validate the **model-supplied** `scope_ref` argument and must **keep** the new class. *(An earlier revision of this row said all eight were internal, which would have handed the impl leg a checklist contradicting §11.1; corrected at out-of-family review round 5 [P2]. **This row is a population count, never an A-ii scope — §11.1 is the scope.**)* |
 | 3 | `MemoryToolExecutionDeniedError`, 14 raise sites | **15** (growth from later arcs, not a regression). |
 | 4 | 37 parametrized rows | **39** (AST count). |
 | 5 | Mutation probes *"all five"* | **SEVEN**, enumerated (a)–(g). The header undercounted its own body; **no probe is missing**. |

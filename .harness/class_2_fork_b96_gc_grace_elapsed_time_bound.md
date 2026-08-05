@@ -859,8 +859,18 @@ later session actually reads.
 ### §11.1 The gate — the primary decision (operator `AskUserQuestion`, 2026-08-05)
 
 > **Operator selected: READING C — replace the sweep-COUNT bound with a DURABLE, publication-bounded
-> elapsed-time first-observation grace, on a dedicated digest+timestamp sidecar published by
-> `os.replace`, accepting the reversal of `B-77`'s ratified "no persisted sidecar" judgment.**
+> elapsed-time first-observation grace, on a dedicated **candidate-filename + timestamp** sidecar
+> published by `os.replace`, accepting the reversal of `B-77`'s ratified "no persisted sidecar"
+> judgment.**
+>
+> *(**Carrier wording, corrected at out-of-family review round 5 [P2].** §4's option text and §8's
+> ask use the shorthand *"digest+timestamp"*, which is **not** the ratified carrier: a
+> digest-keyed record cannot key `mkstemp`-drawn `.tmp-*` candidates, so it would leave that
+> class with no observation record at all — forcing first-sight reclaim or unbounded retention,
+> exactly what council condition #5 exists to forbid. **§11.3's table is the operative statement
+> of the ratified form**; the record is condition #5's closed set
+> `{candidate filename, first_observed_at}`, keyed over **both** sweep classes. The §4/§8
+> shorthand is left as filed, being the historical option text.)*
 >
 > **Reading A was NOT selected and is NOT partially adopted.** A deferral that quietly kept the
 > sweep-count bound while adopting C's vocabulary would be the silent-absorption failure mode this
