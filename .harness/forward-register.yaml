@@ -2926,7 +2926,66 @@ items:
   title: 'Memory tool batch: an executor-level argument failure mid-batch can commit earlier writes, then retry-duplicate them'
   status: open
   pr: '#1228 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record)'
-  summary: 'Out-of-family Codex round 4 on the B-82 arc (2026-07-27). Round 1 made both memory tool loops validate the COMPLETE batch before executing any of it, closing the DISPATCH-side half of the partial-batch problem. A second half remains one layer down: validation the dispatch layer legitimately does not perform still happens mid-execution, at the executor. A batch of [memory.write_note (valid), memory.read (missing the contract-required `memory_ref`)] passes every dispatch-side check, so the result-message builders execute in order -- the write COMMITS a durable record, then the read raises MemoryToolExecutionInputError from `_string_arg` (`harness-runtime/src/harness_runtime/memory_tool_executor.py:549-553` — *`_string_arg` is at `:678` at 2026-08-05; the whole helper inventory drifted, refreshed in the close_out*). That error WAS retry-classified TRANSIENT (`_classify_provider_exception` fail-fasted only LLMDispatchProviderUnreachableError / LLMDispatchPayloadShapeError / HTTP 401-403), so RetryBreakerFallbackDispatcher re-ran the whole dispatch and the committed write executed once per retry -- the same double-write class as the round-1 [P1], reached through a different door. PARTIAL MITIGATION LANDED (2026-07-28): MemoryToolExecutionInputError now joins the fail-fast branch of `_classify_provider_exception` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:326-334`), so the retry staircase no longer re-runs the dispatch for this class -- on the default single-candidate chain the mid-batch failure now consumes exactly ONE dispatch instead of max_attempts. THE ROW STAYS registered_finding: the RETRY-duplication half is closed, the PARTIAL-COMMIT half is NOT -- the earlier write in the batch still commits before the later call raises, and a MULTI-candidate fallback chain CAN duplicate the committed prefix -- contingent, not guaranteed (codex 2026-08-05): the failed inner dispatch''s prepared batch is local and not forwarded; the next candidate re-samples its own tool calls (repeat, differ, or absent) -- up to one extra copy per candidate when re-sampled alike, versus max_attempts x candidates before. ALREADY PREVALIDATED by the B-82 rounds-1/3 pre-pass, for every call, before anything executes: tool_call wire shape (function mapping; OpenAI id present); name resolution to a MemoryToolName (wire map on OpenAI, dotted-only on ollama); arguments normalizing to a mapping (fail-loud otherwise); and the RuntimeMemoryContext checks (record_scope/scope_ref present; scope_ref argument matching the context for the two tools whose contracts declare it). NOT checked: per-tool required-argument keys and per-tool policy gates -- those are the EXECUTOR''''s semantics. Reachability requires a multi-call batch with an earlier valid write AND a later dispatch-valid-but-executor-invalid call; unreachable for single-call batches. AGGRAVATOR (out-of-family Codex round 5, verified empirically at registration time against the locked ollama 0.6.2 SDK): the ollama client REVALIDATES caller-supplied tool mappings as its own `ollama.Tool` model before posting to /api/chat (`ChatRequest.tools: Optional[Sequence[Tool]]`, `ollama/_types.py:400`), and that model is a CLOSED FIELD SUBSET over a plain pydantic BaseModel -- `SubscriptableBaseModel` (`_types.py:19`) sets no `model_config`, so pydantic''''s default `extra=''ignore''` applies; `Tool.Function.Parameters` (`_types.py:365-371`) declares only type/$defs/items/required/properties, and `Parameters.Property` (`_types.py:372-379`) declares only type/items/description/enum. Every other JSON-Schema keyword is therefore SILENTLY DROPPED on the way to the daemon. Measured directly on the real C-MEM-14 contracts: `memory.search` loses top-level `additionalProperties: false` and `limit.minimum: 1` and `query.minLength: 1`; `memory.write_note` loses `note.minLength: 1`. The model therefore never sees the constraints the contracts declare, which raises the odds it emits an argument payload the EXECUTOR then rejects -- i.e. it feeds exactly this row''''s mid-batch / transient-retry class. Aggravator only: it changes the likelihood, not the mechanism, and the mitigation menu below is unchanged. Note this is orthogonal to the separate, already-fixed B-82 round-5 issue of non-tool-template models (e.g. llava) 400-ing on `tools=` at all. 2026-07-30 post-#1159 re-check (gate-log LOW batch): the DEFECT premise is unchanged (both halves re-verified at the 2026-07-29 pass above and untouched since), but direction (2)''s COST ASSESSMENT predates U-MEM-27. Two substrate pieces the (1)-vs-(2) framing was written without now exist: a GENERIC compare-and-commit seam on the canonical store (`CanonicalMemoryStore.write_record_guarded`, `harness-is/src/harness_is/memory_store.py` -- it carries no promotion, provenance, or policy semantics, so a batch executor can supply its own precondition), and a REENTRANT per-root cross-process hold (`cross_process_scope_lock`) under which a multi-write section can evaluate and commit without releasing. Neither makes an append-only store transactional by itself, and the compensation question direction (2) actually turns on is untouched -- but "make the whole batch atomic" no longer starts from nothing, so the (1)-vs-(2) tradeoff leans differently than this row records. Re-price BOTH directions at build time rather than reading the recorded lean.'
+  summary: '[SUPERSEDED 2026-08-05 -- RATIFIED as READING A (executor pure validate() pre-pass);
+    status is now `open` with a build leg owed, and DIRECTION (2), the transactional/journaled
+    batch, was REJECTED and must NOT be re-priced or reopened by the build leg. Everything below
+    is the pre-ratification record, kept as history.] Out-of-family Codex round 4 on the B-82
+    arc (2026-07-27). Round 1 made both memory tool loops validate the COMPLETE batch before executing
+    any of it, closing the DISPATCH-side half of the partial-batch problem. A second half remains
+    one layer down: validation the dispatch layer legitimately does not perform still happens
+    mid-execution, at the executor. A batch of [memory.write_note (valid), memory.read (missing
+    the contract-required `memory_ref`)] passes every dispatch-side check, so the result-message
+    builders execute in order -- the write COMMITS a durable record, then the read raises MemoryToolExecutionInputError
+    from `_string_arg` (`harness-runtime/src/harness_runtime/memory_tool_executor.py:549-553`
+    — *`_string_arg` is at `:678` at 2026-08-05; the whole helper inventory drifted, refreshed
+    in the close_out*). That error WAS retry-classified TRANSIENT (`_classify_provider_exception`
+    fail-fasted only LLMDispatchProviderUnreachableError / LLMDispatchPayloadShapeError / HTTP
+    401-403), so RetryBreakerFallbackDispatcher re-ran the whole dispatch and the committed write
+    executed once per retry -- the same double-write class as the round-1 [P1], reached through
+    a different door. PARTIAL MITIGATION LANDED (2026-07-28): MemoryToolExecutionInputError now
+    joins the fail-fast branch of `_classify_provider_exception` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:326-334`),
+    so the retry staircase no longer re-runs the dispatch for this class -- on the default single-candidate
+    chain the mid-batch failure now consumes exactly ONE dispatch instead of max_attempts. THE
+    ROW STAYS registered_finding: the RETRY-duplication half is closed, the PARTIAL-COMMIT half
+    is NOT -- the earlier write in the batch still commits before the later call raises, and a
+    MULTI-candidate fallback chain CAN duplicate the committed prefix -- contingent, not guaranteed
+    (codex 2026-08-05): the failed inner dispatch''s prepared batch is local and not forwarded;
+    the next candidate re-samples its own tool calls (repeat, differ, or absent) -- up to one
+    extra copy per candidate when re-sampled alike, versus max_attempts x candidates before. ALREADY
+    PREVALIDATED by the B-82 rounds-1/3 pre-pass, for every call, before anything executes: tool_call
+    wire shape (function mapping; OpenAI id present); name resolution to a MemoryToolName (wire
+    map on OpenAI, dotted-only on ollama); arguments normalizing to a mapping (fail-loud otherwise);
+    and the RuntimeMemoryContext checks (record_scope/scope_ref present; scope_ref argument matching
+    the context for the two tools whose contracts declare it). NOT checked: per-tool required-argument
+    keys and per-tool policy gates -- those are the EXECUTOR''''s semantics. Reachability requires
+    a multi-call batch with an earlier valid write AND a later dispatch-valid-but-executor-invalid
+    call; unreachable for single-call batches. AGGRAVATOR (out-of-family Codex round 5, verified
+    empirically at registration time against the locked ollama 0.6.2 SDK): the ollama client REVALIDATES
+    caller-supplied tool mappings as its own `ollama.Tool` model before posting to /api/chat (`ChatRequest.tools:
+    Optional[Sequence[Tool]]`, `ollama/_types.py:400`), and that model is a CLOSED FIELD SUBSET
+    over a plain pydantic BaseModel -- `SubscriptableBaseModel` (`_types.py:19`) sets no `model_config`,
+    so pydantic''''s default `extra=''ignore''` applies; `Tool.Function.Parameters` (`_types.py:365-371`)
+    declares only type/$defs/items/required/properties, and `Parameters.Property` (`_types.py:372-379`)
+    declares only type/items/description/enum. Every other JSON-Schema keyword is therefore SILENTLY
+    DROPPED on the way to the daemon. Measured directly on the real C-MEM-14 contracts: `memory.search`
+    loses top-level `additionalProperties: false` and `limit.minimum: 1` and `query.minLength:
+    1`; `memory.write_note` loses `note.minLength: 1`. The model therefore never sees the constraints
+    the contracts declare, which raises the odds it emits an argument payload the EXECUTOR then
+    rejects -- i.e. it feeds exactly this row''''s mid-batch / transient-retry class. Aggravator
+    only: it changes the likelihood, not the mechanism, and the mitigation menu below is unchanged.
+    Note this is orthogonal to the separate, already-fixed B-82 round-5 issue of non-tool-template
+    models (e.g. llava) 400-ing on `tools=` at all. 2026-07-30 post-#1159 re-check (gate-log LOW
+    batch): the DEFECT premise is unchanged (both halves re-verified at the 2026-07-29 pass above
+    and untouched since), but direction (2)''s COST ASSESSMENT predates U-MEM-27. Two substrate
+    pieces the (1)-vs-(2) framing was written without now exist: a GENERIC compare-and-commit
+    seam on the canonical store (`CanonicalMemoryStore.write_record_guarded`, `harness-is/src/harness_is/memory_store.py`
+    -- it carries no promotion, provenance, or policy semantics, so a batch executor can supply
+    its own precondition), and a REENTRANT per-root cross-process hold (`cross_process_scope_lock`)
+    under which a multi-write section can evaluate and commit without releasing. Neither makes
+    an append-only store transactional by itself, and the compensation question direction (2)
+    actually turns on is untouched -- but "make the whole batch atomic" no longer starts from
+    nothing, so the (1)-vs-(2) tradeoff leans differently than this row records. Re-price BOTH
+    directions at build time rather than reading the recorded lean.'
   close_out: 'RATIFIED 2026-08-05 as READING A -- the executor''s PURE `validate()` PRE-PASS (one
     method + two dispatch call sites, zero contract text). Operator two-stage AskUserQuestion
     on the fork''s section 10.1 (`.harness/class_2_fork_b84_memory_batch_partial_commit.md`):
@@ -3108,8 +3167,12 @@ items:
   title: 'Memory failure telemetry: substring-keyed classify_memory_failure collapses the typed input-error family (and two real policy denials) to io_failure'
   status: design_substrate_gated
   pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record)'
-  summary: 'Surfaced by the merge-gate lens-2 sweep on the B-84 arc (2026-07-28); PRE-EXISTING
-    and latent, orthogonal to B-84 but made visible by it. `classify_memory_failure` (`harness-is/src/harness_is/memory_observability.py:150-163`
+  summary: '[SUPERSEDED 2026-08-05 -- RATIFIED as READING A with sub-decision A-ii = RE-TYPE;
+    the spec half is DECIDED and the status is now `design_substrate_gated` with a spec leg then
+    an impl leg owed. Every ''the spec half REMAINS, so the row stays registered_finding'' statement
+    below is the pre-ratification record, kept as history.] Surfaced by the merge-gate lens-2
+    sweep on the B-84 arc (2026-07-28); PRE-EXISTING and latent, orthogonal to B-84 but made visible
+    by it. `classify_memory_failure` (`harness-is/src/harness_is/memory_observability.py:150-163`
     *(the classifier sits at `:166`–`:200` at 2026-08-05; filing §10)*) classifies into the C-MEM-19
     vocabulary by matching SUBSTRINGS of the exception message and of the lowercased type name.
     Its third rule is `isinstance(exc, (OSError, IOError)) or "io" in exc_name` -- and "io" is
@@ -3398,14 +3461,16 @@ items:
     diverging from it (the scope-value-domain exceptions declare `memory_failure_class` at their
     definition sites, `memory_capture.py:286`-`:288` and `:307`-`:309` -- cite repaired 2026-08-05,
     see the drift-repair list above), so step (2) -- the input-validation class, a Class 1 C-MEM-19
-    vocabulary amendment -- remains the sole open half. SPEC-HALF FORK FILED 2026-08-05 at `.harness/class_2_fork_b88_memory_failure_input_validation_class.md`
-    -- readings A (add a seventh member `input_validation_failure`, RECOMMENDED) / B (bless the
-    `provider_adapter_failure` stopgap in contract text) / C (defer under a D-0..D-3 demand test);
-    recommendation A, runner-up C, discriminator named (does `memory.failure_class` name the fault
-    KIND or the fault LOCUS); the council premise is PROBE-RESOLVED -- zero exhaustive consumers
-    measured at HEAD 4f914159, so no convening is owed unless B is selected. Ratification joined
-    the 2026-08-05 operator batch alongside B-96/B-98/B-104/B-93+B-45/B-84/B-95 and is RECORDED
-    above.'
+    vocabulary amendment -- remained the sole open half UNTIL THE 2026-08-05 RATIFICATION, which
+    DECIDED it as Reading A + A-ii (see the ratification paragraph at the head of this close_out);
+    what remains is the SPEC LEG that writes the decision, not the decision. SPEC-HALF FORK FILED
+    2026-08-05 at `.harness/class_2_fork_b88_memory_failure_input_validation_class.md` -- readings
+    A (add a seventh member `input_validation_failure`, RECOMMENDED) / B (bless the `provider_adapter_failure`
+    stopgap in contract text) / C (defer under a D-0..D-3 demand test); recommendation A, runner-up
+    C, discriminator named (does `memory.failure_class` name the fault KIND or the fault LOCUS);
+    the council premise is PROBE-RESOLVED -- zero exhaustive consumers measured at HEAD 4f914159,
+    so no convening is owed unless B is selected. Ratification joined the 2026-08-05 operator
+    batch alongside B-96/B-98/B-104/B-93+B-45/B-84/B-95 and is RECORDED above.'
   council: 'NO CONVENING OWED -- settled 2026-08-05: the operator ratified READING A, and the
     conditional convening was owed only under Reading B. PROBE-RESOLVED at the 2026-08-05 filing
     -- no convening owed unless Reading B is selected. The original disposition ("Likely, for

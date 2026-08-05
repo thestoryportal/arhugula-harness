@@ -1003,7 +1003,7 @@ which the register now says.
 operator's verdict is READING C — DEFER, unchanged.**
 
 - **Nothing new is owed.** The substantive ratification ran on 2026-08-01 and is recorded at
-  §11.1–§11.3 above; its spec-side leg landed at **PR #1182**. The 2026-08-05 answer **re-affirms**
+  §11.1–§11.3 above; its **ratification leg** landed at **PR #1182**. **That PR carried NO `B-98` spec-side component** — Reading C owes **no** spec leg and **no** impl leg, exactly as §11.3 and §9's `C` column state; the Runtime v1.110 delta in PR #1182 belongs to **`B-104`**, a different row and a different ratified reading. **The two shared a PR, not a scope.** *(Attribution corrected at out-of-family review round 10 [P2]: the earlier wording "its spec-side leg" could let a later carrier arc infer `B-98`'s carrier decision had been design-applied.)* The 2026-08-05 answer **re-affirms**
   that disposition rather than reopening it: no carrier change, no spec leg, no impl leg, **D-0
   dominant**, `status` stays `registered_finding`.
 - **One bookkeeping repair rides this leg.** §11.2's last row recorded `pr: '#1180 + #pending'` — the

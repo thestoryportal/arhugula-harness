@@ -661,11 +661,20 @@ verbatim-in-substance rather than only at the register row.
 > `StandardMemoryToolExecutor.execute()`'s catch calls `classify_memory_failure`
 > (`memory_tool_executor.py:255`). Relocating them into `_openai_prepared_memory_tool_calls` /
 > `_ollama_prepared_memory_tool_calls` **removes that emission**, and **none** of `B-84`'s ratified
-> witnesses (W-1 / W-2 / W-4 / W-5 / W-7 / W-8) asserts it. **The `B-84` build leg therefore owes
-> ONE of two things and may not simply inherit the loss:** either **preserve classification** for
-> the relocated checks on the prepare path, or **ratify the telemetry loss explicitly and witness
-> it end-to-end** (assert the attribute's absence, so the absence is a decision on the record
-> rather than a silent regression).
+> witnesses (W-1 / W-2 / W-4 / W-5 / W-7 / W-8) asserts it.
+>
+> **PRESERVATION IS MANDATORY.** *(The "or ratify the telemetry loss" arm this paragraph carried
+> at round 7 is **WITHDRAWN at out-of-family review round 9 [P2]** — it would have authorized a
+> contract weakening with no design-substrate change, and is corrected rather than defended.)*
+> **Grounded:** `C-MEM-19` (`Spec_Memory_Substrate_v1.md:835`–`:870`) lists **"Standard memory
+> tool call"** among the operations memory telemetry **covers**, and names **`memory.failure_class`**
+> among its **required attributes**. **Reading A opened no spec leg** and `B-84` is `open` with no
+> blocker — so an impl leg **cannot elect** to drop that attribute on its own authority; that is
+> precisely the **X-AL-3 silent-absorption** failure mode. **The `B-84` build leg MUST preserve
+> classification for every check it relocates off the executor's catch, and MUST witness the
+> preserved emission end-to-end. If preservation proves infeasible, that is a CLASS 1 BACK-FLOW
+> against `C-MEM-19` — filed and ratified BEFORE the code lands — not an impl-discretion call, and
+> not closable by witnessing the absence.**
 >
 > The unclassified prepare path itself stays a build-time question, closable only **end-to-end**,
 > because the gap is precisely that the production path never reaches the classifier.
