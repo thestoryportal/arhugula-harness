@@ -1055,6 +1055,17 @@ defect in the routing skill, belonging to whoever next revises it, not to this f
 - **W-5's four-cell matrix EXECUTED, with its answers recorded back on the register row.**
 - The **§9 items 3–7 shipped-source cite repairs**, in the files the leg touches.
 
+**Telemetry obligation, added at out-of-family review round 7 [P2].** Checks the pre-pass relocates out of
+`_execute_authorized()` — `limit=0` among them — **are classified today**, because
+`StandardMemoryToolExecutor.execute()`'s catch calls `classify_memory_failure`
+(`memory_tool_executor.py:255`). Raising them from `_openai_prepared_memory_tool_calls` /
+`_ollama_prepared_memory_tool_calls` instead **removes that emission**, and **none of W-1 / W-2 / W-4 /
+W-5 / W-7 / W-8 asserts it**. **The build leg owes ONE of two things and may not simply inherit the
+loss:** either **preserve classification** for the relocated checks on the prepare path, or **ratify the
+telemetry loss explicitly and witness it end-to-end** (assert the attribute's absence, so the absence is
+a decision on the record rather than a silent regression). This interacts with `B-88`'s ratified seventh
+class and is cross-referenced on that row.
+
 **Accepted costs, ratified rather than re-opened at build time:** the policy-flip TOCTOU window and
 the intra-call window both remain, and retry precedence changes. These were priced in §5 and are part
 of what Reading A buys.
