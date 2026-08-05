@@ -3742,7 +3742,7 @@ items:
     a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry
     milliseconds after its bootstrap sweep first observed it'
   status: design_substrate_gated
-  pr: '#1179 (the Class 2 fork filing) + #1183 (the C-1/C-2 council record) + #1233 (the 2026-08-05 ratification record)'
+  pr: '#1179 (the Class 2 fork filing) + #1183 (the C-1/C-2 council record) + #1233 (the 2026-08-05 ratification record) + #pending (the SPEC leg -- Runtime spec v1.111 section 14.8.11.1 + Runtime plan v2.58 U-RT-150)'
   summary: 'Surfaced by out-of-family Codex round 2 at the B-77 impl arc (2026-07-30),
     against the fix landed in that same PR. `gc_sweep`''s first-observation grace refuses to
     reclaim an entry the store has not already seen past TTL at a PRIOR sweep of the same
@@ -3772,7 +3772,19 @@ items:
     past it (the factory default is 86400s, roughly seven orders of magnitude above that),
     AND a crash landing strictly between `os.link` and the post-commit mtime refresh, AND a
     recovering run short enough that its own shutdown sweep fires before any repair read.'
-  close_out: 'RATIFIED 2026-08-05 as READING C, ceiling sub-decision C-2 -- the GRACE TERM ALONE,
+  close_out: 'SPEC LEG LANDED at PR #pending -- Runtime spec v1.110 -> v1.111 adds NEW section
+    14.8.11.1 carrying the council record section 7.1''s TWELVE conditions as contract terms 1-12,
+    plus two strict APPENDS (the bounded-retention bullet''s cross-reference and the
+    deferred-to-discretion list''s two new entries); the Runtime plan absorbs it at v2.58 as
+    ONE NEW unit U-RT-150 with FIFTEEN acceptance criteria (a NEW unit, NOT an amendment of the
+    landed U-RT-145, whose AC #7 remains true and unchanged -- the B-97(a) -> U-RT-149 precedent).
+    Clearance markers filed for both artifacts; the FIVE-of-twelve EXPANSION FLAG (conditions #5,
+    #6, #8, #11, #12 did not exist in the fork section 8 ask) is surfaced in the spec marker per
+    council record section 7.2, with a Class 2 route named if the operator judges they owe a fresh
+    decision. NO new C-RT-* number, NO CXA delta (aggregate frozen at 111), NO OD delta
+    (C-OD-05 section 5.1 roster 15 -> 15), NO harness-*/src|tests edit. STATUS UNCHANGED at
+    design_substrate_gated -- the IMPL leg remains owed. RATIFIED 2026-08-05 as READING C, ceiling
+    sub-decision C-2 -- the GRACE TERM ALONE,
     with NO absolute mtime-keyed reclaim ceiling. Operator AskUserQuestion on the fork''s section
     8 (`.harness/class_2_fork_b96_gc_grace_elapsed_time_bound.md`, FILED at PR #1179); the HELD
     C-1/C-2 sub-decision was resolved by the dyadic convening recorded at `.harness/council-b96-grace-ceiling-2026-08-01.md`

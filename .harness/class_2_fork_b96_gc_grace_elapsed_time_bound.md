@@ -960,3 +960,15 @@ bare version label.
 and the four reclaim asserts all belong to the **impl leg**. **Explicitly not owed by any leg:**
 narrowing `ttl_seconds` or adding a TTL floor (`B-74`'s twice-declined option), and any fourth
 reordering of `_publish_atomic`'s two-stamp pipeline.
+
+### §11.8 Spec leg — LANDED 2026-08-05 at PR #pending (chain cross-stamp)
+
+**Chain status: leg 4 of 4 open — filing (#1179) → ratification (#1233, incl. the #1183 convening) → SPEC LEG (#pending, this stamp) → IMPL LEG (owed).**
+
+**What landed.** `Spec_Harness_Runtime_v1.md` **v1.110 → v1.111**: a NEW **§14.8.11.1** carrying the council record's §7.1 **TWELVE** conditions as contract terms 1–12, plus the observation record's carrier discipline, an explicit **does-NOT-acquire** list, and the §7.2 tier-conditional counter-anchor — together with **two strict APPENDS** inside §14.8.11 (the bounded-retention bullet's cross-reference; the deferred-to-discretion list gaining the record's file name, its serialization format, and the emissions' concrete field keys / message shapes). **Three amendment sites; no existing sentence reworded, retracted or relocated.** `Implementation_Plan_Harness_Runtime_v2_57.md` → **v2.58** absorbs it as **ONE NEW unit, U-RT-150**, with **FIFTEEN** acceptance criteria — deliberately **NOT** an amendment of the landed **U-RT-145**, whose AC #7 remains true and unchanged under v1.111 (the `B-97`(a) → U-RT-149 precedent). Clearance markers filed for both artifacts.
+
+**§9's spec-leg row is discharged, and its two named obligations are both met:** the §14.8.11 amendment states the first-observation grace and its effective-retention bound (as the **conditional** statement council condition #7 requires — no unconditional `N × TTL` claim anywhere), and it is co-published with a clearance marker per `CLAUDE.md` §4.5. **§11.5's additional demand is met too:** the marker surfaces §7.2's **expansion flag** — that **FIVE** of the twelve conditions (**#5, #6, #8, #11, #12**) did not exist in this filing's §8 ask and ride the ratification only as *conditions of the selected form* — **with a Class 2 route named** if the operator judges they owe a fresh decision.
+
+**What this leg did NOT do, per §11.7 and §9.** No `harness-*/src` or `harness-*/tests` edit; no `ttl_seconds` floor or narrowing; no numeric `k` or absolute ceiling; no fourth reordering of `_publish_atomic`'s two-stamp pipeline; no carrier **(C-ii)** or **(C-iii)**; no new `C-RT-*` number (§14.8.11.1 extends §14.8.11 inside `C-RT-18`); no CXA delta (aggregate frozen at **111**); no OD delta (`C-OD-05` §5.1 roster **15 → 15**). **The record's non-dot-leading name stayed IMPL-leg** per §10.1's soundness exit and the council record §7.1's routing split, and is carried at U-RT-150 **AC #15** rather than promoted to `design-substrate/**`.
+
+**Register disposition at this leg:** `B-96` stays **`design_substrate_gated`** per §11.5. **`B-96`, the `B-77` residual and `B-74` flip to `closed` ONLY when the impl leg merges** — the obligation set is §9's impl row plus council conditions #5 / #6 / #8 / #11 / #12 plus the non-dot-leading record name, all now homed at U-RT-150's fifteen ACs.
