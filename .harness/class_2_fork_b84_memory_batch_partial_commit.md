@@ -1061,11 +1061,19 @@ out-of-family review round 7 [P2])*. Checks the pre-pass relocates out of
 `StandardMemoryToolExecutor.execute()`'s catch calls `classify_memory_failure`
 (`memory_tool_executor.py:255`). Raising them from `_openai_prepared_memory_tool_calls` /
 `_ollama_prepared_memory_tool_calls` instead **removes that emission**, and **none of W-1 / W-2 / W-4 /
-W-5 / W-7 / W-8 asserts it**. **The build leg owes ONE of two things and may not simply inherit the
-loss:** either **preserve classification** for the relocated checks on the prepare path, or **ratify the
-telemetry loss explicitly and witness it end-to-end** (assert the attribute's absence, so the absence is
-a decision on the record rather than a silent regression). This interacts with `B-88`'s ratified seventh
-class and is cross-referenced on that row.
+W-5 / W-7 / W-8 asserts it**. **PRESERVATION IS MANDATORY.** *(The "or ratify the loss" arm this paragraph carried at round 7 is
+**WITHDRAWN at out-of-family review round 9 [P2]** — it would have authorized a contract weakening with
+no design-substrate change, and is corrected rather than defended.)* **Grounded:** `C-MEM-19`
+(`Spec_Memory_Substrate_v1.md:835`–`:870`) lists **"Standard memory tool call"** among the operations
+memory telemetry **covers**, and names **`memory.failure_class`** among its **required attributes**.
+**Reading A opened no spec leg** and this row is `open` with no blocker — so an impl leg **cannot elect**
+to drop that attribute on its own authority; doing so is precisely the **X-AL-3 silent-absorption**
+failure mode. **Therefore the build leg MUST preserve classification for every check it relocates off
+the executor's catch, and MUST witness the preserved emission end-to-end. If preservation proves
+infeasible, that is a CLASS 1 BACK-FLOW against `C-MEM-19` — filed and ratified BEFORE the code lands —
+not an impl-discretion call, and not closable by witnessing the absence.** This constrains **how**
+Reading A is built; it does not reopen **whether**. Interacts with `B-88`'s ratified seventh class and is
+cross-referenced on that row.
 
 **Accepted costs, ratified rather than re-opened at build time:** the policy-flip TOCTOU window and
 the intra-call window both remain, and retry precedence changes. These were priced in §5 and are part

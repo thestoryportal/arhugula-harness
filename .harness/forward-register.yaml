@@ -2950,45 +2950,55 @@ items:
     / `_ollama_prepared_memory_tool_calls:4845`), which runs BEFORE `StandardMemoryToolExecutor.execute()`
     opens its telemetry span -- and `lifecycle/llm_dispatch.py` contains ZERO `classify_memory_failure`
     calls, so those failures emit NO `memory.failure_class`. This moves MORE of that class onto
-    an unclassified path, which interacts with B-88''s ratified seventh class. The residue is
-    PRE-EXISTING at HEAD and created by neither ratification; it is NOT decided here, and only
-    an END-TO-END witness could close it. ACCEPTED COSTS, stated so the build leg does not re-litigate
-    them: the policy-flip TOCTOU and intra-call windows remain, and retry precedence changes.
-    STATUS -> `open` (the fork''s section 10.2 ratification row prescribes the `pr:` stamp and
-    the close_out outcome but is SILENT on status; the enum decides it -- ratifying a build reading
-    makes the row actionable-now-no-blocker, and there is no design-substrate gate under A). The
-    row flips to `closed` when the build leg merges. NO COUNCIL is owed (the C10 x memory-ledger-owner
-    dyadic was conditional on Reading B). Two candidate directions, neither obviously dominant.
-    (1) An executor-exposed pure `validate()` pre-pass: the executor grows a side-effect-free
-    method running exactly the argument/policy checks `_execute_authorized` would run, and the
-    dispatch batch pre-pass calls it for every call before executing any -- keeps ONE source of
-    truth (the executor still owns the semantics; dispatch only asks) at the cost of a new public
-    surface plus the discipline that every future check lands in the shared path. (2) Transactional
-    / journaled batch execution at the executor: accept a batch and either commit all durable
-    operations or none, using the existing memory-operation ledger as the journal -- strictly
-    stronger (it also covers mid-batch failures no pre-pass could predict, e.g. a policy resolver
-    flipping or an I/O error) but materially larger, touching durable-write ordering, and it needs
-    a decision about what rollback means for an append-only canonical store (likely compensating
-    ledger entries, not deletion). The third, cheaper mitigation is LANDED (2026-07-28) and does
-    NOT close this row: executor-level INPUT errors are now fail-FAST rather than transient. Grounding
-    verdict before building: IMPL-DISCRETION, not spec-enumerated. Runtime spec §14.6 D2 states
-    the predicate as retry-eligible IFF the exception matches the CP §21.2 transient staircase,
-    FAIL-FAST OTHERWISE (AUTH, payload-shape, shutdown) -- fail-fast is the RESIDUAL class and
-    the parenthetical is illustrative, not a closed set; the §14.5 C-RT-15 table classes and the
-    CP C-CP-21 §21.1 five-value ValidatorRetryExitClass are what is closed, and neither enumerates
-    which concrete Python exception types map to fail-fast. The classifier body already documented
-    itself as MVP-conservative. A contract-invalid C-MEM-14 memory tool call matches nothing in
-    §21.2 (network / rate-limit / 5xx); it is the same permanent malformed-input class as RT-FAIL-PAYLOAD-SHAPE,
-    raised one layer deeper, so the reclassification moves the impl TOWARD the spec predicate
-    rather than extending it. NOTE the register originally justified this as identical-arguments-fail-identically,
-    which is imprecise: a retry re-dispatches to the provider and re-samples the tool-call arguments,
-    so a retry COULD emit valid arguments. The defensible rationale is the spec predicate plus
-    the RT-FAIL-PAYLOAD-SHAPE parity, and the harm removed is the duplicate commit, not wasted
-    attempts. SCOPE: MemoryToolExecutionDeniedError is deliberately EXCLUDED -- `_read_record_by_ref`
-    (`harness-runtime/src/harness_runtime/memory_tool_executor.py:446-449`) wraps ANY store exception,
-    including genuinely transient I/O, into the denied class, and `_allowed_index_entry` (`:424-435`)
-    raises it off mutable index/store state, so fail-fasting the base class would kill retries
-    for real flakes; whether a policy DENIAL is permanently terminal is a C-MEM policy-semantics
+    an unclassified path, which interacts with B-88''s ratified seventh class. PRESERVATION IS
+    MANDATORY -- the ''or ratify the telemetry loss'' arm this note carried at round 7 is WITHDRAWN
+    at out-of-family review round 9 [P2], because it would have authorized a CONTRACT WEAKENING
+    with no design-substrate change. GROUNDED: C-MEM-19 (Spec_Memory_Substrate_v1.md:835-870)
+    lists ''Standard memory tool call'' among the operations memory telemetry COVERS and names
+    `memory.failure_class` among its REQUIRED attributes. Reading A opened NO spec leg and this
+    row is `open` with no blocker, so an impl leg CANNOT elect to drop that attribute on its own
+    authority -- doing so is exactly the X-AL-3 silent-absorption failure mode. THEREFORE: the
+    build leg MUST PRESERVE classification for every check it relocates off the executor''s catch,
+    and MUST witness the preserved emission end-to-end. IF PRESERVATION PROVES INFEASIBLE, that
+    is a CLASS 1 BACK-FLOW against C-MEM-19 -- filed and ratified BEFORE the code lands -- NOT
+    an impl-discretion call and NOT closable by witnessing the absence. This constrains HOW Reading
+    A is built; it does not reopen WHETHER it is built. ACCEPTED COSTS, stated so the build leg
+    does not re-litigate them: the policy-flip TOCTOU and intra-call windows remain, and retry
+    precedence changes. STATUS -> `open` (the fork''s section 10.2 ratification row prescribes
+    the `pr:` stamp and the close_out outcome but is SILENT on status; the enum decides it --
+    ratifying a build reading makes the row actionable-now-no-blocker, and there is no design-substrate
+    gate under A). The row flips to `closed` when the build leg merges. NO COUNCIL is owed (the
+    C10 x memory-ledger-owner dyadic was conditional on Reading B). Two candidate directions,
+    neither obviously dominant. (1) An executor-exposed pure `validate()` pre-pass: the executor
+    grows a side-effect-free method running exactly the argument/policy checks `_execute_authorized`
+    would run, and the dispatch batch pre-pass calls it for every call before executing any --
+    keeps ONE source of truth (the executor still owns the semantics; dispatch only asks) at the
+    cost of a new public surface plus the discipline that every future check lands in the shared
+    path. (2) Transactional / journaled batch execution at the executor: accept a batch and either
+    commit all durable operations or none, using the existing memory-operation ledger as the journal
+    -- strictly stronger (it also covers mid-batch failures no pre-pass could predict, e.g. a
+    policy resolver flipping or an I/O error) but materially larger, touching durable-write ordering,
+    and it needs a decision about what rollback means for an append-only canonical store (likely
+    compensating ledger entries, not deletion). The third, cheaper mitigation is LANDED (2026-07-28)
+    and does NOT close this row: executor-level INPUT errors are now fail-FAST rather than transient.
+    Grounding verdict before building: IMPL-DISCRETION, not spec-enumerated. Runtime spec §14.6
+    D2 states the predicate as retry-eligible IFF the exception matches the CP §21.2 transient
+    staircase, FAIL-FAST OTHERWISE (AUTH, payload-shape, shutdown) -- fail-fast is the RESIDUAL
+    class and the parenthetical is illustrative, not a closed set; the §14.5 C-RT-15 table classes
+    and the CP C-CP-21 §21.1 five-value ValidatorRetryExitClass are what is closed, and neither
+    enumerates which concrete Python exception types map to fail-fast. The classifier body already
+    documented itself as MVP-conservative. A contract-invalid C-MEM-14 memory tool call matches
+    nothing in §21.2 (network / rate-limit / 5xx); it is the same permanent malformed-input class
+    as RT-FAIL-PAYLOAD-SHAPE, raised one layer deeper, so the reclassification moves the impl
+    TOWARD the spec predicate rather than extending it. NOTE the register originally justified
+    this as identical-arguments-fail-identically, which is imprecise: a retry re-dispatches to
+    the provider and re-samples the tool-call arguments, so a retry COULD emit valid arguments.
+    The defensible rationale is the spec predicate plus the RT-FAIL-PAYLOAD-SHAPE parity, and
+    the harm removed is the duplicate commit, not wasted attempts. SCOPE: MemoryToolExecutionDeniedError
+    is deliberately EXCLUDED -- `_read_record_by_ref` (`harness-runtime/src/harness_runtime/memory_tool_executor.py:446-449`)
+    wraps ANY store exception, including genuinely transient I/O, into the denied class, and `_allowed_index_entry`
+    (`:424-435`) raises it off mutable index/store state, so fail-fasting the base class would
+    kill retries for real flakes; whether a policy DENIAL is permanently terminal is a C-MEM policy-semantics
     decision this narrow change does not take. Three witnesses at `harness-runtime/tests/test_lifecycle_retry_breaker_fallback.py`
     (fail-fast candidate-advance plus permanent-fail-exit span class; single-candidate exactly-one-dispatch;
     denied-still-retries scope guard), each mutation-probed: reverting the isinstance addition
@@ -3052,9 +3062,13 @@ items:
     _promotion_kind `:783`, and the two denied-class sites are _allowed_index_entry `:516` and
     _read_record_by_ref `:545`. Disposition FORK-SHAPED -- RESOLVED 2026-08-05 as READING A (see
     the ratification paragraph at the head of this close_out); the 2026-07-30 re-price note above
-    stays load-bearing -- U-MEM-27''s write_record_guarded (memory_store.py:298) and the reentrant
-    cross_process_scope_lock both exist at HEAD, so re-price BOTH directions at build time rather
-    than reading the recorded lean.'
+    is SUPERSEDED as an INSTRUCTION and retained only as history (out-of-family review round 9
+    [P2]): it told a later leg to ''re-price BOTH directions at build time'', which would REOPEN
+    the transactional direction (2) the operator REJECTED on 2026-08-05 by selecting Reading A.
+    **DIRECTION (2) IS NOT TO BE RE-PRICED OR REOPENED BY THE BUILD LEG.** What survives from
+    that note is only the factual observation that U-MEM-27''s write_record_guarded (memory_store.py:298)
+    and the reentrant cross_process_scope_lock both exist at HEAD -- facts the ratified Reading
+    A build may use, not a mandate to re-open the fork.'
   council: 'NONE OWED -- SETTLED 2026-08-05. Reading A is ratified, and the fork''s section 7
     is PROBE-RESOLVED for A (the C10 x memory-ledger-owner dyadic was owed under Reading B ONLY,
     and B was not selected). The pre-ratification disposition below is SUPERSEDED and retained
@@ -3293,25 +3307,33 @@ items:
     `_execute_authorized()` -- `limit=0` among them -- are classified today, because `StandardMemoryToolExecutor.execute()`''s
     catch calls `classify_memory_failure` (memory_tool_executor.py:255). Moving them into `_openai_prepared_memory_tool_calls`
     / `_ollama_prepared_memory_tool_calls` REMOVES that emission, and NONE of B-84''s ratified
-    witnesses (W-1/W-2/W-4/W-5/W-7/W-8) asserts it. **THE B-84 BUILD LEG THEREFORE OWES ONE OF
-    TWO THINGS, and must not simply inherit the loss: either PRESERVE classification for the relocated
-    checks on the prepare path, or RATIFY the telemetry loss EXPLICITLY and WITNESS it (an end-to-end
-    assertion that the attribute is absent, so the absence is a decision on the record rather
-    than a silent regression).** The unclassified prepare path itself stays a build-time question,
-    closable only END-TO-END, since the gap is precisely that the production path never reaches
-    the classifier. LEG OWNERSHIP, made explicit (out-of-family review round 1 [P2], accepted
-    -- an earlier draft said ''RE-TYPED at the spec leg'' while also forbidding any src edit at
-    the spec leg, leaving the re-typing with NO owning leg): the SPEC leg records the boundary
-    invariant and the re-type DECISION in contract text and establishes the dispatch population''s
-    classification REACHABILITY; the IMPL leg performs the SOURCE re-typing at the llm_dispatch.py
-    sites and carries its reachability WITNESS (the fork''s ''impl rider''). READINGS B and C
-    were NOT selected and are NOT partially adopted -- in particular C''s docstring-rewrite-at-ratification
-    obligation DOES NOT FIRE, because under A the `memory_tool_executor.py:149`-`:171` stopgap
-    docstring is rewritten to match the ratified outcome AT THE IMPL LEG (fork section 9, impl
-    row), and no `harness-*/src` edit rides a doc-only ratification. STATUS design_substrate_gated
-    (fork section 9: status flips to design_substrate_gated under A or B): OWED are the SPEC leg
-    -- `Spec_Memory_Substrate_v1.md` v1.2 -> v1.3 by a dedicated spec-writer AND `Implementation_Plan_Memory_Substrate_v1.md`
-    v1.2 -> v1.3 (U-MEM-22 :829 extended, NO new unit), with BOTH clearance markers per root CLAUDE.md
+    witnesses (W-1/W-2/W-4/W-5/W-7/W-8) asserts it. **PRESERVATION IS MANDATORY -- the ''or ratify
+    the telemetry loss'' arm this note carried at round 7 is WITHDRAWN at out-of-family review
+    round 9 [P2], because it would have authorized a CONTRACT WEAKENING with no design-substrate
+    change. GROUNDED: C-MEM-19 (Spec_Memory_Substrate_v1.md:835-870) lists ''Standard memory tool
+    call'' among the operations memory telemetry COVERS and names `memory.failure_class` among
+    its REQUIRED attributes. Reading A opened NO spec leg and this row is `open` with no blocker,
+    so an impl leg CANNOT elect to drop that attribute on its own authority -- doing so is exactly
+    the X-AL-3 silent-absorption failure mode. THEREFORE: the build leg MUST PRESERVE classification
+    for every check it relocates off the executor''s catch, and MUST witness the preserved emission
+    end-to-end. IF PRESERVATION PROVES INFEASIBLE, that is a CLASS 1 BACK-FLOW against C-MEM-19
+    -- filed and ratified BEFORE the code lands -- NOT an impl-discretion call and NOT closable
+    by witnessing the absence. This constrains HOW Reading A is built; it does not reopen WHETHER
+    it is built.** The unclassified prepare path itself stays a build-time question, closable
+    only END-TO-END, since the gap is precisely that the production path never reaches the classifier.
+    LEG OWNERSHIP, made explicit (out-of-family review round 1 [P2], accepted -- an earlier draft
+    said ''RE-TYPED at the spec leg'' while also forbidding any src edit at the spec leg, leaving
+    the re-typing with NO owning leg): the SPEC leg records the boundary invariant and the re-type
+    DECISION in contract text and establishes the dispatch population''s classification REACHABILITY;
+    the IMPL leg performs the SOURCE re-typing at the llm_dispatch.py sites and carries its reachability
+    WITNESS (the fork''s ''impl rider''). READINGS B and C were NOT selected and are NOT partially
+    adopted -- in particular C''s docstring-rewrite-at-ratification obligation DOES NOT FIRE,
+    because under A the `memory_tool_executor.py:149`-`:171` stopgap docstring is rewritten to
+    match the ratified outcome AT THE IMPL LEG (fork section 9, impl row), and no `harness-*/src`
+    edit rides a doc-only ratification. STATUS design_substrate_gated (fork section 9: status
+    flips to design_substrate_gated under A or B): OWED are the SPEC leg -- `Spec_Memory_Substrate_v1.md`
+    v1.2 -> v1.3 by a dedicated spec-writer AND `Implementation_Plan_Memory_Substrate_v1.md` v1.2
+    -> v1.3 (U-MEM-22 :829 extended, NO new unit), with BOTH clearance markers per root CLAUDE.md
     section 4.5 -- and then the IMPL leg (1 enum member + 1 declaration flip + 1 docstring rewrite
     + 1 fixture re-key; 8 witness rows flip + 2 added negative rows + the mutation probe; PLUS
     the A-ii source re-typing at the SIX llm_dispatch.py internal-fault sites, and a reachability
@@ -3872,22 +3894,27 @@ items:
     changed since capture"; it discriminates a config EDIT, never a re-pause.'
   close_out: 'RE-AFFIRMED 2026-08-05 in the operator ratification batch: READING C (DEFER) stands,
     unchanged, with D-0 dominant. NO NEW WORK IS OWED -- the substantive ratification already
-    ran on 2026-08-01 and its spec-side component landed at PR #1182 (the fork''s `section 11
-    RATIFICATION` addendum); the row''s `pr:` pointer, which still read `#pending` for that leg,
-    is REPAIRED here to name #1182. STATUS stays `registered_finding` with the four-disjunct demand
-    test as the falsifiable re-open trigger, exactly as the fork''s section 9 column C prescribes.
-    Capture-side, hash-affecting, X-AL-3-relevant -- materially bigger than the read-only projection
-    B-69 authored, and explicitly declined for that arc by the ergonomics voice itself. Close-out
-    requires a capture-side carrier decision (which field, on which resume-state carriers, with
-    what hash disposition per the drop-when-empty precedent) before any read-side projection field
-    is added. DISTINCT FROM B-71, which adds a run-instance correlation id to HITLEscalationBrief
-    and the webhook payload -- B-71 is about DISAMBIGUATING two identical-looking escalations;
-    this row is about DESCRIBING one. [SUPERSEDED 2026-08-01, struck in place: the reopening rule
-    here read "Open only if the operator loop demands it" and is REPLACED -- not supplemented
-    -- by the falsifiable D-0..D-3 demand test below. It was unfalsifiable as written and MUST
-    NOT be applied as a second, parallel reopening criterion. Caught at out-of-family review round
-    2 [P2].] The B-69 projection deliberately ships without it, and position plus pause_reason
-    were judged sufficient for the map-composition task. RATIFIED 2026-08-01 (operator AskUserQuestion)
+    ran on 2026-08-01 and its RATIFICATION LEG landed at PR #1182 (the fork''s `section 11 RATIFICATION`
+    addendum). **PR #1182 carried NO B-98 spec-side component -- Reading C owes NO spec leg and
+    NO impl leg, as this row and the fork both state; the Runtime v1.110 spec delta in that PR
+    belongs to B-104, a different row and a different ratified reading. The two shared a PR, not
+    a scope.** (Attribution corrected at out-of-family review round 9 [P2]: the earlier wording
+    ''its spec-side component'' could let a later agent infer B-98''s carrier decision had been
+    design-applied.) the row''s `pr:` pointer, which still read `#pending` for that leg, is REPAIRED
+    here to name #1182. STATUS stays `registered_finding` with the four-disjunct demand test as
+    the falsifiable re-open trigger, exactly as the fork''s section 9 column C prescribes. Capture-side,
+    hash-affecting, X-AL-3-relevant -- materially bigger than the read-only projection B-69 authored,
+    and explicitly declined for that arc by the ergonomics voice itself. Close-out requires a
+    capture-side carrier decision (which field, on which resume-state carriers, with what hash
+    disposition per the drop-when-empty precedent) before any read-side projection field is added.
+    DISTINCT FROM B-71, which adds a run-instance correlation id to HITLEscalationBrief and the
+    webhook payload -- B-71 is about DISAMBIGUATING two identical-looking escalations; this row
+    is about DESCRIBING one. [SUPERSEDED 2026-08-01, struck in place: the reopening rule here
+    read "Open only if the operator loop demands it" and is REPLACED -- not supplemented -- by
+    the falsifiable D-0..D-3 demand test below. It was unfalsifiable as written and MUST NOT be
+    applied as a second, parallel reopening criterion. Caught at out-of-family review round 2
+    [P2].] The B-69 projection deliberately ships without it, and position plus pause_reason were
+    judged sufficient for the map-composition task. RATIFIED 2026-08-01 (operator AskUserQuestion)
     as READING C -- DEFER, with NO CARRIER CHANGE. The fork doc .harness/class_2_fork_b98_gate_description_durable_carrier.md
     is FILED (#1180) and its section 11 RATIFICATION addendum records the outcome verbatim-in-substance.
     Reading C owes NO spec text and NO impl text (fork section 9, column C), so no design-substrate
