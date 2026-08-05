@@ -918,7 +918,10 @@ items:
     a declared safe degradation with an UNVERIFIED exclusion claim -- strictly worse than today.
     ZERO spec and plan delta under EVERY reading, verified not assumed — C-IS-09 §9.4 (Spec_Information_Substrate_v1.md:900)
     and C-IS-07 §7.4 (:756) both defer the mechanism, and the IS spec contains ZERO occurrences
-    of timeout, deadline, platform or cross-process.'
+    of timeout, deadline, platform or cross-process. CROSS-REF ADDED 2026-08-05: B-95 (whose Windows
+    same-value `commit_seq` limb this row''s bound produces) was CLOSED at the 2026-08-05 ratification
+    batch as a ratified accepted bound, and this row is one of its named trigger-monitoring carriers
+    -- a Windows target landing here also puts an agent on B-95''s surface.'
   council: no for now — narrow implementation-discretion follow-on per C-IS-09 §9.4's own deferred-mechanism
     framing; council-eligible AT BUILD TIME only if the msvcrt-exclusive-only-lock tradeoff (weaker-than-POSIX
     shared-read guarantee on Windows) turns out non-obvious once actually scoped. ADJUDICATED
@@ -2007,15 +2010,15 @@ items:
     later rediscovered as novel.'
   close_out: '2026-08-05 REVERSAL RECORDED (so it is never later read as unratified drift): this
     row''s landed judgment ''no persisted sidecar'' is REVERSED by the ratified B-96 Reading C
-    / ceiling C-2 form, which publishes a DEDICATED digest+timestamp sidecar (carrier (C-i)) by
-    temp-write + fsync + os.replace + directory fsync. The reversal is RATIFIED, not drift --
-    operator AskUserQuestion 2026-08-05 on the B-96 fork, with the C-1/C-2 sub-decision resolved
-    by the convening at `.harness/council-b96-grace-ceiling-2026-08-01.md` (PR #1183). THE B-77
-    RESIDUAL flips to `closed` when the B-96 IMPL leg merges; this row''s own status is already
-    `closed` and does not move. CLOSED by the landed fix, 2026-07-30. MECHANISM: `gc_sweep` records
-    the filenames it verified past TTL under its own lock and reclaims only those a PRIOR sweep
-    of the same root already recorded (`ProtectedResultStore._observe_expired` + the module-level
-    `_root_observed_expired` registry in `harness-runtime/src/harness_runtime/lifecycle/protected_result_store.py`).
+    / ceiling C-2 form, which publishes a DEDICATED candidate-filename + timestamp sidecar (carrier
+    (C-i), keyed over BOTH sweep classes per council condition #5) by temp-write + fsync + os.replace
+    + directory fsync. The reversal is RATIFIED, not drift -- operator AskUserQuestion 2026-08-05
+    on the B-96 fork, with the C-1/C-2 sub-decision resolved by the convening at `.harness/council-b96-grace-ceiling-2026-08-01.md`
+    (PR #1183). THE B-77 RESIDUAL flips to `closed` when the B-96 IMPL leg merges; this row''s
+    own status is already `closed` and does not move. CLOSED by the landed fix, 2026-07-30. MECHANISM:
+    `gc_sweep` records the filenames it verified past TTL under its own lock and reclaims only
+    those a PRIOR sweep of the same root already recorded (`ProtectedResultStore._observe_expired`
+    + the module-level `_root_observed_expired` registry in `harness-runtime/src/harness_runtime/lifecycle/protected_result_store.py`).
     PERSISTENCE JUDGMENT: the observation record is module-wide, keyed by the root''s filesystem
     identity (`_root_identity_key`, extracted from `_lock_for_root` so both key the same way)
     -- NOT per-instance. Grounded against the real call graph: the composition root builds a FRESH
@@ -3476,7 +3479,40 @@ items:
   title: 'Derived-index auto-refresh rebuild overlap race -- two concurrent rebuilds can leave the OLDER snapshot last and reading fresh'
   status: registered_finding
   summary: 'Surfaced by out-of-family Codex R5 at the post-#1159 gate-log PR (2026-07-30). MECHANISM: `DerivedRetrievalIndexStore.rebuild` computes its entry set from the filesystem and then appends the result, holding NO lock across the two (`harness-is/src/harness_is/memory_retrieval_index.py`; `_append_jsonl` is a bare `open("ab")` + write). Two overlapping rebuilds can therefore interleave as: X reads the record set; a commit lands; Y reads the NEWER set and appends it; X appends its OLDER set LAST. `read_current` resolves an untokenized ledger by POSITION (last rebuild wins), so it returns X''s stale snapshot with `stale=False` - a committed record missing from an index reported as current. PRE-EXISTING, verified by `git show fc40fb2b` and NOT widened by the B-93 arc: pre-branch `rebuild` at `:177-200` computed entries at `:180` and appended at `:199` with no lock; `_append_jsonl` at `:571-574` took none either; `read_current` at `:210-227` was purely positional last-wins; and `AutoRefreshingDerivedRetrievalIndexStore.read_current` (`harness-runtime/src/harness_runtime/automatic_memory.py:110-114`) rebuilt on missing/stale with no coordination - the same interleaving yields the same wrong outcome on the pre-branch code. SCOPE OF WHAT THE B-93 ARC DID AND DID NOT COVER: that arc added a commit-ordering protocol (`commit_seq` stamped inside the memory store''''s write hold, and a `rebuilt_coverage` event binding a rebuild to the commit it answers) which orders TOKENIZED rebuilds - the hook path, where the caller has an invalidation event to quote. The PRODUCTION auto-refresh path is untokenized BY DESIGN: it rebuilds because a read found the index missing or stale, not in response to a specific write, so it has no token to pass and correctly falls to the legacy positional rule. The protocol therefore does not reach this race, and an all-untokenized ledger behaves exactly as it did pre-branch.'
-  close_out: 'CANDIDATE FIX SHAPE (Codex R5''''s direction, recorded not built): derive a coverage token on the auto-refresh path too, from the ledger length captured at the READ that decided to rebuild. That read already walks the whole ledger, so its byte length at that moment is free and is exactly the same monotonic quantity `_next_commit_seq` uses - it names "the state I found stale", which is the honest under-claiming attribution the rebuild contract already requires. `AutoRefreshingDerivedRetrievalIndexStore.read_current` would capture it in the `except` branch and pass it to `rebuild(commit_seq=...)`; the existing ordering rules then reject the older overlapping snapshot with no further change to `read_current`. OPEN QUESTIONS to settle at build time: (1) the capture must happen INSIDE the failed read rather than after it, or it re-races - `read_current` currently returns nothing on the raise, so the token needs a carrier on the exception or a private read variant; (2) whether the fix belongs at the `harness-runtime` subclass (where the auto-refresh policy lives) or at the IS-axis base (where the token semantics live) - the IS axis has zero outbound cross-axis edges, so a base-class change must not import runtime concerns; (3) whether a losing rebuild should be pruned rather than merely ignored, since the ledger still grows by one full snapshot per overlap. NOT URGENT: the outcome is a stale-but-valid index (a retrieval base that under-serves, never a wrong record), the auto-refresh path self-corrects at the next canonical write''''s stale marker, and single-process local development - the default posture - does not overlap rebuilds at all. Re-check when a second concurrent memory consumer becomes routine (daemon + one-shot both retrieving), which is the same trigger B-93 carries. 2026-08-05 grounding re-check at HEAD 43d4dda5 — premise INTACT and now DOCUMENTED IN CODE: the memory_retrieval_index module docstring names BOTH B-95 and B-94 explicitly at `:19-23` (rebuilds that pass no `commit_seq` -- which includes the production auto-refresh path, untokenized by design -- remain positional last-wins), and the production auto-refresh path is confirmed untokenized by direct read: `AutoRefreshingDerivedRetrievalIndexStore.read_current` calls `self.rebuild(indexed_at=datetime.now(UTC))` with NO `commit_seq` at harness-runtime/src/harness_runtime/automatic_memory.py:110-114. `_append_jsonl` still takes no lock and `read_current` still resolves untokenized ledgers positionally. Disposition FORK-SHAPED (low urgency) -- the three open questions stand: where the token is captured, whether the fix lands at the harness-runtime subclass or the IS-axis base (a real axis-placement call under the IS zero-outbound-edge invariant), and prune-vs-ignore for losing rebuilds.'
+  close_out: 'CANDIDATE FIX SHAPE (Codex R5''''s direction, recorded not built): derive a coverage
+    token on the auto-refresh path too, from the ledger length captured at the READ that decided
+    to rebuild. That read already walks the whole ledger, so its byte length at that moment is
+    free and is exactly the same monotonic quantity `_next_commit_seq` uses - it names "the state
+    I found stale", which is the honest under-claiming attribution the rebuild contract already
+    requires. `AutoRefreshingDerivedRetrievalIndexStore.read_current` would capture it in the
+    `except` branch and pass it to `rebuild(commit_seq=...)`; the existing ordering rules then
+    reject the older overlapping snapshot with no further change to `read_current`. OPEN QUESTIONS
+    to settle at build time: (1) the capture must happen INSIDE the failed read rather than after
+    it, or it re-races - `read_current` currently returns nothing on the raise, so the token needs
+    a carrier on the exception or a private read variant; (2) whether the fix belongs at the `harness-runtime`
+    subclass (where the auto-refresh policy lives) or at the IS-axis base (where the token semantics
+    live) - the IS axis has zero outbound cross-axis edges, so a base-class change must not import
+    runtime concerns; (3) whether a losing rebuild should be pruned rather than merely ignored,
+    since the ledger still grows by one full snapshot per overlap. NOT URGENT: the outcome is
+    a stale-but-valid index (a retrieval base that under-serves, never a wrong record), the auto-refresh
+    path self-corrects at the next canonical write''''s stale marker, and single-process local
+    development - the default posture - does not overlap rebuilds at all. Re-check when a second
+    concurrent memory consumer becomes routine (daemon + one-shot both retrieving), which is the
+    same trigger B-93 carries. 2026-08-05 grounding re-check at HEAD 43d4dda5 — premise INTACT
+    and now DOCUMENTED IN CODE: the memory_retrieval_index module docstring names BOTH B-95 and
+    B-94 explicitly at `:19-23` (rebuilds that pass no `commit_seq` -- which includes the production
+    auto-refresh path, untokenized by design -- remain positional last-wins), and the production
+    auto-refresh path is confirmed untokenized by direct read: `AutoRefreshingDerivedRetrievalIndexStore.read_current`
+    calls `self.rebuild(indexed_at=datetime.now(UTC))` with NO `commit_seq` at harness-runtime/src/harness_runtime/automatic_memory.py:110-114.
+    `_append_jsonl` still takes no lock and `read_current` still resolves untokenized ledgers
+    positionally. Disposition FORK-SHAPED (low urgency) -- the three open questions stand: where
+    the token is captured, whether the fix lands at the harness-runtime subclass or the IS-axis
+    base (a real axis-placement call under the IS zero-outbound-edge invariant), and prune-vs-ignore
+    for losing rebuilds. CROSS-REF ADDED 2026-08-05: B-95 (the mixed-version ordering bound over
+    this same untokenized-rebuild surface) was CLOSED at the 2026-08-05 ratification batch as
+    a ratified accepted bound, and this row is one of its named trigger-monitoring carriers --
+    if work here surfaces a planned mixed-version deployment or the first production `derived_index_hook`
+    consumer, B-95''s preserved re-open trigger fires and that row REOPENS.'
   council: 'No -- a bounded concurrency fix inside an already-cleared derived-index mechanism, with the ordering protocol it would extend already built and witnessed at the B-93 arc. There is no cross-domain tension to surface: the question is where the token is captured, not whether the index should be ordered. It does carry a real placement decision (open question 2, the IS-vs-runtime boundary under the IS axis'''' zero-outbound invariant), so advisor() + out-of-family review at build time is the right weight.'
   heading: '### B-94 · Derived-index auto-refresh rebuild overlap race — two concurrent rebuilds can leave the OLDER snapshot last and reading fresh *(surfaced by out-of-family Codex R5 on the B-93 gate-log arc, 2026-07-30; classified PRE-EXISTING by git-show verification against fc40fb2b)*'
 - id: B-95
@@ -3534,7 +3570,24 @@ items:
     an operator call, so the status was deliberately left unchanged there). THAT CANDIDACY IS
     NOW ANSWERED: the operator flipped it at the 2026-08-05 batch and the row is `closed` (see
     the closure paragraph at the head of this close_out). The ''NOT FLIPPED'' clause is the historical
-    record of the pass that deferred the call, not current state.'
+    record of the pass that deferred the call, not current state. TRIGGER-CARRIER NOTE, added
+    at out-of-family review round 3 [P2] and recorded rather than used to reverse the operator:
+    the reviewer is CORRECT that `--open` will no longer surface this row once it is `closed`,
+    and that the status enum''s prose names only two closure senses (built+merged, or foreclosed/superseded)
+    while this closure is a THIRD -- a RATIFIED ACCEPTED BOUND. The operator''s answer stands;
+    what the finding correctly demands is that the live trigger not be orphaned, so its monitoring
+    carriers are named here explicitly. (1) SHIPPED SOURCE is the primary carrier: the bound and
+    this row are cited in the memory_retrieval_index module docstring (`:19`-`:20`) and on `commit_seq`
+    at memory_store.py (`:154`-`:163`), so any arc touching that surface meets the bound where
+    it lives -- which is strictly closer to the trigger than a register row an agent must think
+    to query. (2) TWO LIVE SIBLING ROWS over the SAME mixed-version surface stay in the open inventory
+    and cross-reference this one: B-94 (the untokenized auto-refresh rebuild path -- `registered_finding`)
+    and B-45 (the Windows same-value `commit_seq` bound -- `registered_finding`). Either firing
+    puts an agent on this surface with this row cited from the source it is reading. (3) The re-open
+    trigger above is preserved VERBATIM and closure does not retire it: on a planned mixed-version
+    deployment, or the first production `derived_index_hook` consumer, this row REOPENS. If a
+    future arc wants the trigger back in `--open`, reopening it is a one-field edit -- the information
+    required has been kept deliberately intact.'
   council: 'Not for the bound itself -- accepting a documented limit needs no deliberation. IF the version-fence direction (2) is ever taken it becomes council-eligible: refusing to write during an upgrade window is an operator-visible availability tradeoff (C11 operator-loop / local-deployment against C3 state-and-persistence integrity), and that IS a nameable cross-domain tension rather than an implementation detail.'
   heading: '### B-95 · Mixed-version ordering bound — a live PRE-B-93 **writer**''s untokenized stale markers cannot be ordered against a covered rebuild *(surfaced by out-of-family Codex R6 on the B-93 gate-log arc, 2026-07-30; REGISTER-AND-HOLD under the arc''s own stop rule)* *(**CLOSED 2026-08-05** — a ratified accepted bound; the re-open trigger is preserved verbatim)*'
 - id: B-96
@@ -3578,10 +3631,21 @@ items:
     C-1/C-2 sub-decision was resolved by the dyadic convening recorded at `.harness/council-b96-grace-ceiling-2026-08-01.md`
     section 7 -- verdict C-2, UNANIMOUS across C3/C10/C7 from non-overlapping grounds, merged
     at PR #1183. RATIFIED FORM: `first_observed_at` is WALL-CLOCK; carrier is (C-i), a dedicated
-    digest+timestamp sidecar published by temp-write + fsync + os.replace + directory fsync (explicitly
-    NOT the write-once O_EXCL/os.link primitive, which is no-replace and would freeze the record
-    at its first snapshot); record-absence reads as NO OBSERVATION; retention bound up to 2xTTL
-    + 2I. READING B (per-process elapsed time) IS RETIRED EXPLICITLY -- no future impl leg may
+    CANDIDATE-FILENAME + timestamp sidecar published by temp-write + fsync + os.replace + directory
+    fsync -- the record''s content set is council condition #5''s CLOSED two-member set {candidate
+    filename, first_observed_at}, KEYED ON THE CANDIDATE FILENAME over BOTH sweep classes, `*.entry`
+    AND `.tmp-*`. Saying ''digest+timestamp'' would narrow the key to digest-named entries and
+    leave condition #1''s second conjunct permanently UNSATISFIABLE for `.tmp-*` crash orphans
+    -- forcing an impl either to reclaim one on first sight or never to reclaim one; corrected
+    here at out-of-family review round 3 [P2] (explicitly NOT the write-once O_EXCL/os.link primitive,
+    which is no-replace and would freeze the record at its first snapshot); record-absence reads
+    as NO OBSERVATION; retention typically up to 2xTTL plus UP TO TWO sweep-trigger intervals
+    -- and this figure is CONDITIONAL, never an unconditional bound (council condition #7): the
+    sweep-trigger interval is UNBOUNDED in the one-shot process shape (pre-existing at HEAD, not
+    introduced by the grace), and the figure holds only while the observation record is PRESENT
+    AND READABLE. NO unconditional ''bounded by N x TTL'' claim is available under EITHER ceiling
+    form, and the spec leg MUST NOT encode one -- corrected here at out-of-family review round
+    3 [P2]. READING B (per-process elapsed time) IS RETIRED EXPLICITLY -- no future impl leg may
     build it as written. READING A (keep the sweep-COUNT bound) was NOT selected and is NOT partially
     adopted. STATUS design_substrate_gated, NOT closed (fork section 9, out-of-family round 3
     [P1]): the SPEC leg -- a Runtime section 14.8.11 amendment carrying the council record''s
