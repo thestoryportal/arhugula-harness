@@ -14,8 +14,8 @@ field) + prose at `.harness/post-phase-8-forward-register.md` `### B-84`.
 **Grounding HEAD.** `496f0f4b`. Every `§`/file:line cite below was re-resolved by **direct read** at
 this HEAD; every count was **recomputed** (`git grep -c` / AST / direct enumeration), never copied
 from the row. **Two premise qualifications and seven stale cites** were found and are recorded at §9
-rather than silently normalized — including **three stale cites in shipped code**, not just in the
-register.
+rather than silently normalized — of which **five (§9 items 3–7) are in shipped SOURCE**, not just in
+the register. *(Recounted at codex R4 [P3]: this line said "three" against a five-item range.)*
 
 **What this filing does NOT do.** It does not re-litigate the **retry-duplication half**, which is
 LANDED (2026-07-28) and settled: `MemoryToolExecutionInputError` is a member of the fail-fast
@@ -49,8 +49,16 @@ order: the first call **commits durable state**, and then the second raises. Not
   precisely root `CLAUDE.md` §4.3's Class 2 discriminator, and the same classification `B-88`,
   `B-98`, `B-104` and `B-107` carry.
 
-**What ratification would authorize.** Under A, C or D: an **impl-discretion BUILD leg** only —
-**no spec leg is owed**, because no `C-MEM-*` or `C-RT-*` contract sentence changes.
+**What ratification would authorize, per reading (split at codex R4 [P2-a]).** `[HIGH]`
+
+- **A or C — an impl-discretion BUILD leg.** **No spec leg is owed**, because no `C-MEM-*` or
+  `C-RT-*` contract sentence changes. **A and C may be selected together** (§4: they compose — A
+  prevents the predictable case, C bounds the inter-call sequence).
+- **D — NO build authorization of any kind.** D is *zero code now*. What ratification authorizes
+  under D is the **documentation** work only: the `_PreparedMemoryToolCall` docstring qualification
+  (§4, Reading D) and the register `close_out`, both owed **at the ratification leg itself**.
+  *(Stated because the first draft's "A, C or D → build leg" phrasing could have been read as
+  authorizing implementation immediately after a deferral — the opposite of what D means.)*
 
 **Reading B is different, and its routing is named rather than invented (codex R2 [P1-a] and R3
 [P1], both engaged; see §11 for the disposition history).** `[HIGH]` B introduces durable-write
@@ -578,12 +586,31 @@ against the currently-locked SDK. No reading turns on it.
 
 ---
 
-## §10 Sequencing, and what each leg owes
+## §10 The ratification ask, and what each leg owes
+
+### §10.1 The ask — FIVE options, exhaustive and non-overlapping
+
+*(Widened from a four-way A/B/C/D select at codex R4 [P2-b]: §4 states that A and C compose, which a
+single-select surface could not record, and §5's ORDERING branch is ambiguous between bounded-C and
+exceptionless-B unless the two are separate options.)*
+
+| Option | Discriminator answer it encodes (§5) | What it authorizes | Owed |
+|---|---|---|---|
+| **A** *(recommended)* | INPUT | Build leg: the executor's pure `validate()` pre-pass | W-1, W-2, W-4, W-5 + probes |
+| **A + C** | INPUT **and** bounded ORDERING | Build leg: both, in one arc (they compose — §4) | W-1…W-6 minus B-only items |
+| **C** *(runner-up)* | ORDERING, **bounded** — accept the intra-call residual (§3(vi)) | Build leg: the dispatch-side positional constraint | W-1, W-3, W-5, W-6 + probes |
+| **B** | ORDERING, **without exception** | **NOT a build.** Opens the spec leg at §1 (the `B-97`(a)/`B-104`/`B-107` route), council first (§7) | W-1, W-5, W-6 + compensation + migration |
+| **D** | Not worth paying for yet — on SEVERITY (§5) | **NO build of any kind.** Documentation only: the docstring qualification + `close_out`, both at the ratification leg | none (D-2 wants the §3(iv) case-(3) probe) |
+
+**Carried by any answer** (no separate gate): the §9 items 3–7 shipped-source cite repairs ride
+whichever leg next touches those files; under D they stay recorded-not-repaired.
+
+### §10.2 Sequencing
 
 | Leg | Owes | Gate |
 |---|---|---|
 | **This filing** (doc-only) | This document. Row stays `registered_finding`; **no register edit, no `pr:` stamp, no snapshot change** | — |
-| **Ratification** | Operator selects A / B / C / D via `AskUserQuestion`; a **`§12 RATIFICATION`** section is appended here (§11 is the review record — codex R3 [P2-e]); the register row's `pr:` pointer is set and its `close_out` gains the outcome. **Under D, the `_PreparedMemoryToolCall` docstring qualification (§4, Reading D) is owed AT THIS LEG**, not deferred | Operator |
+| **Ratification** | Operator selects one of the **five** options at §10.1's table via `AskUserQuestion` — **A**, **A+C**, **C**, **B**, or **D** (the surface is exhaustive and each maps to exactly one authorization; widened at codex R4 [P2-b] because §4 states A and C compose while the earlier single-select surface could not record that, and because a bare "ORDERING" answer is ambiguous between bounded-C and exceptionless-B). A **`§12 RATIFICATION`** section is appended here (§11 is the review record — codex R3 [P2-e]); the register row's `pr:` pointer is set and its `close_out` gains the outcome. **Under D, the `_PreparedMemoryToolCall` docstring qualification (§4, Reading D) is owed AT THIS LEG**, not deferred | Operator |
 | **Council** *(B only)* | Dyadic C10 ⊥ memory-ledger-owner convening per §7, **before** the spec leg is authored | Follows ratification |
 | **Spec leg** *(B only)* | Selecting B opens a spec leg, not a build (§1) — the `B-97`(a) / `B-104` / `B-107` route: `Spec_Memory_Substrate_v1.md` compensation semantics + `Implementation_Plan_Memory_Substrate_v1.md` U-MEM-16 amendment, authored by `spec-writer`, plus clearance markers per root `CLAUDE.md` §4.5, one per artifact actually changed | X-AL-3 guard + adversarial review |
 | **Build leg** *(A or C directly; B only after its spec leg clears)* | The code change + the §8 witnesses **for that reading** (§6's per-reading column, not all of W-1…W-6) + the §8 mutation probes + **W-5's four-cell matrix executed and its answers recorded on the row** + the §9 items 3–7 cite repairs in the touched files | CI + `merge-gate` 3-lens (code-touching) |
@@ -696,3 +723,27 @@ against the currently-locked SDK. No reading turns on it.
     register-and-hold discipline, **a third raise will not be re-argued** — it will be recorded as an
     unresolved sub-decision routed to the operator at ratification, alongside the §1 override
     sentence. Flagged now so the escalation is pre-committed rather than improvised.
+
+- **R4 — 3 findings (2 [P2] + 1 [P3]), ALL accepted and fixed. ZERO contract-level findings, and the
+  R3 [P1] element was NOT re-raised** — the pre-committed hold notice did not trigger.
+  - **[P2-a] ACCEPTED.** §1 said ratification authorizes a build leg "under A, C **or D**" — but D is
+    *zero code now*, and §10 correctly limited the build leg to A/C. Read literally, §1 could have
+    authorized implementation immediately after a deferral. §1 now splits the authorization per
+    reading, with D authorizing **documentation only**.
+  - **[P2-b] ACCEPTED.** The ratification surface was a four-way A/B/C/D select, which could not
+    record two things the filing itself states: that **A and C compose** (§4), and that §5's bare
+    `ORDERING` answer is ambiguous between **bounded C** and **exceptionless B**. Replaced by the
+    five-option table at **§10.1** (A / A+C / C / B / D), each mapping to exactly one authorization
+    and one discriminator answer.
+  - **[P3] ACCEPTED — third count error of the arc, recorded without softening.** The header said
+    *"three stale cites in shipped code"* while §9 classifies items **3–7** — five — as shipped-source,
+    and the build obligation repeats that five-item range. Corrected to five.
+
+**SOUNDNESS EXIT DECLARED at R5** *(see the R5 entry below for the confirming round; the exit rests
+on the R4/R5 shape, not on review-quiet)*. Per the workspace's deferred-mechanism review-exit
+discipline: the **recommendation (A), runner-up (C) and the INPUT-vs-ORDERING discriminator never
+moved across five rounds**; substantive findings ended at **R3** (the W-3/W-6 witness defects and the
+retracted precedent count), with **R2's §3(vi)** the last finding to change a reading's substance;
+**R4 onward are consistency-of-the-record and ratification-surface corrections** — the
+self-referential-drift signature. **Contract-level findings still reopen this record at
+ratification.**
