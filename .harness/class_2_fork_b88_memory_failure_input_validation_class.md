@@ -11,7 +11,7 @@ field) + prose at `.harness/post-phase-8-forward-register.md` `### B-88` (`:859`
 class — REMAINS OPEN, spec-side"* — is the fork this filing carries. The row's `pr:` pointer and any
 status change ride the **ratification** leg, not this PR; the row stays `registered_finding` here.
 
-**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-88` is now `status: design_substrate_gated` with a `pr:` pointer naming PR #1233, and the six §10 drift items are REPAIRED IN PLACE on both register surfaces. See `## §11 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
+**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-88` is now `status: design_substrate_gated` with a `pr:` pointer naming **#1220** (this filing) **+ #1233** (the ratification record), and the six §10 drift items are REPAIRED IN PLACE on both register surfaces. See `## §11 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
 
 **Grounding HEAD.** `4f914159`. Every `§`/line cite below was re-resolved by direct read at this HEAD
 and every count was recounted programmatically. **Five count claims and one file:line cite on the
@@ -626,12 +626,22 @@ verbatim-in-substance rather than only at the register row.
 > `MEMORY_TOOL_CONTRACTS` schema faults contradict the boundary invariant and are **re-typed** — they
 > are **not** recorded as mis-typed-at-birth and left in place.
 >
+> **SCOPED TO SIX SITES, NOT EIGHT** *(out-of-family review round 4 [P2], accepted after direct read —
+> §10's population count is a repo-wide total, not an A-ii scope)*. **Re-typed:** `llm_dispatch.py`
+> `:4334` and `:4338` (the harness's own `RuntimeMemoryContext.record_scope` / `.scope_ref` left
+> unset) and `:4450` / `:4458` / `:4947` / `:4958` (`MEMORY_TOOL_CONTRACTS` schema-injection faults).
+> **NOT re-typed — and this is load-bearing:** `:4344` and `:4346` validate the **model-supplied**
+> `scope_ref` *argument* (`arguments.get("scope_ref")` — missing or non-string at `:4344`,
+> context-mismatched at `:4346`). Those are precisely the malformed-model-argument case the ratified
+> `input_validation_failure` class exists for; re-typing them would deny the new class its two
+> clearest dispatch-side emitters and contradict the very boundary invariant A-ii serves.
+>
 > **Leg ownership, stated explicitly so the work has an owner** *(out-of-family review round 1 [P2],
 > accepted — an earlier draft of this section said "re-typed at the spec leg" while §11.2 also
 > forbids any `harness-*/src` edit at a doc leg, which left the re-typing owned by no leg at all)*:
 > the **spec leg** records the boundary invariant and the re-type **decision** in contract text, and
 > establishes the dispatch population's classification **reachability**; the **impl leg** performs
-> the **source** re-typing at the `llm_dispatch.py` internal-fault sites and carries its
+> the **source** re-typing at the **six** `llm_dispatch.py` internal-fault sites and carries its
 > reachability **witness** — the *impl rider* the fork names.
 
 **Readings B and C were NOT selected and are NOT partially adopted.**

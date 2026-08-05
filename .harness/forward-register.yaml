@@ -816,7 +816,7 @@ items:
 - id: B-45
   title: Cross-process ledger lock has no genuine Windows serialization backend
   status: registered_finding
-  pr: '#1233 (the combined B-93+B-45 Class 2 fork filing + the 2026-08-05 ratification record)'
+  pr: '#1224 (the combined B-93+B-45 Class 2 fork filing) + #1233 (the 2026-08-05 ratification record)'
   summary: '`harness_is.cross_process_ledger_lock` (B-40) degrades to a no-op on Windows (`sys.platform
     == "win32"`) rather than providing real cross-process serialization there — Windows sits at exact
     pre-B-40 parity (same as before the module existed), not at feature parity with POSIX. The identical
@@ -2925,7 +2925,7 @@ items:
 - id: B-84
   title: 'Memory tool batch: an executor-level argument failure mid-batch can commit earlier writes, then retry-duplicate them'
   status: open
-  pr: '#1233 (the Class 2 fork filing + the 2026-08-05 ratification record, same batch)'
+  pr: '#1228 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record)'
   summary: 'Out-of-family Codex round 4 on the B-82 arc (2026-07-27). Round 1 made both memory tool loops validate the COMPLETE batch before executing any of it, closing the DISPATCH-side half of the partial-batch problem. A second half remains one layer down: validation the dispatch layer legitimately does not perform still happens mid-execution, at the executor. A batch of [memory.write_note (valid), memory.read (missing the contract-required `memory_ref`)] passes every dispatch-side check, so the result-message builders execute in order -- the write COMMITS a durable record, then the read raises MemoryToolExecutionInputError from `_string_arg` (`harness-runtime/src/harness_runtime/memory_tool_executor.py:549-553` — *`_string_arg` is at `:678` at 2026-08-05; the whole helper inventory drifted, refreshed in the close_out*). That error WAS retry-classified TRANSIENT (`_classify_provider_exception` fail-fasted only LLMDispatchProviderUnreachableError / LLMDispatchPayloadShapeError / HTTP 401-403), so RetryBreakerFallbackDispatcher re-ran the whole dispatch and the committed write executed once per retry -- the same double-write class as the round-1 [P1], reached through a different door. PARTIAL MITIGATION LANDED (2026-07-28): MemoryToolExecutionInputError now joins the fail-fast branch of `_classify_provider_exception` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:326-334`), so the retry staircase no longer re-runs the dispatch for this class -- on the default single-candidate chain the mid-batch failure now consumes exactly ONE dispatch instead of max_attempts. THE ROW STAYS registered_finding: the RETRY-duplication half is closed, the PARTIAL-COMMIT half is NOT -- the earlier write in the batch still commits before the later call raises, and a MULTI-candidate fallback chain CAN duplicate the committed prefix -- contingent, not guaranteed (codex 2026-08-05): the failed inner dispatch''s prepared batch is local and not forwarded; the next candidate re-samples its own tool calls (repeat, differ, or absent) -- up to one extra copy per candidate when re-sampled alike, versus max_attempts x candidates before. ALREADY PREVALIDATED by the B-82 rounds-1/3 pre-pass, for every call, before anything executes: tool_call wire shape (function mapping; OpenAI id present); name resolution to a MemoryToolName (wire map on OpenAI, dotted-only on ollama); arguments normalizing to a mapping (fail-loud otherwise); and the RuntimeMemoryContext checks (record_scope/scope_ref present; scope_ref argument matching the context for the two tools whose contracts declare it). NOT checked: per-tool required-argument keys and per-tool policy gates -- those are the EXECUTOR''''s semantics. Reachability requires a multi-call batch with an earlier valid write AND a later dispatch-valid-but-executor-invalid call; unreachable for single-call batches. AGGRAVATOR (out-of-family Codex round 5, verified empirically at registration time against the locked ollama 0.6.2 SDK): the ollama client REVALIDATES caller-supplied tool mappings as its own `ollama.Tool` model before posting to /api/chat (`ChatRequest.tools: Optional[Sequence[Tool]]`, `ollama/_types.py:400`), and that model is a CLOSED FIELD SUBSET over a plain pydantic BaseModel -- `SubscriptableBaseModel` (`_types.py:19`) sets no `model_config`, so pydantic''''s default `extra=''ignore''` applies; `Tool.Function.Parameters` (`_types.py:365-371`) declares only type/$defs/items/required/properties, and `Parameters.Property` (`_types.py:372-379`) declares only type/items/description/enum. Every other JSON-Schema keyword is therefore SILENTLY DROPPED on the way to the daemon. Measured directly on the real C-MEM-14 contracts: `memory.search` loses top-level `additionalProperties: false` and `limit.minimum: 1` and `query.minLength: 1`; `memory.write_note` loses `note.minLength: 1`. The model therefore never sees the constraints the contracts declare, which raises the odds it emits an argument payload the EXECUTOR then rejects -- i.e. it feeds exactly this row''''s mid-batch / transient-retry class. Aggravator only: it changes the likelihood, not the mechanism, and the mitigation menu below is unchanged. Note this is orthogonal to the separate, already-fixed B-82 round-5 issue of non-tool-template models (e.g. llava) 400-ing on `tools=` at all. 2026-07-30 post-#1159 re-check (gate-log LOW batch): the DEFECT premise is unchanged (both halves re-verified at the 2026-07-29 pass above and untouched since), but direction (2)''s COST ASSESSMENT predates U-MEM-27. Two substrate pieces the (1)-vs-(2) framing was written without now exist: a GENERIC compare-and-commit seam on the canonical store (`CanonicalMemoryStore.write_record_guarded`, `harness-is/src/harness_is/memory_store.py` -- it carries no promotion, provenance, or policy semantics, so a batch executor can supply its own precondition), and a REENTRANT per-root cross-process hold (`cross_process_scope_lock`) under which a multi-write section can evaluate and commit without releasing. Neither makes an append-only store transactional by itself, and the compensation question direction (2) actually turns on is untouched -- but "make the whole batch atomic" no longer starts from nothing, so the (1)-vs-(2) tradeoff leans differently than this row records. Re-price BOTH directions at build time rather than reading the recorded lean.'
   close_out: 'RATIFIED 2026-08-05 as READING A -- the executor''s PURE `validate()` PRE-PASS (one
     method + two dispatch call sites, zero contract text). Operator two-stage AskUserQuestion
@@ -3085,7 +3085,7 @@ items:
 - id: B-88
   title: 'Memory failure telemetry: substring-keyed classify_memory_failure collapses the typed input-error family (and two real policy denials) to io_failure'
   status: design_substrate_gated
-  pr: '#1233 (the Class 2 fork filing + the 2026-08-05 ratification record, same batch)'
+  pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record)'
   summary: 'Surfaced by the merge-gate lens-2 sweep on the B-84 arc (2026-07-28); PRE-EXISTING
     and latent, orthogonal to B-84 but made visible by it. `classify_memory_failure` (`harness-is/src/harness_is/memory_observability.py:150-163`
     *(the classifier sits at `:166`–`:200` at 2026-08-05; filing §10)*) classifies into the C-MEM-19
@@ -3256,20 +3256,27 @@ items:
     it from provider-adapter and serialization failure. SUB-DECISION A-ii (surfaced at codex R4)
     is ratified in its RE-TYPE form: the `llm_dispatch.py` raise sites that raise `MemoryToolExecutionInputError`
     for INTERNAL `MEMORY_TOOL_CONTRACTS` schema faults contradict the boundary invariant and are
-    RE-TYPED -- they are NOT recorded as mis-typed-at-birth and left in place. LEG OWNERSHIP,
-    made explicit (out-of-family review round 1 [P2], accepted -- an earlier draft said ''RE-TYPED
-    at the spec leg'' while also forbidding any src edit at the spec leg, leaving the re-typing
-    with NO owning leg): the SPEC leg records the boundary invariant and the re-type DECISION
-    in contract text and establishes the dispatch population''s classification REACHABILITY; the
-    IMPL leg performs the SOURCE re-typing at the llm_dispatch.py sites and carries its reachability
-    WITNESS (the fork''s ''impl rider''). READINGS B and C were NOT selected and are NOT partially
-    adopted -- in particular C''s docstring-rewrite-at-ratification obligation DOES NOT FIRE,
-    because under A the `memory_tool_executor.py:149`-`:171` stopgap docstring is rewritten to
-    match the ratified outcome AT THE IMPL LEG (fork section 9, impl row), and no `harness-*/src`
-    edit rides a doc-only ratification. STATUS design_substrate_gated (fork section 9: status
-    flips to design_substrate_gated under A or B): OWED are the SPEC leg -- `Spec_Memory_Substrate_v1.md`
-    v1.2 -> v1.3 by a dedicated spec-writer AND `Implementation_Plan_Memory_Substrate_v1.md` v1.2
-    -> v1.3 (U-MEM-22 :829 extended, NO new unit), with BOTH clearance markers per root CLAUDE.md
+    RE-TYPED -- SCOPED TO SIX SITES, NOT EIGHT (out-of-family review round 4 [P2], accepted after
+    direct read): the internal set is llm_dispatch.py `:4334` / `:4338` (the harness''s OWN `RuntimeMemoryContext`
+    left unset) and `:4450` / `:4458` / `:4947` / `:4958` (`MEMORY_TOOL_CONTRACTS` schema-injection
+    faults). `:4344` and `:4346` are NOT in the set and MUST NOT be re-typed -- they validate
+    the MODEL-SUPPLIED `scope_ref` argument (`arguments.get(''scope_ref'')`), missing/non-string
+    at `:4344` and context-mismatched at `:4346`, which is exactly the malformed-model-argument
+    case the ratified `input_validation_failure` class EXISTS for; re-typing them would deny the
+    new class its two clearest dispatch-side emitters -- they are NOT recorded as mis-typed-at-birth
+    and left in place. LEG OWNERSHIP, made explicit (out-of-family review round 1 [P2], accepted
+    -- an earlier draft said ''RE-TYPED at the spec leg'' while also forbidding any src edit at
+    the spec leg, leaving the re-typing with NO owning leg): the SPEC leg records the boundary
+    invariant and the re-type DECISION in contract text and establishes the dispatch population''s
+    classification REACHABILITY; the IMPL leg performs the SOURCE re-typing at the llm_dispatch.py
+    sites and carries its reachability WITNESS (the fork''s ''impl rider''). READINGS B and C
+    were NOT selected and are NOT partially adopted -- in particular C''s docstring-rewrite-at-ratification
+    obligation DOES NOT FIRE, because under A the `memory_tool_executor.py:149`-`:171` stopgap
+    docstring is rewritten to match the ratified outcome AT THE IMPL LEG (fork section 9, impl
+    row), and no `harness-*/src` edit rides a doc-only ratification. STATUS design_substrate_gated
+    (fork section 9: status flips to design_substrate_gated under A or B): OWED are the SPEC leg
+    -- `Spec_Memory_Substrate_v1.md` v1.2 -> v1.3 by a dedicated spec-writer AND `Implementation_Plan_Memory_Substrate_v1.md`
+    v1.2 -> v1.3 (U-MEM-22 :829 extended, NO new unit), with BOTH clearance markers per root CLAUDE.md
     section 4.5 -- and then the IMPL leg (1 enum member + 1 declaration flip + 1 docstring rewrite
     + 1 fixture re-key; 8 witness rows flip + 2 added negative rows + the mutation probe; PLUS
     the A-ii source re-typing at the llm_dispatch.py internal-fault sites and its reachability
@@ -3280,11 +3287,13 @@ items:
     (`MemoryCaptureScopeValueDomainError`, class :271) and `:307`-`:309` (`MemoryCaptureReservedActorError`,
     class :291) -- the previously recorded `:215`/`:236` were a blank line and a docstring; (2)
     `MemoryToolExecutionInputError` is 10 sites IN `memory_tool_executor.py` (correct as scoped
-    to the classified population) but 18 REPO-WIDE, the extra 8 being the `llm_dispatch.py` internal-fault
-    sites that A-ii re-types; (3) `MemoryToolExecutionDeniedError` has 15 raise sites at HEAD,
-    not 14 (growth from later arcs, not a regression); (4) the classification table is 39 parametrized
-    rows (AST count), not 37; (5) the mutation probes are SEVEN, enumerated (a)-(g) -- the ''all
-    five'' header undercounted its own body, no probe is missing; (6) `_NativeMemoryPolicyDeniedError`
+    to the classified population) but 18 REPO-WIDE; of the extra 8 in `llm_dispatch.py`, SIX are
+    internal-fault sites A-ii re-types (`:4334`, `:4338`, `:4450`, `:4458`, `:4947`, `:4958`)
+    and TWO -- `:4344` and `:4346` -- validate the MODEL-SUPPLIED `scope_ref` argument and KEEP
+    the new class (round-4 scoping); (3) `MemoryToolExecutionDeniedError` has 15 raise sites at
+    HEAD, not 14 (growth from later arcs, not a regression); (4) the classification table is 39
+    parametrized rows (AST count), not 37; (5) the mutation probes are SEVEN, enumerated (a)-(g)
+    -- the ''all five'' header undercounted its own body, no probe is missing; (6) `_NativeMemoryPolicyDeniedError`
     has 6 raise sites at HEAD, not 4 (`_require_scope_family_in_domain:305` and a third `_require_retrieval_allowed`
     branch at `:334` added by later arcs) -- and whether those two newcomers are span-pinned was
     NOT verified by the fork and is recorded as UNVERIFIED rather than assumed, so no later arc
@@ -3371,7 +3380,7 @@ items:
 - id: B-93
   title: 'Whole-root memory-write serialization has no deadline -- an unbounded guarded precondition stalls every memory writer on the host'
   status: open
-  pr: '#1233 (the combined B-93+B-45 Class 2 fork filing + the 2026-08-05 ratification record)'
+  pr: '#1224 (the combined B-93+B-45 Class 2 fork filing) + #1233 (the 2026-08-05 ratification record)'
   summary: 'Surfaced by the merge-gate concurrency lens on PR #1159 (the U-MEM-27 impl leg, 2026-07-29); classified REGISTER at the post-#1159 gate-log grounding pass (2026-07-30). MECHANISM: every `CanonicalMemoryStore` write takes `cross_process_scope_lock` over the whole memory ROOT (`_write_scope`, `harness-is/src/harness_is/memory_store.py`), and that lock is a plain BLOCKING `flock(LOCK_EX)` with no timeout (`_DirLock.acquire`, `harness-is/src/harness_is/cross_process_ledger_lock.py`). `write_record_guarded` additionally holds it across a CALLER-SUPPLIED precondition callable, so the hold time of a root-wide exclusive lock is set by code the store does not control and cannot bound. NO LIVE HAZARD AT HEAD: the only precondition in the tree is `_provenance_unchanged` (`harness-runtime/src/harness_runtime/memory_promotion.py`), bounded at one `read_record` per cited source memory ref -- a small N of local file reads, no network, no operator wait, no unbounded loop. The exposure is a FUTURE precondition (an operator confirmation, a provider round-trip, a retrieval sweep) whose author gets no signal from the seam that they are holding a host-wide lock: every same-host memory writer -- a `harness run` alongside a `harness daemon`, the shared-root case the seam''s own SCOPE paragraph documents -- then blocks for its duration, with no deadline and no diagnostic.'
   close_out: 'RATIFIED 2026-08-05 as READING B -- decision 2 (liveness deadline) = YES, decision
     1 (Windows serialization backend) = NO, decision 3 (vehicle) = HAND-ROLLED EXTENSION of the

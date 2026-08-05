@@ -13,7 +13,8 @@ registered_finding`, no `pr:` field) + prose at `.harness/post-phase-8-forward-r
 ride the ratification leg. **No snapshot/digest change** (the digest is over `id:status` pairs and
 neither status moves).
 
-**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-93` is now `status: open` (its half is a YES) and `B-45` stays `registered_finding` (its half is a NO); both carry a `pr:` pointer naming PR #1233, and the snapshot/digest DID move at the ratification leg because `B-93`'s status changed. See `## §12 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
+**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-93` is now `status: open` (its half is a YES) and `B-45` stays `registered_finding` (its half is a NO); both
+carry a `pr:` pointer naming **#1224** (this combined filing) **+ #1233** (the ratification record), and the snapshot/digest DID move at the ratification leg because `B-93`'s status changed. See `## §12 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
 
 **Why the two rows are filed together.** Each row already names the other as its natural co-rider
 (`B-93` prose `:983`, `B-45` prose `:562`), on the ground that both traverse the *identical* primitive
