@@ -356,8 +356,11 @@ that collision, not as leaving it open.
 
 ### Reading C — DEFER, with a falsifiable demand test
 
-Vocabulary stays six; the code docstring stays a declared stopgap; the row stays
-`registered_finding` with an explicit reopening condition, per the `B-98` / `B-104` pattern. **The
+Vocabulary stays six; the row stays `registered_finding` with an explicit reopening condition, per
+the `B-98` / `B-104` pattern. The shipped docstring does NOT stay as-is: it currently PROMISES a
+spec leg ("the flip site when the spec half lands"), which selecting C falsifies, so the
+ratification leg rewrites it to state the deferral + demand test instead (§8/§9's immediate-rewrite
+requirement — the value stays `provider_adapter_failure`; only the promise text changes). **The
 row reopens on ANY of:**
 
 - **D-0** — a **retention/triage surface** consumes `memory.failure_class` for operator-facing
