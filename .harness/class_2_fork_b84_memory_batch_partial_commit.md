@@ -84,7 +84,7 @@ precedents above plainly do not honour. This filing takes the position that §2.
 is the operative discriminator — *"In-session decision-point requiring operator selection between
 substantive alternatives (NOT an architectural defect)"* — and it is satisfied exactly here: §3(ii)
 establishes there is **no contract to violate**, so there is no architectural defect to halt on, and
-what is owed is a selection among four options. **B-84 does not reclassify itself as Class 1 on the
+what is owed is a selection among the **five** ratification options at §10.1. **B-84 does not reclassify itself as Class 1 on the
 strength of a Recording-row phrase that three recent ratifications have already departed from; the
 Recording-row-vs-practice divergence is a real defect in the routing skill and belongs to whoever
 next revises it, not to this fork.** An operator who reads the Recording row as binding should say
@@ -461,14 +461,26 @@ one, and this filing does not pretend otherwise.
   for a cheap *inter-call* bound — but §3(vi) means C leaves the intra-call window open, so if the
   requirement is the ORDERING property **without exception**, only **B** delivers it, at the cost of
   the spec leg at §1.
-- **Not worth paying for yet** → **D is right** — but the ground is **SEVERITY, not rarity** (codex
-  R3 [P2-b], accepted; this branch previously said "cross-candidate and contingent", contradicting
-  §4's own correction). Choosing D accepts a **deterministic** unreported durable commit — reachable
-  on today's default single-candidate chain and, per §3(vi), even in a **single-call** batch — on the
+- **Not worth paying for yet** → **D** — but the ground is **SEVERITY, not rarity** (codex R3
+  [P2-b], accepted; this branch previously said "cross-candidate and contingent", contradicting §4's
+  own correction). Choosing D accepts a **deterministic** unreported durable commit — reachable on
+  today's default single-candidate chain and, per §3(vi), even in a **single-call** batch — on the
   grounds that no incident has been observed and the residue is a note rather than an external
   effect. Only the *duplication* (§3(iv)) is contingent. **D-0 is precisely this branch's falsifier.**
 
-**A single operator sentence choosing INPUT, ORDERING, or "not yet" decides this fork.**
+**The discriminator answer must name a ROUTE, not just a word** (codex R5 [P2-b]): a bare "ORDERING"
+does not decide the fork, because bounded ordering is C (an immediate build) while exceptionless
+ordering is B (council + spec leg). The four answers therefore map onto §10.1's five options as:
+
+| Discriminator answer | §10.1 option |
+|---|---|
+| INPUT | **A** |
+| INPUT **and** bounded ORDERING | **A + C** |
+| ORDERING, bounded — intra-call residual accepted (§3(vi)) | **C** |
+| ORDERING, without exception | **B** |
+| Not worth paying for yet, on severity | **D** |
+
+**One operator sentence naming one of those five rows decides this fork.**
 
 ---
 
@@ -522,11 +534,11 @@ Owed per reading (see §6). All are new tests unless noted; none exists at HEAD.
 
 | # | Witness | Shape | Owed under |
 |---|---|---|---|
-| **W-1** | **The harm, made visible.** Drive a real `StandardMemoryToolExecutor` through the real pre-pass + batch loop with `[memory.write_note (valid), memory.read (no `memory_ref`)]`; assert the batch raises **and** that the tool-events ledger gained a record — i.e. the partial commit is asserted as **present**, not merely inferred | End-to-end through `_openai_memory_tool_result_messages`, not a unit call to `execute()`. This is the *baseline* the fix flips | A, B, C, D-2 |
+| **W-1** | **The harm, made visible.** Drive a real `StandardMemoryToolExecutor` through the real pre-pass + batch loop with `[memory.write_note (valid), memory.read (no `memory_ref`)]`; assert the batch raises **and** that the tool-events ledger gained a record — i.e. the partial commit is asserted as **present**, not merely inferred | End-to-end through `_openai_memory_tool_result_messages`, not a unit call to `execute()`. This is the *baseline* the fix flips | A, B, C *(NOT D — codex R5 [P2-d]: D owes no build witness, and D-2's reopening test asks for the §3(iv) case-(3) probe, which is **W-5**, not this baseline)* |
 | **W-2** | **A's closure.** Same batch, with `validate()` wired: assert the batch raises **before** any durable write — the ledger and the tool-events file are **unchanged** (assert on the durable surface, not on a call count) | Assert absence on the durable artifact; a mock-call-count assertion would pass on a path the store never sees | A |
 | **W-3** | **C's closure + its stated cost — PARAMETERIZED over the full durable-effecting identity set** (widened at codex R3 [P2-c], accepted). For **each** of `write_note`, `propose_promotion`, `request_redaction`: (a) `[<tool>, search]` is REFUSED before execution with the durable surface unchanged; (b) `[search, <tool>]` still SUCCEEDS (the constraint is positional, not a ban); (c) `[<tool>, <tool>]` is refused. Plus one **mixed** case, `[write_note, request_redaction]`, which (c) alone would not catch | The first pass named only `write_note`. A predicate recognizing just that tool would pass every original arm while leaving **two of the three** declared durable-effecting tools unbounded — the exact gap the parameterization closes. Arm (b) is what stops the constraint from silently becoming "no writes in batches" | C |
 | **W-4** | **A's parity pin — structural, and scoped to the per-tool ARGUMENT/BRANCH matrix, not to raise statements** (rewritten across codex R1 [P2-c] and R2 [P2-a], both accepted). The **preferred** discharge makes parity *unfalsifiable by construction*: `validate()` and `_execute_authorized` consume **one shared parsed/validated request representation**, so there is no second path to drift from — and under that discharge **no site cap applies**. Where it is not taken, the witness must cover the **per-tool argument matrix**: the same helper serves many fields (`_string_arg` alone is called for `query`, `note`, `memory_ref`, …), so a `validate()` can cover all **9** model-reachable *raise statements* while omitting an entire field's path. Enumerate **(tool × argument × branch)**, not raise sites and not helper names | Corrected twice, and the second correction matters: R1 fixed "helper names → call sites", R2 caught that the **9-site scope I then wrote is the wrong denominator** — 9 counts syntactic raises, which is not the coverage unit. Reading A's whole value rests on permanent parity, so this witness is load-bearing, not hygiene | A |
-| **W-6** | **The intra-call residual (§3(vi)) — TWO arms with DIFFERENT expected exception classes** (split at codex R3 [P2-d], accepted). **Arm 1 (capture-internal):** single-call `[write_note]`; fail the operation-ledger append *after* `write_record` lands; assert the record IS durable and `execute()` raises **`MemoryToolExecutionStoreError`** — the capture wraps it (`memory_capture.py:892`–`:903` → `memory_tool_executor.py:385`–`:387`). **Arm 2 (`_append_standard_tool_call`):** fail the append at `memory_tool_executor.py:634`, which calls the store **directly with no wrapping**; assert the tool's durable effect landed and `execute()` re-raises **the original store/ledger exception**, NOT `MemoryToolExecutionStoreError` (`execute()`'s handler at `:249`–`:257` classifies and re-raises unmodified) | New at R2 [P1-b]; corrected at R3. The first pass wrote "Repeat for …", which carried the arm-1 exception expectation into arm 2 and would have failed against current behaviour — or, worse, been "fixed" by an unrelated exception-semantics change nobody asked for | B, C *(as C's retained-residual pin)* |
+| **W-6** | **The intra-call residual (§3(vi)) — TWO arms with DIFFERENT expected exception classes** (split at codex R3 [P2-d], accepted). **Arm 1 (capture-internal):** single-call `[write_note]`; fail the operation-ledger append *after* `write_record` lands; assert the record IS durable and `execute()` raises **`MemoryToolExecutionStoreError`** — the capture wraps it (`memory_capture.py:892`–`:903` → `memory_tool_executor.py:385`–`:387`). **Arm 2 (`_append_standard_tool_call`):** fail the append at `memory_tool_executor.py:634`, which calls the store **directly with no wrapping**; assert the tool's durable effect landed and `execute()` re-raises **the original store/ledger exception**, NOT `MemoryToolExecutionStoreError` (`execute()`'s handler at `:249`–`:257` classifies and re-raises unmodified) **Under B the EXPECTATION INVERTS** (codex R5 [P2-c]): B promises to eliminate exactly this window, so B's W-6 asserts the *transactional/compensating* outcome — no orphaned durable effect, or a compensating entry that neutralizes it — **not** the surviving record. Same two injections, opposite assertion | New at R2 [P1-b]; corrected at R3 (split arms) and R5 (B's inverted expectation). The first pass wrote "Repeat for …", carrying arm 1's exception expectation into arm 2; and it then required B to witness the very partial commit B exists to remove, which a correct B implementation could not have passed | B *(inverted)*, C *(as C's retained-residual pin)* |
 | **W-5** | **§3(iv)'s FOUR-CELL matrix, executed rather than inferred.** For each of cases (1) different text, (2) same text/different model, (3) same text/same model name/different provider, (4) fully identical: assert (a) whether a new `memory_id` is derived, (b) the physical JSONL line count under that `memory_id`, (c) the `append_memory_operation` outcome (`APPENDED` / `IDEMPOTENT_NOOP` / raise), and (d) for any raise, the surfacing exception class and its `_classify_provider_exception` disposition | The whole matrix is marked `[MODERATE]` for want of execution. Case (3) is the only cell carrying the duplicate-line-plus-re-opened-staircase claim; **it must be run, not assumed**, and cases (1)/(2) are the ordinary ones whose "extra distinct note" outcome is what the harm statement rests on | A, B, C, and D-2's falsifier |
 
 **Mutation probes (PD-8, Workflow v1.18 — green-alone is not proof).**
@@ -739,11 +751,22 @@ whichever leg next touches those files; under D they stay recorded-not-repaired.
     *"three stale cites in shipped code"* while §9 classifies items **3–7** — five — as shipped-source,
     and the build obligation repeats that five-item range. Corrected to five.
 
-**SOUNDNESS EXIT DECLARED at R5** *(see the R5 entry below for the confirming round; the exit rests
-on the R4/R5 shape, not on review-quiet)*. Per the workspace's deferred-mechanism review-exit
-discipline: the **recommendation (A), runner-up (C) and the INPUT-vs-ORDERING discriminator never
-moved across five rounds**; substantive findings ended at **R3** (the W-3/W-6 witness defects and the
-retracted precedent count), with **R2's §3(vi)** the last finding to change a reading's substance;
-**R4 onward are consistency-of-the-record and ratification-surface corrections** — the
-self-referential-drift signature. **Contract-level findings still reopen this record at
-ratification.**
+- **R5 — 4 findings (1 [P1] + 3 [P2]), ALL accepted and fixed.**
+  - **[P1] ACCEPTED — I broke this record's own rule, and the fix is a retraction.** The R4 entry
+    declared a *"SOUNDNESS EXIT ... at R5"* and forward-referenced an R5 entry, at a point when the
+    record ended at R4 and the branch held only R1–R4. That is exactly the
+    round-outcome-written-before-the-round-ran failure this filing's §11 preamble forbids, and it
+    would have closed review on an unrun round. **The declaration is withdrawn**; this entry is the
+    *actual* R5, written after R5 ran.
+  - **[P2-b] ACCEPTED.** §5's discriminator still resolved to a bare word, but §10.1 routes bounded
+    ORDERING to **C** (immediate build) and exceptionless ORDERING to **B** (council + spec leg) —
+    so "ORDERING" alone did not authorize one route. §5 now carries an answer→option mapping table,
+    and §1's stale "four options" phrasing was corrected to five.
+  - **[P2-c] ACCEPTED — the witness would have been unpassable for the reading that owed it.** W-6
+    required the failed append to leave the tool's durable effect **present**, which is precisely the
+    intra-call partial commit **Reading B exists to eliminate**: a correct transactional B would have
+    failed its own required witness. B's expectation is now **inverted** to the transactional /
+    compensating outcome; C keeps the original expectation as its retained-residual pin.
+  - **[P2-d] ACCEPTED.** W-1's `Owed under` listed `D-2`, making the partial-commit baseline
+    mandatory under a reading that §6 and §10.1 both say owes no build witness — and D-2's reopening
+    test actually asks for the §3(iv) case-(3) probe, which is **W-5**. `D-2` removed from W-1.
