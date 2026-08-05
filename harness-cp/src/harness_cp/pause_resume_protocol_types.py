@@ -36,10 +36,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer, PrivateAttr
+from pydantic import AfterValidator, BaseModel, ConfigDict, PrivateAttr
 
 from harness_cp.handoff_context import StateSummary
 
@@ -160,28 +159,81 @@ class EffectFenceResolution(StrEnum):
     → the run folds to PARTIAL with the surviving branches (FAILED if NO survivor)."""
 
 
+class _ImmutableEffectFenceResolutions(dict[str, EffectFenceResolution]):
+    """Immutable `effect_fence_resolutions` carrier (B-107 impl leg, CP spec v1.115 §1.2).
+
+    A `dict` SUBCLASS with every mutation method disabled — deliberately NOT
+    `MappingProxyType`, mirroring the settled `_ImmutableKeyArns` precedent at
+    `harness-runtime/src/harness_runtime/types.py` (rounds 9 + 34 + 35 there). The
+    discriminator is compatibility, and it was measured at this leg rather than
+    assumed: a `MappingProxyType` field made `copy.deepcopy(context)`,
+    `context.model_copy(deep=True)` and `pickle` of ANY context carrying a VALID map
+    raise `TypeError: cannot pickle 'mappingproxy' object` (out-of-family Codex
+    [P2]). §0.3 authorizes exactly three compatibility costs — a supplied `""`, a
+    post-construction mutation, and a retained-alias mutation — and breaking clone /
+    transport of an ordinary valid map is none of them. A `dict` subclass also
+    serializes through pydantic-core natively, so the field's dumps stay
+    byte-identical with no custom serializer in the path at all.
+
+    The residual, stated rather than hidden: `dict.__setitem__(obj, k, v)` still
+    reaches the base implementation. That is an EXPLICIT base-class escape of the
+    same species as `model_construct` (§1.5), which §1.3 already renders inert at
+    the resolver; it is not a route this type "exposes" in the §1.2 sense.
+    """
+
+    def _refuse(self, *args: object, **kwargs: object) -> None:
+        raise TypeError(
+            "effect_fence_resolutions is immutable after validation (CP spec v1.115 "
+            "§1.2) — a resume-cycle address map must not be mutated post-construction; "
+            "construct a new ResumeContext instead"
+        )
+
+    __setitem__ = _refuse
+    __delitem__ = _refuse
+    # `ctx.effect_fence_resolutions |= {...}` mutates IN PLACE before any
+    # frozen-field re-assignment could raise, so `__ior__` has to be refused too
+    # (the `_ImmutableKeyArns` round-35 lesson, carried rather than re-learned).
+    __ior__ = _refuse  # type: ignore[assignment]
+    update = _refuse  # type: ignore[assignment]
+    pop = _refuse  # type: ignore[assignment]
+    popitem = _refuse  # type: ignore[assignment]
+    clear = _refuse  # type: ignore[assignment]
+    setdefault = _refuse  # type: ignore[assignment]
+
+    def __reduce__(
+        self,
+    ) -> tuple[type[_ImmutableEffectFenceResolutions], tuple[dict[str, EffectFenceResolution]]]:
+        # Pickle / deepcopy support — the whole point of choosing a dict subclass.
+        # Reconstruction goes through the constructor (dict.__init__'s C-level
+        # populate), which bypasses the disabled mutation methods; `copy.deepcopy`'s
+        # default dict `_reconstruct` would otherwise repopulate via the refused
+        # `__setitem__`.
+        return (_ImmutableEffectFenceResolutions, (dict(self),))
+
+
 def _validate_effect_fence_resolution_map(
     supplied: Mapping[str, EffectFenceResolution],
-) -> Mapping[str, EffectFenceResolution]:
+) -> dict[str, EffectFenceResolution]:
     """Validate + COPY + freeze an operator-supplied `effect_fence_resolutions` map.
 
     B-107 impl leg (CP spec v1.115 §1.2) — the map-domain amendment. On ORDINARY
     construction every key MUST be non-empty, and the stored field MUST be a
     validated immutable **copy** of what the caller supplied: validate keys and
     values, copy them, then expose no mutation route. A proxy or view over a
-    CALLER-RETAINED mapping does not satisfy the term, so the `MappingProxyType`
+    CALLER-RETAINED mapping does not satisfy the term, so the immutable carrier
     must wrap a mapping only this model holds.
 
-    The `dict(supplied)` copy makes that true LOCALLY rather than by inheritance
-    from an implementation detail. Verified empirically at this leg: pydantic's
-    own `Mapping[str, EffectFenceResolution]` validation already materializes a
-    fresh mapping before this validator runs, so on the ordinary construction path
-    `supplied` is pydantic's object, not the caller's, and isolation is
-    over-determined. That is a property of pydantic's dict validator, NOT of this
-    contract — an annotation change (a `BeforeValidator`, a passthrough type) would
-    silently hand the caller's own object straight through. The copy is therefore
-    kept, and the PD-8 probe exercises this function DIRECTLY with a
-    caller-retained mapping so the term is witnessed where it is actually stated.
+    The `dict(supplied)` copy — via the carrier's own constructor — makes that true
+    LOCALLY rather than by inheritance from an implementation detail. Verified
+    empirically at this leg: pydantic's own `dict[str, EffectFenceResolution]`
+    validation already materializes a fresh mapping before this validator runs, so
+    on the ordinary construction path `supplied` is pydantic's object, not the
+    caller's, and isolation is over-determined. That is a property of pydantic's
+    dict validator, NOT of this contract — an annotation change (a
+    `BeforeValidator`, a passthrough type) would silently hand the caller's own
+    object straight through. The copy is therefore kept, and the PD-8 probe
+    exercises this function DIRECTLY with a caller-retained mapping so the term is
+    witnessed where it is actually stated.
 
     An empty key is the position-only, key-ABSENT effect-fence source shape (CP
     spec v1.113 §2.1): it addresses no held reserve, so it can never be the target
@@ -195,33 +247,18 @@ def _validate_effect_fence_resolution_map(
                 "an empty captured `idempotency_key` is position-only and addresses no "
                 "held reserve, so it can never carry a per-key resolution"
             )
-    return MappingProxyType(dict(supplied))
-
-
-def _serialize_effect_fence_resolution_map(
-    stored: Mapping[str, EffectFenceResolution],
-) -> dict[str, EffectFenceResolution]:
-    """Serialize the frozen map as the plain `dict` shape it has always had.
-
-    B-107 impl leg (CP spec v1.115 §0.3) — the amendment changes the field's
-    admissible key domain and its nested-container behaviour, NOT its serialized
-    logical content: an existing VALID map keeps byte-identical dumps in both
-    `python` and `json` modes. `MappingProxyType` has no pydantic-core serializer
-    of its own, so without this the amendment would silently break every dump.
-    """
-    return dict(stored)
+    return _ImmutableEffectFenceResolutions(supplied)
 
 
 EffectFenceResolutionMap = Annotated[
-    Mapping[str, EffectFenceResolution],
+    dict[str, EffectFenceResolution],
     AfterValidator(_validate_effect_fence_resolution_map),
-    PlainSerializer(
-        _serialize_effect_fence_resolution_map,
-        return_type=dict[str, EffectFenceResolution],
-    ),
 ]
 """The validated, copied, immutable `effect_fence_resolutions` address domain
-(CP spec v1.115 §1.2). Applies to `ResumeContext` and — by inheritance — to
+(CP spec v1.115 §1.2). The declared type stays `dict[str, EffectFenceResolution]`
+— the amendment narrows the admissible key domain and the nested-container
+behaviour, never the field's name, optionality, values, or serialized shape
+(§0.3). Applies to `ResumeContext` and — by inheritance — to
 `AccessorDerivedResumeContext` and every other `ResumeContext` subclass."""
 
 

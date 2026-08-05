@@ -992,6 +992,20 @@ def test_pd8_probe_b_item_assignment_through_the_stored_mapping_is_refused() -> 
         stored[_EMPTY] = EffectFenceResolution.ABORT  # type: ignore[index]
     with pytest.raises(TypeError):
         stored["another-key"] = EffectFenceResolution.ABORT  # type: ignore[index]
+    # Every OTHER mutation route is refused too — a `dict` subclass would otherwise leave
+    # `update` / `|=` / `pop` / `setdefault` / `clear` wide open. `|=` in particular mutates
+    # IN PLACE before any frozen-field re-assignment could raise.
+    for mutate in (
+        lambda: stored.update({"u": EffectFenceResolution.ABORT}),  # type: ignore[union-attr]
+        lambda: stored.__ior__({"i": EffectFenceResolution.ABORT}),  # type: ignore[attr-defined]
+        lambda: stored.pop(_KEYED),  # type: ignore[union-attr]
+        lambda: stored.popitem(),  # type: ignore[union-attr]
+        lambda: stored.setdefault("s", EffectFenceResolution.ABORT),  # type: ignore[union-attr]
+        lambda: stored.clear(),  # type: ignore[union-attr]
+        lambda: stored.__delitem__(_KEYED),  # type: ignore[attr-defined]
+    ):
+        with pytest.raises(TypeError):
+            mutate()
     assert dict(stored) == {_KEYED: EffectFenceResolution.RE_FIRE}
     assert context.effect_fence_resolution_for(_EMPTY) is None
 
@@ -1006,13 +1020,20 @@ def test_pd8_probe_c_mutating_the_callers_original_mapping_cannot_change_the_sto
     probes (a) and (b).
 
     **Two halves, because the model-level half is over-determined and saying otherwise would
-    be a false witness.** Verified at this leg: pydantic's `Mapping[...]` validation already
+    be a false witness.** Verified at this leg: pydantic's `dict[...]` validation already
     materializes a fresh mapping before the field validator runs, so the model-level half
     (below) passes even with the explicit copy removed — it witnesses the OBSERVABLE
     contract, not the mechanism. The DISCRIMINATING half exercises
     `_validate_effect_fence_resolution_map` directly with a caller-retained mapping, which is
     exactly the shape §1.2 forbids and exactly what an annotation change (a
-    `BeforeValidator`, a passthrough type) would start handing it."""
+    `BeforeValidator`, a passthrough type) would start handing it.
+
+    **Honest limit on independence.** Because the immutable carrier's own constructor is
+    what copies, "copying" and "immutability" are one mechanism, not two: the mutation that
+    breaks this probe (returning the supplied mapping unchanged) also breaks probe (b). That
+    is a property of the chosen carrier — a live view over caller state is structurally
+    unrepresentable — not a gap in the probe. Probes (a) and (d)/(d2) remain independently
+    discriminated."""
     from harness_cp.pause_resume_protocol_types import _validate_effect_fence_resolution_map
 
     # Half 1 (DISCRIMINATING) — the copy stated where the contract states it.
@@ -1042,12 +1063,14 @@ def test_pd8_probe_c_mutating_the_callers_original_mapping_cannot_change_the_sto
 
 def test_pd8_probe_d_a_valid_pre_amendment_map_keeps_its_bytes_and_its_meaning() -> None:
     """PD-8 probe (d) — VALID-MAP SERIALIZATION COMPATIBILITY (§0.3). Fails if and only if
-    the plain-`dict` serializer is removed (`MappingProxyType` has no pydantic-core
-    serializer, so a dump would raise or emit an unexpected type).
+    the stored value stops being a `dict` pydantic-core can serialize natively.
 
     Asserts byte-identical serialized logical content in BOTH dump modes against literals,
     a clean re-validation round trip, and unchanged resolution meaning — the whole point of
-    §0.3's "existing valid maps retain their bytes and resolution meaning"."""
+    §0.3's "existing valid maps retain their bytes and resolution meaning". A first draft of
+    this amendment stored a `MappingProxyType`, which has no pydantic-core serializer: every
+    dump emitted the raw proxy with a serializer warning and `model_dump_json` raised. This
+    probe is what pins that shape out."""
     context = ResumeContext(
         effect_fence_resolutions={
             "k0": EffectFenceResolution.SKIP_AS_FIRED,
@@ -1057,7 +1080,7 @@ def test_pd8_probe_d_a_valid_pre_amendment_map_keeps_its_bytes_and_its_meaning()
     )
 
     dumped = context.model_dump()
-    assert type(dumped["effect_fence_resolutions"]) is dict
+    assert isinstance(dumped["effect_fence_resolutions"], dict)
     assert dumped["effect_fence_resolutions"] == {
         "k0": EffectFenceResolution.SKIP_AS_FIRED,
         "k1": EffectFenceResolution.RE_FIRE,
@@ -1079,6 +1102,42 @@ def test_pd8_probe_d_a_valid_pre_amendment_map_keeps_its_bytes_and_its_meaning()
     # `None` (the default) is untouched by the amendment — the v1.65 byte-identical shape.
     assert ResumeContext().model_dump()["effect_fence_resolutions"] is None
     assert '"effect_fence_resolutions":null' in ResumeContext().model_dump_json()
+
+
+def test_pd8_probe_d2_a_valid_map_still_deep_copies_and_pickles() -> None:
+    """PD-8 probe (d2) — CLONE + TRANSPORT COMPATIBILITY (§0.3), the sibling of probe (d).
+
+    Out-of-family Codex [P2], caught before merge: the first draft of this amendment stored
+    a `MappingProxyType`, which made `copy.deepcopy(context)`, `context.model_copy(deep=True)`
+    and `pickle` of ANY context carrying a VALID map raise `TypeError: cannot pickle
+    'mappingproxy' object`. §0.3 authorizes exactly three compatibility costs — a supplied
+    `""`, a post-construction mutation, and a retained-alias mutation — and breaking clone /
+    transport of an ordinary valid map is none of them.
+
+    Fails if and only if `_ImmutableEffectFenceResolutions.__reduce__` is removed or the
+    carrier is swapped back to a non-picklable proxy. Each clone must ALSO stay immutable,
+    so the fix cannot be "make it copyable by making it a plain dict"."""
+    import copy
+    import pickle
+
+    context = ResumeContext(
+        effect_fence_resolutions={"k0": EffectFenceResolution.SKIP_AS_FIRED},
+        effect_fence_resolution=EffectFenceResolution.ABORT,
+    )
+    clones = {
+        "deepcopy": copy.deepcopy(context),
+        "model_copy_deep": context.model_copy(deep=True),
+        "model_copy_shallow": context.model_copy(),
+        "pickle": pickle.loads(pickle.dumps(context)),
+    }
+    for label, clone in clones.items():
+        assert clone == context, label
+        stored = clone.effect_fence_resolutions
+        assert stored is not None, label
+        assert dict(stored) == {"k0": EffectFenceResolution.SKIP_AS_FIRED}, label
+        assert clone.effect_fence_resolution_for("k0") is EffectFenceResolution.SKIP_AS_FIRED
+        with pytest.raises(TypeError):
+            stored["injected"] = EffectFenceResolution.ABORT  # type: ignore[index]
 
 
 # ===========================================================================
