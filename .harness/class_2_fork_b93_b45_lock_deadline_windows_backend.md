@@ -405,7 +405,11 @@ One traversal, four modules.
   Windows, and its one consumer — `admin/pause_journal_adoption.py:412`, which **refuses by default**
   where the primitive degrades — would stop refusing. **A declared, safe degradation would be replaced
   by an unverified exclusion claim.** That is a strictly worse posture than today's, and it is not
-  fixed by choosing a better backend; it is fixed only by a Windows CI witness.
+  fixed by choosing a better backend; it is fixed only by a Windows CI witness — which (codex R8) a
+  Reading-A selection CAN carry in its own PR: the same PR adds a `windows-latest` job running a
+  genuine second-OS-process lock-contention witness, making A gated-but-self-dischargeable rather
+  than inherently unwitnessable. The "against" is therefore the COST of that carried witness (a new
+  CI platform lane maintained forever, per §9's build-gate row), not an impossibility.
 - **Sub-decision A-i (naming + home).** `CrossProcessLockTimeoutError`, homed at **`harness-core`**.
   Grounds: all four carriers must raise one nominal type — ONE in `harness-is`
   (`cross_process_ledger_lock.py`, six of the nine sites) and THREE in `harness-runtime` (the
@@ -465,8 +469,8 @@ Neither half is built. Both rows stay `registered_finding` with their premises r
 
 | Test | Fires when | Why it is the right trigger |
 |---|---|---|
-| **D-0** | A **second** production `write_record_guarded` caller appears — i.e. any new `precondition=` argument beyond `_provenance_unchanged` (`memory_promotion.py:911`) | B-93's own registered trigger, unchanged. The first caller whose precondition is unbounded converts the row from latent to live |
-| **D-1** | A **Windows CI job** is added to `.github/workflows/` (today: `runs-on: ubuntu-latest` ×12, zero Windows) | The gate on B-45's half is *witnessability*, not backend choice (Reading A's "against"). Windows CI is the precondition that makes any backend landable |
+| **D-0** | A **second** production `write_record_guarded` caller appears (any new `precondition=` argument beyond `_provenance_unchanged`, `memory_promotion.py:911`) — **OR the existing precondition's implementation is modified to perform any unbounded operation** (a retrieval sweep, a provider round-trip, an operator wait; codex R8 widened this from call-site counting, which a modified-in-place `_provenance_unchanged` would never trip) | B-93's own registered trigger, widened to the mechanism. The first UNBOUNDED precondition — new caller or modified existing one — converts the row from latent to live |
+| **D-1** | A Windows CI job runs an **EXECUTING BEHAVIORAL WITNESS** — a genuine second-OS-process lock-contention test on `windows-latest` — not merely any Windows job (codex R8: a lint-only Windows job would satisfy a weaker phrasing while witnessing nothing; today: `runs-on: ubuntu-latest` ×12, zero Windows) | The gate on B-45's half is *witnessability*, not backend choice. A behavioral Windows witness is the precondition that makes any backend landable — and note a Reading-A selection can CARRY this witness in its own PR (the same PR adds the `windows-latest` contention job), so A is gated-but-self-dischargeable, not inherently unwitnessable |
 | **D-2** | An operator or deployment asks for a Windows host, OR any packaging surface declares one (an `Operating System ::` classifier or a `sys_platform` marker in a harness `pyproject.toml` — today: zero) | Converts the C-STK-10 commitment from a design-time constraint into an observable target |
 | **D-3** | An **observed stall** — any report or log of a same-host memory writer blocked indefinitely | The empirical falsifier of "no live hazard at HEAD" |
 | **D-4** | A **third** row is registered against this same lock substrate (today: `B-45`, `B-93`, plus `B-45`'s accepted O-1 lock-identity residual and `B-94`/`B-95` which inherit the `commit_seq` bound at §3(iii) Stake 2) | Accumulating rows against one primitive is itself evidence that the substrate, not the individual gaps, is the unit of work |
