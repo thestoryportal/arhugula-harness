@@ -8,12 +8,12 @@ back_reference:
   - .harness/class_2_fork_b96_gc_grace_elapsed_time_bound.md (FILED PR #1179; RATIFIED 2026-08-05 as READING C; its §9 impl-leg row is the obligation set U-RT-150 carries)
   - .harness/council-b96-grace-ceiling-2026-08-01.md (merged PR #1183; ceiling form C-2, and the §7.1 routing split that assigns the non-dot-leading record name to the IMPL leg)
   - .harness/forward-register.yaml row `B-96` (status UNCHANGED at `design_substrate_gated`)
-  - PR '#pending' (this arc)
+  - PR '#1235' (this arc)
 merge_commit: pending
 reviewer_chain:
   - implementation-planner Phase-7 revision pass — absorbs Runtime spec v1.111 §14.8.11.1 into **ONE NEW unit (U-RT-150)** with **FIFTEEN** acceptance criteria; adds no contract beyond the spec, re-decomposes no existing unit, and makes no blanket zero-cascade claim.
   - empirical grounding pass at this leg — U-RT-145's AC #7 re-read at `Implementation_Plan_Harness_Runtime_v2_51.md` §1.1 and confirmed **still true and unchanged** under v1.111 (the reason a new unit is correct and an amendment is not); the highest existing `U-RT-*` id recomputed programmatically across the plan corpus (**149**) so `U-RT-150` is genuinely free; the `harness-inspect` admin CLI and its §13.7 pause-journal enumeration row confirmed present in code, so AC #8(b)'s *extension of an existing row* is buildable.
-  - out-of-family Codex review (`just codex-review`, base `main`) to convergence
+  - out-of-family Codex review (`just codex-review`, base `main`) — **round 1: TWO [P2], BOTH UPHELD and FOLDED.** (i) Term 2's publication bound was stated WITHOUT the fork §3(ii) qualification **(b)** — the no-backward-step wall-clock assumption the fork states verbatim as *"the lemma is stated with the assumption rather than without it"*; qualifications (a) and (c) had been carried, (b) had not. Term 2 now carries it with the fork's own scoping (not a defect this grace introduces; not owed by any leg; a monotonic clock is NOT the substitute, because the observation state is durable across process exit), and plan **AC #2** carries the matching scope so the witness cannot be read as proving an unconditional bound. (ii) The register's prose surface still asserted *"spec leg + impl leg owed"* at three sites after this leg lands; all three were amended **in place** (heading parenthetical, ratified bullet, superseded-state pointer) with the YAML `heading` mirror updated in the same commit and `forward_register.py --check` re-verified.
 supersedes: implementation-plan-harness-runtime-v2-57-cleared-2026-07-31.md
 ---
 

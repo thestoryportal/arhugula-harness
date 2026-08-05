@@ -961,9 +961,9 @@ and the four reclaim asserts all belong to the **impl leg**. **Explicitly not ow
 narrowing `ttl_seconds` or adding a TTL floor (`B-74`'s twice-declined option), and any fourth
 reordering of `_publish_atomic`'s two-stamp pipeline.
 
-### §11.8 Spec leg — LANDED 2026-08-05 at PR #pending (chain cross-stamp)
+### §11.8 Spec leg — LANDED 2026-08-05 at PR #1235 (chain cross-stamp)
 
-**Chain status: leg 4 of 4 open — filing (#1179) → ratification (#1233, incl. the #1183 convening) → SPEC LEG (#pending, this stamp) → IMPL LEG (owed).**
+**Chain status: leg 4 of 4 open — filing (#1179) → ratification (#1233, incl. the #1183 convening) → SPEC LEG (#1235, this stamp) → IMPL LEG (owed).**
 
 **What landed.** `Spec_Harness_Runtime_v1.md` **v1.110 → v1.111**: a NEW **§14.8.11.1** carrying the council record's §7.1 **TWELVE** conditions as contract terms 1–12, plus the observation record's carrier discipline, an explicit **does-NOT-acquire** list, and the §7.2 tier-conditional counter-anchor — together with **two strict APPENDS** inside §14.8.11 (the bounded-retention bullet's cross-reference; the deferred-to-discretion list gaining the record's file name, its serialization format, and the emissions' concrete field keys / message shapes). **Three amendment sites; no existing sentence reworded, retracted or relocated.** `Implementation_Plan_Harness_Runtime_v2_57.md` → **v2.58** absorbs it as **ONE NEW unit, U-RT-150**, with **FIFTEEN** acceptance criteria — deliberately **NOT** an amendment of the landed **U-RT-145**, whose AC #7 remains true and unchanged under v1.111 (the `B-97`(a) → U-RT-149 precedent). Clearance markers filed for both artifacts.
 

@@ -3742,7 +3742,7 @@ items:
     a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry
     milliseconds after its bootstrap sweep first observed it'
   status: design_substrate_gated
-  pr: '#1179 (the Class 2 fork filing) + #1183 (the C-1/C-2 council record) + #1233 (the 2026-08-05 ratification record) + #pending (the SPEC leg -- Runtime spec v1.111 section 14.8.11.1 + Runtime plan v2.58 U-RT-150)'
+  pr: '#1179 (the Class 2 fork filing) + #1183 (the C-1/C-2 council record) + #1233 (the 2026-08-05 ratification record) + #1235 (the SPEC leg -- Runtime spec v1.111 section 14.8.11.1 + Runtime plan v2.58 U-RT-150)'
   summary: 'Surfaced by out-of-family Codex round 2 at the B-77 impl arc (2026-07-30),
     against the fix landed in that same PR. `gc_sweep`''s first-observation grace refuses to
     reclaim an entry the store has not already seen past TTL at a PRIOR sweep of the same
@@ -3772,7 +3772,7 @@ items:
     past it (the factory default is 86400s, roughly seven orders of magnitude above that),
     AND a crash landing strictly between `os.link` and the post-commit mtime refresh, AND a
     recovering run short enough that its own shutdown sweep fires before any repair read.'
-  close_out: 'SPEC LEG LANDED at PR #pending -- Runtime spec v1.110 -> v1.111 adds NEW section
+  close_out: 'SPEC LEG LANDED at PR #1235 -- Runtime spec v1.110 -> v1.111 adds NEW section
     14.8.11.1 carrying the council record section 7.1''s TWELVE conditions as contract terms 1-12,
     plus two strict APPENDS (the bounded-retention bullet''s cross-reference and the
     deferred-to-discretion list''s two new entries); the Runtime plan absorbs it at v2.58 as
@@ -3841,7 +3841,7 @@ items:
     No third ceiling form survives -- record-keyed, hybrid absent-record and a fourth ctime-keyed
     variant were each constructed and killed, and are recorded as tested-and-dead rather than
     suppressed. NO FURTHER CONVENING is owed at the spec or impl leg.'
-  heading: '### B-96 · The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time -- a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry milliseconds after its bootstrap sweep first observed it *(surfaced at the B-77 impl arc, out-of-family Codex round 2 [P2], 2026-07-30)* *(**RATIFIED 2026-08-05 as READING C, ceiling sub-decision C-2** — the grace term alone, carrier `(C-i)`; spec leg + impl leg owed)*'
+  heading: '### B-96 · The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time -- a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry milliseconds after its bootstrap sweep first observed it *(surfaced at the B-77 impl arc, out-of-family Codex round 2 [P2], 2026-07-30)* *(**RATIFIED 2026-08-05 as READING C, ceiling sub-decision C-2** — the grace term alone, carrier `(C-i)`; **SPEC LEG LANDED 2026-08-05 (Runtime v1.111 + plan v2.58 U-RT-150); IMPL leg owed**)*'
 - id: B-97
   title: The durable pause journal carries no tenant binding (half (a) -- RATIFIED
     Reading A, SPEC-APPLIED at v1.108, IMPL LANDED at U-RT-149); its appends were
