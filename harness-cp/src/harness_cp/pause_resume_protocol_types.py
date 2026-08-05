@@ -188,10 +188,22 @@ class _ImmutableEffectFenceResolutions(dict[str, EffectFenceResolution]):
     `obj.__init__({...})` is NOT in that category — it resolves through this type's
     own MRO with no base class named — so it is SEALED below (out-of-family Codex
     round 2 [P2], reproduced before fixing: it re-populated the stored map in place
-    and changed a later `effect_fence_resolution_for` answer).
+    and changed a later `effect_fence_resolution_for` answer). Round 3 [P2] then
+    found the seal itself reopenable by plain attribute assignment
+    (`stored._sealed = False`), so the seal lives in a `__slots__` slot behind a
+    refusing `__setattr__`/`__delattr__`: there is no instance `__dict__` to write
+    into and no ordinary assignment that reaches it.
+
+    **Where this line terminates, stated so it is a decision and not an omission.**
+    The remaining routes — `dict.__setitem__(obj, k, v)`, `object.__setattr__(obj,
+    "_sealed", False)` — both NAME A BASE CLASS explicitly. Python cannot seal an
+    object against a caller willing to do that, so "no mutation route" is
+    necessarily read as "no route reachable through this type's own surface". That
+    boundary is the same one §1.5 already draws for `model_construct`, and §1.3
+    renders anything that gets through it inert at the resolver regardless.
     """
 
-    _sealed: bool
+    __slots__ = ("_sealed",)
 
     def __init__(
         self, supplied: Mapping[str, EffectFenceResolution] = _EMPTY_RESOLUTIONS, /
@@ -200,14 +212,24 @@ class _ImmutableEffectFenceResolutions(dict[str, EffectFenceResolution]):
         # UPDATES it in place (it does not clear first), so leaving it inherited
         # left `ctx.effect_fence_resolutions.__init__({...})` as a mutation route
         # that the disabled item/update methods did not cover. Sealing after the
-        # first populate keeps `__reduce__`'s reconstruction path (a FRESH object)
-        # working while refusing re-population of an existing one. The default is a
-        # read-only empty literal that is never mutated — `dict.__init__`'s own
-        # signature shape, kept so `cls()` stays valid for pickle protocols.
+        # first populate keeps `__reduce__`'s reconstruction path (a FRESH object,
+        # whose slot is unset) working while refusing re-population of an existing
+        # one. The default is a read-only empty mapping that is never mutated —
+        # `dict.__init__`'s own signature shape, kept so `cls()` stays valid.
         if getattr(self, "_sealed", False):
             self._refuse()
         super().__init__(supplied)
-        self._sealed = True
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        # The seal must not be resettable through ordinary assignment, or
+        # `stored._sealed = False; stored.__init__({...})` reopens the map and the
+        # injected entry is then honoured by `_resolve_effect_fence_gated`
+        # (out-of-family Codex round 3 [P2], reproduced before fixing).
+        self._refuse()
+
+    def __delattr__(self, name: str) -> None:
+        self._refuse()
 
     def _refuse(self, *args: object, **kwargs: object) -> None:
         raise TypeError(

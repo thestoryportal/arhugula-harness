@@ -40,6 +40,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
+import textwrap
 import threading
 from pathlib import Path
 from typing import Any, cast
@@ -928,28 +929,54 @@ def test_the_pure_lookup_method_is_deliberately_outside_the_ss1_3_resolver_bound
        public method published at v1.66 would be a FOURTH, and §0.3 enumerates the authorized
        compatibility costs without it — an X-AL-3 silent design extension at impl time.
 
-    Safety is not left to that reading: the method has exactly ONE non-test caller in `src/`
-    (`_resolve_effect_fence_gated`, which now guards ahead of it), so no production path can
-    reach the unguarded answer. This test pins BOTH halves — the deliberate behaviour and the
-    single-caller premise it rests on — so a future arc that adds a second caller, or that
-    ratifies the narrowing, breaks here instead of drifting silently."""
+    Safety is not left to that reading: the method has exactly ONE non-test caller anywhere
+    in production source (`_resolve_effect_fence_gated`, which now guards ahead of it), so no
+    production path can reach the unguarded answer. This test pins BOTH halves — the
+    deliberate behaviour and the single-caller premise it rests on — so a future arc that adds
+    a second caller, or that ratifies the narrowing, breaks here instead of drifting silently.
+
+    The inventory scans EVERY workspace package's `src/`, not just `workflow_driver.py`: a
+    caller landing in some other production module would otherwise slip past the premise this
+    decision rests on (out-of-family Codex round 3 [P3])."""
     plain = ResumeContext(effect_fence_resolution=EffectFenceResolution.ABORT)
     assert plain.effect_fence_resolution_for(_EMPTY) is EffectFenceResolution.ABORT
 
-    source = inspect.getsource(_workflow_driver_module)
-    tree = ast.parse(source)
-    callers = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "effect_fence_resolution_for"
-    ]
-    assert len(callers) == 1, (
-        "the pure lookup's safety rests on having exactly ONE guarded caller in the driver; "
-        f"found {len(callers)} — re-decide the §1.3 boundary before adding another"
+    repo_root = Path(__file__).resolve().parents[2]
+    src_roots = sorted(repo_root.glob("harness-*/src"))
+    assert len(src_roots) >= 6, f"unexpected workspace layout: {src_roots!r}"
+    callers: dict[str, int] = {}
+    for src_root in src_roots:
+        for path in src_root.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            count = sum(
+                1
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "effect_fence_resolution_for"
+            )
+            if count:
+                callers[str(path.relative_to(repo_root))] = count
+
+    assert callers == {"harness-cp/src/harness_cp/workflow_driver.py": 1}, (
+        "the pure lookup's safety rests on having exactly ONE production caller, the guarded "
+        f"`_resolve_effect_fence_gated`; found {callers!r} — re-decide the §1.3 boundary "
+        "before adding another"
     )
+    # And that one caller is genuinely the guarded resolver — counted over the resolver's own
+    # AST, so its prose (which names the method) cannot inflate the count.
     assert _resolve_effect_fence_gated(plain, _EMPTY, _EMPTY) is None
+    resolver_tree = ast.parse(textwrap.dedent(inspect.getsource(_resolve_effect_fence_gated)))
+    assert (
+        sum(
+            1
+            for node in ast.walk(resolver_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "effect_fence_resolution_for"
+        )
+        == 1
+    )
 
 
 def test_resolver_refuses_empty_key_before_map_hit_and_before_eligibility() -> None:
@@ -1055,6 +1082,16 @@ def test_pd8_probe_b_item_assignment_through_the_stored_mapping_is_refused() -> 
     # base class, so it is a route the type EXPOSES in the §1.2 sense.
     with pytest.raises(TypeError):
         stored.__init__({"reinit": EffectFenceResolution.ABORT})  # type: ignore[misc]
+    # The SEAL itself must not be reopenable by ordinary attribute assignment, or
+    # `stored._sealed = False; stored.__init__({...})` walks straight back in (Codex round 3
+    # [P2], reproduced before fixing). `__slots__` + a refusing `__setattr__` closes it; the
+    # residual `object.__setattr__` route explicitly names a base class, the same boundary
+    # §1.5 already draws for `model_construct`.
+    with pytest.raises(TypeError):
+        stored._sealed = False  # type: ignore[attr-defined, union-attr]
+    with pytest.raises(TypeError):
+        del stored._sealed  # type: ignore[attr-defined, union-attr]
+    assert not hasattr(stored, "__dict__"), "a `__dict__` would reintroduce the writable seal"
     assert dict(stored) == {_KEYED: EffectFenceResolution.RE_FIRE}
     assert context.effect_fence_resolution_for("reinit") is None
     assert context.effect_fence_resolution_for(_EMPTY) is None
