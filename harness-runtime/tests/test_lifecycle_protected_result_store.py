@@ -49,6 +49,69 @@ def _sweep_past_grace(store: ProtectedResultStore, *, now: float | None = None) 
     return store.gc_sweep(now=at)
 
 
+#: How long a "slow" publish step is simulated to take by the witnesses below
+#: that pin `_publish_atomic`'s mtime-refresh placement. Advanced on a
+#: `_ScriptedClock` rather than slept for real (see `_ScriptedClock`), so the
+#: figure is free to be enormous relative to the sub-100ms TTLs those tests
+#: configure — the margin no longer competes with CI scheduling latency at
+#: all, in either the pass or the mutation-kill direction.
+_SIMULATED_SLOW_STEP_SECONDS = 60.0
+
+#: The sub-second phase the coarse-filesystem-granularity witness pins its
+#: scripted publish moment to. Any value strictly above that test's 100ms TTL
+#: (and strictly below 1.0) exercises the condition; 0.6 sits mid-second, far
+#: from both boundaries.
+_COARSE_MTIME_PHASE = 0.6
+
+
+class _ScriptedClock:
+    """Deterministic stand-in for the wall clock `_publish_atomic`'s mtime
+    refreshes read.
+
+    `gc_sweep`'s age arithmetic has exactly two inputs: the entry file's
+    mtime — written ONLY by `os.utime(path, None)`, i.e. the filesystem's
+    current wall clock — and the sweep's own already-injectable `now=`.
+    Pinning the first to a scripted value (`_pin_mtime_stamps_to_clock`) and
+    passing the same value as the second makes every TTL comparison in a
+    witness EXACT, instead of a race between a sub-100ms TTL and however
+    long the surrounding statements happened to take. `advance()` then
+    stands in for a slow publish step without a real `time.sleep` — a
+    strictly stronger simulation (it can model an unboundedly slow tail)
+    that no CI load can perturb.
+
+    Seeded from the REAL clock deliberately: a mutation that deletes one of
+    the two refreshes leaves the file carrying its raw, unstamped write-time
+    mtime, and that value must still read as `advance()`-seconds stale for
+    the mutation-kill direction to keep its margin. A synthetic epoch (e.g.
+    `0.0`) would instead make an unstamped mtime read as far in the FUTURE
+    and silently defuse every such probe.
+    """
+
+    def __init__(self) -> None:
+        self.now = time.time()
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _pin_mtime_stamps_to_clock(monkeypatch: pytest.MonkeyPatch, clock: _ScriptedClock) -> None:
+    """Route every `os.utime(path, None)` "refresh to now" through `clock`.
+
+    Only the `times is None` form is redirected — that is precisely
+    `_publish_atomic`'s two refresh-to-now stamps. Calls passing explicit
+    `times` (a test back-dating a file itself) pass straight through.
+    """
+    real_utime = os.utime
+
+    def _clocked_utime(path: object, times: object = None, **kwargs: object) -> None:
+        if times is None:
+            real_utime(path, (clock.now, clock.now), **kwargs)  # type: ignore[arg-type]
+            return
+        real_utime(path, times, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "utime", _clocked_utime)
+
+
 class _Unserializable:
     """Holds a live generator — `pickle.dumps` raises `TypeError` on it."""
 
@@ -601,23 +664,40 @@ def test_write_once_survives_immediate_sweep_under_slow_fsync_and_short_ttl(
     file's mtime to "now" (B-77: BEFORE the commit, not after) closing
     that remaining gap.
 
-    Mutation probe: removing the pre-commit `os.utime` refresh reproduces
-    the exact codex-verified failure — `gc_sweep` collects the entry."""
+    Mutation probe: removing BOTH of `_publish_atomic`'s refresh-to-now
+    stamps reproduces the exact codex-verified failure — the entry keeps
+    the temp file's raw write-time mtime, which predates the slowed data
+    fsync, and `gc_sweep` collects it. (Removing only ONE of the two does
+    NOT fail this witness: the surviving stamp still runs after the slowed
+    fsync. Each stamp is pinned individually by
+    `test_crash_immediately_after_commit_leaves_an_already_correct_durable_
+    mtime` (pre-commit) and `test_slow_post_commit_tail_does_not_falsely_
+    expire_a_successful_write` (post-commit); the docstring said "the
+    pre-commit refresh" alone until the two-stamp shape landed and is
+    corrected here rather than left stale.)
+
+    CI-load hardening: the slow fsync is simulated by ADVANCING a
+    `_ScriptedClock` that both the store's mtime stamps and this sweep's
+    `now=` read, not by a real `time.sleep` raced against a 20ms TTL — see
+    `_ScriptedClock`. The store's TTL and the stamp placement it pins are
+    unchanged; only the clock the comparison reads is now exact."""
     store = _store(tmp_path, ttl_seconds=0.02)
+    clock = _ScriptedClock()
+    _pin_mtime_stamps_to_clock(monkeypatch, clock)
     real_fsync = os.fsync
     seen = {"slowed": False}
 
     def _slow_first_fsync(fd: int) -> None:
         if not seen["slowed"]:
             seen["slowed"] = True
-            time.sleep(0.10)
+            clock.advance(_SIMULATED_SLOW_STEP_SECONDS)
         real_fsync(fd)
 
     monkeypatch.setattr(os, "fsync", _slow_first_fsync)
     ref = store.write_once("tenant-a", "just published")
     assert isinstance(ref, str)
 
-    expired = _sweep_past_grace(store, now=time.time())
+    expired = _sweep_past_grace(store, now=clock.now)
     assert expired == []
     assert store.read("tenant-a", ref) == "just published"
 
@@ -646,16 +726,24 @@ def test_crash_immediately_after_commit_leaves_an_already_correct_durable_mtime(
     process's immediate bootstrap sweep must not reclaim.
 
     Mutation probe: reverting to the pre-fix post-commit `os.utime`
-    ordering makes the crash-recovered entry inherit the temp file's
-    stale, pre-slow-fsync mtime, and the sweep below reclaims it."""
+    ordering (i.e. deleting the PRE-commit stamp) makes the crash-recovered
+    entry inherit the temp file's stale, pre-slow-fsync mtime, and the
+    sweep below reclaims it.
+
+    CI-load hardening: the slow fsync is simulated by ADVANCING a
+    `_ScriptedClock` that both the store's mtime stamps and this sweep's
+    `now=` read, not by a real `time.sleep` raced against a 50ms TTL — see
+    `_ScriptedClock`."""
     store = _store(tmp_path, ttl_seconds=0.05)
+    clock = _ScriptedClock()
+    _pin_mtime_stamps_to_clock(monkeypatch, clock)
     real_fsync = os.fsync
     seen = {"slowed": False}
 
     def _slow_first_fsync(fd: int) -> None:
         if not seen["slowed"]:
             seen["slowed"] = True
-            time.sleep(0.10)
+            clock.advance(_SIMULATED_SLOW_STEP_SECONDS)
         real_fsync(fd)
 
     monkeypatch.setattr(os, "fsync", _slow_first_fsync)
@@ -685,7 +773,7 @@ def test_crash_immediately_after_commit_leaves_an_already_correct_durable_mtime(
     # entry whatever its mtime, so a one-sweep assertion here would pass
     # even if the PRE-commit stamp regressed to the raw write-time value —
     # exactly the freshness this witness exists to pin.
-    expired = _sweep_past_grace(store2, now=time.time())
+    expired = _sweep_past_grace(store2, now=clock.now)
     assert expired == []
     assert entry_path.exists()
 
@@ -713,8 +801,19 @@ def test_slow_post_commit_tail_does_not_falsely_expire_a_successful_write(
 
     Mutation probe: removing the post-commit `os.utime`+fsync block
     (reverting to the round-1-only, pre-commit-stamp-alone shape) makes
-    this test fail — the immediate sweep below reclaims the entry."""
+    this test fail — the immediate sweep below reclaims the entry.
+
+    CI-load hardening: the slow directory fsync is simulated by ADVANCING a
+    `_ScriptedClock` that both the store's mtime stamps and this sweep's
+    `now=` read, not by a real `time.sleep` raced against a 20ms TTL. The
+    original 100ms-vs-20ms margin was the flake: under CI load the wall
+    time between the post-commit stamp and the sweep's own `time.time()`
+    could itself exceed 20ms, expiring a correctly-stamped entry (recorded
+    instances: PRs #1103, #1130, #1213, #1223). The reproduction's shape
+    (which fsync is slowed, which stamp must run below it) is unchanged."""
     store = _store(tmp_path, ttl_seconds=0.02)
+    clock = _ScriptedClock()
+    _pin_mtime_stamps_to_clock(monkeypatch, clock)
     real_fsync = os.fsync
     calls = {"n": 0}
 
@@ -726,7 +825,7 @@ def test_slow_post_commit_tail_does_not_falsely_expire_a_successful_write(
         # failure_degrades_to_unresolvable` above for the full call
         # ordering.
         if calls["n"] == 3:
-            time.sleep(0.10)
+            clock.advance(_SIMULATED_SLOW_STEP_SECONDS)
         real_fsync(fd)
 
     monkeypatch.setattr(os, "fsync", _slow_third_fsync)
@@ -734,7 +833,7 @@ def test_slow_post_commit_tail_does_not_falsely_expire_a_successful_write(
     ref = store.write_once("tenant-a", "slow tail, no crash")
     assert isinstance(ref, str)
 
-    expired = _sweep_past_grace(store, now=time.time())
+    expired = _sweep_past_grace(store, now=clock.now)
     assert expired == []
     assert store.read("tenant-a", ref) == "slow tail, no crash"
 
@@ -1019,13 +1118,21 @@ def test_write_once_does_not_block_on_a_sweep_stalled_in_its_decrypt_phase(
     sweeper.start()
     assert decrypt_phase_entered.wait(timeout=5.0), "sweep never reached its decrypt phase"
 
-    # Run the write on its OWN thread and check with a SHORT bounded join —
+    # Run the write on its OWN thread and check with a bounded join —
     # calling `write_once()` directly and merely timing how long it takes
     # would not discriminate: under the pre-fix whole-body lock it still
     # eventually completes (once the mock's own 5s wait times out), just
-    # slower, so a synchronous call passes either way. A short join window
-    # well under the mock's 5s stall is what actually distinguishes
-    # "blocked on the stalled sweep" from "completed promptly".
+    # slower, so a synchronous call passes either way. A join window well
+    # under the mock's 5s stall is what actually distinguishes "blocked on
+    # the stalled sweep" from "completed promptly".
+    #
+    # The window's exact size is INCIDENTAL to that claim — any bound
+    # comfortably below the 5s stall discriminates identically, because
+    # under the mutation the write cannot return until the stall ends. It
+    # is widened from the original 0.3s purely for CI-load headroom (a
+    # genuine, unblocked `write_once()` — pickle + Fernet + three fsyncs —
+    # can take far longer than 0.3s on a loaded runner without any lock
+    # being involved), which costs the mutation-kill direction nothing.
     write_results: list[object] = []
 
     def _run_write() -> None:
@@ -1033,9 +1140,9 @@ def test_write_once_does_not_block_on_a_sweep_stalled_in_its_decrypt_phase(
 
     writer = threading.Thread(target=_run_write)
     writer.start()
-    writer.join(timeout=0.3)
+    writer.join(timeout=1.5)
     assert not writer.is_alive(), (
-        "write_once() was still blocked 0.3s after starting — it waited on "
+        "write_once() was still blocked 1.5s after starting — it waited on "
         "the stalled sweep's lock instead of completing promptly"
     )
     assert len(write_results) == 1
@@ -1872,27 +1979,37 @@ def test_uninterrupted_write_survives_an_immediate_sweep_past_the_grace(
 
     Same shape as the round-9 reproduction: a 20ms TTL with the
     DESTINATION-directory fsync (the third `fsync` call, below the
-    pre-commit stamp) slowed by 100ms.
+    pre-commit stamp) slowed.
 
     Mutation probe: removing `_publish_atomic`'s POST-commit
     `os.utime(entry_path, None)` refresh leaves the entry carrying the
-    pre-commit stamp, 100ms stale on return — the second sweep then
-    reclaims it and this test fails."""
+    pre-commit stamp, a full slow-tail duration stale on return — the
+    second sweep then reclaims it and this test fails.
+
+    CI-load hardening: that slow tail is simulated by ADVANCING a
+    `_ScriptedClock` both the store's mtime stamps and this sweep's `now=`
+    read, not by a real `time.sleep` raced against the 20ms TTL — see
+    `_ScriptedClock`. This test is one of the recorded CI flakes (PRs
+    #1103/#1130/#1213/#1223: the wall time between the post-commit stamp
+    and the sweep's own `time.time()` exceeded the TTL under load, so a
+    correctly-stamped entry read as expired)."""
     store = _store(tmp_path, ttl_seconds=0.02)
+    clock = _ScriptedClock()
+    _pin_mtime_stamps_to_clock(monkeypatch, clock)
     real_fsync = os.fsync
     calls = {"n": 0}
 
     def _slow_third_fsync(fd: int) -> None:
         calls["n"] += 1
         if calls["n"] == 3:
-            time.sleep(0.10)
+            clock.advance(_SIMULATED_SLOW_STEP_SECONDS)
         real_fsync(fd)
 
     monkeypatch.setattr(os, "fsync", _slow_third_fsync)
     ref = store.write_once("tenant-a", "uninterrupted, must stay live")
     assert isinstance(ref, str)
 
-    assert _sweep_past_grace(store, now=time.time()) == []
+    assert _sweep_past_grace(store, now=clock.now) == []
     assert store.read("tenant-a", ref) == "uninterrupted, must stay live"
 
 
@@ -1945,41 +2062,52 @@ def test_coarse_filesystem_mtime_granularity_does_not_lose_a_live_entry_on_sight
 
     Mutation probe: removing the `previously_observed` gate from
     `gc_sweep` makes the first sweep reclaim the live entry and the
-    `read()` below raises `ProtectedStoreEntryNotFoundError`."""
+    `read()` below raises `ProtectedStoreEntryNotFoundError`.
+
+    CI-load hardening: the publish moment is a `_ScriptedClock` pinned to a
+    fixed mid-second PHASE, so the rounding error this witness needs is
+    exactly `_COARSE_MTIME_PHASE` on every run. Out-of-family Codex round 1
+    [P1] had already identified the phase dependence and answered it with a
+    busy-wait for a favourable phase BEFORE the write — but that only fixed
+    the phase at the START of `write_once()`, and a write slow enough under
+    CI load to cross the next second boundary re-floored the stamp to that
+    NEW second, collapsing the error to ~0 and failing the `> 0.1`
+    assertion below (a recorded flake: PR #1223,
+    `assert (1785922920.0142367 - 1785922920.0) > 0.1`). Pinning the clock
+    removes the dependence entirely rather than betting on the write being
+    fast — the busy-wait it replaces is deleted."""
+    clock = _ScriptedClock()
+    # A fixed mid-second phase: the store's own stamp lands on the second
+    # boundary below, so the granularity error is exactly this figure —
+    # comfortably outside the 100ms TTL, on every run, whatever the load.
+    clock.now = float(int(clock.now)) + _COARSE_MTIME_PHASE
     real_utime = os.utime
 
     def _coarse_utime(path: object, times: object = None, **kwargs: object) -> None:
         if times is None:
-            floored = float(int(time.time()))
+            floored = float(int(clock.now))
             real_utime(path, (floored, floored))  # type: ignore[arg-type]
             return
         real_utime(path, times, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(os, "utime", _coarse_utime)
     store = _store(tmp_path, ttl_seconds=0.1)
-    # Out-of-family Codex round 1 [P1]: flooring is wall-clock-PHASE
-    # dependent — running within the first 100ms after a second boundary
-    # would leave a rounding error SMALLER than the 100ms TTL, and the entry
-    # would not read as expired at all (a ~10% spurious CI failure). Wait
-    # for a phase where the full-granularity error is guaranteed, so the
-    # witness exercises the coarse-filesystem condition every run.
-    while not 0.3 <= time.time() % 1.0 < 0.9:
-        time.sleep(0.01)
     ref = store.write_once("tenant-a", "live despite a coarse mtime")
     assert isinstance(ref, str)
     entry_path = store._entry_path(ref)  # type: ignore[attr-defined]
-    # The stored mtime is now up to a full second behind the true publish
-    # moment — far outside the 100ms TTL, so the entry reads as expired.
-    assert time.time() - entry_path.stat().st_mtime > 0.1
+    # The stored mtime is now a full `_COARSE_MTIME_PHASE` behind the true
+    # publish moment — far outside the 100ms TTL, so the entry reads as
+    # expired.
+    assert clock.now - entry_path.stat().st_mtime > 0.1
 
-    assert store.gc_sweep(now=time.time()) == []
+    assert store.gc_sweep(now=clock.now) == []
     assert store.read("tenant-a", ref) == "live despite a coarse mtime"
 
     # REGISTERED RESIDUAL (B-74): the grace is bounded to one sweep
     # interval, so a granularity error exceeding the gap between two sweeps
     # still loses the live entry. Pinned here so a future B-74 fix has to
     # come back and update this witness rather than silently diverge.
-    assert store.gc_sweep(now=time.time()) == [entry_path.stem]
+    assert store.gc_sweep(now=clock.now) == [entry_path.stem]
 
 
 def test_observation_record_is_shared_across_instances_of_one_root(tmp_path: Path) -> None:
