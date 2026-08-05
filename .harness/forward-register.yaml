@@ -312,7 +312,7 @@ items:
     ruff clean; 155 tests pass.'
   council: no — spec already resolved the carrier-ownership question at a prior cleared fork; no live
     tension to convene
-  pr: '#pending'
+  pr: '#1023'
   heading: '### B-29 · Pre-existing F2-write gaps surfaced at B-23 (out-of-family Codex, not novel to
     B-23) *(registered 2026-07-13)*'
 - id: B-30
@@ -422,7 +422,7 @@ items:
     closing a Section21-registered gap.'
   council: no -- mechanical fix once the labeling logic was corrected; the routing half's council question
     is now moot per B-39's disposition
-  pr: '#pending'
+  pr: '#1015'
   heading: '### B-32 · Nested paused-child pause-reason propagation *(surfaced at B-21, out-of-family
     Codex round 3; scope narrowed after a same-session Codex review of the first attempt)*'
 - id: B-39
@@ -564,7 +564,7 @@ items:
     `from tools import X` package-relative import only worked from repo root, inconsistent with the working-directory:
     tools convention every other tools/test_*.py file already uses).'
   council: no — mechanical once each contract was grounded; no cross-domain tension
-  pr: '#pending'
+  pr: '#1017'
   heading: '### B-35 · `tools/test_qa_evidence_matrix.py` / `test_closure_gate.py` are orphaned from CI
     + 12 contracts lack test-file citation *(surfaced during B-28 triage, 2026-07-14; closed same session
     as B-32)*'
@@ -590,7 +590,7 @@ items:
     of `sign_audit_entry` exist today. B-33/B-34 narrowed accordingly (see their own rows).'
   council: 'DONE — C10 blast-radius vs C11 operator-loop/deployment-surface, dyadic council 2026-07-16;
     ranked AWS KMS delegated signing over Secrets-Manager-plus-local-signing'
-  pr: '#pending'
+  pr: '#1031'
   heading: '### B-36 · Concrete F5 audit-signature backend selection *(split off `B-22` 2026-07-14, per
     operator direction — `B-22`''s seam is CLOSED, this is what remains; CLOSED 2026-07-16 via ADR-D8)*'
 - id: B-37
@@ -1756,7 +1756,7 @@ items:
     SS14.8.11 carries NO AC numbering at all, so the prior "AC 7" resolved to nothing) Phase-7 impl
     discretion should not narrow unilaterally.
     Remains open, not dormant, not built this arc. NARROWED AGAIN 2026-07-30 (dated
-    re-check against the landed B-77 fix, PR #pending): B-77''s first-observation grace
+    re-check against the landed B-77 fix, PR #1163): B-77''s first-observation grace
     covers this row''s reachable loss case but does NOT subsume the row. What is now
     covered: a granularity error up to ONE sweep interval -- the sweep that FIRST observes
     a coarse-stamped, genuinely-live entry can no longer reclaim it, which is the
@@ -1822,7 +1822,7 @@ items:
   title: Protected result store's mtime refresh is not durable atomically with the publish
     commit, leaving a crash window where a recovered entry looks pre-aged
   status: closed
-  pr: '#pending'
+  pr: '#1163'
   summary: 'NARROWED TWICE, not closed, 2026-07-26 (PR #1123). This PR went through THREE wrong
     claims before landing here, all caught by out-of-family Codex: round 1 tried to classify
     B-77 as dormant via a "sub-millisecond os.link-to-os.utime window" argument (wrong -- the
@@ -1850,7 +1850,7 @@ items:
     (post-link-to-post-commit-refresh tail) is registered, not tested, since no fix for it has
     landed. merge-gate 3-lens review approved the round-2 diff; only the concurrency lens was
     re-run for round 3 (the durability-step change is inside the same lock its reasoning already
-    covered) per advisor()-directed scope. CLOSED 2026-07-30 (PR #pending, branch
+    covered) per advisor()-directed scope. CLOSED 2026-07-30 (PR #1163, branch
     b77-gc-first-observation-grace-20260730) -- the close_out''s own fix landed as a
     FIRST-OBSERVATION GRACE inside `gc_sweep`, with no fourth reordering of the two-stamp
     pipeline and no narrowing of `ttl_seconds`. The residual window this row named (a crash
@@ -3632,7 +3632,7 @@ items:
     the response map and the scalar uniform fallback DROP it on all three carriers, and the
     level-local abort scans MIS-APPLY it to a keyed sibling
   status: closed
-  pr: '#pending'
+  pr: '#1214'
   summary: 'RATIFIED 2026-08-03: Reading A-hybrid is selected. The design-substrate gate is discharged; B-107 remains OPEN only for the separately owed U-CP-64 implementation, b80 update, eight-cell witness grid, and PD-8 probes. Scalar membership removes empty keys; the map refuses them at ordinary construction via a validated immutable copy; resolver-boundary removal makes validation-bypassed empty keys inert. B-101(a) is NOT jointly discharged -- this map-field change pays the same compatibility-cost category but does not add B-101(a)''s closed variant discriminator; B-101 remains separately closed under (b)-PLUS with its promotion trigger unchanged, and the rows remain separate. ID NOTE: this row is B-107, NOT B-105 -- B-105 was minted and WITHDRAWN at PR #1172
     (the B-103 premise-falsified rework; see .harness/roadmap_status.md and
     .harness/merge-gate-log.md row #1172), -- reusing it would make register lookup and the historical record resolve to two different issues; caught at out-of-family review round 5 [P1]) and NOT B-106 (minted CONCURRENTLY on main at commit d9f68b02 for the embedder-path event-loop exposure, while this leg was in flight; renumbered at the merge rather than contested, since that row landed first).
@@ -3945,7 +3945,7 @@ items:
 - id: B-109
   title: Sibling immutable-map carrier _ImmutableKeyArns retains the inherited dict.__init__ re-population hole
   status: closed
-  pr: '#pending'
+  pr: '#1216'
   summary: 'SURFACED at the B-107 impl leg (codex round 2, 2026-08-04): the B-107 carrier
     _ImmutableEffectFenceResolutions had its inherited dict.__init__ re-population route sealed
     (calling __init__ on the already-constructed instance silently repopulated the sealed map
@@ -3959,9 +3959,10 @@ items:
     NO further sealed-mapping siblings. The B-107 carrier''s sealed form (__slots__ +
     refusing __setattr__ + sealed __init__) was the template; the fix stayed bounded to the
     sibling type. Explicit-base-class routes (dict.__setitem__(obj, ...)) remain out of scope
-    per the same threat-model boundary B-107 section 6.1 draws.'
+    per the B-107 section 6.1 / CP v1.115 section 1.5 forged-instance boundary, extended to
+    explicit base-class routes at the B-107 impl-leg docstring.'
   heading: '### B-109 · Sibling immutable-map carrier `_ImmutableKeyArns` retains the inherited `dict.__init__` re-population hole *(surfaced at the B-107 impl leg, out-of-family review round 2, 2026-08-04; observed and deliberately not fixed there — harness-runtime was read-only for that arc)*'
-  close_out: 'CLOSED 2026-08-04, BUILT (pr reconciles at the next register touch). The closure
+  close_out: 'CLOSED 2026-08-04, BUILT (PR #1216). The closure
     criterion -- the sibling refuses re-initialization with witnesses mirroring test_pd8_probe_b/c
     and a mutation probe -- is MET: sealed per the B-107 template
     (_ImmutableEffectFenceResolutions at harness-cp/src/harness_cp/pause_resume_protocol_types.py)
@@ -3972,10 +3973,14 @@ items:
     refused + byte-unchanged on raw AND validated-field carriers; seal-reopen (_sealed
     assignment/del) refused with no instance __dict__; copies sealed; no-arg construction valid.
     PD-8 mutation probe PERFORMED, not asserted: the __init__ override deleted -> all four named
-    tests FAIL (DID NOT RAISE TypeError) -> restored -> green. Full just check green (7374
-    passed; pyright strict 0/0). Explicit-base-class routes (dict.__setitem__(obj, ...),
-    object.__setattr__) stay out of scope per the B-107 section 6.1 threat-model boundary,
-    restated in the type''s own docstring.'
+    tests FAIL (DID NOT RAISE TypeError) -> restored -> green. Test totals, CI-MEASURED (not
+    derived): 7373 passed / 11 skipped / 36 deselected at the PR branch head dff5b25a, blocking
+    "pytest (all axis packages)" job, run 30972358886 -- identical at the merge commit ec438578
+    (run 30972622806); the local run was 7372 passed + 2 known harness.toml env-artifact reds;
+    pyright strict 0/0. Explicit-base-class routes (dict.__setitem__(obj, ...),
+    object.__setattr__) stay out of scope per the B-107 section 6.1 / CP v1.115 section 1.5
+    forged-instance boundary, extended to explicit base-class routes at the B-107 impl-leg
+    docstring, restated in the type''s own docstring.'
   council: 'no -- single-axis mechanical hardening of an existing internal type; no cross-domain
     tension nameable in advance; route per the standing single-voice-plus-advisor default if a
     design question surfaces at grounding.'
