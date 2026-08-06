@@ -368,8 +368,17 @@ def test_contention_observed_withdraws_the_first_probe_exemption(tmp_path: Path)
             fcntl.flock(other, fcntl.LOCK_UN)
         finally:
             os.close(other)
-        # And the default (no prior contention) still takes a free lock.
-        flock_until_deadline(fd, fcntl.LOCK_EX, deadline=spent, lock_target=str(target))
+        # A FRESH deadline over the same free lock still succeeds — the refusal
+        # above is about the SPENT budget, not about the lock. Deliberately a
+        # fresh one: re-using `spent` here would now ALSO refuse, because the
+        # declared contention is recorded on the DEADLINE and persists to every
+        # later site under it (that persistence is its own witness below).
+        flock_until_deadline(
+            fd,
+            fcntl.LOCK_EX,
+            deadline=CrossProcessLockDeadline.starting_now(1.0),
+            lock_target=str(target),
+        )
         fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
@@ -425,6 +434,53 @@ def test_the_exemption_is_spent_by_contention_anywhere_under_the_deadline(
         os.close(waiter)
         fcntl.flock(holder, fcntl.LOCK_UN)
         os.close(holder)
+
+
+@requires_posix_flock
+def test_observed_contention_persists_to_later_sites(tmp_path: Path) -> None:
+    """Out-of-family review at the merge-gate fix round — the same class as the
+    round-10 fix, ONE HOP OUT.
+
+    An ABBA arm passes `contention_observed=True` because it already saw
+    `BlockingIOError` and already waited. If the holder then releases before this
+    helper's first probe, the probe SUCCEEDS — and if the flag only gated that
+    one call, `has_contended()` stayed False and a LATER site under the same
+    end-to-end deadline regained its own first-probe exemption, acquiring past
+    expiry. The fact has to persist on the DEADLINE, because that is what spans
+    the sites.
+
+    Site 1 here is UNCONTENDED at probe time but declares prior contention; site
+    2 is free and the budget is spent. Site 2 must still refuse.
+
+    Mutation probe (run at this arc): gating on `contention_observed` alone
+    (without `deadline.note_contention()`) makes site 2 acquire and this fails."""
+    deadline = CrossProcessLockDeadline.starting_now(0.05)
+    first = tmp_path / "abba-site1.lock"
+    second = tmp_path / "abba-site2.lock"
+    fd1 = os.open(first, os.O_CREAT | os.O_RDWR, 0o600)
+    fd2 = os.open(second, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        # Site 1: free at probe time, but the caller declares it already waited.
+        flock_until_deadline(
+            fd1,
+            fcntl.LOCK_EX,
+            deadline=deadline,
+            lock_target=str(first),
+            contention_observed=True,
+        )
+        fcntl.flock(fd1, fcntl.LOCK_UN)
+        assert deadline.has_contended(), (
+            "the declared contention was not recorded on the deadline — a later "
+            "site will regain the first-probe exemption"
+        )
+        time.sleep(0.1)  # spend the budget
+        assert deadline.remaining_seconds() <= 0.0
+        # Site 2: free, same deadline, budget gone. Must refuse.
+        with pytest.raises(CrossProcessLockTimeoutError):
+            flock_until_deadline(fd2, fcntl.LOCK_EX, deadline=deadline, lock_target=str(second))
+    finally:
+        os.close(fd1)
+        os.close(fd2)
 
 
 @requires_posix_flock

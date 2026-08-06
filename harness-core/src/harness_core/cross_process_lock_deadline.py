@@ -312,8 +312,19 @@ def flock_until_deadline(
     """
     import fcntl  # POSIX-only; every caller gates win32 before reaching here.
 
+    if contention_observed:
+        # Persist it on the DEADLINE, not merely on this call (out-of-family
+        # review at the merge-gate fix round). Gating only this call's first
+        # probe left a hole ONE HOP OUT: if the holder released before the probe
+        # the probe SUCCEEDED, `has_contended()` stayed False, and a LATER
+        # acquisition under the same end-to-end deadline regained the exemption
+        # and could acquire past expiry. By the time a caller passes this flag
+        # it has already WAITED, so the entry surface has contended — record it
+        # once, here, where the fact arrives.
+        deadline.note_contention()
+
     poll_seconds = _INITIAL_POLL_SECONDS
-    first_probe = not contention_observed and not deadline.has_contended()
+    first_probe = not deadline.has_contended()
     while True:
         try:
             fcntl.flock(fd, operation | fcntl.LOCK_NB)
