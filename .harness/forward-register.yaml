@@ -3807,10 +3807,14 @@ items:
     3 [P2]. READING B (per-process elapsed time) IS RETIRED EXPLICITLY -- no future impl leg may
     build it as written. READING A (keep the sweep-COUNT bound) was NOT selected and is NOT partially
     adopted. STATUS design_substrate_gated, NOT closed (fork section 9, out-of-family round 3
-    [P1]): the SPEC leg -- a Runtime section 14.8.11 amendment carrying the council record''s
+    [P1]). The SPEC leg -- a Runtime section 14.8.11 amendment carrying the council record''s
     TWELVE conditions at its section 7.1, with section 7.2''s expansion flag surfaced in the clearance
-    marker per root CLAUDE.md section 4.5 -- and the IMPL leg are both still outstanding, and
-    `closed` would drop live work out of the open-work inventory. SPEC AND IMPL DO NOT LAND TOGETHER
+    marker per root CLAUDE.md section 4.5 -- HAS LANDED at PR #1235 as section 14.8.11.1 (spec v1.111,
+    plan v2.58 / U-RT-150); ONLY THE IMPL LEG REMAINS OUTSTANDING, which is why the row stays
+    design_substrate_gated rather than closed -- `closed` would drop that live work out of the
+    open-work inventory. (This sentence previously read "and the IMPL leg are both still outstanding";
+    corrected in place at out-of-family review round 3 [P2] so the structured register cannot
+    reschedule an already-landed leg.) SPEC AND IMPL DO NOT LAND TOGETHER
     (the B-33/B-39/B-59/B-69/B-70/B-72/B-97/B-107 precedent). CXA: no delta owed -- determined
     at the council record''s adversarial pass, not assumed. B-96, the B-77 residual and B-74 all
     flip to `closed` ONLY when the impl leg merges. NOT OWED BY ANY LEG, restated so it is not

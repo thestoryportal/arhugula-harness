@@ -849,8 +849,11 @@ this filing.
 ## §11 RATIFICATION
 
 **Status: RATIFIED 2026-08-05 as READING C, with the held ceiling sub-decision resolved as C-2 — the
-GRACE TERM ALONE, no absolute mtime-keyed reclaim ceiling. The spec leg and the impl leg are both
-still OWED; this filing's chain is at leg 3 of 4.**
+GRACE TERM ALONE, no absolute mtime-keyed reclaim ceiling. **SUPERSEDED 2026-08-05 by §11.8 — the SPEC LEG HAS LANDED (PR #1235: Runtime spec
+**v1.111** §14.8.11.1 + Runtime plan **v2.58** U-RT-150). Only the IMPL leg remains OWED; the chain is at
+leg 4 of 4.** *(The sentence this replaces read "the spec leg and the impl leg are both still OWED; this
+filing's chain is at leg 3 of 4" — true when written, false once §11.8 landed. Corrected in place at
+out-of-family review round 3 [P2] rather than left for a top-down reader to trip over.)***
 
 The `B-92` / `B-97`(a) / `B-107` precedent is followed: the outcome is recorded here
 verbatim-in-substance rather than only at the register row, so the decision travels with the filing a
@@ -928,7 +931,7 @@ Per §9 (out-of-family round 3 [P1]) the row moves to **`design_substrate_gated`
 under C both the spec leg and the impl leg are outstanding, and `closed` would drop live work out of
 the open-work inventory.
 
-- **Spec leg (owed):** a Runtime **§14.8.11** amendment carrying the council record's **twelve
+- **Spec leg — ~~owed~~ LANDED 2026-08-05 at PR #1235 (see §11.8); recorded as filed:** a Runtime **§14.8.11** amendment carrying the council record's **twelve
   conditions** at its §7.1, with §7.2's **expansion flag** surfaced in the clearance marker per root
   `CLAUDE.md` §4.5. Landing the grace silently would be **X-AL-3** — §14.8.11's deferred-to-impl list
   does not name a retention-extending grace.
