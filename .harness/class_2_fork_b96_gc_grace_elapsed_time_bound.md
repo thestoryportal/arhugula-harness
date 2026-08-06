@@ -9,7 +9,7 @@ spec leg (if owed) → impl leg.**
 registered_finding`, no `pr:`) + prose at `.harness/post-phase-8-forward-register.md:1002`. The row's
 `pr:` pointer and any status change ride the **ratification** leg, not this PR.
 
-**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-96` is now `status: design_substrate_gated` with `pr: '#1179 (the filing) + #1183 (the council record) + #1233 (the ratification record)'`, and the *"no `design-substrate/**` edit rides this PR"* scoping above describes the FILING leg — it remains true of the ratification leg too, and stops being true at the spec leg. See `## §11 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
+**AT RATIFICATION (2026-08-05) the register-row state above is SUPERSEDED, and is preserved only as the filing-time record.** `B-96` is now `status: open` — it was `design_substrate_gated` from the ratification leg until the SPEC leg landed at PR #1235, which per the register's own status enum opens it for code — with `pr: '#1179 (the filing) + #1183 (the council record) + #1233 (the ratification record) + #1235 (the spec leg)'`, and the *"no `design-substrate/**` edit rides this PR"* scoping above describes the FILING leg — it remains true of the ratification leg too, and stops being true at the spec leg. See `## §11 RATIFICATION`. *(Recorded rather than silently overwritten, per the workspace stale-carry discipline; surfaced by out-of-family review round 1 [P2].)*
 
 **Grounding HEAD.** `6d557c26`. Every `§`/line cite below was re-resolved by direct read at this
 HEAD. **One anchor moved from the row's grounding and is recorded rather than silently normalized:**
@@ -849,8 +849,11 @@ this filing.
 ## §11 RATIFICATION
 
 **Status: RATIFIED 2026-08-05 as READING C, with the held ceiling sub-decision resolved as C-2 — the
-GRACE TERM ALONE, no absolute mtime-keyed reclaim ceiling. The spec leg and the impl leg are both
-still OWED; this filing's chain is at leg 3 of 4.**
+GRACE TERM ALONE, no absolute mtime-keyed reclaim ceiling. **SUPERSEDED 2026-08-05 by §11.8 — the SPEC LEG HAS LANDED (PR #1235: Runtime spec
+**v1.111** §14.8.11.1 + Runtime plan **v2.58** U-RT-150). Only the IMPL leg remains OWED; the chain is at
+leg 4 of 4.** *(The sentence this replaces read "the spec leg and the impl leg are both still OWED; this
+filing's chain is at leg 3 of 4" — true when written, false once §11.8 landed. Corrected in place at
+out-of-family review round 3 [P2] rather than left for a top-down reader to trip over.)***
 
 The `B-92` / `B-97`(a) / `B-107` precedent is followed: the outcome is recorded here
 verbatim-in-substance rather than only at the register row, so the decision travels with the filing a
@@ -928,7 +931,7 @@ Per §9 (out-of-family round 3 [P1]) the row moves to **`design_substrate_gated`
 under C both the spec leg and the impl leg are outstanding, and `closed` would drop live work out of
 the open-work inventory.
 
-- **Spec leg (owed):** a Runtime **§14.8.11** amendment carrying the council record's **twelve
+- **Spec leg — ~~owed~~ LANDED 2026-08-05 at PR #1235 (see §11.8); recorded as filed:** a Runtime **§14.8.11** amendment carrying the council record's **twelve
   conditions** at its §7.1, with §7.2's **expansion flag** surfaced in the clearance marker per root
   `CLAUDE.md` §4.5. Landing the grace silently would be **X-AL-3** — §14.8.11's deferred-to-impl list
   does not name a retention-extending grace.
@@ -960,3 +963,15 @@ bare version label.
 and the four reclaim asserts all belong to the **impl leg**. **Explicitly not owed by any leg:**
 narrowing `ttl_seconds` or adding a TTL floor (`B-74`'s twice-declined option), and any fourth
 reordering of `_publish_atomic`'s two-stamp pipeline.
+
+### §11.8 Spec leg — LANDED 2026-08-05 at PR #1235 (chain cross-stamp)
+
+**Chain status: leg 4 of 4 open — filing (#1179) → ratification (#1233, incl. the #1183 convening) → SPEC LEG (#1235, this stamp) → IMPL LEG (owed).**
+
+**What landed.** `Spec_Harness_Runtime_v1.md` **v1.110 → v1.111**: a NEW **§14.8.11.1** carrying the council record's §7.1 **TWELVE** conditions as contract terms 1–12, plus the observation record's carrier discipline, an explicit **does-NOT-acquire** list, and the §7.2 tier-conditional counter-anchor — together with **two strict APPENDS** inside §14.8.11 (the bounded-retention bullet's cross-reference; the deferred-to-discretion list gaining the record's file name, its serialization format, and the emissions' concrete field keys / message shapes). **Three amendment sites; no existing sentence reworded, retracted or relocated.** `Implementation_Plan_Harness_Runtime_v2_57.md` → **v2.58** absorbs it as **ONE NEW unit, U-RT-150**, with **FIFTEEN** acceptance criteria — deliberately **NOT** an amendment of the landed **U-RT-145**, whose AC #7 remains true and unchanged under v1.111 (the `B-97`(a) → U-RT-149 precedent). Clearance markers filed for both artifacts.
+
+**§9's spec-leg row is discharged, and its two named obligations are both met:** the §14.8.11 amendment states the first-observation grace and its effective-retention bound (as the **conditional** statement council condition #7 requires — no unconditional `N × TTL` claim anywhere), and it is co-published with a clearance marker per `CLAUDE.md` §4.5. **§11.5's additional demand is met too:** the marker surfaces §7.2's **expansion flag** — that **FIVE** of the twelve conditions (**#5, #6, #8, #11, #12**) did not exist in this filing's §8 ask and ride the ratification only as *conditions of the selected form* — **with a Class 2 route named** if the operator judges they owe a fresh decision.
+
+**What this leg did NOT do, per §11.7 and §9.** No `harness-*/src` or `harness-*/tests` edit; no `ttl_seconds` floor or narrowing; no numeric `k` or absolute ceiling; no fourth reordering of `_publish_atomic`'s two-stamp pipeline; no carrier **(C-ii)** or **(C-iii)**; no new `C-RT-*` number (§14.8.11.1 extends §14.8.11 inside `C-RT-18`); no CXA delta (aggregate frozen at **111**); no OD delta (`C-OD-05` §5.1 roster **15 → 15**). **The record's non-dot-leading name stayed IMPL-leg** per §10.1's soundness exit and the council record §7.1's routing split, and is carried at U-RT-150 **AC #15** rather than promoted to `design-substrate/**`.
+
+**Register disposition at this leg:** `B-96` moves **`design_substrate_gated` → `open`**, per the register's own status enum (`.harness/forward-register.yaml` lines 31–39: **ratified + APPLIED** spec deltas *plus* the corresponding Phase-6 plan deltas open the row for code — both landed here). **This does not contradict §11.5**, which contrasts `design_substrate_gated` against **`closed`** at the ratification leg; `open` is not `closed`. *(Corrected at out-of-family review round 4 [P2].)* **One bounded residual was surfaced against this leg's own text and REGISTERED as `B-110` rather than absorbed:** the observation record cannot distinguish generations of a **reused temporary candidate name**, because its ratified content set is closed at two members — condition #5's *"never reused for a different file"* ground reaches a file's lifetime but not post-removal reuse. **The conjunctive rule still gates the recreated file by its own TIMESTAMP; term 2's PUBLICATION bound does not extend to a reused temporary name. Only the additional grace degrades, for crash orphans alone.** Closing it would widen a ratified closed set and is a Class 2 operator decision, explicitly not owed by any leg of this filing. **`B-96`, the `B-77` residual and `B-74` flip to `closed` ONLY when the impl leg merges** — the obligation set is §9's impl row plus council conditions #5 / #6 / #8 / #11 / #12 plus the non-dot-leading record name, all now homed at U-RT-150's fifteen ACs.
