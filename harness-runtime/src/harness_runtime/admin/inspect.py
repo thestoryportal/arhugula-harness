@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from harness_core import DeploymentSurface, PersonaTier
+from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.state_ledger_entry_schema import StateLedgerEntry
 from harness_is.state_ledger_write import read_ledger
@@ -703,7 +704,12 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return _EXIT_INSPECT_PATH
-    except OSError as exc:
+    except (OSError, CrossProcessLockTimeoutError) as exc:
+        # B-93 (out-of-family review round 9 [P2], accepted): the read lock now
+        # carries a deadline, and its timeout is deliberately NOT an OSError —
+        # so without this arm an INTERACTIVE command would wait out its budget
+        # and then print a traceback instead of RT-FAIL-INSPECT-PATH/exit 2.
+        # Contention is an expected operator-facing condition, not a crash.
         print(
             f"harness-inspect: RT-FAIL-INSPECT-PATH — read error on {ledger_path}: {exc}",
             file=sys.stderr,

@@ -306,6 +306,47 @@ def test_site9_uncontended_is_unchanged(tmp_path: Path) -> None:
         assert journal.with_name(journal.name + PAUSE_JOURNAL_LOCK_SUFFIX).exists()
 
 
+@requires_posix_flock
+def test_harness_inspect_reports_a_lock_timeout_as_a_path_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Out-of-family review round 9 [P2], accepted — the operator-facing end of
+    the class rounds 1/4/8 closed at library boundaries.
+
+    `harness-inspect` is INTERACTIVE. Its `main` catches `FileNotFoundError` and
+    `OSError` around the ledger read and maps them to `RT-FAIL-INSPECT-PATH` /
+    exit 2. `CrossProcessLockTimeoutError` is deliberately neither, so before
+    this fold an operator who ran the command while another process held the
+    ledger would have waited out the budget and then been shown a TRACEBACK —
+    for a condition (contention) that is entirely expected.
+
+    Driven through the REAL `main`, with a genuine second OS process holding the
+    ledger inode, so this witnesses the CLI contract rather than the fold.
+
+    Mutation probe (run at this arc): narrowing the arm back to `OSError` makes
+    `main` propagate and this test fails."""
+    from harness_runtime.admin import inspect as inspect_module
+
+    ledger = tmp_path / "state" / "state.jsonl"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("{}\n")
+
+    with _Holder(tmp_path, _FOREIGN_HOLDER, str(ledger)):
+        with pytest.MonkeyPatch.context() as patch:
+            import harness_is.cross_process_ledger_lock as lock_module
+
+            real_read_lock = lock_module.cross_process_read_lock
+            patch.setattr(
+                "harness_is.state_ledger_write.cross_process_read_lock",
+                lambda path, **_kw: real_read_lock(path, deadline_seconds=0.1),
+            )
+            exit_code = inspect_module.main(["--ledger-path", str(ledger)])
+
+    assert exit_code == 2, f"expected RT-FAIL-INSPECT-PATH exit 2, got {exit_code}"
+    captured = capsys.readouterr()
+    assert "RT-FAIL-INSPECT-PATH" in captured.err, captured.err
+
+
 def test_journal_exclusion_degraded_predicate_is_untouched() -> None:
     """`B-45` is DEFERRED and this arc must not prejudge it. The predicate the
     (3b) adoption's refuse-by-default consult keys on still reports the PLATFORM
