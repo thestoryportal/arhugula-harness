@@ -93,10 +93,29 @@ def test_the_dataclass_constructor_itself_refuses_a_non_expiring_deadline() -> N
     below construct and this test fails."""
     for bad in (float("inf"), float("nan"), 0.0, -1.0):
         with pytest.raises(ValueError, match="finite positive"):
-            CrossProcessLockDeadline(budget_seconds=bad, expires_at=time.monotonic() + 1.0)
-    for bad_expiry in (float("inf"), float("nan")):
-        with pytest.raises(ValueError, match="finite"):
-            CrossProcessLockDeadline(budget_seconds=1.0, expires_at=bad_expiry)
+            CrossProcessLockDeadline(budget_seconds=bad)
+
+
+def test_the_expiry_cannot_disagree_with_the_declared_budget() -> None:
+    """Out-of-family review round 3 [P2], accepted. Validating the two fields
+    INDEPENDENTLY was not enough: a caller could declare `budget_seconds=0.001`
+    with an expiry an hour out, and every timeout message would then report a
+    1 ms budget for an hour-long wait — a diagnostic that lies about the one
+    thing this type exists to make legible.
+
+    Closed by removing the SECOND AUTHORITY rather than policing a relationship:
+    `expires_at` is DERIVED, so the fields cannot disagree by construction. The
+    witness is that supplying it is a TypeError — not that a mismatch is
+    rejected, which would still admit the two-authority shape.
+
+    Mutation probe (run at this arc): restoring `expires_at` as an `init=True`
+    field makes the constructor accept the mismatch and this test fails."""
+    with pytest.raises(TypeError):
+        CrossProcessLockDeadline(budget_seconds=0.001, expires_at=time.monotonic() + 3600)  # type: ignore[call-arg]
+    derived = CrossProcessLockDeadline(budget_seconds=0.5)
+    assert 0.0 < derived.remaining_seconds() <= 0.5, (
+        "expiry is not derived from the declared budget"
+    )
 
 
 @requires_posix_flock
@@ -190,7 +209,8 @@ def test_uncontended_acquisition_succeeds_with_an_already_spent_budget(tmp_path:
     target = tmp_path / "uncontended.lock"
     fd = os.open(target, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        spent = CrossProcessLockDeadline(budget_seconds=1.0, expires_at=time.monotonic() - 5.0)
+        spent = CrossProcessLockDeadline.starting_now(0.01)
+        time.sleep(0.05)
         assert spent.remaining_seconds() < 0
         flock_until_deadline(fd, fcntl.LOCK_EX, deadline=spent, lock_target=str(target))
         fcntl.flock(fd, fcntl.LOCK_UN)

@@ -181,7 +181,15 @@ class _DirLock:
                 flock_until_deadline(
                     self._fd,
                     fcntl.LOCK_EX,
-                    deadline=deadline or CrossProcessLockDeadline.starting_now(),
+                    # `resolved`, NOT a fresh mint (out-of-family review round 3
+                    # [P3], accepted). Re-minting here gave the two faces
+                    # SEPARATE budgets whenever `deadline` was None: an
+                    # in-process holder could consume nearly the whole default
+                    # and a cross-process holder the whole of another — twice
+                    # the bound this method's own docstring promises. The
+                    # end-to-end contract has to hold WITHIN a site, not only
+                    # across sites.
+                    deadline=resolved,
                     lock_target=str(self._path),
                 )
             except BaseException:

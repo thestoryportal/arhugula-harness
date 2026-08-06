@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 __all__ = [
     "DEFAULT_CROSS_PROCESS_LOCK_DEADLINE_SECONDS",
@@ -178,29 +178,29 @@ class CrossProcessLockDeadline:
     """
 
     budget_seconds: float
-    expires_at: float
+    expires_at: float = field(init=False)
+    """DERIVED, never supplied — the clock starts when the deadline is created.
+
+    Out-of-family review rounds 2 [P2] and 3 [P2], accepted, in two steps. Round
+    2 established that validating only in :meth:`starting_now` left the illegal
+    state one constructor call away (``CrossProcessLockDeadline(nan, nan)`` makes
+    ``remaining_seconds()`` return ``nan``, so ``remaining <= 0`` is never true
+    and a contended acquisition polls FOREVER). Round 3 showed that validating
+    the two fields INDEPENDENTLY was still not enough: a caller could declare
+    ``budget_seconds=0.001`` with an expiry an hour out, and every timeout
+    message would then report a 1 ms budget for an hour-long wait — a diagnostic
+    that lies about the very thing this type exists to make legible.
+
+    Both are closed by removing the SECOND AUTHORITY rather than policing a
+    relationship between two: the expiry is now COMPUTED from the budget, so the
+    fields cannot disagree by construction and there is nothing left to
+    cross-validate.
+    """
 
     def __post_init__(self) -> None:
-        """Refuse a non-expiring deadline AT THE TYPE, not only at the factory.
-
-        Out-of-family review round 2 [P2], accepted: this dataclass is exported
-        and directly constructible, so validating only in :meth:`starting_now`
-        left the illegal state one ordinary constructor call away —
-        ``CrossProcessLockDeadline(nan, nan)`` makes ``remaining_seconds()``
-        return ``nan``, ``remaining <= 0`` is then never true, and a contended
-        acquisition polls FOREVER: precisely the unbounded block this module
-        exists to remove. Enforcing here makes the state unrepresentable rather
-        than merely hard to reach, which is the whole point of putting the
-        deadline in a type instead of passing a bare float.
-        """
         if not math.isfinite(self.budget_seconds) or self.budget_seconds <= 0.0:
             raise ValueError(_BUDGET_REFUSAL.format(value=self.budget_seconds))
-        if not math.isfinite(self.expires_at):
-            raise ValueError(
-                f"cross-process lock deadline expiry must be a finite "
-                f"time.monotonic() instant, got {self.expires_at!r} — a "
-                f"non-finite expiry never elapses"
-            )
+        object.__setattr__(self, "expires_at", time.monotonic() + self.budget_seconds)
 
     @classmethod
     def starting_now(cls, deadline_seconds: float | None = None) -> CrossProcessLockDeadline:
@@ -208,18 +208,19 @@ class CrossProcessLockDeadline:
 
         ``None`` selects :data:`DEFAULT_CROSS_PROCESS_LOCK_DEADLINE_SECONDS`.
 
-        Validation lives ENTIRELY at ``__post_init__``, deliberately: a mirrored
-        check here would be unreachable defensive code — the PD-8 probe for it
-        came back GREEN precisely because ``__post_init__`` already refuses
-        every value it would have caught, and a guard no mutation can defeat is
-        a guard that is not doing anything. One authority, at the type.
+        Validation and the expiry computation both live at ``__post_init__``,
+        deliberately: a mirrored check here would be unreachable defensive code —
+        its PD-8 probe came back GREEN precisely because ``__post_init__`` already
+        refuses every value it would have caught, and a guard no mutation can
+        defeat is a guard that is not doing anything. This classmethod now adds
+        exactly one thing the constructor cannot: resolving ``None`` to the
+        default budget.
         """
-        budget = (
+        return cls(
             DEFAULT_CROSS_PROCESS_LOCK_DEADLINE_SECONDS
             if deadline_seconds is None
             else float(deadline_seconds)
         )
-        return cls(budget_seconds=budget, expires_at=time.monotonic() + budget)
 
     def remaining_seconds(self) -> float:
         """Seconds left before expiry; zero or negative once expired."""

@@ -214,6 +214,71 @@ def test_site1_the_in_process_face_is_bounded_too(tmp_path: Path) -> None:
 
 
 @requires_posix_flock
+def test_site1_spends_one_budget_across_both_of_its_faces(tmp_path: Path) -> None:
+    """Out-of-family review round 3 [P3], accepted. `_DirLock.acquire` waits on
+    TWO faces in sequence — the in-process `RLock`, then the cross-process
+    `flock` — and an earlier draft resolved the deadline for the first but
+    MINTED A FRESH ONE for the second whenever no explicit deadline was passed.
+    A same-process holder could then consume nearly the whole budget and a
+    cross-process holder the whole of another: twice the bound the method's own
+    docstring promises. The end-to-end contract has to hold WITHIN a site, not
+    only across sites.
+
+    Both faces are contended: the in-process `RLock` is held for a FIXED span by
+    a sibling thread, and a genuine second OS process holds the `flock`
+    throughout. So the caller waits at face 1, then at face 2, and a re-armed
+    face 2 shows up as an elapsed time far past the single budget.
+
+    The `RLock` is held DIRECTLY rather than by driving a sibling through
+    `cross_process_scope_lock` — an earlier draft did the latter and the probe
+    came back GREEN, because under the mutation the SIBLING's own flock wait was
+    re-armed too, so it held the `RLock` for the mutated duration and the caller
+    timed out at face 1 having never reached face 2. The mutation masked itself.
+    Holding the `RLock` directly makes the contention independent of the code
+    under test, which is what a discriminating witness requires.
+
+    Mutation probe (run at this arc): re-minting at the flock makes this HANG on
+    the fresh default budget."""
+    import threading
+
+    from harness_is.cross_process_ledger_lock import _dir_lock_for
+
+    budget = 1.0
+    rlock_hold = 0.4
+    root = tmp_path / "scope-root"
+    root.mkdir()
+    lock_file = root / SCOPE_LOCK_FILENAME
+    lock_file.touch()
+    dir_lock = _dir_lock_for(lock_file)
+
+    with _ForeignHolder(tmp_path, lock_file):
+        holding = threading.Event()
+
+        def _hold_the_in_process_face() -> None:
+            dir_lock._rlock.acquire()
+            holding.set()
+            time.sleep(rlock_hold)
+            dir_lock._rlock.release()
+
+        thread = threading.Thread(target=_hold_the_in_process_face)
+        thread.start()
+        try:
+            assert holding.wait(10), "the in-process face was never held"
+            started = time.monotonic()
+            with pytest.raises(CrossProcessLockTimeoutError):
+                with cross_process_scope_lock(root, deadline_seconds=budget):
+                    raise AssertionError("entered while both faces were contended")
+            elapsed = time.monotonic() - started
+            assert elapsed >= rlock_hold, "never waited at the in-process face"
+            assert elapsed < budget * 2, (
+                f"spent {elapsed:.2f}s against a {budget}s single budget — the two "
+                f"faces were given SEPARATE deadlines"
+            )
+        finally:
+            thread.join(30)
+
+
+@requires_posix_flock
 def test_site1_reentrant_acquisition_is_unaffected_by_an_expired_budget(tmp_path: Path) -> None:
     """The bound must not break REENTRANCY, which the B-50 `tenant_transaction`
     composition depends on: a guarded section calls through the tree's own write
