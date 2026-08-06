@@ -747,7 +747,20 @@ def main(argv: list[str] | None = None) -> int:
     # `None` → output byte-unchanged from a pre-v1.111 run, exactly the §13.7
     # shape above. READ-ONLY and SWEEP-FREE: it writes nothing, creates
     # nothing, takes no lock, and never governs the exit code.
-    store_snapshot = _read_protected_result_store_if_engaged(args)
+    try:
+        store_snapshot = _read_protected_result_store_if_engaged(args)
+    except OSError as exc:
+        # An UNUSABLE store root — present but unreadable, or not a directory —
+        # is a PATH ERROR, never an absent store. Suppressing the row would
+        # report nothing at all, successfully, for a store the operator cannot
+        # inspect — on the one surface whose purpose is to make the retention
+        # level falsifiable. Same disposition the §13.7 enumeration takes for an
+        # unreadable journal directory. *(Out-of-family review round 1 [P2].)*
+        print(
+            f"harness-inspect: RT-FAIL-INSPECT-PATH — protected result store root unusable: {exc}",
+            file=sys.stderr,
+        )
+        return _EXIT_INSPECT_PATH
 
     if args.json:
         output = _format_json(

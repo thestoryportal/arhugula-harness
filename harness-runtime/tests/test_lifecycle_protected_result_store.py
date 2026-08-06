@@ -3258,6 +3258,81 @@ def test_one_malformed_row_invalidates_the_whole_record_not_just_that_row(
     assert store.gc_sweep(now=at + ttl + 0.1) == [entry_path.stem]
 
 
+def test_a_non_finite_first_observed_at_invalidates_the_record(tmp_path: Path) -> None:
+    """AC #11's totality against the NUMERIC-BUT-UNUSABLE stamp, which a type
+    check alone admits. Python's `json` accepts the non-standard literals
+    `Infinity` / `-Infinity` / `NaN`, so a restored, hand-edited or
+    foreign-build record can carry `-Infinity` as a `first_observed_at`. It is
+    numeric, so it parses; and `current_time - (-inf)` is `+inf`, which passes
+    the elapsed conjunct INSTANTLY and DELETES a protected result rather than
+    granting it a fresh grace — precisely the earlier-than-truth,
+    retention-SHORTENING direction AC #4 forbids.
+
+    Both non-finite directions are exercised. `NaN` fails the comparison in the
+    safe direction on its own, but is rejected too, because term 11's fail-safe
+    is a TOTALITY over anything that is not *read, parsed whole, entries
+    usable* — not a set of individually-patched hazards.
+
+    *(Out-of-family review round 1 [P1].)*
+
+    Mutation probe: dropping the `math.isfinite` guard makes the `-Infinity`
+    case reclaim the live entry on the FIRST sweep and this test fails."""
+    ttl = 1.0
+    for literal in ("-Infinity", "Infinity", "NaN"):
+        store, entry_path = _stale_entry(
+            tmp_path / literal.lower().lstrip("-"), ttl_seconds=ttl, age_seconds=10.0
+        )
+        _observation_record_path(store).write_text(
+            f'{{"version": 1, "observations": {{"{entry_path.name}": {literal}}}}}'
+        )
+        at = time.time()
+        assert store.gc_sweep(now=at, observed_at=at) == [], (
+            f"a record carrying {literal} as a first_observed_at was trusted — "
+            f"a numeric-but-unusable stamp reached the reclaim decision"
+        )
+        assert entry_path.exists()
+        # Fail-SAFE, not fail-open: the fresh grace it granted is a real one.
+        assert store.gc_sweep(now=at + ttl + 0.1) == [entry_path.stem]
+
+
+def test_an_unusable_store_root_is_a_path_error_not_an_absent_store(tmp_path: Path) -> None:
+    """AC #8(b)'s engagement predicate discriminates ABSENT from UNUSABLE. A
+    configured root that EXISTS but is a regular file, or whose contents cannot
+    be read, is NOT the *no store here* case: collapsing the two would report
+    nothing at all, successfully, for a store the operator cannot inspect — on
+    the one surface whose purpose is to make the retention level falsifiable.
+
+    *(Out-of-family review round 1 [P2].)*
+
+    Mutation probe: reverting the predicate to a bare `root.is_dir()` returns
+    `None` for the regular-file case (silently suppressing the row) and lets the
+    unreadable-directory case raise an UNCAUGHT `PermissionError` out of the
+    read instead of a typed path error — both assertions below fail."""
+    # Genuinely absent → None, and nothing is created.
+    absent = tmp_path / "never-existed"
+    assert read_protected_result_store_snapshot(absent) is None
+    assert not absent.exists()
+
+    # Exists but is a regular file → a path error, not `None`.
+    not_a_dir = tmp_path / "a-file-not-a-store"
+    not_a_dir.write_text("this is not a store root")
+    with pytest.raises(NotADirectoryError):
+        read_protected_result_store_snapshot(not_a_dir)
+
+    # Exists, is a directory, but is unreadable → a path error, not `None`.
+    unreadable = tmp_path / "unreadable-store"
+    unreadable.mkdir()
+    (unreadable / GC_OBSERVATION_RECORD_FILENAME).write_text('{"version": 1, "observations": {}}')
+    unreadable.chmod(0o000)
+    try:
+        if os.access(unreadable, os.R_OK):  # pragma: no cover — root/CI-as-root
+            pytest.skip("running as a user that bypasses directory permissions")
+        with pytest.raises(OSError):
+            read_protected_result_store_snapshot(unreadable)
+    finally:
+        unreadable.chmod(0o700)
+
+
 def test_emissions_ride_the_report_log_with_no_span_no_metric_no_composite_key(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -648,6 +648,40 @@ def test_protected_result_store_row_json_shape(
     assert "CANNOT TELL WHICH" in payload["protected_result_store_observation_record_absent_note"]
 
 
+def test_protected_result_store_unusable_root_exits_rt_fail_inspect_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U-RT-150 AC #8(b) — an UNUSABLE store root takes the binary's own
+    `RT-FAIL-INSPECT-PATH` exit rather than silently suppressing the row.
+    Suppressing it would report nothing at all, successfully, for a store the
+    operator cannot inspect — on the one surface whose purpose is to make the
+    retention level falsifiable. Same disposition the §13.7 pause-journal
+    enumeration already takes for an unreadable journal directory.
+
+    *(Out-of-family review round 1 [P2].)*
+
+    Mutation probe: dropping the `except OSError` around the row lets the
+    `NotADirectoryError` escape as an uncaught traceback instead of exit 2."""
+    from harness_runtime.bootstrap.factories.protected_result_store_factory import (
+        PROTECTED_RESULT_STORE_ROOT_SUBPATH,
+    )
+
+    ledger = tmp_path / "state.jsonl"
+    _write_n_entries(ledger, 1)
+    # A regular FILE where the store root should be.
+    store_root = tmp_path / PROTECTED_RESULT_STORE_ROOT_SUBPATH
+    store_root.parent.mkdir(parents=True, exist_ok=True)
+    store_root.write_text("not a store root")
+    config_file = _runtime_config_file(tmp_path, tmp_path)
+
+    code = main(["--ledger-path", str(ledger), "--runtime-config", str(config_file)])
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in captured.err
+    assert "protected result store root unusable" in captured.err
+
+
 def test_protected_result_store_row_root_is_config_derived_not_ledger_path_derived(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

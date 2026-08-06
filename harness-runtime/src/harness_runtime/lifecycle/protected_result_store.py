@@ -27,8 +27,10 @@ import errno
 import hashlib
 import json
 import logging
+import math
 import os
 import pickle
+import stat
 import sys
 import tempfile
 import threading
@@ -231,10 +233,22 @@ def _read_observation_record(record_path: Path) -> _ObservationRecordRead:
         # happens to parse can carry a `first_observed_at` EARLIER than the
         # truth and SHORTEN retention, the one direction term 4 forbids.
         # `bool` is excluded explicitly: it is an `int` subclass.
+        #
+        # NON-FINITE values are rejected for exactly that reason and are NOT a
+        # theoretical case: Python's `json` accepts the non-standard literals
+        # `Infinity` / `-Infinity` / `NaN`, so a restored, hand-edited or
+        # foreign-build record can carry `-Infinity` here. It is numeric, so a
+        # type check alone admits it — and `current_time - (-inf)` is `+inf`,
+        # which passes the elapsed conjunct instantly and DELETES a protected
+        # result rather than granting it a fresh grace. `NaN` fails the same
+        # comparison in the safe direction, but is rejected too: term 11's
+        # fail-safe is a TOTALITY over anything that is not *read, parsed
+        # whole, entries usable*. *(Out-of-family review round 1 [P1].)*
         if (
             not isinstance(name, str)
             or isinstance(stamp, bool)
             or not isinstance(stamp, int | float)
+            or not math.isfinite(stamp)
         ):
             return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
         observations[name] = float(stamp)
@@ -1316,7 +1330,17 @@ def read_protected_result_store_snapshot(
     root: Path, *, now: float | None = None
 ) -> ProtectedResultStoreSnapshot | None:
     """Spec term 8(b) — the OPERATOR-FACING, READ-ONLY, SWEEP-FREE read of a
-    store root. Returns `None` when the root does not exist.
+    store root. Returns `None` when the root is GENUINELY ABSENT.
+
+    ABSENT and UNUSABLE are kept apart deliberately. A configured root that
+    EXISTS but is a regular file, or whose contents cannot be read, is not the
+    engagement predicate's *no store here* case — collapsing the two would let
+    the surface report nothing at all, successfully, for a store the operator
+    cannot inspect, on the one surface whose entire purpose is to make the
+    retention level falsifiable. Any such failure raises `OSError` for the
+    caller to convert into its own path-error disposition, exactly as the §13.7
+    pause-journal enumeration already does for an unreadable journal directory.
+    *(Out-of-family review round 1 [P2].)*
 
     STRICTLY READ-ONLY: this writes nothing and CREATES nothing (not the root,
     not the record, not a temporary) — one `glob`+`stat` pass and one read of a
@@ -1329,8 +1353,14 @@ def read_protected_result_store_snapshot(
     hold. The caller renders the three-way record state and the
     indistinguishability note; this function supplies only the readings.
     """
-    if not root.is_dir():
+    try:
+        root_stat = root.stat()
+    except FileNotFoundError:
         return None
+    if not stat.S_ISDIR(root_stat.st_mode):
+        raise NotADirectoryError(
+            errno.ENOTDIR, "protected result store root is not a directory", str(root)
+        )
     current_time = time.time() if now is None else now
     entry_count = 0
     oldest_entry_age: float | None = None
@@ -1353,11 +1383,16 @@ def read_protected_result_store_snapshot(
         if oldest_orphan_age is None or age > oldest_orphan_age:
             oldest_orphan_age = age
     record_path = root / GC_OBSERVATION_RECORD_FILENAME
-    if not record_path.exists():
+    try:
+        record_path.stat()
+    except FileNotFoundError:
         record_state = GcObservationRecordState.ABSENT
     else:
         # The sweep's own totality rule, reused rather than re-implemented, so
         # this surface's three-way reading can never disagree with the sweep's.
+        # Reached only once the record's PRESENCE is established, so a read
+        # failure here is genuinely *present but unreadable* rather than an
+        # unusable root masquerading as one — that case raised above.
         record_state = _read_observation_record(record_path).state
     return ProtectedResultStoreSnapshot(
         root=root,
