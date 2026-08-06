@@ -146,6 +146,22 @@ def test_site1_scope_lock_deadline_fires(tmp_path: Path) -> None:
 
 
 @requires_posix_flock
+def test_no_entry_surface_can_mint_an_unbounded_deadline(tmp_path: Path) -> None:
+    """Out-of-family review round 1 [P2], accepted — witnessed at the ENTRY
+    SURFACE, not only at the constructor. `inf` passes a bare `> 0` check and
+    `nan` passes it because every comparison with `nan` is False; either makes
+    the remaining time never reach zero, so the poll loop spins forever and the
+    pre-B-93 indefinite hang is back. Proving the VALUE is refused is weaker
+    than proving the HANG is UNREACHABLE, which is what a caller actually
+    depends on — so this drives a real entry surface."""
+    root = tmp_path / "scope"
+    for bad in (float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="finite positive"):
+            with cross_process_scope_lock(root, deadline_seconds=bad):
+                raise AssertionError("entered under an unbounded deadline")
+
+
+@requires_posix_flock
 def test_site1_scope_lock_still_acquires_uncontended(tmp_path: Path) -> None:
     """The non-contended path is UNCHANGED — with a budget so short a polling
     waiter could never win a contended race, an uncontended acquisition still

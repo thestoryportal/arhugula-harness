@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, cast
 
 from harness_core.cross_process_lock_deadline import (
     CrossProcessLockDeadline,
+    CrossProcessLockTimeoutError,
     flock_until_deadline,
 )
 
@@ -590,12 +591,19 @@ class ProtectedResultStore:
 
         **B-93 site 8 of 9 — bounded.** `deadline_seconds` bounds the wait;
         expiry raises `harness_core.CrossProcessLockTimeoutError` and neither
-        `_publish_atomic` nor `gc_sweep`'s candidate-selection phase runs. Note
-        for a later reader: this store's callers already fold acquisition
-        failures broadly (`write_once` → `UnresolvableResultRef`; the bootstrap
-        and shutdown `gc_sweep` callers wrap in `except Exception`), so a
-        timeout is absorbed there exactly as a raising `flock` already was —
-        pre-existing caller behaviour this arc deliberately does not change.
+        `_publish_atomic` nor `gc_sweep`'s candidate-selection phase runs.
+
+        **The timeout needed an EXPLICIT fold at `write_once`, and an earlier
+        draft of this note wrongly claimed it did not** (out-of-family review
+        round 1 [P1], accepted). A raising `flock` arrives as an `OSError` and
+        `write_once`'s `except OSError` already folded it to
+        `UnresolvableResultRef`; `CrossProcessLockTimeoutError` deliberately
+        does NOT derive from `OSError`, so it would have ESCAPED a method
+        contracted never to raise for an expected failure class — at the
+        raise-site for an already-completed paid effect, where an escape lets CP
+        redispatch it. `write_once` now folds it explicitly. The `gc_sweep`
+        callers (bootstrap, shutdown step 5b, `_maybe_opportunistic_gc_sweep`)
+        wrap in `except Exception` and were already covered.
         """
         if _IS_WINDOWS:
             yield
@@ -704,6 +712,27 @@ class ProtectedResultStore:
                 tag,
             )
             return UnresolvableResultRef(reason="write-once refused: composite key already exists")
+        except CrossProcessLockTimeoutError as exc:
+            # B-93 (out-of-family review round 1 [P1], accepted): the new
+            # deadline is a THIRD expected failure class at this boundary, and
+            # it does NOT arrive as an `OSError`. That is deliberate at the
+            # lock (an OSError-derived timeout would be swallowed by the
+            # acquisition sites' own ENOTSUP arms), but it means the arm above
+            # does not catch it — so without this arm the timeout would escape
+            # `write_once`, which is documented to "never raise for an expected
+            # failure class". It is reached ONLY while constructing a
+            # `PostEffectAuditSigningError` for an ALREADY-completed paid
+            # effect, and `resolve_result_ref_off_loop`'s narrower catch does
+            # not fold it — so an escape would let CP treat a completed effect
+            # as an ordinary resumable failure and REDISPATCH it. Same
+            # fail-closed disposition as every other expected class: the ref is
+            # unresolvable, the original signing error still propagates.
+            logger.error(
+                "protected result store: cross-process lock deadline expired for tenant=%s: %s",
+                tag,
+                exc,
+            )
+            return UnresolvableResultRef(reason=f"store lock timeout: {type(exc).__name__}")
         except OSError as exc:
             logger.error(
                 "protected result store: durable publication failed for tenant=%s: %s",

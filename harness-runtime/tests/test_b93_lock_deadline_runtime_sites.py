@@ -1,6 +1,6 @@
 """B-93 — the THREE `harness-runtime` acquisition sites, plus the §3(ii) import repair.
 
-Companion to `harness-is/tests/test_b93_cross_process_lock_deadline.py` (sites
+Companion to `harness-is/tests/test_b93_lock_deadline_is_sites.py` (sites
 1-6). This file carries:
 
 - sites 7/8/9 — `_workflow_lock`, `_cross_process_lock`, `cross_process_journal_lock`;
@@ -219,6 +219,48 @@ def test_site8_protected_result_store_lock_deadline_fires(tmp_path: Path) -> Non
                 raise AssertionError("entered while a second OS process held the store lock")
         assert caught.value.lock_target == str(lock_path)
         assert time.monotonic() - started >= _DEADLINE
+
+
+@requires_posix_flock
+def test_site8_write_once_folds_the_timeout_instead_of_raising(tmp_path: Path) -> None:
+    """Out-of-family review round 1 [P1], accepted — and it FALSIFIED a claim an
+    earlier draft of `_cross_process_lock`'s docstring made.
+
+    `write_once` is contracted to NEVER raise for an expected failure class: it
+    is reached only while constructing a `PostEffectAuditSigningError` for an
+    ALREADY-COMPLETED paid effect, so an escaping exception lets CP treat that
+    effect as an ordinary resumable failure and REDISPATCH it. A raising `flock`
+    arrived as an `OSError` and the existing arm folded it;
+    `CrossProcessLockTimeoutError` deliberately does not derive from `OSError`,
+    so before the fold it ESCAPED — a new failure path through the one method
+    whose whole purpose is to have none.
+
+    Mutation probe (run at this arc): removing the
+    `except CrossProcessLockTimeoutError` arm makes this fail with the raw
+    timeout propagating out of `write_once`.
+    """
+    from cryptography.fernet import Fernet
+
+    store_dir = tmp_path / "store"
+    store_dir.mkdir()
+    store = ProtectedResultStore(
+        store_dir, codec=Fernet(Fernet.generate_key()), ttl_seconds=86400.0
+    )
+    lock_path = store_dir / _CROSS_PROCESS_LOCK_FILENAME
+    # Force every acquisition on this store to expire fast while a genuine
+    # second OS process holds the lock.
+    original = type(store)._cross_process_lock  # type: ignore[attr-defined]
+
+    def _fast(self: ProtectedResultStore, *, deadline_seconds: float | None = None) -> object:
+        return original(self, deadline_seconds=0.05)
+
+    with _Holder(tmp_path, _FOREIGN_HOLDER, str(lock_path)):
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(type(store), "_cross_process_lock", _fast)
+            outcome = store.write_once(None, {"paid": "effect"})
+
+    assert not isinstance(outcome, str), f"write_once returned a live ref: {outcome!r}"
+    assert "lock timeout" in outcome.reason, outcome.reason
 
 
 @requires_posix_flock

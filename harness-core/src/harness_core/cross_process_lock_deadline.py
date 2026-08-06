@@ -50,6 +50,7 @@ exactly where they are (`B-45`, deferred).
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 
@@ -106,9 +107,27 @@ re-acquisition to actually fail).
 The property is intrinsic to the ratified shape, not to this implementation:
 ``filelock`` — the alternative vehicle the fork evaluated and declined — polls
 identically (``poll_interval=0.05``, ten times coarser), and ``msvcrt.LK_LOCK``
-retries at 1 s. No portable primitive gives a kernel-parked wait WITH a timeout.
-One shipped witness depended on the old handoff ordering and was re-pinned at
-this arc; see ``test_shadow_git_rollback.py``'s concurrent-append test.
+retries at 1 s. No portable primitive gives a kernel-parked wait WITH a timeout
+(``F_SETLKW`` has none either; a watchdog thread would orphan an acquisition in
+exactly the wedged-holder case this bound targets). One shipped witness depended
+on the old handoff ordering and was re-pinned at this arc; see
+``test_shadow_git_rollback.py``'s concurrent-append test.
+
+**ONE CONSEQUENCE REACHES A PRODUCTION CONTRACT — register row ``B-112``**
+(out-of-family review round 1 [P1], accepted; reproduced 12/20 by the reviewer's
+own contention probe). ``append_ledger_entry`` validates a CALLER-SAMPLED
+timestamp against PHYSICAL APPEND ORDER under a ``_CLOCK_SKEW_TOLERANCE`` of
+ZERO, so a waiter whose timestamp was sampled BEFORE it queued can now be
+overtaken by a later-arriving writer and be refused with
+``NonMonotonicTimestampError``. **The lock layer cannot fix this and should not
+try**: no acquisition ordering makes a timestamp sampled arbitrarily long before
+acquisition correct, and the ordering flock itself guarantees is unspecified.
+**The remedy already exists in the cleared spec** — C-IS-07 §7.6 (IS spec v1.11)
+added ``WRITER_OWNED_TIMESTAMP``, which samples the timestamp INSIDE the write
+critical section so sampling order EQUALS append order, monotonic by
+construction and immune to any lock's fairness. Selecting it per caller is a
+semantic decision about whose clock a given entry records, so it is registered
+rather than applied wholesale here.
 """
 
 
@@ -164,11 +183,20 @@ class CrossProcessLockDeadline:
             if deadline_seconds is None
             else float(deadline_seconds)
         )
-        if budget <= 0.0:
+        if not math.isfinite(budget) or budget <= 0.0:
+            # FINITE as well as positive (out-of-family review round 1 [P2],
+            # accepted). `inf` and `nan` both pass a bare `> 0` check — `inf`
+            # trivially, `nan` because every comparison against it is False —
+            # and either makes `remaining_seconds()` never reach `<= 0`, so the
+            # poll loop spins forever and RECREATES the exact indefinite hang
+            # this module exists to eliminate. Refusing at construction keeps
+            # the illegal state unrepresentable rather than leaving the loop to
+            # cope with it.
             raise ValueError(
-                f"cross-process lock deadline must be positive, got {budget!r} — "
-                f"a non-positive budget would make every contended acquisition "
-                f"fail without waiting"
+                f"cross-process lock deadline must be a finite positive number of "
+                f"seconds, got {budget!r} — a non-positive budget would refuse "
+                f"every contended acquisition without waiting, and a non-finite "
+                f"one would never expire (the unbounded block this bound removes)"
             )
         return cls(budget_seconds=budget, expires_at=time.monotonic() + budget)
 

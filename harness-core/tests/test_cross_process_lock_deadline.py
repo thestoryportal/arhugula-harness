@@ -2,8 +2,8 @@
 
 Unit-level witnesses for the mechanism the nine acquisition sites share. The
 per-SITE witnesses (a genuine second OS process holding each of the nine locks)
-live beside their carriers at `harness-is/tests/test_b93_cross_process_lock_deadline.py`
-and `harness-runtime/tests/test_b93_cross_process_lock_deadline.py`; this file
+live beside their carriers at `harness-is/tests/test_b93_lock_deadline_is_sites.py`
+and `harness-runtime/tests/test_b93_lock_deadline_runtime_sites.py`; this file
 pins the properties those witnesses would not distinguish:
 
 - an UNCONTENDED acquisition succeeds even with an already-spent budget (the
@@ -77,7 +77,21 @@ def test_a_non_positive_budget_is_refused() -> None:
     """Detect-then-refuse: a zero/negative budget would make every contended
     acquisition fail without waiting at all — a silent no-lock posture."""
     for bad in (0.0, -1.0):
-        with pytest.raises(ValueError, match="must be positive"):
+        with pytest.raises(ValueError, match="finite positive"):
+            CrossProcessLockDeadline.starting_now(bad)
+
+
+def test_a_non_finite_budget_is_refused() -> None:
+    """Out-of-family review round 1 [P2], accepted. `inf` passes a bare `> 0`
+    trivially and `nan` passes it because EVERY comparison with `nan` is False —
+    and either makes `remaining_seconds()` never reach `<= 0`, so the poll loop
+    spins forever and RECREATES the indefinite hang this module exists to
+    remove. The check must be finiteness, not just sign.
+
+    Mutation probe (run at this arc): reverting the guard to `budget <= 0.0`
+    makes both cases construct successfully and this test fails."""
+    for bad in (float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="finite positive"):
             CrossProcessLockDeadline.starting_now(bad)
 
 
