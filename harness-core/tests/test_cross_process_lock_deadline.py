@@ -18,6 +18,7 @@ pins the properties those witnesses would not distinguish:
 
 from __future__ import annotations
 
+import errno
 import os
 import sys
 import time
@@ -395,6 +396,51 @@ def test_shared_waiters_are_bounded_too(tmp_path: Path) -> None:
         os.close(waiter)
         fcntl.flock(holder, fcntl.LOCK_UN)
         os.close(holder)
+
+
+@requires_posix_flock
+def test_eacces_is_treated_as_contention_not_as_a_hard_failure(tmp_path: Path) -> None:
+    """Out-of-family review round 8 [P1], accepted.
+
+    `fcntl.flock`'s own docstring says it is "emulated using fcntl() on some
+    systems", and the `lockf` docs spell out that a non-blocking failure arrives
+    as `EACCES` *or* `EAGAIN` with an explicit instruction to "check for either
+    value". A catch keyed on `BlockingIOError` alone therefore turns every
+    contended acquisition on an emulated platform into an immediate
+    `PermissionError`: the deadline never fires and the typed timeout is
+    unreachable — the mechanism silently absent exactly where it is needed.
+
+    `EACCES` cannot be produced natively on this host (Linux/macOS `flock` is
+    real and reports `EWOULDBLOCK`), so contention is INJECTED. That is honest:
+    the platform is unavailable, the BEHAVIOUR under it is not.
+
+    Mutation probe (run at this arc): narrowing the catch back to
+    `BlockingIOError` makes this raise `PermissionError` and the test fails."""
+    target = tmp_path / "eacces.lock"
+    fd = os.open(target, os.O_CREAT | os.O_RDWR, 0o600)
+    real_flock = fcntl.flock
+    calls = {"n": 0}
+
+    def _emulated_flock(the_fd: int, operation: int) -> None:
+        if operation & fcntl.LOCK_NB:
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise PermissionError(errno.EACCES, "Permission denied")
+        real_flock(the_fd, operation)
+
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(fcntl, "flock", _emulated_flock)
+            flock_until_deadline(
+                fd,
+                fcntl.LOCK_EX,
+                deadline=CrossProcessLockDeadline.starting_now(5.0),
+                lock_target=str(target),
+            )
+        assert calls["n"] >= 3, "the EACCES probes were not retried"
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 @requires_posix_flock

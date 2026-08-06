@@ -50,6 +50,7 @@ exactly where they are (`B-45`, deferred).
 
 from __future__ import annotations
 
+import errno
 import math
 import time
 from dataclasses import dataclass, field
@@ -128,6 +129,18 @@ critical section so sampling order EQUALS append order, monotonic by
 construction and immune to any lock's fairness. Selecting it per caller is a
 semantic decision about whose clock a given entry records, so it is registered
 rather than applied wholesale here.
+"""
+
+
+_CONTENTION_ERRNOS = frozenset({errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES})
+"""The errnos a NON-BLOCKING `flock` reports CONTENTION with.
+
+`EWOULDBLOCK`/`EAGAIN` are the same value on every platform this runs on and
+surface as `BlockingIOError`; `EACCES` is the third because `fcntl.flock` is
+"emulated using fcntl()" on some systems (its own docstring), and the `lockf`
+docs spell the pair out with an explicit instruction to "check for either
+value". Keyed on ERRNO rather than exception CLASS so the emulated path is
+covered — a class-only catch turns contention there into `PermissionError`.
 """
 
 
@@ -282,8 +295,22 @@ def flock_until_deadline(
     while True:
         try:
             fcntl.flock(fd, operation | fcntl.LOCK_NB)
-        except BlockingIOError:
-            pass
+        except OSError as exc:
+            # CONTENTION is `EWOULDBLOCK`/`EAGAIN` (which CPython raises as
+            # `BlockingIOError`) — but ALSO `EACCES` where `flock` is EMULATED
+            # VIA `fcntl()`, which `fcntl.flock`'s own docstring says happens
+            # "on some systems"; the `lockf` docs spell the pair out and tell
+            # callers to "check for either value". Catching only
+            # `BlockingIOError` there would turn every contended acquisition
+            # into an immediate `PermissionError` instead of a bounded retry —
+            # the deadline would never fire and the typed timeout would be
+            # unreachable *(out-of-family review round 8 [P1], accepted)*.
+            #
+            # Everything else — `ENOTSUP` on an un-flockable object, `EBADF` —
+            # still propagates UNCHANGED, so the acquisition sites' own
+            # classifiers keep working.
+            if exc.errno not in _CONTENTION_ERRNOS:
+                raise
         else:
             if first_probe or deadline.remaining_seconds() > 0.0:
                 return

@@ -474,6 +474,53 @@ def test_read_lock_still_acquires_uncontended(tmp_path: Path) -> None:
         assert ledger.read_text() == "seed\n"
 
 
+# --- typed/total boundaries the new exception must not leak through --------
+
+
+@requires_posix_flock
+def test_the_jsonl_validation_surface_stays_total_on_lock_timeout(tmp_path: Path) -> None:
+    """Out-of-family review round 8 [P2], accepted — the THIRD instance of the
+    class rounds 1 and 4 already closed at `write_once` and `_adopt_one`.
+
+    `validate_jsonl_event_ledger_format`'s whole contract is a DISCRIMINATED
+    RESULT (`VALID` / `EMPTY` / `MALFORMED_LINE` / `IO_ERROR`), delivered by an
+    `except OSError -> IO_ERROR` fold around a read taken under
+    `cross_process_read_lock`. `CrossProcessLockTimeoutError` is deliberately
+    NOT an `OSError`, so before this fold it LEAKED — a total surface silently
+    became partial the moment the lock grew a deadline.
+
+    `IO_ERROR` is the honest classification: the read did not happen.
+
+    Mutation probe (run at this arc): narrowing the fold back to `OSError`
+    makes the timeout propagate and this test fails."""
+    from harness_is.jsonl_event_ledger_lifecycle import (
+        JsonlLedgerHandle,
+        LedgerFormatValidationResult,
+        validate_jsonl_event_ledger_format,
+    )
+
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    _seed(ledger)
+    handle = JsonlLedgerHandle(canonical_path=ledger, exists=True, entry_count=1)
+
+    with _ForeignHolder(tmp_path, ledger):
+        with pytest.MonkeyPatch.context() as patch:
+            import harness_is.jsonl_event_ledger_lifecycle as module
+
+            real_lock = module.cross_process_read_lock
+            patch.setattr(
+                module,
+                "cross_process_read_lock",
+                lambda path, **_kw: real_lock(path, deadline_seconds=0.1),
+            )
+            result = validate_jsonl_event_ledger_format(handle)
+
+    assert result is LedgerFormatValidationResult.IO_ERROR, (
+        f"the surface returned {result!r} — a lock timeout must fold to a "
+        f"discriminated result, not leak out of a total contract"
+    )
+
+
 # --- the END-TO-END property, across two sites in ONE entry surface --------
 
 
