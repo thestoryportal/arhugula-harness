@@ -233,6 +233,7 @@ def flock_until_deadline(
     *,
     deadline: CrossProcessLockDeadline,
     lock_target: str,
+    contention_observed: bool = False,
 ) -> None:
     """Acquire ``operation`` (``LOCK_EX`` / ``LOCK_SH``) on ``fd`` within ``deadline``.
 
@@ -249,6 +250,16 @@ def flock_until_deadline(
     An UNCONTENDED acquisition never sleeps — the FIRST probe takes the lock —
     so a deadline that has already expired still succeeds when nothing holds the
     lock. The bound is on WAITING, not on the acquisition itself.
+
+    **``contention_observed`` withdraws that first-probe exemption**, and the
+    three ABBA arms MUST pass it *(out-of-family review round 7 [P2],
+    accepted)*. Those arms run their OWN non-blocking probe, see
+    ``BlockingIOError``, release the directory lock and only then call this
+    helper — so by the time the first probe here runs, contention is an
+    ESTABLISHED FACT and the caller has already waited. Exempting that probe
+    would let a holder who releases during the handoff hand the lock to a caller
+    whose budget had already expired: the exemption exists for the case where
+    nothing was ever contended, and this is not that case.
 
     **It NEVER RETURNS HOLDING A LOCK IT ACQUIRED PAST THE DEADLINE.** Checking
     expiry only *before* probing cannot deliver that: the checking thread can be
@@ -267,7 +278,7 @@ def flock_until_deadline(
     import fcntl  # POSIX-only; every caller gates win32 before reaching here.
 
     poll_seconds = _INITIAL_POLL_SECONDS
-    first_probe = True
+    first_probe = not contention_observed
     while True:
         try:
             fcntl.flock(fd, operation | fcntl.LOCK_NB)

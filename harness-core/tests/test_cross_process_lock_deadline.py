@@ -330,6 +330,51 @@ def test_the_error_names_the_lock_target_and_the_budget(tmp_path: Path) -> None:
 
 
 @requires_posix_flock
+def test_contention_observed_withdraws_the_first_probe_exemption(tmp_path: Path) -> None:
+    """Out-of-family review round 7 [P2], accepted.
+
+    The three ABBA arms run their OWN non-blocking probe, see `BlockingIOError`,
+    release the directory lock, and only THEN call this helper. By that point
+    contention is an ESTABLISHED FACT and the caller has already waited — so
+    exempting this helper's first probe would let a holder releasing during the
+    handoff give the lock to a caller whose budget had already expired. The
+    exemption exists for the case where nothing was ever contended, and that is
+    not this case.
+
+    Here the lock is FREE and the budget SPENT — the exact shape the exemption
+    would wave through — and the call must refuse anyway.
+
+    Mutation probe (run at this arc): defaulting `first_probe = True` regardless
+    of `contention_observed` makes this acquire and the test fails."""
+    target = tmp_path / "handoff-exempt.lock"
+    fd = os.open(target, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        spent = CrossProcessLockDeadline.starting_now(0.01)
+        time.sleep(0.05)
+        assert spent.remaining_seconds() < 0
+        with pytest.raises(CrossProcessLockTimeoutError):
+            flock_until_deadline(
+                fd,
+                fcntl.LOCK_EX,
+                deadline=spent,
+                lock_target=str(target),
+                contention_observed=True,
+            )
+        # It refused WITHOUT leaving the lock held.
+        other = os.open(target, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(other, fcntl.LOCK_UN)
+        finally:
+            os.close(other)
+        # And the default (no prior contention) still takes a free lock.
+        flock_until_deadline(fd, fcntl.LOCK_EX, deadline=spent, lock_target=str(target))
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+@requires_posix_flock
 def test_shared_waiters_are_bounded_too(tmp_path: Path) -> None:
     """LOCK_SH is bounded exactly as LOCK_EX is. A shared reader blocked by an
     exclusive writer waits just as indefinitely, and one of the nine sites

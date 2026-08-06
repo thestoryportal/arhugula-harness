@@ -527,6 +527,7 @@ def cross_process_write_lock(
                         fcntl.LOCK_EX,
                         deadline=deadline,
                         lock_target=str(canonical_path),
+                        contention_observed=True,
                     )
             except OSError as exc:
                 import errno as errno_module
@@ -645,6 +646,7 @@ def cross_process_replace_lock(
                     fcntl.LOCK_EX,
                     deadline=deadline,
                     lock_target=str(canonical_path),
+                    contention_observed=True,
                 )
                 fcntl.flock(file_fd, fcntl.LOCK_UN)
             finally:
@@ -761,6 +763,7 @@ def cross_process_read_lock(
                         fcntl.LOCK_SH,
                         deadline=deadline,
                         lock_target=str(canonical_path),
+                        contention_observed=True,
                     )
             except OSError as exc:
                 import errno as errno_module
