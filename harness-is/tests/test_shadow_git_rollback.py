@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -24,6 +24,10 @@ from harness_is.workload_manifest_opt_in_schema import CheckpointCadence
 
 _RUN = Identifier("wf-run-1")
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="agent-1")
+#: Timestamp of the pre-existing `act-pre` entry every `_ledger()` fixture seeds.
+#: Named so the B-93 concurrent-append worker can re-use it verbatim (see its
+#: docstring) rather than re-typing a literal that would drift from the fixture.
+_PRE_ENTRY_TS = datetime(2026, 5, 16, 1, tzinfo=UTC)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -54,7 +58,7 @@ def _ledger(repo: Path) -> JsonlLedgerHandle:
             action_id=Identifier("act-pre"),
             idempotency_key=Identifier("idem-pre"),
             actor=_ACTOR,
-            timestamp=datetime(2026, 5, 16, 1, tzinfo=UTC),
+            timestamp=_PRE_ENTRY_TS,
         ),
         WriteKey(
             thread_id=_RUN, step_id=Identifier("step-0"), idempotency_key=Identifier("idem-pre")
@@ -200,35 +204,59 @@ def _mp_append_worker_gated(canonical_path: Path, ready_event: object) -> None:
     a genuine OS process. Forked BEFORE any lock is acquired (see the caller's
     docstring for why fork timing matters here).
 
-    B-93: the timestamp is `now`-relative rather than the former fixed
-    `2026-05-16T02:00Z`. `_CLOCK_SKEW_TOLERANCE` is ZERO, so a fixed timestamp
-    silently PINS an append ORDER against `rollback_to_checkpoint`'s own
-    rollback-event entry (stamped with the `now` captured before the preserve
-    window). The old fixed value pinned "child appends FIRST", which held only
-    because a blocking `flock` hands the lock straight to the parked waiter on
-    release. The deadline'd lock POLLS, so the ex-holder wins the next round and
-    the child now appends SECOND — see the fairness note at
-    `harness_core.cross_process_lock_deadline._MAX_POLL_SECONDS`. A `now + 1s`
-    stamp is monotonic under that order; the caller asserts the order EXPLICITLY
-    so a future fairness change fails loudly instead of flaking here."""
+    B-93 — ORDER-INDEPENDENT, after out-of-family review round 2 [P1] showed an
+    order-PINNED formulation is flaky in BOTH directions.
+
+    `_CLOCK_SKEW_TOLERANCE` is ZERO and `rollback_to_checkpoint` stamps its own
+    rollback-event entry with a `now` captured BEFORE the preserve window, so any
+    single fixed timestamp here pins an append ORDER against it: an EARLY value
+    (the original `2026-05-16T02:00Z`) requires the child to win, a LATE value
+    requires the parent to win. `flock` specifies NO acquisition ordering, and
+    the deadline'd lock polls, so NEITHER can be relied on — the original passed
+    only because a blocking `flock` happened to hand the lock to the parked
+    waiter, and a `now + 1s` replacement failed on repetition once the child
+    occasionally won again.
+
+    The fix is to make the CHILD tolerate the order rather than assume one.
+    Attempt 1 stamps the pre-existing entry's own timestamp, which is monotonic
+    when the child lands FIRST. If it lands second the append is refused, and the
+    retry uses `WRITER_OWNED_TIMESTAMP` — C-IS-07 §7.6's sentinel, which samples
+    INSIDE the write critical section so sampling order EQUALS append order
+    (monotonic by construction, immune to any lock's fairness). Both orders now
+    succeed, and the load-bearing survival assertion is untouched: with the lock
+    removed the child's append still lands mid-window and is still clobbered.
+    Register row `B-112` carries the general form of this hazard for production
+    callers."""
+    from harness_is.state_ledger_write import (
+        WRITER_OWNED_TIMESTAMP,
+        NonMonotonicTimestampError,
+    )
     from harness_is.state_ledger_write import append_ledger_entry as _append
 
     ready_event.wait(timeout=10)  # type: ignore[attr-defined]
     handle = JsonlLedgerHandle(canonical_path=canonical_path, exists=False, entry_count=0)
-    _append(
-        handle,
-        EntryPayload(
-            action_id=Identifier("act-concurrent"),
-            idempotency_key=Identifier("idem-concurrent"),
-            actor=_ACTOR,
-            timestamp=datetime.now(UTC) + timedelta(seconds=1),
-        ),
-        WriteKey(
-            thread_id=_RUN,
-            step_id=Identifier("step-concurrent"),
-            idempotency_key=Identifier("idem-concurrent"),
-        ),
-    )
+
+    def _attempt(stamp: datetime) -> None:
+        _append(
+            handle,
+            EntryPayload(
+                action_id=Identifier("act-concurrent"),
+                idempotency_key=Identifier("idem-concurrent"),
+                actor=_ACTOR,
+                timestamp=stamp,
+            ),
+            WriteKey(
+                thread_id=_RUN,
+                step_id=Identifier("step-concurrent"),
+                idempotency_key=Identifier("idem-concurrent"),
+            ),
+        )
+
+    try:
+        _attempt(_PRE_ENTRY_TS)
+    except NonMonotonicTimestampError:
+        # The parent's rollback entry landed first — re-stamp inside the lock.
+        _attempt(WRITER_OWNED_TIMESTAMP)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="multiprocessing 'fork' context is POSIX-only")
@@ -295,13 +323,13 @@ def test_rollback_cross_process_lock_prevents_lost_concurrent_append(
     action_ids = {entry.action_id for entry in ledger}
     assert {"act-pre", "act-concurrent"} <= action_ids
     assert len(ledger) == 3
-    # B-93: the child is EXCLUDED for the whole preserve window and, because the
-    # deadline'd lock polls rather than parking in the kernel, acquires only
-    # after the parent's own post-window append. Asserted rather than left
-    # implicit in a fixed timestamp — if handoff fairness ever returns, this
-    # fails loudly here instead of surfacing as a NonMonotonicTimestampError
-    # inside a forked worker.
-    assert [entry.action_id for entry in ledger][-1] == "act-concurrent"
+    # B-93: deliberately NO assertion on the child's POSITION. `flock` specifies
+    # no acquisition ordering, so either order is legal and an order assertion
+    # here would be a flake, not a witness (out-of-family review round 2 [P1]
+    # reproduced exactly that against an earlier draft). What the lock owes is
+    # EXCLUSION — the child cannot append inside the read→restore-write window —
+    # and that is what the three assertions above check: with the lock removed
+    # the child's entry is clobbered and `len(ledger)` drops to 2.
     assert verify_chain(ledger).status is VerificationStatus.VALID
 
 

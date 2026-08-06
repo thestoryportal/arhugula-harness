@@ -102,6 +102,7 @@ from pathlib import Path
 
 from harness_core.cross_process_lock_deadline import (
     CrossProcessLockDeadline,
+    CrossProcessLockTimeoutError,
     flock_until_deadline,
 )
 
@@ -135,18 +136,36 @@ class _DirLock:
         self._fd = -1
 
     def acquire(self, deadline: CrossProcessLockDeadline | None = None) -> None:
-        """Acquire both faces; `deadline` bounds the cross-process `flock` wait.
+        """Acquire BOTH faces within `deadline` — the in-process one too.
 
-        B-93 site 1 of 9. The deadline covers ONLY the flock face — the
-        in-process `RLock` is taken first and is not bounded here, because a
-        same-process holder of this path is either this very thread (reentrant,
-        refcounted, returns immediately) or a thread inside a section whose own
-        flock acquisition already carries the bound. `None` mints a fresh
-        default-budget deadline, so a caller outside the four entry surfaces
-        (only the direct-construction tests) still gets a bound rather than the
-        pre-B-93 indefinite block.
+        B-93 site 1 of 9. `None` mints a fresh default-budget deadline, so a
+        caller outside the four entry surfaces (only the direct-construction
+        tests) still gets a bound rather than the pre-B-93 indefinite block.
+
+        **BOTH faces are bounded, and an earlier draft of this arc bounded only
+        the flock** (out-of-family review round 2 [P1], accepted). That draft
+        argued the `RLock` needed no bound because a same-process holder is
+        either this very thread (reentrant, returns immediately) or a thread
+        whose own flock acquisition is already bounded. **The second half is a
+        non-sequitur:** bounding how long a holder WAITED says nothing about how
+        long it HOLDS — and a long hold is the exact harm this row registers.
+        `write_record_guarded` keeps this lock across a caller-supplied
+        precondition, so an in-process sibling thread running a slow precondition
+        wedged every waiter here, BEFORE the bounded `flock` was ever reached,
+        with the victim-side bound advertised and not delivered.
+
+        The `RLock` therefore takes the deadline's REMAINING time (never
+        negative — `acquire` rejects that) and raises the same typed error on
+        expiry. An UNCONTENDED or REENTRANT acquisition still succeeds with a
+        zero remaining budget, matching `flock_until_deadline`'s own contract:
+        the bound is on WAITING, not on acquiring.
         """
-        self._rlock.acquire()
+        resolved = deadline or CrossProcessLockDeadline.starting_now()
+        if not self._rlock.acquire(timeout=max(resolved.remaining_seconds(), 0.0)):
+            raise CrossProcessLockTimeoutError(
+                lock_target=str(self._path),
+                budget_seconds=resolved.budget_seconds,
+            )
         if self._refcount == 0:
             try:
                 self._fd = os.open(self._path, os.O_RDONLY)

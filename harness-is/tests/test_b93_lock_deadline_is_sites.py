@@ -162,6 +162,73 @@ def test_no_entry_surface_can_mint_an_unbounded_deadline(tmp_path: Path) -> None
 
 
 @requires_posix_flock
+def test_site1_the_in_process_face_is_bounded_too(tmp_path: Path) -> None:
+    """Out-of-family review round 2 [P1], accepted — and it falsified this arc's
+    own reasoning.
+
+    `_DirLock` has TWO faces: a per-thread reentrant `RLock` and the
+    cross-process `flock`. An earlier draft bounded only the flock, arguing that
+    a same-process holder is either this very thread or a thread whose own flock
+    acquisition is already bounded. **Bounding how long a holder WAITED says
+    nothing about how long it HOLDS** — and a long hold is precisely the harm
+    `B-93` registers: `write_record_guarded` keeps this lock across a
+    caller-supplied precondition. So an in-process sibling running a slow
+    precondition wedged every waiter at the `RLock`, BEFORE the bounded `flock`
+    was ever reached, while the victim-side bound was advertised as delivered.
+
+    No second OS process here — deliberately. The contention is IN-PROCESS,
+    which is exactly the face a cross-process witness cannot see.
+
+    Mutation probe (run at this arc): reverting to a bare `self._rlock.acquire()`
+    makes this HANG (the wedge the bound is supposed to remove).
+    """
+    import threading
+
+    root = tmp_path / "scope-root"
+    holding = threading.Event()
+    release = threading.Event()
+
+    def _slow_precondition_holder() -> None:
+        with cross_process_scope_lock(root, deadline_seconds=30.0):
+            holding.set()
+            release.wait(30)
+
+    thread = threading.Thread(target=_slow_precondition_holder)
+    thread.start()
+    try:
+        assert holding.wait(10), "the in-process holder never entered"
+        started = time.monotonic()
+        with pytest.raises(CrossProcessLockTimeoutError) as caught:
+            with cross_process_scope_lock(root, deadline_seconds=_DEADLINE):
+                raise AssertionError("entered while an in-process thread held the lock")
+        elapsed = time.monotonic() - started
+        assert caught.value.budget_seconds == _DEADLINE
+        assert elapsed >= _DEADLINE, "refused without waiting"
+        assert elapsed < _DEADLINE + 5.0, (
+            f"waited {elapsed:.2f}s against a {_DEADLINE}s budget — the in-process "
+            f"face is not bounded"
+        )
+    finally:
+        release.set()
+        thread.join(30)
+
+
+@requires_posix_flock
+def test_site1_reentrant_acquisition_is_unaffected_by_an_expired_budget(tmp_path: Path) -> None:
+    """The bound must not break REENTRANCY, which the B-50 `tenant_transaction`
+    composition depends on: a guarded section calls through the tree's own write
+    path, which re-takes this very lock from the SAME thread. A naive
+    `RLock.acquire(timeout=...)` bound would still admit it (an owner
+    re-acquiring returns immediately), and this pins that — with a budget so
+    short it is spent before the inner acquisition is even attempted."""
+    root = tmp_path / "scope-root"
+    with cross_process_scope_lock(root, deadline_seconds=0.05):
+        time.sleep(0.1)  # spend the outer budget
+        with cross_process_scope_lock(root, deadline_seconds=0.001):
+            assert (root / SCOPE_LOCK_FILENAME).exists()
+
+
+@requires_posix_flock
 def test_site1_scope_lock_still_acquires_uncontended(tmp_path: Path) -> None:
     """The non-contended path is UNCHANGED — with a budget so short a polling
     waiter could never win a contended race, an uncontended acquisition still

@@ -81,6 +81,76 @@ def test_a_non_positive_budget_is_refused() -> None:
             CrossProcessLockDeadline.starting_now(bad)
 
 
+def test_the_dataclass_constructor_itself_refuses_a_non_expiring_deadline() -> None:
+    """Out-of-family review round 2 [P2], accepted. The dataclass is EXPORTED and
+    directly constructible, so validating only in `starting_now` left the
+    illegal state one ordinary constructor call away: a `nan` expiry makes
+    `remaining_seconds()` return `nan`, `remaining <= 0` is never true, and a
+    contended acquisition polls FOREVER — the unbounded block this module
+    removes, reachable through the public type.
+
+    Mutation probe (run at this arc): deleting `__post_init__` lets every case
+    below construct and this test fails."""
+    for bad in (float("inf"), float("nan"), 0.0, -1.0):
+        with pytest.raises(ValueError, match="finite positive"):
+            CrossProcessLockDeadline(budget_seconds=bad, expires_at=time.monotonic() + 1.0)
+    for bad_expiry in (float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="finite"):
+            CrossProcessLockDeadline(budget_seconds=1.0, expires_at=bad_expiry)
+
+
+@requires_posix_flock
+def test_a_late_wake_past_the_budget_does_not_acquire(tmp_path: Path) -> None:
+    """Out-of-family review round 2 [P2], accepted. `time.sleep` is a FLOOR, not
+    a promise — a loaded scheduler can wake the poller well past its remaining
+    budget. Without an expiry check AFTER the sleep the loop probes first, so a
+    holder releasing during the overshoot hands the lock to a caller whose
+    deadline had already passed: a bound that holds "usually".
+
+    The overshoot is simulated deterministically by patching `time.sleep` inside
+    the module to release the holder and then sleep past the budget — waiting on
+    a real scheduler stall would be a flake, not a witness.
+
+    Mutation probe (run at this arc): removing the post-sleep expiry check makes
+    the acquisition succeed and this test fails."""
+    import harness_core.cross_process_lock_deadline as module
+
+    target = tmp_path / "latewake.lock"
+    holder = _held_fd(target)
+    waiter = os.open(target, os.O_CREAT | os.O_RDWR, 0o600)
+    real_sleep = time.sleep
+    released = False
+
+    def _overshooting_sleep(_seconds: float) -> None:
+        nonlocal released
+        if not released:
+            released = True
+            fcntl.flock(holder, fcntl.LOCK_UN)  # the holder lets go mid-sleep
+        real_sleep(0.15)  # ... and we wake well past a 0.05s budget
+
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(module.time, "sleep", _overshooting_sleep)
+            with pytest.raises(CrossProcessLockTimeoutError):
+                flock_until_deadline(
+                    waiter,
+                    fcntl.LOCK_EX,
+                    deadline=CrossProcessLockDeadline.starting_now(0.05),
+                    lock_target=str(target),
+                )
+        assert released, "the holder never released — the probe did not exercise the race"
+        # And it really did not take the lock, even though it was free.
+        third = os.open(target, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(third, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(third, fcntl.LOCK_UN)
+        finally:
+            os.close(third)
+    finally:
+        os.close(waiter)
+        os.close(holder)
+
+
 def test_a_non_finite_budget_is_refused() -> None:
     """Out-of-family review round 1 [P2], accepted. `inf` passes a bare `> 0`
     trivially and `nan` passes it because EVERY comparison with `nan` is False —

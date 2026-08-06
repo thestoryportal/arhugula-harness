@@ -131,6 +131,14 @@ rather than applied wholesale here.
 """
 
 
+_BUDGET_REFUSAL = (
+    "cross-process lock deadline must be a finite positive number of seconds, "
+    "got {value!r} — a non-positive budget would refuse every contended "
+    "acquisition without waiting, and a non-finite one would never expire (the "
+    "unbounded block this bound removes)"
+)
+
+
 class CrossProcessLockTimeoutError(Exception):
     """A same-host cross-process advisory lock was not acquired within its deadline.
 
@@ -172,32 +180,45 @@ class CrossProcessLockDeadline:
     budget_seconds: float
     expires_at: float
 
+    def __post_init__(self) -> None:
+        """Refuse a non-expiring deadline AT THE TYPE, not only at the factory.
+
+        Out-of-family review round 2 [P2], accepted: this dataclass is exported
+        and directly constructible, so validating only in :meth:`starting_now`
+        left the illegal state one ordinary constructor call away —
+        ``CrossProcessLockDeadline(nan, nan)`` makes ``remaining_seconds()``
+        return ``nan``, ``remaining <= 0`` is then never true, and a contended
+        acquisition polls FOREVER: precisely the unbounded block this module
+        exists to remove. Enforcing here makes the state unrepresentable rather
+        than merely hard to reach, which is the whole point of putting the
+        deadline in a type instead of passing a bare float.
+        """
+        if not math.isfinite(self.budget_seconds) or self.budget_seconds <= 0.0:
+            raise ValueError(_BUDGET_REFUSAL.format(value=self.budget_seconds))
+        if not math.isfinite(self.expires_at):
+            raise ValueError(
+                f"cross-process lock deadline expiry must be a finite "
+                f"time.monotonic() instant, got {self.expires_at!r} — a "
+                f"non-finite expiry never elapses"
+            )
+
     @classmethod
     def starting_now(cls, deadline_seconds: float | None = None) -> CrossProcessLockDeadline:
         """Mint a deadline running from this instant.
 
         ``None`` selects :data:`DEFAULT_CROSS_PROCESS_LOCK_DEADLINE_SECONDS`.
+
+        Validation lives ENTIRELY at ``__post_init__``, deliberately: a mirrored
+        check here would be unreachable defensive code — the PD-8 probe for it
+        came back GREEN precisely because ``__post_init__`` already refuses
+        every value it would have caught, and a guard no mutation can defeat is
+        a guard that is not doing anything. One authority, at the type.
         """
         budget = (
             DEFAULT_CROSS_PROCESS_LOCK_DEADLINE_SECONDS
             if deadline_seconds is None
             else float(deadline_seconds)
         )
-        if not math.isfinite(budget) or budget <= 0.0:
-            # FINITE as well as positive (out-of-family review round 1 [P2],
-            # accepted). `inf` and `nan` both pass a bare `> 0` check — `inf`
-            # trivially, `nan` because every comparison against it is False —
-            # and either makes `remaining_seconds()` never reach `<= 0`, so the
-            # poll loop spins forever and RECREATES the exact indefinite hang
-            # this module exists to eliminate. Refusing at construction keeps
-            # the illegal state unrepresentable rather than leaving the loop to
-            # cope with it.
-            raise ValueError(
-                f"cross-process lock deadline must be a finite positive number of "
-                f"seconds, got {budget!r} — a non-positive budget would refuse "
-                f"every contended acquisition without waiting, and a non-finite "
-                f"one would never expire (the unbounded block this bound removes)"
-            )
         return cls(budget_seconds=budget, expires_at=time.monotonic() + budget)
 
     def remaining_seconds(self) -> float:
@@ -249,3 +270,17 @@ def flock_until_deadline(
             )
         time.sleep(min(poll_seconds, remaining))
         poll_seconds = min(poll_seconds * 2.0, _MAX_POLL_SECONDS)
+        if deadline.remaining_seconds() <= 0.0:
+            # Out-of-family review round 2 [P2], accepted. `time.sleep` is a
+            # FLOOR, not a promise: a loaded scheduler can wake this thread well
+            # past the remaining budget. Without this check the loop would probe
+            # again first, so a holder that released DURING the overshoot handed
+            # the lock to a caller whose deadline had already passed — the bound
+            # would hold "usually", which is the kind of guarantee that reads as
+            # total and is not. Only SUBSEQUENT probes are gated: the first one
+            # stays unconditional so an UNCONTENDED acquisition still succeeds
+            # on an already-spent budget (the documented contract above).
+            raise CrossProcessLockTimeoutError(
+                lock_target=lock_target,
+                budget_seconds=deadline.budget_seconds,
+            )
