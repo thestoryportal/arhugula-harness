@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 109
-  open: 2
-  design_substrate_gated: 2
-  registered_finding: 14
+  total: 110
+  open: 3
+  design_substrate_gated: 1
+  registered_finding: 15
   operator_gated: 0
   held: 1
   closed: 90
-  identity_digest: f868889276382c43
+  identity_digest: 1fe23cdcb7637014
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -3741,7 +3741,7 @@ items:
   title: 'The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time --
     a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry
     milliseconds after its bootstrap sweep first observed it'
-  status: design_substrate_gated
+  status: open
   pr: '#1179 (the Class 2 fork filing) + #1183 (the C-1/C-2 council record) + #1233 (the 2026-08-05 ratification record) + #1235 (the SPEC leg -- Runtime spec v1.111 section 14.8.11.1 + Runtime plan v2.58 U-RT-150)'
   summary: 'Surfaced by out-of-family Codex round 2 at the B-77 impl arc (2026-07-30),
     against the fix landed in that same PR. `gc_sweep`''s first-observation grace refuses to
@@ -3772,7 +3772,12 @@ items:
     past it (the factory default is 86400s, roughly seven orders of magnitude above that),
     AND a crash landing strictly between `os.link` and the post-commit mtime refresh, AND a
     recovering run short enough that its own shutdown sweep fires before any repair read.'
-  close_out: 'SPEC LEG LANDED at PR #1235 -- Runtime spec v1.110 -> v1.111 adds NEW section
+  close_out: 'STATUS design_substrate_gated -> OPEN at this leg, per the register''s OWN status enum (this file,
+    lines 31-39: only ratified + APPLIED spec deltas plus the corresponding Phase-6 plan deltas open
+    the row for code -- both landed here). This does NOT contradict the fork section 11.5, which
+    contrasts design_substrate_gated against `closed` at the RATIFICATION leg and says B-96 / the
+    B-77 residual / B-74 flip to `closed` only when the IMPL leg merges -- `open` is not `closed`.
+    Corrected at out-of-family review round 4 [P2]. SPEC LEG LANDED at PR #1235 -- Runtime spec v1.110 -> v1.111 adds NEW section
     14.8.11.1 carrying the council record section 7.1''s TWELVE conditions as contract terms 1-12,
     plus two strict APPENDS (the bounded-retention bullet''s cross-reference and the
     deferred-to-discretion list''s two new entries); the Runtime plan absorbs it at v2.58 as
@@ -3810,8 +3815,8 @@ items:
     [P1]). The SPEC leg -- a Runtime section 14.8.11 amendment carrying the council record''s
     TWELVE conditions at its section 7.1, with section 7.2''s expansion flag surfaced in the clearance
     marker per root CLAUDE.md section 4.5 -- HAS LANDED at PR #1235 as section 14.8.11.1 (spec v1.111,
-    plan v2.58 / U-RT-150); ONLY THE IMPL LEG REMAINS OUTSTANDING, which is why the row stays
-    design_substrate_gated rather than closed -- `closed` would drop that live work out of the
+    plan v2.58 / U-RT-150); ONLY THE IMPL LEG REMAINS OUTSTANDING, which is why the row is `open`
+    (actionable, no blocker) rather than closed -- `closed` would drop that live work out of the
     open-work inventory. (This sentence previously read "and the IMPL leg are both still outstanding";
     corrected in place at out-of-family review round 3 [P2] so the structured register cannot
     reschedule an already-landed leg.) SPEC AND IMPL DO NOT LAND TOGETHER
@@ -3845,7 +3850,7 @@ items:
     No third ceiling form survives -- record-keyed, hybrid absent-record and a fourth ctime-keyed
     variant were each constructed and killed, and are recorded as tested-and-dead rather than
     suppressed. NO FURTHER CONVENING is owed at the spec or impl leg.'
-  heading: '### B-96 · The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time -- a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry milliseconds after its bootstrap sweep first observed it *(surfaced at the B-77 impl arc, out-of-family Codex round 2 [P2], 2026-07-30)* *(**RATIFIED 2026-08-05 as READING C, ceiling sub-decision C-2** — the grace term alone, carrier `(C-i)`; **SPEC LEG LANDED 2026-08-05 (Runtime v1.111 + plan v2.58 U-RT-150); IMPL leg owed**)*'
+  heading: '### B-96 · The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time -- a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry milliseconds after its bootstrap sweep first observed it *(surfaced at the B-77 impl arc, out-of-family Codex round 2 [P2], 2026-07-30)* *(**RATIFIED 2026-08-05 as READING C, ceiling sub-decision C-2** — the grace term alone, carrier `(C-i)`; **SPEC LEG LANDED 2026-08-05 (Runtime v1.111 + plan v2.58 U-RT-150); status now `open`; IMPL leg owed**)*'
 - id: B-97
   title: The durable pause journal carries no tenant binding (half (a) -- RATIFIED
     Reading A, SPEC-APPLIED at v1.108, IMPL LANDED at U-RT-149); its appends were
@@ -4979,3 +4984,46 @@ items:
   council: 'no -- single-axis mechanical hardening of an existing internal type; no cross-domain
     tension nameable in advance; route per the standing single-voice-plus-advisor default if a
     design question surfaces at grounding.'
+- id: B-110
+  title: The GC observation record cannot distinguish generations of a REUSED temporary
+    candidate name, because its ratified content set is closed at two members
+  status: registered_finding
+  pr: '#1235'
+  summary: 'Surfaced at the B-96 SPEC leg (PR #1235) by out-of-family Codex rounds 3-4, against
+    that leg''s own text -- reported, not absorbed. Runtime spec v1.111 section 14.8.11.1 term 5
+    keys the durable grace record on the CANDIDATE FILENAME over both sweep classes, with a
+    content set RATIFIED CLOSED at two members {candidate filename, first_observed_at}. The
+    authorizing council record (`.harness/council-b96-grace-ceiling-2026-08-01.md` condition #5)
+    asserts a name is "stable and never reused for a different file" for BOTH classes, grounding
+    it on the absence of any rename/replace in the store. Round 3 [P2] showed that ground
+    establishes the LIFETIME half only: a temporary name is drawn by a mechanism that avoids only
+    names CURRENTLY PRESENT, so once an orphan is removed its name is redrawable and a surviving
+    record row can match a DIFFERENT later file. The published-entry class is NOT exposed -- those
+    names are non-invertible digests of a uuid4-bearing composite key. Round 4 [P1] then showed
+    that MANDATING a generation check (the spec leg''s first response) is UNSATISFIABLE inside the
+    ratified two-member set, since there is no field to carry one and adding one would widen a
+    ratified closed set. WHAT IT COSTS, EXACTLY: term 2 is NOT violated -- term 1 conjunct (a) is
+    keyed on the NEW file''s own filesystem timestamp, so reclaim still cannot precede that file''s
+    own timestamp + TTL. What degrades is the ADDITIONAL grace: for a reused temporary name alone
+    the reclaim bound falls back to the pre-existing timestamp-derived one, reintroducing the
+    under-report-width window for that single candidate. Reachability is remote (the name is drawn
+    from a large random space and must be redrawn in the interval between two sweeps) and is
+    confined to crash orphans, never to a paid effect''s stored entry.'
+  close_out: 'Two grounded dispositions, neither owed by the B-96 impl leg. (a) ACCEPT AND
+    DOCUMENT -- the residual is already stated at Runtime spec v1.111 section 14.8.11.1 term 5 as a
+    bounded, named residual with its exact cost, and B-96 U-RT-150 AC #5 witnesses the BOUND
+    (term 2 holds for the recreated file) rather than an unbuildable freshness guarantee; on this
+    disposition the row closes as documented-and-accepted. (b) WIDEN THE RATIFIED CONTENT SET --
+    add a generation-stable identity as a third member, or key on an identity that is not the bare
+    basename. That is a CLASS 2 OPERATOR DECISION, not a spec-leg or impl-leg act: the two-member
+    closure is ratified at the B-96 fork section 11.3 table and at council condition #5, and its
+    stated ground is that widening adds no field, no carrier and no namespace. A fork filing is
+    owed before (b) may be built. NOT OWED BY ANY LEG: reopening the B-96 ceiling question, or any
+    change to the candidate-filename key over BOTH sweep classes, which condition #5 requires for
+    an independent reason (crash orphans would otherwise be permanently unreclaimable).'
+  council: 'NOT owed at registration. The question is whether a ratified CLOSED content set should
+    grow one member to close a remote, bounded, crash-orphan-only residual -- a scoping question
+    for an operator ratification, not a nameable cross-domain tension. If disposition (b) is opened,
+    re-evaluate: a third member touches the same C3 (state/persistence integrity) vs C10/C7
+    (content restriction on a sensitive-payload store) axis condition #5 was authored on.'
+  heading: '### B-110 · The GC observation record cannot distinguish generations of a REUSED temporary candidate name *(surfaced at the B-96 spec leg, out-of-family Codex rounds 3-4, 2026-08-05)*'
