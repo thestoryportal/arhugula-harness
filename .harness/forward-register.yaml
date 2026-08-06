@@ -5023,8 +5023,9 @@ items:
     confined to crash orphans, never to a paid effect''s stored entry.'
   close_out: 'Two grounded dispositions, neither owed by the B-96 impl leg. (a) ACCEPT AND
     DOCUMENT -- the residual is already stated at Runtime spec v1.111 section 14.8.11.1 term 5 as a
-    bounded, named residual with its exact cost, and B-96 U-RT-150 AC #5 witnesses the BOUND
-    (term 2 holds for the recreated file) rather than an unbuildable freshness guarantee; on this
+    bounded, named residual with its exact cost, and B-96 U-RT-150 AC #5 witnesses the
+    TIMESTAMP-DERIVED bound -- explicitly NOT term 2, whose publication bound does not extend to a
+    reused temporary name -- rather than an unbuildable freshness guarantee; on this
     disposition the row closes as documented-and-accepted. (b) WIDEN THE RATIFIED CONTENT SET --
     add a generation-stable identity as a third member, or key on an identity that is not the bare
     basename. That is a CLASS 2 OPERATOR DECISION, not a spec-leg or impl-leg act: the two-member
