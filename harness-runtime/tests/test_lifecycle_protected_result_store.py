@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import errno
 import inspect
+import json
 import os
 import subprocess
 import sys
@@ -17,6 +18,8 @@ from pathlib import Path
 import pytest
 from cryptography.fernet import Fernet
 from harness_runtime.lifecycle.protected_result_store import (
+    GC_OBSERVATION_RECORD_FILENAME,
+    GcObservationRecordState,
     ProtectedResultStore,
     ProtectedStoreCrossTenantError,
     ProtectedStoreEntryNotFoundError,
@@ -25,6 +28,7 @@ from harness_runtime.lifecycle.protected_result_store import (
     _encode_scope_prefix,
     compose_composite_key,
     normalize_tenant_scope,
+    read_protected_result_store_snapshot,
 )
 
 
@@ -34,18 +38,65 @@ def _store(tmp_path: Path, *, ttl_seconds: float = 86400.0) -> ProtectedResultSt
     )
 
 
+def _observation_record_path(store: ProtectedResultStore) -> Path:
+    """The durable `B-96` observation record for `store`'s root."""
+    return store._root / GC_OBSERVATION_RECORD_FILENAME  # type: ignore[attr-defined]
+
+
+def _read_observation_record(store: ProtectedResultStore) -> dict[str, float]:
+    document = json.loads(_observation_record_path(store).read_text())
+    rows: dict[str, float] = document["observations"]
+    return rows
+
+
+def _backdate_observation_record(store: ProtectedResultStore, *, by: float | None = None) -> None:
+    """Move every recorded `first_observed_at` BACK by `by` (default: one TTL
+    plus a one-second margin), in place, preserving the record's form.
+
+    This is the elapsed-time analogue of the sweep-COUNT era's "just sweep
+    twice": it satisfies term 1's SECOND conjunct without moving the sweep's
+    own `now`, so a witness's FIRST conjunct — the filesystem-timestamp
+    classification it actually exists to discriminate — is evaluated at exactly
+    the instant it was before, unchanged. Advancing `now` instead would move
+    both conjuncts together and silently re-classify entries the witness
+    intends to be fresh.
+    """
+    path = _observation_record_path(store)
+    document = json.loads(path.read_text())
+    shift = store._ttl_seconds + 1.0 if by is None else by  # type: ignore[attr-defined]
+    rows: dict[str, float] = document["observations"]
+    document["observations"] = {name: stamp - shift for name, stamp in rows.items()}
+    path.write_text(json.dumps(document))
+
+
 def _sweep_past_grace(store: ProtectedResultStore, *, now: float | None = None) -> list[str]:
     """Two consecutive sweeps at the SAME `now`, returning the second's report.
 
-    B-77's first-observation grace means a sweep never reclaims an entry it
-    has not already seen past TTL at a PRIOR sweep — so every witness about
+    `B-96`'s DURABLE ELAPSED-TIME grace means a sweep never reclaims a
+    candidate until a full TTL of wall-clock time has passed since the
+    candidate's durably recorded FIRST observation — so every witness about
     what the sweep CLASSIFIES (rather than about the grace itself) needs the
-    second sweep to reach the reclaim. Pinning one `now` across both keeps
-    the classification identical, so these witnesses still discriminate
-    exactly what they did before the grace landed.
+    first sweep to record the observation, that observation aged past the TTL,
+    and a second sweep to reach the reclaim.
+
+    Re-grounded from the sweep-COUNT era (`B-77`), where two sweeps at one
+    pinned `now` sufficed. The aging is done by BACK-DATING the durable record
+    between the two sweeps rather than by advancing `now`, precisely so the
+    pinned-`now` property the old helper's callers depend on survives intact:
+    both sweeps still evaluate the mtime conjunct at the identical instant, so
+    these witnesses discriminate exactly what they discriminated before.
+
+    `observed_at` is pinned to `at` on the FIRST sweep, and that is load-bearing
+    rather than tidiness: several callers pass a `now` well AHEAD of the real
+    clock (`time.time() + 10.0`, or a `_ScriptedClock` advanced 60s). Left to
+    its production default the sample would read the REAL clock, the elapsed
+    conjunct would already be satisfied at the first sweep, and the reclaim
+    would happen there — leaving the second sweep to return `[]` and every
+    `== []` caller passing VACUOUSLY, with the entry gone.
     """
     at = time.time() if now is None else now
-    store.gc_sweep(now=at)
+    store.gc_sweep(now=at, observed_at=at)
+    _backdate_observation_record(store)
     return store.gc_sweep(now=at)
 
 
@@ -760,9 +811,13 @@ def test_crash_immediately_after_commit_leaves_an_already_correct_durable_mtime(
     assert entry_path.exists()  # the commit itself survived the "crash"
 
     # A separate, fresh instance sharing the same root stands in for the
-    # NEXT process's bootstrap sweep — unaffected by the patches above
-    # (both are set on `store`/the global `os.fsync`, and `seen["slowed"]`
-    # is already consumed by the time this runs).
+    # NEXT process's bootstrap sweep — unaffected by the THREE patches above
+    # (the scripted-clock `os.utime` redirect, the slowed global `os.fsync`,
+    # and the `store`-bound `_fsync_dir` crash: the first two are global but
+    # `seen["slowed"]` is already consumed by the time this runs, and the third
+    # is bound to `store`, not to `store2`). Corrected from "the patches" /
+    # "both" — an undercount since PR #1226 added the third (scripted-clock)
+    # patch, flagged by that arc's merge-gate lens 2.
     store2 = ProtectedResultStore(
         tmp_path / "store",
         codec=store._codec,  # type: ignore[attr-defined]
@@ -802,6 +857,16 @@ def test_slow_post_commit_tail_does_not_falsely_expire_a_successful_write(
     Mutation probe: removing the post-commit `os.utime`+fsync block
     (reverting to the round-1-only, pre-commit-stamp-alone shape) makes
     this test fail — the immediate sweep below reclaims the entry.
+
+    A NUANCE in the other direction, recorded so the PD-8 matrix is not
+    misread (PR #1226's merge-gate lens 3): the drop-PRE-commit-stamp mutation
+    ALSO fails this test, but that kill is an ORDERING ARTIFACT rather than a
+    semantic one — removing the pre-commit stamp removes its own `fsync`, so
+    the `calls["n"] == 3` counter below lands on a DIFFERENT `fsync` and the
+    clock advance moves. It is not evidence that this witness pins the
+    pre-commit stamp; `test_crash_immediately_after_commit_leaves_an_already_
+    correct_durable_mtime` is what pins that. No coverage gap either way — each
+    stamp has its own dedicated witness.
 
     CI-load hardening: the slow directory fsync is simulated by ADVANCING a
     `_ScriptedClock` that both the store's mtime stamps and this sweep's
@@ -1092,11 +1157,15 @@ def test_write_once_does_not_block_on_a_sweep_stalled_in_its_decrypt_phase(
     ref = store_a.write_once("tenant-a", "will be swept")
     assert isinstance(ref, str)
     time.sleep(0.05)  # comfortably past the 0.01s TTL
-    # B-77 first-observation grace: the stalled sweep below must actually
-    # REACH its decrypt phase, which only happens for an entry already
-    # observed past TTL at a prior sweep. This priming sweep (run before the
-    # stall is installed) is that prior observation.
+    # `B-96` durable elapsed-time grace: the stalled sweep below must actually
+    # REACH its decrypt phase, which only happens for an entry whose recorded
+    # first observation is already a full TTL old. This priming sweep (run
+    # before the stall is installed) records that observation; back-dating the
+    # record then ages it past the TTL without touching the sweep's own clock.
+    # Re-pinned from the `B-77` sweep-COUNT form, where the priming sweep alone
+    # sufficed.
     store_a.gc_sweep()
+    _backdate_observation_record(store_a)
 
     decrypt_phase_entered = threading.Event()
     decrypt_may_proceed = threading.Event()
@@ -1523,11 +1592,22 @@ def test_write_once_does_not_block_on_a_stalled_gc_sweep_enumeration(
     def _run_write() -> None:
         write_results.append(store_b.write_once("tenant-b", "must not block on the stalled scan"))
 
+    # The join window's exact size is INCIDENTAL to the claim — any bound
+    # comfortably below the mock's 5s stall discriminates identically, because
+    # under the mutation the write cannot return until the stall ends. Widened
+    # from 0.3s purely for CI-load headroom (a genuine, unblocked
+    # `write_once()` — pickle + Fernet + three fsyncs — can take far longer
+    # than 0.3s on a loaded runner without any lock being involved), which
+    # costs the mutation-kill direction nothing. Mirrors the same widening
+    # applied to the sibling
+    # `test_write_once_does_not_block_on_a_sweep_stalled_in_its_decrypt_phase`
+    # at PR #1226; that arc's merge-gate lens 1 flagged this same-shape join as
+    # the one left un-widened, and this is that follow-up.
     writer = threading.Thread(target=_run_write)
     writer.start()
-    writer.join(timeout=0.3)
+    writer.join(timeout=1.5)
     assert not writer.is_alive(), (
-        "write_once() was still blocked 0.3s after starting — it waited on "
+        "write_once() was still blocked 1.5s after starting — it waited on "
         "the stalled enumeration's lock instead of completing promptly"
     )
     assert len(write_results) == 1
@@ -1572,11 +1652,15 @@ def test_opportunistic_gc_runs_on_write_after_interval(
         return real_time() + 10.0
 
     monkeypatch.setattr(time, "time", _later)
-    # Two writes, not one: B-77's first-observation grace means the sweep
-    # this write triggers only RECORDS `entry_a` as past TTL; the next
-    # write's sweep is the one that reclaims it.
+    # Two writes, not one: the `B-96` durable grace means the sweep this write
+    # triggers only RECORDS `entry_a`'s first observation; reclaim additionally
+    # needs a TTL of elapsed time since that record, which the back-dating
+    # supplies without disturbing `entry_a`'s own mtime classification.
+    # Re-grounded from the `B-77` sweep-COUNT form (U-RT-150 AC #13), where the
+    # second write's sweep alone sufficed.
     store.write_once("tenant-a", "records the expired entry")
     assert entry_a.exists()
+    _backdate_observation_record(store)
     store.write_once("tenant-a", "triggers the opportunistic sweep")
     assert not entry_a.exists()
 
@@ -1641,10 +1725,12 @@ def test_gc_unlink_failure_does_not_propagate_or_replace_the_carrier(
 
     real_time = time.time
     monkeypatch.setattr(time, "time", lambda: real_time() + 10.0)
-    # B-77 first-observation grace: the rigged unlink below is only reached
-    # for an entry already observed past TTL at a prior sweep — this priming
-    # sweep is that observation.
+    # `B-96` durable grace: the rigged unlink below is only reached for an
+    # entry whose recorded first observation is already a TTL old — this
+    # priming sweep records it, and the back-dating ages it (U-RT-150 AC #13,
+    # re-grounded from the `B-77` sweep-COUNT form).
     store.gc_sweep()
+    _backdate_observation_record(store)
 
     real_unlink = Path.unlink
 
@@ -1913,15 +1999,21 @@ def test_crash_between_link_and_post_commit_refresh_survives_a_fresh_bootstrap_s
     `protected_result_store_factory`) would then reclaim the only
     recoverable copy of an already-completed paid effect on sight.
 
-    `gc_sweep`'s first-observation grace closes that: an entry is never
-    reclaimed on the sweep that FIRST sees it past TTL. The crash is
-    simulated exactly at the registered window — the post-commit
-    `os.utime` raises once, and the pre-commit one lands an mtime old
-    enough that the surviving entry reads as expired.
+    `gc_sweep`'s durable elapsed-time grace closes that: reclaim additionally
+    requires a full TTL of elapsed time since the candidate's recorded FIRST
+    observation, and a sweep cannot record an observation before the candidate
+    exists. The crash is simulated exactly at the registered window — the
+    post-commit `os.utime` raises once, and the pre-commit one lands an mtime
+    old enough that the surviving entry reads as expired.
 
-    Mutation probe: removing the `previously_observed` gate from
-    `gc_sweep` (reclaiming every verified candidate outright) makes the
-    fresh instance's FIRST sweep collect the entry, and the
+    RE-GROUNDED at `B-96` / U-RT-150 AC #13 (see the inline note at the second
+    sweep): the closing assertions moved from "reclaimed by the NEXT sweep" to
+    "NOT reclaimed by an immediately-following sweep; reclaimed once a TTL of
+    elapsed time has passed".
+
+    Mutation probe: removing the elapsed-time conjunct from `gc_sweep`'s
+    eligibility predicate (reclaiming every verified candidate outright) makes
+    the fresh instance's FIRST sweep collect the entry, and the
     `entry_path.exists()` assertion below fails."""
     store = _store(tmp_path, ttl_seconds=0.05)
     real_utime = os.utime
@@ -1954,15 +2046,27 @@ def test_crash_between_link_and_post_commit_refresh_survives_a_fresh_bootstrap_s
         codec=store._codec,  # type: ignore[attr-defined]
         ttl_seconds=0.05,
     )
-    assert recovered.gc_sweep(now=time.time()) == []
+    first_sweep_at = time.time()
+    assert recovered.gc_sweep(now=first_sweep_at, observed_at=first_sweep_at) == []
     assert entry_path.exists(), (
         "the crash-recovered entry was reclaimed by the first bootstrap sweep "
-        "that ever saw it — B-77's first-observation grace did not hold"
+        "that ever saw it — the durable first-observation grace did not hold"
     )
 
-    # The grace is ONE sweep interval, not immortality: still expired at the
-    # next sweep, so bounded retention still collects it.
-    assert recovered.gc_sweep(now=time.time()) == [entry_path.stem]
+    # RE-PINNED at `B-96` / U-RT-150 AC #13. Under the retired sweep-COUNT
+    # grace this was "still expired at the NEXT sweep", and an immediately
+    # following sweep collected it — the very residue `B-96` names, since a
+    # short run's own shutdown sweep fires milliseconds later. Under the
+    # elapsed-time rule an immediately-following sweep must NOT reclaim, and
+    # reclaim arrives only once a full TTL has elapsed since the recorded first
+    # observation. Both halves are asserted, so the witness still proves
+    # bounded retention rather than immunity.
+    assert recovered.gc_sweep(now=first_sweep_at + 0.01) == [], (
+        "an immediately-following sweep reclaimed the entry — the grace is "
+        "still bounded by sweep COUNT rather than by elapsed time"
+    )
+    assert entry_path.exists()
+    assert recovered.gc_sweep(now=first_sweep_at + 0.06) == [entry_path.stem]
     assert not entry_path.exists()
 
 
@@ -1985,6 +2089,14 @@ def test_uninterrupted_write_survives_an_immediate_sweep_past_the_grace(
     `os.utime(entry_path, None)` refresh leaves the entry carrying the
     pre-commit stamp, a full slow-tail duration stale on return — the
     second sweep then reclaims it and this test fails.
+
+    A NUANCE in the other direction, recorded so the PD-8 matrix is not
+    misread (PR #1226's merge-gate lens 3): the drop-PRE-commit-stamp mutation
+    ALSO fails this test, but that kill is an ORDERING ARTIFACT rather than a
+    semantic one — removing the pre-commit stamp removes its own `fsync`, so
+    the `calls["n"] == 3` counter below lands on a DIFFERENT `fsync` and the
+    clock advance moves. This witness pins the POST-commit stamp; the
+    pre-commit one has its own dedicated witness, so there is no coverage gap.
 
     CI-load hardening: that slow tail is simulated by ADVANCING a
     `_ScriptedClock` both the store's mtime stamps and this sweep's `now=`
@@ -2013,28 +2125,39 @@ def test_uninterrupted_write_survives_an_immediate_sweep_past_the_grace(
     assert store.read("tenant-a", ref) == "uninterrupted, must stay live"
 
 
-def test_genuinely_expired_entry_is_reclaimed_at_the_second_sweep_not_the_first(
+def test_genuinely_expired_entry_is_reclaimed_once_the_grace_elapses(
     tmp_path: Path,
 ) -> None:
-    """B-77 liveness bound: the first-observation grace must delay reclaim by
-    exactly one sweep, never grant immunity — the spec v1.103 §14.8.11
-    bounded-retention term still holds (a signing outage must not grow an
-    unbounded store of sensitive payloads).
+    """Liveness bound (U-RT-150 AC #14(ii)), RE-GROUNDED at AC #13 from the
+    retired `B-77` sweep-COUNT form: the grace must DELAY reclaim, never grant
+    immunity — the spec v1.103 §14.8.11 bounded-retention term still holds (a
+    signing outage must not grow an unbounded store of sensitive payloads).
 
-    Mutation probe (both directions): dropping the `previously_observed`
-    gate makes the FIRST sweep reclaim and the `exists()` assertion fails;
-    never recording an observation (an always-empty prior set) makes the
-    SECOND sweep return `[]` and the reclaim assertion fails."""
+    Renamed because the property it pins changed: reclaim is no longer keyed on
+    the SECOND SWEEP but on a TTL of ELAPSED TIME since the recorded first
+    observation. The middle assertion is the discriminator `B-96` exists for —
+    a second sweep firing immediately after the first (the short-run shutdown
+    sweep) must NOT reclaim.
+
+    Mutation probes (three directions): dropping the elapsed-time conjunct
+    makes the FIRST sweep reclaim and its `[] ==` assertion fails; making the
+    elapsed conjunct unsatisfiable (never recording an observation) makes the
+    LAST sweep return `[]`; keying the grace on sweep COUNT again makes the
+    immediately-following middle sweep reclaim."""
     store = _store(tmp_path, ttl_seconds=1.0)
     ref = store.write_once("tenant-a", "genuinely expires")
     assert isinstance(ref, str)
     entry_path = store._entry_path(ref)  # type: ignore[attr-defined]
     sweep_at = time.time() + 10.0
 
-    assert store.gc_sweep(now=sweep_at) == []
+    assert store.gc_sweep(now=sweep_at, observed_at=sweep_at) == []
     assert entry_path.exists()
 
-    assert store.gc_sweep(now=sweep_at) == [entry_path.stem]
+    # A second sweep milliseconds later — the short-or-failing-run shape.
+    assert store.gc_sweep(now=sweep_at + 0.001) == []
+    assert entry_path.exists()
+
+    assert store.gc_sweep(now=sweep_at + 1.5) == [entry_path.stem]
     assert not entry_path.exists()
 
 
@@ -2053,16 +2176,23 @@ def test_coarse_filesystem_mtime_granularity_does_not_lose_a_live_entry_on_sight
     seconds (the store's OWN stamp lands coarse, as it would on such a
     volume) with a 100ms TTL.
 
-    The grace absorbs that error for the sweep that first observes the
-    entry — which is the reachable loss case (a bootstrap sweep firing
-    immediately after publication). It does NOT absorb a granularity error
-    larger than the gap between two sweeps: the second assertion below pins
-    that REGISTERED RESIDUAL (B-74, narrowed — not desired behavior, and
-    the reason that row stays open rather than closing as subsumed).
+    `B-74` CLOSES HERE, and this witness is RE-PINNED AS A POSITIVE ONE
+    (U-RT-150 AC #13 + the `B-96` ratification record §8). Under the retired
+    sweep-COUNT grace the error was absorbed only for the sweep that FIRST
+    observed the entry, and a granularity error larger than the gap between two
+    sweeps still lost the live entry — the REGISTERED RESIDUAL the closing
+    assertion used to pin, in the shape *"the live entry is reclaimed"*. Under
+    the ratified elapsed-time rule that residue is DISSOLVED rather than
+    narrowed: the inter-sweep gap ceases to be a term in the reclaim decision
+    at all, so the closing assertion now witnesses that the LIVE ENTRY SURVIVES
+    BOTH SWEEPS — exactly as the row's own close_out instructs — and is kept
+    rather than deleted.
 
-    Mutation probe: removing the `previously_observed` gate from
-    `gc_sweep` makes the first sweep reclaim the live entry and the
-    `read()` below raises `ProtectedStoreEntryNotFoundError`.
+    Mutation probes (both directions): removing the elapsed-time conjunct from
+    `gc_sweep`'s eligibility predicate makes the first sweep reclaim the live
+    entry and the `read()` below raises `ProtectedStoreEntryNotFoundError`;
+    re-keying the grace on sweep COUNT makes the second sweep reclaim it and
+    the re-pinned `== []` assertion fails.
 
     CI-load hardening: the publish moment is a `_ScriptedClock` pinned to a
     fixed mid-second PHASE, so the rounding error this witness needs is
@@ -2100,40 +2230,50 @@ def test_coarse_filesystem_mtime_granularity_does_not_lose_a_live_entry_on_sight
     # expired.
     assert clock.now - entry_path.stat().st_mtime > 0.1
 
-    assert store.gc_sweep(now=clock.now) == []
+    assert store.gc_sweep(now=clock.now, observed_at=clock.now) == []
     assert store.read("tenant-a", ref) == "live despite a coarse mtime"
 
-    # REGISTERED RESIDUAL (B-74): the grace is bounded to one sweep
-    # interval, so a granularity error exceeding the gap between two sweeps
-    # still loses the live entry. Pinned here so a future B-74 fix has to
-    # come back and update this witness rather than silently diverge.
-    assert store.gc_sweep(now=clock.now) == [entry_path.stem]
+    # `B-74` CLOSED — re-pinned POSITIVE. The second sweep fires immediately
+    # after the first (the gap that used to lose the entry), and the live entry
+    # SURVIVES: the elapsed-time conjunct is not yet satisfied, and no
+    # filesystem granularity error can satisfy it, because the recorded first
+    # observation is this store's own wall-clock reading rather than a value
+    # the volume rounded.
+    assert store.gc_sweep(now=clock.now) == [], (
+        "the coarse-mtime live entry was reclaimed by an immediately-following "
+        "sweep — the B-74 residue is not dissolved"
+    )
+    assert entry_path.exists()
+    assert store.read("tenant-a", ref) == "live despite a coarse mtime"
 
 
 def test_observation_record_is_shared_across_instances_of_one_root(tmp_path: Path) -> None:
-    """merge-gate round-2 test-witness lens (PR #1163), BLOCKING finding.
-    The central design judgment of the B-77 fix is that the
-    first-observation record is MODULE-WIDE, keyed by the root's filesystem
-    identity — not an instance attribute — because the composition root
-    builds a FRESH `ProtectedResultStore` per `run()`/`resume()` bootstrap
+    """merge-gate round-2 test-witness lens (PR #1163), BLOCKING finding,
+    RE-GROUNDED at U-RT-150 AC #13. The observation record must be shared by
+    every `ProtectedResultStore` on one root, because the composition root
+    builds a FRESH instance per `run()`/`resume()` bootstrap
     (`bootstrap/factories/protected_result_store_factory.py` ->
-    `bootstrap/stage_4_od.py`, which sweeps immediately). A per-instance
-    record would hand EVERY bootstrap sweep a fresh grace and defer reclaim
-    to shutdown indefinitely, weakening the spec's bounded-retention term.
+    `bootstrap/stage_4_od.py`, which sweeps immediately). A per-instance record
+    would hand EVERY bootstrap sweep a fresh grace and defer reclaim
+    indefinitely, weakening the spec's bounded-retention term.
 
     Nothing else in this module discriminates that: the crash-recovery
-    witness's fresh instance is NOT load-bearing there, because
-    `write_once` runs `_maybe_opportunistic_gc_sweep()` before publishing
-    and a fresh instance's `_last_gc_at = 0.0` makes that pre-publish sweep
-    always fire — so the recovering sweep is the root's second sweep either
-    way. This test pins the property directly: instance A observes the
-    expired entry, then a SECOND instance on the SAME root must reclaim it
-    on ITS OWN FIRST sweep, inheriting A's observation.
+    witness's fresh instance is NOT load-bearing there, because `write_once`
+    runs `_maybe_opportunistic_gc_sweep()` before publishing and a fresh
+    instance's `_last_gc_at = 0.0` makes that pre-publish sweep always fire.
+    This test pins the property directly: instance A observes the expired
+    entry, then a SECOND instance on the SAME root reclaims it on ITS OWN FIRST
+    sweep once the grace has elapsed, inheriting A's observation.
 
-    Mutation probe: making the record an instance attribute (e.g.
-    `self._observed_expired` initialized in `__init__` instead of the
-    module-level `_root_observed_expired` registry) makes instance B's
-    first sweep return `[]` and this test fails."""
+    What changed at `B-96`: the sharing carrier is no longer the module-level
+    `_root_observed_expired` registry keyed by filesystem identity but the
+    DURABLE record in the root itself — which is strictly stronger, since it
+    survives process exit as well as instance churn (that half is witnessed
+    across real processes by `test_one_shot_process_invocations_...`).
+
+    Mutation probe: making the record an instance attribute (e.g. an
+    in-memory `self._observed` dict initialized in `__init__` instead of the
+    durable file) makes instance B's sweep return `[]` and this test fails."""
     store_a = _store(tmp_path, ttl_seconds=1.0)
     ref = store_a.write_once("tenant-a", "observed by A, reclaimed by B")
     assert isinstance(ref, str)
@@ -2141,7 +2281,7 @@ def test_observation_record_is_shared_across_instances_of_one_root(tmp_path: Pat
     sweep_at = time.time() + 10.0
 
     # A observes it past TTL (grace: no reclaim).
-    assert store_a.gc_sweep(now=sweep_at) == []
+    assert store_a.gc_sweep(now=sweep_at, observed_at=sweep_at) == []
     assert entry_path.exists()
 
     # A genuinely fresh instance on the SAME root — exactly what the next
@@ -2151,25 +2291,30 @@ def test_observation_record_is_shared_across_instances_of_one_root(tmp_path: Pat
         codec=store_a._codec,  # type: ignore[attr-defined]
         ttl_seconds=1.0,
     )
-    assert store_b.gc_sweep(now=sweep_at) == [entry_path.stem], (
-        "a second instance's FIRST sweep did not inherit the first instance's "
+    assert store_b.gc_sweep(now=sweep_at + 1.5) == [entry_path.stem], (
+        "a second instance's sweep did not inherit the first instance's "
         "observation — the record is per-instance, not per-root"
     )
     assert not entry_path.exists()
 
 
 def test_observation_records_are_keyed_per_root_not_one_global_set(tmp_path: Path) -> None:
-    """merge-gate round-2 test-witness lens (PR #1163), rider 1. The record
-    is keyed by ROOT identity and REPLACED on each sweep (that replacement
-    is what keeps it bounded). Those two facts only compose safely because
-    the key is per-root: a single un-keyed global set, replaced each sweep,
-    would let alternating sweeps of two distinct roots wipe each other's
-    records and starve reclaim indefinitely.
+    """merge-gate round-2 test-witness lens (PR #1163), rider 1, RE-GROUNDED at
+    U-RT-150 AC #13. The record is per-ROOT and REPLACED wholesale on each
+    sweep (that replacement is what keeps it bounded). Those two facts only
+    compose safely because the record is per-root: one shared, un-keyed record
+    replaced each sweep would let alternating sweeps of two distinct roots wipe
+    each other's observations and starve reclaim indefinitely.
 
-    Mutation probe: replacing `_root_identity_key(self._root)` in
-    `_observe_expired` with a constant key (one global set) makes each
-    root's SECOND sweep return `[]` — the other root's sweep having wiped
-    its record — and this test fails."""
+    Under `B-96` the per-root property is carried by the record's RESIDENCE —
+    it lives in the store root it indexes — rather than by a filesystem-identity
+    key into a module-wide dict. Both roots' records are asserted to hold only
+    their own root's names, which is the property directly.
+
+    Mutation probe: pointing `_observation_record_path` at a single shared
+    location (e.g. a fixed path outside the root) makes each root's later sweep
+    return `[]` — the other root's sweep having replaced the shared record —
+    and this test fails."""
     store_1 = _store(tmp_path / "one", ttl_seconds=1.0)
     store_2 = ProtectedResultStore(
         tmp_path / "two" / "store",
@@ -2184,11 +2329,15 @@ def test_observation_records_are_keyed_per_root_not_one_global_set(tmp_path: Pat
     sweep_at = time.time() + 10.0
 
     # Interleaved first observations — neither may disturb the other's.
-    assert store_1.gc_sweep(now=sweep_at) == []
-    assert store_2.gc_sweep(now=sweep_at) == []
+    assert store_1.gc_sweep(now=sweep_at, observed_at=sweep_at) == []
+    assert store_2.gc_sweep(now=sweep_at, observed_at=sweep_at) == []
 
-    assert store_1.gc_sweep(now=sweep_at) == [entry_1.stem]
-    assert store_2.gc_sweep(now=sweep_at) == [entry_2.stem]
+    # Each root's record holds ONLY that root's own candidate name.
+    assert set(_read_observation_record(store_1)) == {entry_1.name}
+    assert set(_read_observation_record(store_2)) == {entry_2.name}
+
+    assert store_1.gc_sweep(now=sweep_at + 1.5) == [entry_1.stem]
+    assert store_2.gc_sweep(now=sweep_at + 1.5) == [entry_2.stem]
     assert not entry_1.exists()
     assert not entry_2.exists()
 
@@ -2200,9 +2349,15 @@ def test_crash_orphaned_temp_file_survives_its_first_observed_sweep(tmp_path: Pa
     asserts EVENTUAL reclaim (it sweeps past the grace), so nothing pinned
     the tmp half of the gate.
 
-    Mutation probe: dropping the `previously_observed` filter from the tmp
-    path alone (`tmp_candidates = verified_tmp`) makes the first sweep
-    reclaim the orphan and this test fails."""
+    RE-GROUNDED at U-RT-150 AC #13 + AC #5: the second half now waits for the
+    ELAPSED grace rather than for a second sweep, and an intervening
+    immediately-following sweep is asserted NOT to reclaim.
+
+    Mutation probes (both directions): dropping the elapsed-time conjunct from
+    the tmp path alone (`tmp_candidates = verified_tmp`) makes the first sweep
+    reclaim the orphan; restricting the record's key to the published-entry
+    class leaves the orphan's conjunct (b) permanently unsatisfiable and the
+    final reclaim assertion fails."""
     store = _store(tmp_path, ttl_seconds=1.0)
     store_root = tmp_path / "store"
     store_root.mkdir(parents=True, exist_ok=True)
@@ -2212,48 +2367,1557 @@ def test_crash_orphaned_temp_file_survives_its_first_observed_sweep(tmp_path: Pa
     os.utime(orphan, (old_time, old_time))
     sweep_at = time.time()
 
-    store.gc_sweep(now=sweep_at)
+    store.gc_sweep(now=sweep_at, observed_at=sweep_at)
     assert orphan.exists(), (
         "a crash-orphaned temp file was reclaimed by the sweep that FIRST "
         "observed it — the grace does not cover the .tmp-* path"
     )
+    assert set(_read_observation_record(store)) == {orphan.name}
 
-    store.gc_sweep(now=sweep_at)
+    store.gc_sweep(now=sweep_at + 0.001)
+    assert orphan.exists(), "the orphan was reclaimed by an immediately-following sweep"
+
+    store.gc_sweep(now=sweep_at + 1.5)
     assert not orphan.exists()
 
 
-def test_observe_expired_runs_while_the_publish_lock_is_held(
+def test_observe_candidates_runs_while_the_publish_lock_is_held(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """merge-gate round-2 test-witness lens (PR #1163), rider 4.
-    `_observe_expired`'s docstring claims it is called with
-    `self._publish_lock` held — that is what stops two concurrent sweeps of
-    one root from interleaving a read with the other's replace (a lost
-    observation, hence a premature reclaim). Structural witness in the same
-    shape as `test_gc_sweep_candidate_enumeration_runs_without_holding_
-    publish_lock` (`[[verification-shape-sharpened-grep-vs-e2e]]`: assert
-    lock-identity, not a race outcome): record whether the lock is held at
-    the moment the call is made.
+    """merge-gate round-2 test-witness lens (PR #1163), rider 4, RE-GROUNDED at
+    U-RT-150 AC #13 onto the renamed `_observe_candidates`.
+    `_observe_candidates`'s docstring claims it is called with
+    `self._publish_lock` held — that is what stops two concurrent sweeps of one
+    root from interleaving a read with the other's replace (a lost observation,
+    hence a premature reclaim). Under `B-96` the same lock ALSO makes the
+    wall-clock sample the term-3 LOCKED, POST-RE-VERIFICATION point, so this
+    structural pin now carries two properties rather than one.
 
-    Mutation probe: hoisting the `self._observe_expired(...)` call out of
-    `gc_sweep`'s `with self._publish_lock, self._cross_process_lock():`
-    block records `False` and this test fails."""
+    Same shape as `test_gc_sweep_candidate_enumeration_runs_without_holding_
+    publish_lock` (`[[verification-shape-sharpened-grep-vs-e2e]]`: assert
+    lock-identity, not a race outcome): record whether the lock is held at the
+    moment the call is made.
+
+    Mutation probe: hoisting the `self._observe_candidates(...)` call out of
+    `gc_sweep`'s `with self._publish_lock, self._cross_process_lock():` block
+    records `False` and this test fails."""
     store = _store(tmp_path, ttl_seconds=0.01)
     ref = store.write_once("tenant-a", "will be swept")
     assert isinstance(ref, str)
     time.sleep(0.05)  # comfortably past the 0.01s TTL
 
     lock_held_at_call: list[bool] = []
-    real_observe = store._observe_expired  # type: ignore[attr-defined]
+    real_observe = store._observe_candidates  # type: ignore[attr-defined]
 
-    def _recording_observe(still_expired: set[str]) -> frozenset[str]:
+    def _recording_observe(names: list[str], **kwargs: object) -> object:
         lock_held_at_call.append(store._publish_lock.locked())  # type: ignore[attr-defined]
-        return real_observe(still_expired)
+        return real_observe(names, **kwargs)
 
-    monkeypatch.setattr(store, "_observe_expired", _recording_observe)
+    monkeypatch.setattr(store, "_observe_candidates", _recording_observe)
 
     store.gc_sweep(now=time.time())
 
     assert lock_held_at_call == [True], (
-        f"_observe_expired was called with `_publish_lock` UNHELD: {lock_held_at_call}"
+        f"_observe_candidates was called with `_publish_lock` UNHELD: {lock_held_at_call}"
     )
+
+
+# ---------------------------------------------------------------------------
+# `B-96` / U-RT-150 — durable, publication-bounded, elapsed-time GC reclaim
+# grace (Runtime spec v1.111 §14.8.11.1, terms 1-12 + the record's carrier).
+# ---------------------------------------------------------------------------
+
+
+def _stale_entry(
+    tmp_path: Path, *, ttl_seconds: float, age_seconds: float
+) -> tuple[ProtectedResultStore, Path]:
+    """A store holding ONE published entry whose filesystem timestamp already
+    reads `age_seconds` old — the shape every conjunct-(a)-satisfied witness
+    below needs, without waiting for real time to pass."""
+    store = _store(tmp_path, ttl_seconds=ttl_seconds)
+    ref = store.write_once("tenant-a", "an already-completed paid effect")
+    assert isinstance(ref, str)
+    entry_path = store._entry_path(ref)  # type: ignore[attr-defined]
+    stale = time.time() - age_seconds
+    os.utime(entry_path, (stale, stale))
+    return store, entry_path
+
+
+def test_reclaim_requires_both_conjuncts_and_admits_no_third_path(tmp_path: Path) -> None:
+    """AC #1 — reclaim is ELIGIBLE iff BOTH the filesystem-timestamp age AND
+    the elapsed time since the durably recorded first observation are past the
+    TTL. The four-cell matrix is asserted, not just the positive diagonal, so
+    the witness pins a CONJUNCTION rather than either half.
+
+    Eligibility is the contract; COLLECTION is best-effort and deliberately
+    allowed to fail (a removal `OSError` is caught, logged and skipped — see
+    `test_gc_unlink_failure_does_not_propagate_or_replace_the_carrier`), so
+    this witness asserts the eligibility decision, never that every eligible
+    entry is always collected.
+
+    Mutation probes (both directions): relaxing the predicate to conjunct (a)
+    alone reclaims in the fresh-observation cell; relaxing it to conjunct (b)
+    alone reclaims in the young-file cell."""
+    ttl = 1.0
+
+    # Cell 1 — timestamp past TTL, observation FRESH: NOT eligible.
+    store, entry_path = _stale_entry(tmp_path / "a", ttl_seconds=ttl, age_seconds=10.0)
+    at = time.time()
+    assert store.gc_sweep(now=at, observed_at=at) == []
+    assert entry_path.exists()
+
+    # Cell 2 — timestamp past TTL, observation ALSO past TTL: eligible.
+    assert store.gc_sweep(now=at + 1.5) == [entry_path.stem]
+    assert not entry_path.exists()
+
+    # Cell 3 — observation past TTL, timestamp YOUNG: NOT eligible. The entry
+    # is observed while stale, then its timestamp is refreshed before the
+    # second sweep, so only conjunct (b) holds.
+    store_2, entry_2 = _stale_entry(tmp_path / "b", ttl_seconds=ttl, age_seconds=10.0)
+    at_2 = time.time()
+    assert store_2.gc_sweep(now=at_2, observed_at=at_2) == []
+    fresh = at_2 + 1.4
+    os.utime(entry_2, (fresh, fresh))
+    assert store_2.gc_sweep(now=at_2 + 1.5) == [], (
+        "an entry whose filesystem timestamp is YOUNG was reclaimed on the "
+        "strength of its observation alone — conjunct (a) is not gating"
+    )
+    assert entry_2.exists()
+
+    # Cell 4 — neither conjunct: NOT eligible (the ordinary fresh-store case).
+    store_3 = _store(tmp_path / "c", ttl_seconds=ttl)
+    ref_3 = store_3.write_once("tenant-a", "fresh")
+    assert isinstance(ref_3, str)
+    now_3 = time.time()
+    assert store_3.gc_sweep(now=now_3, observed_at=now_3) == []
+    assert store_3.gc_sweep(now=now_3 + 0.1) == []
+
+
+def test_no_absolute_ceiling_reclaims_an_ancient_entry_inside_its_grace(
+    tmp_path: Path,
+) -> None:
+    """AC #1's *no third path* half, in the direction a `k × ttl_seconds`
+    ceiling would break (ratified form C-2: NO absolute reclaim ceiling of any
+    kind). An entry whose filesystem timestamp reads ONE HUNDRED TTLs old, but
+    whose first observation is fresh, must survive every sweep inside its
+    grace — under any ceiling term it would be reclaimed at once.
+
+    Mutation probe: adding `or age > k * self._ttl_seconds` to the eligibility
+    predicate for any finite `k` reclaims the entry at the first sweep."""
+    ttl = 1.0
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=ttl, age_seconds=100.0 * ttl)
+    at = time.time()
+    assert store.gc_sweep(now=at, observed_at=at) == []
+    for offset in (0.1, 0.3, 0.6, 0.9):
+        assert store.gc_sweep(now=at + offset) == [], (
+            f"a 100×TTL-old entry was reclaimed {offset}s into its grace — an "
+            f"absolute age ceiling is gating reclaim"
+        )
+        assert entry_path.exists()
+    # And it IS reclaimed once the grace itself elapses — the ceiling's absence
+    # does not become immortality.
+    assert store.gc_sweep(now=at + 1.5) == [entry_path.stem]
+
+
+def test_reclaim_never_precedes_publication_plus_ttl_under_an_under_reporting_mtime(
+    tmp_path: Path,
+) -> None:
+    """AC #2 — the PUBLICATION BOUND. For an entry published at `t_pub`, no
+    reclaim occurs before `t_pub + TTL`, across an arbitrary number of sweeps
+    and INDEPENDENT of the recorded filesystem timestamp — including the
+    crash-window shape `B-77` / `B-74` name, where that timestamp UNDER-REPORTS
+    publication by an unbounded amount (simulated here as ten seconds against a
+    one-second TTL).
+
+    SCOPE, stated so this is not read as proving more than it does: the bound
+    holds under spec term 2's stated assumption — a wall clock FREE OF STEP
+    DISCONTINUITIES IN EITHER DIRECTION between publication and reclaim. A
+    backward step before the first observation, or a forward step larger than
+    the TTL at any point before reclaim, each break it; closing that residual is
+    NOT owed by this unit (it is a property of the store's wall-clock age
+    authority as a whole, and the pre-existing timestamp comparison carries it
+    identically), and substituting a monotonic clock is FORBIDDEN because the
+    observation state is durable across process exit. The sweep instants below
+    are therefore asserted to be MONOTONICALLY NON-DECREASING, so a
+    backward-stepping clock can never pass this witness as evidence of the
+    unconditional bound.
+
+    Mutation probes: sampling the first observation before the existence
+    re-verification, or reintroducing a mtime-only reclaim path, reclaims at the
+    very first sweep (the timestamp already reads 10× the TTL)."""
+    ttl = 1.0
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=ttl, age_seconds=10.0)
+    t_pub = time.time()
+
+    sweep_instants = [t_pub + offset for offset in (0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99)]
+    assert sweep_instants == sorted(sweep_instants), (
+        "the sweep instants are not monotonically non-decreasing — a "
+        "backward-stepping clock would make this witness vacuous"
+    )
+    for index, instant in enumerate(sweep_instants):
+        observed_at = instant if index == 0 else None
+        assert store.gc_sweep(now=instant, observed_at=observed_at) == [], (
+            f"reclaim occurred {instant - t_pub:.2f}s after publication, before "
+            f"publication + TTL ({ttl}s)"
+        )
+        assert entry_path.exists()
+
+    assert store.gc_sweep(now=t_pub + ttl + 0.01) == [entry_path.stem]
+
+
+def test_first_observed_at_is_sampled_under_the_lock_after_re_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #3 — `first_observed_at` is a WALL-CLOCK value sampled at the LOCKED,
+    POST-RE-VERIFICATION observation point, NEVER at the sweep's pre-enumeration
+    clock read. Asserted BY CONSTRUCTION on two independent axes:
+
+    (i) the two clock seams are DISTINCT — driven to different values, the
+        recorded stamp is the observation-point one, and the pre-enumeration
+        `now` is not obtainable from the record; and
+    (ii) with both seams left to their production default, the candidate's
+        existence has ALREADY been re-verified under the lock by the time the
+        sample is taken — the entry has been `stat`-ed at least twice (the
+        unlocked provisional pass and the locked re-verify pass).
+
+    The lock-HELD half is pinned separately by
+    `test_observe_candidates_runs_while_the_publish_lock_is_held`.
+
+    Mutation probe: moving the sample to the pre-enumeration `now` read makes
+    (i) record the pre-enumeration value; moving the `_observe_candidates` call
+    above the locked re-verify loop makes (ii) see one `stat` instead of two —
+    the same relocation AC #2's witness independently kills."""
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+
+    # (i) two independently drivable seams.
+    pre_enumeration = time.time()
+    observation_point = pre_enumeration + 4321.0
+    store.gc_sweep(now=pre_enumeration, observed_at=observation_point)
+    recorded = _read_observation_record(store)
+    assert recorded == {entry_path.name: observation_point}
+    assert recorded[entry_path.name] != pre_enumeration
+
+    # (i-bis) and with the observation seam left to its PRODUCTION default, the
+    # recorded stamp is STILL not obtainable from the pre-enumeration read —
+    # the half that discriminates a default-path implementation quietly reusing
+    # `now` when no `observed_at` is supplied. `now` is driven far from the real
+    # clock so the two are unmistakably distinguishable. Its OWN store, because
+    # a `now` that far ahead legitimately reclaims on the spot.
+    other, other_entry = _stale_entry(tmp_path / "default-seam", ttl_seconds=1.0, age_seconds=10.0)
+    far_future = pre_enumeration + 100_000.0
+    other.gc_sweep(now=far_future)
+    defaulted = _read_observation_record(other)[other_entry.name]
+    assert defaulted != far_future, (
+        "with no `observed_at` supplied the sweep recorded its own "
+        "pre-enumeration `now` — the sample is not taken at the observation point"
+    )
+    assert abs(defaulted - time.time()) < 60.0, (
+        f"the default sample is not a wall-clock reading taken during the sweep: {defaulted}"
+    )
+
+    # (ii) re-verification precedes the sample.
+    _observation_record_path(store).unlink()
+    stat_calls = {"n": 0}
+    real_stat = Path.stat
+
+    def _counting_stat(self: Path, **kwargs: object) -> object:
+        if self == entry_path:
+            stat_calls["n"] += 1
+        return real_stat(self, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "stat", _counting_stat)
+    stats_at_sample: list[int] = []
+    real_observe = store._observe_candidates  # type: ignore[attr-defined]
+
+    def _recording_observe(names: list[str], **kwargs: object) -> object:
+        stats_at_sample.append(stat_calls["n"])
+        return real_observe(names, **kwargs)
+
+    monkeypatch.setattr(store, "_observe_candidates", _recording_observe)
+    store.gc_sweep()
+    assert stats_at_sample and stats_at_sample[0] >= 2, (
+        f"the observation was sampled after only {stats_at_sample} stat call(s) "
+        f"on the candidate — the locked re-verification had not run yet"
+    )
+
+
+def test_a_deleted_record_begins_a_fresh_grace_and_can_only_lengthen_retention(
+    tmp_path: Path,
+) -> None:
+    """AC #4 — the record is a DERIVED INDEX, never an authority. With the
+    record DELETED between two sweeps, a past-TTL entry is NOT reclaimed at the
+    next sweep: a fresh grace begins.
+
+    SCOPE, exactly as spec term 4 scopes it — to record LOSS. An ABSENT record
+    (and, per AC #11, an UNREADABLE one) can only LENGTHEN retention and MUST
+    NOT be able to shorten it. This is NOT a universal over every record state:
+    a STALE BUT READABLE row surviving a removed-then-reused temporary name is a
+    distinct case AC #5 explicitly permits and registered row `B-110` tracks,
+    and asserting this property universally would make the two ACs mutually
+    unsatisfiable.
+
+    Mutation probe: treating an absent record as *observed long ago* (e.g.
+    defaulting a missing `first_observed_at` to `0.0` instead of the sample
+    time) reclaims at the sweep after the deletion."""
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+    at = time.time()
+    assert store.gc_sweep(now=at, observed_at=at) == []
+    assert _observation_record_path(store).exists()
+
+    _observation_record_path(store).unlink()
+
+    # Well past the grace the FIRST observation would have granted — and still
+    # not reclaimed, because that observation no longer exists.
+    assert store.gc_sweep(now=at + 5.0, observed_at=at + 5.0) == [], (
+        "a past-TTL entry was reclaimed at the sweep following record deletion "
+        "— record loss SHORTENED retention"
+    )
+    assert entry_path.exists()
+    # The fresh grace is a grace, not immunity.
+    assert store.gc_sweep(now=at + 6.5) == [entry_path.stem]
+
+
+def test_record_content_set_is_closed_at_two_members_and_discloses_nothing(
+    tmp_path: Path,
+) -> None:
+    """AC #5 — the record's content is EXACTLY `{candidate filename,
+    first_observed_at}` per name, CLOSED at two members, over BOTH sweep
+    classes. The REFUSALS are asserted, not merely the presence: the persisted
+    bytes carry no composite key in whole or in part, no tenant tag, no
+    plaintext and no ciphertext — a known sentinel written through the store is
+    absent from the raw bytes AND from their base64 and utf-8 decodings.
+
+    Mutation probe: adding any third member (a tenant tag, the composite key, a
+    ciphertext digest) to the published payload fails the closed-set assertion;
+    keying on the composite key rather than the candidate filename fails the
+    key-shape and no-composite-key assertions together."""
+    import base64
+
+    sentinel = "SENTINEL-PAYLOAD-b96-must-never-reach-the-record"
+    store = _store(tmp_path, ttl_seconds=1.0)
+    ref = store.write_once("tenant-a", sentinel)
+    assert isinstance(ref, str)
+    entry_path = store._entry_path(ref)  # type: ignore[attr-defined]
+    stale = time.time() - 10.0
+    os.utime(entry_path, (stale, stale))
+    orphan = (tmp_path / "store") / ".tmp-b96-closed-set-orphan"
+    orphan.write_bytes(b"partial ciphertext from a killed write")
+    os.utime(orphan, (stale, stale))
+
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+
+    raw = _observation_record_path(store).read_bytes()
+    document = json.loads(raw.decode("utf-8"))
+    # CLOSED at two members: the document's own keys are form metadata plus the
+    # observations map, and each ROW is exactly `name -> first_observed_at`.
+    assert set(document) == {"version", "observations"}
+    assert document["observations"] == {entry_path.name: at, orphan.name: at}
+
+    # The refusals — over the raw bytes and both decodings a reader might apply.
+    decodings = [raw, raw.decode("utf-8").encode("utf-8"), base64.b64encode(raw)]
+    forbidden = [
+        sentinel.encode("utf-8"),
+        ref.encode("utf-8"),
+        ref.split(":", 1)[1].encode("utf-8"),  # the uuid4 half of the composite key
+        b"tenant-a",
+        entry_path.read_bytes()[:32],  # a ciphertext prefix
+    ]
+    for blob in decodings:
+        for secret in forbidden:
+            assert secret not in blob, f"{secret!r} leaked into the observation record"
+
+
+def test_reused_temporary_name_stays_bounded_by_its_own_filesystem_timestamp(
+    tmp_path: Path,
+) -> None:
+    """AC #5's NAME-REUSE BOUND — the registered residual `B-110`, witnessed at
+    exactly the strength the ratified carrier can deliver and no further.
+
+    A temporary name is drawn by a mechanism that avoids only names CURRENTLY
+    PRESENT, so once an orphan is removed its name is redrawable and a surviving
+    record row can match a DIFFERENT later file. This witnesses the bound that
+    SURVIVES that: conjunct (a) is keyed on the NEW file's own filesystem
+    timestamp, so the recreated file is NOT reclaimed before `new_mtime + TTL`.
+
+    WHAT THIS DOES **NOT** WITNESS, stated so the assertion is never read as
+    more: it does NOT witness spec TERM 2. Term 2 bounds reclaim by
+    PUBLICATION; a temporary orphan is not a published entry, and on a volume
+    whose timestamps under-report creation `new_mtime + TTL` can elapse before
+    the new file's own creation + TTL. That overstatement is exactly what
+    `B-110` records as lost, and closing it is NOT owed by this unit. Nor does
+    this assert that the new file receives a FRESH `first_observed_at` — the
+    record's ratified content set is closed at two members and carries no
+    generation identity, so such an assertion would be unsatisfiable and an
+    implementation contorted to pass it would be widening a ratified closed set.
+
+    Mutation probe: dropping conjunct (a) so a stale record row alone can
+    reclaim makes the recreated file disappear at the first post-recreation
+    sweep."""
+    ttl = 1.0
+    store = _store(tmp_path, ttl_seconds=ttl)
+    store_root = tmp_path / "store"
+    store_root.mkdir(parents=True, exist_ok=True)
+    orphan = store_root / ".tmp-b110-reused-name"
+    orphan.write_bytes(b"generation one")
+    stale = time.time() - 10.0
+    os.utime(orphan, (stale, stale))
+
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+    assert set(_read_observation_record(store)) == {orphan.name}
+
+    # The surviving row is aged well past its own grace, so conjunct (b) is
+    # satisfied for the reused name — the degraded state `B-110` names.
+    _backdate_observation_record(store, by=10.0)
+
+    # Generation one is removed; a DIFFERENT file takes the same name, and its
+    # own timestamp is fresh.
+    orphan.unlink()
+    orphan.write_bytes(b"generation two - a different file, the same name")
+    recreated_at = at + 0.05
+    os.utime(orphan, (recreated_at, recreated_at))
+
+    # BEFORE the new file's own timestamp + TTL: conjunct (a) still gates it,
+    # even though the stale row has already satisfied conjunct (b).
+    assert store.gc_sweep(now=recreated_at + ttl - 0.1) == []
+    assert orphan.exists(), (
+        "a recreated file bearing a reused temporary name was reclaimed before "
+        "its OWN filesystem timestamp plus the TTL — conjunct (a) is not gating"
+    )
+    assert orphan.read_bytes() == b"generation two - a different file, the same name"
+
+    # AFTER it, the timestamp-derived bound is met and the file is reclaimed —
+    # which is precisely the degradation `B-110` records: for this ONE candidate
+    # the reclaim bound falls back to the pre-existing timestamp-derived one,
+    # rather than gaining the additional grace a fresh observation would give.
+    assert store.gc_sweep(now=recreated_at + ttl + 0.1) == []
+    assert not orphan.exists()
+
+
+def test_absent_record_emits_the_reset_as_an_observed_fact_never_a_diagnosis(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC #6 — when a sweep finds one or more past-TTL candidates AND reads no
+    observation record, it emits a typed report-log line carrying the observed
+    state and NOTHING BEYOND IT: that no record was read, the COUNT of past-TTL
+    candidates OVER BOTH CLASSES, the oldest resident candidate's age from the
+    same timestamp pass, and that a fresh grace begins.
+
+    The MUST-NOTs are asserted: the line does not assert, name or classify the
+    record as LOST, and emits no verdict. Emission is UNCONDITIONAL and
+    PER-OCCURRENCE — it fires on the FIRST occurrence, with no in-process
+    suppression and no waiting for a second.
+
+    Mutation probe: adding a *record lost* classification (or any verdict word)
+    fails the MUST-NOT assertions; suppressing the first occurrence, or gating
+    on a second, fails the first-occurrence assertion."""
+    import logging
+
+    store, _entry_path = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+    orphan = (tmp_path / "store") / ".tmp-b96-reset-line-orphan"
+    orphan.write_bytes(b"partial ciphertext")
+    stale = time.time() - 20.0
+    os.utime(orphan, (stale, stale))
+
+    caplog.set_level(logging.WARNING, logger="harness.runtime.protected_result_store")
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+
+    reset_lines = [r for r in caplog.records if "no GC observation record was read" in r.message]
+    assert len(reset_lines) == 1, (
+        "the reset line did not fire on the FIRST occurrence, or fired more "
+        f"than once for one sweep: {[r.message for r in caplog.records]}"
+    )
+    message = reset_lines[0].message
+    assert "past_ttl_entries=1" in message
+    assert "past_ttl_orphans=1" in message  # BOTH classes are counted
+    assert "oldest_entry_age_s=" in message and "oldest_orphan_age_s=" in message
+    assert "fresh grace begins" in message
+    lowered = message.lower()
+    for forbidden in ("lost", "loss", "corrupt", "verdict", "fail", "error", "invalid"):
+        assert forbidden not in lowered, (
+            f"the reset line classifies the record ({forbidden!r}) — it must "
+            f"state the observed state and nothing beyond it"
+        )
+
+
+def test_typical_worst_case_retention_is_two_ttls_from_publication(tmp_path: Path) -> None:
+    """AC #7's positive half — the TYPICAL worst case is `2 × TTL` plus up to
+    two sweep-trigger intervals: one interval to the first post-TTL observation,
+    one more to the post-grace reclaim. Driven on a pinned clock: sweeps at
+    `t_pub`, at `t_pub + TTL + ε` (the first post-TTL observation), and at
+    `t_pub + 2×TTL + ε` (the reclaim).
+
+    Mutation probe: dropping the elapsed conjunct collapses this to `1 × TTL`
+    and the middle assertion fails."""
+    ttl = 1.0
+    store = _store(tmp_path, ttl_seconds=ttl)
+    ref = store.write_once("tenant-a", "retained for two TTLs")
+    assert isinstance(ref, str)
+    entry_path = store._entry_path(ref)  # type: ignore[attr-defined]
+    t_pub = time.time()
+    os.utime(entry_path, (t_pub, t_pub))
+
+    # Sweep 1, at publication: not even past the TTL yet.
+    assert store.gc_sweep(now=t_pub, observed_at=t_pub) == []
+    # Sweep 2, one TTL later: past-TTL and FIRST observed — still not reclaimed.
+    at_one_ttl = t_pub + ttl + 0.01
+    assert store.gc_sweep(now=at_one_ttl, observed_at=at_one_ttl) == []
+    assert entry_path.exists()
+    # Sweep 3, two TTLs after publication: the grace has elapsed.
+    assert store.gc_sweep(now=t_pub + 2 * ttl + 0.02) == [entry_path.stem]
+
+
+def test_no_surface_claims_an_unconditional_retention_bound(tmp_path: Path) -> None:
+    """AC #7's NEGATIVE half, which is the load-bearing one: an implementation
+    that ships a correct reclaim rule and an OVERCLAIMING docstring violates
+    spec term 7. Retention under this form is CONDITIONAL — on the observation
+    record being present and readable, and on a sweep-trigger interval that is
+    unbounded in the one-shot process shape — so no `N × TTL` bound may be
+    asserted anywhere on the surface: not in the module, not in an emission,
+    not in a docstring, not in the operator-facing CLI row.
+
+    Mutation probe: adding a sentence such as *"retention is bounded by 2 × TTL"*
+    to any of the scanned surfaces fires one of the patterns below."""
+    import re
+
+    from harness_runtime.admin import inspect as inspect_module
+    from harness_runtime.lifecycle import protected_result_store as store_module
+
+    overclaims = [
+        re.compile(r"bound(?:ed)?\s+by\s+\d+\s*[×x*]\s*(?:ttl|TTL)", re.IGNORECASE),
+        re.compile(r"(?:unconditional|guaranteed|hard)\s+(?:retention\s+)?bound", re.IGNORECASE),
+        re.compile(r"never\s+retained\s+(?:for\s+)?(?:more|longer)\s+than", re.IGNORECASE),
+        re.compile(r"retention\s+is\s+bounded\s+by", re.IGNORECASE),
+    ]
+    scanned: list[tuple[str, str]] = []
+    for module in (store_module, inspect_module):
+        source_path = Path(str(module.__file__))
+        scanned.append((source_path.name, source_path.read_text(encoding="utf-8")))
+
+    # Plus the operator-facing rendering itself, over a live store.
+    store, _entry = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+    snapshot = read_protected_result_store_snapshot(tmp_path / "store")
+    assert snapshot is not None
+    from harness_runtime.admin.inspect import _format_protected_result_store_human
+
+    scanned.append(("harness-inspect output", _format_protected_result_store_human(snapshot)))
+
+    for label, text in scanned:
+        for pattern in overclaims:
+            match = pattern.search(text)
+            assert match is None, (
+                f"{label} asserts an unconditional retention bound: {match.group(0)!r}"
+            )
+
+
+def test_oldest_candidate_age_is_a_field_of_every_sweep_emission_never_cached(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC #8(a) — the oldest resident candidate's age is a FIELD OF every
+    sweep's report-log emission (the reclaim line and the AC #6 / AC #11
+    lines), NEVER a separate line, and computed AT READ TIME from the timestamp
+    pass the sweep already performs rather than cached between sweeps.
+
+    The not-cached half is witnessed by VALUE: two sweeps a known interval
+    apart must report ages that differ by that interval, which a cached value
+    cannot do.
+
+    Mutation probe: caching the gauge on the instance (computing it once and
+    reusing it) makes the second sweep report the first sweep's age and the
+    delta assertion fails; moving the age onto its own log line leaves the
+    reclaim line without the field and the membership assertion fails."""
+    import logging
+
+    ttl = 10.0
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=ttl, age_seconds=20.0)
+    caplog.set_level(logging.WARNING, logger="harness.runtime.protected_result_store")
+    # Derived from the recorded mtime rather than the wall clock, so the
+    # reported ages below are EXACT on every run whatever the load.
+    mtime = entry_path.stat().st_mtime
+    at = mtime + 20.0
+
+    store.gc_sweep(now=at, observed_at=at)
+    reset_line = next(r for r in caplog.records if "no GC observation record" in r.message)
+    assert "oldest_entry_age_s=20.0" in reset_line.message
+
+    caplog.clear()
+    # A sweep five seconds later, with the record removed so the same emission
+    # fires again: the SAME entry, a five-second-older reported age.
+    _observation_record_path(store).unlink()
+    store.gc_sweep(now=at + 5.0, observed_at=at + 5.0)
+    later_line = next(r for r in caplog.records if "no GC observation record" in r.message)
+    assert "oldest_entry_age_s=25.0" in later_line.message, (
+        f"the oldest-candidate age did not advance with the sweep clock — it is "
+        f"cached rather than computed at read time: {later_line.message}"
+    )
+
+    caplog.clear()
+    _backdate_observation_record(store)
+    reclaimed = store.gc_sweep(now=at + 6.0)
+    assert reclaimed == [entry_path.stem]
+    reclaim_line = next(r for r in caplog.records if "TTL-expired entry GC'd" in r.message)
+    assert "oldest_entry_age_s=26.0" in reclaim_line.message, (
+        "the reclaim emission does not carry the oldest-candidate age as a FIELD"
+    )
+
+
+def test_reclaim_emission_carries_the_which_term_fired_last_discriminator(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC #8's WHICH-RECLAIM-TERM-FIRED-LAST discriminator — the later of the
+    two conjunct deadlines, DERIVED AT THE RECLAIM SITE and never stored, as an
+    ATTRIBUTE of the reclaim emission rather than a line of its own. Both
+    values of the discriminator are exercised.
+
+    Mutation probe: storing the discriminator in the observation record (a third
+    member) breaks AC #5's closed-set witness; hard-coding one value fails
+    whichever half it does not produce."""
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="harness.runtime.protected_result_store")
+
+    # (a) The FIRST-OBSERVATION deadline is the later one: the timestamp is
+    # ancient, so the observation is what gates.
+    store, entry = _stale_entry(tmp_path / "obs", ttl_seconds=1.0, age_seconds=100.0)
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+    caplog.clear()
+    assert store.gc_sweep(now=at + 1.5) == [entry.stem]
+    line = next(r for r in caplog.records if "TTL-expired entry GC'd" in r.message)
+    assert "reclaim_term=first-observation" in line.message
+
+    # (b) The FILESYSTEM-AGE deadline is the later one: the entry is observed
+    # long before its own timestamp (the reused-name shape), so the timestamp
+    # is what gates.
+    store_2 = _store(tmp_path / "fs", ttl_seconds=1.0)
+    store_root = tmp_path / "fs" / "store"
+    store_root.mkdir(parents=True, exist_ok=True)
+    orphan = store_root / ".tmp-which-term-fs-age"
+    orphan.write_bytes(b"partial ciphertext")
+    stale = time.time() - 10.0
+    os.utime(orphan, (stale, stale))
+    at_2 = time.time()
+    store_2.gc_sweep(now=at_2, observed_at=at_2)
+    _backdate_observation_record(store_2, by=100.0)
+    later = at_2 + 1.0
+    os.utime(orphan, (later, later))
+    caplog.clear()
+    store_2.gc_sweep(now=later + 1.5)
+    line_2 = next(r for r in caplog.records if "crash-orphaned temp-file GC'd" in r.message)
+    assert "reclaim_term=filesystem-age" in line_2.message
+
+
+def test_snapshot_surface_is_read_only_sweep_free_and_reports_the_record_three_ways(
+    tmp_path: Path,
+) -> None:
+    """AC #8(b) — the read-only, sweep-free store read. It engages only when
+    the root exists, computes the same timestamp-derived oldest-candidate age at
+    read time, reports the observation record's own state THREE-WAY, adds ZERO
+    persistence, and WRITES NOTHING / CREATES NOTHING.
+
+    Mutation probes: making the surface create the store root fails the
+    read-only invariant assertion (the directory listing would change and the
+    absent-root case would stop returning `None`); collapsing the three-way
+    record state to present/absent fails the unreadable branch."""
+    root = tmp_path / "store"
+
+    # Absent root: no engagement, and nothing is created.
+    assert read_protected_result_store_snapshot(root) is None
+    assert not root.exists(), "the read-only surface CREATED the store root"
+
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+    orphan = root / ".tmp-snapshot-orphan"
+    orphan.write_bytes(b"partial ciphertext")
+    orphan_stale = time.time() - 30.0
+    os.utime(orphan, (orphan_stale, orphan_stale))
+
+    # (1) record ABSENT.
+    before = sorted(p.name for p in root.iterdir())
+    snapshot = read_protected_result_store_snapshot(root, now=time.time())
+    assert snapshot is not None
+    assert snapshot.record_state is GcObservationRecordState.ABSENT
+    assert snapshot.entry_count == 1 and snapshot.orphan_count == 1
+    assert snapshot.gauge.oldest_entry_age_seconds is not None
+    assert 9.0 < snapshot.gauge.oldest_entry_age_seconds < 12.0
+    assert snapshot.gauge.oldest_orphan_age_seconds is not None
+    assert 29.0 < snapshot.gauge.oldest_orphan_age_seconds < 32.0
+    # Sweep-free and read-only: the directory is byte-for-byte the same set,
+    # and no record was published.
+    assert sorted(p.name for p in root.iterdir()) == before
+    assert entry_path.exists() and orphan.exists()
+
+    # (2) record PRESENT AND READABLE, after a real sweep publishes one.
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+    snapshot = read_protected_result_store_snapshot(root)
+    assert snapshot is not None
+    assert snapshot.record_state is GcObservationRecordState.PRESENT_READABLE
+
+    # (3) record PRESENT BUT UNREADABLE.
+    _observation_record_path(store).write_text('{"version": 1, "observations": {"a": 1.0')
+    snapshot = read_protected_result_store_snapshot(root)
+    assert snapshot is not None
+    assert snapshot.record_state is GcObservationRecordState.PRESENT_UNREADABLE
+
+
+def test_the_gauge_covers_an_orphan_only_store_with_no_observation_record(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC #8's GAUGE TOTALITY, asserted rather than assumed. With a store
+    holding ONLY past-TTL temporary-file crash orphans and no observation
+    record — a state AC #6 makes reachable and requires an emission for — BOTH
+    the sweep emission (a) and the read-only surface (b) must still report a
+    conforming oldest-candidate age. A gauge permitted to exclude the orphan
+    class would leave that case with no conforming value at all.
+
+    Mutation probe: excluding the crash-orphan class from either gauge leaves
+    both reported ages `none-resident` here and this test fails."""
+    import logging
+
+    store = _store(tmp_path, ttl_seconds=1.0)
+    root = tmp_path / "store"
+    root.mkdir(parents=True, exist_ok=True)
+    orphan = root / ".tmp-orphan-only-store"
+    orphan.write_bytes(b"partial ciphertext")
+    stale = time.time() - 42.0
+    os.utime(orphan, (stale, stale))
+
+    caplog.set_level(logging.WARNING, logger="harness.runtime.protected_result_store")
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+    line = next(r for r in caplog.records if "no GC observation record" in r.message)
+    assert "past_ttl_orphans=1" in line.message
+    assert "oldest_orphan_age_s=42.0" in line.message
+
+    snapshot = read_protected_result_store_snapshot(root)
+    assert snapshot is not None
+    assert snapshot.orphan_count == 1
+    assert snapshot.gauge.oldest_orphan_age_seconds is not None
+    assert snapshot.gauge.oldest_orphan_age_seconds > 41.0
+
+
+def test_record_is_replaced_not_accumulated_over_the_union_of_both_classes(
+    tmp_path: Path,
+) -> None:
+    """AC #9's first half — the record is REPLACED WHOLESALE at each sweep over
+    the union of both candidate classes; names no longer resident are DROPPED,
+    so a long-lived store's record does not grow without bound as entries come
+    and go. Includes the completed-publication case: a temporary name drops out
+    of the union exactly as a reclaimed entry's name does.
+
+    Mutation probe: accumulating (merging the new observations into the old map
+    rather than replacing it) leaves the removed names in the record and the
+    final size assertion fails."""
+    store = _store(tmp_path, ttl_seconds=1.0)
+    root = tmp_path / "store"
+    root.mkdir(parents=True, exist_ok=True)
+    stale = time.time() - 10.0
+
+    names_seen: set[str] = set()
+    at = time.time()
+    for generation in range(4):
+        orphan = root / f".tmp-generation-{generation}"
+        orphan.write_bytes(b"partial ciphertext")
+        os.utime(orphan, (stale, stale))
+        names_seen.add(orphan.name)
+        store.gc_sweep(now=at, observed_at=at)
+        assert set(_read_observation_record(store)) == {orphan.name}, (
+            "the record accumulated names from earlier sweeps instead of being replaced wholesale"
+        )
+        orphan.unlink()
+
+    assert len(names_seen) == 4
+    store.gc_sweep(now=at)
+    assert _read_observation_record(store) == {}
+
+
+def test_a_retained_candidate_keeps_its_original_first_observed_at(tmp_path: Path) -> None:
+    """AC #9's SECOND half — the one a literal reading of *replace wholesale*
+    would break. A candidate that SURVIVES a sweep retains its ORIGINAL
+    `first_observed_at`: the replacement rewrites the RECORD, never the
+    timestamps of names already in it.
+
+    Driven across FOUR sweeps at intervals SHORTER than the TTL, then asserted
+    reclaimed on schedule from its FIRST observation.
+
+    Mutation probe: re-sampling `first_observed_at` for a retained name slides
+    each deadline forward by the inter-sweep interval, so under this sub-TTL
+    cadence the entry is NEVER reclaimed at all — precisely the unbounded
+    retention this unit exists to prevent — and the final assertion fails."""
+    ttl = 1.0
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=ttl, age_seconds=10.0)
+    at = time.time()
+
+    store.gc_sweep(now=at, observed_at=at)
+    original = _read_observation_record(store)[entry_path.name]
+    assert original == at
+
+    for offset in (0.2, 0.4, 0.6, 0.8):
+        assert store.gc_sweep(now=at + offset, observed_at=at + offset) == []
+        assert _read_observation_record(store)[entry_path.name] == original, (
+            "a retained candidate's first_observed_at was re-sampled — under a "
+            "sub-TTL sweep cadence nothing would ever become reclaimable"
+        )
+
+    # On schedule from the FIRST observation, not from the latest sweep.
+    assert store.gc_sweep(now=at + ttl + 0.05, observed_at=at + ttl + 0.05) == [entry_path.stem]
+
+
+def test_unreadable_record_reads_as_no_observation_for_every_name(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC #11 — a record that EXISTS but is truncated, corrupted or written in
+    an incompatible form reads as NO OBSERVATION FOR EVERY NAME, never partial
+    trust of the rows that happen to parse. The record written below has rows
+    that are individually well-formed (`"<name>": <float>` pairs a permissive
+    reader would happily take) while the WHOLE is invalid, and NO name is
+    treated as observed.
+
+    The emission is asserted and so is its DISCRIMINATION as *record present but
+    unreadable*, both of which are MANDATORY. The additional FAULT
+    CLASSIFICATION is PERMITTED rather than required by spec term 11, so it is
+    deliberately NOT asserted here.
+
+    Mutation probe: trusting the parseable subset lets a row carrying an
+    earlier-than-truth `first_observed_at` shorten retention — the direction
+    AC #4 forbids — and the entry is reclaimed at the sweep below."""
+    import logging
+
+    ttl = 1.0
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=ttl, age_seconds=10.0)
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+
+    # Individually well-formed rows; the document as a whole is truncated.
+    long_ago = at - 1_000_000.0
+    _observation_record_path(store).write_text(
+        f'{{"version": 1, "observations": {{"{entry_path.name}": {long_ago}, "other.entry": 1.0'
+    )
+
+    caplog.set_level(logging.WARNING, logger="harness.runtime.protected_result_store")
+    assert store.gc_sweep(now=at + 5.0, observed_at=at + 5.0) == [], (
+        "a name from an INVALID record was treated as observed — the parseable "
+        "subset was trusted, and a row older than the truth shortened retention"
+    )
+    assert entry_path.exists()
+
+    lines = [r for r in caplog.records if "PRESENT BUT UNREADABLE" in r.message]
+    assert len(lines) == 1, "the unreadable-record emission is missing or duplicated"
+    assert "past_ttl_entries=1" in lines[0].message
+    assert "oldest_entry_age_s=" in lines[0].message
+
+    # Totality is fail-SAFE, not fail-open: a fresh grace runs and then reclaim
+    # proceeds normally.
+    assert store.gc_sweep(now=at + 6.5) == [entry_path.stem]
+
+
+def test_one_malformed_row_invalidates_the_whole_record_not_just_that_row(
+    tmp_path: Path,
+) -> None:
+    """AC #11's TOTALITY at ROW granularity — the case a document-level parse
+    failure alone cannot reach. The record below is VALID JSON with a valid
+    envelope; only ONE of its two rows carries a non-numeric
+    `first_observed_at`. The OTHER row is perfectly well-formed and names a
+    genuinely resident candidate, so an implementation that skipped the bad row
+    and trusted the good one would treat that name as observed.
+
+    Fail-safe is a TOTALITY: NO name is observed, because a corrupted row that
+    happens to parse can carry a `first_observed_at` EARLIER than the truth and
+    thereby SHORTEN retention — the one direction AC #4 forbids.
+
+    Mutation probe: skipping the malformed row (`continue`) instead of
+    invalidating the whole record makes the good row's back-dated stamp
+    reachable and the entry is reclaimed at the sweep below."""
+    ttl = 1.0
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=ttl, age_seconds=10.0)
+    at = time.time()
+
+    # The good row is back-dated far enough that trusting it WOULD reclaim.
+    _observation_record_path(store).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "observations": {
+                    entry_path.name: at - 1_000_000.0,
+                    "sibling.entry": "not-a-number",
+                },
+            }
+        )
+    )
+
+    assert store.gc_sweep(now=at, observed_at=at) == [], (
+        "a well-formed row from a record with ONE malformed row was trusted — "
+        "partial trust shortened retention"
+    )
+    assert entry_path.exists()
+    # And the fresh grace it granted is a real one.
+    assert store.gc_sweep(now=at + ttl + 0.1) == [entry_path.stem]
+
+
+def test_an_out_of_domain_first_observed_at_invalidates_the_record(tmp_path: Path) -> None:
+    """AC #11's totality against the NUMERIC-BUT-UNUSABLE stamp, which a type
+    check alone admits. Four shapes, all reachable from a restored, hand-edited
+    or foreign-build record:
+
+    - `-Infinity` — Python's `json` accepts the non-standard literal; it is
+      numeric, so it parses, and `current_time - (-inf)` is `+inf`, which passes
+      the elapsed conjunct INSTANTLY and DELETES a protected result rather than
+      granting it a fresh grace: the earlier-than-truth, retention-SHORTENING
+      direction AC #4 forbids.
+    - `Infinity` — the same literal family, in the lengthening direction.
+    - `NaN` — fails the elapsed comparison in the SAFE direction on its own, but
+      is rejected too, because the fail-safe is a TOTALITY over anything that is
+      not *read, parsed whole, entries usable*, not a set of individually
+      patched hazards.
+    - a finite NEGATIVE stamp — the quiet one. `first_observed_at` is a
+      wall-clock reading taken AFTER the candidate was observed to exist (AC
+      #3), so a pre-epoch value cannot be one; treating it as an ancient
+      observation reclaims on the first sweep.
+    - a JSON integer too large for a float — `math.isfinite` RAISES on it rather
+      than answering, so an unguarded domain test lets an unreadable record
+      escape the totality as an uncaught `OverflowError` out of `gc_sweep`.
+
+    This is a DOMAIN check and the witness claims no more: it pins that values
+    which cannot be a wall-clock observation at all are refused. It asserts
+    nothing about detecting an arbitrarily corrupted but IN-domain stamp, which
+    the ratified two-member content set carries no way to detect.
+
+    *(Out-of-family review rounds 1 [P1] and 2 [P1].)*
+
+    Mutation probes: dropping the `math.isfinite`/`value < 0.0` guard makes the
+    `-Infinity` and negative cases reclaim the live entry on the FIRST sweep;
+    dropping the `OverflowError` guard turns the huge-integer case into an
+    uncaught exception rather than a refusal."""
+    ttl = 1.0
+    huge_integer = "1" + "0" * 400
+    for index, literal in enumerate(("-Infinity", "Infinity", "NaN", "-1", huge_integer)):
+        store, entry_path = _stale_entry(
+            tmp_path / f"case-{index}", ttl_seconds=ttl, age_seconds=10.0
+        )
+        _observation_record_path(store).write_text(
+            f'{{"version": 1, "observations": {{"{entry_path.name}": {literal}}}}}'
+        )
+        at = time.time()
+        assert store.gc_sweep(now=at, observed_at=at) == [], (
+            f"a record carrying {literal[:24]} as a first_observed_at was "
+            f"trusted — a numeric-but-unusable stamp reached the reclaim decision"
+        )
+        assert entry_path.exists()
+        # Fail-SAFE, not fail-open: the fresh grace it granted is a real one.
+        assert store.gc_sweep(now=at + ttl + 0.1) == [entry_path.stem]
+
+
+def test_a_bool_version_field_invalidates_the_record(tmp_path: Path) -> None:
+    """AC #11's totality against the `bool`-is-`int` trap at the ENVELOPE, which
+    the row loop already guards one level down. `True == 1` in Python, so a
+    record carrying `"version": true` — reachable from a foreign build or a
+    hand-edit — passed a bare `!= _GC_OBSERVATION_RECORD_VERSION` and read as
+    PRESENT_READABLE, admitting its rows. A `0.0` stamp among them is finite and
+    non-negative, so the domain check trusts it, and `current_time - 0.0` clears
+    the elapsed conjunct instantly: the invalid record RECLAIMS on the FIRST
+    sweep — the retention-SHORTENING direction AC #4 forbids.
+
+    *(Out-of-family review round 4 [P1], reproduced independently before the
+    fix.)*
+
+    Mutation probe: dropping the `isinstance(version, bool)` guard makes the
+    record read PRESENT_READABLE and the live entry is reclaimed on the first
+    sweep, failing both assertions below."""
+    ttl = 1.0
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=ttl, age_seconds=10.0)
+    _observation_record_path(store).write_text(
+        json.dumps({"version": True, "observations": {entry_path.name: 0.0}})
+    )
+
+    # The READ-ONLY surface first — a sweep republishes the record, so checking
+    # it afterwards would read the sweep's own valid replacement.
+    snapshot = read_protected_result_store_snapshot(tmp_path / "store")
+    assert snapshot is not None
+    assert snapshot.record_state is GcObservationRecordState.PRESENT_UNREADABLE
+
+    at = time.time()
+    assert store.gc_sweep(now=at, observed_at=at) == [], (
+        "a record whose `version` was the bool `true` was trusted — `True == 1` "
+        "let an invalid envelope admit its rows and reclaim on sight"
+    )
+    assert entry_path.exists()
+
+
+def test_the_snapshot_gauge_mirrors_the_sweep_globs_including_dot_leading_names(
+    tmp_path: Path,
+) -> None:
+    """AC #8(b)'s gauge must never UNDER-REPORT relative to what the SWEEP
+    enumerates. `pathlib`'s `glob` does NOT hide dotfiles the way shell globbing
+    does — `*.entry` matches `.hidden.entry` — so a membership test that
+    excluded dot-leading names from the entry class counted FEWER candidates
+    than the sweep sees, on the one surface whose purpose is to make the
+    retention level falsifiable.
+
+    Membership is also NOT exclusive: `.tmp-x.entry` is matched by BOTH globs
+    and enumerated in both classes by the sweep, so the gauge counts it in both.
+
+    Both properties are asserted against the sweep's OWN globs rather than
+    against a restated expectation, so the two can never silently diverge again.
+
+    *(Out-of-family review round 4 [P2], reproduced independently before the
+    fix.)*
+
+    Mutation probe: restoring the `not name.startswith(".")` condition drops
+    the dot-leading entry and the count-parity assertion fails; making the
+    membership exclusive drops the dual-match name from one class."""
+    store = _store(tmp_path, ttl_seconds=1.0)
+    root = tmp_path / "store"
+    root.mkdir(parents=True, exist_ok=True)
+    stale = time.time() - 100.0
+    for name in ("plain.entry", ".hidden.entry", ".tmp-orphan", ".tmp-dual.entry"):
+        (root / name).write_bytes(b"x")
+        os.utime(root / name, (stale, stale))
+
+    # The sweep's own globs are the reference — not a restated expectation.
+    swept_entries = {p.name for p in root.glob("*.entry")}
+    swept_orphans = {p.name for p in root.glob(".tmp-*")}
+    assert ".hidden.entry" in swept_entries, "premise changed: pathlib glob now hides dotfiles"
+    assert ".tmp-dual.entry" in swept_entries and ".tmp-dual.entry" in swept_orphans
+
+    snapshot = read_protected_result_store_snapshot(root, now=time.time())
+    assert snapshot is not None
+    assert snapshot.entry_count == len(swept_entries), (
+        f"the gauge counted {snapshot.entry_count} entries where the sweep "
+        f"enumerates {len(swept_entries)} ({sorted(swept_entries)}) — it UNDER-REPORTS"
+    )
+    assert snapshot.orphan_count == len(swept_orphans), (
+        f"the gauge counted {snapshot.orphan_count} orphans where the sweep "
+        f"enumerates {len(swept_orphans)} ({sorted(swept_orphans)})"
+    )
+    assert store._ttl_seconds == 1.0  # type: ignore[attr-defined]
+
+
+def test_an_unusable_store_root_is_a_path_error_not_an_absent_store(tmp_path: Path) -> None:
+    """AC #8(b)'s engagement predicate discriminates ABSENT from UNUSABLE. A
+    configured root that EXISTS but is a regular file, or whose contents cannot
+    be read, is NOT the *no store here* case: collapsing the two would report
+    nothing at all, successfully, for a store the operator cannot inspect — on
+    the one surface whose purpose is to make the retention level falsifiable.
+
+    *(Out-of-family review round 1 [P2].)*
+
+    Mutation probe: reverting the predicate to a bare `root.is_dir()` returns
+    `None` for the regular-file case (silently suppressing the row) and lets the
+    unreadable-directory case raise an UNCAUGHT `PermissionError` out of the
+    read instead of a typed path error — both assertions below fail."""
+    # Genuinely absent → None, and nothing is created.
+    absent = tmp_path / "never-existed"
+    assert read_protected_result_store_snapshot(absent) is None
+    assert not absent.exists()
+
+    # Exists but is a regular file → a path error, not `None`.
+    not_a_dir = tmp_path / "a-file-not-a-store"
+    not_a_dir.write_text("this is not a store root")
+    with pytest.raises(NotADirectoryError):
+        read_protected_result_store_snapshot(not_a_dir)
+
+    # Exists, is a directory, but is unreadable → a path error, not `None`.
+    unreadable = tmp_path / "unreadable-store"
+    unreadable.mkdir()
+    (unreadable / GC_OBSERVATION_RECORD_FILENAME).write_text('{"version": 1, "observations": {}}')
+    unreadable.chmod(0o000)
+    try:
+        if os.access(unreadable, os.R_OK):  # pragma: no cover — root/CI-as-root
+            pytest.skip("running as a user that bypasses directory permissions")
+        with pytest.raises(OSError):
+            read_protected_result_store_snapshot(unreadable)
+    finally:
+        unreadable.chmod(0o700)
+
+
+def test_deeply_nested_json_reads_as_unreadable_rather_than_raising(tmp_path: Path) -> None:
+    """AC #11's totality against an exception ESCAPING it. `json.loads` raises
+    `RecursionError` — not a `ValueError` — on sufficiently deeply nested input,
+    and left uncaught it aborts `gc_sweep` and crashes the inspection surface
+    instead of reporting *present but unreadable*. Every invalid record must
+    READ as no observation; none may raise.
+
+    *(Out-of-family review round 3 [P2]; the same species as round 2's
+    `OverflowError` half.)*
+
+    Mutation probe: dropping `RecursionError` from the parse guard turns both
+    calls below into an uncaught exception rather than a refusal."""
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+    depth = sys.getrecursionlimit() * 20
+    corrupt = "[" * depth + "]" * depth
+    # Verified in-test rather than assumed: this input really does raise
+    # `RecursionError` from the parser, so the witness is not vacuous.
+    with pytest.raises(RecursionError):
+        json.loads(corrupt)
+
+    # The READ-ONLY surface first — a sweep republishes the record, so checking
+    # it afterwards would read the sweep's own valid replacement.
+    _observation_record_path(store).write_text(corrupt)
+    snapshot = read_protected_result_store_snapshot(tmp_path / "store")
+    assert snapshot is not None
+    assert snapshot.record_state is GcObservationRecordState.PRESENT_UNREADABLE
+
+    at = time.time()
+    assert store.gc_sweep(now=at, observed_at=at) == []
+    assert entry_path.exists()
+
+
+def test_an_unreadable_store_directory_scan_is_never_a_zero_reading(tmp_path: Path) -> None:
+    """AC #8(b)'s under-report guard, at the ENUMERATION rather than the
+    per-candidate stat. On a directory that is SEARCHABLE but not READABLE
+    (mode `0100`), `Path.glob` suppresses the `EACCES` and simply yields
+    nothing — so both classes would come back EMPTY while the record path still
+    resolves, and the surface would report zero counts for a store full of
+    resident entries. `os.scandir` raises instead.
+
+    *(Out-of-family review round 3 [P2]; completes round 2's [P2], which
+    guarded the root and record stats but not the scan between them.)*
+
+    Mutation probe: reverting the enumeration to `root.glob(...)` makes the
+    snapshot return a successful ZERO reading instead of raising."""
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+    root = tmp_path / "store"
+    assert entry_path.exists()
+
+    root.chmod(0o100)  # --x------ : searchable, NOT readable
+    try:
+        if os.access(root, os.R_OK):  # pragma: no cover — root/CI-as-root
+            pytest.skip("running as a user that bypasses directory permissions")
+        with pytest.raises(OSError):
+            read_protected_result_store_snapshot(root)
+    finally:
+        root.chmod(0o700)
+
+    # And the ordinary path still reads the resident entry.
+    snapshot = read_protected_result_store_snapshot(root)
+    assert snapshot is not None
+    assert snapshot.entry_count == 1
+
+
+def test_an_unreadable_candidate_is_never_silently_dropped_from_the_gauge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #8(b)'s gauge must never UNDER-REPORT. If a resident candidate's
+    `stat()` fails with a real error (`EIO`, `EACCES`), skipping it drops it
+    from BOTH the count and the oldest-age reading and lets the binary exit 0 on
+    a falsely LOW value — on the one surface whose whole purpose is to make the
+    retention level falsifiable, an under-report is the single worst direction
+    to fail in. Only a BENIGN concurrent disappearance is skipped.
+
+    The SWEEP's own skip-and-continue is deliberately untouched and is asserted
+    here to still hold: it is shipped behaviour, and a sweep that skips an
+    unreadable candidate merely RETAINS it — the safe direction.
+
+    *(Out-of-family review round 2 [P2].)*
+
+    Mutation probe: widening the inspector's guard back to `except OSError`
+    makes the snapshot report `entry_count == 0` with a `None` age instead of
+    raising, and this test fails."""
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+    root = tmp_path / "store"
+    real_stat = Path.stat
+
+    def _failing_stat(self: Path, **kwargs: object) -> object:
+        if self == entry_path:
+            raise PermissionError(errno.EACCES, "simulated unreadable candidate")
+        return real_stat(self, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "stat", _failing_stat)
+    with pytest.raises(PermissionError):
+        read_protected_result_store_snapshot(root)
+
+    # A benign concurrent disappearance IS skipped — that is not an error.
+    def _vanished_stat(self: Path, **kwargs: object) -> object:
+        if self == entry_path:
+            raise FileNotFoundError(errno.ENOENT, "vanished mid-scan")
+        return real_stat(self, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "stat", _vanished_stat)
+    snapshot = read_protected_result_store_snapshot(root)
+    assert snapshot is not None
+    assert snapshot.entry_count == 0
+    assert snapshot.gauge.oldest_entry_age_seconds is None
+
+    # The SWEEP still skips-and-continues, unchanged: it retains the entry.
+    monkeypatch.setattr(Path, "stat", _failing_stat)
+    assert store.gc_sweep(now=time.time()) == []
+    monkeypatch.undo()
+    assert entry_path.exists()
+
+
+def test_emissions_ride_the_report_log_with_no_span_no_metric_no_composite_key(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC #12 — the emission surface. Every emission this unit adds rides the
+    TYPED REPORT-LOG LINE the store already uses: NO span is emitted, NO metric
+    instrument is created, and NO new observability namespace appears. The
+    composite key MUST NOT appear in any emission; the AC #6 / AC #11 lines
+    decrypt nothing and therefore carry no tenant identity. A candidate filename
+    may appear in a BODY but is never a dimension or label of an aggregate
+    (logging records carry no label dimension at all). The implementation does
+    not rely on the `PersonaTier` span-processor gradient reaching this carrier
+    — it does not.
+
+    Mutation probes: emitting the composite key on any of these lines fails the
+    content assertions; decrypting an entry to tag the reset line pulls the
+    tenant tag in and fails the reset-line assertion; adding a span or a metric
+    instrument pulls an `opentelemetry` import into the module and fails the
+    carrier assertions."""
+    import logging
+
+    from harness_runtime.lifecycle import protected_result_store as store_module
+
+    source = Path(str(store_module.__file__)).read_text(encoding="utf-8")
+    for forbidden_token in (
+        "opentelemetry",
+        "start_as_current_span",
+        "get_tracer",
+        "get_meter",
+        "create_counter",
+        "create_histogram",
+        "PersonaTier",
+    ):
+        assert forbidden_token not in source, (
+            f"the store module references {forbidden_token!r} — this unit's "
+            f"emissions ride the typed report-log line and nothing else"
+        )
+    assert store_module.logger.name == "harness.runtime.protected_result_store"
+
+    store = _store(tmp_path, ttl_seconds=1.0)
+    ref = store.write_once("tenant-a", "a paid effect's payload")
+    assert isinstance(ref, str)
+    entry_path = store._entry_path(ref)  # type: ignore[attr-defined]
+    stale = time.time() - 10.0
+    os.utime(entry_path, (stale, stale))
+
+    caplog.set_level(logging.WARNING, logger="harness.runtime.protected_result_store")
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+    reset_line = next(r for r in caplog.records if "no GC observation record" in r.message)
+    assert "tenant" not in reset_line.message.lower(), (
+        "the reset line carries a tenant identity — it must derive from the "
+        "timestamp pass and the record read ALONE, decrypting nothing"
+    )
+
+    _backdate_observation_record(store)
+    caplog.clear()
+    assert store.gc_sweep(now=at) == [entry_path.stem]
+
+    for record in caplog.records:
+        assert record.name == "harness.runtime.protected_result_store"
+        assert ref not in record.message, "the composite key leaked into an emission"
+        assert ref.split(":", 1)[1] not in record.message, (
+            "part of the composite key leaked into an emission"
+        )
+
+
+_B96_ONE_SHOT_SWEEP_SCRIPT = """
+import json
+import sys
+from pathlib import Path
+from cryptography.fernet import Fernet
+from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
+
+store_dir, key, ttl, now, observed_at, result_marker = sys.argv[1:7]
+store = ProtectedResultStore(Path(store_dir), codec=Fernet(key.encode()), ttl_seconds=float(ttl))
+reclaimed = store.gc_sweep(now=float(now), observed_at=float(observed_at))
+Path(result_marker).write_text(json.dumps(reclaimed))
+"""
+
+
+def test_one_shot_process_invocations_accumulate_the_grace_across_process_exit(
+    tmp_path: Path,
+) -> None:
+    """AC #10 + AC #14(i) — the criterion that DISCRIMINATES the ratified form
+    from the retired Reading B, and the one an in-process test structurally
+    cannot see.
+
+    Across N SUCCESSIVE ONE-SHOT PROCESS INVOCATIONS against the same store
+    root — genuine `subprocess` runs, each a fresh interpreter with no shared
+    Python state — a genuinely expired entry IS eventually reclaimed, because
+    the grace clock ACCUMULATES ACROSS PROCESS EXITS. Per-process elapsed time
+    is FORBIDDEN (spec term 10): in this exact shape it never accumulates, so
+    the entry would never be reclaimed and retention would be unbounded.
+
+    The durable record's own cross-process survival is asserted DIRECTLY
+    between invocations (AC #14(i)), not merely inferred from the outcome.
+
+    Mutation probe: holding the observation state in process-local memory only
+    (the retired `_root_observed_expired` module dict) makes invocation 3 record
+    a FRESH observation instead of inheriting invocation 1's — the entry is
+    never reclaimed and the final assertion fails."""
+    ttl = 1.0
+    key = Fernet.generate_key()
+    store_dir = tmp_path / "store"
+    store_dir.mkdir(parents=True)
+    store = ProtectedResultStore(store_dir, codec=Fernet(key), ttl_seconds=ttl)
+    ref = store.write_once("tenant-a", "survives across process exits")
+    assert isinstance(ref, str)
+    entry_path = store._entry_path(ref)  # type: ignore[attr-defined]
+    stale = time.time() - 10.0
+    os.utime(entry_path, (stale, stale))
+    record_path = store_dir / GC_OBSERVATION_RECORD_FILENAME
+    record_path.unlink(missing_ok=True)  # start from a genuine first cutover
+
+    t0 = time.time()
+
+    def _invoke(now: float, observed_at: float, marker: Path) -> list[str]:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                _B96_ONE_SHOT_SWEEP_SCRIPT,
+                str(store_dir),
+                key.decode("ascii"),
+                str(ttl),
+                str(now),
+                str(observed_at),
+                str(marker),
+            ],
+            capture_output=True,
+            timeout=120.0,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
+        reclaimed: list[str] = json.loads(marker.read_text())
+        return reclaimed
+
+    # Invocation 1 — first observation; nothing reclaimed.
+    assert _invoke(t0, t0, tmp_path / "r1") == []
+    assert entry_path.exists()
+    # AC #14(i): the observation SURVIVED that process's exit.
+    assert record_path.exists()
+    surviving = json.loads(record_path.read_text())["observations"]
+    assert surviving == {entry_path.name: t0}
+
+    # Invocation 2 — a second one-shot run well inside the grace.
+    assert _invoke(t0 + 0.2, t0 + 0.2, tmp_path / "r2") == []
+    assert entry_path.exists()
+    assert json.loads(record_path.read_text())["observations"] == {entry_path.name: t0}, (
+        "the second process re-sampled the observation instead of inheriting "
+        "the first process's — the grace is not accumulating across exits"
+    )
+
+    # Invocation 3 — past the grace: the entry IS reclaimed.
+    assert _invoke(t0 + ttl + 0.2, t0 + ttl + 0.2, tmp_path / "r3") == [entry_path.stem]
+    assert not entry_path.exists()
+
+
+def test_record_publication_is_crash_atomic_and_never_no_replace_or_unlink_recreate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #14(iii) — crash-atomicity of the RECORD's own publication.
+    Interrupting the record write AFTER the temp write and BEFORE the atomic
+    replace leaves the PREVIOUS record intact and readable, never an absent or
+    half-written one. And the publication path is temp-write + `fsync` + ATOMIC
+    REPLACE + directory `fsync`: NEVER the write-once no-replace primitive
+    (`os.link`, which would freeze the record at its first snapshot) and NEVER
+    unlink-then-recreate (which opens a window in which the record reads ABSENT
+    and every grace restarts).
+
+    Mutation probes: publishing with the no-replace primitive freezes the record
+    at its first snapshot, so the second sweep's new name never appears and the
+    replaced-content assertion fails; unlink-then-recreate removes the record
+    before writing, so the interrupted publication below leaves it ABSENT and
+    the previous-record assertion fails."""
+    store = _store(tmp_path, ttl_seconds=1.0)
+    root = tmp_path / "store"
+    root.mkdir(parents=True, exist_ok=True)
+    stale = time.time() - 10.0
+    first = root / ".tmp-crash-atomic-one"
+    first.write_bytes(b"partial ciphertext")
+    os.utime(first, (stale, stale))
+
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+    record_path = _observation_record_path(store)
+    original_bytes = record_path.read_bytes()
+    assert json.loads(original_bytes)["observations"] == {first.name: at}
+
+    # The publication path uses os.replace, and neither os.link nor an unlink
+    # of the record itself.
+    second = root / ".tmp-crash-atomic-two"
+    second.write_bytes(b"partial ciphertext")
+    os.utime(second, (stale, stale))
+    replaces: list[str] = []
+    links: list[str] = []
+    unlinks: list[str] = []
+    real_replace, real_link, real_unlink = os.replace, os.link, os.unlink
+
+    def _spy_replace(src: object, dst: object, **kwargs: object) -> None:
+        replaces.append(str(dst))
+        real_replace(src, dst, **kwargs)  # type: ignore[arg-type]
+
+    def _spy_link(src: object, dst: object, **kwargs: object) -> None:
+        links.append(str(dst))
+        real_link(src, dst, **kwargs)  # type: ignore[arg-type]
+
+    def _spy_unlink(path: object, **kwargs: object) -> None:
+        unlinks.append(str(path))
+        real_unlink(path, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", _spy_replace)
+    monkeypatch.setattr(os, "link", _spy_link)
+    monkeypatch.setattr(os, "unlink", _spy_unlink)
+    store.gc_sweep(now=at + 0.1, observed_at=at + 0.1)
+    monkeypatch.undo()
+
+    assert str(record_path) in replaces, "the record was not published via os.replace"
+    assert str(record_path) not in links, (
+        "the record was published with the write-once NO-REPLACE primitive — it "
+        "would freeze at its first snapshot"
+    )
+    assert str(record_path) not in unlinks, (
+        "the record was unlinked before being recreated — that opens a window "
+        "in which it reads ABSENT and every grace restarts"
+    )
+    # Replacement really happened: the new name is in the record.
+    assert set(_read_observation_record(store)) == {first.name, second.name}
+    intact_bytes = record_path.read_bytes()
+
+    # Now interrupt a publication between the temp write and the replace.
+    def _failing_replace(src: object, dst: object, **kwargs: object) -> None:
+        raise OSError(errno.EIO, "simulated crash before the atomic replace")
+
+    monkeypatch.setattr(os, "replace", _failing_replace)
+    store.gc_sweep(now=at + 0.2, observed_at=at + 0.2)
+    monkeypatch.undo()
+
+    assert record_path.exists(), "an interrupted record publication left NO record"
+    assert record_path.read_bytes() == intact_bytes, (
+        "an interrupted record publication left a half-written record instead "
+        "of the PREVIOUS one intact"
+    )
+    assert read_protected_result_store_snapshot(root) is not None
+    snapshot = read_protected_result_store_snapshot(root)
+    assert snapshot is not None
+    assert snapshot.record_state is GcObservationRecordState.PRESENT_READABLE
+
+
+def test_record_carrier_is_glob_disjoint_and_not_dot_leading(tmp_path: Path) -> None:
+    """AC #15 — the record is a dedicated file in the store root whose name is
+    DISJOINT FROM BOTH SWEEP GLOBS, so the sweep can never enumerate its own
+    record as a candidate, AND is NOT DOT-LEADING, which closes the
+    dotfile-skipping copy channel that is one of the two ways the record is lost
+    while the entries it indexes survive.
+
+    BOTH properties are asserted DIRECTLY AND SEPARATELY: glob-disjointness does
+    not imply non-dot-leading (a name such as `.gc-observations` satisfies the
+    first and defeats the second), so a single glob probe cannot discharge this
+    AC.
+
+    Mutation probes: naming the record so a sweep glob matches it (e.g.
+    `gc-observations.entry`) fails the enumeration assertions; naming it with a
+    leading dot fails the dot-leading assertion."""
+    assert not GC_OBSERVATION_RECORD_FILENAME.startswith("."), (
+        f"the observation record name {GC_OBSERVATION_RECORD_FILENAME!r} is "
+        f"DOT-LEADING — a dotfile-skipping copy would silently drop it while "
+        f"preserving every entry it indexes"
+    )
+
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+    root = tmp_path / "store"
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+    record_path = _observation_record_path(store)
+    assert record_path.exists()
+
+    enumerated = {p.name for p in root.glob("*.entry")} | {p.name for p in root.glob(".tmp-*")}
+    assert GC_OBSERVATION_RECORD_FILENAME not in enumerated, (
+        "the record's own name is matched by a sweep glob — the sweep would "
+        "enumerate, age, report and unlink its own record"
+    )
+    assert enumerated == {entry_path.name}
+
+    # And it is never reported or reclaimed as a candidate, however long it sits.
+    _backdate_observation_record(store)
+    assert store.gc_sweep(now=at + 3600.0) == [entry_path.stem]
+    assert record_path.exists(), "the sweep reclaimed its own observation record"
+
+
+def test_record_publication_temporary_is_never_enumerated_as_a_payload_orphan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #15's SECOND half — the same disjointness binds EVERY INTERMEDIATE
+    FILE the record's own publication creates, not merely the final name. If the
+    publication temporary reused the store's `.tmp-` PAYLOAD-temp naming
+    convention, a crash after the temp write would leave an artifact the next
+    sweep classifies as a crash-orphaned payload — entering count and age
+    accounting, being reported as a candidate, and being unlinked as though it
+    were ciphertext — all while the FINAL record name still satisfies the
+    disjointness check.
+
+    Mutation probe: naming the publication temporary with the payload-temp
+    prefix makes the post-crash sweep enumerate, report and remove it, failing
+    every assertion below."""
+    import logging
+
+    store = _store(tmp_path, ttl_seconds=1.0)
+    root = tmp_path / "store"
+    root.mkdir(parents=True, exist_ok=True)
+    orphan = root / ".tmp-real-payload-orphan"
+    orphan.write_bytes(b"partial ciphertext")
+    stale = time.time() - 10.0
+    os.utime(orphan, (stale, stale))
+
+    # Simulate a crash mid-publication: the temp is written, the replace never
+    # happens, and the leftover temporary is NOT cleaned up.
+    def _failing_replace(src: object, dst: object, **kwargs: object) -> None:
+        raise OSError(errno.EIO, "simulated crash before the atomic replace")
+
+    def _no_cleanup(path: object, **kwargs: object) -> None:
+        return None
+
+    at = time.time()
+    monkeypatch.setattr(os, "replace", _failing_replace)
+    monkeypatch.setattr(os, "unlink", _no_cleanup)
+    store.gc_sweep(now=at, observed_at=at)
+    monkeypatch.undo()
+
+    leftovers = [
+        p.name
+        for p in root.iterdir()
+        if p.name != orphan.name and p.name != GC_OBSERVATION_RECORD_FILENAME
+    ]
+    leftovers = [name for name in leftovers if not name.endswith(".entry")]
+    leftovers = [name for name in leftovers if name != ".cross_process.lock"]
+    assert leftovers, "the mid-publication crash left no temporary to classify"
+    for name in leftovers:
+        assert not name.startswith(".tmp-"), (
+            f"the record's publication temporary {name!r} carries the PAYLOAD-temp "
+            f"prefix — the next sweep would classify it as crash-orphaned ciphertext"
+        )
+
+    # The next sweep, well past every TTL, must not enumerate, report or remove it.
+    caplog_records: list[logging.LogRecord] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            caplog_records.append(record)
+
+    handler = _Collector(level=logging.WARNING)
+    logger = logging.getLogger("harness.runtime.protected_result_store")
+    logger.addHandler(handler)
+    try:
+        # The crashed publication left no record at all, so a successful sweep
+        # first re-records the observation; back-dating then ages it past the
+        # grace for the final, reclaim-reaching sweep.
+        store.gc_sweep(now=at + 0.01, observed_at=at + 0.01)
+        _backdate_observation_record(store)
+        store.gc_sweep(now=at + 3600.0)
+    finally:
+        logger.removeHandler(handler)
+
+    for name in leftovers:
+        assert (root / name).exists(), (
+            f"the sweep REMOVED the record's own publication temporary {name!r}"
+        )
+        assert not any(name in record.message for record in caplog_records), (
+            f"the sweep REPORTED the record's own publication temporary {name!r} as a candidate"
+        )
+    for name in leftovers:
+        (root / name).unlink()

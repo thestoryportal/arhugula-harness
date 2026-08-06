@@ -522,3 +522,218 @@ def test_main_module_callable() -> None:
     sig = stdlib_inspect.signature(admin_inspect.main)
     params = list(sig.parameters.keys())
     assert params == ["argv"]
+
+
+# ---------------------------------------------------------------------------
+# §14.8.11.1 term 8(b) — the read-only protected-result-store row (U-RT-150).
+# ---------------------------------------------------------------------------
+
+
+def _runtime_config_file(config_dir: Path, repository_root: Path) -> Path:
+    config_file = config_dir / "harness.toml"
+    config_file.write_text(
+        "[runtime]\n"
+        'deployment_surface = "local-development"\n'
+        f'repository_root = "{repository_root}"\n'
+        'default_topology = "single-threaded-linear"\n'
+        "\n[runtime.otel]\n"
+        'otlp_endpoint = "http://localhost:4317"\n'
+    )
+    return config_file
+
+
+def _seed_protected_result_store(repository_root: Path) -> Path:
+    """Create the store root the composition root derives, holding one
+    past-TTL crash orphan and no observation record."""
+    from harness_runtime.bootstrap.factories.protected_result_store_factory import (
+        PROTECTED_RESULT_STORE_ROOT_SUBPATH,
+    )
+
+    store_root = repository_root / PROTECTED_RESULT_STORE_ROOT_SUBPATH
+    store_root.mkdir(parents=True, exist_ok=True)
+    orphan = store_root / ".tmp-inspect-row-orphan"
+    orphan.write_bytes(b"partial ciphertext from a killed write")
+    stale = datetime.now(UTC).timestamp() - 120.0
+    os.utime(orphan, (stale, stale))
+    return store_root
+
+
+def test_protected_result_store_row_absent_leaves_the_summary_byte_unchanged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U-RT-150 AC #8(b) engagement predicate — the row ENGAGES ONLY when the
+    config-derived store root exists. Absent, the output is BYTE-UNCHANGED from
+    a pre-v1.111 run, and nothing is created.
+
+    Mutation probe: engaging unconditionally (or creating the store root to
+    check it) changes the output for a deployment that has never written a
+    protected result, and the byte-equality assertion fails."""
+    from harness_runtime.bootstrap.factories.protected_result_store_factory import (
+        PROTECTED_RESULT_STORE_ROOT_SUBPATH,
+    )
+
+    ledger = tmp_path / "state.jsonl"
+    _write_n_entries(ledger, 1)
+    config_file = _runtime_config_file(tmp_path, tmp_path)
+
+    assert main(["--ledger-path", str(ledger)]) == 0
+    baseline = capsys.readouterr().out
+
+    assert main(["--ledger-path", str(ledger), "--runtime-config", str(config_file)]) == 0
+    with_config = capsys.readouterr().out
+
+    assert with_config == baseline
+    assert "protected result store" not in with_config
+    assert not (tmp_path / PROTECTED_RESULT_STORE_ROOT_SUBPATH).exists(), (
+        "the read-only row CREATED the store root"
+    )
+
+
+def test_protected_result_store_row_reports_the_gauge_and_the_three_way_record_state(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U-RT-150 AC #8(b) — the row reports the oldest resident candidate's age
+    (covering BOTH classes) and the observation record's own state THREE-WAY,
+    states in its own output what it CANNOT tell, and emits NO bound, NO
+    threshold and NO pass/fail verdict. The record-absent reading is presented
+    as EITHER a first-cutover store OR a repeating record-loss loop,
+    indistinguishable at this surface — attributing it would reproduce AC #6's
+    fact-not-verdict defect one surface over.
+
+    Mutation probe: attributing the absent reading to record loss (or emitting
+    any verdict/threshold token) fails the assertions below."""
+    ledger = tmp_path / "state.jsonl"
+    _write_n_entries(ledger, 1)
+    _seed_protected_result_store(tmp_path)
+    config_file = _runtime_config_file(tmp_path, tmp_path)
+
+    assert main(["--ledger-path", str(ledger), "--runtime-config", str(config_file)]) == 0
+    out = capsys.readouterr().out
+
+    assert "protected result store" in out
+    assert "resident crash-orphans: 1" in out
+    assert "oldest_orphan_age=" in out
+    assert "GC observation record: absent" in out
+    assert "CANNOT TELL WHICH" in out
+    assert "READ-TIME SNAPSHOT" in out
+    assert "does NOT imply a sweep will run" in out
+    assert "No bound, threshold or pass/fail verdict" in out
+    lowered = out.lower()
+    for verdict_token in ("exceeds", "threshold of", "pass/fail:", "unhealthy", "violation"):
+        assert verdict_token not in lowered, f"the row emitted a verdict token: {verdict_token!r}"
+
+
+def test_protected_result_store_row_json_shape(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U-RT-150 AC #8(b) — the JSON rendering composes into the summary payload
+    (never replacing a section) and carries the same readings.
+
+    Mutation probe: replacing rather than composing drops `total_entries` and
+    the ledger keys, failing the composition assertions."""
+    ledger = tmp_path / "state.jsonl"
+    _write_n_entries(ledger, 1)
+    _seed_protected_result_store(tmp_path)
+    config_file = _runtime_config_file(tmp_path, tmp_path)
+
+    assert main(["--ledger-path", str(ledger), "--runtime-config", str(config_file), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["total_entries"] == 1  # composed, not replaced
+    assert payload["protected_result_store_entry_count"] == 0
+    assert payload["protected_result_store_orphan_count"] == 1
+    assert payload["protected_result_store_oldest_entry_age_seconds"] is None
+    assert payload["protected_result_store_oldest_orphan_age_seconds"] > 100.0
+    assert payload["protected_result_store_observation_record_state"] == "absent"
+    assert "CANNOT TELL WHICH" in payload["protected_result_store_observation_record_absent_note"]
+
+
+def test_protected_result_store_unusable_root_exits_rt_fail_inspect_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U-RT-150 AC #8(b) — an UNUSABLE store root takes the binary's own
+    `RT-FAIL-INSPECT-PATH` exit rather than silently suppressing the row.
+    Suppressing it would report nothing at all, successfully, for a store the
+    operator cannot inspect — on the one surface whose purpose is to make the
+    retention level falsifiable. Same disposition the §13.7 pause-journal
+    enumeration already takes for an unreadable journal directory.
+
+    *(Out-of-family review round 1 [P2].)*
+
+    Mutation probe: dropping the `except OSError` around the row lets the
+    `NotADirectoryError` escape as an uncaught traceback instead of exit 2."""
+    from harness_runtime.bootstrap.factories.protected_result_store_factory import (
+        PROTECTED_RESULT_STORE_ROOT_SUBPATH,
+    )
+
+    ledger = tmp_path / "state.jsonl"
+    _write_n_entries(ledger, 1)
+    # A regular FILE where the store root should be.
+    store_root = tmp_path / PROTECTED_RESULT_STORE_ROOT_SUBPATH
+    store_root.parent.mkdir(parents=True, exist_ok=True)
+    store_root.write_text("not a store root")
+    config_file = _runtime_config_file(tmp_path, tmp_path)
+
+    code = main(["--ledger-path", str(ledger), "--runtime-config", str(config_file)])
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert "RT-FAIL-INSPECT-PATH" in captured.err
+    assert "protected result store root unusable" in captured.err
+
+
+def test_protected_result_store_row_root_is_config_derived_not_ledger_path_derived(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U-RT-150 AC #8(b)'s PINNED ROOT RESOLUTION. The row MUST read the SAME
+    store root the composition root derives —
+    `materialize_protected_result_store_stage`'s
+    `config.repository_root / PROTECTED_RESULT_STORE_ROOT_SUBPATH` — and MUST
+    NOT introduce a second, independent resolution. `--ledger-path` selects the
+    STATE LEDGER, not this store, so a `--ledger-path` pointed at a different
+    directory can never redirect the row: a report rendered against a different
+    directory than the one the sweep collects is an acceptance FAILURE, not a
+    configuration nuance.
+
+    The two directories are deliberately set DIFFERENT here, and only the
+    config-derived one holds a store.
+
+    Mutation probe: resolving the root from `--ledger-path` (e.g.
+    `ledger_path.parent / subpath`) renders the row against the ledger
+    directory, where there is no store — the row would not engage at all and the
+    assertions below fail."""
+    ledger_dir = tmp_path / "ledger-elsewhere"
+    ledger_dir.mkdir()
+    ledger = ledger_dir / "state.jsonl"
+    _write_n_entries(ledger, 1)
+
+    repository_root = tmp_path / "deployment-root"
+    repository_root.mkdir()
+    store_root = _seed_protected_result_store(repository_root)
+    config_file = _runtime_config_file(tmp_path, repository_root)
+
+    # A store also exists under the LEDGER directory, holding a DIFFERENT
+    # candidate count — so reading the wrong root would be visible, not merely
+    # empty.
+    from harness_runtime.bootstrap.factories.protected_result_store_factory import (
+        PROTECTED_RESULT_STORE_ROOT_SUBPATH,
+    )
+
+    decoy_root = ledger_dir / PROTECTED_RESULT_STORE_ROOT_SUBPATH
+    decoy_root.mkdir(parents=True)
+    stale = datetime.now(UTC).timestamp() - 120.0
+    for index in range(3):
+        decoy = decoy_root / f".tmp-decoy-{index}"
+        decoy.write_bytes(b"decoy")
+        os.utime(decoy, (stale, stale))
+
+    assert main(["--ledger-path", str(ledger), "--runtime-config", str(config_file), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["protected_result_store_root"] == str(store_root), (
+        "the row resolved its root from --ledger-path instead of the config-derived store root"
+    )
+    assert payload["protected_result_store_orphan_count"] == 1, (
+        "the row reported the DECOY store under the ledger directory — it would "
+        "render against a different directory than the one the sweep collects"
+    )

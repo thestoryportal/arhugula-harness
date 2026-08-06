@@ -34,9 +34,19 @@ from harness_runtime.types import RuntimeConfig
 if TYPE_CHECKING:
     from harness_runtime.lifecycle.memory_tool_encrypted import FernetLike
 
-__all__ = ["materialize_protected_result_store_stage"]
+__all__ = [
+    "PROTECTED_RESULT_STORE_ROOT_SUBPATH",
+    "materialize_protected_result_store_stage",
+]
 
-_PROTECTED_RESULT_STORE_ROOT_SUBPATH = Path(".harness") / "protected-results"
+#: The ONE authority for where a deployment's protected result store lives,
+#: relative to `RuntimeConfig.repository_root`. Public (not `_`-private) since
+#: `B-96` / U-RT-150 AC #8(b): the read-only `harness-inspect` store row MUST
+#: resolve the SAME root this factory derives, and MUST NOT introduce a second,
+#: independent resolution — a report rendered against a different directory
+#: than the one the sweep collects is an acceptance FAILURE, not a
+#: configuration nuance.
+PROTECTED_RESULT_STORE_ROOT_SUBPATH = Path(".harness") / "protected-results"
 
 
 def _create_fernet_from_key(key: bytes) -> FernetLike | None:
@@ -76,7 +86,7 @@ def materialize_protected_result_store_stage(config: RuntimeConfig) -> Protected
     if codec is None:
         return None
     return ProtectedResultStore(
-        root=config.repository_root / _PROTECTED_RESULT_STORE_ROOT_SUBPATH,
+        root=config.repository_root / PROTECTED_RESULT_STORE_ROOT_SUBPATH,
         codec=codec,
         ttl_seconds=config.protected_result_store_ttl_seconds,
     )
