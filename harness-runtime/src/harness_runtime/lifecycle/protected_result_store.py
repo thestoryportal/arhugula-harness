@@ -216,7 +216,14 @@ def _read_observation_record(record_path: Path) -> _ObservationRecordRead:
         return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
     try:
         parsed: object = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        # `RecursionError` is not a `ValueError`: `json.loads` raises it on
+        # sufficiently deeply nested input, and left uncaught it would escape
+        # this function, abort `gc_sweep` and crash `harness-inspect` instead of
+        # reporting *present but unreadable*. Term 11's fail-safe is a TOTALITY
+        # — every invalid record must READ as no observation, not raise.
+        # *(Out-of-family review round 3 [P2]; same species as round 2's
+        # `OverflowError`.)*
         return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
     if not isinstance(parsed, dict):
         return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
@@ -253,6 +260,25 @@ def _read_observation_record(record_path: Path) -> _ObservationRecordRead:
         # nothing about detecting an arbitrarily corrupted but IN-domain stamp,
         # which the ratified two-member content set carries no way to detect.
         # *(Out-of-family review rounds 1 and 2 [P1].)*
+        #
+        # TWO FURTHER NARROWINGS WERE PROPOSED AND ARE DECLINED HERE, with the
+        # reasons rather than silence. (i) Rejecting a FUTURE or "implausibly
+        # large" finite stamp (`1e308`): its effect is to make the elapsed
+        # conjunct never true, which LENGTHENS retention — the direction term 4
+        # explicitly PERMITS as the fail-safe — while the forbidden SHORTENING
+        # direction is already closed above; and any such bound is either a
+        # numeric plausibility constant the ratified two-member set does not
+        # license, or a `stamp > now` test that ordinary inter-process clock
+        # skew on a shared store root would trip, resetting every grace on every
+        # sweep. (ii) Rejecting DUPLICATE JSON keys (`json` keeps the last):
+        # this buys nothing a forger cannot bypass by writing the forged row
+        # ALONE — which is the in-domain case the paragraph above already states
+        # is undetectable — so it narrows nothing while adding a decode hook.
+        # *(Out-of-family review rounds 2 and 3, DECLINED with these pins; the
+        # loop was non-convergent on this axis, producing a fresh
+        # value-plausibility case each round while the two directions that
+        # matter — SHORTENING, and an exception ESCAPING the totality — stayed
+        # closed.)*
         if (
             not isinstance(name, str)
             or isinstance(stamp, bool)
@@ -965,6 +991,17 @@ class ProtectedResultStore:
         # quantity — the OLDEST RESIDENT candidate's age, per class, over
         # EVERY resident candidate and not merely the past-TTL ones. It is
         # derived here and never cached across sweeps.
+        #
+        # The `except OSError: continue` below is SHIPPED sweep behaviour and is
+        # deliberately left alone, so a candidate whose `stat()` fails can leave
+        # this EMISSION's age reading low. That is declined rather than
+        # overlooked: changing the sweep's enumeration disposition is outside
+        # U-RT-150's scope (it is the `B-75`/`B-76` lineage), a sweep that skips
+        # an unreadable candidate merely RETAINS it, and term 8(b) names the
+        # on-demand pull surface — not this emission — as the AUTHORITATIVE one,
+        # which is exactly why `read_protected_result_store_snapshot` propagates
+        # the same failures instead of skipping them. *(Out-of-family review
+        # round 3 [P2], DECLINED with this pin.)*
         provisional_entries: list[Path] = []
         oldest_entry_age: float | None = None
         for entry_path in self._root.glob(_ENTRY_GLOB):
@@ -1417,24 +1454,41 @@ def read_protected_result_store_snapshot(
     # [P2].)*
     entry_count = 0
     oldest_entry_age: float | None = None
-    for entry_path in root.glob(_ENTRY_GLOB):
-        try:
-            age = current_time - entry_path.stat().st_mtime
-        except FileNotFoundError:
-            continue
-        entry_count += 1
-        if oldest_entry_age is None or age > oldest_entry_age:
-            oldest_entry_age = age
     orphan_count = 0
     oldest_orphan_age: float | None = None
-    for orphan_path in root.glob(_ORPHAN_GLOB):
-        try:
-            age = current_time - orphan_path.stat().st_mtime
-        except FileNotFoundError:
-            continue
-        orphan_count += 1
-        if oldest_orphan_age is None or age > oldest_orphan_age:
-            oldest_orphan_age = age
+    # `os.scandir`, not `Path.glob`. On a directory that is SEARCHABLE but not
+    # READABLE (mode `0100`, or an equivalent ACL) `glob` suppresses the
+    # `EACCES` and simply yields nothing, so both classes would come back EMPTY
+    # while the record path still resolves — and the surface would report zero
+    # counts and an absent record for a store full of resident entries. That is
+    # the under-report this surface exists to make impossible, arriving through
+    # the enumeration rather than the per-candidate stat. `scandir` raises.
+    # *(Out-of-family review round 3 [P2]; completes round 2's [P2].)*
+    with os.scandir(root) as scan:
+        for candidate in scan:
+            name = candidate.name
+            # The two sweep-glob memberships, spelled out: `*.entry` does NOT
+            # match a dot-leading name (Python glob semantics), `.tmp-*` does.
+            is_entry = not name.startswith(".") and name.endswith(".entry")
+            is_orphan = name.startswith(_ORPHAN_GLOB[:-1])
+            if not (is_entry or is_orphan):
+                continue
+            try:
+                # `Path(...).stat()` rather than `DirEntry.stat()`: the latter
+                # CACHES on some platforms, and this surface must read the
+                # timestamp at READ TIME (term 8), never a value captured when
+                # the directory was scanned.
+                age = current_time - Path(candidate.path).stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if is_entry:
+                entry_count += 1
+                if oldest_entry_age is None or age > oldest_entry_age:
+                    oldest_entry_age = age
+            else:
+                orphan_count += 1
+                if oldest_orphan_age is None or age > oldest_orphan_age:
+                    oldest_orphan_age = age
     record_path = root / GC_OBSERVATION_RECORD_FILENAME
     try:
         record_path.stat()

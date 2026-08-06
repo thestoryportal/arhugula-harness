@@ -3349,6 +3349,70 @@ def test_an_unusable_store_root_is_a_path_error_not_an_absent_store(tmp_path: Pa
         unreadable.chmod(0o700)
 
 
+def test_deeply_nested_json_reads_as_unreadable_rather_than_raising(tmp_path: Path) -> None:
+    """AC #11's totality against an exception ESCAPING it. `json.loads` raises
+    `RecursionError` — not a `ValueError` — on sufficiently deeply nested input,
+    and left uncaught it aborts `gc_sweep` and crashes the inspection surface
+    instead of reporting *present but unreadable*. Every invalid record must
+    READ as no observation; none may raise.
+
+    *(Out-of-family review round 3 [P2]; the same species as round 2's
+    `OverflowError` half.)*
+
+    Mutation probe: dropping `RecursionError` from the parse guard turns both
+    calls below into an uncaught exception rather than a refusal."""
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+    depth = sys.getrecursionlimit() * 20
+    corrupt = "[" * depth + "]" * depth
+    # Verified in-test rather than assumed: this input really does raise
+    # `RecursionError` from the parser, so the witness is not vacuous.
+    with pytest.raises(RecursionError):
+        json.loads(corrupt)
+
+    # The READ-ONLY surface first — a sweep republishes the record, so checking
+    # it afterwards would read the sweep's own valid replacement.
+    _observation_record_path(store).write_text(corrupt)
+    snapshot = read_protected_result_store_snapshot(tmp_path / "store")
+    assert snapshot is not None
+    assert snapshot.record_state is GcObservationRecordState.PRESENT_UNREADABLE
+
+    at = time.time()
+    assert store.gc_sweep(now=at, observed_at=at) == []
+    assert entry_path.exists()
+
+
+def test_an_unreadable_store_directory_scan_is_never_a_zero_reading(tmp_path: Path) -> None:
+    """AC #8(b)'s under-report guard, at the ENUMERATION rather than the
+    per-candidate stat. On a directory that is SEARCHABLE but not READABLE
+    (mode `0100`), `Path.glob` suppresses the `EACCES` and simply yields
+    nothing — so both classes would come back EMPTY while the record path still
+    resolves, and the surface would report zero counts for a store full of
+    resident entries. `os.scandir` raises instead.
+
+    *(Out-of-family review round 3 [P2]; completes round 2's [P2], which
+    guarded the root and record stats but not the scan between them.)*
+
+    Mutation probe: reverting the enumeration to `root.glob(...)` makes the
+    snapshot return a successful ZERO reading instead of raising."""
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+    root = tmp_path / "store"
+    assert entry_path.exists()
+
+    root.chmod(0o100)  # --x------ : searchable, NOT readable
+    try:
+        if os.access(root, os.R_OK):  # pragma: no cover — root/CI-as-root
+            pytest.skip("running as a user that bypasses directory permissions")
+        with pytest.raises(OSError):
+            read_protected_result_store_snapshot(root)
+    finally:
+        root.chmod(0o700)
+
+    # And the ordinary path still reads the resident entry.
+    snapshot = read_protected_result_store_snapshot(root)
+    assert snapshot is not None
+    assert snapshot.entry_count == 1
+
+
 def test_an_unreadable_candidate_is_never_silently_dropped_from_the_gauge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
