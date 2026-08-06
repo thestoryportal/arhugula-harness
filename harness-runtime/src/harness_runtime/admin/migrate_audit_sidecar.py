@@ -232,13 +232,21 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
 
     ledger_text = ledger_path.read_text()
     entry_count = sum(1 for line in ledger_text.splitlines() if line.strip())
-    ledger_audit_refs = frozenset(
-        str(entry.action_id)
-        for entry in _read_ledger(
-            _Handle(canonical_path=ledger_path, exists=True, entry_count=entry_count)
+    try:
+        ledger_audit_refs = frozenset(
+            str(entry.action_id)
+            for entry in _read_ledger(
+                _Handle(canonical_path=ledger_path, exists=True, entry_count=entry_count)
+            )
+            if str(entry.action_id).startswith("audit:")
         )
-        if str(entry.action_id).startswith("audit:")
-    )
+    except CrossProcessLockTimeoutError as exc:
+        # B-93 (merge-gate lens 3, G1): this read takes the ledger read lock and
+        # sits OUTSIDE the try below, so the round-9 fold did NOT cover it — the
+        # gap was found by the executing witness the gate demanded, not by
+        # inspection. Same refusal contract as every other contention here.
+        print(f"migration refused: {exc}", file=sys.stderr)
+        return 1
 
     from harness_runtime.admin.record_migration import TenantAttestation
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -1461,3 +1462,103 @@ def test_b63_record_verify_availability_maps_to_typed_cli_refusal(
     captured = capsys.readouterr()
     assert "record-verification backend unavailable (retryable)" in captured.err
     assert "Traceback" not in captured.err
+
+
+_B93_HOLDER = """
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], "w").close()
+limit = time.monotonic() + 60
+while not os.path.exists(sys.argv[3]) and time.monotonic() < limit:
+    time.sleep(0.01)
+fcntl.flock(fd, fcntl.LOCK_UN)
+os.close(fd)
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl.flock is POSIX-only (B-45)")
+def test_b93_record_mode_refuses_on_lock_timeout(
+    dep: _Deployment, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-93 (merge-gate lens 3, G1) — the `_run_record_mode` lock-timeout fold.
+
+    Record mode reads the ledger and retags the sidecar, both under
+    cross-process locks. B-93 made those acquisitions deadline-bounded, and the
+    timeout is deliberately NOT an `OSError`/`ValueError`/`RecordMigrationError`
+    — so without the widened arm ordinary contention would exit this
+    operator-facing command with a TRACEBACK instead of its refusal exit 1.
+
+    Contended by a GENUINE second OS process holding the ledger inode.
+
+    Mutation probe (run at this arc): removing the
+    `except CrossProcessLockTimeoutError` arm from `_run_record_mode` makes the
+    raw timeout propagate and this test fails.
+    """
+    import subprocess
+    import time as _time
+
+    from harness_is.cross_process_ledger_lock import cross_process_read_lock as _real_read
+    from harness_runtime.admin.migrate_audit_sidecar import main
+
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    dep.write_record(_row(entry.entry_hash))
+
+    config_path = dep.root / "harness.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[runtime]",
+                'deployment_surface = "local-development"',
+                f'repository_root = "{dep.root}"',
+                'default_topology = "single-threaded-linear"',
+                'persona_tier = "multi-tenant-compliance"',
+                f'tenant_id = "{_TENANT}"',
+                f'audit_cutover_record_path = "{dep.record_path}"',
+                f'audit_cutover_record_key_id = "{_RECORD_KEY}"',
+                f'audit_ledger_binding_id = "{_BINDING}"',
+                "",
+                "[runtime.audit_signing]",
+                'backend = "aws-kms"',
+                "[runtime.audit_signing.key_arns]",
+                f'"{_ROW_KEY}" = "{_ARN_ROW}"',
+                f'"{_RECORD_KEY}" = "{_ARN_RECORD}"',
+                f'"harness-runtime-redaction-token" = "{_ARN_ROW}-redaction"',
+                f'"harness-runtime-dev" = "{_ARN_ROW}-dev"',
+                f'"harness-cost-attribution-v1" = "{_ARN_ROW}-cost"',
+                "",
+                "[runtime.otel]",
+                'otlp_endpoint = "http://localhost:4318"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "harness_runtime.config.audit_signing.make_audit_signing_backend",
+        lambda config: dep.record_backend,
+    )
+    monkeypatch.setattr(
+        "harness_is.state_ledger_write.cross_process_read_lock",
+        lambda path, **_kw: _real_read(path, deadline_seconds=0.1),
+    )
+
+    ready = dep.root / "b93-ready"
+    release = dep.root / "b93-release"
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _B93_HOLDER, str(dep.ledger_path), str(ready), str(release)]
+    )
+    try:
+        limit = _time.monotonic() + 30
+        while not ready.exists() and _time.monotonic() < limit:
+            assert holder.poll() is None, "holder exited before acquiring"
+            _time.sleep(0.01)
+        assert ready.exists(), "holder never acquired the ledger lock"
+        exit_code = main([str(dep.ledger_path), "--retag", "--runtime-config", str(config_path)])
+    finally:
+        release.write_text("go")
+        holder.wait(timeout=30)
+
+    assert exit_code == 1, f"expected the refusal exit 1, got {exit_code}"
+    assert "migration refused" in capsys.readouterr().err

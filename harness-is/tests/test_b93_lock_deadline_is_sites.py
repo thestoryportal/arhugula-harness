@@ -420,9 +420,28 @@ def test_site4_abba_release_before_blocking_is_preserved(tmp_path: Path) -> None
             time.sleep(0.3)  # let it reach the blocking arm
             # A DIFFERENT ledger in the SAME directory must still be writable:
             # only true if the waiter released the directory lock first.
+            #
+            # POSITIVE CONTROL (merge-gate lens 3, G4). `waiting.set()` fires
+            # BEFORE the blocked writer's own lock call, so the 0.3 s sleep is
+            # the only thing sequencing this — under CI load the sibling could
+            # acquire simply because the waiter had not reached the blocking arm
+            # yet, and the test would pass VACUOUSLY. Timing the sibling makes
+            # that indistinguishable case detectable: if the directory were held
+            # this acquisition would burn its full 2.0 s budget and then raise,
+            # so completing well inside it is the discriminating signal.
+            started = time.monotonic()
             with cross_process_write_lock(sibling, deadline_seconds=2.0):
                 sibling_entered.set()
+            sibling_elapsed = time.monotonic() - started
             assert sibling_entered.is_set()
+            assert sibling_elapsed < 0.5, (
+                f"the sibling took {sibling_elapsed:.2f}s of its 2.0s budget — it "
+                f"contended for the directory, so the waiter had NOT released it"
+            )
+            assert thread.is_alive(), (
+                "the blocked writer finished before the sibling was tested — this "
+                "run proved nothing about release-before-blocking"
+            )
         finally:
             thread.join(20)
 

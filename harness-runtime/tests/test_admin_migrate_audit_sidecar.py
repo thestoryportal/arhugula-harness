@@ -10,6 +10,11 @@ run, and a mistyped path exits without creating anything.
 
 from __future__ import annotations
 
+import contextlib
+import subprocess
+import sys
+import time
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -152,3 +157,78 @@ def test_module_runnable_via_python_m(tmp_path: Path) -> None:
         if already is not None:
             sys.modules["harness_runtime.admin.migrate_audit_sidecar"] = already
     assert excinfo.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# B-93 — the two lock-timeout folds this CLI gained at the deadline arc.
+# ---------------------------------------------------------------------------
+
+_B93_HOLDER = """
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], "w").close()
+limit = time.monotonic() + 60
+while not os.path.exists(sys.argv[3]) and time.monotonic() < limit:
+    time.sleep(0.01)
+fcntl.flock(fd, fcntl.LOCK_UN)
+os.close(fd)
+"""
+
+
+@contextlib.contextmanager
+def _b93_hold(tmp_path: Path, target: Path) -> Generator[None, None, None]:
+    """Hold `target`'s flock from a GENUINE second OS process.
+
+    A thread would contend only the in-process face and prove nothing about the
+    cross-process lock the CLI actually takes.
+    """
+    ready = tmp_path / f"b93-ready-{target.name}"
+    release = tmp_path / f"b93-release-{target.name}"
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _B93_HOLDER, str(target), str(ready), str(release)]
+    )
+    try:
+        limit = time.monotonic() + 30
+        while not ready.exists() and time.monotonic() < limit:
+            assert proc.poll() is None, "holder exited before acquiring"
+            time.sleep(0.01)
+        assert ready.exists(), "holder never acquired the lock"
+        yield
+    finally:
+        release.write_text("go")
+        proc.wait(timeout=30)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl.flock is POSIX-only (B-45)")
+def test_b93_legacy_adoption_refuses_on_lock_timeout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-93 (merge-gate lens 3, G1) — the legacy-adoption fold at `main`.
+
+    `adopt_legacy_is_refs` takes a cross-process write lock on the sidecar.
+    B-93 made that acquisition deadline-bounded, and its timeout is
+    deliberately NOT an `OSError`/`ValueError` — so without the widened arm
+    ordinary contention would exit this operator-facing command with a
+    TRACEBACK instead of its established refusal (exit 1).
+
+    Mutation probe (run at this arc): reverting the arm to `except ValueError`
+    makes `main` propagate the raw timeout and this test fails.
+    """
+    ledger_path, writer = _legacy_ledger(tmp_path)
+    sidecar = writer.sidecar_path
+
+    from harness_is.cross_process_ledger_lock import cross_process_write_lock as real_lock
+
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.audit_writer.cross_process_write_lock",
+        lambda path, **_kw: real_lock(path, deadline_seconds=0.1),
+    )
+
+    with _b93_hold(tmp_path, sidecar):
+        exit_code = main([str(ledger_path)])
+
+    assert exit_code == 1, f"expected the refusal exit 1, got {exit_code}"
+    assert "migration refused" in capsys.readouterr().err
+    # Nothing was adopted — the deployment is unchanged and the run is retryable.
+    assert not sidecar.is_file() or sidecar.read_text() == ""

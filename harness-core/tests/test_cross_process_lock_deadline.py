@@ -495,6 +495,30 @@ def test_eacces_is_treated_as_contention_not_as_a_hard_failure(tmp_path: Path) -
         os.close(fd)
 
 
+def test_enotsup_is_not_in_the_contention_set() -> None:
+    """No-over-widening guard on `_CONTENTION_ERRNOS` (merge-gate lens 3, G5).
+
+    Three acquisition sites classify `ENOTSUP` — macOS raises it for a FIFO —
+    and deliberately yield UNGUARDED so the caller's own validated open owns the
+    loud rejection. If `ENOTSUP` were ever added to the contention set, those
+    degradation arms would become unreachable: the helper would retry a lock the
+    filesystem can never grant and then report a TIMEOUT, converting a
+    documented, deliberate yield-unguarded path into a spurious deadline
+    failure. The `EACCES` widening made that a live risk, so the boundary is
+    pinned rather than left to reviewer memory.
+
+    Mutation probe (run at this arc): adding `errno.ENOTSUP` to
+    `_CONTENTION_ERRNOS` makes this test fail."""
+    from harness_core.cross_process_lock_deadline import _CONTENTION_ERRNOS
+
+    assert errno.ENOTSUP not in _CONTENTION_ERRNOS, (
+        "ENOTSUP must NOT be contention — the three ENOTSUP arms yield "
+        "unguarded on purpose and would become unreachable"
+    )
+    assert errno.EBADF not in _CONTENTION_ERRNOS
+    assert _CONTENTION_ERRNOS == frozenset({errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES})
+
+
 @requires_posix_flock
 def test_a_non_contention_error_propagates_unchanged(tmp_path: Path) -> None:
     """Only BlockingIOError means "contended". Everything else (EBADF here;
