@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 110
+  total: 111
   open: 2
   design_substrate_gated: 1
-  registered_finding: 14
+  registered_finding: 15
   operator_gated: 0
   held: 1
   closed: 92
-  identity_digest: b99da3eb9595815e
+  identity_digest: 744dbb3f1e034018
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5045,3 +5045,11 @@ items:
     re-evaluate: a third member touches the same C3 (state/persistence integrity) vs C10/C7
     (content restriction on a sensitive-payload store) axis condition #5 was authored on.'
   heading: '### B-110 · The GC observation record cannot distinguish generations of a REUSED temporary candidate name *(surfaced at the B-96 spec leg, out-of-family Codex rounds 3-4, 2026-08-05)*'
+- id: B-111
+  title: 'The GC observation record''s publication temporary is unreclaimable after a mid-publication kill, because both sweep globs exclude it by construction'
+  status: registered_finding
+  pr: '#pending'
+  summary: 'Surfaced at the B-96 IMPL leg (U-RT-150) by out-of-family Codex round 2 [P2], against that leg''s own code -- reported, not absorbed. `_publish_observation_record` publishes the durable grace record by `tempfile.mkstemp(prefix="gc-observations.publishing-")` -> write -> fsync -> `os.replace`, with an `except BaseException: unlink(tmp); raise` cleanup. A process KILLED strictly between `mkstemp` and `os.replace` runs NO Python cleanup, so the temporary survives. That prefix is deliberately disjoint from BOTH sweep globs (U-RT-150 AC #15''s second half REQUIRES the disjointness: reusing the `.tmp-` payload prefix would make the next sweep classify the artifact as crash-orphaned ciphertext and unlink it as though it were a payload), and nothing else in the store enumerates it -- so no path ever removes it, and it is invisible to the term-8 gauge and to the `harness-inspect` counts as well. A repeated crash loop landing in that window could therefore accumulate files on the store volume with no bound and no operator-visible signal. Reachability is REMOTE and of the same order as B-110: the window is the sub-millisecond gap between `mkstemp` and `os.replace`, once per sweep, and it needs a KILL (not an exception -- an exception takes the cleanup path, which is witnessed by `test_record_publication_is_crash_atomic_and_never_no_replace_or_unlink_recreate`).'
+  close_out: 'DECLINED AT THE B-96 IMPL LEG WITH A GROUNDED PIN, registered rather than absorbed. The natural fix -- having `_publish_observation_record` remove stale siblings of its OWN prefix at publication time, mirroring `_publish_atomic`''s `finally: os.unlink(tmp_name)` for payload temps -- is FORECLOSED by U-RT-150 AC #15 as written: its mutation probe states that a sweep after a simulated mid-publication crash "must not enumerate, report or remove it", and the AC''s witness (`test_record_publication_temporary_is_never_enumerated_as_a_payload_orphan`) asserts exactly that the leftover STILL EXISTS after a later sweep. Since `_publish_observation_record` is reached only FROM `gc_sweep`, any cleanup there IS a sweep removing it, so building the fix at this leg would mean absorbing a plan-level contradiction -- precisely the silent-absorption failure mode X-AL-3 forbids. TWO GROUNDED DISPOSITIONS, neither owed by U-RT-150. (a) NARROW AC #15 at a plan delta so its no-removal clause binds the PAYLOAD-orphan accounting path specifically (enumeration into count/age/report, and unlink AS ciphertext) rather than any removal whatsoever, then build the prefix-scoped cleanup under the lock the publication already holds -- cheap, and strictly in the bounded-retention direction the store exists to serve. This is a Phase-6 plan act, not an impl act. (b) ACCEPT AND DOCUMENT -- the residual is stated in `_publish_observation_record`''s own docstring with its exact cost and reachability, and the row closes as documented-and-accepted. NOT OWED BY ANY LEG: changing the temporary''s prefix back toward `.tmp-` (AC #15 requires the disjointness for an independent and stronger reason), or widening the sweep globs (which would reintroduce exactly the unlink-as-ciphertext defect AC #15 exists to close).'
+  council: 'NOT owed at registration. The question is whether an acceptance criterion''s no-removal clause should be narrowed by one qualifier so a self-owned cleanup becomes legal -- a plan-scoping question, not a nameable cross-domain tension. If disposition (a) is opened, re-evaluate: it touches the same C3 (state/persistence integrity) vs C10 (blast radius on a sensitive-payload store) axis AC #15 was authored on.'
+  heading: '### B-111 · The GC observation record''s publication temporary is unreclaimable after a mid-publication kill, because both sweep globs exclude it by construction *(surfaced at the B-96 impl leg, out-of-family Codex round 2 [P2], 2026-08-05)*'

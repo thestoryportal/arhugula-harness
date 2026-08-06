@@ -3258,37 +3258,53 @@ def test_one_malformed_row_invalidates_the_whole_record_not_just_that_row(
     assert store.gc_sweep(now=at + ttl + 0.1) == [entry_path.stem]
 
 
-def test_a_non_finite_first_observed_at_invalidates_the_record(tmp_path: Path) -> None:
+def test_an_out_of_domain_first_observed_at_invalidates_the_record(tmp_path: Path) -> None:
     """AC #11's totality against the NUMERIC-BUT-UNUSABLE stamp, which a type
-    check alone admits. Python's `json` accepts the non-standard literals
-    `Infinity` / `-Infinity` / `NaN`, so a restored, hand-edited or
-    foreign-build record can carry `-Infinity` as a `first_observed_at`. It is
-    numeric, so it parses; and `current_time - (-inf)` is `+inf`, which passes
-    the elapsed conjunct INSTANTLY and DELETES a protected result rather than
-    granting it a fresh grace — precisely the earlier-than-truth,
-    retention-SHORTENING direction AC #4 forbids.
+    check alone admits. Four shapes, all reachable from a restored, hand-edited
+    or foreign-build record:
 
-    Both non-finite directions are exercised. `NaN` fails the comparison in the
-    safe direction on its own, but is rejected too, because term 11's fail-safe
-    is a TOTALITY over anything that is not *read, parsed whole, entries
-    usable* — not a set of individually-patched hazards.
+    - `-Infinity` — Python's `json` accepts the non-standard literal; it is
+      numeric, so it parses, and `current_time - (-inf)` is `+inf`, which passes
+      the elapsed conjunct INSTANTLY and DELETES a protected result rather than
+      granting it a fresh grace: the earlier-than-truth, retention-SHORTENING
+      direction AC #4 forbids.
+    - `Infinity` — the same literal family, in the lengthening direction.
+    - `NaN` — fails the elapsed comparison in the SAFE direction on its own, but
+      is rejected too, because the fail-safe is a TOTALITY over anything that is
+      not *read, parsed whole, entries usable*, not a set of individually
+      patched hazards.
+    - a finite NEGATIVE stamp — the quiet one. `first_observed_at` is a
+      wall-clock reading taken AFTER the candidate was observed to exist (AC
+      #3), so a pre-epoch value cannot be one; treating it as an ancient
+      observation reclaims on the first sweep.
+    - a JSON integer too large for a float — `math.isfinite` RAISES on it rather
+      than answering, so an unguarded domain test lets an unreadable record
+      escape the totality as an uncaught `OverflowError` out of `gc_sweep`.
 
-    *(Out-of-family review round 1 [P1].)*
+    This is a DOMAIN check and the witness claims no more: it pins that values
+    which cannot be a wall-clock observation at all are refused. It asserts
+    nothing about detecting an arbitrarily corrupted but IN-domain stamp, which
+    the ratified two-member content set carries no way to detect.
 
-    Mutation probe: dropping the `math.isfinite` guard makes the `-Infinity`
-    case reclaim the live entry on the FIRST sweep and this test fails."""
+    *(Out-of-family review rounds 1 [P1] and 2 [P1].)*
+
+    Mutation probes: dropping the `math.isfinite`/`value < 0.0` guard makes the
+    `-Infinity` and negative cases reclaim the live entry on the FIRST sweep;
+    dropping the `OverflowError` guard turns the huge-integer case into an
+    uncaught exception rather than a refusal."""
     ttl = 1.0
-    for literal in ("-Infinity", "Infinity", "NaN"):
+    huge_integer = "1" + "0" * 400
+    for index, literal in enumerate(("-Infinity", "Infinity", "NaN", "-1", huge_integer)):
         store, entry_path = _stale_entry(
-            tmp_path / literal.lower().lstrip("-"), ttl_seconds=ttl, age_seconds=10.0
+            tmp_path / f"case-{index}", ttl_seconds=ttl, age_seconds=10.0
         )
         _observation_record_path(store).write_text(
             f'{{"version": 1, "observations": {{"{entry_path.name}": {literal}}}}}'
         )
         at = time.time()
         assert store.gc_sweep(now=at, observed_at=at) == [], (
-            f"a record carrying {literal} as a first_observed_at was trusted — "
-            f"a numeric-but-unusable stamp reached the reclaim decision"
+            f"a record carrying {literal[:24]} as a first_observed_at was "
+            f"trusted — a numeric-but-unusable stamp reached the reclaim decision"
         )
         assert entry_path.exists()
         # Fail-SAFE, not fail-open: the fresh grace it granted is a real one.
@@ -3331,6 +3347,57 @@ def test_an_unusable_store_root_is_a_path_error_not_an_absent_store(tmp_path: Pa
             read_protected_result_store_snapshot(unreadable)
     finally:
         unreadable.chmod(0o700)
+
+
+def test_an_unreadable_candidate_is_never_silently_dropped_from_the_gauge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #8(b)'s gauge must never UNDER-REPORT. If a resident candidate's
+    `stat()` fails with a real error (`EIO`, `EACCES`), skipping it drops it
+    from BOTH the count and the oldest-age reading and lets the binary exit 0 on
+    a falsely LOW value — on the one surface whose whole purpose is to make the
+    retention level falsifiable, an under-report is the single worst direction
+    to fail in. Only a BENIGN concurrent disappearance is skipped.
+
+    The SWEEP's own skip-and-continue is deliberately untouched and is asserted
+    here to still hold: it is shipped behaviour, and a sweep that skips an
+    unreadable candidate merely RETAINS it — the safe direction.
+
+    *(Out-of-family review round 2 [P2].)*
+
+    Mutation probe: widening the inspector's guard back to `except OSError`
+    makes the snapshot report `entry_count == 0` with a `None` age instead of
+    raising, and this test fails."""
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=1.0, age_seconds=10.0)
+    root = tmp_path / "store"
+    real_stat = Path.stat
+
+    def _failing_stat(self: Path, **kwargs: object) -> object:
+        if self == entry_path:
+            raise PermissionError(errno.EACCES, "simulated unreadable candidate")
+        return real_stat(self, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "stat", _failing_stat)
+    with pytest.raises(PermissionError):
+        read_protected_result_store_snapshot(root)
+
+    # A benign concurrent disappearance IS skipped — that is not an error.
+    def _vanished_stat(self: Path, **kwargs: object) -> object:
+        if self == entry_path:
+            raise FileNotFoundError(errno.ENOENT, "vanished mid-scan")
+        return real_stat(self, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "stat", _vanished_stat)
+    snapshot = read_protected_result_store_snapshot(root)
+    assert snapshot is not None
+    assert snapshot.entry_count == 0
+    assert snapshot.gauge.oldest_entry_age_seconds is None
+
+    # The SWEEP still skips-and-continues, unchanged: it retains the entry.
+    monkeypatch.setattr(Path, "stat", _failing_stat)
+    assert store.gc_sweep(now=time.time()) == []
+    monkeypatch.undo()
+    assert entry_path.exists()
 
 
 def test_emissions_ride_the_report_log_with_no_span_no_metric_no_composite_key(

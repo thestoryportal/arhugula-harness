@@ -234,24 +234,43 @@ def _read_observation_record(record_path: Path) -> _ObservationRecordRead:
         # truth and SHORTEN retention, the one direction term 4 forbids.
         # `bool` is excluded explicitly: it is an `int` subclass.
         #
-        # NON-FINITE values are rejected for exactly that reason and are NOT a
-        # theoretical case: Python's `json` accepts the non-standard literals
+        # OUT-OF-DOMAIN values are rejected for exactly that reason, and none of
+        # them is theoretical. Python's `json` accepts the non-standard literals
         # `Infinity` / `-Infinity` / `NaN`, so a restored, hand-edited or
-        # foreign-build record can carry `-Infinity` here. It is numeric, so a
+        # foreign-build record can carry `-Infinity` here; it is numeric, so a
         # type check alone admits it — and `current_time - (-inf)` is `+inf`,
         # which passes the elapsed conjunct instantly and DELETES a protected
-        # result rather than granting it a fresh grace. `NaN` fails the same
-        # comparison in the safe direction, but is rejected too: term 11's
-        # fail-safe is a TOTALITY over anything that is not *read, parsed
-        # whole, entries usable*. *(Out-of-family review round 1 [P1].)*
+        # result rather than granting it a fresh grace. A finite NEGATIVE stamp
+        # does the same thing more quietly: `first_observed_at` is a wall-clock
+        # reading taken AFTER the candidate was observed to exist (term 3), so a
+        # pre-epoch value cannot be one, and treating it as an ancient
+        # observation reclaims on the first sweep. `NaN` fails the same
+        # comparison in the SAFE direction, but is rejected too, because term
+        # 11's fail-safe is a TOTALITY over anything that is not *read, parsed
+        # whole, entries usable* — not a set of individually-patched hazards.
+        # **This is a DOMAIN check, not a plausibility filter**: it refuses
+        # values that cannot be a wall-clock observation at all, and claims
+        # nothing about detecting an arbitrarily corrupted but IN-domain stamp,
+        # which the ratified two-member content set carries no way to detect.
+        # *(Out-of-family review rounds 1 and 2 [P1].)*
         if (
             not isinstance(name, str)
             or isinstance(stamp, bool)
             or not isinstance(stamp, int | float)
-            or not math.isfinite(stamp)
         ):
             return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
-        observations[name] = float(stamp)
+        try:
+            value = float(stamp)
+        except OverflowError:
+            # A JSON integer too large for a float. `math.isfinite` would raise
+            # here rather than answer, so the conversion is guarded BEFORE the
+            # domain test — otherwise an unreadable record would escape term
+            # 11's totality as an uncaught exception out of `gc_sweep`.
+            # *(Out-of-family review round 2 [P1].)*
+            return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
+        if not math.isfinite(value) or value < 0.0:
+            return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
+        observations[name] = value
     return _ObservationRecordRead(GcObservationRecordState.PRESENT_READABLE, observations)
 
 
@@ -1174,6 +1193,31 @@ class ProtectedResultStore:
 
         The publication temporary deliberately does NOT use `_publish_atomic`'s
         `.tmp-` payload prefix (see `_GC_OBSERVATION_RECORD_TEMP_PREFIX`).
+
+        **A residual is DECLINED here rather than absorbed, and registered
+        instead (`B-111`).** A process KILLED strictly between `mkstemp` and
+        `os.replace` leaves a `gc-observations.publishing-*` file that nothing
+        removes: it is invisible to both sweep globs by construction, so a
+        repeated crash loop at that window could accumulate. The natural fix —
+        having this method sweep away stale siblings of its own prefix — is
+        FORECLOSED by U-RT-150 **AC #15**, whose mutation probe states that a
+        sweep after a simulated mid-publication crash *"must not enumerate,
+        report or remove it"*, and whose witness asserts exactly that. Changing
+        it here would be absorbing a plan-level contradiction at the impl leg,
+        so it is reported and registered. Reachability is remote — a
+        sub-millisecond window per sweep — and the same order as `B-110`.
+        *(Out-of-family review round 2 [P2], DECLINED with this pin.)*
+
+        **The locks are held across this write DELIBERATELY, and that is
+        contract, not oversight.** Spec v1.111 §14.8.11.1 *"The observation
+        record's carrier"* states the record is *"Published under the same locks
+        the sweep already holds"*, and the correctness reason is the read side:
+        the read-then-replace must be atomic against a concurrent sweep of the
+        same root, or one sweep's observation is lost and the other reclaims
+        early. The cost is bounded by term 9 — the record is bounded by the
+        resident PAST-TTL candidate set, and this is one small JSON file, not
+        the unbounded `glob`/`stat` scan `B-75` moved off the lock.
+        *(Out-of-family review round 2 [P2], DECLINED with this pin.)*
         """
         payload = json.dumps(
             {"version": _GC_OBSERVATION_RECORD_VERSION, "observations": dict(observations)},
@@ -1362,12 +1406,21 @@ def read_protected_result_store_snapshot(
             errno.ENOTDIR, "protected result store root is not a directory", str(root)
         )
     current_time = time.time() if now is None else now
+    # Only a BENIGN concurrent disappearance is skipped here. Any other stat
+    # failure (`EIO`, `EACCES`) propagates: silently omitting an unreadable
+    # candidate would drop it from BOTH the count and the oldest-age gauge and
+    # let the binary exit 0 on a falsely LOW reading — on the one surface whose
+    # purpose is to make the retention level falsifiable, an under-report is the
+    # single worst direction to fail in. The SWEEP's own skip-and-continue is
+    # deliberately left alone: it is shipped behaviour, and a sweep that skips
+    # an unreadable candidate merely retains it. *(Out-of-family review round 2
+    # [P2].)*
     entry_count = 0
     oldest_entry_age: float | None = None
     for entry_path in root.glob(_ENTRY_GLOB):
         try:
             age = current_time - entry_path.stat().st_mtime
-        except OSError:
+        except FileNotFoundError:
             continue
         entry_count += 1
         if oldest_entry_age is None or age > oldest_entry_age:
@@ -1377,7 +1430,7 @@ def read_protected_result_store_snapshot(
     for orphan_path in root.glob(_ORPHAN_GLOB):
         try:
             age = current_time - orphan_path.stat().st_mtime
-        except OSError:
+        except FileNotFoundError:
             continue
         orphan_count += 1
         if oldest_orphan_age is None or age > oldest_orphan_age:
