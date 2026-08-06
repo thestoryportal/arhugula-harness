@@ -99,10 +99,16 @@ _root_locks_guard = threading.Lock()
 #: sharing one store root (e.g. two co-resident daemon instances) each hold
 #: their own independent `_root_locks` dict and are not mutually excluded by
 #: it at all. This dedicated lockfile name is disjoint from both `gc_sweep`
-#: glob patterns (`*.entry` — Python's dotfile-hiding glob semantics never
-#: match a leading-dot name against a non-dot-leading pattern; `.tmp-*` —
-#: this name doesn't share that prefix), so it is never enumerated as a GC
-#: candidate.
+#: glob patterns (`*.entry` — this name ends in `.lock`; `.tmp-*` — it doesn't
+#: share that prefix), so it is never enumerated as a GC candidate.
+#:
+#: *(Rationale CORRECTED at the `B-96` impl leg, out-of-family review round 4:
+#: the prior text grounded the `*.entry` half on "Python's dotfile-hiding glob
+#: semantics", which is FALSE — `pathlib`'s `glob` matches `.hidden.entry`
+#: against `*.entry`, verified empirically. The CONCLUSION was never at risk,
+#: because the suffix alone settles it; only the stated reason was wrong, and
+#: it is corrected rather than left as a false premise a later arc could
+#: build on.)*
 _CROSS_PROCESS_LOCK_FILENAME = ".cross_process.lock"
 
 #: `B-96` / U-RT-150 (Runtime spec v1.111 §14.8.11.1, *"The observation
@@ -228,7 +234,18 @@ def _read_observation_record(record_path: Path) -> _ObservationRecordRead:
     if not isinstance(parsed, dict):
         return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
     document = cast("dict[object, object]", parsed)
-    if document.get("version") != _GC_OBSERVATION_RECORD_VERSION:
+    version = document.get("version")
+    # `bool` is excluded explicitly, for the SAME reason the row loop below
+    # excludes it: `bool` is an `int` subclass and `True == 1`, so a record
+    # carrying `"version": true` — reachable from a foreign build or a
+    # hand-edit — passed a bare `!= _GC_OBSERVATION_RECORD_VERSION` and read as
+    # PRESENT_READABLE, admitting its rows. A `0.0` stamp among them is finite
+    # and non-negative, so the domain check below trusts it, and
+    # `current_time - 0.0` clears the elapsed conjunct instantly: an invalid
+    # record RECLAIMS on the first sweep, the retention-SHORTENING direction
+    # term 4 forbids. *(Out-of-family review round 4 [P1], reproduced
+    # independently before the fix.)*
+    if isinstance(version, bool) or version != _GC_OBSERVATION_RECORD_VERSION:
         return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
     rows_value = document.get("observations")
     if not isinstance(rows_value, dict):
@@ -1467,9 +1484,19 @@ def read_protected_result_store_snapshot(
     with os.scandir(root) as scan:
         for candidate in scan:
             name = candidate.name
-            # The two sweep-glob memberships, spelled out: `*.entry` does NOT
-            # match a dot-leading name (Python glob semantics), `.tmp-*` does.
-            is_entry = not name.startswith(".") and name.endswith(".entry")
+            # The two sweep-glob memberships, MIRRORED EXACTLY. `pathlib`'s
+            # `glob` does NOT hide dotfiles the way shell globbing does:
+            # `*.entry` matches `.hidden.entry`, verified empirically rather
+            # than assumed. An earlier form of this loop excluded dot-leading
+            # names from the entry class and so counted FEWER candidates than
+            # the sweep enumerates — an UNDER-REPORT on the one surface whose
+            # whole purpose is to make the retention level falsifiable.
+            # Membership is deliberately NOT exclusive, again mirroring the
+            # sweep: a name like `.tmp-x.entry` is matched by BOTH globs and is
+            # enumerated in both classes there, so it is counted in both here.
+            # *(Out-of-family review round 4 [P2], reproduced independently
+            # before the fix.)*
+            is_entry = name.endswith(".entry")
             is_orphan = name.startswith(_ORPHAN_GLOB[:-1])
             if not (is_entry or is_orphan):
                 continue
@@ -1485,7 +1512,7 @@ def read_protected_result_store_snapshot(
                 entry_count += 1
                 if oldest_entry_age is None or age > oldest_entry_age:
                     oldest_entry_age = age
-            else:
+            if is_orphan:
                 orphan_count += 1
                 if oldest_orphan_age is None or age > oldest_orphan_age:
                     oldest_orphan_age = age

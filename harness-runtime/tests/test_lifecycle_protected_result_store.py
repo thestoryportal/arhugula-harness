@@ -3311,6 +3311,91 @@ def test_an_out_of_domain_first_observed_at_invalidates_the_record(tmp_path: Pat
         assert store.gc_sweep(now=at + ttl + 0.1) == [entry_path.stem]
 
 
+def test_a_bool_version_field_invalidates_the_record(tmp_path: Path) -> None:
+    """AC #11's totality against the `bool`-is-`int` trap at the ENVELOPE, which
+    the row loop already guards one level down. `True == 1` in Python, so a
+    record carrying `"version": true` — reachable from a foreign build or a
+    hand-edit — passed a bare `!= _GC_OBSERVATION_RECORD_VERSION` and read as
+    PRESENT_READABLE, admitting its rows. A `0.0` stamp among them is finite and
+    non-negative, so the domain check trusts it, and `current_time - 0.0` clears
+    the elapsed conjunct instantly: the invalid record RECLAIMS on the FIRST
+    sweep — the retention-SHORTENING direction AC #4 forbids.
+
+    *(Out-of-family review round 4 [P1], reproduced independently before the
+    fix.)*
+
+    Mutation probe: dropping the `isinstance(version, bool)` guard makes the
+    record read PRESENT_READABLE and the live entry is reclaimed on the first
+    sweep, failing both assertions below."""
+    ttl = 1.0
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=ttl, age_seconds=10.0)
+    _observation_record_path(store).write_text(
+        json.dumps({"version": True, "observations": {entry_path.name: 0.0}})
+    )
+
+    # The READ-ONLY surface first — a sweep republishes the record, so checking
+    # it afterwards would read the sweep's own valid replacement.
+    snapshot = read_protected_result_store_snapshot(tmp_path / "store")
+    assert snapshot is not None
+    assert snapshot.record_state is GcObservationRecordState.PRESENT_UNREADABLE
+
+    at = time.time()
+    assert store.gc_sweep(now=at, observed_at=at) == [], (
+        "a record whose `version` was the bool `true` was trusted — `True == 1` "
+        "let an invalid envelope admit its rows and reclaim on sight"
+    )
+    assert entry_path.exists()
+
+
+def test_the_snapshot_gauge_mirrors_the_sweep_globs_including_dot_leading_names(
+    tmp_path: Path,
+) -> None:
+    """AC #8(b)'s gauge must never UNDER-REPORT relative to what the SWEEP
+    enumerates. `pathlib`'s `glob` does NOT hide dotfiles the way shell globbing
+    does — `*.entry` matches `.hidden.entry` — so a membership test that
+    excluded dot-leading names from the entry class counted FEWER candidates
+    than the sweep sees, on the one surface whose purpose is to make the
+    retention level falsifiable.
+
+    Membership is also NOT exclusive: `.tmp-x.entry` is matched by BOTH globs
+    and enumerated in both classes by the sweep, so the gauge counts it in both.
+
+    Both properties are asserted against the sweep's OWN globs rather than
+    against a restated expectation, so the two can never silently diverge again.
+
+    *(Out-of-family review round 4 [P2], reproduced independently before the
+    fix.)*
+
+    Mutation probe: restoring the `not name.startswith(".")` condition drops
+    the dot-leading entry and the count-parity assertion fails; making the
+    membership exclusive drops the dual-match name from one class."""
+    store = _store(tmp_path, ttl_seconds=1.0)
+    root = tmp_path / "store"
+    root.mkdir(parents=True, exist_ok=True)
+    stale = time.time() - 100.0
+    for name in ("plain.entry", ".hidden.entry", ".tmp-orphan", ".tmp-dual.entry"):
+        (root / name).write_bytes(b"x")
+        os.utime(root / name, (stale, stale))
+
+    # The sweep's own globs are the reference — not a restated expectation.
+    swept_entries = {p.name for p in root.glob("*.entry")}
+    swept_orphans = {p.name for p in root.glob(".tmp-*")}
+    assert ".hidden.entry" in swept_entries, "premise changed: pathlib glob now hides dotfiles"
+    assert ".tmp-dual.entry" in swept_entries and ".tmp-dual.entry" in swept_orphans
+
+    snapshot = read_protected_result_store_snapshot(root, now=time.time())
+    assert snapshot is not None
+    assert snapshot.entry_count == len(swept_entries), (
+        f"the gauge counted {snapshot.entry_count} entries where the sweep "
+        f"enumerates {len(swept_entries)} ({sorted(swept_entries)}) — it UNDER-REPORTS"
+    )
+    assert snapshot.orphan_count == len(swept_orphans), (
+        f"the gauge counted {snapshot.orphan_count} orphans where the sweep "
+        f"enumerates {len(swept_orphans)} ({sorted(swept_orphans)})"
+    )
+    assert store._ttl_seconds == 1.0  # type: ignore[attr-defined]
+
+
 def test_an_unusable_store_root_is_a_path_error_not_an_absent_store(tmp_path: Path) -> None:
     """AC #8(b)'s engagement predicate discriminates ABSENT from UNUSABLE. A
     configured root that EXISTS but is a regular file, or whose contents cannot
