@@ -5003,7 +5003,14 @@ items:
     names are non-invertible digests of a uuid4-bearing composite key. Round 4 [P1] then showed
     that MANDATING a generation check (the spec leg''s first response) is UNSATISFIABLE inside the
     ratified two-member set, since there is no field to carry one and adding one would widen a
-    ratified closed set. WHAT IT COSTS, EXACTLY: term 2 is NOT violated -- term 1 conjunct (a) is
+    ratified closed set. A SECOND, DISTINCT and PRE-EXISTING mechanism, surfaced at out-of-family round 6 [P2] and verified
+    by direct read: the sweep SELECTS candidates under the publish + cross-process locks
+    (protected_result_store.py:781-800) but REMOVES them OUTSIDE the lock (:821-822, :845-847), so two
+    concurrent sweeps can both select one orphan and the second sweep''s STALE PATH can unlink an active
+    replacement -- a PREMATURE DELETION, not merely a lost grace. That is a property of the shipped
+    sweep''s phase split, NOT of the observation record: it is present at HEAD under the sweep-COUNT
+    grace, reachable with no record at all, and NOT introduced by the B-96 amendment. Disposition (c)
+    below covers it. WHAT THE PRIMARY ITEM COSTS, EXACTLY: for the RECORD-MEDIATED reclaim DECISION term 2 is NOT violated -- term 1 conjunct (a) is
     keyed on the NEW file''s own filesystem timestamp, so reclaim still cannot precede that file''s
     own timestamp + TTL. What degrades is the ADDITIONAL grace: for a reused temporary name alone
     the reclaim bound falls back to the pre-existing timestamp-derived one, reintroducing the
@@ -5019,7 +5026,11 @@ items:
     basename. That is a CLASS 2 OPERATOR DECISION, not a spec-leg or impl-leg act: the two-member
     closure is ratified at the B-96 fork section 11.3 table and at council condition #5, and its
     stated ground is that widening adds no field, no carrier and no namespace. A fork filing is
-    owed before (b) may be built. NOT OWED BY ANY LEG: reopening the B-96 ceiling question, or any
+    owed before (b) may be built. (c) LOCK-BOUND IDENTITY REVALIDATION BEFORE REMOVAL --
+    re-verify under the lock that the path still names the file the selection decided on. Cheap, and
+    B-96 U-RT-150 is already working at that exact site so that unit MAY take it, but it is NOT owed by
+    the B-96 legs, whose ratified scope is the reclaim RULE; mandating it there would be scope creep on
+    a pre-existing hazard. NOT OWED BY ANY LEG: reopening the B-96 ceiling question, or any
     change to the candidate-filename key over BOTH sweep classes, which condition #5 requires for
     an independent reason (crash orphans would otherwise be permanently unreclaimable).'
   council: 'NOT owed at registration. The question is whether a ratified CLOSED content set should
