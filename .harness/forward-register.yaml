@@ -3787,8 +3787,9 @@ items:
     #6, #8, #11, #12 did not exist in the fork section 8 ask) is surfaced in the spec marker per
     council record section 7.2, with a Class 2 route named if the operator judges they owe a fresh
     decision. NO new C-RT-* number, NO CXA delta (aggregate frozen at 111), NO OD delta
-    (C-OD-05 section 5.1 roster 15 -> 15), NO harness-*/src|tests edit. STATUS UNCHANGED at
-    design_substrate_gated -- the IMPL leg remains owed. RATIFIED 2026-08-05 as READING C, ceiling
+    (C-OD-05 section 5.1 roster 15 -> 15), NO harness-*/src|tests edit. STATUS IS NOW `open`
+    (see the status paragraph at the head of this close_out) -- the IMPL leg is the only leg still
+    owed, and B-96 / the B-77 residual / B-74 flip to `closed` only when it merges. RATIFIED 2026-08-05 as READING C, ceiling
     sub-decision C-2 -- the GRACE TERM ALONE,
     with NO absolute mtime-keyed reclaim ceiling. Operator AskUserQuestion on the fork''s section
     8 (`.harness/class_2_fork_b96_gc_grace_elapsed_time_bound.md`, FILED at PR #1179); the HELD
