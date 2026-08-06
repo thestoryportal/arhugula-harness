@@ -246,9 +246,19 @@ def flock_until_deadline(
     in-process ``RLock`` release) is the same unwind it already ran for a
     raising ``flock``.
 
-    An UNCONTENDED acquisition never sleeps — the first probe takes the lock —
+    An UNCONTENDED acquisition never sleeps — the FIRST probe takes the lock —
     so a deadline that has already expired still succeeds when nothing holds the
     lock. The bound is on WAITING, not on the acquisition itself.
+
+    **It NEVER RETURNS HOLDING A LOCK IT ACQUIRED PAST THE DEADLINE.** Checking
+    expiry only *before* probing cannot deliver that: the checking thread can be
+    descheduled, the holder release meanwhile, and the next probe then succeed
+    on a spent budget — the bound would hold "usually", which is the kind of
+    guarantee that reads as total and is not. The check therefore sits on the
+    SUCCESS path, after the acquisition, where there is no window left to lose:
+    a retry that lands late is UNLOCKED and refused *(out-of-family review
+    rounds 2 and 6 [P2], accepted — round 2 moved the check after the sleep,
+    round 6 established that only the success path closes it)*.
 
     Errors other than contention (``ENOTSUP`` on an un-flockable object,
     ``EBADF``) propagate unchanged from the first probe, preserving the
@@ -257,12 +267,26 @@ def flock_until_deadline(
     import fcntl  # POSIX-only; every caller gates win32 before reaching here.
 
     poll_seconds = _INITIAL_POLL_SECONDS
+    first_probe = True
     while True:
         try:
             fcntl.flock(fd, operation | fcntl.LOCK_NB)
-            return
         except BlockingIOError:
             pass
+        else:
+            if first_probe or deadline.remaining_seconds() > 0.0:
+                return
+            # Acquired, but only after the budget was spent. Release what we
+            # just took — a caller that gets a lock here would believe it
+            # acquired within its deadline — and refuse. Unlocking BEFORE
+            # raising keeps the invariant every caller's unwind relies on: on
+            # any exit other than a successful return, the lock is not held.
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            raise CrossProcessLockTimeoutError(
+                lock_target=lock_target,
+                budget_seconds=deadline.budget_seconds,
+            )
+        first_probe = False
         remaining = deadline.remaining_seconds()
         if remaining <= 0.0:
             raise CrossProcessLockTimeoutError(
@@ -271,17 +295,3 @@ def flock_until_deadline(
             )
         time.sleep(min(poll_seconds, remaining))
         poll_seconds = min(poll_seconds * 2.0, _MAX_POLL_SECONDS)
-        if deadline.remaining_seconds() <= 0.0:
-            # Out-of-family review round 2 [P2], accepted. `time.sleep` is a
-            # FLOOR, not a promise: a loaded scheduler can wake this thread well
-            # past the remaining budget. Without this check the loop would probe
-            # again first, so a holder that released DURING the overshoot handed
-            # the lock to a caller whose deadline had already passed — the bound
-            # would hold "usually", which is the kind of guarantee that reads as
-            # total and is not. Only SUBSEQUENT probes are gated: the first one
-            # stays unconditional so an UNCONTENDED acquisition still succeeds
-            # on an already-spent budget (the documented contract above).
-            raise CrossProcessLockTimeoutError(
-                lock_target=lock_target,
-                budget_seconds=deadline.budget_seconds,
-            )

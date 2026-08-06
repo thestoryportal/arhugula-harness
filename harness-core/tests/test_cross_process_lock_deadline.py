@@ -178,8 +178,14 @@ def test_a_late_wake_past_the_budget_does_not_acquire(tmp_path: Path) -> None:
     the module to release the holder and then sleep past the budget — waiting on
     a real scheduler stall would be a flake, not a witness.
 
-    Mutation probe (run at this arc): removing the post-sleep expiry check makes
-    the acquisition succeed and this test fails."""
+    Round 6 [P2] sharpened WHERE the check has to live: gating the probe cannot
+    close this, because the thread can be descheduled between the check and the
+    probe. The check now sits on the SUCCESS path, so the probe here genuinely
+    ACQUIRES and is then unlocked and refused — which is why the assertion below
+    that the lock is free afterwards is load-bearing, not decorative.
+
+    Mutation probe (run at this arc): removing the success-path expiry check
+    makes the acquisition stand and this test fails."""
     import harness_core.cross_process_lock_deadline as module
 
     target = tmp_path / "latewake.lock"
