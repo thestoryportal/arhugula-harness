@@ -425,10 +425,15 @@ def test_site4_abba_release_before_blocking_is_preserved(tmp_path: Path) -> None
             # BEFORE the blocked writer's own lock call, so the 0.3 s sleep is
             # the only thing sequencing this — under CI load the sibling could
             # acquire simply because the waiter had not reached the blocking arm
-            # yet, and the test would pass VACUOUSLY. Timing the sibling makes
-            # that indistinguishable case detectable: if the directory were held
-            # this acquisition would burn its full 2.0 s budget and then raise,
-            # so completing well inside it is the discriminating signal.
+            # yet, and the test would pass VACUOUSLY. Timing the sibling does
+            # NOT make that case detectable — stated honestly, since the first
+            # draft of this comment claimed it did. Both readings predict a fast
+            # sibling acquisition, so the timing assert cannot separate them.
+            # What it DOES buy is a check on the opposite failure: if the
+            # directory were still held, this acquisition would burn its full
+            # 2.0 s budget and raise, so a fast completion rules THAT out. The
+            # thread-alive assert below is the closest thing to a sequencing
+            # guarantee here, and it is a weak one.
             started = time.monotonic()
             with cross_process_write_lock(sibling, deadline_seconds=2.0):
                 sibling_entered.set()

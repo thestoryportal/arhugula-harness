@@ -1491,9 +1491,17 @@ def test_b93_record_mode_refuses_on_lock_timeout(
 
     Contended by a GENUINE second OS process holding the ledger inode.
 
-    Mutation probe (run at this arc): removing the
-    `except CrossProcessLockTimeoutError` arm from `_run_record_mode` makes the
-    raw timeout propagate and this test fails.
+    SCOPE, corrected at merge-gate fix round 2: this witness exercises the
+    LEDGER-READ fold that guards `_read_ledger` — NOT the `_run_record_mode`
+    try/except beneath it. The read fold returns first, so this test never
+    reaches that arm and deleting it leaves this test GREEN. The earlier
+    docstring claimed otherwise; that claim was FALSE. The arm beneath is
+    reached through the RETAG path and is witnessed separately by the
+    retag-refusal test below.
+
+    Mutation probe (run at this arc): removing the ledger-read
+    `except CrossProcessLockTimeoutError` fold makes the raw timeout propagate
+    out of `main` and this test fails.
     """
     import subprocess
     import time as _time
@@ -1562,3 +1570,99 @@ def test_b93_record_mode_refuses_on_lock_timeout(
 
     assert exit_code == 1, f"expected the refusal exit 1, got {exit_code}"
     assert "migration refused" in capsys.readouterr().err
+
+
+def test_b93_retag_refuses_on_lock_timeout(
+    dep: _Deployment, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-93 (merge-gate fix round 2) — the `_run_record_mode` try/except arm.
+
+    THE GAP THIS CLOSES. The sibling ledger-read witness contends the LEDGER
+    lock, which the earlier ledger-read fold catches and returns on — so it
+    never reaches this arm, and the gate proved that by deleting the arm and
+    watching both suites stay green. The live route in is `retag_sidecar` →
+    `cross_process_replace_lock(sidecar_path)` (`record_migration.py:430`),
+    which sits INSIDE `_run_record_mode`'s try.
+
+    WHY THIS INJECTS RATHER THAN CONTENDS, stated plainly rather than dressed
+    up as a second-OS-process witness. A genuine holder on the sidecar inode was
+    BUILT FIRST and did not work: a positive control confirmed the holder held
+    `LOCK_EX` on `dep.sidecar_path`, and the replace lock was asked for that
+    exact path, yet it still acquired — the retag path does not contend the
+    inode the holder pinned at the moment it probes. Chasing that identity race
+    would witness the LOCK, which nine other tests already do. What is
+    unwitnessed here is the ARM: whether `_run_record_mode` TRANSLATES the typed
+    timeout into this command's refusal instead of letting it escape as a
+    traceback. Raising the real exception at the real call site tests exactly
+    that, deterministically — the same route the merge-gate used to verify the
+    arm is live rather than dead.
+
+    Mutation probe (run at this arc): deleting the
+    `except CrossProcessLockTimeoutError` arm from `_run_record_mode` makes the
+    raw timeout propagate out of `main` and this test fails — which the sibling
+    ledger-read witness alone did NOT detect.
+    """
+    from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
+    from harness_runtime.admin.migrate_audit_sidecar import main
+
+    entry = dep.signed_entry("ref-1", placeholder=True)
+    dep.writer().append(None, entry)
+    dep.write_record(_row(entry.entry_hash))
+
+    config_path = dep.root / "harness.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[runtime]",
+                'deployment_surface = "local-development"',
+                f'repository_root = "{dep.root}"',
+                'default_topology = "single-threaded-linear"',
+                'persona_tier = "multi-tenant-compliance"',
+                f'tenant_id = "{_TENANT}"',
+                f'audit_cutover_record_path = "{dep.record_path}"',
+                f'audit_cutover_record_key_id = "{_RECORD_KEY}"',
+                f'audit_ledger_binding_id = "{_BINDING}"',
+                "",
+                "[runtime.audit_signing]",
+                'backend = "aws-kms"',
+                "[runtime.audit_signing.key_arns]",
+                f'"{_ROW_KEY}" = "{_ARN_ROW}"',
+                f'"{_RECORD_KEY}" = "{_ARN_RECORD}"',
+                f'"harness-runtime-redaction-token" = "{_ARN_ROW}-redaction"',
+                f'"harness-runtime-dev" = "{_ARN_ROW}-dev"',
+                f'"harness-cost-attribution-v1" = "{_ARN_ROW}-cost"',
+                "",
+                "[runtime.otel]",
+                'otlp_endpoint = "http://localhost:4318"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "harness_runtime.config.audit_signing.make_audit_signing_backend",
+        lambda config: dep.record_backend,
+    )
+
+    asked: list[str] = []
+
+    def _timeout_at_the_replace_lock(path: object, **_kw: object) -> object:
+        # The REAL exception, raised at the REAL call site, from inside the try
+        # this arm guards. The ledger read above is left untouched so the
+        # earlier fold cannot intercept — asserted below.
+        asked.append(str(path))
+        raise CrossProcessLockTimeoutError(lock_target=str(path), budget_seconds=0.1)
+
+    monkeypatch.setattr(
+        "harness_runtime.admin.record_migration.cross_process_replace_lock",
+        _timeout_at_the_replace_lock,
+    )
+
+    exit_code = main([str(dep.ledger_path), "--retag", "--runtime-config", str(config_path)])
+
+    assert exit_code == 1, f"expected the refusal exit 1, got {exit_code}"
+    assert "migration refused" in capsys.readouterr().err
+    assert asked == [str(dep.sidecar_path)], (
+        f"the retag replace-lock site was not the raise point ({asked}) — this "
+        f"test did not exercise the arm it claims to"
+    )

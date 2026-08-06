@@ -157,7 +157,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # B-93 (out-of-family review round 9 [P2], accepted): the adoption path
         # takes cross-process locks, whose deadline timeout is deliberately NOT
         # an OSError or a ValueError — so without this arm ordinary contention
-        # would escape as a traceback instead of this command''s established
+        # would escape as a traceback instead of this command's established
         # refusal (exit 1). Contention is an expected operator condition.
         print(f"migration refused: {exc}", file=sys.stderr)
         return 1
@@ -320,7 +320,7 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
         # ledger read and `retag_sidecar` both take cross-process locks whose
         # deadline timeout is deliberately NOT an OSError/ValueError, so
         # ordinary contention would escape this normalization as a traceback
-        # rather than the command''s refusal exit 1.
+        # rather than the command's refusal exit 1.
         print(f"migration refused: {exc}", file=sys.stderr)
         return 1
     except RecordMigrationError as exc:
