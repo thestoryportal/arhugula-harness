@@ -336,6 +336,32 @@ class CanonicalMemoryStore:
         posture, unchanged. Raising `MemoryStoreGuardedWriteConflictError` rather
         than returning a sentinel keeps a caller from treating a refused commit
         as a completed one by ignoring a return value.
+
+        HOLD-TIME CONTRACT (B-93, the register row this seam is the exposure
+        for). `precondition` runs while this process holds the HOST-WIDE
+        exclusive `cross_process_scope_lock` over the whole memory root. Every
+        other same-host process's mutating store write — every `harness run`,
+        every `harness daemon` capture — is blocked for its entire duration.
+        The paragraph above says this store "knows nothing about what the
+        precondition tests"; that is exactly why the cost is stated HERE, at the
+        seam a precondition author reads, rather than left to be discovered.
+
+        A precondition MUST therefore be BOUNDED and LOCAL: re-read what it
+        needs through this store's own read path and decide. It MUST NOT perform
+        a provider round-trip, an operator wait, an unbounded retrieval sweep,
+        or any I/O whose duration it does not control — each of those converts a
+        host-wide lock hold into an unbounded one. The one production
+        precondition today (`MemoryPromotionService._provenance_unchanged`) is
+        bounded at one `read_record` per cited source, and stays that way.
+
+        Since B-93 the hold is BOUNDED rather than indefinite: a waiter that
+        cannot acquire the scope lock within its deadline raises
+        `harness_core.CrossProcessLockTimeoutError` instead of wedging silently.
+        That bounds the VICTIM, not the offender — it turns an undiagnosable
+        hang into a named failure; it does NOT license a slow precondition.
+        Widening the existing precondition to an unbounded operation, or adding
+        a second caller with one, is demand test D-0 of the fork's Reading D and
+        re-opens the substrate question rather than being absorbed here.
         """
 
         with self._write_scope(), _FILE_WRITE_LOCK, _JSONL_WRITE_LOCK:

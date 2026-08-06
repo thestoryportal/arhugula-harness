@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -198,7 +198,19 @@ def test_rollback_holds_write_lock_across_ledger_preserve_window(
 def _mp_append_worker_gated(canonical_path: Path, ready_event: object) -> None:
     """Module-level (picklable) worker — waits for a signal, then appends from
     a genuine OS process. Forked BEFORE any lock is acquired (see the caller's
-    docstring for why fork timing matters here)."""
+    docstring for why fork timing matters here).
+
+    B-93: the timestamp is `now`-relative rather than the former fixed
+    `2026-05-16T02:00Z`. `_CLOCK_SKEW_TOLERANCE` is ZERO, so a fixed timestamp
+    silently PINS an append ORDER against `rollback_to_checkpoint`'s own
+    rollback-event entry (stamped with the `now` captured before the preserve
+    window). The old fixed value pinned "child appends FIRST", which held only
+    because a blocking `flock` hands the lock straight to the parked waiter on
+    release. The deadline'd lock POLLS, so the ex-holder wins the next round and
+    the child now appends SECOND — see the fairness note at
+    `harness_core.cross_process_lock_deadline._MAX_POLL_SECONDS`. A `now + 1s`
+    stamp is monotonic under that order; the caller asserts the order EXPLICITLY
+    so a future fairness change fails loudly instead of flaking here."""
     from harness_is.state_ledger_write import append_ledger_entry as _append
 
     ready_event.wait(timeout=10)  # type: ignore[attr-defined]
@@ -209,7 +221,7 @@ def _mp_append_worker_gated(canonical_path: Path, ready_event: object) -> None:
             action_id=Identifier("act-concurrent"),
             idempotency_key=Identifier("idem-concurrent"),
             actor=_ACTOR,
-            timestamp=datetime(2026, 5, 16, 2, tzinfo=UTC),
+            timestamp=datetime.now(UTC) + timedelta(seconds=1),
         ),
         WriteKey(
             thread_id=_RUN,
@@ -275,10 +287,21 @@ def test_rollback_cross_process_lock_prevents_lost_concurrent_append(
     # Both the pre-existing entry and the concurrent process's entry survive
     # (not lost by the ledger-restore-write); `rollback_to_checkpoint` also
     # appends its own rollback-event entry after the preserve window.
+    # THE LOAD-BEARING ASSERTION IS SURVIVAL, and it is unchanged by B-93: with
+    # the lock removed, the child's append lands between the pre-checkout read
+    # and the restore-write and is clobbered, so `act-concurrent` disappears and
+    # `len(ledger)` drops to 2 (mutation probe re-run at the B-93 arc).
     ledger = read_ledger(handle)
     action_ids = {entry.action_id for entry in ledger}
     assert {"act-pre", "act-concurrent"} <= action_ids
     assert len(ledger) == 3
+    # B-93: the child is EXCLUDED for the whole preserve window and, because the
+    # deadline'd lock polls rather than parking in the kernel, acquires only
+    # after the parent's own post-window append. Asserted rather than left
+    # implicit in a fixed timestamp — if handoff fairness ever returns, this
+    # fails loudly here instead of surfacing as a NonMonotonicTimestampError
+    # inside a forked worker.
+    assert [entry.action_id for entry in ledger][-1] == "act-concurrent"
     assert verify_chain(ledger).status is VerificationStatus.VALID
 
 

@@ -41,6 +41,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from harness_core.cross_process_lock_deadline import (
+    CrossProcessLockDeadline,
+    flock_until_deadline,
+)
+
 if TYPE_CHECKING:
     from harness_runtime.lifecycle.memory_tool_encrypted import FernetLike
 
@@ -558,7 +563,9 @@ class ProtectedResultStore:
         return _lock_for_root(self._root)
 
     @contextmanager
-    def _cross_process_lock(self) -> Generator[None, None, None]:
+    def _cross_process_lock(
+        self, *, deadline_seconds: float | None = None
+    ) -> Generator[None, None, None]:
         """B-73: an OS-level advisory lock (`fcntl.flock`) serializing
         `_publish_atomic` and `gc_sweep`'s candidate-selection phase across
         separate PROCESSES sharing this store root — mirrors the proven
@@ -580,16 +587,26 @@ class ProtectedResultStore:
         in-process `self._publish_lock` still applies; only the additional
         cross-process exclusion is unavailable there), matching
         `harness_is.cross_process_ledger_lock`'s own Windows carve-out.
+
+        **B-93 site 8 of 9 — bounded.** `deadline_seconds` bounds the wait;
+        expiry raises `harness_core.CrossProcessLockTimeoutError` and neither
+        `_publish_atomic` nor `gc_sweep`'s candidate-selection phase runs. Note
+        for a later reader: this store's callers already fold acquisition
+        failures broadly (`write_once` → `UnresolvableResultRef`; the bootstrap
+        and shutdown `gc_sweep` callers wrap in `except Exception`), so a
+        timeout is absorbed there exactly as a raising `flock` already was —
+        pre-existing caller behaviour this arc deliberately does not change.
         """
         if _IS_WINDOWS:
             yield
             return
         import fcntl  # POSIX-only; never reached on Windows.
 
+        deadline = CrossProcessLockDeadline.starting_now(deadline_seconds)
         lock_path = self._root / _CROSS_PROCESS_LOCK_FILENAME
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            flock_until_deadline(fd, fcntl.LOCK_EX, deadline=deadline, lock_target=str(lock_path))
             try:
                 yield
             finally:

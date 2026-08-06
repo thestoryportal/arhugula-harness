@@ -103,11 +103,11 @@ Mirrors the ``WALSegmentEnginePauseResumeSubstrate`` (U-RT-121) structure.
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
 import socket
+import sys
 import uuid
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -116,6 +116,10 @@ from pathlib import Path
 from typing import cast
 
 from harness_core import EntryID, WorkflowID
+from harness_core.cross_process_lock_deadline import (
+    CrossProcessLockDeadline,
+    flock_until_deadline,
+)
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import (
     EngineDiffProvider,
@@ -136,6 +140,25 @@ from harness_runtime.lifecycle.journal_pause_resume_substrate import (
 )
 
 __all__ = ["LeaseBackend", "ReconcilerEnginePauseResumeSubstrate"]
+
+_IS_WINDOWS = sys.platform == "win32"
+"""B-93 §3(ii) import repair — the flag this module was the ONE lock carrier to lack.
+
+Its three sibling carriers (``harness_is.cross_process_ledger_lock``,
+``protected_result_store``, ``journal_workflow_pause_store``) each declare this
+flag and import ``fcntl`` FUNCTION-LOCALLY. This module imported ``fcntl``
+UNCONDITIONALLY at module scope, and is imported at module scope by
+``bootstrap/factories/r_cxa_2_producer_loop_factory.py`` — so on Windows that
+bootstrap path raised ``ModuleNotFoundError: fcntl`` at IMPORT time: not a
+degraded lock, a process that cannot start.
+
+**This is NOT a serialization claim, stated explicitly so it is not read as one.**
+The repair makes a Windows process *start*; it does **not** make Windows
+*exclude*. ``_workflow_lock`` degrades to the same documented no-op its three
+siblings already degrade to — identical in kind, smaller in blast radius. The
+real Windows backend is `B-45`, DEFERRED on witnessability (no Windows CI), and
+nothing here advances or prejudges it.
+"""
 
 
 class LeaseBackend(Enum):
@@ -268,7 +291,9 @@ class ReconcilerEnginePauseResumeSubstrate(JournalEnginePauseResumeSubstrate):
         return self._journal_dir / f"{digest}.lock"
 
     @contextmanager
-    def _workflow_lock(self, workflow_id: WorkflowID) -> Generator[None, None, None]:
+    def _workflow_lock(
+        self, workflow_id: WorkflowID, *, deadline_seconds: float | None = None
+    ) -> Generator[None, None, None]:
         """Hold an exclusive per-workflow advisory ``flock`` for a critical section.
 
         Makes the substrate's read-modify-write operations atomic w.r.t. concurrent
@@ -286,12 +311,31 @@ class ReconcilerEnginePauseResumeSubstrate(JournalEnginePauseResumeSubstrate):
         death). It does NOT span hosts — cross-host coordination rests solely on the
         atomic ``os.link`` revision-claim (``SHARED_STORE_CAS`` over a store with
         atomic link). flock is never relied on as a cross-host safety primitive.
+
+        **B-93 site 7 of 9 — bounded.** ``deadline_seconds`` bounds the wait;
+        expiry raises ``harness_core.CrossProcessLockTimeoutError`` and the
+        critical section is NOT entered, so neither the ``_append`` nor the
+        resume's read-prefix→CAS-claim runs. Losing the lock is therefore a
+        LIVENESS failure, distinct from every ``ResumeOutcomeKind`` — which
+        report a decided race, not an undecided one.
+
+        **No-op on Windows (`_IS_WINDOWS`), NEW at this arc** — see the flag's
+        own docstring. Before it, this module's unconditional ``import fcntl``
+        made a Windows process fail to START; it now starts with the same
+        documented degradation its three sibling carriers already carry. The
+        Windows *serialization* backend is `B-45`, deferred.
         """
+        if _IS_WINDOWS:
+            yield
+            return
+        import fcntl  # POSIX-only; never reached on Windows.
+
+        deadline = CrossProcessLockDeadline.starting_now(deadline_seconds)
         path = self._lock_file(workflow_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            flock_until_deadline(fd, fcntl.LOCK_EX, deadline=deadline, lock_target=str(path))
             try:
                 yield
             finally:

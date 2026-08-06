@@ -478,14 +478,21 @@ def test_ac9d_never_holds_two_journal_locks_at_once(
     real_flock = fcntl.flock
 
     def _spy_flock(fd: int, op: int) -> None:
+        # B-93: match the LOCK_EX *bit*, not the exact op value. The deadline'd
+        # acquisition probes with `LOCK_EX | LOCK_NB`, so an `op == LOCK_EX`
+        # equality test silently stops matching and the witness reports a peak
+        # of ZERO — passing on absence rather than proving one-lock-at-a-time.
+        # Counting only AFTER `real_flock` returns also tightens the witness:
+        # a probe that RAISES (contention) no longer counts as a hold.
         info = os.fstat(fd)
         key = (info.st_dev, info.st_ino)
-        if op == fcntl.LOCK_EX:
+        result = real_flock(fd, op)
+        if op & fcntl.LOCK_EX:
             held.add(key)
             peak["max"] = max(peak["max"], len(held))
-        elif op == fcntl.LOCK_UN:
+        elif op & fcntl.LOCK_UN:
             held.discard(key)
-        return real_flock(fd, op)
+        return result
 
     monkeypatch.setattr(fcntl, "flock", _spy_flock)
     _run(journal_dir, tmp_path)

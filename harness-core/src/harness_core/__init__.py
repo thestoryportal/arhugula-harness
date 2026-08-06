@@ -18,6 +18,13 @@ Members:
 - `SigningBackendUnavailableError` — B-63 shared typed availability
   contract for `SigningBackend` infra failures (cross-axis: CP produces,
   OD translates at the verification boundary).
+- `CrossProcessLockTimeoutError` — B-93 liveness outcome of the same-host
+  cross-process advisory locks (cross-axis: `harness-is`'s ledger locks and
+  three `harness-runtime` lifecycle stores all raise this ONE nominal type;
+  the fork's ratified sub-decision A-i). The acquisition MECHANISM lives
+  beside it at `cross_process_lock_deadline`, imported from that submodule
+  by the two lock-owning packages rather than re-exported here — it is
+  substrate, not a shared type.
 - `SkillID`, `ClientName` — runtime-axis identity newtypes promoted at
   Phase 2 Session 5 (2026-05-19) from `harness_runtime.types`; consumed at
   `HarnessContext.skills` / `HarnessContext.mcp_clients` (C-RT-04). The
@@ -27,6 +34,7 @@ Members:
 
 from __future__ import annotations
 
+from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.identity import (
     ActionID,
@@ -60,6 +68,7 @@ __all__ = [
     "Cardinality",
     "ClientName",
     "ContractID",
+    "CrossProcessLockTimeoutError",
     "DeploymentSurface",
     "EntryID",
     "PersonaTier",

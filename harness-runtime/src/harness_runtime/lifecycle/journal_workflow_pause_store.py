@@ -81,6 +81,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple, cast
 
+from harness_core.cross_process_lock_deadline import (
+    CrossProcessLockDeadline,
+    flock_until_deadline,
+)
 from harness_cp.pause_resume_protocol_types import PauseSnapshot
 from pydantic import ValidationError
 
@@ -415,7 +419,9 @@ def journal_exclusion_is_degraded() -> bool:
 
 
 @contextmanager
-def cross_process_journal_lock(journal_path: Path) -> Generator[None, None, None]:
+def cross_process_journal_lock(
+    journal_path: Path, *, deadline_seconds: float | None = None
+) -> Generator[None, None, None]:
     """Hold an exclusive same-host advisory lock over ONE journal's critical section.
 
     ``B-97`` half (b)'s primitive, promoted to module scope at half (a) so the
@@ -473,12 +479,25 @@ def cross_process_journal_lock(journal_path: Path) -> Generator[None, None, None
     with a captured-loop bridge — the evolution its own docstring anticipates,
     conditioned on the protocol body gaining real async I/O — this acquisition
     becomes genuinely loop-co-resident and ``B-103``'s premise goes live.
+
+    **B-93 site 9 of 9 — bounded.** ``deadline_seconds`` bounds the wait; expiry
+    raises ``harness_core.CrossProcessLockTimeoutError`` and the append critical
+    section is NOT entered. This sharpens the `B-103` note directly above: the
+    acquisition still BLOCKS the calling thread, but the block is now finite, so
+    even the reopening trigger's loop-co-resident future carries a bound rather
+    than an indefinite hold.
+
+    ``journal_exclusion_is_degraded()`` is UNAFFECTED — it reports the Windows
+    carve-out, which this arc does not touch (`B-45`, deferred). A deadline
+    bounds how long exclusion is WAITED FOR; it does not weaken exclusion once
+    held, so the (3b) adoption's refuse-by-default consult keeps its meaning.
     """
     if _IS_WINDOWS:
         yield
         return
     import fcntl  # POSIX-only; never reached on Windows.
 
+    deadline = CrossProcessLockDeadline.starting_now(deadline_seconds)
     lock_path = journal_path.with_name(journal_path.name + PAUSE_JOURNAL_LOCK_SUFFIX)
     # O_NOFOLLOW: a symlink planted at the lock path — including a dangling
     # one, which O_CREAT would otherwise materialize at its target — fails
@@ -486,7 +505,7 @@ def cross_process_journal_lock(journal_path: Path) -> Generator[None, None, None
     flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     fd = os.open(lock_path, flags, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        flock_until_deadline(fd, fcntl.LOCK_EX, deadline=deadline, lock_target=str(lock_path))
         try:
             yield
         finally:
