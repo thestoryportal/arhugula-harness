@@ -230,12 +230,36 @@ class CrossProcessLockDeadline:
         object.__setattr__(self, "expires_at", time.monotonic() + self.budget_seconds)
 
     def note_contention(self) -> None:
-        """Record that an acquisition under this deadline actually waited."""
-        self._contention.append(True)
+        """Record that an acquisition under this deadline actually waited.
+
+        IDEMPOTENT. `has_contended()` needs exactly one bit, but this is called
+        from the poll loop on EVERY retry — at a 1–5 ms cadence against the
+        300 s default that is ~60,000 calls per waiter, and more per concurrent
+        waiter on the same wedged lock. Appending each one grew a list nobody
+        reads for its length *(out-of-family review, merge-gate fix round 2)*.
+        """
+        if not self._contention:
+            self._contention.append(True)
 
     def has_contended(self) -> bool:
         """Whether anything under this deadline has waited yet."""
         return bool(self._contention)
+
+    def refuse_after_acquire(self) -> bool:
+        """Whether a JUST-ACQUIRED lock must be released and refused.
+
+        The acquisition sites run their OWN non-blocking probes before ever
+        reaching :func:`flock_until_deadline` — the three ABBA arms probe, and on
+        success never call the helper at all. So a caller that already WAITED
+        (typically at the parent-directory lock), then found the file lock free
+        on a spent budget, would enter its critical section past the deadline
+        through a path the helper never sees *(out-of-family review, merge-gate
+        fix round 2; reproduced entering at 0.148 s against a 0.1 s budget)*.
+
+        Keyed on prior contention, not on expiry alone: an entry surface that
+        never waited for anything keeps the documented first-probe exemption.
+        """
+        return self.has_contended() and self.remaining_seconds() <= 0.0
 
     @classmethod
     def starting_now(cls, deadline_seconds: float | None = None) -> CrossProcessLockDeadline:

@@ -553,6 +553,19 @@ def cross_process_write_lock(
                 if dir_held:
                     dir_lock.release()
                     dir_held = False
+            # B-93 (out-of-family review, merge-gate fix round 2): the manual
+            # probe above can SUCCEED without ever calling
+            # `flock_until_deadline`, so a caller that already waited at the
+            # directory lock could enter here on a SPENT budget through a path
+            # the helper never sees. Release and refuse — the same rule the
+            # helper applies to its own late retries.
+            if deadline.refuse_after_acquire():
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+                raise CrossProcessLockTimeoutError(
+                    lock_target=str(canonical_path),
+                    budget_seconds=deadline.budget_seconds,
+                )
             # Inode-stability verify (codex round-3 P1): flock rides the
             # INODE, and `cross_process_replace_lock` (rollback) swaps the
             # canonical inode — a lock riding a pre-replacement fd would
@@ -667,6 +680,17 @@ def cross_process_replace_lock(
         # section (round-5 P1: a pre-B-46 writer holding only the sidecar
         # would otherwise append concurrently and have its rows
         # overwritten by the rewrite).
+        # B-93 (merge-gate fix round 2): same post-acquire rule as the other two
+        # arms — the non-blocking probe above can succeed on a spent budget when
+        # this caller already waited at the directory lock.
+        if deadline.refuse_after_acquire():
+            fcntl.flock(file_fd, fcntl.LOCK_UN)
+            os.close(file_fd)
+            dir_lock.release()
+            raise CrossProcessLockTimeoutError(
+                lock_target=str(canonical_path),
+                budget_seconds=deadline.budget_seconds,
+            )
         try:
             try:
                 legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path, deadline=deadline)
@@ -792,6 +816,19 @@ def cross_process_read_lock(
                 if dir_held:
                     dir_lock.release()
                     dir_held = False
+            # B-93 (out-of-family review, merge-gate fix round 2): the manual
+            # probe above can SUCCEED without ever calling
+            # `flock_until_deadline`, so a caller that already waited at the
+            # directory lock could enter here on a SPENT budget through a path
+            # the helper never sees. Release and refuse — the same rule the
+            # helper applies to its own late retries.
+            if deadline.refuse_after_acquire():
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+                raise CrossProcessLockTimeoutError(
+                    lock_target=str(canonical_path),
+                    budget_seconds=deadline.budget_seconds,
+                )
             # Inode-stability verify (round-3 P1) — mirror of the writer,
             # with the same leak-safe wrap (round-4 P2).
             try:

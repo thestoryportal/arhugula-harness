@@ -545,6 +545,65 @@ def test_the_jsonl_validation_surface_stays_total_on_lock_timeout(tmp_path: Path
     )
 
 
+@requires_posix_flock
+def test_a_spent_budget_refuses_even_when_the_manual_probe_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Out-of-family review, merge-gate fix round 2 — the read FAST PATH.
+
+    The three ABBA arms run their OWN `LOCK_NB` probe before ever calling
+    `flock_until_deadline`. When that probe SUCCEEDS the helper is never
+    invoked — so a caller that already WAITED at the parent-directory lock, and
+    whose budget expired during that wait, entered its critical section past the
+    deadline through a path the helper cannot see. The reviewer reproduced entry
+    at 0.148 s against a 0.1 s budget.
+
+    The window is sub-millisecond in the wild (the directory acquire itself
+    refuses once expired), so it is reproduced here at the REAL SEAM instead of
+    raced: `_dir_lock_for` is wrapped so the directory acquire SUCCEEDS and then
+    spends the budget, which is exactly the state the reviewer hit — waited,
+    acquired, budget gone. The file lock is left FREE, so the manual probe
+    succeeds and ONLY the post-acquire check can refuse.
+
+    Mutation probe (run at this arc): removing the `refuse_after_acquire()`
+    check from the file arms makes this ENTER the section and the test fails."""
+    import harness_is.cross_process_ledger_lock as lock_module
+
+    budget = 0.2
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    _seed(ledger)
+
+    real_dir_lock_for = lock_module._dir_lock_for
+
+    class _SlowDirLock:
+        """Acquires for real, then burns the caller's remaining budget."""
+
+        def __init__(self, inner: object) -> None:
+            self._inner = inner
+
+        def acquire(self, deadline: object = None) -> None:
+            self._inner.acquire(deadline)  # type: ignore[attr-defined]
+            if deadline is not None:
+                deadline.note_contention()  # type: ignore[attr-defined]
+                remaining = deadline.remaining_seconds()  # type: ignore[attr-defined]
+                if remaining > 0:
+                    time.sleep(remaining + 0.05)
+
+        def release(self) -> None:
+            self._inner.release()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(
+        lock_module, "_dir_lock_for", lambda parent: _SlowDirLock(real_dir_lock_for(parent))
+    )
+
+    with pytest.raises(CrossProcessLockTimeoutError):
+        with cross_process_read_lock(ledger, deadline_seconds=budget):
+            raise AssertionError(
+                "entered the read section on a SPENT budget — the manual probe "
+                "succeeded and nothing refused"
+            )
+
+
 # --- the END-TO-END property, across two sites in ONE entry surface --------
 
 

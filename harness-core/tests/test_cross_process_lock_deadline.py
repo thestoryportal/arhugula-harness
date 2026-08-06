@@ -483,6 +483,30 @@ def test_observed_contention_persists_to_later_sites(tmp_path: Path) -> None:
         os.close(fd2)
 
 
+def test_contention_state_is_constant_size() -> None:
+    """Out-of-family review, merge-gate fix round 2 — `note_contention()` is
+    IDEMPOTENT.
+
+    `has_contended()` needs exactly one bit, but the poll loop calls
+    `note_contention()` on EVERY retry: at the 1–5 ms cadence against the 300 s
+    default that is ~60,000 calls per waiter, multiplied by every concurrent
+    waiter on the same wedged lock. Appending each one grew a list nobody reads
+    for its length — avoidable memory growth on exactly the pathological path
+    the deadline exists to survive.
+
+    Mutation probe (run at this arc): dropping the `if not self._contention`
+    guard makes the recorded state grow with the call count and this fails."""
+    deadline = CrossProcessLockDeadline.starting_now(1.0)
+    assert not deadline.has_contended()
+    for _ in range(1000):
+        deadline.note_contention()
+    assert deadline.has_contended()
+    assert len(deadline._contention) == 1, (  # pyright: ignore[reportPrivateUsage]
+        f"contention state grew to {len(deadline._contention)} entries "  # pyright: ignore[reportPrivateUsage]
+        f"— it must stay constant-size"
+    )
+
+
 @requires_posix_flock
 def test_shared_waiters_are_bounded_too(tmp_path: Path) -> None:
     """LOCK_SH is bounded exactly as LOCK_EX is. A shared reader blocked by an
