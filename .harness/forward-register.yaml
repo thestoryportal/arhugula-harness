@@ -3988,7 +3988,7 @@ items:
     belongs to B-104, a different row and a different ratified reading. The two shared a PR, not
     a scope.** (Attribution corrected at out-of-family review round 9 [P2]: the earlier wording
     ''its spec-side component'' could let a later agent infer B-98''s carrier decision had been
-    design-applied.) the row''s `pr:` pointer, which still read `#1237` for that leg, is REPAIRED
+    design-applied.) the row''s `pr:` pointer, which still read `#pending` for that leg, is REPAIRED
     here to name #1182. STATUS stays `registered_finding` with the four-disjunct demand test as
     the falsifiable re-open trigger, exactly as the fork''s section 9 column C prescribes. Capture-side,
     hash-affecting, X-AL-3-relevant -- materially bigger than the read-only projection B-69 authored,
@@ -4477,7 +4477,7 @@ items:
     IS OWED -- Component 1, the MANDATORY symmetric declaration, ALREADY LANDED at Runtime spec
     v1.109 -> v1.110 (PR #1182, clearance marker `.harness/clearance/spec-harness-runtime-v1-110-cleared-2026-08-01.md`),
     and Component 2, the discriminator, stays DEFERRED under D-0..D-3; the row''s `pr:` pointer,
-    which still read `#1237` for that leg, is REPAIRED here to name #1182. STATUS stays `registered_finding`.
+    which still read `#pending` for that leg, is REPAIRED here to name #1182. STATUS stays `registered_finding`.
     Readings A/B/C remain NOT selected; the runner-up A remains registered-and-held and is NOT
     advanced by this re-affirmation. The discriminator is CAPTURE-SIDE and therefore fork-shaped,
     which is exactly why it was not absorbed: any resolved-marker is a write the store does not
