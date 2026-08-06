@@ -5010,9 +5010,13 @@ items:
     replacement -- a PREMATURE DELETION, not merely a lost grace. That is a property of the shipped
     sweep''s phase split, NOT of the observation record: it is present at HEAD under the sweep-COUNT
     grace, reachable with no record at all, and NOT introduced by the B-96 amendment. Disposition (c)
-    below covers it. WHAT THE PRIMARY ITEM COSTS, EXACTLY: for the RECORD-MEDIATED reclaim DECISION term 2 is NOT violated -- term 1 conjunct (a) is
-    keyed on the NEW file''s own filesystem timestamp, so reclaim still cannot precede that file''s
-    own timestamp + TTL. What degrades is the ADDITIONAL grace: for a reused temporary name alone
+    below covers it. WHAT THE PRIMARY ITEM COSTS, EXACTLY: the conjunctive rule still gates the recreated file -- term 1
+    conjunct (a) is keyed on the NEW file''s own filesystem timestamp, so the reclaim DECISION cannot
+    precede that file''s own TIMESTAMP + TTL. That is the TIMESTAMP-DERIVED bound and it is NOT term 2:
+    term 2 bounds reclaim by PUBLICATION, a temporary orphan is not a published entry, and on a volume
+    whose timestamps under-report creation the timestamp + TTL check can elapse before the new file''s
+    own creation + TTL. Term 2''s publication bound therefore does NOT extend to a reused temporary
+    candidate name, and neither the spec nor this row claims it does (corrected at out-of-family round 8 [P2]). What degrades is the ADDITIONAL grace: for a reused temporary name alone
     the reclaim bound falls back to the pre-existing timestamp-derived one, reintroducing the
     under-report-width window for that single candidate. Reachability is remote (the name is drawn
     from a large random space and must be redrawn in the interval between two sweeps) and is
