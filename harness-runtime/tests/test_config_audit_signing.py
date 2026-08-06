@@ -171,10 +171,26 @@ def test_default_key_arns_is_immutable_too() -> None:
     """Codex round-20 (PR B1) — pydantic skips field validators on defaults
     unless validate_default is set, so the DEFAULT config's key_arns stayed a
     mutable dict that bypassed every blank/normalization check. The default
-    is now validated (and therefore proxied) like any supplied value."""
+    is now validated (and therefore proxied) like any supplied value.
+
+    `B-109` sharpening (#1216 merge-gate lens 3): the `validate_default` route
+    is asserted EXPLICITLY — the default's carrier is the sealed
+    `_ImmutableKeyArns` type and it is sealed in its own right, not merely a
+    mapping whose `__setitem__` happens to refuse. Turning `validate_default`
+    off returns a plain `dict` here, which fails the type assertion before the
+    refusal assertions are even reached."""
+    from harness_runtime.types import _ImmutableKeyArns
+
     config = AuditSigningConfig()
-    with pytest.raises(TypeError):
+    assert type(config.key_arns) is _ImmutableKeyArns, (
+        "the DEFAULT key_arns is not the sealed carrier — validate_default is "
+        "not reaching the field validator"
+    )
+    with pytest.raises(TypeError, match="immutable after validation"):
         config.key_arns["x"] = "y"  # type: ignore[index]
+    with pytest.raises(TypeError, match="immutable after validation"):
+        config.key_arns.__init__({"injected": "arn:EVIL"})  # type: ignore[misc]
+    assert dict(config.key_arns) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -226,9 +242,14 @@ def test_b109_the_seal_itself_cannot_be_reopened_by_attribute_assignment() -> No
     from harness_runtime.types import _ImmutableKeyArns
 
     stored = _ImmutableKeyArns({"harness-runtime-redaction-token": _ARN})
-    with pytest.raises(TypeError):
+    # `match=` binds these two to the carrier's OWN refusal rather than to any
+    # `TypeError` that happens to escape — without it, an unrelated
+    # `TypeError` (a changed `__setattr__` signature, say) would pass them
+    # silently. (#1216 merge-gate lens 3 verified them un-false-passable as
+    # written; this is the recorded sharpening, not a defect fix.)
+    with pytest.raises(TypeError, match="immutable after validation"):
         stored._sealed = False  # type: ignore[attr-defined]
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="immutable after validation"):
         del stored._sealed  # type: ignore[attr-defined]
     assert not hasattr(stored, "__dict__"), "a `__dict__` would reintroduce the writable seal"
     with pytest.raises(TypeError, match="immutable after validation"):

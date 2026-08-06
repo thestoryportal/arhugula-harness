@@ -55,6 +55,9 @@ from harness_od.operator_burden_eval_primitives import OperatorBurdenEvalPrimiti
 if TYPE_CHECKING:
     from harness_runtime.admin.inspect_audit_verification import AuditInspectionOutcome
     from harness_runtime.admin.pause_journal_enumeration import EnumeratedJournal
+    from harness_runtime.lifecycle.protected_result_store import (
+        ProtectedResultStoreSnapshot,
+    )
 
 __all__ = ["build_parser", "main"]
 
@@ -384,6 +387,7 @@ def _format_human(
     last_n: int,
     audit_section: str | None = None,
     pause_journal_section: str | None = None,
+    protected_result_store_section: str | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append("harness-inspect — read-only summary")
@@ -422,6 +426,12 @@ def _format_human(
         # a deployment that has never journaled a pause never sees this surface.
         lines.append("")
         lines.append(pause_journal_section)
+    if protected_result_store_section is not None:
+        # §14.8.11.1 term 8(b) — ENGAGES ONLY when the config-derived store
+        # root exists; otherwise this argument is `None` and the output above
+        # is BYTE-UNCHANGED from a pre-v1.111 run.
+        lines.append("")
+        lines.append(protected_result_store_section)
     return "\n".join(lines) + "\n"
 
 
@@ -432,6 +442,7 @@ def _format_json(
     last_n: int,
     audit_report: dict[str, Any] | None = None,
     pause_journal_report: dict[str, Any] | None = None,
+    protected_result_store_report: dict[str, Any] | None = None,
 ) -> str:
     head = _entry_head_hash(entries[-1]) if entries else None
     payload: dict[str, Any] = {
@@ -448,6 +459,8 @@ def _format_json(
         payload.update(audit_report)
     if pause_journal_report is not None:
         payload.update(pause_journal_report)
+    if protected_result_store_report is not None:
+        payload.update(protected_result_store_report)
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
@@ -729,6 +742,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return _EXIT_INSPECT_PATH
 
+    # --- §14.8.11.1 term 8(b) protected-result-store row (U-RT-150) --------
+    # Engagement predicate: the CONFIG-DERIVED store root EXISTS. Absent →
+    # `None` → output byte-unchanged from a pre-v1.111 run, exactly the §13.7
+    # shape above. READ-ONLY and SWEEP-FREE: it writes nothing, creates
+    # nothing, takes no lock, and never governs the exit code.
+    store_snapshot = _read_protected_result_store_if_engaged(args)
+
     if args.json:
         output = _format_json(
             ledger_path=ledger_path,
@@ -737,6 +757,11 @@ def main(argv: list[str] | None = None) -> int:
             audit_report=audit.as_report() if audit is not None else None,
             pause_journal_report=(
                 _format_pause_journal_json(journals) if journals is not None else None
+            ),
+            protected_result_store_report=(
+                _format_protected_result_store_json(store_snapshot)
+                if store_snapshot is not None
+                else None
             ),
         )
     else:
@@ -751,6 +776,11 @@ def main(argv: list[str] | None = None) -> int:
             ),
             pause_journal_section=(
                 _format_pause_journal_human(journals) if journals is not None else None
+            ),
+            protected_result_store_section=(
+                _format_protected_result_store_human(store_snapshot)
+                if store_snapshot is not None
+                else None
             ),
         )
 
@@ -1016,6 +1046,105 @@ def _authoritative_tenant_scope(args: argparse.Namespace) -> tuple[str | None, b
         # A reserved scope cannot classify anything; report it as unavailable
         # rather than as a confident untenanted classification.
         return None, False
+
+
+# ---------------------------------------------------------------------------
+# §14.8.11.1 term 8(b) protected-result-store row (U-RT-150; Runtime v1.111).
+# ---------------------------------------------------------------------------
+
+
+_STORE_SNAPSHOT_DISCLAIMER = (
+    "These values are a READ-TIME SNAPSHOT taken without a sweep, and the presence "
+    "of candidates does NOT imply a sweep will run. No bound, threshold or pass/fail "
+    "verdict is emitted here: the level check is closed by YOU, against your own "
+    "deployment's sweep-cadence expectation, which this store does not hold."
+)
+
+_STORE_RECORD_ABSENT_NOTE = (
+    "ABSENT is consistent with EITHER a first-cutover store that predates the record "
+    "OR a repeating record-loss loop, and THIS SURFACE CANNOT TELL WHICH."
+)
+
+
+def _read_protected_result_store_if_engaged(
+    args: argparse.Namespace,
+) -> ProtectedResultStoreSnapshot | None:
+    """Snapshot the protected result store when its root exists; else `None`.
+
+    ROOT RESOLUTION IS PINNED: the root is the one the composition root
+    derives — `RuntimeConfig.repository_root / PROTECTED_RESULT_STORE_ROOT_SUBPATH`,
+    the SAME expression `materialize_protected_result_store_stage` uses — and
+    NOT `--ledger-path`, which selects the state ledger and has nothing to do
+    with this store. A report rendered against a different directory than the
+    one the sweep collects would be an acceptance failure, so there is exactly
+    one resolution and both sites read it from the factory module.
+
+    An unusable ambient config leaves the root UNRESOLVABLE, so the row cannot
+    engage and the summary proceeds byte-unchanged — the same disposition
+    `_authoritative_tenant_scope` takes for the same input, and never a
+    silently-wrong directory.
+    """
+    from harness_runtime.bootstrap.factories.protected_result_store_factory import (
+        PROTECTED_RESULT_STORE_ROOT_SUBPATH,
+    )
+    from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
+    from harness_runtime.lifecycle.protected_result_store import (
+        read_protected_result_store_snapshot,
+    )
+
+    try:
+        config = RuntimeConfigSource.load(config_file=args.runtime_config)
+    except RuntimeConfigLoadError:
+        return None
+    return read_protected_result_store_snapshot(
+        config.repository_root / PROTECTED_RESULT_STORE_ROOT_SUBPATH
+    )
+
+
+def _render_store_age(age: float | None) -> str:
+    return "(none resident)" if age is None else f"{age:.1f}s"
+
+
+def _format_protected_result_store_human(snapshot: ProtectedResultStoreSnapshot) -> str:
+    """Human rendering of the term-8(b) row. REPORTS, never ATTRIBUTES."""
+    from harness_runtime.lifecycle.protected_result_store import GcObservationRecordState
+
+    lines = [
+        f"protected result store: {snapshot.root} (Runtime spec v1.111 §14.8.11.1)",
+        f"  {_STORE_SNAPSHOT_DISCLAIMER}",
+        f"  resident entries: {snapshot.entry_count} "
+        f"oldest_entry_age={_render_store_age(snapshot.gauge.oldest_entry_age_seconds)}",
+        f"  resident crash-orphans: {snapshot.orphan_count} "
+        f"oldest_orphan_age={_render_store_age(snapshot.gauge.oldest_orphan_age_seconds)}",
+        f"  GC observation record: {snapshot.record_state.value}",
+    ]
+    if snapshot.record_state is GcObservationRecordState.ABSENT:
+        lines.append(f"  {_STORE_RECORD_ABSENT_NOTE}")
+    return "\n".join(lines)
+
+
+def _format_protected_result_store_json(
+    snapshot: ProtectedResultStoreSnapshot,
+) -> dict[str, Any]:
+    """JSON rendering of the term-8(b) row, composed into the summary payload."""
+    from harness_runtime.lifecycle.protected_result_store import GcObservationRecordState
+
+    payload: dict[str, Any] = {
+        "protected_result_store_root": str(snapshot.root),
+        "protected_result_store_snapshot_disclaimer": _STORE_SNAPSHOT_DISCLAIMER,
+        "protected_result_store_entry_count": snapshot.entry_count,
+        "protected_result_store_orphan_count": snapshot.orphan_count,
+        "protected_result_store_oldest_entry_age_seconds": (
+            snapshot.gauge.oldest_entry_age_seconds
+        ),
+        "protected_result_store_oldest_orphan_age_seconds": (
+            snapshot.gauge.oldest_orphan_age_seconds
+        ),
+        "protected_result_store_observation_record_state": snapshot.record_state.value,
+    }
+    if snapshot.record_state is GcObservationRecordState.ABSENT:
+        payload["protected_result_store_observation_record_absent_note"] = _STORE_RECORD_ABSENT_NOTE
+    return payload
 
 
 def _format_pause_journal_human(report: PauseJournalReport) -> str:

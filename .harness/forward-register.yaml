@@ -59,13 +59,13 @@
 
 snapshot:
   total: 110
-  open: 3
+  open: 2
   design_substrate_gated: 1
-  registered_finding: 15
+  registered_finding: 14
   operator_gated: 0
   held: 1
-  closed: 90
-  identity_digest: 1fe23cdcb7637014
+  closed: 92
+  identity_digest: b99da3eb9595815e
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1821,7 +1821,8 @@ items:
 - id: B-74
   title: Protected result store's mtime-based GC age authority can under-report publish time
     below a filesystem's timestamp granularity
-  status: registered_finding
+  status: closed
+  pr: '#pending'
   summary: 'Surfaced at the B-68 impl arc, out-of-family Codex round 7 [P2]. `_publish_atomic`''s
     `os.utime(entry_path, None)` refresh sets the entry''s mtime to the CURRENT system time, but
     the underlying filesystem is what actually STORES that value, at whatever timestamp resolution
@@ -1880,7 +1881,7 @@ items:
     it rather than silently diverge. Not closed as subsumed-by-B-77; the close_out below (probe
     the deployment volume''s real resolution and either refuse a sub-resolution TTL typed or select
     a higher-resolution age signal) is unchanged and still the fix.'
-  close_out: '2026-08-05 RATIFICATION-LEG DISPOSITION (B-96 Reading C / ceiling C-2): under the
+  close_out: 'CLOSED at the B-96 impl leg (PR #pending, U-RT-150). The residue is DISSOLVED exactly as the disposition paragraph below prescribes: the age authority is no longer mtime ALONE, so a filesystem timestamp-granularity error can no longer reach the reclaim decision by itself, and the inter-sweep gap ceases to be a term in that decision at all. The WITNESS DISPOSITION this row prescribes was applied literally -- test_coarse_filesystem_mtime_granularity_does_not_lose_a_live_entry_on_sight is RE-PINNED AS A POSITIVE witness that the live entry SURVIVES BOTH SWEEPS, kept rather than deleted, and the two corrections this row warns the impl leg not to inherit as fact were not inherited. STATUS registered_finding -> closed. 2026-08-05 RATIFICATION-LEG DISPOSITION (B-96 Reading C / ceiling C-2): under the
     ratified C-2 form THIS ROW CLOSES, and closes in the shape its own close_out asks for -- `.harness/council-b96-grace-ceiling-2026-08-01.md`
     section 8, reached independently by all three voices and re-derived by that record''s adversarial
     pass against the live test. C-2 delivers this row''s SECOND stated option (an age authority
@@ -1933,7 +1934,7 @@ items:
     concrete resolution floor which is a design decision, not an immediate judgment call
   heading: '### B-74 · Protected result store''s mtime-based GC age authority can under-report
     publish time below a filesystem''s timestamp granularity *(surfaced at the B-68 impl arc,
-    out-of-family Codex round 7 [P2], 2026-07-25)*'
+    out-of-family Codex round 7 [P2], 2026-07-25)* *(**CLOSED 2026-08-05 at the B-96 impl leg** -- residue DISSOLVED under ceiling form C-2, not narrowed)*'
 - id: B-75
   title: Protected result store's gc_sweep candidate-selection scan can itself stall inside the
     publish lock under a pathological backlog or a hanging filesystem
@@ -2008,7 +2009,7 @@ items:
     reporting `UnresolvableResultRef` for an entry already durably linked) is UNCHANGED and
     still not fixed -- it remains `main`''s original semantics, recorded here so it is not
     later rediscovered as novel.'
-  close_out: '2026-08-05 REVERSAL RECORDED (so it is never later read as unratified drift): this
+  close_out: 'THE B-77 RESIDUAL IS NOW CLOSED at the B-96 impl leg (PR #pending, U-RT-150): the sweep-COUNT grace this row landed is replaced by a DURABLE ELAPSED-TIME one, so the residual practical duration gap -- a short or immediately-failing run whose own shutdown sweep fires milliseconds after its bootstrap sweep -- no longer exists, and the persisted-sidecar reversal recorded below is now BUILT rather than merely ratified. This row status was already closed and does not move. 2026-08-05 REVERSAL RECORDED (so it is never later read as unratified drift): this
     row''s landed judgment ''no persisted sidecar'' is REVERSED by the ratified B-96 Reading C
     / ceiling C-2 form, which publishes a DEDICATED candidate-filename + timestamp sidecar (carrier
     (C-i), keyed over BOTH sweep classes per council condition #5) by temp-write + fsync + os.replace
@@ -3741,8 +3742,8 @@ items:
   title: 'The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time --
     a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry
     milliseconds after its bootstrap sweep first observed it'
-  status: open
-  pr: '#1179 (the Class 2 fork filing) + #1183 (the C-1/C-2 council record) + #1233 (the 2026-08-05 ratification record) + #1235 (the SPEC leg -- Runtime spec v1.111 section 14.8.11.1 + Runtime plan v2.58 U-RT-150)'
+  status: closed
+  pr: '#1179 (the Class 2 fork filing) + #1183 (the C-1/C-2 council record) + #1233 (the 2026-08-05 ratification record) + #1235 (the SPEC leg -- Runtime spec v1.111 section 14.8.11.1 + Runtime plan v2.58 U-RT-150) + #pending (the IMPL leg -- U-RT-150)'
   summary: 'Surfaced by out-of-family Codex round 2 at the B-77 impl arc (2026-07-30),
     against the fix landed in that same PR. `gc_sweep`''s first-observation grace refuses to
     reclaim an entry the store has not already seen past TTL at a PRIOR sweep of the same
@@ -3772,7 +3773,7 @@ items:
     past it (the factory default is 86400s, roughly seven orders of magnitude above that),
     AND a crash landing strictly between `os.link` and the post-commit mtime refresh, AND a
     recovering run short enough that its own shutdown sweep fires before any repair read.'
-  close_out: 'STATUS design_substrate_gated -> OPEN at this leg, per the register''s OWN status enum (this file,
+  close_out: 'IMPL LEG LANDED at PR #pending -- U-RT-150 built at harness-runtime/src/harness_runtime/lifecycle/protected_result_store.py: the sweep-COUNT grace is REPLACED by a CONJUNCTIVE, publication-bounded, DURABLE elapsed-time rule keyed on a dedicated gc-observations.json record in the store root (published temp-write + fsync + os.replace + directory fsync -- never the write-once no-replace primitive, never unlink-then-recreate; the name is disjoint from BOTH sweep globs and is NOT dot-leading, and so is its publication temporary), keyed over BOTH sweep classes, replace-not-accumulate with retained names carrying forward their ORIGINAL first_observed_at. Both falsifiability surfaces landed: the oldest-resident-candidate age as a FIELD of every sweep emission plus the which-term-fired-last discriminator, and a read-only, sweep-free harness-inspect store row reporting the record state THREE-WAY off the CONFIG-DERIVED store root (the same expression materialize_protected_result_store_stage uses, never --ledger-path). All FIFTEEN acceptance criteria are green with PD-8 mutation probes, including the AC #13 re-grounding pass over every inverted grace-dependent witness with NO witness weakened or deleted, and the AC #10 / #14(i) durability witness driven as REAL successive one-shot subprocess invocations against one store root. Registered row B-110 disposition (c) was NOT taken -- see that row. STATUS open -> closed. STATUS design_substrate_gated -> OPEN at this leg, per the register''s OWN status enum (this file,
     lines 31-39: only ratified + APPLIED spec deltas plus the corresponding Phase-6 plan deltas open
     the row for code -- both landed here). This does NOT contradict the fork section 11.5, which
     contrasts design_substrate_gated against `closed` at the RATIFICATION leg and says B-96 / the
@@ -3851,7 +3852,7 @@ items:
     No third ceiling form survives -- record-keyed, hybrid absent-record and a fourth ctime-keyed
     variant were each constructed and killed, and are recorded as tested-and-dead rather than
     suppressed. NO FURTHER CONVENING is owed at the spec or impl leg.'
-  heading: '### B-96 · The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time -- a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry milliseconds after its bootstrap sweep first observed it *(surfaced at the B-77 impl arc, out-of-family Codex round 2 [P2], 2026-07-30)* *(**RATIFIED 2026-08-05 as READING C, ceiling sub-decision C-2** — the grace term alone, carrier `(C-i)`; **SPEC LEG LANDED 2026-08-05 (Runtime v1.111 + plan v2.58 U-RT-150); status now `open`; IMPL leg owed**)*'
+  heading: '### B-96 · The B-77 first-observation grace is bounded by SWEEP COUNT, not elapsed time -- a short or failing run''s own shutdown sweep can reclaim a crash-recovered entry milliseconds after its bootstrap sweep first observed it *(surfaced at the B-77 impl arc, out-of-family Codex round 2 [P2], 2026-07-30)* *(**RATIFIED 2026-08-05 as READING C, ceiling sub-decision C-2** — the grace term alone, carrier `(C-i)`; **SPEC LEG LANDED 2026-08-05 (Runtime v1.111 + plan v2.58 U-RT-150); IMPL LEG LANDED 2026-08-05 (U-RT-150) — CLOSED**)*'
 - id: B-97
   title: The durable pause journal carries no tenant binding (half (a) -- RATIFIED
     Reading A, SPEC-APPLIED at v1.108, IMPL LANDED at U-RT-149); its appends were

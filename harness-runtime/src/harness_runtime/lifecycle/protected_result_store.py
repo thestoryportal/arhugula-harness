@@ -20,9 +20,12 @@ and encryption happen at `write_once`/`read`, never at construction.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+import enum
 import errno
 import hashlib
+import json
 import logging
 import os
 import pickle
@@ -31,10 +34,10 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from harness_runtime.lifecycle.memory_tool_encrypted import FernetLike
@@ -48,13 +51,18 @@ if TYPE_CHECKING:
 _IS_WINDOWS = sys.platform == "win32"
 
 __all__ = [
+    "GC_OBSERVATION_RECORD_FILENAME",
+    "CandidateAgeGauge",
+    "GcObservationRecordState",
     "ProtectedResultStore",
+    "ProtectedResultStoreSnapshot",
     "ProtectedStoreCrossTenantError",
     "ProtectedStoreEntryNotFoundError",
     "ProtectedStoreTamperError",
     "ResultRefValue",
     "UnresolvableResultRef",
     "compose_composite_key",
+    "read_protected_result_store_snapshot",
     "resolve_result_ref",
 ]
 
@@ -95,21 +103,158 @@ _root_locks_guard = threading.Lock()
 #: candidate.
 _CROSS_PROCESS_LOCK_FILENAME = ".cross_process.lock"
 
-#: B-77: the set of past-TTL filenames each store root was observed holding
-#: at its PREVIOUS `gc_sweep` — the first-observation grace that keeps a
-#: crash-recovered entry from being reclaimed on sight. Keyed by the root's
-#: filesystem identity (module-wide, NOT per-instance) for the same reason
-#: `_root_locks` is: the composition root builds a FRESH
-#: `ProtectedResultStore` per `run()`/`resume()` bootstrap
-#: (`bootstrap/factories/protected_result_store_factory.py` ->
-#: `bootstrap/stage_4_od.py`), so a per-instance record would hand EVERY
-#: bootstrap sweep a fresh grace and defer reclaim to shutdown indefinitely,
-#: weakening the bounded-retention guarantee. A fresh PROCESS legitimately
-#: starts empty — it has no way to distinguish a genuine age from a
-#: crash-window mtime artifact, so granting the grace is the safe direction,
-#: and that IS the crash-recovery case B-77 names. See `gc_sweep`.
-_root_observed_expired: dict[str, frozenset[str]] = {}
-_root_observed_expired_guard = threading.Lock()
+#: `B-96` / U-RT-150 (Runtime spec v1.111 §14.8.11.1, *"The observation
+#: record's carrier"*): the DURABLE first-observation record. A dedicated file
+#: in the store root holding term 5's CLOSED two-member set
+#: `{candidate filename, first_observed_at}` per name, over BOTH sweep classes.
+#:
+#: The name is asserted DISJOINT from both sweep globs (`*.entry` — this name
+#: does not end in `.entry`; `.tmp-*` — it does not carry that prefix) so the
+#: sweep can never enumerate its own record as a candidate, and it is
+#: deliberately NOT dot-leading: a `.`-prefixed name satisfies glob-disjointness
+#: while silently re-opening the dotfile-skipping copy channel that is one of
+#: the two ways the record is lost while the entries it indexes survive
+#: (U-RT-150 AC #15; the council record routed this to the impl leg as an
+#: acceptance condition). Both properties are asserted separately by the
+#: witnesses — glob-disjointness does not imply non-dot-leading.
+GC_OBSERVATION_RECORD_FILENAME = "gc-observations.json"
+
+#: The record's publication temporary. AC #15's second half: this MUST NOT
+#: reuse `_publish_atomic`'s `.tmp-` PAYLOAD-temp prefix. If it did, a crash
+#: after the temp write would leave an artifact the next sweep classifies as a
+#: crash-orphaned payload — entering count and age accounting, being reported
+#: as a candidate and unlinked as though it were ciphertext — all while the
+#: FINAL record name still satisfies the disjointness check.
+_GC_OBSERVATION_RECORD_TEMP_PREFIX = "gc-observations.publishing-"
+
+#: On-disk form version of the record. A record carrying any other value is
+#: INVALID as a whole and reads as *no observation for every name* (term 11).
+_GC_OBSERVATION_RECORD_VERSION = 1
+
+#: The two sweep classes' globs, named once so the record-name disjointness
+#: assertion and the enumeration read the same source of truth.
+_ENTRY_GLOB = "*.entry"
+_ORPHAN_GLOB = ".tmp-*"
+
+
+class GcObservationRecordState(enum.Enum):
+    """The THREE-WAY reading of the observation record (spec term 8(b)).
+
+    `ABSENT` and `PRESENT_UNREADABLE` are the two reachable LOSS states (term
+    11); both read as *no observation for every name*, and both can therefore
+    only LENGTHEN retention (term 4).
+    """
+
+    PRESENT_READABLE = "present-and-readable"
+    ABSENT = "absent"
+    PRESENT_UNREADABLE = "present-but-unreadable"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ObservationRecordRead:
+    """One read of the durable record: its state, plus the observations it
+    yielded. `observations` is EMPTY for both loss states — never a partially
+    trusted subset (term 11's fail-safe TOTALITY: a corrupted row that happens
+    to parse can carry a `first_observed_at` EARLIER than the truth and thereby
+    SHORTEN retention, the one direction term 4 forbids)."""
+
+    state: GcObservationRecordState
+    observations: Mapping[str, float]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class CandidateAgeGauge:
+    """The falsifying quantity of spec term 8 — the OLDEST RESIDENT CANDIDATE's
+    age — computed at read time from the timestamp pass the surface already
+    performs, and NEVER cached between sweeps (a cached value is a second
+    authority and goes stale in precisely the crash window §14.8.11's
+    crash-atomic publication term exists for).
+
+    Reported as TWO per-class values rather than one combined figure — the
+    shape term 8 explicitly defers to this unit — because an orphan's age
+    tracks a CRASH while a published entry's age tracks the retention of a paid
+    effect. Coverage of both classes is CONTRACT, not shape: `None` means the
+    class has no resident candidate at all, never that it was excluded.
+    """
+
+    oldest_entry_age_seconds: float | None
+    oldest_orphan_age_seconds: float | None
+
+    def render(self) -> str:
+        """One-line rendering for the report-log emissions (term 8(a): a FIELD
+        of every sweep's emission, never a separate line)."""
+        return (
+            f"oldest_entry_age_s={_render_age(self.oldest_entry_age_seconds)} "
+            f"oldest_orphan_age_s={_render_age(self.oldest_orphan_age_seconds)}"
+        )
+
+
+def _render_age(age: float | None) -> str:
+    return "none-resident" if age is None else f"{age:.1f}"
+
+
+def _read_observation_record(record_path: Path) -> _ObservationRecordRead:
+    """Read the durable record TOTALLY: any outcome other than *read, parsed
+    whole, entries usable* yields NO OBSERVATION FOR EVERY NAME (term 11) —
+    never partial trust of the rows that happen to parse.
+
+    Absence reads as *no observation* and grants a fresh grace (term 4); an
+    existing-but-untrustworthy file reads the same way but is DISCRIMINATED as
+    `PRESENT_UNREADABLE`, because no benign cause produces it.
+
+    Module-level rather than a method so the sweep and the read-only term-8(b)
+    surface share ONE totality rule and can never disagree about a record's
+    three-way state.
+    """
+    try:
+        raw = record_path.read_bytes()
+    except FileNotFoundError:
+        return _ObservationRecordRead(GcObservationRecordState.ABSENT, {})
+    except OSError:
+        return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
+    try:
+        parsed: object = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
+    if not isinstance(parsed, dict):
+        return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
+    document = cast("dict[object, object]", parsed)
+    if document.get("version") != _GC_OBSERVATION_RECORD_VERSION:
+        return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
+    rows_value = document.get("observations")
+    if not isinstance(rows_value, dict):
+        return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
+    rows = cast("dict[object, object]", rows_value)
+    observations: dict[str, float] = {}
+    for name, stamp in rows.items():
+        # One malformed row invalidates the WHOLE record — a corrupted row that
+        # happens to parse can carry a `first_observed_at` EARLIER than the
+        # truth and SHORTEN retention, the one direction term 4 forbids.
+        # `bool` is excluded explicitly: it is an `int` subclass.
+        if (
+            not isinstance(name, str)
+            or isinstance(stamp, bool)
+            or not isinstance(stamp, int | float)
+        ):
+            return _ObservationRecordRead(GcObservationRecordState.PRESENT_UNREADABLE, {})
+        observations[name] = float(stamp)
+    return _ObservationRecordRead(GcObservationRecordState.PRESENT_READABLE, observations)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ProtectedResultStoreSnapshot:
+    """A read-time, SWEEP-FREE snapshot of a store root (spec term 8(b)).
+
+    Carries no bound, no threshold and no verdict — the level check is closed
+    by the OPERATOR against their own deployment's sweep-cadence expectation,
+    which the store does not hold and must not pretend to.
+    """
+
+    root: Path
+    entry_count: int
+    orphan_count: int
+    gauge: CandidateAgeGauge
+    record_state: GcObservationRecordState
 
 
 def _root_identity_key(root: Path) -> str:
@@ -525,11 +670,12 @@ class ProtectedResultStore:
         shape B-77 originally named, but starting from the pre-commit
         stamp's fresher baseline (excluding the data write+fsync term)
         rather than the temp file's raw write-time mtime. That residual is
-        closed OUTSIDE this method, at `gc_sweep`'s first-observation grace
-        (a newly-observed past-TTL entry is never reclaimed until a
-        subsequent sweep still finds it expired) — no third reordering of
-        this two-stamp pipeline is involved, and `ttl_seconds` keeps its
-        full spec'd range.
+        closed OUTSIDE this method, at `gc_sweep`'s DURABLE elapsed-time
+        first-observation grace (`B-96` / U-RT-150: reclaim additionally
+        requires a full TTL of elapsed time since the candidate's durably
+        recorded first observation, which a sweep cannot record before the
+        candidate exists) — no third reordering of this two-stamp pipeline is
+        involved, and `ttl_seconds` keeps its full spec'd range.
         Restoring the post-commit block also reintroduces a pre-existing,
         out-of-scope inconsistency the reorder had incidentally fixed: if
         this SECOND refresh's own fsync fails, `write_once` reports
@@ -647,7 +793,7 @@ class ProtectedResultStore:
         """
         self._entry_path(composite_key).unlink(missing_ok=True)
 
-    def gc_sweep(self, *, now: float | None = None) -> list[str]:
+    def gc_sweep(self, *, now: float | None = None, observed_at: float | None = None) -> list[str]:
         """TTL sweep for unacknowledged entries (spec v1.103 §14.8.11).
 
         Expiry is a TYPED report-log line, never silent loss — the caller
@@ -683,33 +829,67 @@ class ProtectedResultStore:
         excluded by `_cross_process_lock` (B-73), composed inside
         `self._publish_lock` below.
 
-        B-77 FIRST-OBSERVATION GRACE: an entry is reclaimed only if it was
-        ALREADY observed past TTL at a PRIOR sweep of this root (see
-        `_observe_expired`). Neither lock can close B-77's residual crash
-        window — a process KILLED between `_publish_atomic`'s `os.link` and
-        its post-commit mtime refresh leaves a genuinely-live entry carrying
-        the pre-commit stamp, and the next process's bootstrap sweep has no
-        way to tell that stale-looking mtime from a genuine age. Under a
-        short deployment `ttl_seconds`, reclaiming on sight would destroy
-        the only recoverable copy of an already-completed paid effect. The
-        grace makes mtime's under-report harmless up to ONE sweep interval
-        without narrowing `ttl_seconds` itself (a spec'd
-        deployment-configurable surface, spec v1.103 §14.8.11 bounded-
-        retention term — a TTL floor was the explicitly-declined
-        alternative, B-74's own close_out option). Bounded retention is
-        preserved, not weakened: a genuinely-expired entry is still
-        collected, one sweep later.
+        RECLAIM GRACE — `B-96` / U-RT-150, Runtime spec v1.111 §14.8.11.1.
+        Reclaim of an unacknowledged candidate is CONJUNCTIVE and there is NO
+        third path: it requires BOTH (a) that the candidate's
+        filesystem-timestamp-derived age is past the TTL AND (b) that the
+        elapsed time since its DURABLY RECORDED first observation is past the
+        TTL. No absolute age ceiling, no `k × ttl_seconds` term, and no reclaim
+        conditioned on anything else exists here or may be added.
 
-        The grace is bounded by SWEEP COUNT, not elapsed time — stated
-        plainly so it is not read as more than it is. Every
-        `run()`/`resume()` sweeps twice by construction (bootstrap
-        `stage_4_od.py`, then `shutdown.py` step 5b), so on a short or
-        immediately-failing run the two observations can be milliseconds
-        apart. The reachable loss B-77 names — reclaim by the sweep that
-        FIRST sees the crash-recovered entry — is closed; a wall-clock
-        interval a repair flow could rely on is NOT provided. That residue
-        is registered at B-96 (out-of-family Codex round 2 on the B-77 impl
-        arc), whose close_out is the elapsed-time variant.
+        This REPLACES the sweep-COUNT grace that shipped at `B-77`. That form
+        closed `B-77`'s named defect but was bounded by the NUMBER of sweeps,
+        not by elapsed time: every `run()`/`resume()` sweeps at least twice by
+        construction (bootstrap `stage_4_od.py`, then `shutdown.py` step 5b),
+        so on a short or immediately-failing run the two observations could be
+        milliseconds apart. Holding the observation state in PROCESS-LOCAL
+        memory is now FORBIDDEN (term 10): in the one-shot process shape it
+        never accumulates across invocations, so a genuinely expired entry
+        would never be reclaimed at all and retention would become unbounded.
+        The state is therefore DURABLE — `GC_OBSERVATION_RECORD_FILENAME` in
+        the store root, read and replaced under the same locks this sweep
+        already holds.
+
+        PUBLICATION BOUND (term 2). A sweep cannot observe a candidate that
+        does not yet exist, so a first-observation timestamp cannot predate
+        publication; with every non-publication-bounded term removed from the
+        reclaim decision, `reclaim ≥ publication + TTL` becomes STRUCTURAL
+        rather than heuristic. That is what closes `B-74`'s
+        filesystem-timestamp-granularity residue without a TTL floor and
+        without any knowledge of the volume's real timestamp resolution, and
+        what closes `B-77`'s residual crash window (a process KILLED between
+        `_publish_atomic`'s `os.link` and its post-commit mtime refresh leaves
+        a genuinely-live entry carrying the pre-commit stamp; conjunct (b) now
+        gates it regardless of how stale that stamp looks).
+
+        The bound carries ONE stated assumption rather than an elided one: a
+        wall clock free of STEP DISCONTINUITIES in EITHER direction between
+        publication and reclaim. Both conjuncts are wall-clock differences, so
+        a backward step before the first observation, or a forward step larger
+        than the TTL at any point before reclaim, each break it. NEITHER is a
+        defect this grace introduces — the pre-existing filesystem-timestamp
+        comparison is perturbed by the same steps in the same directions — and
+        a monotonic clock is NOT the fix and MUST NOT be substituted: the
+        observation state is durable across process exit, where a monotonic
+        reading is meaningless.
+
+        RETENTION IS CONDITIONAL, and this docstring states it as such rather
+        than as a bound. The TYPICAL worst case is `2 × ttl_seconds` plus UP TO
+        TWO sweep-trigger intervals — one to the first post-TTL observation,
+        one more to the post-grace reclaim — CONDITIONAL on the observation
+        record being present and readable, and the sweep-trigger interval is
+        itself unbounded in the one-shot process shape (pre-existing, not
+        introduced here). No unconditional `N × ttl_seconds` claim is available
+        and none is made anywhere on this surface; the falsifying quantity an
+        operator can actually check is the oldest resident candidate's age,
+        emitted as a field of every line below and readable on demand, without
+        a sweep, via `read_protected_result_store_snapshot`.
+
+        `observed_at` is the injectable seam for the term-3 sampling point,
+        kept SEPARATE from `now` deliberately: `first_observed_at` is sampled
+        at the LOCKED, POST-RE-VERIFICATION observation point and never at this
+        sweep's pre-enumeration clock read, so the recorded value must not be
+        obtainable from `now`.
         """
         current_time = now if now is not None else time.time()
         expired: list[str] = []
@@ -747,13 +927,22 @@ class ProtectedResultStore:
         # instead turn `_cross_process_lock`'s per-call `fcntl.flock`
         # (B-73) into N kernel round-trips and give a competing process a
         # window to interleave between batches.
+        #
+        # The same unlocked timestamp pass also yields term 8's falsifying
+        # quantity — the OLDEST RESIDENT candidate's age, per class, over
+        # EVERY resident candidate and not merely the past-TTL ones. It is
+        # derived here and never cached across sweeps.
         provisional_entries: list[Path] = []
-        for entry_path in self._root.glob("*.entry"):
+        oldest_entry_age: float | None = None
+        for entry_path in self._root.glob(_ENTRY_GLOB):
             try:
                 written_at = entry_path.stat().st_mtime
             except OSError:
                 continue
-            if current_time - written_at > self._ttl_seconds:
+            age = current_time - written_at
+            if oldest_entry_age is None or age > oldest_entry_age:
+                oldest_entry_age = age
+            if age > self._ttl_seconds:
                 provisional_entries.append(entry_path)
         # codex [P2] round 5 on this arc — a process KILLED between
         # `_publish_atomic`'s temp-write and its `finally: os.unlink(tmp_name)`
@@ -769,13 +958,21 @@ class ProtectedResultStore:
         # milliseconds, so any bound this generous only ever catches
         # genuine crash orphans).
         provisional_tmp: list[Path] = []
-        for tmp_entry_path in self._root.glob(".tmp-*"):
+        oldest_orphan_age: float | None = None
+        for tmp_entry_path in self._root.glob(_ORPHAN_GLOB):
             try:
                 tmp_mtime = tmp_entry_path.stat().st_mtime
             except OSError:
                 continue
-            if current_time - tmp_mtime > self._ttl_seconds:
+            tmp_age = current_time - tmp_mtime
+            if oldest_orphan_age is None or tmp_age > oldest_orphan_age:
+                oldest_orphan_age = tmp_age
+            if tmp_age > self._ttl_seconds:
                 provisional_tmp.append(tmp_entry_path)
+        gauge = CandidateAgeGauge(
+            oldest_entry_age_seconds=oldest_entry_age,
+            oldest_orphan_age_seconds=oldest_orphan_age,
+        )
         verified_entries: list[tuple[Path, float]] = []
         verified_tmp: list[tuple[Path, float]] = []
         with self._publish_lock, self._cross_process_lock():
@@ -793,13 +990,34 @@ class ProtectedResultStore:
                     continue
                 if current_time - tmp_mtime > self._ttl_seconds:
                     verified_tmp.append((tmp_entry_path, tmp_mtime))
-            # B-77 first-observation grace — see this method's docstring.
-            previously_observed = self._observe_expired(
-                {path.name for path, _ in verified_entries}
-                | {path.name for path, _ in verified_tmp}
+            # Durable elapsed-time grace (`B-96` term 3): the wall-clock
+            # sample happens HERE — after every candidate's existence has been
+            # re-verified, still under the lock — never at the pre-enumeration
+            # `now` read above.
+            record, observations = self._observe_candidates(
+                [path.name for path, _ in verified_entries]
+                + [path.name for path, _ in verified_tmp],
+                observed_at=observed_at,
+                gauge=gauge,
             )
-        entry_candidates = [c for c in verified_entries if c[0].name in previously_observed]
-        tmp_candidates = [c for c in verified_tmp if c[0].name in previously_observed]
+
+        def _eligible(candidate: tuple[Path, float]) -> bool:
+            # Term 1's conjunct (b). Conjunct (a) is already established for
+            # everything in `verified_*`; both must hold and there is no other
+            # path to this predicate.
+            first_observed_at = observations.get(candidate[0].name)
+            if first_observed_at is None:
+                return False
+            return current_time - first_observed_at > self._ttl_seconds
+
+        entry_candidates = [c for c in verified_entries if _eligible(c)]
+        tmp_candidates = [c for c in verified_tmp if _eligible(c)]
+        self._report_record_loss_if_any(
+            record_state=record,
+            past_ttl_entry_count=len(verified_entries),
+            past_ttl_orphan_count=len(verified_tmp),
+            gauge=gauge,
+        )
         # Phase 2 — outside the lock: decrypt (best-effort, logging only)
         # and the actual unlinks. See the round-7 comment above for why
         # this is safe unlocked.
@@ -837,10 +1055,13 @@ class ProtectedResultStore:
                 continue
             expired.append(digest)
             logger.warning(
-                "protected result store: TTL-expired entry GC'd (digest=%s, tenant=%s, age_s=%.1f)",
+                "protected result store: TTL-expired entry GC'd (digest=%s, tenant=%s, "
+                "age_s=%.1f, reclaim_term=%s, %s)",
                 digest,
                 tenant_tag,
                 current_time - written_at,
+                _later_reclaim_term(written_at, observations[entry_path.name]),
+                gauge.render(),
             )
         for tmp_entry_path, tmp_mtime in tmp_candidates:
             try:
@@ -853,31 +1074,160 @@ class ProtectedResultStore:
                 )
                 continue
             logger.warning(
-                "protected result store: crash-orphaned temp-file GC'd (%s, age_s=%.1f)",
+                "protected result store: crash-orphaned temp-file GC'd "
+                "(%s, age_s=%.1f, reclaim_term=%s, %s)",
                 tmp_entry_path.name,
                 current_time - tmp_mtime,
+                _later_reclaim_term(tmp_mtime, observations[tmp_entry_path.name]),
+                gauge.render(),
             )
         self._last_gc_at = current_time
         return expired
 
-    def _observe_expired(self, still_expired: set[str]) -> frozenset[str]:
-        """Record this sweep's past-TTL filenames for this root and return
-        the set recorded by the PREVIOUS sweep (B-77 first-observation
-        grace; see `gc_sweep`'s docstring for why).
+    @property
+    def _observation_record_path(self) -> Path:
+        return self._root / GC_OBSERVATION_RECORD_FILENAME
 
-        Called with `self._publish_lock` held, so two concurrent sweeps of
-        one root cannot interleave a read with the other's replace.
-        Replacing (rather than accumulating) the recorded set is what keeps
-        it bounded — a name that has since been reclaimed, ack-deleted, or
-        refreshed below TTL simply drops out. Entry filenames are sha256
-        digests of a uuid4-bearing composite key and `.tmp-*` names come
-        from `mkstemp`, so a name is never reused for a different file.
+    def _observe_candidates(
+        self,
+        past_ttl_names: list[str],
+        *,
+        observed_at: float | None,
+        gauge: CandidateAgeGauge,
+    ) -> tuple[GcObservationRecordState, Mapping[str, float]]:
+        """Read the durable record, carry it forward over `past_ttl_names`,
+        and publish the replacement. Returns the record's READ state and the
+        effective observation map this sweep must judge eligibility against.
+
+        Called with `self._publish_lock` (and the cross-process lock) held, so
+        two concurrent sweeps of one root cannot interleave a read with the
+        other's replace, and so the sample below is the term-3 LOCKED,
+        POST-RE-VERIFICATION point.
+
+        REPLACE-NOT-ACCUMULATE, over the UNION of both sweep classes (term 9):
+        names no longer resident are DROPPED, which is what keeps the record
+        bounded by the resident candidate set. **A retained name carries
+        forward its ORIGINAL `first_observed_at` unchanged** — wholesale
+        replacement of the RECORD is not re-sampling of its TIMESTAMPS. That
+        distinction is load-bearing, not pedantic: re-sampling every
+        still-resident candidate at every sweep would slide each deadline
+        forward by the inter-sweep interval, so under a sweep cadence SHORTER
+        than the TTL no candidate would ever become reclaimable at all —
+        reproducing the unbounded retention this grace exists to prevent,
+        while satisfying a replace-not-accumulate criterion read literally.
+        The only timestamp write permitted for an already-recorded name is
+        NONE.
+
+        A record-publication failure is reported and the sweep CONTINUES: an
+        unpersisted observation means the next sweep re-observes from scratch,
+        which can only LENGTHEN retention (term 4's fail-safe direction).
+        Aborting the sweep instead would let one record-write hiccup suppress
+        GC entirely.
         """
-        key = _root_identity_key(self._root)
-        with _root_observed_expired_guard:
-            previously_observed = _root_observed_expired.get(key, frozenset())
-            _root_observed_expired[key] = frozenset(still_expired)
-        return previously_observed
+        record = self._read_observation_record()
+        # Term 3: WALL-CLOCK, sampled HERE — never derived from `gc_sweep`'s
+        # pre-enumeration `now` read.
+        sample_time = observed_at if observed_at is not None else time.time()
+        updated = {
+            name: record.observations.get(name, sample_time)
+            for name in dict.fromkeys(past_ttl_names)
+        }
+        try:
+            self._publish_observation_record(updated)
+        except OSError as exc:
+            logger.error(
+                "protected result store: GC observation record publication failed "
+                "(a fresh grace will begin at the next sweep; %s): %s",
+                gauge.render(),
+                exc,
+            )
+        return record.state, updated
+
+    def _read_observation_record(self) -> _ObservationRecordRead:
+        return _read_observation_record(self._observation_record_path)
+
+    def _publish_observation_record(self, observations: Mapping[str, float]) -> None:
+        """Publish the record by temp-write + `fsync` + ATOMIC REPLACE +
+        directory `fsync`.
+
+        Explicitly NOT `_publish_atomic`'s write-once `os.link` primitive,
+        which is NO-REPLACE and would freeze the record at its first snapshot;
+        and explicitly NOT unlink-then-recreate, which opens a window in which
+        the record reads ABSENT and every grace restarts. Atomic replace makes
+        a torn write from THIS path unreachable — a failed write leaves only an
+        orphaned publication temporary — which is why ABSENT and UNREADABLE,
+        not corrupt-by-our-own-write, are the reachable loss states.
+
+        The publication temporary deliberately does NOT use `_publish_atomic`'s
+        `.tmp-` payload prefix (see `_GC_OBSERVATION_RECORD_TEMP_PREFIX`).
+        """
+        payload = json.dumps(
+            {"version": _GC_OBSERVATION_RECORD_VERSION, "observations": dict(observations)},
+            sort_keys=True,
+        ).encode("utf-8")
+        self._root.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=self._root, prefix=_GC_OBSERVATION_RECORD_TEMP_PREFIX)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, self._observation_record_path)
+        except BaseException:
+            # The replace never happened (or never completed), so the PREVIOUS
+            # record is still intact — remove only our own leftover temporary.
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name)
+            raise
+        self._fsync_dir(self._root)
+
+    def _report_record_loss_if_any(
+        self,
+        *,
+        record_state: GcObservationRecordState,
+        past_ttl_entry_count: int,
+        past_ttl_orphan_count: int,
+        gauge: CandidateAgeGauge,
+    ) -> None:
+        """Terms 6 and 11's emissions — UNCONDITIONAL and PER-OCCURRENCE (no
+        in-process suppression, no waiting for a second occurrence: in the
+        one-shot process shape there is no second occurrence to wait for).
+
+        Term 6's line states the OBSERVED STATE and nothing beyond it. It MUST
+        NOT assert, name or classify the record as LOST: at the first sweep of
+        a store that predates the record, the observable state — candidates
+        present, record absent — is IDENTICAL to genuine loss, and no state
+        this store may hold distinguishes them (a durable init marker or a
+        reset counter would live in the same root and be removed by the same
+        selective backup, dotfile-skipping copy or operator cleanup).
+
+        Term 11's line MAY be classified as a fault, because no benign cause
+        produces an unreadable record — that permission is exercised here via
+        the error level. Both lines derive from the timestamp pass and the
+        record read ALONE: they decrypt nothing and therefore carry no tenant
+        identity, and they never carry a composite key.
+        """
+        if record_state is GcObservationRecordState.PRESENT_UNREADABLE:
+            logger.error(
+                "protected result store: GC observation record PRESENT BUT UNREADABLE — "
+                "no name is treated as observed and a fresh grace begins for every "
+                "past-TTL candidate (past_ttl_entries=%d, past_ttl_orphans=%d, %s)",
+                past_ttl_entry_count,
+                past_ttl_orphan_count,
+                gauge.render(),
+            )
+            return
+        if record_state is GcObservationRecordState.ABSENT and (
+            past_ttl_entry_count or past_ttl_orphan_count
+        ):
+            logger.warning(
+                "protected result store: no GC observation record was read — a fresh "
+                "grace begins for every past-TTL candidate "
+                "(past_ttl_entries=%d, past_ttl_orphans=%d, %s)",
+                past_ttl_entry_count,
+                past_ttl_orphan_count,
+                gauge.render(),
+            )
 
     def _maybe_opportunistic_gc_sweep(self) -> None:
         """Best-effort in-write housekeeping — never blocks the write.
@@ -948,6 +1298,77 @@ class ProtectedResultStore:
                 raise
         finally:
             os.close(dir_fd)
+
+
+def _later_reclaim_term(filesystem_mtime: float, first_observed_at: float) -> str:
+    """The WHICH-RECLAIM-TERM-FIRED-LAST discriminator (spec term 8).
+
+    The later of term 1's two conjunct deadlines — `mtime + ttl` and
+    `first_observed_at + ttl` — which, the TTL being common to both, is
+    decided by the later base. DERIVED AT THE RECLAIM SITE and NEVER STORED,
+    and carried as an ATTRIBUTE of the reclaim emission, never a line of its
+    own.
+    """
+    return "filesystem-age" if filesystem_mtime >= first_observed_at else "first-observation"
+
+
+def read_protected_result_store_snapshot(
+    root: Path, *, now: float | None = None
+) -> ProtectedResultStoreSnapshot | None:
+    """Spec term 8(b) — the OPERATOR-FACING, READ-ONLY, SWEEP-FREE read of a
+    store root. Returns `None` when the root does not exist.
+
+    STRICTLY READ-ONLY: this writes nothing and CREATES nothing (not the root,
+    not the record, not a temporary) — one `glob`+`stat` pass and one read of a
+    single file, exactly what a sweep already performs, with ZERO persistence.
+    It takes no lock, so the values it reports are a read-time SNAPSHOT.
+
+    It emits no bound, no threshold and no pass/fail verdict, and it reports
+    rather than ATTRIBUTES: the level check is closed by the operator against
+    their own deployment's sweep-cadence expectation, which this store does not
+    hold. The caller renders the three-way record state and the
+    indistinguishability note; this function supplies only the readings.
+    """
+    if not root.is_dir():
+        return None
+    current_time = time.time() if now is None else now
+    entry_count = 0
+    oldest_entry_age: float | None = None
+    for entry_path in root.glob(_ENTRY_GLOB):
+        try:
+            age = current_time - entry_path.stat().st_mtime
+        except OSError:
+            continue
+        entry_count += 1
+        if oldest_entry_age is None or age > oldest_entry_age:
+            oldest_entry_age = age
+    orphan_count = 0
+    oldest_orphan_age: float | None = None
+    for orphan_path in root.glob(_ORPHAN_GLOB):
+        try:
+            age = current_time - orphan_path.stat().st_mtime
+        except OSError:
+            continue
+        orphan_count += 1
+        if oldest_orphan_age is None or age > oldest_orphan_age:
+            oldest_orphan_age = age
+    record_path = root / GC_OBSERVATION_RECORD_FILENAME
+    if not record_path.exists():
+        record_state = GcObservationRecordState.ABSENT
+    else:
+        # The sweep's own totality rule, reused rather than re-implemented, so
+        # this surface's three-way reading can never disagree with the sweep's.
+        record_state = _read_observation_record(record_path).state
+    return ProtectedResultStoreSnapshot(
+        root=root,
+        entry_count=entry_count,
+        orphan_count=orphan_count,
+        gauge=CandidateAgeGauge(
+            oldest_entry_age_seconds=oldest_entry_age,
+            oldest_orphan_age_seconds=oldest_orphan_age,
+        ),
+        record_state=record_state,
+    )
 
 
 def resolve_result_ref(

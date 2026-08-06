@@ -171,10 +171,12 @@ def test_ttl_threaded_from_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     store = materialize_protected_result_store_stage(config)
     assert isinstance(store, ProtectedResultStore)
     store.write_once("tenant-a", "expires fast")
-    # Two sweeps at the same `now`: B-77's first-observation grace means the
-    # first sweep only RECORDS the past-TTL entry; the second reclaims it.
-    # The TTL classification under test is identical at both.
+    # RE-GROUNDED at `B-96` / U-RT-150 AC #13. Two sweeps are still needed —
+    # the first only RECORDS the past-TTL entry's first observation — but the
+    # grace is now bounded by ELAPSED TIME rather than by sweep COUNT, so the
+    # second sweep runs a full TTL later. Both sweeps' mtime classification is
+    # still past-TTL by a wide margin, which is the property under test.
     sweep_at = time.time() + 10.0
-    store.gc_sweep(now=sweep_at)
-    expired = store.gc_sweep(now=sweep_at)
+    store.gc_sweep(now=sweep_at, observed_at=sweep_at)
+    expired = store.gc_sweep(now=sweep_at + 1.5)
     assert len(expired) == 1
