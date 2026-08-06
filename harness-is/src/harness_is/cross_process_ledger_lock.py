@@ -161,7 +161,17 @@ class _DirLock:
         the bound is on WAITING, not on acquiring.
         """
         resolved = deadline or CrossProcessLockDeadline.starting_now()
-        if not self._rlock.acquire(timeout=max(resolved.remaining_seconds(), 0.0)):
+        # `threading.TIMEOUT_MAX` cap (out-of-family review round 5 [P3],
+        # accepted): `RLock.acquire` raises `OverflowError` for a timeout above
+        # it, so a FINITE, POSITIVE, validation-passing budget like `1e20` blew
+        # up here BEFORE any lock was attempted — on every `harness-is` entry
+        # surface. Capped at the CONSUMER rather than refused at the deadline,
+        # because `TIMEOUT_MAX` is a limit of THIS lock primitive and
+        # `harness-core`'s deadline type has no business knowing about
+        # `threading`. The cap is semantically free: it is ~292 years, so a
+        # capped wait that expires has outlived any budget a caller meant.
+        rlock_timeout = min(max(resolved.remaining_seconds(), 0.0), threading.TIMEOUT_MAX)
+        if not self._rlock.acquire(timeout=rlock_timeout):
             raise CrossProcessLockTimeoutError(
                 lock_target=str(self._path),
                 budget_seconds=resolved.budget_seconds,

@@ -294,6 +294,27 @@ def test_site1_reentrant_acquisition_is_unaffected_by_an_expired_budget(tmp_path
 
 
 @requires_posix_flock
+def test_site1_survives_a_budget_larger_than_threading_timeout_max(tmp_path: Path) -> None:
+    """Out-of-family review round 5 [P3], accepted. `RLock.acquire` raises
+    `OverflowError` for a timeout above `threading.TIMEOUT_MAX`, so a FINITE,
+    POSITIVE, validation-passing budget like `1e20` blew up at the in-process
+    face BEFORE any lock was attempted — on every `harness-is` entry surface,
+    and with an exception type no caller could have anticipated.
+
+    Absurd as an input, but the point is that the deadline type ACCEPTS it: a
+    value the contract calls legal must not crash the consumer.
+
+    Mutation probe (run at this arc): removing the `threading.TIMEOUT_MAX` cap
+    makes this raise `OverflowError` and the test fails."""
+    import threading
+
+    root = tmp_path / "scope-root"
+    oversized = threading.TIMEOUT_MAX * 10
+    with cross_process_scope_lock(root, deadline_seconds=oversized):
+        assert (root / SCOPE_LOCK_FILENAME).exists()
+
+
+@requires_posix_flock
 def test_site1_scope_lock_still_acquires_uncontended(tmp_path: Path) -> None:
     """The non-contended path is UNCHANGED — with a budget so short a polling
     waiter could never win a contended race, an uncontended acquisition still
