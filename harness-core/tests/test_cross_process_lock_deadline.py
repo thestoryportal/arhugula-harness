@@ -18,7 +18,6 @@ pins the properties those witnesses would not distinguish:
 
 from __future__ import annotations
 
-import fcntl
 import os
 import sys
 import time
@@ -32,6 +31,22 @@ from harness_core.cross_process_lock_deadline import (
     flock_until_deadline,
 )
 
+# `fcntl` is POSIX-only and this module imports it at collection time for its
+# in-process contention helpers. A module-level `import fcntl` would raise
+# `ModuleNotFoundError` on Windows BEFORE pytest could evaluate any skip marker,
+# so collecting the whole `harness-core` suite would fail on a host OS
+# `Target_Stack_Commitment_v1.md:42` (C-STK-10) commits to. Skipping at module
+# level keeps the suite collectable there and skipped rather than broken
+# *(out-of-family review round 4 [P2], accepted)*.
+if sys.platform == "win32":  # pragma: no cover — POSIX-only CI
+    pytest.skip(
+        "the cross-process lock deadline is exercised through `fcntl.flock`, "
+        "which Windows does not provide (the B-45 carve-out)",
+        allow_module_level=True,
+    )
+
+import fcntl  # POSIX-only; guarded by the module-level skip above
+
 requires_posix_flock = pytest.mark.skipif(
     sys.platform == "win32", reason="fcntl.flock is POSIX-only (the B-45 carve-out)"
 )
@@ -42,6 +57,39 @@ def _held_fd(path: Path) -> int:
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
     return fd
+
+
+def test_the_windows_skip_guard_precedes_the_fcntl_import() -> None:
+    """Out-of-family review round 4 [P2], accepted — a STRUCTURAL check, and
+    labelled as one because a behavioural witness is NOT AVAILABLE here.
+
+    The property: on Windows a bare module-level `import fcntl` would raise
+    `ModuleNotFoundError` BEFORE pytest could evaluate any skip marker, so
+    collecting the whole `harness-core` suite would FAIL — not skip — on a host
+    OS `Target_Stack_Commitment_v1.md:42` (C-STK-10) commits to. The
+    module-level `pytest.skip` above fixes it, and its ORDER relative to the
+    import is the entire fix.
+
+    **Why this is not an executing witness, stated rather than glossed.** A
+    subprocess that fakes `sys.platform = "win32"` plus an absent `fcntl` was
+    BUILT and DISCARDED at this arc: faking the platform makes the *stdlib*
+    take its Windows branches too, and the run dies on `_winapi` long before
+    reaching this module. Simulating Windows in-process is not simulating
+    Windows. That is precisely the witnessability gate `B-45` is deferred on —
+    so the honest posture is a presence check that is HONEST ABOUT BEING ONE,
+    not a behavioural claim POSIX CI cannot support. A real `windows-latest`
+    job (demand test `D-1`) would witness it for free.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    guard = source.index('if sys.platform == "win32":')
+    fcntl_import = source.index("\nimport fcntl")
+    assert guard < fcntl_import, (
+        "the module-level Windows skip must come BEFORE `import fcntl`, or "
+        "collection dies on Windows before the guard is reached"
+    )
+    assert "allow_module_level=True" in source[guard:fcntl_import], (
+        "the guard must skip at MODULE level; a function-level skip runs too late"
+    )
 
 
 def test_the_error_is_reachable_from_the_package_root() -> None:
