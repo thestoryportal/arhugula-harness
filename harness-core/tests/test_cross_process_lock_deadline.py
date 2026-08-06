@@ -376,6 +376,58 @@ def test_contention_observed_withdraws_the_first_probe_exemption(tmp_path: Path)
 
 
 @requires_posix_flock
+def test_the_exemption_is_spent_by_contention_anywhere_under_the_deadline(
+    tmp_path: Path,
+) -> None:
+    """Out-of-family review round 10 [P2], accepted — the third and last
+    instance of the exemption class (rounds 2 and 6 were the first two).
+
+    `contention_observed` was a PER-CALL flag, so an entry surface that
+    contended at site 1 — spending its whole budget there — could then take a
+    FREE site 2 through *that* site's own first-probe exemption, after expiry.
+    The exemption is a property of the ENTRY SURFACE ("nothing here ever
+    waited"), not of one call, so the flag now travels ON the deadline.
+
+    Here site 1 genuinely waits out its budget and site 2 is completely free —
+    the exact shape the per-call flag waved through.
+
+    Mutation probe (run at this arc): dropping `and not deadline.has_contended()`
+    makes the second acquisition succeed and this test fails."""
+    deadline = CrossProcessLockDeadline.starting_now(0.15)
+
+    contended = tmp_path / "site1.lock"
+    free = tmp_path / "site2.lock"
+    holder = _held_fd(contended)
+    waiter = os.open(contended, os.O_CREAT | os.O_RDWR, 0o600)
+    second = os.open(free, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        # Site 1: contends and spends the budget.
+        with pytest.raises(CrossProcessLockTimeoutError):
+            flock_until_deadline(
+                waiter, fcntl.LOCK_EX, deadline=deadline, lock_target=str(contended)
+            )
+        assert deadline.has_contended(), "site 1's wait was not recorded on the deadline"
+        assert deadline.remaining_seconds() <= 0.0
+        # Site 2: FREE, and under the same (now spent) deadline. It must refuse.
+        with pytest.raises(CrossProcessLockTimeoutError):
+            flock_until_deadline(second, fcntl.LOCK_EX, deadline=deadline, lock_target=str(free))
+        # A FRESH deadline over the same free lock still succeeds — the refusal
+        # above is about the spent budget, not about the lock.
+        flock_until_deadline(
+            second,
+            fcntl.LOCK_EX,
+            deadline=CrossProcessLockDeadline.starting_now(1.0),
+            lock_target=str(free),
+        )
+        fcntl.flock(second, fcntl.LOCK_UN)
+    finally:
+        os.close(second)
+        os.close(waiter)
+        fcntl.flock(holder, fcntl.LOCK_UN)
+        os.close(holder)
+
+
+@requires_posix_flock
 def test_shared_waiters_are_bounded_too(tmp_path: Path) -> None:
     """LOCK_SH is bounded exactly as LOCK_EX is. A shared reader blocked by an
     exclusive writer waits just as indefinitely, and one of the nine sites

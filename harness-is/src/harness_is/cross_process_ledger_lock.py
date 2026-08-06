@@ -171,11 +171,17 @@ class _DirLock:
         # `threading`. The cap is semantically free: it is ~292 years, so a
         # capped wait that expires has outlived any budget a caller meant.
         rlock_timeout = min(max(resolved.remaining_seconds(), 0.0), threading.TIMEOUT_MAX)
-        if not self._rlock.acquire(timeout=rlock_timeout):
-            raise CrossProcessLockTimeoutError(
-                lock_target=str(self._path),
-                budget_seconds=resolved.budget_seconds,
-            )
+        if not self._rlock.acquire(blocking=False):
+            # Contended at the IN-PROCESS face. Recorded on the deadline before
+            # waiting (round 10 [P2]) so a LATER, FREE acquisition under the same
+            # entry surface cannot slip through its own first-probe exemption
+            # after this wait has spent the budget.
+            resolved.note_contention()
+            if not self._rlock.acquire(timeout=rlock_timeout):
+                raise CrossProcessLockTimeoutError(
+                    lock_target=str(self._path),
+                    budget_seconds=resolved.budget_seconds,
+                )
         if self._refcount == 0:
             try:
                 self._fd = os.open(self._path, os.O_RDONLY)

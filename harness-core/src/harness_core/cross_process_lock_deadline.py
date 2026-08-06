@@ -210,10 +210,32 @@ class CrossProcessLockDeadline:
     cross-validate.
     """
 
+    _contention: list[bool] = field(
+        init=False, default_factory=lambda: [], repr=False, compare=False
+    )
+    """Whether ANY acquisition under this deadline has already WAITED.
+
+    A mutable container inside a frozen dataclass, deliberately: the flag has to
+    travel with the deadline because the first-probe exemption is a property of
+    the ENTRY SURFACE, not of one call. A per-call flag let a surface that
+    contended at site 1 — spending its budget there — then take a FREE site 2
+    through that site's own exemption, after expiry *(out-of-family review
+    round 10 [P2], accepted)*. The exemption exists for a surface that never
+    waited for anything; once anything has waited, it is spent for good.
+    """
+
     def __post_init__(self) -> None:
         if not math.isfinite(self.budget_seconds) or self.budget_seconds <= 0.0:
             raise ValueError(_BUDGET_REFUSAL.format(value=self.budget_seconds))
         object.__setattr__(self, "expires_at", time.monotonic() + self.budget_seconds)
+
+    def note_contention(self) -> None:
+        """Record that an acquisition under this deadline actually waited."""
+        self._contention.append(True)
+
+    def has_contended(self) -> bool:
+        """Whether anything under this deadline has waited yet."""
+        return bool(self._contention)
 
     @classmethod
     def starting_now(cls, deadline_seconds: float | None = None) -> CrossProcessLockDeadline:
@@ -291,7 +313,7 @@ def flock_until_deadline(
     import fcntl  # POSIX-only; every caller gates win32 before reaching here.
 
     poll_seconds = _INITIAL_POLL_SECONDS
-    first_probe = not contention_observed
+    first_probe = not contention_observed and not deadline.has_contended()
     while True:
         try:
             fcntl.flock(fd, operation | fcntl.LOCK_NB)
@@ -331,5 +353,6 @@ def flock_until_deadline(
                 lock_target=lock_target,
                 budget_seconds=deadline.budget_seconds,
             )
+        deadline.note_contention()
         time.sleep(min(poll_seconds, remaining))
         poll_seconds = min(poll_seconds * 2.0, _MAX_POLL_SECONDS)
