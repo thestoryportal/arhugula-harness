@@ -33,7 +33,14 @@ from harness_is.state_ledger_entry_schema import (
     ActorClass,
     Timestamp,
 )
-from harness_is.state_ledger_write import EntryPayload, WriteKey, WriteResult, read_ledger
+from harness_is.state_ledger_write import (
+    WRITER_OWNED_TIMESTAMP,
+    EntryPayload,
+    NonMonotonicTimestampError,
+    WriteKey,
+    WriteResult,
+    read_ledger,
+)
 from harness_od.audit_ledger_types import (
     AuditLedgerEntry,
     AuditPayload,
@@ -384,19 +391,56 @@ def test_same_entry_different_tenants_both_append(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Time-source injection — composer accepts a callable; default is now(UTC).
+# Time-source injection — composer still ACCEPTS the callable, but since the
+# C-IS-07 §7.6.1 election (IS spec v1.13, `B-57`; IS plan v2.9 §2.1 row 12 —
+# the injection-caveat site resolved ELECT at the impl leg) it no longer
+# determines the PERSISTED ledger timestamp.
 # ---------------------------------------------------------------------------
 
 
-def test_time_source_injection_drives_entry_timestamps(tmp_path: Path) -> None:
-    fixed = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
-    writer = _writer(tmp_path, start=fixed)
+def test_injected_time_source_no_longer_determines_persisted_timestamp(
+    tmp_path: Path,
+) -> None:
+    """AC #18 ELECT witness (row 12) — the successor to
+    `test_time_source_injection_drives_entry_timestamps`, UPDATED rather than
+    deleted per the acceptance criterion.
 
+    What it still legitimately pins: the `time_source` kwarg is still accepted
+    and still bound (API stability — the ~30 construction sites that pass it
+    keep working). What it now pins INSTEAD of the old assertion: the persisted
+    IS timestamp is WRITER-OWNED — sampled inside `append_ledger_entry`'s write
+    serialization point at the real append moment — so a deliberately absurd
+    injected clock (year 2026-01-01, ticking by 1µs) is NOT what lands, and the
+    injected callable is not consulted at all for that field.
+
+    PD-8: revert the row-12 election (restore `timestamp=self.time_source()`)
+    and this test FAILS on both assertions — the persisted value becomes
+    `fixed + 1µs` exactly, and the call count becomes 1.
+    """
+    fixed = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    calls: list[Timestamp] = []
+
+    def _counting_tick() -> Timestamp:
+        calls.append(fixed + timedelta(microseconds=len(calls) + 1))
+        return calls[-1]
+
+    ledger = _ledger_writer(tmp_path)
+    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=_counting_tick)
+
+    before = datetime.now(UTC)
     writer.append("tenant-a", _make_audit_entry(entry_hash="f" * 64))
+    after = datetime.now(UTC)
 
     [is_entry] = read_ledger(writer.ledger_writer.handle)
-    # Ticking clock advances by 1 microsecond per call.
-    assert is_entry.timestamp == fixed + timedelta(microseconds=1)
+    assert is_entry.timestamp != fixed + timedelta(microseconds=1), (
+        "the injected clock must NOT be the persisted timestamp under the row-12 election"
+    )
+    assert before <= is_entry.timestamp <= after, (
+        "the persisted timestamp must be the writer's own sample, taken during this append"
+    )
+    assert calls == [], "the injected time_source must not be consulted for the ledger timestamp"
+    # API stability — the kwarg is retained and still bound.
+    assert writer.time_source is _counting_tick
 
 
 # --- B-47 item (e) — full-entry durable sidecar -----------------------------
@@ -1830,26 +1874,45 @@ def test_reader_first_ever_append_race_does_not_false_report_loss(tmp_path: Path
 
 
 def test_append_samples_timestamp_inside_serialization_lock(tmp_path: Path) -> None:
-    """Codex round-4 P1 (PR B2a) — with parallel audit workers, timestamps
-    sampled OUTSIDE the ordered critical section could commit out of order:
-    the earlier append raised NonMonotonicTimestampError AFTER its sidecar
-    row landed (an unanchored row). The time source must now be invoked
-    while the per-ledger append lock is held."""
-    from harness_runtime.lifecycle import audit_writer as audit_writer_module
+    """Codex round-4 P1 (PR B2a), RESTATED under the row-12 C-IS-07 §7.6.1
+    election (IS spec v1.13, `B-57`).
 
+    The original property — *"the time source must be invoked while the
+    per-ledger append lock is held"* — was carried by an assertion INSIDE the
+    injected clock. Under the election that clock is never invoked for the
+    ledger timestamp, so the original body would have gone VACUOUSLY GREEN
+    (a pass-on-absence liveness-discriminator loss), which is why it is
+    restated here rather than left standing.
+
+    The property it now pins is STRICTLY STRONGER and lives one layer down:
+    the persisted instant is sampled inside `append_ledger_entry`'s OWN write
+    serialization point (the critical section that reads the prior entry),
+    not merely inside this module's audit lock. Witnessed directly by
+    (a) the injected source going UNCONSULTED, and (b) two successive appends
+    landing real, non-decreasing, this-call-bracketed instants.
+
+    PD-8: revert the row-12 election and (a) fails — the injected source is
+    consulted twice and the persisted values become the 2026-05-19 fixtures.
+    """
     ledger = _ledger_writer(tmp_path)
-    lock = audit_writer_module._append_lock_for(ledger.handle.canonical_path)
-    state = {"now": datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)}
+    consulted: list[int] = []
 
-    def _lock_held_tick() -> Timestamp:
-        assert lock.locked(), "timestamp sampled OUTSIDE the append lock"
-        state["now"] = state["now"] + timedelta(microseconds=1)
-        return state["now"]
+    def _never_consulted_tick() -> Timestamp:
+        consulted.append(1)
+        return datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
 
-    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=_lock_held_tick)
+    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=_never_consulted_tick)
+    before = datetime.now(UTC)
     writer.append("tenant-A", _make_audit_entry("1" * 64))
     writer.append("tenant-A", _make_audit_entry("2" * 64))
+    after = datetime.now(UTC)
+
+    assert consulted == [], "the injected clock must not be consulted under the row-12 election"
     assert len(writer.read_for_tenant("tenant-A")) == 2
+    first, second = read_ledger(ledger.handle)
+    assert before <= first.timestamp <= second.timestamp <= after, (
+        "both persisted instants must be writer-owned samples taken in physical-append order"
+    )
 
 
 def test_concurrent_appends_never_raise_non_monotonic(tmp_path: Path) -> None:
@@ -1880,25 +1943,85 @@ def test_concurrent_appends_never_raise_non_monotonic(tmp_path: Path) -> None:
     assert verify_chain(entries).status is VerificationStatus.VALID
 
 
-def test_stale_timestamp_resamples_instead_of_orphaning_sidecar_row(tmp_path: Path) -> None:
-    """Codex round-8 P1 (PR B2a) — the append lock serializes AUDIT appends
-    only; an ordinary F2/state write to the same ledger can commit a newer
-    timestamp between our sampling and our IS append, which then raised
-    NonMonotonicTimestampError AFTER the sidecar row was durable (an
-    unanchored signature, audit record omitted). The IS append is
-    timestamp-independent for the sidecar identity, so a stale sample now
-    resamples and retries."""
+def test_electing_audit_append_has_no_resample_retry_loop(tmp_path: Path) -> None:
+    """AC #19 disposition witness — the successor to
+    `test_stale_timestamp_resamples_instead_of_orphaning_sidecar_row`.
+
+    The bounded 5-attempt resample-retry loop (codex round-8 P1) existed to
+    recover from the ONE refusal the row-12 C-IS-07 §7.6.1 election makes
+    structurally unreachable: an ordinary F2/state write committing a newer
+    timestamp BETWEEN our out-of-lock sample and our IS append. Under election
+    there is no such window — the persisted instant is sampled inside
+    `append_ledger_entry`'s critical section — so the loop was REMOVED rather
+    than left as dead code.
+
+    **The removal is witnessed by COUNTING IS APPEND ATTEMPTS on the one path
+    that still refuses**, not by observing the injected clock go unconsulted —
+    an earlier draft did the latter and out-of-family review round 2 [P1]
+    correctly called it VACUOUS: with the election in place the clock is never
+    touched whether the loop is present or absent, so it could not discriminate.
+    The loop's own signature is that a refused append is RETRIED up to FIVE
+    times; its absence is that the refusal propagates on attempt ONE.
+
+    The refusal is forced through §7.6.1's own recorded MIXED-POPULATION limit
+    (a preceding NON-electing producer persisting a future-skewed timestamp) —
+    the one refusal election does not remove, and the one no resample could
+    ever have recovered from, which is the second half of why the loop went.
+
+    PD-8 (run, not assumed): restore the loop with the election left in place
+    and `attempts` becomes 5 — this test goes RED on a mutation that the
+    earlier clock-based formulation could not detect at all.
+    """
+    ledger = _ledger_writer(tmp_path)
+    attempts: list[EntryPayload] = []
+    real_append = ledger.append
+
+    def _counting_append(payload: EntryPayload, write_key: WriteKey) -> WriteResult:
+        attempts.append(payload)
+        return real_append(payload, write_key)
+
+    # Seed a FUTURE-skewed non-electing entry so the audit append below is
+    # refused — the only refusal that survives the row-12 election.
+    real_append(
+        EntryPayload(
+            action_id="plain:future-skewed",
+            idempotency_key="plain-future-skewed-1",
+            actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-runtime"),
+            timestamp=datetime.now(UTC) + timedelta(hours=1),
+        ),
+        WriteKey(thread_id="t-plain", step_id="s-1", idempotency_key="plain-future-skewed-1"),
+    )
+    attempts.clear()
+    object.__setattr__(ledger, "append", _counting_append)
+
+    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=lambda: datetime.now(UTC))
+    with pytest.raises(NonMonotonicTimestampError):
+        writer.append("tenant-A", _make_audit_entry("1" * 64))
+
+    assert len(attempts) == 1, (
+        "the AC #19 bounded 5-attempt resample-retry loop is GONE — a refused "
+        f"append propagates on the FIRST attempt, got {len(attempts)} attempts"
+    )
+
+
+def test_electing_audit_append_needs_no_resample_on_the_ordinary_path(
+    tmp_path: Path,
+) -> None:
+    """AC #19's other half — the refusal the loop existed for is unreachable.
+
+    The pre-election script that used to FORCE one retry (a fresh sample at
+    t+5s, then a STALE t+1s as if a competing writer had committed in between)
+    is fed in verbatim. It no longer produces a refusal, because the persisted
+    instant is sampled inside `append_ledger_entry`'s critical section and the
+    injected clock is not consulted for it at all.
+
+    PD-8: revert the row-12 election and the second append raises
+    `NonMonotonicTimestampError` — which is precisely what the removed loop
+    used to swallow.
+    """
     ledger = _ledger_writer(tmp_path)
     base = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
-    # First append at t+5s; the SECOND append's first sample is STALE (t+1s
-    # — as if a competing writer committed t+5s after we sampled), and its
-    # retry sample is fresh (t+6s).
-    ticks = [
-        base + timedelta(seconds=5),
-        base + timedelta(seconds=1),
-        base + timedelta(seconds=6),
-        base + timedelta(seconds=7),
-    ]
+    ticks = [base + timedelta(seconds=5), base + timedelta(seconds=1)]
 
     def _scripted_clock() -> Timestamp:
         return ticks.pop(0)
@@ -1911,8 +2034,37 @@ def test_stale_timestamp_resamples_instead_of_orphaning_sidecar_row(tmp_path: Pa
 
     entries = read_ledger(writer.ledger_writer.handle)
     assert verify_chain(entries).status is VerificationStatus.VALID
+    assert [e.timestamp for e in entries] == sorted(e.timestamp for e in entries)
     hashes = [e.entry_hash for e in writer.read_full_entries_for_tenant("tenant-A")]
     assert hashes == [first.entry_hash, second.entry_hash]
+
+
+def test_electing_audit_append_still_refusable_under_mixed_population(tmp_path: Path) -> None:
+    """The §7.6.1 recorded limit, witnessed rather than assumed — *election is
+    NOT refusal immunity*.
+
+    The DIRECT surface's population is MIXED by design: electing and
+    non-electing producers coexist on one ledger, which is exactly what
+    preserves the default for everyone who does not elect. So an electing
+    append CAN still be refused when a preceding NON-electing producer has
+    persisted a FUTURE-skewed caller-supplied timestamp — and no resample
+    could have recovered from that either, which is the second half of why
+    AC #19's loop was removed rather than kept.
+    """
+    ledger = _ledger_writer(tmp_path)
+    future = datetime.now(UTC) + timedelta(hours=1)
+    ledger.append(
+        EntryPayload(
+            action_id="plain:future-skewed",
+            idempotency_key="plain-future-skewed-1",
+            actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-runtime"),
+            timestamp=future,
+        ),
+        WriteKey(thread_id="t-plain", step_id="s-1", idempotency_key="plain-future-skewed-1"),
+    )
+    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=lambda: datetime.now(UTC))
+    with pytest.raises(NonMonotonicTimestampError):
+        writer.append("tenant-A", _make_audit_entry("1" * 64))
 
 
 def test_per_family_verifier_over_real_sidecar_rehydration(tmp_path: Path) -> None:
@@ -2705,12 +2857,20 @@ def test_first_sidecar_txn_with_concurrent_state_append_no_deadlock(tmp_path: Pa
     def _plain() -> None:
         txn_in_section.wait(30)
         # A plain state-ledger append against the same parent directory.
+        # `WRITER_OWNED_TIMESTAMP` (C-IS-07 §7.6.1) rather than the former
+        # fixed `2026-05-19T13:00` fixture: since the row-12 election the
+        # audit append this races carries a REAL `now()` instant, so a
+        # fixed past fixture here would be refused as non-monotonic and
+        # this witness would fail for a reason that has nothing to do with
+        # the lock ORDER it exists to pin. The timestamp is incidental to
+        # this test; the deadlock assertion below is unchanged and still
+        # discriminates under the order-revert regression.
         writer.ledger_writer.append(
             EntryPayload(
                 action_id="plain:concurrent",
                 idempotency_key="plain-concurrent-1",
                 actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-runtime"),
-                timestamp=datetime(2026, 5, 19, 13, 0, 0, tzinfo=UTC),
+                timestamp=WRITER_OWNED_TIMESTAMP,
             ),
             WriteKey(thread_id="t-plain", step_id="s-1", idempotency_key="plain-concurrent-1"),
         )

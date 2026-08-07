@@ -20,7 +20,13 @@ runtime writer; this module is pure persistence. The wrap encodes:
   in principle reference the same OD entry without dedup-conflating them).
 - `EntryPayload.actor` = the runtime's bound IS actor (from
   `LedgerWriter.actor` — committed at materialize_state_ledger time).
-- `EntryPayload.timestamp` = `time_source()` (default `datetime.now(UTC)`).
+- `EntryPayload.timestamp` = `WRITER_OWNED_TIMESTAMP` — this site's C-IS-07
+  §7.6.1 ELECTION (IS spec v1.13, `B-57` Reading A; IS plan v2.9 §2.1 row 12).
+  The persisted instant is sampled by `append_ledger_entry` inside its own
+  write serialization point, NOT here. `time_source` is retained as a
+  construction kwarg for API stability but no longer determines the persisted
+  ledger timestamp (the same disposition `sub_agent_dispatch` took at the
+  §7.6 B-48 carve-out).
 - `WriteKey.thread_id = "audit:<tag>"`; `step_id = action_id`;
   `idempotency_key = action_id`.
 
@@ -85,8 +91,8 @@ from harness_is.cross_process_ledger_lock import (
 )
 from harness_is.state_ledger_entry_schema import Identifier, StateLedgerEntry, Timestamp
 from harness_is.state_ledger_write import (
+    WRITER_OWNED_TIMESTAMP,
     EntryPayload,
-    NonMonotonicTimestampError,
     WriteKey,
     WriteResult,
     read_ledger,
@@ -292,7 +298,18 @@ class RuntimeAuditLedgerWriter:
     """IS state-ledger writer (U-RT-12) — durable substrate for audit entries."""
 
     time_source: Callable[[], Timestamp]
-    """Timestamp injection point (test determinism). Default: `datetime.now(UTC)`."""
+    """Retained construction kwarg; NO LONGER the persisted ledger timestamp.
+
+    C-IS-07 §7.6.1 (IS spec v1.13, `B-57` Reading A; IS plan v2.9 §2.1 row 12
+    — the injection-caveat site, resolved **ELECT** at the impl leg): the IS
+    append below stamps `WRITER_OWNED_TIMESTAMP`, so `append_ledger_entry`
+    samples the persisted instant inside its own write serialization point and
+    this callable is not consulted for it. The seam's TIMESTAMP ROLE is
+    retired here; the kwarg itself is kept for API stability across the ~30
+    construction sites that pass it, exactly as `sub_agent_dispatch` kept its
+    own `time_source` at the §7.6 B-48 carve-out (`sub_agent_dispatch.py`
+    field docstring). Default: `datetime.now(UTC)`.
+    """
 
     cutover_record: AuditCutoverRecord | None = None
     """U-RT-139 live-writer wiring — the AUTHENTICATED cutover record
@@ -661,8 +678,13 @@ class RuntimeAuditLedgerWriter:
         key (scoped by tenant via the action_id prefix).
         """
         # ONE ordered critical section per ledger path (codex round-4
-        # P1): timestamp sampling + sidecar write + IS append serialize
-        # together, so commit order always matches timestamp order.
+        # P1): the sidecar write + IS append serialize together, so a
+        # concurrent audit append cannot interleave between them.
+        # (Timestamp sampling no longer happens here at all — the row-12
+        # C-IS-07 §7.6.1 election moved it inside the IS writer's own
+        # serialization point, which is strictly stronger than this lock
+        # for ordering; this lock's remaining job is the sidecar-first
+        # pairing, not timestamp order.)
         with _append_lock_for(self.ledger_writer.handle.canonical_path):
             return self._append_core(tenant_id, audit_entry, sidecar_locks_held=False)
 
@@ -698,7 +720,18 @@ class RuntimeAuditLedgerWriter:
             action_id=action_id,
             idempotency_key=action_id,
             actor=self.ledger_writer.actor,
-            timestamp=self.time_source(),
+            # C-IS-07 §7.6.1 ELECTION (IS spec v1.13, `B-57` Reading A; IS
+            # plan v2.9 §2.1 row 12 — the injection-caveat site, resolved
+            # ELECT per AC #18). This entry's `timestamp` means WHEN THE IS
+            # ANCHOR WAS APPENDED, never when the audited event happened (the
+            # OD entry carries its own instants inside the signed payload
+            # persisted to the sidecar), so §7.6.1's eligibility rule permits
+            # electing. Electing OVERRIDES the injected `time_source` — that
+            # is the caveat, taken deliberately: the seam's timestamp role is
+            # retired here (the kwarg survives for API stability) because the
+            # inversion it could not close from OUTSIDE the writer's lock is
+            # exactly `B-57`'s named failure.
+            timestamp=WRITER_OWNED_TIMESTAMP,
         )
         write_key = WriteKey(
             thread_id=Identifier(f"{self._ACTION_ID_PREFIX}:{self._tenant_tag(tenant_id)}"),
@@ -724,32 +757,34 @@ class RuntimeAuditLedgerWriter:
             self._append_sidecar_line_if_missing_locked(tenant_id, audit_entry)
         else:
             self._append_sidecar_line_if_missing(tenant_id, audit_entry)
-        # Bounded resample-retry (codex round-8 P1): this lock
-        # serializes AUDIT appends, but ordinary `LedgerWriter.append`
-        # F2/state writes to the SAME ledger do not take it — one can
-        # commit a newer timestamp between our sampling and our IS
-        # append, which then raises NonMonotonicTimestampError AFTER
-        # the sidecar row is durable (an unanchored signature). The IS
-        # append is retry-safe here: the OD entry (and so the sidecar
-        # identity) is timestamp-independent, and the idempotency key
-        # is unchanged — resample a fresh timestamp and retry. Bounded:
-        # a hot ledger could starve an unbounded loop; exhaustion
-        # propagates the error loudly (the sidecar row is preserved and
-        # the NEXT append's crash-repair path re-anchors it).
-        attempts_left = 5
-        while True:
-            try:
-                return self.ledger_writer.append(payload, write_key)
-            except NonMonotonicTimestampError:
-                attempts_left -= 1
-                if attempts_left <= 0:
-                    raise
-                payload = EntryPayload(
-                    action_id=payload.action_id,
-                    idempotency_key=payload.idempotency_key,
-                    actor=payload.actor,
-                    timestamp=self.time_source(),
-                )
+        # AC #19 — the bounded resample-retry loop that stood here (codex
+        # round-8 P1) is REMOVED, deliberately, as a consequence of the row-12
+        # election above; the removal is witnessed at
+        # `test_electing_audit_append_has_no_resample_retry_loop`.
+        #
+        # What it recovered from: this lock serializes AUDIT appends, but an
+        # ordinary `LedgerWriter.append` F2/state write to the SAME ledger does
+        # not take it, so it could commit a newer timestamp BETWEEN our sample
+        # and our IS append — raising NonMonotonicTimestampError after the
+        # sidecar row was already durable. Resampling closed that window from
+        # outside the writer's lock, one attempt at a time.
+        #
+        # Why it is now dead: under C-IS-07 §7.6.1 election there IS no window
+        # — the persisted instant is sampled inside `append_ledger_entry`'s own
+        # critical section, after the prior entry is read, so sampling order IS
+        # physical-append order at this site. The sample-then-lose-the-race
+        # refusal it caught is structurally unreachable here.
+        #
+        # And why it would now be WRONG to keep: its retry re-stamped the
+        # payload with `self.time_source()`, a CALLER-supplied value — a retry
+        # would silently revert this site to caller-supplied semantics, i.e.
+        # un-elect it mid-append. The one refusal that DOES survive election is
+        # §7.6.1's recorded mixed-population limit (a preceding NON-electing
+        # producer persisting a future-skewed timestamp), and resampling cannot
+        # recover from that: a fresh `now()` is still earlier. That residual
+        # propagates loudly — exactly what the old loop did on exhaustion, with
+        # the sidecar row preserved for the next append's crash-repair path.
+        return self.ledger_writer.append(payload, write_key)
 
     def _sidecar_line_for(self, tenant_id: str | None, audit_entry: AuditLedgerEntry) -> str:
         return json.dumps(

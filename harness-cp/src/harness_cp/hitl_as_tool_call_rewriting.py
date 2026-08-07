@@ -24,12 +24,15 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
 from enum import StrEnum
 
 from harness_core import PersonaTier
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
-from harness_is.state_ledger_write import EntryPayload, WriteResult
+from harness_is.state_ledger_write import (
+    WRITER_OWNED_TIMESTAMP,
+    EntryPayload,
+    WriteResult,
+)
 from pydantic import BaseModel, ConfigDict
 
 from harness_cp.cp_shared_types import ActorIdentity
@@ -287,7 +290,12 @@ async def emit_hitl_tool_call_rewriting_state_ledger_entry(
         action_id=Identifier(_HITL_TOOL_CALL_REWRITING_ACTION_ID),
         idempotency_key=Identifier(idempotency_key),
         actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
-        timestamp=datetime.now(UTC),
+        # C-IS-07 §7.6.1 ELECTION (IS spec v1.13, `B-57` Reading A; IS plan
+        # v2.9 §2.1 row 8). This §16.5 composer's `timestamp` means WHEN THE
+        # ENTRY WAS APPENDED — the rewriting outcome's own identity lives in
+        # the canonicalized bytes behind `idempotency_key` — so §7.6.1's
+        # eligibility rule permits electing. Per call site, never a default.
+        timestamp=WRITER_OWNED_TIMESTAMP,
         procedural_tier_snapshot_ref=procedural_tier_snapshot_resolver(),
     )
     return await ledger_writer(payload)

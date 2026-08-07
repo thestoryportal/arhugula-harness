@@ -866,6 +866,48 @@ async def test_8b_hitl_f2_entry_populates_procedural_tier_snapshot_ref(
 
 
 @pytest.mark.asyncio
+async def test_8b_hitl_f2_entry_elects_writer_owned_timestamp(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """IS plan v2.9 §2.1 row 11 — the per-site conversion witness for this
+    module's C-IS-07 §7.6.1 ELECTION (IS spec v1.13, `B-57` Reading A).
+
+    The 8b F2 entry's `timestamp` means WHEN THE ENTRY WAS APPENDED — the HITL
+    response's own instant is the separate `timestamp` on the
+    `CPAuditLedgerEntry` composed just above it, which is UNCHANGED — so the
+    §7.6.1 eligibility rule permits electing, and the payload carries the
+    sentinel rather than a locally-captured `datetime.now(UTC)`.
+
+    PD-8: restore `timestamp=datetime.now(UTC)` at that site and this FAILS —
+    the captured payload carries a real instant instead of the sentinel.
+    """
+    from harness_is.state_ledger_write import WRITER_OWNED_TIMESTAMP
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=5.0)]
+    )
+    ledger = _MockLedgerWriter()
+    composer = RuntimeHITLGateComposer(
+        inner=inner,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, _MockAuditWriter()),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    step = _make_step(placements=(placement,))
+    await composer.dispatch(cast(Any, object()), step, step_context=_make_step_context())
+    payload, _key = ledger.appends[0]
+    assert payload.timestamp == WRITER_OWNED_TIMESTAMP
+
+
+@pytest.mark.asyncio
 async def test_8b_hitl_resolver_raise_halts_before_ledger_write(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:

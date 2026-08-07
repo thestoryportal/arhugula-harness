@@ -6055,7 +6055,11 @@ def _append_step_ledger_entry(
     """
     # Lazy-import to keep the module's import surface narrow.
     from harness_is.state_ledger_entry_schema import Identifier
-    from harness_is.state_ledger_write import EntryPayload, WriteKey
+    from harness_is.state_ledger_write import (
+        WRITER_OWNED_TIMESTAMP,
+        EntryPayload,
+        WriteKey,
+    )
 
     action_id = ActionID(f"workflow:{workflow_id}:step:{step_index}")
     # R-003 producer-site lift — populate the `procedural_tier_snapshot_ref`
@@ -6071,7 +6075,15 @@ def _append_step_ledger_entry(
         action_id=Identifier(str(action_id)),
         idempotency_key=Identifier(step_idempotency_key),
         actor=ctx.ledger_writer.actor,
-        timestamp=datetime.now(UTC),
+        # C-IS-07 §7.6.1 ELECTION (IS spec v1.13, `B-57` Reading A; IS plan
+        # v2.9 §2.1 row 5). This per-step entry's `timestamp` means WHEN THE
+        # ENTRY WAS APPENDED — it is sampled here purely to fill the field,
+        # not carried from the step's own execution record — so §7.6.1's
+        # eligibility rule permits electing, and the writer samples it inside
+        # `_WRITE_LOCK` at the real append moment. Per call site, never a
+        # default: this is the SAME sentinel `drain_branch_buffers` already
+        # stamps for the buffered surface (§7.6), not a writer-side mode.
+        timestamp=WRITER_OWNED_TIMESTAMP,
         procedural_tier_snapshot_ref=_procedural_tier_snapshot_ref,
     )
     write_key = WriteKey(
@@ -6285,7 +6297,11 @@ def _append_synthesis_ledger_entry(
     writer on the driver thread POST-barrier (after the branch buffers have
     drained), exactly as the linear terminal entry."""
     from harness_is.state_ledger_entry_schema import Identifier
-    from harness_is.state_ledger_write import EntryPayload, WriteKey
+    from harness_is.state_ledger_write import (
+        WRITER_OWNED_TIMESTAMP,
+        EntryPayload,
+        WriteKey,
+    )
 
     action_id = ActionID(f"workflow:{workflow_id}:post-join-synthesis:{synthesis_index}")
     _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
@@ -6294,7 +6310,12 @@ def _append_synthesis_ledger_entry(
         action_id=Identifier(str(action_id)),
         idempotency_key=Identifier(synthesis_idempotency_key),
         actor=ctx.ledger_writer.actor,
-        timestamp=datetime.now(UTC),
+        # C-IS-07 §7.6.1 ELECTION (IS spec v1.13, `B-57` Reading A; IS plan
+        # v2.9 §2.1 row 6). Post-join synthesis rides the single real writer
+        # POST-barrier, and this `timestamp` means WHEN THE ENTRY WAS
+        # APPENDED — the synthesized aggregate carries no event instant of
+        # its own — so §7.6.1's eligibility rule permits electing.
+        timestamp=WRITER_OWNED_TIMESTAMP,
         procedural_tier_snapshot_ref=_procedural_tier_snapshot_ref,
     )
     write_key = WriteKey(

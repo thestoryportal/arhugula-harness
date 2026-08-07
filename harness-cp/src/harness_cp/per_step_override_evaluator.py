@@ -45,7 +45,11 @@ from harness_as import GateLevel
 from harness_core import PersonaTier
 from harness_core.identity import ActionID
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
-from harness_is.state_ledger_write import EntryPayload, WriteResult
+from harness_is.state_ledger_write import (
+    WRITER_OWNED_TIMESTAMP,
+    EntryPayload,
+    WriteResult,
+)
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
 from harness_cp.cp_shared_types import ActorIdentity, AgentRole, ModelBinding
@@ -466,7 +470,9 @@ def compose_override_entry_payload(
 
     - the async `emit_override_state_ledger_entry` composer below (the
       `SINGLE_THREADED_LINEAR` driver-thread site + the runtime cp_is_wiring
-      binding), passing `timestamp=datetime.now(UTC)` + the resolver's value; and
+      binding), passing `timestamp=WRITER_OWNED_TIMESTAMP` — its C-IS-07
+      §7.6.1 ELECTION (IS spec v1.13, `B-57`; IS plan v2.9 §2.1 row 9) — plus
+      the resolver's value; and
     - the CP-driver buffered-branch path (`append_branch_override_ledger_entry`
       at `workflow_driver.py`, R-FS-1 `B-NONLINEAR-OVERRIDE-PROVENANCE`), passing
       a buffer-time placeholder `timestamp` the barrier drain re-stamps + the
@@ -520,6 +526,16 @@ async def emit_override_state_ledger_entry(
         post_override_step_config=post_override_step_config,
         actor=actor,
         procedural_tier_snapshot_ref=procedural_tier_snapshot_resolver(),
-        timestamp=datetime.now(UTC),
+        # C-IS-07 §7.6.1 ELECTION (IS spec v1.13, `B-57` Reading A; IS plan
+        # v2.9 §2.1 row 9). The election is expressed HERE, at the SAMPLING
+        # caller — NOT at `compose_override_entry_payload`'s pass-through
+        # `timestamp=timestamp`, which is the SHARED shape authority the
+        # CP-driver buffered-branch path also composes through with its own
+        # buffer-time placeholder that the barrier drain re-stamps (§7.6).
+        # Electing in the composer would silently convert that second path
+        # too. This entry's `timestamp` means WHEN THE ENTRY WAS APPENDED —
+        # the override is a static binding property, its identity carried by
+        # the §16.5.4 key — so §7.6.1's eligibility rule permits electing.
+        timestamp=WRITER_OWNED_TIMESTAMP,
     )
     return await ledger_writer(payload)
