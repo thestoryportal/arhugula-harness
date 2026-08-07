@@ -3167,7 +3167,7 @@ items:
 - id: B-88
   title: 'Memory failure telemetry: substring-keyed classify_memory_failure collapses the typed input-error family (and two real policy denials) to io_failure'
   status: open
-  pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record)'
+  pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record) + #1245 (the SPEC leg -- Memory spec v1.3 + Memory plan v1.3, both clearance markers)'
   summary: '[SUPERSEDED 2026-08-05 -- RATIFIED as READING A with sub-decision A-ii = RE-TYPE;
     the spec half is DECIDED and the status is now `design_substrate_gated` with a spec leg then
     an impl leg owed. Every ''the spec half REMAINS, so the row stays registered_finding'' statement

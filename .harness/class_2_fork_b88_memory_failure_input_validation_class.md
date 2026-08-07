@@ -1,6 +1,6 @@
 # Class 2 Fork — B-88 (spec half): the C-MEM-19 failure vocabulary has no input-validation class, so a malformed memory-tool argument has nowhere truthful to go
 
-**Status: RATIFIED 2026-08-05 as READING A, sub-decision A-ii = RE-TYPE** (filed 2026-08-05). See `## §11 RATIFICATION` at the foot of this file. Doc-only filing per the workspace
+**Status: RATIFIED 2026-08-05 as READING A, sub-decision A-ii = RE-TYPE; SPEC LEG LANDED 2026-08-06 at PR #1245 (Memory spec v1.2 -> v1.3 + Memory plan v1.2 -> v1.3, both clearance markers; register row `B-88` -> `open`). The IMPL LEG (U-MEM-28) is the only thing this fork still owes.** (filed 2026-08-05). See `## §11 RATIFICATION` at the foot of this file. Doc-only filing per the workspace
 codex-context-guard rule (fork FILINGS ship doc-only FIRST; no `design-substrate/**` edit rides this
 PR). Chain mirrors `B-107`'s, `B-98`'s and `B-97`(a)'s: **filing (this PR) → operator ratification →
 spec leg → impl leg.**
@@ -755,3 +755,44 @@ recorded in contract text; a re-type that leaves it unstated ships a control-flo
 chose. **Zero hash / CXA / contract-number impact.**
 
 **No council is owed.** §7's convening was probe-resolved and conditional on **Reading B** only.
+
+### §11.6 SPEC LEG LANDED - PR #1245, 2026-08-06
+
+`Spec_Memory_Substrate_v1.md` **v1.2 -> v1.3** and `Implementation_Plan_Memory_Substrate_v1.md`
+**v1.2 -> v1.3**, with both clearance markers
+(`.harness/clearance/{spec,implementation-plan}-memory-substrate-v1-3-cleared-2026-08-06.md`).
+Register row `B-88` transits `design_substrate_gated` -> **`open`** on both surfaces at that PR, per
+the status enum at `.harness/forward-register.yaml`'s own head. **The IMPL LEG is the only thing this
+fork still owes**, and it is carried by NEW plan unit **U-MEM-28** (G8).
+
+**What the spec leg decided, that this filing routed to it.** (i) The **retry exit classification**
+for the six re-typed sites: **fail-fast PRESERVED**, on the ground that an unset runtime memory
+context and a malformed harness-supplied schema are deterministic and candidate-independent, so a
+retry - and, under a fallback chain, a candidate advance - cannot succeed; continuity with the
+shipped disposition is corroboration, not the argument. Stated as a constraint on the authorized
+re-typing rather than as a retry obligation minted at a memory contract. (ii) The **coverage
+statement**, in exactly the terms §11.1 required: the class is claimed for the classify-routed
+population, the dispatch prepare path emits no `memory.failure_class` today and the leg neither
+wires nor promises one - with the converse explicitly **not** licensed, so no existing emission may
+be withdrawn by relocating a check onto an unclassified path.
+
+**Three departures from this filing's own text, recorded rather than absorbed - none changes a
+disposition.**
+
+1. **"No new unit" (§4, §8, §9, §11.5) is followed for the vocabulary half and departed from for the
+   A-ii half.** U-MEM-22's acceptance line was extended in place as prescribed; the A-ii work - a
+   six-site source re-typing, a receiving-type choice, a preserved fail-fast disposition, an
+   end-to-end dispatch/retry witness - had **no owning unit**, and that assessment predates A-ii,
+   which was raised at this filing's own R4 and scoped only at ratification. NEW **U-MEM-28** carries
+   it, per the plan's own `B-86` -> U-MEM-26 / `B-92` -> U-MEM-27 convention. Nothing in U-MEM-28
+   exceeds §11.5's enumerated impl-leg list. **Flagged overturnable at the plan change-note.**
+2. **The classify-routed population is FIVE production call sites at HEAD `3a1300eb`, not the four
+   §11.1 recorded.** `B-84`'s ratified pre-pass landed at PR #1243 **between** the ratification and
+   the spec leg, adding `memory_tool_executor.py:355` (and moving the executor catch `:255` ->
+   `:315`). It **satisfies §11.1's mandatory C-MEM-19 preservation clause as built**, and the faults
+   it classifies are exactly the argument refusals the new member names.
+3. **Every `lifecycle/llm_dispatch.py` offset in §11.1 / §11.4's six/two enumeration has shifted.**
+   Re-resolved **by content** at the spec leg: internal-fault six at `:4359` / `:4363` / `:4475` /
+   `:4483` / `:4977` / `:4988`; the two **RETAINED** model-supplied-`scope_ref` sites at `:4369` /
+   `:4371`. **The six/two split itself is unchanged** - only the offsets moved, and U-MEM-28
+   instructs re-resolution by content at the impl leg's own HEAD rather than inheriting either set.
