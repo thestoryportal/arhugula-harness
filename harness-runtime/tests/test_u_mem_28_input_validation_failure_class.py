@@ -22,6 +22,16 @@ tell them apart would let one of them regress green:
    raises the family BASE - the base classifies to the same residual, but is not
    in the fail-fast set, so it would silently fall through to transient retry.
 
+   READ THE POLARITY CAREFULLY, because a strong reviewer inverted it (gemini R4
+   [P1]): `_classify_provider_exception` returns a `ValidatorRetryExitClass` for
+   RETRYABLE and **`None` for fail-fast / propagate** - its own signature is
+   `-> ValidatorRetryExitClass | None` and the fail-fast `isinstance` tuple's
+   branch is literally `return None`. So
+   `assert _classify_provider_exception(exc) is None` is the assertion that the
+   type IS in the fail-fast tuple, not that it is missing from it. Mutation probe
+   (c) is the empirical proof: removing `MemoryToolExecutionInternalError` from
+   that tuple turns all six of these assertions RED.
+
 Every site below is resolved BY CONTENT (what the check reads), never by line
 offset: every offset in `llm_dispatch.py` had already shifted once between the
 ratification and the spec leg.
@@ -286,12 +296,23 @@ async def _raised_by_dispatch(
     memory_context: RuntimeMemoryContext,
     *,
     provider: str = "openai",
+    model: str = "test-model-1",
 ) -> BaseException:
-    """Drive the REAL dispatch path and return the exception it actually raised."""
+    """Drive the REAL dispatch path and return the exception it actually raised.
+
+    `model` is threaded so the `StepEffectiveBinding` names the SAME model the
+    caller's `RuntimeMemoryContext` was composed for (gemini R4 [P2]). Nothing in
+    the guards under test reads the model - `_standard_memory_tools_context`
+    compares `selection.selected_provider` against the dispatched PROVIDER - so
+    the previous mismatch was inert rather than a false green, and the per-site
+    mutation probes confirmed each witness still reached its own site. It is
+    aligned anyway: a fixture whose binding and context disagree invites exactly
+    the doubt the reviewer raised.
+    """
 
     dispatcher = _dispatcher(memory_context, provider=provider)
     with pytest.raises(MemoryToolExecutionError) as excinfo:
-        await dispatcher.dispatch(_binding(provider), _step(), step_context=_step_context())
+        await dispatcher.dispatch(_binding(provider, model), _step(), step_context=_step_context())
     return excinfo.value
 
 
@@ -491,7 +512,7 @@ async def test_internal_site_5_ollama_schema_injection_unset_scope_ref() -> None
     context = _memory_context(
         provider="ollama", model="llama3.2:3b", family=ProviderFamily.LOCAL_OPEN_WEIGHT
     ).model_copy(update={"scope_ref": None})
-    exc = await _raised_by_dispatch(context, provider="ollama")
+    exc = await _raised_by_dispatch(context, provider="ollama", model="llama3.2:3b")
 
     assert isinstance(exc, MemoryToolExecutionInternalError)
     assert "schema injection" in str(exc)
@@ -513,7 +534,7 @@ async def test_internal_site_6_ollama_schema_injection_properties_missing(
     context = _memory_context(
         provider="ollama", model="llama3.2:3b", family=ProviderFamily.LOCAL_OPEN_WEIGHT
     )
-    exc = await _raised_by_dispatch(context, provider="ollama")
+    exc = await _raised_by_dispatch(context, provider="ollama", model="llama3.2:3b")
 
     assert isinstance(exc, MemoryToolExecutionInternalError)
     assert "input schema properties missing" in str(exc)
