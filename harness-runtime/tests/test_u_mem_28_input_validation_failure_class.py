@@ -811,9 +811,12 @@ async def test_a_re_typed_internal_fault_takes_the_fail_fast_exit_end_to_end() -
     """Through the REAL retry path, not by inspecting the isinstance tuple.
 
     A single-candidate chain plus `max_attempts=3`: under `TRANSIENT_RETRY` this
-    consumes three dispatches, under fail-fast exactly one. `fail_threshold=1`
-    so the single failure trips a real breaker, and the transition's existence
-    is asserted BEFORE its cause, so the cause assertion cannot go vacuous.
+    consumes three dispatches, under fail-fast exactly one. `fail_threshold=1` is
+    a TEST-FIXTURE value - not a production posture and not a claim about one -
+    chosen only so the single fail-fast failure surfaces an observable
+    transition; the transition's existence is then asserted BEFORE its cause, so
+    the cause assertion cannot go vacuous. See the annotated block at the end of
+    this test for what each of those three assertions is and is not saying.
     """
 
     emissions: list[Any] = []
@@ -891,7 +894,30 @@ async def test_a_re_typed_internal_fault_takes_the_fail_fast_exit_end_to_end() -
     assert first["retry.fail_class"] == "permanent-fail-exit"
     assert first["retry.cause_attribution"] == "MemoryToolExecutionInternalError"
 
-    # Positive control before the cause assertion.
+    # The breaker bookkeeping, in the shape the existing sibling witness for
+    # this family already pins
+    # (`test_lifecycle_retry_breaker_fallback.py::test_memory_tool_input_error_fail_fast_trip_carries_no_breaker_cause`).
+    # Three separate things are being said here, and the middle one is a
+    # TEST-FIXTURE fact rather than a production semantic (gemini R2 [P1] read it
+    # as the latter):
+    #
+    # 1. POSITIVE CONTROL - a transition was actually emitted. Without it, the
+    #    `cause` assertion below would pass vacuously on silence, which is the
+    #    exact vacuity `fail_threshold=1` exists to remove. Production does NOT
+    #    run a threshold of 1; that value is set at the top of THIS test purely
+    #    so one fail-fast failure is observable as a transition. The fail-fast
+    #    branch calling `breaker.record_failure(...)` at all is PRE-EXISTING
+    #    behaviour shared with `MemoryToolExecutionInputError`
+    #    (`LLMDispatchPayloadShapeError` too) since B-84; this unit adds a type
+    #    to the same tuple and changes none of it.
+    # 2. The transition's terminal state, asserted so the positive control is
+    #    about a real OPEN transition rather than any emission at all.
+    # 3. `cause is None` is the CORRECT value, not a missing one - and this is
+    #    the assertion, not a lead-in to a different one. `_classify_breaker_cause`
+    #    duck-types on `.status_code`, which this exception does not carry, so
+    #    the honest report is the ABSENCE of a classified cause; C-OD-07 §7.1
+    #    populates `harness.breaker.cause` only on a real classified trip.
+    #    Hardcoding a cause here was precisely the B-88 lens-3 defect.
     assert len(emissions) == 1
     assert emissions[0].to_state.value == "open"
     assert emissions[0].cause is None
