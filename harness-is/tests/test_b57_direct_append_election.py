@@ -19,6 +19,7 @@ that turns it RED.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import time
@@ -506,6 +507,12 @@ _DEFER_SITE = "harness-cp/src/harness_cp/sibling_ledger_entry_composition.py"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+#: A payload stamp, tolerating the trailing-comma variance a formatter can
+#: introduce (out-of-family review round 2 [P3]). Deliberately does NOT match
+#: prose mentions in comments/docstrings, nor the §7.6 drain path's
+#: `model_copy(update={"timestamp": ...})` form.
+_STAMP_LINE = re.compile(r"timestamp=WRITER_OWNED_TIMESTAMP,?")
+
 
 def _sentinel_stamps_by_module() -> dict[str, int]:
     """Every production `timestamp=WRITER_OWNED_TIMESTAMP` payload stamp.
@@ -523,7 +530,7 @@ def _sentinel_stamps_by_module() -> dict[str, int]:
             count = sum(
                 1
                 for line in module.read_text(encoding="utf-8").splitlines()
-                if line.strip() == "timestamp=WRITER_OWNED_TIMESTAMP,"
+                if _STAMP_LINE.fullmatch(line.strip())
             )
             if count:
                 found[module.relative_to(_REPO_ROOT).as_posix()] = count
@@ -594,17 +601,26 @@ def test_defer_site_has_no_production_caller() -> None:
     ever appears, this test fails and the row is re-classified — which is
     exactly what §7.6.1 prescribes.
     """
-    non_test_hits: list[str] = []
+    definitions: list[str] = []
+    invocations: list[str] = []
     for package in sorted(_REPO_ROOT.glob("harness-*")):
         for module in sorted(package.rglob("*.py")):
             parts = module.relative_to(_REPO_ROOT).parts
             if "tests" in parts or ".venv" in parts:
                 continue
-            for lineno, line in enumerate(module.read_text(encoding="utf-8").splitlines(), 1):
-                if "emit_sibling_ledger_entry" in line:
-                    non_test_hits.append(f"{module.relative_to(_REPO_ROOT)}:{lineno}")
-    assert non_test_hits == [
-        "harness-cp/src/harness_cp/sibling_ledger_entry_composition.py:150",
-        "harness-runtime/src/harness_runtime/lifecycle/cp_is_wiring.py:34",
-        "harness-runtime/src/harness_runtime/lifecycle/cp_is_wiring.py:124",
-    ], "row 10's DEFER rests on this seam having no production caller"
+            rel = module.relative_to(_REPO_ROOT).as_posix()
+            for line in module.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if "emit_sibling_ledger_entry" not in stripped:
+                    continue
+                if stripped.startswith(("def ", "async def ")):
+                    definitions.append(rel)
+                elif "emit_sibling_ledger_entry(" in stripped:
+                    invocations.append(rel)
+    # Line numbers are deliberately NOT asserted (out-of-family review round 2
+    # [P2]) — they drift on any unrelated edit above them, which would make this
+    # a false-failure generator rather than a reachability claim.
+    assert definitions == ["harness-runtime/src/harness_runtime/lifecycle/cp_is_wiring.py"]
+    assert invocations == [], (
+        f"row 10's DEFER rests on this seam having NO production caller; found {invocations}"
+    )

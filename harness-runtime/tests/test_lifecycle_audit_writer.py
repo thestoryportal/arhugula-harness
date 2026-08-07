@@ -1955,25 +1955,76 @@ def test_electing_audit_append_has_no_resample_retry_loop(tmp_path: Path) -> Non
     `append_ledger_entry`'s critical section — so the loop was REMOVED rather
     than left as dead code.
 
-    The removal is witnessed, not asserted: the scripted clock below scripts a
-    STALE second sample (the exact input that used to force one retry) and
-    supplies only enough ticks to prove the point — if any resample happened
-    the list would be consulted. Both appends land, in order, with a VALID
-    chain, and the clock is never touched. The loop being gone is therefore
-    observable, not merely claimed.
+    **The removal is witnessed by COUNTING IS APPEND ATTEMPTS on the one path
+    that still refuses**, not by observing the injected clock go unconsulted —
+    an earlier draft did the latter and out-of-family review round 2 [P1]
+    correctly called it VACUOUS: with the election in place the clock is never
+    touched whether the loop is present or absent, so it could not discriminate.
+    The loop's own signature is that a refused append is RETRIED up to FIVE
+    times; its absence is that the refusal propagates on attempt ONE.
 
-    PD-8: restore the loop AND revert the election and this test fails —
-    `consulted` becomes non-empty.
+    The refusal is forced through §7.6.1's own recorded MIXED-POPULATION limit
+    (a preceding NON-electing producer persisting a future-skewed timestamp) —
+    the one refusal election does not remove, and the one no resample could
+    ever have recovered from, which is the second half of why the loop went.
+
+    PD-8 (run, not assumed): restore the loop with the election left in place
+    and `attempts` becomes 5 — this test goes RED on a mutation that the
+    earlier clock-based formulation could not detect at all.
+    """
+    ledger = _ledger_writer(tmp_path)
+    attempts: list[EntryPayload] = []
+    real_append = ledger.append
+
+    def _counting_append(payload: EntryPayload, write_key: WriteKey) -> WriteResult:
+        attempts.append(payload)
+        return real_append(payload, write_key)
+
+    # Seed a FUTURE-skewed non-electing entry so the audit append below is
+    # refused — the only refusal that survives the row-12 election.
+    real_append(
+        EntryPayload(
+            action_id="plain:future-skewed",
+            idempotency_key="plain-future-skewed-1",
+            actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-runtime"),
+            timestamp=datetime.now(UTC) + timedelta(hours=1),
+        ),
+        WriteKey(thread_id="t-plain", step_id="s-1", idempotency_key="plain-future-skewed-1"),
+    )
+    attempts.clear()
+    object.__setattr__(ledger, "append", _counting_append)
+
+    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=lambda: datetime.now(UTC))
+    with pytest.raises(NonMonotonicTimestampError):
+        writer.append("tenant-A", _make_audit_entry("1" * 64))
+
+    assert len(attempts) == 1, (
+        "the AC #19 bounded 5-attempt resample-retry loop is GONE — a refused "
+        f"append propagates on the FIRST attempt, got {len(attempts)} attempts"
+    )
+
+
+def test_electing_audit_append_needs_no_resample_on_the_ordinary_path(
+    tmp_path: Path,
+) -> None:
+    """AC #19's other half — the refusal the loop existed for is unreachable.
+
+    The pre-election script that used to FORCE one retry (a fresh sample at
+    t+5s, then a STALE t+1s as if a competing writer had committed in between)
+    is fed in verbatim. It no longer produces a refusal, because the persisted
+    instant is sampled inside `append_ledger_entry`'s critical section and the
+    injected clock is not consulted for it at all.
+
+    PD-8: revert the row-12 election and the second append raises
+    `NonMonotonicTimestampError` — which is precisely what the removed loop
+    used to swallow.
     """
     ledger = _ledger_writer(tmp_path)
     base = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
-    # The pre-election script: t+5s, then a STALE t+1s that forced a retry.
     ticks = [base + timedelta(seconds=5), base + timedelta(seconds=1)]
-    consulted: list[Timestamp] = []
 
     def _scripted_clock() -> Timestamp:
-        consulted.append(ticks.pop(0))
-        return consulted[-1]
+        return ticks.pop(0)
 
     writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=_scripted_clock)
     first = _make_audit_entry("1" * 64)
@@ -1981,10 +2032,6 @@ def test_electing_audit_append_has_no_resample_retry_loop(tmp_path: Path) -> Non
     assert writer.append("tenant-A", first) is WriteResult.APPENDED
     assert writer.append("tenant-A", second) is WriteResult.APPENDED
 
-    assert consulted == [], (
-        "no sample, and therefore no RESAMPLE, is taken at this site any more — "
-        "the AC #19 retry loop is gone"
-    )
     entries = read_ledger(writer.ledger_writer.handle)
     assert verify_chain(entries).status is VerificationStatus.VALID
     assert [e.timestamp for e in entries] == sorted(e.timestamp for e in entries)
