@@ -592,14 +592,12 @@ def test_retain_and_defer_sites_do_not_elect() -> None:
         )
 
 
-def test_defer_site_has_no_production_caller() -> None:
-    """§2.2 — row 10's DEFER rests on a MEASURED reachability claim, re-measured
-    here rather than trusted.
+def _non_test_occurrences(symbol: str) -> tuple[list[str], list[str]]:
+    """Split a symbol's non-test occurrences into (definitions, invocations).
 
-    `emit_sibling_ledger_entry`'s only non-test occurrences are its definition
-    and two docstring mentions; every call site is a test. If a real producer
-    ever appears, this test fails and the row is re-classified — which is
-    exactly what §7.6.1 prescribes.
+    Line numbers are deliberately NOT reported (out-of-family review round 2
+    [P2]) — they drift on any unrelated edit above them, which would make a
+    reachability claim into a false-failure generator.
     """
     definitions: list[str] = []
     invocations: list[str] = []
@@ -611,15 +609,47 @@ def test_defer_site_has_no_production_caller() -> None:
             rel = module.relative_to(_REPO_ROOT).as_posix()
             for line in module.read_text(encoding="utf-8").splitlines():
                 stripped = line.strip()
-                if "emit_sibling_ledger_entry" not in stripped:
+                if symbol not in stripped:
                     continue
                 if stripped.startswith(("def ", "async def ")):
                     definitions.append(rel)
-                elif "emit_sibling_ledger_entry(" in stripped:
+                elif f"{symbol}(" in stripped:
                     invocations.append(rel)
-    # Line numbers are deliberately NOT asserted (out-of-family review round 2
-    # [P2]) — they drift on any unrelated edit above them, which would make this
-    # a false-failure generator rather than a reachability claim.
+    return definitions, invocations
+
+
+def test_defer_site_has_no_production_caller() -> None:
+    """§2.2 — row 10's DEFER rests on a MEASURED reachability claim, re-measured
+    here rather than trusted.
+
+    **The chain, named explicitly** (out-of-family review round 3 read the
+    earlier one-hop form as a contradiction against `_DEFER_SITE`, which it was
+    not — but the objection was a fair legibility complaint, so both hops are
+    now asserted rather than one):
+
+    1. The DEFER site itself is the `EntryPayload` construction inside
+       `construct_sibling_ledger_entry` (`harness-cp`, the `_DEFER_SITE`
+       module). Its ONLY non-test invocation is inside
+       `RuntimeCpIsWiring.emit_sibling_ledger_entry` (`harness-runtime`) — a
+       DIFFERENT module, which is why the reachability question does not stop
+       at the CP file.
+    2. `emit_sibling_ledger_entry` is where the chain ends: it is DEFINED and
+       never INVOKED outside tests. Nothing in production reaches step 1.
+
+    So the seam is wired but not driven at HEAD; it cannot contend at runtime,
+    and per §7.6.1 a site DEFERRED for want of a production caller *"acquires
+    no election by default; it is re-classified when a real producer appears."*
+    If one ever does, this test fails and forces that re-classification.
+    """
+    # Hop 1 — the DEFER site's own function, reached from exactly one module.
+    definitions, invocations = _non_test_occurrences("construct_sibling_ledger_entry")
+    assert definitions == [_DEFER_SITE]
+    assert invocations == ["harness-runtime/src/harness_runtime/lifecycle/cp_is_wiring.py"], (
+        "the DEFER site must remain reachable ONLY through the cp_is_wiring seam"
+    )
+
+    # Hop 2 — that seam is itself never invoked in production.
+    definitions, invocations = _non_test_occurrences("emit_sibling_ledger_entry")
     assert definitions == ["harness-runtime/src/harness_runtime/lifecycle/cp_is_wiring.py"]
     assert invocations == [], (
         f"row 10's DEFER rests on this seam having NO production caller; found {invocations}"
