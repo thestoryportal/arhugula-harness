@@ -209,4 +209,3 @@ paragraph closed the way windows 1 and 2 were, and the check re-run green. R-MEM
 R-MEM-05 are deliberately **not** annotated: plan v1.3's back-reference reconciliation
 records that neither is extended, because the dispatch-side re-typing changes no provider
 routing behaviour and adds no promotion obligation.
-
