@@ -807,7 +807,8 @@ disposition.**
    leg **applies** operator-decided fixes and may not widen a ratified enumeration on its own
    reading, and that objection was **accepted**: the obligation was removed. **The consequence is
    recorded rather than softened - at U-MEM-28's close, C-MEM-19's type-boundary invariant will have
-   ONE known non-conformant site.** Repairing it needs an operator ratification of a **seventh
-   site** (which a later arc may seek, and which this item exists to make findable), or a finding at
-   the impl leg's own re-grounding that the branch is caller-reachable after all, in which case it
-   is conformant as it stands and nothing is owed.
+   ONE known non-conformant site.** **That finding is OWNED BY ITS OWN REGISTER ROW, `B-114`**, minted
+   at the spec leg after out-of-family round 9 observed that a finding carried only on `B-88`'s
+   close-out would vanish from open work when `B-88` closes at U-MEM-28. `B-114` carries the
+   grounding pass, the discriminator between plain conformance repair against the cleared contract
+   and a genuine extension of this filing's ratified A-ii enumeration, and the repair recipe.
