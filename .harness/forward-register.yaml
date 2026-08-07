@@ -3167,7 +3167,7 @@ items:
 - id: B-88
   title: 'Memory failure telemetry: substring-keyed classify_memory_failure collapses the typed input-error family (and two real policy denials) to io_failure'
   status: closed
-  pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record) + #1245 (the SPEC leg -- Memory spec v1.3 + Memory plan v1.3, both clearance markers) + #pending (the IMPL leg -- U-MEM-28)'
+  pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record) + #1245 (the SPEC leg -- Memory spec v1.3 + Memory plan v1.3, both clearance markers) + #1247 (the IMPL leg -- U-MEM-28)'
   summary: '[CURRENT STATE 2026-08-06 -- RATIFIED as READING A with sub-decision A-ii = RE-TYPE, and
     the SPEC LEG HAS LANDED (PR #1245: Memory spec v1.3 + Memory plan v1.3, both clearance markers).
     `status: open`. THE ONLY THING OWED IS THE IMPL LEG, carried by plan unit U-MEM-28 -- do NOT
