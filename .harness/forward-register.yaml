@@ -1453,7 +1453,34 @@ items:
     previously cited `:6038` / `:6261`); the SUBSTANCE is unchanged -- both are still `timestamp=datetime.now(UTC)`
     on a `ctx.ledger_writer` append. THIS DOES NOT CHANGE THE ROW''S DISPOSITION -- still PARTIALLY MET,
     still deferred, remedy unchanged -- it changes the SIZE OF THE SURFACE the prescribed route must price,
-    which is grounding the fork filing owes.'
+    which is grounding the fork filing owes.
+    2026-08-07 -- CLASS 2 FORK FILED at
+    `.harness/class_2_fork_b57_direct_append_writer_owned_opt_in.md` (doc-only; status UNCHANGED at
+    registered_finding and no `pr:` pointer set here -- both ride the ratification leg, per the B-88
+    precedent). This row is the REMEDY OWNER; the filing prices the route this close-out already
+    prescribes. READINGS: A (RECOMMENDED) -- a narrow IS delta authorizing PER-CALL-SITE opt-in to
+    WRITER_OWNED_TIMESTAMP on direct surfaces, default unchanged for every non-electing producer,
+    extending the EXISTING C-IS-07 section 7.6 (ZERO contract numbers, ZERO hash impact, ZERO CXA
+    rows, ZERO new plan units) + a U-IS-11 AC widening + a per-site classification table; B -- HOLD
+    until an observed production refusal. THE SINGLE OPERATOR GATE: whether authorizing a
+    per-call-site opt-in to an ALREADY-UNCONDITIONAL writer-side mechanism (the sentinel check at
+    state_ledger_write.py:316-320 fires for ANY caller that stamps it -- no surface discriminator
+    exists, so the direct-path restriction is held by PROSE alone) is a spec act or needs
+    ratification first. COUNCIL: NOT OWED -- PROBE-RESOLVED (B-112''s step-(3) trigger is not
+    reached; the classification leaves no exposed caller stranded, so the C3/C11 tension does not
+    arise). THREE GROUNDING CORRECTIONS RECORDED RATHER THAN ABSORBED: (i)
+    sibling_ledger_entry_composition.py:163 is PRODUCTION-UNREACHABLE (emit_sibling_ledger_entry at
+    cp_is_wiring.py:124 has ZERO non-test callers), so the exposed direct-writer surface is 11 of 12
+    sites, not 12; (ii) audit_writer.py:701 /:751 and cost_attribution_f2_write.py:157 sample an
+    INJECTED time_source, not datetime.now(UTC) at the site, so electing there OVERRIDES the
+    test-determinism injection seam -- a real per-site cost the spec leg must resolve explicitly;
+    (iii) _CLOCK_SKEW_TOLERANCE''s own comment (state_ledger_write.py:67-68) calls it
+    ''configuration-supplied'' while it is a bare module constant with no configuration path at HEAD
+    -- a pre-existing shipped-comment defect. ALSO RECORDED: the 2026-07-27 audit_writer
+    resample-retry nuance on this row is ATTRIBUTED, NOT RE-DISCOVERED; the filing disagrees only
+    about its WEIGHT (this row reads it as consistent with the committed posture, the filing reads
+    it as circumstantial materialization evidence because the mitigation samples outside the lock
+    and the interleave''s cost half has none) and marks that ground CONTESTED.'
   council: 'no -- bounded follow-on; the C3/C9 reasoning is recorded at the IS v1.11 change-note'
   heading: '### B-57 · Direct-writer caller-supplied timestamp capture-order inversion *(registered at
     the B-48 apply arc, 2026-07-19)*'
@@ -5289,7 +5316,26 @@ items:
     direct appenders on one ledger root, THREADS INCLUDED. Recorded as a code-grounded WIDENING OF SCOPE
     only -- the 12/20 figure remains a TWO-PROCESS measurement and NO in-process probe was run at this
     pass.'
-  close_out: 'ADJACENT INFRA GAP, REGISTERED HERE RATHER THAN BUILT (merge-gate lens 3, G3). This arc hit a SILENT TEST-LOSS defect: two new test files shared a basename (`test_b93_cross_process_lock_deadline.py` in both `harness-is/tests/` and `harness-runtime/tests/`), and because EVERY `tests/` directory is a package literally named `tests`, the module path `tests.test_b93_cross_process_lock_deadline` COLLIDED -- pytest imported ONE module for BOTH paths and silently dropped 12 witnesses (34 collected where 35 were written). It was caught only by recounting programmatically; the suite was GREEN throughout. NOTHING GUARDS AGAINST A RECURRENCE: `__init__.py` is present in every tests dir and does NOT prevent this (the packages are all named `tests`), so the invariant the tree actually relies on is UNIQUE TEST BASENAMES REPO-WIDE -- currently true, currently unenforced, and violated silently rather than loudly. A CI guard (a basename-uniqueness check across `harness-*/tests/**`, or per-package `pytest` rootdir isolation, or `--import-mode=importlib` with unique package names) is its own mini-arc with its own tradeoffs and is NOT built here. Recorded on this row because it was surfaced by the same arc; a future infra arc may lift it to its own row. (1) SWEEP the production callers of `append_ledger_entry` and classify each: does it pass a caller-sampled timestamp, and can its ledger be appended to by a SECOND OS PROCESS concurrently? Only the intersection is exposed. The `harness run` alongside `harness daemon` shared-root topology named in `CanonicalMemoryStore.write_record_guarded`''s own SCOPE paragraph is the reference shape. (2) For each exposed caller, decide between `WRITER_OWNED_TIMESTAMP` (C-IS-07 section 7.6 -- monotonic by construction; correct wherever the entry''s timestamp means ''when this was appended'') and keeping caller-supplied semantics (correct wherever it means ''when the event happened'', where an out-of-order refusal is the honest outcome and the caller should handle it). This is the actual decision and it is per-caller. (3) If ANY exposed caller must keep caller-supplied semantics, decide separately whether `_CLOCK_SKEW_TOLERANCE` -- documented as ''configuration-supplied'' but hard-coded to `timedelta(0)` -- should become genuinely configurable; note that widening it weakens the C-IS-05 section 5 monotonicity guarantee for everyone, so it is a contract question, not a tuning knob. (4) Witness with a two-OS-process probe: a waiter whose timestamp is sampled first must not be refused after a later writer overtakes it. DO NOT attempt a fairness fix in the lock layer -- the substrate reasons above are why.'
+  close_out: 'ADJACENT INFRA GAP, REGISTERED HERE RATHER THAN BUILT (merge-gate lens 3, G3). This arc hit a SILENT TEST-LOSS defect: two new test files shared a basename (`test_b93_cross_process_lock_deadline.py` in both `harness-is/tests/` and `harness-runtime/tests/`), and because EVERY `tests/` directory is a package literally named `tests`, the module path `tests.test_b93_cross_process_lock_deadline` COLLIDED -- pytest imported ONE module for BOTH paths and silently dropped 12 witnesses (34 collected where 35 were written). It was caught only by recounting programmatically; the suite was GREEN throughout. NOTHING GUARDS AGAINST A RECURRENCE: `__init__.py` is present in every tests dir and does NOT prevent this (the packages are all named `tests`), so the invariant the tree actually relies on is UNIQUE TEST BASENAMES REPO-WIDE -- currently true, currently unenforced, and violated silently rather than loudly. A CI guard (a basename-uniqueness check across `harness-*/tests/**`, or per-package `pytest` rootdir isolation, or `--import-mode=importlib` with unique package names) is its own mini-arc with its own tradeoffs and is NOT built here. Recorded on this row because it was surfaced by the same arc; a future infra arc may lift it to its own row. (1) SWEEP the production callers of `append_ledger_entry` and classify each: does it pass a caller-sampled timestamp, and can its ledger be appended to by a SECOND OS PROCESS concurrently? Only the intersection is exposed. The `harness run` alongside `harness daemon` shared-root topology named in `CanonicalMemoryStore.write_record_guarded`''s own SCOPE paragraph is the reference shape. (2) For each exposed caller, decide between `WRITER_OWNED_TIMESTAMP` (C-IS-07 section 7.6 -- monotonic by construction; correct wherever the entry''s timestamp means ''when this was appended'') and keeping caller-supplied semantics (correct wherever it means ''when the event happened'', where an out-of-order refusal is the honest outcome and the caller should handle it). This is the actual decision and it is per-caller. (3) If ANY exposed caller must keep caller-supplied semantics, decide separately whether `_CLOCK_SKEW_TOLERANCE` -- documented as ''configuration-supplied'' but hard-coded to `timedelta(0)` -- should become genuinely configurable; note that widening it weakens the C-IS-05 section 5 monotonicity guarantee for everyone, so it is a contract question, not a tuning knob. (4) Witness with a two-OS-process probe: a waiter whose timestamp is sampled first must not be refused after a later writer overtakes it. DO NOT attempt a fairness fix in the lock layer -- the substrate reasons above are why.
+    2026-08-07 -- CLASS 2 FORK FILED at
+    `.harness/class_2_fork_b57_direct_append_writer_owned_opt_in.md` (doc-only; status UNCHANGED at
+    registered_finding). This row is the CAUSE-AND-EVIDENCE record and the adoption question it
+    defers to B-57 is what that filing decides. THIS ROW''S COUNCIL CONDITION IS RESOLVED NEGATIVE
+    BY PROBE: step (3) (_CLOCK_SKEW_TOLERANCE configurability, the C3/C11 dyad) is reached ''only if
+    step (2) leaves an exposed caller that cannot adopt writer-owned sampling'', and the filing''s
+    twelve-site classification leaves exactly ONE site retaining caller-supplied semantics --
+    as_is_wiring.py:129 (timestamp=composed.timestamp), genuine EVENT time, single-producer, for
+    which an out-of-order refusal is the honest outcome by design. That is not a stranded exposed
+    caller, so STEP (3) IS NEVER REACHED and no convening is owed. CLOSE-OUT STEP (1) IS DISCHARGED
+    by the filing''s section 3(ii)/(iii): the production callers of append_ledger_entry are swept
+    and classified BY CONTENT at HEAD 73b0e87b, and one of them
+    (sibling_ledger_entry_composition.py:163) proved PRODUCTION-UNREACHABLE -- its
+    cp_is_wiring.emit_sibling_ledger_entry entry point has ZERO non-test callers -- so the exposed
+    surface is 11 sites, not 12. Re-commissioning the sweep at a later leg is NOT owed; re-grounding
+    it at the spec leg is. THE IN-PROCESS WIDENING recorded on this row was RE-VERIFIED by direct
+    read at the filing''s HEAD (cross_process_ledger_lock.py:120 module text, :173-184 in-process
+    probe then bounded acquire, :524 cross-process probe) and remains CODE-GROUNDED, NOT REPRODUCED
+    -- the 12/20 figure is still a two-process measurement only.'
   council: 'No. Step (2) is a per-caller semantic classification against an ALREADY-CLEARED contract (C-IS-07 section 7.6 exists precisely for this), with no cross-domain tension to name. Step (3) WOULD be council-eligible if it is reached -- widening the skew tolerance trades information-substrate integrity (C3) against operator-loop robustness (C11) across every ledger writer at once -- but it is reached only if step (2) leaves an exposed caller that cannot adopt writer-owned sampling. Re-evaluate at that point, not now.'
   heading: '### B-112 · Deadline''d lock polling drops kernel handoff fairness, so a caller-sampled ledger timestamp can be overtaken and refused *(surfaced by out-of-family review round 1 on the B-93 build leg, 2026-08-06; reproduced 12/20 by the reviewer''s own contention probe)*'
 - id: B-113
