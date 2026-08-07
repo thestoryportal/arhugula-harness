@@ -75,11 +75,27 @@ _CLOCK_SKEW_TOLERANCE = timedelta(0)
 #: sampled INSIDE `_WRITE_LOCK` (the same critical section that reads the
 #: prior entry and computes `prior_event_hash`), so sampling order equals
 #: physical-append order and the C-IS-05 §5 monotonic-non-decreasing
-#: constraint holds by construction for concurrent sibling drains. Every
-#: DIRECT append path keeps caller-supplied timestamp semantics verbatim —
-#: this sentinel is opt-in per entry, never a default. The epoch value is a
-#: sentinel choice, not a real production timestamp (the harness has no
-#: legitimate 1970 wall-clock value).
+#: constraint holds by construction for concurrent sibling drains.
+#:
+#: **C-IS-07 §7.6.1 (v1.13, `B-57` Reading A) — DIRECT surfaces, per call
+#: site.** A DIRECT-append call site MAY likewise ELECT writer-owned sampling
+#: by stamping this same sentinel; the election is expressed ONLY by the value
+#: that call site supplies on its own payload. It is **never a default and
+#: never a mode on the writer** — no surface discriminator, no flag, no path
+#: gate exists here, so one producer's election cannot alter another's. A
+#: NON-electing direct append keeps caller-supplied timestamp semantics
+#: BYTE-VERBATIM, still validated detect-then-refuse against the prior entry.
+#: §7.6.1's eligibility rule bounds who MAY elect: only a site whose entry
+#: `timestamp` means *when the entry was appended*. Where it means *when the
+#: event happened* (a value carried from an upstream composed record),
+#: caller-supplied semantics are REQUIRED and an out-of-order refusal is the
+#: honest outcome. The writer's substitution below is unconditional and cannot
+#: make that distinction — the contract does, and the ELECT/RETAIN/DEFER
+#: roster lives at the U-IS-11 amendment in
+#: `Implementation_Plan_Information_Substrate_v2_9.md` §2.1.
+#:
+#: The epoch value is a sentinel choice, not a real production timestamp (the
+#: harness has no legitimate 1970 wall-clock value).
 WRITER_OWNED_TIMESTAMP: Timestamp = datetime.fromtimestamp(0, tz=UTC)
 
 #: Serializes the read-prior-then-append critical section (acceptance #7).
@@ -293,6 +309,12 @@ def append_ledger_entry(
     the caller's value (the buffered/branch-drain surface's mechanism for
     monotonic-by-construction concurrent sibling appends). Every other
     timestamp value keeps caller-supplied semantics verbatim.
+
+    C-IS-07 §7.6.1 (v1.13, `B-57`): a DIRECT-append call site may ELECT the
+    same sentinel, per call site. The writer's check below is unchanged and
+    unconditional — election is authorized by the CONTRACT's eligibility rule
+    (elect only where the entry timestamp means *when appended*), never by
+    anything this function can observe.
     """
     if write_key.idempotency_key != entry_payload.idempotency_key:
         raise WriteKeyMismatchError(

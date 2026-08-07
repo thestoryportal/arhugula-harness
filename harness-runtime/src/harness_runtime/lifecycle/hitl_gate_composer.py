@@ -170,7 +170,11 @@ from harness_cp.validator_framework_types import HITLEscalationBrief
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier
-from harness_is.state_ledger_write import EntryPayload, WriteKey
+from harness_is.state_ledger_write import (
+    WRITER_OWNED_TIMESTAMP,
+    EntryPayload,
+    WriteKey,
+)
 from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRef
 from opentelemetry.trace import Status, StatusCode
 
@@ -1563,7 +1567,15 @@ class RuntimeHITLGateComposer:
                 action_id=Identifier(str(hitl_action_id)),
                 idempotency_key=Identifier(str(hitl_action_id)),
                 actor=step_context.parent_actor,
-                timestamp=datetime.now(UTC),
+                # C-IS-07 §7.6.1 ELECTION (IS spec v1.13, `B-57` Reading A;
+                # IS plan v2.9 §2.1 row 11). The 8b F2 HITL entry's
+                # `timestamp` means WHEN THE ENTRY WAS APPENDED — the HITL
+                # response's own instant is the separate `timestamp` on the
+                # `CPAuditLedgerEntry` above (`:1430`, unchanged) — so
+                # §7.6.1's eligibility rule permits electing here, and only
+                # here. Mirrors `sub_agent_dispatch`'s 8b write (§7.6 B-48
+                # carve-out): same sentinel, per call site, never a default.
+                timestamp=WRITER_OWNED_TIMESTAMP,
                 procedural_tier_snapshot_ref=(self.procedural_tier_snapshot_resolver()),
             )
             f2_key = WriteKey(

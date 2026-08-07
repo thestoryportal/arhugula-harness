@@ -40,6 +40,7 @@ from harness_is.state_ledger_entry_schema import (
     Timestamp,
 )
 from harness_is.state_ledger_write import (
+    WRITER_OWNED_TIMESTAMP,
     EntryPayload,
     WriteKey,
     append_ledger_entry,
@@ -138,7 +139,23 @@ def rollback_to_checkpoint(
             action_id=Identifier(f"rollback:{checkpoint_id}"),
             idempotency_key=rollback_entry_id,
             actor=_ROLLBACK_ACTOR,
-            timestamp=now,
+            # C-IS-07 §7.6.1 ELECTION (IS spec v1.13, `B-57` Reading A; IS
+            # plan v2.9 §2.1 row 1). This entry's `timestamp` means WHEN THE
+            # ENTRY WAS APPENDED — the rollback fact is recorded at append —
+            # so the §7.6.1 eligibility rule permits electing, and the writer
+            # samples it inside `_WRITE_LOCK` at the real append moment.
+            #
+            # AC #20 — DELIBERATE DECOUPLING, not a defect: `restored_at`
+            # below keeps the caller-sampled `now` (`:93`, taken before the
+            # git checkout), while the persisted ledger timestamp is the
+            # writer's later sample. The two now honestly mean DIFFERENT
+            # things — *when the rollback completed* vs *when the entry was
+            # appended* — and are expected to differ. Witnessed at
+            # `test_rollback_restored_at_decoupled_from_persisted_ledger_
+            # timestamp`. The `CHECKPOINT_NOT_FOUND` (`:98`) and
+            # `ROLLBACK_FAILED` (`:125`) early returns are unaffected: they
+            # fire before this append, so no entry exists to decouple from.
+            timestamp=WRITER_OWNED_TIMESTAMP,
         ),
         WriteKey(
             thread_id=workflow_run_id,

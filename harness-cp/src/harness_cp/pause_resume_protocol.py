@@ -998,11 +998,25 @@ from harness_is.state_ledger_entry_schema import (  # noqa: E402
     ActorClass,
     Identifier,
 )
-from harness_is.state_ledger_write import EntryPayload, WriteResult  # noqa: E402
+from harness_is.state_ledger_write import (  # noqa: E402
+    WRITER_OWNED_TIMESTAMP,
+    EntryPayload,
+    WriteResult,
+)
 
 from harness_cp.state_ledger_canonicalization import (  # noqa: E402
     _canonicalize_outcome_bytes,
 )
+
+# C-IS-07 §7.6.1 ELECTION (IS spec v1.13, `B-57` Reading A; IS plan v2.9 §2.1
+# rows 2-4). All three §16.5 composers below stamp `WRITER_OWNED_TIMESTAMP`
+# instead of a locally-captured `datetime.now(UTC)`: each entry's `timestamp`
+# means WHEN THE ENTRY WAS APPENDED (the composer samples at emission, purely
+# to fill the field), never when the pause/resume event happened — the
+# protocol event's own instants live inside the canonicalized outcome bytes —
+# so §7.6.1's eligibility rule permits electing, and the writer samples inside
+# its serialization point at the real append moment. Per call site, never a
+# default: no other producer's semantics change.
 
 
 class PauseResumeProtocolEventKind(StrEnum):
@@ -1100,7 +1114,9 @@ async def emit_pause_resume_state_ledger_entry(
         action_id=Identifier(_PAUSE_RESUME_ACTION_ID),
         idempotency_key=Identifier(idempotency_key),
         actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
-        timestamp=datetime.now(UTC),
+        # C-IS-07 §7.6.1 ELECTION — IS plan v2.9 §2.1 row 2 (see the note at
+        # the `state_ledger_write` import for the eligibility grounding).
+        timestamp=WRITER_OWNED_TIMESTAMP,
         procedural_tier_snapshot_ref=procedural_tier_snapshot_resolver(),
     )
     return await ledger_writer(payload)
@@ -1187,7 +1203,9 @@ async def emit_pause_captured_state_ledger_entry(
         action_id=Identifier(_PAUSE_CAPTURED_ACTION_ID),
         idempotency_key=Identifier(idempotency_key),
         actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
-        timestamp=datetime.now(UTC),
+        # C-IS-07 §7.6.1 ELECTION — IS plan v2.9 §2.1 row 3 (see the note at
+        # the `state_ledger_write` import for the eligibility grounding).
+        timestamp=WRITER_OWNED_TIMESTAMP,
         procedural_tier_snapshot_ref=procedural_tier_snapshot_resolver(),
     )
     return await ledger_writer(payload)
@@ -1291,7 +1309,9 @@ async def emit_resume_attempted_state_ledger_entry(
         action_id=Identifier(_RESUME_ATTEMPTED_ACTION_ID),
         idempotency_key=Identifier(idempotency_key),
         actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
-        timestamp=datetime.now(UTC),
+        # C-IS-07 §7.6.1 ELECTION — IS plan v2.9 §2.1 row 4 (see the note at
+        # the `state_ledger_write` import for the eligibility grounding).
+        timestamp=WRITER_OWNED_TIMESTAMP,
         procedural_tier_snapshot_ref=procedural_tier_snapshot_resolver(),
     )
     return await ledger_writer(payload)

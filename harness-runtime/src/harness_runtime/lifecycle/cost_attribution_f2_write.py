@@ -30,7 +30,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
-from harness_is.state_ledger_write import EntryPayload, WriteKey
+from harness_is.state_ledger_write import (
+    WRITER_OWNED_TIMESTAMP,
+    EntryPayload,
+    WriteKey,
+)
 from harness_od.audit_ledger_types import StateLedgerEntryRef
 
 __all__ = ["compose_cost_f2_entry_core"]
@@ -115,6 +119,13 @@ def compose_cost_f2_entry_core(
     the second tenant's audit entry would silently reference the first
     tenant's F2 anchor.
 
+    `time_source` is RETAINED for API stability but NO LONGER determines the
+    persisted F2 timestamp: this site ELECTS writer-owned sampling per C-IS-07
+    §7.6.1 (IS spec v1.13, `B-57` Reading A; IS plan v2.9 §2.1 row 13), so
+    `append_ledger_entry` samples the instant inside its own write
+    serialization point. No caller — production or test — ever passed a
+    non-default value, so the election overrides no live injection.
+
     Returns `None` when `ledger_writer` is `None` — the converter's
     `_entry_core_or_default` then falls back to its pre-existing
     `cp-audit:<action_id>` fabricated marker (unit-test ergonomics;
@@ -154,7 +165,20 @@ def compose_cost_f2_entry_core(
         action_id=action_id,
         idempotency_key=action_id,
         actor=_COST_ATTRIBUTION_ACTOR,
-        timestamp=time_source(),
+        # C-IS-07 §7.6.1 ELECTION (IS spec v1.13, `B-57` Reading A; IS plan
+        # v2.9 §2.1 row 13 — the second injection-caveat site, resolved ELECT
+        # per AC #18). This entry's `timestamp` means WHEN THE F2 ANCHOR WAS
+        # APPENDED — the billable event's own instants live on the OD cost
+        # record that references this anchor — so §7.6.1's eligibility rule
+        # permits electing.
+        #
+        # The "caveat" is NARROWER HERE THAN THE PLAN TABLE ASSUMED, and the
+        # difference is recorded rather than normalized: `time_source` is a
+        # DEFAULTED parameter that NO caller — production or test — ever
+        # overrides (all four cost-dispatch composers omit it), so electing
+        # overrides no live injection and breaks no determinism witness. The
+        # parameter is kept for API stability; its timestamp role is retired.
+        timestamp=WRITER_OWNED_TIMESTAMP,
         procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
     )
     write_key = WriteKey(
