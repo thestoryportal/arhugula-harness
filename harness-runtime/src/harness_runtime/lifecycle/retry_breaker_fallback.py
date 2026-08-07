@@ -294,7 +294,10 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
       function so this classifier's control-flow contract stays independent
       of the telemetry classifier's).
     - ``MemoryToolExecutionInternalError`` → ``None`` (fail-fast, U-MEM-28 /
-      B-88 sub-decision A-ii). Admitted BY NAME, never as the family base: the
+      B-88 sub-decision A-ii; extended to a seventh raise site by ``B-114`` -
+      ``StandardMemoryToolExecutor._prepare``'s exhaustiveness fall-through,
+      which is deterministic and candidate-independent for the same reason and
+      so takes the same exit). Admitted BY NAME, never as the family base: the
       six `lifecycle/llm_dispatch.py` harness-internal faults (an unset
       ``RuntimeMemoryContext.record_scope`` / ``.scope_ref``, a
       ``MEMORY_TOOL_CONTRACTS`` entry whose input schema has no ``properties``
