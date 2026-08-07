@@ -488,3 +488,44 @@ recorded because a reader pricing step (3) would otherwise believe a configurati
 - *(To be filled per round; no outcome is pre-written.)*
 
 ---
+
+---
+
+## §11 RATIFICATION — **Reading A**, operator, 2026-08-07
+
+**Decision.** The operator ratified **Reading A**: `C-IS-07 §7.6` is extended to authorize **per-call-site** election of writer-owned sampling on DIRECT append surfaces via the EXISTING `WRITER_OWNED_TIMESTAMP` sentinel. The default is **unchanged** — every non-electing direct producer retains caller-supplied semantics byte-verbatim. **No new contract number is minted** (the existing C-IS-07 §7.6 is extended; per `[[spec-leg-cannot-mint-contract-number]]` a spec leg cannot mint one).
+
+| Field | Value |
+|---|---|
+| Ratified reading | **A** (per-call-site opt-in; `B` — HOLD — declined) |
+| Ratified by | Operator |
+| Ratified on | 2026-08-07 |
+| Gate answered | §7's single gate — *"is authorizing a per-call-site opt-in to an already-unconditional writer-side mechanism, on a cleared contract whose residual routes the extension to back-flow, a spec act this leg may perform, or does it require operator ratification first?"* — answered by **performing** the ratification: this filing IS the §7.6 residual's demanded back-flow, and the operator's selection discharges it |
+| Discriminator (§5) resolved | The §7.6 residual guards the **DEFAULT**, not a whole-surface guarantee — its own sentence is scoped to *"every existing direct producer"*, and a per-call-site election leaves every non-electing producer byte-identical. This generalizes the adjudication the `B-93` leg already made once, under review, on this same contract |
+| Council | **NOT owed — probe-resolved** per §6, re-determined (not inherited) at the spec leg. `B-112` step (3) is not reached: the classification leaves exactly one RETAIN site (`as_is_wiring.py:129`, genuine event time), which is not an *exposed caller that cannot adopt*. **A LIVE trigger survives:** a RETAIN verdict on either injection-caveat site at the impl leg re-opens the C3 ⊥ C11 determination before any tolerance change — recorded at the plan's §0.6 |
+
+### §11.1 What the spec leg landed (this ratification's apply pass — PR #1255)
+
+| Artifact | Version | Amendment sites |
+|---|---|---|
+| `design-substrate/Spec_Information_Substrate_v1.md` | v1.12 → **v1.13** | **ONE authorizing site** — NEW `§7.6.1` (the election, the eligibility rule, the demonstrable default-preservation property, the does-NOT-authorize list, and the roster-lives-at-the-plan routing). PLUS ONE **residual-status paragraph** inside §7.6 recording that the residual's demanded back-flow has been performed and DISCHARGED in this narrow form (the `"Surfaces that do NOT change"` and `Registered residual` paragraphs themselves **PRESERVED VERBATIM**, per §4's shape and the §7.5 precedent). PLUS ONE **cross-reference-only** clause at the §7.1 row-7 cell (zero new semantics; authored so the summary row does not become stale-as-described) |
+| `design-substrate/Implementation_Plan_Information_Substrate_v2_9.md` | v2.8 → **v2.9** | U-IS-11 AMENDED — ACs **#14–#20** (with **#14-bis**) (election authorization; the negative default-preservation witness; the eligibility rule; per-site table conformance; the two injection-caveat resolutions; the `audit_writer` retry-loop disposition; the `shadow_git_rollback` `restored_at` decoupling pin) + the **per-site classification table** §7.6.1 routes to the plan + PD-8-probed witnesses. **ZERO new units / nodes / edges / auxiliary types**; ACs #1–#13 PRESERVED VERBATIM |
+| `.harness/clearance/` | — | One marker per changed artifact (spec + plan), per root `CLAUDE.md` §4.5 |
+| `.harness/forward-register.yaml` | — | `B-57` `registered_finding` → **`open`** (ratified, spec AND plan deltas applied, impl leg owed — the `B-96`/`B-88` enum reasoning); `B-112` stays `registered_finding` with a note that ratification A landed and its deferred adoption question is answered, its own remaining disposition resolving at the impl leg |
+
+### §11.2 Costs, as ratified — all re-determined at the spec leg, none assumed
+
+**ZERO** contract numbers · **ZERO** hash / canonicalization / migration / `snapshot_hash` impact (no field added, no shape changed, no recipe touched — only *which instant* a consenting call site records) · **ZERO** CXA rows (the sentinel is already exported from `harness-is` and every candidate site already imports the C-IS-07 §7.1 write contract: no new package edge, no new typed seam) · **ZERO** new plan units, nodes, edges or auxiliary types · **ZERO** code at this leg (SPEC-ONLY).
+
+### §11.3 THREE claims in this filing CORRECTED at the spec leg (two COUNTS + one CITE RANGE) — recorded, not silently normalized
+
+Re-grounded by direct read at HEAD `acfc1afa`; all fourteen §3(ii) rows are byte-identical to this filing, and the `emit_sibling_ledger_entry` zero-non-test-caller sweep re-ran independently (19 hits, exactly 3 non-test: the definition plus two docstring mentions). Two of this filing's own COUNTS do not reconcile with its own table:
+
+1. **§3(ii)'s *"Fourteen rows, twelve SITES"*.** The stated fold (audit_writer's primary + resample retry; per_step_override_evaluator's composer + sampling caller) is **already performed** inside rows 12 and 9 as printed — deducting it again is what produces "twelve". By content the classification table is **14 rows**, and that is what IS plan v2.9 §2.1 carries.
+2. **§4/§7's *"≈8 conversions"* / *"~8 one-line conversions"*.** §4's own ELECT cell enumerates **TEN** payload-construction rows. The corrected figure is **10 ELECT** + **2** pending the per-site injection-caveat verdicts.
+3. **§2's sentinel-docstring cite `:79`–`:80` under-covers the sentence it quotes by one line.** Read at `acfc1afa`, `state_ledger_write.py:78` ends with the word *"Every"* and `:79` begins *"DIRECT append path keeps caller-supplied…"* — so the quoted sentence spans **`:78`–`:80`**. The QUOTE is byte-exact; only its range is one line short. This filing's §2 body is left **byte-unchanged** (it is the historical record); the corrected range is what IS spec v1.13's change-note, IS plan v2.9's AC #14-bis, both clearance markers and the register carry, so an impl agent editing to the cite does not leave a dangling *"Every"* at `:78`.
+**None of the three changes a disposition, a reading, or any zero-cost line.** The two COUNT corrections change the **SIZE of the surface** the impl leg must convert; the CITE-RANGE correction changes only where an impl agent's edit must start. Recorded here per the workspace's stale-carry discipline, alongside this filing's own §9 drift record.
+
+### §11.4 What remains owed after this leg
+
+The **impl leg**: the 10 ELECT conversions; the **sentinel-docstring refresh** at `state_ledger_write.py:78`–`:80` (AC #14-bis — the OTHER prose carrier of the direct-path restriction §7.6.1 replaces; its *"Every DIRECT append path keeps caller-supplied timestamp semantics verbatim"* clause goes flagrantly false once the conversions land); the 2 injection-caveat resolutions recorded with rationale (a RETAIN verdict on either FIRES the §0.6 council trigger); the `audit_writer` resample-retry disposition; the `shadow_git_rollback` `restored_at` decoupling pin; the two-process contention witness under PD-8 mutation probe; the non-electing negative witness; the `as_is_wiring` event-time control; and the per-site table conformance check. `B-57` closes at that leg, not this one.
