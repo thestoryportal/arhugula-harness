@@ -1031,7 +1031,15 @@ def test_executor_by_reference_readers_deny_a_crafted_raw_key_context(tmp_path: 
         executor._allowed_index_entry(legacy.envelope.memory_id, context)  # pyright: ignore[reportPrivateUsage]
 
     with pytest.raises(MemoryToolExecutionDeniedError):
-        executor._read_retrievable_record_by_ref(legacy.envelope.memory_id, context)  # pyright: ignore[reportPrivateUsage]
+        # B-84: the record kind is now derived once, in the tool's `_prepare_*`
+        # (so `_kind_from_memory_ref`'s two input-error sites are reachable from
+        # `validate()`), and handed to the reader. `envelope.kind` IS what the
+        # ref encodes, so the crafted-context probe is unchanged in substance.
+        executor._read_retrievable_record_by_ref(  # pyright: ignore[reportPrivateUsage]
+            legacy.envelope.memory_id,
+            legacy.envelope.kind,
+            context,
+        )
 
     # End to end through the public surface, for the same crafted context.
     with pytest.raises(MemoryToolExecutionDeniedError):
@@ -1054,7 +1062,11 @@ def test_executor_by_reference_readers_serve_a_canonical_record(tmp_path: Path) 
     context = _context(_scope(_OLLAMA_KEY))
 
     entry = executor._allowed_index_entry(canonical.envelope.memory_id, context)  # pyright: ignore[reportPrivateUsage]
-    record = executor._read_retrievable_record_by_ref(canonical.envelope.memory_id, context)  # pyright: ignore[reportPrivateUsage]
+    record = executor._read_retrievable_record_by_ref(  # pyright: ignore[reportPrivateUsage]
+        canonical.envelope.memory_id,
+        canonical.envelope.kind,  # B-84: derived once, in the tool's `_prepare_*`.
+        context,
+    )
 
     assert entry.memory_id == canonical.envelope.memory_id
     assert record.envelope.memory_id == canonical.envelope.memory_id
