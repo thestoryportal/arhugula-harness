@@ -16,6 +16,47 @@ Revision: v1.1 -> v1.2 (`B-92` spec-leg apply pass - NEW U-MEM-27 decomposing th
 
 Revision date: 2026-07-29
 
+Revision: v1.2 -> v1.3 (`B-88` spec-leg apply pass - U-MEM-22's failure-class acceptance criterion extended to the seven values `Spec_Memory_Substrate_v1.md` v1.3 requires, plus NEW U-MEM-28 decomposing the impl leg of that spec delta. Detail at the change-note below.)
+
+Revision date: 2026-08-06
+
+## Change-note (v1.2 -> v1.3)
+
+**Trigger and back-flow authority.** RATIFIED Class 2 fork `.harness/class_2_fork_b88_memory_failure_input_validation_class.md` (filed 2026-08-05 at PR #1220; ratified 2026-08-05 at PR #1233; register row `B-88`), applied at the spec leg as `Spec_Memory_Substrate_v1.md` v1.3 in this same PR. v1.3 adds `input_validation_failure` as a seventh C-MEM-19 failure class (ratified reading A), the subsection and two invariants that bound it against provider adapter failure and serialization failure, the ratified sub-decision **A-ii in its RE-TYPE form**, the coverage statement scoping the class to the classify-routed population, and the retry disposition the re-typing must preserve. This plan delta carries the resulting acceptance-criterion amendment and decomposes the resulting impl leg.
+
+**Revision scope, and the one place this delta departs from the fork's own prescription - stated first, because it is the delta's only judgement call.** The fork (§4 reading A, §8 option table, §9 and §11.5) prescribes **an acceptance-criterion amendment and no new unit**, on the ground that U-MEM-22 already owns the failure vocabulary and has landed. That prescription is **followed for the half it was written about**: U-MEM-22's `Acceptance:` failure-class line is extended from six values to seven, in place, and nothing else in that unit is touched. It is **departed from for the half it predates.** The fork's "no new unit" assessment was authored when reading A meant one enum member plus one declaration flip; **sub-decision A-ii did not exist yet** - it was raised at the fork's own out-of-family review round 4, and its scope was fixed only at the 2026-08-05 ratification, which added a six-site source re-typing in `lifecycle/llm_dispatch.py`, a receiving-type choice, a classification-reachability witness scoped to the classify-routed population, a preserved fail-fast retry disposition, and an end-to-end dispatch/retry witness. **That work has no owning unit.** U-MEM-22 is *Implement memory observability* (contracts C-MEM-19; axis action surface plus operational discipline plus runtime; depends on U-MEM-03, U-MEM-12, U-MEM-16, U-MEM-17, U-MEM-21), and a dispatch-side re-typing whose load-bearing witness is a **retry** exit classification is neither observability nor within that unit's dependency set. Folding it into a landed unit's acceptance list would put the work somewhere no impl arc would look for it - the precise failure the ratification's own "leg ownership, stated explicitly so the work has an owner" paragraph was written to prevent. This plan's own convention is the tie-breaker: each of the two preceding spec legs decomposed its impl leg as one new unit (`B-86` -> U-MEM-26 at G6, `B-92` -> U-MEM-27 at G7), and this delta follows it with **U-MEM-28 at G8**. **Nothing in U-MEM-28 exceeds the ratification's own enumerated impl-leg list**; the unit is a decomposition of it, not an extension. The departure is recorded rather than absorbed so it can be overturned by inspection: an operator or reviewer who prefers the literal prescription can fold U-MEM-28's `Implement:` and `Acceptance:` items into U-MEM-22 without changing a single obligation.
+
+**Why the U-MEM-22 amendment is one line and not more.** The unit's `Implement:` list already reads *"Failure class vocabulary."* without enumerating it, so the vocabulary's size lives at exactly one place in this plan - the second `Acceptance:` bullet - which the fork §3(v) established by sweeping both memory artifacts for the six-value list and finding exactly two sites repo-wide, one here and one in the spec. Only that bullet moves. Note the pre-existing wording asymmetry, left alone deliberately: this plan writes *"retrieval empty result"* unhyphenated where the spec writes *"retrieval empty-result"*. Normalizing it would be an unrelated edit to a landed unit, and the fork recorded the same asymmetry without repairing it.
+
+**U-MEM-28's shape, and the two constraints that fix it.** The unit is narrow - one enum member, one declaration flip, one docstring rewrite, one test-fixture re-key, one six-site re-typing with its receiving type, and the witnesses - but two of its parts are easy to get wrong in the same direction, so both are pinned in the unit body rather than left to discretion. (1) **The six/two split is a content split, not a line-offset split.** Six `lifecycle/llm_dispatch.py` raises are harness-internal faults and are re-typed; **two are not**, and they are the two the new class most needs: they validate the *model-supplied* `scope_ref` argument and must **keep** the input-error type. The ratification says so explicitly and calls it load-bearing. Every offset in that file has already shifted once between the ratification and this leg, so the unit instructs re-resolution **by content** at the impl leg's own HEAD. (2) **The re-typing changes retry behaviour unless the receiving type is admitted to the fail-fast set.** `_classify_provider_exception` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:269-344`) returns `None` - fail-fast - only on an `isinstance` match against the tuple at `:332-339` (`MemoryToolExecutionInputError` at `:337`); everything else falls through to `TRANSIENT_RETRY` at `:344`. Re-typing away from that class therefore flips six internal faults from fail-fast to transient-retry, which under a fallback chain means retrying and advancing candidates against a deterministic wiring fault. Spec v1.3 fixes the intended disposition (fail-fast preserved) and this unit owes the end-to-end witness for it.
+
+**Axis placement and dependencies for U-MEM-28.** Action surface plus operational discipline plus runtime - the same three U-MEM-22 carries, because the unit's contract is C-MEM-19 and its edits land in `harness-is` (the vocabulary enum) and `harness-runtime` (the declaration, the dispatch re-typing, the retry tuple). **Information substrate is deliberately not claimed**, unlike at U-MEM-26 and U-MEM-27: the `harness-is` edit is one enum member on an already-declared telemetry vocabulary, adding no record type, no field, and no store or index obligation, so no IS isolation posture is engaged. **Control plane is deliberately not claimed** either, and the reason is worth stating because the retry witness invites the opposite conclusion: the unit **preserves** an existing retry disposition rather than choosing a new one, adds no exit class, and consults no policy - the witness exists to prove nothing moved. `Depends on: U-MEM-16, U-MEM-22.` U-MEM-16 owns the standard memory tool executor, which is where the exception family and the declaration live; U-MEM-22 owns the telemetry surface and the vocabulary the seventh member joins, and its acceptance criterion is amended in this same delta. U-MEM-17 and U-MEM-21 are reached transitively through U-MEM-22 and are not re-declared, the same omission-as-decision U-MEM-27 recorded for U-MEM-25.
+
+**Back-reference reconciliation inside this file.** §3 axis placement gains U-MEM-28 under action surface, operational discipline, and runtime; §4 gains two dependency edges (`U-MEM-16` -> `U-MEM-28`, `U-MEM-22` -> `U-MEM-28`); §4.1 extends the R-MEM-01 range to U-MEM-28 and adds U-MEM-28 to R-MEM-13, the observability requirement U-MEM-22 already carries alone; §7 gains a G8 review-boundary row; §9 extends the completion range to U-MEM-28. U-MEM-22's `Acceptance:` failure-class bullet is the one pre-existing unit-body line this delta edits. No other row is touched. R-MEM-09 is deliberately **not** extended: the dispatch-side re-typing changes no provider routing behaviour and adds no access mode - it changes which class a fault is reported under and preserves its retry disposition.
+
+**Class-3 cite-drift sweep, routed to this leg by the PR #1243 gate, and corrected at note level per this file's own convention.** PR #1243 relocated roughly 180 lines of `harness-runtime/src/harness_runtime/memory_tool_executor.py`, drifting thirteen `memory_tool_executor.py:NNN` cites in this file (and two in the spec, tabulated at its matching change-note). **Every one of the thirteen sits in text this file preserves verbatim** - the `## Change-note (v1.1 -> v1.2)` block, or the bodies of the landed units U-MEM-26 and U-MEM-27, whose `harness-runtime` code cites the v1.2 "Cite hygiene" paragraph already declares *"historical records of that unit's authoring HEAD"* that are *"not rewritten here"*. Rewriting them in place would violate the convention that governs them, so they are corrected **here** and nowhere else. Re-resolved by direct read at HEAD `3a1300eb`:
+
+| Cited as | Where in this file | Resolves at HEAD `3a1300eb` |
+|---|---|---|
+| `_propose_promotion` `:399-435` | change-note `:27`; U-MEM-27 body | **`:576-651`** |
+| `_promotion_risk_flags` `:882-885` | change-note `:27` / `:41`; U-MEM-27 body | **`:1083-1099`** |
+| `_promotion_review_required` `:888-894` | change-note `:27`; U-MEM-27 body | **`:1102-1114`** |
+| `_promotion_auto_allowed` `:897-903` | change-note `:27` / `:45`; U-MEM-27 body | **`:1117-1132`** |
+| `risk_flags=_promotion_risk_flags(source)` `:425` | U-MEM-27 body | **`:600`** |
+| `review_required=` `:433` / `auto_promote_allowed=` `:434` | U-MEM-27 body | **`:617`** / **`:618`** |
+| `source_memory_refs` single entry `:420` | change-note `:49`; U-MEM-27 body | **`:604`** |
+| tool path branches on `auto_promote_allowed` `:448-460` | change-note `:45` | **`:631-644`** (`if candidate.auto_promote_allowed:` at `:632`) |
+| `MemoryToolExecutor._write_note` `capture_tool_event` `:361`, `MODEL_GENERATED` `:366`, `provider=` `:369` | change-note `:53` | **`:537`**, **`:542`**, **`:545`** |
+| promotion scope from the tool-execution context `:405-412` | U-MEM-26 body `:953` | **shape changed** - the context scope is now resolved through `_resolved_scope` (`:760-779`) and bound at `:596` before candidate identity is derived, which is U-MEM-26's own ordering rule as built |
+| by-reference read `:500-526`, `requested_scope=context.scope` `:511` | U-MEM-26 body `:955` | **shape changed** - `_read_record_by_ref` (**`:726-742`**) no longer resolves retrieval policy at all; the policy call moved to `_read_retrievable_record_by_ref` (**`:744-758`**, `requested_scope=self._resolved_scope(context)` at **`:754`**) |
+| `_read_retrievable_record_by_ref` `:542-555`, same at `:551` | U-MEM-26 body `:955` | **`:744-758`**, the call at **`:754`** |
+| `_search` `:268-289`, `scope=context.scope` `:283` | U-MEM-26 body `:955` | **`:445-487`**, now `scope=self._resolved_scope(context)` at **`:461`** |
+| `:510` and `:550` pass `record.envelope.scope` through | U-MEM-26 body `:957` | **shape changed** - one such site survives, `:753`; the other by-reference path now passes `entry.scope` from the index entry (`_allowed_index_entry` `:697-724`, at `:708`) |
+
+The three **shape-changed** rows are why this sweep re-resolved every cite by direct read rather than by applying the PR #1243 gate's reported offsets: a mechanical line-shift repair would have produced three confidently wrong cites pointing at code that no longer does what the citing sentence says.
+
+**Sections preserved verbatim at v1.3.** The Status section (revision lines appended only); the whole `## Change-note (v1.1 -> v1.2)` block and the whole `## Change-note (v1 -> v1.1)` block; §1 goal; §2 non-negotiable constraints; §5 unit bodies U-MEM-01 through U-MEM-27 **except** U-MEM-22's second `Acceptance:` bullet, which gains one value inside its existing sentence and nothing else; §6 required review gates; §8 risk controls. The §3 / §4 / §4.1 / §7 / §9 reconciliations enumerated above are membership or range extensions only - no pre-existing unit body, dependency edge, acceptance criterion, or verification line is removed or rewritten. Zero contract numbers are minted (U-MEM-28 extends C-MEM-19), zero hash impact, zero CXA rows owed.
+
 ## Change-note (v1.1 -> v1.2)
 
 **Trigger and back-flow authority.** RATIFIED Class 1 fork `.harness/class_1_fork_c_mem_10_cross_family_promotion_eligibility.md` (filed 2026-07-29; register row `B-92`), applied at the spec leg as `Spec_Memory_Substrate_v1.md` v1.2 in this same PR. v1.2 of that spec settles the C-MEM-10 promotion-eligibility question v1.1 carried undischarged - operator-ratified **reading B (flag + gate)** - and adds the C-MEM-03 tri-state `MemoryRecordEnvelope.captured_cross_family` field that makes the gate decidable. This plan delta decomposes the resulting impl leg.
@@ -143,10 +184,10 @@ Repository sequencing note: at filing head `cc612ec8`, this repository's `main` 
 | Axis | Units |
 |---|---|
 | Information substrate | U-MEM-01, U-MEM-02, U-MEM-03, U-MEM-04, U-MEM-05, U-MEM-06, U-MEM-10, U-MEM-11, U-MEM-21, U-MEM-24, U-MEM-26, U-MEM-27 |
-| Action surface | U-MEM-12, U-MEM-13, U-MEM-22, U-MEM-24 |
+| Action surface | U-MEM-12, U-MEM-13, U-MEM-22, U-MEM-24, U-MEM-28 |
 | Control plane | U-MEM-11, U-MEM-12, U-MEM-18, U-MEM-19, U-MEM-24, U-MEM-26 |
-| Operational discipline | U-MEM-04, U-MEM-08, U-MEM-09, U-MEM-20, U-MEM-21, U-MEM-22, U-MEM-24, U-MEM-26, U-MEM-27 |
-| Runtime | U-MEM-07, U-MEM-08, U-MEM-09, U-MEM-14, U-MEM-15, U-MEM-16, U-MEM-17, U-MEM-18, U-MEM-19, U-MEM-20, U-MEM-22, U-MEM-23, U-MEM-24, U-MEM-26, U-MEM-27 |
+| Operational discipline | U-MEM-04, U-MEM-08, U-MEM-09, U-MEM-20, U-MEM-21, U-MEM-22, U-MEM-24, U-MEM-26, U-MEM-27, U-MEM-28 |
+| Runtime | U-MEM-07, U-MEM-08, U-MEM-09, U-MEM-14, U-MEM-15, U-MEM-16, U-MEM-17, U-MEM-18, U-MEM-19, U-MEM-20, U-MEM-22, U-MEM-23, U-MEM-24, U-MEM-26, U-MEM-27, U-MEM-28 |
 | Cross-axis closeout | U-MEM-24, U-MEM-25 |
 
 ## 4. Dependency map
@@ -222,6 +263,8 @@ U-MEM-08 -> U-MEM-27
 U-MEM-09 -> U-MEM-27
 U-MEM-16 -> U-MEM-27
 U-MEM-26 -> U-MEM-27
+U-MEM-16 -> U-MEM-28
+U-MEM-22 -> U-MEM-28
 
 External CLI routing port gates CLI-route-specific acceptance in U-MEM-05, U-MEM-12, U-MEM-14, U-MEM-18, and U-MEM-24. It is not represented as a `U-MEM` node because it is an upstream/deployed feature port, not memory-layer scope.
 ```
@@ -230,7 +273,7 @@ External CLI routing port gates CLI-route-specific acceptance in U-MEM-05, U-MEM
 
 | Requirement | Primary units |
 |---|---|
-| R-MEM-01 full layer/no MVP | U-MEM-01 through U-MEM-27 |
+| R-MEM-01 full layer/no MVP | U-MEM-01 through U-MEM-28 |
 | R-MEM-02 canonical filesystem/git store | U-MEM-02, U-MEM-03, U-MEM-06 |
 | R-MEM-03 typed records | U-MEM-01, U-MEM-06, U-MEM-07 |
 | R-MEM-04 automatic episodic and durable capture | U-MEM-03, U-MEM-07 |
@@ -242,7 +285,7 @@ External CLI routing port gates CLI-route-specific acceptance in U-MEM-05, U-MEM
 | R-MEM-10 CLI-neutral and CLI-specific memory | U-MEM-05, U-MEM-18, U-MEM-24 |
 | R-MEM-11 engine-class durability | U-MEM-19 |
 | R-MEM-12 redaction, privacy, and scope | U-MEM-04, U-MEM-21, U-MEM-24, U-MEM-26 |
-| R-MEM-13 observability | U-MEM-22 |
+| R-MEM-13 observability | U-MEM-22, U-MEM-28 |
 | R-MEM-14 review and administration | U-MEM-09, U-MEM-21, U-MEM-25, U-MEM-27 |
 | R-MEM-15 migration and compatibility | U-MEM-17, U-MEM-23, U-MEM-24 |
 
@@ -826,7 +869,7 @@ Implement:
 Acceptance:
 
 - All major memory operations emit telemetry.
-- Failure classes distinguish policy denial, path violation, IO failure, serialization failure, provider adapter failure, and retrieval empty result.
+- Failure classes distinguish policy denial, path violation, IO failure, serialization failure, provider adapter failure, input validation failure, and retrieval empty result.
 - Existing memory telemetry consumers remain compatible and existing attribute names are not renamed.
 
 Verification:
@@ -1098,6 +1141,52 @@ Out of scope for this unit:
 - **Aggregate-run** provenance ("was any leg of this run cross-family"), which no per-record envelope field can represent. It would require the C-MEM-08 ledger join the spec v1.2 explicitly declines to mandate.
 - Any back-fill or migration of the pre-amendment corpus. It reads `unknown` by construction and is gated on that basis; back-filling it would be the ledger-join option run offline, which is not this unit.
 
+### U-MEM-28 - Land the C-MEM-19 input-validation failure class and the A-ii type re-typing
+
+Contracts: C-MEM-19.
+
+Requirements: R-MEM-13.
+
+Axis: Action surface plus operational discipline plus runtime.
+
+Depends on: U-MEM-16, U-MEM-22.
+
+Back-flow authority: `.harness/class_2_fork_b88_memory_failure_input_validation_class.md` (RATIFIED Class 2 fork, reading A with sub-decision A-ii = RE-TYPE; register row `B-88`), applied at `Spec_Memory_Substrate_v1.md` v1.3. All `file:line` cites in this unit were verified by direct read at HEAD `3a1300eb`. **They are this leg's HEAD, not the impl leg's**: every offset in `lifecycle/llm_dispatch.py` cited by the ratification had already shifted by the time this unit was authored, so the unit instructs re-resolution by CONTENT rather than by offset wherever a site is named.
+
+Implement:
+
+- The seventh member on the implementation-side failure vocabulary: `MemoryTelemetryFailureClass` (`harness-is/src/harness_is/memory_observability.py:33-41`, a `StrEnum` whose docstring already reads *"Failure classes required by C-MEM-19."*) gains `INPUT_VALIDATION_FAILURE = "input_validation_failure"`. **This is the only enum edit the unit makes.** The value is the ratified name; the fork's stated fallback `input_error` is **not** taken.
+- **The single declaration flip**, which is the whole of the behaviour change on the classify-routed population: `MemoryToolExecutionInputError.memory_failure_class` (`harness-runtime/src/harness_runtime/memory_tool_executor.py:151-173`, the declaration at `:171-173`) moves from `PROVIDER_ADAPTER_FAILURE` to `INPUT_VALIDATION_FAILURE`. The declaration is written explicitly on this class rather than inherited from its base precisely so this stays one line; do not restructure the family to achieve it.
+- **The stopgap docstring rewrite** at `:152-169`. The shipped text calls itself *"LEAST-WRONG STOPGAP - the flip site when the spec half lands"*, names the spec back-flow as owed, and enumerates a four-point rationale for a value that is no longer the one carried. That promise is discharged by spec v1.3, so the docstring must state what the class **is** - a C-MEM-19 input validation failure, per the spec's own boundary definition - rather than what it was waiting for. A docstring left as-shipped is a stale-as-described carry the next reader trusts.
+- **The A-ii source re-typing at SIX `lifecycle/llm_dispatch.py` sites, and at exactly six.** The six are harness-internal faults, which the C-MEM-19 type-boundary rule forbids raising as the input-error type: the two unset-`RuntimeMemoryContext` checks in `_standard_memory_tool_context` (`record_scope is None` at `:4359`, `scope_ref is None` at `:4363`) and the four `MEMORY_TOOL_CONTRACTS` schema-injection checks - `_openai_standard_memory_tools` (`memory_context.scope_ref is None` at `:4475`, `input schema properties missing` at `:4483`) and `_ollama_standard_memory_tools` (the same pair at `:4977` and `:4988`). **Two sites in the same function are NOT re-typed, and this is load-bearing rather than incidental:** `:4369` and `:4371` validate the **model-supplied** `scope_ref` *argument* (`arguments.get("scope_ref")` - missing or non-string, then context-mismatched). Those are precisely the malformed-model-argument case the new class exists for; re-typing them would deny the class its two clearest dispatch-side raise sites and contradict the boundary invariant A-ii serves. **Re-resolve all eight by content at your own HEAD** - the internal set is identified by *what it checks* (the harness's own context object, and the harness's own schema table), never by line offset.
+- **The receiving type for the six, with two binding constraints and otherwise discretion.** The type must (a) **not** be a subclass of `MemoryToolExecutionInputError`, since the declaration is read through the MRO and an inheriting subtype would carry `input_validation_failure` straight back into the internal population, defeating the re-typing entirely; and (b) declare `provider_adapter_failure`, the residual the family base already declares (`memory_tool_executor.py:87-103`, the declaration at `:101-103`) - so raising the base itself, or a dispatch-local subtype of it, both conform. Which of those is chosen is implementation discretion.
+- **Fail-fast preservation for the six re-typed sites.** `_classify_provider_exception` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:269-344`) returns `None` - fail-fast - only on an `isinstance` match against the tuple at `:332-339`, whose three members are at `:335-337`, `MemoryToolExecutionInputError` among them at `:337`; **everything else falls through to `TRANSIENT_RETRY` at `:344`**. Re-typing the six away from that class therefore flips them from fail-fast to transient-retry unless the receiving type is **also** admitted to the tuple. Spec v1.3 fixes the intended disposition as **fail-fast preserved**, on the ground that an unset context and a malformed harness-supplied schema are deterministic and candidate-independent, so a retry - and, under a fallback chain, a candidate advance - cannot succeed. Admit the receiving type to the tuple, and extend that function's own docstring rationale, which today explains the memory entry in `MemoryToolExecutionInputError`'s terms (`:293-316`) and would otherwise describe a membership it no longer fully accounts for.
+- **The test-fixture re-key at `harness-is/tests/test_memory_observability.py:52-55`.** `_BogusDeclarationError` declares the plain `str` `"input_validation_failure"` (`:55`) as a deliberately non-member value, with a comment at `:82-83` stating that a non-member declaration is ignored. The row does **not** break on adoption - `_declared_failure_class` gates on `isinstance(declared, MemoryTelemetryFailureClass)` (`memory_observability.py:203-220`, the gate at `:218`) and a plain `str` is not an instance of the `StrEnum` subclass - but the fixture would then name a **real** member's value while intending a non-member, which is semantically muddled and would mislead the next reader of that test. Re-key it to a genuinely non-member literal.
+
+Acceptance:
+
+- A memory tool argument refusal raised through the standard memory tool executor emits `memory.failure_class = input_validation_failure` on the memory tool-call span, on **both** classify-routed paths through that executor: the `execute()` catch (`memory_tool_executor.py:291-317`, classifying at `:315`) and the `B-84` `validate()` pre-pass (`:319-357`, classifying at `:355`). Both are asserted, because they are separate emission sites that can regress independently.
+- The other five C-MEM-19 classes are **unchanged**, and the seventh member is additive: no existing member is removed, renamed, or re-valued, and no population other than the input-error family changes the class it emits. In particular the family base `MemoryToolExecutionError` still declares `provider_adapter_failure`, the store subtype still declares `io_failure`, the denial subtype still declares `policy_denial`, and the classifier residual is untouched.
+- Every `lifecycle/llm_dispatch.py` raise site that reports a **harness-internal** fault - unset runtime memory context, missing or malformed harness-supplied tool schema - raises a type that does **not** carry `input_validation_failure`, and every site that refuses a **model-supplied** argument still raises the input-error type. The split is asserted per site, not in aggregate.
+- The six re-typed sites retain **fail-fast** exit classification end-to-end: a dispatch that trips one of them abandons the candidate without a same-candidate retry staircase, exactly as before the re-typing.
+- **Classification reachability is claimed only for the classify-routed population.** The dispatch prepare path opens no memory telemetry span, so the two retained model-argument raises at that layer emit no `memory.failure_class` today and this unit does not wire one. The unit **must not** assert or imply a dispatch-side emission it does not build; that gap is recorded at spec v1.3's coverage paragraph and closing it is a separate arc.
+- **No existing emission is withdrawn.** Every check that is classified at HEAD is still classified after this unit, on the same span with the same attribute. A relocation that drops a `memory.failure_class` emission is a C-MEM-19 change and back-flows as one rather than landing here.
+
+Verification:
+
+- **The population table flips, and only where it should.** `harness-runtime/tests/test_memory_failure_classification.py` carries one `@pytest.mark.parametrize` table of **39** rows (decorator at `:57`, count re-verified by AST at this leg's HEAD). Exactly **8** rows - the `MemoryToolExecutionInputError` rows at `:90`, `:92`, `:96`, `:100`, `:103`, `:105`, `:110`, `:112` - change their expected value to `input_validation_failure`. The other **31 are untouched**, and that is asserted by leaving them untouched rather than by re-deriving them.
+- **Two negative rows, one per gate, with DISTINCT literals** - one fixture cannot serve both. (b1) The re-keyed `_BogusDeclarationError`, now declaring a genuinely non-member literal, is still **ignored**, pinning that an arbitrary declaration cannot widen the vocabulary. (b2) A **new** second fixture declaring the plain `str` `"input_validation_failure"` - the new member's *value*, but not the enum member - is **also ignored**, pinning the `isinstance` type gate at `memory_observability.py:218` independently of membership. b1 must **not** name a real member's value; b2 **must**. Without b2 the type gate is only witnessed by a literal that is non-member on both counts, and a membership check would satisfy the test while the type check rotted.
+- **End-to-end through the real executor, both classify-routed paths.** One test drives a genuine malformed argument through `execute()` and asserts the emitted `memory.failure_class` on the outer memory tool-call span; a second drives the same argument through `validate()` and asserts the same attribute on the span that path emits. Asserted on the emitted span, not on the classifier in isolation - the `B-88` impl half's own lesson was that a unit-green classifier proves nothing about what the production span carries.
+- **The dispatch six/two split, witnessed per site.** For each of the six internal-fault sites, the raised exception classifies to `provider_adapter_failure`; for each of the two retained model-argument sites, it classifies to `input_validation_failure`. Sixteen assertions, not two aggregates: an aggregate over "the dispatch sites" is satisfiable by an implementation that re-typed all eight, which is the exact error the ratification corrected.
+- **End-to-end dispatch/retry witness for the re-typed sites**, which the telemetry witnesses above do **not** reach. A dispatch tripping a re-typed internal fault takes the **fail-fast** exit - the candidate is abandoned with no same-candidate retry - and this is asserted through the real retry path, not by inspecting the isinstance tuple. Mirror the shape of the existing fail-fast witness for this family (`harness-runtime/tests/test_lifecycle_retry_breaker_fallback.py::test_memory_tool_input_error_fail_fast_trip_carries_no_breaker_cause`), which pins the emitted breaker transition after asserting the transition exists, so the assertion cannot go vacuous.
+- **Mutation probes, each restored after.** (a) Revert the declaration at `memory_tool_executor.py:171-173` to `PROVIDER_ADAPTER_FAILURE`: exactly the 8 table rows fail with `assert 'provider_adapter_failure' == 'input_validation_failure'`, and the two end-to-end span witnesses fail with them. (b) Re-type one of the two **retained** model-argument sites along with the six: its own per-site assertion fails and no other does - proving the split is asserted per site rather than in aggregate. (c) Remove the receiving type from `_classify_provider_exception`'s fail-fast tuple: the end-to-end dispatch/retry witness fails while every telemetry witness still passes - which is the correct discriminating shape, since the two obligations are independent and a single suite that could not tell them apart would let the retry regression ship green.
+
+Out of scope for this unit:
+
+- **Wiring a `memory.failure_class` emission on the dispatch prepare path.** That path opens no memory telemetry span; giving it one is a change to C-MEM-19's covered-operation list and belongs to its own arc, not to this one. The unit records the gap and does not close it.
+- **Changing the classifier residual.** Giving the unclassified case a dedicated value - the fork's variant A-prime - is a sibling improvement to the residual, explicitly not an alternative to this unit, and the fork records it as owing its own row. `classify_memory_failure`'s residual return is untouched here.
+- **Re-classifying any population other than the input-error family.** The declaration-keyed classifications landed by the `B-88` impl half are settled and are not revisited: the denial, store, path-violation, callback-IO, and native-adapter-denial populations keep the classes they declare today.
+
 ## 6. Required review gates
 
 Before implementation starts:
@@ -1134,6 +1223,7 @@ Recommended PR groups:
 | G5 | U-MEM-23 through U-MEM-25 | Migration, end-to-end verification, documentation, final evidence. |
 | G6 | U-MEM-26 | Run-level memory scope keying and cross-family tool withholding. Conformance repair against the cleared threat-model scope invariant; lands after the `B-86` spec leg. |
 | G7 | U-MEM-27 | Cross-family-captured promotion gate. Lands after the `B-92` spec leg and after G6, whose composed-scope writer repair is what makes the provenance comparison meaningful. |
+| G8 | U-MEM-28 | C-MEM-19 input-validation failure class and the A-ii type re-typing. Lands after the `B-88` spec leg. Independent of G6 and G7 - it shares no surface with either. |
 
 No group may be described as an MVP. Groups are review boundaries only.
 
@@ -1154,7 +1244,7 @@ No group may be described as an MVP. Groups are review boundaries only.
 
 The memory substrate is complete when:
 
-- U-MEM-01 through U-MEM-27 are implemented.
+- U-MEM-01 through U-MEM-28 are implemented.
 - Every R-MEM requirement maps to implementation and verification evidence.
 - Every C-MEM contract maps to implementation and verification evidence.
 - Anthropic native memory, standard memory tools, and prompt packet fallback all operate over the same canonical store.

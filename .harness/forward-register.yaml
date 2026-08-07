@@ -59,13 +59,13 @@
 
 snapshot:
   total: 113
-  open: 0
-  design_substrate_gated: 1
+  open: 1
+  design_substrate_gated: 0
   registered_finding: 17
   operator_gated: 0
   held: 1
   closed: 94
-  identity_digest: 0edaaffc2bcc7804
+  identity_digest: 9f9adae6710c8034
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -3166,7 +3166,7 @@ items:
   heading: '### B-87 · Degraded-serve span over-reports pre-wire failures as completed injections *(surfaced by out-of-family Codex round 8 on the B-83 arc, 2026-07-28; CLOSED 2026-07-29 — PR #1149)*'
 - id: B-88
   title: 'Memory failure telemetry: substring-keyed classify_memory_failure collapses the typed input-error family (and two real policy denials) to io_failure'
-  status: design_substrate_gated
+  status: open
   pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record)'
   summary: '[SUPERSEDED 2026-08-05 -- RATIFIED as READING A with sub-decision A-ii = RE-TYPE;
     the spec half is DECIDED and the status is now `design_substrate_gated` with a spec leg then
@@ -3335,7 +3335,25 @@ items:
     comment at test_memory_observability.py claiming the declaration beat a message that trips
     an earlier heuristic was fixed by making the message genuinely trip rule 2 (path traversal),
     so the row is a real conflict rather than a residual-agreement.'
-  close_out: 'RATIFIED 2026-08-05 as READING A, with sub-decision A-ii = RE-TYPE. Operator AskUserQuestion
+  close_out: 'SPEC LEG LANDED 2026-08-06 -- `Spec_Memory_Substrate_v1.md` v1.2 -> v1.3 (C-MEM-19 gains
+    the seventh member `input_validation_failure`, the NEW `### Input validation failure` subsection
+    carrying the A-ii type boundary + the coverage statement + the re-typed sites'' fail-fast retry
+    disposition, and two appended invariants) AND `Implementation_Plan_Memory_Substrate_v1.md`
+    v1.2 -> v1.3 (U-MEM-22 acceptance extended to seven values; NEW U-MEM-28 at G8 decomposing the
+    impl leg). Both clearance markers filed. STATUS `design_substrate_gated` -> `open` per the status
+    enum at this file''s head: a filed fork does not flip the status -- only ratified + applied spec
+    deltas plus the corresponding Phase-6 plan deltas open the row for code, and both landed at this
+    PR. WHAT REMAINS IS THE IMPL LEG (U-MEM-28), not any design gate. Two drifts against the
+    ratification text are RECORDED at the spec change-note rather than absorbed: the classify-routed
+    population is FIVE production call sites at HEAD 3a1300eb (not four -- PR #1243''s B-84 validate
+    pre-pass added `memory_tool_executor.py:355`, and it SATISFIES the ratification''s mandatory
+    C-MEM-19 preservation clause as built), and every `lifecycle/llm_dispatch.py` offset in the six/two
+    A-ii enumeration has shifted (six internal-fault sites now `:4359`/`:4363`/`:4475`/`:4483`/`:4977`/`:4988`;
+    the two RETAINED model-supplied-`scope_ref` sites now `:4369`/`:4371`) -- re-resolved BY CONTENT,
+    and the six/two split itself is unchanged. One judgement call is recorded as overturnable at the
+    plan change-note: the fork''s "no new unit" line predates A-ii''s ratified scope, so the vocabulary
+    half stayed an AC amendment as prescribed while the A-ii half took NEW U-MEM-28, which no landed
+    unit owned. RATIFIED 2026-08-05 as READING A, with sub-decision A-ii = RE-TYPE. Operator AskUserQuestion
     on the fork''s section 8 (`.harness/class_2_fork_b88_memory_failure_input_validation_class.md`).
     WHAT IS RATIFIED: C-MEM-19 gains `input_validation_failure` as a SEVENTH failure class (the
     stated fallback name `input_error` is NOT taken), plus the BOUNDARY INVARIANT distinguishing
