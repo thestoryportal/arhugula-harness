@@ -5,8 +5,9 @@ DIRECT append surfaces (IS spec v1.13, `B-57` ratified Reading A; IS plan v2.9
 The load-bearing witnesses of the `B-57` impl leg live here:
 
 - the **two-OS-process contention witness** (§2.4 first bullet) — the direct
-  analogue of `B-112`'s own 12/20 repro, made DETERMINISTIC by holding the real
-  cross-process lock across the overtake instead of racing for it;
+  analogue of `B-112`'s own 12/20 repro, made DETERMINISTIC by marker-staging
+  the overtake instead of racing for it, plus a genuinely simultaneous
+  40-vs-40 contention test so the race is non-vacuous;
 - the **non-electing default-preservation NEGATIVE witness** (AC #15) — the one
   that proves the election did NOT become a default;
 - the **per-site table conformance check** (AC #17);
@@ -77,20 +78,22 @@ def _append(handle: JsonlLedgerHandle, tag: str, stamp: datetime) -> None:
 #: Two modes:
 #:
 #: - ``overtake`` — samples its timestamp FIRST, announces the sample, then
-#:   deliberately DELAYS before appending, so the parent's later-sampled entry
-#:   is guaranteed to commit in between. That is `B-57`'s named failure staged
-#:   DETERMINISTICALLY (sampled-first / appended-second) rather than raced for.
-#:   Both processes still go through the real `flock`; what is removed is the
+#:   WAITS on a `go` marker the parent writes only after its own, later-sampled
+#:   entry is durable. That is `B-57`'s named failure staged DETERMINISTICALLY
+#:   (sampled-first / appended-second) rather than raced for OR timed. Both
+#:   processes still go through the real `flock`; what is removed is the
 #:   coin-flip, not the lock.
 #: - ``hammer`` — appends a burst of electing entries as fast as it can while
 #:   the parent does the same, which is the genuinely CONTENDED half: it makes
 #:   the race non-vacuous instead of assuming it.
 #:
-#: The parent CANNOT simply hold the lock across the overtake: within one
-#: process a nested `cross_process_write_lock` opens a SECOND fd on the same
-#: canonical file and `flock` contends between separate fds even within one
-#: process (`cross_process_ledger_lock.py:120`), so the holder would deadlock
-#: against its own append. Only the per-directory face is refcount-reentrant.
+#: Why markers and not a parent-held lock: within one process a nested
+#: `cross_process_write_lock` opens a SECOND fd on the same canonical file, and
+#: `flock` contends between separate fds even within one process
+#: (`cross_process_ledger_lock.py:120`) — so a parent holding the lock across
+#: the overtake would deadlock against its own append. Only the per-directory
+#: face is refcount-reentrant. Grounded by direct read + an observed hang, not
+#: assumed.
 _CHILD_SOURCE = """\
 import json, sys, time
 from datetime import UTC, datetime
@@ -138,10 +141,12 @@ if mode == "overtake":
     sampled = datetime.now(UTC)
     # 2. Announce the sample so the parent can overtake deterministically.
     marker.write_text(sampled.isoformat())
-    # 3. Yield the window. The parent commits its own, LATER-sampled entry
-    #    during this delay, so we are provably the waiter that sampled first
-    #    and acquires second.
-    time.sleep(1.5)
+    # 3. Wait for the parent's OWN, later-sampled entry to be durable. A
+    #    marker, never a sleep: a fixed delay would make the ordering identity
+    #    a timing bet a loaded CI runner could lose, and the identity is the
+    #    whole point of this witness.
+    while not (marker.parent / "go.marker").exists():
+        time.sleep(0.005)
     try:
         append("child", WRITER_OWNED_TIMESTAMP if elects else sampled)
     except NonMonotonicTimestampError:
@@ -163,7 +168,7 @@ def _spawn_child(
     mode: str, ledger_path: Path, marker: Path, *, elects: bool
 ) -> subprocess.Popen[str]:
     script = ledger_path.parent / "b57_child_appender.py"
-    script.write_text(_CHILD_SOURCE)
+    script.write_text(_CHILD_SOURCE, encoding="utf-8")
     return subprocess.Popen(
         [
             sys.executable,
@@ -196,11 +201,13 @@ def _run_two_process_overtake(tmp_path: Path, *, elects: bool) -> subprocess.Com
 
     The child samples first and appends second; the parent samples second and
     appends first. Both go through the real cross-process `flock`; the ordering
-    is STAGED (the child yields a window after announcing its sample) rather
-    than raced for, because `flock` specifies no acquisition ordering and a
-    raced formulation is flaky in both directions — the lesson already recorded
-    on `test_rollback_cross_process_lock_prevents_lost_concurrent_append`.
-    `B-112` reproduced this same ordering 12/20 by racing; this makes it 20/20.
+    is STAGED via markers in BOTH directions rather than raced for, because
+    `flock` specifies no acquisition ordering and a raced (or sleep-timed)
+    formulation is flaky in both directions — the lesson already recorded on
+    `test_rollback_cross_process_lock_prevents_lost_concurrent_append`.
+    `B-112` reproduced this same ordering 12/20 by racing; this makes it 20/20,
+    with no timing assumption a loaded CI runner could invalidate. The genuinely
+    SIMULTANEOUS half is a separate test below.
     """
     ledger_path = tmp_path / "state.jsonl"
     marker = tmp_path / "child-sampled.marker"
@@ -209,8 +216,10 @@ def _run_two_process_overtake(tmp_path: Path, *, elects: bool) -> subprocess.Com
 
     child = _spawn_child("overtake", ledger_path, marker, elects=elects)
     _await_marker(marker, child, "its timestamp sample")
-    # The child has sampled and is inside its yield window. Overtake it.
+    # The child has sampled and is waiting. Overtake it with a LATER instant,
+    # then release it — so it provably sampled first and appends second.
     _append(handle, "parent", datetime.now(UTC))
+    (tmp_path / "go.marker").write_text("go")
 
     stdout, stderr = child.communicate(timeout=120)
     return subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
@@ -245,7 +254,9 @@ def test_electing_direct_append_survives_lock_race_overtake(tmp_path: Path) -> N
         "the child must have appended SECOND (after the overtaking parent entry)"
     )
 
-    child_pre_queue_sample = datetime.fromisoformat((tmp_path / "child-sampled.marker").read_text())
+    child_pre_queue_sample = datetime.fromisoformat(
+        (tmp_path / "child-sampled.marker").read_text(encoding="utf-8")
+    )
     parent_entry, child_entry = entries[1], entries[2]
     assert child_pre_queue_sample < parent_entry.timestamp, (
         "the staging is vacuous unless the child genuinely sampled BEFORE the overtaker"
@@ -285,6 +296,7 @@ def test_non_electing_direct_append_is_refused_after_lock_race_overtake(
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX flock serializes these writers")
 def test_electing_appends_never_invert_under_real_two_process_contention(
     tmp_path: Path,
 ) -> None:
@@ -510,7 +522,7 @@ def _sentinel_stamps_by_module() -> dict[str, int]:
         for module in sorted(src_dir.rglob("*.py")):
             count = sum(
                 1
-                for line in module.read_text().splitlines()
+                for line in module.read_text(encoding="utf-8").splitlines()
                 if line.strip() == "timestamp=WRITER_OWNED_TIMESTAMP,"
             )
             if count:
@@ -545,7 +557,7 @@ def test_no_production_module_touches_the_sentinel_outside_the_roster() -> None:
         module.relative_to(_REPO_ROOT).as_posix()
         for src_dir in _REPO_ROOT.glob("harness-*/src")
         for module in src_dir.rglob("*.py")
-        if "WRITER_OWNED_TIMESTAMP" in module.read_text()
+        if "WRITER_OWNED_TIMESTAMP" in module.read_text(encoding="utf-8")
     }
     expected = set(_SENTINEL_ROSTER) | {
         # The sentinel's own definition + the §7.6 drain path that predates
@@ -568,7 +580,7 @@ def test_retain_and_defer_sites_do_not_elect() -> None:
     because these are the two the acceptance criteria call out by name.
     """
     for site in (_RETAIN_SITE, _DEFER_SITE):
-        assert "WRITER_OWNED_TIMESTAMP" not in (_REPO_ROOT / site).read_text(), (
+        assert "WRITER_OWNED_TIMESTAMP" not in (_REPO_ROOT / site).read_text(encoding="utf-8"), (
             f"{site} must not elect"
         )
 
@@ -588,7 +600,7 @@ def test_defer_site_has_no_production_caller() -> None:
             parts = module.relative_to(_REPO_ROOT).parts
             if "tests" in parts or ".venv" in parts:
                 continue
-            for lineno, line in enumerate(module.read_text().splitlines(), 1):
+            for lineno, line in enumerate(module.read_text(encoding="utf-8").splitlines(), 1):
                 if "emit_sibling_ledger_entry" in line:
                     non_test_hits.append(f"{module.relative_to(_REPO_ROOT)}:{lineno}")
     assert non_test_hits == [
