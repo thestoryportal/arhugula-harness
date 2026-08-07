@@ -517,15 +517,14 @@ recorded because a reader pricing step (3) would otherwise believe a configurati
 
 **ZERO** contract numbers · **ZERO** hash / canonicalization / migration / `snapshot_hash` impact (no field added, no shape changed, no recipe touched — only *which instant* a consenting call site records) · **ZERO** CXA rows (the sentinel is already exported from `harness-is` and every candidate site already imports the C-IS-07 §7.1 write contract: no new package edge, no new typed seam) · **ZERO** new plan units, nodes, edges or auxiliary types · **ZERO** code at this leg (SPEC-ONLY).
 
-### §11.3 Two count claims in this filing CORRECTED at the spec leg — recorded, not silently normalized
+### §11.3 THREE claims in this filing CORRECTED at the spec leg (two COUNTS + one CITE RANGE) — recorded, not silently normalized
 
 Re-grounded by direct read at HEAD `acfc1afa`; all fourteen §3(ii) rows are byte-identical to this filing, and the `emit_sibling_ledger_entry` zero-non-test-caller sweep re-ran independently (19 hits, exactly 3 non-test: the definition plus two docstring mentions). Two of this filing's own COUNTS do not reconcile with its own table:
 
 1. **§3(ii)'s *"Fourteen rows, twelve SITES"*.** The stated fold (audit_writer's primary + resample retry; per_step_override_evaluator's composer + sampling caller) is **already performed** inside rows 12 and 9 as printed — deducting it again is what produces "twelve". By content the classification table is **14 rows**, and that is what IS plan v2.9 §2.1 carries.
 2. **§4/§7's *"≈8 conversions"* / *"~8 one-line conversions"*.** §4's own ELECT cell enumerates **TEN** payload-construction rows. The corrected figure is **10 ELECT** + **2** pending the per-site injection-caveat verdicts.
-
 3. **§2's sentinel-docstring cite `:79`–`:80` under-covers the sentence it quotes by one line.** Read at `acfc1afa`, `state_ledger_write.py:78` ends with the word *"Every"* and `:79` begins *"DIRECT append path keeps caller-supplied…"* — so the quoted sentence spans **`:78`–`:80`**. The QUOTE is byte-exact; only its range is one line short. This filing's §2 body is left **byte-unchanged** (it is the historical record); the corrected range is what IS spec v1.13's change-note, IS plan v2.9's AC #14-bis, both clearance markers and the register carry, so an impl agent editing to the cite does not leave a dangling *"Every"* at `:78`.
-Neither correction changes a disposition, a reading, or any zero-cost line; both change the **SIZE of the surface** the impl leg must convert. Recorded here per the workspace's stale-carry discipline, alongside this filing's own §9 drift record.
+**None of the three changes a disposition, a reading, or any zero-cost line.** The two COUNT corrections change the **SIZE of the surface** the impl leg must convert; the CITE-RANGE correction changes only where an impl agent's edit must start. Recorded here per the workspace's stale-carry discipline, alongside this filing's own §9 drift record.
 
 ### §11.4 What remains owed after this leg
 
