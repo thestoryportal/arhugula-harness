@@ -744,9 +744,8 @@ ratification.**
 `Implementation_Plan_Memory_Substrate_v1.md` v1.2 → v1.3 (U-MEM-22 `:829` extended, **no new unit**),
 by a dedicated `spec-writer`, with **both** clearance markers per root `CLAUDE.md` §4.5 (under A the
 plan does change, so the plan marker is owed too). **Impl leg (owed after it):** 1 enum member + 1
-declaration flip + 1 docstring rewrite + 1 fixture re-key; **SEVEN** witness rows flip and the
-eighth is RE-KEYED as an executor-side negative row (revised at the spec leg - see §11.6) + the two
-added negative rows + the mutation probes; **plus the A-ii source re-typing at the SIX `llm_dispatch.py`
+declaration flip + 1 docstring rewrite + 1 fixture re-key; 8 witness rows flip + the two added
+negative rows + the mutation probes; **plus the A-ii source re-typing at the SIX `llm_dispatch.py`
 internal-fault sites, with a classification-reachability witness SCOPED TO THE CLASSIFY-ROUTED
 POPULATION** — the dispatch prepare path is outside that scope per §11.1's coverage narrowing, and
 must not be promised by this leg — **plus an END-TO-END dispatch/retry witness for the re-typed
@@ -797,18 +796,18 @@ disposition.**
    `:4483` / `:4977` / `:4988`; the two **RETAINED** model-supplied-`scope_ref` sites at `:4369` /
    `:4371`. **The six/two split itself is unchanged** - only the offsets moved, and U-MEM-28
    instructs re-resolution by content at the impl leg's own HEAD rather than inheriting either set.
-4. **A SEVENTH re-typing, at a site this filing never surveyed - and it IS a scoped extension of
-   the ratified A-ii list, not a decomposition of it.** `_prepare`'s executor-side exhaustiveness
-   fall-through (`memory_tool_executor.py:373`) raises the input-error type for an *"unsupported
-   memory tool"*, but `MemoryToolExecutionRequest.tool_name` is typed `MemoryToolName` on an
-   `extra="forbid"` model, so that branch fires only when the executor lacks a `_prepare_*` for a
-   valid enum member - a harness-internal fault, which spec v1.3's own type-boundary rule forbids
-   raising as that type. §11.1 enumerated **six** sites because this filing surveyed
-   `lifecycle/llm_dispatch.py` and **never surveyed the executor**. Leaving it would ship a contract
-   the implementation is knowingly non-conformant with at one named site; widening a ratified
-   enumeration on a spec leg's own reading is nonetheless the shape X-AL-3 polices. It is therefore
-   **surfaced rather than absorbed** *(out-of-family rounds 3 and 7)* and is **overturnable two
-   ways**: the impl leg's own re-grounding may find the branch caller-reachable at its HEAD and keep
-   the input class, or the operator may strike the seventh site, leaving the residual
-   non-conformance recorded against C-MEM-19 rather than repaired. No other U-MEM-28 obligation
-   changes either way.
+4. **A SEVENTH re-typing was PROPOSED and WITHDRAWN - surfaced here so a later arc can take it up.**
+   `_prepare`'s executor-side exhaustiveness fall-through (`memory_tool_executor.py:373`) raises the
+   input-error type for an *"unsupported memory tool"*, but `MemoryToolExecutionRequest.tool_name`
+   is typed `MemoryToolName` on an `extra="forbid"` model, so that branch fires only when the
+   executor lacks a `_prepare_*` for a valid enum member - a **harness-internal** fault, which spec
+   v1.3's type-boundary rule forbids raising as that type. §11.1 enumerated **six** sites because
+   this filing surveyed `lifecycle/llm_dispatch.py` and **never surveyed the executor**. The spec
+   leg initially required the seventh re-typing; out-of-family review round 8 objected that a spec
+   leg **applies** operator-decided fixes and may not widen a ratified enumeration on its own
+   reading, and that objection was **accepted**: the obligation was removed. **The consequence is
+   recorded rather than softened - at U-MEM-28's close, C-MEM-19's type-boundary invariant will have
+   ONE known non-conformant site.** Repairing it needs an operator ratification of a **seventh
+   site** (which a later arc may seek, and which this item exists to make findable), or a finding at
+   the impl leg's own re-grounding that the branch is caller-reachable after all, in which case it
+   is conformant as it stands and nothing is owed.

@@ -3356,13 +3356,16 @@ items:
     and the six/two split itself is unchanged. One judgement call is recorded as overturnable at the
     plan change-note: the fork''s "no new unit" line predates A-ii''s ratified scope, so the vocabulary
     half stayed an AC amendment as prescribed while the A-ii half took NEW U-MEM-28, which no landed
-    unit owned. A SECOND, SEPARATE DEPARTURE: U-MEM-28 requires a SEVENTH re-typing the ratification
-    did not enumerate -- `_prepare`''s executor-side exhaustiveness fall-through (`memory_tool_executor.py:373`),
-    a harness-internal fault under spec v1.3''s own type-boundary rule, at a site the fork never surveyed
-    because it surveyed `llm_dispatch.py` only. That is a SCOPED EXTENSION of the ratified six-site list,
-    NOT a decomposition; surfaced rather than absorbed (out-of-family rounds 3 + 7) and overturnable two
-    ways -- the impl leg''s re-grounding may keep the input class, or the operator may strike the seventh
-    site and leave the residual non-conformance recorded against C-MEM-19. ONE FINDING CARRIED FORWARD, recorded not repaired (out-of-family review round 1 [P1]): the
+    unit owned. A SEVENTH RE-TYPING WAS PROPOSED AND WITHDRAWN: `_prepare`''s executor-side exhaustiveness
+    fall-through (`memory_tool_executor.py:373`) raises the input-error type for a HARNESS-INTERNAL fault
+    that spec v1.3''s type-boundary rule forbids, at a site the fork never surveyed because it surveyed
+    `llm_dispatch.py` only. The spec leg initially required it; out-of-family round 8 objected that a spec
+    leg APPLIES ratified fixes and may not widen a ratified six-site enumeration on its own reading, and
+    the objection was ACCEPTED -- the obligation is removed and the finding carried, with its consequence
+    stated: at U-MEM-28''s close, C-MEM-19''s type-boundary invariant has ONE KNOWN NON-CONFORMANT SITE,
+    recorded and unrepaired. Repairing it needs an operator ratification of a seventh site (a later arc
+    may seek one), or a finding at the impl leg''s re-grounding that the branch is caller-reachable.
+    ONE FINDING CARRIED FORWARD, recorded not repaired (out-of-family review round 1 [P1]): the
     same model-supplied `scope_ref` MISMATCH is refused as a DENIAL at the executor (`memory_tool_executor.py:794-800`,
     one of the four sites this row''s own impl half re-classified to `policy_denial`) and as an INPUT ERROR
     at the dispatch prepare layer (`lifecycle/llm_dispatch.py:4371`, retained by ratified name), so one logical
@@ -3433,7 +3436,7 @@ items:
     v1.2 -> v1.3 by a dedicated spec-writer AND `Implementation_Plan_Memory_Substrate_v1.md` v1.2
     -> v1.3 (U-MEM-22 :829 extended, NO new unit), with BOTH clearance markers per root CLAUDE.md
     section 4.5 -- and then the IMPL leg (1 enum member + 1 declaration flip + 1 docstring rewrite
-    + 1 fixture re-key; SEVEN witness rows flip and the eighth is re-keyed as an executor-side negative row (revised at the 2026-08-06 spec leg, out-of-family round 3) + 2 added negative rows + the mutation probes; PLUS
+    + 1 fixture re-key; 8 witness rows flip + 2 added negative rows + the mutation probes; PLUS
     the A-ii source re-typing at the SIX llm_dispatch.py internal-fault sites, and a reachability
     witness SCOPED TO THE CLASSIFY-ROUTED POPULATION -- the dispatch prepare path is out of that
     scope per the coverage narrowing above). RETRY-EXIT-CLASS CONSEQUENCE OF THE RE-TYPE, surfaced
