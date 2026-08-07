@@ -7,6 +7,7 @@ import json
 import unicodedata
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, ClassVar, cast
 
@@ -126,7 +127,8 @@ class MemoryToolExecutionStoreError(MemoryToolExecutionError):
     declaration mislabelled a real storage failure: `_write_note` re-raises a
     `MemoryCaptureResult` whose `status is FAILED`, and that status is produced
     at exactly ONE place - `EpisodicMemoryCapture._capture`'s `except` around
-    `write_record` + `append_memory_operation` (`memory_capture.py:541-552`),
+    `write_record` + `append_memory_operation` (`memory_capture.py:818` / `:820`,
+    under the broad handler `:892`-`:903`),
     which classifies its OWN span `io_failure`. The outer standard-tool span
     would then have contradicted the inner capture span about the same event.
 
@@ -210,6 +212,64 @@ class MemoryToolExecutionRequest(BaseModel):
     context: MemoryToolExecutionContext
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedSearch:
+    """`memory.search`'s arguments, parsed and cross-checked. B-84."""
+
+    query: str
+    allowed_kinds: tuple[MemoryRecordKind, ...]
+    limit: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedRead:
+    """`memory.read`'s arguments, parsed and cross-checked. B-84."""
+
+    memory_ref: MemoryID
+    packet_section_ref: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedWriteNote:
+    """`memory.write_note`'s arguments, parsed and cross-checked. B-84."""
+
+    note: str
+    tool_event_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedPromotion:
+    """`memory.propose_promotion`'s arguments, parsed and cross-checked. B-84."""
+
+    memory_ref: MemoryID
+    record_kind: MemoryRecordKind
+    target_kind: PromotionCandidateKind
+    evidence_ref: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedRedaction:
+    """`memory.request_redaction`'s arguments, parsed and cross-checked. B-84."""
+
+    memory_ref: MemoryID
+    record_kind: MemoryRecordKind
+    reason: str
+
+
+#: The one parsed-and-validated representation every tool body consumes.
+#:
+#: B-84 (Reading A). `validate()` and `_execute_authorized` both obtain their
+#: checks by calling `_prepare`, and every tool body takes its member of this
+#: union as a REQUIRED parameter - so no tool can run without having been
+#: prepared, and no check can be added to one path without appearing on the
+#: other. That is W-4's preferred discharge: parity is unfalsifiable by
+#: construction rather than pinned by an enumeration that a new argument could
+#: silently outgrow.
+type _PreparedArguments = (
+    _PreparedSearch | _PreparedRead | _PreparedWriteNote | _PreparedPromotion | _PreparedRedaction
+)
+
+
 class StandardMemoryToolExecutor:
     """Execute C-MEM-14 provider-neutral memory tools under memory policy."""
 
@@ -256,26 +316,139 @@ class StandardMemoryToolExecutor:
                 )
                 raise
 
-    def _execute_authorized(self, request: MemoryToolExecutionRequest) -> dict[str, object]:
+    def validate(self, request: MemoryToolExecutionRequest) -> None:
+        """Run the tool's argument checks WITHOUT executing it. B-84, Reading A.
+
+        Side-effect-free: it reaches nothing but `request` and the pure helpers
+        `_prepare` composes - no store read, no ledger append, no policy
+        resolver call, no retrieval. A batch pre-pass can therefore ask "would
+        every one of these calls survive its own argument checks?" before the
+        first of them commits anything durable, which is what closes the
+        partial-commit door: an executor-level argument failure on a LATER call
+        can no longer follow an EARLIER call's durable write.
+
+        The checks are not re-implemented here. `validate` and
+        `_execute_authorized` call the SAME `_prepare`, and every tool body
+        requires the prepared value as an argument, so the two paths cannot
+        drift (see `_PreparedArguments`).
+
+        Telemetry (`C-MEM-19`): the checks this relocates ahead of `execute()`
+        were classified by `execute()`'s own catch, so raising from a dispatch
+        pre-pass would have DROPPED `memory.failure_class` for exactly the
+        population B-84 moves. The failure path therefore emits the same
+        `memory.tool_call` span with the same attributes. Nothing is emitted
+        when validation passes - `execute()` emits that call's span itself, and
+        a second success span would double-count the call.
+        """
+
+        memory_tool_contract(request.tool_name)
+        try:
+            self._prepare(request)
+        except Exception as exc:
+            with self._span_context(request) as span:
+                _set_span_attributes(span, request)
+                set_memory_telemetry_attributes(
+                    span,
+                    policy_decision="denied"
+                    if isinstance(exc, MemoryToolExecutionDeniedError)
+                    else "failed",
+                    failure_class=classify_memory_failure(exc),
+                )
+                raise
+
+    def _prepare(self, request: MemoryToolExecutionRequest) -> _PreparedArguments:
+        """Parse + cross-check one call's arguments. Pure - see `validate`."""
+
         tool_name = request.tool_name
         if tool_name is MemoryToolName.SEARCH:
-            return self._search(request)
+            return self._prepare_search(request)
         if tool_name is MemoryToolName.READ:
-            return self._read(request)
+            return self._prepare_read(request)
         if tool_name is MemoryToolName.WRITE_NOTE:
-            return self._write_note(request)
+            return self._prepare_write_note(request)
         if tool_name is MemoryToolName.PROPOSE_PROMOTION:
-            return self._propose_promotion(request)
+            return self._prepare_promotion(request)
         if tool_name is MemoryToolName.REQUEST_REDACTION:
-            return self._request_redaction(request)
+            return self._prepare_redaction(request)
         raise MemoryToolExecutionInputError(f"unsupported memory tool {tool_name!s}")
 
-    def _search(self, request: MemoryToolExecutionRequest) -> dict[str, object]:
-        context = request.context
+    def _prepare_search(self, request: MemoryToolExecutionRequest) -> _PreparedSearch:
         args = request.arguments
-        self._require_policy_ref(args, context)
-        self._require_scope_ref(args, context)
-        allowed_kinds = _allowed_kinds(args)
+        self._require_policy_ref(args, request.context)
+        self._require_scope_ref(args, request.context)
+        return _PreparedSearch(
+            query=_string_arg(args, "query"),
+            allowed_kinds=_allowed_kinds(args),
+            # Parsed here, defaulted at the call site: the default is the
+            # retrieved section count, which does not exist yet - but the
+            # VALIDITY of a supplied `limit` does not depend on it, so the
+            # check moves ahead of the retrieval and the defaulting does not.
+            limit=_optional_positive_int_arg(args, "limit"),
+        )
+
+    def _prepare_read(self, request: MemoryToolExecutionRequest) -> _PreparedRead:
+        args = request.arguments
+        self._require_policy_ref(args, request.context)
+        return _PreparedRead(
+            memory_ref=MemoryID(_string_arg(args, "memory_ref")),
+            packet_section_ref=_optional_string_arg(args, "packet_section_ref"),
+        )
+
+    def _prepare_write_note(self, request: MemoryToolExecutionRequest) -> _PreparedWriteNote:
+        args = request.arguments
+        self._require_policy_ref(args, request.context)
+        self._require_scope_ref(args, request.context)
+        note = _string_arg(args, "note")
+        return _PreparedWriteNote(
+            note=note,
+            tool_event_id=_tool_event_id(note, _optional_string_arg(args, "idempotency_key")),
+        )
+
+    def _prepare_promotion(self, request: MemoryToolExecutionRequest) -> _PreparedPromotion:
+        args = request.arguments
+        self._require_policy_ref(args, request.context)
+        memory_ref = MemoryID(_string_arg(args, "memory_ref"))
+        return _PreparedPromotion(
+            memory_ref=memory_ref,
+            record_kind=_kind_from_memory_ref(memory_ref),
+            target_kind=_promotion_kind(_string_arg(args, "target_kind")),
+            evidence_ref=_optional_string_arg(args, "evidence_ref"),
+        )
+
+    def _prepare_redaction(self, request: MemoryToolExecutionRequest) -> _PreparedRedaction:
+        args = request.arguments
+        self._require_policy_ref(args, request.context)
+        memory_ref = MemoryID(_string_arg(args, "memory_ref"))
+        return _PreparedRedaction(
+            memory_ref=memory_ref,
+            record_kind=_kind_from_memory_ref(memory_ref),
+            reason=_string_arg(args, "reason"),
+        )
+
+    def _execute_authorized(self, request: MemoryToolExecutionRequest) -> dict[str, object]:
+        # B-84: the SAME `_prepare` `validate()` runs, and the only source of
+        # the prepared value every tool body below requires.
+        prepared = self._prepare(request)
+        if isinstance(prepared, _PreparedSearch):
+            return self._search(request, prepared)
+        if isinstance(prepared, _PreparedRead):
+            return self._read(request, prepared)
+        if isinstance(prepared, _PreparedWriteNote):
+            return self._write_note(request, prepared)
+        if isinstance(prepared, _PreparedPromotion):
+            return self._propose_promotion(request, prepared)
+        # Exhaustive by construction: the four narrowings above leave exactly
+        # `_PreparedRedaction`, so a SIXTH `_PreparedArguments` variant would
+        # make this call a type error rather than a silently skipped tool.
+        return self._request_redaction(request, prepared)
+
+    def _search(
+        self,
+        request: MemoryToolExecutionRequest,
+        prepared: _PreparedSearch,
+    ) -> dict[str, object]:
+        context = request.context
+        allowed_kinds = prepared.allowed_kinds
         retrieval = self._retriever.retrieve(
             MemoryRetrievalRequest(
                 run_id=context.run_id,
@@ -284,7 +457,7 @@ class StandardMemoryToolExecutor:
                 cli_profile=context.cli_profile,
                 provider=context.provider,
                 model=context.model,
-                query_summary=_string_arg(args, "query"),
+                query_summary=prepared.query,
                 scope=self._resolved_scope(context),
                 token_budget=context.token_budget,
                 allowed_kinds=allowed_kinds,
@@ -294,7 +467,7 @@ class StandardMemoryToolExecutor:
             access_mode=MemoryPacketAccessMode.STANDARD_MEMORY_TOOLS,
         )
         score_by_ref = {trace.memory_ref: trace.score for trace in retrieval.ranking_trace}
-        limit = _positive_int_arg(args, "limit", default=len(retrieval.packet.sections))
+        limit = max(0, len(retrieval.packet.sections)) if prepared.limit is None else prepared.limit
         return {
             "results": [
                 {
@@ -313,11 +486,13 @@ class StandardMemoryToolExecutor:
             "policy_ref": context.policy_ref,
         }
 
-    def _read(self, request: MemoryToolExecutionRequest) -> dict[str, object]:
+    def _read(
+        self,
+        request: MemoryToolExecutionRequest,
+        prepared: _PreparedRead,
+    ) -> dict[str, object]:
         context = request.context
-        args = request.arguments
-        self._require_policy_ref(args, context)
-        memory_ref = MemoryID(_string_arg(args, "memory_ref"))
+        memory_ref = prepared.memory_ref
         entry = self._allowed_index_entry(memory_ref, context)
         try:
             record = self._store.read_record(entry.memory_id, entry.record_kind)
@@ -325,7 +500,7 @@ class StandardMemoryToolExecutor:
             raise MemoryToolExecutionDeniedError(
                 f"memory ref {memory_ref!s} is unavailable"
             ) from exc
-        packet_section_ref = _optional_string_arg(args, "packet_section_ref") or (
+        packet_section_ref = prepared.packet_section_ref or (
             f"record:{_stable_digest(str(memory_ref))[:32]}"
         )
         return {
@@ -337,15 +512,16 @@ class StandardMemoryToolExecutor:
             "policy_ref": context.policy_ref,
         }
 
-    def _write_note(self, request: MemoryToolExecutionRequest) -> dict[str, object]:
+    def _write_note(
+        self,
+        request: MemoryToolExecutionRequest,
+        prepared: _PreparedWriteNote,
+    ) -> dict[str, object]:
         context = request.context
-        args = request.arguments
-        self._require_policy_ref(args, context)
-        self._require_scope_ref(args, context)
         capture = self._policy_resolver.resolve_capture()
         if capture.capture_decision is CaptureDecision.DENY:
             raise MemoryToolExecutionDeniedError("memory capture policy denies write_note")
-        note = _string_arg(args, "note")
+        note = prepared.note
         capture_mode = _capture_mode_from_decision(capture.capture_decision)
         capture_api = EpisodicMemoryCapture(
             store=self._store,
@@ -358,10 +534,9 @@ class StandardMemoryToolExecutor:
             # re-derived from the per-dispatch provider key.
             record_scope=self._resolved_scope(context),
         )
-        tool_event_id = _tool_event_id(note, _optional_string_arg(args, "idempotency_key"))
         result = capture_api.capture_tool_event(
             run_id=context.run_id,
-            tool_event_id=tool_event_id,
+            tool_event_id=prepared.tool_event_id,
             tool_name=MemoryToolName.WRITE_NOTE.value,
             summary_text=note,
             summary=SummaryProvenance(source=SummarySource.MODEL_GENERATED, model=context.model),
@@ -379,15 +554,16 @@ class StandardMemoryToolExecutor:
             # B-88 round 2: discriminated on the capture API's OWN closed status
             # enum, never on the wording of `failure_reason`. `FAILED` is
             # produced at exactly one place - `EpisodicMemoryCapture._capture`'s
-            # `except` around `write_record` + `append_memory_operation`
-            # (`memory_capture.py:541-552`) - so the status IS the statement
+            # `except` around `write_record` (`memory_capture.py:818`) +
+            # `append_memory_operation` (`:820`), whose FAILED result is built at
+            # `:899` - so the status IS the statement
             # "the durable store/ledger write raised".
             raise MemoryToolExecutionStoreError(
                 result.failure_reason or "write_note capture failed"
             )
         if result.memory_id is None:
             # Defensive residual: a CAPTURED result always carries a memory_id
-            # (`memory_capture.py:553-560`), so this is unreachable through the
+            # (`memory_capture.py:905`), so this is unreachable through the
             # real capture API. It stays on the base's residual class because
             # nothing about it says which substrate fault occurred.
             raise MemoryToolExecutionError(result.failure_reason or "write_note capture failed")
@@ -397,20 +573,23 @@ class StandardMemoryToolExecutor:
             "policy_ref": context.policy_ref,
         }
 
-    def _propose_promotion(self, request: MemoryToolExecutionRequest) -> dict[str, object]:
+    def _propose_promotion(
+        self,
+        request: MemoryToolExecutionRequest,
+        prepared: _PreparedPromotion,
+    ) -> dict[str, object]:
         context = request.context
-        args = request.arguments
-        self._require_policy_ref(args, context)
         promotion = self._policy_resolver.resolve_promotion()
         if promotion.promotion_decision is PromotionDecision.DISCARD:
             raise MemoryToolExecutionDeniedError("memory promotion policy discards candidates")
         if promotion.review_mode is ReviewMode.FORBIDDEN:
             raise MemoryToolExecutionDeniedError("memory promotion review is forbidden")
         source = self._read_retrievable_record_by_ref(
-            MemoryID(_string_arg(args, "memory_ref")),
+            prepared.memory_ref,
+            prepared.record_kind,
             context,
         )
-        target_kind = _promotion_kind(_string_arg(args, "target_kind"))
+        target_kind = prepared.target_kind
         # U-MEM-26 ordering rule: resolved BEFORE candidate identity is derived
         # from it, not at the record write, so key-vs-value-equivalent contexts
         # produce the same `candidate_id`.
@@ -420,8 +599,8 @@ class StandardMemoryToolExecutor:
         # read of `source.envelope.captured_cross_family`.
         risk_flags = _promotion_risk_flags(source)
         candidate = PromotionCandidate(
-            candidate_id=_candidate_id(source, target_kind, suggested_scope, args),
-            source_refs=_source_refs(source, _optional_string_arg(args, "evidence_ref")),
+            candidate_id=_candidate_id(source, target_kind, suggested_scope, prepared.evidence_ref),
+            source_refs=_source_refs(source, prepared.evidence_ref),
             source_memory_refs=(source.envelope.memory_id,),
             proposed_kind=target_kind,
             statement=_promotion_statement(source),
@@ -471,13 +650,15 @@ class StandardMemoryToolExecutor:
             "review_required": result.status is SemanticRecordStatus.PROPOSED,
         }
 
-    def _request_redaction(self, request: MemoryToolExecutionRequest) -> dict[str, object]:
+    def _request_redaction(
+        self,
+        request: MemoryToolExecutionRequest,
+        prepared: _PreparedRedaction,
+    ) -> dict[str, object]:
         context = request.context
-        args = request.arguments
-        self._require_policy_ref(args, context)
-        memory_ref = MemoryID(_string_arg(args, "memory_ref"))
-        self._read_retrievable_record_by_ref(memory_ref, context)
-        reason = _string_arg(args, "reason")
+        memory_ref = prepared.memory_ref
+        self._read_retrievable_record_by_ref(memory_ref, prepared.record_kind, context)
+        reason = prepared.reason
         event_hash = _hash_json(
             {
                 "tool_name": request.tool_name.value,
@@ -545,9 +726,13 @@ class StandardMemoryToolExecutor:
     def _read_record_by_ref(
         self,
         memory_ref: MemoryID,
+        kind: MemoryRecordKind,
         context: MemoryToolExecutionContext,
     ) -> MemoryStoreRecord:
-        kind = _kind_from_memory_ref(memory_ref)
+        # B-84: `kind` is derived ONCE, by `_kind_from_memory_ref` inside the
+        # tool's `_prepare_*`, so the two `MemoryToolExecutionInputError` sites
+        # that parse a `memory_ref` are reachable from `validate()` rather than
+        # only from the store-touching path.
         run_id = context.run_id if _episodic_kind(kind) else None
         try:
             return self._store.read_record(memory_ref, kind, run_id=run_id)
@@ -559,9 +744,10 @@ class StandardMemoryToolExecutor:
     def _read_retrievable_record_by_ref(
         self,
         memory_ref: MemoryID,
+        kind: MemoryRecordKind,
         context: MemoryToolExecutionContext,
     ) -> MemoryStoreRecord:
-        record = self._read_record_by_ref(memory_ref, context)
+        record = self._read_record_by_ref(memory_ref, kind, context)
         access = self._policy_resolver.resolve_retrieval(
             record_kind=record.envelope.kind,
             record_scope=record.envelope.scope,
@@ -691,10 +877,19 @@ def _optional_string_arg(args: Mapping[str, object], name: str) -> str | None:
     return value
 
 
-def _positive_int_arg(args: Mapping[str, object], name: str, *, default: int) -> int:
+def _optional_positive_int_arg(args: Mapping[str, object], name: str) -> int | None:
+    """Validate a supplied positive int; ``None`` means the caller omitted it.
+
+    B-84 split the DEFAULTING out of this helper (it was `default: int`, applied
+    here). The default `memory.search` wants is the retrieved section count,
+    which does not exist until after the retrieval that a validated `limit` must
+    precede - so the check moves into `_prepare_search` and the caller applies
+    its own default. The raise wording is unchanged.
+    """
+
     value = args.get(name)
     if value is None:
-        return max(0, default)
+        return None
     if not isinstance(value, int) or value < 1:
         raise MemoryToolExecutionInputError(f"memory tool argument {name!r} must be >= 1")
     return value
@@ -713,7 +908,8 @@ def _allowed_kinds(args: Mapping[str, object]) -> tuple[MemoryRecordKind, ...]:
         # B-84: the enum conversion must raise the TYPED input error, not the
         # bare `ValueError` `MemoryRecordKind(...)` raises. A bare `ValueError`
         # is NOT caught by the fail-fast branch of `_classify_provider_exception`
-        # (`retry_breaker_fallback.py:326-334`) — `MemoryToolExecutionInputError`
+        # (`lifecycle/retry_breaker_fallback.py:332`-`:340`) —
+        # `MemoryToolExecutionInputError`
         # subclasses `ValueError`, not the reverse — so an unknown kind on a
         # `memory.search` following a committed `memory.write_note` in the same
         # batch still replayed the whole dispatch and duplicated the write.
@@ -802,7 +998,7 @@ def _candidate_id(
     source: MemoryStoreRecord,
     target_kind: PromotionCandidateKind,
     scope: MemoryScope,
-    args: Mapping[str, object],
+    evidence_ref: str | None,
 ) -> str:
     """Derive the candidate identity from the CANONICALIZED scope (U-MEM-26).
 
@@ -817,7 +1013,7 @@ def _candidate_id(
             "target_kind": target_kind.value,
             "statement": _promotion_statement(source),
             "scope": scope.model_dump(mode="json"),
-            "evidence_ref": _optional_string_arg(args, "evidence_ref"),
+            "evidence_ref": evidence_ref,
         }
     )
 

@@ -298,21 +298,28 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
       / 5xx). It is the same class as ``LLMDispatchPayloadShapeError``
       (§14.5 ``RT-FAIL-PAYLOAD-SHAPE``, "permanent") raised one layer deeper —
       at the memory tool executor's argument validation
-      (`memory_tool_executor.py:549-553`) or at the dispatch-side memory
-      context/schema invariants (`llm_dispatch.py:3626-3641`) — so it takes the
+      (`memory_tool_executor.py:864`-`:868`, `_string_arg`, reached from BOTH
+      `validate()` and `_execute_authorized` through the same `_prepare`) or at
+      the dispatch-side memory context/schema invariants
+      (`lifecycle/llm_dispatch.py:4358`-`:4373`) — so it takes the
       same fail-fast branch. The harm this closes (B-84): the memory tool loops
       execute a prepared batch in order, so an executor-level argument failure
       on a LATER call can follow an EARLIER call that already committed a
       durable write; a ``TRANSIENT_RETRY`` classification re-ran the whole
-      dispatch and committed that write again, once per retry. Fail-fast does
-      NOT close the partial-commit itself (that half stays registered at B-84),
-      and it still permits the outer candidate advance — it removes the
+      dispatch and committed that write again, once per retry. Fail-fast alone
+      did NOT close the partial-commit itself; B-84's ratified Reading A leg
+      closed its ARGUMENT-SHAPE class by having both batch pre-passes call
+      `StandardMemoryToolExecutor.validate` before executing any call. The
+      policy-flip, store-error and intra-call residuals stay recorded on the
+      row. Fail-fast still permits the outer candidate advance — it removes the
       same-candidate retry staircase, which for the default single-candidate
       chain removes the duplication entirely.
       ``MemoryToolExecutionDeniedError`` is deliberately NOT included: its
-      raise sites read mutable index/store state (`memory_tool_executor.py:424-435`)
-      and it also WRAPS arbitrary store exceptions, including genuinely
-      transient I/O (`:446-449`), so fail-fasting the denied class would kill
+      raise sites read mutable index/store state
+      (`memory_tool_executor.py:697`-`:724`, `_allowed_index_entry`) and it also
+      WRAPS arbitrary store exceptions, including genuinely transient I/O
+      (`:737`-`:742`, `_read_record_by_ref`), so fail-fasting the denied class
+      would kill
       retries for real flakes.
     - ``asyncio.CancelledError`` → re-raise (shutdown / cancellation must
       propagate; this is handled by the caller, not classified here).

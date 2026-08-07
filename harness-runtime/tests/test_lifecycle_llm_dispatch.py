@@ -1461,6 +1461,9 @@ async def test_openai_standard_memory_tool_loop_executes_provider_neutral_tool()
         def __init__(self) -> None:
             self.requests: list[Any] = []
 
+        def validate(self, request: Any) -> None:
+            """No-op — see the module-level fake's docstring."""
+
         def execute(self, request: Any) -> dict[str, object]:
             self.requests.append(request)
             return {
@@ -2243,8 +2246,20 @@ async def test_openai_caller_only_tool_batch_matches_bare_path_semantics() -> No
 
 
 class _FakeStandardMemoryToolExecutor:
+    """A stand-in that VALIDATES NOTHING and executes everything.
+
+    `validate` is a deliberate no-op: this fake exists to observe what dispatch
+    hands the executor, not to enforce C-MEM-14 semantics. Every B-84 witness
+    that asserts a check actually fires uses `_real_memory_tool_executor`
+    instead — a no-op here would otherwise make those witnesses vacuous.
+    """
+
     def __init__(self) -> None:
         self.requests: list[Any] = []
+        self.validated: list[Any] = []
+
+    def validate(self, request: Any) -> None:
+        self.validated.append(request)
 
     def execute(self, request: Any) -> dict[str, object]:
         self.requests.append(request)
@@ -2278,8 +2293,9 @@ def _real_memory_tool_executor(tmp_path: Path) -> StandardMemoryToolExecutor:
     dispatch fixtures use, so a dispatch-composed context is accepted verbatim.
     Needed because the `_FakeStandardMemoryToolExecutor` validates NOTHING —
     required-argument-key enforcement lives in the executor
-    (`memory_tool_executor.py:266` -> `_string_arg` at `:549-553`), not at the
-    dispatch layer, so only a real executor can witness it.
+    (`memory_tool_executor.py`'s per-tool `_prepare_*`, reached from BOTH
+    `validate()` and `_execute_authorized`; `_string_arg` at `:864`-`:868`), not
+    at the dispatch layer, so only a real executor can witness it.
     """
     binding = MemoryRootBinding(default_root=tmp_path / "memory")
     surface = DeploymentSurface.LOCAL_DEVELOPMENT

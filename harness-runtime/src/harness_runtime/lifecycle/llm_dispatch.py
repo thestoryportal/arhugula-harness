@@ -3945,6 +3945,21 @@ class _PreparedMemoryToolCall:
     ``RetryBreakerFallbackDispatcher`` re-runs the whole dispatch from the top
     and the already-committed call executes a second time.
 
+    B-84 (Reading A, ratified 2026-08-05) closed the executor-side half of that
+    claim. Preparation used to cover only the DISPATCH-side failure modes listed
+    above; the executor's own per-tool checks — required-argument keys, argument
+    types, the `memory_ref` grammar, the promotion `target_kind` vocabulary —
+    still ran mid-batch inside ``execute()``, so a batch of
+    ``[write_note (valid), search (limit=0)]`` committed the note and then
+    raised. Both pre-passes now call
+    ``StandardMemoryToolExecutor.validate(request)`` for every call, so those
+    checks run here too, where nothing has executed. What preparation still does
+    NOT predict is stated rather than implied: a policy decision that FLIPS
+    between validation and execution, a store/ledger I/O failure, and the
+    intra-call window in which ``_capture`` writes its record before appending
+    the operation-ledger entry. Those residuals are recorded on register row
+    ``B-84`` and were priced into the ratified reading.
+
     ``tool_call_id`` is OpenAI-only: ollama's typed client exposes no tool-call
     id at all (`ollama/_types.py:304-355`), so its result turn correlates by
     name instead.
@@ -4116,6 +4131,7 @@ async def _dispatch_openai_with_standard_memory_tools(
             step_context=step_context,
             step_id=step_id,
             model=model,
+            standard_memory_tool_executor=standard_memory_tool_executor,
         )
         if iteration + 1 >= max_iterations:
             # The batch is valid but no iteration budget remains to send its
@@ -4191,12 +4207,18 @@ def _openai_prepared_memory_tool_calls(
     step_context: StepExecutionContext,
     step_id: str,
     model: str,
+    standard_memory_tool_executor: Any,
 ) -> tuple[_PreparedMemoryToolCall, ...]:
     """Resolve + validate the COMPLETE batch before any of it executes.
 
     Every failure mode of a single call — missing id, unknown tool name,
     malformed arguments, a `scope_ref` that does not match the context — is
     raised here, where nothing has run yet. See `_PreparedMemoryToolCall`.
+
+    B-84 (Reading A): the EXECUTOR's own per-tool checks are asked for here too,
+    via `StandardMemoryToolExecutor.validate` — a side-effect-free pre-pass over
+    the same parsed representation `execute()` uses. Dispatch still mirrors no
+    executor semantics; it asks the executor, which stays the single authority.
     """
     prepared: list[_PreparedMemoryToolCall] = []
     for call in calls:
@@ -4204,22 +4226,24 @@ def _openai_prepared_memory_tool_calls(
         if not isinstance(tool_call_id, str) or not tool_call_id:
             raise LLMDispatchPayloadShapeError("OpenAI memory tool_call missing string id")
         tool_name, arguments = _openai_memory_tool_name_and_arguments(call)
+        request = MemoryToolExecutionRequest(
+            tool_name=tool_name,
+            arguments=arguments,
+            context=_standard_memory_tool_context(
+                arguments,
+                tool_name=tool_name,
+                memory_context=memory_context,
+                step_context=step_context,
+                step_id=step_id,
+                provider="openai",
+                model=model,
+            ),
+        )
+        standard_memory_tool_executor.validate(request)
         prepared.append(
             _PreparedMemoryToolCall(
                 tool_name=tool_name,
-                request=MemoryToolExecutionRequest(
-                    tool_name=tool_name,
-                    arguments=arguments,
-                    context=_standard_memory_tool_context(
-                        arguments,
-                        tool_name=tool_name,
-                        memory_context=memory_context,
-                        step_context=step_context,
-                        step_id=step_id,
-                        provider="openai",
-                        model=model,
-                    ),
-                ),
+                request=request,
                 tool_call_id=tool_call_id,
             )
         )
@@ -4294,8 +4318,9 @@ def _memory_tools_declaring(field: str) -> frozenset[MemoryToolName]:
     Same authority ``_bind_schema_fixed_value`` uses when it binds a fixed enum
     value (presence in the contract's ``properties``), and the same partition
     the executor itself enforces: ``StandardMemoryToolExecutor._require_scope_ref``
-    is reached ONLY from ``_search`` and ``_write_note``
-    (`memory_tool_executor.py:195` / `:262`) — exactly the two contracts that
+    is reached ONLY from ``_prepare_search`` and ``_prepare_write_note``
+    (`memory_tool_executor.py:375` / `:397`; B-84 moved the two cross-checks
+    into the shared prepare step) — exactly the two contracts that
     declare ``scope_ref``.
     """
     return frozenset(
@@ -4731,6 +4756,7 @@ async def _dispatch_ollama_with_standard_memory_tools(
             step_context=step_context,
             step_id=step_id,
             model=model,
+            standard_memory_tool_executor=standard_memory_tool_executor,
         )
         if iteration + 1 >= max_iterations:
             raise _memory_tool_loop_exhausted("Ollama", max_iterations)
@@ -4827,31 +4853,35 @@ def _ollama_prepared_memory_tool_calls(
     step_context: StepExecutionContext,
     step_id: str,
     model: str,
+    standard_memory_tool_executor: Any,
 ) -> tuple[_PreparedMemoryToolCall, ...]:
     """Resolve + validate the COMPLETE batch before any of it executes.
 
     Mirrors `_openai_prepared_memory_tool_calls` exactly, minus the tool-call-id
-    check ollama has no field for. See `_PreparedMemoryToolCall`.
+    check ollama has no field for — including the B-84 `validate()` pre-pass.
+    See `_PreparedMemoryToolCall`.
     """
     prepared: list[_PreparedMemoryToolCall] = []
     for call in calls:
         tool_name, arguments = _ollama_memory_tool_name_and_arguments(call)
+        request = MemoryToolExecutionRequest(
+            tool_name=tool_name,
+            arguments=arguments,
+            context=_standard_memory_tool_context(
+                arguments,
+                tool_name=tool_name,
+                memory_context=memory_context,
+                step_context=step_context,
+                step_id=step_id,
+                provider="ollama",
+                model=model,
+            ),
+        )
+        standard_memory_tool_executor.validate(request)
         prepared.append(
             _PreparedMemoryToolCall(
                 tool_name=tool_name,
-                request=MemoryToolExecutionRequest(
-                    tool_name=tool_name,
-                    arguments=arguments,
-                    context=_standard_memory_tool_context(
-                        arguments,
-                        tool_name=tool_name,
-                        memory_context=memory_context,
-                        step_context=step_context,
-                        step_id=step_id,
-                        provider="ollama",
-                        model=model,
-                    ),
-                ),
+                request=request,
             )
         )
     return tuple(prepared)
