@@ -30,7 +30,6 @@ ratification and the spec leg.
 from __future__ import annotations
 
 import ast
-import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -130,12 +129,9 @@ class _Response:
 class _Completions:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
-        self.responses: list[_Response] = []
 
     async def create(self, **kwargs: Any) -> _Response:
         self.calls.append(kwargs)
-        if self.responses:
-            return self.responses.pop(0)
         return _Response()
 
 
@@ -147,42 +143,6 @@ class _OpenAIChat:
 class _OpenAIClient:
     def __init__(self) -> None:
         self.chat = _OpenAIChat()
-
-
-def _openai_memory_tool_call_response() -> _Response:
-    """One assistant turn calling `memory.search` with a well-formed argument set.
-
-    Well-formed on purpose: the witness that consumes it is about a HARNESS-side
-    fault, so the model's own arguments must not be what fails.
-    """
-
-    return _Response(
-        id="cmpl_u_mem_28_tool",
-        _dump={
-            "id": "cmpl_u_mem_28_tool",
-            "choices": [
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "call_search",
-                                "type": "function",
-                                "function": {
-                                    "name": "memory_search",
-                                    "arguments": json.dumps(
-                                        {"query": "q", "scope_ref": _SCOPE_REF},
-                                        sort_keys=True,
-                                    ),
-                                },
-                            }
-                        ],
-                    }
-                }
-            ],
-        },
-    )
 
 
 @dataclass
