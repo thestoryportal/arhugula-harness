@@ -59,13 +59,13 @@
 
 snapshot:
   total: 116
-  open: 0
+  open: 1
   design_substrate_gated: 0
-  registered_finding: 16
+  registered_finding: 15
   operator_gated: 0
   held: 1
   closed: 99
-  identity_digest: 623e9b91376a6329
+  identity_digest: d9366da9d230bac3
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5210,9 +5210,9 @@ items:
   heading: '### B-110 · The GC observation record cannot distinguish generations of a REUSED temporary candidate name *(surfaced at the B-96 spec leg, out-of-family Codex rounds 3-4, 2026-08-05)*'
 - id: B-111
   title: 'The GC observation record''s publication temporary is unreclaimable after a mid-publication kill, because both sweep globs exclude it by construction'
-  status: registered_finding
-  pr: '#1237'
-  summary: 'Surfaced at the B-96 IMPL leg (U-RT-150) by out-of-family Codex round 2 [P2], against that
+  status: open
+  pr: '#1237 (the B-96 IMPL leg this surfaced against -- DECLINED with a grounded pin and registered) + #pending (the PLAN leg -- Runtime plan v2.59: the AC #15 qualifier + NEW unit U-RT-151)'
+  summary: 'RATIFIED 2026-08-07: DISPOSITION (a) is selected -- narrow U-RT-150 AC #15''s no-removal clause to the SWEEP''s PAYLOAD-orphan accounting path, then build the prefix-scoped cleanup. APPLIED at Runtime plan v2.59 (design-substrate/Implementation_Plan_Harness_Runtime_v2_59.md, cleared 2026-08-07): U-RT-150 AC #15 gains an APPENDED narrow qualifier -- the SWEEP half (enumeration into count/age accounting, the AC #8 gauge at both surfaces, candidate reporting, and unlink-as-ciphertext) is PRESERVED UNQUALIFIED and the `.tmp-*` PAYLOAD-orphan semantics are BYTE-UNCHANGED with NO glob widened, while the record''s OWN publication path MAY remove stale leftovers of its OWN `_GC_OBSERVATION_RECORD_TEMP_PREFIX`, prefix-scoped BY CONSTRUCTION and under the locks the publication already holds. THE RUNTIME SPEC IS UNTOUCHED -- v1.111 stands and NO spec delta is owed: sec14.8.11.1 ''The observation record''''s carrier'' commits the publication mechanism and lock scope and EXPLICITLY ACKNOWLEDGES the orphan (''a failed write leaves only an orphan temporary file'') while stating NO disposition for it, so the prohibition this row runs into exists ONLY in the plan. THE QUALIFIER IS A PERMISSION, NOT AN OBLIGATION -- deliberately, because U-RT-150 is LANDED and CLOSED (PR #1237) and a MUST written into AC #15 would make its conjunctive closure criterion RETROACTIVELY FALSE; the MUST therefore lives at NEW unit U-RT-151 per the B-97(a) -> U-RT-149 precedent. U-RT-151 (FOUR ACs, ~5 lines of production code mirroring `_publish_atomic`''s finally-unlink at protected_result_store.py:857-858) owes: the prefix-scoped cleanup with its exact-set scope refusal and its own in-flight temporary surviving; ONE DECLARED re-pin of `test_record_publication_temporary_is_never_enumerated_as_a_payload_orphan` -- its `exists()` assertion flips to a POSITIVE removed-by-a-LATER-PUBLICATION witness that ATTRIBUTES the removal to the publication path (absence alone would also pass a widened sweep glob), while its prefix-disjointness and not-reported assertion groups are PRESERVED VERBATIM; an assertion that the `.tmp-*` payload class is classified exactly as before; and the no-new-surface absences. ZERO contract numbers, ZERO carriers retyped, ZERO fields added, ZERO snapshot_hash impact, ZERO cluster, ZERO cross-axis edge, ZERO CXA rows (aggregate frozen at 111). B-110 is NEITHER closed NOR widened. ROW STATUS registered_finding -> open per this file''s own status enum (ratified + applied plan delta opens the row for code); it flips to `closed` ONLY when U-RT-151 merges. ORIGINAL REGISTRATION FOLLOWS. Surfaced at the B-96 IMPL leg (U-RT-150) by out-of-family Codex round 2 [P2], against that
     leg''s own code -- reported, not absorbed. `_publish_observation_record` publishes the durable grace
     record by `tempfile.mkstemp(prefix="gc-observations.publishing-")` -> write -> fsync -> `os.replace`,
     with an `except BaseException: unlink(tmp); raise` cleanup. A process KILLED strictly between `mkstemp`
