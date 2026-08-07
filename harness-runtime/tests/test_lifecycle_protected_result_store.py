@@ -4141,8 +4141,14 @@ def test_a_failed_publication_leaves_the_leftover_untouched_by_every_sweep(
     the PAYLOAD orphan's age although the leftover is far older), reports it,
     nor removes it.
 
-    Mutation probe: widening `_ORPHAN_GLOB` to match the record's temp prefix
-    fails every assertion below."""
+    Mutation probe: widening `_ORPHAN_GLOB` to match the record's temp prefix is
+    caught by the ORPHAN-CLASS GAUGE assertion below — it reads the leftover's
+    ~5000s in place of the payload orphan's 10s. That single assertion is the
+    load-bearing killer, and naming it matters: the surrounding assertions do NOT
+    kill under that mutation, because the leftover is planted after the only
+    successful sweep and so carries no recorded first observation — it would be
+    enumerated but not yet ELIGIBLE, hence still neither reclaimed nor named in
+    any line."""
     import logging
 
     store = _store(tmp_path, ttl_seconds=1.0)
@@ -4269,11 +4275,18 @@ def test_the_cleanup_is_silent_on_success_and_reports_a_suppressed_unlink_failur
     still runs. And the suppression MUST NOT extend over the `os.replace`
     itself: a failing replace still emits the publication-failure line.
 
-    Mutation probes: emitting anything on the SUCCESS path fails phase 1;
+    A leftover that VANISHED before the removal is a benign concurrent reclaim,
+    not a failure, and MUST NOT be reported either — otherwise two sweeps that
+    collected the same pre-lock leftover inject a false positive into exactly the
+    persistent-failure signal phase 2 exists to keep truthful.
+
+    Mutation probes: emitting anything on the SUCCESS path fails phase 1; moving
+    the cleanup loop after the directory `fsync` fails phase 1's ORDER assertion;
     suppressing the failure emission fails phase 2; letting the removal
     `OSError` propagate fails phase 2's no-raise assertion; broadening the
     suppression over the `os.replace` fails phase 3 (and leaks the in-flight
-    temporary as a FRESH own-prefix leftover, failing AC #1's exact set)."""
+    temporary as a FRESH own-prefix leftover, failing AC #1's exact set);
+    reporting the vanished leftover fails phase 4."""
     import logging
 
     store = _store(tmp_path, ttl_seconds=1.0)
@@ -4282,11 +4295,32 @@ def test_the_cleanup_is_silent_on_success_and_reports_a_suppressed_unlink_failur
     stale = time.time() - 10.0
     leftover = _record_publication_leftover(root, "killed-one", mtime=stale)
 
-    # Phase 1 — SUCCESS is silent, and creates nothing.
+    # Phase 1 — SUCCESS is silent, creates nothing, and the removal runs BEFORE
+    # the directory `fsync` (the sweep's ONLY `_fsync_dir` call), which is what
+    # makes the removal durable under the same barrier as the `os.replace`.
     caplog.set_level(logging.DEBUG, logger="harness.runtime.protected_result_store")
+    order: list[str] = []
+    ordering_real_unlink = os.unlink
+    ordering_real_fsync_dir = store._fsync_dir  # type: ignore[attr-defined]
+
+    def _ordering_unlink(path: object, **kwargs: object) -> None:
+        order.append(f"unlink:{os.path.basename(str(path))}")
+        ordering_real_unlink(path, **kwargs)  # type: ignore[arg-type]
+
+    def _ordering_fsync_dir(directory: Path) -> None:
+        order.append(f"fsync:{Path(directory).name}")
+        ordering_real_fsync_dir(directory)
+
+    monkeypatch.setattr(os, "unlink", _ordering_unlink)
+    monkeypatch.setattr(store, "_fsync_dir", _ordering_fsync_dir)
     at = time.time()
     store.gc_sweep(now=at, observed_at=at)
+    monkeypatch.undo()
     assert not leftover.exists()
+    assert order.index(f"unlink:{leftover.name}") < order.index(f"fsync:{root.name}"), (
+        "the cleanup loop ran AFTER the directory `fsync` — the removal is then "
+        f"outside the barrier that durably records the publication: {order}"
+    )
     assert not any(leftover.name in record.message for record in caplog.records), (
         "the cleanup emitted on its SUCCESS path — it removes an artifact that "
         "appears in no count, gauge or report"
@@ -4360,6 +4394,31 @@ def test_the_cleanup_is_silent_on_success_and_reports_a_suppressed_unlink_failur
         "a failing `os.replace` was swallowed — the suppression covers more than the removal"
     )
     assert second.exists(), "the cleanup ran even though the publication FAILED"
+
+    # Phase 4 — a leftover that VANISHED before the removal is NOT a failure.
+    # The vanish is REAL, not simulated at the unlink: the file is removed
+    # between this sweep's off-lock enumeration and its publication, exactly as
+    # a concurrent sweep that collected the same pre-lock leftover would.
+    third = _record_publication_leftover(root, "killed-three", mtime=stale)
+    real_observe = store._observe_candidates  # type: ignore[attr-defined]
+
+    def _vanishing_observe(names: list[str], **kwargs: object) -> object:
+        os.unlink(third)  # the OTHER sweep reclaimed it first
+        return real_observe(names, **kwargs)
+
+    caplog.clear()
+    monkeypatch.setattr(store, "_observe_candidates", _vanishing_observe)
+    store.gc_sweep(now=at + 0.3, observed_at=at + 0.3)  # MUST NOT raise
+    monkeypatch.undo()
+
+    assert not third.exists()
+    assert not [
+        r for r in caplog.records if third.name in r.message and r.levelno >= logging.ERROR
+    ], (
+        "a benign concurrent reclaim — the leftover vanished before the unlink — was "
+        "reported as a cleanup FAILURE, a false positive in the operator's "
+        "persistent-failure signal"
+    )
 
 
 def test_a_recycled_temporary_name_is_refused_by_lock_bound_identity_revalidation(

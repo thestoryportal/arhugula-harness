@@ -246,17 +246,26 @@ _APPEND_LOCKS_GUARD = threading.Lock()
 
 
 def _append_lock_for(path: Path) -> threading.Lock:
-    """One in-process lock per ledger path serializing the WHOLE append.
+    """One in-process lock per ledger path serializing the sidecar+IS append.
 
     Codex round-4 P1 (PR B2a): with audit composition on the offload pool
     plus the loop-thread paths, two appenders could sample timestamps in
     one order and commit in the other — the later timestamp persisting
     first left the earlier append raising NonMonotonicTimestampError AFTER
-    its sidecar row was written (an unanchored row). Timestamp sampling and
-    the sidecar+IS commits now happen inside ONE ordered critical section.
-    (Cross-process timestamp ordering remains the pre-existing B-40-tier
-    residual — the cross-process locks serialize the file writes, not the
-    sampling.)
+    its sidecar row was written (an unanchored row). That was closed by
+    putting timestamp sampling and the sidecar+IS commits inside ONE
+    ordered critical section — this one.
+
+    TIMESTAMP SAMPLING NO LONGER HAPPENS UNDER THIS LOCK. The `B-57`
+    Reading A impl leg (C-IS-07 §7.6.1; IS plan v2.9 §2.1 row 12, resolved
+    ELECT) moved it into `append_ledger_entry`'s OWN write serialization
+    point, which is strictly stronger for ordering: it samples after the
+    prior entry is read, so sampling order IS physical-append order — and
+    it holds ACROSS PROCESSES, retiring the old B-40-tier cross-process
+    residual this docstring used to record rather than merely narrowing
+    it. What remains this lock's job is the sidecar-first PAIRING (a
+    concurrent audit append must not interleave between the sidecar write
+    and the IS append), not timestamp order.
     """
     key = str(path.resolve())
     with _APPEND_LOCKS_GUARD:
