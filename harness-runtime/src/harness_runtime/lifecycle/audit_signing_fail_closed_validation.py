@@ -49,6 +49,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from harness_core import PersonaTier
+from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
 from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_is.cross_process_ledger_lock import (
     cross_process_read_lock,
@@ -541,7 +542,7 @@ def initialize_mtc_audit_signing_record(
         if audit_sidecar_path is not None:
             try:
                 stack.enter_context(cross_process_write_lock(audit_sidecar_path))
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, CrossProcessLockTimeoutError) as exc:
                 # Out-of-family Codex [P2] B-64 rounds 1+2: acquisition can
                 # raise raw — OSError (a directory at the sidecar path,
                 # permission denied) or ValueError (the lock module's
@@ -678,9 +679,12 @@ def _reject_record_key_used_by_persisted_rows(  # pyright: ignore[reportUnusedFu
             _reject_record_key_used_by_persisted_rows_locked(
                 config, sidecar_path=sidecar_path, record_key_id=record_key_id
             )
-    except OSError as exc:
+    except (OSError, CrossProcessLockTimeoutError) as exc:
         # Lock acquisition itself failed — same typed fail-closed surface
-        # as an unreadable sidecar (separation cannot be proven).
+        # as an unreadable sidecar (separation cannot be proven). B-93 added
+        # the deadline timeout to this set: it is deliberately NOT an OSError
+        # (see harness_core.cross_process_lock_deadline), so it would otherwise
+        # LEAK past this fold and out of the RT-FAIL-CONFIG taxonomy.
         raise AuditSigningConfigInvalidError(
             (
                 f"audit sidecar {str(sidecar_path)!r} could not be read ({exc}) "

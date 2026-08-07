@@ -76,6 +76,19 @@ discovered set member-by-member reintroduces a lock-ordering problem.
 `cross_process_scope_lock` covers that case with one exclusive lock per
 directory TREE, built on the same `_DirLock` (per-path `flock` EX + reentrant
 in-process face) the file locks already use.
+
+**Liveness deadline (B-93, ratified Reading B — hand-rolled).** Every blocking
+acquisition below is bounded: a non-blocking probe plus caller-owned bounded
+retry, raising `harness_core.CrossProcessLockTimeoutError` when the bound
+expires. Each of the four entry surfaces mints ONE
+`CrossProcessLockDeadline` and threads it through every acquisition beneath
+it, so the bound is END-TO-END — an entry surface that blocks at the directory
+lock, then the legacy sidecar, then the file lock spends ONE budget across all
+three, and the inode-replacement retry loops cannot re-arm it. A per-site bound
+would be a partial guarantee that reads as a total one. `deadline_seconds`
+overrides the default per call. Windows behaviour is UNCHANGED — the carve-outs
+below still `yield` before any acquisition is reached (`B-45`, deferred on
+witnessability).
 """
 
 from __future__ import annotations
@@ -86,6 +99,12 @@ import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+
+from harness_core.cross_process_lock_deadline import (
+    CrossProcessLockDeadline,
+    CrossProcessLockTimeoutError,
+    flock_until_deadline,
+)
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -116,10 +135,53 @@ class _DirLock:
         self._refcount = 0
         self._fd = -1
 
-    def acquire(self) -> None:
-        import fcntl  # POSIX-only; callers gate win32.
+    def acquire(self, deadline: CrossProcessLockDeadline | None = None) -> None:
+        """Acquire BOTH faces within `deadline` — the in-process one too.
 
-        self._rlock.acquire()
+        B-93 site 1 of 9. `None` mints a fresh default-budget deadline, so a
+        caller outside the four entry surfaces (only the direct-construction
+        tests) still gets a bound rather than the pre-B-93 indefinite block.
+
+        **BOTH faces are bounded, and an earlier draft of this arc bounded only
+        the flock** (out-of-family review round 2 [P1], accepted). That draft
+        argued the `RLock` needed no bound because a same-process holder is
+        either this very thread (reentrant, returns immediately) or a thread
+        whose own flock acquisition is already bounded. **The second half is a
+        non-sequitur:** bounding how long a holder WAITED says nothing about how
+        long it HOLDS — and a long hold is the exact harm this row registers.
+        `write_record_guarded` keeps this lock across a caller-supplied
+        precondition, so an in-process sibling thread running a slow precondition
+        wedged every waiter here, BEFORE the bounded `flock` was ever reached,
+        with the victim-side bound advertised and not delivered.
+
+        The `RLock` therefore takes the deadline's REMAINING time (never
+        negative — `acquire` rejects that) and raises the same typed error on
+        expiry. An UNCONTENDED or REENTRANT acquisition still succeeds with a
+        zero remaining budget, matching `flock_until_deadline`'s own contract:
+        the bound is on WAITING, not on acquiring.
+        """
+        resolved = deadline or CrossProcessLockDeadline.starting_now()
+        # `threading.TIMEOUT_MAX` cap (out-of-family review round 5 [P3],
+        # accepted): `RLock.acquire` raises `OverflowError` for a timeout above
+        # it, so a FINITE, POSITIVE, validation-passing budget like `1e20` blew
+        # up here BEFORE any lock was attempted — on every `harness-is` entry
+        # surface. Capped at the CONSUMER rather than refused at the deadline,
+        # because `TIMEOUT_MAX` is a limit of THIS lock primitive and
+        # `harness-core`'s deadline type has no business knowing about
+        # `threading`. The cap is semantically free: it is ~292 years, so a
+        # capped wait that expires has outlived any budget a caller meant.
+        rlock_timeout = min(max(resolved.remaining_seconds(), 0.0), threading.TIMEOUT_MAX)
+        if not self._rlock.acquire(blocking=False):
+            # Contended at the IN-PROCESS face. Recorded on the deadline before
+            # waiting (round 10 [P2]) so a LATER, FREE acquisition under the same
+            # entry surface cannot slip through its own first-probe exemption
+            # after this wait has spent the budget.
+            resolved.note_contention()
+            if not self._rlock.acquire(timeout=rlock_timeout):
+                raise CrossProcessLockTimeoutError(
+                    lock_target=str(self._path),
+                    budget_seconds=resolved.budget_seconds,
+                )
         if self._refcount == 0:
             try:
                 self._fd = os.open(self._path, os.O_RDONLY)
@@ -130,7 +192,22 @@ class _DirLock:
                 self._rlock.release()
                 raise
             try:
-                fcntl.flock(self._fd, fcntl.LOCK_EX)
+                import fcntl  # POSIX-only; callers gate win32.
+
+                flock_until_deadline(
+                    self._fd,
+                    fcntl.LOCK_EX,
+                    # `resolved`, NOT a fresh mint (out-of-family review round 3
+                    # [P3], accepted). Re-minting here gave the two faces
+                    # SEPARATE budgets whenever `deadline` was None: an
+                    # in-process holder could consume nearly the whole default
+                    # and a cross-process holder the whole of another — twice
+                    # the bound this method's own docstring promises. The
+                    # end-to-end contract has to hold WITHIN a site, not only
+                    # across sites.
+                    deadline=resolved,
+                    lock_target=str(self._path),
+                )
             except BaseException:
                 os.close(self._fd)
                 self._fd = -1
@@ -183,7 +260,9 @@ nothing reads it.
 
 
 @contextmanager
-def cross_process_scope_lock(scope_root: Path) -> Generator[None, None, None]:
+def cross_process_scope_lock(
+    scope_root: Path, *, deadline_seconds: float | None = None
+) -> Generator[None, None, None]:
     """Hold an exclusive same-host lock over a whole directory TREE.
 
     The coarse sibling of `cross_process_write_lock`, for a critical section
@@ -201,17 +280,26 @@ def cross_process_scope_lock(scope_root: Path) -> Generator[None, None, None]:
 
     Same-host only, and a no-op on Windows — identical posture to this module's
     file locks (see the module docstring and the B-45 register row).
+
+    **B-93 — bounded.** `deadline_seconds` bounds the acquisition; expiry raises
+    `harness_core.CrossProcessLockTimeoutError` and the section is NOT entered.
+    This is the entry surface carrying the exposure the row registers:
+    `CanonicalMemoryStore.write_record_guarded` holds this lock across a
+    caller-supplied precondition callable, so the next precondition author gets
+    a bounded failure with a named lock target instead of a silent host-wide
+    wedge.
     """
     if _IS_WINDOWS:
         yield
         return
 
+    deadline = CrossProcessLockDeadline.starting_now(deadline_seconds)
     scope_root.mkdir(parents=True, exist_ok=True)
     lock_file = scope_root / SCOPE_LOCK_FILENAME
     open_flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     os.close(os.open(lock_file, open_flags, 0o600))
     lock = _dir_lock_for(lock_file)
-    lock.acquire()
+    lock.acquire(deadline)
     try:
         yield
     finally:
@@ -223,7 +311,9 @@ def _legacy_lock_file_path(canonical_path: Path) -> Path:
     return canonical_path.with_name(canonical_path.name + ".lock")
 
 
-def _acquire_legacy_sidecar_for_writer(canonical_path: Path) -> int:
+def _acquire_legacy_sidecar_for_writer(
+    canonical_path: Path, *, deadline: CrossProcessLockDeadline
+) -> int:
     """Writer-side legacy coordination (codex round-7 P1): writers PROVISION
     the legacy sidecar (`O_CREAT`, atomic existence) rather than
     exists-checking it — a fresh pre-B-46 process arriving mid-window could
@@ -231,7 +321,11 @@ def _acquire_legacy_sidecar_for_writer(canonical_path: Path) -> int:
     concurrently (forked chain). Writers may create files (they mutate the
     ledger anyway); the sidecar therefore stays provisioned for the
     compatibility window — its removal rides the B-45 successor arc that
-    retires the legacy protocol entirely. Returns the locked fd."""
+    retires the legacy protocol entirely. Returns the locked fd.
+
+    B-93 site 2 of 9. `deadline` is the CALLER's end-to-end budget, already
+    partly spent on the directory (and possibly the canonical-file) lock — this
+    acquisition gets what remains of it, never a fresh one."""
     import fcntl
     import stat as stat_module
 
@@ -271,14 +365,21 @@ def _acquire_legacy_sidecar_for_writer(canonical_path: Path) -> int:
                 f"aliases the canonical ledger — refusing (remove the "
                 f"mangled sidecar)"
             )
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        flock_until_deadline(
+            fd,
+            fcntl.LOCK_EX,
+            deadline=deadline,
+            lock_target=str(_legacy_lock_file_path(canonical_path)),
+        )
     except BaseException:
         os.close(fd)
         raise
     return fd
 
 
-def _acquire_legacy_sidecar_if_present(canonical_path: Path, *, exclusive: bool) -> int:
+def _acquire_legacy_sidecar_if_present(
+    canonical_path: Path, *, exclusive: bool, deadline: CrossProcessLockDeadline
+) -> int:
     """Transitional mixed-version coordination (codex round-4 P1): a
     pre-B-46 process on a sibling worktree locks `<ledger>.lock`, which the
     canonical-file lock never touches — without this, old and new writers
@@ -289,7 +390,12 @@ def _acquire_legacy_sidecar_if_present(canonical_path: Path, *, exclusive: bool)
     never create the sidecar, so this is a no-op for them; the legacy
     lazy-provisioning TOCTOU survives only for the mixed-version
     transition window it has always covered. Returns the locked fd, or -1
-    when the sidecar does not exist."""
+    when the sidecar does not exist.
+
+    B-93 site 3 of 9 — the one bounded acquisition that can be SHARED
+    (`exclusive=False`); `LOCK_SH` is deadline-bounded exactly as `LOCK_EX` is,
+    since a shared waiter is blocked by an exclusive holder just as
+    indefinitely. `deadline` is the caller's remaining end-to-end budget."""
     import fcntl  # POSIX-only; callers gate win32.
     import stat as stat_module
 
@@ -327,7 +433,12 @@ def _acquire_legacy_sidecar_if_present(canonical_path: Path, *, exclusive: bool)
                 f"aliases the canonical ledger — refusing (remove the "
                 f"mangled sidecar)"
             )
-        fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        flock_until_deadline(
+            fd,
+            fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH,
+            deadline=deadline,
+            lock_target=str(_legacy_lock_file_path(canonical_path)),
+        )
     except BaseException:
         os.close(fd)
         raise
@@ -344,7 +455,9 @@ def _release_legacy_sidecar(fd: int) -> None:
 
 
 @contextmanager
-def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None]:
+def cross_process_write_lock(
+    canonical_path: Path, *, deadline_seconds: float | None = None
+) -> Generator[None, None, None]:
     """Hold an exclusive same-host lock across a read-prior -> append critical section.
 
     Callers still hold their own in-process `threading.Lock` around the same
@@ -354,16 +467,25 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
     whole section and the caller's own append creates the file inside it
     (preserving "file existence == a real append happened" for the audit
     writer's absence guard).
+
+    **B-93 — bounded END-TO-END.** `deadline_seconds` is ONE budget spanning
+    every acquisition this surface performs: the directory lock, the legacy
+    sidecar, and the canonical-file lock (up to three in sequence), INCLUDING
+    across the inode-replacement retry loop below — which is why the deadline is
+    minted once, outside the loop, and never re-armed. Expiry raises
+    `harness_core.CrossProcessLockTimeoutError`; the section is NOT entered and
+    no append happens.
     """
     if _IS_WINDOWS:
         yield
         return
     import fcntl  # POSIX-only; never reached on Windows.
 
+    deadline = CrossProcessLockDeadline.starting_now(deadline_seconds)
     canonical_path.parent.mkdir(parents=True, exist_ok=True)
     while True:
         dir_lock = _dir_lock_for(canonical_path.parent)
-        dir_lock.acquire()
+        dir_lock.acquire(deadline)
         dir_held = True
         try:
             try:
@@ -383,7 +505,7 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
                 # creating the canonical file — acquire the sidecar too
                 # when present, and re-check the canonical afterwards (it
                 # may have appeared while we waited on the old writer).
-                legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path)
+                legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path, deadline=deadline)
                 try:
                     if canonical_path.exists():
                         continue
@@ -403,7 +525,16 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
                 except BlockingIOError:
                     dir_lock.release()
                     dir_held = False
-                    fcntl.flock(file_fd, fcntl.LOCK_EX)
+                    # B-93 site 4 of 9. The ABBA handoff is PRESERVED exactly:
+                    # the dir lock is released FIRST, and only then is the file
+                    # lock waited on — now bounded rather than indefinite.
+                    flock_until_deadline(
+                        file_fd,
+                        fcntl.LOCK_EX,
+                        deadline=deadline,
+                        lock_target=str(canonical_path),
+                        contention_observed=True,
+                    )
             except OSError as exc:
                 import errno as errno_module
 
@@ -422,6 +553,19 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
                 if dir_held:
                     dir_lock.release()
                     dir_held = False
+            # B-93 (out-of-family review, merge-gate fix round 2): the manual
+            # probe above can SUCCEED without ever calling
+            # `flock_until_deadline`, so a caller that already waited at the
+            # directory lock could enter here on a SPENT budget through a path
+            # the helper never sees. Release and refuse — the same rule the
+            # helper applies to its own late retries.
+            if deadline.refuse_after_acquire():
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+                raise CrossProcessLockTimeoutError(
+                    lock_target=str(canonical_path),
+                    budget_seconds=deadline.budget_seconds,
+                )
             # Inode-stability verify (codex round-3 P1): flock rides the
             # INODE, and `cross_process_replace_lock` (rollback) swaps the
             # canonical inode — a lock riding a pre-replacement fd would
@@ -445,7 +589,7 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
                 os.close(file_fd)
                 continue
             try:
-                legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path)
+                legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path, deadline=deadline)
             except BaseException:
                 fcntl.flock(file_fd, fcntl.LOCK_UN)
                 os.close(file_fd)
@@ -463,7 +607,9 @@ def cross_process_write_lock(canonical_path: Path) -> Generator[None, None, None
 
 
 @contextmanager
-def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, None]:
+def cross_process_replace_lock(
+    canonical_path: Path, *, deadline_seconds: float | None = None
+) -> Generator[None, None, None]:
     """Hold EXCLUSION for a section that REPLACES the canonical file's inode
     (shadow-git rollback's `git checkout` + `write_bytes`).
 
@@ -474,16 +620,23 @@ def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, No
     writers/readers block at their transitional dir acquisition for the
     section's duration; stragglers that locked the pre-replacement inode
     are caught by the acquisition-side inode verify and retry.
+
+    **B-93 — bounded END-TO-END.** One `deadline_seconds` budget spans the
+    directory lock, the wait-out of an active file holder, and the legacy
+    sidecar — across every turn of the wait-out retry loop, which is why the
+    deadline is minted before it. Expiry raises
+    `harness_core.CrossProcessLockTimeoutError` and no inode is replaced.
     """
     if _IS_WINDOWS:
         yield
         return
     import fcntl  # POSIX-only; never reached on Windows.
 
+    deadline = CrossProcessLockDeadline.starting_now(deadline_seconds)
     canonical_path.parent.mkdir(parents=True, exist_ok=True)
     dir_lock = _dir_lock_for(canonical_path.parent)
     while True:
-        dir_lock.acquire()
+        dir_lock.acquire(deadline)
         try:
             file_fd = os.open(canonical_path, os.O_RDWR | getattr(os, "O_NONBLOCK", 0))
         except FileNotFoundError:
@@ -504,7 +657,16 @@ def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, No
             # attempt).
             dir_lock.release()
             try:
-                fcntl.flock(file_fd, fcntl.LOCK_EX)
+                # B-93 site 5 of 9. ABBA PRESERVED — the dir lock is released
+                # above, before this wait; the wait is now bounded, and the
+                # bound spans every turn of the enclosing retry loop.
+                flock_until_deadline(
+                    file_fd,
+                    fcntl.LOCK_EX,
+                    deadline=deadline,
+                    lock_target=str(canonical_path),
+                    contention_observed=True,
+                )
                 fcntl.flock(file_fd, fcntl.LOCK_UN)
             finally:
                 os.close(file_fd)
@@ -518,9 +680,20 @@ def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, No
         # section (round-5 P1: a pre-B-46 writer holding only the sidecar
         # would otherwise append concurrently and have its rows
         # overwritten by the rewrite).
+        # B-93 (merge-gate fix round 2): same post-acquire rule as the other two
+        # arms — the non-blocking probe above can succeed on a spent budget when
+        # this caller already waited at the directory lock.
+        if deadline.refuse_after_acquire():
+            fcntl.flock(file_fd, fcntl.LOCK_UN)
+            os.close(file_fd)
+            dir_lock.release()
+            raise CrossProcessLockTimeoutError(
+                lock_target=str(canonical_path),
+                budget_seconds=deadline.budget_seconds,
+            )
         try:
             try:
-                legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path)
+                legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path, deadline=deadline)
             except BaseException:
                 # Round-6 P2: a legacy-acquisition failure must not leave
                 # the canonical file lock held until process restart.
@@ -537,7 +710,7 @@ def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, No
         finally:
             dir_lock.release()
     try:
-        legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path)
+        legacy_fd = _acquire_legacy_sidecar_for_writer(canonical_path, deadline=deadline)
         try:
             yield
         finally:
@@ -547,7 +720,9 @@ def cross_process_replace_lock(canonical_path: Path) -> Generator[None, None, No
 
 
 @contextmanager
-def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]:
+def cross_process_read_lock(
+    canonical_path: Path, *, deadline_seconds: float | None = None
+) -> Generator[None, None, None]:
     """Hold a shared same-host lock across a read, excluding a concurrent writer.
 
     Side-effect free (the `harness-inspect` read-only contract): never
@@ -556,12 +731,19 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
     a file an absent-file-mode writer's caller had just created and take
     an uncontested SHARED lock mid-append. Only a ledger whose PARENT
     DIRECTORY does not exist yields unguarded (see module docstring).
+
+    **B-93 — bounded END-TO-END.** One `deadline_seconds` budget spans the
+    directory lock, the shared file lock and the legacy sidecar, across the
+    inode-replacement retry loop. Bounding the READ path matters as much as the
+    write path: a shared waiter is blocked by an exclusive holder just as
+    indefinitely, and `harness-inspect` is an interactive surface.
     """
     if _IS_WINDOWS:
         yield
         return
     import fcntl  # POSIX-only; never reached on Windows.
 
+    deadline = CrossProcessLockDeadline.starting_now(deadline_seconds)
     if not canonical_path.parent.exists():
         # No parent directory: nothing to read AND no bootstrapped
         # deployment to race — the documented residual window. (Readers
@@ -570,7 +752,7 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
         return
     while True:
         dir_lock = _dir_lock_for(canonical_path.parent)
-        dir_lock.acquire()
+        dir_lock.acquire(deadline)
         dir_held = True
         try:
             try:
@@ -586,7 +768,9 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
                 # upgrade (round-5 P1): also wait out a legacy-sidecar
                 # holder and re-check for the canonical it may have
                 # created.
-                legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=False)
+                legacy_fd = _acquire_legacy_sidecar_if_present(
+                    canonical_path, exclusive=False, deadline=deadline
+                )
                 try:
                     if canonical_path.exists():
                         continue
@@ -602,7 +786,15 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
                     # while holding the dir.
                     dir_lock.release()
                     dir_held = False
-                    fcntl.flock(file_fd, fcntl.LOCK_SH)
+                    # B-93 site 6 of 9 — the only SHARED site of the nine.
+                    # ABBA PRESERVED: dir released above, then the bounded wait.
+                    flock_until_deadline(
+                        file_fd,
+                        fcntl.LOCK_SH,
+                        deadline=deadline,
+                        lock_target=str(canonical_path),
+                        contention_observed=True,
+                    )
             except OSError as exc:
                 import errno as errno_module
 
@@ -624,6 +816,19 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
                 if dir_held:
                     dir_lock.release()
                     dir_held = False
+            # B-93 (out-of-family review, merge-gate fix round 2): the manual
+            # probe above can SUCCEED without ever calling
+            # `flock_until_deadline`, so a caller that already waited at the
+            # directory lock could enter here on a SPENT budget through a path
+            # the helper never sees. Release and refuse — the same rule the
+            # helper applies to its own late retries.
+            if deadline.refuse_after_acquire():
+                fcntl.flock(file_fd, fcntl.LOCK_UN)
+                os.close(file_fd)
+                raise CrossProcessLockTimeoutError(
+                    lock_target=str(canonical_path),
+                    budget_seconds=deadline.budget_seconds,
+                )
             # Inode-stability verify (round-3 P1) — mirror of the writer,
             # with the same leak-safe wrap (round-4 P2).
             try:
@@ -640,7 +845,9 @@ def cross_process_read_lock(canonical_path: Path) -> Generator[None, None, None]
                 os.close(file_fd)
                 continue
             try:
-                legacy_fd = _acquire_legacy_sidecar_if_present(canonical_path, exclusive=False)
+                legacy_fd = _acquire_legacy_sidecar_if_present(
+                    canonical_path, exclusive=False, deadline=deadline
+                )
             except BaseException:
                 fcntl.flock(file_fd, fcntl.LOCK_UN)
                 os.close(file_fd)

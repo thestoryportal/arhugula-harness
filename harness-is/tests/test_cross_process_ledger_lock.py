@@ -817,7 +817,9 @@ def test_dir_flock_excludes_a_genuine_second_process(
     from harness_is import cross_process_ledger_lock as lock_module
 
     monkeypatch.setattr(
-        lock_module, "_acquire_legacy_sidecar_for_writer", lambda canonical_path: -1
+        lock_module,
+        "_acquire_legacy_sidecar_for_writer",
+        lambda canonical_path, *, deadline: -1,
     )
     ledger = tmp_path / "ledger.jsonl"
     ctx = multiprocessing.get_context("fork")
@@ -870,7 +872,9 @@ def test_replace_lock_waits_out_an_active_file_holder(
     from harness_is.cross_process_ledger_lock import cross_process_replace_lock
 
     monkeypatch.setattr(
-        lock_module, "_acquire_legacy_sidecar_for_writer", lambda canonical_path: -1
+        lock_module,
+        "_acquire_legacy_sidecar_for_writer",
+        lambda canonical_path, *, deadline: -1,
     )
 
     ledger = tmp_path / "ledger.jsonl"

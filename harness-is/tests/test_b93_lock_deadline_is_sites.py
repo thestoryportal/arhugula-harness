@@ -1,0 +1,651 @@
+"""B-93 — per-site deadline witnesses for the SIX `harness-is` acquisition sites.
+
+The ratified Reading B (fork §12.4 item 6) owes "≥1 process-based deadline
+witness per site-class". This file carries one per SITE rather than per class,
+because the six sites differ in reachability, not only in shape: the two legacy
+sidecar helpers are reached only through an ABSENT-canonical branch, and the
+three ABBA arms are reached only after a non-blocking probe FAILS. A witness
+that never reaches its site would pass on absence.
+
+**Why a genuine second OS PROCESS.** Every one of these locks has an in-process
+face too — `_DirLock`'s reentrant `threading.RLock`, and the callers' own module
+`_WRITE_LOCK`s. A thread-based contender contends on THAT face and proves
+nothing about the `flock`, which is the only face a second `harness run` sees.
+The existing suite states this at `test_cross_process_ledger_lock.py`. The
+holder here is a bare `python -c` that flocks the same inode: it needs no
+harness import, so it cannot deadlock on a forked lock (the hazard
+`test_shadow_git_rollback.py` records) and it models exactly what the kernel
+sees — an unrelated process holding the inode.
+
+Each test also pins WHICH lock timed out via `CrossProcessLockTimeoutError.lock_target`.
+Without that, all six tests would pass identically if a single early acquisition
+were bounded and the other five were not — the "partial guarantee that reads as
+a total one" the fork's §5 Variant F was dominated on.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+from harness_core import CrossProcessLockTimeoutError
+from harness_is.cross_process_ledger_lock import (
+    SCOPE_LOCK_FILENAME,
+    cross_process_read_lock,
+    cross_process_replace_lock,
+    cross_process_scope_lock,
+    cross_process_write_lock,
+)
+
+requires_posix_flock = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the cross-process locks degrade to a no-op on Windows (the B-45 register row)",
+)
+
+_DEADLINE = 0.2
+"""Per-witness budget. Long enough that the holder is genuinely waited on (the
+elapsed-time assertion below would fail on an instant refusal), short enough to
+keep the suite fast."""
+
+_HOLDER = """
+import fcntl, os, sys, time
+target, ready, release, mode, hold = sys.argv[1:6]
+fd = os.open(target, os.O_RDONLY) if mode == "dir" else os.open(target, os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(ready, "w").close()
+limit = time.monotonic() + float(hold)
+while not os.path.exists(release) and time.monotonic() < limit:
+    time.sleep(0.005)
+fcntl.flock(fd, fcntl.LOCK_UN)
+os.close(fd)
+"""
+
+
+class _ForeignHolder:
+    """A genuine second OS process holding LOCK_EX on one inode.
+
+    `hold_seconds` caps the hold so a witness can arrange a lock that releases
+    PART WAY through the caller's budget — the only shape that can distinguish
+    an end-to-end deadline from a per-acquisition one.
+    """
+
+    def __init__(
+        self, tmp_path: Path, target: Path, *, mode: str = "file", hold_seconds: float = 60.0
+    ) -> None:
+        self._ready = tmp_path / f"ready-{os.getpid()}-{id(self)}"
+        self._release = tmp_path / f"release-{os.getpid()}-{id(self)}"
+        self._proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _HOLDER,
+                str(target),
+                str(self._ready),
+                str(self._release),
+                mode,
+                str(hold_seconds),
+            ]
+        )
+
+    def __enter__(self) -> _ForeignHolder:
+        limit = time.monotonic() + 30
+        while not self._ready.exists() and time.monotonic() < limit:
+            if self._proc.poll() is not None:  # pragma: no cover — holder crashed
+                raise AssertionError(f"holder exited early: {self._proc.returncode}")
+            time.sleep(0.01)
+        assert self._ready.exists(), "holder never acquired the lock"
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._release.write_text("go")
+        self._proc.wait(timeout=30)
+
+
+def _assert_timed_out_on(target: Path, block: object) -> None:
+    """Run `block` (a zero-arg callable), asserting it timed out on `target`."""
+    started = time.monotonic()
+    with pytest.raises(CrossProcessLockTimeoutError) as caught:
+        block()  # type: ignore[operator]
+    elapsed = time.monotonic() - started
+    assert caught.value.lock_target == str(target), (
+        f"timed out on {caught.value.lock_target}, not the expected {target} — "
+        f"a DIFFERENT acquisition is bounded and this site may not be"
+    )
+    assert caught.value.budget_seconds == _DEADLINE
+    assert elapsed >= _DEADLINE, "refused without waiting — it never contended"
+
+
+def _seed(ledger: Path) -> None:
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("seed\n")
+
+
+# --- site 1 — `_DirLock.acquire`, via `cross_process_scope_lock` ------------
+
+
+@requires_posix_flock
+def test_site1_scope_lock_deadline_fires(tmp_path: Path) -> None:
+    """The entry surface carrying the row's registered exposure:
+    `write_record_guarded` holds THIS lock across a caller-supplied
+    precondition, so an unbounded holder wedges every same-host memory writer."""
+    root = tmp_path / "scope-root"
+    root.mkdir()
+    lock_file = root / SCOPE_LOCK_FILENAME
+    lock_file.touch()
+    with _ForeignHolder(tmp_path, lock_file):
+
+        def _attempt() -> None:
+            with cross_process_scope_lock(root, deadline_seconds=_DEADLINE):
+                raise AssertionError("entered the scope section while a holder held it")
+
+        _assert_timed_out_on(lock_file, _attempt)
+
+
+@requires_posix_flock
+def test_no_entry_surface_can_mint_an_unbounded_deadline(tmp_path: Path) -> None:
+    """Out-of-family review round 1 [P2], accepted — witnessed at the ENTRY
+    SURFACE, not only at the constructor. `inf` passes a bare `> 0` check and
+    `nan` passes it because every comparison with `nan` is False; either makes
+    the remaining time never reach zero, so the poll loop spins forever and the
+    pre-B-93 indefinite hang is back. Proving the VALUE is refused is weaker
+    than proving the HANG is UNREACHABLE, which is what a caller actually
+    depends on — so this drives a real entry surface."""
+    root = tmp_path / "scope"
+    for bad in (float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="finite positive"):
+            with cross_process_scope_lock(root, deadline_seconds=bad):
+                raise AssertionError("entered under an unbounded deadline")
+
+
+@requires_posix_flock
+def test_site1_the_in_process_face_is_bounded_too(tmp_path: Path) -> None:
+    """Out-of-family review round 2 [P1], accepted — and it falsified this arc's
+    own reasoning.
+
+    `_DirLock` has TWO faces: a per-thread reentrant `RLock` and the
+    cross-process `flock`. An earlier draft bounded only the flock, arguing that
+    a same-process holder is either this very thread or a thread whose own flock
+    acquisition is already bounded. **Bounding how long a holder WAITED says
+    nothing about how long it HOLDS** — and a long hold is precisely the harm
+    `B-93` registers: `write_record_guarded` keeps this lock across a
+    caller-supplied precondition. So an in-process sibling running a slow
+    precondition wedged every waiter at the `RLock`, BEFORE the bounded `flock`
+    was ever reached, while the victim-side bound was advertised as delivered.
+
+    No second OS process here — deliberately. The contention is IN-PROCESS,
+    which is exactly the face a cross-process witness cannot see.
+
+    Mutation probe (run at this arc): reverting to a bare `self._rlock.acquire()`
+    makes this HANG (the wedge the bound is supposed to remove).
+    """
+    import threading
+
+    root = tmp_path / "scope-root"
+    holding = threading.Event()
+    release = threading.Event()
+
+    def _slow_precondition_holder() -> None:
+        with cross_process_scope_lock(root, deadline_seconds=30.0):
+            holding.set()
+            release.wait(30)
+
+    thread = threading.Thread(target=_slow_precondition_holder)
+    thread.start()
+    try:
+        assert holding.wait(10), "the in-process holder never entered"
+        started = time.monotonic()
+        with pytest.raises(CrossProcessLockTimeoutError) as caught:
+            with cross_process_scope_lock(root, deadline_seconds=_DEADLINE):
+                raise AssertionError("entered while an in-process thread held the lock")
+        elapsed = time.monotonic() - started
+        assert caught.value.budget_seconds == _DEADLINE
+        assert elapsed >= _DEADLINE, "refused without waiting"
+        assert elapsed < _DEADLINE + 5.0, (
+            f"waited {elapsed:.2f}s against a {_DEADLINE}s budget — the in-process "
+            f"face is not bounded"
+        )
+    finally:
+        release.set()
+        thread.join(30)
+
+
+@requires_posix_flock
+def test_site1_spends_one_budget_across_both_of_its_faces(tmp_path: Path) -> None:
+    """Out-of-family review round 3 [P3], accepted. `_DirLock.acquire` waits on
+    TWO faces in sequence — the in-process `RLock`, then the cross-process
+    `flock` — and an earlier draft resolved the deadline for the first but
+    MINTED A FRESH ONE for the second whenever no explicit deadline was passed.
+    A same-process holder could then consume nearly the whole budget and a
+    cross-process holder the whole of another: twice the bound the method's own
+    docstring promises. The end-to-end contract has to hold WITHIN a site, not
+    only across sites.
+
+    Both faces are contended: the in-process `RLock` is held for a FIXED span by
+    a sibling thread, and a genuine second OS process holds the `flock`
+    throughout. So the caller waits at face 1, then at face 2, and a re-armed
+    face 2 shows up as an elapsed time far past the single budget.
+
+    The `RLock` is held DIRECTLY rather than by driving a sibling through
+    `cross_process_scope_lock` — an earlier draft did the latter and the probe
+    came back GREEN, because under the mutation the SIBLING's own flock wait was
+    re-armed too, so it held the `RLock` for the mutated duration and the caller
+    timed out at face 1 having never reached face 2. The mutation masked itself.
+    Holding the `RLock` directly makes the contention independent of the code
+    under test, which is what a discriminating witness requires.
+
+    Mutation probe (run at this arc): re-minting at the flock makes this HANG on
+    the fresh default budget."""
+    import threading
+
+    from harness_is.cross_process_ledger_lock import _dir_lock_for
+
+    budget = 1.0
+    rlock_hold = 0.4
+    root = tmp_path / "scope-root"
+    root.mkdir()
+    lock_file = root / SCOPE_LOCK_FILENAME
+    lock_file.touch()
+    dir_lock = _dir_lock_for(lock_file)
+
+    with _ForeignHolder(tmp_path, lock_file):
+        holding = threading.Event()
+
+        def _hold_the_in_process_face() -> None:
+            dir_lock._rlock.acquire()
+            holding.set()
+            time.sleep(rlock_hold)
+            dir_lock._rlock.release()
+
+        thread = threading.Thread(target=_hold_the_in_process_face)
+        thread.start()
+        try:
+            assert holding.wait(10), "the in-process face was never held"
+            started = time.monotonic()
+            with pytest.raises(CrossProcessLockTimeoutError):
+                with cross_process_scope_lock(root, deadline_seconds=budget):
+                    raise AssertionError("entered while both faces were contended")
+            elapsed = time.monotonic() - started
+            assert elapsed >= rlock_hold, "never waited at the in-process face"
+            assert elapsed < budget * 2, (
+                f"spent {elapsed:.2f}s against a {budget}s single budget — the two "
+                f"faces were given SEPARATE deadlines"
+            )
+        finally:
+            thread.join(30)
+
+
+@requires_posix_flock
+def test_site1_reentrant_acquisition_is_unaffected_by_an_expired_budget(tmp_path: Path) -> None:
+    """The bound must not break REENTRANCY, which the B-50 `tenant_transaction`
+    composition depends on: a guarded section calls through the tree's own write
+    path, which re-takes this very lock from the SAME thread. A naive
+    `RLock.acquire(timeout=...)` bound would still admit it (an owner
+    re-acquiring returns immediately), and this pins that — with a budget so
+    short it is spent before the inner acquisition is even attempted."""
+    root = tmp_path / "scope-root"
+    with cross_process_scope_lock(root, deadline_seconds=0.05):
+        time.sleep(0.1)  # spend the outer budget
+        with cross_process_scope_lock(root, deadline_seconds=0.001):
+            assert (root / SCOPE_LOCK_FILENAME).exists()
+
+
+@requires_posix_flock
+def test_site1_survives_a_budget_larger_than_threading_timeout_max(tmp_path: Path) -> None:
+    """Out-of-family review round 5 [P3], accepted. `RLock.acquire` raises
+    `OverflowError` for a timeout above `threading.TIMEOUT_MAX`, so a FINITE,
+    POSITIVE, validation-passing budget like `1e20` blew up at the in-process
+    face BEFORE any lock was attempted — on every `harness-is` entry surface,
+    and with an exception type no caller could have anticipated.
+
+    Absurd as an input, but the point is that the deadline type ACCEPTS it: a
+    value the contract calls legal must not crash the consumer.
+
+    Mutation probe (run at this arc): removing the `threading.TIMEOUT_MAX` cap
+    makes this raise `OverflowError` and the test fails."""
+    import threading
+
+    root = tmp_path / "scope-root"
+    oversized = threading.TIMEOUT_MAX * 10
+    with cross_process_scope_lock(root, deadline_seconds=oversized):
+        assert (root / SCOPE_LOCK_FILENAME).exists()
+
+
+@requires_posix_flock
+def test_site1_scope_lock_still_acquires_uncontended(tmp_path: Path) -> None:
+    """The non-contended path is UNCHANGED — with a budget so short a polling
+    waiter could never win a contended race, an uncontended acquisition still
+    succeeds instantly. Without this, a mechanism that always raised would pass
+    the timeout witness above."""
+    root = tmp_path / "scope-root"
+    entered = False
+    with cross_process_scope_lock(root, deadline_seconds=0.001):
+        entered = True
+    assert entered
+
+
+# --- site 2 — `_acquire_legacy_sidecar_for_writer` -------------------------
+
+
+@requires_posix_flock
+def test_site2_legacy_sidecar_writer_deadline_fires(tmp_path: Path) -> None:
+    """Reached only through the ABSENT-canonical branch of the write lock: the
+    directory lock is taken, the canonical open raises FileNotFoundError, and
+    the legacy sidecar is provisioned + locked for the rolling-upgrade window.
+    The canonical file is deliberately NOT created here."""
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    ledger.parent.mkdir(parents=True)
+    sidecar = ledger.with_name(ledger.name + ".lock")
+    with _ForeignHolder(tmp_path, sidecar):
+
+        def _attempt() -> None:
+            with cross_process_write_lock(ledger, deadline_seconds=_DEADLINE):
+                raise AssertionError("entered the absent-file section")
+
+        _assert_timed_out_on(sidecar, _attempt)
+
+
+# --- site 3 — `_acquire_legacy_sidecar_if_present` (the SHARED site) -------
+
+
+@requires_posix_flock
+def test_site3_legacy_sidecar_shared_deadline_fires(tmp_path: Path) -> None:
+    """The one site of the nine that acquires SHARED. Reached through the read
+    lock's absent-canonical branch, where the sidecar EXISTS on disk. A shared
+    waiter is blocked by an exclusive holder just as indefinitely as an
+    exclusive one, so bounding only the exclusive sites would leave this open."""
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    ledger.parent.mkdir(parents=True)
+    sidecar = ledger.with_name(ledger.name + ".lock")
+    sidecar.touch()
+    with _ForeignHolder(tmp_path, sidecar):
+
+        def _attempt() -> None:
+            with cross_process_read_lock(ledger, deadline_seconds=_DEADLINE):
+                raise AssertionError("entered the absent-file read section")
+
+        _assert_timed_out_on(sidecar, _attempt)
+
+
+# --- site 4 — `cross_process_write_lock`'s file lock (ABBA arm) ------------
+
+
+@requires_posix_flock
+def test_site4_write_lock_file_deadline_fires(tmp_path: Path) -> None:
+    """The ABBA handoff arm: the non-blocking probe fails, the directory lock is
+    RELEASED, and only then is the file lock waited on. The release-before-wait
+    invariant is preserved — asserted separately below."""
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    _seed(ledger)
+    with _ForeignHolder(tmp_path, ledger):
+
+        def _attempt() -> None:
+            with cross_process_write_lock(ledger, deadline_seconds=_DEADLINE):
+                raise AssertionError("entered the write section")
+
+        _assert_timed_out_on(ledger, _attempt)
+
+
+@requires_posix_flock
+def test_site4_abba_release_before_blocking_is_preserved(tmp_path: Path) -> None:
+    """The ABBA-avoidance invariant the fork forbids breaking (§4): while this
+    caller waits on the FILE lock, it must NOT be holding the parent directory —
+    a sibling ledger in the same directory must stay writable throughout. This
+    is the property a timeout witness alone cannot see."""
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    sibling = tmp_path / "state" / "sibling.jsonl"
+    _seed(ledger)
+    _seed(sibling)
+    with _ForeignHolder(tmp_path, ledger):
+        import threading
+
+        waiting = threading.Event()
+        sibling_entered = threading.Event()
+
+        def _blocked_writer() -> None:
+            waiting.set()
+            try:
+                with cross_process_write_lock(ledger, deadline_seconds=3.0):
+                    pass  # pragma: no cover — the holder never releases in time
+            except CrossProcessLockTimeoutError:
+                pass
+
+        thread = threading.Thread(target=_blocked_writer)
+        thread.start()
+        try:
+            assert waiting.wait(5)
+            time.sleep(0.3)  # let it reach the blocking arm
+            # A DIFFERENT ledger in the SAME directory must still be writable:
+            # only true if the waiter released the directory lock first.
+            #
+            # POSITIVE CONTROL (merge-gate lens 3, G4). `waiting.set()` fires
+            # BEFORE the blocked writer's own lock call, so the 0.3 s sleep is
+            # the only thing sequencing this — under CI load the sibling could
+            # acquire simply because the waiter had not reached the blocking arm
+            # yet, and the test would pass VACUOUSLY. Timing the sibling does
+            # NOT make that case detectable — stated honestly, since the first
+            # draft of this comment claimed it did. Both readings predict a fast
+            # sibling acquisition, so the timing assert cannot separate them.
+            # What it DOES buy is a check on the opposite failure: if the
+            # directory were still held, this acquisition would burn its full
+            # 2.0 s budget and raise, so a fast completion rules THAT out. The
+            # thread-alive assert below is the closest thing to a sequencing
+            # guarantee here, and it is a weak one.
+            started = time.monotonic()
+            with cross_process_write_lock(sibling, deadline_seconds=2.0):
+                sibling_entered.set()
+            sibling_elapsed = time.monotonic() - started
+            assert sibling_entered.is_set()
+            assert sibling_elapsed < 0.5, (
+                f"the sibling took {sibling_elapsed:.2f}s of its 2.0s budget — it "
+                f"contended for the directory, so the waiter had NOT released it"
+            )
+            assert thread.is_alive(), (
+                "the blocked writer finished before the sibling was tested — this "
+                "run proved nothing about release-before-blocking"
+            )
+        finally:
+            thread.join(20)
+
+
+# --- site 5 — `cross_process_replace_lock`'s wait-out (ABBA arm) -----------
+
+
+@requires_posix_flock
+def test_site5_replace_lock_deadline_fires(tmp_path: Path) -> None:
+    """The replace lock waits out an active file-lock holder before swapping the
+    inode. Its wait sits inside a `while True` retry loop, so this also witnesses
+    that the end-to-end deadline is not re-armed per turn."""
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    _seed(ledger)
+    with _ForeignHolder(tmp_path, ledger):
+
+        def _attempt() -> None:
+            with cross_process_replace_lock(ledger, deadline_seconds=_DEADLINE):
+                raise AssertionError("entered the replace section")
+
+        _assert_timed_out_on(ledger, _attempt)
+
+
+# --- site 6 — `cross_process_read_lock`'s SHARED file lock (ABBA arm) ------
+
+
+@requires_posix_flock
+def test_site6_read_lock_shared_deadline_fires(tmp_path: Path) -> None:
+    """`harness-inspect` is an interactive read surface; an unbounded shared wait
+    behind an exclusive writer hangs it with no diagnostic."""
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    _seed(ledger)
+    with _ForeignHolder(tmp_path, ledger):
+
+        def _attempt() -> None:
+            with cross_process_read_lock(ledger, deadline_seconds=_DEADLINE):
+                raise AssertionError("entered the read section")
+
+        _assert_timed_out_on(ledger, _attempt)
+
+
+@requires_posix_flock
+def test_read_lock_still_acquires_uncontended(tmp_path: Path) -> None:
+    """Non-contended read path unchanged — the shared lock is taken instantly
+    when no exclusive holder exists."""
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    _seed(ledger)
+    with cross_process_read_lock(ledger, deadline_seconds=0.001):
+        assert ledger.read_text() == "seed\n"
+
+
+# --- typed/total boundaries the new exception must not leak through --------
+
+
+@requires_posix_flock
+def test_the_jsonl_validation_surface_stays_total_on_lock_timeout(tmp_path: Path) -> None:
+    """Out-of-family review round 8 [P2], accepted — the THIRD instance of the
+    class rounds 1 and 4 already closed at `write_once` and `_adopt_one`.
+
+    `validate_jsonl_event_ledger_format`'s whole contract is a DISCRIMINATED
+    RESULT (`VALID` / `EMPTY` / `MALFORMED_LINE` / `IO_ERROR`), delivered by an
+    `except OSError -> IO_ERROR` fold around a read taken under
+    `cross_process_read_lock`. `CrossProcessLockTimeoutError` is deliberately
+    NOT an `OSError`, so before this fold it LEAKED — a total surface silently
+    became partial the moment the lock grew a deadline.
+
+    `IO_ERROR` is the honest classification: the read did not happen.
+
+    Mutation probe (run at this arc): narrowing the fold back to `OSError`
+    makes the timeout propagate and this test fails."""
+    from harness_is.jsonl_event_ledger_lifecycle import (
+        JsonlLedgerHandle,
+        LedgerFormatValidationResult,
+        validate_jsonl_event_ledger_format,
+    )
+
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    _seed(ledger)
+    handle = JsonlLedgerHandle(canonical_path=ledger, exists=True, entry_count=1)
+
+    with _ForeignHolder(tmp_path, ledger):
+        with pytest.MonkeyPatch.context() as patch:
+            import harness_is.jsonl_event_ledger_lifecycle as module
+
+            real_lock = module.cross_process_read_lock
+            patch.setattr(
+                module,
+                "cross_process_read_lock",
+                lambda path, **_kw: real_lock(path, deadline_seconds=0.1),
+            )
+            result = validate_jsonl_event_ledger_format(handle)
+
+    assert result is LedgerFormatValidationResult.IO_ERROR, (
+        f"the surface returned {result!r} — a lock timeout must fold to a "
+        f"discriminated result, not leak out of a total contract"
+    )
+
+
+@requires_posix_flock
+def test_a_spent_budget_refuses_even_when_the_manual_probe_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Out-of-family review, merge-gate fix round 2 — the read FAST PATH.
+
+    The three ABBA arms run their OWN `LOCK_NB` probe before ever calling
+    `flock_until_deadline`. When that probe SUCCEEDS the helper is never
+    invoked — so a caller that already WAITED at the parent-directory lock, and
+    whose budget expired during that wait, entered its critical section past the
+    deadline through a path the helper cannot see. The reviewer reproduced entry
+    at 0.148 s against a 0.1 s budget.
+
+    The window is sub-millisecond in the wild (the directory acquire itself
+    refuses once expired), so it is reproduced here at the REAL SEAM instead of
+    raced: `_dir_lock_for` is wrapped so the directory acquire SUCCEEDS and then
+    spends the budget, which is exactly the state the reviewer hit — waited,
+    acquired, budget gone. The file lock is left FREE, so the manual probe
+    succeeds and ONLY the post-acquire check can refuse.
+
+    Mutation probe (run at this arc): removing the `refuse_after_acquire()`
+    check from the file arms makes this ENTER the section and the test fails."""
+    import harness_is.cross_process_ledger_lock as lock_module
+
+    budget = 0.2
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    _seed(ledger)
+
+    real_dir_lock_for = lock_module._dir_lock_for
+
+    class _SlowDirLock:
+        """Acquires for real, then burns the caller's remaining budget."""
+
+        def __init__(self, inner: object) -> None:
+            self._inner = inner
+
+        def acquire(self, deadline: object = None) -> None:
+            self._inner.acquire(deadline)  # type: ignore[attr-defined]
+            if deadline is not None:
+                deadline.note_contention()  # type: ignore[attr-defined]
+                remaining = deadline.remaining_seconds()  # type: ignore[attr-defined]
+                if remaining > 0:
+                    time.sleep(remaining + 0.05)
+
+        def release(self) -> None:
+            self._inner.release()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(
+        lock_module, "_dir_lock_for", lambda parent: _SlowDirLock(real_dir_lock_for(parent))
+    )
+
+    with pytest.raises(CrossProcessLockTimeoutError):
+        with cross_process_read_lock(ledger, deadline_seconds=budget):
+            raise AssertionError(
+                "entered the read section on a SPENT budget — the manual probe "
+                "succeeded and nothing refused"
+            )
+
+
+# --- the END-TO-END property, across two sites in ONE entry surface --------
+
+
+@requires_posix_flock
+def test_the_budget_is_spent_across_sites_not_reset_at_each(tmp_path: Path) -> None:
+    """The end-to-end contract, witnessed by ELAPSED TIME across TWO waits.
+
+    A witness that contends only ONE site cannot see this: one acquisition
+    spends one budget under either design. So the shape here is deliberately
+    two-stage — the DIRECTORY is held for 0.6 s and then released, while the
+    legacy sidecar is held throughout and the canonical file is ABSENT. One
+    `cross_process_write_lock` call therefore waits at site 1 (~0.6 s, then
+    succeeds) and again at site 2 (until expiry).
+
+    With ONE end-to-end budget of 1.0 s the call raises at ~1.0 s total.
+    Re-minting per acquisition would give site 2 a FRESH 1.0 s and the call
+    would raise at ~1.6 s. The 1.4 s assertion sits between the two.
+
+    Mutation probe (run at this arc): re-minting the deadline at the
+    `_acquire_legacy_sidecar_for_writer` call site makes this FAIL on elapsed
+    time — the deadline still fires, so a witness that only asserted "it raises"
+    would pass the mutation and prove nothing about the end-to-end claim.
+    """
+    budget = 1.0
+    dir_hold = 0.6
+    ledger = tmp_path / "state" / "ledger.jsonl"
+    ledger.parent.mkdir(parents=True)
+    sidecar = ledger.with_name(ledger.name + ".lock")
+    sidecar.touch()
+    with _ForeignHolder(tmp_path, sidecar):
+        with _ForeignHolder(tmp_path, ledger.parent, mode="dir", hold_seconds=dir_hold):
+            started = time.monotonic()
+            with pytest.raises(CrossProcessLockTimeoutError) as caught:
+                with cross_process_write_lock(ledger, deadline_seconds=budget):
+                    raise AssertionError("entered while the sidecar was held")
+            elapsed = time.monotonic() - started
+        # It reached the SECOND site — so two waits really happened.
+        assert caught.value.lock_target == str(sidecar), (
+            f"timed out at {caught.value.lock_target}, never reaching the second site"
+        )
+        assert elapsed >= dir_hold, "never waited out the directory holder"
+        assert elapsed < budget + 0.4, (
+            f"spent {elapsed:.3f}s against a {budget}s END-TO-END budget — the "
+            f"deadline was re-minted at the second site rather than threaded"
+        )

@@ -478,14 +478,21 @@ def test_ac9d_never_holds_two_journal_locks_at_once(
     real_flock = fcntl.flock
 
     def _spy_flock(fd: int, op: int) -> None:
+        # B-93: match the LOCK_EX *bit*, not the exact op value. The deadline'd
+        # acquisition probes with `LOCK_EX | LOCK_NB`, so an `op == LOCK_EX`
+        # equality test silently stops matching and the witness reports a peak
+        # of ZERO — passing on absence rather than proving one-lock-at-a-time.
+        # Counting only AFTER `real_flock` returns also tightens the witness:
+        # a probe that RAISES (contention) no longer counts as a hold.
         info = os.fstat(fd)
         key = (info.st_dev, info.st_ino)
-        if op == fcntl.LOCK_EX:
+        result = real_flock(fd, op)
+        if op & fcntl.LOCK_EX:
             held.add(key)
             peak["max"] = max(peak["max"], len(held))
-        elif op == fcntl.LOCK_UN:
+        elif op & fcntl.LOCK_UN:
             held.discard(key)
-        return real_flock(fd, op)
+        return result
 
     monkeypatch.setattr(fcntl, "flock", _spy_flock)
     _run(journal_dir, tmp_path)
@@ -713,6 +720,81 @@ def test_ac9e_every_journal_gets_exactly_one_durable_account_row(tmp_path: Path)
     assert intent_rows[0]["source"] == legacy_pause_journal_filename("wf-legacy")
 
 
+@requires_posix_flock
+def test_the_adoption_stays_total_when_the_exclusion_lock_times_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-93 (out-of-family review round 4 [P2], accepted) — the same defect class
+    as the round-1 `write_once` finding, at a SECOND totality boundary.
+
+    `_adopt_one` promises to ALWAYS return an outcome and the account contract is
+    ONE ROW PER JOURNAL, but `main` catches only `ValueError`. The deadline B-93
+    added to `cross_process_journal_lock` made the lock ENTRY a failable step, so
+    an escaping `CrossProcessLockTimeoutError` would have exited this
+    operator-facing migration with a traceback and NO row for the journal it
+    failed on — breaking both contracts at once.
+
+    Contended by a GENUINE SECOND OS PROCESS holding the legacy source's own lock
+    inode, which is the inode the adoption contends on (AC #9(a)).
+
+    Mutation probe (run at this arc): removing the `except
+    CrossProcessLockTimeoutError` at the lock entry makes this raise out of
+    `adopt_pause_journals` instead of returning an outcome.
+    """
+    import time
+
+    journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
+    legacy = _legacy(journal_dir, "wf-timeout")
+    lock_path = legacy.with_name(legacy.name + PAUSE_JOURNAL_LOCK_SUFFIX)
+    ready = tmp_path / "holder-ready"
+    release = tmp_path / "holder-release"
+    holder_script = (
+        "import fcntl, os, sys, time\n"
+        "fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)\n"
+        "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+        "open(sys.argv[2], 'w').close()\n"
+        "limit = time.monotonic() + 60\n"
+        "while not os.path.exists(sys.argv[3]) and time.monotonic() < limit:\n"
+        "    time.sleep(0.01)\n"
+    )
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_script, str(lock_path), str(ready), str(release)]
+    )
+    try:
+        limit = time.monotonic() + 30
+        while not ready.exists() and time.monotonic() < limit:
+            assert holder.poll() is None, "holder exited before acquiring"
+            time.sleep(0.01)
+        assert ready.exists(), "holder never acquired the legacy source lock"
+
+        real_lock = adoption_module.cross_process_journal_lock
+
+        def _fast_lock(path: Path, *, deadline_seconds: float | None = None) -> object:
+            # Short-circuit the 300s default: the path under test is the
+            # exception boundary, not the budget's value.
+            return real_lock(path, deadline_seconds=0.1)
+
+        monkeypatch.setattr(adoption_module, "cross_process_journal_lock", _fast_lock)
+        outcomes = _run(journal_dir, tmp_path)
+    finally:
+        release.write_text("go")
+        holder.wait(timeout=30)
+
+    assert len(outcomes) == 1, f"totality broken — expected one row, got {outcomes}"
+    assert outcomes[0].disposition is AdoptionDisposition.REFUSED_EXCLUSION_TIMEOUT
+    assert outcomes[0].disposition is not AdoptionDisposition.REFUSED_EXCLUSION_DEGRADED, (
+        "a lock timeout must not be reported as a PLATFORM degradation — that "
+        "points the operator at the wrong thing entirely"
+    )
+    assert "deadline" in outcomes[0].detail
+    # The durable account row landed too: the contract is a RECORD, not a return.
+    assert (
+        "refused-because-the-exclusion-lock-timed-out" in (tmp_path / "account.jsonl").read_text()
+    )
+    # And nothing was published for it.
+    assert not (journal_dir / pause_journal_filename(_TENANT, "wf-timeout")).exists()
+
+
 def test_ac9e_the_disposition_vocabulary_is_total_over_the_mandated_refusals() -> None:
     """AC #9(e) — the vocabulary is **TOTAL over the refusals this unit
     mandates**, asserted PROGRAMMATICALLY over the shipped enum.
@@ -731,10 +813,25 @@ def test_ac9e_the_disposition_vocabulary_is_total_over_the_mandated_refusals() -
     }
     shipped = {member.value for member in AdoptionDisposition}
     assert mandated <= shipped, f"a MANDATED disposition is missing: {mandated - shipped}"
-    # The spec's list is explicitly a FLOOR ("at minimum"). Exactly ONE member is
-    # added beyond it, and it is a NON-refusal — §13.7.1's CURRENT-FORMAT arm,
-    # which that section itself calls "ordinary state" rather than a refusal.
-    assert shipped - mandated == {"skipped-as-current-format-not-adoptable"}
+    # The spec's list is explicitly a FLOOR ("at minimum"). Members added beyond
+    # it are enumerated here EXACTLY — an open-ended assertion would let a
+    # mandated refusal be quietly renamed into a new member and still pass.
+    assert shipped - mandated == {
+        # §13.7.1's CURRENT-FORMAT arm — a NON-refusal, which that section itself
+        # calls "ordinary state".
+        "skipped-as-current-format-not-adoptable",
+        # B-93: the exclusion lock now carries a deadline, so "the primitive
+        # works but a holder did not release" became a reachable outcome that is
+        # NOT one of the mandated refusals (it is an implementation-level failure
+        # of a mechanism the spec leaves to discretion). It is deliberately
+        # DISTINCT from `refused-because-the-exclusion-primitive-degraded`, which
+        # reports a PLATFORM that cannot exclude at all — collapsing the two
+        # would tell a Linux operator their platform degrades and point the
+        # investigation at the wrong thing. Added because totality is enforced BY
+        # CONSTRUCTION: a new exception type must be terminated at every totality
+        # boundary it can reach, or the command exits with a traceback and no row.
+        "refused-because-the-exclusion-lock-timed-out",
+    }
 
 
 def test_ac9e_totality_is_by_construction_not_by_enumeration() -> None:

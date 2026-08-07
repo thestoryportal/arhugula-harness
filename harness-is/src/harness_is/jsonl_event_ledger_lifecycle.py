@@ -24,6 +24,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from harness_core import DeploymentSurface, WorkloadClass
+from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
 from pydantic import BaseModel, ConfigDict
 
 from harness_is.cross_process_ledger_lock import (
@@ -111,7 +112,13 @@ def validate_jsonl_event_ledger_format(
             if handle.canonical_path.stat().st_size == 0:
                 return LedgerFormatValidationResult.EMPTY
             text = handle.canonical_path.read_text()
-    except OSError:
+    except (OSError, CrossProcessLockTimeoutError):
+        # B-93: the read lock now carries a deadline, and its timeout is
+        # deliberately NOT an `OSError` (see
+        # `harness_core.cross_process_lock_deadline`), so it would otherwise
+        # LEAK out of a function whose whole contract is a discriminated
+        # result. `IO_ERROR` is the honest classification — the read did not
+        # happen — and keeps this surface TOTAL.
         return LedgerFormatValidationResult.IO_ERROR
     for line in text.splitlines():
         if not line.strip():

@@ -38,6 +38,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
@@ -152,7 +153,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         baselined = writer.adopt_legacy_is_refs()
-    except ValueError as exc:
+    except (ValueError, CrossProcessLockTimeoutError) as exc:
+        # B-93 (out-of-family review round 9 [P2], accepted): the adoption path
+        # takes cross-process locks, whose deadline timeout is deliberately NOT
+        # an OSError or a ValueError — so without this arm ordinary contention
+        # would escape as a traceback instead of this command's established
+        # refusal (exit 1). Contention is an expected operator condition.
         print(f"migration refused: {exc}", file=sys.stderr)
         return 1
     print(f"baselined {baselined} legacy audit reference(s) at {writer.sidecar_path}")
@@ -226,13 +232,21 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
 
     ledger_text = ledger_path.read_text()
     entry_count = sum(1 for line in ledger_text.splitlines() if line.strip())
-    ledger_audit_refs = frozenset(
-        str(entry.action_id)
-        for entry in _read_ledger(
-            _Handle(canonical_path=ledger_path, exists=True, entry_count=entry_count)
+    try:
+        ledger_audit_refs = frozenset(
+            str(entry.action_id)
+            for entry in _read_ledger(
+                _Handle(canonical_path=ledger_path, exists=True, entry_count=entry_count)
+            )
+            if str(entry.action_id).startswith("audit:")
         )
-        if str(entry.action_id).startswith("audit:")
-    )
+    except CrossProcessLockTimeoutError as exc:
+        # B-93 (merge-gate lens 3, G1): this read takes the ledger read lock and
+        # sits OUTSIDE the try below, so the round-9 fold did NOT cover it — the
+        # gap was found by the executing witness the gate demanded, not by
+        # inspection. Same refusal contract as every other contention here.
+        print(f"migration refused: {exc}", file=sys.stderr)
+        return 1
 
     from harness_runtime.admin.record_migration import TenantAttestation
 
@@ -301,6 +315,14 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
                 f"{outcome.baseline_aliased} baseline pair(s) alias-projected "
                 f"(nothing rewritten on disk for baselines)"
             )
+    except CrossProcessLockTimeoutError as exc:
+        # B-93 (out-of-family review round 9 [P2], accepted): the record-mode
+        # ledger read and `retag_sidecar` both take cross-process locks whose
+        # deadline timeout is deliberately NOT an OSError/ValueError, so
+        # ordinary contention would escape this normalization as a traceback
+        # rather than the command's refusal exit 1.
+        print(f"migration refused: {exc}", file=sys.stderr)
+        return 1
     except RecordMigrationError as exc:
         print(f"record migration refused: {exc}", file=sys.stderr)
         return 1

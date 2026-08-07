@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1319,3 +1320,132 @@ def test_b64_verify_branch_releases_sidecar_lock_before_record_verification(
     # The load-bearing assertion: the sidecar lock was already released
     # while the record verification ran.
     assert lock_released_during_verify == [True]
+
+
+# ---------------------------------------------------------------------------
+# B-93 — the two lock-timeout folds this module gained at the deadline arc.
+# ---------------------------------------------------------------------------
+
+_B93_HOLDER = """
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], "w").close()
+limit = time.monotonic() + 60
+while not os.path.exists(sys.argv[3]) and time.monotonic() < limit:
+    time.sleep(0.01)
+fcntl.flock(fd, fcntl.LOCK_UN)
+os.close(fd)
+"""
+
+
+def _b93_hold(tmp_path: Path, target: Path):
+    """Hold `target`'s flock from a genuine second OS process."""
+    import contextlib
+    import subprocess
+
+    @contextlib.contextmanager
+    def _holder():
+        ready = tmp_path / f"b93-ready-{target.name}"
+        release = tmp_path / f"b93-release-{target.name}"
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _B93_HOLDER, str(target), str(ready), str(release)]
+        )
+        try:
+            limit = time.monotonic() + 30
+            while not ready.exists() and time.monotonic() < limit:
+                assert proc.poll() is None, "holder exited before acquiring"
+                time.sleep(0.01)
+            assert ready.exists(), "holder never acquired the lock"
+            yield
+        finally:
+            release.write_text("go")
+            proc.wait(timeout=30)
+
+    return _holder()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl.flock is POSIX-only (B-45)")
+def test_b93_mint_folds_a_lock_timeout_into_the_config_taxonomy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-93 (merge-gate lens 3, G1) — the fold at the `ExitStack` lock entry.
+
+    `initialize_mtc_audit_signing_record` deliberately translates a failed
+    sidecar-lock acquisition into `AuditSigningConfigInvalidError` so the
+    RT-FAIL-CONFIG taxonomy holds instead of an unclassified bootstrap
+    exception leaking (the contract a prior out-of-family round established on
+    the B-64 arc). B-93 made that acquisition deadline-bounded, and its timeout
+    is deliberately NOT an `OSError`/`ValueError` — so without the widened arm
+    it would escape the taxonomy entirely.
+
+    Mutation probe (run at this arc): reverting the arm to
+    `except (OSError, ValueError)` makes the raw timeout propagate and this
+    test fails.
+    """
+    from harness_runtime.lifecycle import audit_signing_fail_closed_validation as validation
+
+    record_path = tmp_path / "cutover-record.json"
+    sidecar = tmp_path / "audit-entries.jsonl"
+    sidecar.write_text("")
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    kwargs["audit_cutover_record_path"] = str(record_path)
+    config = _config(tmp_path, **kwargs)
+
+    real_lock = validation.cross_process_write_lock
+    monkeypatch.setattr(
+        validation,
+        "cross_process_write_lock",
+        lambda path, **_kw: real_lock(path, deadline_seconds=0.1),
+    )
+
+    with _b93_hold(tmp_path, sidecar):
+        with pytest.raises(AuditSigningConfigInvalidError) as caught:
+            validation.initialize_mtc_audit_signing_record(
+                config,
+                signing_backend=_FakeBackend(),
+                audit_sidecar_path=sidecar,
+            )
+
+    assert "could not be locked" in str(caught.value)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl.flock is POSIX-only (B-45)")
+def test_b93_record_key_separation_folds_a_lock_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-93 (merge-gate lens 3, G1) — the fold at the read-lock entry.
+
+    `_reject_record_key_used_by_persisted_rows` treats a failed lock
+    acquisition as the same typed fail-closed surface as an unreadable sidecar:
+    separation cannot be PROVEN, so it refuses. A leaking timeout would turn
+    that fail-closed refusal into an unclassified crash on the trust-anchor
+    path.
+
+    Mutation probe (run at this arc): reverting the arm to `except OSError`
+    makes the raw timeout propagate and this test fails.
+    """
+    from harness_runtime.lifecycle import audit_signing_fail_closed_validation as validation
+
+    sidecar = tmp_path / "audit-entries.jsonl"
+    sidecar.write_text(
+        '{"tenant_tag": "_single", "entry": {"signature_attrs": '
+        '{"audit_signature_key_id": "some-row-key"}}}\n'
+    )
+    kwargs = _mtc_ready_kwargs(tmp_path)
+    config = _config(tmp_path, **kwargs)
+
+    real_lock = validation.cross_process_read_lock
+    monkeypatch.setattr(
+        validation,
+        "cross_process_read_lock",
+        lambda path, **_kw: real_lock(path, deadline_seconds=0.1),
+    )
+
+    reject = validation._reject_record_key_used_by_persisted_rows  # pyright: ignore[reportPrivateUsage]
+
+    with _b93_hold(tmp_path, sidecar):
+        with pytest.raises(AuditSigningConfigInvalidError) as caught:
+            reject(config, sidecar_path=sidecar, record_key_id="cutover-key")
+
+    assert "could not be read" in str(caught.value)

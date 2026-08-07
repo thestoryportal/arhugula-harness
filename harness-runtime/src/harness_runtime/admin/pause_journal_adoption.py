@@ -112,6 +112,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
+from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
+
 from harness_runtime.admin.pause_journal_enumeration import (
     EnumeratedJournal,
     JournalIdentityClass,
@@ -254,6 +256,25 @@ class AdoptionDisposition(StrEnum):
     DEFAULT; the read-back-only escape is reachable only under an explicit
     operator flag whose weaker guarantee appears in the refusal text."""
 
+    REFUSED_EXCLUSION_TIMEOUT = "refused-because-the-exclusion-lock-timed-out"
+    """The exclusion primitive WORKS here but a holder did not release within
+    the lock's deadline (`B-93`), so this journal was never entered.
+
+    DELIBERATELY DISTINCT from `REFUSED_EXCLUSION_DEGRADED`, which reports a
+    PLATFORM carve-out — a primitive that cannot exclude at all. Collapsing the
+    two would tell an operator on Linux that their platform degrades, pointing
+    any investigation at the wrong thing entirely; the remedy here is to find
+    the holder, not to reconsider the platform.
+
+    Added at the `B-93` build leg, and NOT one of the refusals §14.14.8
+    mandates: it is an implementation-level failure of a mechanism the spec
+    leaves to discretion. It is added because TOTALITY is enforced BY
+    CONSTRUCTION here — `_adopt_one` promises to ALWAYS return an outcome, and
+    `B-93` introduced a new exception type that could escape it, which would
+    have exited the command with a traceback and NO account row for the journal
+    it failed on. A new failure type must be terminated at every totality
+    boundary it can reach *(out-of-family review round 4 [P2], accepted)*."""
+
 
 #: The dispositions that make the run's exit code nonzero. Keyed on the ENUM
 #: MEMBERS, never on a string prefix: a value-prefix test silently swept the
@@ -265,6 +286,11 @@ _REFUSAL_DISPOSITIONS = frozenset(
         AdoptionDisposition.REFUSED_ON_READ_BACK,
         AdoptionDisposition.REFUSED_NOT_LEGACY,
         AdoptionDisposition.REFUSED_EXCLUSION_DEGRADED,
+        # B-93: a lock timeout is a genuine refusal — the journal was NOT
+        # adopted — so it must make the run's exit code nonzero like every other
+        # refusal. Omitting it would report success for a run that adopted
+        # nothing, which is the failure mode this keyed set exists to prevent.
+        AdoptionDisposition.REFUSED_EXCLUSION_TIMEOUT,
     }
 )
 
@@ -434,6 +460,58 @@ def _adopt_one(
     # The lock is on the LEGACY SOURCE journal's own lock file — the inode a
     # straggler appender contends on. Locking the TARGET would exclude nothing
     # that matters, because a straggler computes the LEGACY key.
+    #
+    # B-93 (out-of-family review round 4 [P2], accepted): the acquisition is now
+    # DEADLINE-BOUNDED, so entering this block is itself a failable step. This
+    # function promises to ALWAYS return an outcome and `main` catches only
+    # `ValueError`, so an escaping timeout would exit the command with a
+    # traceback and write NO account row for this journal — breaking both the
+    # totality contract and the account's one-row-per-journal contract. Caught
+    # HERE rather than at `main` so the refusal lands as a per-journal row with
+    # the journal's own identity, which is what an operator retries against.
+    # Nothing inside the block takes another cross-process lock, so this cannot
+    # mis-attribute some other acquisition's timeout.
+    try:
+        return _adopt_one_under_lock(
+            journal,
+            journal_dir=journal_dir,
+            tenant_scope=tenant_scope,
+            account_path=account_path,
+            workflow_id=workflow_id,
+            target=target,
+            target_name=target_name,
+        )
+    except CrossProcessLockTimeoutError as exc:
+        return AdoptionOutcome(
+            source=journal.path.name,
+            disposition=AdoptionDisposition.REFUSED_EXCLUSION_TIMEOUT,
+            detail=(
+                f"the LEGACY-source exclusion lock was not acquired within its "
+                f"deadline ({exc}) — a straggler appender or another adoption "
+                f"run still holds it. This journal was NOT entered and NOTHING "
+                f"was published for it; the deployment is unchanged and the run "
+                f"is safely retryable once the holder releases."
+            ),
+            workflow_id=workflow_id,
+        )
+
+
+def _adopt_one_under_lock(
+    journal: EnumeratedJournal,
+    *,
+    journal_dir: Path,
+    tenant_scope: str | None,
+    account_path: Path,
+    workflow_id: str,
+    target: Path,
+    target_name: str,
+) -> AdoptionOutcome:
+    """The half of `_adopt_one` that runs INSIDE the exclusion lock.
+
+    Split out at the `B-93` build leg purely so the deadline-bounded acquisition
+    has a boundary to be caught at without wrapping the whole body in a `try`
+    that could swallow an unrelated failure. Body PRESERVED VERBATIM.
+    """
     with cross_process_journal_lock(journal.path):
         try:
             source_bytes = journal.path.read_bytes()
