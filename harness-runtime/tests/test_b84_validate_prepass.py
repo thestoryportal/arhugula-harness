@@ -985,7 +985,13 @@ def _spans(exporter: InMemorySpanExporter) -> list[dict[str, Any]]:
         pytest.param(
             {"query": "q", "scope_ref": _SCOPE_REF, "policy_ref": _POLICY_REF, "limit": 0},
             MemoryToolExecutionInputError,
-            "provider_adapter_failure",
+            # U-MEM-28: was `provider_adapter_failure`, the B-88 impl half's
+            # least-wrong stopgap. Memory spec v1.3 gives the class its own
+            # value and this type is the single declaration flip site. The
+            # PRESERVATION property this row exists for is unchanged - the
+            # relocated check still emits `memory.failure_class`, and
+            # `validate()` still classifies exactly as `execute()` would.
+            "input_validation_failure",
             "failed",
             id="input-error",
         ),

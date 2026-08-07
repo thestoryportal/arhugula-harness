@@ -99,7 +99,10 @@ from harness_runtime.lifecycle.llm_dispatch import (
     RoutedPrimaryResolution,
 )
 from harness_runtime.lifecycle.retry_breaker import BreakerStateMachine
-from harness_runtime.memory_tool_executor import MemoryToolExecutionInputError
+from harness_runtime.memory_tool_executor import (
+    MemoryToolExecutionInputError,
+    MemoryToolExecutionInternalError,
+)
 from harness_runtime.types import LLMDispatcher, RetryBreakerRegistry
 
 __all__ = [
@@ -290,6 +293,22 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
       ``_classify_breaker_cause`` below, deliberately NOT reusing that
       function so this classifier's control-flow contract stays independent
       of the telemetry classifier's).
+    - ``MemoryToolExecutionInternalError`` → ``None`` (fail-fast, U-MEM-28 /
+      B-88 sub-decision A-ii). Admitted BY NAME, never as the family base: the
+      six `lifecycle/llm_dispatch.py` harness-internal faults (an unset
+      ``RuntimeMemoryContext.record_scope`` / ``.scope_ref``, a
+      ``MEMORY_TOOL_CONTRACTS`` entry whose input schema has no ``properties``
+      mapping) were re-typed OFF ``MemoryToolExecutionInputError`` so the
+      C-MEM-19 v1.3 type boundary holds, and without this entry that re-typing
+      would have flipped them from fail-fast to ``TRANSIENT_RETRY`` — a
+      control-flow change nobody chose. `Spec_Memory_Substrate_v1.md` v1.3
+      (`### Input validation failure`, retry-disposition paragraph) fixes the
+      intended disposition as fail-fast PRESERVED: both faults are
+      deterministic and candidate-independent, so a retry — and, under a
+      fallback chain, an advance to a different candidate — cannot succeed and
+      only consumes the chain. Admitting the family BASE instead would be
+      subclass-inclusive and would silently fail-fast the denied and store
+      subtypes too, which the paragraph below refuses.
     - ``MemoryToolExecutionInputError`` → ``None`` (fail-fast, B-84). A
       contract-invalid C-MEM-14 memory tool call is a PERMANENT malformed-input
       failure, not a provider transient: spec §14.6 D2 makes an exception
@@ -297,12 +316,16 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
       otherwise", and this class matches nothing in §21.2 (network / rate-limit
       / 5xx). It is the same class as ``LLMDispatchPayloadShapeError``
       (§14.5 ``RT-FAIL-PAYLOAD-SHAPE``, "permanent") raised one layer deeper —
-      at the memory tool executor's argument validation
-      (`memory_tool_executor.py:864`-`:868`, `_string_arg`, reached from BOTH
-      `validate()` and `_execute_authorized` through the same `_prepare`) or at
-      the dispatch-side memory context/schema invariants
-      (`lifecycle/llm_dispatch.py:4358`-`:4373`) — so it takes the
-      same fail-fast branch. The harm this closes (B-84): the memory tool loops
+      at the memory tool executor's argument validation (`_string_arg` in
+      `memory_tool_executor.py`, reached from BOTH `validate()` and
+      `_execute_authorized` through the same `_prepare`) or at the
+      dispatch-side check of the MODEL-supplied `scope_ref` argument
+      (`_standard_memory_tool_context` in `lifecycle/llm_dispatch.py` — the two
+      `arguments.get("scope_ref")` refusals, which U-MEM-28 deliberately
+      RETAINS on this type; the sibling harness-internal checks in the same
+      function were re-typed to `MemoryToolExecutionInternalError`, see the
+      bullet above) — so it takes the same fail-fast branch. The harm this
+      closes (B-84): the memory tool loops
       execute a prepared batch in order, so an executor-level argument failure
       on a LATER call can follow an EARLIER call that already committed a
       durable write; a ``TRANSIENT_RETRY`` classification re-ran the whole
@@ -335,6 +358,7 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
             LLMDispatchProviderUnreachableError,
             LLMDispatchPayloadShapeError,
             MemoryToolExecutionInputError,
+            MemoryToolExecutionInternalError,
         ),
     ):
         return None

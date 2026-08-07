@@ -151,26 +151,74 @@ class MemoryToolExecutionStoreError(MemoryToolExecutionError):
 class MemoryToolExecutionInputError(MemoryToolExecutionError, ValueError):
     """Raised when a standard memory tool call has invalid arguments.
 
-    B-88 (impl half), LEAST-WRONG STOPGAP - the flip site when the spec half
-    lands. The closed C-MEM-19 vocabulary has no input-validation class, so a
-    malformed model-supplied argument has nowhere truthful to go; adding a
-    member is a Class 1 back-flow to `Spec_Memory_Substrate_v1.md` C-MEM-19
-    and is NOT absorbable at Phase 7 per X-AL-3. `provider_adapter_failure` is
-    chosen because (i) the fault originates in a provider/model-emitted tool
-    call arriving through the adapter, not in the memory substrate's own IO or
-    record codecs; (ii) `retry_breaker_fallback._classify_provider_exception`
-    already groups this class with `LLMDispatchPayloadShapeError`, the
-    provider-payload-shape family; (iii) it restores the value this population
-    emitted before B-84 typed the `_allowed_kinds` site (a bare `ValueError`
-    fell to the same residual), so B-84's incidental telemetry shift is
-    reverted rather than entrenched; and (iv) `serialization_failure` is
-    reserved for record-codec faults and would poison that bucket for triage.
-    Declared explicitly - not inherited - so this stays the flip site.
+    C-MEM-19 `input_validation_failure` (`Spec_Memory_Substrate_v1.md` v1.3,
+    `### Input validation failure`): a refusal of caller- or model-supplied
+    arguments at the memory tool boundary - a malformed, out-of-domain, or
+    missing argument. That is what this type is FOR, and per the spec's TYPE
+    boundary it is what this type is raised for and nothing else: a
+    harness-internal fault (an unset `RuntimeMemoryContext`, a missing or
+    malformed entry in the harness's own memory tool schema table) is NOT a
+    caller-supplied argument and must not be raised as this type - it raises
+    `MemoryToolExecutionInternalError` instead (U-MEM-28, B-88 sub-decision
+    A-ii). The declaration is written explicitly here, not inherited, so the
+    boundary is stated at the type that carries the class.
+
+    The class is distinct from `provider_adapter_failure`, which names a fault
+    of the provider adapter or its transport AND carries the unclassified
+    residual, and from `serialization_failure`, which is reserved for
+    record-codec faults. Routing this large, well-typed, deliberately
+    classified population into the residual is exactly what C-MEM-19 v1.3
+    forbids: it would make a triaged failure and an untriaged one
+    indistinguishable at the telemetry surface.
+
+    Retry disposition is unchanged by the vocabulary move: this type stays in
+    `retry_breaker_fallback._classify_provider_exception`'s fail-fast tuple
+    (B-84), and so does the internal-fault sibling.
     """
 
     memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
-        MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
+        MemoryTelemetryFailureClass.INPUT_VALIDATION_FAILURE
     )
+
+
+class MemoryToolExecutionInternalError(MemoryToolExecutionError):
+    """Raised for a HARNESS-INTERNAL memory-tool fault - never a caller argument.
+
+    U-MEM-28 / B-88 sub-decision A-ii (RE-TYPE). C-MEM-19 v1.3 makes the
+    failure-class boundary a TYPE boundary wherever the class is keyed on the
+    raised exception type, so the six `lifecycle/llm_dispatch.py` sites that
+    report the harness's OWN wiring faults - `RuntimeMemoryContext.record_scope`
+    / `.scope_ref` left unset, and a `MEMORY_TOOL_CONTRACTS` entry whose input
+    schema has no `properties` mapping - raise THIS type rather than
+    `MemoryToolExecutionInputError`. The two sibling sites that validate the
+    MODEL-supplied `scope_ref` argument keep the input type: they are the
+    argument-refusal case the new class exists for.
+
+    Three constraints fix the shape, and each one is load-bearing:
+
+    - NOT a subclass of `MemoryToolExecutionInputError`: `getattr` walks the
+      MRO, so an inheriting subtype would carry `input_validation_failure`
+      straight back into the internal population and void the re-typing.
+    - NOT the family base itself: the next constraint admits this type to an
+      `isinstance` tuple, and `isinstance` is subclass-inclusive, so admitting
+      the base would silently fail-fast `MemoryToolExecutionDeniedError` and
+      `MemoryToolExecutionStoreError` too - which
+      `_classify_provider_exception`'s own docstring refuses, because the
+      denied type wraps genuinely transient store I/O.
+    - Declares NO class of its own, inheriting the base's RESIDUAL
+      `provider_adapter_failure`. Per C-MEM-19 v1.3 a residual report is the
+      ABSENCE of a claim, not an assertion of adapter-hood, so this does not
+      label an internal fault an adapter fault. What the contract requires is
+      only that the internal population stop carrying the input-validation
+      class; if a later arc mints a dedicated unclassified value, this type
+      takes it with no further contract amendment.
+
+    Fail-fast is PRESERVED, not inherited by luck: this type is admitted BY
+    NAME to `retry_breaker_fallback._classify_provider_exception`'s fail-fast
+    tuple, because an unset context and a malformed harness-supplied schema are
+    deterministic and candidate-independent - a retry, and under a fallback
+    chain a candidate advance, cannot succeed.
+    """
 
 
 class MemoryToolExecutionContext(BaseModel):
@@ -1194,6 +1242,7 @@ __all__ = [
     "MemoryToolExecutionDeniedError",
     "MemoryToolExecutionError",
     "MemoryToolExecutionInputError",
+    "MemoryToolExecutionInternalError",
     "MemoryToolExecutionRequest",
     "MemoryToolExecutionStoreError",
     "StandardMemoryToolExecutor",

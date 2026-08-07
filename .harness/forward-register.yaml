@@ -59,13 +59,13 @@
 
 snapshot:
   total: 114
-  open: 1
+  open: 0
   design_substrate_gated: 0
   registered_finding: 18
   operator_gated: 0
   held: 1
-  closed: 94
-  identity_digest: 425087312c3c3829
+  closed: 95
+  identity_digest: e6f024c50257b042
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -3166,8 +3166,8 @@ items:
   heading: '### B-87 · Degraded-serve span over-reports pre-wire failures as completed injections *(surfaced by out-of-family Codex round 8 on the B-83 arc, 2026-07-28; CLOSED 2026-07-29 — PR #1149)*'
 - id: B-88
   title: 'Memory failure telemetry: substring-keyed classify_memory_failure collapses the typed input-error family (and two real policy denials) to io_failure'
-  status: open
-  pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record) + #1245 (the SPEC leg -- Memory spec v1.3 + Memory plan v1.3, both clearance markers)'
+  status: closed
+  pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record) + #1245 (the SPEC leg -- Memory spec v1.3 + Memory plan v1.3, both clearance markers) + #1247 (the IMPL leg -- U-MEM-28)'
   summary: '[CURRENT STATE 2026-08-06 -- RATIFIED as READING A with sub-decision A-ii = RE-TYPE, and
     the SPEC LEG HAS LANDED (PR #1245: Memory spec v1.3 + Memory plan v1.3, both clearance markers).
     `status: open`. THE ONLY THING OWED IS THE IMPL LEG, carried by plan unit U-MEM-28 -- do NOT
@@ -3338,7 +3338,41 @@ items:
     comment at test_memory_observability.py claiming the declaration beat a message that trips
     an earlier heuristic was fixed by making the message genuinely trip rule 2 (path traversal),
     so the row is a real conflict rather than a residual-agreement.'
-  close_out: 'SPEC LEG LANDED 2026-08-06 -- `Spec_Memory_Substrate_v1.md` v1.2 -> v1.3 (C-MEM-19 gains
+  close_out: 'IMPL LEG LANDED 2026-08-07 (U-MEM-28) -- THIS ROW IS NOW CLOSED. WHAT SHIPPED: the seventh
+    `MemoryTelemetryFailureClass` member `INPUT_VALIDATION_FAILURE`; the SINGLE declaration flip at
+    `MemoryToolExecutionInputError` (the LEAST-WRONG-STOPGAP docstring rewritten to state what the class IS);
+    the ratified A-ii RE-TYPING of the SIX harness-internal `lifecycle/llm_dispatch.py` raise sites onto a NEW
+    dedicated `MemoryToolExecutionInternalError` -- not a subclass of the input type, not the family base, and
+    declaring nothing of its own so it inherits the base RESIDUAL -- with the TWO model-supplied-`scope_ref`
+    sites deliberately RETAINED on the input type; that receiving type admitted BY NAME to
+    `_classify_provider_exception`''s fail-fast tuple so the fail-fast disposition is PRESERVED rather than
+    silently flipped to TRANSIENT_RETRY; and the `test_memory_observability.py` fixture re-key plus a NEW
+    distinct type-gate sibling. Sites were re-resolved BY CONTENT at the impl HEAD, never by offset.
+    THE TYPE-BOUNDARY INVARIANT CLOSES WITH ONE KNOWN NON-CONFORMANT SITE, RECORDED AND UNREPAIRED:
+    `StandardMemoryToolExecutor._prepare`''s exhaustiveness fall-through still raises the input-error type for a
+    harness-internal fault. U-MEM-28 does NOT repair it, on AUTHORITY grounds rather than merit -- the operator
+    ratified an A-ii site list of EXACTLY SIX, all in `lifecycle/llm_dispatch.py`, and an impl leg does not widen
+    a ratified enumeration on its own reading. THAT FINDING IS OWNED BY REGISTER ROW `B-114`, which outlives this
+    row and carries the grounding pass, the conformance-repair-vs-ratified-extension discriminator, and the repair
+    recipe (including the same receiving-type and dual-witness constraints U-MEM-28 fixed for the six).
+    THE CROSS-ENTRY-PATH DIVERGENCE IS CARRIED FORWARD UNMOVED, as this row prescribed: the same model-supplied
+    `scope_ref` MISMATCH is still refused as a DENIAL at the executor and as an INPUT ERROR at the dispatch prepare
+    layer, so one logical failure still carries two classes. It stays INERT (the prepare path emits no
+    `memory.failure_class`) and neither side was moved: the executor class is a landed decision and the dispatch
+    retention is ratified operator text. It belongs to whichever arc closes the dispatch-side coverage gap.
+    THE COVERAGE STATEMENT HELD IN BOTH DIRECTIONS, and is now pinned rather than described: NO new emission was
+    wired on the prepare path (witnessed by an explicit no-span assertion) and NO existing emission was withdrawn
+    (witnessed by an AST pin that the classify-routed population is still exactly FIVE production call sites --
+    `memory_redaction.py`, `memory_capture.py`, `memory_tool_executor.py` x2 for `execute()` + the B-84 `validate()`
+    pre-pass, and `native_memory_adapter.py`). ONE GROUNDED PREMISE CORRECTION, recorded rather than absorbed: the
+    two `_standard_memory_tool_context` internal checks are UNREACHABLE through a whole dispatch -- a
+    `record_scope is None` context is WITHHELD by `_standard_memory_tools_context`''s C-MEM-13 conjunct
+    (`_packet_scope_matches_dispatch_family` returns UNVERIFIABLE), and a `scope_ref is None` context raises at the
+    sibling schema-injection guard first -- so those two of the six are witnessed as CONSTRUCTED SHAPES over the
+    real production function, with the withholding guard itself pinned so the unreachability claim is falsifiable
+    rather than asserted. The other four are driven END-TO-END through the real dispatch. The U-MEM-25 closeout
+    packet''s three `PENDING - U-MEM-28` rows are lifted, window 3 is closed the way windows 1 and 2 were, and
+    `just memory-closeout-check` re-ran green. PRECEDING RECORD FOLLOWS. SPEC LEG LANDED 2026-08-06 -- `Spec_Memory_Substrate_v1.md` v1.2 -> v1.3 (C-MEM-19 gains
     the seventh member `input_validation_failure`, the NEW `### Input validation failure` subsection
     carrying the A-ii type boundary + the coverage statement + the re-typed sites'' fail-fast retry
     disposition, and two appended invariants) AND `Implementation_Plan_Memory_Substrate_v1.md`
@@ -3520,7 +3554,7 @@ items:
     A dyadic C7/C8 x memory-contract-owner convening is owed ONLY if the operator selects Reading
     B (blessing the stopgap in contract text is a real observability-vs-contract tension). Steps
     (1)/(3) unchanged: mechanical once (2) is settled.'
-  heading: '### B-88 · Memory failure telemetry: substring-keyed `classify_memory_failure` collapses the typed input-error family — and two real policy denials — to `io_failure` *(surfaced by the merge-gate lens-2 sweep on the B-84 arc, 2026-07-28)* *(**RATIFIED 2026-08-05 as READING A, sub-decision A-ii = RE-TYPE**; SPEC LEG LANDED 2026-08-06 at PR #1245 -- only the IMPL LEG (U-MEM-28) is owed)*'
+  heading: '### B-88 · Memory failure telemetry: substring-keyed `classify_memory_failure` collapses the typed input-error family — and two real policy denials — to `io_failure` *(surfaced by the merge-gate lens-2 sweep on the B-84 arc, 2026-07-28)* *(**RATIFIED 2026-08-05 as READING A, sub-decision A-ii = RE-TYPE**; SPEC LEG LANDED 2026-08-06 at PR #1245; IMPL LEG (U-MEM-28) LANDED 2026-08-07 -- CLOSED, with ONE known non-conformant type-boundary site carried at `B-114`)*'
 - id: B-89
   title: 'Memory-scope producer asymmetry: capture stamps raw provider KEYS while retrieval requests carry family VALUES'
   status: closed
