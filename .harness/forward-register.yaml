@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 113
-  open: 0
-  design_substrate_gated: 1
-  registered_finding: 17
+  total: 114
+  open: 1
+  design_substrate_gated: 0
+  registered_finding: 18
   operator_gated: 0
   held: 1
   closed: 94
-  identity_digest: 0edaaffc2bcc7804
+  identity_digest: 425087312c3c3829
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -3166,11 +3166,14 @@ items:
   heading: '### B-87 · Degraded-serve span over-reports pre-wire failures as completed injections *(surfaced by out-of-family Codex round 8 on the B-83 arc, 2026-07-28; CLOSED 2026-07-29 — PR #1149)*'
 - id: B-88
   title: 'Memory failure telemetry: substring-keyed classify_memory_failure collapses the typed input-error family (and two real policy denials) to io_failure'
-  status: design_substrate_gated
-  pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record)'
-  summary: '[SUPERSEDED 2026-08-05 -- RATIFIED as READING A with sub-decision A-ii = RE-TYPE;
-    the spec half is DECIDED and the status is now `design_substrate_gated` with a spec leg then
-    an impl leg owed. Every ''the spec half REMAINS, so the row stays registered_finding'' statement
+  status: open
+  pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record) + #1245 (the SPEC leg -- Memory spec v1.3 + Memory plan v1.3, both clearance markers)'
+  summary: '[CURRENT STATE 2026-08-06 -- RATIFIED as READING A with sub-decision A-ii = RE-TYPE, and
+    the SPEC LEG HAS LANDED (PR #1245: Memory spec v1.3 + Memory plan v1.3, both clearance markers).
+    `status: open`. THE ONLY THING OWED IS THE IMPL LEG, carried by plan unit U-MEM-28 -- do NOT
+    schedule the spec leg again. This bracket REPLACES the 2026-08-05 one that said the status was
+    `design_substrate_gated` with a spec leg then an impl leg owed; that reading is superseded, not
+    merely appended to. Every ''the spec half REMAINS, so the row stays registered_finding'' statement
     below is the pre-ratification record, kept as history.] Surfaced by the merge-gate lens-2
     sweep on the B-84 arc (2026-07-28); PRE-EXISTING and latent, orthogonal to B-84 but made visible
     by it. `classify_memory_failure` (`harness-is/src/harness_is/memory_observability.py:150-163`
@@ -3335,7 +3338,42 @@ items:
     comment at test_memory_observability.py claiming the declaration beat a message that trips
     an earlier heuristic was fixed by making the message genuinely trip rule 2 (path traversal),
     so the row is a real conflict rather than a residual-agreement.'
-  close_out: 'RATIFIED 2026-08-05 as READING A, with sub-decision A-ii = RE-TYPE. Operator AskUserQuestion
+  close_out: 'SPEC LEG LANDED 2026-08-06 -- `Spec_Memory_Substrate_v1.md` v1.2 -> v1.3 (C-MEM-19 gains
+    the seventh member `input_validation_failure`, the NEW `### Input validation failure` subsection
+    carrying the A-ii type boundary + the coverage statement + the re-typed sites'' fail-fast retry
+    disposition, and two appended invariants) AND `Implementation_Plan_Memory_Substrate_v1.md`
+    v1.2 -> v1.3 (U-MEM-22 acceptance extended to seven values; NEW U-MEM-28 at G8 decomposing the
+    impl leg). Both clearance markers filed. STATUS `design_substrate_gated` -> `open` per the status
+    enum at this file''s head: a filed fork does not flip the status -- only ratified + applied spec
+    deltas plus the corresponding Phase-6 plan deltas open the row for code, and both landed at this
+    PR. WHAT REMAINS IS THE IMPL LEG (U-MEM-28), not any design gate. Two drifts against the
+    ratification text are RECORDED at the spec change-note rather than absorbed: the classify-routed
+    population is FIVE production call sites at HEAD 3a1300eb (not four -- PR #1243''s B-84 validate
+    pre-pass added `memory_tool_executor.py:355`, and it SATISFIES the ratification''s mandatory
+    C-MEM-19 preservation clause as built), and every `lifecycle/llm_dispatch.py` offset in the six/two
+    A-ii enumeration has shifted (six internal-fault sites now `:4359`/`:4363`/`:4475`/`:4483`/`:4977`/`:4988`;
+    the two RETAINED model-supplied-`scope_ref` sites now `:4369`/`:4371`) -- re-resolved BY CONTENT,
+    and the six/two split itself is unchanged. One judgement call is recorded as overturnable at the
+    plan change-note: the fork''s "no new unit" line predates A-ii''s ratified scope, so the vocabulary
+    half stayed an AC amendment as prescribed while the A-ii half took NEW U-MEM-28, which no landed
+    unit owned. A SEVENTH RE-TYPING WAS PROPOSED AND WITHDRAWN: `_prepare`''s executor-side exhaustiveness
+    fall-through (`memory_tool_executor.py:373`) raises the input-error type for a HARNESS-INTERNAL fault
+    that spec v1.3''s type-boundary rule forbids, at a site the fork never surveyed because it surveyed
+    `llm_dispatch.py` only. The spec leg initially required it; out-of-family round 8 objected that a spec
+    leg APPLIES ratified fixes and may not widen a ratified six-site enumeration on its own reading, and
+    the objection was ACCEPTED -- the obligation is removed and the finding carried, with its consequence
+    stated: at U-MEM-28''s close, C-MEM-19''s type-boundary invariant has ONE KNOWN NON-CONFORMANT SITE,
+    recorded and unrepaired. THAT FINDING IS NOW OWNED BY ITS OWN ROW, `B-114`, so it survives this row''s
+    close at U-MEM-28 rather than disappearing with it (out-of-family round 9 [P1]); `B-114` carries the
+    grounding pass, the conformance-repair-vs-ratified-extension discriminator, and the repair recipe.
+    ONE FINDING CARRIED FORWARD, recorded not repaired (out-of-family review round 1 [P1]): the
+    same model-supplied `scope_ref` MISMATCH is refused as a DENIAL at the executor (`memory_tool_executor.py:794-800`,
+    one of the four sites this row''s own impl half re-classified to `policy_denial`) and as an INPUT ERROR
+    at the dispatch prepare layer (`lifecycle/llm_dispatch.py:4371`, retained by ratified name), so one logical
+    failure carries two classes. It is INERT today (the prepare path emits no `memory.failure_class`) and NEITHER
+    side is movable at a spec leg (the executor class is a landed decision; the dispatch retention is ratified
+    operator text). It belongs to whichever arc closes the dispatch-side coverage gap, which is when it becomes
+    observable. RATIFIED 2026-08-05 as READING A, with sub-decision A-ii = RE-TYPE. Operator AskUserQuestion
     on the fork''s section 8 (`.harness/class_2_fork_b88_memory_failure_input_validation_class.md`).
     WHAT IS RATIFIED: C-MEM-19 gains `input_validation_failure` as a SEVENTH failure class (the
     stated fallback name `input_error` is NOT taken), plus the BOUNDARY INVARIANT distinguishing
@@ -3399,7 +3437,7 @@ items:
     v1.2 -> v1.3 by a dedicated spec-writer AND `Implementation_Plan_Memory_Substrate_v1.md` v1.2
     -> v1.3 (U-MEM-22 :829 extended, NO new unit), with BOTH clearance markers per root CLAUDE.md
     section 4.5 -- and then the IMPL leg (1 enum member + 1 declaration flip + 1 docstring rewrite
-    + 1 fixture re-key; 8 witness rows flip + 2 added negative rows + the mutation probe; PLUS
+    + 1 fixture re-key; 8 witness rows flip + 2 added negative rows + the mutation probes; PLUS
     the A-ii source re-typing at the SIX llm_dispatch.py internal-fault sites, and a reachability
     witness SCOPED TO THE CLASSIFY-ROUTED POPULATION -- the dispatch prepare path is out of that
     scope per the coverage narrowing above). RETRY-EXIT-CLASS CONSEQUENCE OF THE RE-TYPE, surfaced
@@ -3464,7 +3502,7 @@ items:
     see the drift-repair list above), so step (2) -- the input-validation class, a Class 1 C-MEM-19
     vocabulary amendment -- remained the sole open half UNTIL THE 2026-08-05 RATIFICATION, which
     DECIDED it as Reading A + A-ii (see the ratification paragraph at the head of this close_out);
-    what remains is the SPEC LEG that writes the decision, not the decision. SPEC-HALF FORK FILED
+    the SPEC LEG that writes the decision LANDED 2026-08-06 at PR #1245 (see the close_out lead paragraph), so what remains is the IMPL LEG at U-MEM-28, not the decision and not the spec text. SPEC-HALF FORK FILED
     2026-08-05 at `.harness/class_2_fork_b88_memory_failure_input_validation_class.md` -- readings
     A (add a seventh member `input_validation_failure`, RECOMMENDED) / B (bless the `provider_adapter_failure`
     stopgap in contract text) / C (defer under a D-0..D-3 demand test); recommendation A, runner-up
@@ -3482,7 +3520,7 @@ items:
     A dyadic C7/C8 x memory-contract-owner convening is owed ONLY if the operator selects Reading
     B (blessing the stopgap in contract text is a real observability-vs-contract tension). Steps
     (1)/(3) unchanged: mechanical once (2) is settled.'
-  heading: '### B-88 · Memory failure telemetry: substring-keyed `classify_memory_failure` collapses the typed input-error family — and two real policy denials — to `io_failure` *(surfaced by the merge-gate lens-2 sweep on the B-84 arc, 2026-07-28)* *(**RATIFIED 2026-08-05 as READING A, sub-decision A-ii = RE-TYPE**; spec leg + impl leg owed)*'
+  heading: '### B-88 · Memory failure telemetry: substring-keyed `classify_memory_failure` collapses the typed input-error family — and two real policy denials — to `io_failure` *(surfaced by the merge-gate lens-2 sweep on the B-84 arc, 2026-07-28)* *(**RATIFIED 2026-08-05 as READING A, sub-decision A-ii = RE-TYPE**; SPEC LEG LANDED 2026-08-06 at PR #1245 -- only the IMPL LEG (U-MEM-28) is owed)*'
 - id: B-89
   title: 'Memory-scope producer asymmetry: capture stamps raw provider KEYS while retrieval requests carry family VALUES'
   status: closed
@@ -5069,3 +5107,57 @@ items:
   close_out: '(1) Determine WHICH platforms CPython actually emulates `flock` via `fcntl()` on -- the `configure` probe is `HAVE_FLOCK`, so the answer is a build-time fact about the target, not a runtime one. If no target the workspace supports lacks native `flock`, this row closes as UNREACHABLE rather than fixed. (2) If a target does: merge each of the three arms'' `except BlockingIOError` into a single `except OSError` that dispatches on errno -- contention errnos take the ABBA release-and-wait path, `ENOTSUP` keeps its yield-unguarded arm, everything else re-raises. The three arms are `cross_process_write_lock`, `cross_process_replace_lock` and `cross_process_read_lock` in `harness-is/src/harness_is/cross_process_ledger_lock.py`. (3) Witness by INJECTION, as the B-93 helper''s own EACCES witness does -- a real emulated-`flock` platform is not available, and pretending otherwise is the unwitnessable-claim failure `B-45` exists to avoid. (4) NOTE THE COUPLING TO `B-45`: if a Windows backend is ever built, the same errno-vs-class question recurs there (`msvcrt.LK_NBLCK` raises `OSError`, not `BlockingIOError`), so these two rows should be read together at that point.'
   council: 'No. An implementation-level errno classification inside an already-cleared lock mechanism (C-IS-09 section 9.4 defers the mechanism), with no cross-domain tension to name. The only judgement is the platform-reachability question at close-out step (1), which is a fact to establish rather than a value to trade.'
   heading: '### B-113 · The three ABBA contention probes classify contention by EXCEPTION CLASS, so an emulated-`flock` platform would leave three of the nine acquisition sites unbounded *(surfaced by out-of-family review rounds 8 and 10 on the B-93 build leg, 2026-08-06; DECLINED AT THE LEG, registered)*'
+- id: B-114
+  title: '`_prepare`''s executor-side exhaustiveness fall-through raises the memory-tool input-error
+    type for a harness-internal fault, violating the C-MEM-19 type-boundary invariant introduced at
+    Memory spec v1.3'
+  status: registered_finding
+  pr: '#1245 (the B-88 spec leg, where the finding was surfaced and its repair withdrawn)'
+  summary: 'Surfaced by out-of-family Codex round 3 on the B-88 spec leg (2026-08-06) and re-scoped
+    at rounds 7 and 8. `StandardMemoryToolExecutor._prepare` (`harness-runtime/src/harness_runtime/memory_tool_executor.py:359-373`)
+    ends with `raise MemoryToolExecutionInputError(f"unsupported memory tool {tool_name!s}")` at `:373`.
+    But `MemoryToolExecutionRequest.tool_name` is typed `MemoryToolName` (`:205-212`, the field at `:210`)
+    on an `extra="forbid"` model, so a request that reaches `_prepare` ALWAYS carries a valid enum member
+    and that branch fires only when the executor lacks a `_prepare_*` for one -- a HARNESS-INTERNAL
+    EXHAUSTIVENESS fault, not a caller- or model-supplied argument. `Spec_Memory_Substrate_v1.md` v1.3
+    C-MEM-19 (`### Input validation failure`, plus the appended type-boundary invariant) states that where
+    an implementation keys the failure class on the raised exception type, the type carrying
+    `input_validation_failure` is raised ONLY for argument refusals and a harness-internal fault is not
+    raised as that type. Once U-MEM-28 flips `MemoryToolExecutionInputError` to the new class, THIS SITE
+    BECOMES A KNOWN NON-CONFORMANCE with a cleared contract. It is latent rather than harmful: an operator
+    triaging `input_validation_failure` would see one entry that is really an internal wiring fault, and
+    the branch is defensive (unreachable while every enum member has a `_prepare_*`).'
+  close_out: 'WHY IT IS A SEPARATE ROW RATHER THAN U-MEM-28 WORK -- authority, not merit. The B-88 spec
+    leg initially required this seventh re-typing alongside the ratified six in `lifecycle/llm_dispatch.py`.
+    Out-of-family round 8 objected that the operator ratified an A-ii site list of EXACTLY SIX, that a
+    spec leg APPLIES operator-decided fixes rather than deciding them, and that recording a contradiction
+    does not authorize it; the objection was ACCEPTED and the obligation removed (fork §11.6 item 4;
+    plan v1.3 change-note; U-MEM-28 Out-of-scope). Round 9 then observed that a finding carried only on
+    `B-88`''s close-out would VANISH from open work when that row closes at U-MEM-28 -- hence this row,
+    which OWNS the question and outlives `B-88`. CLOSE-OUT STEPS. (1) GROUND FIRST at the then-current
+    HEAD: re-read `_prepare` and `MemoryToolExecutionRequest.tool_name`; if either has changed such that
+    the branch is reachable from caller-supplied input, the site is CONFORMANT as it stands and this row
+    closes with that finding recorded -- no code change owed. (2) If it is still internal, decide the
+    DISPOSITION, and the discriminator is whether this needs an operator gate at all: (a) plain conformance
+    repair against a CLEARED contract -- the C-MEM-19 type-boundary rule is already ratified spec text and
+    the executor site was NEVER BEFORE THE OPERATOR (the B-88 fork surveyed `lifecycle/llm_dispatch.py`
+    only), so extending nothing the operator decided, this is impl work under the cleared floor; or
+    (b) a genuine extension of the ratified A-ii enumeration, needing a Class 2 fork + operator
+    ratification. Reading (a) is the STRONGER one on the grounding above and is where a grounding pass
+    should start, but the B-88 leg deliberately did NOT take it on its own authority and this row does not
+    pre-decide it. (3) If repaired: re-type `:373` to a type outside the input-error family declaring the
+    residual -- the SAME receiving-type constraints U-MEM-28 fixes for the six dispatch sites (not a
+    subclass of `MemoryToolExecutionInputError`; not the family base itself, since `isinstance` is
+    subclass-inclusive and admitting the base to `_classify_provider_exception`''s fail-fast tuple would
+    silently fail-fast the DENIED and STORE subtypes that deliberately stay retryable) -- and witness BOTH
+    halves per the same discipline: the emitted `memory.failure_class` AND `_classify_provider_exception`
+    returning `None`, since telemetry alone cannot see a base-raise regression. The
+    `test_memory_failure_classification.py` row carrying the "unsupported memory tool" message re-keys with
+    it. (4) DEPENDS ON U-MEM-28 having landed: before the flip, `MemoryToolExecutionInputError` still
+    declares `provider_adapter_failure` and this site is conformant, so the row is not actionable earlier.'
+  council: 'No. There is no nameable cross-domain tension: the contract rule is already ratified, the
+    blast radius is one defensive branch and one witness row, and the only open judgement is the
+    conformance-repair-vs-ratified-extension discriminator at close-out step (2), which is a governance
+    reading to be resolved by grounding rather than a design fork between substantive alternatives.
+    Escalates to a Class 2 fork ONLY if step (2) resolves to reading (b).'
+  heading: '### B-114 · `_prepare`''s executor-side exhaustiveness fall-through raises the memory-tool INPUT-error type for a harness-internal fault, violating the C-MEM-19 type-boundary invariant v1.3 introduced *(surfaced at the B-88 spec leg, out-of-family Codex rounds 3/7/8, 2026-08-06; the re-typing was PROPOSED and WITHDRAWN there on authority grounds, registered)*'
