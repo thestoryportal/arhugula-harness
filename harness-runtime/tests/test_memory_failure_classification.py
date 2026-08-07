@@ -19,7 +19,9 @@ message rule happened to fire - so four genuine policy denials were reported
 as IO failures, violating the C-MEM-19 Invariants distinguish rule ("Failure
 telemetry must distinguish policy denial, path violation, IO failure,
 serialization failure, provider adapter failure, and retrieval empty-result")
-on an axis the vocabulary already has.
+on an axis the vocabulary already has. That quotation is the invariant AS IT
+STOOD THEN; Memory spec v1.3 (U-MEM-28) inserts `input validation failure` into
+the same list, and the eight `MemoryToolExecutionInputError` rows below carry it.
 
 Mutation probes for this table are recorded in the B-88 register row.
 """
@@ -52,6 +54,7 @@ _POLICY_DENIAL = MemoryTelemetryFailureClass.POLICY_DENIAL
 _PATH_VIOLATION = MemoryTelemetryFailureClass.PATH_VIOLATION
 _IO_FAILURE = MemoryTelemetryFailureClass.IO_FAILURE
 _PROVIDER_ADAPTER = MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
+_INPUT_VALIDATION = MemoryTelemetryFailureClass.INPUT_VALIDATION_FAILURE
 
 
 @pytest.mark.parametrize(
@@ -82,35 +85,48 @@ _PROVIDER_ADAPTER = MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
             MemoryToolExecutionDeniedError("memory tool scope_ref does not match context"),
             _POLICY_DENIAL,
         ),
-        # --- MemoryToolExecutionInputError: the least-wrong stopgap ---------
-        # The C-MEM-19 vocabulary has no input-validation class; these were all
-        # io_failure before B-88 (except the policy_ref wording, which was
-        # policy_denial - a malformed argument asserting a policy decision no
-        # resolver made). Flip site when the spec-side class lands.
-        (MemoryToolExecutionInputError("unsupported memory tool search"), _PROVIDER_ADAPTER),
+        # --- MemoryToolExecutionInputError: input_validation_failure --------
+        # U-MEM-28. These eight rows carried the LEAST-WRONG STOPGAP
+        # `provider_adapter_failure` from the B-88 impl half (and io_failure
+        # before it, except the policy_ref wording, which was policy_denial - a
+        # malformed argument asserting a policy decision no resolver made),
+        # because the C-MEM-19 vocabulary had no input-validation class. Memory
+        # spec v1.3 adds `input_validation_failure` as the seventh member and
+        # this type is the single declaration flip site, so exactly these eight
+        # rows move and the other 31 do not.
+        #
+        # The first row's raise site is `_prepare`'s executor-side
+        # exhaustiveness fall-through, which is a HARNESS-INTERNAL fault that
+        # C-MEM-19 v1.3's type boundary says should not carry this type. It is
+        # deliberately NOT re-typed here - the operator ratified an A-ii site
+        # list of exactly six, all in `lifecycle/llm_dispatch.py` - so the site
+        # keeps the input type and its row flips with the rest. That known
+        # non-conformance is owned by register row `B-114`, and this row
+        # re-keys when it is repaired.
+        (MemoryToolExecutionInputError("unsupported memory tool search"), _INPUT_VALIDATION),
         (
             MemoryToolExecutionInputError("memory tool argument 'query' must be a string"),
-            _PROVIDER_ADAPTER,
+            _INPUT_VALIDATION,
         ),
         (
             MemoryToolExecutionInputError("memory tool argument 'policy_ref' must be a string"),
-            _PROVIDER_ADAPTER,
+            _INPUT_VALIDATION,
         ),
         (
             MemoryToolExecutionInputError("memory tool argument 'limit' must be >= 1"),
-            _PROVIDER_ADAPTER,
+            _INPUT_VALIDATION,
         ),
-        (MemoryToolExecutionInputError("allowed_kinds must be a sequence"), _PROVIDER_ADAPTER),
+        (MemoryToolExecutionInputError("allowed_kinds must be a sequence"), _INPUT_VALIDATION),
         (
             MemoryToolExecutionInputError(
                 "unsupported allowed_kinds entry 'nope'; accepted kinds: episodic, semantic"
             ),
-            _PROVIDER_ADAPTER,
+            _INPUT_VALIDATION,
         ),
-        (MemoryToolExecutionInputError("invalid memory_ref mem-1"), _PROVIDER_ADAPTER),
+        (MemoryToolExecutionInputError("invalid memory_ref mem-1"), _INPUT_VALIDATION),
         (
             MemoryToolExecutionInputError("unsupported promotion target_kind 'nope'"),
-            _PROVIDER_ADAPTER,
+            _INPUT_VALIDATION,
         ),
         # --- MemoryToolExecutionStoreError: the durable-write failure -------
         # Round 2. `_write_note` raises this whenever the capture API returns

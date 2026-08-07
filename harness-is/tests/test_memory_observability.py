@@ -50,7 +50,30 @@ class _OverridingSubclassError(_DeclaredDenialError):
 
 
 class _BogusDeclarationError(Exception):
-    """Declares a non-member value - must be ignored, not emitted."""
+    """Declares a non-member value - must be ignored, not emitted.
+
+    U-MEM-28 re-key. The literal used to be `"input_validation_failure"`, which
+    was a genuine non-member when the C-MEM-19 vocabulary had six values. Memory
+    spec v1.3 makes it a REAL member's value, so this fixture would have named a
+    member while intending a non-member. It is re-keyed to a literal that is
+    non-member on BOTH counts (not an enum member, not any member's value), and
+    the type-gate half moved to `_NonMemberTypeDeclarationError` below.
+    """
+
+    memory_failure_class: ClassVar[str] = "definitely_not_a_failure_class"
+
+
+class _NonMemberTypeDeclarationError(Exception):
+    """Declares a REAL member's VALUE as a plain `str` - still must be ignored.
+
+    U-MEM-28. `_declared_failure_class` gates on
+    `isinstance(declared, MemoryTelemetryFailureClass)`, NOT on membership, so
+    this fixture pins the TYPE gate independently of the vocabulary: a plain
+    `str` that happens to equal a member's value is not an instance of the
+    `StrEnum` subclass and is ignored. Without it the gate would be witnessed
+    only by a literal that is non-member on both counts, and a membership check
+    would satisfy the suite while the type check rotted.
+    """
 
     memory_failure_class: ClassVar[str] = "input_validation_failure"
 
@@ -79,10 +102,21 @@ def test_declaration_attribute_name_is_the_documented_one() -> None:
             _OverridingSubclassError("anything"),
             MemoryTelemetryFailureClass.SERIALIZATION_FAILURE,
         ),
-        # A non-member declaration is ignored: the closed C-MEM-19 vocabulary
-        # cannot be widened by an attribute, so this falls to the residual.
+        # (b1) A non-member declaration is ignored: the closed C-MEM-19
+        # vocabulary cannot be widened by an attribute, so this falls to the
+        # residual. The literal is non-member on BOTH counts - not an enum
+        # member, and not any member's value.
         (
             _BogusDeclarationError("malformed argument"),
+            MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE,
+        ),
+        # (b2) U-MEM-28. The DISTINCT second gate: a plain `str` carrying a REAL
+        # member's value is still ignored, because `_declared_failure_class`
+        # tests `isinstance(..., MemoryTelemetryFailureClass)` and a `str` is not
+        # an instance of the `StrEnum` subclass. b1 must NOT name a real member's
+        # value and b2 MUST - one fixture cannot serve both gates.
+        (
+            _NonMemberTypeDeclarationError("malformed argument"),
             MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE,
         ),
     ],
@@ -153,12 +187,35 @@ def test_residual_heuristics_for_undeclared_types(
     assert classify_memory_failure(exc) is expected
 
 
+def test_c_mem_19_failure_vocabulary_is_exactly_the_seven_spec_values() -> None:
+    """U-MEM-28 - the seventh member is ADDITIVE, and nothing else moved.
+
+    `Spec_Memory_Substrate_v1.md` v1.3 C-MEM-19 Invariants: "Failure telemetry
+    must distinguish policy denial, path violation, IO failure, serialization
+    failure, provider adapter failure, input validation failure, and retrieval
+    empty-result". Pinned as an ordered value tuple rather than a count, so a
+    rename or a re-valuing of any of the pre-existing six fails here instead of
+    passing a size check.
+    """
+
+    assert tuple(member.value for member in MemoryTelemetryFailureClass) == (
+        "policy_denial",
+        "path_violation",
+        "io_failure",
+        "serialization_failure",
+        "provider_adapter_failure",
+        "input_validation_failure",
+        "retrieval_empty_result",
+    )
+
+
 def test_every_returned_class_is_a_closed_vocabulary_member() -> None:
-    """The classifier is total into the closed six-value C-MEM-19 vocabulary."""
+    """The classifier is total into the closed seven-value C-MEM-19 vocabulary."""
 
     samples: list[BaseException] = [
         _DeclaredDenialError("x"),
         _BogusDeclarationError("x"),
+        _NonMemberTypeDeclarationError("x"),
         OSError("x"),
         RuntimeError("x"),
         RuntimeError("denied"),

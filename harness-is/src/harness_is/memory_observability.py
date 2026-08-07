@@ -38,6 +38,7 @@ class MemoryTelemetryFailureClass(StrEnum):
     IO_FAILURE = "io_failure"
     SERIALIZATION_FAILURE = "serialization_failure"
     PROVIDER_ADAPTER_FAILURE = "provider_adapter_failure"
+    INPUT_VALIDATION_FAILURE = "input_validation_failure"
     RETRIEVAL_EMPTY_RESULT = "retrieval_empty_result"
 
 

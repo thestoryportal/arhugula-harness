@@ -135,6 +135,7 @@ from harness_runtime.memory_scope_family import canonical_scope_family
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionContext,
     MemoryToolExecutionInputError,
+    MemoryToolExecutionInternalError,
     MemoryToolExecutionRequest,
 )
 
@@ -3941,7 +3942,10 @@ class _PreparedMemoryToolCall:
     ``_classify_provider_exception`` (`retry_breaker_fallback.py`) maps every
     exception other than ``LLMDispatchProviderUnreachableError`` /
     ``LLMDispatchPayloadShapeError`` / ``MemoryToolExecutionInputError``
-    (fail-fast since B-84) / 401-403 to ``TRANSIENT_RETRY``, so
+    (fail-fast since B-84) / ``MemoryToolExecutionInternalError`` (fail-fast
+    since U-MEM-28, which re-typed the harness-internal dispatch faults off the
+    input type and had to re-admit them here to PRESERVE that disposition) /
+    401-403 to ``TRANSIENT_RETRY``, so
     ``RetryBreakerFallbackDispatcher`` re-runs the whole dispatch from the top
     and the already-committed call executes a second time.
 
@@ -4355,12 +4359,18 @@ def _standard_memory_tool_context(
     provider: str,
     model: str,
 ) -> MemoryToolExecutionContext:
+    # U-MEM-28 / B-88 A-ii. The next two checks read the HARNESS's OWN context
+    # object, so they are harness-internal faults and NOT argument refusals: per
+    # the C-MEM-19 v1.3 type boundary they must not raise the type that carries
+    # `input_validation_failure`. The two checks BELOW are the opposite case —
+    # they validate the MODEL-supplied `scope_ref` argument and deliberately KEEP
+    # `MemoryToolExecutionInputError`, which is what the new class exists for.
     if memory_context.record_scope is None:
-        raise MemoryToolExecutionInputError(
+        raise MemoryToolExecutionInternalError(
             "standard memory tool dispatch requires RuntimeMemoryContext.record_scope"
         )
     if memory_context.scope_ref is None:
-        raise MemoryToolExecutionInputError(
+        raise MemoryToolExecutionInternalError(
             "standard memory tool dispatch requires RuntimeMemoryContext.scope_ref"
         )
     if tool_name in _MEMORY_TOOLS_DECLARING_SCOPE_REF:
@@ -4471,8 +4481,12 @@ def _openai_tools_with_standard_memory(
 
 
 def _openai_standard_memory_tools(memory_context: RuntimeMemoryContext) -> list[dict[str, Any]]:
+    # U-MEM-28 / B-88 A-ii — both raises below are harness-internal faults (the
+    # harness's own context object, the harness's own `MEMORY_TOOL_CONTRACTS`
+    # schema table), never a caller- or model-supplied argument, so the C-MEM-19
+    # v1.3 type boundary forbids raising them as the input-validation type.
     if memory_context.scope_ref is None:
-        raise MemoryToolExecutionInputError(
+        raise MemoryToolExecutionInternalError(
             "standard memory tool schema injection requires RuntimeMemoryContext.scope_ref"
         )
     tools: list[dict[str, Any]] = []
@@ -4480,7 +4494,7 @@ def _openai_standard_memory_tools(memory_context: RuntimeMemoryContext) -> list[
         parameters: dict[str, object] = deepcopy(entry.contract.input_schema)
         properties = parameters.get("properties")
         if not isinstance(properties, dict):
-            raise MemoryToolExecutionInputError("memory tool input schema properties missing")
+            raise MemoryToolExecutionInternalError("memory tool input schema properties missing")
         schema_properties = cast("dict[str, object]", properties)
         _bind_schema_fixed_value(schema_properties, "scope_ref", memory_context.scope_ref)
         _bind_schema_fixed_value(schema_properties, "policy_ref", memory_context.policy_ref)
@@ -4973,8 +4987,10 @@ def _ollama_tools_with_standard_memory(
 
 
 def _ollama_standard_memory_tools(memory_context: RuntimeMemoryContext) -> list[dict[str, Any]]:
+    # U-MEM-28 / B-88 A-ii — the OpenAI arm's rationale applies verbatim: both
+    # raises below are harness-internal faults, not argument refusals.
     if memory_context.scope_ref is None:
-        raise MemoryToolExecutionInputError(
+        raise MemoryToolExecutionInternalError(
             "standard memory tool schema injection requires RuntimeMemoryContext.scope_ref"
         )
     tools: list[dict[str, Any]] = []
@@ -4985,7 +5001,7 @@ def _ollama_standard_memory_tools(memory_context: RuntimeMemoryContext) -> list[
         parameters: dict[str, object] = deepcopy(entry.contract.input_schema)
         properties = parameters.get("properties")
         if not isinstance(properties, dict):
-            raise MemoryToolExecutionInputError("memory tool input schema properties missing")
+            raise MemoryToolExecutionInternalError("memory tool input schema properties missing")
         schema_properties = cast("dict[str, object]", properties)
         _bind_schema_fixed_value(schema_properties, "scope_ref", memory_context.scope_ref)
         _bind_schema_fixed_value(schema_properties, "policy_ref", memory_context.policy_ref)
