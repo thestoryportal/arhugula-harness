@@ -1102,12 +1102,61 @@ class ProtectedResultStore:
                 oldest_orphan_age = tmp_age
             if tmp_age > self._ttl_seconds:
                 provisional_tmp.append(tmp_entry_path)
+        # U-RT-151 / `B-111` — the record's OWN publication-temp leftovers.
+        # This pass is NOT candidate enumeration: nothing collected here is
+        # counted, aged, gauged, reported or reclaimed as ciphertext (the
+        # `.tmp-*` PAYLOAD class above is untouched, and neither sweep glob
+        # widens). It is collected solely to be handed to the record's own
+        # publication path, which removes it after its `os.replace` — the ONLY
+        # removal channel U-RT-150 AC #15's v2.59 qualifier opens.
+        #
+        # THE ENUMERATION LIVES HERE, UNLOCKED, DELIBERATELY: the publication
+        # runs inside the combined lock opened below, where a root `glob` is
+        # O(total files in the root) — precisely the cost `B-75` moved OFF the
+        # lock, and precisely what `_publish_observation_record`'s own docstring
+        # justification for holding the lock across its write denies doing. Only
+        # a bounded unlink loop over this pre-collected list runs under the lock,
+        # and it is ZERO-length in steady state.
+        #
+        # PAST-TTL AGE GATE, on the store's own `ttl_seconds` (the same constant
+        # the re-verify below consumes — no new configuration key): a LIVE
+        # co-resident publication's in-flight temporary is seconds old and can
+        # never be selected, which is what bounds the Windows exposure
+        # (`_cross_process_lock` is a documented NO-OP there) to exactly the
+        # pre-existing `B-45` shape the `.tmp-*` re-verify already carries. This
+        # sweep's OWN in-flight temporary is created by the `mkstemp` inside
+        # `_publish_observation_record` — AFTER this pass — so it cannot appear
+        # in this list BY CONSTRUCTION.
+        stale_publication_temps: list[str] = []
+        for publication_temp_path in self._root.glob(f"{_GC_OBSERVATION_RECORD_TEMP_PREFIX}*"):
+            try:
+                publication_temp_mtime = publication_temp_path.stat().st_mtime
+            except OSError:
+                continue
+            if current_time - publication_temp_mtime > self._ttl_seconds:
+                stale_publication_temps.append(str(publication_temp_path))
         gauge = CandidateAgeGauge(
             oldest_entry_age_seconds=oldest_entry_age,
             oldest_orphan_age_seconds=oldest_orphan_age,
         )
         verified_entries: list[tuple[Path, float]] = []
-        verified_tmp: list[tuple[Path, float]] = []
+        # `B-110` mechanism (c): the identity a `.tmp-*` removal is decided on is
+        # captured HERE, at selection, as the `(st_dev, st_ino, st_mtime)` triple
+        # — and re-verified under the SAME lock hold immediately before the
+        # unlink below. A bare re-`stat()` is insufficient (POSIX offers no
+        # compare-inode-and-unlink primitive), which is why the comparison must
+        # be made under the lock the unlink itself takes.
+        verified_tmp: list[tuple[Path, float, tuple[int, int, float]]] = []
+
+        def _eligible(name: str, observations: Mapping[str, float]) -> bool:
+            # Term 1's conjunct (b). Conjunct (a) is already established for
+            # everything in `verified_*`; both must hold and there is no other
+            # path to this predicate.
+            first_observed_at = observations.get(name)
+            if first_observed_at is None:
+                return False
+            return current_time - first_observed_at > self._ttl_seconds
+
         with self._publish_lock, self._cross_process_lock():
             for entry_path in provisional_entries:
                 try:
@@ -1118,33 +1167,72 @@ class ProtectedResultStore:
                     verified_entries.append((entry_path, written_at))
             for tmp_entry_path in provisional_tmp:
                 try:
-                    tmp_mtime = tmp_entry_path.stat().st_mtime
+                    tmp_stat = tmp_entry_path.stat()
                 except OSError:
                     continue
+                tmp_mtime = tmp_stat.st_mtime
                 if current_time - tmp_mtime > self._ttl_seconds:
-                    verified_tmp.append((tmp_entry_path, tmp_mtime))
+                    verified_tmp.append(
+                        (tmp_entry_path, tmp_mtime, (tmp_stat.st_dev, tmp_stat.st_ino, tmp_mtime))
+                    )
             # Durable elapsed-time grace (`B-96` term 3): the wall-clock
             # sample happens HERE — after every candidate's existence has been
             # re-verified, still under the lock — never at the pre-enumeration
             # `now` read above.
             record, observations = self._observe_candidates(
                 [path.name for path, _ in verified_entries]
-                + [path.name for path, _ in verified_tmp],
+                + [path.name for path, _, _ in verified_tmp],
                 observed_at=observed_at,
                 gauge=gauge,
+                stale_publication_temps=stale_publication_temps,
             )
+            # `B-110` mechanism (c), taken here per its standing opportunistic
+            # trigger: the `.tmp-*` removals run UNDER the same lock hold that
+            # selected them, not off-lock. `B-75`'s off-lock rationale does not
+            # bind them — they perform no decrypt and no unbounded work — while
+            # off-lock they let a SECOND concurrent sweep's stale path unlink a
+            # replacement file a publisher was handed at the just-freed name,
+            # bypassing `_publish_atomic`'s whole-lifetime lock hold and losing a
+            # completed paid effect's recovery record. The identity captured at
+            # selection is re-verified immediately before each unlink.
+            for tmp_entry_path, tmp_mtime, selected_identity in verified_tmp:
+                if not _eligible(tmp_entry_path.name, observations):
+                    continue
+                try:
+                    current_stat = tmp_entry_path.stat()
+                except OSError:
+                    continue
+                if (
+                    current_stat.st_dev,
+                    current_stat.st_ino,
+                    current_stat.st_mtime,
+                ) != selected_identity:
+                    logger.warning(
+                        "protected result store: crash-orphaned temp-file GC skipped — the "
+                        "name now refers to a DIFFERENT file than the one selected (%s)",
+                        tmp_entry_path.name,
+                    )
+                    continue
+                try:
+                    tmp_entry_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.error(
+                        "protected result store: crash-orphaned temp-file GC unlink failed "
+                        "(%s): %s",
+                        tmp_entry_path.name,
+                        exc,
+                    )
+                    continue
+                logger.warning(
+                    "protected result store: crash-orphaned temp-file GC'd "
+                    "(%s, age_s=%.1f, reclaim_term=%s, %s)",
+                    tmp_entry_path.name,
+                    current_time - tmp_mtime,
+                    _later_reclaim_term(tmp_mtime, observations[tmp_entry_path.name]),
+                    gauge.render(),
+                )
 
-        def _eligible(candidate: tuple[Path, float]) -> bool:
-            # Term 1's conjunct (b). Conjunct (a) is already established for
-            # everything in `verified_*`; both must hold and there is no other
-            # path to this predicate.
-            first_observed_at = observations.get(candidate[0].name)
-            if first_observed_at is None:
-                return False
-            return current_time - first_observed_at > self._ttl_seconds
-
-        entry_candidates = [c for c in verified_entries if _eligible(c)]
-        tmp_candidates = [c for c in verified_tmp if _eligible(c)]
+        entry_candidates = [c for c in verified_entries if _eligible(c[0].name, observations)]
         self._report_record_loss_if_any(
             record_state=record,
             past_ttl_entry_count=len(verified_entries),
@@ -1152,8 +1240,9 @@ class ProtectedResultStore:
             gauge=gauge,
         )
         # Phase 2 — outside the lock: decrypt (best-effort, logging only)
-        # and the actual unlinks. See the round-7 comment above for why
-        # this is safe unlocked.
+        # and the ENTRY unlinks. See the round-7 comment above for why
+        # this is safe unlocked. (The `.tmp-*` unlinks are NOT here: `B-110`
+        # mechanism (c) moved them under the selecting lock hold above.)
         for entry_path, written_at in entry_candidates:
             tenant_tag: str | None = None
             try:
@@ -1196,24 +1285,6 @@ class ProtectedResultStore:
                 _later_reclaim_term(written_at, observations[entry_path.name]),
                 gauge.render(),
             )
-        for tmp_entry_path, tmp_mtime in tmp_candidates:
-            try:
-                tmp_entry_path.unlink(missing_ok=True)
-            except OSError as exc:
-                logger.error(
-                    "protected result store: crash-orphaned temp-file GC unlink failed (%s): %s",
-                    tmp_entry_path.name,
-                    exc,
-                )
-                continue
-            logger.warning(
-                "protected result store: crash-orphaned temp-file GC'd "
-                "(%s, age_s=%.1f, reclaim_term=%s, %s)",
-                tmp_entry_path.name,
-                current_time - tmp_mtime,
-                _later_reclaim_term(tmp_mtime, observations[tmp_entry_path.name]),
-                gauge.render(),
-            )
         self._last_gc_at = current_time
         return expired
 
@@ -1227,6 +1298,7 @@ class ProtectedResultStore:
         *,
         observed_at: float | None,
         gauge: CandidateAgeGauge,
+        stale_publication_temps: list[str],
     ) -> tuple[GcObservationRecordState, Mapping[str, float]]:
         """Read the durable record, carry it forward over `past_ttl_names`,
         and publish the replacement. Returns the record's READ state and the
@@ -1251,6 +1323,13 @@ class ProtectedResultStore:
         The only timestamp write permitted for an already-recorded name is
         NONE.
 
+        `stale_publication_temps` is threaded through from `gc_sweep`'s UNLOCKED
+        enumeration phase — an explicit parameter rather than `self`-stashed
+        state, so the publication's input is visible at its call site — and is
+        forwarded UNINSPECTED to `_publish_observation_record`. It is not a
+        candidate list: no name in it is counted, aged, gauged, reported or
+        judged against `observations`.
+
         A record-publication failure is reported and the sweep CONTINUES: an
         unpersisted observation means the next sweep re-observes from scratch,
         which can only LENGTHEN retention (term 4's fail-safe direction).
@@ -1266,7 +1345,9 @@ class ProtectedResultStore:
             for name in dict.fromkeys(past_ttl_names)
         }
         try:
-            self._publish_observation_record(updated)
+            self._publish_observation_record(
+                updated, stale_publication_temps=stale_publication_temps
+            )
         except OSError as exc:
             logger.error(
                 "protected result store: GC observation record publication failed "
@@ -1279,7 +1360,9 @@ class ProtectedResultStore:
     def _read_observation_record(self) -> _ObservationRecordRead:
         return _read_observation_record(self._observation_record_path)
 
-    def _publish_observation_record(self, observations: Mapping[str, float]) -> None:
+    def _publish_observation_record(
+        self, observations: Mapping[str, float], *, stale_publication_temps: list[str]
+    ) -> None:
         """Publish the record by temp-write + `fsync` + ATOMIC REPLACE +
         directory `fsync`.
 
@@ -1294,19 +1377,26 @@ class ProtectedResultStore:
         The publication temporary deliberately does NOT use `_publish_atomic`'s
         `.tmp-` payload prefix (see `_GC_OBSERVATION_RECORD_TEMP_PREFIX`).
 
-        **A residual is DECLINED here rather than absorbed, and registered
-        instead (`B-111`).** A process KILLED strictly between `mkstemp` and
-        `os.replace` leaves a `gc-observations.publishing-*` file that nothing
-        removes: it is invisible to both sweep globs by construction, so a
-        repeated crash loop at that window could accumulate. The natural fix —
-        having this method sweep away stale siblings of its own prefix — is
-        FORECLOSED by U-RT-150 **AC #15**, whose mutation probe states that a
-        sweep after a simulated mid-publication crash *"must not enumerate,
-        report or remove it"*, and whose witness asserts exactly that. Changing
-        it here would be absorbing a plan-level contradiction at the impl leg,
-        so it is reported and registered. Reachability is remote — a
-        sub-millisecond window per sweep — and the same order as `B-110`.
-        *(Out-of-family review round 2 [P2], DECLINED with this pin.)*
+        **`B-111` is CLOSED here (U-RT-151).** A process KILLED strictly between
+        `mkstemp` and `os.replace` leaves a `gc-observations.publishing-*` file
+        that is invisible to both sweep globs by construction, so before this
+        unit NO path removed it and a repeated crash loop at that window made an
+        operator's orphan accounting silently under-report. U-RT-150 **AC #15**'s
+        v2.59 qualifier scopes its no-removal clause to the SWEEP's PAYLOAD-orphan
+        accounting path and permits exactly this: the record's OWN publication
+        path removing stale leftovers of its OWN prefix, scoped to that constant
+        BY CONSTRUCTION and under the locks this method already holds. The
+        removal is NOT a sweep act — it enumerates nothing into candidate
+        accounting, and it can reach no file outside the prefix.
+
+        **ORDERING IS PINNED:** the removal runs only AFTER the `os.replace`
+        returns and BEFORE the directory `fsync`. Post-replace placement is what
+        makes a FAILED publication leave the cleanup un-run, and what keeps a
+        suppressed removal `OSError` from being confusable with a failed replace;
+        it also makes the exclusion of this path's OWN in-flight temporary doubly
+        true — by then it has already been renamed away, and it could not have
+        been enumerated in the first place (the pass that produced
+        `stale_publication_temps` ran before the `mkstemp` below).
 
         **The locks are held across this write DELIBERATELY, and that is
         contract, not oversight.** Spec v1.111 §14.8.11.1 *"The observation
@@ -1337,6 +1427,25 @@ class ProtectedResultStore:
             with contextlib.suppress(OSError):
                 os.unlink(tmp_name)
             raise
+        # U-RT-151 / `B-111`: reached ONLY once the replace above has returned,
+        # so a failed publication leaves this un-run and the suppression below
+        # can never cover the `os.replace` itself. Bounded and zero-length in
+        # steady state. A cleanup failure MUST NOT fail the publication — but it
+        # is NOT silent: a persistently failing cleanup would otherwise reproduce
+        # exactly the accounting invisibility this unit closes, so the failure
+        # rides the sweep's EXISTING report-log carrier. The SUCCESS path emits
+        # nothing: this artifact is a candidate of neither class and appears in
+        # no count, gauge or report.
+        for stale_publication_temp in stale_publication_temps:
+            try:
+                os.unlink(stale_publication_temp)
+            except OSError as exc:
+                logger.error(
+                    "protected result store: stale record-publication temporary unlink "
+                    "failed (%s): %s",
+                    os.path.basename(stale_publication_temp),
+                    exc,
+                )
         self._fsync_dir(self._root)
 
     def _report_record_loss_if_any(

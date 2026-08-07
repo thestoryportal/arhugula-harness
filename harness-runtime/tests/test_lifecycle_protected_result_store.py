@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -18,6 +19,7 @@ from pathlib import Path
 import pytest
 from cryptography.fernet import Fernet
 from harness_runtime.lifecycle.protected_result_store import (
+    _GC_OBSERVATION_RECORD_TEMP_PREFIX,
     GC_OBSERVATION_RECORD_FILENAME,
     GcObservationRecordState,
     ProtectedResultStore,
@@ -3851,9 +3853,32 @@ def test_record_publication_temporary_is_never_enumerated_as_a_payload_orphan(
     were ciphertext — all while the FINAL record name still satisfies the
     disjointness check.
 
-    Mutation probe: naming the publication temporary with the payload-temp
+    RE-PINNED DELIBERATELY at U-RT-151 (`B-111`), and exactly ONE assertion
+    group flips. The witness's old teardown loop (which unlinked each leftover)
+    is DROPPED AS REDUNDANT rather than wrapped in a broader `try`: once the
+    cleanup ships the leftover is already gone, so that loop would raise
+    `FileNotFoundError` and ERROR the test rather than fail it.
+
+    The leftover of the killed publication is no longer permanently
+    resident: a LATER, SUCCESSFUL PUBLICATION of the record reclaims it once it
+    is past TTL (AC #15's v2.59 qualifier). The flip is a POSITIVE witness that
+    ATTRIBUTES the removal to the publication path — the unlink must happen
+    INSIDE `_publish_observation_record`, between the record's `os.replace` and
+    the method's return — because a witness that merely observed the file's
+    absence would equally pass an implementation that widened a SWEEP glob,
+    which is the defect AC #15 exists to close. The `.tmp-` prefix-disjointness
+    assertion and the not-reported-as-a-candidate log assertion are PRESERVED:
+    both are the SWEEP half the qualifier leaves unqualified, and both must
+    still hold at every sweep here.
+
+    Mutation probes: naming the publication temporary with the payload-temp
     prefix makes the post-crash sweep enumerate, report and remove it, failing
-    every assertion below."""
+    the preserved assertions; reverting U-RT-151's cleanup fails the flipped
+    assertion; widening `_ORPHAN_GLOB` to match the record's temp prefix fails
+    the not-reported assertion AND
+    `test_a_failed_publication_leaves_the_leftover_untouched_by_every_sweep`
+    (and cannot satisfy the flipped assertion either, since a sweep-glob removal
+    happens OUTSIDE the publication window this asserts)."""
     import logging
 
     store = _store(tmp_path, ttl_seconds=1.0)
@@ -3902,22 +3927,540 @@ def test_record_publication_temporary_is_never_enumerated_as_a_payload_orphan(
     handler = _Collector(level=logging.WARNING)
     logger = logging.getLogger("harness.runtime.protected_result_store")
     logger.addHandler(handler)
+    # Attribution instrumentation for the flipped assertion: every unlink and
+    # the publication's own entry/return are recorded in ONE ordered event log,
+    # so "removed by the publication path" is asserted BY POSITION rather than
+    # inferred from the file's absence.
+    events: list[str] = []
+    real_unlink = os.unlink
+    real_publish = store._publish_observation_record  # type: ignore[attr-defined]
+
+    def _tracing_unlink(path: object, **kwargs: object) -> None:
+        events.append(f"unlink:{os.path.basename(str(path))}")
+        real_unlink(path, **kwargs)  # type: ignore[arg-type]
+
+    def _tracing_publish(observations: object, **kwargs: object) -> None:
+        events.append("publication:enter")
+        try:
+            real_publish(observations, **kwargs)
+        finally:
+            events.append("publication:return")
+
     try:
         # The crashed publication left no record at all, so a successful sweep
         # first re-records the observation; back-dating then ages it past the
         # grace for the final, reclaim-reaching sweep.
         store.gc_sweep(now=at + 0.01, observed_at=at + 0.01)
+        for name in leftovers:
+            assert (root / name).exists(), (
+                f"the FRESH leftover {name!r} — younger than the TTL at this sweep — was "
+                f"removed: the cleanup's past-TTL age gate is missing"
+            )
         _backdate_observation_record(store)
+        monkeypatch.setattr(os, "unlink", _tracing_unlink)
+        monkeypatch.setattr(store, "_publish_observation_record", _tracing_publish)
         store.gc_sweep(now=at + 3600.0)
+        monkeypatch.undo()
     finally:
         logger.removeHandler(handler)
 
+    assert events.count("publication:enter") == 1, (
+        f"expected exactly one record publication in the final sweep: {events}"
+    )
+    opened = events.index("publication:enter")
+    returned = events.index("publication:return")
     for name in leftovers:
-        assert (root / name).exists(), (
-            f"the sweep REMOVED the record's own publication temporary {name!r}"
+        # FLIPPED (U-RT-151 AC #2): the leftover IS reclaimed — by a LATER
+        # PUBLICATION, attributed by position inside the publication window.
+        assert not (root / name).exists(), (
+            f"the record's own publication temporary {name!r} SURVIVED a later, "
+            f"successful publication — U-RT-151's cleanup did not run"
         )
+        assert opened < events.index(f"unlink:{name}") < returned, (
+            f"the record's own publication temporary {name!r} was removed OUTSIDE the "
+            f"publication path (a widened sweep glob would look like this): {events}"
+        )
+        # PRESERVED: the SWEEP half never reports it as a candidate.
         assert not any(name in record.message for record in caplog_records), (
             f"the sweep REPORTED the record's own publication temporary {name!r} as a candidate"
         )
-    for name in leftovers:
-        (root / name).unlink()
+        # PRESERVED, and asserted at the ENUMERATION surface as well as the
+        # reporting one: a widened `_ORPHAN_GLOB` would carry the name into the
+        # published observation record even on a sweep whose reclaim the
+        # publication's own cleanup pre-empts.
+        assert name not in _read_observation_record(store), (
+            f"the sweep ENUMERATED the record's own publication temporary {name!r} "
+            f"into candidate accounting"
+        )
+
+
+# ---------------------------------------------------------------------------
+# `B-111` / U-RT-151 — the record's OWN publication-temp cleanup, permitted by
+# U-RT-150 AC #15's v2.59 qualifier (Runtime plan v2.59 §2).
+# ---------------------------------------------------------------------------
+
+
+def _record_publication_leftover(root: Path, suffix: str, *, mtime: float) -> Path:
+    """A leftover of a KILLED record publication: a file carrying the record's
+    own publication-temp prefix, disjoint from BOTH sweep globs, backdated to
+    `mtime`."""
+    leftover = root / f"{_GC_OBSERVATION_RECORD_TEMP_PREFIX}{suffix}"
+    leftover.write_bytes(b'{"version": 1, "observations": {}}')
+    os.utime(leftover, (mtime, mtime))
+    return leftover
+
+
+def test_publication_removes_exactly_its_own_past_ttl_leftovers_and_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """U-RT-151 AC #1 — the cleanup is PREFIX-SCOPED BY CONSTRUCTION, PAST-TTL
+    AGE-GATED, and its ENUMERATION RUNS OFF THE LOCK.
+
+    The scope refusals are ASSERTED AS AN EXACT SET rather than as "the leftover
+    is gone": the store root additionally holds a real `.tmp-*` payload orphan,
+    an `*.entry` member, the record itself, the cross-process lock file, an
+    unrelated arbitrarily-named file, and a FRESH own-prefix leftover younger
+    than `ttl_seconds`. A publication removes exactly the PAST-TTL own-prefix
+    leftovers and nothing else — the fresh one SURVIVES, which is the age-gate
+    witness (the deterministic stand-in for the Windows in-flight-temporary race
+    a lock-no-op platform cannot witness deterministically).
+
+    The enumeration is asserted OFF-LOCK BY CONSTRUCTION — by the lock's state
+    at the moment the prefix-scoped glob runs, not by timing. A root scan under
+    the combined lock is O(total files in the root), the cost `B-75` moved off
+    it, and would falsify `_publish_observation_record`'s own docstring
+    justification for holding the lock across its write.
+
+    Mutation probes: broadening the scope from the prefix constant to the whole
+    root fails the exact-set assertion; moving the enumeration inside the lock
+    fails the off-lock assertion; removing the age gate fails the
+    fresh-leftover-SURVIVES membership of the exact set; unlinking the path's
+    OWN in-flight temporary fails the own-temp-survives assertion (and U-RT-150
+    AC #14(iii)'s crash-atomicity witness)."""
+    ttl = 1.0
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=ttl, age_seconds=10.0)
+    root = tmp_path / "store"
+    stale = time.time() - 10.0
+
+    orphan = root / ".tmp-real-payload-orphan"
+    orphan.write_bytes(b"partial ciphertext")
+    os.utime(orphan, (stale, stale))
+    unrelated = root / "operator-notes.txt"
+    unrelated.write_text("neither a candidate nor ours")
+    os.utime(unrelated, (stale, stale))
+    lock_file = root / ".cross_process.lock"
+    lock_file.touch()
+    os.utime(lock_file, (stale, stale))
+    killed_one = _record_publication_leftover(root, "killed-one", mtime=stale)
+    killed_two = _record_publication_leftover(root, "killed-two", mtime=stale)
+    # Fresh: written now, so it is younger than the TTL at the sweep below.
+    fresh = _record_publication_leftover(root, "live-co-resident", mtime=time.time())
+
+    globs: list[tuple[str, bool]] = []
+    real_glob = Path.glob
+    real_mkstemp = tempfile.mkstemp
+    real_unlink = os.unlink
+    in_flight: list[str] = []
+    unlinked: list[str] = []
+
+    def _tracing_glob(self: Path, pattern: str, **kwargs: object) -> object:
+        # `_publish_lock` is acquired in the SAME `with` statement as the
+        # cross-process lock, so its state is a faithful, observable proxy for
+        # "the combined lock is held" — and a state check, not a timing one.
+        globs.append((pattern, store._publish_lock.locked()))  # type: ignore[attr-defined]
+        return real_glob(self, pattern, **kwargs)  # type: ignore[arg-type]
+
+    def _tracing_mkstemp(**kwargs: object) -> tuple[int, str]:
+        fd, name = real_mkstemp(**kwargs)  # type: ignore[arg-type]
+        in_flight.append(name)
+        return fd, name
+
+    def _tracing_unlink(path: object, **kwargs: object) -> None:
+        unlinked.append(str(path))
+        real_unlink(path, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "glob", _tracing_glob)
+    monkeypatch.setattr(tempfile, "mkstemp", _tracing_mkstemp)
+    monkeypatch.setattr(os, "unlink", _tracing_unlink)
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+    monkeypatch.undo()
+
+    assert sorted(p.name for p in root.iterdir()) == sorted(
+        [
+            entry_path.name,
+            orphan.name,
+            unrelated.name,
+            lock_file.name,
+            GC_OBSERVATION_RECORD_FILENAME,
+            fresh.name,
+        ]
+    ), (
+        "the publication's cleanup did not remove EXACTLY the past-TTL own-prefix "
+        f"leftovers ({killed_one.name!r}, {killed_two.name!r}) and nothing else"
+    )
+
+    own_prefix_globs = [
+        held for pattern, held in globs if pattern.startswith(_GC_OBSERVATION_RECORD_TEMP_PREFIX)
+    ]
+    assert own_prefix_globs, (
+        "the cleanup's candidate list was not produced by a prefix-scoped glob of "
+        f"the store root: {globs}"
+    )
+    assert not any(own_prefix_globs), (
+        "the cleanup's ENUMERATION ran while the publish lock was held — that is "
+        "the O(store size) root scan `B-75` moved OFF the lock"
+    )
+
+    assert in_flight, "the publication created no temporary at all"
+    for name in in_flight:
+        assert name not in unlinked, (
+            f"the cleanup unlinked the publication's OWN in-flight temporary {name!r} — "
+            f"that reopens the unlink-then-recreate window AC #14(iii) forbids"
+        )
+    snapshot = read_protected_result_store_snapshot(root)
+    assert snapshot is not None
+    assert snapshot.record_state is GcObservationRecordState.PRESENT_READABLE
+
+
+def test_a_failed_publication_leaves_the_leftover_untouched_by_every_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """U-RT-151 AC #2's ADDED witness, isolating the SWEEP half AC #15's
+    qualifier PRESERVES. Once the cleanup ships, every successful publication
+    reclaims the leftover before a later sweep can reach it — so without this
+    witness nothing would still exercise "a SWEEP must not enumerate, report or
+    remove the record's publication temporary", and disposition (a) would
+    silently trade a real protection for the fix.
+
+    With the leftover present and the record's publication made to FAIL (so the
+    cleanup does not run — it sits strictly after the `os.replace`), a full
+    sweep PAST every TTL — one that demonstrably reaches its reclaim path, since
+    it removes the real payload orphan — still neither enumerates the leftover
+    (it never enters the observation record, and the orphan-class gauge reports
+    the PAYLOAD orphan's age although the leftover is far older), reports it,
+    nor removes it.
+
+    Mutation probe: widening `_ORPHAN_GLOB` to match the record's temp prefix
+    fails every assertion below."""
+    import logging
+
+    store = _store(tmp_path, ttl_seconds=1.0)
+    root = tmp_path / "store"
+    root.mkdir(parents=True, exist_ok=True)
+    orphan = root / ".tmp-real-payload-orphan"
+    orphan.write_bytes(b"partial ciphertext")
+    orphan_mtime = time.time() - 10.0
+    os.utime(orphan, (orphan_mtime, orphan_mtime))
+    at = orphan_mtime + 10.0
+
+    caplog.set_level(logging.DEBUG, logger="harness.runtime.protected_result_store")
+    # A first, successful sweep records the payload orphan's observation. The
+    # leftover is planted AFTER it, so no successful publication ever sees it —
+    # the only publication that could have cleaned it up is the FAILING one
+    # below, which never reaches its post-`os.replace` cleanup.
+    store.gc_sweep(now=at, observed_at=at)
+    leftover = _record_publication_leftover(root, "killed", mtime=orphan_mtime - 4990.0)
+    _backdate_observation_record(store)
+    caplog.clear()
+
+    def _failing_replace(src: object, dst: object, **kwargs: object) -> None:
+        raise OSError(errno.EIO, "simulated crash before the atomic replace")
+
+    monkeypatch.setattr(os, "replace", _failing_replace)
+    store.gc_sweep(now=at)
+    monkeypatch.undo()
+
+    assert not orphan.exists(), (
+        "the sweep never reached its reclaim path — the isolation this witness "
+        "asserts would be vacuous"
+    )
+    assert leftover.exists(), (
+        "a SWEEP removed the record's own publication temporary — the half AC #15's "
+        "qualifier PRESERVES unqualified"
+    )
+    assert not any(leftover.name in record.message for record in caplog.records), (
+        "a SWEEP reported the record's own publication temporary as a candidate"
+    )
+    # Not ENUMERATED either: the orphan-class gauge on that sweep's own reclaim
+    # emission reports the PAYLOAD orphan's 10s, not the leftover's 5000s.
+    gc_line = next(r for r in caplog.records if "crash-orphaned temp-file GC'd" in r.message)
+    assert "oldest_orphan_age_s=10.0" in gc_line.message, (
+        f"the leftover entered the orphan class's age accounting: {gc_line.message}"
+    )
+    assert leftover.name not in _read_observation_record(store), (
+        "the record's publication temporary was ENUMERATED into candidate accounting"
+    )
+
+
+def test_the_payload_orphan_class_is_byte_unchanged_by_the_record_temp_cleanup(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """U-RT-151 AC #3 — in the SAME witness state as AC #1, a real `.tmp-*`
+    payload orphan is STILL classified exactly as before: enumerated by the
+    sweep, counted, carried by AC #8's oldest-resident-candidate gauge at BOTH
+    surfaces, reported as a candidate, reclaimed once BOTH conjuncts elapse —
+    and NOT reclaimed on the sweep that first observes it.
+
+    Load-bearing rather than bookkeeping: the cheapest wrong way to close
+    `B-111` is to let the record's temporary fall into the payload class, and an
+    acceptance surface asserting only "the leftover is gone" would accept it.
+
+    Mutation probe: routing the record's publication temporary through the
+    payload-orphan class fails this criterion (the counts and both gauges read
+    one too many) together with AC #2's preserved assertions."""
+    import logging
+
+    ttl = 1.0
+    store, entry_path = _stale_entry(tmp_path, ttl_seconds=ttl, age_seconds=10.0)
+    root = tmp_path / "store"
+    orphan = root / ".tmp-real-payload-orphan"
+    orphan.write_bytes(b"partial ciphertext")
+    orphan_mtime = time.time() - 10.0
+    os.utime(orphan, (orphan_mtime, orphan_mtime))
+    (root / "operator-notes.txt").write_text("neither a candidate nor ours")
+    _record_publication_leftover(root, "killed-one", mtime=orphan_mtime - 4990.0)
+    _record_publication_leftover(root, "live-co-resident", mtime=time.time())
+    at = orphan_mtime + 10.0
+
+    caplog.set_level(logging.DEBUG, logger="harness.runtime.protected_result_store")
+    store.gc_sweep(now=at, observed_at=at)
+
+    # Enumerated + counted + gauged + reported, at the sweep emission surface.
+    reset_line = next(r for r in caplog.records if "no GC observation record" in r.message)
+    assert "past_ttl_orphans=1" in reset_line.message
+    assert "oldest_orphan_age_s=10.0" in reset_line.message
+    assert orphan.name in _read_observation_record(store)
+    # NOT reclaimed on the sweep that first observes it.
+    assert orphan.exists(), "the crash orphan was reclaimed on its FIRST observation"
+
+    # The second gauge surface — the read-only, sweep-free snapshot.
+    snapshot = read_protected_result_store_snapshot(root, now=at)
+    assert snapshot is not None
+    assert snapshot.orphan_count == 1, (
+        f"the record's publication temporary entered the payload-orphan count: {snapshot}"
+    )
+    assert snapshot.gauge.oldest_orphan_age_seconds is not None
+    assert 9.9 < snapshot.gauge.oldest_orphan_age_seconds < 10.1
+    assert snapshot.entry_count == 1
+
+    # Reclaimed once BOTH conjuncts elapse.
+    _backdate_observation_record(store)
+    caplog.clear()
+    assert store.gc_sweep(now=at) == [entry_path.stem]
+    assert not orphan.exists()
+    gc_line = next(r for r in caplog.records if "crash-orphaned temp-file GC'd" in r.message)
+    assert orphan.name in gc_line.message
+
+
+def test_the_cleanup_is_silent_on_success_and_reports_a_suppressed_unlink_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """U-RT-151 AC #4 — the success path adds NO surface; the failure path adds
+    exactly ONE emission, on the sweep's EXISTING report-log carrier.
+
+    On success the cleanup emits no report-log line at any level, no span and no
+    metric, mints no namespace, and creates no file or directory (the removals
+    are of an artifact that is a candidate of neither class and appears in no
+    count, gauge or report). A suppressed removal `OSError` MUST nonetheless be
+    REPORTED — a persistently failing cleanup that said nothing would recreate
+    exactly the accounting invisibility `B-111` was ratified to close — while
+    never failing the publication and never propagating; the directory `fsync`
+    still runs. And the suppression MUST NOT extend over the `os.replace`
+    itself: a failing replace still emits the publication-failure line.
+
+    Mutation probes: emitting anything on the SUCCESS path fails phase 1;
+    suppressing the failure emission fails phase 2; letting the removal
+    `OSError` propagate fails phase 2's no-raise assertion; broadening the
+    suppression over the `os.replace` fails phase 3 (and leaks the in-flight
+    temporary as a FRESH own-prefix leftover, failing AC #1's exact set)."""
+    import logging
+
+    store = _store(tmp_path, ttl_seconds=1.0)
+    root = tmp_path / "store"
+    root.mkdir(parents=True, exist_ok=True)
+    stale = time.time() - 10.0
+    leftover = _record_publication_leftover(root, "killed-one", mtime=stale)
+
+    # Phase 1 — SUCCESS is silent, and creates nothing.
+    caplog.set_level(logging.DEBUG, logger="harness.runtime.protected_result_store")
+    at = time.time()
+    store.gc_sweep(now=at, observed_at=at)
+    assert not leftover.exists()
+    assert not any(leftover.name in record.message for record in caplog.records), (
+        "the cleanup emitted on its SUCCESS path — it removes an artifact that "
+        "appears in no count, gauge or report"
+    )
+    assert sorted(p.name for p in root.iterdir()) == sorted(
+        [GC_OBSERVATION_RECORD_FILENAME, ".cross_process.lock"]
+    ), "the cleanup created a new file or directory"
+
+    # Phase 2 — a suppressed removal `OSError` IS reported, never fails the
+    # publication, never propagates, and the directory `fsync` still runs.
+    second = _record_publication_leftover(root, "killed-two", mtime=stale)
+    real_unlink = os.unlink
+
+    def _refusing_unlink(path: object, **kwargs: object) -> None:
+        if os.path.basename(str(path)).startswith(_GC_OBSERVATION_RECORD_TEMP_PREFIX):
+            raise OSError(errno.EACCES, "simulated permission denied")
+        real_unlink(path, **kwargs)  # type: ignore[arg-type]
+
+    fsyncs: list[str] = []
+    real_fsync_dir = store._fsync_dir  # type: ignore[attr-defined]
+
+    def _tracing_fsync_dir(directory: Path) -> None:
+        fsyncs.append(str(directory))
+        real_fsync_dir(directory)
+
+    caplog.clear()
+    monkeypatch.setattr(os, "unlink", _refusing_unlink)
+    monkeypatch.setattr(store, "_fsync_dir", _tracing_fsync_dir)
+    _backdate_observation_record(store)
+    store.gc_sweep(now=at + 0.1, observed_at=at + 0.1)  # MUST NOT raise
+    monkeypatch.undo()
+
+    assert second.exists(), "the refusing unlink did not actually refuse"
+    failure_lines = [
+        r for r in caplog.records if second.name in r.message and r.levelno >= logging.ERROR
+    ]
+    assert failure_lines, (
+        "a SUPPRESSED removal `OSError` was not reported on the sweep's existing "
+        "report-log carrier — a persistently failing cleanup would be invisible"
+    )
+    assert fsyncs, "the directory fsync did not run after a suppressed removal failure"
+    snapshot = read_protected_result_store_snapshot(root)
+    assert snapshot is not None
+    assert snapshot.record_state is GcObservationRecordState.PRESENT_READABLE, (
+        "a suppressed cleanup failure failed the publication"
+    )
+
+    # Phase 3 — the suppression never covers the `os.replace`.
+    def _failing_replace(src: object, dst: object, **kwargs: object) -> None:
+        raise OSError(errno.EIO, "simulated crash before the atomic replace")
+
+    caplog.clear()
+    monkeypatch.setattr(os, "replace", _failing_replace)
+    store.gc_sweep(now=at + 0.2, observed_at=at + 0.2)
+    monkeypatch.undo()
+
+    # (i) A suppression broadened over the `os.replace` SKIPS the
+    # `except BaseException` handler, leaking the failed publication's OWN
+    # in-flight temporary as a fresh own-prefix leftover.
+    leaked = [
+        p.name
+        for p in root.iterdir()
+        if p.name.startswith(_GC_OBSERVATION_RECORD_TEMP_PREFIX) and p.name != second.name
+    ]
+    assert not leaked, (
+        f"the failed publication leaked its own in-flight temporary {leaked} — the "
+        f"suppression covered the `os.replace` and skipped the cleanup handler"
+    )
+    # (ii) ...and the failing replace still reports through `_observe_candidates`.
+    assert any("GC observation record publication failed" in r.message for r in caplog.records), (
+        "a failing `os.replace` was swallowed — the suppression covers more than the removal"
+    )
+    assert second.exists(), "the cleanup ran even though the publication FAILED"
+
+
+def test_a_recycled_temporary_name_is_refused_by_lock_bound_identity_revalidation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`B-110` mechanism (c), taken as this arc's companion per its standing
+    opportunistic trigger (the unit works `gc_sweep`'s phase split).
+
+    Phase 1 — RELOCATION: the `.tmp-*` unlinks run UNDER the lock hold that
+    SELECTED them, not off-lock. Off-lock, two concurrent sweeps can both select
+    one expired orphan; if the first removes it and a publisher is handed the
+    freed name, the second sweep's stale path unlinks that ACTIVE replacement,
+    bypassing `_publish_atomic`'s whole-lifetime lock hold and losing a completed
+    paid effect's recovery record.
+
+    Phase 2 — REVALIDATION: the identity captured at SELECTION (the
+    `(st_dev, st_ino, st_mtime)` triple — a bare re-`stat()` is insufficient,
+    since POSIX offers no compare-inode-and-unlink primitive) is re-verified
+    under the same lock immediately before the unlink. The collision is injected
+    DETERMINISTICALLY rather than raced for: between selection and removal, the
+    other sweep's unlink is performed and `tempfile.mkstemp` is monkeypatched to
+    hand the publisher exactly the just-freed name.
+
+    Mutation probes: moving the unlink loop back outside the `with` block fails
+    phase 1's lock-held assertion; dropping the identity revalidation lets phase
+    2 unlink the replacement and fails its survival assertion."""
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="harness.runtime.protected_result_store")
+
+    # Phase 1 — the removal happens under the selecting lock hold.
+    store = _store(tmp_path / "relocation", ttl_seconds=1.0)
+    root = tmp_path / "relocation" / "store"
+    root.mkdir(parents=True, exist_ok=True)
+    orphan = root / ".tmp-under-lock-removal"
+    orphan.write_bytes(b"partial ciphertext")
+    stale = time.time() - 10.0
+    os.utime(orphan, (stale, stale))
+    at = stale + 10.0
+    store.gc_sweep(now=at, observed_at=at)
+    _backdate_observation_record(store)
+
+    lock_held: list[bool] = []
+    real_path_unlink = Path.unlink
+
+    def _recording_unlink(self: Path, **kwargs: object) -> None:
+        if self.name == orphan.name:
+            lock_held.append(store._publish_lock.locked())  # type: ignore[attr-defined]
+        real_path_unlink(self, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "unlink", _recording_unlink)
+    store.gc_sweep(now=at)
+    monkeypatch.undo()
+    assert not orphan.exists()
+    assert lock_held == [True], (
+        f"the crash-orphan unlink ran with the selecting lock RELEASED: {lock_held}"
+    )
+
+    # Phase 2 — the recycled-name collision is refused.
+    store_2 = _store(tmp_path / "revalidation", ttl_seconds=1.0)
+    root_2 = tmp_path / "revalidation" / "store"
+    root_2.mkdir(parents=True, exist_ok=True)
+    recycled = root_2 / ".tmp-recycled-name"
+    recycled.write_bytes(b"the EXPIRED crash orphan both sweeps selected")
+    os.utime(recycled, (stale, stale))
+    store_2.gc_sweep(now=at, observed_at=at)
+    _backdate_observation_record(store_2)
+
+    hand_back: list[str] = []
+    real_mkstemp = tempfile.mkstemp
+    real_observe = store_2._observe_candidates  # type: ignore[attr-defined]
+    replacement_payload = b"a NEW in-flight temporary at the just-freed name"
+
+    def _recycling_mkstemp(**kwargs: object) -> tuple[int, str]:
+        if hand_back:
+            name = hand_back.pop()
+            return os.open(name, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600), name
+        return real_mkstemp(**kwargs)  # type: ignore[arg-type]
+
+    def _other_sweep_then_publisher(names: list[str], **kwargs: object) -> object:
+        # The OTHER sweep removes the orphan both sweeps selected...
+        os.unlink(recycled)
+        # ...and `tempfile.mkstemp` then hands the publisher the freed name.
+        hand_back.append(str(recycled))
+        fd, drawn = tempfile.mkstemp(dir=root_2, prefix=".tmp-")
+        os.write(fd, replacement_payload)
+        os.close(fd)
+        assert drawn == str(recycled)
+        return real_observe(names, **kwargs)
+
+    monkeypatch.setattr(tempfile, "mkstemp", _recycling_mkstemp)
+    monkeypatch.setattr(store_2, "_observe_candidates", _other_sweep_then_publisher)
+    caplog.clear()
+    store_2.gc_sweep(now=at)
+    monkeypatch.undo()
+
+    assert recycled.exists(), (
+        "the sweep unlinked an ACTIVE file that had inherited the just-freed name — "
+        "the selection-time identity was not revalidated under the lock"
+    )
+    assert recycled.read_bytes() == replacement_payload
+    assert any("refers to a DIFFERENT file" in r.message for r in caplog.records), (
+        "the refusal was not reported at all"
+    )
