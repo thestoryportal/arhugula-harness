@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 114
+  total: 116
   open: 0
   design_substrate_gated: 0
-  registered_finding: 16
+  registered_finding: 18
   operator_gated: 0
   held: 1
   closed: 97
-  identity_digest: 9ec02294adeb2892
+  identity_digest: 9ffeb9fc4a59175d
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5436,3 +5436,103 @@ items:
     reading to be resolved by grounding rather than a design fork between substantive alternatives.
     Escalates to a Class 2 fork ONLY if step (2) resolves to reading (b).'
   heading: '### B-114 · `_prepare`''s executor-side exhaustiveness fall-through raises the memory-tool INPUT-error type for a harness-internal fault, violating the C-MEM-19 type-boundary invariant v1.3 introduced *(surfaced at the B-88 spec leg, out-of-family Codex rounds 3/7/8, 2026-08-06; the re-typing was PROPOSED and WITHDRAWN there on authority grounds, registered)*'
+- id: B-115
+  title: 'Memory capture same-text / same-model-NAME / different-PROVIDER re-entry: a duplicate record JSONL line, then a TRANSIENT_RETRY staircase via MemoryToolExecutionStoreError'
+  status: registered_finding
+  summary: 'MEASURED, not inferred -- executed at the B-84 build leg (PR #1243) as cell (3) of that leg''s
+    W-5 four-cell matrix, and recorded there on the now-CLOSED B-84 row''s close_out. THE MECHANISM:
+    a memory capture whose TEXT and model NAME are unchanged but whose PROVIDER differs re-derives
+    the SAME memory_id (summary_model is hashed into the id; the provider is not), so the record
+    JSONL line IS APPENDED A SECOND TIME, and the operation ledger then RAISES on its 18-field
+    equivalence payload (because provider differs) -- surfacing as MemoryToolExecutionStoreError.
+    WHY THAT IS THE LIVE HALF: _classify_provider_exception admits MemoryToolExecutionInputError and
+    MemoryToolExecutionInternalError to its fail-fast branch BY NAME and deliberately NOT the family
+    base, precisely so the denied and STORE subtypes are not swept in -- so the store error is NOT
+    fail-fast, classifies TRANSIENT_RETRY, and RE-ENTERS the retry staircase. THIS ANSWERS B-84''s
+    FILING D-2 FALSIFIER AFFIRMATIVELY: the landed fail-fast half IS re-enterable through the
+    store-error class. STATED AGAINST INTEREST: this is a PRE-EXISTING residual that B-84''s
+    ratified Reading A explicitly priced as OUT of its scope (A never claimed to close store
+    errors), NOT a regression the build leg introduced and NOT a new defect -- B-84 left it OPEN and
+    measured. WHY THIS ROW EXISTS: B-84 is CLOSED, so the residual currently lives only inside a
+    closed row''s close_out and is not open-row-queryable. This row makes the live residual
+    queryable at its own id. NO disposition is committed here. Ratified by the operator 2026-08-07
+    on recommendation.'
+  close_out: '(1) GROUND FIRST at the then-current HEAD, by content: re-read the memory_id derivation (which
+    dimensions are hashed, and specifically whether provider is among them), the record-append path,
+    and the operation ledger''s 18-field equivalence payload; and re-confirm that
+    _classify_provider_exception still admits only the input and internal memory types BY NAME so
+    the store subtype still classifies TRANSIENT_RETRY. If any of those has changed, the cell-(3)
+    mechanism may no longer hold and this row closes with that finding recorded. (2) DECIDE THE
+    DISPOSITION. The candidate readings, none pre-selected: (a) make provider part of the capture
+    identity, which collapses cell (3) into cell (1) -- an EXTRA DISTINCT note rather than a
+    duplicate -- but is an IDENTITY-DIMENSION change to a content-addressed id and therefore carries
+    the full new-surface hash audit (does the id capture the new dimension; what happens to
+    already-persisted records); (b) leave the identity alone and make the store-error class
+    non-re-enterable (fail-fast, or a dedicated non-retryable disposition), which addresses the
+    STAIRCASE half but not the duplicate JSONL line; (c) accept and document, on the grounds that
+    the duplicate line is inert and the ledger raise is the honest outcome. (3) NOTE THE INTERACTION
+    with B-84''s other two recorded-and-left-open residuals (the policy-flip TOCTOU window and the
+    intra-call window) -- a disposition here should not silently re-open or contradict those. (4)
+    WITNESS whatever is chosen with the same executed-matrix discipline the B-84 leg used, including
+    a PD-8 mutation probe; a code-read inference is not sufficient for this row, since its entire
+    value is that cell (3) was EXECUTED rather than reasoned about.'
+  council: 'NO at registration -- this row only makes a measured residual queryable, and framing it commits
+    to no design. CONDITIONALLY YES at step (2): reading (a) is an identity-dimension change to a
+    content-addressed memory_id, which trades capture fidelity against the stability of an
+    already-persisted address space -- a nameable tension between the information-substrate
+    integrity voice (C3) and whichever voice owns memory-capture semantics. Convene ONLY if step (2)
+    leans (a), and only after step (1)''s grounding, per the workspace probe-first discipline.
+    Readings (b) and (c) are within a cleared contract and owe no convening.'
+  heading: '### B-115 · Memory capture same-text / same-model-NAME / different-PROVIDER re-entry: a duplicate record JSONL line, then a `TRANSIENT_RETRY` staircase via `MemoryToolExecutionStoreError` *(MEASURED at the `B-84` build leg, PR #1243, W-5 cell (3); ratified by the operator 2026-08-07)*'
+- id: B-116
+  title: 'Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state?'
+  status: registered_finding
+  summary: 'THE QUESTION, and this row frames it rather than answering it. When the retry/breaker/fallback
+    dispatcher fail-fasts a candidate, it records ONE breaker failure against that candidate''s
+    PROVIDER before exiting. GROUNDED BY CONTENT at HEAD 73b0e87b (the inbound note''s ~:1025 is
+    CORRECTED -- :1025 is the ''retry.fail_class'' attribute-set line): retry_breaker_fallback.py
+    computes breaker_cause = _classify_breaker_cause(exc) at :1006, and on the cause-None
+    (fail-fast) branch calls transition = breaker.record_failure(cause=breaker_cause) at :1028. THE
+    FAIL-FAST SET (_classify_provider_exception, from :272) is FIVE members:
+    LLMDispatchProviderUnreachableError; LLMDispatchPayloadShapeError; a raw SDK exception with
+    .status_code in (401, 403); MemoryToolExecutionInternalError; and MemoryToolExecutionInputError.
+    THE SHARPENED FRAMING, which is finer than ''internal faults are tagged as provider faults'':
+    _classify_breaker_cause is duck-typed on .status_code and returns None for anything without one
+    (:404-406), so a MemoryToolExecutionInternalError yields cause=None -- it is NOT mis-tagged. But
+    BreakerRegistry.record_failure (retry_breaker.py:219) increments fail_count REGARDLESS of cause
+    -- cause is telemetry-only (:228-233) -- so the failure still counts toward fail_threshold and
+    still moves the provider toward OPEN. THE TENSION: MemoryToolExecutionInternalError is BY
+    CONSTRUCTION a harness-internal wiring fault (an unset RuntimeMemoryContext.record_scope /
+    .scope_ref; a MEMORY_TOOL_CONTRACTS entry whose input schema has no properties mapping) and is
+    admitted to fail-fast on the express grounds that it is ''deterministic and
+    candidate-independent''. A deterministic, candidate-independent, harness-internal fault is not
+    evidence about the PROVIDER''s health -- yet it consumes provider breaker budget, and on a
+    repeated internal misconfiguration could open a healthy provider''s breaker. PRE-EXISTING, NOT
+    INTRODUCED by any recent arc; spans C-CP-21 and Runtime section 14.6 (Runtime + CP). NO
+    COMMITMENT to a change is made here. Ratified by the operator 2026-08-07.'
+  close_out: '(1) GROUND FIRST at the then-current HEAD, by content: re-read _classify_provider_exception''s
+    fail-fast membership, _classify_breaker_cause''s duck-typed None return, the record_failure call
+    on the cause-None branch, and record_failure''s own counting semantics -- the whole framing
+    above rests on record_failure counting independently of cause, and that is the first thing to
+    falsify. (2) ESTABLISH THE CONTRACT POSITION BEFORE DECIDING ANYTHING: read C-CP-21 and Runtime
+    section 14.6 for what a breaker failure is DEFINED to mean. If the contract already says, this
+    is a conformance question and not a design fork; if it does not, that silence is itself the
+    finding. (3) ONLY THEN decide a disposition. THE DISCRIMINATOR: does the breaker count ''this
+    CANDIDATE failed to produce a result'' or ''this PROVIDER is unhealthy''? Under the first
+    reading an internal fault legitimately counts -- the candidate did in fact fail, and the
+    fallback chain is right to move on. Under the second it must NOT count, and the fix is to skip
+    record_failure (or record it on a non-provider scope) for the deterministic harness-internal
+    members of the fail-fast set. (4) NOTE THE SCOPE ASYMMETRY when pricing: the same question
+    applies with DIFFERENT force to each of the five fail-fast members -- 401/403 is genuinely a
+    provider-credential fact, unreachable is genuinely a provider fact, payload-shape and the two
+    memory types are harness-side. Any fix must be per-member, not wholesale, or it will silently
+    stop counting real provider auth failures.'
+  council: 'NO at registration -- the row frames a question and commits to nothing, so there is no decision
+    for voices to disagree about yet. CONDITIONALLY YES at step (3), and the tension is nameable in
+    advance: changing what counts toward a breaker trades control-plane reliability semantics (C1/C9
+    -- a breaker that under-counts fails to protect a genuinely failing chain) against operator-loop
+    robustness (C11 -- a breaker that over-counts opens a healthy provider on the operator''s own
+    misconfiguration). Convene ONLY if step (2) finds the contract silent AND step (3) leans toward
+    changing the counting rule; if C-CP-21 or Runtime section 14.6 already settles the meaning, this
+    is conformance work and owes no convening.'
+  heading: '### B-116 · Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state? *(pre-existing; spans C-CP-21 + Runtime §14.6; the row frames the QUESTION only — ratified by the operator 2026-08-07)*'
