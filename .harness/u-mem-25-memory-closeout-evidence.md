@@ -49,7 +49,7 @@ provider calls.
 | C-MEM-16 - CLI profiles | CLI profile resolution supports generic and vendor-specific routes without hard-coded auth assumptions. | `cli_profile_resolution` selectors and external CLI route scenarios. |
 | C-MEM-17 - Engine-class durability | Durable engine classes preserve memory operation evidence across restart/resume boundaries. | `engine_class_durability` selectors. |
 | C-MEM-18 - Redaction, tombstone, and retention | Redacted, tombstoned, and expired records stay auditable but unavailable to retrieval/tools. | `redaction_tombstone_exclusion` selectors. |
-| C-MEM-19 - Observability | Memory operations and failures emit structured telemetry without leaking content. **v1.3 obligations CERTIFIED at the U-MEM-28 impl leg (2026-08-07).** The failure vocabulary is seven values, pinned as an ordered value tuple so a rename or re-valuing of any pre-existing six fails rather than passing a size check; `input_validation_failure` names argument refusals at the memory tool boundary only; the TYPE boundary is enforced at the six harness-internal `lifecycle/llm_dispatch.py` sites, which now raise `MemoryToolExecutionInternalError` and classify away from the new class, while the two model-supplied-`scope_ref` sites keep it; the re-typed sites' fail-fast retry disposition is PRESERVED and witnessed end-to-end through the real retry path. ONE known non-conformant site remains, recorded and unrepaired on authority grounds and owned by register row `B-114`: `_prepare`'s executor-side exhaustiveness fall-through. | U-MEM-22 observability tests and provider-free local gate, extended by `harness-runtime/tests/test_u_mem_28_input_validation_failure_class.py`. |
+| C-MEM-19 - Observability | Memory operations and failures emit structured telemetry without leaking content. **v1.3 obligations CERTIFIED at the U-MEM-28 impl leg (2026-08-07).** The failure vocabulary is seven values, pinned as an ordered value tuple so a rename or re-valuing of any pre-existing six fails rather than passing a size check; `input_validation_failure` names argument refusals at the memory tool boundary only; the TYPE boundary is enforced at the six harness-internal `lifecycle/llm_dispatch.py` sites, which now raise `MemoryToolExecutionInternalError` and classify away from the new class, while the two model-supplied-`scope_ref` sites keep it; the re-typed sites' fail-fast retry disposition is PRESERVED and witnessed end-to-end through the real retry path. The ONE site U-MEM-28 left non-conformant on authority grounds - `_prepare`'s executor-side exhaustiveness fall-through - was repaired at `B-114` (2026-08-07) as a conformance repair against the cleared invariant, whose text binds the KIND of fault rather than an enumeration of sites; the type boundary now holds at every site that raises for a harness-internal memory-tool fault, and no known non-conformance remains. | U-MEM-22 observability tests and provider-free local gate, extended by `harness-runtime/tests/test_u_mem_28_input_validation_failure_class.py` and `harness-runtime/tests/test_b114_prepare_fall_through_conformance.py`. |
 | C-MEM-20 - Verification contract | The C-MEM-20 evidence matrix indexes deterministic selectors and live credential gates. | [memory_verification_suite.py](../harness-runtime/src/harness_runtime/memory_verification_suite.py) and `just memory-closeout-check`. |
 
 ## Review Evidence
@@ -218,12 +218,18 @@ v1.3's back-reference reconciliation records that neither is extended, because t
 dispatch-side re-typing changes no provider routing behaviour and adds no promotion
 obligation.
 
-**One obligation is CLOSED WITH A RECORDED RESIDUAL, stated here rather than only on the
-register.** C-MEM-19 v1.3's type-boundary invariant closes at this unit with **ONE known
-non-conformant site**: `StandardMemoryToolExecutor._prepare`'s exhaustiveness
-fall-through still raises `MemoryToolExecutionInputError` for a harness-internal fault.
-U-MEM-28 does not repair it, and the reason is authority rather than merit — the operator
-ratified an A-ii site list of exactly six, all in `lifecycle/llm_dispatch.py`, and this
-leg does not widen a ratified enumeration on its own reading. The finding is owned by
-register row **`B-114`**, which outlives `B-88` and carries the grounding pass, the
-conformance-repair-vs-ratified-extension discriminator, and the repair recipe.
+**One obligation closed at this unit WITH A RECORDED RESIDUAL, and that residual is now
+also closed — stated here rather than only on the register.** C-MEM-19 v1.3's
+type-boundary invariant closed at U-MEM-28 with **ONE known non-conformant site**:
+`StandardMemoryToolExecutor._prepare`'s exhaustiveness fall-through still raised
+`MemoryToolExecutionInputError` for a harness-internal fault. U-MEM-28 did not repair it,
+and the reason was authority rather than merit — the operator ratified an A-ii site list
+of exactly six, all in `lifecycle/llm_dispatch.py`, and a spec leg does not widen a
+ratified enumeration on its own reading. The finding was owned by register row **`B-114`**,
+which outlived `B-88`; its grounding pass resolved the discriminator to **plain conformance
+repair against a cleared contract** — the invariant's cleared text binds *"a harness-internal
+fault"* as a KIND, not a list of sites, so bringing a violating site into conformance
+extends nothing the operator decided — and the repair landed on 2026-08-07 with the
+receiving-type constraints, the both-halves witnesses (emitted class **and**
+`_classify_provider_exception(exc) is None`) and the population-table re-key the row
+prescribed. **The invariant now holds at every site; no known non-conformance remains.**

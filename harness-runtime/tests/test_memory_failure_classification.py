@@ -21,7 +21,9 @@ telemetry must distinguish policy denial, path violation, IO failure,
 serialization failure, provider adapter failure, and retrieval empty-result")
 on an axis the vocabulary already has. That quotation is the invariant AS IT
 STOOD THEN; Memory spec v1.3 (U-MEM-28) inserts `input validation failure` into
-the same list, and the eight `MemoryToolExecutionInputError` rows below carry it.
+the same list, and the SEVEN `MemoryToolExecutionInputError` rows below carry it.
+U-MEM-28 landed eight; `B-114` then re-keyed the `_prepare` exhaustiveness
+fall-through's row onto `MemoryToolExecutionInternalError` (see that row).
 
 Mutation probes for this table are recorded in the B-88 register row.
 """
@@ -47,6 +49,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionDeniedError,
     MemoryToolExecutionError,
     MemoryToolExecutionInputError,
+    MemoryToolExecutionInternalError,
     MemoryToolExecutionStoreError,
 )
 
@@ -85,25 +88,34 @@ _INPUT_VALIDATION = MemoryTelemetryFailureClass.INPUT_VALIDATION_FAILURE
             MemoryToolExecutionDeniedError("memory tool scope_ref does not match context"),
             _POLICY_DENIAL,
         ),
+        # --- MemoryToolExecutionInternalError: the residual, by inheritance --
+        # B-114. This row's raise site is `_prepare`'s executor-side
+        # exhaustiveness fall-through (`memory_tool_executor.py`), a
+        # HARNESS-INTERNAL fault that C-MEM-19 v1.3's type boundary forbids
+        # raising as the input type. U-MEM-28 left it on the input type on
+        # AUTHORITY grounds (the ratified A-ii site list named six sites, all in
+        # `lifecycle/llm_dispatch.py`) and recorded the non-conformance; B-114
+        # repaired it, and this row re-keyed with it - exactly as U-MEM-28's
+        # own comment here said it would.
+        #
+        # The expected class is the RESIDUAL the family base declares, which
+        # this type inherits rather than overriding: C-MEM-19 v1.3 states that a
+        # harness-internal fault landing on `provider_adapter_failure` where an
+        # implementation declares no dedicated unclassified value is conforming,
+        # because such a report is the ABSENCE of a claim, not an assertion of
+        # adapter-hood. What the contract forbids is the input-validation class,
+        # which the site no longer carries.
+        (MemoryToolExecutionInternalError("unsupported memory tool search"), _PROVIDER_ADAPTER),
         # --- MemoryToolExecutionInputError: input_validation_failure --------
-        # U-MEM-28. These eight rows carried the LEAST-WRONG STOPGAP
+        # U-MEM-28. These rows carried the LEAST-WRONG STOPGAP
         # `provider_adapter_failure` from the B-88 impl half (and io_failure
         # before it, except the policy_ref wording, which was policy_denial - a
         # malformed argument asserting a policy decision no resolver made),
         # because the C-MEM-19 vocabulary had no input-validation class. Memory
         # spec v1.3 adds `input_validation_failure` as the seventh member and
-        # this type is the single declaration flip site, so exactly these eight
-        # rows move and the other 31 do not.
-        #
-        # The first row's raise site is `_prepare`'s executor-side
-        # exhaustiveness fall-through, which is a HARNESS-INTERNAL fault that
-        # C-MEM-19 v1.3's type boundary says should not carry this type. It is
-        # deliberately NOT re-typed here - the operator ratified an A-ii site
-        # list of exactly six, all in `lifecycle/llm_dispatch.py` - so the site
-        # keeps the input type and its row flips with the rest. That known
-        # non-conformance is owned by register row `B-114`, and this row
-        # re-keys when it is repaired.
-        (MemoryToolExecutionInputError("unsupported memory tool search"), _INPUT_VALIDATION),
+        # this type is the single declaration flip site, so exactly the eight
+        # rows U-MEM-28 named moved and the other 31 did not. Seven of those
+        # eight remain here; the eighth is the B-114 row above.
         (
             MemoryToolExecutionInputError("memory tool argument 'query' must be a string"),
             _INPUT_VALIDATION,

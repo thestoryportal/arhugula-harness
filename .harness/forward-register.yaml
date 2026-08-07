@@ -61,11 +61,11 @@ snapshot:
   total: 114
   open: 0
   design_substrate_gated: 0
-  registered_finding: 18
+  registered_finding: 17
   operator_gated: 0
   held: 1
-  closed: 95
-  identity_digest: e6f024c50257b042
+  closed: 96
+  identity_digest: 2ff7b2e9a9b0f97d
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5145,8 +5145,8 @@ items:
   title: '`_prepare`''s executor-side exhaustiveness fall-through raises the memory-tool input-error
     type for a harness-internal fault, violating the C-MEM-19 type-boundary invariant introduced at
     Memory spec v1.3'
-  status: registered_finding
-  pr: '#1245 (the B-88 spec leg, where the finding was surfaced and its repair withdrawn)'
+  status: closed
+  pr: '#pending (the conformance repair; surfaced at #1245, the B-88 spec leg, where the repair was withdrawn on authority grounds)'
   summary: 'Surfaced by out-of-family Codex round 3 on the B-88 spec leg (2026-08-06) and re-scoped
     at rounds 7 and 8. `StandardMemoryToolExecutor._prepare` (`harness-runtime/src/harness_runtime/memory_tool_executor.py:359-373`)
     ends with `raise MemoryToolExecutionInputError(f"unsupported memory tool {tool_name!s}")` at `:373`.
@@ -5188,7 +5188,7 @@ items:
     returning `None`, since telemetry alone cannot see a base-raise regression. The
     `test_memory_failure_classification.py` row carrying the "unsupported memory tool" message re-keys with
     it. (4) DEPENDS ON U-MEM-28 having landed: before the flip, `MemoryToolExecutionInputError` still
-    declares `provider_adapter_failure` and this site is conformant, so the row is not actionable earlier.'
+    declares `provider_adapter_failure` and this site is conformant, so the row is not actionable earlier. CLOSED 2026-08-07 - the grounding pass resolved the step-(2) discriminator to READING (a), PLAIN CONFORMANCE REPAIR AGAINST A CLEARED CONTRACT, and built it. THE ADJUDICATION, ON THE INVARIANT''S OWN WORDS. `Spec_Memory_Substrate_v1.md` v1.3 C-MEM-19 `### Invariants` reads: *"Where the failure class is determined from the raised exception type, the type carrying input validation failure is raised only for those argument refusals, and a harness-internal fault is not raised as that type; separating such a fault out does not change its retry disposition."* The prose paragraph it summarizes is identical in scope: *"the type carrying `input_validation_failure` must be raised ONLY for the argument refusals defined above. A harness-internal fault - an unset runtime memory context, or a missing or malformed entry in the harness''s own memory tool schema table - is not a caller- or model-supplied argument, and must not be raised as that type"*, closing with *"The rule constrains the type-to-class relation only; it fixes neither the number nor the naming of an implementation''s exception types"*. That is KIND-OF-FAULT language quantified over the TYPE, not an enumerated-sites list - the em-dash clause glosses what *harness-internal* means and is introduced as a definition, not as the exhaustive set of covered sites. The ratified "exactly six" is the enumeration of what the B-88 ARC undertook; the invariant is what the CODEBASE must satisfy. Reading (b) would require the cleared invariant NOT to bind this site - which the design substrate itself denies: fork §11.6 item 4 and plan v1.3 U-MEM-28 Out-of-scope both call it a *"REAL non-conformance"* / *"ONE known non-conformant site"* with the cleared contract, i.e. design-phase authority already adjudicated that the invariant binds here and withheld only the SPEC LEG''s authority to do the repair in that leg. Treating six as a ceiling on conformance would make cleared spec text unenforceable wherever a filing did not happen to survey, inverting the CLAUDE.md §1.3 authority chain. This arc is an IMPL leg, edits ZERO design-substrate files, mints no contract number and needs no re-clearance. PREMISE CHECK AT HEAD (step 1''s falsifier NOT met): offsets moved (`_prepare` at `:407-421`, the raise at `:421`; `tool_name` at `:258`) but the substance is unchanged - `tool_name` is still typed `MemoryToolName` on an `extra="forbid"` model, all five members still have `_prepare_*` arms, so the branch is still reachable only from a harness-internal fault; and step (4)''s precondition is met, U-MEM-28 having landed at #1247. WHAT LANDED. `:421` re-typed to `MemoryToolExecutionInternalError` (already satisfying the three receiving-type constraints, already in `_classify_provider_exception`''s fail-fast tuple BY NAME as of U-MEM-28); docstrings at the receiving type and at the fail-fast tuple amended to name the seventh raise site; the `test_memory_failure_classification.py` row RE-KEYED onto the internal type expecting the inherited residual `provider_adapter_failure` (eight input rows -> seven + one internal), which the U-MEM-28 comment there said it would do; NEW `harness-runtime/tests/test_b114_prepare_fall_through_conformance.py` with the both-halves witnesses (raised type + not-a-subclass-of-the-input-type; emitted `memory.failure_class` on BOTH classify-routed paths, `execute()` and the `validate()` pre-pass; and `_classify_provider_exception(exc) is None`) plus the reachability positive control (every shipped `MemoryToolName` member reaches its own arm, which doubles as the tripwire for a member added without one). Unlike the six dispatch sites this one IS on a classify-routed path, so the repair MOVES the emission to the residual rather than withdrawing one - conforming per C-MEM-19 v1.3''s own residual paragraph (*"a report ... is the ABSENCE of a claim"*) and consistent with its coverage paragraph, which forbids withdrawal. PD-8 probes, both restored: (a) revert `:421` to the input type -> the three real-site witnesses go RED (the population-table row stays green, correctly - it pins a type''s declaration, not a raise site); (b) drop the internal type from the fail-fast tuple -> ONLY the retry-exit assertion goes RED while all three telemetry witnesses stay green, the discriminating shape the two independent obligations require. Zero existing witnesses weakened (full `harness-runtime` suite 3692 passed / 39 skipped); ruff + pyright clean. The `.harness/u-mem-25-memory-closeout-evidence.md` C-MEM-19 row and its recorded-residual paragraph were refreshed in place so the U-MEM-28 certification does not carry a stale open residual.'
   council: 'No. There is no nameable cross-domain tension: the contract rule is already ratified, the
     blast radius is one defensive branch and one witness row, and the only open judgement is the
     conformance-repair-vs-ratified-extension discriminator at close-out step (2), which is a governance

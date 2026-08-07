@@ -194,6 +194,21 @@ class MemoryToolExecutionInternalError(MemoryToolExecutionError):
     MODEL-supplied `scope_ref` argument keep the input type: they are the
     argument-refusal case the new class exists for.
 
+    B-114 adds the SEVENTH raise site, and the first in this module: `_prepare`'s
+    exhaustiveness fall-through. That site was surveyed only after A-ii was
+    ratified over `lifecycle/llm_dispatch.py`, so U-MEM-28 left it on the input
+    type and recorded the resulting non-conformance rather than repairing it on a
+    spec leg's own authority. Repairing it extends nothing the operator decided:
+    C-MEM-19 v1.3's boundary is stated over the KIND of fault ("a harness-internal
+    fault ... must not be raised as that type"), not over an enumeration of sites,
+    so bringing a violating site into conformance is impl work under the cleared
+    floor. Unlike the six, this site is on a classify-routed path - `execute()`'s
+    catch and the `validate()` pre-pass both emit `memory.failure_class` around it
+    - so the repair MOVES that emission from `input_validation_failure` to the
+    inherited residual and withdraws none, which C-MEM-19 v1.3 states is
+    conforming for a harness-internal fault ("a report ... is the ABSENCE of a
+    claim").
+
     Three constraints fix the shape, and each one is load-bearing:
 
     - NOT a subclass of `MemoryToolExecutionInputError`: `getattr` walks the
@@ -418,7 +433,12 @@ class StandardMemoryToolExecutor:
             return self._prepare_promotion(request)
         if tool_name is MemoryToolName.REQUEST_REDACTION:
             return self._prepare_redaction(request)
-        raise MemoryToolExecutionInputError(f"unsupported memory tool {tool_name!s}")
+        # B-114: HARNESS-INTERNAL exhaustiveness, never a caller argument.
+        # `request.tool_name` is typed `MemoryToolName` on an `extra="forbid"`
+        # model, so a request that reaches here ALWAYS carries a valid member -
+        # this branch fires only when the executor lacks a `_prepare_*` for one.
+        # C-MEM-19 v1.3's type boundary forbids raising that as the input type.
+        raise MemoryToolExecutionInternalError(f"unsupported memory tool {tool_name!s}")
 
     def _prepare_search(self, request: MemoryToolExecutionRequest) -> _PreparedSearch:
         args = request.arguments
