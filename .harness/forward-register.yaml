@@ -3424,7 +3424,7 @@ items:
     v1.2 -> v1.3 by a dedicated spec-writer AND `Implementation_Plan_Memory_Substrate_v1.md` v1.2
     -> v1.3 (U-MEM-22 :829 extended, NO new unit), with BOTH clearance markers per root CLAUDE.md
     section 4.5 -- and then the IMPL leg (1 enum member + 1 declaration flip + 1 docstring rewrite
-    + 1 fixture re-key; 8 witness rows flip + 2 added negative rows + the mutation probe; PLUS
+    + 1 fixture re-key; SEVEN witness rows flip and the eighth is re-keyed as an executor-side negative row (revised at the 2026-08-06 spec leg, out-of-family round 3) + 2 added negative rows + the mutation probes; PLUS
     the A-ii source re-typing at the SIX llm_dispatch.py internal-fault sites, and a reachability
     witness SCOPED TO THE CLASSIFY-ROUTED POPULATION -- the dispatch prepare path is out of that
     scope per the coverage narrowing above). RETRY-EXIT-CLASS CONSEQUENCE OF THE RE-TYPE, surfaced

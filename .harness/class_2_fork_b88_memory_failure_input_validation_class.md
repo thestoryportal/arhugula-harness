@@ -744,8 +744,9 @@ ratification.**
 `Implementation_Plan_Memory_Substrate_v1.md` v1.2 → v1.3 (U-MEM-22 `:829` extended, **no new unit**),
 by a dedicated `spec-writer`, with **both** clearance markers per root `CLAUDE.md` §4.5 (under A the
 plan does change, so the plan marker is owed too). **Impl leg (owed after it):** 1 enum member + 1
-declaration flip + 1 docstring rewrite + 1 fixture re-key; 8 witness rows flip + the two added
-negative rows + the mutation probe; **plus the A-ii source re-typing at the SIX `llm_dispatch.py`
+declaration flip + 1 docstring rewrite + 1 fixture re-key; **SEVEN** witness rows flip and the
+eighth is RE-KEYED as an executor-side negative row (revised at the spec leg - see §11.6) + the two
+added negative rows + the mutation probes; **plus the A-ii source re-typing at the SIX `llm_dispatch.py`
 internal-fault sites, with a classification-reachability witness SCOPED TO THE CLASSIFY-ROUTED
 POPULATION** — the dispatch prepare path is outside that scope per §11.1's coverage narrowing, and
 must not be promised by this leg — **plus an END-TO-END dispatch/retry witness for the re-typed
