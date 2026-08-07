@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `805e5abd71dd` |
+| `workspace_state_hash` | `4d62979fe519` |
 | `last_refreshed` | 2026-08-07T00:00:00Z |
-| `git_head` | `5a91321a` —  |
+| `git_head` | `802a6bd8` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 110 |
 
@@ -243,7 +243,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| #1261 | `roadmap-refresh-post-1260` | — | — |
+| *(none)* | — | — | No open PRs at refresh time. |
 
 ---
 
@@ -251,11 +251,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1263 | 2026-08-07 | Rider bundle merged (3-lens ALL-APPROVE at 383d1376): ENOENT missing_ok narrowing (lens-2-adjudicated compatible with U-RT-151 AC #4), gate-log row, pr stamps (B-57 #1256; B-110 #1235+#1260; B-111 #1258+#1260; B-112 #1256), B-117 minted (pytest basename-collision guard gap; importlib mode falsified as a fix), three stale prose carriers rewritten, AC #2 undercount fix, two witness strengthenings. Register: 117 items, 0 open / 15 registered_finding / 1 held / 101 closed. Next: B-115/B-116 grounding legs; standing riders (Runtime v2.60 probe-text corrections incl. ENOENT narrowing note + B-57 md closure bullet gap; v1_99 cite at next CP delta). |
 | 1260 | 2026-08-07 | U-RT-151 impl leg merged (3-lens gate ALL-APPROVE at dc338e2a): B-111 record publication-temp cleanup (past-TTL age gate, post-replace ordering, failure emission on existing carrier) + B-110 identity-revalidation companion — BOTH rows closed (register 0 open / 14 registered_finding / 101 closed). Next: rider bundle (ENOENT missing_ok nit + gate-log commit + stale prose carriers + B-112 guard row mint + pr stamps B-57 #1256, B-111/B-110 #1260); Runtime plan v2.60 probe-text rider owed at next Runtime delta. |
 | 1258 | 2026-08-07 | B-111 plan leg merged: Runtime v2.59 (U-RT-150 AC #15 publication-temp qualifier + NEW U-RT-151, disposition (a)); five review rounds absorbed (R4 codex 4xP2 incl. past-TTL age gate, failure-path emission on existing carrier, B-110 companion scheduling; R5 fresh-context 5 ripples). Next: U-RT-151 impl leg + B-110 companion fix. |
 | PR #1256 | 2026-08-07 | feat(is+cp+runtime): U-IS-11 landed — WRITER_OWNED_TIMESTAMP election at 12 classified direct-append sites (both injection-caveat rows resolved ELECT, council trigger unfired; row-13 caveat premise falsified and recorded); real two-subprocess ordering witness with shipping RED half; 17 PD-8 probes + 19 gate-lens mutations all RED; audit_writer retry loop removed per AC #19; 3-lens gate ALL-APPROVE FIRST PASS (fourth consecutive); register B-57 AND B-112 closed — 99 closed / 0 open |
 | PR #1255 | 2026-08-07 | **`B-57` SPEC LEG** — IS spec v1.12→v1.13 (NEW C-IS-07 §7.6.1: PER-CALL-SITE election of writer-owned timestamp sampling on DIRECT appends via the EXISTING `WRITER_OWNED_TIMESTAMP` sentinel; never a default, never a writer mode; non-electing producers byte-verbatim; + a residual-status paragraph DISCHARGING §7.6's residual, both preserved paragraphs verbatim; + a cross-reference-only §7.1 row-7 clause) + IS plan v2.8→v2.9 (U-IS-11 ACs #14–#20 + #14-bis + the 14-row per-site table: 10 ELECT / 2 injection-caveat / 1 RETAIN / 1 DEFER) + 2 clearance markers. ZERO contract numbers / hash / CXA / new units / code. `B-57` registered_finding→**open** (B-96/B-88 enum precedent); `B-112` unmoved. 2 filing count claims corrected; 3 review rounds to convergence. |
-| PR #1253 | 2026-08-07 | B-57/B-112 Class 2 fork FILED (doc-only, .harness/** only); both rows stay registered_finding — the pr: pointers and any status flip ride the RATIFICATION leg. Readings: A (RECOMMENDED) narrow IS delta authorizing PER-CALL-SITE opt-in to WRITER_OWNED_TIMESTAMP on direct surfaces, default unchanged, extending EXISTING C-IS-07 §7.6 (zero contract numbers / hash / CXA / new units) + U-IS-11 AC widening + a per-site classification table; B HOLD. Decisive cheapener: the sentinel check at state_ledger_write.py:316-320 is UNCONDITIONAL — the mechanism exists, only the authorization is missing, and the direct-path restriction is held by PROSE alone. Council NOT convened, PROBE-RESOLVED (B-112 step-(3) C3⊥C11 trigger unreached: only as_is_wiring.py:129 retains caller-supplied semantics and it is genuine single-producer EVENT time). Plus TWO operator-ratified mints: B-115 (W-5 cell-3 successor — the MEASURED same-text/same-model/different-provider duplicate JSONL + TRANSIENT_RETRY re-entry via MemoryToolExecutionStoreError, cross-linked to closed B-84, now open-row-queryable) and B-116 (breaker-scope question: should DETERMINISTIC harness-internal faults count toward a PROVIDER breaker — frames the QUESTION only). Register 114→116 items / 16→18 registered_finding, snapshot re-pinned same commit, --check green. Grounding: 27/27 automated checks green, every cite re-read BY CONTENT; FIVE drift items reported not absorbed — three wrong module PATHS; sibling_ledger_entry_composition.py:163 is PRODUCTION-UNREACHABLE (zero non-test callers) so the exposed surface is 11 of 12 sites; retry_breaker_fallback ~:1025→:1028; the two injected-time_source sites CANNOT adopt without overriding the test-determinism seam; and _CLOCK_SKEW_TOLERANCE's own comment falsely calls itself configuration-supplied. Review: gemini 2 rounds, APPROVE/APPROVE (round 2 verified 4 falsifiable claims against verbatim source, found no omitted undermining fact). CI 16/16 green; merge-gate skipped (doc-only). |
 ---
 
 ---
