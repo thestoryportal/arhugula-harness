@@ -6833,14 +6833,19 @@ def _maybe_post_join_synthesis(
 # compares. This supersedes the prior one-drain-one-timestamp policy — entries of
 # ONE drain MAY now carry distinct, non-decreasing instants, each sampled at its
 # own append. The zero-tolerance writer remains the live safety net for the DIRECT
-# (linear / runtime) append paths, whose caller-supplied semantics are unchanged
-# (the sentinel is opt-in per entry on the drain surface only, never a default).
-# B-48 closed the drain-vs-drain half ONLY: a DIRECT runtime audit / cost write
-# interleaving the lock CAN still invert against a drain append — its timestamp is
-# still captured caller-side, OUTSIDE `_WRITE_LOCK` — which is why
-# `audit_writer.py` carries a bounded 5-attempt resample-retry and
-# `cost_attribution_f2_write.py` (which carries none) stays exposed. That residual
-# is the `B-57` register row (IS spec C-IS-07 §7.6 "Registered residual").
+# (linear / runtime) append paths that do NOT elect: the sentinel is opt-in PER CALL
+# SITE and never a default, so every non-electing direct producer keeps its
+# caller-supplied semantics byte-verbatim.
+# B-48 closed the drain-vs-drain half ONLY, and the DIRECT-path residual it left —
+# a runtime audit / cost write interleaving the lock and inverting against a drain
+# append, its timestamp captured caller-side OUTSIDE `_WRITE_LOCK` — is CLOSED at
+# `B-57` Reading A (IS spec C-IS-07 §7.6.1, IS spec v1.13; U-IS-11 landed at
+# PR #1256), which authorizes that same per-call-site election on DIRECT append
+# surfaces. Both sites this comment used to name now ELECT: `audit_writer.py` and
+# `cost_attribution_f2_write.py` each stamp `WRITER_OWNED_TIMESTAMP`, so neither is
+# exposed, and `audit_writer.py`'s bounded 5-attempt resample-retry is DELETED, not
+# merely unused — its retry re-stamped the payload with a CALLER-supplied value,
+# which would have silently un-elected the site mid-append.
 # See `.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md`
 # §8 + `drain_branch_buffers` + `test_concurrent_sibling_drains_invert_timestamp`
 # (a passing witness; previously strict-xfail). The `timestamp=` these helpers

@@ -123,12 +123,28 @@ overtaken by a later-arriving writer and be refused with
 ``NonMonotonicTimestampError``. **The lock layer cannot fix this and should not
 try**: no acquisition ordering makes a timestamp sampled arbitrarily long before
 acquisition correct, and the ordering flock itself guarantees is unspecified.
-**The remedy already exists in the cleared spec** — C-IS-07 §7.6 (IS spec v1.11)
-added ``WRITER_OWNED_TIMESTAMP``, which samples the timestamp INSIDE the write
-critical section so sampling order EQUALS append order, monotonic by
-construction and immune to any lock's fairness. Selecting it per caller is a
-semantic decision about whose clock a given entry records, so it is registered
-rather than applied wholesale here.
+**The remedy is APPLIED, not merely registered — ``B-112`` is CLOSED.**
+C-IS-07 §7.6 (IS spec v1.11) added ``WRITER_OWNED_TIMESTAMP``, which samples the
+timestamp INSIDE the write critical section so sampling order EQUALS append
+order, monotonic by construction and immune to any lock's fairness — but §7.6
+scoped it to the buffered/branch-DRAIN surface only, leaving every DIRECT
+producer on caller-supplied semantics. That residual was ``B-57``, ratified as
+**Reading A** and authorized at the NEW **C-IS-07 §7.6.1 (IS spec v1.13)**:
+election is PER CALL SITE on DIRECT append surfaces, never a default and never a
+mode on the writer, and every non-electing direct producer keeps caller-supplied
+semantics byte-verbatim. U-IS-11 landed the conversions at PR #1256, including
+the two sites this bound's own review named — ``audit_writer`` and
+``cost_attribution_f2_write``, both resolved ELECT — and with them ``B-112``'s
+own prescribed two-OS-process witness
+(``harness-is/tests/test_b57_direct_append_election.py``), which exercises this
+overtake in BOTH directions.
+
+**What this bound still owns, stated against interest:** the handoff-fairness
+loss above is UNCHANGED and UNREPAIRED — the polling wait still drops kernel
+handoff ordering, and the lock layer still cannot and should not fix it. What
+changed is that its one production consequence no longer has a caller-sampled
+timestamp to invert, at the classified sites. A NEW direct producer that does
+not elect re-enters the exposed set.
 """
 
 

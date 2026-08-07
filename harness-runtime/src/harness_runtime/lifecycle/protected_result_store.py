@@ -1436,9 +1436,16 @@ class ProtectedResultStore:
         # rides the sweep's EXISTING report-log carrier. The SUCCESS path emits
         # nothing: this artifact is a candidate of neither class and appears in
         # no count, gauge or report.
+        # A leftover that VANISHED before this unlink is a benign concurrent
+        # reclaim, not a cleanup failure: two sweeps can collect the same
+        # pre-lock leftover and the first to reach here removes it. Reporting
+        # that as a failure would inject a false positive into the operator's
+        # persistent-failure signal, so `missing_ok=True` suppresses ONLY the
+        # ENOENT case — every other `OSError` is still reported exactly as
+        # before, on the sweep's existing report-log carrier.
         for stale_publication_temp in stale_publication_temps:
             try:
-                os.unlink(stale_publication_temp)
+                Path(stale_publication_temp).unlink(missing_ok=True)
             except OSError as exc:
                 logger.error(
                     "protected result store: stale record-publication temporary unlink "
