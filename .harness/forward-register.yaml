@@ -3356,7 +3356,13 @@ items:
     and the six/two split itself is unchanged. One judgement call is recorded as overturnable at the
     plan change-note: the fork''s "no new unit" line predates A-ii''s ratified scope, so the vocabulary
     half stayed an AC amendment as prescribed while the A-ii half took NEW U-MEM-28, which no landed
-    unit owned. ONE FINDING CARRIED FORWARD, recorded not repaired (out-of-family review round 1 [P1]): the
+    unit owned. A SECOND, SEPARATE DEPARTURE: U-MEM-28 requires a SEVENTH re-typing the ratification
+    did not enumerate -- `_prepare`''s executor-side exhaustiveness fall-through (`memory_tool_executor.py:373`),
+    a harness-internal fault under spec v1.3''s own type-boundary rule, at a site the fork never surveyed
+    because it surveyed `llm_dispatch.py` only. That is a SCOPED EXTENSION of the ratified six-site list,
+    NOT a decomposition; surfaced rather than absorbed (out-of-family rounds 3 + 7) and overturnable two
+    ways -- the impl leg''s re-grounding may keep the input class, or the operator may strike the seventh
+    site and leave the residual non-conformance recorded against C-MEM-19. ONE FINDING CARRIED FORWARD, recorded not repaired (out-of-family review round 1 [P1]): the
     same model-supplied `scope_ref` MISMATCH is refused as a DENIAL at the executor (`memory_tool_executor.py:794-800`,
     one of the four sites this row''s own impl half re-classified to `policy_denial`) and as an INPUT ERROR
     at the dispatch prepare layer (`lifecycle/llm_dispatch.py:4371`, retained by ratified name), so one logical
