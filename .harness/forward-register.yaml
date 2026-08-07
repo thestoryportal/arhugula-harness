@@ -3168,9 +3168,12 @@ items:
   title: 'Memory failure telemetry: substring-keyed classify_memory_failure collapses the typed input-error family (and two real policy denials) to io_failure'
   status: open
   pr: '#1220 (the Class 2 fork filing) + #1233 (the 2026-08-05 ratification record) + #1245 (the SPEC leg -- Memory spec v1.3 + Memory plan v1.3, both clearance markers)'
-  summary: '[SUPERSEDED 2026-08-05 -- RATIFIED as READING A with sub-decision A-ii = RE-TYPE;
-    the spec half is DECIDED and the status is now `design_substrate_gated` with a spec leg then
-    an impl leg owed. Every ''the spec half REMAINS, so the row stays registered_finding'' statement
+  summary: '[CURRENT STATE 2026-08-06 -- RATIFIED as READING A with sub-decision A-ii = RE-TYPE, and
+    the SPEC LEG HAS LANDED (PR #1245: Memory spec v1.3 + Memory plan v1.3, both clearance markers).
+    `status: open`. THE ONLY THING OWED IS THE IMPL LEG, carried by plan unit U-MEM-28 -- do NOT
+    schedule the spec leg again. This bracket REPLACES the 2026-08-05 one that said the status was
+    `design_substrate_gated` with a spec leg then an impl leg owed; that reading is superseded, not
+    merely appended to. Every ''the spec half REMAINS, so the row stays registered_finding'' statement
     below is the pre-ratification record, kept as history.] Surfaced by the merge-gate lens-2
     sweep on the B-84 arc (2026-07-28); PRE-EXISTING and latent, orthogonal to B-84 but made visible
     by it. `classify_memory_failure` (`harness-is/src/harness_is/memory_observability.py:150-163`
@@ -3489,7 +3492,7 @@ items:
     see the drift-repair list above), so step (2) -- the input-validation class, a Class 1 C-MEM-19
     vocabulary amendment -- remained the sole open half UNTIL THE 2026-08-05 RATIFICATION, which
     DECIDED it as Reading A + A-ii (see the ratification paragraph at the head of this close_out);
-    what remains is the SPEC LEG that writes the decision, not the decision. SPEC-HALF FORK FILED
+    the SPEC LEG that writes the decision LANDED 2026-08-06 at PR #1245 (see the close_out lead paragraph), so what remains is the IMPL LEG at U-MEM-28, not the decision and not the spec text. SPEC-HALF FORK FILED
     2026-08-05 at `.harness/class_2_fork_b88_memory_failure_input_validation_class.md` -- readings
     A (add a seventh member `input_validation_failure`, RECOMMENDED) / B (bless the `provider_adapter_failure`
     stopgap in contract text) / C (defer under a D-0..D-3 demand test); recommendation A, runner-up
