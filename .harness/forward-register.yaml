@@ -61,11 +61,11 @@ snapshot:
   total: 114
   open: 0
   design_substrate_gated: 0
-  registered_finding: 17
+  registered_finding: 16
   operator_gated: 0
   held: 1
-  closed: 96
-  identity_digest: 2ff7b2e9a9b0f97d
+  closed: 97
+  identity_digest: 9ec02294adeb2892
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -1417,16 +1417,43 @@ items:
     scope-widening); B-57 covers the remaining direct writers. The superseded defect record section 8.3 phrased the fix this broadly;
     the filing did not ratify it.'
   close_out: 'IF the direct-path inversion materializes in practice (a real NonMonotonicTimestampError
-    from production direct writers): a narrow IS spec delta extending section 7.6''s writer-owned
-    sampling to an opt-in direct-append mode (or per-writer serialization guidance) + U-IS-11 widening.
-    Until then detect-then-refuse is the committed posture and this row is the queryable record.
-    2026-08-05 grounding re-check at HEAD 43d4dda5 — premise INTACT and the load-bearing lines read
-    directly: state_ledger_write.py still carries _CLOCK_SKEW_TOLERANCE = timedelta(0) at :69, the
-    NonMonotonicTimestampError refusal at :321-322, and writer-owned sampling strictly OPT-IN via
-    the sentinel at :318 (WRITER_OWNED_TIMESTAMP defined at :83) -- so DIRECT appends keep
-    caller-supplied semantics exactly as registered. Disposition VERIFIED-DORMANT **AS OF THAT PASS -- SUPERSEDED 2026-08-06, SEE BELOW**. NOT re-walked
-    this pass -- the ~10 enumerated direct-writer call sites individually (the refusal mechanism and
-    the opt-in gate are the load-bearing claims and both hold). 2026-08-06 -- DISPOSITION MOVES FROM VERIFIED-DORMANT TO **PARTIALLY MET**, on evidence from the B-93 build leg (`B-112`, PR #1241). This row''s close-out is conditioned on the direct-path inversion *materializing in practice*; `B-112` records a MECHANISM that raises its probability rather than an observed production failure -- the B-93 liveness deadline replaced a blocking `flock` with a POLLING retry, which does not preserve the kernel''s handoff fairness, so a direct writer whose timestamp was sampled BEFORE it queued can now be overtaken and refused. Reproduced 12 of 20 runs by out-of-family review against a focused two-process contention probe. THE DEFERRAL STILL HOLDS and the prescribed route is UNCHANGED (narrow IS spec delta extending section 7.6 writer-owned sampling to an opt-in direct-append mode, or per-writer serialization guidance, + U-IS-11 widening) -- what changed is the PROBABILITY, not the remedy. `B-112` is the cause-and-evidence record and DEFERS the adoption question here; this row remains the remedy owner. ONE data point for pricing that route: `harness-is/tests/test_shadow_git_rollback.py`''s concurrent-append worker now opts into the sentinel on a DIRECT append surface -- adjudicated at the B-93 leg as permitted (section 7.6 constrains the CONTRACT for every existing direct producer; a single explicit opt-in changes no producer''s semantics and sets no default), and recorded here as the first direct-surface use of the sentinel in the tree.'
+    from production direct writers): a narrow IS spec delta extending section 7.6''s writer-owned sampling
+    to an opt-in direct-append mode (or per-writer serialization guidance) + U-IS-11 widening. Until then
+    detect-then-refuse is the committed posture and this row is the queryable record. 2026-08-05 grounding
+    re-check at HEAD 43d4dda5 — premise INTACT and the load-bearing lines read directly: state_ledger_write.py
+    still carries _CLOCK_SKEW_TOLERANCE = timedelta(0) at :69, the NonMonotonicTimestampError refusal
+    at :321-322, and writer-owned sampling strictly OPT-IN via the sentinel at :318 (WRITER_OWNED_TIMESTAMP
+    defined at :83) -- so DIRECT appends keep caller-supplied semantics exactly as registered. Disposition
+    VERIFIED-DORMANT **AS OF THAT PASS -- SUPERSEDED 2026-08-06, SEE BELOW**. NOT re-walked this pass
+    -- the ~10 enumerated direct-writer call sites individually (the refusal mechanism and the opt-in
+    gate are the load-bearing claims and both hold). 2026-08-06 -- DISPOSITION MOVES FROM VERIFIED-DORMANT
+    TO **PARTIALLY MET**, on evidence from the B-93 build leg (`B-112`, PR #1241). This row''s close-out
+    is conditioned on the direct-path inversion *materializing in practice*; `B-112` records a MECHANISM
+    that raises its probability rather than an observed production failure -- the B-93 liveness deadline
+    replaced a blocking `flock` with a POLLING retry, which does not preserve the kernel''s handoff fairness,
+    so a direct writer whose timestamp was sampled BEFORE it queued can now be overtaken and refused.
+    Reproduced 12 of 20 runs by out-of-family review against a focused two-process contention probe. THE
+    DEFERRAL STILL HOLDS and the prescribed route is UNCHANGED (narrow IS spec delta extending section
+    7.6 writer-owned sampling to an opt-in direct-append mode, or per-writer serialization guidance, +
+    U-IS-11 widening) -- what changed is the PROBABILITY, not the remedy. `B-112` is the cause-and-evidence
+    record and DEFERS the adoption question here; this row remains the remedy owner. ONE data point for
+    pricing that route: `harness-is/tests/test_shadow_git_rollback.py`''s concurrent-append worker now
+    opts into the sentinel on a DIRECT append surface -- adjudicated at the B-93 leg as permitted (section
+    7.6 constrains the CONTRACT for every existing direct producer; a single explicit opt-in changes no
+    producer''s semantics and sets no default), and recorded here as the first direct-surface use of the
+    sentinel in the tree. 2026-08-07 -- GROUNDING INPUT FOR THE PENDING `B-57`/`B-112` FORK FILING, recorded
+    here and NOT acted on (the fork is NOT filed at this PR). THE ENUMERATION AT THIS ROW''S 2026-07-27
+    PASS UNDER-COUNTS THE DIRECT WRITERS BY FOUR. Four production sites construct a state-ledger entry
+    with a CALLER-SAMPLED timestamp and appear in NO prior enumeration on this row, each re-resolved BY
+    CONTENT at HEAD: `harness-cp/src/harness_cp/workload_binding_engine_class_selection.py:337` (`timestamp=datetime.now(UTC)`);
+    `harness-cp/src/harness_cp/hitl_as_tool_call_rewriting.py:290` (same); `harness-cp/src/harness_cp/per_step_override_evaluator.py:489`
+    (a `timestamp` PARAMETER, sampled by its caller at `:523` as `datetime.now(UTC)`); and `harness-cp/src/harness_cp/sibling_ledger_entry_composition.py:163`
+    (a `timestamp` parameter on the sibling-composition path). TWO EXISTING CITES HAVE DRIFTED and are
+    re-stamped: the two genuine `workflow_driver` direct appends now sit at `:6074` and `:6297` (the row
+    previously cited `:6038` / `:6261`); the SUBSTANCE is unchanged -- both are still `timestamp=datetime.now(UTC)`
+    on a `ctx.ledger_writer` append. THIS DOES NOT CHANGE THE ROW''S DISPOSITION -- still PARTIALLY MET,
+    still deferred, remedy unchanged -- it changes the SIZE OF THE SURFACE the prescribed route must price,
+    which is grounding the fork filing owes.'
   council: 'no -- bounded follow-on; the C3/C9 reasoning is recorded at the IS v1.11 change-note'
   heading: '### B-57 · Direct-writer caller-supplied timestamp capture-order inversion *(registered at
     the B-48 apply arc, 2026-07-19)*'
@@ -5094,23 +5121,57 @@ items:
     under-report-width window for that single candidate. Reachability is remote (the name is drawn
     from a large random space and must be redrawn in the interval between two sweeps) and is
     confined to crash orphans, never to a paid effect''s stored entry.'
-  close_out: 'Two grounded dispositions, neither owed by the B-96 impl leg. (a) ACCEPT AND
-    DOCUMENT -- the residual is already stated at Runtime spec v1.111 section 14.8.11.1 term 5 as a
-    bounded, named residual with its exact cost, and B-96 U-RT-150 AC #5 witnesses the
-    TIMESTAMP-DERIVED bound -- explicitly NOT term 2, whose publication bound does not extend to a
-    reused temporary name -- rather than an unbuildable freshness guarantee; on this
-    disposition the row closes as documented-and-accepted. (b) WIDEN THE RATIFIED CONTENT SET --
-    add a generation-stable identity as a third member, or key on an identity that is not the bare
-    basename. That is a CLASS 2 OPERATOR DECISION, not a spec-leg or impl-leg act: the two-member
-    closure is ratified at the B-96 fork section 11.3 table and at council condition #5, and its
-    stated ground is that widening adds no field, no carrier and no namespace. A fork filing is
-    owed before (b) may be built. (c) LOCK-BOUND IDENTITY REVALIDATION BEFORE REMOVAL --
-    re-verify under the lock that the path still names the file the selection decided on. Cheap, and
-    B-96 U-RT-150 is already working at that exact site so that unit MAY take it, but it is NOT owed by
-    the B-96 legs, whose ratified scope is the reclaim RULE; mandating it there would be scope creep on
-    a pre-existing hazard. NOT OWED BY ANY LEG: reopening the B-96 ceiling question, or any
-    change to the candidate-filename key over BOTH sweep classes, which condition #5 requires for
-    an independent reason (crash orphans would otherwise be permanently unreclaimable).'
+  close_out: 'Two grounded dispositions, neither owed by the B-96 impl leg. (a) ACCEPT AND DOCUMENT --
+    the residual is already stated at Runtime spec v1.111 section 14.8.11.1 term 5 as a bounded, named
+    residual with its exact cost, and B-96 U-RT-150 AC #5 witnesses the TIMESTAMP-DERIVED bound -- explicitly
+    NOT term 2, whose publication bound does not extend to a reused temporary name -- rather than an unbuildable
+    freshness guarantee; on this disposition the row closes as documented-and-accepted. (b) WIDEN THE
+    RATIFIED CONTENT SET -- add a generation-stable identity as a third member, or key on an identity
+    that is not the bare basename. That is a CLASS 2 OPERATOR DECISION, not a spec-leg or impl-leg act:
+    the two-member closure is ratified at the B-96 fork section 11.3 table and at council condition #5,
+    and its stated ground is that widening adds no field, no carrier and no namespace. A fork filing is
+    owed before (b) may be built. (c) LOCK-BOUND IDENTITY REVALIDATION BEFORE REMOVAL -- re-verify under
+    the lock that the path still names the file the selection decided on. Cheap, and B-96 U-RT-150 is
+    already working at that exact site so that unit MAY take it, but it is NOT owed by the B-96 legs,
+    whose ratified scope is the reclaim RULE; mandating it there would be scope creep on a pre-existing
+    hazard. NOT OWED BY ANY LEG: reopening the B-96 ceiling question, or any change to the candidate-filename
+    key over BOTH sweep classes, which condition #5 requires for an independent reason (crash orphans
+    would otherwise be permanently unreclaimable). 2026-08-07 -- RE-SCOPED AT A GROUNDING PASS; THE ROW
+    NOW CARRIES MECHANISM (c) ALONE. (i) THE PRIMARY HALF IS DISCHARGED IN SUBSTANCE. Disposition (a)
+    ACCEPT-AND-DOCUMENT is SATISFIED at HEAD: the landed U-RT-150 witness `test_reused_temporary_name_stays_bounded_by_its_own_filesystem_timestamp`
+    (`harness-runtime/tests/test_lifecycle_protected_result_store.py:2731-2795`) asserts exactly the TIMESTAMP-DERIVED
+    bound this row says survives a name reuse -- the recreated file is NOT reclaimed before its own filesystem
+    timestamp + TTL and IS reclaimed after (`:2794-2795`) -- i.e. the degradation is witnessed at the
+    strength the ratified two-member carrier can actually deliver, and no unbuildable freshness guarantee
+    is claimed anywhere. Disposition (b) WIDEN-THE-RATIFIED-CONTENT-SET remains a Class 2 OPERATOR decision
+    and is NOT opened by this pass; the row does not carry it as owed work. (ii) WHAT THE ROW RETAINS:
+    mechanism (c) -- the SECOND, DISTINCT, PRE-EXISTING sweep-phase-split hazard -- ALONE. OFFSETS RE-STAMPED
+    AT HEAD BY CONTENT (the summary''s `:781-800` / `:821-822` / `:845-847` cites are from the B-96-era
+    file and are SUPERSEDED): selection of BOTH candidate classes happens under `self._publish_lock` +
+    `self._cross_process_lock()` at `harness-runtime/src/harness_runtime/lifecycle/protected_result_store.py:1111-1135`;
+    the ENTRY unlink is OFF-LOCK at `:1173`; the TMP-ORPHAN unlink is OFF-LOCK at `:1201`. (iii) SEVERITY
+    SHARPENED -- (c) is a HOLE IN `B-68`''s OWN whole-lifetime-lock fix, not merely an adjacent race.
+    `_publish_atomic` holds BOTH the publish lock and the cross-process lock across the temporary''s ENTIRE
+    lifetime (`:810-858` -- `mkstemp` at `:811` inside the `with` opened at `:810`, `os.unlink(tmp_name)`
+    in the `finally` at `:857-858`) PRECISELY so that no sweep can unlink an in-flight temporary. A SECOND
+    concurrent sweep''s OFF-LOCK unlink at `:1201` walks a path captured BEFORE that hold began and therefore
+    BYPASSES it. If it fires, the publisher''s subsequent `os.link` raises `FileNotFoundError` -- a LOST
+    RECOVERY RECORD FOR A COMPLETED PAID EFFECT, which is the exact loss the protected result store exists
+    to prevent. (iv) REACHABILITY, QUANTIFIED -- this is why it stays REGISTERED rather than opening:
+    firing requires an EXACT `tempfile._RandomNameSequence` redraw of the just-freed name inside the window,
+    and that sequence draws 8 characters over a 37-symbol alphabet = 3.51e12 distinct names, so ~2.8e-13
+    per redraw (ground-truthed against Python 3.12.13''s `tempfile` on the dev machine), narrowed further
+    by requiring two overlapping sweeps with a publish landing between them. (v) TRIGGER REPLACED. The
+    ''B-96''s U-RT-150 is already working at that exact site so that unit MAY take it'' trigger is EXPIRED
+    -- U-RT-150 has landed and did NOT take it. The standing trigger is now OPPORTUNISTIC: THE NEXT ARC
+    THAT TOUCHES `gc_sweep`''s PHASE SPLIT TAKES IT. Nothing else opens the row. (vi) THE FIX IS PRICED
+    for that arc so it does not have to be re-derived: move the `tmp_candidates` unlink loop (`:1199-1201`)
+    back UNDER the lock -- `B-75`''s off-lock rationale does NOT bind it, since that loop performs no
+    decrypt and no unbounded work -- and add identity revalidation against the `(st_dev, st_ino, st_mtime)`
+    triple captured at SELECTION time, because a bare re-`stat()` is INSUFFICIENT (POSIX offers no compare-inode-and-unlink
+    primitive, so the comparison must be made under the same lock the unlink takes). ~25 lines plus ONE
+    injected witness: monkeypatch `tempfile.mkstemp` to hand the publisher the just-freed name, and assert
+    the second sweep REFUSES to unlink it.'
   council: 'NOT owed at registration. The question is whether a ratified CLOSED content set should
     grow one member to close a remote, bounded, crash-orphan-only residual -- a scoping question
     for an operator ratification, not a nameable cross-domain tension. If disposition (b) is opened,
@@ -5121,7 +5182,36 @@ items:
   title: 'The GC observation record''s publication temporary is unreclaimable after a mid-publication kill, because both sweep globs exclude it by construction'
   status: registered_finding
   pr: '#1237'
-  summary: 'Surfaced at the B-96 IMPL leg (U-RT-150) by out-of-family Codex round 2 [P2], against that leg''s own code -- reported, not absorbed. `_publish_observation_record` publishes the durable grace record by `tempfile.mkstemp(prefix="gc-observations.publishing-")` -> write -> fsync -> `os.replace`, with an `except BaseException: unlink(tmp); raise` cleanup. A process KILLED strictly between `mkstemp` and `os.replace` runs NO Python cleanup, so the temporary survives. That prefix is deliberately disjoint from BOTH sweep globs (U-RT-150 AC #15''s second half REQUIRES the disjointness: reusing the `.tmp-` payload prefix would make the next sweep classify the artifact as crash-orphaned ciphertext and unlink it as though it were a payload), and nothing else in the store enumerates it -- so no path ever removes it, and it is invisible to the term-8 gauge and to the `harness-inspect` counts as well. A repeated crash loop landing in that window could therefore accumulate files on the store volume with no bound and no operator-visible signal. Reachability is REMOTE and of the same order as B-110: the window is the sub-millisecond gap between `mkstemp` and `os.replace`, once per sweep, and it needs a KILL (not an exception -- an exception takes the cleanup path, which is witnessed by `test_record_publication_is_crash_atomic_and_never_no_replace_or_unlink_recreate`).'
+  summary: 'Surfaced at the B-96 IMPL leg (U-RT-150) by out-of-family Codex round 2 [P2], against that
+    leg''s own code -- reported, not absorbed. `_publish_observation_record` publishes the durable grace
+    record by `tempfile.mkstemp(prefix="gc-observations.publishing-")` -> write -> fsync -> `os.replace`,
+    with an `except BaseException: unlink(tmp); raise` cleanup. A process KILLED strictly between `mkstemp`
+    and `os.replace` runs NO Python cleanup, so the temporary survives. That prefix is deliberately disjoint
+    from BOTH sweep globs (U-RT-150 AC #15''s second half REQUIRES the disjointness: reusing the `.tmp-`
+    payload prefix would make the next sweep classify the artifact as crash-orphaned ciphertext and unlink
+    it as though it were a payload), and nothing else in the store enumerates it -- so no path ever removes
+    it, and it is invisible to the term-8 gauge and to the `harness-inspect` counts as well. A repeated
+    crash loop landing in that window could therefore accumulate files on the store volume with no bound
+    and no operator-visible signal. Reachability is REMOTE and of the same order as B-110: the window
+    is the sub-millisecond gap between `mkstemp` and `os.replace`, once per sweep, and it needs a KILL
+    (not an exception -- an exception takes the cleanup path, which is witnessed by `test_record_publication_is_crash_atomic_and_never_no_replace_or_unlink_recreate`).
+    WINDOW CORRECTION (2026-08-07 grounding pass, by direct read). The text above calls the window *"the
+    sub-millisecond gap between `mkstemp` and `os.replace`"*. THAT UNDERSTATES IT. The gap at `harness-runtime/src/harness_runtime/lifecycle/protected_result_store.py:1329-1332`
+    is FSYNC-INCLUSIVE -- `os.fdopen` -> `handle.write` -> `handle.flush` -> `os.fsync(handle.fileno())`
+    all sit INSIDE it, before the `os.replace` at `:1333` -- so on a slow or contended volume the window
+    is a DURABILITY-BOUNDED interval, not a sub-millisecond one. Worse, it is CORRELATED with exactly
+    the condition that provokes an external kill: a supervisor SIGKILLing a process that appears hung
+    on a slow mount lands PREFERENTIALLY inside this window. COUNTER-CORRECTION, STATED AGAINST INTEREST:
+    the *"accumulate files on the store volume with no bound"* framing OVERSTATES the cost in the other
+    direction -- each leftover is ONE record-sized file per killed sweep, so exhausting a volume needs
+    an implausible number of kills. THE REAL COST IS ACCOUNTING INVISIBILITY, not capacity: the leftovers
+    are invisible to the term-8 gauge and to the `harness-inspect` counts, so an operator''s orphan accounting
+    silently UNDER-REPORTS. NET: reachability is HIGHER than registered and the harm is NARROWER than
+    registered. GROUNDING RECOMMENDS DISPOSITION (a) -- the AC #15 narrowing -- on PLAN-TEXT-CORRECTNESS
+    grounds rather than on severity: AC #15''s no-removal clause, read literally, forbids the store from
+    cleaning up its OWN prefix, which is not what the AC exists to protect (it exists to stop the record
+    temporary being unlinked AS CIPHERTEXT). DECISION PENDING OPERATOR -- this note records the grounding,
+    it does not select the disposition.'
   close_out: 'DECLINED AT THE B-96 IMPL LEG WITH A GROUNDED PIN, registered rather than absorbed. The natural fix -- having `_publish_observation_record` remove stale siblings of its OWN prefix at publication time, mirroring `_publish_atomic`''s `finally: os.unlink(tmp_name)` for payload temps -- is FORECLOSED by U-RT-150 AC #15 as written: its mutation probe states that a sweep after a simulated mid-publication crash "must not enumerate, report or remove it", and the AC''s witness (`test_record_publication_temporary_is_never_enumerated_as_a_payload_orphan`) asserts exactly that the leftover STILL EXISTS after a later sweep. Since `_publish_observation_record` is reached only FROM `gc_sweep`, any cleanup there IS a sweep removing it, so building the fix at this leg would mean absorbing a plan-level contradiction -- precisely the silent-absorption failure mode X-AL-3 forbids. TWO GROUNDED DISPOSITIONS, neither owed by U-RT-150. (a) NARROW AC #15 at a plan delta so its no-removal clause binds the PAYLOAD-orphan accounting path specifically (enumeration into count/age/report, and unlink AS ciphertext) rather than any removal whatsoever, then build the prefix-scoped cleanup under the lock the publication already holds -- cheap, and strictly in the bounded-retention direction the store exists to serve. This is a Phase-6 plan act, not an impl act. (b) ACCEPT AND DOCUMENT -- the residual is stated in `_publish_observation_record`''s own docstring with its exact cost and reachability, and the row closes as documented-and-accepted. NOT OWED BY ANY LEG: changing the temporary''s prefix back toward `.tmp-` (AC #15 requires the disjointness for an independent and stronger reason), or widening the sweep globs (which would reintroduce exactly the unlink-as-ciphertext defect AC #15 exists to close).'
   council: 'NOT owed at registration. The question is whether an acceptance criterion''s no-removal clause should be narrowed by one qualifier so a self-owned cleanup becomes legal -- a plan-scoping question, not a nameable cross-domain tension. If disposition (a) is opened, re-evaluate: it touches the same C3 (state/persistence integrity) vs C10 (blast radius on a sensitive-payload store) axis AC #15 was authored on.'
   heading: '### B-111 · The GC observation record''s publication temporary is unreclaimable after a mid-publication kill, because both sweep globs exclude it by construction *(surfaced at the B-96 impl leg, out-of-family Codex round 2 [P2], 2026-08-05)*'
@@ -5129,16 +5219,121 @@ items:
   title: 'Deadline''d lock polling drops kernel handoff fairness, so a caller-sampled ledger timestamp can be overtaken and refused'
   status: registered_finding
   pr: '#1241 (the B-93 build leg that surfaced it)'
-  summary: 'Surfaced by out-of-family Codex round 1 on the B-93 build leg (2026-08-06) and ACCEPTED. MECHANISM: the B-93 deadline replaces a bare blocking `fcntl.flock` with the ratified non-blocking-probe-plus-bounded-retry shape. A blocking `flock` PARKS the waiter in the kernel, which grants the lock on release before the ex-holder can realistically re-acquire it; a POLLING waiter is asleep at that instant, so an ex-holder that releases and immediately re-acquires wins the next round. This changes ORDERING, never EXCLUSION -- mutual exclusion is the same kernel `flock` it always was. It reaches a production contract at exactly one place: `append_ledger_entry` (`harness-is/src/harness_is/state_ledger_write.py`) validates a CALLER-SAMPLED timestamp against PHYSICAL APPEND ORDER under a `_CLOCK_SKEW_TOLERANCE` of ZERO, so a waiter whose timestamp was sampled BEFORE it queued can now be overtaken by a later-arriving writer and refused with `NonMonotonicTimestampError`. The reviewer reproduced the dropped waiter in 12 of 20 runs of a focused two-process contention probe. NOT NEWLY POSSIBLE, NEWLY LIKELY -- stated against interest: the same refusal was always reachable whenever the later writer genuinely acquired first, and POSIX `flock` specifies NO acquisition ordering at all, so the pre-B-93 code was relying on an UNSPECIFIED kernel behaviour. B-93 raises the probability; it does not create the class. THE LOCK LAYER CANNOT FIX THIS AND SHOULD NOT TRY: no acquisition ordering makes a timestamp sampled arbitrarily long before acquisition correct, and no portable primitive offers a kernel-parked wait WITH a timeout (`F_SETLKW` has none; a watchdog thread would orphan an acquisition in exactly the wedged-holder case the deadline targets, accumulating one stuck thread per attempt). Polling is intrinsic to the ratified shape, not to the implementation: `filelock` -- the vehicle the B-93+B-45 fork evaluated and DECLINED -- polls ten times coarser (`poll_interval=0.05`), and `msvcrt.LK_LOCK` retries at 1s. THE MECHANISM EXISTS IN THE CLEARED SPEC BUT IS SCOPED AWAY FROM THIS ROW''S SURFACE -- CORRECTED AT THE MERGE-GATE (lens 2), because the first filing of this row got the disposition WRONG in the row''s own favour. C-IS-07 section 7.6 (IS spec v1.11) added `WRITER_OWNED_TIMESTAMP`, whose sentinel makes `append_ledger_entry` sample the timestamp INSIDE the write critical section, so on the surface it covers the C-IS-05 section 5 monotonic constraint (verbatim) *"holds **by construction** on this surface — concurrent sibling drains cannot invert"*. THAT SURFACE IS THE BUFFERED/BRANCH-DRAIN PATH ONLY. Section 7.6''s *"Surfaces that do NOT change"* paragraph keeps EVERY DIRECT append on caller-supplied semantics verbatim, and its REGISTERED RESIDUAL states that extending writer-owned authority to direct surfaces *"would change caller-supplied semantics for every existing direct producer and requires its own back-flow"* -- naming `B-57` as the row that covers the remaining direct writers. Its deferred-to-discretion footer likewise constrains the carrier to *"preserve the direct-path caller-supplied contract byte-verbatim"*. THE EARLIER CLAIM OF ''ZERO design-substrate delta ... a per-caller adoption decision inside cleared contract'' IS THEREFORE RETRACTED: adopting the sentinel on direct producers is exactly the extension section 7.6 routes to back-flow, and `B-57` (`.harness/forward-register.yaml` B-57 row) ALREADY OWNS that residual and ALREADY PRESCRIBES the route -- *a narrow IS spec delta extending section 7.6''s writer-owned sampling to an opt-in direct-append mode (or per-writer serialization guidance) + U-IS-11 widening*. THE ADOPTION QUESTION IS THEREFORE DEFERRED TO `B-57`, NOT DECIDED HERE. WHY THIS STAYS A SEPARATE ROW RATHER THAN FOLDING INTO `B-57`, recorded as the reasoning the gate asked for: `B-57` registers the direct-writer inversion as a LATENT possibility whose close-out is conditioned on it *"materializ[ing] in practice"*; this row is the EVIDENCE that its probability changed -- a specific, reproduced (12/20) mechanism, introduced by a specific arc, on a specific lock. Folding it in would bury a falsifiable trigger inside a dormancy note. The rows are therefore CROSS-LINKED: `B-112` is the cause-and-evidence record and `B-57` is the remedy owner, and `B-57`''s materialization condition should be read as PARTIALLY MET by this row''s evidence. TEST-SIDE ADJUDICATION (the gate asked for a direct read of section 7.6''s scope, not a reflex): `harness-is/tests/test_shadow_git_rollback.py`''s concurrent-append worker retries with `WRITER_OWNED_TIMESTAMP` on a DIRECT append surface. Section 7.6''s constraint is about changing the CONTRACT -- *"caller-supplied semantics for every existing direct producer"* -- and the sentinel is the ratified opt-in CARRIER, deliberately left to implementation discretion. A single test explicitly opting in changes no producer''s semantics and sets no default, so the constraint does NOT forbid it and the test is UNCHANGED. It is recorded here as EVIDENCE on the row -- the first direct-surface use of the sentinel in the tree, and therefore a data point `B-57` should weigh when it prices the opt-in mode. WHY IT IS REGISTERED RATHER THAN APPLIED AT THE B-93 LEG: selecting writer-owned sampling changes WHOSE CLOCK a given entry records, which is a semantic decision per call site, not a mechanical substitution -- some entries deliberately carry an event time that is not the append time. Converting callers wholesale inside a lock-deadline arc would be exactly the opportunistic-scope-creep the workspace''s surgical-change discipline forbids. One SHIPPED WITNESS was already repaired in place at the B-93 leg for this reason (`test_rollback_cross_process_lock_prevents_lost_concurrent_append`, whose fixed child timestamp had silently PINNED the old ordering); its load-bearing survival assertion is unchanged and still discriminates under mutation.'
+  summary: 'Surfaced by out-of-family Codex round 1 on the B-93 build leg (2026-08-06) and ACCEPTED. MECHANISM:
+    the B-93 deadline replaces a bare blocking `fcntl.flock` with the ratified non-blocking-probe-plus-bounded-retry
+    shape. A blocking `flock` PARKS the waiter in the kernel, which grants the lock on release before
+    the ex-holder can realistically re-acquire it; a POLLING waiter is asleep at that instant, so an ex-holder
+    that releases and immediately re-acquires wins the next round. This changes ORDERING, never EXCLUSION
+    -- mutual exclusion is the same kernel `flock` it always was. It reaches a production contract at
+    exactly one place: `append_ledger_entry` (`harness-is/src/harness_is/state_ledger_write.py`) validates
+    a CALLER-SAMPLED timestamp against PHYSICAL APPEND ORDER under a `_CLOCK_SKEW_TOLERANCE` of ZERO,
+    so a waiter whose timestamp was sampled BEFORE it queued can now be overtaken by a later-arriving
+    writer and refused with `NonMonotonicTimestampError`. The reviewer reproduced the dropped waiter in
+    12 of 20 runs of a focused two-process contention probe. NOT NEWLY POSSIBLE, NEWLY LIKELY -- stated
+    against interest: the same refusal was always reachable whenever the later writer genuinely acquired
+    first, and POSIX `flock` specifies NO acquisition ordering at all, so the pre-B-93 code was relying
+    on an UNSPECIFIED kernel behaviour. B-93 raises the probability; it does not create the class. THE
+    LOCK LAYER CANNOT FIX THIS AND SHOULD NOT TRY: no acquisition ordering makes a timestamp sampled arbitrarily
+    long before acquisition correct, and no portable primitive offers a kernel-parked wait WITH a timeout
+    (`F_SETLKW` has none; a watchdog thread would orphan an acquisition in exactly the wedged-holder case
+    the deadline targets, accumulating one stuck thread per attempt). Polling is intrinsic to the ratified
+    shape, not to the implementation: `filelock` -- the vehicle the B-93+B-45 fork evaluated and DECLINED
+    -- polls ten times coarser (`poll_interval=0.05`), and `msvcrt.LK_LOCK` retries at 1s. THE MECHANISM
+    EXISTS IN THE CLEARED SPEC BUT IS SCOPED AWAY FROM THIS ROW''S SURFACE -- CORRECTED AT THE MERGE-GATE
+    (lens 2), because the first filing of this row got the disposition WRONG in the row''s own favour.
+    C-IS-07 section 7.6 (IS spec v1.11) added `WRITER_OWNED_TIMESTAMP`, whose sentinel makes `append_ledger_entry`
+    sample the timestamp INSIDE the write critical section, so on the surface it covers the C-IS-05 section
+    5 monotonic constraint (verbatim) *"holds **by construction** on this surface — concurrent sibling
+    drains cannot invert"*. THAT SURFACE IS THE BUFFERED/BRANCH-DRAIN PATH ONLY. Section 7.6''s *"Surfaces
+    that do NOT change"* paragraph keeps EVERY DIRECT append on caller-supplied semantics verbatim, and
+    its REGISTERED RESIDUAL states that extending writer-owned authority to direct surfaces *"would change
+    caller-supplied semantics for every existing direct producer and requires its own back-flow"* -- naming
+    `B-57` as the row that covers the remaining direct writers. Its deferred-to-discretion footer likewise
+    constrains the carrier to *"preserve the direct-path caller-supplied contract byte-verbatim"*. THE
+    EARLIER CLAIM OF ''ZERO design-substrate delta ... a per-caller adoption decision inside cleared contract''
+    IS THEREFORE RETRACTED: adopting the sentinel on direct producers is exactly the extension section
+    7.6 routes to back-flow, and `B-57` (`.harness/forward-register.yaml` B-57 row) ALREADY OWNS that
+    residual and ALREADY PRESCRIBES the route -- *a narrow IS spec delta extending section 7.6''s writer-owned
+    sampling to an opt-in direct-append mode (or per-writer serialization guidance) + U-IS-11 widening*.
+    THE ADOPTION QUESTION IS THEREFORE DEFERRED TO `B-57`, NOT DECIDED HERE. WHY THIS STAYS A SEPARATE
+    ROW RATHER THAN FOLDING INTO `B-57`, recorded as the reasoning the gate asked for: `B-57` registers
+    the direct-writer inversion as a LATENT possibility whose close-out is conditioned on it *"materializ[ing]
+    in practice"*; this row is the EVIDENCE that its probability changed -- a specific, reproduced (12/20)
+    mechanism, introduced by a specific arc, on a specific lock. Folding it in would bury a falsifiable
+    trigger inside a dormancy note. The rows are therefore CROSS-LINKED: `B-112` is the cause-and-evidence
+    record and `B-57` is the remedy owner, and `B-57`''s materialization condition should be read as PARTIALLY
+    MET by this row''s evidence. TEST-SIDE ADJUDICATION (the gate asked for a direct read of section 7.6''s
+    scope, not a reflex): `harness-is/tests/test_shadow_git_rollback.py`''s concurrent-append worker retries
+    with `WRITER_OWNED_TIMESTAMP` on a DIRECT append surface. Section 7.6''s constraint is about changing
+    the CONTRACT -- *"caller-supplied semantics for every existing direct producer"* -- and the sentinel
+    is the ratified opt-in CARRIER, deliberately left to implementation discretion. A single test explicitly
+    opting in changes no producer''s semantics and sets no default, so the constraint does NOT forbid
+    it and the test is UNCHANGED. It is recorded here as EVIDENCE on the row -- the first direct-surface
+    use of the sentinel in the tree, and therefore a data point `B-57` should weigh when it prices the
+    opt-in mode. WHY IT IS REGISTERED RATHER THAN APPLIED AT THE B-93 LEG: selecting writer-owned sampling
+    changes WHOSE CLOCK a given entry records, which is a semantic decision per call site, not a mechanical
+    substitution -- some entries deliberately carry an event time that is not the append time. Converting
+    callers wholesale inside a lock-deadline arc would be exactly the opportunistic-scope-creep the workspace''s
+    surgical-change discipline forbids. One SHIPPED WITNESS was already repaired in place at the B-93
+    leg for this reason (`test_rollback_cross_process_lock_prevents_lost_concurrent_append`, whose fixed
+    child timestamp had silently PINNED the old ordering); its load-bearing survival assertion is unchanged
+    and still discriminates under mutation. IN-PROCESS WIDENING (2026-08-07 grounding pass; CODE-GROUNDED,
+    EXPLICITLY NOT REPRODUCED). The overtaking is NOT confined to two OS processes. `flock` contends between
+    separate FILE DESCRIPTORS EVEN WITHIN ONE PROCESS -- stated in the lock module''s own text at `harness-is/src/harness_is/cross_process_ledger_lock.py:120`
+    (*"`flock` contends between separate fds even within one process"*), which is precisely why the module
+    carries a refcounted IN-PROCESS `_rlock` face at all. A sibling THREAD in the SAME process that loses
+    the in-process probe therefore enters the SAME polling wait (`:173-184`: `self._rlock.acquire(blocking=False)`
+    fails -> `resolved.note_contention()` -> a `timeout`-bounded `acquire`), and the cross-process arm
+    beneath it polls the same way (`:524`). The exposed population is therefore BROADER than the `harness
+    run` alongside `harness daemon` two-process topology close-out step (1) names: it is ANY two concurrent
+    direct appenders on one ledger root, THREADS INCLUDED. Recorded as a code-grounded WIDENING OF SCOPE
+    only -- the 12/20 figure remains a TWO-PROCESS measurement and NO in-process probe was run at this
+    pass.'
   close_out: 'ADJACENT INFRA GAP, REGISTERED HERE RATHER THAN BUILT (merge-gate lens 3, G3). This arc hit a SILENT TEST-LOSS defect: two new test files shared a basename (`test_b93_cross_process_lock_deadline.py` in both `harness-is/tests/` and `harness-runtime/tests/`), and because EVERY `tests/` directory is a package literally named `tests`, the module path `tests.test_b93_cross_process_lock_deadline` COLLIDED -- pytest imported ONE module for BOTH paths and silently dropped 12 witnesses (34 collected where 35 were written). It was caught only by recounting programmatically; the suite was GREEN throughout. NOTHING GUARDS AGAINST A RECURRENCE: `__init__.py` is present in every tests dir and does NOT prevent this (the packages are all named `tests`), so the invariant the tree actually relies on is UNIQUE TEST BASENAMES REPO-WIDE -- currently true, currently unenforced, and violated silently rather than loudly. A CI guard (a basename-uniqueness check across `harness-*/tests/**`, or per-package `pytest` rootdir isolation, or `--import-mode=importlib` with unique package names) is its own mini-arc with its own tradeoffs and is NOT built here. Recorded on this row because it was surfaced by the same arc; a future infra arc may lift it to its own row. (1) SWEEP the production callers of `append_ledger_entry` and classify each: does it pass a caller-sampled timestamp, and can its ledger be appended to by a SECOND OS PROCESS concurrently? Only the intersection is exposed. The `harness run` alongside `harness daemon` shared-root topology named in `CanonicalMemoryStore.write_record_guarded`''s own SCOPE paragraph is the reference shape. (2) For each exposed caller, decide between `WRITER_OWNED_TIMESTAMP` (C-IS-07 section 7.6 -- monotonic by construction; correct wherever the entry''s timestamp means ''when this was appended'') and keeping caller-supplied semantics (correct wherever it means ''when the event happened'', where an out-of-order refusal is the honest outcome and the caller should handle it). This is the actual decision and it is per-caller. (3) If ANY exposed caller must keep caller-supplied semantics, decide separately whether `_CLOCK_SKEW_TOLERANCE` -- documented as ''configuration-supplied'' but hard-coded to `timedelta(0)` -- should become genuinely configurable; note that widening it weakens the C-IS-05 section 5 monotonicity guarantee for everyone, so it is a contract question, not a tuning knob. (4) Witness with a two-OS-process probe: a waiter whose timestamp is sampled first must not be refused after a later writer overtakes it. DO NOT attempt a fairness fix in the lock layer -- the substrate reasons above are why.'
   council: 'No. Step (2) is a per-caller semantic classification against an ALREADY-CLEARED contract (C-IS-07 section 7.6 exists precisely for this), with no cross-domain tension to name. Step (3) WOULD be council-eligible if it is reached -- widening the skew tolerance trades information-substrate integrity (C3) against operator-loop robustness (C11) across every ledger writer at once -- but it is reached only if step (2) leaves an exposed caller that cannot adopt writer-owned sampling. Re-evaluate at that point, not now.'
   heading: '### B-112 · Deadline''d lock polling drops kernel handoff fairness, so a caller-sampled ledger timestamp can be overtaken and refused *(surfaced by out-of-family review round 1 on the B-93 build leg, 2026-08-06; reproduced 12/20 by the reviewer''s own contention probe)*'
 - id: B-113
   title: 'ABBA contention probes classify by exception class, leaving three sites unbounded on an emulated-flock platform'
-  status: registered_finding
-  pr: '#1241 (the B-93 build leg that surfaced it)'
+  status: closed
+  pr: '#pending (the close-unreachable grounding pass; surfaced at #1241, the B-93 build leg)'
   summary: 'Surfaced by out-of-family Codex rounds 8 and 10 on the B-93 build leg (2026-08-06); the reviewer raised it twice and it is ACCEPTED AS A FINDING but DECLINED AS A CHANGE AT THAT LEG. MECHANISM: `cross_process_write_lock`, `cross_process_replace_lock` and `cross_process_read_lock` each run a NON-BLOCKING probe under the directory hold and key their contention arm on `except BlockingIOError` -- i.e. on the EXCEPTION CLASS, which CPython raises for `EWOULDBLOCK`/`EAGAIN` only. `fcntl.flock`''s own docstring records that it is *"emulated using fcntl() on some systems"*, and the `lockf` docs spell out that a non-blocking failure arrives as `EACCES` OR `EAGAIN` with an explicit instruction to "check for either value". On such a platform those three probes would raise `PermissionError` immediately instead of entering their ABBA release-and-wait arm -- so `flock_until_deadline` is never reached and THREE OF THE NINE B-93 SITES WOULD NOT BE DEADLINE-BOUNDED THERE, while the leg''s own documentation says all nine are. WHAT B-93 DID FIX: the shared helper `harness_core.cross_process_lock_deadline.flock_until_deadline` now classifies contention by ERRNO (`_CONTENTION_ERRNOS` = EWOULDBLOCK/EAGAIN/EACCES), witnessed by an injected-EACCES test. So every acquisition the helper performs is correct on an emulated platform; only the three PRE-EXISTING probes that gate entry to it are not. WHY DECLINED AT THE B-93 LEG, stated rather than smoothed: (1) the narrow catch is SHIPPED B-46 behaviour, not introduced by B-93 -- the helper mirrored it deliberately; (2) widening it means MERGING each arm''s `except BlockingIOError` with the `except OSError` beneath it that classifies `ENOTSUP` and yields UNGUARDED, i.e. restructuring three hardened arms whose ABBA release-before-blocking invariant the fork forbids breaking; (3) `EACCES` from a NATIVE `flock` is not contention at all but a genuine permission failure, so the widening is only unambiguously correct on the emulated platform and only ambiguously so everywhere else; (4) the exposure is DORMANT on every platform this workspace can observe -- Linux and macOS both provide native `flock` returning `EWOULDBLOCK`, CI is `ubuntu-latest` only, and the operator''s machine is an x86 Mac. Doing it under the review cap, on concurrency code, for a platform no test can reach, is the regression-risk trade the workspace''s own non-convergent-hardening discipline warns against.'
-  close_out: '(1) Determine WHICH platforms CPython actually emulates `flock` via `fcntl()` on -- the `configure` probe is `HAVE_FLOCK`, so the answer is a build-time fact about the target, not a runtime one. If no target the workspace supports lacks native `flock`, this row closes as UNREACHABLE rather than fixed. (2) If a target does: merge each of the three arms'' `except BlockingIOError` into a single `except OSError` that dispatches on errno -- contention errnos take the ABBA release-and-wait path, `ENOTSUP` keeps its yield-unguarded arm, everything else re-raises. The three arms are `cross_process_write_lock`, `cross_process_replace_lock` and `cross_process_read_lock` in `harness-is/src/harness_is/cross_process_ledger_lock.py`. (3) Witness by INJECTION, as the B-93 helper''s own EACCES witness does -- a real emulated-`flock` platform is not available, and pretending otherwise is the unwitnessable-claim failure `B-45` exists to avoid. (4) NOTE THE COUPLING TO `B-45`: if a Windows backend is ever built, the same errno-vs-class question recurs there (`msvcrt.LK_NBLCK` raises `OSError`, not `BlockingIOError`), so these two rows should be read together at that point.'
+  close_out: '(1) Determine WHICH platforms CPython actually emulates `flock` via `fcntl()` on -- the
+    `configure` probe is `HAVE_FLOCK`, so the answer is a build-time fact about the target, not a runtime
+    one. If no target the workspace supports lacks native `flock`, this row closes as UNREACHABLE rather
+    than fixed. (2) If a target does: merge each of the three arms'' `except BlockingIOError` into a single
+    `except OSError` that dispatches on errno -- contention errnos take the ABBA release-and-wait path,
+    `ENOTSUP` keeps its yield-unguarded arm, everything else re-raises. The three arms are `cross_process_write_lock`,
+    `cross_process_replace_lock` and `cross_process_read_lock` in `harness-is/src/harness_is/cross_process_ledger_lock.py`.
+    (3) Witness by INJECTION, as the B-93 helper''s own EACCES witness does -- a real emulated-`flock`
+    platform is not available, and pretending otherwise is the unwitnessable-claim failure `B-45` exists
+    to avoid. (4) NOTE THE COUPLING TO `B-45`: if a Windows backend is ever built, the same errno-vs-class
+    question recurs there (`msvcrt.LK_NBLCK` raises `OSError`, not `BlockingIOError`), so these two rows
+    should be read together at that point. CLOSED 2026-08-07 AS UNREACHABLE, NOT FIXED -- the disposition
+    this row''s OWN step (1) provides for. THE FINDING IS CORRECT BY INSPECTION AND IS DECLINED ON REACHABILITY,
+    NOT ON CORRECTNESS: the three arms do key their contention path on the exception CLASS, and on a platform
+    where CPython emulates `flock` via `fcntl()` they would raise `PermissionError` and skip the ABBA
+    release-and-wait arm exactly as described. WHAT STEP (1) ESTABLISHED. (i) The discriminator is the
+    BUILD-TIME `configure` probe `HAVE_FLOCK`, not a runtime condition -- a CPython built with `HAVE_FLOCK`
+    defined calls native `flock(2)`, and only a build WITHOUT it takes the `fcntl()` emulation whose non-blocking
+    failure can arrive as `EACCES`. (ii) EMPIRICAL POSITIVE CONTROL on the operator''s dev machine (Python
+    3.12.13, `darwin`, x86_64): `sysconfig.get_config_var(''HAVE_FLOCK'')` is `1`, and a REAL two-fd contention
+    probe (`LOCK_EX` held on one fd, `LOCK_EX|LOCK_NB` attempted on a second fd over the same file) raised
+    `BlockingIOError` with `errno 35` (`EAGAIN`) -- native, not emulated, so the shipped `except BlockingIOError`
+    arm is correct there. (iii) THE COMMITTED DEPLOYMENT SURFACE CONTAINS NO EMULATED TARGET. The ADR-D2
+    decision matrix (`design-substrate/ADR-D2.md:96-98`) commits exactly three deployment surfaces --
+    local-development, self-hosted-server, managed-cloud -- and every one is a Linux/macOS/BSD-family
+    target whose CPython builds provide native `flock`; CI is `ubuntu-latest` only; the RC runbook''s
+    Docker / Lima path is a Linux VM. The platform families where CPython actually emulates `flock` via
+    `fcntl()` (the Solaris / HP-UX / z-OS class) appear NOWHERE in the committed surface -- not in ADR-D2,
+    not in CI, not in the RC runbook. Step (1)''s condition -- *if no target the workspace supports lacks
+    native `flock`, this row closes as UNREACHABLE rather than fixed* -- is therefore MET, and steps (2)-(3)
+    are NOT owed. TWO REOPEN TRIGGERS, both PRESERVED rather than discharged by this close. (A) `B-45`:
+    if a Windows serialization backend is ever built, the same errno-vs-class question recurs there --
+    `msvcrt.LK_NBLCK` raises `OSError`, NOT `BlockingIOError` -- so the two rows must be read TOGETHER
+    at that point, exactly as step (4) says. (B) NEW, and INDEPENDENT of `B-45`: any new SUPPORTED DEPLOYMENT
+    TARGET whose CPython build lacks `HAVE_FLOCK` reopens this row directly, because the close rests on
+    the composition of the committed deployment surface and on nothing else. Neither trigger is a defect
+    in the finding; both are the conditions under which its dormancy ends.'
   council: 'No. An implementation-level errno classification inside an already-cleared lock mechanism (C-IS-09 section 9.4 defers the mechanism), with no cross-domain tension to name. The only judgement is the platform-reachability question at close-out step (1), which is a fact to establish rather than a value to trade.'
   heading: '### B-113 · The three ABBA contention probes classify contention by EXCEPTION CLASS, so an emulated-`flock` platform would leave three of the nine acquisition sites unbounded *(surfaced by out-of-family review rounds 8 and 10 on the B-93 build leg, 2026-08-06; DECLINED AT THE LEG, registered)*'
 - id: B-114
@@ -5146,7 +5341,7 @@ items:
     type for a harness-internal fault, violating the C-MEM-19 type-boundary invariant introduced at
     Memory spec v1.3'
   status: closed
-  pr: '#pending (the conformance repair; surfaced at #1245, the B-88 spec leg, where the repair was withdrawn on authority grounds)'
+  pr: '#1249 (the conformance repair; surfaced at #1245, the B-88 spec leg, where the repair was withdrawn on authority grounds)'
   summary: 'Surfaced by out-of-family Codex round 3 on the B-88 spec leg (2026-08-06) and re-scoped
     at rounds 7 and 8. `StandardMemoryToolExecutor._prepare` (`harness-runtime/src/harness_runtime/memory_tool_executor.py:359-373`)
     ends with `raise MemoryToolExecutionInputError(f"unsupported memory tool {tool_name!s}")` at `:373`.
