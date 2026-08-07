@@ -1407,7 +1407,7 @@ items:
 - id: B-57
   title: Direct-writer caller-supplied timestamp capture-order inversion
   status: open
-  pr: '#pending (B-57 spec leg -- IS spec v1.13 + IS plan v2.9 + clearance markers)'
+  pr: '#1255 (B-57 spec leg -- IS spec v1.13 + IS plan v2.9 + clearance markers; the IMPL leg is a later, separate PR)'
   summary: 'Registered at the B-48 apply arc (IS v1.11 change-note; apply-PR codex round-13 made the
     row real): the C-IS-07 section 7.6 writer-owned fix covers the buffered/branch-DRAIN path only
     (the ratified narrow scope, pinned by the sibling-drain xfail). DIRECT appends keep caller-supplied

@@ -504,7 +504,7 @@ recorded because a reader pricing step (3) would otherwise believe a configurati
 | Discriminator (§5) resolved | The §7.6 residual guards the **DEFAULT**, not a whole-surface guarantee — its own sentence is scoped to *"every existing direct producer"*, and a per-call-site election leaves every non-electing producer byte-identical. This generalizes the adjudication the `B-93` leg already made once, under review, on this same contract |
 | Council | **NOT owed — probe-resolved** per §6, re-determined (not inherited) at the spec leg. `B-112` step (3) is not reached: the classification leaves exactly one RETAIN site (`as_is_wiring.py:129`, genuine event time), which is not an *exposed caller that cannot adopt*. **A LIVE trigger survives:** a RETAIN verdict on either injection-caveat site at the impl leg re-opens the C3 ⊥ C11 determination before any tolerance change — recorded at the plan's §0.6 |
 
-### §11.1 What the spec leg landed (this ratification's apply pass)
+### §11.1 What the spec leg landed (this ratification's apply pass — PR #1255)
 
 | Artifact | Version | Amendment sites |
 |---|---|---|
