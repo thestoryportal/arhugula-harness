@@ -214,6 +214,42 @@ class LLMDispatchPayloadShapeError(Exception):
         super().__init__(f"RT-FAIL-PAYLOAD-SHAPE: {reason}")
 
 
+class LLMDispatchPayloadShapeInternalError(Exception):
+    """Raised at the three PRE-FLIGHT payload-shape sites — the ones that
+    validate the harness's OWN outgoing payload BEFORE any provider call
+    (the ``_coerce_payload`` `ProviderAgnosticPayload` coercion; the
+    post-join-synthesis tool-binding rejection; the external-CLI text-only
+    tools rejection).
+
+    Per `Spec_Harness_Runtime_v1.md` v1.112 §14.6.3 row 2a (`B-116`,
+    ratified Reading (II)): a pre-flight shape rejection is deterministic
+    over the same payload, so a breaker half-open trial CANNOT return a
+    different result for a reason attributable to the ``{provider, model}``
+    the breaker is keyed to — the fault therefore does NOT charge the
+    provider-model breaker. The split is carried by the TYPE (the
+    C-MEM-19 v1.3 / `B-88` A-ii precedent), not by wording: the 25
+    RESPONSE-PARSING sites keep `LLMDispatchPayloadShapeError` and keep
+    charging (row 2b), because those re-parse a NEW provider response.
+
+    Stays within ``RT-FAIL-PAYLOAD-SHAPE``'s permanent family — same
+    message prefix, same fail-fast / permanent / chain-advance disposition
+    at the C-RT-16 composer; ONLY the breaker charge differs, via this
+    type's membership in `retry_breaker_fallback._BREAKER_CHARGE_WAIVED_TYPES`.
+
+    **Parentage is deliberately NOT `LLMDispatchPayloadShapeError`.** §14.6.3
+    leaves parentage to impl discretion but PINS that fail-fast preservation
+    must not rely on inheritance from the charging type; nothing in the
+    workspace catches `LLMDispatchPayloadShapeError` (no ``except`` clause
+    for it exists outside tests), so subclassing would buy no
+    driver-boundary compatibility while making
+    `_classify_provider_exception`'s BY-NAME admission of this type
+    unfalsifiable — the exact silent-flip hazard the `B-88` leg refused.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"RT-FAIL-PAYLOAD-SHAPE: {reason}")
+
+
 class PromptInjectionConflictError(Exception):
     """Raised when a configured active prompt collides with a payload-carried
     system source at translate-time (R-PM-1 cascade PR #1).
@@ -310,17 +346,18 @@ def _coerce_payload(payload: Mapping[str, Any]) -> ProviderAgnosticPayload:
     """Coerce ``step.step_payload`` to `ProviderAgnosticPayload`.
 
     Pydantic v2 ``model_validate`` accepts a mapping in the canonical
-    shape. Mis-shaped mappings raise `LLMDispatchPayloadShapeError`
-    wrapping the underlying `ValidationError` so the driver's
-    ``except`` block sees a typed failure attributable to the dispatch
-    site.
+    shape. Mis-shaped mappings raise `LLMDispatchPayloadShapeInternalError`
+    (a PRE-FLIGHT site per §14.6.3 row 2a — the harness's own outgoing
+    payload, validated before any provider call) wrapping the underlying
+    `ValidationError` so the driver's ``except`` block sees a typed failure
+    attributable to the dispatch site.
     """
     if isinstance(payload, ProviderAgnosticPayload):
         return payload
     try:
         return ProviderAgnosticPayload.model_validate(payload)
     except Exception as exc:
-        raise LLMDispatchPayloadShapeError(
+        raise LLMDispatchPayloadShapeInternalError(
             f"step.step_payload not coercible to ProviderAgnosticPayload: {exc}"
         ) from exc
 
@@ -1263,7 +1300,7 @@ class RuntimeLLMDispatcher:
 
             _synth_violations = post_join_tool_binding_violations(payload.tools, payload.params)
             if _synth_violations:
-                raise LLMDispatchPayloadShapeError(
+                raise LLMDispatchPayloadShapeInternalError(
                     "post-join-synthesis step is read-only / effect-free but the dispatched "
                     f"payload binds tools ({', '.join(_synth_violations)}); rejected at the LLM "
                     "dispatch boundary (this catches a post-HITL-EDIT re-introduction the "
@@ -3504,7 +3541,7 @@ def _payload_to_external_cli_prompt(
     become a second source and trip the conflict check below.
     """
     if payload.tools:
-        raise LLMDispatchPayloadShapeError(
+        raise LLMDispatchPayloadShapeInternalError(
             f"external CLI provider {provider!r} is text-only; tools are not supported"
         )
 
@@ -5423,6 +5460,7 @@ def materialize_llm_dispatcher_stage(
 __all__ = [
     "LLMDispatchBindError",
     "LLMDispatchPayloadShapeError",
+    "LLMDispatchPayloadShapeInternalError",
     "LLMDispatchProviderUnreachableError",
     "PrewarmOutcome",
     "PromptInjectionConflictError",

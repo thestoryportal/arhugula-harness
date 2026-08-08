@@ -80,6 +80,7 @@ from harness_is.memory_retrieval import MemoryPacket, MemoryPacketAccessMode, Me
 from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
 from harness_is.memory_store import CanonicalMemoryStore
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
+from harness_od.harness_breaker_schema import BreakerScope
 from harness_runtime.lifecycle import llm_dispatch as llm_dispatch_module
 from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
 from harness_runtime.lifecycle.retry_breaker import DEFAULT_RETRY_POLICY, RuntimeRetryBreaker
@@ -793,11 +794,20 @@ async def test_a_re_typed_internal_fault_takes_the_fail_fast_exit_end_to_end() -
 
     A single-candidate chain plus `max_attempts=3`: under `TRANSIENT_RETRY` this
     consumes three dispatches, under fail-fast exactly one. `fail_threshold=1` is
-    a TEST-FIXTURE value - not a production posture and not a claim about one -
-    chosen only so the single fail-fast failure surfaces an observable
-    transition; the transition's existence is then asserted BEFORE its cause, so
-    the cause assertion cannot go vacuous. See the annotated block at the end of
-    this test for what each of those three assertions is and is not saying.
+    a TEST-FIXTURE value - not a production posture and not a claim about one.
+
+    U-RT-152 / `B-116` (`Spec_Harness_Runtime_v1.md` v1.112 §14.6.3 row 4)
+    REVISES this test's breaker-bookkeeping half, and only that half: the
+    fail-fast EXIT is unchanged (one dispatch, `permanent-fail-exit`, the
+    exception class name as cause attribution), but the CHARGE is now waived -
+    `MemoryToolExecutionInternalError` is a harness wiring fault, deterministic
+    and candidate-independent, so a half-open trial could not return a
+    different result attributable to the `{provider, model}` the breaker is
+    keyed to. The `fail_threshold=1` fixture is what makes the new assertions
+    strong rather than vacuous: pre-waiver this single failure WOULD have
+    tripped the breaker OPEN, so the zero-emission / zero-`fail_count`
+    assertions below are about a real waiver, not about a threshold not
+    being reached. See the annotated block at the end of this test.
     """
 
     emissions: list[Any] = []
@@ -875,30 +885,28 @@ async def test_a_re_typed_internal_fault_takes_the_fail_fast_exit_end_to_end() -
     assert first["retry.fail_class"] == "permanent-fail-exit"
     assert first["retry.cause_attribution"] == "MemoryToolExecutionInternalError"
 
-    # The breaker bookkeeping, in the shape the existing sibling witness for
-    # this family already pins
-    # (`test_lifecycle_retry_breaker_fallback.py::test_memory_tool_input_error_fail_fast_trip_carries_no_breaker_cause`).
-    # Three separate things are being said here, and the middle one is a
-    # TEST-FIXTURE fact rather than a production semantic (gemini R2 [P1] read it
-    # as the latter):
+    # The breaker bookkeeping, in the shape U-RT-152 / `B-116` §14.6.3 row 4
+    # ratified. Three separate things are being said here, and the first is a
+    # TEST-FIXTURE fact rather than a production semantic (gemini R2 [P1] read
+    # the prior threshold framing as the latter):
     #
-    # 1. POSITIVE CONTROL - a transition was actually emitted. Without it, the
-    #    `cause` assertion below would pass vacuously on silence, which is the
-    #    exact vacuity `fail_threshold=1` exists to remove. Production does NOT
-    #    run a threshold of 1; that value is set at the top of THIS test purely
-    #    so one fail-fast failure is observable as a transition. The fail-fast
-    #    branch calling `breaker.record_failure(...)` at all is PRE-EXISTING
-    #    behaviour shared with `MemoryToolExecutionInputError`
-    #    (`LLMDispatchPayloadShapeError` too) since B-84; this unit adds a type
-    #    to the same tuple and changes none of it.
-    # 2. The transition's terminal state, asserted so the positive control is
-    #    about a real OPEN transition rather than any emission at all.
-    # 3. `cause is None` is the CORRECT value, not a missing one - and this is
-    #    the assertion, not a lead-in to a different one. `_classify_breaker_cause`
-    #    duck-types on `.status_code`, which this exception does not carry, so
-    #    the honest report is the ABSENCE of a classified cause; C-OD-07 §7.1
-    #    populates `harness.breaker.cause` only on a real classified trip.
-    #    Hardcoding a cause here was precisely the B-88 lens-3 defect.
-    assert len(emissions) == 1
-    assert emissions[0].to_state.value == "open"
-    assert emissions[0].cause is None
+    # 1. `fail_threshold=1` is what removes vacuity in the NEW direction too.
+    #    Production does NOT run a threshold of 1; that value is set at the top
+    #    of THIS test purely so that a SINGLE fail-fast failure would have been
+    #    enough to trip the breaker OPEN under the pre-waiver behaviour. The
+    #    assertions below therefore witness a waiver, not a threshold that was
+    #    merely never reached.
+    # 2. ZERO emissions and an UNCHANGED `fail_count`: the re-typed internal
+    #    fault no longer consumes provider breaker budget. `record_failure` is
+    #    not called at all - so the `B-88` lens-3 concern (a fail-fast exit
+    #    asserting a trip cause it cannot know) is now closed a stronger way:
+    #    there is no trip to mis-attribute.
+    # 3. The t1+t2 pair makes the NON-charge observable rather than silent, on
+    #    the same inner attempt span that already carries the fail-fast
+    #    attributes asserted above.
+    assert emissions == []
+    charged = breaker.get_breaker(BreakerScope.PER_MODEL, "openai:test-model-1")
+    assert charged.fail_count == 0
+    assert charged.state.value == "closed"
+    assert first["retry.breaker_waived.reason"] == "MemoryToolExecutionInternalError"
+    assert first["retry.breaker_waived.candidate"] == "openai:test-model-1"

@@ -133,6 +133,7 @@ from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputC
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
     LLMDispatchPayloadShapeError,
+    LLMDispatchPayloadShapeInternalError,
     LLMDispatchProviderUnreachableError,
     PromptInjectionConflictError,
     RuntimeLLMDispatcher,
@@ -616,7 +617,7 @@ async def test_post_join_synthesis_tool_bearing_payload_rejected_at_dispatch_bou
     tp, _ = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
 
-    with pytest.raises(LLMDispatchPayloadShapeError, match="effect-free"):
+    with pytest.raises(LLMDispatchPayloadShapeInternalError, match="effect-free"):
         await dispatcher.dispatch(_binding("anthropic"), step, step_context=_step_context())
     # Rejected BEFORE the provider call — no LLM dispatch fired.
     assert adapter.client.messages.last_kwargs is None
@@ -682,7 +683,7 @@ async def test_post_join_synthesis_hitl_edit_readding_tools_rejected_at_boundary
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     ctx = _step_context().model_copy(update={"hitl_placements": (placement,)})
 
-    with pytest.raises(LLMDispatchPayloadShapeError, match="effect-free"):
+    with pytest.raises(LLMDispatchPayloadShapeInternalError, match="effect-free"):
         await composer.dispatch(_binding("anthropic"), synthesis_step, step_context=ctx)
     # The operator's tool-re-adding EDIT never reached the provider.
     assert adapter.client.messages.last_kwargs is None
@@ -888,7 +889,7 @@ async def test_dispatch_external_cli_rejects_tools_before_subprocess() -> None:
         "params": {},
     }
 
-    with pytest.raises(LLMDispatchPayloadShapeError, match="text-only"):
+    with pytest.raises(LLMDispatchPayloadShapeInternalError, match="text-only"):
         await dispatcher.dispatch(
             _binding("claude_code", model="sonnet"),
             _step(payload),
@@ -4656,7 +4657,7 @@ async def test_b87_external_cli_pre_wire_payload_rejection_is_not_reported_as_in
         standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
     )
 
-    with pytest.raises(LLMDispatchPayloadShapeError, match="text-only"):
+    with pytest.raises(LLMDispatchPayloadShapeInternalError, match="text-only"):
         await dispatcher.dispatch(
             _binding("claude_code"),
             _step(
@@ -6096,7 +6097,12 @@ def test_materialize_factory_raises_on_empty_providers() -> None:
 
 @pytest.mark.asyncio
 async def test_mis_shaped_payload_raises_payload_shape_error() -> None:
-    """Payload missing `messages` → `LLMDispatchPayloadShapeError`."""
+    """Payload missing `messages` → `LLMDispatchPayloadShapeInternalError`
+
+    (`B-116` §14.6.3 row 2a: the coercion is one of the three PRE-FLIGHT
+    payload-shape sites re-typed at U-RT-152 — it validates the harness's
+    OWN outgoing payload before any provider call, so it no longer charges
+    the provider-model breaker.)"""
     adapter = _AnthropicFakeAdapter(_AnthropicClient())
     tp, _ = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
@@ -6106,7 +6112,7 @@ async def test_mis_shaped_payload_raises_payload_shape_error() -> None:
         step_kind=StepKind.INFERENCE_STEP,
         step_payload={"not_messages": "oops"},
     )
-    with pytest.raises(LLMDispatchPayloadShapeError):
+    with pytest.raises(LLMDispatchPayloadShapeInternalError):
         await dispatcher.dispatch(_binding("anthropic"), bad_step, step_context=_step_context())
 
 
@@ -8378,3 +8384,34 @@ async def test_signing_backend_is_passed_into_cost_audit_composition() -> None:
         "USE-half (dispatcher field): self.signing_backend must reach "
         "_attribute_cost_best_effort at the step-4.5 dispatch site"
     )
+
+
+# ---------------------------------------------------------------------------
+# U-RT-152 / `B-116` §14.6.3 row 2a/2b — the payload-shape raise-site partition.
+# ---------------------------------------------------------------------------
+
+
+def test_payload_shape_raise_site_partition_is_three_pre_flight_and_25_response() -> None:
+    """AC #4 partition witness: `llm_dispatch.py` raises
+    `LLMDispatchPayloadShapeInternalError` at EXACTLY the 3 PRE-FLIGHT sites
+    (the harness's own outgoing payload, validated before any provider call)
+    and `LLMDispatchPayloadShapeError` at EXACTLY the 25 RESPONSE-PARSING
+    sites, per `Spec_Harness_Runtime_v1.md` v1.112 §14.6.3 rows 2a / 2b.
+
+    BOTH counts are asserted, not one side: the split decides whether a
+    payload-shape fault charges the provider-model breaker, so a future edit
+    that adds a pre-flight raise on the charging type — or re-types a
+    response-parsing site onto the internal one — must fail a test and force
+    a deliberate re-classification rather than drifting silently.
+
+    Source-level by construction: the 25 response-parsing sites are spread
+    across the Anthropic / OpenAI / Ollama / external-CLI response readers and
+    have no single runtime entry point to enumerate them through."""
+    source = Path(llm_dispatch_module.__file__ or "").read_text(encoding="utf-8")
+
+    internal_sites = re.findall(r"\braise LLMDispatchPayloadShapeInternalError\(", source)
+    charging_sites = re.findall(r"\braise LLMDispatchPayloadShapeError\(", source)
+
+    assert len(internal_sites) == 3, f"pre-flight raise sites: {len(internal_sites)}"
+    assert len(charging_sites) == 25, f"response-parsing raise sites: {len(charging_sites)}"
+    assert len(internal_sites) + len(charging_sites) == 28

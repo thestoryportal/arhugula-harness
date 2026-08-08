@@ -67,6 +67,7 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_od.harness_breaker_schema import BreakerCause, BreakerScope
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchPayloadShapeError,
+    LLMDispatchPayloadShapeInternalError,
     LLMDispatchProviderUnreachableError,
     RoutedPrimaryResolution,
     RuntimeLLMDispatcher,
@@ -79,17 +80,22 @@ from harness_runtime.lifecycle.retry_breaker import (
     materialize_retry_breaker_stage,
 )
 from harness_runtime.lifecycle.retry_breaker_fallback import (
+    _BREAKER_CHARGE_WAIVED_TYPES,
     DEFAULT_LLM_DISPATCH_RETRY_POLICY,
     RESERVED_LLM_DISPATCH_KEY,
     RetryBreakerFallbackDispatcher,
     RetryBreakerFallbackExhaustedError,
     _classify_breaker_cause,
+    _is_breaker_charge_waived,
     _required_capabilities,
     materialize_retry_breaker_fallback_dispatcher_stage,
 )
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionDeniedError,
+    MemoryToolExecutionError,
     MemoryToolExecutionInputError,
+    MemoryToolExecutionInternalError,
+    MemoryToolExecutionStoreError,
 )
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -717,7 +723,14 @@ async def test_breaker_open_skips_candidate_emits_retry_skipped() -> None:
 @pytest.mark.asyncio
 async def test_breaker_transition_emitted_via_registry() -> None:
     """When the breaker trips CLOSED → OPEN after the fail-threshold, the
-    composer invokes ``RuntimeRetryBreaker.emit_breaker_transition_event``."""
+    composer invokes ``RuntimeRetryBreaker.emit_breaker_transition_event``.
+
+    The fixture is a 401 SDK exception — a fail-fast member that STILL
+    charges after `B-116` (§14.6.3 row 3: key rotation genuinely changes
+    the half-open answer). It replaces the original
+    `LLMDispatchProviderUnreachableError`, which the ratified waiver tuple
+    now exempts from the charge (row 1), and which would therefore emit no
+    transition at all."""
     # Use a per-test registry with fail_threshold=1 → first failure trips.
     breaker = RuntimeRetryBreaker(
         retry_policies={
@@ -764,7 +777,7 @@ async def test_breaker_transition_emitted_via_registry() -> None:
     chain = _chain(primary, same_family=same_family)
     inner = _MockInnerDispatcher(
         outcomes=[
-            LLMDispatchProviderUnreachableError("anthropic"),  # fail-fast → record_failure
+            _FakeProviderStatusError(401),  # fail-fast, still-charging → record_failure
             {"result": "candidate-1-ok"},
         ]
     )
@@ -1086,13 +1099,20 @@ async def test_memory_tool_input_error_single_candidate_dispatches_exactly_once(
 
 
 @pytest.mark.asyncio
-async def test_memory_tool_input_error_fail_fast_trip_carries_no_breaker_cause() -> None:
+async def test_charging_fail_fast_trip_carries_no_breaker_cause() -> None:
     """B-88 (lens-3 half): the fail-fast exit's breaker bookkeeping must NOT
     assert a trip cause it cannot know.
 
+    The fixture is a RESPONSE-PARSING `LLMDispatchPayloadShapeError` — a
+    fail-fast member that STILL charges after `B-116` (§14.6.3 row 2b) and
+    that carries no `.status_code`. It replaces the original
+    `MemoryToolExecutionInputError`, which the ratified waiver tuple now
+    exempts from the charge (row 5), and which would therefore emit no
+    transition at all; the property under test is unchanged.
+
     The fail-fast branch calls `breaker.record_failure(cause=
     _classify_breaker_cause(exc))`, and `_classify_breaker_cause` duck-types on
-    `.status_code` - which a `MemoryToolExecutionInputError` does not carry, so
+    `.status_code` - which this exception does not carry, so
     the correct cause is `None` and `harness.breaker.cause` is correctly
     omitted from the `breaker.tripped` event (C-OD-07 §7.1: the attribute is
     populated only on a real classified trip). That correctness was UNWITNESSED
@@ -1148,7 +1168,7 @@ async def test_memory_tool_input_error_fail_fast_trip_carries_no_breaker_cause()
     chain = _chain(primary, same_family=same_family)
     inner = _MockInnerDispatcher(
         outcomes=[
-            MemoryToolExecutionInputError("memory tool argument 'memory_ref' must be a string"),
+            LLMDispatchPayloadShapeError("Anthropic tool_use block missing string id"),
             {"result": "candidate-1-ok"},
         ]
     )
@@ -2460,3 +2480,511 @@ async def test_retry_wrapper_propagates_resume_edit_decode_terminally() -> None:
     with pytest.raises(HITLGateEditDecodeError):
         await wrapper.dispatch(_binding(), _step(), step_context=resume_step_context)
     assert inner_llm.calls == []
+
+
+# ---------------------------------------------------------------------------
+# U-RT-152 / `B-116` — the breaker-charge waiver at the fail-fast site.
+#
+# `Spec_Harness_Runtime_v1.md` v1.112 §14.6.3 (ratified Reading (II)): a fault
+# charges the provider-model breaker ONLY if a half-open trial could return a
+# different result than the trip did, attributably to the `{provider, model}`
+# the breaker is keyed to. The four harness-internal waiver types fail that
+# test. Every witness below drives the REAL composer dispatch path.
+# ---------------------------------------------------------------------------
+
+
+def _waived_fixtures() -> list[tuple[str, BaseException]]:
+    """One instance per §14.6.3 waiver-tuple member, named by type.
+
+    `MemoryToolExecutionInternalError` is the council's Probe-B fixture — the
+    unset `RuntimeMemoryContext.record_scope` fault. That the REAL path raises
+    exactly this type is witnessed at
+    `test_u_mem_28_input_validation_failure_class.py::
+    test_internal_site_1_context_composition_unset_record_scope`; constructing
+    it here keeps the composer witnesses at the mock-inner shape the plan's
+    verification-shape clause prescribes."""
+    return [
+        (
+            "LLMDispatchProviderUnreachableError",
+            LLMDispatchProviderUnreachableError("anthropic"),
+        ),
+        (
+            "LLMDispatchPayloadShapeInternalError",
+            LLMDispatchPayloadShapeInternalError(
+                "step.step_payload not coercible to ProviderAgnosticPayload"
+            ),
+        ),
+        (
+            "MemoryToolExecutionInternalError",
+            MemoryToolExecutionInternalError(
+                "standard memory tool dispatch requires RuntimeMemoryContext.record_scope"
+            ),
+        ),
+        (
+            "MemoryToolExecutionInputError",
+            MemoryToolExecutionInputError("memory tool argument 'memory_ref' must be a string"),
+        ),
+    ]
+
+
+def _attempt_spans(exporter: InMemorySpanExporter) -> list[Any]:
+    return [s for s in exporter.get_finished_spans() if s.name == "harness.runtime.retry_attempt"]
+
+
+def _outer_span(exporter: InMemorySpanExporter) -> Any:
+    return next(
+        s
+        for s in exporter.get_finished_spans()
+        if s.name == "harness.runtime.retry_breaker_fallback"
+    )
+
+
+# --- AC #4, per-member waiver witnesses (x4) -------------------------------
+
+
+@pytest.mark.parametrize(
+    ("type_name", "exc"),
+    _waived_fixtures(),
+    ids=[name for name, _ in _waived_fixtures()],
+)
+@pytest.mark.asyncio
+async def test_waived_member_does_not_charge_breaker(type_name: str, exc: BaseException) -> None:
+    """AC #1 + AC #3, per tuple member: a fail-fast dispatch on a waived type
+    leaves the candidate's breaker `fail_count` UNCHANGED (asserted against the
+    registry, not inferred from logs), still abandons the candidate, still
+    advances the chain, and carries the t1+t2 pair on the inner attempt span.
+
+    Mutation probes: reverting the guard (charging unconditionally) fails the
+    `fail_count == 0` assertion; narrowing the tuple by this member fails this
+    parametrization only; dropping either t1 or t2 fails the attribute
+    assertions."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(outcomes=[exc, {"result": "candidate-1-ok"}])
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    # Control flow byte-preserved: candidate abandoned after ONE attempt, the
+    # chain advanced to candidate 1 (not a retry on candidate 0).
+    assert result == {"result": "candidate-1-ok"}
+    assert len(inner.calls) == 2
+    assert inner.calls[0][0].model_binding.model == "claude-test-1"
+    assert inner.calls[1][0].model_binding.model == "claude-test-2"
+
+    # The charge — and ONLY the charge — is waived.
+    charged = breaker.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
+    assert charged.fail_count == 0
+    assert charged.state.value == "closed"
+
+    attempts = _attempt_spans(exporter)
+    first = attempts[0].attributes
+    assert first is not None
+    # t1 + t2.
+    assert first["retry.breaker_waived.reason"] == type_name
+    assert first["retry.breaker_waived.candidate"] == "anthropic:claude-test-1"
+    # The shipped fail-fast attribute set is untouched.
+    assert first["retry.delay_ms"] == 0
+    assert first["retry.cause_attribution"] == type_name
+    assert first["retry.fail_class"] == "permanent-fail-exit"
+
+
+@pytest.mark.asyncio
+async def test_waived_attributes_are_on_the_inner_span_not_the_outer() -> None:
+    """AC #3 span identity: t1+t2 are INNER-span (`harness.runtime.retry_attempt`)
+    ATTRIBUTES. Emitting them on the outer wrapper span instead fails here.
+
+    Also asserts the SUCCEEDING attempt's span carries neither — absence is
+    per-attempt, not per-dispatch."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            MemoryToolExecutionInternalError("unset RuntimeMemoryContext.record_scope"),
+            {"result": "candidate-1-ok"},
+        ]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=3),
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    outer = _outer_span(exporter).attributes or {}
+    assert "retry.breaker_waived.reason" not in outer
+    assert "retry.breaker_waived.candidate" not in outer
+
+    attempts = _attempt_spans(exporter)
+    assert len(attempts) == 2
+    waived = attempts[0].attributes or {}
+    assert waived["retry.breaker_waived.reason"] == "MemoryToolExecutionInternalError"
+    succeeded = attempts[1].attributes or {}
+    assert "retry.breaker_waived.reason" not in succeeded
+    assert "retry.breaker_waived.candidate" not in succeeded
+
+
+# --- AC #4, Probe B: the chain-length amplifier, foreclosed ----------------
+
+
+@pytest.mark.asyncio
+async def test_probe_b_one_waived_fault_charges_no_breaker_in_the_chain() -> None:
+    """AC #4 Probe B as an assertion: ONE dispatch over a 3-candidate chain
+    failing EVERY candidate with the same waived, candidate-independent fault
+    leaves EVERY breaker in the chain unchanged.
+
+    Pre-fix, one such dispatch charged three breakers across two providers —
+    the chain-length amplifier the council recorded. Reverting the guard fails
+    every `fail_count == 0` assertion below."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    cross_family = (_candidate("openai", "gpt-test-1"),)
+    chain = _chain(primary, same_family=same_family, cross_family=cross_family)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    fault = "standard memory tool dispatch requires RuntimeMemoryContext.record_scope"
+    inner = _MockInnerDispatcher(
+        outcomes=[MemoryToolExecutionInternalError(fault) for _ in range(3)]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    # Positive control: all three candidates really were attempted, so the
+    # zero-charge assertions below are about a waiver, not about a short chain.
+    assert len(inner.calls) == 3
+    for identifier in (
+        "anthropic:claude-test-1",
+        "anthropic:claude-test-2",
+        "openai:gpt-test-1",
+    ):
+        candidate_breaker = breaker.get_breaker(BreakerScope.PER_MODEL, identifier)
+        assert candidate_breaker.fail_count == 0, identifier
+        assert candidate_breaker.state.value == "closed", identifier
+
+    # t2 carries the ACTUAL per-position candidate, not the binding/primary —
+    # only the fallback positions can discriminate a mis-report (every other
+    # waiver witness's primary coincides with the binding), so a mutation
+    # sourcing the attribute from `binding.model_binding` instead of
+    # `candidate` fails HERE and nowhere else.
+    attempts = _attempt_spans(exporter)
+    assert len(attempts) == 3
+    for span, identifier in zip(
+        attempts,
+        (
+            "anthropic:claude-test-1",
+            "anthropic:claude-test-2",
+            "openai:gpt-test-1",
+        ),
+        strict=True,
+    ):
+        attrs = span.attributes or {}
+        assert attrs["retry.breaker_waived.reason"] == "MemoryToolExecutionInternalError"
+        assert attrs["retry.breaker_waived.candidate"] == identifier
+
+
+# --- AC #4, Probe C: the null-topology harm, foreclosed --------------------
+
+
+@pytest.mark.asyncio
+async def test_probe_c_repeated_waived_faults_never_open_a_breaker() -> None:
+    """AC #4 Probe C as an assertion: REPEATED dispatches with the same waived
+    fault — far past `fail_threshold` per candidate — leave every breaker
+    CLOSED and the chain topology intact: on the LAST dispatch every candidate
+    is still attempted, none skipped by the breaker pre-check.
+
+    `fail_threshold=1` makes the pre-fix harm maximal (the first dispatch would
+    have opened all three breakers, and every later dispatch would have found a
+    null topology — zero attemptable candidates)."""
+    breaker = RuntimeRetryBreaker(
+        retry_policies={
+            RESERVED_LLM_DISPATCH_KEY: RetryPolicy(
+                max_attempts=1, backoff="full_jitter", jitter="full_jitter"
+            )
+        },
+        default_policy=DEFAULT_RETRY_POLICY,
+        fail_threshold=1,
+        base_delay_seconds=0.0,
+        delay_cap_seconds=0.01,
+    )
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    cross_family = (_candidate("openai", "gpt-test-1"),)
+    chain = _chain(primary, same_family=same_family, cross_family=cross_family)
+    identifiers = ("anthropic:claude-test-1", "anthropic:claude-test-2", "openai:gpt-test-1")
+
+    dispatches = 4  # 4 x 3 candidates = 12 waived faults, vs fail_threshold=1.
+    for _ in range(dispatches):
+        inner = _MockInnerDispatcher(
+            outcomes=[
+                LLMDispatchPayloadShapeInternalError("pre-flight payload rejected")
+                for _ in range(3)
+            ]
+        )
+        tp, _ = _tracer_provider_with_exporter()
+        wrapper = RetryBreakerFallbackDispatcher(
+            inner=inner,
+            retry_breaker=breaker,
+            fallback_chain=chain,
+            tracer_provider=tp,
+            sleep_fn=_noop_sleep,
+        )
+        with pytest.raises(RetryBreakerFallbackExhaustedError):
+            await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+        # Topology intact on EVERY dispatch, including the last: three real
+        # provider attempts, none pre-empted by an OPEN breaker.
+        assert len(inner.calls) == 3
+
+    for identifier in identifiers:
+        candidate_breaker = breaker.get_breaker(BreakerScope.PER_MODEL, identifier)
+        assert candidate_breaker.state.value == "closed", identifier
+        assert candidate_breaker.fail_count == 0, identifier
+        assert candidate_breaker.should_attempt() is True, identifier
+
+
+# --- AC #4, positive controls: the guard must not over-reach ---------------
+
+
+@pytest.mark.asyncio
+async def test_auth_401_still_charges_and_emits_no_waiver_attributes() -> None:
+    """AC #4 positive control (a) + AC #3 absence: a raw SDK 401 is fail-fast
+    AND still charges (§14.6.3 row 3 — key rotation genuinely changes the
+    half-open answer), and its inner attempt span carries NEITHER waiver
+    attribute. Emitting t1/t2 on a charging path fails the absence assertions;
+    over-broadening the guard fails the `fail_count == 1` assertion."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(
+        outcomes=[_FakeProviderStatusError(401), {"result": "candidate-1-ok"}]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    charged = breaker.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
+    assert charged.fail_count == 1
+    first = _attempt_spans(exporter)[0].attributes or {}
+    assert "retry.breaker_waived.reason" not in first
+    assert "retry.breaker_waived.candidate" not in first
+
+
+@pytest.mark.asyncio
+async def test_response_parsing_payload_shape_still_charges() -> None:
+    """AC #4 positive control (b) + AC #2 row 2b: the RESPONSE-PARSING
+    `LLMDispatchPayloadShapeError` keeps the charging type and keeps charging —
+    it re-parses a NEW provider response, so a half-open trial genuinely could
+    differ. Only its pre-flight sibling type is waived."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            LLMDispatchPayloadShapeError("Anthropic tool_use block missing string id"),
+            {"result": "candidate-1-ok"},
+        ]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    charged = breaker.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
+    assert charged.fail_count == 1
+    first = _attempt_spans(exporter)[0].attributes or {}
+    assert "retry.breaker_waived.reason" not in first
+
+
+def test_waiver_predicate_refuses_the_memory_family_by_name() -> None:
+    """AC #4 positive control (c)(i), PREDICATE level: the guard's membership
+    test admits the four CONCRETE tuple members and refuses the family base
+    plus its non-admitted subtypes.
+
+    `MemoryToolExecutionDeniedError` / `MemoryToolExecutionStoreError` never
+    reach the guarded fail-fast branch in composer flow (the classifier's
+    catch-all routes them to the staircase), so a family-base broadening of
+    the tuple is killable ONLY here — which is why the guard is realized as a
+    named predicate over a module-level tuple rather than an inline match."""
+    for _, exc in _waived_fixtures():
+        assert _is_breaker_charge_waived(exc) is True, type(exc).__name__
+
+    refused: list[BaseException] = [
+        MemoryToolExecutionError("family base"),
+        MemoryToolExecutionDeniedError("memory ref mem:x is unavailable"),
+        MemoryToolExecutionStoreError("durable store write raised"),
+        LLMDispatchPayloadShapeError("Anthropic tool_use block missing string id"),
+        _FakeProviderStatusError(401),
+        RuntimeError("unclassified transient"),
+    ]
+    for exc in refused:
+        assert _is_breaker_charge_waived(exc) is False, type(exc).__name__
+
+    # The tuple is exactly the four members, by name — not a family base.
+    assert _BREAKER_CHARGE_WAIVED_TYPES == (
+        LLMDispatchProviderUnreachableError,
+        LLMDispatchPayloadShapeInternalError,
+        MemoryToolExecutionInternalError,
+        MemoryToolExecutionInputError,
+    )
+
+
+@pytest.mark.asyncio
+async def test_memory_store_error_still_charges_end_to_end_via_staircase() -> None:
+    """AC #4 positive control (c)(ii), END-TO-END: a dispatch failing
+    repeatedly with the store/IO memory subtype still CHARGES the breaker —
+    via the staircase's max-attempts-exhaustion site, which this unit's
+    ratified scope deliberately leaves untouched.
+
+    This is the declared `B-132` residual asserted as the CURRENT contract, so
+    the guard demonstrably does not reach beyond the fail-fast site."""
+    chain = _chain(_candidate("anthropic", "claude-test-1"))
+    breaker = _retry_breaker_with_llm_policy(max_attempts=2)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            MemoryToolExecutionStoreError("durable store write raised"),
+            MemoryToolExecutionStoreError("durable store write raised"),
+        ]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    # Positive control: the staircase really did retry (2 attempts), so the
+    # charge below comes from the exhaustion site, not the fail-fast one.
+    assert len(inner.calls) == 2
+    charged = breaker.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
+    assert charged.fail_count == 1
+    for span in _attempt_spans(exporter):
+        assert "retry.breaker_waived.reason" not in (span.attributes or {})
+
+
+# --- AC #3, absence on the remaining non-waived paths ----------------------
+
+
+@pytest.mark.asyncio
+async def test_waiver_attributes_absent_on_success_and_transient_paths() -> None:
+    """AC #3 absent-by-default across the remaining non-waived attempt shapes:
+    a transient retry, the max-attempts exhaustion, and a success. None of the
+    four spans below carries either waiver attribute."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            _FakeProviderStatusError(429),  # transient retry
+            _FakeProviderStatusError(429),  # transient retry
+            _FakeProviderStatusError(429),  # max-attempts exhaustion
+            {"result": "candidate-1-ok"},  # success
+        ]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    attempts = _attempt_spans(exporter)
+    assert len(attempts) == 4
+    for span in attempts:
+        attributes = span.attributes or {}
+        assert "retry.breaker_waived.reason" not in attributes
+        assert "retry.breaker_waived.candidate" not in attributes
+
+
+# --- AC #5, exhaustion identity -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_waived_exhaustion_is_identical_except_for_the_charge() -> None:
+    """AC #5: a chain whose every candidate fail-fasts on a waived type
+    exhausts IDENTICALLY to the pre-guard behaviour in every observable except
+    the charge — same `RetryBreakerFallbackExhaustedError`, same
+    `fallback.exhausted` attributes, same `last_failure_class`.
+
+    Forecloses the cheapest wrong fix: treating 'waived' as 'skipped' or
+    'retried'. Suppressing the candidate-advance alongside the charge fails
+    the attempt-count / chain_length / exhaustion_cause assertions."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(
+        outcomes=[LLMDispatchProviderUnreachableError("anthropic") for _ in range(2)]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError) as exc_info:
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert exc_info.value.last_failure_class == "LLMDispatchProviderUnreachableError"
+    # Both candidates attempted exactly once each — fail-fast, then advance.
+    assert len(inner.calls) == 2
+
+    outer = _outer_span(exporter)
+    exhausted = next(e for e in outer.events if e.name == "fallback.exhausted")
+    assert exhausted.attributes is not None
+    assert exhausted.attributes["fallback.chain_length"] == 2
+    assert exhausted.attributes["fallback.last_failure_class"] == (
+        "LLMDispatchProviderUnreachableError"
+    )
+    assert exhausted.attributes["fallback.exhaustion_cause"] == "per-candidate-retry-exhaustion"
+
+    for identifier in ("anthropic:claude-test-1", "anthropic:claude-test-2"):
+        assert breaker.get_breaker(BreakerScope.PER_MODEL, identifier).fail_count == 0, identifier
