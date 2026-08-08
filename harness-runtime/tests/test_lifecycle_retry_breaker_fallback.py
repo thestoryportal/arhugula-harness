@@ -2659,7 +2659,7 @@ async def test_probe_b_one_waived_fault_charges_no_breaker_in_the_chain() -> Non
     inner = _MockInnerDispatcher(
         outcomes=[MemoryToolExecutionInternalError(fault) for _ in range(3)]
     )
-    tp, _ = _tracer_provider_with_exporter()
+    tp, exporter = _tracer_provider_with_exporter()
     wrapper = RetryBreakerFallbackDispatcher(
         inner=inner,
         retry_breaker=breaker,
@@ -2682,6 +2682,26 @@ async def test_probe_b_one_waived_fault_charges_no_breaker_in_the_chain() -> Non
         candidate_breaker = breaker.get_breaker(BreakerScope.PER_MODEL, identifier)
         assert candidate_breaker.fail_count == 0, identifier
         assert candidate_breaker.state.value == "closed", identifier
+
+    # t2 carries the ACTUAL per-position candidate, not the binding/primary —
+    # only the fallback positions can discriminate a mis-report (every other
+    # waiver witness's primary coincides with the binding), so a mutation
+    # sourcing the attribute from `binding.model_binding` instead of
+    # `candidate` fails HERE and nowhere else.
+    attempts = _attempt_spans(exporter)
+    assert len(attempts) == 3
+    for span, identifier in zip(
+        attempts,
+        (
+            "anthropic:claude-test-1",
+            "anthropic:claude-test-2",
+            "openai:gpt-test-1",
+        ),
+        strict=True,
+    ):
+        attrs = span.attributes or {}
+        assert attrs["retry.breaker_waived.reason"] == "MemoryToolExecutionInternalError"
+        assert attrs["retry.breaker_waived.candidate"] == identifier
 
 
 # --- AC #4, Probe C: the null-topology harm, foreclosed --------------------
