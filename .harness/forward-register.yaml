@@ -6485,7 +6485,7 @@ items:
     are span EVENTS, so their head=1.0 floor is unrealized on the dispatch path'
   status: closed
   pr: '#pending (the B-133 realization leg -- OD spec v1.38 NEW section 9.2.1 + plan v2.33 U-OD-59 + the
-    event-aware arm at TailKeepSpanProcessor.on_end + the twelve-witness set; both clearance markers filed)'
+    event-aware arm at TailKeepSpanProcessor.on_end + the fourteen-witness set; both clearance markers filed)'
   summary: 'WHAT IT IS. Both C-OD-09 §9.2 consumers resolve the always-sampled floor against a SPAN NAME and
     never against an EVENT name. Head: HarnessCompositeSampler.should_sample
     (harness-od/src/harness_od/composite_sampler.py:100) branches on is_always_sampled(name, attributes)
@@ -6518,87 +6518,97 @@ items:
     OUT-OF-FAMILY CODEX ROUND 1 AT THE B-116-t3 LEG (PR #1272), 2026-08-08; root cause SHARED WITH
     B-123 (the §10.2 tail-keep trigger arm of the same span-name-vs-span-event mismatch) and B-124 (the
     inert attribute-qualified row) -- the three are one family and should be dispositioned together.'
-  close_out: 'CLOSED 2026-08-08 -- STEPS (1) AND (2) EXECUTED; STEP (3) CARRIED AS A NAMED OPEN RESIDUAL ON
-    THIS CLOSED ROW (the B-104 precedent for a residual that outlives its row''s disposition). (1) THE
-    POSITIVE CONTROL WAS RUN FIRST, END-TO-END, AND BEFORE ANY REPAIR WAS WRITTEN. A REAL
-    RetryBreakerFallbackDispatcher.dispatch driven to fallback-chain exhaustion through a TracerProvider
-    wired with the REAL HarnessCompositeSampler AND the REAL TailKeepSpanProcessor, across SEVEN
-    configurations covering ALL THREE event-shaped members by their own real dispatch shapes (chain
-    exhaustion for fallback.exhausted; capability-shortfall exhaustion for fallback.triggered;
-    charging-fault exhaustion at fail_threshold=1 for breaker.tripped -- LLMDispatchProviderUnreachableError
-    is one of the §14.6.3 WAIVED types and does NOT trip, which is why the charging fault was selected
-    deliberately). RESULT -- ZERO spans exported at BOTH consumers for ALL THREE members: head-only at
-    base_rate=0.0 exported 0; the tail arm with the head admitting exported 0 WITHOUT force_flush; the
-    combined production shape exported 0. The base_rate=1.0 control exported 3, proving the carrier and
-    its event exist. THE DECISIVE DISCRIMINATOR: at base_rate=0.0, a span NAMED fallback.exhausted
-    SURVIVES while a span CARRYING it as an event is DROPPED -- which makes "event-shaped, not
-    name-shaped" the MEASURED cause rather than an inference. The tail mechanism was read off the same
-    run: the carrier span harness.runtime.retry_breaker_fallback is in NEITHER §9.2 (by name) NOR §10.2
-    (by trigger predicate), so it buffers and drops at root close. (2) REPAIR VENUE (a) BUILT, as this
-    row ranked it. An event-aware arm at TailKeepSpanProcessor.on_end resolves the span''s EVENT names
-    against the SAME is_always_sampled SSOT after the name check fails, passing event attributes through
-    so the conditional rows keep conservative-absent, and forwards the carrier immediately on a match.
-    Venue (b) REFUSED as the X-AL-3 extension this row already classified it as. Contract at OD spec
-    v1.38 NEW §C-OD-09 §9.2.1 (five normative terms); unit at OD plan v2.33 U-OD-59; twelve witnesses
-    W1-W12 plus five PD-8 probes, two of which changed the deliverable (probe (ii) caught the
-    trigger-flag mirror witness PASSING under the mutation it existed to catch -- it asserted membership
-    where the arm''s discriminator is export ORDER, and was sharpened; probe (iii) returned GREEN and was
-    recorded as the CORRECT result, ordering being a cost property rather than a correctness one). A
-    CLOSE-OUT HYPOTHESIS OF THIS ROW WAS FALSIFIED AND IS CORRECTED RATHER THAN INHERITED: step (2) said
-    "a head-based-dev cell samples at 1.0 anyway, so the head arm may need nothing -- confirm rather than
-    assume". Confirmed FALSE. Enumerating PER_CELL_BASE_RATE_ENVELOPE against PER_DEPLOYMENT_SURFACE_SAMPLING
-    returns TWO HEAD_BASED_DEV cells, and team-binding x local-development runs at a §10.3 default
-    base-rate of 0.5 (min 0.1) with NO tail processor engaged (span_processor.py wraps only at
-    deployment_surface != LOCAL_DEVELOPMENT). The HEAD half is therefore a live, non-vacuous exposure at
-    exactly one cell, and it CANNOT be repaired at venue (a) for a structural reason -- a span''s events
-    do not exist at span creation -- so it is a DECLARED BOUND at §9.2.1 term 4, asserted by a witness
-    that pins the drop and names it as the bound rather than a comment hoping it is vacuous. Closing it
-    needs an emission-side span shape, i.e. venue (b), i.e. back-flow. (3) STILL OPEN, DELIBERATELY --
-    THE F-08 PER-TENANT KEEP-VOLUME MEASUREMENT against the C-OD-11 §11.1 1,000 spans/sec budget. This
-    leg realizes the floor at the tail and so makes the measurement MEANINGFUL FOR THE FIRST TIME (before
-    realization it would have measured the wrong thing), and deliberately does NOT make it: no volume
-    claim is asserted anywhere in the spec or plan leg and no term or acceptance criterion depends on
-    one, consistent with C7''s FM-K refusal. What CAN be stated without measurement is structural, not
-    populational: the arm forwards the CARRIER span, the smallest unit the OTel export boundary can
-    deliver an event in, so keep granularity is one carrier span per event-carrying dispatch, and the arm
-    adds ZERO emission sites and ZERO per-attempt multiplier. WHOEVER PICKS UP THE RESIDUAL should
-    measure at a TAIL_BASED_PROD multi-tenant cell, since the head cell has no tail consumer at all.
-    B-123 IS NOT CLOSED BY THIS LEG. Its step-(1) probe question is ANSWERED as a side effect and the
-    finding is recorded here and at OD spec v1.38 §0.1: is_classification_trigger matches breaker.tripped
-    by span NAME, so an event-carried trip forwards its OWN carrier under §9.2 (term 2) but does NOT flag
-    its trace for §10.2 sibling preservation. §9.2.1 term 3 declines to widen the trigger predicate
-    deliberately; B-123 owns its own disposition and its step (3) (the sandbox.violation sibling arm)
-    is untouched. B-136 NEWLY REGISTERED at this leg -- a SECOND probe found the PRE-EXISTING name-matching
-    arm leaks its trace buffer when the always-sampled span is the ROOT close, which is outside this
-    row''s authority to repair but which this row''s own arm must not EXTEND (term 5 + AC #6c + PD-8
-    probe (iv), which goes RED without it). B-137 NEWLY REGISTERED AFTER OUT-OF-FAMILY CODEX ROUND 1
-    AGAINST THIS LEG''S COMMIT ff63c725. The reviewer held that at TAIL_BASED_PROD cells with
-    base_rate<1 the head sampler drops the carrier at span CREATION so no ReadableSpan reaches the new
-    tail arm, contradicting section 9.2.1 term 4''s coverage claim. ADJUDICATED EMPIRICALLY AT THE REAL
-    PRODUCTION WIRING RATHER THAN ON ARGUMENT, AND CONFIRMED: tracer_provider.py binds the section 10.3
-    per-cell ratio at the head UNCONDITIONALLY in BOTH section 9.1 modes (its own words: "the current
-    default sampler ignores the mode"), and measurement over 4,000 carriers per cell returned 10.4%
-    admitted at team-binding x self-hosted-server and 20.9% at multi-tenant-compliance x managed-cloud.
-    THE REPAIR THIS ROW BUILT IS THEREFORE REAL BUT PARTIAL -- it realizes the floor for head-ADMITTED
-    carriers, and of those it delivers 100% (420/420 and 837/837). WHAT WAS DEFECTIVE WAS THE TEXT, NOT
-    THE ARM: term 4 claimed every TAIL_BASED_PROD cell was covered by terms 1-3, and that claim is
-    RETRACTED and replaced with the per-cell admission table plus the statement that the head bound
-    reaches FIVE of the EIGHT active cells rather than one. A SECOND framing was ALSO falsified by the
-    same run and is recorded so it is not carried forward: the starvation is NOT uniform across the
-    tail-keep mechanism. A section 9.2 member realized as a ROOT SPAN NAME is admitted at 100% even at
-    base-rate 0.1 (measured 4,000/4,000 for sandbox.violation), because the head resolves
-    is_always_sampled against the span name. Only EVENT-carried members and NON-ROOT spans are starved,
-    the latter including non-root section 10.2 triggers (measured ~9% preservation at base-rate 0.1).
-    That shape-dependence is exactly what this row named, and it is why the architecture question --
-    an unconditionally admitting head in TAIL_BASED_PROD mode with the ratio moved into the tail
-    consumer -- is registered as B-137 rather than absorbed here: it spans every class the tail
-    preserves and multiplies admitted volume by 1/base_rate at every production cell. Witnesses W13
-    (parametrized over the two production cells) and W14 (the root-name-vs-event asymmetry) pin the
-    corrected bound honestly, on the W5 pattern -- named as a bound, not hidden -- and PD-8 probe (vi)
-    demonstrates they are load-bearing by inverting them under a B-137 candidate-A sketch. B-137 also
-    MERGES with this row''s F-08 residual: today''s ~20% multi-tenant admission is the ceiling on the
-    arm''s added keep-volume, and candidate A removes that ceiling, so F-08 must be measured jointly
-    with B-137 rather than against today''s admission.'
+  close_out: 'CLOSED 2026-08-08 -- STEPS (1) AND (2) EXECUTED; STEP (3) STILL OPEN, carried as a named residual on this
+    closed row (the B-104 precedent for a residual that outlives its row''s disposition) and MERGED with B-137.
+    This field states the CURRENT result: where an earlier framing was superseded it is named in one clause
+    rather than restated, and the full correction narrative lives at OD spec v1.38 §0.2 and OD plan v2.33 §0.9.
+
+    (1) THE POSITIVE CONTROL WAS RUN FIRST, END-TO-END, AND BEFORE ANY REPAIR WAS WRITTEN. A REAL
+    RetryBreakerFallbackDispatcher.dispatch driven to fallback-chain exhaustion through a TracerProvider wired
+    with the REAL HarnessCompositeSampler AND the REAL TailKeepSpanProcessor, across SEVEN configurations
+    covering ALL THREE event-shaped members by their own real dispatch shapes (chain exhaustion for
+    fallback.exhausted; capability-shortfall exhaustion for fallback.triggered; charging-fault exhaustion at
+    fail_threshold=1 for breaker.tripped -- LLMDispatchProviderUnreachableError is one of the §14.6.3 WAIVED
+    types and does NOT trip, which is why the charging fault was selected deliberately). RESULT -- ZERO spans
+    exported at BOTH consumers for ALL THREE members: head-only at base_rate=0.0 exported 0; the tail arm with
+    the head admitting exported 0 WITHOUT force_flush; the combined production shape exported 0. The
+    base_rate=1.0 control exported 3, proving the carrier and its event exist. THE DECISIVE DISCRIMINATOR: at
+    base_rate=0.0 a span NAMED fallback.exhausted SURVIVES while a span CARRYING it as an event is DROPPED --
+    which makes "event-shaped, not name-shaped" the MEASURED cause rather than an inference. The tail mechanism
+    was read off the same run: the carrier span harness.runtime.retry_breaker_fallback is in NEITHER §9.2 (by
+    name) NOR §10.2 (by trigger predicate), so it buffers and drops at root close.
+
+    (2) REPAIR VENUE (a) BUILT, as this row ranked it. An event-aware arm at TailKeepSpanProcessor.on_end
+    resolves the span''s EVENT names against the SAME is_always_sampled SSOT after the name check fails, passing
+    event attributes through so the conditional rows keep conservative-absent, and forwards the carrier
+    immediately on a match. Venue (b) REFUSED as the X-AL-3 extension this row already classified it as.
+    Contract at OD spec v1.38 NEW §C-OD-09 §9.2.1 (five normative terms); unit at OD plan v2.33 U-OD-59;
+    FOURTEEN witnesses W1-W14 (35 cases under parametrization) plus SIX PD-8 probes. TWO probes changed the
+    deliverable: probe (ii) caught the trigger-flag mirror witness PASSING under the mutation it existed to
+    catch -- it asserted membership where the arm''s discriminator is export ORDER, and was sharpened, then
+    re-run at 27 failed / 5 passed -- and probe (iii) returned GREEN and was recorded as the CORRECT result,
+    ordering being a cost property rather than a correctness one. Probe (vi) VALIDATES rather than changes:
+    making the head unconditionally admitting inverts EXACTLY the bound witnesses (W5, W13 x2, W14) and nothing
+    else.
+
+    WHAT THE ARM DELIVERS, STATED AS MEASURED SCOPE RATHER THAN AS COVERAGE. The arm realizes the §9.2 floor for
+    carriers the HEAD ADMITTED, and for those it delivers 100% (measured 420/420 and 837/837) -- what bounds it
+    is admission, not classification. tracer_provider.py binds the §10.3 per-cell ratio at the head
+    UNCONDITIONALLY in BOTH §9.1 modes (its own words: "the current default sampler ignores the mode"), so
+    measurement over 4,000 carriers per cell returned 10.4% admitted at team-binding x self-hosted-server, 20.9%
+    at multi-tenant-compliance x managed-cloud, and 100% at the base-rate-1.0 cells. THE HEAD BOUND THEREFORE
+    REACHES FIVE OF THE EIGHT ACTIVE CELLS -- every cell whose head base-rate is below 1.0 -- AND IT IS
+    SHAPE-SPECIFIC: at the same cell and the same rate, a §9.2 member realized as a ROOT SPAN NAME is admitted
+    at 100% (measured 4,000/4,000 for sandbox.violation), so only EVENT-carried members and NON-ROOT spans are
+    starved, the latter including non-root §10.2 triggers at ~9% preservation. The bound is pinned by W5 plus
+    W13 (parametrized over the two production cells, asserting BOTH the shortfall AND that every admitted
+    carrier exports) and W14 (the root-name-vs-event asymmetry), on the discipline of naming a bound rather than
+    hiding it.
+
+    HISTORY, COMPRESSED RATHER THAN CARRIED TWICE. Two successive framings of this head bound were wrong and
+    were corrected by MEASUREMENT rather than by argument: first this row''s own step-(2) hypothesis that a
+    head-based-dev cell "samples at 1.0 anyway, so the head arm may need nothing", and then the leg''s first
+    drafting, which over-corrected to "exactly one cell" and claimed every TAIL_BASED_PROD cell was covered by
+    terms 1-3. BOTH ARE SUPERSEDED BY THE PARAGRAPH ABOVE. The row''s original close-out step (2) text and the
+    prose block''s earlier bullets preserve the first framing as registration history; they are to be read
+    against this field, not beside it.
+
+    TWO CLOSING ROUTES REMAIN, BOTH OUTSIDE THIS ROW. The SHAPE half -- giving the three members a span shape at
+    emission -- is venue (b), a NEW emission primitive routing through §4.3 back-flow per X-AL-3, and is
+    authorized nowhere at this leg. The ADMISSION half -- an unconditionally admitting head in TAIL_BASED_PROD
+    mode with the §10.3 ratio moved into the tail consumer -- is B-137.
+
+    (3) STILL OPEN, DELIBERATELY, AND NOW MERGED WITH B-137 -- THE F-08 PER-TENANT KEEP-VOLUME MEASUREMENT
+    against the C-OD-11 §11.1 1,000 spans/sec budget. This leg realizes the floor at the tail and so makes the
+    measurement MEANINGFUL FOR THE FIRST TIME (before realization it would have measured the wrong thing), and
+    deliberately does NOT make it: no volume claim is asserted anywhere in the spec or plan leg and no term or
+    acceptance criterion depends on one, consistent with C7''s FM-K refusal. What CAN be stated without
+    measurement is structural rather than populational: the arm forwards the CARRIER span, the smallest unit the
+    OTel export boundary can deliver an event in, so keep granularity is one carrier span per event-carrying
+    dispatch, and the arm adds ZERO emission sites and ZERO per-attempt multiplier. WHOEVER PICKS UP THE
+    RESIDUAL must measure at a TAIL_BASED_PROD multi-tenant cell -- the head-based cells engage no tail consumer
+    at all -- AND must measure it JOINTLY WITH B-137: today''s ~20% multi-tenant admission is the CEILING on
+    this arm''s added keep-volume, and B-137''s candidate A removes that ceiling, so a figure taken against
+    today''s admission would not survive that repair.
+
+    B-123 IS NOT CLOSED BY THIS LEG. Its step-(1) probe question is ANSWERED as a side effect, and the finding
+    is recorded here and at OD spec v1.38 §0.1: is_classification_trigger matches breaker.tripped by span NAME,
+    so an event-carried trip forwards its OWN carrier under §9.2 (term 2) but does NOT flag its trace for §10.2
+    sibling preservation. §9.2.1 term 3 declines to widen the trigger predicate deliberately, and witness W7
+    PINS the boundary so widening it later is a deliberate, test-visible act. B-123 owns its own disposition and
+    its step (3) -- the sandbox.violation sibling arm -- is untouched.
+
+    B-136 NEWLY REGISTERED at this leg: a probe found the PRE-EXISTING name-matching arm leaks its trace buffer
+    when the always-sampled span is the ROOT close. Outside this row''s authority to repair, but this row''s own
+    arm must not EXTEND it (term 5 + AC #6c + PD-8 probe (iv), which goes RED without it).
+
+    B-137 NEWLY REGISTERED after OUT-OF-FAMILY CODEX ROUND 1 against this leg''s commit ff63c725, whose P1 was
+    ADJUDICATED EMPIRICALLY AT THE REAL PRODUCTION WIRING RATHER THAN ON ARGUMENT, and CONFIRMED. The repair
+    this row built is REAL BUT PARTIAL; what was defective was the leg''s contract TEXT, not the arm, and term 4
+    was rewritten accordingly. B-137 carries the architecture question -- it spans every class the tail
+    preserves and multiplies admitted volume by 1/base_rate at every production cell -- with a YES council
+    disposition (C7 observability floor vs C11 telemetry volume) convened at its own step (3), after
+    re-measurement.'
   council: 'No -- a probe-then-repair row in the B-123 family; convene nothing until the positive control runs.
     If step (1) returns dropped and step (2) selects candidate (b), that IS a convening trigger: a new
     emission primitive re-opens the C7 observability-floor vs C11 telemetry-volume tension on a surface
