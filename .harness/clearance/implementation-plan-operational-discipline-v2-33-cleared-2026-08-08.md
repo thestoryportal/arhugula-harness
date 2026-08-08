@@ -8,7 +8,7 @@ back_reference:
   - design-substrate/Implementation_Plan_Operational_Discipline_v2_32.md §1.2 — the explicit statement of what U-OD-58 did NOT own ("The floor's END-TO-END REALIZATION at the SDK boundary. Registered as `B-133`."), which is exactly this unit's scope
   - .harness/forward-register.yaml row `B-133` close-out steps (1) + (2)
   - .harness/forward-register.yaml row `B-137` — NEWLY REGISTERED at this leg (out-of-family Codex round 1 against commit `ff63c725`, adjudicated by measurement); the plan's NEW §0.9 carries the adjudication and AC #5's restatement
-  - PR '#pending' (this arc)
+  - PR '#1276' (this arc)
 merge_commit: pending
 reviewer_chain:
   - atomic-decomposition pass — ONE new unit (U-OD-59), the next free OD unit ID after v2.32's U-OD-58, verified by grep across `design-substrate/` and `.harness/` before filing. ZERO amended units: neither U-OD-11 (which owns `sampling_mode.py` and `is_always_sampled`) nor the tail-keep processor's own carrier unit has its acceptance criteria rewritten, per the `B-97`(a) → U-RT-149 and `B-96` → U-RT-150 precedent that a landed unit is not retroactively re-scoped by a later contract amendment.

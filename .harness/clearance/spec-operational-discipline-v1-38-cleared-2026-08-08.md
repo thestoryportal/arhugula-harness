@@ -9,7 +9,7 @@ back_reference:
   - .harness/forward-register.yaml row `B-123` — the §10.2 half of the same span-name-vs-span-event mismatch. This leg's positive control ANSWERS its step-(1) probe question; the finding is recorded as a cross-reference and `B-123` is NOT closed
   - .harness/forward-register.yaml row `B-137` — NEWLY REGISTERED at this leg after out-of-family Codex round 1 against commit `ff63c725`: head sampling starves the tail-keep mechanism for every preserved class that is NOT a root span name, because the shipped head sampler applies the §10.3 ratio in BOTH §9.1 modes. An architecture-level question spanning the whole §10.2 mechanism, with a YES council disposition (C7 ⊥ C11) at its own step (3)
   - .harness/forward-register.yaml row `B-136` — NEWLY REGISTERED at this leg: the pre-existing name-matching arm leaves an always-sampled ROOT's trace buffered until `force_flush`, observed at this leg's probe and deliberately NOT repaired here
-  - PR '#pending' (this arc)
+  - PR '#1276' (this arc)
 merge_commit: pending
 reviewer_chain:
   - ratified-fork apply pass — applies the repair venue the `B-133` row itself ranked, at the altitude the row set, and EXTENDS NOTHING beyond it. Candidate (b) (an event→span projection at emission) is explicitly REFUSED as the X-AL-3 extension the row already classified it as; candidate (a) introduces no primitive, no contract number, no new type, and reads the EXISTING `is_always_sampled` SSOT against data the span already carries.

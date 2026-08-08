@@ -6484,7 +6484,7 @@ items:
   title: 'The §9.2 always-sampled floor classifies span NAMES at both consumers while three of its members
     are span EVENTS, so their head=1.0 floor is unrealized on the dispatch path'
   status: closed
-  pr: '#pending (the B-133 realization leg -- OD spec v1.38 NEW section 9.2.1 + plan v2.33 U-OD-59 + the
+  pr: '#1276 (the B-133 realization leg -- OD spec v1.38 NEW section 9.2.1 + plan v2.33 U-OD-59 + the
     event-aware arm at TailKeepSpanProcessor.on_end + the fourteen-witness set; both clearance markers filed)'
   summary: 'WHAT IT IS. Both C-OD-09 §9.2 consumers resolve the always-sampled floor against a SPAN NAME and
     never against an EVENT name. Head: HarnessCompositeSampler.should_sample
