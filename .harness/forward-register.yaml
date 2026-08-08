@@ -61,11 +61,11 @@ snapshot:
   total: 117
   open: 0
   design_substrate_gated: 0
-  registered_finding: 15
-  operator_gated: 0
+  registered_finding: 14
+  operator_gated: 1
   held: 1
   closed: 101
-  identity_digest: 0f41577309489f60
+  identity_digest: a7449fb3bd0d02e2
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5489,7 +5489,7 @@ items:
   heading: '### B-115 · Memory capture same-text / same-model-NAME / different-PROVIDER re-entry: a duplicate record JSONL line, then a `TRANSIENT_RETRY` staircase via `MemoryToolExecutionStoreError` *(MEASURED at the `B-84` build leg, PR #1243, W-5 cell (3); ratified by the operator 2026-08-07)*'
 - id: B-116
   title: 'Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state?'
-  status: registered_finding
+  status: operator_gated
   summary: 'THE QUESTION, and this row frames it rather than answering it. When the retry/breaker/fallback
     dispatcher fail-fasts a candidate, it records ONE breaker failure against that candidate''s
     PROVIDER before exiting. GROUNDED BY CONTENT at HEAD 73b0e87b (the inbound note''s ~:1025 is
