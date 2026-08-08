@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 134
+  total: 135
   open: 0
   design_substrate_gated: 0
-  registered_finding: 29
+  registered_finding: 30
   operator_gated: 0
   held: 1
   closed: 104
-  identity_digest: f37e55c063f47ae9
+  identity_digest: 0a0bb03401f9881c
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5804,7 +5804,14 @@ items:
     attempt is necessarily is_last_attempt, so a transient on it takes the exhaustion branch and IS cell
     5. The cap is the ratified term, so the cell is marked VOID BY CONSTRUCTION with its derivation and
     is NOT renumbered, keeping cell numbering stable against the plan, this register and every citing
-    witness. The matrix is nine cells declared, EIGHT live.'
+        witness. The matrix is nine cells declared, EIGHT live. ROUND 2 (same review): one mechanical
+    count reconciliation (11 ACs / 14 probes) and one CROSS-TRANSITION stale-outcome variant the epoch
+    guard does NOT cover -- a request admitted while CLOSED that survives a trip AND a recovery, then
+    resets fail_count on the tokenless CLOSED arm. ADJUDICATED PRE-EXISTING AND REGISTERED, NOT ABSORBED
+    -- the CLOSED-arm success-reset is shipped consecutive-failure semantics reachable with zero trips,
+    and guarding it would mean epoch-capturing every ordinary dispatch and rewriting contracted
+    success-reset semantics, a redesign this leg does not price. Declared at Runtime spec v1.114 section
+    14.6.4''s honest-boundary paragraph and minted as forward row B-135.'
   council: 'No at registration. A single-domain C9 reliability-mechanism gap with no nameable cross-domain
     tension — the mechanism, the contract text, and the recovery model are all in one voice''s lineage.
     Conditionally yes only if step (2) proposes a durable cooldown clock: that re-opens the persistence
@@ -6536,3 +6543,57 @@ items:
     rather than routing them to the residual? *(surfaced at the `B-115` (b′) leg, 2026-08-08 — the leg
     took the residual per the U-MEM-28 precedent and registered the vocabulary question rather than
     widening a ratified enumeration on its own authority)*'
+- id: B-135
+  title: 'Stale in-flight outcomes cross breaker state transitions un-epoch-guarded on the CLOSED arm,
+    so a pre-trip success arriving post-recovery resets the fail_count accumulated since'
+  status: registered_finding
+  summary: 'WHAT IT IS. The B-118 trial-epoch guard (Runtime spec v1.114 section 14.6.4) binds the
+    HALF_OPEN resolution arms ONLY -- record_success / record_failure / re_arm_half_open_trial refuse to
+    resolve a HALF_OPEN machine unless the caller presents the current admission epoch. The CLOSED arms
+    stay TOKENLESS by design. Codex round 2 at the B-118 leg named a scenario that crosses the boundary:
+    a request admitted while the breaker was CLOSED survives, in flight, through a trip AND a successful
+    half-open recovery, and its stale success then arrives while the breaker is CLOSED again. It takes
+    the tokenless CLOSED arm, resets fail_count, and erases whatever failure accumulation has built up
+    SINCE the recovery. WHY THIS IS PRE-EXISTING AND NOT A B-118 REGRESSION, VERIFIED NOT ASSUMED.
+    record_success resetting fail_count in CLOSED is the shipped CONSECUTIVE-failure breaker semantics
+    on main (harness-runtime/src/harness_runtime/lifecycle/retry_breaker.py, the record_success CLOSED
+    arm, pre-B-118), and the erasure is reachable with ZERO trips and ZERO recoveries: siblings fail
+    twice, an older in-flight success lands, the count resets. That is the definition of a
+    consecutive-failure counter and it long predates this leg. B-118 adds ONE MORE PATH into the same
+    arm (a request that outlived a full trip-and-recover cycle) but changes NOTHING about the arm''s
+    semantics. WHY THE B-118 GUARD DELIBERATELY STOPS AT HALF_OPEN. The HALF_OPEN race is categorically
+    different -- there a stale success does not merely reset a counter, it RESOLVES A TRIAL IT DOES NOT
+    OWN and closes a breaker the machine had already judged unhealthy, after which the real trial''s
+    failure lands under threshold and the provider-model is silently readmitted. Guarding CLOSED-arm
+    outcomes instead requires capturing an epoch on EVERY ordinary dispatch and changes CONTRACTED
+    success-reset semantics for every caller -- an unpriced redesign, not a bug fix, which is why the
+    B-118 leg declared the boundary at section 14.6.4 rather than absorbing it. SURFACED BY
+    OUT-OF-FAMILY CODEX REVIEW ROUND 2 AT THE B-118 LEG, 2026-08-08.'
+  close_out: '(1) DECIDE WHETHER CLOSED-ARM OUTCOME ORDERING SHOULD BE EPOCH-AWARE AT ALL. This is the
+    whole question, and it is not obviously yes -- a consecutive-failure counter that forgives on ANY
+    success is a deliberate, contracted design, and making it order-aware changes what fail_threshold
+    means for every caller. Ground it against the C-CP-03 section 3.5 breaker semantics before pricing
+    anything. Likely a C9 single-domain call; council only if step (2) proposes a DURABLE or PERSISTENT
+    epoch, which re-opens the same persistence tension B-116 term t4 pinned. (2) IF YES, PRICE THE
+    ORDINARY-DISPATCH EPOCH CAPTURE honestly -- every dispatch would have to capture an epoch and every
+    CLOSED-arm resolution present it, which touches the hot path rather than the rare recovery path the
+    B-118 guard touches, and would need its own witness set plus a decision about what a stale
+    CLOSED-arm success DOES instead of resetting (drop it? apply it to the epoch it belongs to? neither
+    is free). (3) NOTE THE B-116 t4 INTERACTION -- any future breaker-persistence arc must replay epochs
+    consistently, or a rehydrated breaker will treat every in-flight outcome as stale (or every stale
+    one as current), which is a worse failure than the one this row describes. WHAT WOULD FALSIFY IT. A
+    demonstration that the CLOSED-arm reset is NOT reachable without a trip -- which the pre-existing
+    grounding above already contradicts -- or a ratified decision that
+    consecutive-failure-with-forgiveness is exactly the intended semantics, in which case this row
+    closes as WORKING-AS-DESIGNED and section 14.6.4''s boundary paragraph becomes the permanent
+    statement of it.'
+  council: 'No at registration. A single-domain C9 breaker-semantics question -- what fail_threshold
+    counts, and whether a counter that forgives on any success is intended -- with no nameable
+    cross-domain tension. Conditionally yes only if step (2) proposes a DURABLE or PERSISTENT epoch,
+    which re-opens the persistence tension B-116 term t4 pinned (a durable breaker opened by a fault the
+    operator cannot see survives the restart the operator reaches for first) and is a genuine C9 vs C11
+    dyad.'
+  heading: '### B-135 · Stale in-flight outcomes cross breaker state transitions un-epoch-guarded on the
+    `CLOSED` arm *(surfaced by out-of-family codex review round 2 at the `B-118` leg, 2026-08-08 —
+    adjudicated PRE-EXISTING, so the leg declared the boundary rather than absorbing an unpriced
+    redesign)*'
