@@ -1,0 +1,38 @@
+---
+artifact: design-substrate/Implementation_Plan_Operational_Discipline_v2_33.md
+version: v2.33
+cleared_at: 2026-08-08T00:00:00-06:00
+clearance_type: ratified-fork-apply-pass
+back_reference:
+  - design-substrate/Spec_Operational_Discipline_v1_38.md §1 — NEW §C-OD-09 §9.2.1 terms 1–5, the subsection U-OD-59 realizes; cleared at `.harness/clearance/spec-operational-discipline-v1-38-cleared-2026-08-08.md` (SAME arc, SAME PR)
+  - design-substrate/Implementation_Plan_Operational_Discipline_v2_32.md §1.2 — the explicit statement of what U-OD-58 did NOT own ("The floor's END-TO-END REALIZATION at the SDK boundary. Registered as `B-133`."), which is exactly this unit's scope
+  - .harness/forward-register.yaml row `B-133` close-out steps (1) + (2)
+  - PR '#pending' (this arc)
+merge_commit: pending
+reviewer_chain:
+  - atomic-decomposition pass — ONE new unit (U-OD-59), the next free OD unit ID after v2.32's U-OD-58, verified by grep across `design-substrate/` and `.harness/` before filing. ZERO amended units: neither U-OD-11 (which owns `sampling_mode.py` and `is_always_sampled`) nor the tail-keep processor's own carrier unit has its acceptance criteria rewritten, per the `B-97`(a) → U-RT-149 and `B-96` → U-RT-150 precedent that a landed unit is not retroactively re-scoped by a later contract amendment.
+  - DAG pass — one new node; TWO new intra-axis edges (U-OD-11 → U-OD-59 for the SSOT the arm must share; U-OD-58 → U-OD-59 because the roster's nineteenth member is one of the three the arm exists to deliver). ZERO cross-axis edges, ZERO CXA rows, ZERO new cluster. The cross-axis claim is DETERMINED rather than assumed: `tail_keep_span_processor.py` imports only `harness_od.*` plus the OTel SDK, gains no new import at this unit, exposes no new symbol outside `harness-od/`, and its constructor signature is byte-unchanged — so the runtime construction site at `span_processor.py` does not move and no cross-package consumption is introduced.
+  - acceptance-criteria pass — TEN criteria, every one by EXECUTION. AC #1 is the positive control itself and is written so `B-133` closes on the RESULT rather than the expectation. AC #2 closes the parametrize-literal drift gap v2.32 §0.7 found at the name arm, and closes it BY CONSTRUCTION here (the witness is parametrized over `ALWAYS_SAMPLED_EVENT_CLASSES` itself, so a future roster row is covered the moment it lands) rather than by a second hand-maintained list. AC #5 pins the HEAD bound as a BOUND and says in-text that a green witness there is not a discharge. AC #8 asserts the scope claim by ABSENCE in the arc diff.
+  - THREE PROBE FINDINGS RECORDED, INCLUDING ONE AGAINST THIS PLAN'S OWN WITNESS SET. (i) §0.5 — the close-out hypothesis that head-based-dev cells sample at 1.0 was FALSIFIED by enumerating the per-cell envelope; `team-binding × local-development` is head-based at 0.5 with no tail processor. (ii) §0.6 — a PRE-EXISTING buffer leak in the name-matching arm, observed and REGISTERED as `B-136` rather than repaired, with AC #6c owing only that the new arm not extend it. (iii) §0.7 — PD-8 probe (ii) showed the trigger-flag mirror witness PASSING under the very mutation it exists to catch, because it asserted membership where the arm's discriminator is export ORDER; the witness was SHARPENED and now fails under that mutation. Finding (iii) is the one that matters most for review: it is a "presence-not-correctness" witness caught by its own probe, and it is recorded rather than silently corrected.
+  - PD-8 pass — FIVE probes, each applied, observed, restored by FILE COPY from a pre-probe backup (never `git checkout`, which would destroy uncommitted arc content), and re-verified green. Probe (ii) name-check-only: 26 failed / 6 passed on first run, with the trigger-flag mirror witness among the SIX PASSING — the §0.7 finding; RE-RUN after that witness was sharpened from membership to export ORDER: 27 failed / 5 passed, the kill demonstrated by measurement rather than asserted. Both figures are recorded in the plan. Probe (iv) drop the root-close materialization: 5 failed — the `B-136` no-extension criterion is load-bearing. Probe (v) drop `event.attributes`: 1 failed, the conservative-absent case. Probe (iii) move the arm above the name arm: 62 PASSED, and §0.8 records this as the CORRECT result — ordering is a cost property, not a correctness one — so no ordering assertion is written, because that would pin an implementation detail the spec does not bind.
+  - scope-boundary pass — §1.2 enumerates FIVE surfaces this unit does not own, each with its owning row: the HEAD half (declared bound, term 4), the §10.2 trigger half (`B-123`, whose step-(1) probe this leg ANSWERS without closing it), the name-arm buffer leak (`B-136`), the inert `validator.fail.permanence` row (`B-124`) and the `tool_id` homonym (`B-125`), and the F-08 keep-volume measurement (`B-133` step (3), still OPEN, with NO acceptance criterion depending on a volume figure).
+  - thread/async posture verified by direct read rather than assumed — `on_end` is called by the OTel SDK on whichever thread ends the span and the module carries NO lock today (no `Lock`, no `async def`, no `threading` import). The arm matches that posture exactly: a pure read over `span.events` plus the same downstream call and the same bookkeeping the existing arms already perform. No lock added, no `async` introduced, no new shared mutable state — the module's concurrency profile is unchanged.
+supersedes: implementation-plan-operational-discipline-v2-32-cleared-2026-08-08.md
+---
+
+# Clearance — `Implementation_Plan_Operational_Discipline_v2_33.md v2.33`
+
+v2.33 is the OD plan leg of the **`B-133`** arc. It authors **ONE NEW atomic unit, U-OD-59** — the event-aware §9.2 arm at the tail-keep consumer, realizing OD spec v1.38 §C-OD-09 §9.2.1 terms 1–5 — and preserves every other section verbatim from v2.32.
+
+**The unit is written as a consequence of a measurement, not as a prediction.** §0.2 records the positive-control result before the unit body appears: zero spans exported at either consumer, for all three event-shaped members, across seven configurations driven by REAL dispatch shapes. AC #1 is that control, and it is phrased so the row would have closed on a survival finding with no repair at all.
+
+**Scale is small and stated honestly** — roughly fourteen functional `src` lines in one module (an ~8-line helper plus a ~6-line arm), with the remainder being the twelve-witness set and the module-docstring record. What earns the plan its length is not the code but the three probe findings §0.5–§0.8 record, one of which is against this plan's own witness set: PD-8 probe (ii) caught a witness passing under the mutation it existed to catch, and the sharpening (membership → export order) is recorded rather than quietly applied.
+
+What was reviewed during clearance: the unit ID's freeness by grep; the two new DAG edges against their stated grounds; the CXA no-delta claim by import and constructor-signature inspection; the concurrency posture by direct read; every PD-8 probe by execution with its exact pass/fail counts; and the §1.2 non-ownership list against the register rows it names. Deferrals: none — the whole shape is determined by §9.2.1's five terms, so spec, plan and implementation land in the same PR per the #1272 precedent.
+
+Note for Phase 7 consumers: AC #5's green witness asserts that the HEAD bound EXISTS. It is not a repair and must not be consumed as one.
+
+## Notes
+
+- Phase 7 consumers may rely on this version as canonical until a successor marker is filed.
+- See `.harness/clearance/README.md` for marker discipline.

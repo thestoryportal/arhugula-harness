@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 135
+  total: 136
   open: 0
   design_substrate_gated: 0
   registered_finding: 30
   operator_gated: 0
   held: 1
-  closed: 104
-  identity_digest: 0a0bb03401f9881c
+  closed: 105
+  identity_digest: 94929b71524902d9
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -6064,7 +6064,22 @@ items:
     finding — it needs a positive-control run before anyone cites it." That framing is load-bearing and
     is not upgraded by registration. The row exists so the probe is queued, not so the conclusion can be
     cited. SURFACED AT THE B-116 COUNCIL DELIBERATION, C7 A2 consultant registered adjacency 1, carried
-    as rider (b) of the B-116-t3 leg, 2026-08-07.'
+    as rider (b) of the B-116-t3 leg, 2026-08-07. PROBE OBSERVATION RECORDED AT THE B-133
+    LEG, 2026-08-08 -- AN OBSERVATION, NOT A CLOSURE, AND THIS ROW STAYS registered_finding. The
+    B-133 positive control drove a REAL charging-fault dispatch to exhaustion through the REAL
+    TailKeepSpanProcessor and observed the predicate directly on the carrying span:
+    is_classification_trigger(span) returned False on the wrapper span
+    harness.runtime.retry_breaker_fallback that carries the breaker.tripped EVENT, and the trace''s
+    buffered siblings were consequently DROPPED at root close. THAT ANSWERS THIS ROW''S STEP (1) IN
+    THE AFFIRMATIVE FOR THE BREAKER ARM: the §10.2 trigger is inert on the dispatch path. It does NOT
+    answer step (3) -- the sandbox.violation sibling arm was not exercised -- and it does not decide
+    step (2)''s repair. OD spec v1.38 §9.2.1 term 3 DELIBERATELY declined to widen
+    is_classification_trigger to event names while closing the §9.2 half beside it, and U-OD-59''s
+    witness W7 PINS the boundary (an event-carried breaker.tripped forwards its own carrier under the
+    §9.2 floor but sets no keep flag), so widening it later is a deliberate, test-visible act rather
+    than silent drift. C7''s "I surface this as a probe, not a finding" framing is preserved: the probe
+    has now RUN for one of its two arms, and the result is recorded here so the conclusion can be
+    cited for that arm -- with the repair decision still owed.'
   close_out: '(1) RUN THE POSITIVE CONTROL FIRST. Drive a real breaker trip through the tail-keep processor and
     observe whether the trace is preserved. Grep proves presence; only the run proves behaviour, and
     this row is entirely about behaviour. (2) If inert, decide the repair — match the event name as well
@@ -6468,7 +6483,9 @@ items:
 - id: B-133
   title: 'The §9.2 always-sampled floor classifies span NAMES at both consumers while three of its members
     are span EVENTS, so their head=1.0 floor is unrealized on the dispatch path'
-  status: registered_finding
+  status: closed
+  pr: '#pending (the B-133 realization leg -- OD spec v1.38 NEW section 9.2.1 + plan v2.33 U-OD-59 + the
+    event-aware arm at TailKeepSpanProcessor.on_end + the twelve-witness set; both clearance markers filed)'
   summary: 'WHAT IT IS. Both C-OD-09 §9.2 consumers resolve the always-sampled floor against a SPAN NAME and
     never against an EVENT name. Head: HarnessCompositeSampler.should_sample
     (harness-od/src/harness_od/composite_sampler.py:100) branches on is_always_sampled(name, attributes)
@@ -6492,40 +6509,76 @@ items:
     ratified gate, whose stated content was the roster widening plus its sampling fixtures per the
     council record C-c7-reconcile.md''s own pricing; this row carries the REALIZATION debt that pricing
     never covered. REGISTRATION IS THE NON-SILENT DISPOSITION -- the finding is neither absorbed into a
-    closed row nor repaired by redesign at a leg that has no authority for it. WHY NOT FIXED HERE. The
-    out-of-family reviewer''s proposed remedies -- emit a dedicated span for the event, or make the
-    wrapper span itself always-sampled -- are both REJECTED at the t3 leg. The first mints a new emission
+    closed row nor repaired by redesign at a leg that has no authority for it. WHY NOT FIXED AT THE t3
+    LEG. The out-of-family reviewer''s proposed remedies -- emit a dedicated span for the event, or make
+    the wrapper span itself always-sampled -- were both REJECTED there. The first mints a new emission
     primitive that no cleared spec authorizes, which is an X-AL-3 design extension routing through
     back-flow, not an impl fix. The second would always-sample EVERY dispatch wrapper, over-sampling far
     beyond the three rows at issue and silently rewriting the §10.3 per-cell envelope. SURFACED BY
-    OUT-OF-FAMILY CODEX ROUND 1 AT THE B-116-t3 LEG (PR pending), 2026-08-08; root cause SHARED WITH
+    OUT-OF-FAMILY CODEX ROUND 1 AT THE B-116-t3 LEG (PR #1272), 2026-08-08; root cause SHARED WITH
     B-123 (the §10.2 tail-keep trigger arm of the same span-name-vs-span-event mismatch) and B-124 (the
     inert attribute-qualified row) -- the three are one family and should be dispositioned together.'
-  close_out: '(1) RUN THE POSITIVE CONTROL FIRST, and run it end-to-end rather than at the predicate. Drive a real
-    EXHAUSTED dispatch through the composite sampler AND the tail-keep processor at a cell whose
-    base_rate is < 1, and observe whether the wrapper span carrying the fallback.exhausted event is
-    dropped. Grep proves the code path; only the run proves the floor is or is not delivered. Cover the
-    two siblings in the same run -- they share the shape, and a repair scoped to one row would leave the
-    family half-fixed. (2) IF DROPPED (the expected outcome), decide the REPAIR VENUE, and the two
-    candidates are not equivalent in kind: (a) an event-aware arm at the tail-keep on_end that scans
-    span.events names against the §9.2 roster before the drop decision -- single-domain C7, no new
-    emission primitive, no spec amendment, and it composes with B-123''s trigger arm since both want the
-    same event-name lookup; or (b) an event-to-span projection at emission time -- a NEW primitive that
-    routes through design-phase back-flow per X-AL-3, and which also changes the span topology every
-    existing witness asserts against. Prefer (a) unless the positive control shows the tail arm cannot
-    reach the decision. Note that (a) repairs the TAIL surface only; the HEAD surface at a
-    head-based-dev cell samples at 1.0 anyway, so the head arm may need nothing -- confirm rather than
-    assume. (3) POST-REALIZATION, and only then, bound the multi-tenant keep-volume against the C-OD-11
-    §11.1 per-tenant 1,000 spans/sec budget per C7''s F-08. This is the POPULATION question the B-116-t3
-    leg left EXPLICITLY OPEN and did not answer: that leg established only the STRUCTURAL result (the
-    budget enforces at COLLECTOR_BOUNDARY / BACKEND_INGESTION independently of any sampling decision, so
-    membership cannot admit throughput past the enforced caps, and the event is once-per-exhausted-dispatch
-    so membership adds no multiplicity). Measuring the volume before the floor is actually realized would
-    measure the wrong thing.'
+  close_out: 'CLOSED 2026-08-08 -- STEPS (1) AND (2) EXECUTED; STEP (3) CARRIED AS A NAMED OPEN RESIDUAL ON
+    THIS CLOSED ROW (the B-104 precedent for a residual that outlives its row''s disposition). (1) THE
+    POSITIVE CONTROL WAS RUN FIRST, END-TO-END, AND BEFORE ANY REPAIR WAS WRITTEN. A REAL
+    RetryBreakerFallbackDispatcher.dispatch driven to fallback-chain exhaustion through a TracerProvider
+    wired with the REAL HarnessCompositeSampler AND the REAL TailKeepSpanProcessor, across SEVEN
+    configurations covering ALL THREE event-shaped members by their own real dispatch shapes (chain
+    exhaustion for fallback.exhausted; capability-shortfall exhaustion for fallback.triggered;
+    charging-fault exhaustion at fail_threshold=1 for breaker.tripped -- LLMDispatchProviderUnreachableError
+    is one of the §14.6.3 WAIVED types and does NOT trip, which is why the charging fault was selected
+    deliberately). RESULT -- ZERO spans exported at BOTH consumers for ALL THREE members: head-only at
+    base_rate=0.0 exported 0; the tail arm with the head admitting exported 0 WITHOUT force_flush; the
+    combined production shape exported 0. The base_rate=1.0 control exported 3, proving the carrier and
+    its event exist. THE DECISIVE DISCRIMINATOR: at base_rate=0.0, a span NAMED fallback.exhausted
+    SURVIVES while a span CARRYING it as an event is DROPPED -- which makes "event-shaped, not
+    name-shaped" the MEASURED cause rather than an inference. The tail mechanism was read off the same
+    run: the carrier span harness.runtime.retry_breaker_fallback is in NEITHER §9.2 (by name) NOR §10.2
+    (by trigger predicate), so it buffers and drops at root close. (2) REPAIR VENUE (a) BUILT, as this
+    row ranked it. An event-aware arm at TailKeepSpanProcessor.on_end resolves the span''s EVENT names
+    against the SAME is_always_sampled SSOT after the name check fails, passing event attributes through
+    so the conditional rows keep conservative-absent, and forwards the carrier immediately on a match.
+    Venue (b) REFUSED as the X-AL-3 extension this row already classified it as. Contract at OD spec
+    v1.38 NEW §C-OD-09 §9.2.1 (five normative terms); unit at OD plan v2.33 U-OD-59; twelve witnesses
+    W1-W12 plus five PD-8 probes, two of which changed the deliverable (probe (ii) caught the
+    trigger-flag mirror witness PASSING under the mutation it existed to catch -- it asserted membership
+    where the arm''s discriminator is export ORDER, and was sharpened; probe (iii) returned GREEN and was
+    recorded as the CORRECT result, ordering being a cost property rather than a correctness one). A
+    CLOSE-OUT HYPOTHESIS OF THIS ROW WAS FALSIFIED AND IS CORRECTED RATHER THAN INHERITED: step (2) said
+    "a head-based-dev cell samples at 1.0 anyway, so the head arm may need nothing -- confirm rather than
+    assume". Confirmed FALSE. Enumerating PER_CELL_BASE_RATE_ENVELOPE against PER_DEPLOYMENT_SURFACE_SAMPLING
+    returns TWO HEAD_BASED_DEV cells, and team-binding x local-development runs at a §10.3 default
+    base-rate of 0.5 (min 0.1) with NO tail processor engaged (span_processor.py wraps only at
+    deployment_surface != LOCAL_DEVELOPMENT). The HEAD half is therefore a live, non-vacuous exposure at
+    exactly one cell, and it CANNOT be repaired at venue (a) for a structural reason -- a span''s events
+    do not exist at span creation -- so it is a DECLARED BOUND at §9.2.1 term 4, asserted by a witness
+    that pins the drop and names it as the bound rather than a comment hoping it is vacuous. Closing it
+    needs an emission-side span shape, i.e. venue (b), i.e. back-flow. (3) STILL OPEN, DELIBERATELY --
+    THE F-08 PER-TENANT KEEP-VOLUME MEASUREMENT against the C-OD-11 §11.1 1,000 spans/sec budget. This
+    leg realizes the floor at the tail and so makes the measurement MEANINGFUL FOR THE FIRST TIME (before
+    realization it would have measured the wrong thing), and deliberately does NOT make it: no volume
+    claim is asserted anywhere in the spec or plan leg and no term or acceptance criterion depends on
+    one, consistent with C7''s FM-K refusal. What CAN be stated without measurement is structural, not
+    populational: the arm forwards the CARRIER span, the smallest unit the OTel export boundary can
+    deliver an event in, so keep granularity is one carrier span per event-carrying dispatch, and the arm
+    adds ZERO emission sites and ZERO per-attempt multiplier. WHOEVER PICKS UP THE RESIDUAL should
+    measure at a TAIL_BASED_PROD multi-tenant cell, since the head cell has no tail consumer at all.
+    B-123 IS NOT CLOSED BY THIS LEG. Its step-(1) probe question is ANSWERED as a side effect and the
+    finding is recorded here and at OD spec v1.38 §0.1: is_classification_trigger matches breaker.tripped
+    by span NAME, so an event-carried trip forwards its OWN carrier under §9.2 (term 2) but does NOT flag
+    its trace for §10.2 sibling preservation. §9.2.1 term 3 declines to widen the trigger predicate
+    deliberately; B-123 owns its own disposition and its step (3) (the sandbox.violation sibling arm)
+    is untouched. B-136 NEWLY REGISTERED at this leg -- a SECOND probe found the PRE-EXISTING name-matching
+    arm leaks its trace buffer when the always-sampled span is the ROOT close, which is outside this
+    row''s authority to repair but which this row''s own arm must not EXTEND (term 5 + AC #6c + PD-8
+    probe (iv), which goes RED without it).'
   council: 'No -- a probe-then-repair row in the B-123 family; convene nothing until the positive control runs.
     If step (1) returns dropped and step (2) selects candidate (b), that IS a convening trigger: a new
     emission primitive re-opens the C7 observability-floor vs C11 telemetry-volume tension on a surface
-    wider than these three rows. Candidate (a) is single-domain and owes no convening.'
+    wider than these three rows. Candidate (a) is single-domain and owes no convening. AT CLOSURE: the
+    control returned DROPPED and step (2) selected candidate (a), so NO convening was owed and none was
+    held. The conditional survives for whoever takes the HEAD half, which can only be closed at
+    candidate (b)''s venue and therefore DOES carry the trigger.'
   heading: '### B-133 · The §9.2 always-sampled floor classifies **span names** at both consumers while three of
     its members are span **events**, so their head=1.0 floor is unrealized on the dispatch path
     *(surfaced by out-of-family Codex round 1 at the `B-116-t3` leg, 2026-08-08; same family as B-123 /
@@ -6680,3 +6733,65 @@ items:
     out-of-family codex review round 2 at the `B-118` leg, attempt side by round 6, both 2026-08-08 —
     each adjudicated PRE-EXISTING, so the leg declared the boundaries rather than absorbing an unpriced
     redesign)*'
+- id: B-136
+  title: 'The tail-keep name-matching always-sampled arm returns before the root-close materialization, so an
+    always-sampled ROOT leaves its trace buffered until force_flush'
+  status: registered_finding
+  summary: 'WHAT IT IS, MEASURED RATHER THAN REASONED. TailKeepSpanProcessor.on_end''s §9.2 name-matching arm
+    (harness-od/src/harness_od/tail_keep_span_processor.py, the is_always_sampled(span.name,
+    span.attributes) branch) forwards the span to the downstream processor, optionally sets the §10.2
+    keep flag, and RETURNS -- unconditionally, before the is_root_close ->
+    _materialize_trace_decision(trace_id) step further down the method. When the always-sampled span is
+    itself the trace''s ROOT CLOSE, the trace''s buffered siblings are therefore never resolved: they sit
+    in self._buffer, holding a max_buffered_traces slot, until force_flush drains them keep-all at
+    shutdown. Probed directly at the B-133 leg, 2026-08-08: a trace whose root is named sandbox.violation
+    with ONE ordinary buffered child leaves buffered_trace_count == 1 after the root closes; the control
+    trace with an ordinary root returns 0. WHY IT MATTERS BEYOND MEMORY. The slot is not merely held, it
+    is CHARGED: under max_buffered_traces pressure _evict_oldest_trace sheds the oldest buffered trace
+    FIFO, so a population of never-resolving always-sampled-root traces displaces live traces that would
+    otherwise have taken a real keep decision. The module''s own "Eviction fidelity tradeoff" paragraph
+    reasons about eviction on the assumption that buffered traces resolve at their root close; this arm
+    is the case where they do not. WHY IT IS PRE-EXISTING AND NOT B-133 EXPOSURE. The name-matching arm
+    and its unconditional return long predate the B-133 leg; that leg only ASKED the question, because
+    its own new event-aware arm sits beside the same return and the dispatch carrier span IS routinely
+    the root close, so an unconditional early return there would have put the common case into the
+    leaking shape. THE B-133 ARM DOES NOT LEAK -- OD spec v1.38 §9.2.1 term 5 makes the root-close
+    materialization normative for the event arm, U-OD-59 AC #6c witnesses it, and PD-8 probe (iv) goes
+    RED without it. The asymmetry between the two arms is therefore DELIBERATE and recorded, not an
+    oversight: repairing the name arm changes shipped behaviour for every name-shaped always-sampled
+    root, which the B-133 arc had no authority to do. SURFACED AT THE B-133 LEG BY DIRECT PROBE,
+    2026-08-08.'
+  close_out: '(1) RE-GROUND, because the arm may have moved. Re-run the two-trace probe at the then-current HEAD
+    (always-sampled ROOT + one ordinary child, versus an ordinary root + one ordinary child) and confirm
+    buffered_trace_count is still 1 versus 0. Grep proves the return statement; only the run proves the
+    trace is still stranded. (2) DECIDE WHETHER IT IS A DEFECT AT ALL, and this is a real question rather
+    than a formality. force_flush drains keep-all, so nothing is LOST -- what is affected is WHEN the
+    siblings are exported (at drain rather than at root close) and how much max_buffered_traces headroom
+    a long-running process retains. A deployment whose always-sampled roots are rare pays nothing. Ground
+    the answer against C-OD-09 §9.3''s implementer-discretion clause, which is where the buffering
+    algorithm''s shape lives, before pricing anything. (3) IF IT IS A DEFECT, THE REPAIR IS SMALL BUT
+    NOT FREE: mirror OD spec v1.38 §9.2.1 term 5 onto the name arm (materialize the trace decision when
+    the forwarded span is the root close). It is ~2 lines. What is NOT free is the behaviour change --
+    every existing witness that asserts on export ORDER or on buffered_trace_count around an
+    always-sampled root must be re-grounded, and a trace whose siblings previously survived to
+    force_flush keep-all would, after the repair, be DROPPED at root close if no §10.2 trigger fired.
+    That is a real reduction in exported spans for a real population, and it is the reason this was
+    registered rather than folded into the B-133 arm. (4) WITNESS BOTH DIRECTIONS if built: the root-close
+    resolution (buffered_trace_count -> 0) AND the drop-when-no-trigger consequence, so the repair is not
+    mistaken for a pure bookkeeping fix. (5) DECIDE THE VENUE. If the answer to (2) is that force_flush
+    keep-all is the CONTRACTED behaviour, this closes as WORKING-AS-DESIGNED and the module docstring''s
+    "Drop semantics (false-but-bounded)" paragraph should be extended to say so explicitly, since it
+    currently describes only the never-root-closing case and not this one. WHAT WOULD FALSIFY IT. A
+    re-run showing buffered_trace_count == 0 for the always-sampled-root trace (the arm having been
+    changed since), or a ratified reading that deferring always-sampled-root traces to force_flush is
+    intended.'
+  council: 'No. A single-domain C7 question about the tail-keep buffering algorithm''s own bookkeeping, sitting
+    squarely inside §9.3''s implementer-discretion clause, with a named two-trace probe that answers it.
+    Convene nothing. The one thing that would change that is step (3) turning out to reduce exported
+    spans for a population an operator depends on, which would put the C7 observability floor against the
+    C11 telemetry-volume posture -- but that is a consequence to MEASURE at step (4), not a tension
+    nameable in advance, so it does not meet the convening discriminator at registration.'
+  heading: '### B-136 · The tail-keep **name-matching** always-sampled arm returns before the root-close
+    materialization, so an always-sampled **root** leaves its trace buffered until `force_flush`
+    *(surfaced by direct probe at the `B-133` leg, 2026-08-08 — pre-existing; the `B-133` event arm
+    deliberately does NOT share the shape)*'

@@ -102,10 +102,37 @@ considered: drop-NEW (reject the incoming trace) — rejected because it
 lets stale never-closing traces hog the buffer indefinitely, the opposite
 of the pathology the bound exists to contain.
 
+**Event-shaped §9.2 members (OD spec v1.38 §9.2.1 — `B-133`).** Three §9.2
+members are emitted as span **EVENTS** on a wrapper span rather than as
+spans of their own: ``fallback.triggered`` and ``fallback.exhausted``
+(``harness-runtime/.../lifecycle/retry_breaker_fallback.py``) and
+``breaker.tripped`` (``harness_od.harness_breaker_schema``). Resolving the
+§9.2 floor against ``span.name`` alone therefore never sees them, and the
+carrier span — ``harness.runtime.retry_breaker_fallback``, which is in
+neither §9.2 nor §10.2 — buffers and is DROPPED at root close, taking the
+always-sampled event with it. That was confirmed empirically (not inferred)
+by the `B-133` positive control before this arm was written: a real
+exhausted dispatch through the real ``HarnessCompositeSampler`` + this
+processor exported ZERO spans for all three members.
+
+``_carries_always_sampled_event`` closes the TAIL half: after the span-name
+check fails, the span's EVENT names are resolved against the same
+``is_always_sampled`` SSOT and a match forwards immediately. The HEAD half
+CANNOT be closed at this venue — a span's events do not exist at span
+creation, so ``HarnessCompositeSampler.should_sample`` has nothing to
+inspect — and stays a **declared bound** (OD spec v1.38 §9.2.1 term 4). The
+bound is NOT vacuous: ``team-binding × local-development`` is
+``HEAD_BASED_DEV`` at a §10.3 default base-rate of **0.5** and engages no
+tail processor at all (``span_processor.py:368`` wraps only at
+``deployment_surface != LOCAL_DEVELOPMENT``), so at that one cell the three
+event-shaped members are still dropped at head. The tail is nonetheless the
+production enforcement point — every ``TAIL_BASED_PROD`` cell resolves here.
+
 **Spec authority.** OD spec v1.2 §C-OD-09 §9.1 (per-deployment-surface
 sampling mode) + §9.2 (always-sampled exception set) + §9.3 (sampling-
 discipline invariants + implementer-discretion clause on tail-based
-algorithm) + §C-OD-10 §10.2 (3 classification triggers).
+algorithm) + §C-OD-10 §10.2 (3 classification triggers) + OD spec v1.38
+§9.2.1 (the event-aware tail arm + the declared head bound).
 
 Authority anchors: `harness-od/src/harness_od/base_rate_set_and_envelope.py`
 canonical `TAIL_KEEP_RULES` declaration site;
@@ -135,6 +162,30 @@ if TYPE_CHECKING:
 __all__ = [
     "TailKeepSpanProcessor",
 ]
+
+
+def _carries_always_sampled_event(span: ReadableSpan) -> bool:
+    """Return True iff any of `span`'s EVENT names is a §9.2 always-sampled member.
+
+    The `B-133` event-aware companion to the `span.name` check. Resolves the
+    SAME `is_always_sampled` SSOT the name arm uses, so the §9.2 roster has
+    exactly one authority and a roster edit reaches both arms at once; event
+    attributes are passed through so the §9.2 conditional-by-attribute rows
+    keep their conservative-absent posture here too.
+
+    **Cost.** Reached ONLY when the span-name check already returned False, so
+    it never runs on an always-sampled span. `span.events` is empty for the
+    overwhelming majority of spans — the guard is then a single truthiness
+    test and the loop never starts. When events are present the scan
+    early-exits on the first match, and each step is one frozenset lookup plus
+    a two-prefix `startswith` scan. The worst case is bounded by the OTel SDK's
+    per-span event limit (default 128), which is the same bound the SDK already
+    accepts when it serializes those events for export.
+    """
+    events = span.events
+    if not events:
+        return False
+    return any(is_always_sampled(event.name, event.attributes) for event in events)
 
 
 class TailKeepSpanProcessor(SpanProcessor):
@@ -266,6 +317,39 @@ class TailKeepSpanProcessor(SpanProcessor):
             assert ctx is not None  # a span reaching on_end always has a context
             if is_classification_trigger(span):
                 self._keep[ctx.trace_id] = True
+            return
+
+        # `B-133` EVENT-AWARE ARM (OD spec v1.38 §9.2.1, U-OD-59). Three §9.2
+        # members (`fallback.triggered` / `breaker.tripped` / `fallback.exhausted`)
+        # ride as span EVENTS on a carrier span that is in neither §9.2 nor
+        # §10.2, so the name check above cannot see them and the carrier is
+        # dropped at root close with the always-sampled event inside it. Reached
+        # only after the name check failed, so an always-sampled span never pays
+        # for the scan.
+        if _carries_always_sampled_event(span):
+            self._downstream.on_end(span)
+            ctx = span.get_span_context()
+            assert ctx is not None  # a span reaching on_end always has a context
+            # Mirror of the name arm's trigger-flag step: an event-carrying span
+            # that is ALSO a §10.2 classification trigger must still preserve its
+            # buffered tree-siblings. `is_classification_trigger` itself matches
+            # `breaker.tripped` by span NAME only, so an event-carried trip does
+            # NOT set the flag here — that is register row `B-123`'s scope (the
+            # §10.2 half of the same span-name-vs-span-event mismatch), NOT
+            # widened at this leg, and confirmed inert by the `B-133` positive
+            # control.
+            if is_classification_trigger(span):
+                self._keep[ctx.trace_id] = True
+            # The name arm returns unconditionally, so an always-sampled ROOT
+            # leaves its trace's buffered siblings pending until `force_flush`
+            # (pre-existing; observed at the `B-133` probe and registered as
+            # `B-136`). This arm must not extend that to the dispatch path,
+            # where the carrier span IS routinely the root close: materialize
+            # the trace decision so the siblings resolve and the trace frees its
+            # `max_buffered_traces` slot. The forwarded span is NOT in the
+            # buffer, so the decision below concerns only its siblings.
+            if span.parent is None:
+                self._materialize_trace_decision(ctx.trace_id)
             return
 
         ctx = span.get_span_context()

@@ -1,0 +1,134 @@
+# Implementation Plan: Operational Discipline — v2.33 (delta over v2.32)
+
+*v2.33 is the OD plan leg of the **`B-133`** arc — the realization debt OD spec v1.37's honest-scope paragraph registered and did not repair. `Spec_Operational_Discipline_v1_38.md` §1 adds **NEW §C-OD-09 §9.2.1** (five normative terms: the tail consumer resolves §9.2 against span EVENT names as well as span names; the carrier forwards immediately; the §10.2 keep flag is mirrored but not widened; the HEAD half is a DECLARED BOUND; bookkeeping is bounded). This delta authors **ONE NEW atomic unit, U-OD-59**, carrying that subsection's realization at the shipped substrate and its witness set. All sections except the §0 change note and the NEW U-OD-59 body + coverage delta below are PRESERVED VERBATIM from v2.32 (delta-only-plan-chain convention).*
+
+**Status:** Proposed
+
+---
+
+## §0 Change-note (v2.32 → v2.33)
+
+### §0.1 Predecessor
+
+`Implementation_Plan_Operational_Discipline_v2_32.md` (v2.32 — the `B-116-t3` leg's OD plan delta; NEW U-OD-58).
+
+### §0.2 Why this delta exists
+
+v2.32 §1.2 states plainly what U-OD-58 did **not** own: *"The floor's END-TO-END REALIZATION at the SDK boundary. Registered as `B-133`. This unit lands the roster row and its witnesses; it does not make the event survive a base-rate drop of the wrapper span that carries it."* `B-133`'s close-out sequenced that work as *probe first, then repair*. **Both steps are executed at this leg**, and the probe is what authorizes the repair rather than a prediction of it.
+
+**The probe result, recorded before the unit body so the unit reads as a consequence of it.** A REAL exhausted dispatch was driven through the REAL `HarnessCompositeSampler` + the REAL `TailKeepSpanProcessor` across seven configurations covering all three event-shaped members. **Zero spans reached the exporter at either consumer, for every member.** The full arm table is at OD spec v1.38 §0.1; the mechanism is that the carrier span `harness.runtime.retry_breaker_fallback` is in **neither** §9.2 (by name) **nor** §10.2 (by trigger predicate), so it buffers and drops at root close.
+
+### §0.3 Sections revised
+
+§0 (this change note); §1 (the NEW U-OD-59 body); §2 (coverage delta). All other sections — every existing `U-OD-NN` body including U-OD-58, all dependency graphs, cross-cutting units, open items — PRESERVED VERBATIM from v2.32.
+
+### §0.4 Scope discipline
+
+ADDITIVE — ONE NEW atomic unit (U-OD-59), the next free OD unit ID after v2.32's U-OD-58 (verified: no `U-OD-59` occurrence anywhere in `design-substrate/` or `.harness/` before this filing). **ZERO amended units** — neither U-OD-11 (which owns `sampling_mode.py`) nor the tail-keep processor's own carrier unit has its acceptance criteria rewritten, per the `B-97`(a) → U-RT-149 and `B-96` → U-RT-150 precedent that a landed unit is not retroactively re-scoped by a later contract amendment. **ZERO new contract IDs** (C-OD-09 exists; §9.2.1 is a subsection of its own material). **ZERO roster change** (§9.2 stays at nineteen — this unit changes how the roster is RESOLVED, never what is in it). **ZERO new namespace.** **ZERO new cluster.** **ONE new DAG node + TWO new intra-axis edges** (U-OD-11 → U-OD-59 for the `is_always_sampled` SSOT; U-OD-58 → U-OD-59 because the roster's nineteenth member is one of the three the arm exists to deliver). **ZERO cross-axis edges; ZERO CXA rows** — verified, not assumed: `tail_keep_span_processor.py` imports only `harness_od.*` and the OTel SDK, gains no new import at this unit, and exposes no new symbol outside `harness-od/`.
+
+### §0.5 A close-out hypothesis that grounding FALSIFIED — recorded, not inherited
+
+`B-133` close-out step (2) says of the head consumer: *"the HEAD surface at a head-based-dev cell samples at 1.0 anyway, so the head arm may need nothing — confirm rather than assume."* **Confirmed, and it is FALSE.** Enumerating `PER_CELL_BASE_RATE_ENVELOPE` against `PER_DEPLOYMENT_SURFACE_SAMPLING` at this filing returns **two** `HEAD_BASED_DEV` cells, not one, and the second is not at 1.0:
+
+| Cell | §9.1 mode | §10.3 default | tail processor engaged? |
+|---|---|---|---|
+| solo-developer × local-development | `HEAD_BASED_DEV` | 1.0 | no |
+| **team-binding × local-development** | **`HEAD_BASED_DEV`** | **0.5** (min 0.1) | **no** |
+
+`span_processor.py:368` wraps the BSP with `TailKeepSpanProcessor` only when `deployment_surface != LOCAL_DEVELOPMENT`, so at `team-binding × local-development` there is **no tail consumer at all** and the head half is a live exposure. The head half still cannot be repaired at this unit's venue — a span's events do not exist at span creation — so it is carried as a **declared bound** (OD spec v1.38 §9.2.1 term 4) with a witness that ASSERTS the drop and names it as the bound, rather than a comment that hopes it is vacuous. **The prediction was not inherited; the enumeration is.**
+
+### §0.6 A pre-existing bookkeeping defect the probe surfaced, registered rather than absorbed
+
+`[HIGH]` While grounding where the new arm should return, a second probe asked whether the **existing** name-matching arm leaks its trace buffer. It does: a trace whose ROOT close is an always-sampled span (`sandbox.violation` with one ordinary buffered child) leaves `buffered_trace_count == 1` after the root closes, because that arm returns before the root-close materialization step. A control trace with an ordinary root returns `0`.
+
+This is **PRE-EXISTING and outside this arc's authorized scope** — repairing it would change shipped behaviour for every name-shaped always-sampled root, which OD spec v1.38 does not authorize. It is **registered as forward row `B-136`**, not silently fixed and not silently ignored. What this unit **does** owe is that its own arm must not EXTEND the leak, and that is a real risk rather than a theoretical one: on the dispatch path the carrier span **is** routinely the root close (observed directly at the positive control), so an unconditional early return here would put the common case into the leaking shape. AC #6 and its PD-8 probe (iv) close that.
+
+### §0.7 A witness that the PD-8 probe found was NOT load-bearing, and how it was sharpened
+
+`[HIGH]` PD-8 probe (ii) — make the event lookup return `False` unconditionally, i.e. revert to name-check-only — was run and returned **26 failed / 6 passed**. Among the six passing was the trigger-flag mirror witness, which asserted only **membership** (`"ordinary.root" in names and "sibling.work" in names`). That assertion is satisfied **without** the arm: the span's own `validator.fail.permanence=permanent` attribute sets the keep flag on the buffered path, so both spans forward at root close either way.
+
+The witness was **sharpened rather than dropped**: it now asserts export **ORDER** (`== ["ordinary.root", "sibling.work"]`), which the arm alone produces — the arm forwards the carrier immediately (root first, eviction-safe, bypassing the buffer) whereas the buffered path materializes in insertion order (sibling first). **Re-run under the identical mutation after sharpening: 27 failed / 5 passed**, W6 having moved from the passing set to the failing set — the mutation-kill demonstrated by measurement rather than asserted. *This is recorded because a witness that passes under the mutation it exists to catch is exactly the "presence-not-correctness" failure the workspace checklist names, and finding it is what the probe is for.*
+
+### §0.8 PD-8 probe (iii) returned GREEN, and that is the CORRECT result — recorded so it is not mistaken for a gap
+
+Probe (iii) moved the event arm **above** the name arm. **62 tests passed, unchanged.** This is not a missing witness: the ordering is a **cost** property, not a correctness one, because no span that matches the name arm also carries events in any exercised path. The finding is carried at OD spec v1.38 §9.2.1's non-normative "Cost posture" note and at this unit's AC #7, deliberately as discretion rather than as contract — writing an ordering assertion would pin an implementation detail the spec does not bind. *Recorded rather than quietly omitted, per §0.7's own standard.*
+
+---
+
+## §1 U-OD-59 — the §9.2.1 event-aware always-sampled arm at the tail-keep consumer
+
+**Implements:** C-OD-09 §9.2.1 terms 1–5 (NEW at OD spec v1.38 §1) — the event-aware realization of the §9.2 floor at the tail consumer, plus the declared HEAD bound.
+
+**Depends on:** [**U-OD-11**, **U-OD-58**]. U-OD-11 owns `harness-od/src/harness_od/sampling_mode.py` and declares `is_always_sampled` — the SSOT term 1 requires both resolutions to share (verified by direct read: the module docstring line 1 names U-OD-11). U-OD-58 landed §9.2's nineteenth row `fallback.exhausted`, one of the three event-shaped members this arm exists to deliver, so the arm's member coverage is only complete atop it.
+
+**Consumed by (cross-axis):** **NONE.** `tail_keep_span_processor.py` is OD-owned; it is constructed at `harness-runtime/.../lifecycle/span_processor.py` through its **existing, unchanged** constructor signature. This unit adds no parameter, no exported symbol and no import outside `harness_od.*`, so no new cross-package consumption is introduced and no CXA row is owed.
+
+**Files affected (logical):**
+
+- `harness-od/src/harness_od/tail_keep_span_processor.py` — a module-level `_carries_always_sampled_event` helper (~8 functional lines) + the event-aware arm in `on_end` (~6 functional lines) + the module-docstring section recording the mechanism, the empirical grounding and the declared head bound.
+- `harness-od/tests/test_b133_event_aware_tail_floor.py` — **NEW**, the twelve-witness set (W1–W12) + the PD-8 probe table.
+- `harness-od/src/harness_od/composite_sampler.py` — **NOT EDITED, deliberately.** The head consumer is the declared bound (term 4); editing it would be the venue-(b) extension this arc has no authority for. AC #5 asserts the bound by execution instead.
+- `harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py` + `harness-od/src/harness_od/harness_breaker_schema.py` — **NOT EDITED.** The three emission sites are byte-unchanged; AC #8 asserts this by absence.
+
+**Scale:** ~14 functional `src` lines in one module; the remainder is the witness set and the docstring record.
+
+**Thread / async posture.** `on_end` is called by the OTel SDK on whichever thread ends the span, and `TailKeepSpanProcessor` carries **no lock today** (plain `dict` buffers). The arm matches that posture exactly — it is a pure read over `span.events` followed by the same `self._downstream.on_end(...)` call and the same `self._keep` / `self._materialize_trace_decision` bookkeeping the existing arms already perform. **No lock is added, no `async` is introduced, and no new shared mutable state is created**, so the module's concurrency profile is unchanged. *(Verified by direct read rather than assumed: the module contains no `Lock`, no `async def`, and no `threading` import.)*
+
+### §1.1 Acceptance criteria — by EXECUTION
+
+1. **The positive control is run FIRST, end-to-end, and its result is recorded before any repair is written.** A REAL `RetryBreakerFallbackDispatcher.dispatch` driven to exhaustion through a `TracerProvider` wired with the REAL `HarnessCompositeSampler` **and** the REAL `TailKeepSpanProcessor`, at both `base_rate=0.0` (head half) and `base_rate=1.0` + tail processor (tail half), covering **all three** event-shaped members via real dispatch shapes — chain exhaustion (`fallback.exhausted`), capability-shortfall exhaustion (`fallback.triggered`), charging-fault exhaustion at `fail_threshold=1` (`breaker.tripped`). **`B-133` closes on the RESULT, not on the expectation**: had the run shown survival, the row would close with that finding and no repair. *(Executed; result at OD spec v1.38 §0.1 — zero spans at both consumers for all three members.)*
+2. **Term 1 — the tail consumer resolves BOTH shapes through the SAME SSOT.** After the span-name resolution fails, the span's event names resolve against `is_always_sampled`, with **event attributes passed through**. Asserted structurally rather than by inspection: the witness set is parametrized over `ALWAYS_SAMPLED_EVENT_CLASSES` **itself**, so every current and future roster member is covered the moment it lands — the parametrize-literal drift gap v2.32 §0.7 found at the name arm is closed here by construction rather than by a hand-maintained list. Wildcard rows are exercised at a concrete descendant name, as the SDK boundary sees them. Witness: **W11**.
+3. **Terms 1–2 — all three event-shaped members survive the tail, through the REAL processor chain.** Each driven by its own REAL dispatch shape and asserted **without `force_flush`**, so survival is attributable to the arm and not to the drain path's keep-all. Witnesses: **W2** (`fallback.exhausted`), **W3** (`fallback.triggered`), **W4** (`breaker.tripped`).
+4. **The counterfactual is asserted, not described.** The carrier span fails **both** name-shaped predicates (`is_always_sampled(span.name, span.attributes)` and `is_classification_trigger(span)` are both `False`) while carrying the always-sampled event — so if either ever became `True` by name, the arm would be redundant and this witness would go red. Paired with a **live control**: a carrier whose events are all non-members is still dropped. Witness: **W1**.
+5. **Term 4 — the HEAD bound is pinned honestly, and named as a bound.** The head sampler at `base_rate=0.0` still drops the event carrier (asserted), paired with the discriminator that a span **NAMED** `fallback.exhausted` survives the SAME sampler — which is what makes *event-shaped, not name-shaped* the operative cause rather than an inference. The witness docstring records §0.5's falsified hypothesis and the `team-binding × local-development` cell that makes the bound non-vacuous. Witness: **W5**. *A green witness here asserts the bound EXISTS; it is not a repair and must not be read as one.*
+6. **Terms 3 + 5 — bookkeeping.** (a) An event-matching span that is ALSO a §10.2 classification trigger sets the per-trace keep flag and its buffered siblings are preserved — asserted by export **ORDER**, per §0.7, because membership alone does not discriminate the arm (**W6**). (b) An event-carried `breaker.tripped` forwards its own carrier but does **NOT** flag its trace — the `B-123` boundary, pinned so widening it is deliberate and test-visible (**W7**). (c) An event-matching ROOT close materializes its trace decision, leaving `buffered_trace_count == 0` — the `B-136` leak is NOT extended to the dispatch path (**W10**, and the same assertion carried on W2/W4/W7).
+7. **Conservative-absent survives the new arm, and non-matching spans are untouched.** A `files.operation` event with **no** `kind` forwards (never under-sample the §9.3 floor); with a mutation `kind` forwards; with a non-mutation `kind` does **not** (**W8**, parametrized three ways). A span carrying only non-member events still buffers, still takes the §10.2 decision, and leaves `dropped_span_count` / `dropped_trace_count` exactly as before (**W9**). The name arm's own spans forward without any event scan (**W12**) — the cost posture, pinned as discretion per §0.8, not as contract.
+8. **Zero emission-site changes, zero head-sampler edit, zero CP delta, zero CXA rows.** Assert by absence: `harness-runtime/.../lifecycle/retry_breaker_fallback.py`, `harness-od/src/harness_od/harness_breaker_schema.py`, `harness-od/src/harness_od/composite_sampler.py` and every `harness-cp/` file are **untouched** in this arc's diff. *This unit widens a consumer's classification; if the diff reaches an emission site or the head sampler, the scope claim is false.*
+9. **PD-8 — the arm is load-bearing, demonstrated by mutation.** Five probes, each applied, observed, restored, re-verified green. **Restoration is by file copy from a pre-probe backup, never `git checkout`** — the working tree carries uncommitted arc content a checkout would destroy.
+
+| # | Mutation | Observed |
+|---|---|---|
+| i | Delete the event-aware arm from `on_end` | equivalent to (ii) by construction |
+| ii | `_carries_always_sampled_event` returns `False` unconditionally (name-check-only) | **26 failed / 6 passed** on first run — W2, W3, W4, W7, W8(×2), W10, W11(×19) red, and **W6 among the six PASSING**, which is the §0.7 finding. **Re-run after W6 was sharpened: 27 failed / 5 passed**, W6 now red. Both figures are recorded; the second is the one that stands |
+| iii | Move the event arm ABOVE the name arm | **62 passed** — the CORRECT result; ordering is a cost property, per §0.8 |
+| iv | Drop the `_materialize_trace_decision` call on the root-close path | **5 failed** — W2, W4, W6, W7, W10 red. The `B-136` no-extension criterion is load-bearing |
+| v | Drop `event.attributes` from the `is_always_sampled` call | **1 failed** — W8's non-mutation case, `assert True is False`. Conservative-absent pass-through is load-bearing |
+
+10. **The full OD suite and the runtime breaker / sampling-adjacent suites pass unmodified.** `harness-od/tests/` in full, plus `harness-runtime/tests/test_lifecycle_retry_breaker_fallback.py`, `test_lifecycle_span_processor.py` and `test_lifecycle_tracer_provider.py` — the three modules that construct or exercise the amended consumer. **Zero edits to any pre-existing test module**: the arm only ever ADDS keeps, so a pre-existing drop assertion that broke would mean the arm over-forwards.
+
+### §1.2 What this unit does NOT own
+
+- **The HEAD half of the floor.** Declared bound per OD spec v1.38 §9.2.1 term 4, asserted at AC #5, **not repaired**. Closing it requires giving the three members a span shape at emission — a NEW primitive routing through workspace `CLAUDE.md` §4.3 back-flow per X-AL-3. *Stated so a green W5 is not misread as a discharge.*
+- **The §10.2 tail-keep trigger half** (`B-123`). This leg's positive control **answers** its step-(1) probe — an event-carried `breaker.tripped` does not flag its trace — and the finding is recorded as a cross-reference at OD spec v1.38 §0.1 and pinned by W7. **`B-123` is NOT closed here**; it owns its own disposition, and term 3 declines to widen `is_classification_trigger` deliberately.
+- **The `B-136` name-arm buffer leak.** Pre-existing, surfaced by this leg's probe (§0.6), registered rather than repaired — fixing it would change shipped behaviour for name-shaped always-sampled roots, outside this arc's authority. This unit owes only that its own arm does not extend it (AC #6c).
+- **The `B-124` inert `validator.fail.permanence` row and the `B-125` `harness.breaker.tool_id` homonym.** Same family, neither a precondition, neither repaired.
+- **The F-08 per-tenant keep-volume measurement.** `B-133` close-out step (3), sequenced after realization and **still OPEN**. This unit makes the measurement meaningful for the first time and deliberately does not make it; **no acceptance criterion depends on a volume figure**, and none is asserted. Carried as a named residual on the closed `B-133` row per the `B-104` precedent.
+
+---
+
+## §2 Coverage matrix delta (v2.32 → v2.33)
+
+| Contract surface | Units covering (delta) |
+|---|---|
+| C-OD-09 §9.2.1 terms 1–5 (NEW at OD spec v1.38 — the `B-133` event-aware tail arm + the declared HEAD bound) | **U-OD-59 (NEW)** |
+
+DAG: U-OD-59 added as a new node; in-degree per its `Depends on` (**U-OD-11**, **U-OD-58**) — **two new intra-axis edges, U-OD-11 → U-OD-59 and U-OD-58 → U-OD-59**; no existing edge removed or rewired; **no cross-axis edge**.
+
+---
+
+## §3 Filing footer
+
+| Field | Value |
+|---|---|
+| Artifact | `Implementation_Plan_Operational_Discipline_v2_33.md` (delta over v2.32) |
+| Authored at | Phase 7 — the `B-133` realization leg (2026-08-08) |
+| Authoring authority | `Spec_Operational_Discipline_v1_38.md` §1 (the subsection this unit realizes); forward-register row `B-133` close-out steps (1) + (2) |
+| Predecessor | `Implementation_Plan_Operational_Discipline_v2_32.md` (v2.32 — the `B-116-t3` leg) |
+| Siblings (same arc) | `Spec_Operational_Discipline_v1_38.md` — filed in the SAME PR, together with the implementation, per the #1272 precedent |
+| Unit-count change | **+1** (NEW U-OD-59) |
+| Cluster-count change | None |
+| DAG topology change | One new node (U-OD-59); two new intra-axis edges (U-OD-11 → U-OD-59; U-OD-58 → U-OD-59); **zero cross-axis edges** |
+| Cross-axis cascade | **NONE** — verified, not assumed: the amended consumer is OD-owned, gains no import outside `harness_od.*`, and its constructor signature is unchanged, so the runtime construction site is byte-unchanged. CXA aggregate stays frozen at 111 |
+| Empirical grounding | The `B-133` positive control (AC #1), run end-to-end BEFORE the repair: zero spans exported at both consumers for all three event-shaped members. Two further probes recorded: the falsified head-cell hypothesis (§0.5) and the pre-existing name-arm buffer leak (§0.6) |
+| Register consequence | **`B-133` CLOSES at this leg** (steps 1 + 2 executed; step 3 carried as a named OPEN residual on the closed row). **`B-136` newly registered.** `B-123` gains a cross-reference clause recording this leg's probe finding and is **NOT** closed |
+| Revision policy | Delta-only per workspace `CLAUDE.md` §2.4; revisions route to design-phase back-flow |
