@@ -5822,7 +5822,20 @@ items:
     fault is not masked) before re-raising. The other four transition emissions were SWEPT and verified
     to follow their state mutation, so the admission is the one site where the ordering is structurally
     impossible. AC #12 + probe P15 added; unit now TWELVE ACs / FIFTEEN probes, with the closure
-    criterion restated over the SETS rather than a count.'
+        criterion restated over the SETS rather than a count. ROUND 4 (same review): ONE finding, REAL
+    -- the MIRROR of round 3 at the inconclusive EXITS. When a trial exits through cells 6-8 and the
+    re-arm''s own transition emission failed, the emitter error raised BEFORE the bare raise and
+    REPLACED the propagating exception -- AuditSigningFailedError, the terminal HITL signals and
+    DispatchFenceTrippedSignal are each contracted to travel verbatim, so a terminal RT-FAIL-* mapping
+    and the fence''s at-most-once effect semantics were being traded for a telemetry fault. Fixed by a
+    disposition flip keyed on whether an exception is IN FLIGHT rather than a blanket guard: with one
+    present the emitter failure is SUPPRESSED and attached to the propagating exception via add_note
+    (suppressed is NOT discarded); with none present it still propagates as its own fault, matching
+    main''s unguarded posture at every other harness.breaker.* emission site -- a blanket rule would
+    hide exporter breakage on the common path. Cell 9 VERIFIED to emit nothing by construction; the
+    success/charging emissions SWEPT and left unchanged, none of them sitting on a path that must
+    propagate a terminal exception verbatim. AC #13 + probe P16 added; unit now THIRTEEN ACs / SIXTEEN
+    probes under the set-phrased closure criterion.'
   council: 'No at registration. A single-domain C9 reliability-mechanism gap with no nameable cross-domain
     tension — the mechanism, the contract text, and the recovery model are all in one voice''s lineage.
     Conditionally yes only if step (2) proposes a durable cooldown clock: that re-opens the persistence

@@ -933,20 +933,37 @@ class RetryBreakerFallbackDispatcher:
                 except asyncio.CancelledError:
                     # §14.6.4 cell 9 — re-arm SILENTLY. Emitting during
                     # cancellation risks masking shutdown; the cancellation
-                    # itself propagates untouched.
+                    # itself propagates untouched. It needs no `in_flight`
+                    # thread because it emits NOTHING: the state re-arm is
+                    # called directly rather than through
+                    # `_release_half_open_trial`, and
+                    # `re_arm_half_open_trial` is pure state with no emission
+                    # and no raising statement — so there is no emitter fault
+                    # here that could replace the cancellation. (Verified at
+                    # review round 4 rather than assumed.)
                     if half_open_trial:
                         breaker.re_arm_half_open_trial(
                             now=self.monotonic(), trial_token=trial_token
                         )
                     raise
-                except BaseException:
+                except BaseException as _in_flight:
                     # §14.6.4 cells 6-8 — an audit-signing hard failure, a
                     # terminal HITL control-flow signal, or a
                     # `DispatchFenceTrippedSignal` (a BaseException, so no
                     # `except Exception` arm inside the loop sees it) all
                     # leave the trial without recording an outcome.
+                    #
+                    # `_in_flight` is threaded so a failing transition emitter
+                    # cannot REPLACE the propagating exception: each of these
+                    # is contracted to reach the driver verbatim (its terminal
+                    # `RT-FAIL-*` mapping; the fence's at-most-once effect
+                    # semantics), and a telemetry fault substituted for one
+                    # would lose exactly that. Suppressed, not discarded — the
+                    # emitter error rides `add_note` on the exception below.
                     if half_open_trial:
-                        self._release_half_open_trial(breaker, outer_span, trial_token)
+                        self._release_half_open_trial(
+                            breaker, outer_span, trial_token, in_flight=_in_flight
+                        )
                     raise
                 finally:
                     ROUTED_PRIMARY_SPAN_TRACE.reset(_span_trace_token)
@@ -1400,17 +1417,62 @@ class RetryBreakerFallbackDispatcher:
         )
 
     def _release_half_open_trial(
-        self, breaker: Any, outer_span: Any, trial_token: int | None
+        self,
+        breaker: Any,
+        outer_span: Any,
+        trial_token: int | None,
+        *,
+        in_flight: BaseException | None = None,
     ) -> None:
         """Re-arm an INCONCLUSIVE half-open trial and emit its transition
         (`B-118`, §14.6.4 cells 3 / 6-8).
 
         A no-op unless the machine is still ``half_open`` — which is exactly
         the "the trial recorded neither success nor a charging failure" test,
-        encoded as a state read rather than as a second bookkeeping flag."""
+        encoded as a state read rather than as a second bookkeeping flag.
+
+        **State first, then emission** — so a raising emitter cannot strand the
+        machine (the §14.6 step-4 protected-region rule).
+
+        ``in_flight`` is the exception currently PROPAGATING, when the release
+        runs on an exception path (cells 6-8). Its presence flips the emitter's
+        failure disposition, and the flip is the whole point of the parameter:
+
+        - ``None`` (cell 3, the ordinary post-dispatch release — no exception in
+          flight): an emitter failure PROPAGATES as its own fault, matching the
+          pre-`B-118` posture at every other `harness.breaker.*` emission site,
+          which are likewise unguarded.
+        - **non-None** (cells 6-8): the emitter failure is SUPPRESSED in favour
+          of the in-flight exception. `AuditSigningFailedError`, the terminal
+          HITL control-flow signals and `DispatchFenceTrippedSignal` are
+          contracted to propagate VERBATIM — the driver maps each to its
+          terminal ``RT-FAIL-*`` and the fence carries at-most-once effect
+          semantics — so letting a telemetry fault replace one would lose the
+          terminal mapping the whole path exists to deliver. **Suppressed is
+          not discarded**: the emitter error is attached to the propagating
+          exception via ``add_note``, so it travels to the same operator on the
+          same traceback rather than vanishing. (Found by out-of-family review
+          round 4 — the mirror, at the inconclusive exits, of the round-3
+          admission-window finding.)
+
+        ``except Exception`` deliberately, not ``BaseException``: a
+        ``KeyboardInterrupt`` or ``SystemExit`` raised by the emitter is not a
+        telemetry fault to be suppressed."""
         transition = breaker.re_arm_half_open_trial(now=self.monotonic(), trial_token=trial_token)
-        if transition is not None:
+        if transition is None:
+            return
+        try:
             self._emit_breaker_transition(transition, outer_span)
+        except Exception as emit_error:
+            if in_flight is None:
+                raise
+            in_flight.add_note(
+                f"harness.runtime.retry_breaker_fallback: the `B-118` half-open "
+                f"trial was re-armed (breaker returned to `open` with a fresh "
+                f"cooldown), but emitting its `half_open -> open` transition "
+                f"failed and was SUPPRESSED so this exception could propagate "
+                f"verbatim: {type(emit_error).__name__}: {emit_error}"
+            )
 
     def _emit_breaker_transition(self, transition: Any, parent_span: Any) -> None:
         """Delegate breaker-transition span emission to the registry per

@@ -3827,3 +3827,147 @@ def test_b118_every_transition_emission_follows_its_state_mutation() -> None:
     machine.attempt_half_open(now=110.0)
     transition = machine.record_failure(now=111.0, trial_token=machine.trial_epoch)
     assert transition is not None and machine.state is BreakerState.OPEN
+
+
+# --- AC #13, a failing emitter must never REPLACE the propagating exception --
+
+
+class _EmitterExplodes(RuntimeError):
+    """Stand-in for a broken span exporter / full queue / OTel SDK fault."""
+
+
+def _emitter_that_raises_on(
+    monkeypatch: pytest.MonkeyPatch, to_state: BreakerState, calls: list[str]
+) -> None:
+    """Patch the dispatcher's transition emitter to raise on ONE destination
+    state (class-level: the dispatcher is a `slots=True` dataclass)."""
+
+    def _emit(self: Any, transition: Any, parent_span: Any) -> None:
+        calls.append(f"{transition.from_state.value}->{transition.to_state.value}")
+        if transition.to_state is to_state:
+            raise _EmitterExplodes("span exporter refused the transition event")
+
+    monkeypatch.setattr(RetryBreakerFallbackDispatcher, "_emit_breaker_transition", _emit)
+
+
+@pytest.mark.parametrize(
+    ("cell", "raised"),
+    [
+        (6, AuditSigningFailedError("kms down")),
+        (7, HITLGateRejectedError("operator rejected")),
+        (8, DispatchFenceTrippedSignal("fence tripped")),
+    ],
+    ids=["cell6-audit-signing", "cell7-terminal-hitl", "cell8-dispatch-fence"],
+)
+@pytest.mark.asyncio
+async def test_b118_a_failing_release_emitter_never_replaces_the_propagating_exception(
+    cell: int, raised: BaseException, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #13 / §14.6.4 cells 6-8: when the trial exits through an INCONCLUSIVE
+    path AND the re-arm's transition emission fails, the ORIGINAL exception
+    must still reach the caller.
+
+    Each of these three is contracted to propagate VERBATIM — the driver maps
+    the audit-signing failure and the terminal HITL decision to their terminal
+    `RT-FAIL-*`, and `DispatchFenceTrippedSignal` carries at-most-once effect
+    semantics. Letting a telemetry fault be raised in their place loses exactly
+    the terminal mapping the path exists to deliver. This is the mirror, at the
+    inconclusive exits, of the round-3 admission-window finding.
+
+    The breaker must ALSO end correctly re-armed — the state release runs
+    before the emission, so a broken emitter cannot cost both."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [raised], clock=clock, fail_threshold=2
+    )
+    calls: list[str] = []
+    _emitter_that_raises_on(monkeypatch, BreakerState.OPEN, calls)
+
+    clock.advance(30.0)
+    with pytest.raises(type(raised)) as exc_info:
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    # The ORIGINAL fault reached the caller, not `_EmitterExplodes`.
+    assert not isinstance(exc_info.value, _EmitterExplodes), f"cell {cell}"
+    assert type(exc_info.value) is type(raised)
+
+    # Suppressed is NOT discarded: the emitter fault rides the same traceback.
+    notes = getattr(exc_info.value, "__notes__", [])
+    assert any("_EmitterExplodes" in n for n in notes), notes
+    assert any("re-armed" in n for n in notes), notes
+
+    # And the release still happened: state first, emission second.
+    assert primary_breaker.state is BreakerState.OPEN, f"cell {cell}"
+    assert primary_breaker.opened_at == 30.0
+    assert primary_breaker.fail_count == 2
+    assert primary_breaker.attempt_half_open(now=60.0) is not None, "genuinely recoverable"
+    # The admission emitted fine; only the re-arm emission blew up.
+    assert calls == ["open->half_open", "half_open->open"]
+
+
+@pytest.mark.asyncio
+async def test_b118_cell9_cancellation_cannot_be_replaced_by_an_emitter_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #13 / §14.6.4 cell 9: the cancellation path emits NOTHING by design,
+    so there is no emitter fault available to replace the `CancelledError`.
+
+    Verified rather than assumed: the arm calls the pure-state
+    `re_arm_half_open_trial` directly instead of the release helper. Patched
+    here with an emitter that raises on EVERY transition — if the cell ever
+    grew an emission, this witness would surface `_EmitterExplodes` in place of
+    the cancellation and go red."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [asyncio.CancelledError()], clock=clock, fail_threshold=2
+    )
+    calls: list[str] = []
+
+    def _emit_always_raises(self: Any, transition: Any, parent_span: Any) -> None:
+        calls.append(f"{transition.from_state.value}->{transition.to_state.value}")
+        if transition.to_state is BreakerState.OPEN:
+            raise _EmitterExplodes("would replace the cancellation if ever reached")
+
+    monkeypatch.setattr(
+        RetryBreakerFallbackDispatcher, "_emit_breaker_transition", _emit_always_raises
+    )
+
+    clock.advance(30.0)
+    with pytest.raises(asyncio.CancelledError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert primary_breaker.state is BreakerState.OPEN
+    assert primary_breaker.opened_at == 30.0
+    # ONLY the admission emitted; the cell-9 re-arm is silent by contract.
+    assert calls == ["open->half_open"]
+
+
+@pytest.mark.asyncio
+async def test_b118_cell3_release_emitter_failure_still_propagates_as_its_own_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #13 scope bound: with NO exception in flight (cell 3, the ordinary
+    post-dispatch release after a waived fail-fast), an emitter failure
+    PROPAGATES as its own fault.
+
+    That matches the pre-`B-118` posture at every other `harness.breaker.*`
+    emission site, all of which are unguarded on main. The suppression is
+    scoped to the paths that have a contracted exception to protect — it is
+    NOT a blanket "breaker telemetry never fails" policy, which would hide
+    exporter breakage on the common path."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [MemoryToolExecutionInternalError("harness wiring fault"), {"result": "fallback-ok"}],
+        clock=clock,
+        fail_threshold=2,
+    )
+    calls: list[str] = []
+    _emitter_that_raises_on(monkeypatch, BreakerState.OPEN, calls)
+
+    clock.advance(30.0)
+    with pytest.raises(_EmitterExplodes):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    # The state release still completed first, so nothing is stranded.
+    assert primary_breaker.state is BreakerState.OPEN
+    assert primary_breaker.opened_at == 30.0
