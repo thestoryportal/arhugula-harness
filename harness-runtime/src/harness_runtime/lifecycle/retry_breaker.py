@@ -48,8 +48,12 @@ Per-component landing posture:
 
 - `BreakerStateMachine` — mutable per-(scope, identifier) breaker state.
   closed → open at `fail_threshold` consecutive failures; open → half_open
-  when the caller invokes `attempt_half_open()` after cooldown; half_open →
-  closed on success, → open on failure.
+  when the caller invokes `attempt_half_open(now=...)` AND the cooldown has
+  elapsed against the caller-recorded `opened_at`; half_open → closed on
+  success, → open on failure, → open (re-armed, uncharged) on an
+  INCONCLUSIVE trial via `re_arm_half_open_trial(now=...)`. Wired into the
+  C-RT-16 composer at `B-118` / U-RT-154 — before that, `attempt_half_open`
+  had zero production call sites and `open` was absorbing for the process.
 - `BreakerTransition` — frozen record of one state-machine transition,
   consumed by `emit_breaker_transition_event` to produce the `breaker.tripped`
   span event.
@@ -198,15 +202,28 @@ class BreakerStateMachine:
     (closed, open, half_open). The state transition discipline:
 
     - **closed → open**: at `fail_threshold` consecutive failures.
-    - **open → half_open**: caller-driven via `attempt_half_open()` after
+    - **open → half_open**: caller-driven via `attempt_half_open(now)` after
       `cooldown_seconds` elapses. The state machine does not hold a clock —
-      the caller (L8 LOOP_INIT orchestrator) decides when cooldown has
-      elapsed and invokes the transition.
+      the caller (the C-RT-16 composer, per Runtime spec §14.6 step 4) reads
+      a monotonic clock and threads `now` in; the machine owns the DEADLINE
+      STATE (`opened_at`) because that state is per-`(scope, identifier)`
+      and the caller holds no per-breaker storage (one-source-of-truth).
     - **half_open → closed**: on a single success (`record_success`).
-    - **half_open → open**: on a failure during the half-open trial.
+    - **half_open → open**: on a failure during the half-open trial
+      (`record_failure`), or on an INCONCLUSIVE trial
+      (`re_arm_half_open_trial`) whose outcome was not attributable to the
+      `{provider, model}` — Runtime spec §14.6.4 matrix cells 3 / 6-9.
 
-    The lazy-clock model means this class is deterministic + clock-free in
-    tests; the caller threads a clock + cooldown policy at the L8 layer.
+    **`should_attempt()` is the single-trial permit (§14.6.4, `B-118`).**
+    `half_open` is a TRANSIENT state that exists only between a trial's
+    admission and its outcome, so admitting on `state is not open` would let
+    every concurrent sibling dispatch join an in-flight trial. The predicate
+    is therefore `state is closed`: the permit holder proceeds on the
+    `attempt_half_open` transition it just took (it does NOT re-consult
+    `should_attempt`), and every sibling is refused for the trial's duration.
+
+    The caller-threaded-clock model keeps this class deterministic +
+    clock-free in tests; nothing here ever calls `time.monotonic()`.
     """
 
     scope: BreakerScope
@@ -215,8 +232,18 @@ class BreakerStateMachine:
     fail_count: int = 0
     fail_threshold: int = DEFAULT_FAIL_THRESHOLD
     cooldown_seconds: float = DEFAULT_COOLDOWN_SECONDS
+    opened_at: float | None = None
+    """Caller-supplied monotonic instant of the most recent `open` entry.
 
-    def record_failure(self, *, cause: BreakerCause | None = None) -> BreakerTransition | None:
+    Non-`None` whenever `state is open` for any machine that reached `open`
+    through this class's own transitions — the cooldown deadline is
+    `opened_at + cooldown_seconds`. `None` while `open` is an ILLEGAL state
+    reachable only by assigning `state` directly; `attempt_half_open` treats
+    it as "cooldown never elapses" (refuse) rather than silently admitting."""
+
+    def record_failure(
+        self, *, cause: BreakerCause | None = None, now: float
+    ) -> BreakerTransition | None:
         """Record one failure; return the transition iff the state changed.
 
         - In `closed`: increments `fail_count`; transitions to `open` if the
@@ -232,6 +259,12 @@ class BreakerStateMachine:
         `.harness/b19-breaker-ambient-attrs-redundancy-analysis.md` §3,
         before B-38).
 
+        `now` (v1.114, `B-118`) is the caller's monotonic instant, recorded
+        as `opened_at` on every transition INTO `open` so the cooldown
+        deadline exists. REQUIRED, deliberately without a default: an `open`
+        breaker carrying no open-instant can never recover, and a `None`
+        default would make that unrecoverable state the silent fallback.
+
         Returns the `BreakerTransition` on a state change, else `None`.
         """
         if self.state is BreakerState.OPEN:
@@ -240,6 +273,7 @@ class BreakerStateMachine:
             prior = self.state
             self.fail_count += 1
             self.state = BreakerState.OPEN
+            self.opened_at = now
             return BreakerTransition(
                 from_state=prior,
                 to_state=BreakerState.OPEN,
@@ -253,6 +287,7 @@ class BreakerStateMachine:
         self.fail_count += 1
         if self.fail_count >= self.fail_threshold:
             self.state = BreakerState.OPEN
+            self.opened_at = now
             return BreakerTransition(
                 from_state=BreakerState.CLOSED,
                 to_state=BreakerState.OPEN,
@@ -268,12 +303,14 @@ class BreakerStateMachine:
         """Record one success; return the transition iff the state changed.
 
         - In `closed`: resets `fail_count` to 0; no transition.
-        - In `half_open`: transitions to `closed`; resets `fail_count`.
+        - In `half_open`: transitions to `closed`; resets `fail_count` and
+          clears `opened_at` (the recovery is complete — §14.6.4 cell 1).
         - In `open`: no-op; returns `None`.
         """
         if self.state is BreakerState.HALF_OPEN:
             self.state = BreakerState.CLOSED
             self.fail_count = 0
+            self.opened_at = None
             return BreakerTransition(
                 from_state=BreakerState.HALF_OPEN,
                 to_state=BreakerState.CLOSED,
@@ -286,15 +323,31 @@ class BreakerStateMachine:
             self.fail_count = 0
         return None
 
-    def attempt_half_open(self) -> BreakerTransition | None:
-        """Caller-driven open → half_open transition (cooldown elapsed).
+    def attempt_half_open(self, *, now: float) -> BreakerTransition | None:
+        """Caller-driven open → half_open transition, gated CONJUNCTIVELY on
+        the cooldown having elapsed (v1.114 `B-118`; Runtime spec §14.6 step 4).
 
-        The state machine carries `cooldown_seconds` as a policy hint; the
-        L8 LOOP_INIT orchestrator threads a monotonic clock and decides when
-        to invoke this method. Returns the transition on success; `None` if
-        not in `open` state.
+        The caller threads a monotonic `now`; this machine holds the deadline
+        state (`opened_at` + `cooldown_seconds`) but never reads a clock. The
+        transition is admitted iff ALL of:
+
+        1. `state is open`,
+        2. `opened_at is not None` (an `open` machine with no recorded open
+           instant is the illegal state described at the field — refuse
+           rather than admit, so a directly-assigned `state` cannot conjure
+           a trial out of a deadline that was never set), and
+        3. `now - opened_at >= cooldown_seconds`.
+
+        Returning the transition IS the single-trial permit: the state leaves
+        `open`, so a second caller gets `None` from this method, and
+        `should_attempt()` is False for every sibling while the trial runs.
+        `None` on any refused conjunct — the caller skips the candidate.
         """
         if self.state is not BreakerState.OPEN:
+            return None
+        if self.opened_at is None:
+            return None
+        if now - self.opened_at < self.cooldown_seconds:
             return None
         self.state = BreakerState.HALF_OPEN
         return BreakerTransition(
@@ -306,9 +359,57 @@ class BreakerStateMachine:
             cooldown_seconds=self.cooldown_seconds,
         )
 
+    def re_arm_half_open_trial(self, *, now: float) -> BreakerTransition | None:
+        """Return an INCONCLUSIVE half-open trial to `open` with a FRESH
+        cooldown (v1.114 `B-118`; Runtime spec §14.6.4 matrix cells 3 / 6-9).
+
+        A trial whose outcome was NOT attributable to the `{provider, model}`
+        — a waived fail-fast per §14.6.3, an audit-signing hard failure, a
+        terminal HITL control-flow signal, a dispatch-fence trip, a
+        cancellation — produced no evidence about provider health. Under the
+        §14.6.3 recovery model it is neither a failure nor a success, so it
+        must NOT be charged and must NOT be read as recovery.
+
+        Without this, such a trial would strand the machine in `half_open`,
+        where `should_attempt()` refuses everyone and `attempt_half_open`
+        returns `None` (state is not `open`) — a NEW absorbing state strictly
+        worse than the absorbing `open` that `B-118` exists to remove. The
+        caller therefore invokes this on EVERY exit path from a trial; it is
+        a no-op (`None`) unless the machine is still `half_open`, which is
+        exactly the "neither outcome was recorded" test.
+
+        `fail_count` is deliberately UNCHANGED — an inconclusive trial must
+        not walk the breaker toward a threshold it never earned — and
+        `trigger_count` is 0, the existing non-trip convention, which
+        distinguishes this on the wire from a real half_open → open re-trip
+        (whose `trigger_count` is `fail_count >= 1`). The cooldown restarts
+        from `now` (operator-ratified 2026-08-08, §14.6.4 cell 3): a
+        waived-fault storm would otherwise produce back-to-back trials, since
+        the original deadline is already in the past.
+        """
+        if self.state is not BreakerState.HALF_OPEN:
+            return None
+        self.state = BreakerState.OPEN
+        self.opened_at = now
+        return BreakerTransition(
+            from_state=BreakerState.HALF_OPEN,
+            to_state=BreakerState.OPEN,
+            scope=self.scope,
+            identifier=self.identifier,
+            trigger_count=0,
+            cooldown_seconds=self.cooldown_seconds,
+        )
+
     def should_attempt(self) -> bool:
-        """Return True iff a retry attempt may proceed (state is not `open`)."""
-        return self.state is not BreakerState.OPEN
+        """Return True iff a retry attempt may proceed WITHOUT a trial permit.
+
+        `state is closed` — NOT `state is not open` (narrowed at v1.114,
+        `B-118`). `half_open` exists only while a trial is in flight, so the
+        old predicate admitted every concurrent sibling into a trial that is
+        contracted to be a SINGLE call. The permit holder does not consult
+        this method; it proceeds on the `attempt_half_open` transition.
+        """
+        return self.state is BreakerState.CLOSED
 
 
 def compute_full_jitter_delay_seconds(

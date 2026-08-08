@@ -1,0 +1,130 @@
+# Implementation Plan: Harness Runtime — v2.62 (delta over v2.61)
+
+*v2.62 is the plan leg of register row **`B-118`** — the half-open latch, which had **ZERO production call sites**, making `open` an ABSORBING breaker state for the process lifetime. It carries **ONE new unit and ZERO amended units**: **U-RT-154**, the wiring itself — the conjunctive cooldown admission, the single-trial permit, the ONE-attempt trial cap, the release-on-every-exit obligation with the Runtime spec v1.114 §14.6.4 nine-cell trial-outcome matrix behind it, and the deliberate strengthening of the `B-116` witness roster that C9's A1 recommendation 2 had forbidden while the recovery path was unreachable. **U-RT-152 and U-RT-153 are LANDED and CLOSED and are NOT amended** — a NEW unit per the `B-97`(a) → U-RT-149, `B-111` → U-RT-151 and `B-115` → U-RT-153 precedent, because amending a closed unit's acceptance criteria would falsify its closure criterion retroactively. **ZERO contract numbers minted, ZERO `snapshot_hash` impact, ZERO cluster, ZERO cross-axis edge, ZERO CXA rows (aggregate frozen at 111), ZERO OD-spec / OD-plan / CP-spec delta.** Every unit other than the NEW U-RT-154 is **PRESERVED VERBATIM**; U-RT-150, U-RT-151, U-RT-152 and U-RT-153 remain **CLOSED**.*
+
+**Status:** Proposed
+
+---
+
+## §0 Change-note (v2.61 → v2.62)
+
+### §0.1 Provenance
+
+`Spec_Harness_Runtime_v1.md` **v1.114** §14.6 step 4 (three-way breaker pre-check) + NEW **§14.6.4** (half-open trial-outcome semantics and their interaction with the §14.6.3 waiver), which discharge the *"honest residual — the dead half-open latch"* that v1.112 registered and v1.113 restated unchanged. Register row `B-118` (`.harness/forward-register.yaml`), surfaced at the `B-116` council deliberation as C9's A1 recommendation 3 and raised to the highest-priority forward row at the E2b reconcile by adversarial finding F-06.
+
+**Predecessor:** `Implementation_Plan_Harness_Runtime_v2_61.md` (v2.61 — the `B-115` (b′) deterministic ledger-conflict split; ONE new unit U-RT-153, ZERO amended).
+
+**Operator gate answered at this leg.** §14.6.4 cell 3 — what a WAIVED fault during a half-open trial does to the breaker — is **not** answered by the ratified Reading (II), which governs whether a fault CHARGES and is silent on a breaker MID-TRIAL. INCONCLUSIVE → re-arm is derivable from the attributability clause; the FRESH-versus-PRESERVED cooldown choice is not. **Operator-ratified 2026-08-08 (AskUserQuestion): FRESH cooldown.** Cited here as a ratification, not a derivation.
+
+### §0.2 Why the gap existed, in falsifiable terms
+
+`[HIGH]` Three facts, each re-verified at HEAD before this leg opened:
+
+1. `BreakerStateMachine.attempt_half_open` had **ZERO production call sites** — the only occurrences across every `harness-*/src` tree were two docstrings and the definition itself.
+2. `should_attempt()` was a pure state read (`state is not open`) holding **no clock**; nothing anywhere read `cooldown_seconds` as a deadline.
+3. `RuntimeRetryBreaker.get_breaker` caches breakers **identity-stable** for the process, and the registry is bootstrap-bound once.
+
+Therefore `open` was **absorbing for the process lifetime**. `record_failure`'s own `half_open → open` arm was unreachable for the same reason.
+
+**This is a CONTRACT-versus-CODE gap, not a design extension** — which is why the leg is an implementation obligation and not a Class 1 route. §14.6 step 4 already read *"state is OPEN and **cooldown unexpired**"*, which `should_attempt()` cannot express, and C-OD-07 §7.1 already contracts both recovery transitions by name. The latch was specified at two venues and built at neither. `B-118`'s registered falsifier — *"a decision that absorbing-OPEN is intentional"* — is NOT taken, because the contrary text at both venues is what makes the wiring owed.
+
+### §0.3 The three design decisions, recorded rather than absorbed
+
+`[HIGH]` **(a) Who holds the clock.** The COMPOSER holds the clock SOURCE (an injectable `monotonic` field defaulting to `time.monotonic`, mirroring the existing `sleep_fn` posture); the STATE MACHINE holds only the caller-recorded `opened_at` deadline state, because that state is per-`(scope, identifier)` and the composer has no per-breaker storage — an `opened_at` map in the composer would be a SECOND authority for breaker state. The machine still never calls a clock. **Not** a `RuntimeConfig` scalar: C-CP-03 §3.5 defers the values to implementation discretion and the registry already carries the policy. The shape template is in-tree at `BreakerGuardedSigningBackend` (`harness-runtime/src/harness_runtime/config/audit_signing.py`), which has carried an injected-clock + single-probe breaker since ADR-D8.
+
+**(b) `now` is REQUIRED, without a default.** An `open` breaker carrying no open-instant can never recover; a `None` default would make that unrecoverable state the SILENT fallback. `attempt_half_open` REFUSES an `open` machine whose `opened_at is None` (a deadline never set cannot have elapsed) rather than admitting a trial from a cooldown that does not exist.
+
+**(c) No lock, and the absence is a decision.** Every PARALLELIZATION / orchestrator-workers branch shares one composer, one registry and one `BreakerStateMachine` under `asyncio.TaskGroup` / `gather`, but they all run on ONE event loop — so the hazard is INTERLEAVING at the `await`, not a data race, and the permit closes it. Contrast `BreakerGuardedSigningBackend`, whose otherwise-identical shape DOES take a `threading.Lock` because span-end worker threads sign concurrently. The reasoning is carried in a source comment so a later reader cannot mistake the absence for an oversight.
+
+### §0.4 Scale + absences
+
+ONE new unit (**U-RT-154**); ZERO existing units amended; ZERO clusters; **ONE new DAG edge** (U-RT-153 → U-RT-154); **ZERO cross-axis edges**; ZERO CXA rows (aggregate frozen at 111); ZERO contract numbers.
+
+**Absences, as decisions.** **NO `RetryBreakerRegistry` Protocol widening** — the composer already narrows `get_breaker`'s `object` return to the concrete `BreakerStateMachine` via `isinstance`, so the new methods need no Protocol declaration and no cross-package surface moves. **NO OD delta of any kind** — C-OD-07 §7.1 already contracts both recovery transitions, §7.2's four non-optional attributes are satisfied by every transition the machine constructs, `is_trip` already gates `cause`/`cooldown_ms` correctly, and `emit_breaker_transition_event` needed no change. **NO CP §3.5 delta** — `retry.skipped.reason` gains a second token, which §14.6's own deferred-to-discretion list already covers. **NO durable state** — `opened_at` is an in-process monotonic float on a bootstrap-scoped dataclass, which is why `B-118`'s registered council condition (*"conditionally yes only if step (2) proposes a durable cooldown clock"*) does NOT fire and no council was convened. **NO `B-119` (PER_PROVIDER) work.**
+
+### §0.5 One PD-8 probe came back GREEN, and it was closed in-unit
+
+`[HIGH]` Probe **P7** (*admit an `open` machine whose `opened_at is None`*, realized as `self.opened_at = now` in place of the refusal) initially came back **GREEN** — the first draft of AC #1's illegal-state witness could not kill it. The reason is worth recording rather than patching silently: the mutation still **refuses the first call**, because after stamping `opened_at = now` the elapsed check reads `now - now = 0 < cooldown_seconds`. A witness asserting only the `None` return and the unchanged state therefore passes against it — while the mutated guard has in fact converted a **permanent** refusal into *"refuse once, then start a cooldown"*, admitting a trial on the next call.
+
+The witness was strengthened to the correct invariant — **a refused admission must not mutate the machine at all** — asserted as `opened_at is None` after the refused call plus a second refused call at a later `now`, and mirrored on the ordinary cooldown-unexpired path (`opened_at` unchanged, so repeated pre-checks cannot walk the deadline forward and postpone recovery indefinitely). P7 then goes RED. **The probe was not weakened to fit the witness, and the guard was not changed** — the witness was wrong, and the mutation is what proved it. Same shape as the OD v2.32 §0.7 precedent, where a GREEN probe exposed a missing completeness assertion and was closed in-unit.
+
+### §0.6 A hanging witness is not a witness
+
+`[HIGH]` Under probe **P1** the concurrency witness (AC #4) initially **HUNG** instead of failing: with `should_attempt()` reverted, the sibling dispatches JOIN the in-flight trial and block on the same `asyncio.Event` the test only sets after they return. A regression that hangs is indistinguishable from a slow suite and will be killed by a timeout somewhere far from its cause. The witness now runs its whole interleaving inside `async with asyncio.timeout(10)`, which converts that regression into a red test at the right site. Recorded because it changed a witness, not merely a probe run.
+---
+
+## §1 U-RT-154 — wiring the half-open latch
+
+**Unit ID:** U-RT-154 (**NEW**)
+**Axis:** Runtime
+**Contract:** `C-RT-16` (`Spec_Harness_Runtime_v1.md` v1.114 §14.6 step 4 + NEW §14.6.4)
+**Depends on:** [U-RT-153 (prior-landed — the five-member waiver tuple and the `_is_breaker_charge_waived` predicate whose interaction with the trial this unit contracts)].
+**Cluster:** none new — U-RT-154 joins the existing Runtime dispatch-composition cluster U-RT-152 / U-RT-153 belong to.
+
+**Carriers.** `harness-runtime/src/harness_runtime/lifecycle/retry_breaker.py` (the state machine) + `harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py` (the composer). Witnesses at `harness-runtime/tests/test_lifecycle_retry_breaker.py` (state-machine level) + `harness-runtime/tests/test_lifecycle_retry_breaker_fallback.py` (end-to-end through the REAL composer, which is where the load-bearing evidence lives).
+
+### Acceptance criteria
+
+**#1 — Conjunctive cooldown admission.** `BreakerStateMachine` gains `opened_at: float | None`, recorded from a caller-supplied `now` on **every** transition into `open` (the `closed → open` trip AND the `half_open → open` re-trip — a re-trip that failed to restamp would leave the breaker recoverable against a stale deadline). `record_failure` and `attempt_half_open` both take `now` as a **REQUIRED** keyword. `attempt_half_open(now)` admits **iff CONJUNCTIVELY**: state is `open`, `opened_at is not None`, and `now - opened_at >= cooldown_seconds`. An `open` machine with `opened_at is None` — reachable only by assigning `state` directly — is REFUSED. `record_success` clears `opened_at` so a `closed` machine carries no stale deadline.
+
+**#2 — The single-trial permit.** `should_attempt()` narrows to `state is closed`. The permit holder does not re-consult it; it proceeds on the transition `attempt_half_open` returned, which is itself one-shot (a second caller gets `None` because the state is no longer `open`). NEW `re_arm_half_open_trial(now)` returns an inconclusive trial to `open` with a FRESH `opened_at`, `fail_count` UNCHANGED and `trigger_count = 0`; it is a **no-op unless the machine is still `half_open`**, which is exactly the "recorded neither success nor a charging failure" test expressed as a state read rather than a second bookkeeping flag.
+
+**#3 — Both directions, end-to-end through the REAL composer.** A green state-machine unit test is **NOT** the witness — the state machine was already green and the gap was REACHABILITY. Both must run through `RetryBreakerFallbackDispatcher.dispatch` with an injected clock: **(i)** trip → skipped while the cooldown is unexpired → advance the clock → ONE trial admitted → success → `closed` → the next dispatch is ordinary, not a trial; **(ii)** trip → advance → trial → charging fail-fast (a raw SDK 401, §14.6.3 row 3) → `half_open → open` with a RESTAMPED deadline → the immediately-following dispatch is skipped again. Direction (ii) exercises `record_failure`'s `half_open → open` arm, which was unreachable before this unit. Emitted transitions are asserted as `(from_state, to_state, trigger_count)` triples.
+
+**#4 — The permit under real concurrency.** Three concurrent dispatches against ONE tripped breaker admit exactly ONE trial; the siblings are skipped with `retry.skipped.reason = "half-open-trial-in-flight"` and fall through to the chain. The interleaving must be **GUARANTEED, not hoped for**: the trial's completion is gated on an `asyncio.Event` the test releases only after the siblings have run their pre-check.
+
+**#5 — The ONE-attempt trial cap.** The trial candidate runs under `RetryPolicy(max_attempts=1, ...)`. Witnessed by counting inner calls to the trial candidate under a policy whose `max_attempts` is 3 and a transient outcome: exactly ONE. Uncapped, the transient path (which charges only at escalation/exhaustion) would burn up to `max_attempts` PAID calls against a provider believed down.
+
+**#6 — Every inconclusive cell, proven not to strand.** One witness per §14.6.4 cell 3 / 6 / 7 / 8 / 9 — a waived fail-fast, an audit-signing hard failure, a terminal HITL control-flow signal, a `DispatchFenceTrippedSignal`, and an `asyncio.CancelledError` — each asserting the breaker ends `open` (**NOT** stranded in `half_open`), `fail_count` UNCHANGED, `opened_at` FRESH, and the emitted transition carrying `trigger_count = 0`. Cell 9 additionally asserts that **NO** transition event is emitted. Cell 8 is load-bearing on the release's placement: `DispatchFenceTrippedSignal` is a `BaseException`, so an `except Exception` release would leave it stranded.
+
+**#7 — Trial spacing under the ratified FRESH cooldown.** After an inconclusive trial, three further dispatches at one-second intervals yield exactly ONE trial in total — not three. This is the witness that discriminates the ratified disposition from the unratified alternative (preserve the original deadline), under which every subsequent dispatch would immediately re-trial and the breaker would throttle nothing.
+
+**#8 — The `B-116` witness-strengthening roster, applied deliberately.** C9's A1 recommendation 2 forbade asserting anything about the half-open path while it was unreachable, so `B-116`'s witnesses stop at `fail_count == 0` / state `closed`. Each row below gains its now-available assertion; the rows named unchanged stay unchanged; `B-115`'s IS-side determinism witnesses (`harness-is/tests/test_b115_ledger_conflict_determinism.py`, W-D1..W-D4) are **UNTOUCHED**.
+
+| Witness | Strengthening applied |
+|---|---|
+| `test_waived_member_does_not_charge_breaker` (×5 members) | still **ADMISSIBLE** (`should_attempt() is True`) and `opened_at is None` — the waived fault did not move the machine at all, which `fail_count == 0` alone cannot show (a machine that opened and was reset also has `fail_count == 0`) |
+| `test_probe_b_one_waived_fault_charges_no_breaker_in_the_chain` | every chain breaker still ADMITS and entered no cooldown |
+| `test_probe_c_repeated_waived_faults_never_open_a_breaker` | the **clock-advance** form — at an arbitrarily distant `now`, NO half-open trial is even admissible (refused on the first conjunct), and `opened_at is None` across all twelve waived faults |
+| `test_auth_401_still_charges_and_emits_no_waiver_attributes` | **recovery-completion positive control** — the charge produces a real cooldown that a real trial then CLEARS, which is the exact premise §14.6.3's normative test rests on ("key rotation genuinely changes the half-open answer") |
+| `test_response_parsing_payload_shape_still_charges` | recovery-completion control for row 2b's "a half-open trial genuinely could differ" |
+| `test_memory_store_error_still_charges_end_to_end_via_staircase` | recovery completion reaches the `B-132` population too — the staircase charge site produces a real cooldown a trial clears |
+| `test_waived_exhaustion_is_identical_except_for_the_charge` | admissibility loop — a fully-waived chain leaves every breaker not merely uncharged but immediately ADMISSIBLE |
+| `test_waived_attributes_are_on_the_inner_span_not_the_outer`, `test_waiver_predicate_refuses_the_memory_family_by_name`, `test_waiver_attributes_absent_on_success_and_transient_paths` | **UNCHANGED** — no breaker-state claim to strengthen |
+
+**#9 — The pre-`B-118` skip behaviour is PRESERVED, and its witness is re-fixtured honestly.** `test_breaker_open_skips_candidate_emits_retry_skipped` tripped its breaker by assigning `state` directly, which leaves `opened_at is None`. It is re-fixtured to trip through `record_failure(now=clock())` with the composer's clock pinned at the trip instant — so the cooldown genuinely has not elapsed and the witness keeps asserting the SKIP it was written for. Left as-was with a real `time.monotonic`, it would have silently begun asserting a half-open trial instead, since process-start monotonic is already far past any cooldown.
+
+**#10 — Absences.** No `RetryBreakerRegistry` Protocol change; no `RuntimeConfig` field; no new attribute at the OD or CP venue; no `threading.Lock`; no persisted breaker state.
+
+### PD-8 mutation probes (each MUST be seen RED)
+
+| # | Mutation | Witness that must fail |
+|---|---|---|
+| P1 | Revert `should_attempt()` to `state is not open` | AC #4 concurrency witness — inner calls to the trial candidate go 1 → 3 |
+| P2 | Delete the inconclusive re-arm (the `finally`/`BaseException` release) | AC #6 cells 3 / 6 / 7 / 8 / 9 — the breaker is found stranded in `half_open` |
+| P3 | Narrow the release to `except Exception` | AC #6 cell 8 only (`DispatchFenceTrippedSignal` is a `BaseException`) |
+| P4 | Drop the ONE-attempt trial cap (pass `policy` unchanged) | AC #5 paid-call count — 1 → `max_attempts` |
+| P5 | Drop the FRESH `opened_at` on re-arm (preserve the original deadline) | AC #7 trial-spacing witness — 1 trial → 4 |
+| P6 | Make `attempt_half_open` non-conjunctive (state check only, as at v1.113) | AC #1 boundary assertions + AC #9's preserved-skip witness |
+| P7 | Admit an `open` machine with `opened_at is None` (as `opened_at = now`) | AC #1's illegal-state witness — specifically its **no-mutation-on-refusal** assertions, which the first draft lacked (§0.5) |
+| P8 | Charge `fail_count` on the inconclusive re-arm | AC #6's `fail_count` UNCHANGED assertions |
+| P9 | Emit on cell 9 (cancellation) | AC #6 cell 9's transition-absence assertion |
+| P10 | Set `trigger_count = fail_count` on the re-arm | AC #6's `trigger_count == 0` discriminator |
+
+**Closure criterion (CONJUNCTIVE).** U-RT-154 closes when ALL of: ACs #1–#10 green with their P1–P10 mutation probes each seen RED and restored; both direction witnesses passing **through the real composer** (not the state machine alone); the full Runtime suite green with a **programmatic collected-count reconciliation** (the `B-117` silent-collection hazard — recount collected versus written, do not trust exit-green alone); `ruff` and `pyright` clean; and the register's `--check` green. **`B-118` flips to `closed` at this unit's merge.**
+
+---
+
+## §2 Dependency graph delta
+
+```
+U-RT-153 (landed — the B-115 (b′) split, the five-member waiver tuple) ──▶ U-RT-154
+```
+
+U-RT-145 → U-RT-150 → U-RT-151 and U-RT-58 → U-RT-152 → U-RT-153 (all landed) are unchanged. The edge is real rather than nominal: U-RT-154's §14.6.4 matrix is stated OVER the waiver tuple U-RT-153 finalized at five members, and its cell-3 witness instantiates a tuple member. **ZERO cross-axis edges** — every carrier is inside `harness_runtime`, and the memory-family exception types the cell-3 witness constructs are a pre-existing import dependency of `retry_breaker_fallback.py`.
+
+---
+
+## §3 Preserved verbatim
+
+Every U-RT-* unit body other than the NEW U-RT-154; the v2.61 §1 U-RT-153 body and its closure criterion; the v2.60 §1 U-RT-152 body and its closure criterion; the v2.60 §2 probe-text rider; all prior change-note blocks; every prior DAG statement. **No pre-existing unit body, dependency edge, acceptance criterion or verification line is removed or rewritten at this delta.**

@@ -320,10 +320,10 @@ def test_breaker_emits_event_on_closed_to_open(tmp_path: Path) -> None:
     breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-x")
 
     # First two failures: no transition.
-    assert breaker.record_failure() is None
-    assert breaker.record_failure() is None
+    assert breaker.record_failure(now=0.0) is None
+    assert breaker.record_failure(now=0.0) is None
     # Third failure: closed → open.
-    transition = breaker.record_failure()
+    transition = breaker.record_failure(now=0.0)
     assert transition is not None
     assert transition.from_state is BreakerState.CLOSED
     assert transition.to_state is BreakerState.OPEN
@@ -338,6 +338,153 @@ def test_breaker_emits_event_on_closed_to_open(tmp_path: Path) -> None:
     assert emission.sampled is True
 
 
+def test_attempt_half_open_is_conjunctive_on_cooldown_elapse(tmp_path: Path) -> None:
+    """`B-118` AC #1: `attempt_half_open(now)` admits iff ALL THREE conjuncts
+    hold — state is `open`, `opened_at` was recorded, and the cooldown has
+    elapsed. Before v1.114 the method checked ONLY the state, so it would
+    have flipped a just-tripped breaker to `half_open` immediately."""
+    registry = materialize_retry_breaker_stage(
+        _config(tmp_path, manifest=_manifest()),
+        fail_threshold=1,
+        cooldown_seconds=30.0,
+    ).registry
+    breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-cooldown")
+
+    # Conjunct 1 — not open.
+    assert breaker.attempt_half_open(now=1_000.0) is None
+    assert breaker.state is BreakerState.CLOSED
+
+    breaker.record_failure(now=100.0)  # closed → open, opened_at = 100.0
+    assert breaker.state is BreakerState.OPEN
+    assert breaker.opened_at == 100.0
+
+    # Conjunct 3 — cooldown unexpired. Boundary is inclusive at `>=`, so
+    # both strictly-before and exactly-one-tick-before are refused.
+    assert breaker.attempt_half_open(now=100.0) is None
+    assert breaker.attempt_half_open(now=129.999) is None
+    assert breaker.state is BreakerState.OPEN
+    # A refusal leaves the deadline untouched, so repeated pre-checks cannot
+    # walk it forward and postpone recovery indefinitely.
+    assert breaker.opened_at == 100.0
+
+    # All three hold at the boundary itself.
+    transition = breaker.attempt_half_open(now=130.0)
+    assert transition is not None
+    assert transition.from_state is BreakerState.OPEN
+    assert transition.to_state is BreakerState.HALF_OPEN
+    assert transition.trigger_count == 0
+    assert breaker.state is BreakerState.HALF_OPEN
+
+    # The transition IS the permit: a second caller gets None.
+    assert breaker.attempt_half_open(now=1_000.0) is None
+
+
+def test_attempt_half_open_refuses_an_open_machine_with_no_opened_at(
+    tmp_path: Path,
+) -> None:
+    """`B-118` AC #1: `state is open` with `opened_at is None` is the illegal
+    state reachable only by assigning `state` directly. It must REFUSE (a
+    deadline that was never set cannot have elapsed) rather than admit a
+    trial from a cooldown that does not exist."""
+    registry = materialize_retry_breaker_stage(
+        _config(tmp_path, manifest=_manifest()),
+        fail_threshold=1,
+    ).registry
+    breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-illegal")
+    breaker.state = BreakerState.OPEN  # direct assignment; no opened_at
+    assert breaker.opened_at is None
+    assert breaker.attempt_half_open(now=1e9) is None
+    assert breaker.state is BreakerState.OPEN
+    # A REFUSED admission must not mutate the machine AT ALL. Asserting only
+    # the `None` return and the unchanged state is too weak: a guard that
+    # STAMPED `opened_at = now` and then fell through to the elapsed check
+    # would also refuse this first call — and would thereby convert a
+    # permanent refusal into "refuse once, then start a cooldown", admitting
+    # a trial on the next call. (Found by the P7 mutation probe coming back
+    # GREEN against the first draft of this witness.)
+    assert breaker.opened_at is None
+    assert breaker.attempt_half_open(now=2e9) is None
+    assert breaker.state is BreakerState.OPEN
+
+
+def test_re_arm_half_open_trial_returns_to_open_with_a_fresh_cooldown(
+    tmp_path: Path,
+) -> None:
+    """`B-118` AC #2 / §14.6.4 cell 3 (operator-ratified 2026-08-08): an
+    INCONCLUSIVE trial returns to `open` with a FRESH cooldown, `fail_count`
+    UNCHANGED, and `trigger_count == 0` — the wire discriminator against a
+    real half_open → open re-trip, whose `trigger_count` is `fail_count`."""
+    registry = materialize_retry_breaker_stage(
+        _config(tmp_path, manifest=_manifest()),
+        fail_threshold=2,
+        cooldown_seconds=30.0,
+    ).registry
+    breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-rearm")
+    breaker.record_failure(now=0.0)
+    breaker.record_failure(now=0.0)  # closed → open at threshold 2
+    assert breaker.fail_count == 2
+    assert breaker.attempt_half_open(now=30.0) is not None
+
+    transition = breaker.re_arm_half_open_trial(now=200.0)
+    assert transition is not None
+    assert transition.from_state is BreakerState.HALF_OPEN
+    assert transition.to_state is BreakerState.OPEN
+    assert transition.trigger_count == 0  # NOT a trip
+    assert breaker.state is BreakerState.OPEN
+    assert breaker.fail_count == 2  # an inconclusive trial charges nothing
+    assert breaker.opened_at == 200.0  # FRESH, not the original 0.0
+
+    # The fresh cooldown really governs: the ORIGINAL deadline is long past,
+    # yet no trial is admitted until 30s after the re-arm.
+    assert breaker.attempt_half_open(now=201.0) is None
+    assert breaker.attempt_half_open(now=230.0) is not None
+
+
+def test_re_arm_half_open_trial_is_a_no_op_off_half_open(tmp_path: Path) -> None:
+    """`B-118` AC #2: the re-arm is a no-op unless the machine is still
+    `half_open` — which is exactly the "the trial recorded neither success
+    nor a charging failure" test, so the composer may call it on every exit
+    path without discriminating the outcome itself."""
+    registry = materialize_retry_breaker_stage(
+        _config(tmp_path, manifest=_manifest()),
+        fail_threshold=1,
+    ).registry
+    breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-rearm-noop")
+    assert breaker.re_arm_half_open_trial(now=1.0) is None  # closed
+    breaker.record_failure(now=0.0)
+    assert breaker.re_arm_half_open_trial(now=1.0) is None  # open
+    assert breaker.state is BreakerState.OPEN
+    assert breaker.opened_at == 0.0  # untouched by the no-op
+
+
+def test_record_failure_records_the_open_instant_on_both_open_entries(
+    tmp_path: Path,
+) -> None:
+    """`B-118` AC #1: every transition INTO `open` records `opened_at` from
+    the caller-supplied `now` — the closed → open trip AND the half_open →
+    open re-trip. A re-trip that failed to restamp would leave the breaker
+    recoverable against a stale deadline."""
+    registry = materialize_retry_breaker_stage(
+        _config(tmp_path, manifest=_manifest()),
+        fail_threshold=1,
+        cooldown_seconds=30.0,
+    ).registry
+    breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-instants")
+    breaker.record_failure(now=10.0)
+    assert breaker.opened_at == 10.0
+    breaker.attempt_half_open(now=40.0)
+    transition = breaker.record_failure(now=41.0)  # trial failed → re-open
+    assert transition is not None
+    assert transition.to_state is BreakerState.OPEN
+    assert transition.trigger_count == breaker.fail_count >= 1
+    assert breaker.opened_at == 41.0  # restamped, not 10.0
+    # And a success clears it, so a CLOSED machine carries no stale deadline.
+    breaker.attempt_half_open(now=71.0)
+    breaker.record_success()
+    assert breaker.state is BreakerState.CLOSED
+    assert breaker.opened_at is None
+
+
 def test_breaker_emits_event_on_open_to_half_open(tmp_path: Path) -> None:
     """open → half_open transition emits an event when the caller-driven
     `attempt_half_open()` fires after cooldown."""
@@ -346,8 +493,8 @@ def test_breaker_emits_event_on_open_to_half_open(tmp_path: Path) -> None:
         fail_threshold=1,
     ).registry
     breaker = registry.get_breaker(BreakerScope.PER_PROVIDER, "anthropic")
-    breaker.record_failure()  # closed → open
-    transition = breaker.attempt_half_open()
+    breaker.record_failure(now=0.0)  # closed → open
+    transition = breaker.attempt_half_open(now=31.0)
     assert transition is not None
     assert transition.from_state is BreakerState.OPEN
     assert transition.to_state is BreakerState.HALF_OPEN
@@ -362,8 +509,8 @@ def test_breaker_emits_event_on_half_open_to_closed(tmp_path: Path) -> None:
         fail_threshold=1,
     ).registry
     breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-y")
-    breaker.record_failure()  # closed → open
-    breaker.attempt_half_open()  # open → half_open
+    breaker.record_failure(now=0.0)  # closed → open
+    breaker.attempt_half_open(now=31.0)  # open → half_open
     transition = breaker.record_success()
     assert transition is not None
     assert transition.from_state is BreakerState.HALF_OPEN
@@ -380,9 +527,9 @@ def test_breaker_emits_event_on_half_open_to_open_on_retry_fail(tmp_path: Path) 
         fail_threshold=1,
     ).registry
     breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-z")
-    breaker.record_failure()  # closed → open
-    breaker.attempt_half_open()  # open → half_open
-    transition = breaker.record_failure()
+    breaker.record_failure(now=0.0)  # closed → open
+    breaker.attempt_half_open(now=31.0)  # open → half_open
+    transition = breaker.record_failure(now=0.0)
     assert transition is not None
     assert transition.from_state is BreakerState.HALF_OPEN
     assert transition.to_state is BreakerState.OPEN
@@ -400,24 +547,34 @@ def test_breaker_does_not_emit_on_no_op_transitions(tmp_path: Path) -> None:
     ).registry
     breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-no-op")
     assert breaker.record_success() is None  # closed → closed: no transition
-    breaker.record_failure()  # closed → open
-    assert breaker.record_failure() is None  # open: no-op
-    breaker.attempt_half_open()  # open → half_open
+    breaker.record_failure(now=0.0)  # closed → open
+    assert breaker.record_failure(now=0.0) is None  # open: no-op
+    breaker.attempt_half_open(now=31.0)  # open → half_open
     breaker.record_success()  # half_open → closed
-    assert breaker.attempt_half_open() is None  # closed: no-op
+    assert breaker.attempt_half_open(now=31.0) is None  # closed: no-op
 
 
-def test_breaker_should_attempt_reflects_state(tmp_path: Path) -> None:
-    """`should_attempt()` is False iff state is `open`."""
+def test_breaker_should_attempt_is_the_single_trial_permit(tmp_path: Path) -> None:
+    """`should_attempt()` is True iff state is `closed` — NARROWED at v1.114
+    (`B-118`) from the prior `state is not open`.
+
+    `half_open` exists only while a trial is in flight, so the old predicate
+    admitted every concurrent sibling into a call the contract says is a
+    SINGLE trial. Refusing in `half_open` IS the permit; the permit holder
+    proceeds on its own `attempt_half_open` transition and never re-consults
+    this method. The end-to-end consequence is witnessed at
+    `test_lifecycle_retry_breaker_fallback.py`'s concurrent-permit test."""
     registry = materialize_retry_breaker_stage(
         _config(tmp_path, manifest=_manifest()),
         fail_threshold=1,
     ).registry
     breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-attempt")
     assert breaker.should_attempt() is True  # closed
-    breaker.record_failure()  # → open
+    breaker.record_failure(now=0.0)  # → open
     assert breaker.should_attempt() is False
-    breaker.attempt_half_open()  # → half_open
+    breaker.attempt_half_open(now=31.0)  # → half_open: a trial is in flight
+    assert breaker.should_attempt() is False
+    breaker.record_success()  # → closed
     assert breaker.should_attempt() is True
 
 
@@ -429,7 +586,7 @@ def test_breaker_emit_threads_optional_per_model_correlation(tmp_path: Path) -> 
         fail_threshold=1,
     ).registry
     breaker = registry.get_breaker(BreakerScope.PER_MODEL, "search-tool")
-    transition = breaker.record_failure()
+    transition = breaker.record_failure(now=0.0)
     assert transition is not None
     # `model_version` explicitly supplied; `tool_id` defaults to identifier.
     emission = registry.emit_breaker_transition_event(
@@ -556,11 +713,11 @@ def test_breaker_state_machine_resets_fail_count_on_close_success() -> None:
         identifier="tool",
         fail_threshold=3,
     )
-    machine.record_failure()
-    machine.record_failure()
+    machine.record_failure(now=0.0)
+    machine.record_failure(now=0.0)
     machine.record_success()  # resets to 0
-    machine.record_failure()
-    machine.record_failure()
+    machine.record_failure(now=0.0)
+    machine.record_failure(now=0.0)
     # Still closed — only 2 consecutive failures after the reset.
     assert machine.state is BreakerState.CLOSED
     assert machine.fail_count == 2

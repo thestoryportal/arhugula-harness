@@ -61,11 +61,11 @@ snapshot:
   total: 134
   open: 0
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 29
   operator_gated: 0
   held: 1
-  closed: 103
-  identity_digest: d0d0206bcd425900
+  closed: 104
+  identity_digest: f37e55c063f47ae9
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5716,7 +5716,8 @@ items:
   heading: '### B-117 · Duplicate pytest test-file BASENAMES across workspace packages silently drop witnesses from collection, and nothing guards against it *(lifted to its own row 2026-08-07 from the `B-112` close-out''s registered ADJACENT INFRA GAP, per that row''s own "a future infra arc may lift it to its own row")*'
 - id: B-118
   title: 'The half-open latch is dead code, so OPEN is an absorbing breaker state for the process lifetime'
-  status: registered_finding
+  status: closed
+  pr: '#1275 (the B-118 bundled leg -- Runtime spec v1.114 section 14.6 step 4 three-way breaker pre-check + NEW section 14.6.4 nine-cell trial-outcome matrix + the dead-half-open-latch residual DISCHARGED, plan v2.62 U-RT-154, and the impl with both recovery directions witnessed end-to-end through the real composer)'
   summary: 'WHAT IT IS. BreakerStateMachine.attempt_half_open()
     (harness-runtime/src/harness_runtime/lifecycle/retry_breaker.py:289) has ZERO production call sites
     — the only three occurrences across every harness-*/src tree are two docstrings (:51, :201) and the
@@ -5750,7 +5751,42 @@ items:
     instead; once this row lands those may be strengthened, and they should be, deliberately. WHAT WOULD
     FALSIFY IT. A production call site appearing (then the row is already closed), or a decision that
     absorbing-OPEN is intentional — in which case OD §7.1''s transition text and B-116''s normative test
-    both need amending, which is a Class 1 design-substrate route, not an impl fix.'
+    both need amending, which is a Class 1 design-substrate route, not an impl fix. CLOSED 2026-08-08 at
+    Runtime spec v1.114 + plan v2.62 (U-RT-154), spec + plan + impl in ONE PR. ALL FIVE CLOSE-OUT STEPS
+    EXECUTED. (1) Re-verified at HEAD fb3dda44 -- zero production call sites (the only src occurrences
+    were two docstrings and the definition), should_attempt() clock-free, get_breaker identity-stable.
+    (2) The clock is SPLIT. The COMPOSER holds the source (an injectable monotonic field defaulting to
+    time.monotonic, mirroring the existing sleep_fn posture); the STATE MACHINE holds only the
+    caller-recorded opened_at deadline, because that state is per-(scope, identifier) and the composer
+    has no per-breaker storage -- a composer-side map would be a SECOND authority for breaker state. The
+    machine still never reads a clock. NOT a RuntimeConfig scalar. The in-tree shape template is
+    BreakerGuardedSigningBackend at harness-runtime/src/harness_runtime/config/audit_signing.py, which
+    has carried an injected-clock plus single-probe breaker since ADR-D8. (3) Wired at the pre-check,
+    now THREE-WAY -- closed proceeds / open attempts a conjunctively-gated trial capped at ONE attempt /
+    half_open means a sibling holds the permit and is skipped with the new half-open-trial-in-flight
+    reason. should_attempt() narrows to state-is-closed, which IS the permit, since half_open exists
+    only while a trial is in flight and the prior state-is-not-open admitted every concurrent branch
+    into a call contracted to be single. No lock -- all mutators run on one event loop, so the hazard is
+    interleaving at the await rather than a data race (contrast the signing breaker, which DOES lock
+    because span-end worker threads sign). (4) BOTH directions witnessed end-to-end through the REAL
+    composer with an injected clock -- open to half_open to closed recovery AND open to half_open to
+    open re-trip -- plus a three-branch concurrency witness whose interleaving is GUARANTEED by an
+    asyncio.Event rather than hoped for. (5) The B-116 witnesses were strengthened DELIBERATELY -- seven
+    rows gained their now-available assertions (the Probe-C clock-advance form discriminating
+    never-opened from opened-and-reset; the 401 and response-parsing RECOVERY-COMPLETION positive
+    controls that make the charge mean something; the exhaustion-identity admissibility loop), three
+    were left unchanged by name, and the B-115 IS-side determinism witnesses were untouched. THE ONE
+    OPERATOR GATE. Grounding surfaced an interaction the ratified Reading (II) does NOT answer. With the
+    B-116 guard, a WAIVED fail-fast during a trial charges nothing, so record_failure never runs and the
+    machine is STRANDED in half_open -- a NEW absorbing state strictly worse than the absorbing OPEN
+    this row removes, and one the wiring would itself have introduced. Four further cells (audit-signing
+    hard failure, terminal HITL control flow, DispatchFenceTrippedSignal, CancelledError) strand
+    identically. INCONCLUSIVE-then-re-arm is derivable from the Reading (II) attributability clause; the
+    FRESH-versus-PRESERVED cooldown choice is NOT, and was surfaced. OPERATOR-RATIFIED 2026-08-08
+    (AskUserQuestion) -- FRESH cooldown, trigger_count 0, fail_count UNCHANGED. All nine cells are
+    contracted at NEW Runtime spec v1.114 section 14.6.4. THE COUNCIL CONDITION DID NOT FIRE -- the
+    design is in-memory monotonic with nothing persisted, so the durable-cooldown-clock trigger for the
+    C9-C11 dyad was never reached and no council was convened.'
   council: 'No at registration. A single-domain C9 reliability-mechanism gap with no nameable cross-domain
     tension — the mechanism, the contract text, and the recovery model are all in one voice''s lineage.
     Conditionally yes only if step (2) proposes a durable cooldown clock: that re-opens the persistence
@@ -5788,7 +5824,16 @@ items:
     ever report per_model. (5) Note the coupling to B-125 — emit_breaker_transition_event defaults
     tool_id to the breaker key only at PER_MODEL scope (retry_breaker.py:459-461), so constructing a
     second scope changes which trips carry that default. WHAT WOULD FALSIFY IT. A PER_PROVIDER
-    construction site appearing anywhere in harness-*/src.'
+    construction site appearing anywhere in harness-*/src. CROSS-NOTE, 2026-08-08 (B-118 closed) -- this
+    row is UNTOUCHED and NOT dependent on B-118, but its C11 half is materially changed. The registered
+    council framing weighed detection breadth against the fact that one provider-scope OPEN disables
+    every model of that provider at once, AND WITH B-118 UNFIXED IT DOES SO IRREVERSIBLY. B-118 is now
+    closed -- OPEN is escapable, bounded by a real cooldown with a single-trial half-open probe -- so
+    the irreversibility clause no longer holds and the C11 objection is weaker than when it was
+    registered. The dyad is NOT dissolved (a provider-scope breaker still has a wider blast radius than
+    a per-model one, and a recovery probe still costs one real call), but any future step-(2)
+    deliberation MUST re-ground the C11 position against escapable-OPEN rather than quoting the
+    registered text.'
   council: 'No at registration — nothing is decided here. Conditionally yes at step (2): building a second
     breaker scope trades detection breadth (C9 — a provider outage should be visible as one fact, not
     inferred from N per-model facts) against operator recoverability under a materially wider blast

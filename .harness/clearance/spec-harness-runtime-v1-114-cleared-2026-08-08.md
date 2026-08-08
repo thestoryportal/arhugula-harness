@@ -1,0 +1,34 @@
+---
+artifact: design-substrate/Spec_Harness_Runtime_v1.md
+version: v1.114
+cleared_at: 2026-08-08T00:00:00-06:00
+clearance_type: Phase-7-absorbed-via-fork-doc
+back_reference:
+  - .harness/forward-register.yaml row `B-118` (the half-open latch is dead code, so OPEN is an absorbing breaker state for the process lifetime)
+  - .harness/council/b116-breaker-semantics/ (C9 A1 recommendation 3 — register separately, do not fold into B-116)
+  - Spec_Harness_Runtime_v1.md v1.112 §14.6.3 "Honest residual — the dead half-open latch" (the registered residual this version discharges)
+  - operator AskUserQuestion ratification 2026-08-08 (§14.6.4 cell 3 — FRESH cooldown)
+merge_commit: <pending — same PR as this marker>
+reviewer_chain:
+  - B-118 grounding + leg-design pass (read-only, at HEAD fb3dda44 — all six close-out steps re-verified, cites re-located from pre-B-115 numbering)
+  - operator AskUserQuestion ratification 2026-08-08 (the ONE genuine gate: §14.6.4 cell 3 cooldown disposition)
+  - spec-writer apply pass (this leg)
+  - impl-time grounding pass (spec + plan + impl land together; every contract term witnessed by execution)
+supersedes: spec-harness-runtime-v1-113-cleared-2026-08-08.md
+---
+
+# Clearance — `Specification — Harness Runtime v1.114`
+
+v1.114 **wires the half-open latch**, discharging the residual v1.112 registered and v1.113 restated unchanged. The gap was empirical and re-verified at HEAD before this leg opened: `BreakerStateMachine.attempt_half_open` had **ZERO production call sites**, `should_attempt()` was a clock-free state read, and `RuntimeRetryBreaker.get_breaker` caches breakers identity-stable for the process — so `open` was an **absorbing** state for the process lifetime and `record_failure`'s own `half_open → open` arm was unreachable. §14.6.3's ratified normative test is stated over exactly that path, which is why `B-118` was raised to the highest-priority forward row at the `B-116` E2b reconcile by finding F-06.
+
+**Four amendment sites, all within §14.6.** (1) Step 4's breaker pre-check bullet becomes **three-way** — `closed` proceeds, `open` attempts a conjunctively-gated `attempt_half_open(now)` and on admission proceeds as the SINGLE trial capped at ONE attempt, `half_open` means a sibling holds the permit and is skipped — plus a **release-on-every-exit MUST**. (2) The §14.6.3 residual paragraph is **DISCHARGED in place**, with the dispositions in that section's table explicitly unchanged by the discharge. (3) NEW **§14.6.4** carries the nine-cell trial-outcome × waiver matrix as contract. (4) The §14.6 invariants gain a strict append stating the clock is composer-injected, monotonic and **in-memory** — §14.6.3 **t4**'s boundary held positively.
+
+**This closes a contract-versus-code gap, not a design extension.** §14.6 step 4 already read *"state is OPEN and cooldown unexpired"* — which `should_attempt()` cannot express — and C-OD-07 §7.1 already contracts both recovery transitions by name. The latch was specified at two venues and built at neither, so `B-118`'s registered falsifier (*"a decision that absorbing-OPEN is intentional"*) was **not** taken.
+
+**The one operator gate, and what was NOT derivable.** §14.6.4 cell 3 asks what a **waived** fault during a trial does to the breaker. Reading (II) governs whether a fault CHARGES and is silent on a breaker mid-trial — the half-open path was unreachable when it was ratified. Left unhandled, a waived fault would strand the machine in `half_open`, where `should_attempt()` refuses everyone and `attempt_half_open` returns `None`: **a NEW absorbing state strictly worse than the one this row removes**, introduced by this very leg. INCONCLUSIVE → re-arm follows from the attributability clause; the FRESH-versus-PRESERVED cooldown choice does not, and was surfaced. **Operator-ratified 2026-08-08: FRESH cooldown**, `trigger_count = 0`, `fail_count` unchanged.
+
+**Absences, verified rather than assumed.** ZERO new contract numbers; **ZERO OD delta of any kind** (C-OD-07 §7.1 already contracts both recovery transitions, §7.2's four non-optional attributes are satisfied by every transition the machine constructs, `is_trip` already gates `cause`/`cooldown_ms`, and `emit_breaker_transition_event` needed no change); ZERO CP §3.5 delta; ZERO CXA rows (frozen at 111); ZERO `snapshot_hash` impact; ZERO `RetryBreakerRegistry` Protocol widening; ZERO persisted breaker state — which is why `B-118`'s registered council condition (*"conditionally yes only if step (2) proposes a durable cooldown clock"*) did **not** fire and no council was convened.
+
+## Notes
+
+Plan leg: `Implementation_Plan_Harness_Runtime_v2_62.md` (NEW U-RT-154). `B-118` flips to `closed` at this PR's merge. `B-119` (PER_PROVIDER) is cross-noted, not worked: its C11 half — *"one provider-scope OPEN disables every model of that provider at once, and with B-118 unfixed it does so irreversibly"* — materially improves now that `open` is escapable.

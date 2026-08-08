@@ -55,6 +55,7 @@ from harness_cp.routing_manifest_residence import (
 from harness_cp.sub_agent_dispatch_cancellation import (
     DISPATCH_CANCEL_TOKEN_VAR,
     DispatchCancelToken,
+    DispatchFenceTrippedSignal,
     FenceAckOutcome,
 )
 from harness_cp.workflow_driver import StepDispatcher
@@ -64,7 +65,9 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
-from harness_od.harness_breaker_schema import BreakerCause, BreakerScope
+from harness_od.harness_breaker_schema import BreakerCause, BreakerScope, BreakerState
+from harness_runtime.lifecycle.audit_signing_errors import AuditSigningFailedError
+from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchPayloadShapeError,
     LLMDispatchPayloadShapeInternalError,
@@ -73,6 +76,8 @@ from harness_runtime.lifecycle.llm_dispatch import (
     RuntimeLLMDispatcher,
 )
 from harness_runtime.lifecycle.retry_breaker import (
+    DEFAULT_COOLDOWN_SECONDS,
+    DEFAULT_FAIL_THRESHOLD,
     DEFAULT_RETRY_POLICY,
     BreakerStateMachine,
     BreakerTransition,
@@ -224,7 +229,12 @@ def _step_context(step_index: int = 0) -> StepExecutionContext:
     )
 
 
-def _retry_breaker_with_llm_policy(*, max_attempts: int = 3) -> RuntimeRetryBreaker:
+def _retry_breaker_with_llm_policy(
+    *,
+    max_attempts: int = 3,
+    fail_threshold: int = DEFAULT_FAIL_THRESHOLD,
+    cooldown_seconds: float = DEFAULT_COOLDOWN_SECONDS,
+) -> RuntimeRetryBreaker:
     """Construct a registry with the reserved LLM-dispatch policy pre-bound.
 
     Mirrors what ``materialize_retry_breaker_stage`` does at bootstrap; used
@@ -238,9 +248,29 @@ def _retry_breaker_with_llm_policy(*, max_attempts: int = 3) -> RuntimeRetryBrea
             )
         },
         default_policy=DEFAULT_RETRY_POLICY,
+        fail_threshold=fail_threshold,
+        cooldown_seconds=cooldown_seconds,
         base_delay_seconds=0.0,  # makes computed delays small for tests
         delay_cap_seconds=0.01,
     )
+
+
+class _FakeClock:
+    """Controllable monotonic source for the `B-118` half-open cooldown.
+
+    The `BreakerGuardedSigningBackend` tests drive their breaker with a dict
+    (`clock = {"now": 0.0}`); this is the same device with an `advance`
+    affordance, injected at the composer's `monotonic` field so the
+    open → half_open → {closed, open} cycle is deterministic and instant."""
+
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 async def _noop_sleep(_seconds: float) -> None:
@@ -690,10 +720,21 @@ async def test_breaker_open_skips_candidate_emits_retry_skipped() -> None:
     same_family = (_candidate("anthropic", "claude-test-2"),)
     chain = _chain(primary, same_family=same_family)
     breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    clock = _FakeClock(0.0)
 
-    # Pre-trip candidate-0's breaker to OPEN.
+    # Pre-trip candidate-0's breaker to OPEN. Tripped through
+    # `record_failure(now=...)` rather than by assigning `state` directly
+    # (`B-118`): an OPEN machine must carry the `opened_at` deadline its
+    # transitions record. The composer's clock is pinned at the trip instant
+    # and never advanced, so the cooldown stays unexpired and this witness
+    # keeps asserting the SKIP it was written for rather than accidentally
+    # admitting a half-open trial (which a real `time.monotonic` — already
+    # far past any cooldown at process start — silently would).
     pre_breaker = breaker.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
-    pre_breaker.state = pre_breaker.state.__class__("open")  # set to OPEN
+    for _ in range(DEFAULT_FAIL_THRESHOLD):
+        pre_breaker.record_failure(now=clock())
+    assert pre_breaker.state is BreakerState.OPEN
+    assert pre_breaker.opened_at == 0.0
     assert pre_breaker.should_attempt() is False
 
     inner = _MockInnerDispatcher(outcomes=[{"result": "candidate-1-ok"}])
@@ -704,6 +745,7 @@ async def test_breaker_open_skips_candidate_emits_retry_skipped() -> None:
         fallback_chain=chain,
         tracer_provider=tp,
         sleep_fn=_noop_sleep,
+        monotonic=clock,
     )
 
     result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
@@ -2602,6 +2644,14 @@ async def test_waived_member_does_not_charge_breaker(type_name: str, exc: BaseEx
     charged = breaker.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
     assert charged.fail_count == 0
     assert charged.state.value == "closed"
+    # STRENGTHENED at `B-118`: the machine is not merely uncharged, it is
+    # still ADMISSIBLE and carries no cooldown deadline — i.e. the waived
+    # fault did not move it at all. C9's A1 rec 2 forbade asserting anything
+    # about the recovery path while `attempt_half_open` was unreachable;
+    # U-RT-154 wired it, so this now says what `fail_count == 0` alone could
+    # not (a machine that opened and was reset also has `fail_count == 0`).
+    assert charged.should_attempt() is True
+    assert charged.opened_at is None
 
     attempts = _attempt_spans(exporter)
     first = attempts[0].attributes
@@ -2699,6 +2749,13 @@ async def test_probe_b_one_waived_fault_charges_no_breaker_in_the_chain() -> Non
         candidate_breaker = breaker.get_breaker(BreakerScope.PER_MODEL, identifier)
         assert candidate_breaker.fail_count == 0, identifier
         assert candidate_breaker.state.value == "closed", identifier
+        # STRENGTHENED at `B-118`: every chain breaker still ADMITS. The
+        # `B-116` framing of this probe was "one candidate-independent fault
+        # burns one failure on every chain breaker"; the sharper statement,
+        # available only once the recovery path is live, is that none of them
+        # entered a cooldown at all.
+        assert candidate_breaker.should_attempt() is True, identifier
+        assert candidate_breaker.opened_at is None, identifier
 
     # t2 carries the ACTUAL per-position candidate, not the binding/primary —
     # only the fallback positions can discriminate a mis-report (every other
@@ -2778,6 +2835,16 @@ async def test_probe_c_repeated_waived_faults_never_open_a_breaker() -> None:
         assert candidate_breaker.state.value == "closed", identifier
         assert candidate_breaker.fail_count == 0, identifier
         assert candidate_breaker.should_attempt() is True, identifier
+        # STRENGTHENED at `B-118` — the clock-advance form. `fail_count == 0`
+        # + CLOSED is also satisfied by a machine that OPENED and was later
+        # reset by a recovery. Advancing an arbitrarily distant clock and
+        # finding that NO half-open trial is even admissible discriminates
+        # the two: the trial is refused on the FIRST conjunct (state is not
+        # `open`), and `opened_at is None` proves the breaker never entered a
+        # cooldown window at any point across all twelve waived faults.
+        assert candidate_breaker.opened_at is None, identifier
+        assert candidate_breaker.attempt_half_open(now=1e9) is None, identifier
+        assert candidate_breaker.state.value == "closed", identifier
 
 
 # --- AC #4, positive controls: the guard must not over-reach ---------------
@@ -2793,9 +2860,16 @@ async def test_auth_401_still_charges_and_emits_no_waiver_attributes() -> None:
     primary = _candidate("anthropic", "claude-test-1")
     same_family = (_candidate("anthropic", "claude-test-2"),)
     chain = _chain(primary, same_family=same_family)
-    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    clock = _FakeClock(0.0)
+    breaker = _retry_breaker_with_llm_policy(
+        max_attempts=3, fail_threshold=1, cooldown_seconds=30.0
+    )
     inner = _MockInnerDispatcher(
-        outcomes=[_FakeProviderStatusError(401), {"result": "candidate-1-ok"}]
+        outcomes=[
+            _FakeProviderStatusError(401),
+            {"result": "candidate-1-ok"},
+            {"result": "primary-recovered"},
+        ]
     )
     tp, exporter = _tracer_provider_with_exporter()
     wrapper = RetryBreakerFallbackDispatcher(
@@ -2804,6 +2878,7 @@ async def test_auth_401_still_charges_and_emits_no_waiver_attributes() -> None:
         fallback_chain=chain,
         tracer_provider=tp,
         sleep_fn=_noop_sleep,
+        monotonic=clock,
     )
 
     await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
@@ -2813,6 +2888,21 @@ async def test_auth_401_still_charges_and_emits_no_waiver_attributes() -> None:
     first = _attempt_spans(exporter)[0].attributes or {}
     assert "retry.breaker_waived.reason" not in first
     assert "retry.breaker_waived.candidate" not in first
+
+    # STRENGTHENED at `B-118` — the recovery-completion positive control that
+    # makes the CHARGE mean something. `fail_threshold=1` so the 401 tripped
+    # the breaker; the charge is only meaningful if it produces a real
+    # cooldown that a real half-open trial can then clear. This is the exact
+    # premise §14.6.3's normative test rests on ("key rotation genuinely
+    # changes the half-open answer"), and it was UNASSERTABLE at `B-116`
+    # because no production path could reach `half_open`.
+    assert charged.state is BreakerState.OPEN
+    assert charged.opened_at == 0.0
+    clock.advance(30.0)
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert charged.state is BreakerState.CLOSED, "the rotated key closes the breaker"
+    assert charged.fail_count == 0
+    assert charged.opened_at is None
 
 
 @pytest.mark.asyncio
@@ -2824,11 +2914,15 @@ async def test_response_parsing_payload_shape_still_charges() -> None:
     primary = _candidate("anthropic", "claude-test-1")
     same_family = (_candidate("anthropic", "claude-test-2"),)
     chain = _chain(primary, same_family=same_family)
-    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    clock = _FakeClock(0.0)
+    breaker = _retry_breaker_with_llm_policy(
+        max_attempts=3, fail_threshold=1, cooldown_seconds=30.0
+    )
     inner = _MockInnerDispatcher(
         outcomes=[
             LLMDispatchPayloadShapeError("Anthropic tool_use block missing string id"),
             {"result": "candidate-1-ok"},
+            {"result": "primary-recovered"},
         ]
     )
     tp, exporter = _tracer_provider_with_exporter()
@@ -2838,6 +2932,7 @@ async def test_response_parsing_payload_shape_still_charges() -> None:
         fallback_chain=chain,
         tracer_provider=tp,
         sleep_fn=_noop_sleep,
+        monotonic=clock,
     )
 
     await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
@@ -2846,6 +2941,16 @@ async def test_response_parsing_payload_shape_still_charges() -> None:
     assert charged.fail_count == 1
     first = _attempt_spans(exporter)[0].attributes or {}
     assert "retry.breaker_waived.reason" not in first
+
+    # STRENGTHENED at `B-118` — the row-2b recovery-completion control. Row
+    # 2b COUNTS precisely because "a half-open trial genuinely could differ";
+    # that clause is now witnessed rather than asserted, by running the trial
+    # and watching a well-formed response close the breaker.
+    assert charged.state is BreakerState.OPEN
+    clock.advance(30.0)
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert charged.state is BreakerState.CLOSED
+    assert charged.fail_count == 0
 
 
 def test_waiver_predicate_refuses_the_memory_family_by_name() -> None:
@@ -2925,12 +3030,16 @@ async def test_memory_store_error_still_charges_end_to_end_via_staircase() -> No
     The assertions are UNCHANGED by the split, and that is the point — the
     (b′) leg must not move the store subtype's disposition, only subtract a
     population from it."""
+    clock = _FakeClock(0.0)
     chain = _chain(_candidate("anthropic", "claude-test-1"))
-    breaker = _retry_breaker_with_llm_policy(max_attempts=2)
+    breaker = _retry_breaker_with_llm_policy(
+        max_attempts=2, fail_threshold=1, cooldown_seconds=30.0
+    )
     inner = _MockInnerDispatcher(
         outcomes=[
             MemoryToolExecutionStoreError("durable store write raised"),
             MemoryToolExecutionStoreError("durable store write raised"),
+            {"result": "store-recovered"},
         ]
     )
     tp, exporter = _tracer_provider_with_exporter()
@@ -2940,6 +3049,7 @@ async def test_memory_store_error_still_charges_end_to_end_via_staircase() -> No
         fallback_chain=chain,
         tracer_provider=tp,
         sleep_fn=_noop_sleep,
+        monotonic=clock,
     )
 
     with pytest.raises(RetryBreakerFallbackExhaustedError):
@@ -2950,6 +3060,20 @@ async def test_memory_store_error_still_charges_end_to_end_via_staircase() -> No
     assert len(inner.calls) == 2
     charged = breaker.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
     assert charged.fail_count == 1
+
+    # STRENGTHENED at `B-118`: the staircase charge site produces a REAL
+    # cooldown that a half-open trial clears — the recovery path reaches the
+    # `B-132` population too, not only the fail-fast site the guard binds.
+    # The disk-full/permission fault this fixture stands for is exactly the
+    # kind a later attempt CAN clear, so recovery completing here is the
+    # correct behaviour and not a residual defect.
+    assert charged.state is BreakerState.OPEN
+    assert charged.opened_at == 0.0
+    clock.advance(30.0)
+    assert await wrapper.dispatch(_binding(), _step(), step_context=_step_context()) == {
+        "result": "store-recovered"
+    }
+    assert charged.state is BreakerState.CLOSED
     for span in _attempt_spans(exporter):
         assert "retry.breaker_waived.reason" not in (span.attributes or {})
 
@@ -3039,4 +3163,472 @@ async def test_waived_exhaustion_is_identical_except_for_the_charge() -> None:
     assert exhausted.attributes["fallback.exhaustion_cause"] == "per-candidate-retry-exhaustion"
 
     for identifier in ("anthropic:claude-test-1", "anthropic:claude-test-2"):
-        assert breaker.get_breaker(BreakerScope.PER_MODEL, identifier).fail_count == 0, identifier
+        candidate_breaker = breaker.get_breaker(BreakerScope.PER_MODEL, identifier)
+        assert candidate_breaker.fail_count == 0, identifier
+        # STRENGTHENED at `B-118` — the exhaustion-identity claim in its
+        # sharpest form. Pre-guard, a fully-waived chain would have walked
+        # every breaker toward a trip, and any that opened would be
+        # unreachable until a cooldown elapsed. Post-guard every breaker is
+        # not merely uncharged but immediately ADMISSIBLE, so the very next
+        # dispatch on this chain proceeds normally — which is what "identical
+        # except for the charge" has to mean once recovery state exists.
+        assert candidate_breaker.should_attempt() is True, identifier
+        assert candidate_breaker.opened_at is None, identifier
+
+
+# ===========================================================================
+# `B-118` / U-RT-154 — the half-open latch, wired.
+#
+# Before this arc `attempt_half_open` had ZERO production call sites, so OPEN
+# was an ABSORBING state for the process lifetime. A green state-machine unit
+# test was NOT the witness — the state machine was already green and the gap
+# was REACHABILITY. Every test below therefore drives the REAL
+# `RetryBreakerFallbackDispatcher.dispatch` composer with an injected clock.
+# ===========================================================================
+
+
+def _outer_spans(exporter: InMemorySpanExporter) -> list[Any]:
+    """EVERY outer composer span, in finish order.
+
+    `_outer_span` returns only the FIRST; several `B-118` witnesses drive the
+    composer more than once against the same clock, so they must aggregate."""
+    return [
+        s
+        for s in exporter.get_finished_spans()
+        if s.name == "harness.runtime.retry_breaker_fallback"
+    ]
+
+
+def _breaker_events(exporter: InMemorySpanExporter) -> list[Any]:
+    """Every `breaker.tripped` event across every outer span, in order.
+
+    C-OD-07 §7.2 fixes ONE event name for all transitions; the
+    `from_state`/`to_state` pair is what discriminates a trip from a recovery
+    from an inconclusive re-arm."""
+    return [e for s in _outer_spans(exporter) for e in s.events if e.name == "breaker.tripped"]
+
+
+def _transitions(exporter: InMemorySpanExporter) -> list[tuple[str, str, int]]:
+    """`(from_state, to_state, trigger_count)` per emitted transition."""
+    out: list[tuple[str, str, int]] = []
+    for event in _breaker_events(exporter):
+        attributes = event.attributes or {}
+        out.append(
+            (
+                str(attributes["harness.breaker.from_state"]),
+                str(attributes["harness.breaker.to_state"]),
+                int(attributes["harness.breaker.trigger_count"]),  # type: ignore[arg-type]
+            )
+        )
+    return out
+
+
+def _skip_reasons(exporter: InMemorySpanExporter) -> list[str]:
+    return [
+        str((e.attributes or {})["retry.skipped.reason"])
+        for s in _outer_spans(exporter)
+        for e in s.events
+        if e.name == "retry.skipped"
+    ]
+
+
+def _tripped_wrapper(
+    outcomes: list[Any],
+    *,
+    clock: _FakeClock,
+    max_attempts: int = 3,
+    fail_threshold: int = 2,
+    cooldown_seconds: float = 30.0,
+    same_family: tuple[ProviderCandidate, ...] | None = None,
+) -> tuple[Any, Any, InMemorySpanExporter, Any]:
+    """A composer whose PRIMARY candidate's breaker is already OPEN.
+
+    The breaker is tripped through `record_failure(now=clock())` — the real
+    transition — so `opened_at` is the honest deadline the composer will read.
+    Returns `(wrapper, registry, exporter, primary_breaker)`."""
+    primary = _candidate("anthropic", "claude-test-1")
+    chain = _chain(
+        primary,
+        same_family=(
+            same_family if same_family is not None else (_candidate("anthropic", "claude-test-2"),)
+        ),
+    )
+    registry = _retry_breaker_with_llm_policy(
+        max_attempts=max_attempts,
+        fail_threshold=fail_threshold,
+        cooldown_seconds=cooldown_seconds,
+    )
+    primary_breaker = registry.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
+    for _ in range(fail_threshold):
+        primary_breaker.record_failure(now=clock())
+    assert primary_breaker.state is BreakerState.OPEN
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=_MockInnerDispatcher(outcomes=outcomes),
+        retry_breaker=registry,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        monotonic=clock,
+    )
+    return wrapper, registry, exporter, primary_breaker
+
+
+# --- AC #3, direction ONE: open -> half_open -> closed ----------------------
+
+
+@pytest.mark.asyncio
+async def test_b118_recovery_open_to_half_open_to_closed_through_the_composer() -> None:
+    """AC #3 direction 1: a REAL end-to-end recovery. While the cooldown is
+    unexpired the tripped candidate is skipped (the pre-`B-118` behaviour,
+    preserved); once it elapses the composer admits ONE half-open trial, the
+    trial succeeds, and the breaker CLOSES — after which the candidate is
+    dispatched normally again.
+
+    This is the assertion `B-116`'s witnesses could not make: before this arc
+    no production path could reach `half_open` at all."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [{"result": "fallback-ok"}, {"result": "primary-recovered"}, {"result": "primary-again"}],
+        clock=clock,
+    )
+
+    # Cooldown unexpired -> skipped, exactly as before `B-118`.
+    clock.advance(10.0)
+    assert await wrapper.dispatch(_binding(), _step(), step_context=_step_context()) == {
+        "result": "fallback-ok"
+    }
+    assert _skip_reasons(exporter) == ["breaker-open"]
+    assert primary_breaker.state is BreakerState.OPEN
+    assert _transitions(exporter) == []
+
+    # Cooldown elapsed -> ONE trial, which succeeds -> CLOSED.
+    clock.advance(25.0)  # now 35.0 >= opened_at 0.0 + 30.0
+    assert await wrapper.dispatch(_binding(), _step(), step_context=_step_context()) == {
+        "result": "primary-recovered"
+    }
+    assert primary_breaker.state is BreakerState.CLOSED
+    assert primary_breaker.fail_count == 0
+    assert primary_breaker.opened_at is None
+    assert _transitions(exporter) == [("open", "half_open", 0), ("half_open", "closed", 0)]
+
+    # Recovered: the next dispatch is ordinary, not a trial.
+    assert await wrapper.dispatch(_binding(), _step(), step_context=_step_context()) == {
+        "result": "primary-again"
+    }
+    assert _transitions(exporter) == [("open", "half_open", 0), ("half_open", "closed", 0)]
+    assert _skip_reasons(exporter) == ["breaker-open"]
+
+
+# --- AC #3, direction TWO: open -> half_open -> open ------------------------
+
+
+@pytest.mark.asyncio
+async def test_b118_re_trip_open_to_half_open_to_open_through_the_composer() -> None:
+    """AC #3 direction 2: the trial FAILS on a charging fault (a raw SDK 401,
+    §14.6.3 row 3), so `record_failure`'s half_open -> open arm fires — an arm
+    that was UNREACHABLE before this arc — and the breaker re-opens against a
+    FRESH deadline, so the immediately-following dispatch is skipped again.
+
+    `trigger_count >= 1` here is the wire discriminator against the
+    INCONCLUSIVE re-arm, which carries 0."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [_FakeProviderStatusError(401), {"result": "fallback-ok"}, {"result": "fallback-again"}],
+        clock=clock,
+    )
+
+    clock.advance(30.0)
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert primary_breaker.state is BreakerState.OPEN
+    assert primary_breaker.opened_at == 30.0  # restamped from the trial failure
+    transitions = _transitions(exporter)
+    assert transitions[0] == ("open", "half_open", 0)
+    assert transitions[1][0] == "half_open"
+    assert transitions[1][1] == "open"
+    assert transitions[1][2] >= 1  # a real re-trip CHARGES
+
+    # Fresh cooldown governs: 20s later is still inside it.
+    clock.advance(20.0)
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert _skip_reasons(exporter)[-1] == "breaker-open"
+    assert len(_transitions(exporter)) == 2  # no new trial was admitted
+
+
+# --- AC #4, the single-trial permit under real concurrency ------------------
+
+
+@pytest.mark.asyncio
+async def test_b118_concurrent_dispatches_share_exactly_one_trial_permit() -> None:
+    """AC #4: three concurrent dispatches against ONE tripped breaker admit
+    exactly ONE half-open trial. The siblings are skipped with
+    `half-open-trial-in-flight` and fall through to the chain.
+
+    The composer, the registry and the breaker are all shared across
+    PARALLELIZATION branches (`asyncio.TaskGroup` / `gather` at
+    `harness_cp.workflow_driver`), so the hazard is the `await` at the
+    provider call, not a data race. The trial's success is gated on an
+    `asyncio.Event` the test releases only after all three coroutines have
+    reached the pre-check, which GUARANTEES the interleaving rather than
+    hoping for it."""
+    clock = _FakeClock(0.0)
+    released = asyncio.Event()
+    trial_entered = asyncio.Event()
+    primary_calls = 0
+
+    class _GatedInner:
+        async def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> Mapping[str, Any]:
+            nonlocal primary_calls
+            model = binding.model_binding.model
+            if model == "claude-test-1":
+                primary_calls += 1
+                trial_entered.set()
+                await released.wait()
+                return {"result": "trial-ok"}
+            return {"result": "fallback-ok"}
+
+    primary = _candidate("anthropic", "claude-test-1")
+    chain = _chain(primary, same_family=(_candidate("anthropic", "claude-test-2"),))
+    registry = _retry_breaker_with_llm_policy(fail_threshold=2, cooldown_seconds=30.0)
+    primary_breaker = registry.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
+    primary_breaker.record_failure(now=0.0)
+    primary_breaker.record_failure(now=0.0)
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=cast(Any, _GatedInner()),
+        retry_breaker=registry,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        monotonic=clock,
+    )
+    clock.advance(30.0)
+
+    async def _one(index: int) -> Mapping[str, Any]:
+        return await wrapper.dispatch(_binding(), _step(), step_context=_step_context(index))
+
+    # Every await is deadline-bounded. Under the P1 mutation (`should_attempt`
+    # reverted to `state is not open`) the siblings JOIN the in-flight trial
+    # and block on `released`, which the test only sets after they return —
+    # so an unbounded wait would HANG rather than fail, and a hanging witness
+    # is not a witness. The deadline converts that regression into a red test.
+    async with asyncio.timeout(10):
+        trial = asyncio.create_task(_one(0))
+        await trial_entered.wait()  # the permit is now held, mid-`await`
+        siblings = asyncio.gather(_one(1), _one(2))
+        await asyncio.sleep(0)  # let both siblings run their pre-check
+        sibling_results = await siblings
+        released.set()
+        trial_result = await trial
+
+    assert primary_calls == 1, "exactly ONE half-open trial call"
+    assert trial_result == {"result": "trial-ok"}
+    assert list(sibling_results) == [{"result": "fallback-ok"}, {"result": "fallback-ok"}]
+    assert _skip_reasons(exporter) == [
+        "half-open-trial-in-flight",
+        "half-open-trial-in-flight",
+    ]
+    assert primary_breaker.state is BreakerState.CLOSED
+
+
+# --- AC #5, the trial is capped at ONE attempt ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_b118_half_open_trial_is_capped_at_one_attempt() -> None:
+    """AC #5: the trial makes exactly ONE call even under `max_attempts=3`.
+
+    `record_failure` on the transient path fires only at escalation/exhaustion,
+    so an uncapped trial would burn up to `max_attempts` PAID calls against a
+    provider the harness believes is down before the breaker re-opened. C9's
+    Pillar-4 contracts ONE trial call."""
+    clock = _FakeClock(0.0)
+    transient = TimeoutError("provider timeout")
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [transient, {"result": "fallback-ok"}],
+        clock=clock,
+        max_attempts=3,
+    )
+    inner = cast(Any, wrapper.inner)
+
+    clock.advance(30.0)
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    primary_attempts = [c for c in inner.calls if c[0].model_binding.model == "claude-test-1"]
+    assert len(primary_attempts) == 1, "the trial is ONE call, not `max_attempts`"
+    # The single capped attempt is `is_last_attempt`, so it exhausts and
+    # CHARGES -> the breaker re-opens rather than stranding in half_open.
+    assert primary_breaker.state is BreakerState.OPEN
+    assert primary_breaker.opened_at == 30.0
+
+
+# --- AC #6, the inconclusive cells: no HALF_OPEN stranding ------------------
+
+
+@pytest.mark.asyncio
+async def test_b118_cell3_waived_fault_during_a_trial_re_arms_rather_than_stranding() -> None:
+    """AC #6 / §14.6.4 cell 3: a WAIVED fail-fast during the trial charges
+    nothing (§14.6.3), so `record_failure` never runs and the machine would be
+    STRANDED in half_open — where `should_attempt()` refuses everyone and
+    `attempt_half_open` returns None for a non-OPEN state. That would be a NEW
+    absorbing state strictly worse than the absorbing OPEN this row removes.
+
+    The ratified disposition (operator, 2026-08-08) is INCONCLUSIVE: return to
+    OPEN with a FRESH cooldown, `fail_count` UNCHANGED, `trigger_count == 0`."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [
+            MemoryToolExecutionInternalError("harness wiring fault"),
+            {"result": "fallback-ok"},
+        ],
+        clock=clock,
+        fail_threshold=2,
+    )
+
+    clock.advance(30.0)
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert primary_breaker.state is BreakerState.OPEN, "NOT stranded in half_open"
+    assert primary_breaker.fail_count == 2, "an inconclusive trial charges nothing"
+    assert primary_breaker.opened_at == 30.0, "FRESH cooldown"
+    assert _transitions(exporter) == [
+        ("open", "half_open", 0),
+        ("half_open", "open", 0),  # trigger_count 0 -> inconclusive, not a trip
+    ]
+    # The waiver's own t1/t2 attributes still ride the inner span unchanged.
+    waived = _attempt_spans(exporter)[0].attributes or {}
+    assert waived["retry.breaker_waived.reason"] == "MemoryToolExecutionInternalError"
+
+
+@pytest.mark.asyncio
+async def test_b118_cell6_audit_signing_hard_failure_during_a_trial_re_arms() -> None:
+    """AC #6 / §14.6.4 cell 6: an audit-signing hard failure propagates out of
+    the attempt loop by design ("NEVER record breaker failure"), so the trial
+    ends with no outcome recorded. The `except BaseException` re-arm is what
+    keeps it from stranding the machine."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [AuditSigningFailedError("kms down")],
+        clock=clock,
+        fail_threshold=2,
+    )
+
+    clock.advance(30.0)
+    with pytest.raises(AuditSigningFailedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert primary_breaker.state is BreakerState.OPEN
+    assert primary_breaker.fail_count == 2
+    assert primary_breaker.opened_at == 30.0
+    assert _transitions(exporter) == [("open", "half_open", 0), ("half_open", "open", 0)]
+
+
+@pytest.mark.asyncio
+async def test_b118_cell7_terminal_hitl_control_flow_during_a_trial_re_arms() -> None:
+    """AC #6 / §14.6.4 cell 7: a terminal HITL gate decision is operator
+    control flow, not a provider result — it propagates untouched and records
+    no breaker outcome, so the trial must be re-armed."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [HITLGateRejectedError("operator rejected")],
+        clock=clock,
+        fail_threshold=2,
+    )
+
+    clock.advance(30.0)
+    with pytest.raises(HITLGateRejectedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert primary_breaker.state is BreakerState.OPEN
+    assert primary_breaker.fail_count == 2
+    assert _transitions(exporter) == [("open", "half_open", 0), ("half_open", "open", 0)]
+
+
+@pytest.mark.asyncio
+async def test_b118_cell8_dispatch_fence_signal_during_a_trial_re_arms() -> None:
+    """AC #6 / §14.6.4 cell 8: `DispatchFenceTrippedSignal` is a
+    `BaseException` precisely so no `except Exception` arm in the attempt loop
+    can see it. The re-arm therefore has to sit on an `except BaseException`
+    arm — an `except Exception` re-arm would leave this cell stranded."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [DispatchFenceTrippedSignal("fence tripped")],
+        clock=clock,
+        fail_threshold=2,
+    )
+
+    clock.advance(30.0)
+    with pytest.raises(DispatchFenceTrippedSignal):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert primary_breaker.state is BreakerState.OPEN
+    assert primary_breaker.fail_count == 2
+    assert _transitions(exporter) == [("open", "half_open", 0), ("half_open", "open", 0)]
+
+
+@pytest.mark.asyncio
+async def test_b118_cell9_cancellation_during_a_trial_re_arms_silently() -> None:
+    """AC #6 / §14.6.4 cell 9: a cancellation re-arms the breaker but emits
+    NOTHING — emitting during shutdown risks masking the cancellation. The
+    state change is asserted; the ABSENCE of the second transition event is
+    what distinguishes this cell from 3 / 6 / 7 / 8."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [asyncio.CancelledError()],
+        clock=clock,
+        fail_threshold=2,
+    )
+
+    clock.advance(30.0)
+    with pytest.raises(asyncio.CancelledError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert primary_breaker.state is BreakerState.OPEN, "NOT stranded in half_open"
+    assert primary_breaker.fail_count == 2
+    assert primary_breaker.opened_at == 30.0
+    assert _transitions(exporter) == [("open", "half_open", 0)], "re-arm emits NOTHING here"
+
+
+# --- AC #7, trial spacing under the fresh-cooldown ratification -------------
+
+
+@pytest.mark.asyncio
+async def test_b118_inconclusive_trials_are_spaced_by_a_fresh_cooldown() -> None:
+    """AC #7 / §14.6.4 cell 3, the operator-ratified FRESH-cooldown half: a
+    waived-fault storm must NOT produce back-to-back trials.
+
+    Preserving the ORIGINAL deadline (the alternative disposition, NOT
+    ratified) would leave it already in the past, so every subsequent dispatch
+    would immediately re-trial and the breaker would throttle nothing. Three
+    dispatches at +1s intervals after the first trial must yield exactly ONE
+    trial, not three."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [
+            MemoryToolExecutionInternalError("harness wiring fault"),
+            {"result": "fallback-ok"},
+            {"result": "fallback-ok"},
+            {"result": "fallback-ok"},
+            {"result": "fallback-ok"},
+        ],
+        clock=clock,
+        fail_threshold=2,
+    )
+
+    clock.advance(30.0)
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert _transitions(exporter) == [("open", "half_open", 0), ("half_open", "open", 0)]
+
+    for _ in range(3):
+        clock.advance(1.0)
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert _transitions(exporter) == [("open", "half_open", 0), ("half_open", "open", 0)]
+    assert _skip_reasons(exporter) == ["breaker-open"] * 3
+    assert primary_breaker.state is BreakerState.OPEN

@@ -18,9 +18,13 @@ Per-step invocation discipline (the body of
   2. Iterate the fallback chain candidates: first ``chain.primary``, then
      advance via ``advance_or_raise`` on per-candidate exhaustion. Cross-
      family transitions surface the C-CP-04 §4.3 attribution flags.
-  3. Per candidate: breaker pre-check via ``breaker.should_attempt()``; on
-     OPEN-and-cooldown-unexpired emit a ``retry.skipped`` event on the outer
-     span and advance to the next candidate.
+  3. Per candidate: breaker pre-check — three-way at ``B-118`` / v1.114.
+     CLOSED proceeds; OPEN attempts a ``attempt_half_open(now=...)`` and, if
+     the cooldown has elapsed, proceeds as the SINGLE half-open trial (one
+     attempt, uncharged if the outcome is inconclusive); otherwise a
+     ``retry.skipped`` event goes on the outer span and the chain advances.
+     A HALF_OPEN breaker means a sibling dispatch holds the trial permit —
+     also ``retry.skipped``, reason ``half-open-trial-in-flight``.
   4. Per-attempt loop (bounded by ``RetryPolicy.max_attempts``): start an
      inner ``harness.runtime.retry_attempt`` span carrying the
      C-CP-03 §3.5 ``retry.*`` 6-attribute namespace; dispatch via
@@ -64,6 +68,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
@@ -86,7 +91,7 @@ from harness_cp.routing_manifest_residence import RetryPolicy, RoutingManifest
 from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
 from harness_cp.validator_fail_transient_staircase import StaircaseStage
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
-from harness_od.harness_breaker_schema import BreakerCause, BreakerScope
+from harness_od.harness_breaker_schema import BreakerCause, BreakerScope, BreakerState
 
 from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_provider
@@ -600,6 +605,22 @@ class RetryBreakerFallbackDispatcher:
         Awaitable sleep function for full-jitter backoff between retry
         attempts. Defaults to ``asyncio.sleep``; tests inject a recording
         no-op to keep async tests fast and deterministic.
+    monotonic :
+        Monotonic clock source for the §14.6 step-4 breaker cooldown
+        (``B-118`` / v1.114). Defaults to ``time.monotonic``; tests inject a
+        controllable fake so the open → half_open → {closed, open} cycle is
+        deterministic — the ``BreakerGuardedSigningBackend`` precedent at
+        ``harness_runtime.config.audit_signing`` (which carries the same
+        injected-clock + single-probe shape for the audit-signing breaker).
+        The clock lives HERE and not on ``BreakerStateMachine`` because the
+        state machine is contractually clock-free (Runtime spec §14.6 step 4;
+        the machine owns only the caller-recorded ``opened_at`` deadline
+        state, which is per-breaker and has nowhere else to live). It is NOT
+        a ``RuntimeConfig`` scalar: C-CP-03 §3.5 defers cooldown values to
+        implementation discretion and the registry already carries the
+        policy, so a config surface would buy nothing. In-memory + monotonic
+        by design — nothing here is persisted, which is the §14.6.3 t4
+        boundary held positively (no durable breaker clock exists).
     routing_manifest :
         The stage-3a-bound ``RoutingManifest`` (``ctx.routing_manifest``).
         Read at dispatch for the U-RT-114 (§14.5.3) per-role MODEL binding:
@@ -634,6 +655,7 @@ class RetryBreakerFallbackDispatcher:
     fallback_chain: FallbackChain
     tracer_provider: Any
     sleep_fn: Callable[[float], Awaitable[None]] = field(default_factory=lambda: asyncio.sleep)
+    monotonic: Callable[[], float] = field(default_factory=lambda: time.monotonic)
     routing_manifest: RoutingManifest | None = None
     routing_resolver: RoutedBindingResolver | None = None
     workload_class: WorkloadClass | None = None
@@ -761,15 +783,49 @@ class RetryBreakerFallbackDispatcher:
                     f"object: {type(breaker_obj).__name__}"
                 )
                 breaker = breaker_obj
-                if not breaker.should_attempt():
+                # `B-118` (§14.6 step 4, §14.6.4): the pre-check is THREE-WAY.
+                # Before v1.114 it was `if not should_attempt(): skip`, and
+                # since nothing ever called `attempt_half_open`, OPEN was an
+                # absorbing state for the process lifetime — the shipped
+                # breaker was a one-way latch, while the contract already
+                # said "state is OPEN and cooldown unexpired".
+                #
+                # No lock: the state machine is touched only from this
+                # composer, and every branch of a PARALLELIZATION /
+                # orchestrator-workers dispatch runs on ONE event loop
+                # (`asyncio.TaskGroup` / `gather` at
+                # `harness_cp.workflow_driver`). The interleaving hazard is
+                # therefore the `await` at the provider call, not a data
+                # race — which is what the permit below closes. (Contrast
+                # `config.audit_signing.BreakerGuardedSigningBackend`, whose
+                # otherwise-identical shape DOES take a `threading.Lock`
+                # because span-end WORKER THREADS sign concurrently.)
+                half_open_trial = False
+                if breaker.state is BreakerState.OPEN:
+                    trial_transition = breaker.attempt_half_open(now=self.monotonic())
+                    if trial_transition is None:
+                        # Cooldown unexpired — the pre-v1.114 skip, unchanged.
+                        skip_reason = "breaker-open"
+                    else:
+                        self._emit_breaker_transition(trial_transition, outer_span)
+                        half_open_trial = True
+                        skip_reason = None
+                elif not breaker.should_attempt():
+                    # HALF_OPEN: a sibling dispatch holds the trial permit.
+                    # The trial is contracted to be ONE call, so this
+                    # candidate is skipped rather than joining it.
+                    skip_reason = "half-open-trial-in-flight"
+                else:
+                    skip_reason = None
+                if skip_reason is not None:
                     outer_span.add_event(
                         "retry.skipped",
                         attributes={
-                            "retry.skipped.reason": "breaker-open",
+                            "retry.skipped.reason": skip_reason,
                             "retry.skipped.candidate": breaker_identifier,
                         },
                     )
-                    last_failure_class = "breaker-open"
+                    last_failure_class = skip_reason
                     last_failure_detail = None
                     candidate = self._advance_or_exhaust(
                         candidate,
@@ -799,19 +855,56 @@ class RetryBreakerFallbackDispatcher:
                     if _on_routed_primary and routed_resolution is not None
                     else None
                 )
+                # `B-118` trial cap (§14.6.4): C9's Pillar-4 contracts ONE
+                # trial call. `record_failure` on the transient path fires
+                # only at escalation/exhaustion, so an uncapped trial would
+                # make up to `max_attempts` PAID calls against a provider the
+                # harness believes is down before the breaker re-opened.
+                effective_policy = (
+                    RetryPolicy(max_attempts=1, backoff=policy.backoff, jitter=policy.jitter)
+                    if half_open_trial
+                    else policy
+                )
                 try:
                     attempt_terminal = await self._run_per_candidate_attempts(
                         binding=binding,
                         step=step,
                         candidate=candidate,
-                        policy=policy,
+                        policy=effective_policy,
                         breaker=breaker,
                         tracer=tracer,
                         outer_span=outer_span,
                         step_context=step_context,
                     )
+                except asyncio.CancelledError:
+                    # §14.6.4 cell 9 — re-arm SILENTLY. Emitting during
+                    # cancellation risks masking shutdown; the cancellation
+                    # itself propagates untouched.
+                    if half_open_trial:
+                        breaker.re_arm_half_open_trial(now=self.monotonic())
+                    raise
+                except BaseException:
+                    # §14.6.4 cells 6-8 — an audit-signing hard failure, a
+                    # terminal HITL control-flow signal, or a
+                    # `DispatchFenceTrippedSignal` (a BaseException, so no
+                    # `except Exception` arm inside the loop sees it) all
+                    # leave the trial without recording an outcome.
+                    if half_open_trial:
+                        self._release_half_open_trial(breaker, outer_span)
+                    raise
                 finally:
                     ROUTED_PRIMARY_SPAN_TRACE.reset(_span_trace_token)
+
+                # §14.6.4 cell 3 — the waived fail-fast. `record_failure` was
+                # not invoked (the §14.6.3 guard waived the charge), so the
+                # machine is STILL half_open and would be stranded there:
+                # `should_attempt()` refuses everyone and `attempt_half_open`
+                # returns None for a non-OPEN state. Re-arming is what keeps
+                # the waiver from manufacturing a worse absorbing state than
+                # the one this row removes. A no-op on cells 1/2/4/5, where
+                # the machine already left half_open.
+                if half_open_trial:
+                    self._release_half_open_trial(breaker, outer_span)
 
                 if attempt_terminal.result is not None:
                     # Success.
@@ -1135,7 +1228,9 @@ class RetryBreakerFallbackDispatcher:
                                 f"{candidate.provider}:{candidate.model}",
                             )
                         else:
-                            transition = breaker.record_failure(cause=breaker_cause)
+                            transition = breaker.record_failure(
+                                cause=breaker_cause, now=self.monotonic()
+                            )
                             if transition is not None:
                                 self._emit_breaker_transition(transition, outer_span)
                         last_failure_class = type(exc).__name__
@@ -1179,7 +1274,9 @@ class RetryBreakerFallbackDispatcher:
                             "retry.fail_class",
                             ValidatorRetryExitClass.TERMINAL_FAIL_EXIT.value,
                         )
-                        transition = breaker.record_failure(cause=breaker_cause)
+                        transition = breaker.record_failure(
+                            cause=breaker_cause, now=self.monotonic()
+                        )
                         if transition is not None:
                             self._emit_breaker_transition(transition, outer_span)
                         last_failure_class = "max-attempts"
@@ -1198,7 +1295,9 @@ class RetryBreakerFallbackDispatcher:
                         inner_span.set_attribute("retry.delay_ms", 0)
                         inner_span.set_attribute("retry.cause_attribution", cause.value)
                         inner_span.set_attribute("retry.fail_class", cause.value)
-                        transition = breaker.record_failure(cause=breaker_cause)
+                        transition = breaker.record_failure(
+                            cause=breaker_cause, now=self.monotonic()
+                        )
                         if transition is not None:
                             self._emit_breaker_transition(transition, outer_span)
                         last_failure_class = cause.value
@@ -1236,6 +1335,17 @@ class RetryBreakerFallbackDispatcher:
             last_failure_class=last_failure_class or "max-attempts",
             last_failure_detail=last_failure_detail,
         )
+
+    def _release_half_open_trial(self, breaker: Any, outer_span: Any) -> None:
+        """Re-arm an INCONCLUSIVE half-open trial and emit its transition
+        (`B-118`, §14.6.4 cells 3 / 6-8).
+
+        A no-op unless the machine is still ``half_open`` — which is exactly
+        the "the trial recorded neither success nor a charging failure" test,
+        encoded as a state read rather than as a second bookkeeping flag."""
+        transition = breaker.re_arm_half_open_trial(now=self.monotonic())
+        if transition is not None:
+            self._emit_breaker_transition(transition, outer_span)
 
     def _emit_breaker_transition(self, transition: Any, parent_span: Any) -> None:
         """Delegate breaker-transition span emission to the registry per
