@@ -1,4 +1,4 @@
-"""Per-deployment-surface sampling mode + 18-entry always-sampled set — U-OD-11.
+"""Per-deployment-surface sampling mode + 19-entry always-sampled set — U-OD-11.
 
 Implements C-OD-09 §9.1 (per-deployment-surface sampling mode), §9.2
 (always-sampled exception set — head=1.0 across all cells), and §9.3
@@ -6,7 +6,7 @@ Implements C-OD-09 §9.1 (per-deployment-surface sampling mode), §9.2
 
 `SamplingMode` enumerates the two per-deployment-surface modes;
 `PER_DEPLOYMENT_SURFACE_SAMPLING` maps each `DeploymentSurface` to its mode.
-`ALWAYS_SAMPLED_EVENT_CLASSES` carries the §9.2 18-entry always-sampled set
+`ALWAYS_SAMPLED_EVENT_CLASSES` carries the §9.2 19-entry always-sampled set
 (head=1.0 across all cells, inviolable per §9.3). `sampling_decision` returns
 `SAMPLE_ALWAYS` for any event in the always-sampled set, `SAMPLE_AT_BASE_RATE`
 otherwise.
@@ -26,7 +26,12 @@ Authority: Implementation_Plan_Operational_Discipline_v2_5.md §3.4.1 U-OD-11
 conformed to OD spec §9.2; all other surfaces preserved verbatim from v2.1
 §3.4.1); Spec_Operational_Discipline_v1_2.md §9 C-OD-09 §9.1 + §9.2 + §9.3
 (preserved verbatim into v1.3 per v1.3 §0.1); ADR-D6 v1.1 §1.3 sampling
-discipline.
+discipline. The §9.2 table's NINETEENTH row (`fallback.exhausted`) is the
+`B-116-t3` leg: `Spec_Operational_Discipline_v1_37.md` §1 amends §9.2 18 → 19 on
+the CP-declares/OD-ingests chain (`Spec_Control_Plane_v1_2.md:410` declares it
+always-sampled; the row was dropped at original OD ingestion while its two
+siblings at CP `:409`/`:411` were absorbed at OD `:521`/`:522`), carried at
+`Implementation_Plan_Operational_Discipline_v2_32.md` U-OD-58.
 
 `SamplingDecision` is declared in-unit: the spec §9.3 / acc #6 commit the two
 sampling-regime outcomes (`SAMPLE_ALWAYS` / `SAMPLE_AT_BASE_RATE`) without
@@ -114,7 +119,7 @@ PER_DEPLOYMENT_SURFACE_SAMPLING: dict[DeploymentSurface, SamplingMode] = {
 # --- §9.2 always-sampled exception set (head=1.0 across all cells) ---------
 
 #: §9.2 verbatim — the always-sampled exception set. Member set conformed to
-#: the §9.2 table (18 rows). Inviolable per §9.3: a hard floor at the
+#: the §9.2 table (19 rows). Inviolable per §9.3: a hard floor at the
 #: deployment-binding layer, not operator-tunable at base-rate.
 ALWAYS_SAMPLED_EVENT_CLASSES: frozenset[str] = frozenset(
     {
@@ -136,13 +141,14 @@ ALWAYS_SAMPLED_EVENT_CLASSES: frozenset[str] = frozenset(
         "validator.fail.*",  # §9.2 row "validator.fail.* at validator.fail.permanence=permanent"
         "managed_agents.runtime",
         "skill.activation",
+        "fallback.exhausted",  # §9.2 row 19 (NEW at OD spec v1.37 — U-OD-58)
     }
-)  # exactly 18 entries per §9.2
+)  # exactly 19 entries per §9.2
 
 
 # --- §9.2 always-sampled lookup at SDK boundary ----------------------------
 #
-# `ALWAYS_SAMPLED_EVENT_CLASSES` above declares the §9.2 18-entry set
+# `ALWAYS_SAMPLED_EVENT_CLASSES` above declares the §9.2 19-entry set
 # verbatim per spec fidelity-grammar, including two wildcard entries
 # (`audit.*` and `validator.fail.*`). At the SDK boundary the sampler
 # receives concrete span names (`"audit.signature.write"`,

@@ -10,6 +10,8 @@ import pytest
 from harness_core import DeploymentSurface, PersonaTier
 from harness_od.observability_matrix import ACTIVE_CELLS, CellID
 from harness_od.sampling_mode import (
+    _ALWAYS_SAMPLED_LITERALS,
+    _ALWAYS_SAMPLED_PREFIXES,
     ALWAYS_SAMPLED_EVENT_CLASSES,
     FILES_OPERATION_KIND_ATTR,
     MEMORY_OPERATION_KIND_ATTR,
@@ -20,7 +22,7 @@ from harness_od.sampling_mode import (
     sampling_decision,
 )
 
-# §9.2 always-sampled member set — the 18 rows, byte-exact per the §9.2 table.
+# §9.2 always-sampled member set — the 19 rows, byte-exact per the §9.2 table.
 _EXPECTED_ALWAYS_SAMPLED: frozenset[str] = frozenset(
     {
         "sandbox.violation",
@@ -41,6 +43,7 @@ _EXPECTED_ALWAYS_SAMPLED: frozenset[str] = frozenset(
         "validator.fail.*",
         "managed_agents.runtime",
         "skill.activation",
+        "fallback.exhausted",  # §9.2 row 19 (NEW at OD spec v1.37 — U-OD-58)
     }
 )
 
@@ -88,13 +91,13 @@ def test_per_surface_sampling_covers_all_surfaces() -> None:
 
 
 # --- acc #3 ----------------------------------------------------------------
-def test_always_sampled_event_classes_cardinality_eighteen() -> None:
-    """`ALWAYS_SAMPLED_EVENT_CLASSES` has cardinality 18 per §9.2."""
-    assert len(ALWAYS_SAMPLED_EVENT_CLASSES) == 18
+def test_always_sampled_event_classes_cardinality_nineteen() -> None:
+    """`ALWAYS_SAMPLED_EVENT_CLASSES` has cardinality 19 per §9.2."""
+    assert len(ALWAYS_SAMPLED_EVENT_CLASSES) == 19
 
 
 def test_always_sampled_event_class_members_byte_exact_per_9_2() -> None:
-    """Member set is byte-exact against the §9.2 table (18 rows)."""
+    """Member set is byte-exact against the §9.2 table (19 rows)."""
     assert ALWAYS_SAMPLED_EVENT_CLASSES == _EXPECTED_ALWAYS_SAMPLED
 
 
@@ -161,6 +164,45 @@ def test_audit_glob_in_always_sampled_set() -> None:
 def test_breaker_tripped_in_always_sampled_set() -> None:
     """`breaker.tripped` is in the always-sampled set per §9.2."""
     assert "breaker.tripped" in ALWAYS_SAMPLED_EVENT_CLASSES
+
+
+# --- U-OD-58 (§9.2 row 19, NEW at OD spec v1.37) ---------------------------
+def test_fallback_exhausted_in_always_sampled_set() -> None:
+    """`fallback.exhausted` is §9.2 row 19 per OD spec v1.37 (`B-116-t3`).
+
+    Declared always-sampled at `Spec_Control_Plane_v1_2.md:410`; the row was
+    dropped at original OD ingestion while its two CP-table siblings
+    (`fallback.triggered` / `breaker.tripped`) were absorbed. The multi-tenant
+    production cell (§10.3 base rate 0.2) documents the production stakes;
+    `sampling_decision` is by contract invariant to its `cell_id`/`base_rate`
+    arguments, so the discrimination here is membership-only — the
+    base-rate-actually-consulted evidence lives at the composite-sampler
+    `base_rate=0.0` witness.
+    """
+    assert "fallback.exhausted" in ALWAYS_SAMPLED_EVENT_CLASSES
+    assert is_always_sampled("fallback.exhausted") is True
+    cell = CellID(
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+        deployment_surface=DeploymentSurface.MANAGED_CLOUD,
+    )
+    assert (
+        sampling_decision(cell, "fallback.exhausted", base_rate=0.2)
+        is SamplingDecision.SAMPLE_ALWAYS
+    )
+
+
+def test_row_19_is_an_unconditional_literal_not_a_prefix() -> None:
+    """§9.2 row 19 resolves through the LITERAL arm — 17 literals + 2 prefixes.
+
+    Row 19 is unconditional: not a wildcard, and not one of the four
+    conditional-by-attribute rows. A member that accidentally acquired a `.*`
+    suffix would silently always-sample every `fallback.exhausted.*`
+    descendant, so the decomposition is asserted on both sides.
+    """
+    assert "fallback.exhausted" in _ALWAYS_SAMPLED_LITERALS
+    assert len(_ALWAYS_SAMPLED_LITERALS) == 17
+    assert _ALWAYS_SAMPLED_PREFIXES == ("audit.", "validator.fail.")
+    assert is_always_sampled("fallback.exhausted.detail") is False
 
 
 # --- B7 §9.2 conditional-by-attribute rows (over-sampling refinement) -------

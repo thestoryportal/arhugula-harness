@@ -200,7 +200,7 @@ _EXPORTS: tuple[SubstrateSeamExport, ...] = (
         cross_axis_edge_targets=("U-CP-54",),
     ),
     SubstrateSeamExport(
-        export_name=("18-entry always-sampled set + 13-entry base-rate set + per-cell envelope"),
+        export_name=("19-entry always-sampled set + 13-entry base-rate set + per-cell envelope"),
         source_unit="U-OD-11 + U-OD-12",
         contract_anchor="C-OD-09 §9.2 + C-OD-10 §10.1",
         consumer_axis=frozenset({ConsumerAxis.PHASE_6_IMPLEMENTATION}),
