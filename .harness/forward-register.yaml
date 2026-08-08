@@ -5490,7 +5490,7 @@ items:
 - id: B-116
   title: 'Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state?'
   status: closed
-  pr: '#1271 (the U-RT-152 impl leg -- Runtime guard + LLMDispatchPayloadShapeInternalError re-type + t1/t2 waived-charge emission; merge commit 3ba68285) + this PR (the B-116-t3 OD leg -- OD spec v1.37 section 9.2 roster 18->19 + plan v2.32 U-OD-58 + the roster/fixture impl). Section 14.6.3 t3-prime required BOTH; with both landed the row closes.'
+  pr: '#1271 (the U-RT-152 impl leg -- Runtime guard + LLMDispatchPayloadShapeInternalError re-type + t1/t2 waived-charge emission; merge commit 3ba68285) + #1272 (the B-116-t3 OD leg -- OD spec v1.37 section 9.2 roster 18->19 + plan v2.32 U-OD-58 + the roster/fixture impl). Section 14.6.3 t3-prime required BOTH; with both landed the row closes.'
   summary: 'THE QUESTION, and this row frames it rather than answering it. When the retry/breaker/fallback
     dispatcher fail-fasts a candidate, it records ONE breaker failure against that candidate''s
     PROVIDER before exiting. GROUNDED BY CONTENT at HEAD 73b0e87b (the inbound note''s ~:1025 is

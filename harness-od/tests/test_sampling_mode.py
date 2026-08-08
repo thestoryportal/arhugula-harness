@@ -173,8 +173,11 @@ def test_fallback_exhausted_in_always_sampled_set() -> None:
     Declared always-sampled at `Spec_Control_Plane_v1_2.md:410`; the row was
     dropped at original OD ingestion while its two CP-table siblings
     (`fallback.triggered` / `breaker.tripped`) were absorbed. The multi-tenant
-    production cell is the discriminating one: its §10.3 base rate is 0.2, so
-    only §9.2 membership guarantees head=1.0 there.
+    production cell (§10.3 base rate 0.2) documents the production stakes;
+    `sampling_decision` is by contract invariant to its `cell_id`/`base_rate`
+    arguments, so the discrimination here is membership-only — the
+    base-rate-actually-consulted evidence lives at the composite-sampler
+    `base_rate=0.0` witness.
     """
     assert "fallback.exhausted" in ALWAYS_SAMPLED_EVENT_CLASSES
     assert is_always_sampled("fallback.exhausted") is True
