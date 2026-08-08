@@ -1470,6 +1470,7 @@ def _stored_engine_class(content: Mapping[str, object]) -> MemoryOperationEngine
 __all__ = [
     "RUN_START_EVENT_KIND",
     "EpisodicMemoryCapture",
+    "MemoryCaptureFailureKind",
     "MemoryCaptureMode",
     "MemoryCaptureReservedActorError",
     "MemoryCaptureResult",
