@@ -27,8 +27,10 @@ Per-step invocation discipline (the body of
      ``self.inner.dispatch(rebound_binding, step)``. On success the breaker
      records success and the result returns; on fail-fast (provider-
      unreachable / payload-shape / auth, B-41 / memory-tool input, B-84)
-     the breaker records failure
-     and the candidate is abandoned; on transient SDK failure the staircase
+     the candidate is abandoned and the breaker records failure UNLESS the
+     fault is a `B-116` §14.6.3 waiver-tuple member (deterministic and
+     harness-internal — abandoned and advanced identically, but not charged);
+     on transient SDK failure the staircase
      advances and either retries (sleeps full-jitter backoff) or escalates.
   5. On ``FallbackChainExhaustedError`` emit ``fallback.exhausted`` on the
      outer span and raise ``RetryBreakerFallbackExhaustedError`` (maps to the
@@ -95,6 +97,7 @@ from harness_runtime.lifecycle.fallback_chain import (
 from harness_runtime.lifecycle.llm_dispatch import (
     ROUTED_PRIMARY_SPAN_TRACE,
     LLMDispatchPayloadShapeError,
+    LLMDispatchPayloadShapeInternalError,
     LLMDispatchProviderUnreachableError,
     RoutedPrimaryResolution,
 )
@@ -287,6 +290,16 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
       this candidate; the outer loop advances).
     - ``LLMDispatchPayloadShapeError`` → ``None`` (fail-fast, abandons this
       candidate; the outer loop advances).
+    - ``LLMDispatchPayloadShapeInternalError`` → ``None`` (fail-fast, `B-116`
+      §14.6.3 row 2a). Admitted BY NAME, never via inheritance: the three
+      PRE-FLIGHT payload-shape raise sites were re-typed OFF
+      ``LLMDispatchPayloadShapeError`` so the breaker-charge waiver can be
+      keyed on the type, and §14.6.3 PINS that fail-fast preservation must
+      not depend on parentage from the charging type (the `B-88` / U-MEM-28
+      route — an inheritance-only realization would silently flip the
+      pre-flight faults to ``TRANSIENT_RETRY`` if parentage later changed).
+      The new type is a sibling of the charging one, so this entry is
+      load-bearing: removing it flips the three pre-flight sites transient.
     - A raw SDK exception with ``.status_code in (401, 403)`` → ``None``
       (fail-fast, B-41 — matches ``RT-FAIL-PROVIDER-AUTH``'s "raise
       unmodified" per §14.5; duck-typed the same way as
@@ -360,6 +373,7 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
         (
             LLMDispatchProviderUnreachableError,
             LLMDispatchPayloadShapeError,
+            LLMDispatchPayloadShapeInternalError,
             MemoryToolExecutionInputError,
             MemoryToolExecutionInternalError,
         ),
@@ -369,6 +383,43 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
     if isinstance(status_code, int) and status_code in (401, 403):
         return None
     return ValidatorRetryExitClass.TRANSIENT_RETRY
+
+
+_BREAKER_CHARGE_WAIVED_TYPES: tuple[type[BaseException], ...] = (
+    LLMDispatchProviderUnreachableError,
+    LLMDispatchPayloadShapeInternalError,
+    MemoryToolExecutionInternalError,
+    MemoryToolExecutionInputError,
+)
+"""The `B-116` four-type harness-internal breaker-charge waiver tuple
+(`Spec_Harness_Runtime_v1.md` v1.112 §14.6.3, ratified Reading (II)).
+
+Enumerated BY NAME, never as a family base — the same subclass-inclusion
+refusal `_classify_provider_exception` already carries for the memory
+family. `MemoryToolExecutionError` and its OTHER subtypes
+(`MemoryToolExecutionDeniedError`, `MemoryToolExecutionStoreError`) are NOT
+waived: they never reach the guarded fail-fast branch anyway (the
+classifier's catch-all routes them to the staircase) and still charge at
+the staircase sites — the declared `B-132` residual, deliberately outside
+this guard's ratified scope.
+
+Membership is the four CONCRETE types `_classify_provider_exception`
+admits to fail-fast, so guard and classifier cannot diverge on a subclass:
+no exception may be admitted to fail-fast via a tuple member yet charged,
+nor the reverse."""
+
+
+def _is_breaker_charge_waived(exc: BaseException) -> bool:
+    """True when `exc` is a member of the §14.6.3 waiver tuple — the fault
+    is deterministic, harness-internal, and NOT attributable to the
+    ``{provider, model}`` the breaker is keyed to, so a half-open trial
+    call could not return a different result.
+
+    A NAMED predicate rather than an inline `match` so the BY-NAME family
+    refusal is directly testable in isolation: the denied / store subtypes
+    never reach the guarded branch in composer flow, so a family-base
+    broadening is killable only at this predicate."""
+    return isinstance(exc, _BREAKER_CHARGE_WAIVED_TYPES)
 
 
 def _classify_breaker_cause(exc: BaseException) -> BreakerCause | None:
@@ -1025,9 +1076,29 @@ class RetryBreakerFallbackDispatcher:
                             "retry.fail_class",
                             ValidatorRetryExitClass.PERMANENT_FAIL_EXIT.value,
                         )
-                        transition = breaker.record_failure(cause=breaker_cause)
-                        if transition is not None:
-                            self._emit_breaker_transition(transition, outer_span)
+                        # B-116 (§14.6.3, ratified Reading (II)): a fault
+                        # charges the provider-model breaker ONLY if a
+                        # half-open trial could return a different result
+                        # than the trip did, attributably to the
+                        # `{provider, model}` the breaker is keyed to. The
+                        # four harness-internal waiver types fail that test,
+                        # so they do NOT charge — but the candidate is still
+                        # abandoned and the chain still advances: the waiver
+                        # changes the CHARGE, never the control flow. t1+t2
+                        # keep the non-charge observable on this same inner
+                        # span (absent by default; present only when waived).
+                        if _is_breaker_charge_waived(exc):
+                            inner_span.set_attribute(
+                                "retry.breaker_waived.reason", type(exc).__name__
+                            )
+                            inner_span.set_attribute(
+                                "retry.breaker_waived.candidate",
+                                f"{candidate.provider}:{candidate.model}",
+                            )
+                        else:
+                            transition = breaker.record_failure(cause=breaker_cause)
+                            if transition is not None:
+                                self._emit_breaker_transition(transition, outer_span)
                         last_failure_class = type(exc).__name__
                         return _PerCandidateTerminal(
                             result=None,
