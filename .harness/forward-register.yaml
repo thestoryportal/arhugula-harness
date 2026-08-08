@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 117
-  open: 0
+  total: 132
+  open: 1
   design_substrate_gated: 0
-  registered_finding: 14
-  operator_gated: 1
+  registered_finding: 29
+  operator_gated: 0
   held: 1
   closed: 101
-  identity_digest: a7449fb3bd0d02e2
+  identity_digest: 7a591125e71202b3
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5489,7 +5489,7 @@ items:
   heading: '### B-115 · Memory capture same-text / same-model-NAME / different-PROVIDER re-entry: a duplicate record JSONL line, then a `TRANSIENT_RETRY` staircase via `MemoryToolExecutionStoreError` *(MEASURED at the `B-84` build leg, PR #1243, W-5 cell (3); ratified by the operator 2026-08-07)*'
 - id: B-116
   title: 'Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state?'
-  status: operator_gated
+  status: open
   summary: 'THE QUESTION, and this row frames it rather than answering it. When the retry/breaker/fallback
     dispatcher fail-fasts a candidate, it records ONE breaker failure against that candidate''s
     PROVIDER before exiting. GROUNDED BY CONTENT at HEAD 73b0e87b (the inbound note''s ~:1025 is
@@ -5511,25 +5511,33 @@ items:
     candidate-independent''. A deterministic, candidate-independent, harness-internal fault is not
     evidence about the PROVIDER''s health -- yet it consumes provider breaker budget, and on a
     repeated internal misconfiguration could open a healthy provider''s breaker. PRE-EXISTING, NOT
-    INTRODUCED by any recent arc; spans C-CP-21 and Runtime section 14.6 (Runtime + CP). NO
-    COMMITMENT to a change is made here. Ratified by the operator 2026-08-07.'
-  close_out: '(1) GROUND FIRST at the then-current HEAD, by content: re-read _classify_provider_exception''s
-    fail-fast membership, _classify_breaker_cause''s duck-typed None return, the record_failure call
-    on the cause-None branch, and record_failure''s own counting semantics -- the whole framing
-    above rests on record_failure counting independently of cause, and that is the first thing to
-    falsify. (2) ESTABLISH THE CONTRACT POSITION BEFORE DECIDING ANYTHING: read C-CP-21 and Runtime
-    section 14.6 for what a breaker failure is DEFINED to mean. If the contract already says, this
-    is a conformance question and not a design fork; if it does not, that silence is itself the
-    finding. (3) ONLY THEN decide a disposition. THE DISCRIMINATOR: does the breaker count ''this
-    CANDIDATE failed to produce a result'' or ''this PROVIDER is unhealthy''? Under the first
-    reading an internal fault legitimately counts -- the candidate did in fact fail, and the
-    fallback chain is right to move on. Under the second it must NOT count, and the fix is to skip
-    record_failure (or record it on a non-provider scope) for the deterministic harness-internal
-    members of the fail-fast set. (4) NOTE THE SCOPE ASYMMETRY when pricing: the same question
-    applies with DIFFERENT force to each of the five fail-fast members -- 401/403 is genuinely a
-    provider-credential fact, unreachable is genuinely a provider fact, payload-shape and the two
-    memory types are harness-side. Any fix must be per-member, not wholesale, or it will silently
-    stop counting real provider auth failures.'
+    INTRODUCED by any recent arc; spans C-CP-21 and Runtime section 14.6 (Runtime + CP). RATIFIED
+    Reading (II) by the operator 2026-08-07 -- a breaker failure means ''this provider-model is
+    unhealthy'', per the council-unanimous DELIVERABLE at
+    .harness/council/b116-breaker-semantics/. APPLIED at the ratification leg: Runtime spec v1.112
+    (NEW section 14.6.3 -- the recovery-model normative test, the 7-row per-member disposition
+    table, the four-type waiver tuple BY NAME, terms t1-t5, the persistence pin, the
+    trip-threshold revisit-trigger) + Runtime plan v2.60 (NEW U-RT-152 -- the guard ~30-35 src
+    lines across retry_breaker_fallback.py + llm_dispatch.py incl. the row-2a re-type to NEW
+    LLMDispatchPayloadShapeInternalError, Probes B/C as assertions, positive controls, the 3/25
+    raise-site partition witness, PD-8). Closes ONLY when BOTH U-RT-152 AND the B-116-t3 OD leg
+    (section 9.2 roster 18->19, a NAMED closure gate per section 14.6.3 t3-prime) merge.'
+  close_out: 'ALL FOUR registered steps EXECUTED. (1)+(2) at the grounding leg (main 35afeda1):
+    membership, duck-typed None return, cause-None charge and count-regardless-of-cause all
+    re-verified by content; the contract found SILENT everywhere -- the silence was the finding.
+    (3) decided via the operator-convened FULL council (E1 primaries C9/C11 -> consultants C1/C7
+    -> cross-read -> E2 adversarial 8 findings incl. one halt-class -> operator-authorized E2b
+    reconcile; UNANIMOUS) and operator ratification 2026-08-07: Reading (II). (4) honored
+    PER-MEMBER at spec section 14.6.3''s 7-row table -- 401/403 and the 25 response-parsing
+    payload-shape sites STILL CHARGE; the four harness-internal types are WAIVED by name.
+    REMAINING: the U-RT-152 impl leg (plan v2.60 -- guard + re-type + witnesses incl. Probes B/C
+    as assertions and the raise-site partition witness); then the B-116-t3 OD leg (section 9.2
+    roster 18->19 + sampling fixtures, priced at C-c7-reconcile.md) -- the row closes only when
+    BOTH merge. SEQUENCED AFTER: B-115 (b-prime) -- its type joins the waiver tuple only on
+    confirmed determinism at its own build (racy => section 14.6.3 row 6 VOID + C5 reroute).
+    FIFTEEN forward rows B-118..B-132 minted at the ratification-leg PR -- B-118..B-131 from
+    the DELIVERABLE''s forward-row enumeration, B-132 the catch-all residual surfaced at the
+    leg''s fresh-context review.'
   council: 'NO at registration -- the row frames a question and commits to nothing, so there is no decision
     for voices to disagree about yet. CONDITIONALLY YES at step (3), and the tension is nameable in
     advance: changing what counts toward a breaker trades control-plane reliability semantics (C1/C9
@@ -5537,8 +5545,13 @@ items:
     robustness (C11 -- a breaker that over-counts opens a healthy provider on the operator''s own
     misconfiguration). Convene ONLY if step (2) finds the contract silent AND step (3) leans toward
     changing the counting rule; if C-CP-21 or Runtime section 14.6 already settles the meaning, this
-    is conformance work and owes no convening.'
-  heading: '### B-116 · Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state? *(pre-existing; spans C-CP-21 + Runtime §14.6; the row frames the QUESTION only — ratified by the operator 2026-08-07)*'
+    is conformance work and owes no convening. RESOLVED: step (2) found the contract SILENT and
+    step (3) leaned toward changing the counting rule, so the condition FIRED -- the operator
+    convened the FULL workflow (not merely the conditional dyad) and it ran to a UNANIMOUS
+    corrected package; the nameable C1/C9-vs-C11 tension resolved in favor of reading (II) with
+    C9''s and C11''s conditional sign-offs honored structurally (the t3 closure gate + the
+    trip-threshold revisit-trigger at section 14.6.3).'
+  heading: '### B-116 · Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state? *(pre-existing; spans C-CP-03 §3.4+§3.5 + Runtime §14.6; RATIFIED Reading (II) 2026-08-07 — spec v1.112 + plan v2.60 landed; closes at U-RT-152 + the B-116-t3 leg)*'
 - id: B-117
   title: Duplicate pytest test-file basenames across workspace packages silently drop witnesses from collection
   status: registered_finding
@@ -5583,3 +5596,613 @@ items:
     tradeoff is inner-loop cost versus feedback latency (close-out step 3), which is a single-domain
     judgment, not a nameable dyad. Route to a single voice plus advisor() if it is contested at all.'
   heading: '### B-117 · Duplicate pytest test-file BASENAMES across workspace packages silently drop witnesses from collection, and nothing guards against it *(lifted to its own row 2026-08-07 from the `B-112` close-out''s registered ADJACENT INFRA GAP, per that row''s own "a future infra arc may lift it to its own row")*'
+- id: B-118
+  title: 'The half-open latch is dead code, so OPEN is an absorbing breaker state for the process lifetime'
+  status: registered_finding
+  summary: 'WHAT IT IS. BreakerStateMachine.attempt_half_open()
+    (harness-runtime/src/harness_runtime/lifecycle/retry_breaker.py:289) has ZERO production call sites
+    — the only three occurrences across every harness-*/src tree are two docstrings (:51, :201) and the
+    definition itself (:289), re-verified at HEAD this session. should_attempt() (:309-311) is a pure
+    state read that holds no clock, and RuntimeRetryBreaker.get_breaker (:379-400) caches breakers
+    identity-stable for the process. Therefore OPEN is an ABSORBING state for the process lifetime at
+    HEAD — the shipped breaker is a one-way latch. The contract already writes text for the transition
+    the runtime never performs: OD spec v1.32 §7.1 names the "caller-driven open → half_open
+    cooldown-elapsed transition" (design-substrate/Spec_Operational_Discipline_v1_32.md:46), and
+    record_failure''s own half_open → open arm (retry_breaker.py:239-251) is unreachable for the same
+    reason. PRIORITY RAISED, AND WHY. This was C9''s A1 recommendation 3 (register separately, do not
+    fold into B-116). At the E2b reconcile it was raised to the highest-priority forward row by finding
+    F-06: B-116''s ratified normative test is stated over exactly this path — "a fault charges the
+    provider-model breaker only if a half-open trial call could return a different result than the trip
+    did, for a reason attributable to the {provider, model} the breaker is keyed to." The test is not
+    void (OD §7.1 contracts the transition, so it stands as design intent), but B-116 now depends on a
+    recovery path with no production caller. C9 stated the dependency direction plainly at cross-read:
+    ratifying a reading whose cost is a function of the latch ratifies the latch''s consequences without
+    ratifying the latch. SURFACED AT THE B-116 COUNCIL DELIBERATION, C9 A1 primary recommendation 3,
+    priority RAISED at the E2b reconcile per adversarial finding F-06, 2026-08-07.'
+  close_out: '(1) Re-verify zero production call sites and that get_breaker still returns identity-stable
+    machines. (2) Decide who holds the clock — the state machine deliberately holds none
+    (retry_breaker.py:290-296 assigns it to the L8 orchestrator), so the caller must thread one; C9''s
+    Pillar-4 requirement is half-open after the cooldown, one trial call, close on success, re-open on
+    failure, which attempt_half_open / record_success / record_failure already implement. (3) Wire it at
+    or beside the breaker pre-check (retry_breaker_fallback.py:674). (4) Witness both directions — a
+    real open → half_open → closed recovery AND an open → half_open → open re-trip; a green unit test on
+    the state machine alone is not the witness, because the state machine is already green and the gap
+    is reachability. (5) Re-ground B-116''s witnesses — C9''s A1 recommendation 2 forbade asserting a
+    half-open path while it is unreachable, so B-116 asserts fail_count == 0 and state is CLOSED
+    instead; once this row lands those may be strengthened, and they should be, deliberately. WHAT WOULD
+    FALSIFY IT. A production call site appearing (then the row is already closed), or a decision that
+    absorbing-OPEN is intentional — in which case OD §7.1''s transition text and B-116''s normative test
+    both need amending, which is a Class 1 design-substrate route, not an impl fix.'
+  council: 'No at registration. A single-domain C9 reliability-mechanism gap with no nameable cross-domain
+    tension — the mechanism, the contract text, and the recovery model are all in one voice''s lineage.
+    Conditionally yes only if step (2) proposes a durable cooldown clock: that re-opens the persistence
+    tension B-116 term t4 pinned (a durable breaker opened by a fault the operator cannot see survives
+    the restart the operator reaches for first), which is a genuine C9 ⊥ C11 dyad.'
+  heading: '### B-118 · The half-open latch is dead code, so `OPEN` is an absorbing breaker state for the
+    process lifetime *(surfaced at the B-116 council deliberation (C9), 2026-08-07)*'
+- id: B-119
+  title: 'No per-provider breaker is constructed anywhere, so BreakerScope.PER_PROVIDER is a
+    declared-but-unbuilt scope'
+  status: registered_finding
+  summary: 'WHAT IT IS. BreakerScope declares two values — PER_MODEL and PER_PROVIDER
+    (harness-od/src/harness_od/harness_breaker_schema.py:105-112) — and both are contract-declared: CP
+    §3.5 gives harness.breaker.scope ∈ {per_model, per_provider}
+    (design-substrate/Spec_Control_Plane_v1_2.md:402, re-tabled at Spec_Control_Plane_v1_3.md:75) and OD
+    §7.1 mirrors it (Spec_Operational_Discipline_v1_32.md:38). The only breaker constructed anywhere is
+    PER_MODEL, at retry_breaker_fallback.py:662-665, keyed f"{candidate.provider}:{candidate.model}"
+    (:662). C9 records this as his own FM-O (single-breaker-scope), live at HEAD. WHY IT MATTERS, IN
+    B-116''S OWN TERMS. With no provider-scope aggregation, the only provider-wide health signal an
+    operator can get today is "every per-model breaker in the chain opened" — which is precisely the
+    signal a candidate-independent fault manufactures. B-116''s executed Probe B showed one dispatch
+    burning one failure on every chain breaker across both providers, and Probe C showed fail_threshold
+    repeats opening them all. So the absent scope is not merely unbuilt; its absence is what let a
+    config-shaped fault imitate a provider outage. SURFACED AT THE B-116 COUNCIL DELIBERATION, C9 A1
+    primary (FM-O), re-registered at the E2b reconcile as R2, 2026-08-07.'
+  close_out: '(1) Re-verify that PER_MODEL is still the only constructed scope. (2) Decide whether PER_PROVIDER
+    should exist at all — either build it (a second get_breaker(BreakerScope.PER_PROVIDER, provider)
+    charge alongside the per-model one, with its own threshold and its own trip semantics) or record the
+    enum member as deliberately forward-only in the same shape OD v1.32 used for capability_shortfall
+    (Spec_Operational_Discipline_v1_32.md:50). Do not leave it declared-and-silent. (3) If built, price
+    the B-116 interaction explicitly: the ratified guard is stated on record_failure at
+    retry_breaker_fallback.py:1028, and a second charge site must inherit the same negative predicate —
+    otherwise the four demoted harness-internal members re-enter the breaker through the provider scope
+    and B-116 is silently undone. (4) Witness scope discrimination at the emission, which today can only
+    ever report per_model. (5) Note the coupling to B-125 — emit_breaker_transition_event defaults
+    tool_id to the breaker key only at PER_MODEL scope (retry_breaker.py:459-461), so constructing a
+    second scope changes which trips carry that default. WHAT WOULD FALSIFY IT. A PER_PROVIDER
+    construction site appearing anywhere in harness-*/src.'
+  council: 'No at registration — nothing is decided here. Conditionally yes at step (2): building a second
+    breaker scope trades detection breadth (C9 — a provider outage should be visible as one fact, not
+    inferred from N per-model facts) against operator recoverability under a materially wider blast
+    radius (C11 — one provider-scope OPEN disables every model of that provider at once, and with B-118
+    unfixed it does so irreversibly). That is nameable in advance and dyadic.'
+  heading: '### B-119 · No per-provider breaker is constructed anywhere, so `BreakerScope.PER_PROVIDER` is a
+    declared-but-unbuilt scope *(surfaced at the B-116 council deliberation (C9), 2026-08-07)*'
+- id: B-120
+  title: 'The breaker-transition emission passes no permanent_fail_repeats and no model_version, so two
+    declared attributes have no producer'
+  status: registered_finding
+  summary: 'WHAT IT IS. RetryBreakerFallbackDispatcher._emit_breaker_transition
+    (retry_breaker_fallback.py:1130-1136) calls emit_breaker_transition_event(transition, parent_span)
+    positionally and passes none of the three optional correlation keywords the registry accepts —
+    permanent_fail_repeats, tool_id, model_version (retry_breaker.py:430-437). BreakerTransition itself
+    carries no field for any of them (retry_breaker.py:183-189). Two of the three are therefore dead at
+    every shipped trip: harness.breaker.permanent_fail_repeats, the declared C10 gating signal ("Whether
+    this trip is from repeated C5 permanent-fail-exits — the C10 gating signal",
+    Spec_Operational_Discipline_v1_32.md:42; CP §3.5 Spec_Control_Plane_v1_2.md:402), and
+    harness.breaker.model_version (Spec_Operational_Discipline_v1_32.md:44). C9 names this his own FM-Q,
+    live. THE ONE-THIRD CORRECTION, CARRIED RATHER THAN DROPPED. C9''s A1 asserted all three are
+    vacuous. That is true of the call, and false on the wire for tool_id: emit_breaker_transition_event
+    sets effective_tool_id = transition.identifier whenever tool_id is None at PER_MODEL scope
+    (retry_breaker.py:459-461), with the default stated as contract in the docstring (:445-446). C7
+    repeated the "never populated" claim at A2, C11 falsified it at cross-read, and C7 formally withdrew
+    it at E2b. Since PER_MODEL is the only constructed scope (B-119), every shipped trip already emits
+    harness.breaker.tool_id = "provider:model". That half is B-125''s row, not this one. WHY IT MATTERS
+    DIRECTIONALLY. C9''s warning, not a slogan: the fail-fast branch maps to PERMANENT_FAIL_EXIT
+    (retry_breaker_fallback.py:1024-1027), so the moment anyone wires permanent_fail_repeats — the
+    natural follow-on — it begins gating on exactly the branch B-116 re-scoped. Under the rejected
+    reading (I) that would have driven C10''s gate_combination to gate a healthy model+tool combination
+    off a harness config bug. Reading (II)-as-ratified makes the signal more meaningful, not less, but
+    the sequencing is load-bearing. SURFACED AT THE B-116 COUNCIL DELIBERATION, C9 A1 primary refinement
+    4 (FM-Q), re-registered at the E2b reconcile as R3, 2026-08-07.'
+  close_out: '(1) Re-verify that the call site passes no keywords and that BreakerTransition still has no carrier
+    fields. (2) Decide per attribute whether a real producer exists — permanent_fail_repeats needs
+    per-cause failure history the state machine does not keep (the same gap FIVE_XX_STREAK already
+    carries in-code at harness_breaker_schema.py:145-149), whereas model_version needs a binding-side
+    value the dispatcher demonstrably has. These are not one task. (3) For any attribute with no
+    producer, either wire it or record it as a forward-compatible slot in the shape OD v1.32 used for
+    capability_shortfall (Spec_Operational_Discipline_v1_32.md:50) — declared-and-dead-and-undocumented
+    is the state to leave. (4) Sequence AFTER B-116''s guard lands, per C9''s own directional warning
+    above. (5) Witness a trip carrying each newly-populated attribute, and a trip that legitimately
+    omits it (the attributes are optional by contract, and absent is a meaningful value here). WHAT
+    WOULD FALSIFY IT. A producer already existing for either attribute on some path this search missed.'
+  council: 'No. Populating declared-but-unset attributes inside a cleared schema is adjudicated by the attribute
+    owner (C7/OD); there is no cross-domain tradeoff to name. Route to a single voice plus advisor() if
+    step (2) is contested.'
+  heading: '### B-120 · The breaker-transition emission passes no `permanent_fail_repeats` and no
+    `model_version`, so two declared attributes have no producer *(surfaced at the B-116 council
+    deliberation (C9), 2026-08-07)*'
+- id: B-121
+  title: 'LLMDispatchProviderUnreachableError means UNREGISTERED at all three raise sites, and the misleading
+    name is a demonstrated defect vector'
+  status: registered_finding
+  summary: 'WHAT IT IS. The type is named Unreachable; all three of its raise sites are harness-side registry
+    lookups that never contact a provider. Counted at HEAD: exactly 3 raise
+    LLMDispatchProviderUnreachableError sites in
+    harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py — :1525 (provider_name not in
+    self.providers, an in-process dict), :1549 (_PROVIDER_OPERATIONS.get(...) is None, whose own comment
+    at :1546-1548 reads "Defensive — every key in self.providers is one of the three constructed at
+    stage 3a per C-RT-05"), and :1865 (the terminal else of the isinstance adapter-arm chain). The class
+    docstring is explicit: "Raised when binding.model_binding.provider resolves to a provider absent
+    from ctx.providers" (:184-193). The semantics are unregistered, not unreachable. WHY IT IS A DEFECT
+    AND NOT A NIT. The name is the defect vector, demonstrably. It misled the B-116 fork filing''s §5
+    table and all four council voices into keeping member #1 counting through A1 and the entire
+    cross-read; the adversarial leg''s halt-class finding F-01 demoted it on raise-site evidence, and C9
+    recorded the correction against himself: "This is a defect I authored — my A1 row 1 came from the
+    type''s NAME, not its raise sites." Under the ratified recovery-model test a half-open trial
+    re-executes an in-process dict built once at bootstrap and re-fails identically for the process
+    lifetime. Genuine provider-down never travels as this type at all: a real network fault raises the
+    provider SDK''s own exception, carries no .status_code, falls to the catch-all TRANSIENT_RETRY
+    (retry_breaker_fallback.py:371) and charges the breaker at :1072/:1091, outside the branch B-116
+    touches. THIS IS A CLASS 2 BACK-FLOW, AND THE ROW SAYS SO RATHER THAN WALKING IT. The type maps to
+    the RT-FAIL-PROVIDER-UNREACHABLE fail-class token per C-RT-14 (docstring :189-190), and that token
+    is carried in cleared design-substrate — Runtime §C-RT-16''s fail-class narrative propagates it
+    through the wrapper (design-substrate/Spec_Harness_Runtime_v1.md:4194). Renaming the Python type is
+    code-local; renaming or re-taxonomising the token is a design-substrate/ change and routes as a
+    Class 2 fork per root CLAUDE.md §4.3, with the taxonomy value owned by C5/C7/OD — not by an impl
+    leg. Status stays registered_finding; the fork route is named here, not taken. SURFACED AT THE B-116
+    COUNCIL DELIBERATION, C9 E2b reconcile R4, on adversarial finding F-01, 2026-08-07.'
+  close_out: '(1) Re-verify the three raise sites and that none contacts a provider. (2) Decide the scope: (a)
+    rename the Python type only, keeping RT-FAIL-PROVIDER-UNREACHABLE — cheapest, but leaves the
+    operator-facing token still misleading, which is most of the harm; (b) mint a distinct
+    RT-FAIL-PROVIDER-UNREGISTERED token and re-map, which is the design-substrate change. (3) Route (b)
+    as a Class 2 fork against the C-RT-14 taxonomy BEFORE any code lands (X-AL-3 — no silent H_T design
+    extension at Phase 7). (4) Do not re-litigate B-116: member #1''s demotion stands on raise-site
+    evidence regardless of what the type is called. (5) Note the sibling — B-122 is the same raise
+    sites'' other half (should this fault be discoverable at bootstrap at all). WHAT WOULD FALSIFY IT. A
+    fourth raise site that does contact a provider (then the type is genuinely heterogeneous and needs a
+    split, not a rename — the B-116 member-#2 shape).'
+  council: 'No. The substantive question — does it count toward the breaker — was settled at B-116 on evidence.
+    What remains is a naming/taxonomy call inside a contract with a named owner, plus a routing decision
+    this row already names.'
+  heading: '### B-121 · `LLMDispatchProviderUnreachableError` means **unregistered** at all three raise sites,
+    and the misleading name is a demonstrated defect vector *(surfaced at the B-116 council deliberation
+    (C9 E2b reconcile, on adversarial finding F-01), 2026-08-07)*'
+- id: B-122
+  title: 'Nothing validates at bootstrap that every fallback-chain candidate names a registered provider'
+  status: registered_finding
+  summary: 'WHAT IT IS. The same three raise sites that ground B-121 establish the shape: a fallback-chain
+    candidate naming a provider absent from ctx.providers is discovered at dispatch time, per dispatch,
+    as a runtime exception (llm_dispatch.py:1525) — and, after B-116, as one that charges no health
+    counter at all. Nothing validates the chain against the registry earlier. The comment at
+    llm_dispatch.py:1546-1548 records that the provider set is fixed at stage 3a per C-RT-05, so the
+    check is in principle decidable before any dispatch runs: both the chain and the registry are known.
+    C9''s framing — "config faults fail at stage 3a, not at a runtime health counter" — and he assigned
+    the surface to C1/C11 rather than authoring it. STATED HONESTLY: THIS ROW IS THINNER THAN ITS
+    SIBLINGS. C9 registered it in a single line at the E2b reconcile, with no probe run, no venue
+    chosen, and no shape priced. Everything above beyond the raise-site facts is this row observing that
+    the check is decidable — not a council finding, and not a designed proposal. It is registered so the
+    observation is queryable, not because it arrived costed. Read it as a question, not a plan. SURFACED
+    AT THE B-116 COUNCIL DELIBERATION, C9 E2b reconcile R5, on adversarial finding F-01, 2026-08-07.'
+  close_out: '(1) Ground the bootstrap sequence first — where the fallback chain is composed relative to where
+    providers is constructed, and whether a candidate can enter a chain after bootstrap. It can,
+    partially: _advance_or_exhaust traverses a per-dispatch effective chain that may be role-augmented
+    rather than the stage-bound one (retry_breaker_fallback.py:878-883), which bounds how total a
+    bootstrap check can be. Answer this before pricing anything. (2) Decide the failure venue, and
+    answer the counter-argument first: the class docstring names "Ollama-degraded path skipped
+    registration" as an expected case (llm_dispatch.py:186-187) — if skipping registration is a
+    supported deployment shape, a hard bootstrap refusal is wrong, and the correct answer is a startup
+    diagnostic, not a gate. (3) Price whatever survives (2). (4) Witness with a configuration naming an
+    unregistered provider, asserting the chosen venue fires and that a legitimately degraded deployment
+    still boots. WHAT WOULD FALSIFY IT. Step (2) can kill the row outright, and that is a real outcome
+    rather than a formality — the degraded-provider shape is sanctioned by the type''s own docstring.
+    Step (1) can also narrow it to near-nothing if augmented chains make the check substantially
+    partial.'
+  council: 'No at registration — the row is a question with no priced alternatives. Conditionally yes at step
+    (2), and only if step (1) finds the check can be made total: a bootstrap hard-fail trades fail-early
+    configuration hygiene (C1/C9) against the degraded-provider local-deployment shape the docstring
+    already sanctions (C11). Do not convene on the current thin state.'
+  heading: '### B-122 · Nothing validates at bootstrap that every fallback-chain candidate names a
+    **registered** provider *(surfaced at the B-116 council deliberation (C9 E2b reconcile, on
+    adversarial finding F-01), 2026-08-07)*'
+- id: B-123
+  title: 'The tail-keep breaker trigger matches a SPAN NAME while the breaker emits a span EVENT, so the
+    trigger may be inert'
+  status: registered_finding
+  summary: 'WHAT IT IS. is_classification_trigger matches the §10.2 breaker trigger on the span name: if name ==
+    BREAKER_TRIPPED_SPAN_NAME (harness-od/src/harness_od/tail_keep_classification.py:94-95 — re-grounded
+    at HEAD; C7 cited :92-93, which at HEAD is the sibling SANDBOX_VIOLATION_SPAN_NAME arm). The real
+    breaker emission is a span event on a parent span: parent_span_ref.add_event(name="breaker.tripped",
+    attributes=attributes) (harness-od/src/harness_od/harness_breaker_schema.py:282, with the shape
+    committed in the function docstring at :236-243). If no span is ever named breaker.tripped, the
+    §10.2 trigger is inert on the dispatch path — and every claim about breaker-trip visibility at
+    tail-sampled production surfaces is smaller than either B-116 primary assumed. C7 FILED THIS AS A
+    PROBE, NOT A FINDING — PRESERVED VERBATIM HERE. His own words: "I surface this as a probe, not a
+    finding — it needs a positive-control run before anyone cites it." That framing is load-bearing and
+    is not upgraded by registration. The row exists so the probe is queued, not so the conclusion can be
+    cited. SURFACED AT THE B-116 COUNCIL DELIBERATION, C7 A2 consultant registered adjacency 1, carried
+    as rider (b) of the B-116-t3 leg, 2026-08-07.'
+  close_out: '(1) RUN THE POSITIVE CONTROL FIRST. Drive a real breaker trip through the tail-keep processor and
+    observe whether the trace is preserved. Grep proves presence; only the run proves behaviour, and
+    this row is entirely about behaviour. (2) If inert, decide the repair — match the event name as well
+    as the span name, or emit a span so named. (3) Widen the probe by one arm: the identical
+    span-name-only shape governs sandbox.violation (tail_keep_classification.py:92-93), so cover both
+    rather than assuming the sibling is fine. (4) Note the B-116-t3 interaction: C7''s E2b argument for
+    pinning fallback.exhausted to the §9.2 floor leaned on head=1.0 precisely because the tail-keep
+    mitigation might be inert. If this probe returns the trigger fires, t3''s merits argument changes —
+    it does not evaporate (a head=1.0 guarantee does not depend on a trigger), but the row it rests on
+    becomes weaker and should be re-stated rather than carried.'
+  council: 'No. A probe with a binary answer and a named positive control. Convene nothing until it has run; if
+    it returns inert, the repair is single-domain (C7 owns both the predicate and the emission shape).'
+  heading: '### B-123 · The tail-keep breaker trigger matches a **span name** while the breaker emits a span
+    **event**, so the trigger may be inert *(surfaced at the B-116 council deliberation (C7 A2
+    consultant, registered adjacency 1), 2026-08-07)*'
+- id: B-124
+  title: 'validator.fail.permanence is never set on any span, so its OD 9.2 always-sampled row and its 10.2
+    tail-keep trigger are both inert'
+  status: registered_finding
+  summary: 'WHAT IT IS. Two live surfaces read this attribute. OD §9.2''s always-sampled floor carries the row
+    "validator.fail.* at validator.fail.permanence=permanent"
+    (design-substrate/Spec_Operational_Discipline_v1_2.md:530), realized in code at
+    harness-od/src/harness_od/sampling_mode.py:136. is_classification_trigger''s §10.2 row-1 arm reads
+    the same attribute (tail_keep_classification.py:58 declares the key, :99 compares it). The value is
+    derived by validator_fail_permanence(fail_class)
+    (harness-cp/src/harness_cp/validator_fail_taxonomy.py:169-176) and declared in the CP schema at
+    :149. But the function has zero call sites across harness-{runtime,cp,od}/src, and nothing anywhere
+    sets "validator.fail.permanence" as a span attribute (searched at HEAD). Both rows are therefore
+    inert on the dispatch path. ONE REFINEMENT THE COUNCIL DID NOT CARRY, ADDED BY DIRECT READ AT HEAD.
+    There is exactly one structured carrier of the value:
+    ReplaySemanticDivergenceError.validator_fail_permanence: str = "permanent"
+    (harness-od/src/harness_od/idempotency_join_dedup.py:361-368, per §14.5.3). It is a frozen Pydantic
+    record field, not an OTel span attribute — so neither the attribute-reading tail-keep predicate nor
+    the always-sampled lookup can see it. The finding stands; its precise statement sharpens from
+    nothing carries the value to nothing carries it on a span, which is what the two readers require.
+    SURFACED AT THE B-116 COUNCIL DELIBERATION, C7 A2 consultant registered adjacency 2, carried as
+    rider (c) of the B-116-t3 leg, 2026-08-07.'
+  close_out: '(1) Re-verify zero span-attribute set sites and that the derivation function still has no callers.
+    (2) Determine whether a validator-fail span or event is emitted at all on any live path. If none is,
+    this row is about a whole missing emission rather than one unset attribute, and it must be re-scoped
+    upward before it is priced — fixing the attribute on a span that never opens is motion, not
+    progress. (3) If an emission exists, wire the derived attribute at it and witness that the §9.2
+    always-sampled lookup and the §10.2 trigger both fire, by execution rather than by grep. (4) Carry
+    it as rider (c) of the B-116-t3 leg, per C7''s own registration — t3 is the arc that opens OD §9.2,
+    and touching the table twice is the waste to avoid. WHAT WOULD FALSIFY IT. An emission site existing
+    on a path this search missed — the search covered harness-{runtime,cp,od}/src only.'
+  council: 'No. Wiring a declared-but-unset attribute inside a cleared schema, with a named owner (C7/OD). The
+    only judgement is step (2)''s scope question, which grounding answers rather than deliberation.'
+  heading: '### B-124 · `validator.fail.permanence` is never set on any span, so its OD §9.2 always-sampled row
+    and its §10.2 tail-keep trigger are both inert *(surfaced at the B-116 council deliberation (C7 A2
+    consultant, registered adjacency 2), 2026-08-07)*'
+- id: B-125
+  title: 'harness.breaker.tool_id is a homonym-in-waiting: it echoes the breaker KEY at every shipped trip
+    while its contract gloss promises a tool identity'
+  status: registered_finding
+  summary: 'WHAT IT IS. The attribute is declared at OD §7.1 as "Specific tool ID the failures correlate with
+    (when scope is per-model and failures correlate with a specific tool)"
+    (design-substrate/Spec_Operational_Discipline_v1_32.md:43) and at CP §3.5 as "per-model scope
+    correlation" (design-substrate/Spec_Control_Plane_v1_2.md:402); it sits in the nine-member
+    HARNESS_BREAKER_ATTRIBUTES tuple at harness-od/src/harness_od/harness_breaker_schema.py:98
+    (re-grounded at HEAD — C7 cited :101, which at HEAD is harness.breaker.cooldown_ms). What it
+    actually carries is the breaker key: RetryBreakerRegistry.emit_breaker_transition_event sets
+    effective_tool_id = transition.identifier whenever tool_id is None at PER_MODEL scope
+    (harness-runtime/src/harness_runtime/lifecycle/retry_breaker.py:459-461), with the default stated as
+    contract in the docstring (:445-446). Since PER_MODEL is the only scope constructed (B-119), every
+    shipped trip emits harness.breaker.tool_id = "provider:model". THE CORRECTION CHAIN, RECORDED
+    BECAUSE IT IS THE ROW''S WHOLE SUBSTANCE. C7 proposed at A2 populating the attribute with a real
+    tool id to discriminate a memory-tool trip, on the claim it is "never populated" and that
+    BreakerTransition has no such field. BreakerTransition indeed has no field
+    (retry_breaker.py:183-189) — but the registry supplies the default, so the wire value is populated.
+    C11 falsified the claim at cross-read by direct read of :459-461; C7 formally withdrew it at E2b:
+    "My A2 claim that harness.breaker.tool_id is ''never populated'' is FALSE and I withdraw it." The
+    consequence C11 drew and C7 adopted against his own proposal: populating it with a real tool id
+    makes one attribute carry two domains — tool identity at one call site, breaker-key echo at every
+    other — discriminable only by string shape. That is exactly the cross-namespace homonym C7 had just
+    refused for capability_shortfall (harness_breaker_schema.py:141-143). WHY IT IS REGISTERED RATHER
+    THAN REPAIRED. C7 declined the repair rather than pricing it, on his own B-131 standard: the skip
+    must demote the detail, never delete it — and suppressing the :459-461 default would delete the only
+    populated meaning the attribute has at every shipped PER_MODEL trip. He also recorded the full price
+    had he taken it: the default removal, the :442-446 contract docstring, every witness asserting the
+    default, and a re-read of CP §3.5''s "per-model scope correlation" gloss. It is moot for B-116''s
+    member #5 (conceded — there is no #5 trip left to discriminate) and not owed for the members that
+    still trip, because harness.breaker.cause is populated at all three real record_failure() sites
+    (retry_breaker.py:451-453, B-38), so those trips are already discriminated. SURFACED AT THE B-116
+    COUNCIL DELIBERATION, C7 A2 consultant, falsified by C11 at cross-read and formally withdrawn by C7
+    at the E2b reconcile, carried as rider (d) of the B-116-t3 leg, 2026-08-07.'
+  close_out: '(1) Re-verify the default and that PER_MODEL is still the only constructed scope — this couples to
+    B-119, since building PER_PROVIDER changes which trips receive the default at all. (2) Decide the
+    disposition BEFORE any caller passes a real tool_id: (a) keep the breaker-key echo and forbid real
+    tool ids on this attribute — in which case the OD §7.1 and CP §3.5 glosses are wrong as written and
+    owe a correction; or (b) suppress the default and mint a separate attribute for the key echo, at
+    C7''s enumerated price above. (3) The trigger is a caller passing a real tool id — that is the
+    moment the homonym goes live and the attribute becomes uninterpretable without a string-shape
+    heuristic. This row must be dispositioned before that, not after.'
+  council: 'No. An attribute-domain call owned by C7/OD, already argued to a conclusion in venue by two voices
+    including a formal withdrawal. What remains is choosing (a) or (b) and paying for it.'
+  heading: '### B-125 · `harness.breaker.tool_id` is a homonym-in-waiting: it echoes the breaker **key** at
+    every shipped trip while its contract gloss promises a **tool identity** *(surfaced at the B-116
+    council deliberation (C7 A2 -> C11 cross-read falsification -> C7 E2b withdrawal), 2026-08-07)*'
+- id: B-126
+  title: 'The retry.* namespace has three different cardinalities (manifest 4, code 6, wire 8 after B-116) and
+    only the first is verified'
+  status: registered_finding
+  summary: 'WHAT IT IS. CP §3.5 declares the retry.* namespace, and the CP export manifest pins it at
+    attribute_count=4 (harness-cp/src/harness_cp/cp_namespace_export_manifest.py:131-138), feeding the
+    CP_EXPORTED_ATTRIBUTE_COUNT 63-sum acceptance (:165-170). The code-side RETRY_NAMESPACE_SCHEMA
+    already carries six (harness-cp/src/harness_cp/retry_fallback_namespace.py:168-207, whose own
+    docstring records "v2.3 amendment from 4"; the contract re-table is
+    design-substrate/Spec_Control_Plane_v1_3.md:76, against the four-attribute v1.2 row at
+    Spec_Control_Plane_v1_2.md:403). On top of that, the shipped retry.skipped.reason /
+    retry.skipped.candidate pair
+    (harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:678-679) rides the retry.*
+    namespace outside any §3.5 declaration. WHY THAT IS LEGAL TODAY, AND WHY C7 STILL FILED IT [HIGH].
+    The pair is authorized by the Runtime §14.6 discretion bullet — "Whether the wrapper emits a
+    separate retry.skipped span event on breaker-open candidate skip, or just an outer-span attribute —
+    defer to OTel telemetry-volume discretion at implementation; spec-MUST is just that the skip is
+    observable" (design-substrate/Spec_Harness_Runtime_v1.md:4213; re-grounded at HEAD — C7 cited :4195,
+    which at HEAD is blank). C7''s point is that this is precedent, and precedent accumulates: B-116''s
+    ratified terms t1+t2 add two more undeclared retry.* attributes (retry.breaker_waived.reason /
+    .candidate), which he required be "filed alongside" the existing pair rather than silently added.
+    The manifest''s 4, the code''s 6, and the wire''s 8-after-B-116 are three numbers for one namespace,
+    and only the first is cardinality-verified. SURFACED AT THE B-116 COUNCIL DELIBERATION, C7 A2
+    consultant registered adjacency 3, 2026-08-07.'
+  close_out: '(1) Recount all three at the then-current HEAD — these drift every arc, so a stale count is worse
+    than none. (2) Decide whether the discretion lane has a boundary. If it does not, say so in the
+    contract: an unbounded lane means the pinned attribute_count=4 is not a cardinality guarantee about
+    the namespace, only about the declared subset, and the 63-sum acceptance means less than it reads.
+    That is the finding either way. (3) If bounded, the cheapest shape is a declared discretion-lane
+    list the manifest acknowledges without ingesting — no §3.5 amendment, no cardinality bump. (4) Do
+    NOT use this row to block B-116''s t1/t2: those were ratified in venue under exactly this
+    discretion, and C7''s requirement was filing, not refusal. Reading this row as a veto would invert
+    its author''s own position.'
+  council: 'No at registration — nothing is decided until the recount. Conditionally yes at step (2) if it leans
+    toward closing the lane, which trades emission-site observability freedom (C7) against the
+    cardinality and cost guarantees the pinned manifest exists to give (C2/C6). Do not convene before
+    the recount, per the workspace probe-first discipline.'
+  heading: '### B-126 · The `retry.*` namespace has three different cardinalities (manifest 4, code 6, wire 8
+    after `B-116`) and only the first is verified *(surfaced at the B-116 council deliberation (C7 A2
+    consultant, registered adjacency 3), 2026-08-07)*'
+- id: B-127
+  title: 'The breaker-open advance passes no exhaustion_cause, so an all-breakers-open chain reports RETRY
+    exhaustion when no attempt ran'
+  status: registered_finding
+  summary: 'WHAT IT IS. _advance_or_exhaust takes exhaustion_cause: str = "per-candidate-retry-exhaustion"
+    (harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:866) and writes it onto the
+    terminal fallback.exhausted event as fallback.exhaustion_cause (:891, in the attribute dict at
+    :888-897). The capability-shortfall pre-check passes exhaustion_cause="capability-shortfall"
+    explicitly (:656), and the method''s own docstring states why: "so an all-candidates-incapable chain
+    is not mis-classified as retry exhaustion (no provider attempt ran in that case)" (:874-876). The
+    breaker-open pre-check, twenty-eight lines below the shortfall one, passes no exhaustion_cause
+    (:684-691) and therefore takes the default. So an all-breakers-open chain exhaustion is reported as
+    retry exhaustion — the identical mis-classification the sibling path was written to prevent, on the
+    identical premise (no attempt ran). SCOPE AND OWNERSHIP AS THE VOICE LEFT IT. C1 surfaced this as an
+    adjacency he "did not see filed", one line away from C11''s :683 row (B-131), and routed the value
+    to C7/OD while keeping only the naming: "I own naming that the topology emits the wrong-shaped
+    terminal event." He explicitly registered it rather than folding it into B-116''s diff. It fires
+    under either B-116 reading, and after ratification it still fires for the members that keep
+    counting. PRICE, STATED BECAUSE IT IS ITSELF THE ARGUMENT. One keyword argument at one call site,
+    plus a value decision. The sibling path is the shipped precedent for both the fix and its rationale.
+    A defect this cheap to close is one to close rather than carry. SURFACED AT THE B-116 COUNCIL
+    DELIBERATION, C1 A2 consultant standing observability pre-check, 2026-08-07.'
+  close_out: '(1) Re-verify the default, both call sites, and that fallback.exhaustion_cause is written
+    unconditionally — unlike its sibling fallback.last_failure_detail, which is written only if
+    last_failure_detail is not None (:893-894; that asymmetry is B-131). (2) Select rather than mint, if
+    possible: FallThroughCause.BREAKER_OPEN already exists byte-exact in the closed CP §3.5
+    fallback.cause domain (harness-cp/src/harness_cp/fall_through_procedure.py:67-68;
+    design-substrate/Spec_Control_Plane_v1_2.md:401). But fallback.cause and fallback.exhaustion_cause
+    are different attributes, and the value domains must be checked before reuse — the same homonym
+    discipline C7 applied when refusing capability_shortfall. (3) Pass it at :684-691. (4) Witness both
+    — a breaker-open exhaustion carrying the new value, and a per-candidate retry exhaustion still
+    carrying the default, so the fix is discriminating rather than blanket.'
+  council: 'No. A one-value fix inside a closed, declared domain with a shipped sibling precedent and a named
+    value owner. Route to C7 plus advisor() if step (2)''s reuse question is contested.'
+  heading: '### B-127 · The breaker-open advance passes no `exhaustion_cause`, so an all-breakers-open chain
+    reports **retry** exhaustion when no attempt ran *(surfaced at the B-116 council deliberation (C1 A2
+    consultant, standing observability pre-check), 2026-08-07)*'
+- id: B-128
+  title: 'The dispatcher borrows the validator-side PERMANENT_FAIL_EXIT label while performing none of the
+    escalation that label routes to'
+  status: registered_finding
+  summary: 'WHAT IT IS. The fail-fast branch tags the inner attempt span retry.fail_class =
+    ValidatorRetryExitClass.PERMANENT_FAIL_EXIT.value
+    (harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:1024-1027). C-CP-21
+    §21.1''s five-class fail taxonomy routes permanent-fail-exit as "SKIP STAIRCASE; route directly to
+    C11 HITL (validator-escalation placement per §17.1)"
+    (design-substrate/Spec_Control_Plane_v1_2.md:1852, in the §21.1 table at :1843-1853). But that
+    taxonomy is validator-side: the dispatcher borrows the label for a span attribute while the
+    exception propagates to a plain step failure — workflow_driver.py:5564-5572 returns RunStatus.FAILED
+    with a terminal_step_index, and no HITL invocation occurs. C1''s statement: the escalation the
+    attribute names is not the escalation the topology performs. THE OPERATIVE WARNING, WHICH IS WHY IT
+    IS A ROW AND NOT A FOOTNOTE. C1 flagged it [MODERATE], declared it "not this fork''s business", and
+    attached the reason it must still be recorded: the label "must not be quietly used as evidence that
+    an escalation path exists." That is a stale-carry hazard aimed at future readers of the span
+    attribute, not at B-116. SURFACED AT THE B-116 COUNCIL DELIBERATION, C1 A2 consultant HITL
+    pre-check, 2026-08-07.'
+  close_out: '(1) Enumerate producers and consumers first. Every producer of retry.fail_class =
+    permanent-fail-exit and — the load-bearing half — every consumer that reads the class as a routing
+    signal rather than as telemetry. The divergence only bites where such a consumer exists. If there is
+    none, the row is documentation-shaped, and that is the honest outcome to record rather than a reason
+    to build. (2) Then decide: either the dispatcher stops borrowing the validator label (a new
+    dispatch-side value in the retry.fail_class enum — a closed-domain extension against a C5/C7-owned
+    vocabulary, expensive), or the contract records that retry.fail_class and validator.fail.class share
+    a vocabulary but not a routing (cheap, and matches what the code does today). (3) Do NOT resolve it
+    by wiring the HITL escalation. No voice proposed that, C1 and C11 concurred independently that no
+    gate belongs on this path, and B-116 ratified term t5 (no HITL gate here). A fix that adds one would
+    contradict a ratified term. WHAT WOULD FALSIFY IT. A consumer that routes on the dispatcher-set
+    value would upgrade this from a labelling note to a live defect — that is the single check step (1)
+    exists to run.'
+  council: 'No at registration. Conditionally yes at step (2) only if the enum-extension branch is chosen, which
+    touches a closed C5/C7-owned domain and trades vocabulary precision against domain closure — and
+    only after step (1) shows a routing consumer exists.'
+  heading: '### B-128 · The dispatcher borrows the validator-side `PERMANENT_FAIL_EXIT` label while performing
+    none of the escalation that label routes to *(surfaced at the B-116 council deliberation (C1 A2
+    consultant, HITL pre-check), 2026-08-07)*'
+- id: B-129
+  title: 'The memory-tool argument-shape degradation signal has no vocabulary home after B-116 demoted it off
+    the breaker'
+  status: registered_finding
+  summary: 'WHAT IT IS. B-116 ratified member #5 (MemoryToolExecutionInputError) as don''t-count — but C9''s
+    substantive point survived his own concession: a model that repeatedly cannot emit the declared
+    memory-tool argument shape is information, and reading (II) orphans it. The signal is real at the
+    raise site: llm_dispatch.py:4376-4383 validates the model-supplied scope_ref, and the in-file
+    comment at :4362-4367 explicitly distinguishes it from the two harness-internal sibling checks
+    immediately above (:4368-4375), which the B-88 A-ii re-typing moved to
+    MemoryToolExecutionInternalError. What is missing is a home for the signal. WHERE THE TYPE SYSTEM
+    POINTS, PER C1. The only BreakerCause that would fit is capability_shortfall, whose in-code scope
+    explicitly disclaims exactly this use — "names a separate, out-of-scope cross-family
+    fallback-exhaustion path, not a per-step dispatch failure"
+    (harness-od/src/harness_od/harness_breaker_schema.py:141-143, mirroring OD §7.1''s forward-slot note
+    at design-substrate/Spec_Operational_Discipline_v1_32.md:50). Meanwhile
+    FallThroughCause.CAPABILITY_SHORTFALL (harness-cp/src/harness_cp/fall_through_procedure.py:64-65) is
+    the per-dispatch chain-advance vocabulary. C1: "the type system is pointing at the fall-through
+    path, not the counter" — and he declined to author a value, because FallThroughCause is closed at 4
+    and its own docstring names extension "a Workflow §4.1.2 Class-2 D-revision" (:52-58), with the
+    domain CP-declared at design-substrate/Spec_Control_Plane_v1_2.md:401. STATED AGAINST INTEREST. C9
+    accepted the placement while naming exactly what it costs him: "be honest about what it gives my
+    domain: a registered home, not a live signal. I accept that trade only because the alternative live
+    signal is a corrupted counter." C11 accepted it conditional on the B-116 t3 sampling term, since a
+    signal relocated from an inviolable §9.2 floor to a base-rate surface is dropped nine times in ten
+    at team-binding × self-hosted. SURFACED AT THE B-116 COUNCIL DELIBERATION, C1 A2 consultant,
+    conceded by C9 at cross-read and conditioned by C11, 2026-08-07.'
+  close_out: '(1) Re-verify both enums'' scoping text and the closed-at-4 cardinality. (2) Decide whether a
+    fall-through value is warranted at all — and note this requires a POPULATION question, not a code
+    read. Does the shape actually recur in practice? That cannot be answered from the source, so the
+    honest first step is measurement, not a mint. (3) If warranted, route the extension as the Class-2
+    D-revision the enum''s own docstring names (C5/C7/OD own the value) — a spec leg, not an impl leg.
+    (4) Choose the producer site deliberately: B-116''s guard means #5 no longer reaches record_failure
+    at all, so the emission must be placed on the fall-through path itself, not inherited from the old
+    one. (5) Note the B-116-t3 coupling — C11''s acceptance is conditioned on the sampling guarantee, so
+    landing a value onto a base-rate-only surface satisfies C1''s placement while failing C11''s
+    condition.'
+  council: 'No at registration. Conditionally yes at step (3): extending a closed, CP-declared domain to carry a
+    reliability signal is the C9 ⊥ C7 tension (signal fidelity versus vocabulary closure) the
+    deliberation already surfaced once and resolved by refusal. Convene only after step (2) produces a
+    measured population — convening on an unmeasured one would repeat the mistake the probe-first
+    discipline exists to prevent.'
+  heading: '### B-129 · The memory-tool argument-shape degradation signal has no vocabulary home after `B-116`
+    demoted it off the breaker *(surfaced at the B-116 council deliberation (C1 A2 consultant; conceded
+    by C9, conditioned by C11), 2026-08-07)*'
+- id: B-130
+  title: 'All-candidates-permanently-ineligible is a reachable terminal state no canonical artifact declares'
+  status: registered_finding
+  summary: 'WHAT IT IS. The breaker pre-check at
+    harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:674-683 is not telemetry —
+    it is a topology gate that deletes a candidate slot from the chain. Combined with B-118 (OPEN is
+    absorbing for the process lifetime), a trip is an irreversible candidate-set deletion. C1''s end
+    state: a declared N-candidate fallback chain that has silently become a null topology — every
+    subsequent dispatch walks N slots, emits N retry.skipped events (:675-681), does zero work, and
+    exhausts. What the design does declare, both verified at HEAD: candidate exhaustion within a
+    dispatch (RetryBreakerFallbackExhaustedError, :899) and first terminal step failure within a run
+    (harness-cp/src/harness_cp/workflow_driver.py:5564-5572, RunStatus.FAILED plus terminal_step_index).
+    "All candidates permanently ineligible" is neither. THE AMPLIFIER NEITHER PRIMARY NAMED.
+    _advance_or_exhaust is a multiplier: one candidate-independent fault is charged N times per
+    dispatch, N = chain length (B-116''s executed Probe B: three breakers, one dispatch). So lengthening
+    the fallback chain to improve resilience makes the harm strictly worse and trips the whole chain
+    sooner — a topology decision inverting into a reliability regression. Scope after ratification,
+    stated so the row is not read as larger than it is: B-116''s guard removes the four harness-internal
+    members from the multiplier, so the shape narrows to the members that still count. It does not
+    disappear. SURFACED AT THE B-116 COUNCIL DELIBERATION, C1 A2 consultant, 2026-08-07.'
+  close_out: '(1) Re-verify the two declared terminations and that no third exists. (2) Decide whether the state
+    needs naming at all — and weigh C1''s own three-level bound, which argues it may not: max_attempts=3
+    within a candidate (retry_breaker_fallback.py:130-134), chain length then :899 within a dispatch,
+    and first-failed-step termination within a run (workflow_driver.py:5564-5572), with the other
+    topologies bounded too (evaluator-optimizer caps at _DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS = 3,
+    workflow_driver.py:10555). For a candidate-independent fault the bound is one step per run, which is
+    the honest argument for leaving the state undeclared. (3) If it is declared, do not mint twice — the
+    natural carrier is the fallback.exhaustion_cause value B-127 is already about. (4) SEQUENCE B-118
+    FIRST: wiring the half-open latch stops OPEN being absorbing, which weakens this row''s premise
+    substantially and may retire it.'
+  council: 'No at registration. A C1-domain termination-criterion question with C9''s mechanism underneath
+    (T-perm-3, C1 ⊥ C9, fires literally here — the breaker is a reliability primitive performing an
+    irreversible topology edit, and C1 asked that it be recorded as such on the row). But C1 argued both
+    halves in venue and the probe-first answer — the driver''s own terminality — is grounded at HEAD.
+    Re-convene only if step (2) leans toward declaring a new terminal state.'
+  heading: '### B-130 · All-candidates-permanently-ineligible is a reachable terminal state no canonical
+    artifact declares *(surfaced at the B-116 council deliberation (C1 A2 consultant), 2026-08-07)*'
+- id: B-131
+  title: 'The breaker-open skip DELETES the prior candidate''s failure detail instead of demoting it, so a
+    chain exhaustion reports no cause at all'
+  status: registered_finding
+  summary: 'WHAT IT IS. Before the breakers open, the operator''s terminal is correct and loud: _failure_detail
+    composes "<Type>: <message>" bounded
+    (harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:178-187),
+    RetryBreakerFallbackExhaustedError.__init__ appends it as "; last failure: ..." (:169-175),
+    _step_fail_class interpolates str(exc) (harness-cp/src/harness_cp/workflow_driver.py:1686-1687), and
+    the CLI echoes it to stderr (harness-runtime/src/harness_runtime/cli/app.py:141-143 and :243-244).
+    After a breaker opens, the pre-check sets last_failure_class = "breaker-open" and
+    last_failure_detail = None (:682-683) — and the exhausted event writes the detail attribute only if
+    last_failure_detail is not None (:893-894). So the overwrite does not set the field to None: it
+    makes fallback.last_failure_detail vanish from the event entirely, while fallback.last_failure_class
+    falls through to the literal "unknown" (:890). Within one dispatch, candidate 1''s real fail-fast
+    detail (set at :998) is destroyed by candidate 2''s skip. THE MECHANISM, IN C7''S FRAMING WHICH C11
+    ADOPTED VERBATIM. "A strictly-information-destroying write by a path that learned nothing" — a
+    monotonicity violation on a last-write-wins diagnostic slot. The skip must demote the detail, never
+    delete it. C11 adopted that as the row''s title at cross-read. It fires under either B-116 reading,
+    for the members that still count — i.e. genuine provider outages arrive at the operator as "chain
+    exhausted, no reason given". There is no compensating surface: zero breaker hits across
+    harness-runtime/src/harness_runtime/cli/ (three files, re-verified at HEAD), so no operator-facing
+    breaker readout exists to cite in either direction. THE CORRECTION CARRIED, NOT LAUNDERED. C11''s A1
+    additionally called retry.skipped.reason = "breaker-open" false. C7 refused that half — "it is a
+    proximate-mechanism statement about why THIS candidate was skipped, and the breaker WAS open;
+    calling a true attribute false weakens the row" — and C11 conceded and withdrew the sentence at
+    cross-read. This row therefore does not rest on any truth-value claim about retry.skipped.reason. It
+    rests on the erasure mechanism, which C11 then grounded more sharply than either voice had written
+    it. SURFACED AT THE B-116 COUNCIL DELIBERATION, C11 A1 primary refinement (c), reframed by C7 at A2
+    and re-grounded by C11 at cross-read, 2026-08-07.'
+  close_out: '(1) Re-verify the erasure chain — :682-683, :890, :893-894, :998. (2) Implement demotion rather than
+    deletion: preserve the prior candidate''s detail (and class) across a skip instead of overwriting,
+    or carry the skip as an additional fact alongside the retained detail. The open choice is the
+    retention shape — first-write-wins, a list, or a two-field split — not whether to retain. (3)
+    Respect the B-116 adjacency: B-116''s binding term (C11''s (a)) already requires the non-counted
+    fault to keep carrying type(exc).__name__ and the bounded message on last_failure_detail at
+    :1031-1035. This row and that guard touch adjacent lines and must not fight; land them in a known
+    order. (4) Witness the multi-candidate case specifically — candidate 1 fails with a real detail,
+    candidate 2 is skipped breaker-open, and the fallback.exhausted event must still carry candidate
+    1''s detail. A single-candidate test cannot see this defect. (5) Note B-127 — the same terminal
+    event''s exhaustion_cause is mislabelled on the same path; the two are one event apart and should be
+    priced together. WHAT WOULD FALSIFY IT. Nothing found. Two voices grounded the mechanism
+    independently at HEAD, and the one contested claim was withdrawn by its author rather than carried.'
+  council: 'No. C7 (attribute and schema owner) and C11 (operator surface) converged in venue on both the
+    mechanism and the framing, including one concession in each direction. What remains is choosing the
+    retention shape — a single-domain implementation judgement.'
+  heading: '### B-131 · The breaker-open skip **deletes** the prior candidate''s failure detail instead of
+    demoting it, so a chain exhaustion reports no cause at all *(surfaced at the B-116 council
+    deliberation (C11 A1 primary (c), reframed by C7 A2, re-grounded by C11 at cross-read), 2026-08-07)*'
+- id: B-132
+  title: 'The classifier catch-all routes harness-side memory subtypes to the staircase, where they
+    charge the breaker at escalation/exhaustion'
+  status: registered_finding
+  summary: 'WHAT IT IS. _classify_provider_exception''s terminal arm
+    (retry_breaker_fallback.py:371) maps EVERY unlisted Exception subclass to TRANSIENT_RETRY --
+    deliberately, per its own docstring, treating unknown faults as transient until proven
+    otherwise. MemoryToolExecutionDeniedError and MemoryToolExecutionStoreError are siblings of the
+    two WAIVED memory types under the same family base, fall to that catch-all, travel the retry
+    staircase, and charge the provider-model breaker at both staircase record_failure charge
+    sites (:1072, :1091 at HEAD). Under the B-116 ratified normative test (a fault
+    charges only if a half-open trial could return a different result, attributably to the
+    {provider, model}), a DETERMINISTIC policy denial or a local durable-store write failure
+    charging the breaker is a residual -- the same defect shape B-116 closed at the fail-fast site,
+    alive on the staircase path. WHY IT IS A RESIDUAL AND NOT A MISS: the council''s ratified scope
+    binds the fail-fast site only, and the classifier''s exclusion of the denied class from
+    fail-fast is itself deliberate and documented (its raise sites read mutable index/store state
+    and it WRAPS genuinely transient store I/O, so wholesale fail-fasting it would kill retries for
+    real flakes -- the docstring''s own grounds at :343-349). The residual was stated as a FALSE
+    universal ("every other path passes the test by construction") in the first drafting of spec
+    section 14.6.3; the fresh-context review round falsified it by direct read and the spec now
+    declares the residual and cites this row. SURFACED at the B-116 spec leg''s fresh-context
+    review round (P1), 2026-08-08.'
+  close_out: '(1) Re-verify the catch-all membership and the two staircase charge sites at the
+    then-current HEAD. (2) Decide PER-SUBTYPE whether a finer classification is owed: a class that
+    wraps genuinely transient I/O CANNOT be wholesale fail-fasted (the classifier''s own documented
+    grounds), so any fix is a finer split -- discriminating persistent policy denial from wrapped
+    transient I/O (e.g. on the wrapped exception''s own type), or a staircase-side waiver at the
+    exhaustion charge for instances that fail the recovery-model test. (3) Any change routes
+    through the B-116 normative test PER-MEMBER, per the section 14.6.3 discipline -- a wholesale
+    reclassification would repeat the exact mistake the per-member table exists to prevent. WHAT
+    WOULD FALSIFY IT: the catch-all arm gaining member-specific handling for the denied/store
+    subtypes, or an operator decision recording the staircase charge as accepted behaviour.'
+  council: 'No at registration. Conditionally yes at step (2) if a staircase-side waiver is
+    proposed: that re-opens the B-116 C1/C9-vs-C11 dyad (under-counting fails to protect a
+    genuinely failing chain vs over-counting opens healthy providers on harness-side faults) on a
+    NEW path with its own retry-visibility tradeoffs; the per-member discipline carries either
+    way.'
+  heading: '### B-132 · The classifier catch-all routes harness-side memory subtypes to the staircase, where they charge the breaker at escalation/exhaustion *(surfaced at the B-116 spec leg, fresh-context review round, 2026-08-08)*'
