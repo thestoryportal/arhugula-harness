@@ -46,7 +46,8 @@ from harness_is.memory_record_envelope import (
 )
 from harness_is.memory_store import MemoryStoreRecord, MemoryStoreWriteResult
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from harness_runtime.memory_scope_family import (
     canonical_scope_family,
@@ -232,10 +233,54 @@ class SummaryProvenance(BaseModel):
         return self
 
 
+class MemoryCaptureFailureKind(StrEnum):
+    """WHICH substrate fault produced a `FAILED` capture. `B-115` (b′).
+
+    The closed two-value `MemoryCaptureStatus` says a capture failed; this says
+    what failed, and it exists because the two answers have OPPOSITE retry
+    dispositions. `LEDGER_CONFLICT` is the C-MEM-08 operation ledger's
+    divergent-replay refusal - a pure comparison over durable state under the
+    cross-process write lock, deterministic over the same inputs, which a retry
+    cannot clear. `STORE_IO` is everything else the durable-write pair can
+    raise - disk-full, permission, codec faults - which a retry genuinely can.
+
+    Before this enum the executor could only see the merged population and had
+    to adopt the coarser `io_failure` reading for all of it (`B-88` round 2
+    recorded that coarseness honestly, noting the result "carries no exception
+    to re-classify from"). It carries one now, as a VALUE rather than as a
+    propagated exception: `_capture`'s `FAILED`-on-conflict outcome is
+    CONTRACTED for at least two of its six entry points (U-MEM-26), so the
+    exception could not be allowed to escape without changing control flow
+    those callers rely on.
+
+    A closed enum rather than a bool, so a third failure kind is a NAMED value
+    rather than a silent third meaning for `False`.
+
+    **CLOSED AT TWO, and the closure is a pinned witness rather than a property
+    of the consumers - stated precisely because an earlier draft of this
+    docstring overclaimed it.** A third member would NOT be "a type error at
+    every consumer": `_write_note`'s re-type is an `if kind is LEDGER_CONFLICT
+    / else` , so an unrecognised kind would fall through to the store-error
+    branch and travel the retry staircase - silently, and on the CONSERVATIVE
+    side (a new kind stays retryable rather than becoming permanent), but
+    silently nonetheless. The guard is therefore
+    `test_b115_ledger_conflict_split.py::
+    test_the_failure_kind_vocabulary_is_pinned_at_two_members`, which fails the
+    moment a member is added and so FORCES the routing decision into the arc
+    that adds it. `B-134`'s close-out carries the matching obligation.
+    """
+
+    LEDGER_CONFLICT = "ledger_conflict"
+    STORE_IO = "store_io"
+
+
 class MemoryCaptureResult(BaseModel):
     """Result returned by all capture API methods."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    # `arbitrary_types_allowed` is required by `failure_cause` below, which
+    # carries a live exception. It permits non-pydantic FIELD TYPES and weakens
+    # NOTHING else - `extra="forbid"` and `frozen=True` are unchanged.
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
     status: MemoryCaptureStatus
     event_kind: str
@@ -244,6 +289,113 @@ class MemoryCaptureResult(BaseModel):
     operation_action_id: Identifier | None = None
     operation_result: MemoryOperationWriteResult | None = None
     failure_reason: str | None = None
+    # `B-115` (b′). `None` on the CAPTURED path and set on every `FAILED` one -
+    # both directions ENFORCED by the validator below, not merely intended.
+    failure_kind: MemoryCaptureFailureKind | None = None
+    # `B-115` (b′), round 2. The ORIGINAL ledger refusal, retained so the
+    # executor's re-type can `raise ... from` it. Without this the capture path
+    # produced an UNCHAINED `MemoryToolExecutionLedgerConflictError` while the
+    # two direct-append paths chained - the same substrate event losing its
+    # traceback origin depending on which surface caught it.
+    #
+    # Typed as the CONCRETE ledger exception rather than `BaseException`, so
+    # "this field only ever carries the divergent-replay refusal" is a type fact
+    # a reader does not have to take on trust.
+    #
+    # Lifetime is bounded by construction: the field is set only on the FAILED
+    # path, and every consumer of a FAILED result raises immediately, so the
+    # retained traceback does not outlive the dispatch that produced it.
+    #
+    # Present on every FRESHLY PRODUCED conflict result and absent on one that
+    # has been round-tripped through JSON (see the exclusion note below), which
+    # is why the validator's cause rule is ONE-WAY. Consumers must therefore
+    # treat it as an optimisation, not a guarantee: the executor chains from it
+    # when present and raises plainly when not.
+    #
+    # ROUND 3 - EXCLUDED FROM SERIALIZATION AND FROM SCHEMA, and the choice is
+    # between two shapes rather than obvious, so the reasoning is recorded here.
+    # This model is PUBLICLY EXPORTED, so `model_dump_json()` and
+    # `model_json_schema()` are part of its API contract; a live exception field
+    # regressed BOTH from working to raising (`PydanticSerializationError` /
+    # `PydanticInvalidForJsonSchema`) - and the schema break was at the CLASS
+    # level, so it applied to every instance, not just conflicting ones.
+    #
+    # The alternative was a `field_serializer` emitting a string. REJECTED: it
+    # would publish a SECOND, lossier copy of a fact `failure_reason` already
+    # carries verbatim (`f"{type(exc).__name__}: {exc}"`) - two authorities for
+    # one concept, free to drift. EXCLUSION LOSES NOTHING, and that is the test
+    # that decides it: the JSON projection already states the whole failure via
+    # `status` + `failure_kind` + `failure_reason`, while the exception OBJECT
+    # exists for one purpose that has no JSON meaning at all - you cannot
+    # `raise ... from` a deserialized string. It is an in-process affordance,
+    # so it is honest for it to be absent from the wire form and present in
+    # memory. Attribute access is UNAFFECTED by `exclude` - the chaining
+    # witnesses assert exactly that, so exclusion is not loss.
+    failure_cause: SkipJsonSchema[MemoryOperationIdempotencyConflictError | None] = Field(
+        default=None, exclude=True
+    )
+
+    @model_validator(mode="after")
+    def _outcome_fields_agree_with_the_status(self) -> Self:
+        """THE WHOLE CONTRACT, in three clauses. `B-115` (b′) round 4.
+
+        Authored as one validator over all four outcome fields rather than as a
+        rule per field, because the two defects this replaces were BOTH
+        cross-field: an `IFF` on the cause that broke round-tripping, and a
+        `status` that agreed with nothing. Corner-patching one field at a time
+        is what produced them.
+
+        **(a) A CAPTURED result carries NO failure information.** Neither a
+        kind nor a reason: "this succeeded, and here is why it failed" is not a
+        state the capture API can be in, and it was ACCEPTED before this
+        revision.
+
+        **(b) A FAILED result ALWAYS names its kind.** Verified TOTAL at the
+        producers rather than assumed - all four construction sites live in this
+        module, and both `FAILED` sites set a kind unconditionally (the broad
+        handler picks LEDGER_CONFLICT / STORE_IO; the repair path is
+        unconditionally STORE_IO). `failure_reason` is deliberately NOT required
+        here: `automatic_memory._raise_capture_failure` supplies its own default
+        when the reason is absent, so a reasonless FAILED is tolerated by design
+        at the consumer and this validator does not tighten past the defect.
+
+        **(c) A cause implies the conflict kind - ONE WAY ONLY.** The reverse
+        (`LEDGER_CONFLICT` implies a cause) is DELIBERATELY NOT enforced, and
+        the reason is structural rather than a relaxation: `failure_cause` is
+        excluded from serialization, so the reverse direction CANNOT survive
+        `model_validate_json(model_dump_json(...))` - a validator asserting it
+        makes every conflict result un-round-trippable, which is exactly the
+        defect this replaces. That the REAL producers always attach the cause is
+        a property of the producers, and it is pinned where it is true: the
+        three-surface chaining witnesses and the joint symmetry witness.
+
+        **Derived, not separately stated:** CAPTURED implies no cause. (a) forces
+        the kind to `None`, and (c) contrapositively forbids a cause on any kind
+        that is not `LEDGER_CONFLICT`. The legality-table witness asserts the
+        derived row so the reasoning is checked rather than trusted.
+        """
+
+        if self.status is MemoryCaptureStatus.CAPTURED:
+            if self.failure_kind is not None:
+                raise ValueError(
+                    f"a CAPTURED result cannot carry a failure_kind (got {self.failure_kind!r})"
+                )
+            if self.failure_reason is not None:
+                raise ValueError(
+                    f"a CAPTURED result cannot carry a failure_reason (got {self.failure_reason!r})"
+                )
+        elif self.failure_kind is None:
+            raise ValueError("a FAILED result must name its failure_kind")
+
+        if (
+            self.failure_cause is not None
+            and self.failure_kind is not MemoryCaptureFailureKind.LEDGER_CONFLICT
+        ):
+            raise ValueError(
+                "failure_cause may accompany only failure_kind=LEDGER_CONFLICT "
+                f"(got {self.failure_kind!r})"
+            )
+        return self
 
 
 class MemoryCaptureStore(Protocol):
@@ -890,16 +1042,63 @@ class EpisodicMemoryCapture:
                         raise
                     operation_result = None
             except Exception as exc:
+                # `B-115` (b′): the DETERMINISTIC ledger refusal is discriminated
+                # from transient store I/O on this result, as a VALUE - not by
+                # propagating the exception, and not by widening the closed
+                # two-value status enum.
+                #
+                # Propagating was tried and FALSIFIED at the build: `_capture`
+                # has six public entry points, and `FAILED`-on-conflict is a
+                # CONTRACTED outcome for at least two of them (U-MEM-26 / Codex
+                # R6+R8 - a divergent second run-start must be REPORTED rather
+                # than read as completion, and a non-run-start conflict "must
+                # still surface as FAILED"; both are pinned by landed witnesses
+                # whose docstrings say widening the catch would silently mask
+                # the divergence). `_repair_capture_operation` does propagate
+                # the same exception, but that method has ONE caller and no
+                # contracted FAILED semantics, so its precedent does not reach
+                # here.
+                #
+                # Every caller's control flow is therefore BYTE-UNCHANGED: the
+                # status is still `FAILED`, `failure_reason` still carries the
+                # same string. What is added is a discriminator the executor can
+                # re-type from, replacing the message-guessing the B-88 docstring
+                # correctly refused. Carried as a closed enum rather than a bool
+                # so a third failure kind is a type error rather than a silent
+                # third meaning for `False`, and as `None` on the CAPTURED path
+                # so "succeeded" cannot carry a failure kind.
+                #
+                # The span's `failure_class` follows the same split: the RESIDUAL
+                # for a ledger refusal (not an I/O fault, and per C-MEM-19 v1.3 a
+                # residual report is the ABSENCE of a claim rather than a wrong
+                # one), `io_failure` for everything else. This keeps the inner
+                # capture span and the outer standard-tool span AGREEING about
+                # the same event - the property `B-88` round 2 introduced the
+                # store subtype to protect.
+                conflict = exc if isinstance(exc, MemoryOperationIdempotencyConflictError) else None
                 set_memory_telemetry_attributes(
                     span,
                     policy_decision=MemoryCaptureStatus.FAILED.value,
-                    failure_class=MemoryTelemetryFailureClass.IO_FAILURE,
+                    failure_class=(
+                        MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
+                        if conflict is not None
+                        else MemoryTelemetryFailureClass.IO_FAILURE
+                    ),
                 )
                 return MemoryCaptureResult(
                     status=MemoryCaptureStatus.FAILED,
                     event_kind=event_kind,
                     record_kind=record_kind,
                     failure_reason=f"{type(exc).__name__}: {exc}",
+                    failure_kind=(
+                        MemoryCaptureFailureKind.LEDGER_CONFLICT
+                        if conflict is not None
+                        else MemoryCaptureFailureKind.STORE_IO
+                    ),
+                    # The exception OBJECT, not a reconstruction: the executor
+                    # chains it, so the raised type carries the refusal's own
+                    # traceback rather than a fabricated stand-in.
+                    failure_cause=conflict,
                 )
             return MemoryCaptureResult(
                 status=MemoryCaptureStatus.CAPTURED,
@@ -1055,6 +1254,10 @@ class EpisodicMemoryCapture:
                     event_kind=event_kind,
                     record_kind=envelope.kind,
                     failure_reason=f"{type(exc).__name__}: {exc}",
+                    # `B-115` (b′): unconditionally `STORE_IO` here - the arm
+                    # above already re-raised the ledger conflict, so this one
+                    # by construction sees only store I/O.
+                    failure_kind=MemoryCaptureFailureKind.STORE_IO,
                 )
             return MemoryCaptureResult(
                 status=MemoryCaptureStatus.CAPTURED,
@@ -1346,6 +1549,7 @@ def _stored_engine_class(content: Mapping[str, object]) -> MemoryOperationEngine
 __all__ = [
     "RUN_START_EVENT_KIND",
     "EpisodicMemoryCapture",
+    "MemoryCaptureFailureKind",
     "MemoryCaptureMode",
     "MemoryCaptureReservedActorError",
     "MemoryCaptureResult",

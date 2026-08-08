@@ -98,6 +98,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionError,
     MemoryToolExecutionInputError,
     MemoryToolExecutionInternalError,
+    MemoryToolExecutionLedgerConflictError,
     MemoryToolExecutionRequest,
     MemoryToolExecutionStoreError,
     StandardMemoryToolExecutor,
@@ -379,6 +380,16 @@ def test_the_internal_fault_type_satisfies_its_three_receiving_type_constraints(
     assert _classify_provider_exception(MemoryToolExecutionDeniedError("x")) is not None
     assert _classify_provider_exception(MemoryToolExecutionStoreError("x")) is not None
     assert _classify_provider_exception(MemoryToolExecutionError("x")) is not None
+
+    # `B-115` (b′) MIRROR, kept beside the negatives above precisely because it
+    # is the one that could erode them. A fifth family member joined the
+    # fail-fast set; these two assertions together say the admission was BY NAME
+    # and not by widening to the base. If a later arc re-parented the conflict
+    # type under the store subtype, or admitted the base instead of the leaf,
+    # the store-error negative one line up would flip and fail HERE.
+    assert _classify_provider_exception(MemoryToolExecutionLedgerConflictError("x")) is None
+    assert not issubclass(MemoryToolExecutionLedgerConflictError, MemoryToolExecutionStoreError)
+    assert issubclass(MemoryToolExecutionLedgerConflictError, MemoryToolExecutionError)
 
 
 # ---------------------------------------------------------------------------

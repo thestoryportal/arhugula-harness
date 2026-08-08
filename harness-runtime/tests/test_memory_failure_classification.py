@@ -50,6 +50,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionError,
     MemoryToolExecutionInputError,
     MemoryToolExecutionInternalError,
+    MemoryToolExecutionLedgerConflictError,
     MemoryToolExecutionStoreError,
 )
 
@@ -162,18 +163,49 @@ _INPUT_VALIDATION = MemoryTelemetryFailureClass.INPUT_VALIDATION_FAILURE
             ),
             _IO_FAILURE,
         ),
-        # Honest residual on THIS type: the capture layer labels ANY raise from
-        # the durable-write pair `io_failure`, so a non-IO exception escaping
-        # that pair is reported as IO too. That coarseness is the capture
-        # layer's pre-existing choice (recorded as B-88's adjacent item); the
-        # executor ADOPTS it rather than inventing a contradicting third
-        # answer, since the result carries no exception to re-classify from.
+        # --- MemoryToolExecutionLedgerConflictError: the DETERMINISTIC half ---
+        # `B-115` (b′). This population USED to sit on the store subtype above,
+        # reported `io_failure`, and was recorded there as B-88's honest
+        # residual: the capture layer labelled ANY raise from the durable-write
+        # pair `io_failure`, so a non-IO exception escaping that pair was
+        # reported as IO too, and the executor ADOPTED that rather than
+        # inventing a contradicting third answer because the capture result
+        # carried no exception to re-classify from.
+        #
+        # It is discriminable now, though NOT by propagating: the refusal is
+        # still folded into a `FAILED` result (that outcome is CONTRACTED for
+        # two of `_capture`'s six entry points, U-MEM-26 / Codex R6+R8), and the
+        # result carries a closed `failure_kind` enum the executor re-types
+        # from. This row moved with that discriminator. The class flips `io_failure` ->
+        # `provider_adapter_failure` because the new type declares NOTHING and
+        # inherits the base's RESIDUAL: a ledger refusal is not an I/O fault,
+        # and per C-MEM-19 v1.3 a residual report is the ABSENCE of a claim
+        # rather than a wrong one. This WITHDRAWS a false positive; it does not
+        # withdraw an emission.
+        #
+        # It also makes the two consumers AGREE: `memory_redaction.py`'s
+        # `classify_memory_failure` call site already reports the underlying
+        # `MemoryOperationIdempotencyConflictError` as `provider_adapter_failure`
+        # (pinned by the two-row discriminating witness at
+        # `harness-is/tests/test_memory_redaction.py`). Before this row moved,
+        # the same substrate event was reported two different ways depending on
+        # which layer caught it.
         (
-            MemoryToolExecutionStoreError(
+            MemoryToolExecutionLedgerConflictError(
                 "MemoryOperationIdempotencyConflictError: idempotency_key 'k' already records "
                 "a different operation"
             ),
-            _IO_FAILURE,
+            _PROVIDER_ADAPTER,
+        ),
+        # WORDING-CONFLICTING row for the new type, so its (absent) declaration
+        # is not deletable-green: this message would trip the residual
+        # message-rules toward `io_failure`, and only the type's inherited
+        # residual keeps it on `provider_adapter_failure`.
+        (
+            MemoryToolExecutionLedgerConflictError(
+                "MemoryOperationIdempotencyConflictError: durable write io error on append"
+            ),
+            _PROVIDER_ADAPTER,
         ),
         # --- MemoryToolExecutionError base: the residual --------------------
         # WAS io_failure before B-88. After round 2 the base's only raise site

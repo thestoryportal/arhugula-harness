@@ -64,6 +64,7 @@ from harness_runtime.lifecycle.memory_migration import (
 )
 from harness_runtime.memory_capture import (
     EpisodicMemoryCapture,
+    MemoryCaptureFailureKind,
     MemoryCaptureMode,
     MemoryCaptureResult,
     MemoryCaptureStatus,
@@ -126,6 +127,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionError,
     MemoryToolExecutionInputError,
     MemoryToolExecutionInternalError,
+    MemoryToolExecutionLedgerConflictError,
     MemoryToolExecutionRequest,
     MemoryToolExecutionStoreError,
     StandardMemoryToolExecutor,
@@ -193,6 +195,7 @@ __all__ = [
     "LiveCredentialGate",
     "LoadedCliInstructionSource",
     "LocalAutomaticMemoryRuntime",
+    "MemoryCaptureFailureKind",
     "MemoryCaptureMode",
     "MemoryCaptureResult",
     "MemoryCaptureStatus",
@@ -211,6 +214,7 @@ __all__ = [
     "MemoryToolExecutionError",
     "MemoryToolExecutionInputError",
     "MemoryToolExecutionInternalError",
+    "MemoryToolExecutionLedgerConflictError",
     "MemoryToolExecutionRequest",
     "MemoryToolExecutionStoreError",
     "MemoryVerificationMatrix",

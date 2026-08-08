@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 133
+  total: 134
   open: 0
   design_substrate_gated: 0
   registered_finding: 30
   operator_gated: 0
   held: 1
-  closed: 102
-  identity_digest: 9b3a5e11057f8347
+  closed: 103
+  identity_digest: d0d0206bcd425900
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5441,7 +5441,10 @@ items:
   heading: '### B-114 · `_prepare`''s executor-side exhaustiveness fall-through raises the memory-tool INPUT-error type for a harness-internal fault, violating the C-MEM-19 type-boundary invariant v1.3 introduced *(surfaced at the B-88 spec leg, out-of-family Codex rounds 3/7/8, 2026-08-06; the re-typing was PROPOSED and WITHDRAWN there on authority grounds, registered)*'
 - id: B-115
   title: 'Memory capture same-text / same-model-NAME / different-PROVIDER re-entry: a duplicate record JSONL line, then a TRANSIENT_RETRY staircase via MemoryToolExecutionStoreError'
-  status: registered_finding
+  status: closed
+  pr: '#1274 (the (b-prime) bundled leg -- Runtime spec v1.113 section 14.6.3 row 6 discharged +
+    plan v2.61 U-RT-153 + the impl; spec, plan and impl land TOGETHER because row 6 conditions the
+    contract text on a fact only the build can establish)'
   summary: 'MEASURED, not inferred -- executed at the B-84 build leg (PR #1243) as cell (3) of that leg''s
     W-5 four-cell matrix, and recorded there on the now-CLOSED B-84 row''s close_out. THE MECHANISM:
     a memory capture whose TEXT and model NAME are unchanged but whose PROVIDER differs re-derives
@@ -5460,7 +5463,110 @@ items:
     closed row''s close_out and is not open-row-queryable. This row makes the live residual
     queryable at its own id. NO disposition is committed here. Ratified by the operator 2026-08-07
     on recommendation.'
-  close_out: '(1) GROUND FIRST at the then-current HEAD, by content: re-read the memory_id derivation (which
+  close_out: 'ALL FOUR registered steps EXECUTED; disposition (b-prime) BUILT; ROW CLOSED. (1) GROUNDING,
+    by content at HEAD 1bce5d15 and NOT from this row''s own snapshot, which had drifted: the
+    memory_id derivation re-read (_memory_id_for returns derive_memory_id over content_hash alone for
+    non-EPISODIC_RUN kinds; capture_tool_event''s content dict carries summary_model and NOT provider,
+    so provider is NOT among the hashed dimensions); the record-append path re-read (_JSONL_BY_KIND
+    includes TOOL_EVENT; _append_jsonl is unconditional -- no dedup, no skip, no error); the ledger''s
+    SINGLE conflict raise site and its two 18-field equivalence projections re-read (provider is field
+    11 of 18; timestamp is EXCLUDED). THE ROW''S SNAPSHOT WAS STALE AND IS CORRECTED: it said
+    _classify_provider_exception admits only the input and internal memory types; at HEAD it admits
+    FIVE named types plus the 401/403 duck-typed arm, LLMDispatchPayloadShapeInternalError having been
+    added by the B-116 impl leg (PR #1271) after this row was written. The store subtype was
+    nonetheless re-confirmed ABSENT from that tuple, so the mechanism held unchanged -- and it was
+    re-confirmed BY EXECUTION, not by reading: the landed W-5 cell-(3) witness ran green at HEAD.
+    (2) DISPOSITION: (b-prime), as recommended at the #1265 grounding (commit 05abb419), which
+    FALSIFIED reading (b)-as-registered -- making the whole store-error class non-re-enterable is
+    wrong because that class also wraps genuinely transient store I/O a retry CAN clear. (b-prime)
+    splits the DETERMINISTIC ledger-conflict case into a NEW sibling type and leaves the transient
+    half untouched. Reading (a) -- provider joining the capture identity -- is NOT built and remains
+    the registered residual; it is an identity-dimension change to a content-addressed memory_id and
+    carries the full new-surface hash audit. Reading (c) declined. NO COUNCIL was owed: the council
+    row made convening conditional on step (2) leaning (a); it leans (b-prime), which is within a
+    cleared contract. (3) INTERACTION with B-84''s other two recorded-and-left-open residuals: NEITHER
+    IS RE-OPENED OR CONTRADICTED, and the reason is structural rather than asserted. The policy-flip
+    TOCTOU window lives between validate() and execute() at the POLICY RESOLVER and this leg touches
+    no resolver; the intra-call window is the record-written-before-ledger-row ordering, which this
+    leg PRESERVES BYTE-FOR-BYTE -- indeed AC #6 pins it, and the B-84 W-5 cell-(3) duplicate-line
+    assertion (== 2) is PRESERVED VERBATIM precisely so the leg cannot claim a closure it did not
+    deliver. What (b-prime) closes is the RETRY AMPLIFICATION that turned one duplicate line into
+    max_attempts duplicates, not the duplicate line itself. (4) WITNESSED with the executed-matrix
+    discipline B-84 used, including PD-8. Determinism -- which section 14.6.3 row 6 required but which
+    NEITHER the spec NOR the council DELIVERABLE ever defined (REVIEW-e2.md F-05 flagged exactly that
+    circularity) -- is discharged against a four-part definition this leg supplies and states at
+    contract altitude: repeat-invariance (8/8 identical outcomes), candidate-independence (third and
+    fourth candidates refuse identically), state-driven-not-stochastic (the origin candidate''s
+    payload resolves as IDEMPOTENT_NOOP -- the positive control that stops repeat-invariance passing
+    vacuously), and structural clock-exclusion (the 18-field set pinned BY NAME plus a source-level
+    assertion that neither projection reads a clock). Witnessed at the LEDGER
+    (harness-is/tests/test_b115_ledger_conflict_determinism.py) rather than at the executor, so the
+    evidence survives any future re-typing of the executor surface. SCOPE WIDENED BEYOND THIS ROW''S
+    OWN FRAMING, recorded rather than smuggled: the row named ONE executor surface; grounding found
+    THREE, and the two it missed escaped RAW onto the retry staircase. Both were proven reachable BY
+    EXECUTION before scope was fixed, per this row''s own requirement that a code-read inference is
+    not sufficient -- _append_standard_tool_call (which runs after EVERY successful standard tool
+    call, so a read-only memory.search replay from another candidate reaches it with no write_note
+    involved) and _request_redaction. All three are covered. HONEST BOUNDARY, stated rather than
+    hidden: the refusal is deterministic over the SAME inputs, not permanent under all inputs --
+    re-presenting the originating candidate''s payload succeeds, and a re-sampled note text yields a
+    different memory_id and no conflict. Neither is provider recovery, which is why section 14.6.3''s
+    attributability clause still governs. ONE BUILD-TIME CORRECTION, recorded rather than
+    absorbed: the obvious discriminator shape -- re-raising the ledger exception out of
+    EpisodicMemoryCapture._capture, on the _repair_capture_operation precedent -- was tried and
+    FALSIFIED by the existing suite. _capture has SIX public entry points and
+    FAILED-on-conflict is a CONTRACTED outcome for at least two of them (U-MEM-26 / Codex
+    R6+R8: a divergent second run-start must be REPORTED rather than read as completion; a
+    non-run-start conflict must still surface as FAILED), each pinned by a landed witness whose
+    docstring states that widening the catch would silently mask the divergence. The precedent
+    does NOT transfer -- _repair_capture_operation has ONE caller and no contracted FAILED
+    semantics. The discriminator is therefore carried as a VALUE (a closed
+    MemoryCaptureFailureKind enum on the existing result model), leaving every caller''s
+    control flow BYTE-UNCHANGED and NOT widening the closed two-value status enum. AC #9 pins
+    it: the two U-MEM-26 witnesses pass UNMODIFIED. ROUND 2 COMPLETED THE REALIZATION rather
+    than relaxing it: out-of-family review found the value discriminator had left the CAPTURE
+    surface raising an UNCHAINED error while the two direct-append surfaces chained -- the same
+    substrate event losing its traceback origin depending on which surface caught it. The
+    capture result now also RETAINS the ledger exception (failure_cause, present IFF the kind
+    is LEDGER_CONFLICT, enforced BOTH ways by a validator because the missing-cause direction
+    would degrade the wrapper to raise-from-None, which SUPPRESSES the context rather than
+    omitting it) and the wrapper chains from it. The plan AC was STRENGTHENED -- chaining on
+    EVERY surface plus a joint symmetry witness, since the observed failure mode was
+    two-of-three chaining, which per-surface witnesses alone do not catch -- NOT narrowed to
+    fit what was built. ROUND 3 found the retained live exception had regressed the PUBLICLY
+    EXPORTED result model''s model_dump_json and model_json_schema, both of which worked before
+    this leg (the schema break at CLASS level, so every instance). ROUND 2''S GROUNDING IS
+    RETRACTED AS TOO NARROW: it verified that no CURRENT consumer serializes the model, which
+    is true and beside the point for an exported type whose Pydantic APIs are part of its
+    contract regardless of today''s callers -- the same defect shape the workspace polices in
+    the B-101 / B-107 serialization-boundary lineage. Fixed by EXCLUSION (SkipJsonSchema plus
+    Field(exclude=True)) rather than a string field-serializer: failure_reason already carries
+    the same fact verbatim, so a serialized copy would be a second drifting authority, while
+    exclusion loses nothing because the exception object serves chaining, which has no JSON
+    meaning. The in-process object is still present and witnessed. ROUND 4 returned TWO findings,
+    both real, and together they showed the round-2 and round-3 fixes COLLIDING: the IFF cause
+    rule plus the wire-form exclusion made model_validate_json(model_dump_json(...)) raise for
+    EVERY conflict result; and independently a CAPTURED result accepted a failure_kind while a
+    FAILED one accepted none. A THIRD contradiction (CAPTURED carrying a failure_reason) was
+    found by this leg''s own enumeration and closed with them. RESOLVED AS A WHOLE rather than
+    corner-patched a third time -- three clauses in ONE validator; the cause rule made ONE-WAY
+    because the reverse cannot survive deserialization by construction, that direction re-homed
+    to a producer-side witness; CAPTURED-implies-no-cause left DERIVED from the other two and
+    asserted as a derived row; the wrapper raise guarding on cause-presence so it chains when
+    present and raises plainly when absent, NEVER from None. Clause (b) was verified TOTAL at
+    the producers rather than assumed (all four construction sites read; both FAILED sites set
+    a kind unconditionally), and failure_reason deliberately NOT required on FAILED because
+    automatic_memory._raise_capture_failure supplies its own default. ONE deliberate
+    whole-contract pass closed the round: FOURTEEN (status x kind x cause x reason) rows, four
+    legal and ten refused, in a single parametrized witness plus a full round-trip witness for
+    every legal shape -- the shape that stops a fifth corner. ARTIFACTS: Runtime spec v1.113 (three amendment sites, all
+    inside section 14.6.3 -- row 6 discharged, guard tuple four -> five with a sibling-not-subclass
+    constraint, and the declared residual narrowed), plan v2.61 U-RT-153 (a NEW unit, NOT an amendment
+    of the LANDED-and-CLOSED U-RT-152, per the B-97(a) -> U-RT-149 and B-111 -> U-RT-151 precedent),
+    and both clearance markers. B-132 is NARROWED, NOT CLOSED. B-134 minted for the dedicated
+    C-MEM-19 ledger_conflict class question, which is an operator-gated Class 2 decision this leg may
+    not take. ZERO contract numbers, ZERO Memory-spec leg, ZERO CXA rows (111), ZERO hash impact.
+    THE PRE-DISPOSITION REGISTERED STEPS FOLLOW, retained as history. (1) GROUND FIRST at the then-current HEAD, by content: re-read the memory_id derivation (which
     dimensions are hashed, and specifically whether provider is among them), the record-append path,
     and the operation ledger''s 18-field equivalence payload; and re-confirm that
     _classify_provider_exception still admits only the input and internal memory types BY NAME so
@@ -5486,7 +5592,7 @@ items:
     integrity voice (C3) and whichever voice owns memory-capture semantics. Convene ONLY if step (2)
     leans (a), and only after step (1)''s grounding, per the workspace probe-first discipline.
     Readings (b) and (c) are within a cleared contract and owe no convening.'
-  heading: '### B-115 · Memory capture same-text / same-model-NAME / different-PROVIDER re-entry: a duplicate record JSONL line, then a `TRANSIENT_RETRY` staircase via `MemoryToolExecutionStoreError` *(MEASURED at the `B-84` build leg, PR #1243, W-5 cell (3); ratified by the operator 2026-08-07)*'
+  heading: '### B-115 · Memory capture same-text / same-model-NAME / different-PROVIDER re-entry: a duplicate record JSONL line, then a `TRANSIENT_RETRY` staircase via `MemoryToolExecutionStoreError` *(MEASURED at the `B-84` build leg, PR #1243, W-5 cell (3); ratified by the operator 2026-08-07; **CLOSED at the (b′) split — Runtime v1.113 §14.6.3 row 6 discharged + plan v2.61 U-RT-153, waiver tuple 4 → 5**)*'
 - id: B-116
   title: 'Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state?'
   status: closed
@@ -6201,7 +6307,23 @@ items:
     universal ("every other path passes the test by construction") in the first drafting of spec
     section 14.6.3; the fresh-context review round falsified it by direct read and the spec now
     declares the residual and cites this row. SURFACED at the B-116 spec leg''s fresh-context
-    review round (P1), 2026-08-08.'
+    review round (P1), 2026-08-08. NARROWED 2026-08-08 at the B-115 (b-prime) leg -- NOT CLOSED, and
+    the distinction is load-bearing. That leg SPLIT the DETERMINISTIC ledger divergent-replay
+    refusal out of MemoryToolExecutionStoreError into a new sibling type
+    MemoryToolExecutionLedgerConflictError, which is now admitted to fail-fast BY NAME and WAIVED as
+    the fifth member of the section 14.6.3 tuple. So the population still riding the catch-all is
+    strictly smaller: the genuinely transient store I/O the store subtype thereafter exclusively
+    carries (disk-full, permission, and other faults a retry CAN clear), plus
+    MemoryToolExecutionDeniedError. The store subtype''s disposition is otherwise UNCHANGED -- it
+    keeps io_failure, keeps classifying TRANSIENT_RETRY, and still charges at both staircase sites --
+    because wholesale fail-fasting it remains refused on the classifier''s own documented grounds.
+    WHAT THIS MEANS FOR THE ROW''S FORWARD WORK: the deterministic sub-case that was the easiest
+    candidate for a finer split has been taken, so what remains is the genuinely harder question the
+    row was really about -- whether a class that wraps transient I/O can be discriminated at all
+    without message guessing, and whether a staircase-side waiver is warranted for instances that
+    fail the recovery-model test. The (b-prime) leg is also the WORKED PRECEDENT for step (2)''s
+    finer-split option: it discriminated on the wrapped exception''s own TYPE by making that type
+    survive the capture boundary, rather than by reading failure_reason wording.'
   close_out: '(1) Re-verify the catch-all membership and the two staircase charge sites at the
     then-current HEAD. (2) Decide PER-SUBTYPE whether a finer classification is owed: a class that
     wraps genuinely transient I/O CANNOT be wholesale fail-fasted (the classifier''s own documented
@@ -6217,7 +6339,7 @@ items:
     genuinely failing chain vs over-counting opens healthy providers on harness-side faults) on a
     NEW path with its own retry-visibility tradeoffs; the per-member discipline carries either
     way.'
-  heading: '### B-132 · The classifier catch-all routes harness-side memory subtypes to the staircase, where they charge the breaker at escalation/exhaustion *(surfaced at the B-116 spec leg, fresh-context review round, 2026-08-08)*'
+  heading: '### B-132 · The classifier catch-all routes harness-side memory subtypes to the staircase, where they charge the breaker at escalation/exhaustion *(surfaced at the B-116 spec leg, fresh-context review round, 2026-08-08; **NARROWED — not closed — at the `B-115` (b′) leg, which removed the deterministic ledger-refusal population**)*'
 - id: B-133
   title: 'The §9.2 always-sampled floor classifies span NAMES at both consumers while three of its members
     are span EVENTS, so their head=1.0 floor is unrealized on the dispatch path'
@@ -6283,3 +6405,71 @@ items:
     its members are span **events**, so their head=1.0 floor is unrealized on the dispatch path
     *(surfaced by out-of-family Codex round 1 at the `B-116-t3` leg, 2026-08-08; same family as B-123 /
     B-124)*'
+- id: B-134
+  title: 'Should C-MEM-19 gain a dedicated failure class for DETERMINISTIC ledger conflicts, rather than
+    routing them to the residual?'
+  status: registered_finding
+  summary: 'WHAT IT IS, and it is a question this leg deliberately did NOT answer on its own authority. The
+    B-115 (b-prime) leg introduced MemoryToolExecutionLedgerConflictError for the C-MEM-08 operation
+    ledger''s divergent-replay refusal. That type DECLARES no C-MEM-19 failure class and inherits the
+    family base''s RESIDUAL provider_adapter_failure. The choice was between three options and none is
+    obviously dominant. (i) KEEP io_failure -- REJECTED, and this is the one clearly wrong answer: a
+    ledger refusal is a pure comparison over durable state under a lock, not an I/O fault, so
+    io_failure is a positively WRONG claim. (ii) INHERIT THE RESIDUAL -- TAKEN. Per C-MEM-19 v1.3 a
+    residual report is the ABSENCE of a claim rather than an assertion of adapter-hood, so this
+    WITHDRAWS a false positive without inventing a replacement; it follows the U-MEM-28 precedent,
+    which moved an emission input_validation_failure -> residual on exactly these grounds; and it
+    makes the two classify_memory_failure consumers AGREE, since memory_redaction.py already reports
+    the underlying MemoryOperationIdempotencyConflictError as provider_adapter_failure under a landed
+    two-row discriminating witness. (iii) MINT A DEDICATED ledger_conflict CLASS -- NOT TAKEN, and the
+    reason is jurisdictional rather than technical. It would widen C-MEM-19''s ratified failure
+    vocabulary, and Spec_Memory_Substrate_v1.md v1.3 records at its own change-note (the round-8
+    finding on the seventh re-typing) that widening a ratified enumeration on a leg''s own reading of
+    the rule is the X-AL-3 shape even when the reading is sound -- the operator ratified a vocabulary,
+    and only an operator-ratified Class 2 fork may extend it. THE HONEST COST OF (ii), stated so the
+    row is not read as cost-free: the residual bucket now carries a well-typed, deliberately
+    classified population alongside genuinely untriaged failures, which is the same triage-blindness
+    C-MEM-19 v1.3''s input_validation_failure section was written to forbid for a DIFFERENT
+    population. The difference in scale (that one was large and this one is narrow) is a reason to
+    defer, not a reason the concern does not apply.'
+  close_out: '(1) RE-GROUND at the then-current HEAD: re-read C-MEM-19''s failure-class enumeration and its
+    invariants, confirm the residual is still provider_adapter_failure, and confirm
+    MemoryToolExecutionLedgerConflictError still declares nothing (the witness at
+    harness-runtime/tests/test_b115_ledger_conflict_split.py asserts the declaration-ABSENCE over
+    vars(), so a silent later declaration would already have failed there). (2) MEASURE THE RESIDUAL
+    BUCKET rather than arguing about it: enumerate every type and raise-site population currently
+    reporting provider_adapter_failure and state how much of it is deliberately-classified-but-
+    unnamed versus genuinely untriaged. If the deliberate half dominates, the residual has stopped
+    meaning "absence of a claim" and the vocabulary owes a member -- that is the falsifiable trigger.
+    (3) IF a class is warranted, it is a Class 2 fork against C-MEM-19 with a Memory spec leg (v1.3 ->
+    v1.4) plus a Memory plan unit, on the B-88 / U-MEM-28 precedent -- which is a full spec-leg arc,
+    not an impl-discretion flip. Note that the flip site is ONE line (the type declares a ClassVar
+    instead of inheriting), by construction: the B-115 leg wrote the declaration explicitly as an
+    absence rather than relying on the base, so the change surface is minimal whenever it is taken.
+    (3-bis) REVISIT THE CONSUMER ROUTING IN THE SAME ARC. MemoryCaptureFailureKind is CLOSED at
+    two, and the closure is enforced by a pinned witness
+    (test_b115_ledger_conflict_split.py::test_the_failure_kind_vocabulary_is_pinned_at_two_members),
+    NOT by the consumers: _write_note''s re-type is an if-LEDGER_CONFLICT/else, so a third member
+    would fall through to the store-error branch and travel the retry staircase -- silently, and
+    on the conservative side (a new kind stays retryable rather than becoming permanent), but
+    silently nonetheless. The pin makes adding a member FAIL that test, which is the forcing
+    function; whichever arc adds one MUST decide that routing explicitly in the same arc rather
+    than inheriting the fall-through by default. Note the two vocabularies are distinct: a new
+    C-MEM-19 telemetry class does not by itself require a new MemoryCaptureFailureKind member --
+    check whether it does before assuming this clause fires.
+    (4) CONSIDER SCOPE: the same question applies to MemoryToolExecutionInternalError, which inherits
+    the same residual for the same stated reason at U-MEM-28. A vocabulary arc should decide both
+    together rather than minting one member and leaving its sibling in the residual. WHAT WOULD
+    FALSIFY THE DEFERRAL: the residual bucket measured at step (2) turning out to be majority-
+    deliberate, or an operator decision recording the residual routing as accepted permanently.'
+  council: 'No at registration -- the row frames a vocabulary question and commits to nothing. CONDITIONALLY
+    YES at step (3) if a class is proposed: minting a C-MEM-19 member trades telemetry triage
+    precision (the information-substrate integrity voice C3, which owns record and ledger semantics)
+    against vocabulary stability for every downstream consumer that switches on the enum (C7
+    observability). The tension is nameable in advance, which is the workspace''s convening
+    discriminator. Convene ONLY if step (2)''s measurement supports the widening; if the residual is
+    measured and found genuinely residual, this is a documentation outcome and owes no convening.'
+  heading: '### B-134 · Should `C-MEM-19` gain a dedicated failure class for deterministic ledger conflicts,
+    rather than routing them to the residual? *(surfaced at the `B-115` (b′) leg, 2026-08-08 — the leg
+    took the residual per the U-MEM-28 precedent and registered the vocabulary question rather than
+    widening a ratified enumeration on its own authority)*'

@@ -86,6 +86,7 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
     RetryBreakerFallbackDispatcher,
     RetryBreakerFallbackExhaustedError,
     _classify_breaker_cause,
+    _classify_provider_exception,
     _is_breaker_charge_waived,
     _required_capabilities,
     materialize_retry_breaker_fallback_dispatcher_stage,
@@ -95,6 +96,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionError,
     MemoryToolExecutionInputError,
     MemoryToolExecutionInternalError,
+    MemoryToolExecutionLedgerConflictError,
     MemoryToolExecutionStoreError,
 )
 from opentelemetry.sdk.trace import TracerProvider
@@ -2485,10 +2487,10 @@ async def test_retry_wrapper_propagates_resume_edit_decode_terminally() -> None:
 # ---------------------------------------------------------------------------
 # U-RT-152 / `B-116` — the breaker-charge waiver at the fail-fast site.
 #
-# `Spec_Harness_Runtime_v1.md` v1.112 §14.6.3 (ratified Reading (II)): a fault
+# `Spec_Harness_Runtime_v1.md` v1.113 §14.6.3 (ratified Reading (II)): a fault
 # charges the provider-model breaker ONLY if a half-open trial could return a
 # different result than the trip did, attributably to the `{provider, model}`
-# the breaker is keyed to. The four harness-internal waiver types fail that
+# the breaker is keyed to. The five harness-internal waiver types fail that
 # test. Every witness below drives the REAL composer dispatch path.
 # ---------------------------------------------------------------------------
 
@@ -2502,7 +2504,14 @@ def _waived_fixtures() -> list[tuple[str, BaseException]]:
     `test_u_mem_28_input_validation_failure_class.py::
     test_internal_site_1_context_composition_unset_record_scope`; constructing
     it here keeps the composer witnesses at the mock-inner shape the plan's
-    verification-shape clause prescribes."""
+    verification-shape clause prescribes.
+
+    `MemoryToolExecutionLedgerConflictError` is the FIFTH member, added at
+    `B-115` (b′) when §14.6.3 row 6's determinism condition was discharged. The
+    same construction note applies: the REAL path raising it is witnessed
+    end-to-end at `test_b115_ledger_conflict_split.py` over all three executor
+    surfaces, and the LEDGER-level determinism the waiver rests on at
+    `harness-is/tests/test_b115_ledger_conflict_determinism.py`."""
     return [
         (
             "LLMDispatchProviderUnreachableError",
@@ -2524,6 +2533,14 @@ def _waived_fixtures() -> list[tuple[str, BaseException]]:
             "MemoryToolExecutionInputError",
             MemoryToolExecutionInputError("memory tool argument 'memory_ref' must be a string"),
         ),
+        (
+            "MemoryToolExecutionLedgerConflictError",
+            MemoryToolExecutionLedgerConflictError(
+                "MemoryOperationIdempotencyConflictError: idempotency_key "
+                "'idempotent:capture:tool_event:mem:episodic:tool_event:00' "
+                "already records a different operation"
+            ),
+        ),
     ]
 
 
@@ -2539,7 +2556,7 @@ def _outer_span(exporter: InMemorySpanExporter) -> Any:
     )
 
 
-# --- AC #4, per-member waiver witnesses (x4) -------------------------------
+# --- AC #4, per-member waiver witnesses (x5) -------------------------------
 
 
 @pytest.mark.parametrize(
@@ -2833,14 +2850,23 @@ async def test_response_parsing_payload_shape_still_charges() -> None:
 
 def test_waiver_predicate_refuses_the_memory_family_by_name() -> None:
     """AC #4 positive control (c)(i), PREDICATE level: the guard's membership
-    test admits the four CONCRETE tuple members and refuses the family base
+    test admits the FIVE CONCRETE tuple members and refuses the family base
     plus its non-admitted subtypes.
 
     `MemoryToolExecutionDeniedError` / `MemoryToolExecutionStoreError` never
     reach the guarded fail-fast branch in composer flow (the classifier's
     catch-all routes them to the staircase), so a family-base broadening of
     the tuple is killable ONLY here — which is why the guard is realized as a
-    named predicate over a module-level tuple rather than an inline match."""
+    named predicate over a module-level tuple rather than an inline match.
+
+    `B-115` (b′) added the fifth member and made this witness carry a SECOND
+    load: `MemoryToolExecutionLedgerConflictError` is a SIBLING of the store
+    subtype, not a subclass of it. If a later arc re-parented it under
+    `MemoryToolExecutionStoreError` for convenience, the store subtype below
+    would start matching the tuple through inheritance and this test's
+    `MemoryToolExecutionStoreError` refusal row fails — which is the intended
+    kill, because that parentage would also drag `io_failure` back onto the
+    ledger-conflict population and void the C-MEM-19 half of the split."""
     for _, exc in _waived_fixtures():
         assert _is_breaker_charge_waived(exc) is True, type(exc).__name__
 
@@ -2855,13 +2881,22 @@ def test_waiver_predicate_refuses_the_memory_family_by_name() -> None:
     for exc in refused:
         assert _is_breaker_charge_waived(exc) is False, type(exc).__name__
 
-    # The tuple is exactly the four members, by name — not a family base.
+    # The tuple is exactly the five members, by name — not a family base.
     assert _BREAKER_CHARGE_WAIVED_TYPES == (
         LLMDispatchProviderUnreachableError,
         LLMDispatchPayloadShapeInternalError,
         MemoryToolExecutionInternalError,
         MemoryToolExecutionInputError,
+        MemoryToolExecutionLedgerConflictError,
     )
+
+    # §14.6.3's classifier-consistency rule, asserted rather than assumed:
+    # guard membership and fail-fast admission are the SAME set, so no
+    # exception can be admitted to fail-fast via a tuple member yet charged,
+    # nor the reverse. Without this, adding a sixth member to one and not the
+    # other passes every other test in this module.
+    for member in _BREAKER_CHARGE_WAIVED_TYPES:
+        assert _classify_provider_exception(member("consistency probe")) is None, member.__name__
 
 
 @pytest.mark.asyncio
@@ -2872,7 +2907,24 @@ async def test_memory_store_error_still_charges_end_to_end_via_staircase() -> No
     ratified scope deliberately leaves untouched.
 
     This is the declared `B-132` residual asserted as the CURRENT contract, so
-    the guard demonstrably does not reach beyond the fail-fast site."""
+    the guard demonstrably does not reach beyond the fail-fast site.
+
+    `B-115` (b′) NARROWED that residual and this witness's scope with it, and
+    the narrowing is what the fixture below now means. Before the split, this
+    type carried BOTH genuinely transient store I/O and the DETERMINISTIC
+    ledger divergent-replay refusal; the second population left for
+    `MemoryToolExecutionLedgerConflictError`, which fail-fasts and is waived.
+    What this witness now asserts is therefore the transient-I/O half ALONE —
+    `"durable store write raised"` is a disk-full/permission-class fault, which
+    a retry genuinely can clear, so travelling the staircase and charging at
+    exhaustion is the CORRECT disposition for it rather than a residual defect.
+    `B-132` stays OPEN for what remains: this class plus the denied class still
+    charge at the staircase sites even where a given instance would fail the
+    §14.6.3 recovery-model test.
+
+    The assertions are UNCHANGED by the split, and that is the point — the
+    (b′) leg must not move the store subtype's disposition, only subtract a
+    population from it."""
     chain = _chain(_candidate("anthropic", "claude-test-1"))
     breaker = _retry_breaker_with_llm_policy(max_attempts=2)
     inner = _MockInnerDispatcher(

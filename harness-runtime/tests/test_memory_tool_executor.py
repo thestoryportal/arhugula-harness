@@ -679,13 +679,17 @@ def test_write_note_store_failure_emits_io_failure_class(
     standard-tool span as `io_failure`, not as the base's residual class.
 
     `EpisodicMemoryCapture._capture` catches the durable-write exception,
-    classifies its OWN capture span `io_failure`, and returns `status=FAILED`
-    carrying only a formatted reason STRING - the original exception is not
-    retained (`memory_capture.py:541-552`). `_write_note` then re-raises. With
-    the base's unconditional `provider_adapter_failure` declaration, the two
-    spans contradicted each other about the same event; the typed
-    `MemoryToolExecutionStoreError` - discriminated on the capture API's own
-    closed status enum, never on the reason wording - makes them agree.
+    classifies its OWN capture span `io_failure`, and returns `status=FAILED`.
+    **On THIS path - the STORE_IO one - the result carries only a formatted
+    reason STRING and no exception object.** (`B-115` (b′) later added
+    `failure_cause`, but it is set exclusively on the LEDGER_CONFLICT path, so
+    the no-retained-exception statement is true of the store path this witness
+    exercises and is deliberately scoped to it rather than stated generally.)
+    `_write_note` then re-raises. With the base's unconditional
+    `provider_adapter_failure` declaration, the two spans contradicted each
+    other about the same event; the typed `MemoryToolExecutionStoreError` -
+    discriminated on the capture API's own closed enums, never on the reason
+    wording - makes them agree.
 
     Grounded at this witness: on THIS path the outer span is the ONLY record
     of the failure - `_write_note` constructs `EpisodicMemoryCapture` without
