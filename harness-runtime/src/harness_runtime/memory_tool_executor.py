@@ -697,18 +697,26 @@ class StandardMemoryToolExecutor:
             # pre-`B-115` behaviour - the conservative direction, since it keeps
             # an unclassified failure retryable rather than silently permanent.
             if result.failure_kind is MemoryCaptureFailureKind.LEDGER_CONFLICT:
-                # CHAINED from the ledger's own exception, which the capture
-                # layer retains on the result for exactly this purpose. Without
-                # the `from`, this surface would produce an UNCHAINED error
-                # while the two direct-append surfaces below chain - the same
-                # substrate event losing its traceback origin depending on which
-                # surface caught it. `failure_cause` is non-`None` here by the
-                # result model's own validator, so this can never degrade to
-                # `raise ... from None`, which would SUPPRESS the context rather
-                # than merely omit it.
-                raise MemoryToolExecutionLedgerConflictError(
+                conflict = MemoryToolExecutionLedgerConflictError(
                     result.failure_reason or "write_note capture refused a divergent replay"
-                ) from result.failure_cause
+                )
+                # CHAINED from the ledger's own exception when the capture layer
+                # still holds it. Without the `from`, this surface would produce
+                # an UNCHAINED error while the two direct-append surfaces chain -
+                # the same substrate event losing its traceback origin depending
+                # on which surface caught it.
+                #
+                # The `is not None` guard is NOT defensive padding. `B-115`
+                # round 4 made the cause rule ONE-WAY, because `failure_cause`
+                # is excluded from serialization and so cannot survive a JSON
+                # round trip; a reconstructed result therefore legitimately
+                # carries the conflict KIND with no cause. The branch below
+                # raises PLAINLY in that case and NEVER `from None`, which would
+                # SUPPRESS the context rather than merely omit it - actively
+                # hiding an origin instead of leaving it absent.
+                if result.failure_cause is not None:
+                    raise conflict from result.failure_cause
+                raise conflict
             raise MemoryToolExecutionStoreError(
                 result.failure_reason or "write_note capture failed"
             )

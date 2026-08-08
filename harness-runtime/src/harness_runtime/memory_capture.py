@@ -276,8 +276,8 @@ class MemoryCaptureResult(BaseModel):
     operation_action_id: Identifier | None = None
     operation_result: MemoryOperationWriteResult | None = None
     failure_reason: str | None = None
-    # `B-115` (b′). `None` on the CAPTURED path BY CONSTRUCTION - a succeeded
-    # capture cannot carry a failure kind - and set on every `FAILED` result.
+    # `B-115` (b′). `None` on the CAPTURED path and set on every `FAILED` one -
+    # both directions ENFORCED by the validator below, not merely intended.
     failure_kind: MemoryCaptureFailureKind | None = None
     # `B-115` (b′), round 2. The ORIGINAL ledger refusal, retained so the
     # executor's re-type can `raise ... from` it. Without this the capture path
@@ -292,6 +292,12 @@ class MemoryCaptureResult(BaseModel):
     # Lifetime is bounded by construction: the field is set only on the FAILED
     # path, and every consumer of a FAILED result raises immediately, so the
     # retained traceback does not outlive the dispatch that produced it.
+    #
+    # Present on every FRESHLY PRODUCED conflict result and absent on one that
+    # has been round-tripped through JSON (see the exclusion note below), which
+    # is why the validator's cause rule is ONE-WAY. Consumers must therefore
+    # treat it as an optimisation, not a guarantee: the executor chains from it
+    # when present and raises plainly when not.
     #
     # ROUND 3 - EXCLUDED FROM SERIALIZATION AND FROM SCHEMA, and the choice is
     # between two shapes rather than obvious, so the reasoning is recorded here.
@@ -317,23 +323,64 @@ class MemoryCaptureResult(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _cause_accompanies_exactly_the_ledger_conflict_kind(self) -> Self:
-        """`failure_cause` is present IFF `failure_kind is LEDGER_CONFLICT`.
+    def _outcome_fields_agree_with_the_status(self) -> Self:
+        """THE WHOLE CONTRACT, in three clauses. `B-115` (b′) round 4.
 
-        Both directions are enforced, and each one closes a real hazard. A
-        LEDGER_CONFLICT WITHOUT a cause would make the executor's
-        `raise ... from result.failure_cause` degrade to `raise ... from None`,
-        which does not merely skip chaining - it SUPPRESSES the context, so the
-        origin would be actively hidden rather than merely absent. A cause on
-        any other kind would assert a ledger refusal that did not happen.
+        Authored as one validator over all four outcome fields rather than as a
+        rule per field, because the two defects this replaces were BOTH
+        cross-field: an `IFF` on the cause that broke round-tripping, and a
+        `status` that agreed with nothing. Corner-patching one field at a time
+        is what produced them.
+
+        **(a) A CAPTURED result carries NO failure information.** Neither a
+        kind nor a reason: "this succeeded, and here is why it failed" is not a
+        state the capture API can be in, and it was ACCEPTED before this
+        revision.
+
+        **(b) A FAILED result ALWAYS names its kind.** Verified TOTAL at the
+        producers rather than assumed - all four construction sites live in this
+        module, and both `FAILED` sites set a kind unconditionally (the broad
+        handler picks LEDGER_CONFLICT / STORE_IO; the repair path is
+        unconditionally STORE_IO). `failure_reason` is deliberately NOT required
+        here: `automatic_memory._raise_capture_failure` supplies its own default
+        when the reason is absent, so a reasonless FAILED is tolerated by design
+        at the consumer and this validator does not tighten past the defect.
+
+        **(c) A cause implies the conflict kind - ONE WAY ONLY.** The reverse
+        (`LEDGER_CONFLICT` implies a cause) is DELIBERATELY NOT enforced, and
+        the reason is structural rather than a relaxation: `failure_cause` is
+        excluded from serialization, so the reverse direction CANNOT survive
+        `model_validate_json(model_dump_json(...))` - a validator asserting it
+        makes every conflict result un-round-trippable, which is exactly the
+        defect this replaces. That the REAL producers always attach the cause is
+        a property of the producers, and it is pinned where it is true: the
+        three-surface chaining witnesses and the joint symmetry witness.
+
+        **Derived, not separately stated:** CAPTURED implies no cause. (a) forces
+        the kind to `None`, and (c) contrapositively forbids a cause on any kind
+        that is not `LEDGER_CONFLICT`. The legality-table witness asserts the
+        derived row so the reasoning is checked rather than trusted.
         """
 
-        has_cause = self.failure_cause is not None
-        is_conflict = self.failure_kind is MemoryCaptureFailureKind.LEDGER_CONFLICT
-        if has_cause != is_conflict:
+        if self.status is MemoryCaptureStatus.CAPTURED:
+            if self.failure_kind is not None:
+                raise ValueError(
+                    f"a CAPTURED result cannot carry a failure_kind (got {self.failure_kind!r})"
+                )
+            if self.failure_reason is not None:
+                raise ValueError(
+                    f"a CAPTURED result cannot carry a failure_reason (got {self.failure_reason!r})"
+                )
+        elif self.failure_kind is None:
+            raise ValueError("a FAILED result must name its failure_kind")
+
+        if (
+            self.failure_cause is not None
+            and self.failure_kind is not MemoryCaptureFailureKind.LEDGER_CONFLICT
+        ):
             raise ValueError(
-                "failure_cause must be set exactly when failure_kind is "
-                f"LEDGER_CONFLICT (kind={self.failure_kind!r}, cause set={has_cause})"
+                "failure_cause may accompany only failure_kind=LEDGER_CONFLICT "
+                f"(got {self.failure_kind!r})"
             )
         return self
 

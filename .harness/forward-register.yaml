@@ -5543,7 +5543,23 @@ items:
     Field(exclude=True)) rather than a string field-serializer: failure_reason already carries
     the same fact verbatim, so a serialized copy would be a second drifting authority, while
     exclusion loses nothing because the exception object serves chaining, which has no JSON
-    meaning. The in-process object is still present and witnessed. ARTIFACTS: Runtime spec v1.113 (three amendment sites, all
+    meaning. The in-process object is still present and witnessed. ROUND 4 returned TWO findings,
+    both real, and together they showed the round-2 and round-3 fixes COLLIDING: the IFF cause
+    rule plus the wire-form exclusion made model_validate_json(model_dump_json(...)) raise for
+    EVERY conflict result; and independently a CAPTURED result accepted a failure_kind while a
+    FAILED one accepted none. A THIRD contradiction (CAPTURED carrying a failure_reason) was
+    found by this leg''s own enumeration and closed with them. RESOLVED AS A WHOLE rather than
+    corner-patched a third time -- three clauses in ONE validator; the cause rule made ONE-WAY
+    because the reverse cannot survive deserialization by construction, that direction re-homed
+    to a producer-side witness; CAPTURED-implies-no-cause left DERIVED from the other two and
+    asserted as a derived row; the wrapper raise guarding on cause-presence so it chains when
+    present and raises plainly when absent, NEVER from None. Clause (b) was verified TOTAL at
+    the producers rather than assumed (all four construction sites read; both FAILED sites set
+    a kind unconditionally), and failure_reason deliberately NOT required on FAILED because
+    automatic_memory._raise_capture_failure supplies its own default. ONE deliberate
+    whole-contract pass closed the round: FOURTEEN (status x kind x cause x reason) rows, four
+    legal and ten refused, in a single parametrized witness plus a full round-trip witness for
+    every legal shape -- the shape that stops a fifth corner. ARTIFACTS: Runtime spec v1.113 (three amendment sites, all
     inside section 14.6.3 -- row 6 discharged, guard tuple four -> five with a sibling-not-subclass
     constraint, and the declared residual narrowed), plan v2.61 U-RT-153 (a NEW unit, NOT an amendment
     of the LANDED-and-CLOSED U-RT-152, per the B-97(a) -> U-RT-149 and B-111 -> U-RT-151 precedent),

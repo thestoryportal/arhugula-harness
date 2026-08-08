@@ -242,6 +242,14 @@ def test_surface_1_capture_path_write_note(tmp_path: Path) -> None:
         "the capture surface must CHAIN the ledger's own exception (AC #2), not "
         "reduce it to a message — an unchained re-type loses the refusal's traceback origin"
     )
+    # NOT asserted here: `__suppress_context__`. `raise X from Y` always sets it
+    # True — that is correct Python semantics (an explicit cause supersedes the
+    # implicit context), so it discriminates nothing on this path. The hazard is
+    # specifically `raise X from None`, which sets `__cause__` to None WHILE
+    # suppressing — and the `__cause__` assertion above already excludes it. The
+    # cause-absent branch is covered by the legality table's
+    # `failed-conflict-round-tripped` row, which is what makes that branch
+    # reachable at all.
 
 
 def test_surface_1_discriminates_on_the_value_not_on_the_status(tmp_path: Path) -> None:
@@ -337,40 +345,167 @@ def test_every_conflict_surface_chains_the_ledger_exception(tmp_path: Path) -> N
         )
 
 
-def test_the_result_model_forbids_a_kind_cause_mismatch() -> None:
-    """The `failure_cause` invariant, asserted in BOTH directions.
+def _result(
+    status: MemoryCaptureStatus,
+    kind: MemoryCaptureFailureKind | None,
+    cause: bool,
+    reason: str | None,
+) -> MemoryCaptureResult:
+    return MemoryCaptureResult(
+        status=status,
+        event_kind="tool_event",
+        failure_kind=kind,
+        failure_cause=MemoryOperationIdempotencyConflictError("k") if cause else None,
+        failure_reason=reason,
+    )
 
-    A `LEDGER_CONFLICT` without a cause is the dangerous half: the executor's
-    `raise ... from result.failure_cause` would become `raise ... from None`,
-    which SUPPRESSES the context rather than merely omitting it - actively
-    hiding the origin. A cause on any other kind asserts a ledger refusal that
-    did not happen.
+
+# The WHOLE (status x failure_kind x failure_cause x failure_reason) space.
+# `B-115` (b′) round 4 - authored because rounds 2 and 3 each fixed one corner
+# and round 4 found two more. Enumerating the space and asserting it in ONE
+# witness is what stops a fifth corner existing.
+#
+# LEGAL SHAPES (4): a clean CAPTURED; a FAILED/STORE_IO; a FAILED/LEDGER_CONFLICT
+# WITH its cause (freshly produced); and a FAILED/LEDGER_CONFLICT WITHOUT it
+# (round-tripped through JSON, where the cause cannot survive by construction).
+_C = MemoryCaptureStatus.CAPTURED
+_F = MemoryCaptureStatus.FAILED
+_IO = MemoryCaptureFailureKind.STORE_IO
+_LC = MemoryCaptureFailureKind.LEDGER_CONFLICT
+
+_LEGALITY_TABLE: list[
+    tuple[str, MemoryCaptureStatus, MemoryCaptureFailureKind | None, bool, str | None, bool]
+] = [
+    # (id, status, kind, cause?, reason, legal?)
+    ("captured-clean", _C, None, False, None, True),
+    ("captured-with-reason", _C, None, False, "boom", False),
+    ("captured-with-io-kind", _C, _IO, False, None, False),
+    ("captured-with-conflict-kind", _C, _LC, False, None, False),
+    ("captured-with-cause", _C, None, True, None, False),
+    ("captured-with-conflict-kind-and-cause", _C, _LC, True, None, False),
+    ("failed-no-kind", _F, None, False, "boom", False),
+    ("failed-no-kind-no-reason", _F, None, False, None, False),
+    ("failed-io", _F, _IO, False, "OSError: disk full", True),
+    ("failed-io-no-reason", _F, _IO, False, None, True),
+    ("failed-io-with-cause", _F, _IO, True, "boom", False),
+    ("failed-conflict-with-cause", _F, _LC, True, "conflict", True),
+    ("failed-conflict-round-tripped", _F, _LC, False, "conflict", True),
+    ("failed-cause-but-no-kind", _F, None, True, "conflict", False),
+]
+
+
+@pytest.mark.parametrize(
+    ("status", "kind", "cause", "reason", "legal"),
+    [row[1:] for row in _LEGALITY_TABLE],
+    ids=[row[0] for row in _LEGALITY_TABLE],
+)
+def test_the_result_model_legality_table_is_exhaustive(
+    status: MemoryCaptureStatus,
+    kind: MemoryCaptureFailureKind | None,
+    cause: bool,
+    reason: str | None,
+    legal: bool,
+) -> None:
+    """Every (status, kind, cause, reason) combination, stated once.
+
+    Four legal shapes; ten refused. Two rows are worth naming because they are
+    the ones a narrower contract gets wrong in OPPOSITE directions:
+
+    * `failed-conflict-round-tripped` MUST be legal. `failure_cause` is excluded
+      from serialization, so a deserialized conflict result has the kind and no
+      cause. An `IFF` validator makes this illegal and thereby makes every
+      conflict result un-round-trippable.
+    * `captured-with-cause` MUST be refused, and it is refused WITHOUT a clause
+      naming it - clause (a) forces a CAPTURED kind to `None` and clause (c)
+      forbids a cause on any non-conflict kind. Asserting the derived row is how
+      that reasoning gets checked rather than trusted.
     """
 
-    with pytest.raises(ValidationError):
-        MemoryCaptureResult(
-            status=MemoryCaptureStatus.FAILED,
-            event_kind="tool_event",
-            failure_kind=MemoryCaptureFailureKind.LEDGER_CONFLICT,
-            failure_cause=None,
+    if legal:
+        result = _result(status, kind, cause, reason)
+        assert result.status is status
+        assert result.failure_kind is kind
+    else:
+        with pytest.raises(ValidationError):
+            _result(status, kind, cause, reason)
+
+
+def test_every_legal_shape_survives_a_full_json_round_trip() -> None:
+    """`model_validate_json(model_dump_json(...))` for each legal shape.
+
+    The round trip is the property round 3's exclusion silently broke and round
+    4 found: excluding the cause from the wire form while REQUIRING it in the
+    validator made every conflict result fail to re-validate. Asserting the
+    round trip directly is the only witness shape that catches that pairing -
+    serialization alone passes, and validation alone passes.
+    """
+
+    for label, status, kind, cause, reason, legal in _LEGALITY_TABLE:
+        if not legal:
+            continue
+        original = _result(status, kind, cause, reason)
+        revived = MemoryCaptureResult.model_validate_json(original.model_dump_json())
+
+        assert revived.status is status, label
+        assert revived.failure_kind is kind, label
+        assert revived.failure_reason == reason, label
+        # The cause NEVER survives - it is excluded from the wire form - and the
+        # revived value must still be legal, which is the whole point.
+        assert revived.failure_cause is None, label
+
+
+def test_a_real_conflict_producer_always_attaches_the_cause(tmp_path: Path) -> None:
+    """The direction that MOVED OUT of the validator, pinned where it is true.
+
+    Round 4 made the cause rule ONE-WAY: `cause implies LEDGER_CONFLICT` is
+    enforced by the model, but `LEDGER_CONFLICT implies cause` is NOT — it
+    cannot be, because the cause is excluded from serialization and so a
+    round-tripped conflict result legitimately has none (see the legality
+    table's `failed-conflict-round-tripped` row).
+
+    That does not make the property untrue of the PRODUCERS, and dropping it
+    from the validator without re-homing it would lose it. It is a property of
+    the capture layer, so it is asserted against the capture layer: every
+    freshly produced conflict result carries its cause. The three-surface
+    chaining witnesses and the joint symmetry witness consume this same
+    property end-to-end; this one states it directly at the source, so a
+    producer that stopped attaching the cause fails here rather than only
+    showing up as a missing `__cause__` three layers up.
+    """
+
+    store, _executor = executor_for(tmp_path)
+
+    def _capture(provider: str) -> MemoryCaptureResult:
+        return EpisodicMemoryCapture(
+            store=store,
+            actor=Actor(actor_class=ActorClass.AGENT, actor_id="agent-b115"),
+            project="arhugula-v2",
+            visibility=MemoryVisibility.WORKFLOW,
+            record_scope=_scope(),
+        ).capture_tool_event(
+            run_id="run-b115",
+            tool_event_id="note:b115",
+            tool_name=MemoryToolName.WRITE_NOTE.value,
+            summary_text=_NOTE,
+            summary=SummaryProvenance(source=SummarySource.MODEL_GENERATED, model="gpt-5"),
+            step_id="step-b115",
+            timestamp=_NOW,
+            provider=provider,
+            model="gpt-5",
+            cli_profile="codex",
+            engine_class=None,
+            policy_ref=_POLICY_REF,
+            procedural_snapshot_ref=None,
         )
 
-    with pytest.raises(ValidationError):
-        MemoryCaptureResult(
-            status=MemoryCaptureStatus.FAILED,
-            event_kind="tool_event",
-            failure_kind=MemoryCaptureFailureKind.STORE_IO,
-            failure_cause=MemoryOperationIdempotencyConflictError("k"),
-        )
+    _capture("openai")
+    conflict = _capture("azure-openai")
 
-    # And the legal pairing constructs cleanly.
-    ok = MemoryCaptureResult(
-        status=MemoryCaptureStatus.FAILED,
-        event_kind="tool_event",
-        failure_kind=MemoryCaptureFailureKind.LEDGER_CONFLICT,
-        failure_cause=MemoryOperationIdempotencyConflictError("k"),
+    assert conflict.failure_kind is MemoryCaptureFailureKind.LEDGER_CONFLICT
+    assert isinstance(conflict.failure_cause, MemoryOperationIdempotencyConflictError), (
+        "a freshly produced conflict result must carry its cause - the validator no "
+        "longer enforces this direction, so the producer property lives here"
     )
-    assert isinstance(ok.failure_cause, MemoryOperationIdempotencyConflictError)
 
 
 def test_the_live_cause_field_does_not_break_the_models_serialization_contract() -> None:

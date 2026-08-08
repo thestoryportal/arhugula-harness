@@ -67,9 +67,51 @@ unaffected, and the witness asserts that explicitly so exclusion is not read as
 loss. The both-direction validator and the `frozen` / `extra="forbid"` posture
 are unchanged.
 
+### §0.3-quater Round-4 realization — the result contract resolved AS A WHOLE
+
+`[HIGH]` Out-of-family review round 4 returned TWO findings, both real, and
+together they showed the round-2 and round-3 fixes COLLIDING: round 2 added an
+`IFF` cause rule, round 3 excluded the cause from the wire form, and the pair
+made `model_validate_json(model_dump_json(...))` raise for every conflict
+result. The second finding was independent — `CAPTURED` with a `failure_kind`
+and `FAILED` with none both validated, despite the documented contract. A third
+contradiction (`CAPTURED` carrying a `failure_reason`) was found by this leg's
+own enumeration and is closed with them.
+
+**Corner-patching is what produced this**, so the contract is now resolved as a
+whole rather than per field. THREE clauses in ONE validator:
+
+* **(a)** `CAPTURED` ⇒ no `failure_kind` AND no `failure_reason`.
+* **(b)** `FAILED` ⇒ `failure_kind is not None`. **Verified TOTAL at the
+  producers rather than assumed**: all four construction sites are in
+  `memory_capture.py`, and both `FAILED` sites set a kind unconditionally.
+  `failure_reason` is deliberately NOT required — `automatic_memory.
+  _raise_capture_failure` supplies its own default when absent, so a reasonless
+  `FAILED` is tolerated by design at the consumer and the validator does not
+  tighten past the defect.
+* **(c)** `failure_cause is not None` ⇒ `failure_kind is LEDGER_CONFLICT` —
+  **ONE WAY ONLY**. The reverse cannot survive deserialization by construction,
+  so enforcing it is what broke the round trip. It moves OUT of the validator
+  and into the witnesses, where it is true: a new producer-side witness plus the
+  three-surface chaining and joint-symmetry witnesses.
+
+`CAPTURED ⇒ no cause` is **derived** from (a)+(c), not separately stated, and
+the legality-table witness asserts the derived row so the reasoning is checked
+rather than trusted.
+
+**The wrapper raise now guards on cause-presence**: chain when present, raise
+plainly when not — NEVER `from None`, which suppresses the context rather than
+omitting it. That R1 reasoning is preserved, relocated to the branch that can
+now legitimately see an absent cause.
+
+**One deliberate whole-contract pass was run before closing**, per the
+orchestrator's instruction: every (status × kind × cause × reason) combination
+enumerated, FOURTEEN rows, four legal and ten refused, asserted in a single
+parametrized witness — so there is no fifth corner.
+
 ### §0.4 What this delta carries — counts
 
-ONE new unit (**U-RT-153**); ZERO existing units amended; ZERO clusters; **ONE new DAG edge** (U-RT-152 → U-RT-153); **ZERO cross-axis edges** (the memory-tool exception types are an EXISTING import dependency of `retry_breaker_fallback.py`, and `harness_runtime` → `harness_is` is a pre-existing package edge — `memory_capture.py` already imports `MemoryOperationIdempotencyConflictError`); ZERO CXA rows (aggregate frozen at 111); ZERO contract numbers; ZERO Memory-spec / Memory-plan delta. Witness modules 2 (5 + 12 tests); PD-8 probes 8.
+ONE new unit (**U-RT-153**); ZERO existing units amended; ZERO clusters; **ONE new DAG edge** (U-RT-152 → U-RT-153); **ZERO cross-axis edges** (the memory-tool exception types are an EXISTING import dependency of `retry_breaker_fallback.py`, and `harness_runtime` → `harness_is` is a pre-existing package edge — `memory_capture.py` already imports `MemoryOperationIdempotencyConflictError`); ZERO CXA rows (aggregate frozen at 111); ZERO contract numbers; ZERO Memory-spec / Memory-plan delta. Witness modules 2 (5 + 14 test functions; 5 + 27 collected, the legality table being parametrized over 14 rows); PD-8 probes 11.
 
 ---
 
@@ -98,7 +140,7 @@ ONE new unit (**U-RT-153**); ZERO existing units amended; ZERO clusters; **ONE n
 
 **#1 — The four-part determinism definition, witnessed at the LEDGER.** `[HIGH]` §14.6.3 row 6's condition is discharged by a conjunction of four properties, asserted against `append_memory_operation` DIRECTLY rather than through the executor: **(i) repeat-invariance** — the same conflicting append repeated N≥8 times yields exactly ONE distinct `(type, message)` outcome, with the ledger's own line count asserted unchanged so the single-outcome result cannot hold for the wrong reason; **(ii) candidate-independence** — third and fourth unrelated candidates meet the same refusal; **(iii) state-driven-not-stochastic** — re-presenting the ORIGIN candidate's payload returns `IDEMPOTENT_NOOP`, which is simultaneously the honest boundary and the positive control that stops (i) passing vacuously; **(iv) structural clock-exclusion** — the 18-field equivalence set is pinned BY NAME on both projection functions, plus a source-level assertion that neither reads `timestamp` or a clock and that both still read `provider`. The LEDGER placement is required, not incidental: determinism is a property of the ledger's comparison and must stay witnessed there whatever type the executor later wraps it in.
 
-**#2 — All three executor surfaces, each EXECUTED, and all three CHAIN.** `[HIGH]` One witness per surface (capture / standard-tool-call / redaction), each driving a REAL executor over a real filesystem store and asserting the new type. **Every** surface must assert `__cause__` is the ledger exception — plus a JOINT witness over all three together, because the failure mode that actually occurred at this leg's first round was two surfaces chaining and one not: a per-surface witness passes happily in that world, and only the symmetry assertion catches it. The `failure_cause` invariant is separately witnessed in both directions. **And the field must not cost the model its serialization contract:** `model_dump_json()` on BOTH a CAPTURED and a LEDGER_CONFLICT result, and `model_json_schema()` on the class, must all succeed — with an explicit assertion that the live object is STILL present in-process, so exclusion is demonstrably not loss.
+**#2 — All three executor surfaces, each EXECUTED, and all three CHAIN.** `[HIGH]` One witness per surface (capture / standard-tool-call / redaction), each driving a REAL executor over a real filesystem store and asserting the new type. **Every** surface must assert `__cause__` is the ledger exception — plus a JOINT witness over all three together, because the failure mode that actually occurred at this leg's first round was two surfaces chaining and one not: a per-surface witness passes happily in that world, and only the symmetry assertion catches it. The `failure_cause` rule is ONE-WAY at the model (a cause implies the conflict kind); the reverse is a PRODUCER property and is witnessed at the producer plus end-to-end, because it cannot survive deserialization. **And the field must not cost the model its serialization contract:** `model_dump_json()` on BOTH a CAPTURED and a LEDGER_CONFLICT result, and `model_json_schema()` on the class, must all succeed — with an explicit assertion that the live object is STILL present in-process, so exclusion is demonstrably not loss.
 
 **#3 — Partition completeness, asserted STRUCTURALLY.** `[HIGH]` A source-level assertion that the executor makes exactly ONE direct `self._store.append_memory_operation(` call — the one inside the shared helper. A fourth direct append added later would leak the raw ledger type back onto the staircase **silently**, because no behavioural test can cover a surface that does not exist yet. This is the shape a behavioural sweep structurally cannot deliver.
 
@@ -110,11 +152,13 @@ ONE new unit (**U-RT-153**); ZERO existing units amended; ZERO clusters; **ONE n
 
 **#7 — Every landed witness the change touches is amended, not deleted.** `[HIGH]` The tuple-equality witness gains the fifth member and a stated second load (it now also kills a re-parenting under the store subtype); the family-refusal fixture set moves the new type to *waived* while base / denied / store stay refused; the store-error end-to-end staircase-charge control **STAYS with its assertions UNCHANGED** and its docstring narrowed to the transient-I/O half with the `B-132`-narrowed note; W-5 cell (3) INVERTS to fail-fast (and gains a store-subtype counterfactual); the U-MEM-28 store-error negative STAYS and gains a mirror asserting the fifth admission was by name and not by base-widening.
 
-**#8 — PD-8 mutation probes, all confirmed RED then restored.** `[HIGH]` (a) narrow the tuple by the new member; (b) broaden the tuple to the memory family base; (c) de-list from the classifier while keeping the waiver (the consistency-rule probe); (d) collapse the capture-boundary discriminator so every `FAILED` reports `STORE_IO`; (e) re-parent the new type under `MemoryToolExecutionStoreError`; **(f) drop the `from` chain at the capture wrapper** — must fail BOTH the capture-surface witness and the symmetry witness; **(g) drop the `failure_cause` retention** — must fail loudly at the result model's own validator rather than silently producing an unchained raise; **(i) remove the exclusion / skip-schema annotation** — must fail the serialization-contract witness. Each must fail a NAMED witness, and (c) / (e) / (f) must fail the consistency, residual and symmetry witnesses specifically.
+**#8 — PD-8 mutation probes, all confirmed RED then restored.** `[HIGH]` (a) narrow the tuple by the new member; (b) broaden the tuple to the memory family base; (c) de-list from the classifier while keeping the waiver (the consistency-rule probe); (d) collapse the capture-boundary discriminator so every `FAILED` reports `STORE_IO`; (e) re-parent the new type under `MemoryToolExecutionStoreError`; **(f) drop the `from` chain at the capture wrapper** — must fail BOTH the capture-surface witness and the symmetry witness; **(g) drop the `failure_cause` retention** — must fail loudly at the result model's own validator rather than silently producing an unchained raise; **(i) remove the exclusion / skip-schema annotation** — must fail the serialization-contract witness; **(j) remove the whole-contract validator** — must fail every contradictory-combo row of the legality table; **(k) restore the cause rule to an `IFF`** — must fail the round-trip witness AND the legality table's round-tripped row, which is the round-4 defect pinned as a probe. Probe (g) is RE-VERIFIED under the one-way rule: with the validator no longer enforcing that direction, dropping the retention must still kill — via the chaining, symmetry and producer witnesses. Each must fail a NAMED witness, and (c) / (e) / (f) must fail the consistency, residual and symmetry witnesses specifically.
+
+**#10 — The result contract is asserted AS A WHOLE.** `[HIGH]` Every (status × failure_kind × failure_cause × failure_reason) combination enumerated in ONE parametrized witness — FOURTEEN rows, four legal and ten refused — plus a full `model_validate_json(model_dump_json(...))` round trip for every legal shape. Authored because rounds 2, 3 and 4 each found a corner the previous round's narrower assertion missed; an exhaustive table is the shape that stops a fifth.
 
 **#9 — The contracted `FAILED`-on-conflict outcome is NOT disturbed.** `[HIGH]` The two U-MEM-26 witnesses that pin it — a divergent second run-start REPORTED rather than read as completion, and a non-run-start conflict still surfacing as `FAILED` with the conflict named in `failure_reason` — must pass **unmodified**. They are the reason the discriminator is a value rather than a propagated exception, and re-running them unchanged is the only thing that demonstrates the leg left the other five `_capture` entry points alone.
 
-**Closure criterion (CONJUNCTIVE).** U-RT-153 closes when ALL of: ACs #1–#9 green with their mutation probes; the determinism witnesses green **before** the src change as well as after (they are ledger-level and must not depend on the split); the full Runtime and IS suites green with a programmatic collected-count reconciliation (the `B-117` silent-collection hazard: recount collected vs written, do not trust exit-green alone); `ruff` and `pyright` clean; and the register's `--check` green. **`B-115` flips to `closed` at this unit's merge; `B-132` is NARROWED, not closed.**
+**Closure criterion (CONJUNCTIVE).** U-RT-153 closes when ALL of: ACs #1–#10 green with their mutation probes; the determinism witnesses green **before** the src change as well as after (they are ledger-level and must not depend on the split); the full Runtime and IS suites green with a programmatic collected-count reconciliation (the `B-117` silent-collection hazard: recount collected vs written, do not trust exit-green alone); `ruff` and `pyright` clean; and the register's `--check` green. **`B-115` flips to `closed` at this unit's merge; `B-132` is NARROWED, not closed.**
 
 ### Out of scope
 
