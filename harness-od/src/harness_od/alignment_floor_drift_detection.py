@@ -34,7 +34,7 @@ references — three of the four alignment-floor primitives overlap with
 U-OD-23's `OperatorBurdenEvalPrimitive` set, but the §18.1 primitive set is
 its own enum (the fourth, judge-human Cohen's kappa, has no U-OD-23 member).
 
-Plan-vs-spec note. The §9.2 always-sampled exception set (18 rows, landed at
+Plan-vs-spec note. The §9.2 always-sampled exception set (19 rows, landed at
 U-OD-11) is enumerated by namespace and does not contain a literal
 `gen_ai.eval.alignment_floor.drift_detected` entry. The §18.2 drift event is a
 `gen_ai.eval.*` span event whose always-sampled head=1.0 posture is asserted
@@ -42,7 +42,7 @@ by §18.2 itself ("Always-sampled per C-OD-09 §9.2 — rare, load-bearing for
 meta-eval correctness"). Acceptance #4 is satisfied via the
 `DRIFT_DETECTED_SAMPLING_HEAD_RATE == 1.0` constant — the §9.2 reference is to
 the always-sampled *discipline*, not to literal §9.2-set membership; the §9.2
-set stays closed at 18 rows.
+set stays closed at 19 rows.
 """
 
 from __future__ import annotations

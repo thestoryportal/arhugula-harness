@@ -59,13 +59,13 @@
 
 snapshot:
   total: 132
-  open: 1
+  open: 0
   design_substrate_gated: 0
   registered_finding: 29
   operator_gated: 0
   held: 1
-  closed: 101
-  identity_digest: 7a591125e71202b3
+  closed: 102
+  identity_digest: fca12d5bd570db98
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5489,7 +5489,8 @@ items:
   heading: '### B-115 · Memory capture same-text / same-model-NAME / different-PROVIDER re-entry: a duplicate record JSONL line, then a `TRANSIENT_RETRY` staircase via `MemoryToolExecutionStoreError` *(MEASURED at the `B-84` build leg, PR #1243, W-5 cell (3); ratified by the operator 2026-08-07)*'
 - id: B-116
   title: 'Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state?'
-  status: open
+  status: closed
+  pr: '#1271 (the U-RT-152 impl leg -- Runtime guard + LLMDispatchPayloadShapeInternalError re-type + t1/t2 waived-charge emission; merge commit 3ba68285) + this PR (the B-116-t3 OD leg -- OD spec v1.37 section 9.2 roster 18->19 + plan v2.32 U-OD-58 + the roster/fixture impl). Section 14.6.3 t3-prime required BOTH; with both landed the row closes.'
   summary: 'THE QUESTION, and this row frames it rather than answering it. When the retry/breaker/fallback
     dispatcher fail-fasts a candidate, it records ONE breaker failure against that candidate''s
     PROVIDER before exiting. GROUNDED BY CONTENT at HEAD 73b0e87b (the inbound note''s ~:1025 is
@@ -5530,10 +5531,21 @@ items:
     reconcile; UNANIMOUS) and operator ratification 2026-08-07: Reading (II). (4) honored
     PER-MEMBER at spec section 14.6.3''s 7-row table -- 401/403 and the 25 response-parsing
     payload-shape sites STILL CHARGE; the four harness-internal types are WAIVED by name.
-    REMAINING: the U-RT-152 impl leg (plan v2.60 -- guard + re-type + witnesses incl. Probes B/C
-    as assertions and the raise-site partition witness); then the B-116-t3 OD leg (section 9.2
-    roster 18->19 + sampling fixtures, priced at C-c7-reconcile.md) -- the row closes only when
-    BOTH merge. SEQUENCED AFTER: B-115 (b-prime) -- its type joins the waiver tuple only on
+    BOTH CLOSURE LEGS HAVE NOW LANDED, so the row CLOSES. (i) The U-RT-152 impl leg merged at
+    PR #1271 (merge commit 3ba68285) -- the guard, the row-2a re-type to
+    LLMDispatchPayloadShapeInternalError, the t1+t2 waived-charge emission, Probes B/C as
+    assertions and the 3/25 raise-site partition witness. (ii) The B-116-t3 OD leg lands at THIS
+    PR -- OD spec v1.37 amends C-OD-09 section 9.2 18 -> 19 (adding fallback.exhausted, source
+    declaration C-CP-03 section 3.5), OD plan v2.32 adds U-OD-58, and the substrate roster +
+    five fixture edit points + two swept src count claims are reconciled in the same commit. The
+    C-c7-reconcile rider (a) -- the multi-tenant per-cell cardinality-budget check registered as
+    owed BEFORE the leg lands -- was EXECUTED and PASSES on the structural ground that the
+    C-OD-11 section 11.1 budget enforces at COLLECTOR_BOUNDARY / BACKEND_INGESTION, downstream of
+    and independent of the sampling decision, while fallback.exhausted stays a terminal
+    once-per-exhausted-chain event with one emission site and no per-attempt multiplier; the F-08
+    population question remains explicitly unmeasured per C7''s own FM-K refusal. Riders (b)/(c)/(d)
+    are cross-referenced to the already-minted rows B-123 / B-124 / B-125 and were NOT re-minted;
+    none is a precondition of the roster row. SEQUENCED AFTER: B-115 (b-prime) -- its type joins the waiver tuple only on
     confirmed determinism at its own build (racy => section 14.6.3 row 6 VOID + C5 reroute).
     FIFTEEN forward rows B-118..B-132 minted at the ratification-leg PR -- B-118..B-131 from
     the DELIVERABLE''s forward-row enumeration, B-132 the catch-all residual surfaced at the
@@ -5551,7 +5563,7 @@ items:
     corrected package; the nameable C1/C9-vs-C11 tension resolved in favor of reading (II) with
     C9''s and C11''s conditional sign-offs honored structurally (the t3 closure gate + the
     trip-threshold revisit-trigger at section 14.6.3).'
-  heading: '### B-116 · Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state? *(pre-existing; spans C-CP-03 §3.4+§3.5 + Runtime §14.6; RATIFIED Reading (II) 2026-08-07 — spec v1.112 + plan v2.60 landed; closes at U-RT-152 + the B-116-t3 leg)*'
+  heading: '### B-116 · Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state? *(pre-existing; spans C-CP-03 §3.4+§3.5 + Runtime §14.6; RATIFIED Reading (II) 2026-08-07 — spec v1.112 + plan v2.60 landed; U-RT-152 impl leg merged #1271; **CLOSED at the `B-116-t3` OD leg — OD v1.37 §9.2 18 → 19 + plan v2.32 U-OD-58**)*'
 - id: B-117
   title: Duplicate pytest test-file basenames across workspace packages silently drop witnesses from collection
   status: registered_finding

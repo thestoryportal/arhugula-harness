@@ -43,6 +43,7 @@ _LITERAL_ALWAYS_SAMPLED = (
     "memory.operation",
     "managed_agents.runtime",
     "skill.activation",
+    "fallback.exhausted",  # §9.2 row 19 (NEW at OD spec v1.37 — U-OD-58)
 )
 
 
@@ -51,8 +52,21 @@ _LITERAL_ALWAYS_SAMPLED = (
 # ---------------------------------------------------------------------------
 
 
-def test_canonical_set_carries_18_entries_per_spec_9_2() -> None:
-    assert len(ALWAYS_SAMPLED_EVENT_CLASSES) == 18
+def test_canonical_set_carries_19_entries_per_spec_9_2() -> None:
+    assert len(ALWAYS_SAMPLED_EVENT_CLASSES) == 19
+
+
+def test_literal_fixture_is_complete_against_the_canonical_literal_arm() -> None:
+    """`_LITERAL_ALWAYS_SAMPLED` covers EVERY non-wildcard §9.2 member.
+
+    Without this, the tuple is a hand-maintained enumeration that can silently
+    drift from the canonical set: dropping a name merely removes parametrized
+    cases, and every remaining assertion still passes. Surfaced by the U-OD-58
+    PD-8 probe (iii), which found the one-fixture-reverted mutation green.
+    """
+    wildcards = {e for e in ALWAYS_SAMPLED_EVENT_CLASSES if e.endswith(".*")}
+    assert frozenset(_LITERAL_ALWAYS_SAMPLED) == ALWAYS_SAMPLED_EVENT_CLASSES - wildcards
+    assert len(_LITERAL_ALWAYS_SAMPLED) == 17
 
 
 @pytest.mark.parametrize("name", _LITERAL_ALWAYS_SAMPLED)
