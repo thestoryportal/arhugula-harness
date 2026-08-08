@@ -802,23 +802,72 @@ class RetryBreakerFallbackDispatcher:
                 # because span-end WORKER THREADS sign concurrently.)
                 half_open_trial = False
                 trial_token: int | None = None
+                effective_policy = policy
                 if breaker.state is BreakerState.OPEN:
                     trial_transition = breaker.attempt_half_open(now=self.monotonic())
                     if trial_transition is None:
                         # Cooldown unexpired — the pre-v1.114 skip, unchanged.
                         skip_reason = "breaker-open"
                     else:
-                        self._emit_breaker_transition(trial_transition, outer_span)
+                        # ---- TRIAL PROTECTION BOUNDARY (§14.6.4) ----
+                        # The instant `attempt_half_open` returns, the SHARED
+                        # breaker is ALREADY half_open: `should_attempt()` is
+                        # False for every sibling and only a token holder can
+                        # resolve it. Anything that raises between that
+                        # transition and the cleanup boundary below therefore
+                        # leaves the machine latched in half_open with NO
+                        # owner — recreating the process-lifetime absorbing
+                        # latch this row exists to remove, and in a state
+                        # strictly WORSE than the absorbing `open` it replaced,
+                        # because `re_arm_half_open_trial` also refuses a
+                        # non-owner. (Found by out-of-family review round 3;
+                        # the first build emitted here UNGUARDED, so a raising
+                        # span exporter stranded the breaker for the process.)
+                        #
+                        # Discipline: capture the protection state FIRST — no
+                        # statement may sit between the transition and these
+                        # two assignments — then run every remaining
+                        # pre-dispatch statement that CAN raise inside a guard
+                        # that re-arms before re-raising.
                         half_open_trial = True
-                        # Capture the admission epoch. Only this token can
-                        # resolve THIS trial: a request admitted earlier while
-                        # the breaker was CLOSED may still be awaiting the
-                        # provider, and its stale outcome must not resolve a
-                        # trial it does not own (a stale SUCCESS would close an
-                        # unhealthy breaker outright). The `_epoch` guard the
-                        # sibling `config.audit_signing` breaker carries.
+                        # Only this token can resolve THIS trial: a request
+                        # admitted earlier while the breaker was CLOSED may
+                        # still be awaiting the provider, and its stale outcome
+                        # must not resolve a trial it does not own (a stale
+                        # SUCCESS would close an unhealthy breaker outright).
+                        # The `_epoch` guard the sibling
+                        # `config.audit_signing` breaker carries.
                         trial_token = breaker.trial_epoch
                         skip_reason = None
+                        try:
+                            self._emit_breaker_transition(trial_transition, outer_span)
+                            # `B-118` trial cap (§14.6.4): C9's Pillar-4
+                            # contracts ONE trial call. `record_failure` on the
+                            # transient path fires only at escalation /
+                            # exhaustion, so an uncapped trial would make up to
+                            # `max_attempts` PAID calls against a provider the
+                            # harness believes is down before the breaker
+                            # re-opened. Constructed HERE, inside the guard,
+                            # rather than below it — a validation raise from
+                            # this model would otherwise sit in the same
+                            # unprotected window as the emission.
+                            effective_policy = RetryPolicy(
+                                max_attempts=1, backoff=policy.backoff, jitter=policy.jitter
+                            )
+                        except BaseException:
+                            # STATE-ONLY re-arm, deliberately not
+                            # `_release_half_open_trial`: that would emit a
+                            # SECOND event through the same demonstrably-broken
+                            # emitter, raising again and MASKING the original
+                            # fault. The re-arm mutates state before it would
+                            # emit anyway, so the release is already complete
+                            # without the emission — and the machine ends
+                            # `open` with a FRESH deadline, exactly as an
+                            # inconclusive trial does (§14.6.4 cells 3 / 6-9).
+                            breaker.re_arm_half_open_trial(
+                                now=self.monotonic(), trial_token=trial_token
+                            )
+                            raise
                 elif not breaker.should_attempt():
                     # HALF_OPEN: a sibling dispatch holds the trial permit.
                     # The trial is contracted to be ONE call, so this
@@ -864,16 +913,11 @@ class RetryBreakerFallbackDispatcher:
                     if _on_routed_primary and routed_resolution is not None
                     else None
                 )
-                # `B-118` trial cap (§14.6.4): C9's Pillar-4 contracts ONE
-                # trial call. `record_failure` on the transient path fires
-                # only at escalation/exhaustion, so an uncapped trial would
-                # make up to `max_attempts` PAID calls against a provider the
-                # harness believes is down before the breaker re-opened.
-                effective_policy = (
-                    RetryPolicy(max_attempts=1, backoff=policy.backoff, jitter=policy.jitter)
-                    if half_open_trial
-                    else policy
-                )
+                # The only statements now standing between the guarded
+                # region above and this cleanup boundary are the
+                # `_on_routed_primary` comparison (attribute reads on frozen
+                # models) and `ContextVar.set` — both TOTAL, so the window the
+                # guard closes has no remaining raising statement in it.
                 try:
                     attempt_terminal = await self._run_per_candidate_attempts(
                         binding=binding,

@@ -5811,7 +5811,18 @@ items:
     -- the CLOSED-arm success-reset is shipped consecutive-failure semantics reachable with zero trips,
     and guarding it would mean epoch-capturing every ordinary dispatch and rewriting contracted
     success-reset semantics, a redesign this leg does not price. Declared at Runtime spec v1.114 section
-    14.6.4''s honest-boundary paragraph and minted as forward row B-135.'
+        14.6.4''s honest-boundary paragraph and minted as forward row B-135. ROUND 3 (same review): ONE
+    finding, REAL -- the round-1 release obligation guarded the DISPATCH but left the admission''s own
+    transition EMISSION outside it, so a raising span exporter stranded the shared breaker in HALF_OPEN
+    with no owner: the process-lifetime absorbing latch this row removes, recreated by its own fix, and
+    strictly worse than absorbing OPEN because the re-arm refuses a non-owner too. Fixed structurally --
+    the protected region now begins at the TRANSITION rather than at the dispatch, protection state is
+    captured with no statement in between, and the emission plus the capped-policy construction run
+    inside a guard that re-arms (STATE-ONLY, so the broken emitter is not re-entered and the original
+    fault is not masked) before re-raising. The other four transition emissions were SWEPT and verified
+    to follow their state mutation, so the admission is the one site where the ordering is structurally
+    impossible. AC #12 + probe P15 added; unit now TWELVE ACs / FIFTEEN probes, with the closure
+    criterion restated over the SETS rather than a count.'
   council: 'No at registration. A single-domain C9 reliability-mechanism gap with no nameable cross-domain
     tension — the mechanism, the contract text, and the recovery model are all in one voice''s lineage.
     Conditionally yes only if step (2) proposes a durable cooldown clock: that re-opens the persistence

@@ -3732,3 +3732,98 @@ async def test_b118_stale_success_through_the_composer_does_not_close_a_live_tri
     assert ("half_open", "closed", 0) not in transitions
     assert transitions.count(("open", "half_open", 0)) == 1
     assert [t for t in transitions if t[0] == "half_open"][0][1] == "open"
+
+
+@pytest.mark.asyncio
+async def test_b118_a_raising_emitter_on_the_admission_event_does_not_strand_the_breaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #12 / §14.6.4 trial protection boundary: if the `open → half_open`
+    transition EMISSION raises, the breaker must end `open` with a FRESH
+    deadline — never latched in `half_open`.
+
+    The window this closes: `attempt_half_open` has already moved the SHARED
+    machine to `half_open` before the emission runs. A raise there (a broken
+    span exporter, a full queue, an OTel SDK fault) previously escaped dispatch
+    with `should_attempt()` False for every sibling AND `attempt_half_open`
+    refusing forever — a recreated process-lifetime absorbing latch, and one
+    strictly WORSE than the absorbing `open` this row removed, since
+    `re_arm_half_open_trial` also refuses a non-owner.
+
+    The exception must still propagate: this is a re-arm, not a swallow.
+    (Found by out-of-family review round 3.)"""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [{"result": "never-reached"}], clock=clock, fail_threshold=2
+    )
+
+    class _EmitterFault(RuntimeError):
+        pass
+
+    calls: list[str] = []
+
+    def _raising_emit(self: Any, transition: Any, parent_span: Any) -> None:
+        calls.append(f"{transition.from_state.value}->{transition.to_state.value}")
+        if transition.to_state is BreakerState.HALF_OPEN:
+            raise _EmitterFault("span exporter refused the admission event")
+
+    # Class-level patch: the dispatcher is a `slots=True` dataclass, so a
+    # per-instance method assignment is refused.
+    monkeypatch.setattr(RetryBreakerFallbackDispatcher, "_emit_breaker_transition", _raising_emit)
+
+    clock.advance(30.0)
+    with pytest.raises(_EmitterFault):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert primary_breaker.state is BreakerState.OPEN, (
+        "a raising emitter must NOT strand the breaker in half_open"
+    )
+    assert primary_breaker.opened_at == 30.0, "re-armed with a FRESH deadline"
+    assert primary_breaker.fail_count == 2, "the failed admission charges nothing"
+    # The re-arm is STATE-ONLY: it does not push a second event through the
+    # same broken emitter, which would raise again and mask the original fault.
+    assert calls == ["open->half_open"]
+    # And the breaker is genuinely recoverable afterwards — not merely non-half_open.
+    assert primary_breaker.attempt_half_open(now=60.0) is not None
+
+
+def test_b118_every_transition_emission_follows_its_state_mutation() -> None:
+    """AC #12 sweep, asserted STRUCTURALLY rather than by inspection: for every
+    breaker transition this leg emits, the machine has ALREADY reached its
+    destination state before the emission is attempted — so a raising emitter
+    can strand nothing on those paths.
+
+    The admission event is the ONE site where that ordering cannot hold (the
+    machine must be `half_open` for the trial to exist at all), which is why it
+    is the only site needing the explicit protection boundary. This witness
+    pins the other three so a future refactor that emits BEFORE mutating —
+    reintroducing the same window elsewhere — fails here."""
+    machine = BreakerStateMachine(
+        scope=BreakerScope.PER_MODEL,
+        identifier="anthropic:claude-test-1",
+        fail_threshold=1,
+        cooldown_seconds=30.0,
+    )
+    # closed -> open: the transition is returned only once state has moved.
+    transition = machine.record_failure(now=0.0)
+    assert transition is not None and machine.state is BreakerState.OPEN
+
+    # open -> half_open (the guarded site).
+    machine.attempt_half_open(now=30.0)
+    token = machine.trial_epoch
+    assert machine.state is BreakerState.HALF_OPEN
+
+    # half_open -> open via the INCONCLUSIVE re-arm: state first, then emit.
+    transition = machine.re_arm_half_open_trial(now=40.0, trial_token=token)
+    assert transition is not None and machine.state is BreakerState.OPEN
+
+    # half_open -> closed: state first.
+    machine.attempt_half_open(now=70.0)
+    transition = machine.record_success(trial_token=machine.trial_epoch)
+    assert transition is not None and machine.state is BreakerState.CLOSED
+
+    # half_open -> open via a charging failure: state first.
+    machine.record_failure(now=80.0)
+    machine.attempt_half_open(now=110.0)
+    transition = machine.record_failure(now=111.0, trial_token=machine.trial_epoch)
+    assert transition is not None and machine.state is BreakerState.OPEN
