@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 134
+  total: 135
   open: 0
   design_substrate_gated: 0
   registered_finding: 30
   operator_gated: 0
   held: 1
-  closed: 103
-  identity_digest: d0d0206bcd425900
+  closed: 104
+  identity_digest: 0a0bb03401f9881c
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5716,7 +5716,8 @@ items:
   heading: '### B-117 · Duplicate pytest test-file BASENAMES across workspace packages silently drop witnesses from collection, and nothing guards against it *(lifted to its own row 2026-08-07 from the `B-112` close-out''s registered ADJACENT INFRA GAP, per that row''s own "a future infra arc may lift it to its own row")*'
 - id: B-118
   title: 'The half-open latch is dead code, so OPEN is an absorbing breaker state for the process lifetime'
-  status: registered_finding
+  status: closed
+  pr: '#1275 (the B-118 bundled leg -- Runtime spec v1.114 section 14.6 step 4 three-way breaker pre-check + NEW section 14.6.4 nine-cell trial-outcome matrix + the dead-half-open-latch residual DISCHARGED, plan v2.62 U-RT-154, and the impl with both recovery directions witnessed end-to-end through the real composer)'
   summary: 'WHAT IT IS. BreakerStateMachine.attempt_half_open()
     (harness-runtime/src/harness_runtime/lifecycle/retry_breaker.py:289) has ZERO production call sites
     — the only three occurrences across every harness-*/src tree are two docstrings (:51, :201) and the
@@ -5750,7 +5751,122 @@ items:
     instead; once this row lands those may be strengthened, and they should be, deliberately. WHAT WOULD
     FALSIFY IT. A production call site appearing (then the row is already closed), or a decision that
     absorbing-OPEN is intentional — in which case OD §7.1''s transition text and B-116''s normative test
-    both need amending, which is a Class 1 design-substrate route, not an impl fix.'
+    both need amending, which is a Class 1 design-substrate route, not an impl fix. CLOSED 2026-08-08 at
+    Runtime spec v1.114 + plan v2.62 (U-RT-154), spec + plan + impl in ONE PR. ALL FIVE CLOSE-OUT STEPS
+    EXECUTED. (1) Re-verified at HEAD fb3dda44 -- zero production call sites (the only src occurrences
+    were two docstrings and the definition), should_attempt() clock-free, get_breaker identity-stable.
+    (2) The clock is SPLIT. The COMPOSER holds the source (an injectable monotonic field defaulting to
+    time.monotonic, mirroring the existing sleep_fn posture); the STATE MACHINE holds only the
+    caller-recorded opened_at deadline, because that state is per-(scope, identifier) and the composer
+    has no per-breaker storage -- a composer-side map would be a SECOND authority for breaker state. The
+    machine still never reads a clock. NOT a RuntimeConfig scalar. The in-tree shape template is
+    BreakerGuardedSigningBackend at harness-runtime/src/harness_runtime/config/audit_signing.py, which
+    has carried an injected-clock plus single-probe breaker since ADR-D8. (3) Wired at the pre-check,
+    now THREE-WAY -- closed proceeds / open attempts a conjunctively-gated trial capped at ONE attempt /
+    half_open means a sibling holds the permit and is skipped with the new half-open-trial-in-flight
+    reason. should_attempt() narrows to state-is-closed, which IS the permit, since half_open exists
+    only while a trial is in flight and the prior state-is-not-open admitted every concurrent branch
+    into a call contracted to be single. No lock -- all mutators run on one event loop, so the hazard is
+    interleaving at the await rather than a data race (contrast the signing breaker, which DOES lock
+    because span-end worker threads sign). (4) BOTH directions witnessed end-to-end through the REAL
+    composer with an injected clock -- open to half_open to closed recovery AND open to half_open to
+    open re-trip -- plus a three-branch concurrency witness whose interleaving is GUARANTEED by an
+    asyncio.Event rather than hoped for. (5) The B-116 witnesses were strengthened DELIBERATELY -- seven
+    rows gained their now-available assertions (the Probe-C clock-advance form discriminating
+    never-opened from opened-and-reset; the 401 and response-parsing RECOVERY-COMPLETION positive
+    controls that make the charge mean something; the exhaustion-identity admissibility loop), three
+    were left unchanged by name, and the B-115 IS-side determinism witnesses were untouched. THE ONE
+    OPERATOR GATE. Grounding surfaced an interaction the ratified Reading (II) does NOT answer. With the
+    B-116 guard, a WAIVED fail-fast during a trial charges nothing, so record_failure never runs and the
+    machine is STRANDED in half_open -- a NEW absorbing state strictly worse than the absorbing OPEN
+    this row removes, and one the wiring would itself have introduced. Four further cells (audit-signing
+    hard failure, terminal HITL control flow, DispatchFenceTrippedSignal, CancelledError) strand
+    identically. INCONCLUSIVE-then-re-arm is derivable from the Reading (II) attributability clause; the
+    FRESH-versus-PRESERVED cooldown choice is NOT, and was surfaced. OPERATOR-RATIFIED 2026-08-08
+    (AskUserQuestion) -- FRESH cooldown, trigger_count 0, fail_count UNCHANGED. All nine cells are
+    contracted at NEW Runtime spec v1.114 section 14.6.4. THE COUNCIL CONDITION DID NOT FIRE -- the
+    design is in-memory monotonic with nothing persisted, so the durable-cooldown-clock trigger for the
+        C9-C11 dyad was never reached and no council was convened. OUT-OF-FAMILY REVIEW ROUND 1 -- TWO
+    findings, both adjudicated REAL and fixed on the branch. (i) THE STALE-OUTCOME RACE. The first build
+    wired the permit as one-admission-at-a-time and DROPPED the epoch guard this row''s own grounding
+    had cited from the in-tree BreakerGuardedSigningBackend template, which carries it for exactly this
+    race. A request admitted while the breaker was CLOSED can still be awaiting its provider when
+    siblings trip it and a LATER request admits the trial; a stale SUCCESS then closes an unhealthy
+    breaker, and the real trial''s failure lands on a CLOSED machine as one ordinary failure under
+    fail_threshold. Fixed by a per-breaker admission EPOCH -- attempt_half_open increments it, the
+    admitted caller captures it as a trial token, and record_success / record_failure /
+    re_arm_half_open_trial resolve a HALF_OPEN machine ONLY on the current epoch. Stale outcomes are
+    DROPPED with no transition, no state change and no fail_count movement (the same treatment an
+    outcome arriving while OPEN already got, and for the same reason). CLOSED-state accounting stays
+    tokenless and BYTE-UNCHANGED. Contracted at 14.6.4, planned at AC #11, witnessed at BOTH altitudes
+    incl. the exact A/B interleaving end-to-end through the real composer, with four new PD-8 probes
+    P11-P14. (ii) CELL 4 WAS UNREACHABLE -- under the ratified ONE-attempt trial cap the trial''s only
+    attempt is necessarily is_last_attempt, so a transient on it takes the exhaustion branch and IS cell
+    5. The cap is the ratified term, so the cell is marked VOID BY CONSTRUCTION with its derivation and
+    is NOT renumbered, keeping cell numbering stable against the plan, this register and every citing
+        witness. The matrix is nine cells declared, EIGHT live. ROUND 2 (same review): one mechanical
+    count reconciliation (11 ACs / 14 probes) and one CROSS-TRANSITION stale-outcome variant the epoch
+    guard does NOT cover -- a request admitted while CLOSED that survives a trip AND a recovery, then
+    resets fail_count on the tokenless CLOSED arm. ADJUDICATED PRE-EXISTING AND REGISTERED, NOT ABSORBED
+    -- the CLOSED-arm success-reset is shipped consecutive-failure semantics reachable with zero trips,
+    and guarding it would mean epoch-capturing every ordinary dispatch and rewriting contracted
+    success-reset semantics, a redesign this leg does not price. Declared at Runtime spec v1.114 section
+        14.6.4''s honest-boundary paragraph and minted as forward row B-135. ROUND 3 (same review): ONE
+    finding, REAL -- the round-1 release obligation guarded the DISPATCH but left the admission''s own
+    transition EMISSION outside it, so a raising span exporter stranded the shared breaker in HALF_OPEN
+    with no owner: the process-lifetime absorbing latch this row removes, recreated by its own fix, and
+    strictly worse than absorbing OPEN because the re-arm refuses a non-owner too. Fixed structurally --
+    the protected region now begins at the TRANSITION rather than at the dispatch, protection state is
+    captured with no statement in between, and the emission plus the capped-policy construction run
+    inside a guard that re-arms (STATE-ONLY, so the broken emitter is not re-entered and the original
+    fault is not masked) before re-raising. The other four transition emissions were SWEPT and verified
+    to follow their state mutation, so the admission is the one site where the ordering is structurally
+    impossible. AC #12 + probe P15 added; unit now TWELVE ACs / FIFTEEN probes, with the closure
+        criterion restated over the SETS rather than a count. ROUND 4 (same review): ONE finding, REAL
+    -- the MIRROR of round 3 at the inconclusive EXITS. When a trial exits through cells 6-8 and the
+    re-arm''s own transition emission failed, the emitter error raised BEFORE the bare raise and
+    REPLACED the propagating exception -- AuditSigningFailedError, the terminal HITL signals and
+    DispatchFenceTrippedSignal are each contracted to travel verbatim, so a terminal RT-FAIL-* mapping
+    and the fence''s at-most-once effect semantics were being traded for a telemetry fault. Fixed by a
+    disposition flip keyed on whether an exception is IN FLIGHT rather than a blanket guard: with one
+    present the emitter failure is SUPPRESSED and attached to the propagating exception via add_note
+    (suppressed is NOT discarded); with none present it still propagates as its own fault, matching
+    main''s unguarded posture at every other harness.breaker.* emission site -- a blanket rule would
+    hide exporter breakage on the common path. Cell 9 VERIFIED to emit nothing by construction; the
+    success/charging emissions SWEPT and left unchanged, none of them sitting on a path that must
+    propagate a terminal exception verbatim. AC #13 + probe P16 added; unit now THIRTEEN ACs / SIXTEEN
+        probes under the set-phrased closure criterion. ROUND 6 (same review): ONE finding whose fix is
+    the CONTRACT rather than the code. A dispatch admitted while the breaker was CLOSED keeps its
+    multi-attempt policy, so if siblings trip the breaker and a later dispatch takes the trial permit,
+    the stale dispatch resumes attempt 2 with NO breaker re-consultation -- a concurrent PAID call
+    overlapping the single trial. The non-re-consultation is PRE-EXISTING (the pre-check is
+    PER-CANDIDATE by contract at section 14.6 step 4; the pre-v1.114 loop behaved identically), so this
+    leg neither introduced nor priced it. What round 6 caught is that the section 14.6.4 text THIS LEG
+    authored OVERCLAIMED -- C9 Pillar-4 and the cell-3 ratification bind THE TRIAL to one call and never
+    deliberated stale CLOSED-era dispatches, so reading single as process-wide was an unratified
+    widening introduced by the WORDING. Section 14.6.4 now scopes exclusivity to ERA-CONSISTENT
+    admissions, the step-4 bullet carries the matching qualifier, and AC #14 PINS the declared behaviour
+    by witness (both inner-call counts asserted) so it cannot drift back into an overclaim.
+    Mid-staircase re-consultation was REFUSED as unpriced semantic surgery -- it would abandon a
+    candidate partway through its attempt loop and change exhaustion and fallback.last_failure_class
+    accounting for a pre-existing path. Folded into B-135 rather than minted separately: round 2
+        registered the OUTCOME side, round 6 adds the ATTEMPT side, one family two sides. MERGE GATE
+    (#1275, 3-lens decorrelated): lens 1 APPROVE, lens 2 APPROVE after a one-line md-mirror permutation
+    (a B-118 narrative bullet had been filed under the B-119 heading -- a blind spot of the heading-only
+    --check), lens 3 BLOCK on a MEASURED witness-adequacy gap and the most useful finding of the leg.
+    Deleting trial_token from the max-attempts-exhaustion record_failure left the WHOLE SUITE GREEN
+    while fail_count went 3 to 2 and trigger_count 3 to 0, because the cell-5 witness asserted only
+    state-is-OPEN and a fresh opened_at -- both equally true of an INCONCLUSIVE RE-ARM, so it could not
+    tell a real exhaustion charge from a stale-dropped one. Cell 5 was the single cell in the nine-cell
+    matrix carrying no fail_count/trigger_count assertion. Closed with those two assertions plus NEW
+    probe P17; the staircase escalation site''s unwitnessed token threading resolved by DETERMINING
+    unreachability from content (the classifier''s only non-None return is TRANSIENT_RETRY, the composer
+    always passes STAGE_1_REFLEXION, and that pair maps to STAGE_2) and PINNING the determination by
+    witness; cells 7 and 8 given the opened_at-FRESH assertion AC #6 already required of every
+    inconclusive cell; both BaseException-boundary asymmetries (narrow suppression at the release, wide
+    guard at the admission) witnessed rather than recorded as gaps. NO contract text changed -- the
+    spec''s cell-5 disposition was correct as written; what was missing was the assertion that the
+    implementation delivers it. Unit now FIFTEEN ACs / SEVENTEEN probes.'
   council: 'No at registration. A single-domain C9 reliability-mechanism gap with no nameable cross-domain
     tension — the mechanism, the contract text, and the recovery model are all in one voice''s lineage.
     Conditionally yes only if step (2) proposes a durable cooldown clock: that re-opens the persistence
@@ -5788,7 +5904,16 @@ items:
     ever report per_model. (5) Note the coupling to B-125 — emit_breaker_transition_event defaults
     tool_id to the breaker key only at PER_MODEL scope (retry_breaker.py:459-461), so constructing a
     second scope changes which trips carry that default. WHAT WOULD FALSIFY IT. A PER_PROVIDER
-    construction site appearing anywhere in harness-*/src.'
+    construction site appearing anywhere in harness-*/src. CROSS-NOTE, 2026-08-08 (B-118 closed) -- this
+    row is UNTOUCHED and NOT dependent on B-118, but its C11 half is materially changed. The registered
+    council framing weighed detection breadth against the fact that one provider-scope OPEN disables
+    every model of that provider at once, AND WITH B-118 UNFIXED IT DOES SO IRREVERSIBLY. B-118 is now
+    closed -- OPEN is escapable, bounded by a real cooldown with a single-trial half-open probe -- so
+    the irreversibility clause no longer holds and the C11 objection is weaker than when it was
+    registered. The dyad is NOT dissolved (a provider-scope breaker still has a wider blast radius than
+    a per-model one, and a recovery probe still costs one real call), but any future step-(2)
+    deliberation MUST re-ground the C11 position against escapable-OPEN rather than quoting the
+    registered text.'
   council: 'No at registration — nothing is decided here. Conditionally yes at step (2): building a second
     breaker scope trades detection breadth (C9 — a provider outage should be visible as one fact, not
     inferred from N per-model facts) against operator recoverability under a materially wider blast
@@ -6473,3 +6598,85 @@ items:
     rather than routing them to the residual? *(surfaced at the `B-115` (b′) leg, 2026-08-08 — the leg
     took the residual per the U-MEM-28 precedent and registered the vocabulary question rather than
     widening a ratified enumeration on its own authority)*'
+- id: B-135
+  title: 'Stale-era breaker dispatches act under a superseded era on BOTH sides -- outcomes reset the
+    CLOSED-arm fail_count un-epoch-guarded, and attempts continue a multi-attempt staircase across a
+    trip that can overlap the single half-open trial'
+  status: registered_finding
+  summary: 'WHAT IT IS. The B-118 trial-epoch guard (Runtime spec v1.114 section 14.6.4) binds the
+    HALF_OPEN resolution arms ONLY -- record_success / record_failure / re_arm_half_open_trial refuse to
+    resolve a HALF_OPEN machine unless the caller presents the current admission epoch. The CLOSED arms
+    stay TOKENLESS by design. Codex round 2 at the B-118 leg named a scenario that crosses the boundary:
+    a request admitted while the breaker was CLOSED survives, in flight, through a trip AND a successful
+    half-open recovery, and its stale success then arrives while the breaker is CLOSED again. It takes
+    the tokenless CLOSED arm, resets fail_count, and erases whatever failure accumulation has built up
+    SINCE the recovery. WHY THIS IS PRE-EXISTING AND NOT A B-118 REGRESSION, VERIFIED NOT ASSUMED.
+    record_success resetting fail_count in CLOSED is the shipped CONSECUTIVE-failure breaker semantics
+    on main (harness-runtime/src/harness_runtime/lifecycle/retry_breaker.py, the record_success CLOSED
+    arm, pre-B-118), and the erasure is reachable with ZERO trips and ZERO recoveries: siblings fail
+    twice, an older in-flight success lands, the count resets. That is the definition of a
+    consecutive-failure counter and it long predates this leg. B-118 adds ONE MORE PATH into the same
+    arm (a request that outlived a full trip-and-recover cycle) but changes NOTHING about the arm''s
+    semantics. WHY THE B-118 GUARD DELIBERATELY STOPS AT HALF_OPEN. The HALF_OPEN race is categorically
+    different -- there a stale success does not merely reset a counter, it RESOLVES A TRIAL IT DOES NOT
+    OWN and closes a breaker the machine had already judged unhealthy, after which the real trial''s
+    failure lands under threshold and the provider-model is silently readmitted. Guarding CLOSED-arm
+    outcomes instead requires capturing an epoch on EVERY ordinary dispatch and changes CONTRACTED
+    success-reset semantics for every caller -- an unpriced redesign, not a bug fix, which is why the
+    B-118 leg declared the boundary at section 14.6.4 rather than absorbing it. SURFACED BY
+        OUT-OF-FAMILY CODEX REVIEW ROUND 2 AT THE B-118 LEG, 2026-08-08. THE ATTEMPT SIDE, ADDED
+    2026-08-08 (out-of-family codex review round 6 at the same B-118 leg). The same family has a second
+    half, on the ATTEMPT side rather than the OUTCOME side. A dispatch admitted while the breaker was
+    CLOSED keeps its multi-attempt RetryPolicy. If it fails transiently, and siblings then trip the
+    breaker while a later dispatch acquires the HALF_OPEN permit, the CLOSED-era dispatch resumes
+    attempt 2 with NO breaker re-consultation -- a concurrent PAID call overlapping what section 14.6.4
+    calls the single trial. WHY THIS TOO IS PRE-EXISTING. The breaker pre-check is PER-CANDIDATE by
+    contract (section 14.6 step 4): it runs once when a candidate is selected and is never re-consulted
+    between that candidate''s own retry attempts. The pre-v1.114 loop behaved identically, so B-118
+    neither introduced nor priced this. What round 6 actually caught is that the section 14.6.4 text
+    B-118 authored OVERCLAIMED -- the ratified intent (C9 Pillar-4, the cell-3 operator ratification)
+    binds THE TRIAL to one call and never deliberated stale CLOSED-era dispatches. That text is now
+    SCOPED at section 14.6.4 to era-consistent admissions, with the boundary declared and witnessed
+    rather than defended. ONE FAMILY, TWO SIDES -- a dispatch admitted under an earlier breaker era
+    continuing to act under that era''s policy, whether it is reporting an OUTCOME or making another
+    ATTEMPT.'
+  close_out: '(1) DECIDE WHETHER CLOSED-ARM OUTCOME ORDERING SHOULD BE EPOCH-AWARE AT ALL. This is the
+    whole question, and it is not obviously yes -- a consecutive-failure counter that forgives on ANY
+    success is a deliberate, contracted design, and making it order-aware changes what fail_threshold
+    means for every caller. Ground it against the C-CP-03 section 3.5 breaker semantics before pricing
+    anything. Likely a C9 single-domain call; council only if step (2) proposes a DURABLE or PERSISTENT
+    epoch, which re-opens the same persistence tension B-116 term t4 pinned. (2) IF YES, PRICE BOTH
+    SIDES honestly, because epoch-awareness on one alone leaves the family half-open. (2a) THE OUTCOME
+    SIDE -- the ordinary-dispatch epoch capture: every dispatch would have to capture an epoch and every
+    CLOSED-arm resolution present it, which touches the hot path rather than the rare recovery path the
+    B-118 guard touches, and would need its own witness set plus a decision about what a stale
+    CLOSED-arm success DOES instead of resetting (drop it? apply it to the epoch it belongs to? neither
+    is free). (2b) THE ATTEMPT SIDE -- mid-staircase re-consultation, which is the more expensive half
+    and the reason this is registered rather than absorbed: re-checking the breaker BETWEEN a
+    candidate''s own retry attempts means ABANDONING a candidate partway through its attempt loop, which
+    changes exhaustion accounting and the fallback.last_failure_class attribution for a path that
+    predates B-118 entirely. That is semantic surgery on the staircase, not a defect repair, and it must
+    be priced against the pre-existing per-candidate pre-check contract at section 14.6 step 4 rather
+    than bolted on. Note also that the two sides can be decided INDEPENDENTLY -- guarding outcomes
+    without guarding attempts is coherent (it stops a stale success closing a breaker while still
+    allowing a stale paid call), and the reverse is not, so if only one is built it should be the
+    outcome side. (3) NOTE THE B-116 t4 INTERACTION -- any future breaker-persistence arc must replay
+    epochs consistently, or a rehydrated breaker will treat every in-flight outcome as stale (or every
+    stale one as current), which is a worse failure than the one this row describes. WHAT WOULD FALSIFY
+    IT. A demonstration that the CLOSED-arm reset is NOT reachable without a trip -- which the
+    pre-existing grounding above already contradicts -- or a ratified decision that
+    consecutive-failure-with-forgiveness is exactly the intended semantics, in which case this row
+    closes as WORKING-AS-DESIGNED and section 14.6.4''s boundary paragraph becomes the permanent
+    statement of it.'
+  council: 'No at registration. A single-domain C9 breaker-semantics question -- what fail_threshold
+    counts, and whether a counter that forgives on any success is intended -- with no nameable
+    cross-domain tension. Conditionally yes only if step (2) proposes a DURABLE or PERSISTENT epoch,
+    which re-opens the persistence tension B-116 term t4 pinned (a durable breaker opened by a fault the
+    operator cannot see survives the restart the operator reaches for first) and is a genuine C9 vs C11
+    dyad.'
+  heading: '### B-135 · Stale-era breaker dispatches act under a superseded era on BOTH sides — outcomes
+    reset the `closed`-arm `fail_count` un-epoch-guarded, and attempts continue a multi-attempt
+    staircase across a trip that can overlap the single half-open trial *(outcome side surfaced by
+    out-of-family codex review round 2 at the `B-118` leg, attempt side by round 6, both 2026-08-08 —
+    each adjudicated PRE-EXISTING, so the leg declared the boundaries rather than absorbing an unpriced
+    redesign)*'
