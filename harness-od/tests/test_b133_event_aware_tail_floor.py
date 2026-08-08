@@ -38,21 +38,38 @@ runtime to state it.
 | W12 | Name-arm precedence — an always-sampled NAME with zero events still forwards (the scan is never on that path) |
 | W13 | HEAD starves the TAIL at the two sub-1.0 production `TAIL_BASED_PROD` cells — the declared bound, and every admitted carrier still exports |
 | W14 | Shape asymmetry — a root-NAME-shaped §9.2 member is admitted at 100% at the SAME cell and rate |
+| W15 | Scan position — the member survives at ANY index, incl. the real `retry.skipped`-first dispatch ordering |
 
 **Roster homed at `harness-runtime/tests/test_b133_event_aware_tail_floor_real_dispatch.py`**: W1 counterfactual;
 W2–W4 the three members surviving the tail; W5 the `base_rate=0.0` head bound.
 
-**PD-8 mutation probes** (each run by reverting the named surface, confirming
-the listed witnesses go RED, then restoring). Red-sets span BOTH modules:
+**PD-8 mutation probes.** Every figure below was RE-MEASURED against the FINAL
+roster; the scope for all of them is this module + the runtime-homed module +
+`test_tail_keep_span_processor.py` (the sibling contract suite) = **70 cases**
+baseline, so the numbers are comparable to each other and checkable.
 
-| # | Mutation | Observed red |
-|---|---|---|
-| i   | Delete the event-aware arm from `on_end` | equivalent to (ii) by construction |
-| ii  | `_carries_always_sampled_event` returns `False` unconditionally (name-check-only) | W2, W3, W4, W6, W7, W8(×2), W10, W11(×19) — 27 failed / 5 passed after W6 was sharpened (26/6 before, with W6 among the passing: the §0.7 finding) |
-| iii | Move the event arm ABOVE the name arm | all green — the CORRECT result; ordering is a cost property, not a correctness one |
-| iv  | Drop the `_materialize_trace_decision` call on the root-close path | W2, W4, W6, W7, W10 |
-| v   | Drop `event.attributes` from the `is_always_sampled` call | W8's non-mutation case |
-| vi  | Head sampler made unconditionally admitting (a `B-137` candidate-A sketch) | EXACTLY the bound witnesses — W5, W13(×2), W14 — and nothing else |
+| # | Mutation | Measured | Red witnesses |
+|---|---|---|---|
+| i   | Delete the event-aware arm from `on_end` | — | equivalent to (ii) by construction |
+| ii  | `_carries_always_sampled_event` returns `False` (name-check-only) | **34 / 36** | W2, W3, W4, W6, W7, W8(×2), W10, W11(×19), W13(×2), W15(×4), W16 |
+| iii | Move the event arm ABOVE the name arm | **0 / 70** | none — see below |
+| iv  | Drop the root-close `_materialize_trace_decision` | **5 / 65** | W2, W4, W6, W7, W10 |
+| v   | Drop `event.attributes` from the lookup | **1 / 69** | W8 (non-mutation case) |
+| vi  | Head sampler made unconditionally admitting (a `B-137` candidate-A sketch) | **4 / 66** | W5, W13(×2), W14 — exactly the bound witnesses |
+| vii | First-event-only scan (`is_always_sampled(events[0]…)`) | **5 / 65** | W15(×4), W16 |
+
+**Probe (iii) is green, and the honest reading is narrower than "ordering is a
+cost property".** No witness distinguishes the two orderings; the only
+observable divergence would be on a span the name arm holds back — the non-root
+succeeded `subagent.span` — which narrows `B-136`'s territory rather than this
+arm's. The ordering is therefore left as name-first for cost, not asserted.
+
+**Probe (vii) is the merge-gate finding, and it is why W15/W16 exist.** Lens-3
+measured that a first-event-only scan passed the ENTIRE pre-existing suite (65
+cases) while reinstating `B-133` on a PRODUCTION-REACHABLE ordering: when a
+candidate's breaker is already open, `retry_breaker_fallback` emits the
+non-member `retry.skipped` on the OUTER span and then `fallback.exhausted` on
+that same span. Every prior witness happened to put a member FIRST.
 """
 
 from __future__ import annotations
@@ -69,6 +86,7 @@ from harness_od.sampling_mode import (
     FILES_OPERATION_KIND_ATTR,
     PER_DEPLOYMENT_SURFACE_SAMPLING,
     SamplingMode,
+    is_always_sampled,
 )
 from harness_od.tail_keep_classification import (
     VALIDATOR_FAIL_PERMANENCE_ATTR,
@@ -396,3 +414,62 @@ def test_w12_always_sampled_name_forwards_without_any_event_scan() -> None:
         assert not span.events
 
     assert [s.name for s in exporter.get_finished_spans()] == ["sandbox.violation"]
+
+
+# ---------------------------------------------------------------------------
+# W15 — scan position: the member need not be the carrier's FIRST event.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("event_names", "member_index"),
+    [
+        (("retry.skipped", "fallback.exhausted"), 1),
+        (("retry.skipped", "retry.skipped", "fallback.exhausted", "exception"), 2),
+        (
+            (
+                "tool_retry.exhausted",
+                "gen_ai.eval.alignment_floor.drift_detected",
+                "breaker.tripped",
+            ),
+            2,
+        ),
+        (("exception", "fallback.triggered"), 1),
+    ],
+)
+def test_w15_member_survives_at_any_scan_position(
+    event_names: tuple[str, ...],
+    member_index: int,
+) -> None:
+    """The arm must scan the WHOLE event list, not just the first entry.
+
+    **Why this witness exists — it was measured, not imagined.** The merge gate's
+    lens-3 reduced `_carries_always_sampled_event` to
+    `is_always_sampled(events[0].name, events[0].attributes)` and the mutation
+    passed the ENTIRE suite (65 cases) while reinstating `B-133`. Every other
+    witness happens to put a §9.2 member FIRST, so nothing constrained the scan
+    position. The ordering below is the real dispatcher's, not a contrived one:
+    `retry_breaker_fallback` emits the non-member `retry.skipped` on the OUTER
+    span when a candidate's breaker is already open, then `fallback.exhausted` on
+    that SAME span at exhaustion. `harness-runtime`'s W16 drives that shape
+    end-to-end; this one pins the processor's own contract over the ordering,
+    with no runtime present, and generalizes it across the non-member vocabulary.
+    """
+    # Precondition — the leading events really are non-members, so the case
+    # cannot pass by accident if the roster ever absorbs one of them.
+    for name in event_names[:member_index]:
+        assert not is_always_sampled(name), f"{name!r} is a §9.2 member — case is vacuous"
+    assert is_always_sampled(event_names[member_index])
+
+    exporter = InMemorySpanExporter()
+    tail = TailKeepSpanProcessor(downstream=SimpleSpanProcessor(exporter))
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("w15")
+
+    with tracer.start_as_current_span(CARRIER_SPAN_NAME) as span:
+        for name in event_names:
+            span.add_event(name)
+
+    assert [s.name for s in exporter.get_finished_spans()] == [CARRIER_SPAN_NAME]
+    assert tail.buffered_trace_count == 0

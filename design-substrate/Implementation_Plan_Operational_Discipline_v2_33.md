@@ -20,7 +20,7 @@ v2.32 §1.2 states plainly what U-OD-58 did **not** own: *"The floor's END-TO-EN
 
 ### §0.3 Sections revised
 
-§0 (this change note, including the NEW §0.9 out-of-family adjudication and §0.10 witness-homing correction); §1 (the NEW U-OD-59 body); §2 (coverage delta). All other sections — every existing `U-OD-NN` body including U-OD-58, all dependency graphs, cross-cutting units, open items — PRESERVED VERBATIM from v2.32.
+§0 (this change note, including the NEW §0.9 out-of-family adjudication and §0.10 witness-homing correction and §0.11 merge-gate BLOCK); §1 (the NEW U-OD-59 body); §2 (coverage delta). All other sections — every existing `U-OD-NN` body including U-OD-58, all dependency graphs, cross-cutting units, open items — PRESERVED VERBATIM from v2.32.
 
 ### §0.4 Scope discipline
 
@@ -47,11 +47,17 @@ This is **PRE-EXISTING and outside this arc's authorized scope** — repairing i
 
 `[HIGH]` PD-8 probe (ii) — make the event lookup return `False` unconditionally, i.e. revert to name-check-only — was run and returned **26 failed / 6 passed**. Among the six passing was the trigger-flag mirror witness, which asserted only **membership** (`"ordinary.root" in names and "sibling.work" in names`). That assertion is satisfied **without** the arm: the span's own `validator.fail.permanence=permanent` attribute sets the keep flag on the buffered path, so both spans forward at root close either way.
 
-The witness was **sharpened rather than dropped**: it now asserts export **ORDER** (`== ["ordinary.root", "sibling.work"]`), which the arm alone produces — the arm forwards the carrier immediately (root first, eviction-safe, bypassing the buffer) whereas the buffered path materializes in insertion order (sibling first). **Re-run under the identical mutation after sharpening: 27 failed / 5 passed**, W6 having moved from the passing set to the failing set — the mutation-kill demonstrated by measurement rather than asserted. *This is recorded because a witness that passes under the mutation it exists to catch is exactly the "presence-not-correctness" failure the workspace checklist names, and finding it is what the probe is for.*
+The witness was **sharpened rather than dropped**: it now asserts export **ORDER** (`== ["ordinary.root", "sibling.work"]`), which the arm alone produces — the arm forwards the carrier immediately (root first, eviction-safe, bypassing the buffer) whereas the buffered path materializes in insertion order (sibling first). **Re-run under the identical mutation after sharpening**, W6 moved from the passing set to the failing set — the mutation-kill demonstrated by measurement rather than asserted. *(The figure first recorded here, "27 failed / 5 passed", was **stale and did not even sum to the roster**: it was measured before W13/W14 existed, and the merge gate's lens-2 caught the arithmetic. Every probe figure in this plan has since been RE-MEASURED against the final roster at AC #9's table; none is carried forward from an earlier roster.)* *This is recorded because a witness that passes under the mutation it exists to catch is exactly the "presence-not-correctness" failure the workspace checklist names, and finding it is what the probe is for.*
 
-### §0.8 PD-8 probe (iii) returned GREEN, and that is the CORRECT result — recorded so it is not mistaken for a gap
+### §0.8 PD-8 probe (iii) returned GREEN — and the honest reading is narrower than "cost, not correctness"
 
-Probe (iii) moved the event arm **above** the name arm. **62 tests passed, unchanged.** This is not a missing witness: the ordering is a **cost** property, not a correctness one, because no span that matches the name arm also carries events in any exercised path. The finding is carried at OD spec v1.38 §9.2.1's non-normative "Cost posture" note and at this unit's AC #7, deliberately as discretion rather than as contract — writing an ordering assertion would pin an implementation detail the spec does not bind. *Recorded rather than quietly omitted, per §0.7's own standard.*
+`[HIGH]` Probe (iii) moved the event arm **above** the name arm. **0 failed / 70 passed**, unchanged.
+
+An earlier drafting called this *"a **cost** property, not a correctness one"*. That claims more than was measured, and the merge gate's lens-3 supplied the precise form, adopted here: **no witness distinguishes the two orderings**, and the only observable divergence would be on a span the name arm deliberately holds back — the **non-root succeeded `subagent.span`** — where running the event arm first would forward a span the §9.2 root-conditional gate meant to buffer. That divergence **narrows `B-136`'s territory**, not this arm's, and no witness reaches it today.
+
+The ordering is therefore **left name-first for cost and NOT asserted** — the same shipped outcome as before, but stated as *"unconstrained by the current witness set"* rather than as a proven equivalence. *Recorded rather than quietly reworded: a green probe described as proving more than it measured is the same defect class as a stale count.*
+
+---
 
 ### §0.9 An out-of-family finding against this arc's own commit, adjudicated by measurement
 
@@ -118,6 +124,28 @@ interrupted). (iii) Zero `harness_runtime` imports remain anywhere under
 fixtures and module docstrings; every name is unchanged, and the PD-8 red-sets
 below now span the two modules and say so.
 
+### §0.11 The merge gate's BLOCK — a measured witness gap, and the two witnesses that close it
+
+`[HIGH]` The decorrelated 3-lens merge gate on PR #1276 returned lens-1 APPROVE, lens-2 APPROVE (one Class-3 arithmetic nit), **lens-3 BLOCK** — and the BLOCK was a real, measured hole in this unit's own witness set, not a style objection.
+
+**The mutation.** Reduce `_carries_always_sampled_event` to `is_always_sampled(events[0].name, events[0].attributes)` — scan only the FIRST event. **It passed all 65 cases then in the suite** while reinstating `B-133` outright.
+
+**Why every witness missed it.** Each one happened to put a §9.2 member FIRST among its carrier's events, so nothing constrained the scan position. That is the "presence-not-correctness" shape this plan already caught once at §0.7 — and it recurred, at a different surface, which is the honest thing to record.
+
+**The shape is PRODUCTION-REACHABLE, and it was reproduced end-to-end rather than argued.** When a candidate's breaker is already OPEN with an unexpired cooldown, `retry_breaker_fallback` sets `skip_reason = "breaker-open"`, emits the NON-member `retry.skipped` on the **outer** span, and advances the chain; at exhaustion it emits `fallback.exhausted` on that **same** span. A dispatch with both candidates pre-opened produces, measured:
+
+```
+['retry.skipped', 'retry.skipped', 'fallback.exhausted', 'exception']
+```
+
+— member THIRD. Under the mutant that carrier exports nothing.
+
+**Two witnesses close it, and at least one exercises the real ordering.** **W16** (runtime-homed) drives exactly that dispatch — both breakers pre-opened, an injected clock so the cooldown never elapses, and an assertion that **no provider call occurred**, so the shape cannot silently drift onto a retry path. **W15** (OD-homed, four parametrized orderings) pins the same contract on the processor alone with no runtime present, and generalizes across the non-member vocabulary (`retry.skipped`, `tool_retry.exhausted`, `gen_ai.eval.alignment_floor.drift_detected`, `exception`); each case first ASSERTS its leading events really are non-members, so a future roster change cannot make it vacuous. **PD-8 probe (vii)** is the mutation itself: **5 failed / 65 passed** — W15(×4) + W16, and nothing else.
+
+**Two fold-ins from the same gate.** Lens-2's Class-3 nit: probe (ii)'s recorded "27 failed / 5 passed" did not sum to its roster and predated W13/W14 — **every** probe figure has been re-measured (AC #9) and §0.7 now says so. Lens-1's two accuracy nits are applied at the helper docstring: the claim that the scan "never runs on an always-sampled span" is **false** for the non-root succeeded `subagent.span` the name arm holds back — corrected in the DOCSTRING, not by moving the arm, since lens-2 adjudicated the placement as contracted by §9.2.1 term 1 — and the cost note now states what `span.events` actually costs (a lock, a deque copy and a tuple build per access, read once and bound here) instead of "a single truthiness test".
+
+**Roster: 14 → 16 witnesses, 35 → 40 cases** (OD 30 → 34, runtime 5 → 6).
+
 ---
 
 ## §1 U-OD-59 — the §9.2.1 event-aware always-sampled arm at the tail-keep consumer
@@ -131,8 +159,8 @@ below now span the two modules and say so.
 **Files affected (logical):**
 
 - `harness-od/src/harness_od/tail_keep_span_processor.py` — a module-level `_carries_always_sampled_event` helper (~8 functional lines) + the event-aware arm in `on_end` (~6 functional lines) + the module-docstring section recording the mechanism, the empirical grounding and the declared head bound.
-- `harness-od/tests/test_b133_event_aware_tail_floor.py` — **NEW**, the OD-only witnesses **W6–W14** (30 cases under parametrization) + the PD-8 probe table. **`harness_runtime`-FREE by rule** (§0.10).
-- `harness-runtime/tests/test_b133_event_aware_tail_floor_real_dispatch.py` — **NEW**, the REAL-dispatch witnesses **W1–W5** (5 cases). Cross-axis-homed deliberately (§0.10); the `_real_dispatch` suffix keeps repo-wide test-basename uniqueness, which both `tests/` packages structurally require.
+- `harness-od/tests/test_b133_event_aware_tail_floor.py` — **NEW**, the OD-only witnesses **W6–W15** (34 cases under parametrization) + the PD-8 probe table. **`harness_runtime`-FREE by rule** (§0.10).
+- `harness-runtime/tests/test_b133_event_aware_tail_floor_real_dispatch.py` — **NEW**, the REAL-dispatch witnesses **W1–W5 + W16** (6 cases). Cross-axis-homed deliberately (§0.10); the `_real_dispatch` suffix keeps repo-wide test-basename uniqueness, which both `tests/` packages structurally require.
 - `harness-od/src/harness_od/composite_sampler.py` — **NOT EDITED, deliberately.** The head consumer is the declared bound (term 4); editing it would be the venue-(b) extension this arc has no authority for. AC #5 asserts the bound by execution instead.
 - `harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py` + `harness-od/src/harness_od/harness_breaker_schema.py` — **NOT EDITED.** The three emission sites are byte-unchanged; AC #8 asserts this by absence.
 
@@ -152,14 +180,15 @@ below now span the two modules and say so.
 8. **Zero emission-site changes, zero head-sampler edit, zero CP delta, zero CXA rows.** Assert by absence: `harness-runtime/.../lifecycle/retry_breaker_fallback.py`, `harness-od/src/harness_od/harness_breaker_schema.py`, `harness-od/src/harness_od/composite_sampler.py` and every `harness-cp/` file are **untouched** in this arc's diff. *This unit widens a consumer's classification; if the diff reaches an emission site or the head sampler, the scope claim is false.*
 9. **PD-8 — the arm is load-bearing, demonstrated by mutation.** Five probes, each applied, observed, restored, re-verified green. **Restoration is by file copy from a pre-probe backup, never `git checkout`** — the working tree carries uncommitted arc content a checkout would destroy.
 
-| # | Mutation | Observed |
+| # | Mutation | Measured — scope for EVERY figure: both witness modules + `test_tail_keep_span_processor.py`, **70** baseline |
 |---|---|---|
 | i | Delete the event-aware arm from `on_end` | equivalent to (ii) by construction |
-| ii | `_carries_always_sampled_event` returns `False` unconditionally (name-check-only) | **26 failed / 6 passed** on first run — W2, W3, W4, W7, W8(×2), W10, W11(×19) red, and **W6 among the six PASSING**, which is the §0.7 finding. **Re-run after W6 was sharpened: 27 failed / 5 passed**, W6 now red. Both figures are recorded; the second is the one that stands |
-| iii | Move the event arm ABOVE the name arm | **62 passed** — the CORRECT result; ordering is a cost property, per §0.8 |
-| iv | Drop the `_materialize_trace_decision` call on the root-close path | **5 failed** — W2, W4, W6, W7, W10 red. The `B-136` no-extension criterion is load-bearing |
-| v | Drop `event.attributes` from the `is_always_sampled` call | **1 failed** — W8's non-mutation case, `assert True is False`. Conservative-absent pass-through is load-bearing |
-| vi | Head sampler made unconditionally admitting (a `B-137` **candidate-A sketch**) | **4 failed / 31 passed** — and EXACTLY the bound witnesses: W5, W13(×2), W14. Nothing else moves. This is the intended shape: the bound witnesses invert precisely when `B-137` is repaired, which is the signal a future arc needs, and it proves they assert the bound rather than restating the arm |
+| ii | `_carries_always_sampled_event` returns `False` (name-check-only) | **34 failed / 36 passed** — W2, W3, W4, W6, W7, W8(×2), W10, W11(×19), W13(×2), W15(×4), W16 |
+| iii | Move the event arm ABOVE the name arm | **0 failed / 70 passed** — the honest reading is at §0.8 |
+| iv | Drop the root-close `_materialize_trace_decision` | **5 failed / 65 passed** — W2, W4, W6, W7, W10 |
+| v | Drop `event.attributes` from the lookup | **1 failed / 69 passed** — W8's non-mutation case |
+| vi | Head sampler made unconditionally admitting (a `B-137` candidate-A sketch) | **4 failed / 66 passed** — EXACTLY the bound witnesses W5, W13(×2), W14 |
+| vii | **First-event-only scan** — the merge gate's BLOCK (§0.11) | **5 failed / 65 passed** — W15(×4), W16 |
 
 10. **The full OD suite and the runtime breaker / sampling-adjacent suites pass unmodified — AND the OD suite passes with `harness_runtime` UNIMPORTABLE.** The second half is the `axis-isolation — harness-od` contract (§0.10) and is asserted by execution, not by inspection: the lane was simulated in-process with a meta-path finder refusing `harness_runtime`, returning **1156 passed**, and the same probe replayed against the pre-split module reproduces the CI collection failure — so a future witness that reaches for a runtime surface from `harness-od/tests` fails there rather than at CI. `harness-od/tests/` in full, plus `harness-runtime/tests/test_lifecycle_retry_breaker_fallback.py`, `test_lifecycle_span_processor.py` and `test_lifecycle_tracer_provider.py` — the three modules that construct or exercise the amended consumer. **Zero edits to any pre-existing test module**: the arm only ever ADDS keeps, so a pre-existing drop assertion that broke would mean the arm over-forwards.
 

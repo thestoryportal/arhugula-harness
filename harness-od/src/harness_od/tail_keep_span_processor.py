@@ -196,14 +196,26 @@ def _carries_always_sampled_event(span: ReadableSpan) -> bool:
     attributes are passed through so the §9.2 conditional-by-attribute rows
     keep their conservative-absent posture here too.
 
-    **Cost.** Reached ONLY when the span-name check already returned False, so
-    it never runs on an always-sampled span. `span.events` is empty for the
-    overwhelming majority of spans — the guard is then a single truthiness
-    test and the loop never starts. When events are present the scan
+    **Reached when the NAME arm did not forward** — which is *usually* because
+    the name is not a §9.2 member, but NOT always: a non-root SUCCEEDED
+    `subagent.span` is deliberately held back from the name arm by the §9.2
+    root-conditional gate, so this helper does run on a span whose own NAME is
+    always-sampled. That is contracted rather than incidental — OD spec v1.38
+    §9.2.1 term 1 states the event resolution is independent of the carrier's
+    own §9.2 status, including its root-conditional membership, because an
+    event's class is the event's and not the span's.
+
+    **Cost, stated at what it actually costs.** `span.events` is a PROPERTY, not
+    a field: OTel's `ReadableSpan.events` returns `tuple(event for event in
+    self._events)` over a `BoundedList` whose `__iter__` takes a lock and copies
+    the deque — so one lock acquisition, one deque copy and one tuple build per
+    access, even when the result is empty. It is read ONCE here and bound, so
+    that cost is paid once per non-name-forwarded span and the emptiness guard
+    is then a plain truthiness test. When events are present the scan
     early-exits on the first match, and each step is one frozenset lookup plus
     a two-prefix `startswith` scan. The worst case is bounded by the OTel SDK's
-    per-span event limit (default 128), which is the same bound the SDK already
-    accepts when it serializes those events for export.
+    per-span event limit (default 128) — the same bound the SDK already accepts
+    when it serializes those events for export.
     """
     events = span.events
     if not events:

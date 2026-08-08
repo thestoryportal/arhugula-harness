@@ -19,10 +19,12 @@ processor's own contract with no runtime present. The `_real_dispatch`
 suffix is not decoration: both `tests/` directories are packages (`__init__.py`),
 so two modules sharing a basename collide into one importable `tests.<name>` and
 pytest silently attributes one file's cases to both paths — repo-wide basename
-uniqueness holds across all 515 test modules and is preserved here.
+uniqueness holds across all 548 git-tracked `test_*.py` modules and is preserved
+here. (515 is the narrower `harness-*/tests` glob; the repo-wide figure is the
+one the uniqueness claim needs.)
 
-**These five witnesses** (preserved verbatim from the pre-split module, modulo
-this docstring):
+**These six witnesses.** W1–W5 are preserved verbatim from the pre-split module,
+modulo this docstring; W16 was added at the merge gate (see below).
 
 | ID | Witness |
 |---|---|
@@ -31,10 +33,20 @@ this docstring):
 | W3 | `fallback.triggered` survives the tail via a REAL capability-shortfall dispatch |
 | W4 | `breaker.tripped` survives the tail via a REAL charging-fault dispatch |
 | W5 | HEAD-half DECLARED BOUND — the head sampler at `base_rate=0.0` still drops the event carrier, while a span NAMED `fallback.exhausted` survives |
+| W16 | Scan position at the REAL ordering — a pre-opened breaker emits the non-member `retry.skipped` FIRST and `fallback.exhausted` last on the same carrier, which must still survive |
 
-W6–W14 (the OD-only half, including the W13/W14 production-cell bound witnesses,
+W6–W15 (the OD-only half, including the W13/W14 production-cell bound witnesses,
 which compose only `build_default_sampler` + `TailKeepSpanProcessor` and need no
-runtime surface) stay in the OD module. The PD-8 probe table lives there too.
+runtime surface) stay in the OD module. The PD-8 probe table lives there too,
+with every figure re-measured against the final roster.
+
+**W16 exists because the merge gate measured a hole.** Lens-3 reduced
+`_carries_always_sampled_event` to a first-event-only scan and the mutation passed
+the ENTIRE suite while reinstating `B-133`: every witness up to that point put a
+§9.2 member FIRST among the carrier's events, so nothing constrained the scan.
+W16 drives the ordering the dispatcher actually produces; W15 generalizes it over
+the non-member vocabulary with no runtime present. PD-8 probe (vii) is that
+mutation, now red.
 """
 
 from __future__ import annotations
@@ -64,6 +76,7 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_od.composite_sampler import build_default_sampler
+from harness_od.harness_breaker_schema import BreakerScope, BreakerState
 from harness_od.sampling_mode import is_always_sampled
 from harness_od.tail_keep_classification import is_classification_trigger
 from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
@@ -365,3 +378,79 @@ async def test_w5_head_sampler_still_drops_the_event_carrier_declared_bound() ->
         pass
     provider.force_flush()
     assert [s.name for s in exporter.get_finished_spans()] == ["fallback.exhausted"]
+
+
+# ---------------------------------------------------------------------------
+# W16 — the SCAN-POSITION witness, driven at the REAL production ordering.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_w16_member_survives_when_a_non_member_event_comes_first() -> None:
+    """The §9.2 member is NOT always the carrier's FIRST event, and the arm must
+    scan past the ones that are not.
+
+    **Why this witness exists.** The merge gate's lens-3 measured that a
+    `_carries_always_sampled_event` reduced to `is_always_sampled(events[0]...)`
+    — first-event-only — passed the ENTIRE pre-existing suite while reinstating
+    `B-133` outright. Every other witness happens to put a member first, so none
+    of them constrained the scan. This one does, and it does so at the ordering
+    the dispatcher actually produces rather than a contrived one.
+
+    **The production shape, grounded at the emitter.** When a candidate's breaker
+    is already OPEN with an unexpired cooldown, `retry_breaker_fallback` emits
+    the NON-member `retry.skipped` on the OUTER span and advances the chain; on
+    exhaustion it emits `fallback.exhausted` on that SAME span. A dispatch whose
+    candidates are all pre-opened therefore yields
+    `["retry.skipped", ..., "fallback.exhausted"]` — member LAST. No provider call
+    occurs, which is asserted below so the shape cannot drift into a retry path.
+    """
+    clock = {"now": 1000.0}
+    exporter = InMemorySpanExporter()
+    tail = TailKeepSpanProcessor(downstream=SimpleSpanProcessor(exporter))
+    provider = TracerProvider(sampler=build_default_sampler(base_rate=1.0))
+    provider.add_span_processor(tail)
+
+    registry = _registry(max_attempts=2, fail_threshold=1)
+    primary = _candidate("anthropic", "claude-test-1")
+    second = _candidate("anthropic", "claude-test-2")
+    chain = FallbackChain(primary=primary, same_family=(second,), cross_family=(), terminal=None)
+
+    # Pre-open BOTH candidates' breakers; the injected clock never advances, so
+    # the §14.6 cooldown stays unexpired and `attempt_half_open` declines.
+    for cand in (primary, second):
+        breaker = registry.get_breaker(BreakerScope.PER_MODEL, f"{cand.provider}:{cand.model}")
+        breaker.record_failure(now=clock["now"])
+        assert breaker.state is BreakerState.OPEN
+
+    inner = _MockInner(outcomes=[])  # must never be called
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=registry,
+        fallback_chain=chain,
+        tracer_provider=provider,
+        sleep_fn=_noop_sleep,
+        monotonic=lambda: clock["now"],
+    )
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    # No provider was dispatched — every candidate was skipped at the pre-check.
+    assert inner.calls == []
+
+    # The carrier SURVIVED the tail (no `force_flush`), and it survived on an
+    # ordering whose FIRST event is a non-member.
+    spans = exporter.get_finished_spans()
+    carriers = [s for s in spans if s.name == CARRIER_SPAN_NAME]
+    assert carriers, (
+        "the carrier did NOT survive the tail — the event-aware arm failed to see a §9.2 "
+        "member that is not the carrier's FIRST event (this is the `B-133` reinstatement "
+        "the merge gate's lens-3 measured)"
+    )
+    event_names = [e.name for e in carriers[0].events]
+    assert event_names[0] == "retry.skipped", event_names
+    assert not is_always_sampled(event_names[0])
+    assert "fallback.exhausted" in event_names
+    assert event_names.index("fallback.exhausted") > 0, (
+        "the member must NOT be first — otherwise this witness cannot constrain the scan"
+    )

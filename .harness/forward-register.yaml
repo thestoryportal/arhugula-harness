@@ -6543,14 +6543,24 @@ items:
     event attributes through so the conditional rows keep conservative-absent, and forwards the carrier
     immediately on a match. Venue (b) REFUSED as the X-AL-3 extension this row already classified it as.
     Contract at OD spec v1.38 NEW §C-OD-09 §9.2.1 (five normative terms); unit at OD plan v2.33 U-OD-59;
-    FOURTEEN witnesses W1-W14 (35 cases under parametrization; homed across the axis boundary -- the FIVE
-    real-dispatch witnesses at harness-runtime/tests/test_b133_event_aware_tail_floor_real_dispatch.py, the NINE
+    SIXTEEN witnesses W1-W16 (40 cases under parametrization; homed across the axis boundary -- the SIX
+    real-dispatch witnesses at harness-runtime/tests/test_b133_event_aware_tail_floor_real_dispatch.py, the TEN
     processor-contract witnesses at harness-od/tests/test_b133_event_aware_tail_floor.py, which stays
-    harness_runtime-FREE because the axis-isolation CI leg prunes every sibling of harness-od) plus SIX PD-8
-    probes. TWO probes changed the
+    harness_runtime-FREE because the axis-isolation CI leg prunes every sibling of harness-od) plus SEVEN PD-8
+    probes, every figure RE-MEASURED against the final roster. THE DECORRELATED 3-LENS MERGE GATE ON PR #1276
+    RETURNED A REAL BLOCK, and it is recorded because it found a hole this row''s own PD-8 discipline had missed:
+    a first-event-only scan passed all 65 cases then in the suite while REINSTATING B-133 on a
+    PRODUCTION-REACHABLE ordering -- an already-open breaker emits the NON-member retry.skipped on the outer span
+    and fallback.exhausted lands on that SAME span at exhaustion, measured as
+    [''retry.skipped'', ''retry.skipped'', ''fallback.exhausted'', ''exception'']. Every witness up to that point put a
+    member FIRST. Closed by W16 (the real dispatch, both breakers pre-opened, asserting no provider call ran) and
+    W15 (four parametrized orderings on the processor alone), with probe (vii) red at 5 failed / 65 passed. TWO probes changed the
     deliverable: probe (ii) caught the trigger-flag mirror witness PASSING under the mutation it existed to
     catch -- it asserted membership where the arm''s discriminator is export ORDER, and was sharpened, then
-    re-run at 27 failed / 5 passed -- and probe (iii) returned GREEN and was recorded as the CORRECT result,
+    re-run RED (the figure first recorded here, 27 failed / 5 passed, was STALE and did not sum to its roster --
+    the merge gate''s lens-2 caught the arithmetic; every probe figure is now re-measured against the final
+    roster) -- and probe (iii) returned GREEN, which constrains LESS than first claimed: no witness distinguishes
+    the two arm orderings, and the only observable divergence would narrow B-136 rather than this arm,
     ordering being a cost property rather than a correctness one. Probe (vi) VALIDATES rather than changes:
     making the head unconditionally admitting inverts EXACTLY the bound witnesses (W5, W13 x2, W14) and nothing
     else.
