@@ -58,6 +58,8 @@ from harness_cp.sub_agent_dispatch_cancellation import (
     DispatchFenceTrippedSignal,
     FenceAckOutcome,
 )
+from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
+from harness_cp.validator_fail_transient_staircase import StaircaseStage
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
@@ -3466,6 +3468,16 @@ async def test_b118_half_open_trial_is_capped_at_one_attempt() -> None:
     # CHARGES -> the breaker re-opens rather than stranding in half_open.
     assert primary_breaker.state is BreakerState.OPEN
     assert primary_breaker.opened_at == 30.0
+    # ...and it re-opened by CHARGING (cell 5), not by an inconclusive re-arm.
+    # `state is OPEN` + a fresh `opened_at` are equally true of BOTH, so they
+    # cannot tell the two apart: dropping `trial_token` from the exhaustion
+    # `record_failure` makes the charge look STALE, the post-dispatch release
+    # then re-arms as inconclusive, and every assertion above still passes.
+    # `fail_count` and `trigger_count` are the discriminator — 3 / 3 for a real
+    # exhaustion charge, 2 / 0 for a re-arm. (Merge-gate lens 3 measured that
+    # escaping mutation against the whole suite; probe P17 now pins it.)
+    assert primary_breaker.fail_count == 3
+    assert _transitions(exporter)[1] == ("half_open", "open", 3)
 
 
 # --- AC #6, the inconclusive cells: no HALF_OPEN stranding ------------------
@@ -3547,6 +3559,7 @@ async def test_b118_cell7_terminal_hitl_control_flow_during_a_trial_re_arms() ->
 
     assert primary_breaker.state is BreakerState.OPEN
     assert primary_breaker.fail_count == 2
+    assert primary_breaker.opened_at == 30.0  # FRESH cooldown, per AC #6
     assert _transitions(exporter) == [("open", "half_open", 0), ("half_open", "open", 0)]
 
 
@@ -3569,6 +3582,7 @@ async def test_b118_cell8_dispatch_fence_signal_during_a_trial_re_arms() -> None
 
     assert primary_breaker.state is BreakerState.OPEN
     assert primary_breaker.fail_count == 2
+    assert primary_breaker.opened_at == 30.0  # FRESH cooldown, per AC #6
     assert _transitions(exporter) == [("open", "half_open", 0), ("half_open", "open", 0)]
 
 
@@ -3796,7 +3810,7 @@ def test_b118_every_transition_emission_follows_its_state_mutation() -> None:
     The admission event is the ONE site where that ordering cannot hold (the
     machine must be `half_open` for the trial to exist at all), which is why it
     is the only site needing the explicit protection boundary. This witness
-    pins the other three so a future refactor that emits BEFORE mutating —
+    pins the other four so a future refactor that emits BEFORE mutating —
     reintroducing the same window elsewhere — fails here."""
     machine = BreakerStateMachine(
         scope=BreakerScope.PER_MODEL,
@@ -4082,3 +4096,139 @@ async def test_b118_a_closed_era_dispatch_continues_its_staircase_across_a_trip(
     assert _transitions(exporter).count(("open", "half_open", 0)) == 1
     assert _transitions(exporter).count(("half_open", "closed", 0)) == 1
     assert ("half_open", "open", 0) not in _transitions(exporter)
+
+
+# --- AC #15, the boundaries the token-threading and the guards actually have --
+
+
+def test_b118_the_staircase_escalation_arm_is_unreachable_from_this_composer() -> None:
+    """AC #15: the escalation arm of the per-attempt loop threads `trial_token`
+    for CONSISTENCY, and is never exercised on a trial path — because it is
+    **structurally unreachable from this composer**, under ANY policy, not
+    merely under the one-attempt trial cap.
+
+    Determined by content rather than by coverage, and pinned here so the
+    determination cannot rot:
+
+    1. `_classify_provider_exception`'s only non-`None` return is
+       `TRANSIENT_RETRY` (`None` is the fail-fast set, handled before the
+       staircase is consulted at all).
+    2. The composer always passes `STAGE_1_REFLEXION` as `current` — the
+       staircase is used as a cause-class classifier, not as stateful
+       progression across attempts.
+    3. `(STAGE_1_REFLEXION, TRANSIENT_RETRY)` maps to
+       `STAGE_2_RETRY_WITH_BACKOFF` in the §21.2 table.
+
+    So `next_stage` is ALWAYS `STAGE_2_RETRY_WITH_BACKOFF` on every path that
+    reaches the staircase, and the loop can only take the retry arm or the
+    exhaustion arm — never the `else` escalation arm. The token threading there
+    is therefore defensive: it keeps the three `record_failure` sites uniform so
+    a future classifier change cannot silently produce an un-tokenised charge.
+
+    If any of the three facts above ever changes — a classifier gaining a
+    skip-class return, the composer threading real stage state, or the table
+    being re-pointed — this witness goes red and the arm needs a real
+    behavioural witness rather than this argument. (Merge-gate lens 3 asked for
+    exactly that disposition: exercise it, or determine unreachability and
+    document it.)"""
+    # (1) the classifier's non-None range.
+    for exc in (
+        TimeoutError("network"),
+        RuntimeError("unlisted"),
+        _FakeProviderStatusError(500),
+        _FakeProviderStatusError(429),
+    ):
+        assert _classify_provider_exception(exc) is ValidatorRetryExitClass.TRANSIENT_RETRY
+    for exc in (
+        LLMDispatchProviderUnreachableError("anthropic"),
+        LLMDispatchPayloadShapeInternalError("pre-flight"),
+        MemoryToolExecutionInternalError("wiring"),
+        _FakeProviderStatusError(401),
+    ):
+        assert _classify_provider_exception(exc) is None, type(exc).__name__
+
+    # (3) the table entry the composer's fixed `current` lands on, for the ONE
+    # cause class (1) can produce.
+    registry = _retry_breaker_with_llm_policy()
+    transition = registry.advance_staircase(
+        StaircaseStage.STAGE_1_REFLEXION, ValidatorRetryExitClass.TRANSIENT_RETRY, 0
+    )
+    assert transition.to_stage is StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF
+    # ...and it is attempt-invariant, so no attempt number reaches the else-arm.
+    for attempt in range(5):
+        assert (
+            registry.advance_staircase(
+                StaircaseStage.STAGE_1_REFLEXION, ValidatorRetryExitClass.TRANSIENT_RETRY, attempt
+            ).to_stage
+            is StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF
+        )
+
+
+class _EmitterAbort(BaseException):
+    """A BaseException-derived emitter fault — NOT an `Exception`."""
+
+
+@pytest.mark.asyncio
+async def test_b118_a_base_exception_emitter_fault_is_not_suppressed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #15 / AC #13's scope bound: the release-path suppression is
+    `except Exception`, deliberately NOT `BaseException`.
+
+    A `KeyboardInterrupt` / `SystemExit` / other `BaseException` raised by the
+    emitter is not a telemetry fault to be swallowed in favour of the in-flight
+    exception — it is a control-flow signal in its own right and must win. This
+    pins the narrower catch: broadening it to `BaseException` would make this
+    witness red by delivering the HITL error instead."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [HITLGateRejectedError("operator rejected")], clock=clock, fail_threshold=2
+    )
+
+    def _emit(self: Any, transition: Any, parent_span: Any) -> None:
+        if transition.to_state is BreakerState.OPEN:
+            raise _EmitterAbort("not an Exception")
+
+    monkeypatch.setattr(RetryBreakerFallbackDispatcher, "_emit_breaker_transition", _emit)
+
+    clock.advance(30.0)
+    with pytest.raises(_EmitterAbort):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    # The STATE release still completed first, so nothing is stranded even
+    # though the emitter fault won the propagation contest.
+    assert primary_breaker.state is BreakerState.OPEN
+    assert primary_breaker.opened_at == 30.0
+
+
+@pytest.mark.asyncio
+async def test_b118_a_base_exception_in_the_admission_window_still_re_arms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #15 / AC #12's guard breadth: the ADMISSION guard catches
+    `BaseException`, not merely `Exception`.
+
+    That asymmetry against the release path is deliberate and load-bearing in
+    the opposite direction: at the admission there is no in-flight exception to
+    protect, and the only question is whether the breaker gets released — so
+    the guard must be as WIDE as possible. Narrowing it to `Exception` would
+    let a `BaseException`-derived emitter fault strand the machine `half_open`
+    for the process, which is the very latch this row removes."""
+    clock = _FakeClock(0.0)
+    wrapper, registry, exporter, primary_breaker = _tripped_wrapper(
+        [{"result": "never-reached"}], clock=clock, fail_threshold=2
+    )
+
+    def _emit(self: Any, transition: Any, parent_span: Any) -> None:
+        if transition.to_state is BreakerState.HALF_OPEN:
+            raise _EmitterAbort("BaseException on the admission event")
+
+    monkeypatch.setattr(RetryBreakerFallbackDispatcher, "_emit_breaker_transition", _emit)
+
+    clock.advance(30.0)
+    with pytest.raises(_EmitterAbort):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert primary_breaker.state is BreakerState.OPEN, "NOT stranded in half_open"
+    assert primary_breaker.opened_at == 30.0
+    assert primary_breaker.attempt_half_open(now=60.0) is not None, "genuinely recoverable"

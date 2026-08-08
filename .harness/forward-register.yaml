@@ -5850,7 +5850,23 @@ items:
     Mid-staircase re-consultation was REFUSED as unpriced semantic surgery -- it would abandon a
     candidate partway through its attempt loop and change exhaustion and fallback.last_failure_class
     accounting for a pre-existing path. Folded into B-135 rather than minted separately: round 2
-    registered the OUTCOME side, round 6 adds the ATTEMPT side, one family two sides.'
+        registered the OUTCOME side, round 6 adds the ATTEMPT side, one family two sides. MERGE GATE
+    (#1275, 3-lens decorrelated): lens 1 APPROVE, lens 2 APPROVE after a one-line md-mirror permutation
+    (a B-118 narrative bullet had been filed under the B-119 heading -- a blind spot of the heading-only
+    --check), lens 3 BLOCK on a MEASURED witness-adequacy gap and the most useful finding of the leg.
+    Deleting trial_token from the max-attempts-exhaustion record_failure left the WHOLE SUITE GREEN
+    while fail_count went 3 to 2 and trigger_count 3 to 0, because the cell-5 witness asserted only
+    state-is-OPEN and a fresh opened_at -- both equally true of an INCONCLUSIVE RE-ARM, so it could not
+    tell a real exhaustion charge from a stale-dropped one. Cell 5 was the single cell in the nine-cell
+    matrix carrying no fail_count/trigger_count assertion. Closed with those two assertions plus NEW
+    probe P17; the staircase escalation site''s unwitnessed token threading resolved by DETERMINING
+    unreachability from content (the classifier''s only non-None return is TRANSIENT_RETRY, the composer
+    always passes STAGE_1_REFLEXION, and that pair maps to STAGE_2) and PINNING the determination by
+    witness; cells 7 and 8 given the opened_at-FRESH assertion AC #6 already required of every
+    inconclusive cell; both BaseException-boundary asymmetries (narrow suppression at the release, wide
+    guard at the admission) witnessed rather than recorded as gaps. NO contract text changed -- the
+    spec''s cell-5 disposition was correct as written; what was missing was the assertion that the
+    implementation delivers it. Unit now FIFTEEN ACs / SEVENTEEN probes.'
   council: 'No at registration. A single-domain C9 reliability-mechanism gap with no nameable cross-domain
     tension — the mechanism, the contract text, and the recovery model are all in one voice''s lineage.
     Conditionally yes only if step (2) proposes a durable cooldown clock: that re-opens the persistence
