@@ -60,9 +60,14 @@ baseline, so the numbers are comparable to each other and checkable.
 
 **Probe (iii) is green, and the honest reading is narrower than "ordering is a
 cost property".** No witness distinguishes the two orderings; the only
-observable divergence would be on a span the name arm holds back — the non-root
-succeeded `subagent.span` — which narrows `B-136`'s territory rather than this
-arm's. The ordering is therefore left as name-first for cost, not asserted.
+observable divergence (re-gate-measured) is on a name-always-sampled ROOT that
+also carries an always-sampled event — e.g. a `sandbox.violation` root with a
+`fallback.exhausted` event: name-first leaves its buffered sibling behind
+(`buffered_trace_count == 1`, the `B-136` leak), event-first would materialize
+it — so the divergence narrows `B-136`'s territory rather than this arm's.
+(The non-root succeeded `subagent.span` case was measured NON-divergent: the
+event arm forwards it under either ordering.) The ordering is therefore left
+as name-first for cost, not asserted.
 
 **Probe (vii) is the merge-gate finding, and it is why W15/W16 exist.** Lens-3
 measured that a first-event-only scan passed the ENTIRE pre-existing suite (65
