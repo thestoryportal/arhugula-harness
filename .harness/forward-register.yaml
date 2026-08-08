@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 132
+  total: 133
   open: 0
   design_substrate_gated: 0
-  registered_finding: 29
+  registered_finding: 30
   operator_gated: 0
   held: 1
   closed: 102
-  identity_digest: fca12d5bd570db98
+  identity_digest: 9b3a5e11057f8347
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -6218,3 +6218,68 @@ items:
     NEW path with its own retry-visibility tradeoffs; the per-member discipline carries either
     way.'
   heading: '### B-132 · The classifier catch-all routes harness-side memory subtypes to the staircase, where they charge the breaker at escalation/exhaustion *(surfaced at the B-116 spec leg, fresh-context review round, 2026-08-08)*'
+- id: B-133
+  title: 'The §9.2 always-sampled floor classifies span NAMES at both consumers while three of its members
+    are span EVENTS, so their head=1.0 floor is unrealized on the dispatch path'
+  status: registered_finding
+  summary: 'WHAT IT IS. Both C-OD-09 §9.2 consumers resolve the always-sampled floor against a SPAN NAME and
+    never against an EVENT name. Head: HarnessCompositeSampler.should_sample
+    (harness-od/src/harness_od/composite_sampler.py:100) branches on is_always_sampled(name, attributes)
+    at :110, where name is the span name supplied at span creation. Tail: TailKeepSpanProcessor.on_end
+    (harness-od/src/harness_od/tail_keep_span_processor.py:207) branches on
+    is_always_sampled(span.name, span.attributes) at :259 and NEVER inspects span.events -- grounded at
+    HEAD by direct read: the module contains ZERO occurrences of ".events". THREE §9.2 members are
+    emitted as span EVENTS on a wrapper span, not as spans of their own: fallback.triggered
+    (outer_span.add_event at harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:688-689),
+    fallback.exhausted (outer_span.add_event at :946-947, the row this leg added), and breaker.tripped
+    (parent_span_ref.add_event(name="breaker.tripped", ...) at
+    harness-od/src/harness_od/harness_breaker_schema.py:282, the same emission shape B-123 grounds).
+    Consequence: for all three, the §9.2 head=1.0 guarantee is carried only insofar as the WRAPPER span
+    is itself kept -- at a base-rate-sampled cell the wrapper can be dropped and the always-sampled
+    event goes with it. PRE-EXISTING, NOT NEW EXPOSURE FROM THE B-116-t3 LEG, and this is the load-bearing
+    scope fact: the two siblings fallback.triggered and breaker.tripped have carried the identical shape
+    since the ORIGINAL OD ingestion of §9.2, so the characteristic is a property of the floor mechanism
+    rather than of the row this leg added. WHAT IS NOT IN QUESTION. The §9.2 MEMBERSHIP CONTRACT is
+    correct regardless, and so is the ingestion-chain direction that placed the row in OD rather than
+    demoting CP -- neither turns on how the floor is realized at the SDK boundary. B-116 CLOSED at its
+    ratified gate, whose stated content was the roster widening plus its sampling fixtures per the
+    council record C-c7-reconcile.md''s own pricing; this row carries the REALIZATION debt that pricing
+    never covered. REGISTRATION IS THE NON-SILENT DISPOSITION -- the finding is neither absorbed into a
+    closed row nor repaired by redesign at a leg that has no authority for it. WHY NOT FIXED HERE. The
+    out-of-family reviewer''s proposed remedies -- emit a dedicated span for the event, or make the
+    wrapper span itself always-sampled -- are both REJECTED at the t3 leg. The first mints a new emission
+    primitive that no cleared spec authorizes, which is an X-AL-3 design extension routing through
+    back-flow, not an impl fix. The second would always-sample EVERY dispatch wrapper, over-sampling far
+    beyond the three rows at issue and silently rewriting the §10.3 per-cell envelope. SURFACED BY
+    OUT-OF-FAMILY CODEX ROUND 1 AT THE B-116-t3 LEG (PR pending), 2026-08-08; root cause SHARED WITH
+    B-123 (the §10.2 tail-keep trigger arm of the same span-name-vs-span-event mismatch) and B-124 (the
+    inert attribute-qualified row) -- the three are one family and should be dispositioned together.'
+  close_out: '(1) RUN THE POSITIVE CONTROL FIRST, and run it end-to-end rather than at the predicate. Drive a real
+    EXHAUSTED dispatch through the composite sampler AND the tail-keep processor at a cell whose
+    base_rate is < 1, and observe whether the wrapper span carrying the fallback.exhausted event is
+    dropped. Grep proves the code path; only the run proves the floor is or is not delivered. Cover the
+    two siblings in the same run -- they share the shape, and a repair scoped to one row would leave the
+    family half-fixed. (2) IF DROPPED (the expected outcome), decide the REPAIR VENUE, and the two
+    candidates are not equivalent in kind: (a) an event-aware arm at the tail-keep on_end that scans
+    span.events names against the §9.2 roster before the drop decision -- single-domain C7, no new
+    emission primitive, no spec amendment, and it composes with B-123''s trigger arm since both want the
+    same event-name lookup; or (b) an event-to-span projection at emission time -- a NEW primitive that
+    routes through design-phase back-flow per X-AL-3, and which also changes the span topology every
+    existing witness asserts against. Prefer (a) unless the positive control shows the tail arm cannot
+    reach the decision. Note that (a) repairs the TAIL surface only; the HEAD surface at a
+    head-based-dev cell samples at 1.0 anyway, so the head arm may need nothing -- confirm rather than
+    assume. (3) POST-REALIZATION, and only then, bound the multi-tenant keep-volume against the C-OD-11
+    §11.1 per-tenant 1,000 spans/sec budget per C7''s F-08. This is the POPULATION question the B-116-t3
+    leg left EXPLICITLY OPEN and did not answer: that leg established only the STRUCTURAL result (the
+    budget enforces at COLLECTOR_BOUNDARY / BACKEND_INGESTION independently of any sampling decision, so
+    membership cannot admit throughput past the enforced caps, and the event is once-per-exhausted-dispatch
+    so membership adds no multiplicity). Measuring the volume before the floor is actually realized would
+    measure the wrong thing.'
+  council: 'No -- a probe-then-repair row in the B-123 family; convene nothing until the positive control runs.
+    If step (1) returns dropped and step (2) selects candidate (b), that IS a convening trigger: a new
+    emission primitive re-opens the C7 observability-floor vs C11 telemetry-volume tension on a surface
+    wider than these three rows. Candidate (a) is single-domain and owes no convening.'
+  heading: '### B-133 · The §9.2 always-sampled floor classifies **span names** at both consumers while three of
+    its members are span **events**, so their head=1.0 floor is unrealized on the dispatch path
+    *(surfaced by out-of-family Codex round 1 at the `B-116-t3` leg, 2026-08-08; same family as B-123 /
+    B-124)*'
