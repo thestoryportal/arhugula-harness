@@ -4147,6 +4147,15 @@ def test_b118_the_staircase_escalation_arm_is_unreachable_from_this_composer() -
     ):
         assert _classify_provider_exception(exc) is None, type(exc).__name__
 
+    # (2) the composer really does pass the literal STAGE_1_REFLEXION as
+    # `current` — asserted at the SOURCE, so "the composer threading real
+    # stage state" genuinely turns this witness red (re-gate labelling nit:
+    # facts 1 and 3 were executable but fact 2 was direct-read only).
+    import inspect
+
+    composer_src = inspect.getsource(RetryBreakerFallbackDispatcher)
+    assert "StaircaseStage.STAGE_1_REFLEXION" in composer_src
+
     # (3) the table entry the composer's fixed `current` lands on, for the ONE
     # cause class (1) can produce.
     registry = _retry_breaker_with_llm_policy()
