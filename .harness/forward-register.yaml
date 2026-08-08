@@ -5835,7 +5835,22 @@ items:
     hide exporter breakage on the common path. Cell 9 VERIFIED to emit nothing by construction; the
     success/charging emissions SWEPT and left unchanged, none of them sitting on a path that must
     propagate a terminal exception verbatim. AC #13 + probe P16 added; unit now THIRTEEN ACs / SIXTEEN
-    probes under the set-phrased closure criterion.'
+        probes under the set-phrased closure criterion. ROUND 6 (same review): ONE finding whose fix is
+    the CONTRACT rather than the code. A dispatch admitted while the breaker was CLOSED keeps its
+    multi-attempt policy, so if siblings trip the breaker and a later dispatch takes the trial permit,
+    the stale dispatch resumes attempt 2 with NO breaker re-consultation -- a concurrent PAID call
+    overlapping the single trial. The non-re-consultation is PRE-EXISTING (the pre-check is
+    PER-CANDIDATE by contract at section 14.6 step 4; the pre-v1.114 loop behaved identically), so this
+    leg neither introduced nor priced it. What round 6 caught is that the section 14.6.4 text THIS LEG
+    authored OVERCLAIMED -- C9 Pillar-4 and the cell-3 ratification bind THE TRIAL to one call and never
+    deliberated stale CLOSED-era dispatches, so reading single as process-wide was an unratified
+    widening introduced by the WORDING. Section 14.6.4 now scopes exclusivity to ERA-CONSISTENT
+    admissions, the step-4 bullet carries the matching qualifier, and AC #14 PINS the declared behaviour
+    by witness (both inner-call counts asserted) so it cannot drift back into an overclaim.
+    Mid-staircase re-consultation was REFUSED as unpriced semantic surgery -- it would abandon a
+    candidate partway through its attempt loop and change exhaustion and fallback.last_failure_class
+    accounting for a pre-existing path. Folded into B-135 rather than minted separately: round 2
+    registered the OUTCOME side, round 6 adds the ATTEMPT side, one family two sides.'
   council: 'No at registration. A single-domain C9 reliability-mechanism gap with no nameable cross-domain
     tension — the mechanism, the contract text, and the recovery model are all in one voice''s lineage.
     Conditionally yes only if step (2) proposes a durable cooldown clock: that re-opens the persistence
@@ -6568,8 +6583,9 @@ items:
     took the residual per the U-MEM-28 precedent and registered the vocabulary question rather than
     widening a ratified enumeration on its own authority)*'
 - id: B-135
-  title: 'Stale in-flight outcomes cross breaker state transitions un-epoch-guarded on the CLOSED arm,
-    so a pre-trip success arriving post-recovery resets the fail_count accumulated since'
+  title: 'Stale-era breaker dispatches act under a superseded era on BOTH sides -- outcomes reset the
+    CLOSED-arm fail_count un-epoch-guarded, and attempts continue a multi-attempt staircase across a
+    trip that can overlap the single half-open trial'
   status: registered_finding
   summary: 'WHAT IT IS. The B-118 trial-epoch guard (Runtime spec v1.114 section 14.6.4) binds the
     HALF_OPEN resolution arms ONLY -- record_success / record_failure / re_arm_half_open_trial refuse to
@@ -6592,22 +6608,47 @@ items:
     outcomes instead requires capturing an epoch on EVERY ordinary dispatch and changes CONTRACTED
     success-reset semantics for every caller -- an unpriced redesign, not a bug fix, which is why the
     B-118 leg declared the boundary at section 14.6.4 rather than absorbing it. SURFACED BY
-    OUT-OF-FAMILY CODEX REVIEW ROUND 2 AT THE B-118 LEG, 2026-08-08.'
+        OUT-OF-FAMILY CODEX REVIEW ROUND 2 AT THE B-118 LEG, 2026-08-08. THE ATTEMPT SIDE, ADDED
+    2026-08-08 (out-of-family codex review round 6 at the same B-118 leg). The same family has a second
+    half, on the ATTEMPT side rather than the OUTCOME side. A dispatch admitted while the breaker was
+    CLOSED keeps its multi-attempt RetryPolicy. If it fails transiently, and siblings then trip the
+    breaker while a later dispatch acquires the HALF_OPEN permit, the CLOSED-era dispatch resumes
+    attempt 2 with NO breaker re-consultation -- a concurrent PAID call overlapping what section 14.6.4
+    calls the single trial. WHY THIS TOO IS PRE-EXISTING. The breaker pre-check is PER-CANDIDATE by
+    contract (section 14.6 step 4): it runs once when a candidate is selected and is never re-consulted
+    between that candidate''s own retry attempts. The pre-v1.114 loop behaved identically, so B-118
+    neither introduced nor priced this. What round 6 actually caught is that the section 14.6.4 text
+    B-118 authored OVERCLAIMED -- the ratified intent (C9 Pillar-4, the cell-3 operator ratification)
+    binds THE TRIAL to one call and never deliberated stale CLOSED-era dispatches. That text is now
+    SCOPED at section 14.6.4 to era-consistent admissions, with the boundary declared and witnessed
+    rather than defended. ONE FAMILY, TWO SIDES -- a dispatch admitted under an earlier breaker era
+    continuing to act under that era''s policy, whether it is reporting an OUTCOME or making another
+    ATTEMPT.'
   close_out: '(1) DECIDE WHETHER CLOSED-ARM OUTCOME ORDERING SHOULD BE EPOCH-AWARE AT ALL. This is the
     whole question, and it is not obviously yes -- a consecutive-failure counter that forgives on ANY
     success is a deliberate, contracted design, and making it order-aware changes what fail_threshold
     means for every caller. Ground it against the C-CP-03 section 3.5 breaker semantics before pricing
     anything. Likely a C9 single-domain call; council only if step (2) proposes a DURABLE or PERSISTENT
-    epoch, which re-opens the same persistence tension B-116 term t4 pinned. (2) IF YES, PRICE THE
-    ORDINARY-DISPATCH EPOCH CAPTURE honestly -- every dispatch would have to capture an epoch and every
+    epoch, which re-opens the same persistence tension B-116 term t4 pinned. (2) IF YES, PRICE BOTH
+    SIDES honestly, because epoch-awareness on one alone leaves the family half-open. (2a) THE OUTCOME
+    SIDE -- the ordinary-dispatch epoch capture: every dispatch would have to capture an epoch and every
     CLOSED-arm resolution present it, which touches the hot path rather than the rare recovery path the
     B-118 guard touches, and would need its own witness set plus a decision about what a stale
     CLOSED-arm success DOES instead of resetting (drop it? apply it to the epoch it belongs to? neither
-    is free). (3) NOTE THE B-116 t4 INTERACTION -- any future breaker-persistence arc must replay epochs
-    consistently, or a rehydrated breaker will treat every in-flight outcome as stale (or every stale
-    one as current), which is a worse failure than the one this row describes. WHAT WOULD FALSIFY IT. A
-    demonstration that the CLOSED-arm reset is NOT reachable without a trip -- which the pre-existing
-    grounding above already contradicts -- or a ratified decision that
+    is free). (2b) THE ATTEMPT SIDE -- mid-staircase re-consultation, which is the more expensive half
+    and the reason this is registered rather than absorbed: re-checking the breaker BETWEEN a
+    candidate''s own retry attempts means ABANDONING a candidate partway through its attempt loop, which
+    changes exhaustion accounting and the fallback.last_failure_class attribution for a path that
+    predates B-118 entirely. That is semantic surgery on the staircase, not a defect repair, and it must
+    be priced against the pre-existing per-candidate pre-check contract at section 14.6 step 4 rather
+    than bolted on. Note also that the two sides can be decided INDEPENDENTLY -- guarding outcomes
+    without guarding attempts is coherent (it stops a stale success closing a breaker while still
+    allowing a stale paid call), and the reverse is not, so if only one is built it should be the
+    outcome side. (3) NOTE THE B-116 t4 INTERACTION -- any future breaker-persistence arc must replay
+    epochs consistently, or a rehydrated breaker will treat every in-flight outcome as stale (or every
+    stale one as current), which is a worse failure than the one this row describes. WHAT WOULD FALSIFY
+    IT. A demonstration that the CLOSED-arm reset is NOT reachable without a trip -- which the
+    pre-existing grounding above already contradicts -- or a ratified decision that
     consecutive-failure-with-forgiveness is exactly the intended semantics, in which case this row
     closes as WORKING-AS-DESIGNED and section 14.6.4''s boundary paragraph becomes the permanent
     statement of it.'
@@ -6617,7 +6658,9 @@ items:
     which re-opens the persistence tension B-116 term t4 pinned (a durable breaker opened by a fault the
     operator cannot see survives the restart the operator reaches for first) and is a genuine C9 vs C11
     dyad.'
-  heading: '### B-135 · Stale in-flight outcomes cross breaker state transitions un-epoch-guarded on the
-    `CLOSED` arm *(surfaced by out-of-family codex review round 2 at the `B-118` leg, 2026-08-08 —
-    adjudicated PRE-EXISTING, so the leg declared the boundary rather than absorbing an unpriced
+  heading: '### B-135 · Stale-era breaker dispatches act under a superseded era on BOTH sides — outcomes
+    reset the `closed`-arm `fail_count` un-epoch-guarded, and attempts continue a multi-attempt
+    staircase across a trip that can overlap the single half-open trial *(outcome side surfaced by
+    out-of-family codex review round 2 at the `B-118` leg, attempt side by round 6, both 2026-08-08 —
+    each adjudicated PRE-EXISTING, so the leg declared the boundaries rather than absorbing an unpriced
     redesign)*'

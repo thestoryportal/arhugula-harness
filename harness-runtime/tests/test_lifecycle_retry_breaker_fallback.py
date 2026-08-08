@@ -3971,3 +3971,114 @@ async def test_b118_cell3_release_emitter_failure_still_propagates_as_its_own_fa
     # The state release still completed first, so nothing is stranded.
     assert primary_breaker.state is BreakerState.OPEN
     assert primary_breaker.opened_at == 30.0
+
+
+@pytest.mark.asyncio
+async def test_b118_a_closed_era_dispatch_continues_its_staircase_across_a_trip() -> None:
+    """AC #14 / §14.6.4 exclusivity SCOPE: this pins the DECLARED boundary, and
+    it is a boundary pin rather than an aspiration — the behaviour asserted
+    here is what the harness does BY DESIGN, and the assertions are written so
+    that closing the gap would deliberately fail this witness.
+
+    The interleaving: dispatch A is admitted while the breaker is CLOSED, under
+    a multi-attempt policy, and its FIRST attempt fails transiently while
+    parked. Siblings then trip the breaker; the cooldown elapses; dispatch B
+    acquires the HALF_OPEN permit and becomes "the single trial". A then
+    resumes — and its attempt 2 PROCEEDS, a concurrent PAID call overlapping
+    B's trial.
+
+    Why that is correct-as-declared rather than a defect: the breaker pre-check
+    is **per-candidate** (§14.6 step 4), consulted once when a candidate is
+    selected and never between that candidate's own retry attempts. The
+    pre-v1.114 loop behaved identically, so `B-118` neither introduced nor
+    priced it; §14.6.4's exclusivity is stated over ERA-CONSISTENT admissions
+    (the trial holder and the siblings the pre-check skips), not over the
+    process. Closing it would mean abandoning a candidate mid-attempt-loop,
+    changing exhaustion and `fallback.last_failure_class` accounting for a path
+    that predates this section.
+
+    Registered as the ATTEMPT side of forward row `B-135` (out-of-family review
+    round 6); the OUTCOME side is the same row's stale-`closed`-arm half. If
+    `B-135` is ever built, THIS witness is the one that must be rewritten —
+    which is exactly why the boundary is pinned here rather than left implicit.
+    """
+    clock = _FakeClock(0.0)
+    a_first_attempt_failed = asyncio.Event()
+    a_may_resume = asyncio.Event()
+    b_entered = asyncio.Event()
+    a_calls = 0
+    b_calls = 0
+
+    class _EraInner:
+        async def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> Mapping[str, Any]:
+            nonlocal a_calls, b_calls
+            # Dispatch A and B are told apart by their step_context index.
+            if getattr(step_context, "step_index", 0) == 0:
+                a_calls += 1
+                if a_calls == 1:
+                    # Attempt 1: transient, and park so the trip can happen
+                    # while A is mid-staircase.
+                    a_first_attempt_failed.set()
+                    await a_may_resume.wait()
+                    raise TimeoutError("A attempt 1: provider timeout")
+                return {"result": "A-attempt-2-completed"}
+            b_calls += 1
+            b_entered.set()
+            return {"result": "B-trial-ok"}
+
+    primary = _candidate("anthropic", "claude-test-1")
+    chain = _chain(primary, same_family=(_candidate("anthropic", "claude-test-2"),))
+    registry = _retry_breaker_with_llm_policy(
+        max_attempts=3, fail_threshold=2, cooldown_seconds=30.0
+    )
+    breaker = registry.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=cast(Any, _EraInner()),
+        retry_breaker=registry,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        monotonic=clock,
+    )
+
+    async with asyncio.timeout(10):
+        # A is admitted while CLOSED, keeping its multi-attempt policy.
+        task_a = asyncio.create_task(
+            wrapper.dispatch(_binding(), _step(), step_context=_step_context(0))
+        )
+        await a_first_attempt_failed.wait()
+        assert breaker.state is BreakerState.CLOSED, "A was admitted in the CLOSED era"
+
+        # Siblings trip the breaker while A is mid-staircase; cooldown elapses.
+        for _ in range(2):
+            breaker.record_failure(now=clock())
+        assert breaker.state is BreakerState.OPEN
+        clock.advance(30.0)
+
+        # B acquires the trial permit and completes it.
+        assert await wrapper.dispatch(_binding(), _step(), step_context=_step_context(1)) == {
+            "result": "B-trial-ok"
+        }
+        assert b_entered.is_set()
+        assert breaker.state is BreakerState.CLOSED, "B's trial succeeded and closed it"
+
+        # A resumes. Its attempt 2 PROCEEDS — the declared behaviour.
+        a_may_resume.set()
+        assert await task_a == {"result": "A-attempt-2-completed"}
+
+    # Both inner-call counts asserted, so the witness is genuinely exercised
+    # rather than passing on a path that never ran.
+    assert a_calls == 2, "A's attempt 2 really did dispatch across the trip"
+    assert b_calls == 1, "B's trial was exactly one call"
+    # B's trial was unaffected by the overlap: exactly one admission, one
+    # recovery, and no re-arm.
+    assert _transitions(exporter).count(("open", "half_open", 0)) == 1
+    assert _transitions(exporter).count(("half_open", "closed", 0)) == 1
+    assert ("half_open", "open", 0) not in _transitions(exporter)
