@@ -5786,7 +5786,25 @@ items:
     (AskUserQuestion) -- FRESH cooldown, trigger_count 0, fail_count UNCHANGED. All nine cells are
     contracted at NEW Runtime spec v1.114 section 14.6.4. THE COUNCIL CONDITION DID NOT FIRE -- the
     design is in-memory monotonic with nothing persisted, so the durable-cooldown-clock trigger for the
-    C9-C11 dyad was never reached and no council was convened.'
+        C9-C11 dyad was never reached and no council was convened. OUT-OF-FAMILY REVIEW ROUND 1 -- TWO
+    findings, both adjudicated REAL and fixed on the branch. (i) THE STALE-OUTCOME RACE. The first build
+    wired the permit as one-admission-at-a-time and DROPPED the epoch guard this row''s own grounding
+    had cited from the in-tree BreakerGuardedSigningBackend template, which carries it for exactly this
+    race. A request admitted while the breaker was CLOSED can still be awaiting its provider when
+    siblings trip it and a LATER request admits the trial; a stale SUCCESS then closes an unhealthy
+    breaker, and the real trial''s failure lands on a CLOSED machine as one ordinary failure under
+    fail_threshold. Fixed by a per-breaker admission EPOCH -- attempt_half_open increments it, the
+    admitted caller captures it as a trial token, and record_success / record_failure /
+    re_arm_half_open_trial resolve a HALF_OPEN machine ONLY on the current epoch. Stale outcomes are
+    DROPPED with no transition, no state change and no fail_count movement (the same treatment an
+    outcome arriving while OPEN already got, and for the same reason). CLOSED-state accounting stays
+    tokenless and BYTE-UNCHANGED. Contracted at 14.6.4, planned at AC #11, witnessed at BOTH altitudes
+    incl. the exact A/B interleaving end-to-end through the real composer, with four new PD-8 probes
+    P11-P14. (ii) CELL 4 WAS UNREACHABLE -- under the ratified ONE-attempt trial cap the trial''s only
+    attempt is necessarily is_last_attempt, so a transient on it takes the exhaustion branch and IS cell
+    5. The cap is the ratified term, so the cell is marked VOID BY CONSTRUCTION with its derivation and
+    is NOT renumbered, keeping cell numbering stable against the plan, this register and every citing
+    witness. The matrix is nine cells declared, EIGHT live.'
   council: 'No at registration. A single-domain C9 reliability-mechanism gap with no nameable cross-domain
     tension — the mechanism, the contract text, and the recovery model are all in one voice''s lineage.
     Conditionally yes only if step (2) proposes a durable cooldown clock: that re-opens the persistence

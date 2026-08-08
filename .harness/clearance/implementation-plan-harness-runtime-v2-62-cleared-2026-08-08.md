@@ -25,6 +25,8 @@ AC #8 carries the deliberate **`B-116` witness-strengthening roster** that C9's 
 
 **ONE new DAG edge (U-RT-153 → U-RT-154), ZERO cross-axis edges, ZERO CXA rows, ZERO clusters, ZERO contract numbers, ZERO Protocol widening, ZERO OD/CP delta.**
 
+**Review round 1 absorbed at §0.7**: AC #11 (epoch-guarded trial ownership, witnessed at BOTH the state machine and end-to-end through the composer with the exact A/B interleaving) plus PD-8 probes **P11–P14**; and AC #6 reconciled against cell 4's VOID-BY-CONSTRUCTION status. **ELEVEN ACs / FOURTEEN probes.**
+
 ## Notes
 
 `B-118` flips to `closed` at U-RT-154's merge. The `B-119` interaction is cross-noted at the register, not worked here.

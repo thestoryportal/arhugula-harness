@@ -801,6 +801,7 @@ class RetryBreakerFallbackDispatcher:
                 # otherwise-identical shape DOES take a `threading.Lock`
                 # because span-end WORKER THREADS sign concurrently.)
                 half_open_trial = False
+                trial_token: int | None = None
                 if breaker.state is BreakerState.OPEN:
                     trial_transition = breaker.attempt_half_open(now=self.monotonic())
                     if trial_transition is None:
@@ -809,6 +810,14 @@ class RetryBreakerFallbackDispatcher:
                     else:
                         self._emit_breaker_transition(trial_transition, outer_span)
                         half_open_trial = True
+                        # Capture the admission epoch. Only this token can
+                        # resolve THIS trial: a request admitted earlier while
+                        # the breaker was CLOSED may still be awaiting the
+                        # provider, and its stale outcome must not resolve a
+                        # trial it does not own (a stale SUCCESS would close an
+                        # unhealthy breaker outright). The `_epoch` guard the
+                        # sibling `config.audit_signing` breaker carries.
+                        trial_token = breaker.trial_epoch
                         skip_reason = None
                 elif not breaker.should_attempt():
                     # HALF_OPEN: a sibling dispatch holds the trial permit.
@@ -872,6 +881,7 @@ class RetryBreakerFallbackDispatcher:
                         candidate=candidate,
                         policy=effective_policy,
                         breaker=breaker,
+                        trial_token=trial_token,
                         tracer=tracer,
                         outer_span=outer_span,
                         step_context=step_context,
@@ -881,7 +891,9 @@ class RetryBreakerFallbackDispatcher:
                     # cancellation risks masking shutdown; the cancellation
                     # itself propagates untouched.
                     if half_open_trial:
-                        breaker.re_arm_half_open_trial(now=self.monotonic())
+                        breaker.re_arm_half_open_trial(
+                            now=self.monotonic(), trial_token=trial_token
+                        )
                     raise
                 except BaseException:
                     # §14.6.4 cells 6-8 — an audit-signing hard failure, a
@@ -890,7 +902,7 @@ class RetryBreakerFallbackDispatcher:
                     # `except Exception` arm inside the loop sees it) all
                     # leave the trial without recording an outcome.
                     if half_open_trial:
-                        self._release_half_open_trial(breaker, outer_span)
+                        self._release_half_open_trial(breaker, outer_span, trial_token)
                     raise
                 finally:
                     ROUTED_PRIMARY_SPAN_TRACE.reset(_span_trace_token)
@@ -904,7 +916,7 @@ class RetryBreakerFallbackDispatcher:
                 # the one this row removes. A no-op on cells 1/2/4/5, where
                 # the machine already left half_open.
                 if half_open_trial:
-                    self._release_half_open_trial(breaker, outer_span)
+                    self._release_half_open_trial(breaker, outer_span, trial_token)
 
                 if attempt_terminal.result is not None:
                     # Success.
@@ -1094,6 +1106,7 @@ class RetryBreakerFallbackDispatcher:
         candidate: ProviderCandidate,
         policy: RetryPolicy,
         breaker: Any,
+        trial_token: int | None,
         tracer: Any,
         outer_span: Any,
         step_context: StepExecutionContext,
@@ -1229,7 +1242,9 @@ class RetryBreakerFallbackDispatcher:
                             )
                         else:
                             transition = breaker.record_failure(
-                                cause=breaker_cause, now=self.monotonic()
+                                cause=breaker_cause,
+                                now=self.monotonic(),
+                                trial_token=trial_token,
                             )
                             if transition is not None:
                                 self._emit_breaker_transition(transition, outer_span)
@@ -1275,7 +1290,9 @@ class RetryBreakerFallbackDispatcher:
                             ValidatorRetryExitClass.TERMINAL_FAIL_EXIT.value,
                         )
                         transition = breaker.record_failure(
-                            cause=breaker_cause, now=self.monotonic()
+                            cause=breaker_cause,
+                            now=self.monotonic(),
+                            trial_token=trial_token,
                         )
                         if transition is not None:
                             self._emit_breaker_transition(transition, outer_span)
@@ -1296,7 +1313,9 @@ class RetryBreakerFallbackDispatcher:
                         inner_span.set_attribute("retry.cause_attribution", cause.value)
                         inner_span.set_attribute("retry.fail_class", cause.value)
                         transition = breaker.record_failure(
-                            cause=breaker_cause, now=self.monotonic()
+                            cause=breaker_cause,
+                            now=self.monotonic(),
+                            trial_token=trial_token,
                         )
                         if transition is not None:
                             self._emit_breaker_transition(transition, outer_span)
@@ -1313,7 +1332,7 @@ class RetryBreakerFallbackDispatcher:
                     # per C-CP-03 §3.5 sampling discipline). `retry.delay_ms = 0`
                     # makes the success span numerically distinct from retries.
                     inner_span.set_attribute("retry.delay_ms", 0)
-                    transition = breaker.record_success()
+                    transition = breaker.record_success(trial_token=trial_token)
                     if transition is not None:
                         self._emit_breaker_transition(transition, outer_span)
                     return _PerCandidateTerminal(
@@ -1336,14 +1355,16 @@ class RetryBreakerFallbackDispatcher:
             last_failure_detail=last_failure_detail,
         )
 
-    def _release_half_open_trial(self, breaker: Any, outer_span: Any) -> None:
+    def _release_half_open_trial(
+        self, breaker: Any, outer_span: Any, trial_token: int | None
+    ) -> None:
         """Re-arm an INCONCLUSIVE half-open trial and emit its transition
         (`B-118`, §14.6.4 cells 3 / 6-8).
 
         A no-op unless the machine is still ``half_open`` — which is exactly
         the "the trial recorded neither success nor a charging failure" test,
         encoded as a state read rather than as a second bookkeeping flag."""
-        transition = breaker.re_arm_half_open_trial(now=self.monotonic())
+        transition = breaker.re_arm_half_open_trial(now=self.monotonic(), trial_token=trial_token)
         if transition is not None:
             self._emit_breaker_transition(transition, outer_span)
 

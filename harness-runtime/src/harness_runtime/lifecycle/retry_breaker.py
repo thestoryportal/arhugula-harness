@@ -214,6 +214,15 @@ class BreakerStateMachine:
       (`re_arm_half_open_trial`) whose outcome was not attributable to the
       `{provider, model}` — Runtime spec §14.6.4 matrix cells 3 / 6-9.
 
+    **Trial ownership is EPOCH-GUARDED (§14.6.4, `B-118`).** The permit is not
+    only "one admission at a time" — it is "only the admitted caller may
+    resolve the trial". `attempt_half_open` bumps `trial_epoch`; outcomes
+    presented against a different epoch while `half_open` are DROPPED without
+    mutating the machine. Without this, a call admitted while the breaker was
+    CLOSED and still awaiting the provider can resolve a trial admitted later
+    by someone else — and a stale SUCCESS doing so closes an unhealthy
+    breaker. `closed`-state outcomes are unaffected and need no token.
+
     **`should_attempt()` is the single-trial permit (§14.6.4, `B-118`).**
     `half_open` is a TRANSIENT state that exists only between a trial's
     admission and its outcome, so admitting on `state is not open` would let
@@ -232,6 +241,19 @@ class BreakerStateMachine:
     fail_count: int = 0
     fail_threshold: int = DEFAULT_FAIL_THRESHOLD
     cooldown_seconds: float = DEFAULT_COOLDOWN_SECONDS
+    trial_epoch: int = 0
+    """Monotonically-increasing admission epoch for half-open trials.
+
+    Incremented by `attempt_half_open` on every admission; the admitted caller
+    captures the new value as its **trial token** and must present it to
+    resolve the trial. This is the `_epoch` guard the sibling
+    `BreakerGuardedSigningBackend` carries for the same reason
+    (`harness_runtime.config.audit_signing`): a call admitted while the
+    breaker was CLOSED can still be in flight when siblings trip the breaker
+    and a LATER call admits a trial, and its stale outcome must not be allowed
+    to resolve a trial it does not own. See `record_success` /
+    `record_failure` / `re_arm_half_open_trial`."""
+
     opened_at: float | None = None
     """Caller-supplied monotonic instant of the most recent `open` entry.
 
@@ -242,7 +264,11 @@ class BreakerStateMachine:
     it as "cooldown never elapses" (refuse) rather than silently admitting."""
 
     def record_failure(
-        self, *, cause: BreakerCause | None = None, now: float
+        self,
+        *,
+        cause: BreakerCause | None = None,
+        now: float,
+        trial_token: int | None = None,
     ) -> BreakerTransition | None:
         """Record one failure; return the transition iff the state changed.
 
@@ -270,6 +296,19 @@ class BreakerStateMachine:
         if self.state is BreakerState.OPEN:
             return None
         if self.state is BreakerState.HALF_OPEN:
+            if trial_token != self.trial_epoch:
+                # STALE outcome (v1.114 §14.6.4): this failure belongs to a
+                # call admitted under a different epoch — typically one
+                # admitted while the breaker was CLOSED, still in flight when
+                # siblings tripped it and a LATER call took the trial permit.
+                # Dropped entirely: no transition, and `fail_count` is NOT
+                # incremented. This is the SAME treatment an outcome arriving
+                # while `open` already gets above, and for the same reason —
+                # the machine has already concluded this provider-model is
+                # unhealthy, so pre-trip evidence adds nothing, while counting
+                # it here would inflate the eventual re-trip's `trigger_count`
+                # with evidence from a superseded epoch.
+                return None
             prior = self.state
             self.fail_count += 1
             self.state = BreakerState.OPEN
@@ -299,7 +338,7 @@ class BreakerStateMachine:
             )
         return None
 
-    def record_success(self) -> BreakerTransition | None:
+    def record_success(self, *, trial_token: int | None = None) -> BreakerTransition | None:
         """Record one success; return the transition iff the state changed.
 
         - In `closed`: resets `fail_count` to 0; no transition.
@@ -308,6 +347,17 @@ class BreakerStateMachine:
         - In `open`: no-op; returns `None`.
         """
         if self.state is BreakerState.HALF_OPEN:
+            if trial_token != self.trial_epoch:
+                # STALE success (v1.114 §14.6.4). Dropped: a success from a
+                # superseded epoch must NOT close a breaker whose trial is
+                # still outstanding. Left unguarded this is the sharpest
+                # failure in the family — the stale success closes the
+                # breaker, the real trial's failure then lands on a CLOSED
+                # machine as one ordinary failure well under `fail_threshold`,
+                # and an unhealthy provider-model is silently readmitted.
+                # Dropping loses nothing: the outstanding trial supplies
+                # fresher, epoch-correct evidence momentarily.
+                return None
             self.state = BreakerState.CLOSED
             self.fail_count = 0
             self.opened_at = None
@@ -342,6 +392,14 @@ class BreakerStateMachine:
         `open`, so a second caller gets `None` from this method, and
         `should_attempt()` is False for every sibling while the trial runs.
         `None` on any refused conjunct — the caller skips the candidate.
+
+        **On admission `trial_epoch` is incremented, and the admitted caller
+        MUST capture the new value as its trial token** (read
+        `breaker.trial_epoch` immediately after this returns) and present it
+        to `record_success` / `record_failure` / `re_arm_half_open_trial`.
+        Only the token holder can resolve the trial; a stale outcome from an
+        earlier epoch is dropped. A refused admission does NOT increment,
+        so a refusal mutates nothing.
         """
         if self.state is not BreakerState.OPEN:
             return None
@@ -350,6 +408,7 @@ class BreakerStateMachine:
         if now - self.opened_at < self.cooldown_seconds:
             return None
         self.state = BreakerState.HALF_OPEN
+        self.trial_epoch += 1
         return BreakerTransition(
             from_state=BreakerState.OPEN,
             to_state=BreakerState.HALF_OPEN,
@@ -359,7 +418,9 @@ class BreakerStateMachine:
             cooldown_seconds=self.cooldown_seconds,
         )
 
-    def re_arm_half_open_trial(self, *, now: float) -> BreakerTransition | None:
+    def re_arm_half_open_trial(
+        self, *, now: float, trial_token: int | None = None
+    ) -> BreakerTransition | None:
         """Return an INCONCLUSIVE half-open trial to `open` with a FRESH
         cooldown (v1.114 `B-118`; Runtime spec §14.6.4 matrix cells 3 / 6-9).
 
@@ -388,6 +449,11 @@ class BreakerStateMachine:
         the original deadline is already in the past.
         """
         if self.state is not BreakerState.HALF_OPEN:
+            return None
+        if trial_token != self.trial_epoch:
+            # STALE (v1.114 §14.6.4): only the permit HOLDER may re-arm its
+            # own trial. A non-owner re-arming would abort a live trial and
+            # hand the provider a second call it never earned.
             return None
         self.state = BreakerState.OPEN
         self.opened_at = now

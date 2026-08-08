@@ -3632,3 +3632,103 @@ async def test_b118_inconclusive_trials_are_spaced_by_a_fresh_cooldown() -> None
     assert _transitions(exporter) == [("open", "half_open", 0), ("half_open", "open", 0)]
     assert _skip_reasons(exporter) == ["breaker-open"] * 3
     assert primary_breaker.state is BreakerState.OPEN
+
+
+@pytest.mark.asyncio
+async def test_b118_stale_success_through_the_composer_does_not_close_a_live_trial() -> None:
+    """AC #11 end-to-end: the A/B interleaving driven through the REAL
+    composer, not the state machine alone.
+
+    Request A dispatches while the breaker is CLOSED and blocks inside the
+    provider call. Siblings trip the breaker; the cooldown elapses; request B
+    admits the half-open trial and blocks too. A's provider call then SUCCEEDS
+    and returns. Un-epoch-guarded, A's `record_success()` closes the breaker
+    out from under B's outstanding trial — and B's subsequent failure then
+    lands on a CLOSED machine as one ordinary failure well under
+    `fail_threshold`, silently readmitting an unhealthy provider-model.
+
+    With the guard: A's success is dropped, the breaker stays HALF_OPEN, and
+    B's real failure re-opens it."""
+    clock = _FakeClock(0.0)
+    a_release = asyncio.Event()
+    b_release = asyncio.Event()
+    a_entered = asyncio.Event()
+    b_entered = asyncio.Event()
+
+    class _StaleRaceInner:
+        def __init__(self) -> None:
+            self.primary_calls = 0
+
+        async def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> Mapping[str, Any]:
+            if binding.model_binding.model != "claude-test-1":
+                return {"result": "fallback-ok"}
+            self.primary_calls += 1
+            if self.primary_calls == 1:  # request A, admitted while CLOSED
+                a_entered.set()
+                await a_release.wait()
+                return {"result": "A-stale-success"}
+            b_entered.set()  # request B, the half-open trial
+            await b_release.wait()
+            raise _FakeProviderStatusError(401)
+
+    primary = _candidate("anthropic", "claude-test-1")
+    chain = _chain(primary, same_family=(_candidate("anthropic", "claude-test-2"),))
+    registry = _retry_breaker_with_llm_policy(fail_threshold=2, cooldown_seconds=30.0)
+    breaker = registry.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
+    inner = _StaleRaceInner()
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=cast(Any, inner),
+        retry_breaker=registry,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        monotonic=clock,
+    )
+
+    async with asyncio.timeout(10):
+        # A dispatches while CLOSED and parks inside the provider call.
+        task_a = asyncio.create_task(
+            wrapper.dispatch(_binding(), _step(), step_context=_step_context(0))
+        )
+        await a_entered.wait()
+        assert breaker.state is BreakerState.CLOSED
+
+        # Siblings trip the breaker out from under A.
+        for _ in range(2):
+            breaker.record_failure(now=clock())
+        assert breaker.state is BreakerState.OPEN
+
+        # Cooldown elapses; B admits the trial and parks too.
+        clock.advance(30.0)
+        task_b = asyncio.create_task(
+            wrapper.dispatch(_binding(), _step(), step_context=_step_context(1))
+        )
+        await b_entered.wait()
+        assert breaker.state is BreakerState.HALF_OPEN
+
+        # A's stale SUCCESS lands.
+        a_release.set()
+        assert await task_a == {"result": "A-stale-success"}
+        assert breaker.state is BreakerState.HALF_OPEN, (
+            "a stale success must NOT close a breaker whose trial is outstanding"
+        )
+        assert breaker.fail_count == 2
+
+        # B's real trial failure resolves the trial it owns.
+        b_release.set()
+        assert await task_b == {"result": "fallback-ok"}
+
+    assert breaker.state is BreakerState.OPEN, "the real trial failure re-opened it"
+    assert breaker.opened_at == 30.0
+    # Exactly one open->half_open and one half_open->open; no half_open->closed.
+    transitions = _transitions(exporter)
+    assert ("half_open", "closed", 0) not in transitions
+    assert transitions.count(("open", "half_open", 0)) == 1
+    assert [t for t in transitions if t[0] == "half_open"][0][1] == "open"

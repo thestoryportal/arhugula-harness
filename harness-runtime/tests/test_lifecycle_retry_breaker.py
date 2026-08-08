@@ -425,7 +425,7 @@ def test_re_arm_half_open_trial_returns_to_open_with_a_fresh_cooldown(
     assert breaker.fail_count == 2
     assert breaker.attempt_half_open(now=30.0) is not None
 
-    transition = breaker.re_arm_half_open_trial(now=200.0)
+    transition = breaker.re_arm_half_open_trial(now=200.0, trial_token=breaker.trial_epoch)
     assert transition is not None
     assert transition.from_state is BreakerState.HALF_OPEN
     assert transition.to_state is BreakerState.OPEN
@@ -450,9 +450,9 @@ def test_re_arm_half_open_trial_is_a_no_op_off_half_open(tmp_path: Path) -> None
         fail_threshold=1,
     ).registry
     breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-rearm-noop")
-    assert breaker.re_arm_half_open_trial(now=1.0) is None  # closed
+    assert breaker.re_arm_half_open_trial(now=1.0, trial_token=0) is None  # closed
     breaker.record_failure(now=0.0)
-    assert breaker.re_arm_half_open_trial(now=1.0) is None  # open
+    assert breaker.re_arm_half_open_trial(now=1.0, trial_token=0) is None  # open
     assert breaker.state is BreakerState.OPEN
     assert breaker.opened_at == 0.0  # untouched by the no-op
 
@@ -473,14 +473,16 @@ def test_record_failure_records_the_open_instant_on_both_open_entries(
     breaker.record_failure(now=10.0)
     assert breaker.opened_at == 10.0
     breaker.attempt_half_open(now=40.0)
-    transition = breaker.record_failure(now=41.0)  # trial failed → re-open
+    transition = breaker.record_failure(
+        now=41.0, trial_token=breaker.trial_epoch
+    )  # trial failed → re-open
     assert transition is not None
     assert transition.to_state is BreakerState.OPEN
     assert transition.trigger_count == breaker.fail_count >= 1
     assert breaker.opened_at == 41.0  # restamped, not 10.0
     # And a success clears it, so a CLOSED machine carries no stale deadline.
     breaker.attempt_half_open(now=71.0)
-    breaker.record_success()
+    breaker.record_success(trial_token=breaker.trial_epoch)
     assert breaker.state is BreakerState.CLOSED
     assert breaker.opened_at is None
 
@@ -511,7 +513,7 @@ def test_breaker_emits_event_on_half_open_to_closed(tmp_path: Path) -> None:
     breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-y")
     breaker.record_failure(now=0.0)  # closed → open
     breaker.attempt_half_open(now=31.0)  # open → half_open
-    transition = breaker.record_success()
+    transition = breaker.record_success(trial_token=breaker.trial_epoch)
     assert transition is not None
     assert transition.from_state is BreakerState.HALF_OPEN
     assert transition.to_state is BreakerState.CLOSED
@@ -529,7 +531,7 @@ def test_breaker_emits_event_on_half_open_to_open_on_retry_fail(tmp_path: Path) 
     breaker = registry.get_breaker(BreakerScope.PER_MODEL, "tool-z")
     breaker.record_failure(now=0.0)  # closed → open
     breaker.attempt_half_open(now=31.0)  # open → half_open
-    transition = breaker.record_failure(now=0.0)
+    transition = breaker.record_failure(now=0.0, trial_token=breaker.trial_epoch)
     assert transition is not None
     assert transition.from_state is BreakerState.HALF_OPEN
     assert transition.to_state is BreakerState.OPEN
@@ -550,7 +552,7 @@ def test_breaker_does_not_emit_on_no_op_transitions(tmp_path: Path) -> None:
     breaker.record_failure(now=0.0)  # closed → open
     assert breaker.record_failure(now=0.0) is None  # open: no-op
     breaker.attempt_half_open(now=31.0)  # open → half_open
-    breaker.record_success()  # half_open → closed
+    breaker.record_success(trial_token=breaker.trial_epoch)  # half_open → closed
     assert breaker.attempt_half_open(now=31.0) is None  # closed: no-op
 
 
@@ -574,7 +576,7 @@ def test_breaker_should_attempt_is_the_single_trial_permit(tmp_path: Path) -> No
     assert breaker.should_attempt() is False
     breaker.attempt_half_open(now=31.0)  # → half_open: a trial is in flight
     assert breaker.should_attempt() is False
-    breaker.record_success()  # → closed
+    breaker.record_success(trial_token=breaker.trial_epoch)  # → closed
     assert breaker.should_attempt() is True
 
 
@@ -721,3 +723,132 @@ def test_breaker_state_machine_resets_fail_count_on_close_success() -> None:
     # Still closed — only 2 consecutive failures after the reset.
     assert machine.state is BreakerState.CLOSED
     assert machine.fail_count == 2
+
+
+# --- AC #11, stale outcomes while HALF_OPEN (the epoch guard) --------------
+
+
+def test_b118_stale_success_does_not_close_a_breaker_whose_trial_is_outstanding() -> None:
+    """AC #11 / §14.6.4 "stale outcomes", state-machine level: an outcome from
+    a SUPERSEDED epoch must not resolve a trial it does not own.
+
+    This is the sharpest failure in the family. Request A enters while the
+    breaker is CLOSED and is still awaiting the provider; siblings trip the
+    breaker; the cooldown elapses and request B admits a trial. If A's success
+    then lands untokened, it CLOSES the breaker — and B's real trial failure
+    subsequently arrives at a CLOSED machine as one ordinary failure, far under
+    `fail_threshold`, so an unhealthy provider-model is silently readmitted."""
+    machine = BreakerStateMachine(
+        scope=BreakerScope.PER_MODEL,
+        identifier="anthropic:claude-test-1",
+        fail_threshold=2,
+        cooldown_seconds=30.0,
+    )
+    # A is admitted while CLOSED and captures the epoch it saw (0 — no trial).
+    stale_token_a = machine.trial_epoch
+    # Siblings trip the breaker; the cooldown elapses; B admits the trial.
+    machine.record_failure(now=0.0)
+    machine.record_failure(now=0.0)
+    assert machine.state is BreakerState.OPEN
+    assert machine.attempt_half_open(now=30.0) is not None
+    live_token_b = machine.trial_epoch
+    assert live_token_b != stale_token_a
+
+    # A's success finally lands. DROPPED — no transition, no state change.
+    assert machine.record_success(trial_token=stale_token_a) is None
+    assert machine.state is BreakerState.HALF_OPEN, "the trial is still outstanding"
+    assert machine.fail_count == 2
+    # A token-less caller is treated identically (there is no implicit owner).
+    assert machine.record_success() is None
+    assert machine.state is BreakerState.HALF_OPEN
+
+    # B's real trial failure then resolves the trial it owns -> OPEN, not a
+    # stray failure on a wrongly-closed breaker.
+    transition = machine.record_failure(now=60.0, trial_token=live_token_b)
+    assert transition is not None
+    assert transition.from_state is BreakerState.HALF_OPEN
+    assert transition.to_state is BreakerState.OPEN
+    assert machine.state is BreakerState.OPEN
+    assert machine.opened_at == 60.0
+
+
+def test_b118_stale_failure_is_dropped_without_charging() -> None:
+    """AC #11 mirror: a stale FAILURE is dropped too, and does NOT increment
+    `fail_count`.
+
+    Same treatment an outcome arriving while `open` already receives, and for
+    the same reason: the machine has already concluded this provider-model is
+    unhealthy, so pre-trip evidence adds nothing — while counting it would
+    inflate the eventual re-trip's `trigger_count` with evidence from a
+    superseded epoch."""
+    machine = BreakerStateMachine(
+        scope=BreakerScope.PER_MODEL,
+        identifier="anthropic:claude-test-1",
+        fail_threshold=2,
+        cooldown_seconds=30.0,
+    )
+    stale_token = machine.trial_epoch
+    machine.record_failure(now=0.0)
+    machine.record_failure(now=0.0)
+    machine.attempt_half_open(now=30.0)
+    live_token = machine.trial_epoch
+
+    assert machine.record_failure(now=31.0, trial_token=stale_token) is None
+    assert machine.state is BreakerState.HALF_OPEN
+    assert machine.fail_count == 2, "a stale failure charges nothing"
+    assert machine.opened_at == 0.0, "and mutates no deadline"
+
+    # The owner's outcome still carries the honest trip count.
+    transition = machine.record_failure(now=40.0, trial_token=live_token)
+    assert transition is not None
+    assert transition.trigger_count == 3
+
+
+def test_b118_a_non_owner_cannot_re_arm_someone_elses_trial() -> None:
+    """AC #11: the re-arm is epoch-guarded too. A non-owner re-arming would
+    ABORT a live trial and hand the provider a second call it never earned."""
+    machine = BreakerStateMachine(
+        scope=BreakerScope.PER_MODEL,
+        identifier="anthropic:claude-test-1",
+        fail_threshold=1,
+        cooldown_seconds=30.0,
+    )
+    stale_token = machine.trial_epoch
+    machine.record_failure(now=0.0)
+    machine.attempt_half_open(now=30.0)
+    live_token = machine.trial_epoch
+
+    assert machine.re_arm_half_open_trial(now=99.0, trial_token=stale_token) is None
+    assert machine.state is BreakerState.HALF_OPEN
+    assert machine.opened_at == 0.0
+    assert machine.re_arm_half_open_trial(now=99.0, trial_token=live_token) is not None
+    assert machine.state is BreakerState.OPEN
+    assert machine.opened_at == 99.0
+
+
+def test_b118_closed_state_outcomes_need_no_token_and_are_byte_unchanged() -> None:
+    """AC #11 scope bound: the epoch guard binds ONLY the `half_open` arms.
+
+    Ordinary CLOSED-state accounting — the overwhelmingly common path — keeps
+    its pre-v1.114 tokenless behaviour exactly, so the guard cannot silently
+    start dropping ordinary failures."""
+    machine = BreakerStateMachine(
+        scope=BreakerScope.PER_MODEL,
+        identifier="anthropic:claude-test-1",
+        fail_threshold=3,
+        cooldown_seconds=30.0,
+    )
+    assert machine.record_failure(now=0.0) is None
+    assert machine.fail_count == 1
+    assert machine.record_success() is None
+    assert machine.fail_count == 0
+    for _ in range(2):
+        assert machine.record_failure(now=1.0) is None
+    transition = machine.record_failure(now=1.0)  # third -> trip, no token
+    assert transition is not None
+    assert transition.to_state is BreakerState.OPEN
+    assert transition.trigger_count == 3
+    # And an outcome arriving while OPEN stays the no-op it always was.
+    assert machine.record_failure(now=2.0) is None
+    assert machine.record_success() is None
+    assert machine.state is BreakerState.OPEN
