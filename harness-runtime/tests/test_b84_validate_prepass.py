@@ -1175,8 +1175,11 @@ def test_w5_case_3_same_model_name_different_provider_raises_a_ledger_conflict(
     The refusal used to be folded into a `FAILED` capture result and re-raised
     as `MemoryToolExecutionStoreError`, which is NOT in the fail-fast tuple and
     so classified `TRANSIENT_RETRY` - the measured re-enterability that answered
-    `B-84`'s D-2 falsifier affirmatively. It now propagates out of the capture
-    layer and is re-typed to `MemoryToolExecutionLedgerConflictError`, which IS
+    `B-84`'s D-2 falsifier affirmatively. It is STILL folded into a `FAILED`
+    result - that outcome is CONTRACTED for two of `_capture`'s six entry points
+    (U-MEM-26 / Codex R6+R8), so it could not be allowed to propagate - but the
+    result now carries a closed `failure_kind` discriminator, and `_write_note`
+    re-types from it to `MemoryToolExecutionLedgerConflictError`, which IS
     admitted to fail-fast BY NAME. The staircase is therefore closed to this
     class: the assertion below flipped from `TRANSIENT_RETRY` to `None`.
 

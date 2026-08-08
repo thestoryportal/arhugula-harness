@@ -23,11 +23,17 @@ controls):
 * **W-D4 structural clock-exclusion** — the equivalence comparison reads no
   clock. Without this, a later field addition could reintroduce a time input
   and silently falsify W-D1 without failing any behavioural test.
+* **W-D5 concurrency** (added at the #1274 merge gate) — N barrier-synchronized
+  threads issuing the SAME append yield exactly one `APPENDED` and one durable
+  line. W-D1..W-D4 are SEQUENTIAL and establish nothing about interleaving;
+  this closes that gap in-tree. It is an invariant assertion, not a timing one:
+  the append's read-compare-write runs inside the ledger's own locks, so the
+  OUTCOME is serialized even though the SCHEDULING is not.
 
 They are asserted against `append_memory_operation` DIRECTLY, not through the
 memory tool executor, and that placement is load-bearing: determinism is a
 property of the LEDGER's comparison, and it must stay witnessed there whatever
-exception type the executor happens to wrap it in. These four are therefore
+exception type the executor happens to wrap it in. These are therefore
 green both before and after the (b′) split, and a future arc that re-types the
 executor surface again cannot silently drop the evidence §14.6.3 cites.
 
@@ -37,6 +43,7 @@ executor surface again cannot silently drop the evidence §14.6.3 cites.
 from __future__ import annotations
 
 import inspect
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -108,10 +115,20 @@ def test_w_d1_repeated_conflicting_append_is_repeat_invariant(tmp_path: Path) ->
     ledger, produces the SAME outcome every time — same exception type, same
     message, and no drift in the ledger it is comparing against.
 
-    This is the first prong of "confirms determinism". A racy fault would show
-    at least two distinct outcomes across the repeats; this one shows exactly
-    one. Eight rather than two so an intermittent 1-in-N race has room to
-    surface rather than being averaged away by a single retry.
+    This is the first prong of "confirms determinism": the refusal is a pure
+    function of (ledger contents, payload), so repeating it cannot change the
+    answer. Eight rather than two because a single repeat cannot distinguish
+    "invariant" from "happened to agree once".
+
+    **Scope, stated so the witness is not read as more than it is.** These
+    repeats are SEQUENTIAL and in ONE process, so they establish repeat-
+    invariance and nothing about CONCURRENCY — they could not surface an
+    interleaving race even if one existed, and an earlier revision of this
+    docstring wrongly implied they could. The module's header block already
+    scopes the four prongs to determinism-over-the-same-inputs. Concurrency is
+    W-D5's job, added at the #1274 merge gate after that gate's concurrency lens
+    verified the property out-of-band (barrier-synchronized threads and spawned
+    processes, 0 anomalies over 50 trials).
     """
 
     handle = _handle(tmp_path)
@@ -271,3 +288,55 @@ def _entry(ledger: object) -> object:
         _payload(provider="openai"),
         prior_entry=None,
     )
+
+
+# --- W-D5 — the concurrency prong (added at the #1274 merge gate) ----------
+
+
+def test_w_d5_concurrent_identical_appends_yield_exactly_one_row(tmp_path: Path) -> None:
+    """W-D5: N barrier-synchronized threads issuing the SAME append produce
+    exactly ONE `APPENDED`, N-1 `IDEMPOTENT_NOOP`, and ONE durable line.
+
+    W-D1..W-D4 establish determinism over the same inputs, SEQUENTIALLY. They
+    say nothing about interleaving, and the merge gate's concurrency lens
+    verified that half out-of-band. This witness brings the cheap, deterministic
+    part of it in-tree: `append_memory_operation` performs its read-compare-
+    append inside a cross-process lock plus `_WRITE_LOCK`, so the whole
+    critical section is serialized and the OUTCOME is not timing-dependent even
+    though the SCHEDULING is. Whichever thread wins appends; every later one
+    finds an equivalent entry and no-ops.
+
+    That is why this is a legitimate permanent gate rather than a flaky one:
+    the assertions are on the invariant (one row, one APPENDED), not on which
+    thread got there first. Losing the lock would break it deterministically.
+    """
+
+    handle = _handle(tmp_path)
+    workers = 8
+    barrier = threading.Barrier(workers)
+    outcomes: list[MemoryOperationWriteResult] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def _append() -> None:
+        try:
+            barrier.wait(timeout=30)
+            result = append_memory_operation(handle, _payload(provider="openai"))
+        except BaseException as exc:
+            with lock:
+                errors.append(exc)
+            return
+        with lock:
+            outcomes.append(result)
+
+    threads = [threading.Thread(target=_append) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert not errors, f"concurrent append raised: {errors!r}"
+    assert len(outcomes) == workers
+    assert outcomes.count(MemoryOperationWriteResult.APPENDED) == 1
+    assert outcomes.count(MemoryOperationWriteResult.IDEMPOTENT_NOOP) == workers - 1
+    assert len(handle.canonical_path.read_text().splitlines()) == 1

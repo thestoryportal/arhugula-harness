@@ -172,9 +172,11 @@ _INPUT_VALIDATION = MemoryTelemetryFailureClass.INPUT_VALIDATION_FAILURE
         # inventing a contradicting third answer because the capture result
         # carried no exception to re-classify from.
         #
-        # It carries one now. The refusal propagates out of `_capture` instead
-        # of being folded into a `FAILED` result, so the executor can re-type
-        # it - and this row moved with it. The class flips `io_failure` ->
+        # It is discriminable now, though NOT by propagating: the refusal is
+        # still folded into a `FAILED` result (that outcome is CONTRACTED for
+        # two of `_capture`'s six entry points, U-MEM-26 / Codex R6+R8), and the
+        # result carries a closed `failure_kind` enum the executor re-types
+        # from. This row moved with that discriminator. The class flips `io_failure` ->
         # `provider_adapter_failure` because the new type declares NOTHING and
         # inherits the base's RESIDUAL: a ledger refusal is not an I/O fault,
         # and per C-MEM-19 v1.3 a residual report is the ABSENCE of a claim

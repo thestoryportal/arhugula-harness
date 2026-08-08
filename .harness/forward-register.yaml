@@ -5442,7 +5442,7 @@ items:
 - id: B-115
   title: 'Memory capture same-text / same-model-NAME / different-PROVIDER re-entry: a duplicate record JSONL line, then a TRANSIENT_RETRY staircase via MemoryToolExecutionStoreError'
   status: closed
-  pr: '#pending (the (b-prime) bundled leg -- Runtime spec v1.113 section 14.6.3 row 6 discharged +
+  pr: '#1274 (the (b-prime) bundled leg -- Runtime spec v1.113 section 14.6.3 row 6 discharged +
     plan v2.61 U-RT-153 + the impl; spec, plan and impl land TOGETHER because row 6 conditions the
     contract text on a fact only the build can establish)'
   summary: 'MEASURED, not inferred -- executed at the B-84 build leg (PR #1243) as cell (3) of that leg''s
@@ -6446,6 +6446,17 @@ items:
     not an impl-discretion flip. Note that the flip site is ONE line (the type declares a ClassVar
     instead of inheriting), by construction: the B-115 leg wrote the declaration explicitly as an
     absence rather than relying on the base, so the change surface is minimal whenever it is taken.
+    (3-bis) REVISIT THE CONSUMER ROUTING IN THE SAME ARC. MemoryCaptureFailureKind is CLOSED at
+    two, and the closure is enforced by a pinned witness
+    (test_b115_ledger_conflict_split.py::test_the_failure_kind_vocabulary_is_pinned_at_two_members),
+    NOT by the consumers: _write_note''s re-type is an if-LEDGER_CONFLICT/else, so a third member
+    would fall through to the store-error branch and travel the retry staircase -- silently, and
+    on the conservative side (a new kind stays retryable rather than becoming permanent), but
+    silently nonetheless. The pin makes adding a member FAIL that test, which is the forcing
+    function; whichever arc adds one MUST decide that routing explicitly in the same arc rather
+    than inheriting the fall-through by default. Note the two vocabularies are distinct: a new
+    C-MEM-19 telemetry class does not by itself require a new MemoryCaptureFailureKind member --
+    check whether it does before assuming this clause fires.
     (4) CONSIDER SCOPE: the same question applies to MemoryToolExecutionInternalError, which inherits
     the same residual for the same stated reason at U-MEM-28. A vocabulary arc should decide both
     together rather than minting one member and leaving its sibling in the residual. WHAT WOULD

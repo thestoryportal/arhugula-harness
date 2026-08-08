@@ -390,6 +390,14 @@ _LEGALITY_TABLE: list[
     ("failed-io-with-cause", _F, _IO, True, "boom", False),
     ("failed-conflict-with-cause", _F, _LC, True, "conflict", True),
     ("failed-conflict-round-tripped", _F, _LC, False, "conflict", True),
+    # The two LEGAL cells an earlier revision of this table left uncovered.
+    # Without them the table admitted a mutation that ADDS a
+    # `failure_reason is not None` requirement to the FAILED branch: every row
+    # present carried a reason, so the tightening escaped. They are here to kill
+    # exactly that, and they encode the deliberate decision NOT to require a
+    # reason on FAILED (the consumer supplies its own default).
+    ("failed-conflict-with-cause-no-reason", _F, _LC, True, None, True),
+    ("failed-conflict-round-tripped-no-reason", _F, _LC, False, None, True),
     ("failed-cause-but-no-kind", _F, None, True, "conflict", False),
 ]
 
@@ -399,16 +407,28 @@ _LEGALITY_TABLE: list[
     [row[1:] for row in _LEGALITY_TABLE],
     ids=[row[0] for row in _LEGALITY_TABLE],
 )
-def test_the_result_model_legality_table_is_exhaustive(
+def test_the_result_model_legality_table_covers_every_refusal_and_legal_shape(
     status: MemoryCaptureStatus,
     kind: MemoryCaptureFailureKind | None,
     cause: bool,
     reason: str | None,
     legal: bool,
 ) -> None:
-    """Every (status, kind, cause, reason) combination, stated once.
+    """The result contract's legality, stated once — SIXTEEN rows.
 
-    Four legal shapes; ten refused. Two rows are worth naming because they are
+    **Scope, stated precisely because an earlier revision overclaimed it.** This
+    is NOT the full (2 status × 3 kind × 2 cause × 2 reason) = 24-cell product.
+    It is every REFUSED direction (one row per way the contract can be
+    violated) plus every LEGAL shape (all six, each also round-tripped by the
+    next witness). The uncovered cells are redundant repetitions of an
+    already-covered refusal — e.g. `CAPTURED` + kind is refused identically
+    whether or not a reason rides along — so enumerating them would add rows
+    without adding discrimination. What the table DOES have to cover
+    exhaustively is the legal set, because a missing legal row is how a
+    spurious tightening escapes; that is why the two reason-free conflict rows
+    were added.
+
+    Six legal shapes; ten refused. Two rows are worth naming because they are
     the ones a narrower contract gets wrong in OPPOSITE directions:
 
     * `failed-conflict-round-tripped` MUST be legal. `failure_cause` is excluded
@@ -419,6 +439,9 @@ def test_the_result_model_legality_table_is_exhaustive(
       naming it - clause (a) forces a CAPTURED kind to `None` and clause (c)
       forbids a cause on any non-conflict kind. Asserting the derived row is how
       that reasoning gets checked rather than trusted.
+    * the two `...-no-reason` conflict rows MUST be legal. `failure_reason` is
+      deliberately not required on `FAILED`, and without these rows a mutation
+      adding that requirement passes the whole table.
     """
 
     if legal:
@@ -452,6 +475,34 @@ def test_every_legal_shape_survives_a_full_json_round_trip() -> None:
         # The cause NEVER survives - it is excluded from the wire form - and the
         # revived value must still be legal, which is the whole point.
         assert revived.failure_cause is None, label
+
+
+def test_the_failure_kind_vocabulary_is_pinned_at_two_members() -> None:
+    """`MemoryCaptureFailureKind` is CLOSED at two, pinned here BY NAME.
+
+    This witness exists because the consumer does NOT enforce the closure.
+    `_write_note`'s re-type is `if kind is LEDGER_CONFLICT / else`, so a third
+    member would fall through to the store-error branch and travel the retry
+    staircase — silently. The fall-through errs on the CONSERVATIVE side (an
+    unrecognised kind stays retryable rather than becoming permanent), which is
+    why the routing is deliberately left alone rather than made exhaustive here;
+    but "conservative" is not "decided", and the decision belongs to whichever
+    arc adds the member.
+
+    So the pin is the guard: adding a member fails THIS test, which forces that
+    arc to make the routing choice explicitly. `B-134` (the contemplated
+    dedicated C-MEM-19 `ledger_conflict` class) is the live candidate, and its
+    close-out carries the matching obligation.
+    """
+
+    assert set(MemoryCaptureFailureKind) == {
+        MemoryCaptureFailureKind.LEDGER_CONFLICT,
+        MemoryCaptureFailureKind.STORE_IO,
+    }
+    assert len(MemoryCaptureFailureKind) == 2, (
+        "the vocabulary grew — revisit `_write_note`'s kind routing in the SAME "
+        "arc (see this test's docstring and `B-134`'s close-out)"
+    )
 
 
 def test_a_real_conflict_producer_always_attaches_the_cause(tmp_path: Path) -> None:
@@ -598,8 +649,20 @@ def test_surface_3_request_redaction_append(tmp_path: Path) -> None:
     assert isinstance(excinfo.value.__cause__, MemoryOperationIdempotencyConflictError)
 
 
-def test_no_executor_surface_leaks_the_raw_ledger_type(tmp_path: Path) -> None:
-    """The partition's COMPLETENESS half, asserted structurally.
+def test_the_three_covered_surfaces_do_not_leak_the_raw_ledger_type_directly(
+    tmp_path: Path,
+) -> None:
+    """The partition's completeness half FOR THE THREE COVERED SURFACES,
+    asserted structurally — and the name says "three covered", not "no", because
+    the claim is genuinely narrower than a blanket one.
+
+    `_propose_promotion` reaches `memory_promotion.py`'s own
+    `append_memory_operation`, which carries the SAME provider-blind-key /
+    provider-in-payload shape and is NOT re-typed by this leg. That path is
+    executor-REACHABLE, so a witness named `no_executor_surface_leaks...` would
+    be false. It is recorded as the remaining raw-escape route in the
+    type-partition witness's survey below and on `B-134`; this test's scope is
+    the three surfaces the ratified scope names.
 
     Every `append_memory_operation` call the executor makes must route through
     `_append_operation_refusing_divergent_replay` (or, for the capture path,

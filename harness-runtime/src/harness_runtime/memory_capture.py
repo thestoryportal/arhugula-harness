@@ -253,8 +253,21 @@ class MemoryCaptureFailureKind(StrEnum):
     exception could not be allowed to escape without changing control flow
     those callers rely on.
 
-    A closed enum rather than a bool so that a third failure kind is a type
-    error at every consumer rather than a silent third meaning for `False`.
+    A closed enum rather than a bool, so a third failure kind is a NAMED value
+    rather than a silent third meaning for `False`.
+
+    **CLOSED AT TWO, and the closure is a pinned witness rather than a property
+    of the consumers - stated precisely because an earlier draft of this
+    docstring overclaimed it.** A third member would NOT be "a type error at
+    every consumer": `_write_note`'s re-type is an `if kind is LEDGER_CONFLICT
+    / else` , so an unrecognised kind would fall through to the store-error
+    branch and travel the retry staircase - silently, and on the CONSERVATIVE
+    side (a new kind stays retryable rather than becoming permanent), but
+    silently nonetheless. The guard is therefore
+    `test_b115_ledger_conflict_split.py::
+    test_the_failure_kind_vocabulary_is_pinned_at_two_members`, which fails the
+    moment a member is added and so FORCES the routing decision into the arc
+    that adds it. `B-134`'s close-out carries the matching obligation.
     """
 
     LEDGER_CONFLICT = "ledger_conflict"

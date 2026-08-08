@@ -2487,10 +2487,10 @@ async def test_retry_wrapper_propagates_resume_edit_decode_terminally() -> None:
 # ---------------------------------------------------------------------------
 # U-RT-152 / `B-116` — the breaker-charge waiver at the fail-fast site.
 #
-# `Spec_Harness_Runtime_v1.md` v1.112 §14.6.3 (ratified Reading (II)): a fault
+# `Spec_Harness_Runtime_v1.md` v1.113 §14.6.3 (ratified Reading (II)): a fault
 # charges the provider-model breaker ONLY if a half-open trial could return a
 # different result than the trip did, attributably to the `{provider, model}`
-# the breaker is keyed to. The four harness-internal waiver types fail that
+# the breaker is keyed to. The five harness-internal waiver types fail that
 # test. Every witness below drives the REAL composer dispatch path.
 # ---------------------------------------------------------------------------
 
@@ -2556,7 +2556,7 @@ def _outer_span(exporter: InMemorySpanExporter) -> Any:
     )
 
 
-# --- AC #4, per-member waiver witnesses (x4) -------------------------------
+# --- AC #4, per-member waiver witnesses (x5) -------------------------------
 
 
 @pytest.mark.parametrize(

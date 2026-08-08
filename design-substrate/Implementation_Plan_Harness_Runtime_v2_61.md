@@ -109,9 +109,45 @@ orchestrator's instruction: every (status × kind × cause × reason) combinatio
 enumerated, FOURTEEN rows, four legal and ten refused, asserted in a single
 parametrized witness — so there is no fifth corner.
 
+### §0.3-quinquies Merge-gate fold-in (#1274)
+
+`[HIGH]` The 3-lens merge gate returned **APPROVE / APPROVE / APPROVE** at
+`46cb88cb` with CI 17/17 green, and its own findings were folded in on-branch
+rather than carried. None falsified a delivered obligation; all were
+scope-honesty or hardening:
+
+* **The vocabulary closure was overclaimed.** `MemoryCaptureFailureKind`'s
+  docstring said a third member would be "a type error at every consumer" —
+  FALSE as built: `_write_note`'s `if kind is LEDGER_CONFLICT / else` routes an
+  unrecognised kind to the store branch and the retry staircase, silently
+  (conservatively — a new kind stays retryable — but silently). **The consumer
+  routing is deliberately NOT changed**; instead the closure is made a PINNED
+  WITNESS so adding a member FAILS a named test and forces the routing decision
+  into the arc that adds it, with the matching obligation on `B-134`.
+* **A witness name overclaimed its scope.**
+  `test_no_executor_surface_leaks_the_raw_ledger_type` → `test_the_three_
+  covered_surfaces_do_not_leak_the_raw_ledger_type_directly`, because
+  `_propose_promotion` reaches `memory_promotion.py`'s own un-re-typed append —
+  already disclosed in the partition witness's survey, but contradicted by the
+  old name.
+* **The legality table's claim exceeded its coverage** (14 of 24 cells, claimed
+  "every combination"), and two UNCOVERED cells were LEGAL — the reason-free
+  conflict rows — which let a spurious `failure_reason`-required tightening
+  escape. Rows 14 → **16**; the claim reworded to its true scope (every refused
+  direction + every legal shape, not the full product).
+* **W-D1's docstring implied sequential repeats could surface a race.** They
+  cannot. Reworded, and the concurrency prong added in-tree as **W-D5**
+  (barrier-synchronized threads; exactly-one-`APPENDED`, one durable line) after
+  it was verified stable across 12 consecutive local runs — it asserts the
+  INVARIANT, not a timing, so it is a legitimate permanent gate.
+* **Stale carries** repaired (`v1.112` → `v1.113`, "four" → "five", `x4` → `x5`,
+  a now-false general "the original exception is not retained" claim scoped to
+  the STORE_IO path, and two comments still describing the FALSIFIED
+  propagation shape).
+
 ### §0.4 What this delta carries — counts
 
-ONE new unit (**U-RT-153**); ZERO existing units amended; ZERO clusters; **ONE new DAG edge** (U-RT-152 → U-RT-153); **ZERO cross-axis edges** (the memory-tool exception types are an EXISTING import dependency of `retry_breaker_fallback.py`, and `harness_runtime` → `harness_is` is a pre-existing package edge — `memory_capture.py` already imports `MemoryOperationIdempotencyConflictError`); ZERO CXA rows (aggregate frozen at 111); ZERO contract numbers; ZERO Memory-spec / Memory-plan delta. Witness modules 2 (5 + 14 test functions; 5 + 27 collected, the legality table being parametrized over 14 rows); PD-8 probes 11.
+ONE new unit (**U-RT-153**); ZERO existing units amended; ZERO clusters; **ONE new DAG edge** (U-RT-152 → U-RT-153); **ZERO cross-axis edges** (the memory-tool exception types are an EXISTING import dependency of `retry_breaker_fallback.py`, and `harness_runtime` → `harness_is` is a pre-existing package edge — `memory_capture.py` already imports `MemoryOperationIdempotencyConflictError`); ZERO CXA rows (aggregate frozen at 111); ZERO contract numbers; ZERO Memory-spec / Memory-plan delta. Witness modules 2 (6 + 15 test functions; 6 + 30 collected, the legality table being parametrized over 16 rows); PD-8 probes 11.
 
 ---
 
@@ -154,7 +190,7 @@ ONE new unit (**U-RT-153**); ZERO existing units amended; ZERO clusters; **ONE n
 
 **#8 — PD-8 mutation probes, all confirmed RED then restored.** `[HIGH]` (a) narrow the tuple by the new member; (b) broaden the tuple to the memory family base; (c) de-list from the classifier while keeping the waiver (the consistency-rule probe); (d) collapse the capture-boundary discriminator so every `FAILED` reports `STORE_IO`; (e) re-parent the new type under `MemoryToolExecutionStoreError`; **(f) drop the `from` chain at the capture wrapper** — must fail BOTH the capture-surface witness and the symmetry witness; **(g) drop the `failure_cause` retention** — must fail loudly at the result model's own validator rather than silently producing an unchained raise; **(i) remove the exclusion / skip-schema annotation** — must fail the serialization-contract witness; **(j) remove the whole-contract validator** — must fail every contradictory-combo row of the legality table; **(k) restore the cause rule to an `IFF`** — must fail the round-trip witness AND the legality table's round-tripped row, which is the round-4 defect pinned as a probe. Probe (g) is RE-VERIFIED under the one-way rule: with the validator no longer enforcing that direction, dropping the retention must still kill — via the chaining, symmetry and producer witnesses. Each must fail a NAMED witness, and (c) / (e) / (f) must fail the consistency, residual and symmetry witnesses specifically.
 
-**#10 — The result contract is asserted AS A WHOLE.** `[HIGH]` Every (status × failure_kind × failure_cause × failure_reason) combination enumerated in ONE parametrized witness — FOURTEEN rows, four legal and ten refused — plus a full `model_validate_json(model_dump_json(...))` round trip for every legal shape. Authored because rounds 2, 3 and 4 each found a corner the previous round's narrower assertion missed; an exhaustive table is the shape that stops a fifth.
+**#10 — The result contract is asserted AS A WHOLE.** `[HIGH]` ONE parametrized witness covering every REFUSED direction and every LEGAL shape — **SIXTEEN** rows, six legal and ten refused — plus a full `model_validate_json(model_dump_json(...))` round trip for every legal shape, and a membership pin closing `MemoryCaptureFailureKind` at two so a third member forces a revisit of the consumer routing. *(Scope stated precisely: this is not the full 24-cell product; the uncovered cells are redundant repetitions of an already-covered refusal. The LEGAL set, however, is covered exhaustively — a missing legal row is how a spurious tightening escapes.)* Authored because rounds 2, 3 and 4 each found a corner the previous round's narrower assertion missed; an exhaustive table is the shape that stops a fifth.
 
 **#9 — The contracted `FAILED`-on-conflict outcome is NOT disturbed.** `[HIGH]` The two U-MEM-26 witnesses that pin it — a divergent second run-start REPORTED rather than read as completion, and a non-run-start conflict still surfacing as `FAILED` with the conflict named in `failure_reason` — must pass **unmodified**. They are the reason the discriminator is a value rather than a propagated exception, and re-running them unchanged is the only thing that demonstrates the leg left the other five `_capture` entry points alone.
 
