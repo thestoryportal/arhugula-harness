@@ -5533,7 +5533,17 @@ items:
     omitting it) and the wrapper chains from it. The plan AC was STRENGTHENED -- chaining on
     EVERY surface plus a joint symmetry witness, since the observed failure mode was
     two-of-three chaining, which per-surface witnesses alone do not catch -- NOT narrowed to
-    fit what was built. ARTIFACTS: Runtime spec v1.113 (three amendment sites, all
+    fit what was built. ROUND 3 found the retained live exception had regressed the PUBLICLY
+    EXPORTED result model''s model_dump_json and model_json_schema, both of which worked before
+    this leg (the schema break at CLASS level, so every instance). ROUND 2''S GROUNDING IS
+    RETRACTED AS TOO NARROW: it verified that no CURRENT consumer serializes the model, which
+    is true and beside the point for an exported type whose Pydantic APIs are part of its
+    contract regardless of today''s callers -- the same defect shape the workspace polices in
+    the B-101 / B-107 serialization-boundary lineage. Fixed by EXCLUSION (SkipJsonSchema plus
+    Field(exclude=True)) rather than a string field-serializer: failure_reason already carries
+    the same fact verbatim, so a serialized copy would be a second drifting authority, while
+    exclusion loses nothing because the exception object serves chaining, which has no JSON
+    meaning. The in-process object is still present and witnessed. ARTIFACTS: Runtime spec v1.113 (three amendment sites, all
     inside section 14.6.3 -- row 6 discharged, guard tuple four -> five with a sibling-not-subclass
     constraint, and the declared residual narrowed), plan v2.61 U-RT-153 (a NEW unit, NOT an amendment
     of the LANDED-and-CLOSED U-RT-152, per the B-97(a) -> U-RT-149 and B-111 -> U-RT-151 precedent),

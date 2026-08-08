@@ -13,6 +13,7 @@ Unit U-RT-153; `Spec_Harness_Runtime_v1.md` v1.113 §14.6.3 row 6.
 from __future__ import annotations
 
 import inspect
+import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -370,6 +371,53 @@ def test_the_result_model_forbids_a_kind_cause_mismatch() -> None:
         failure_cause=MemoryOperationIdempotencyConflictError("k"),
     )
     assert isinstance(ok.failure_cause, MemoryOperationIdempotencyConflictError)
+
+
+def test_the_live_cause_field_does_not_break_the_models_serialization_contract() -> None:
+    """`B-115` (b′) round 3 — the field is in-process ONLY, and BOTH Pydantic
+    APIs it would otherwise break are asserted working.
+
+    `MemoryCaptureResult` is PUBLICLY EXPORTED from `harness_runtime`, so
+    `model_dump_json()` and `model_json_schema()` are part of its API contract.
+    A live exception field regressed both from working to raising
+    (`PydanticSerializationError` / `PydanticInvalidForJsonSchema`), and the
+    schema break was at the CLASS level — it applied to every instance, not only
+    conflicting ones, which is why the CAPTURED row below is not redundant.
+
+    The regression is the workspace's serialization-boundary hazard class (the
+    `B-101` / `B-107` lineage), so it is witnessed rather than assumed fixed.
+    """
+
+    captured = MemoryCaptureResult(status=MemoryCaptureStatus.CAPTURED, event_kind="tool_event")
+    conflict = MemoryCaptureResult(
+        status=MemoryCaptureStatus.FAILED,
+        event_kind="tool_event",
+        failure_reason="MemoryOperationIdempotencyConflictError: idempotency_key 'k' ...",
+        failure_kind=MemoryCaptureFailureKind.LEDGER_CONFLICT,
+        failure_cause=MemoryOperationIdempotencyConflictError("k"),
+    )
+
+    # Both instances serialize; the conflict one is the row that used to raise.
+    assert json.loads(captured.model_dump_json())["status"] == "captured"
+    payload = json.loads(conflict.model_dump_json())
+    assert payload["status"] == "failed"
+    assert payload["failure_kind"] == "ledger_conflict"
+
+    # Schema generation works at the CLASS level, and the excluded field is
+    # absent from it rather than emitted as an unrepresentable type.
+    schema = MemoryCaptureResult.model_json_schema()
+    assert "failure_cause" not in schema["properties"]
+
+    # EXCLUSION IS NOT LOSS — the whole point. The live object is still there
+    # for the chaining the executor performs; only the WIRE form omits it.
+    assert isinstance(conflict.failure_cause, MemoryOperationIdempotencyConflictError)
+    assert "failure_cause" not in conflict.model_dump()
+
+    # And nothing was lost from the JSON projection either: `failure_reason`
+    # already carries the serializable statement of the same fact, which is why
+    # a second serialized copy would have been a drifting duplicate rather than
+    # added information.
+    assert MemoryOperationIdempotencyConflictError.__name__ in payload["failure_reason"]
 
 
 def test_surface_2_standard_tool_call_append(tmp_path: Path) -> None:

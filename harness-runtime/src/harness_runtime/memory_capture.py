@@ -46,7 +46,8 @@ from harness_is.memory_record_envelope import (
 )
 from harness_is.memory_store import MemoryStoreRecord, MemoryStoreWriteResult
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from harness_runtime.memory_scope_family import (
     canonical_scope_family,
@@ -265,11 +266,7 @@ class MemoryCaptureResult(BaseModel):
 
     # `arbitrary_types_allowed` is required by `failure_cause` below, which
     # carries a live exception. It permits non-pydantic FIELD TYPES and weakens
-    # NOTHING else - `extra="forbid"` and `frozen=True` are unchanged, and this
-    # model is never serialized (no `model_dump` / `model_dump_json` consumer
-    # exists; the only readers are the memory tool executor and
-    # `automatic_memory._raise_capture_failure`, both of which consume it
-    # immediately and raise).
+    # NOTHING else - `extra="forbid"` and `frozen=True` are unchanged.
     model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
     status: MemoryCaptureStatus
@@ -295,7 +292,29 @@ class MemoryCaptureResult(BaseModel):
     # Lifetime is bounded by construction: the field is set only on the FAILED
     # path, and every consumer of a FAILED result raises immediately, so the
     # retained traceback does not outlive the dispatch that produced it.
-    failure_cause: MemoryOperationIdempotencyConflictError | None = None
+    #
+    # ROUND 3 - EXCLUDED FROM SERIALIZATION AND FROM SCHEMA, and the choice is
+    # between two shapes rather than obvious, so the reasoning is recorded here.
+    # This model is PUBLICLY EXPORTED, so `model_dump_json()` and
+    # `model_json_schema()` are part of its API contract; a live exception field
+    # regressed BOTH from working to raising (`PydanticSerializationError` /
+    # `PydanticInvalidForJsonSchema`) - and the schema break was at the CLASS
+    # level, so it applied to every instance, not just conflicting ones.
+    #
+    # The alternative was a `field_serializer` emitting a string. REJECTED: it
+    # would publish a SECOND, lossier copy of a fact `failure_reason` already
+    # carries verbatim (`f"{type(exc).__name__}: {exc}"`) - two authorities for
+    # one concept, free to drift. EXCLUSION LOSES NOTHING, and that is the test
+    # that decides it: the JSON projection already states the whole failure via
+    # `status` + `failure_kind` + `failure_reason`, while the exception OBJECT
+    # exists for one purpose that has no JSON meaning at all - you cannot
+    # `raise ... from` a deserialized string. It is an in-process affordance,
+    # so it is honest for it to be absent from the wire form and present in
+    # memory. Attribute access is UNAFFECTED by `exclude` - the chaining
+    # witnesses assert exactly that, so exclusion is not loss.
+    failure_cause: SkipJsonSchema[MemoryOperationIdempotencyConflictError | None] = Field(
+        default=None, exclude=True
+    )
 
     @model_validator(mode="after")
     def _cause_accompanies_exactly_the_ledger_conflict_kind(self) -> Self:
