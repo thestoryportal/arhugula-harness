@@ -6176,8 +6176,8 @@ items:
     deliberately, per its own docstring, treating unknown faults as transient until proven
     otherwise. MemoryToolExecutionDeniedError and MemoryToolExecutionStoreError are siblings of the
     two WAIVED memory types under the same family base, fall to that catch-all, travel the retry
-    staircase, and charge the provider-model breaker at the escalation and max_attempts-exhaustion
-    record_failure sites (:1072/:1091 at HEAD). Under the B-116 ratified normative test (a fault
+    staircase, and charge the provider-model breaker at both staircase record_failure charge
+    sites (:1072, :1091 at HEAD). Under the B-116 ratified normative test (a fault
     charges only if a half-open trial could return a different result, attributably to the
     {provider, model}), a DETERMINISTIC policy denial or a local durable-store write failure
     charging the breaker is a residual -- the same defect shape B-116 closed at the fail-fast site,
@@ -6185,7 +6185,7 @@ items:
     binds the fail-fast site only, and the classifier''s exclusion of the denied class from
     fail-fast is itself deliberate and documented (its raise sites read mutable index/store state
     and it WRAPS genuinely transient store I/O, so wholesale fail-fasting it would kill retries for
-    real flakes -- the docstring''s own grounds at :343-350). The residual was stated as a FALSE
+    real flakes -- the docstring''s own grounds at :343-349). The residual was stated as a FALSE
     universal ("every other path passes the test by construction") in the first drafting of spec
     section 14.6.3; the fresh-context review round falsified it by direct read and the spec now
     declares the residual and cites this row. SURFACED at the B-116 spec leg''s fresh-context
