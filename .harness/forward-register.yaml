@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 136
+  total: 137
   open: 0
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 31
   operator_gated: 0
   held: 1
   closed: 105
-  identity_digest: 94929b71524902d9
+  identity_digest: 585270b5e1a5687d
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -6571,7 +6571,34 @@ items:
     is untouched. B-136 NEWLY REGISTERED at this leg -- a SECOND probe found the PRE-EXISTING name-matching
     arm leaks its trace buffer when the always-sampled span is the ROOT close, which is outside this
     row''s authority to repair but which this row''s own arm must not EXTEND (term 5 + AC #6c + PD-8
-    probe (iv), which goes RED without it).'
+    probe (iv), which goes RED without it). B-137 NEWLY REGISTERED AFTER OUT-OF-FAMILY CODEX ROUND 1
+    AGAINST THIS LEG''S COMMIT ff63c725. The reviewer held that at TAIL_BASED_PROD cells with
+    base_rate<1 the head sampler drops the carrier at span CREATION so no ReadableSpan reaches the new
+    tail arm, contradicting section 9.2.1 term 4''s coverage claim. ADJUDICATED EMPIRICALLY AT THE REAL
+    PRODUCTION WIRING RATHER THAN ON ARGUMENT, AND CONFIRMED: tracer_provider.py binds the section 10.3
+    per-cell ratio at the head UNCONDITIONALLY in BOTH section 9.1 modes (its own words: "the current
+    default sampler ignores the mode"), and measurement over 4,000 carriers per cell returned 10.4%
+    admitted at team-binding x self-hosted-server and 20.9% at multi-tenant-compliance x managed-cloud.
+    THE REPAIR THIS ROW BUILT IS THEREFORE REAL BUT PARTIAL -- it realizes the floor for head-ADMITTED
+    carriers, and of those it delivers 100% (420/420 and 837/837). WHAT WAS DEFECTIVE WAS THE TEXT, NOT
+    THE ARM: term 4 claimed every TAIL_BASED_PROD cell was covered by terms 1-3, and that claim is
+    RETRACTED and replaced with the per-cell admission table plus the statement that the head bound
+    reaches FIVE of the EIGHT active cells rather than one. A SECOND framing was ALSO falsified by the
+    same run and is recorded so it is not carried forward: the starvation is NOT uniform across the
+    tail-keep mechanism. A section 9.2 member realized as a ROOT SPAN NAME is admitted at 100% even at
+    base-rate 0.1 (measured 4,000/4,000 for sandbox.violation), because the head resolves
+    is_always_sampled against the span name. Only EVENT-carried members and NON-ROOT spans are starved,
+    the latter including non-root section 10.2 triggers (measured ~9% preservation at base-rate 0.1).
+    That shape-dependence is exactly what this row named, and it is why the architecture question --
+    an unconditionally admitting head in TAIL_BASED_PROD mode with the ratio moved into the tail
+    consumer -- is registered as B-137 rather than absorbed here: it spans every class the tail
+    preserves and multiplies admitted volume by 1/base_rate at every production cell. Witnesses W13
+    (parametrized over the two production cells) and W14 (the root-name-vs-event asymmetry) pin the
+    corrected bound honestly, on the W5 pattern -- named as a bound, not hidden -- and PD-8 probe (vi)
+    demonstrates they are load-bearing by inverting them under a B-137 candidate-A sketch. B-137 also
+    MERGES with this row''s F-08 residual: today''s ~20% multi-tenant admission is the ceiling on the
+    arm''s added keep-volume, and candidate A removes that ceiling, so F-08 must be measured jointly
+    with B-137 rather than against today''s admission.'
   council: 'No -- a probe-then-repair row in the B-123 family; convene nothing until the positive control runs.
     If step (1) returns dropped and step (2) selects candidate (b), that IS a convening trigger: a new
     emission primitive re-opens the C7 observability-floor vs C11 telemetry-volume tension on a surface
@@ -6795,3 +6822,86 @@ items:
     materialization, so an always-sampled **root** leaves its trace buffered until `force_flush`
     *(surfaced by direct probe at the `B-133` leg, 2026-08-08 — pre-existing; the `B-133` event arm
     deliberately does NOT share the shape)*'
+- id: B-137
+  title: 'Head sampling starves the tail-keep mechanism for every preserved class that is NOT a root span
+    name -- the shipped head sampler applies the section 10.3 ratio in BOTH section 9.1 modes'
+  status: registered_finding
+  summary: 'WHAT IT IS, MEASURED AT THE REAL PRODUCTION COMPOSITION. C-OD-09 section 9.1 says TAIL_BASED_PROD
+    means the sampling decision is taken at TRACE COMPLETION. The shipped composition does not deliver
+    that: harness-runtime/src/harness_runtime/lifecycle/tracer_provider.py resolves
+    build_default_sampler(base_rate=PER_CELL_BASE_RATE_ENVELOPE[cell].default_rate) UNCONDITIONALLY, for
+    every cell, and states in the same function that "the current default sampler ignores the mode ...
+    Future units may wire mode-conditional samplers". So at a TAIL_BASED_PROD cell the section 10.3 ratio
+    is applied by ParentBased(HarnessCompositeSampler(base_rate)) AT SPAN CREATION, and the
+    TailKeepSpanProcessor only ever sees the admitted fraction. A span the head dropped never reaches
+    on_end at all, so no tail-side preservation rule -- not section 10.2 tail-keep-on-classification, not
+    the section 9.2 always-sampled forward, not the B-133 event-aware arm -- can act on it. MEASURED over
+    4,000 carriers per cell at HEAD: team-binding x self-hosted-server (base 0.1) admitted 10.4%;
+    multi-tenant-compliance x managed-cloud (base 0.2) admitted 20.9%; solo-developer x
+    self-hosted-server (base 1.0) admitted 100%. THE STARVATION IS NOT UNIFORM, AND THE NON-UNIFORMITY IS
+    THE FINDING -- an earlier framing of it as "every preserved class is equally starved" was FALSIFIED by
+    the same run. A section 9.2 member realized as a ROOT SPAN NAME is admitted at 100% even at base-rate
+    0.1 (measured 4,000/4,000 for sandbox.violation), because the head sampler resolves is_always_sampled
+    against the span NAME and returns RECORD_AND_SAMPLE. What IS starved is everything the head cannot
+    classify at creation, and there are exactly two such populations: (i) section 9.2 members carried as
+    span EVENTS -- the B-133 family, measured 10.4% at base-rate 0.1 -- and (ii) NON-ROOT spans of any
+    class, because ParentBased consults the inner sampler ONLY for roots and children inherit an
+    unsampled parent''s decision. Population (ii) includes the section 10.2 classification triggers when
+    they are not roots: a trace with an ordinary root and a sandbox.violation CHILD was preserved in 182
+    of 2,000 traces (~9%) at base-rate 0.1. WHY THIS IS PRE-EXISTING AND NOT B-133 EXPOSURE. Population
+    (ii) is the bound composite_sampler.py''s own "Enforcement boundary (honest scope)" docstring already
+    declares and that the B-TAIL-CONDITIONAL-SAMPLING arc was opened for; it long predates B-133.
+    Population (i) is B-133''s, whose TAIL half B-133 closed for head-ADMITTED carriers and whose HEAD
+    half OD spec v1.38 section 9.2.1 term 4 declares as a bound with the per-cell table. NEITHER row
+    priced the architecture question this row carries. WHAT MAKES IT ARCHITECTURE RATHER THAN A DEFECT
+    REPAIR. Closing it means making the head unconditionally admitting in TAIL_BASED_PROD mode and moving
+    the section 10.3 ratio into the tail consumer -- which multiplies the admitted span volume by
+    1/base_rate at every production cell (x10 at the team cells, x5 at multi-tenant), changes what
+    max_buffered_traces and the C-OD-11 section 11.1 per-cell budgets are sized against, and alters the
+    posture of EVERY class the tail preserves, not only the three B-133 named. SURFACED BY OUT-OF-FAMILY
+    CODEX ROUND 1 AGAINST THE B-133 LEG''S COMMIT ff63c725, 2026-08-08 -- the reviewer''s premise was
+    ADJUDICATED EMPIRICALLY AND CONFIRMED at the real production wiring rather than accepted or declined
+    on argument, and the leg''s own contract TEXT was corrected where it had overclaimed coverage.'
+  close_out: '(1) RE-GROUND THE WIRING FIRST, because it is explicitly marked as provisional. Re-read
+    tracer_provider.py''s sampler resolution at the then-current HEAD and confirm it still binds the
+    per-cell ratio in both modes and still carries the "current default sampler ignores the mode ...
+    Future units may wire mode-conditional samplers" note. If a mode-conditional sampler has since
+    landed, this row may already be closed by that work and should be re-measured rather than re-argued.
+    (2) RE-MEASURE, do not re-reason. The probe is four lines of composition (build_default_sampler at the
+    cell rate + the real TailKeepSpanProcessor, counting arrivals at on_end) across the three populations
+    the summary names -- root-name-matched, event-carried, and non-root trigger -- so the non-uniformity
+    is re-established rather than assumed. (3) DECIDE THE POSTURE, and this is a genuine architectural
+    fork rather than a bug with a fix. Candidate A: mode-conditional head -- ALWAYS_ON (or
+    ParentBased(ALWAYS_ON)) in TAIL_BASED_PROD mode, with the section 10.3 ratio applied inside the tail
+    consumer at the root-close decision. This is what section 9.1 actually says and what
+    tracer_provider.py already names as an unbuilt surface, but it multiplies in-process span volume by
+    1/base_rate and moves the ratio decision to a component that currently has no ratio logic at all.
+    Candidate B: rejected-carrier recording -- leave the head as is, but have the sampler record a
+    counter or a minimal marker for dropped spans that WOULD have carried a preserved class, so the loss
+    is observable rather than silent. Cheaper and honest, but it does not deliver the floor. Candidate C:
+    accept and document -- ratify that the section 9.2 floor is a floor over the ADMITTED stream, which
+    would require amending section 9.2/section 9.3''s "head=1.0 across all cells" language, since that
+    language is what makes A the literal reading. (4) PRICE THE VOLUME CONSEQUENCE BEFORE CHOOSING A --
+    and note that this MERGES with B-133''s still-open F-08 residual rather than sitting beside it.
+    Today''s ~20% multi-tenant admission is the ceiling on the B-133 arm''s added keep-volume; candidate A
+    removes that ceiling, so F-08 measured against today''s admission would not survive this repair. The
+    two MUST be measured together. (5) NOTE THE B-136 INTERACTION -- candidate A increases the population
+    of buffered traces by 1/base_rate, which makes B-136''s never-resolving always-sampled-root traces a
+    proportionally larger share of max_buffered_traces pressure. WHAT WOULD FALSIFY IT. A re-measurement
+    showing event-carried and non-root-trigger admission at parity with root-name-matched admission
+    (which would mean the head composition changed), or a ratified reading under candidate C that the
+    floor was always scoped to the admitted stream.'
+  council: 'YES, and this is the row in the family that genuinely earns one -- unlike B-133, whose repair was
+    single-domain. Candidate A trades a real observability floor (C7: a preserved class that is dropped
+    before any preservation rule can act on it is not preserved) against a 5x-to-10x in-process span
+    volume increase at every production cell (C11: telemetry volume, collector capacity, and the C-OD-11
+    section 11.1 per-cell budgets those caps were sized against). The tension is nameable in advance
+    between two specific voices, which is the convening discriminator, and the decision changes a
+    committed per-cell envelope rather than an implementation detail. Convene DYADIC C7 + C11 at step
+    (3), NOT before step (2)''s re-measurement -- the pilot lesson is that councils convened before the
+    probe converge to a single voice plus cosmetic consultants.'
+  heading: '### B-137 · Head sampling starves the tail-keep mechanism for every preserved class that is **not a
+    root span name** — the shipped head sampler applies the §10.3 ratio in **both** §9.1 modes
+    *(surfaced by out-of-family Codex round 1 against the `B-133` leg''s commit `ff63c725`, 2026-08-08;
+    premise adjudicated empirically at the real production wiring and CONFIRMED, with the
+    non-uniformity falsifying the first framing)*'

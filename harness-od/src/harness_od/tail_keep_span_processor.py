@@ -115,18 +115,41 @@ by the `B-133` positive control before this arm was written: a real
 exhausted dispatch through the real ``HarnessCompositeSampler`` + this
 processor exported ZERO spans for all three members.
 
-``_carries_always_sampled_event`` closes the TAIL half: after the span-name
-check fails, the span's EVENT names are resolved against the same
-``is_always_sampled`` SSOT and a match forwards immediately. The HEAD half
-CANNOT be closed at this venue — a span's events do not exist at span
-creation, so ``HarnessCompositeSampler.should_sample`` has nothing to
-inspect — and stays a **declared bound** (OD spec v1.38 §9.2.1 term 4). The
-bound is NOT vacuous: ``team-binding × local-development`` is
-``HEAD_BASED_DEV`` at a §10.3 default base-rate of **0.5** and engages no
-tail processor at all (``span_processor.py:368`` wraps only at
-``deployment_surface != LOCAL_DEVELOPMENT``), so at that one cell the three
-event-shaped members are still dropped at head. The tail is nonetheless the
-production enforcement point — every ``TAIL_BASED_PROD`` cell resolves here.
+``_carries_always_sampled_event`` closes the TAIL half **for carriers the
+head ADMITTED**: after the span-name check fails, the span's EVENT names are
+resolved against the same ``is_always_sampled`` SSOT and a match forwards
+immediately. Of the carriers that reach ``on_end`` this delivers 100% (the
+`B-133` measurement: 420/420 and 837/837).
+
+**What it does NOT do, stated because the coverage claim would be false.**
+The HEAD half cannot be closed at this venue — a span's events do not exist
+at span creation, so ``HarnessCompositeSampler.should_sample`` has nothing
+to inspect — and it stays a **declared bound** (OD spec v1.38 §9.2.1 term
+4). The bound is neither vacuous nor confined to the dev cell. Production
+resolves the head sampler from the §10.3 envelope **unconditionally in both
+§9.1 modes** (``tracer_provider.py`` binds
+``build_default_sampler(base_rate=PER_CELL_BASE_RATE_ENVELOPE[cell]
+.default_rate)`` and says in the same breath that *"the current default
+sampler ignores the mode"*), so a ``TAIL_BASED_PROD`` cell at base-rate 0.1
+drops ~90% of event carriers **before this processor exists to classify
+them** — measured 10.4% reaching the tail at ``team-binding ×
+self-hosted-server`` and 20.9% at ``multi-tenant-compliance ×
+managed-cloud``, over 4,000 carriers each. The bound reaches **five of the
+eight** ACTIVE cells (every cell whose head base-rate is < 1.0).
+
+**The bound is SHAPE-specific, and that asymmetry is why `B-133` exists.**
+At the SAME cell and base rate, a §9.2 member realized as a ROOT SPAN NAME
+reaches the tail at 100% and exports at 100% (measured 4,000/4,000 for
+``sandbox.violation`` at base-rate 0.1), because the head sampler resolves
+``is_always_sampled`` against the span name. Name-shaped members are
+delivered everywhere; event-shaped members are delivered at the cell's base
+rate.
+
+Making the head unconditionally admitting in ``TAIL_BASED_PROD`` mode (and
+moving the §10.3 ratio into this processor) would close it — but that is an
+architecture change spanning every class the tail preserves, including the
+non-root §10.2 triggers measured at ~9% preservation at base-rate 0.1. It is
+registered as **`B-137`** and is NOT undertaken here.
 
 **Spec authority.** OD spec v1.2 §C-OD-09 §9.1 (per-deployment-surface
 sampling mode) + §9.2 (always-sampled exception set) + §9.3 (sampling-

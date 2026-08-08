@@ -52,7 +52,7 @@ from typing import Any
 
 import pytest
 from harness_as.sandbox_tier import SandboxTier
-from harness_core import PersonaTier
+from harness_core import DeploymentSurface, PersonaTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -70,10 +70,14 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
 from harness_od.composite_sampler import build_default_sampler
+from harness_od.observability_matrix import CellID
 from harness_od.sampling_mode import (
     ALWAYS_SAMPLED_EVENT_CLASSES,
     FILES_OPERATION_KIND_ATTR,
+    PER_DEPLOYMENT_SURFACE_SAMPLING,
+    SamplingMode,
     is_always_sampled,
 )
 from harness_od.tail_keep_classification import (
@@ -566,6 +570,117 @@ def test_w11_every_always_sampled_member_forwards_its_carrier_as_an_event(
     # The three event-shaped members are the ones `B-133` names; assert the
     # roster still contains all three so a removal is test-visible.
     assert set(EVENT_SHAPED_MEMBERS) <= ALWAYS_SAMPLED_EVENT_CLASSES
+
+
+def _tail_admission_counts(
+    *, base_rate: float, span_name: str, event_name: str | None, n: int
+) -> tuple[int, int]:
+    """Return (spans reaching the tail processor, spans exported downstream).
+
+    The REAL production composition: `build_default_sampler(base_rate)` as the
+    provider sampler + the REAL `TailKeepSpanProcessor`, subclassed only to
+    count arrivals at its own `on_end` input.
+    """
+    exporter = InMemorySpanExporter()
+    arrivals: list[str] = []
+
+    class _CountingTail(TailKeepSpanProcessor):
+        def on_end(self, span: Any) -> None:
+            arrivals.append(span.name)
+            super().on_end(span)
+
+    tail = _CountingTail(downstream=SimpleSpanProcessor(exporter))
+    provider = TracerProvider(sampler=build_default_sampler(base_rate=base_rate))
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("admission")
+    for _ in range(n):
+        with tracer.start_as_current_span(span_name) as span:
+            if event_name is not None:
+                span.add_event(event_name)
+    return len(arrivals), len(exporter.get_finished_spans())
+
+
+@pytest.mark.parametrize(
+    ("cell_persona", "cell_surface"),
+    [
+        (PersonaTier.TEAM_BINDING, DeploymentSurface.SELF_HOSTED_SERVER),
+        (PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD),
+    ],
+)
+def test_w13_head_starves_the_tail_at_sub_one_tail_cells_declared_bound(
+    cell_persona: PersonaTier,
+    cell_surface: DeploymentSurface,
+) -> None:
+    """OD spec v1.38 §9.2.1 term 4 — the bound BITES AT PRODUCTION TAIL CELLS.
+
+    Surfaced by out-of-family Codex round 1 against this arc's first commit,
+    whose premise this witness CONFIRMS rather than declines. Production binds
+    the §10.3 per-cell base rate at the HEAD in BOTH §9.1 modes
+    (`tracer_provider.py`: "the current default sampler ignores the mode"), so a
+    `TAIL_BASED_PROD` cell at base-rate 0.1 never gives this processor most of
+    its event carriers to classify.
+
+    **This witness asserts the BOUND, exactly as W5 does for the dev cell — it
+    is not a repair and must not be read as one.** What it also asserts is that
+    the arm is complete for what it CAN see: every carrier that reaches the tail
+    is exported. The residual is admission, not classification. `B-137` owns the
+    architecture-level question.
+    """
+    cell = CellID(persona_tier=cell_persona, deployment_surface=cell_surface)
+    base_rate = PER_CELL_BASE_RATE_ENVELOPE[cell].default_rate
+    # Grounded, not assumed: this really is a TAIL_BASED_PROD cell at a sub-1.0
+    # head rate — if the envelope or the mode map moves, this witness goes red
+    # rather than silently asserting nothing.
+    assert PER_DEPLOYMENT_SURFACE_SAMPLING[cell_surface] is SamplingMode.TAIL_BASED_PROD
+    assert base_rate < 1.0
+
+    n = 2000
+    reached, exported = _tail_admission_counts(
+        base_rate=base_rate,
+        span_name=CARRIER_SPAN_NAME,
+        event_name="fallback.exhausted",
+        n=n,
+    )
+    # THE BOUND: most carriers never reach the tail at all.
+    assert reached < n, "head admitted everything — the §10.3 rate is not binding at the head"
+    # Sanity that the rate is roughly the envelope's (wide band — this is a
+    # ratio sampler over random trace ids, not a determinism claim).
+    assert 0.5 * base_rate * n < reached < 1.5 * base_rate * n
+    # THE ARM IS COMPLETE FOR WHAT IT SEES: every admitted carrier is exported.
+    assert exported == reached
+
+
+def test_w14_name_shaped_members_are_delivered_at_the_same_sub_one_cell() -> None:
+    """The SHAPE asymmetry — the load-bearing half of term 4, and the reason
+    `B-133` is about emission shape rather than about sampling rates.
+
+    At the SAME cell and the SAME base rate at which event-shaped carriers are
+    ~90% starved (W13), a §9.2 member realized as a ROOT SPAN NAME is admitted
+    at 100% — the head sampler resolves `is_always_sampled` against the span
+    name and returns RECORD_AND_SAMPLE. Without this pairing, W13 would read as
+    "sampling drops things", which is not a finding; with it, W13 reads as "the
+    floor's realization depends on the member's emission shape", which is.
+    """
+    cell = CellID(
+        persona_tier=PersonaTier.TEAM_BINDING,
+        deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
+    )
+    base_rate = PER_CELL_BASE_RATE_ENVELOPE[cell].default_rate
+    assert base_rate < 1.0
+
+    n = 1000
+    name_reached, name_exported = _tail_admission_counts(
+        base_rate=base_rate, span_name="sandbox.violation", event_name=None, n=n
+    )
+    event_reached, _ = _tail_admission_counts(
+        base_rate=base_rate, span_name=CARRIER_SPAN_NAME, event_name="fallback.exhausted", n=n
+    )
+
+    # Name-shaped: fully delivered at head AND at tail.
+    assert name_reached == n
+    assert name_exported == n
+    # Event-shaped: starved at head. The asymmetry is the finding.
+    assert event_reached < name_reached
 
 
 def test_w12_always_sampled_name_forwards_without_any_event_scan() -> None:
