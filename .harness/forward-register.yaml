@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 131
+  total: 132
   open: 1
   design_substrate_gated: 0
-  registered_finding: 28
+  registered_finding: 29
   operator_gated: 0
   held: 1
   closed: 101
-  identity_digest: 66ca112c6b2b92d0
+  identity_digest: 7a591125e71202b3
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5535,8 +5535,9 @@ items:
     roster 18->19 + sampling fixtures, priced at C-c7-reconcile.md) -- the row closes only when
     BOTH merge. SEQUENCED AFTER: B-115 (b-prime) -- its type joins the waiver tuple only on
     confirmed determinism at its own build (racy => section 14.6.3 row 6 VOID + C5 reroute).
-    FOURTEEN forward rows B-118..B-131 minted at the ratification-leg PR from the DELIVERABLE''s
-    forward-row enumeration.'
+    FIFTEEN forward rows B-118..B-132 minted at the ratification-leg PR -- B-118..B-131 from
+    the DELIVERABLE''s forward-row enumeration, B-132 the catch-all residual surfaced at the
+    leg''s fresh-context review.'
   council: 'NO at registration -- the row frames a question and commits to nothing, so there is no decision
     for voices to disagree about yet. CONDITIONALLY YES at step (3), and the tension is nameable in
     advance: changing what counts toward a breaker trades control-plane reliability semantics (C1/C9
@@ -5550,7 +5551,7 @@ items:
     corrected package; the nameable C1/C9-vs-C11 tension resolved in favor of reading (II) with
     C9''s and C11''s conditional sign-offs honored structurally (the t3 closure gate + the
     trip-threshold revisit-trigger at section 14.6.3).'
-  heading: '### B-116 · Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state? *(pre-existing; spans C-CP-21 + Runtime §14.6; RATIFIED Reading (II) 2026-08-07 — spec v1.112 + plan v2.60 landed; closes at U-RT-152 + the B-116-t3 leg)*'
+  heading: '### B-116 · Should DETERMINISTIC harness-internal faults count toward a PROVIDER''s circuit-breaker state? *(pre-existing; spans C-CP-03 §3.4+§3.5 + Runtime §14.6; RATIFIED Reading (II) 2026-08-07 — spec v1.112 + plan v2.60 landed; closes at U-RT-152 + the B-116-t3 leg)*'
 - id: B-117
   title: Duplicate pytest test-file basenames across workspace packages silently drop witnesses from collection
   status: registered_finding
@@ -6166,3 +6167,42 @@ items:
   heading: '### B-131 · The breaker-open skip **deletes** the prior candidate''s failure detail instead of
     demoting it, so a chain exhaustion reports no cause at all *(surfaced at the B-116 council
     deliberation (C11 A1 primary (c), reframed by C7 A2, re-grounded by C11 at cross-read), 2026-08-07)*'
+- id: B-132
+  title: 'The classifier catch-all routes harness-side memory subtypes to the staircase, where they
+    charge the breaker at escalation/exhaustion'
+  status: registered_finding
+  summary: 'WHAT IT IS. _classify_provider_exception''s terminal arm
+    (retry_breaker_fallback.py:371) maps EVERY unlisted Exception subclass to TRANSIENT_RETRY --
+    deliberately, per its own docstring, treating unknown faults as transient until proven
+    otherwise. MemoryToolExecutionDeniedError and MemoryToolExecutionStoreError are siblings of the
+    two WAIVED memory types under the same family base, fall to that catch-all, travel the retry
+    staircase, and charge the provider-model breaker at the escalation and max_attempts-exhaustion
+    record_failure sites (:1072/:1091 at HEAD). Under the B-116 ratified normative test (a fault
+    charges only if a half-open trial could return a different result, attributably to the
+    {provider, model}), a DETERMINISTIC policy denial or a local durable-store write failure
+    charging the breaker is a residual -- the same defect shape B-116 closed at the fail-fast site,
+    alive on the staircase path. WHY IT IS A RESIDUAL AND NOT A MISS: the council''s ratified scope
+    binds the fail-fast site only, and the classifier''s exclusion of the denied class from
+    fail-fast is itself deliberate and documented (its raise sites read mutable index/store state
+    and it WRAPS genuinely transient store I/O, so wholesale fail-fasting it would kill retries for
+    real flakes -- the docstring''s own grounds at :343-350). The residual was stated as a FALSE
+    universal ("every other path passes the test by construction") in the first drafting of spec
+    section 14.6.3; the fresh-context review round falsified it by direct read and the spec now
+    declares the residual and cites this row. SURFACED at the B-116 spec leg''s fresh-context
+    review round (P1), 2026-08-08.'
+  close_out: '(1) Re-verify the catch-all membership and the two staircase charge sites at the
+    then-current HEAD. (2) Decide PER-SUBTYPE whether a finer classification is owed: a class that
+    wraps genuinely transient I/O CANNOT be wholesale fail-fasted (the classifier''s own documented
+    grounds), so any fix is a finer split -- discriminating persistent policy denial from wrapped
+    transient I/O (e.g. on the wrapped exception''s own type), or a staircase-side waiver at the
+    exhaustion charge for instances that fail the recovery-model test. (3) Any change routes
+    through the B-116 normative test PER-MEMBER, per the section 14.6.3 discipline -- a wholesale
+    reclassification would repeat the exact mistake the per-member table exists to prevent. WHAT
+    WOULD FALSIFY IT: the catch-all arm gaining member-specific handling for the denied/store
+    subtypes, or an operator decision recording the staircase charge as accepted behaviour.'
+  council: 'No at registration. Conditionally yes at step (2) if a staircase-side waiver is
+    proposed: that re-opens the B-116 C1/C9-vs-C11 dyad (under-counting fails to protect a
+    genuinely failing chain vs over-counting opens healthy providers on harness-side faults) on a
+    NEW path with its own retry-visibility tradeoffs; the per-member discipline carries either
+    way.'
+  heading: '### B-132 · The classifier catch-all routes harness-side memory subtypes to the staircase, where they charge the breaker at escalation/exhaustion *(surfaced at the B-116 spec leg, fresh-context review round, 2026-08-08)*'
