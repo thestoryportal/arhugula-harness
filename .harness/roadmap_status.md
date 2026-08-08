@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `36928ee0ff95` |
+| `workspace_state_hash` | `6145515ef6da` |
 | `last_refreshed` | 2026-08-07T00:00:00Z |
-| `git_head` | `05abb419` —  |
+| `git_head` | `4d27180c` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 111 |
 
@@ -251,11 +251,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1267 | 2026-08-07 | B-116 council ledger merged: full E1/E2/E2b deliberation recorded (reading (II) council-unanimous, 7-row corrected table, terms t1-t5, OD 9.2 pin as separate closure-gating leg). RATIFICATION PENDING - operator held for questions; B-116 stays operator_gated, B-115 sequenced behind it. Next: await ratification -> then B-116 spec leg (Runtime 14.6 amendment) -> impl leg -> B-116-t3 OD leg -> B-115 (b'). |
 | 1265 | 2026-08-07 | B-116 Class 2 fork FILED (breaker-failure semantics for deterministic harness-internal faults; per-member disposition table; recommendation reading (II)); row registered_finding -> operator_gated. B-115 grounded BUILDABLE as (b') (~30 src + ~90 test), coupled: build AFTER the B-116 ratification. Next: surface the B-116 ratification AUQ (the one genuine gate); on ratification -> B-116 spec/build leg + B-115 (b') build leg. |
 | 1263 | 2026-08-07 | Rider bundle merged (3-lens ALL-APPROVE at 383d1376): ENOENT missing_ok narrowing (lens-2-adjudicated compatible with U-RT-151 AC #4), gate-log row, pr stamps (B-57 #1256; B-110 #1235+#1260; B-111 #1258+#1260; B-112 #1256), B-117 minted (pytest basename-collision guard gap; importlib mode falsified as a fix), three stale prose carriers rewritten, AC #2 undercount fix, two witness strengthenings. Register: 117 items, 0 open / 15 registered_finding / 1 held / 101 closed. Next: B-115/B-116 grounding legs; standing riders (Runtime v2.60 probe-text corrections incl. ENOENT narrowing note + B-57 md closure bullet gap; v1_99 cite at next CP delta). |
 | 1260 | 2026-08-07 | U-RT-151 impl leg merged (3-lens gate ALL-APPROVE at dc338e2a): B-111 record publication-temp cleanup (past-TTL age gate, post-replace ordering, failure emission on existing carrier) + B-110 identity-revalidation companion — BOTH rows closed (register 0 open / 14 registered_finding / 101 closed). Next: rider bundle (ENOENT missing_ok nit + gate-log commit + stale prose carriers + B-112 guard row mint + pr stamps B-57 #1256, B-111/B-110 #1260); Runtime plan v2.60 probe-text rider owed at next Runtime delta. |
 | 1258 | 2026-08-07 | B-111 plan leg merged: Runtime v2.59 (U-RT-150 AC #15 publication-temp qualifier + NEW U-RT-151, disposition (a)); five review rounds absorbed (R4 codex 4xP2 incl. past-TTL age gate, failure-path emission on existing carrier, B-110 companion scheduling; R5 fresh-context 5 ripples). Next: U-RT-151 impl leg + B-110 companion fix. |
-| PR #1256 | 2026-08-07 | feat(is+cp+runtime): U-IS-11 landed — WRITER_OWNED_TIMESTAMP election at 12 classified direct-append sites (both injection-caveat rows resolved ELECT, council trigger unfired; row-13 caveat premise falsified and recorded); real two-subprocess ordering witness with shipping RED half; 17 PD-8 probes + 19 gate-lens mutations all RED; audit_writer retry loop removed per AC #19; 3-lens gate ALL-APPROVE FIRST PASS (fourth consecutive); register B-57 AND B-112 closed — 99 closed / 0 open |
 ---
 
 ---
