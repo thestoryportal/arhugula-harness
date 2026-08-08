@@ -10,20 +10,25 @@ NAMES; three §9.2 members (`fallback.triggered` / `breaker.tripped` /
 (`harness.runtime.retry_breaker_fallback`) that is in NEITHER §9.2 nor
 §10.2. The `B-133` positive control drove a REAL exhausted dispatch through
 the REAL `HarnessCompositeSampler` + the REAL `TailKeepSpanProcessor` and
-exported ZERO spans for all three members. This module is that control,
-inverted: the pre-repair shape is asserted as a counterfactual (W1) and the
-post-repair survival is asserted end-to-end through the real processor chain
-(W2-W4).
+exported ZERO spans for all three members.
 
-**Witness roster.**
+**Axis homing — this module is `harness_runtime`-FREE, by rule.** OD is the
+consumer-most-downstream axis, so the `axis-isolation — harness-od` CI leg syncs
+ONLY `harness-od` + its declared deps and runs this directory's tests there; a
+`harness_runtime` import fails collection outright. The five witnesses that
+drive a REAL `RetryBreakerFallbackDispatcher` (W1–W5) therefore live at
+`harness-runtime/tests/test_b133_event_aware_tail_floor_real_dispatch.py` — genuinely
+runtime-homed, since runtime is what consumes the tail processor in production.
+**This module pins the processor's OWN contract with no runtime present**, using
+spans built directly through a `TracerProvider`. W13/W14 stay here deliberately:
+they compose only `build_default_sampler` + `TailKeepSpanProcessor` + the §10.3
+envelope, all OD surfaces, so nothing about the production-cell bound needs
+runtime to state it.
+
+**Witness roster (this module).**
 
 | ID | Witness |
 |---|---|
-| W1  | Counterfactual — the carrier span fails BOTH name-shaped predicates, and a carrier whose events are all non-members is still dropped |
-| W2  | `fallback.exhausted` survives the tail via a REAL exhausted dispatch |
-| W3  | `fallback.triggered` survives the tail via a REAL capability-shortfall dispatch |
-| W4  | `breaker.tripped` survives the tail via a REAL charging-fault dispatch |
-| W5  | HEAD-half DECLARED BOUND — the head sampler at `base_rate=0.0` still drops the event carrier, while a span NAMED `fallback.exhausted` survives |
 | W6  | Trigger-flag mirror — an event-matching span that is ALSO a §10.2 trigger sets the per-trace keep flag, preserving buffered siblings |
 | W7  | `breaker.tripped` carried as an EVENT does NOT set the keep flag (`B-123` scope, NOT widened here) |
 | W8  | Conservative-absent — a `files.operation` event with no `kind` forwards; with a non-mutation `kind` it does not |
@@ -31,45 +36,31 @@ post-repair survival is asserted end-to-end through the real processor chain
 | W10 | Root-close carrier materializes the trace decision (no buffer leak) and frees its `max_buffered_traces` slot |
 | W11 | SSOT completeness — every literal member of `ALWAYS_SAMPLED_EVENT_CLASSES` forwards its carrier when carried as an EVENT |
 | W12 | Name-arm precedence — an always-sampled NAME with zero events still forwards (the scan is never on that path) |
+| W13 | HEAD starves the TAIL at the two sub-1.0 production `TAIL_BASED_PROD` cells — the declared bound, and every admitted carrier still exports |
+| W14 | Shape asymmetry — a root-NAME-shaped §9.2 member is admitted at 100% at the SAME cell and rate |
+
+**Roster homed at `harness-runtime/tests/test_b133_event_aware_tail_floor_real_dispatch.py`**: W1 counterfactual;
+W2–W4 the three members surviving the tail; W5 the `base_rate=0.0` head bound.
 
 **PD-8 mutation probes** (each run by reverting the named surface, confirming
-the listed witnesses go RED, then restoring):
+the listed witnesses go RED, then restoring). Red-sets span BOTH modules:
 
-| # | Mutation | Expected red |
+| # | Mutation | Observed red |
 |---|---|---|
-| i   | Delete the event-aware arm from `on_end` | W2, W3, W4, W6, W7, W8, W10, W11 |
-| ii  | `_carries_always_sampled_event` returns `False` unconditionally (name-check-only) | W2, W3, W4, W6, W7, W8, W10, W11 |
-| iii | Move the event arm ABOVE the name arm | W12 stays green (the name arm's own spans carry no events) — recorded as the ordering being a COST property, not a correctness one; W9 unaffected |
-| iv  | Drop the `_materialize_trace_decision` call on the root-close path | W10 |
-| v   | Drop `event.attributes` from the `is_always_sampled` call | W8's non-mutation half |
+| i   | Delete the event-aware arm from `on_end` | equivalent to (ii) by construction |
+| ii  | `_carries_always_sampled_event` returns `False` unconditionally (name-check-only) | W2, W3, W4, W6, W7, W8(×2), W10, W11(×19) — 27 failed / 5 passed after W6 was sharpened (26/6 before, with W6 among the passing: the §0.7 finding) |
+| iii | Move the event arm ABOVE the name arm | all green — the CORRECT result; ordering is a cost property, not a correctness one |
+| iv  | Drop the `_materialize_trace_decision` call on the root-close path | W2, W4, W6, W7, W10 |
+| v   | Drop `event.attributes` from the `is_always_sampled` call | W8's non-mutation case |
+| vi  | Head sampler made unconditionally admitting (a `B-137` candidate-A sketch) | EXACTLY the bound witnesses — W5, W13(×2), W14 — and nothing else |
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from harness_as.sandbox_tier import SandboxTier
 from harness_core import DeploymentSurface, PersonaTier
-from harness_core.identity import StepID
-from harness_cp.cp_shared_types import ModelBinding
-from harness_cp.cross_family_fallback_chain import (
-    FallbackChain,
-    ProviderCandidate,
-    ProviderFamily,
-)
-from harness_cp.engine_class import EngineClass
-from harness_cp.gate_level_rule import GateLevel
-from harness_cp.per_step_override_evaluator import StepEffectiveBinding
-from harness_cp.routing_manifest_residence import RetryPolicy
-from harness_cp.workflow_driver_types import (
-    StepExecutionContext,
-    StepKind,
-    WorkflowStep,
-)
-from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
 from harness_od.composite_sampler import build_default_sampler
 from harness_od.observability_matrix import CellID
@@ -78,29 +69,12 @@ from harness_od.sampling_mode import (
     FILES_OPERATION_KIND_ATTR,
     PER_DEPLOYMENT_SURFACE_SAMPLING,
     SamplingMode,
-    is_always_sampled,
 )
 from harness_od.tail_keep_classification import (
     VALIDATOR_FAIL_PERMANENCE_ATTR,
     VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE,
-    is_classification_trigger,
 )
 from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
-from harness_runtime.lifecycle.llm_dispatch import (
-    LLMDispatchPayloadShapeError,
-    LLMDispatchProviderUnreachableError,
-)
-from harness_runtime.lifecycle.retry_breaker import (
-    DEFAULT_COOLDOWN_SECONDS,
-    DEFAULT_FAIL_THRESHOLD,
-    DEFAULT_RETRY_POLICY,
-    RuntimeRetryBreaker,
-)
-from harness_runtime.lifecycle.retry_breaker_fallback import (
-    RESERVED_LLM_DISPATCH_KEY,
-    RetryBreakerFallbackDispatcher,
-    RetryBreakerFallbackExhaustedError,
-)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -109,284 +83,6 @@ CARRIER_SPAN_NAME = "harness.runtime.retry_breaker_fallback"
 
 #: The three §9.2 members that ride as span EVENTS rather than as spans.
 EVENT_SHAPED_MEMBERS = ("fallback.triggered", "breaker.tripped", "fallback.exhausted")
-
-
-# ---------------------------------------------------------------------------
-# Real-dispatch fixtures (mirrors of the U-RT-58 suite's fakes).
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class _MockInner:
-    """Raises the supplied fault on every `dispatch` (drives to exhaustion)."""
-
-    outcomes: list[Mapping[str, Any] | BaseException]
-    calls: list[Any] = field(default_factory=list)
-    _cursor: int = 0
-
-    async def dispatch(
-        self,
-        binding: StepEffectiveBinding,
-        step: WorkflowStep,
-        *,
-        step_context: Any = None,
-    ) -> Mapping[str, Any]:
-        self.calls.append((binding, step))
-        outcome = self.outcomes[min(self._cursor, len(self.outcomes) - 1)]
-        self._cursor += 1
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome
-
-
-def _candidate(provider: str, model: str) -> ProviderCandidate:
-    family_map = {
-        "anthropic": ProviderFamily.ANTHROPIC,
-        "openai": ProviderFamily.OPENAI,
-    }
-    return ProviderCandidate(provider=provider, model=model, family=family_map[provider])
-
-
-def _binding() -> StepEffectiveBinding:
-    return StepEffectiveBinding(
-        step_id="step-001",
-        model_binding=ModelBinding(provider="anthropic", model="claude-test-1"),
-        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
-        override_applied=False,
-        persona_tier=PersonaTier.SOLO_DEVELOPER,
-    )
-
-
-def _step() -> WorkflowStep:
-    return WorkflowStep(
-        step_id=StepID("step-001"),
-        step_kind=StepKind.INFERENCE_STEP,
-        step_payload={
-            "messages": [{"role": "user", "content": "hi"}],
-            "tools": None,
-            "params": {"max_tokens": 100},
-        },
-    )
-
-
-def _thinking_step() -> WorkflowStep:
-    """An INFERENCE_STEP requiring the THINKING capability (C-CP-03 §3.3)."""
-    return WorkflowStep(
-        step_id=StepID("step-001"),
-        step_kind=StepKind.INFERENCE_STEP,
-        step_payload={
-            "messages": [{"role": "user", "content": "think hard"}],
-            "tools": None,
-            "params": {"thinking": {"type": "enabled", "budget_tokens": 4096}},
-        },
-    )
-
-
-def _step_context() -> StepExecutionContext:
-    return StepExecutionContext(
-        workflow_id="test-wf",
-        parent_action_id="workflow:test-wf:step:0",
-        parent_gate_level=GateLevel.AUTO,
-        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
-        parent_actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-runtime"),
-        parent_entry_hash="",
-        parent_idempotency_key="test-step-key",
-        tenant_id=None,
-        step_index=0,
-    )
-
-
-def _registry(*, max_attempts: int = 2, fail_threshold: int = DEFAULT_FAIL_THRESHOLD):
-    return RuntimeRetryBreaker(
-        retry_policies={
-            RESERVED_LLM_DISPATCH_KEY: RetryPolicy(
-                max_attempts=max_attempts, backoff="full_jitter", jitter="full_jitter"
-            )
-        },
-        default_policy=DEFAULT_RETRY_POLICY,
-        fail_threshold=fail_threshold,
-        cooldown_seconds=DEFAULT_COOLDOWN_SECONDS,
-        base_delay_seconds=0.0,
-        delay_cap_seconds=0.01,
-    )
-
-
-async def _noop_sleep(_seconds: float) -> None:
-    return None
-
-
-def _tail_provider(*, base_rate: float = 1.0) -> tuple[TracerProvider, InMemorySpanExporter, Any]:
-    """The REAL production processor chain: composite sampler + tail-keep."""
-    exporter = InMemorySpanExporter()
-    tail = TailKeepSpanProcessor(downstream=SimpleSpanProcessor(exporter))
-    provider = TracerProvider(sampler=build_default_sampler(base_rate=base_rate))
-    provider.add_span_processor(tail)
-    return provider, exporter, tail
-
-
-async def _dispatch_exhausted(
-    provider: TracerProvider,
-    *,
-    fault: BaseException,
-    step: WorkflowStep,
-    fail_threshold: int = DEFAULT_FAIL_THRESHOLD,
-) -> None:
-    """Drive a REAL dispatch to fallback-chain exhaustion."""
-    chain = FallbackChain(
-        primary=_candidate("anthropic", "claude-test-1"),
-        same_family=(_candidate("anthropic", "claude-test-2"),),
-        cross_family=(),
-        terminal=None,
-    )
-    wrapper = RetryBreakerFallbackDispatcher(
-        inner=_MockInner(outcomes=[fault]),
-        retry_breaker=_registry(max_attempts=2, fail_threshold=fail_threshold),
-        fallback_chain=chain,
-        tracer_provider=provider,
-        sleep_fn=_noop_sleep,
-    )
-    with pytest.raises(RetryBreakerFallbackExhaustedError):
-        await wrapper.dispatch(_binding(), step, step_context=_step_context())
-
-
-async def _dispatch_capability_shortfall(provider: TracerProvider) -> None:
-    """Drive a REAL capability-shortfall exhaustion (emits `fallback.triggered`)."""
-    chain = FallbackChain(
-        primary=_candidate("openai", "gpt-test-1"),
-        same_family=(),
-        cross_family=(_candidate("openai", "gpt-test-2"),),
-        terminal=None,
-    )
-    wrapper = RetryBreakerFallbackDispatcher(
-        inner=_MockInner(outcomes=[]),
-        retry_breaker=_registry(max_attempts=1),
-        fallback_chain=chain,
-        tracer_provider=provider,
-        sleep_fn=_noop_sleep,
-    )
-    with pytest.raises(RetryBreakerFallbackExhaustedError):
-        await wrapper.dispatch(_binding(), _thinking_step(), step_context=_step_context())
-
-
-def _exported_event_names(exporter: InMemorySpanExporter) -> set[str]:
-    return {e.name for s in exporter.get_finished_spans() for e in s.events}
-
-
-# ---------------------------------------------------------------------------
-# W1 — the counterfactual (what the pre-repair shape asserted).
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_w1_carrier_span_fails_both_name_shaped_predicates() -> None:
-    """The `B-133` defect shape, asserted rather than described.
-
-    The dispatch carrier span is in NEITHER §9.2 (by name) NOR §10.2 (by the
-    trigger predicate) — so under a name-only classification the whole trace,
-    always-sampled event included, is dropped at root close. This assertion is
-    what makes the repair load-bearing: if either predicate ever became True by
-    name, the event arm would be redundant and this witness would go red.
-    """
-    provider, exporter, _ = _tail_provider(base_rate=1.0)
-    plain_exporter = InMemorySpanExporter()
-    plain_provider = TracerProvider(sampler=build_default_sampler(base_rate=1.0))
-    plain_provider.add_span_processor(SimpleSpanProcessor(plain_exporter))
-    await _dispatch_exhausted(
-        plain_provider, fault=LLMDispatchProviderUnreachableError("anthropic"), step=_step()
-    )
-    plain_provider.force_flush()
-    carrier = next(s for s in plain_exporter.get_finished_spans() if s.name == CARRIER_SPAN_NAME)
-    assert is_always_sampled(carrier.name, carrier.attributes) is False
-    assert is_classification_trigger(carrier) is False
-    assert "fallback.exhausted" in {e.name for e in carrier.events}
-
-    # Live control: a carrier whose events are ALL non-members is still dropped.
-    tracer = provider.get_tracer("w1")
-    with tracer.start_as_current_span(CARRIER_SPAN_NAME) as span:
-        span.add_event("retry.skipped")
-        span.add_event("exception")
-    assert exporter.get_finished_spans() == ()
-
-
-# ---------------------------------------------------------------------------
-# W2-W4 — post-repair survival, all three members, REAL processor chain.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_w2_fallback_exhausted_survives_the_tail() -> None:
-    """A REAL exhausted dispatch's `fallback.exhausted` reaches the exporter."""
-    provider, exporter, tail = _tail_provider(base_rate=1.0)
-    await _dispatch_exhausted(
-        provider, fault=LLMDispatchProviderUnreachableError("anthropic"), step=_step()
-    )
-    # No `force_flush` — survival must come from the arm, not the drain path.
-    assert "fallback.exhausted" in _exported_event_names(exporter)
-    assert tail.buffered_trace_count == 0
-
-
-@pytest.mark.asyncio
-async def test_w3_fallback_triggered_survives_the_tail() -> None:
-    """A REAL capability-shortfall dispatch's `fallback.triggered` reaches the exporter."""
-    provider, exporter, tail = _tail_provider(base_rate=1.0)
-    await _dispatch_capability_shortfall(provider)
-    assert "fallback.triggered" in _exported_event_names(exporter)
-    assert tail.buffered_trace_count == 0
-
-
-@pytest.mark.asyncio
-async def test_w4_breaker_tripped_survives_the_tail() -> None:
-    """A REAL charging-fault dispatch's `breaker.tripped` reaches the exporter.
-
-    `LLMDispatchPayloadShapeError` is a CHARGING fault (it is not one of the
-    §14.6.3 five waived types), so `record_failure` fires and the breaker trips
-    at `fail_threshold=1`, emitting the event on the carrier span.
-    """
-    provider, exporter, tail = _tail_provider(base_rate=1.0)
-    await _dispatch_exhausted(
-        provider,
-        fault=LLMDispatchPayloadShapeError("bad shape"),
-        step=_step(),
-        fail_threshold=1,
-    )
-    assert "breaker.tripped" in _exported_event_names(exporter)
-    assert tail.buffered_trace_count == 0
-
-
-# ---------------------------------------------------------------------------
-# W5 — the HEAD-half DECLARED BOUND, pinned honestly.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_w5_head_sampler_still_drops_the_event_carrier_declared_bound() -> None:
-    """OD spec v1.38 §9.2.1 term 4 — the HEAD half is NOT repaired by this arm.
-
-    A span's events do not exist at span creation, so `should_sample` has
-    nothing to inspect; at `base_rate < 1` the event carrier is dropped before
-    any processor runs. Asserted, not glossed — and paired with the discriminator
-    that a span NAMED `fallback.exhausted` DOES survive the same sampler, which
-    is what makes "event-shaped, not name-shaped" the operative cause.
-
-    This bound is NOT vacuous: `team-binding x local-development` is
-    HEAD_BASED_DEV at a §10.3 default base-rate of 0.5 and engages no tail
-    processor, so the three event-shaped members are still dropped there.
-    """
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    await _dispatch_exhausted(
-        provider, fault=LLMDispatchProviderUnreachableError("anthropic"), step=_step()
-    )
-    provider.force_flush()
-    assert exporter.get_finished_spans() == ()
-
-    # Discriminator: the SAME sampler keeps a NAME-shaped member.
-    tracer = provider.get_tracer("w5")
-    with tracer.start_as_current_span("fallback.exhausted"):
-        pass
-    provider.force_flush()
-    assert [s.name for s in exporter.get_finished_spans()] == ["fallback.exhausted"]
 
 
 # ---------------------------------------------------------------------------

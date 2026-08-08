@@ -20,7 +20,7 @@ v2.32 §1.2 states plainly what U-OD-58 did **not** own: *"The floor's END-TO-EN
 
 ### §0.3 Sections revised
 
-§0 (this change note); §1 (the NEW U-OD-59 body); §2 (coverage delta). All other sections — every existing `U-OD-NN` body including U-OD-58, all dependency graphs, cross-cutting units, open items — PRESERVED VERBATIM from v2.32.
+§0 (this change note, including the NEW §0.9 out-of-family adjudication and §0.10 witness-homing correction); §1 (the NEW U-OD-59 body); §2 (coverage delta). All other sections — every existing `U-OD-NN` body including U-OD-58, all dependency graphs, cross-cutting units, open items — PRESERVED VERBATIM from v2.32.
 
 ### §0.4 Scope discipline
 
@@ -71,6 +71,53 @@ Probe (iii) moved the event arm **above** the name arm. **62 tests passed, uncha
 
 **Disposition: fix the text here, register the architecture there.** AC #5 is restated below and two witnesses are added (**W13** at the two production cells, **W14** the shape asymmetry) on the W5 pattern — asserting the bound and NAMING it as one. The architecture question (an unconditionally admitting head in `TAIL_BASED_PROD` mode with the ratio moved into the tail consumer) is **registered as `B-137`**: it spans every class the tail preserves and multiplies admitted volume by `1/base_rate` at every production cell, and it **merges** with `B-133`'s open F-08 residual, since today's ~20% multi-tenant admission is the ceiling on this arm's added keep-volume and candidate A removes it. **No architecture change at this leg.**
 
+### §0.10 Witness homing across the axis boundary — a correction, recorded as one
+
+`[HIGH]` The witness set was first authored as a SINGLE module at
+`harness-od/tests/`. That was wrong, and CI said so before any reviewer did: the
+**`axis-isolation — harness-od`** leg syncs **only** `harness-od` + its declared
+dependencies (`uv sync --package harness-od` prunes every sibling) and then runs
+`harness-od/tests`. Five witnesses drive a REAL `RetryBreakerFallbackDispatcher`
+— a `harness_runtime` surface — so collection failed outright with
+`ModuleNotFoundError: harness_runtime`. **`harness-od` does not declare
+`harness-runtime` and must not**: OD is the consumer-most-downstream axis, and
+adding that dependency would invert the axis graph to silence a test.
+
+**The split is the honest homing, not an `e2e`-marker dodge.**
+
+| Half | Home | Why |
+|---|---|---|
+| **W1–W5** (real dispatch) | `harness-runtime/tests/test_b133_event_aware_tail_floor_real_dispatch.py` | Genuinely runtime-homed — runtime is what composes the tail processor with a real dispatcher in production, and runtime tests already import `harness_od` freely (runtime depends on every axis) |
+| **W6–W14** (processor contract) | `harness-od/tests/test_b133_event_aware_tail_floor.py` | Exercise OD surfaces only, with spans built directly through a `TracerProvider` — the OD lane pins the processor's own contract **with no runtime present** |
+
+**W13/W14 stayed in OD deliberately, and that was checked rather than assumed.**
+They read the §10.3 envelope and compose `build_default_sampler` +
+`TailKeepSpanProcessor` — all OD surfaces — so the production-cell bound needs no
+runtime to state it. An AST sweep confirms the OD module's import roots are
+exactly `{harness_core, harness_od, opentelemetry, pytest, typing}`.
+
+**An unrelated defect the split introduced and the recount caught.** Both
+`tests/` directories are packages (`__init__.py`), so two modules sharing a
+basename resolve to the same importable `tests.<name>`: the first-imported file
+won and pytest attributed **its** 30 cases to **both** paths — 60 collected where
+35 exist, with the runtime file's own five witnesses never running. The joint
+collect listing `harness-runtime/tests/…::test_w12_…`, a witness that exists only
+in the OD module, is what exposed it. Repo-wide basename uniqueness holds across
+all **515** test modules; the `_real_dispatch` suffix restores it, and the
+recount returns **30 + 5 = 35**, the pre-split total exactly.
+
+**Verified BOTH ways, by execution.** (i) The isolation lane was simulated
+in-process with `harness_runtime` made unimportable via a meta-path finder:
+**1156 passed** on `harness-od/tests`. (ii) That probe is load-bearing — replayed
+against the pre-split module it reproduces the CI failure exactly
+(`ERROR harness-od/tests/test_b133_event_aware_tail_floor.py`, collection
+interrupted). (iii) Zero `harness_runtime` imports remain anywhere under
+`harness-od/tests` (AST-verified, not grep-verified).
+
+**No witness changed.** All fourteen are preserved verbatim modulo imports,
+fixtures and module docstrings; every name is unchanged, and the PD-8 red-sets
+below now span the two modules and say so.
+
 ---
 
 ## §1 U-OD-59 — the §9.2.1 event-aware always-sampled arm at the tail-keep consumer
@@ -84,7 +131,8 @@ Probe (iii) moved the event arm **above** the name arm. **62 tests passed, uncha
 **Files affected (logical):**
 
 - `harness-od/src/harness_od/tail_keep_span_processor.py` — a module-level `_carries_always_sampled_event` helper (~8 functional lines) + the event-aware arm in `on_end` (~6 functional lines) + the module-docstring section recording the mechanism, the empirical grounding and the declared head bound.
-- `harness-od/tests/test_b133_event_aware_tail_floor.py` — **NEW**, the fourteen-witness set (W1–W14; 35 cases under parametrization) + the PD-8 probe table.
+- `harness-od/tests/test_b133_event_aware_tail_floor.py` — **NEW**, the OD-only witnesses **W6–W14** (30 cases under parametrization) + the PD-8 probe table. **`harness_runtime`-FREE by rule** (§0.10).
+- `harness-runtime/tests/test_b133_event_aware_tail_floor_real_dispatch.py` — **NEW**, the REAL-dispatch witnesses **W1–W5** (5 cases). Cross-axis-homed deliberately (§0.10); the `_real_dispatch` suffix keeps repo-wide test-basename uniqueness, which both `tests/` packages structurally require.
 - `harness-od/src/harness_od/composite_sampler.py` — **NOT EDITED, deliberately.** The head consumer is the declared bound (term 4); editing it would be the venue-(b) extension this arc has no authority for. AC #5 asserts the bound by execution instead.
 - `harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py` + `harness-od/src/harness_od/harness_breaker_schema.py` — **NOT EDITED.** The three emission sites are byte-unchanged; AC #8 asserts this by absence.
 
@@ -113,7 +161,7 @@ Probe (iii) moved the event arm **above** the name arm. **62 tests passed, uncha
 | v | Drop `event.attributes` from the `is_always_sampled` call | **1 failed** — W8's non-mutation case, `assert True is False`. Conservative-absent pass-through is load-bearing |
 | vi | Head sampler made unconditionally admitting (a `B-137` **candidate-A sketch**) | **4 failed / 31 passed** — and EXACTLY the bound witnesses: W5, W13(×2), W14. Nothing else moves. This is the intended shape: the bound witnesses invert precisely when `B-137` is repaired, which is the signal a future arc needs, and it proves they assert the bound rather than restating the arm |
 
-10. **The full OD suite and the runtime breaker / sampling-adjacent suites pass unmodified.** `harness-od/tests/` in full, plus `harness-runtime/tests/test_lifecycle_retry_breaker_fallback.py`, `test_lifecycle_span_processor.py` and `test_lifecycle_tracer_provider.py` — the three modules that construct or exercise the amended consumer. **Zero edits to any pre-existing test module**: the arm only ever ADDS keeps, so a pre-existing drop assertion that broke would mean the arm over-forwards.
+10. **The full OD suite and the runtime breaker / sampling-adjacent suites pass unmodified — AND the OD suite passes with `harness_runtime` UNIMPORTABLE.** The second half is the `axis-isolation — harness-od` contract (§0.10) and is asserted by execution, not by inspection: the lane was simulated in-process with a meta-path finder refusing `harness_runtime`, returning **1156 passed**, and the same probe replayed against the pre-split module reproduces the CI collection failure — so a future witness that reaches for a runtime surface from `harness-od/tests` fails there rather than at CI. `harness-od/tests/` in full, plus `harness-runtime/tests/test_lifecycle_retry_breaker_fallback.py`, `test_lifecycle_span_processor.py` and `test_lifecycle_tracer_provider.py` — the three modules that construct or exercise the amended consumer. **Zero edits to any pre-existing test module**: the arm only ever ADDS keeps, so a pre-existing drop assertion that broke would mean the arm over-forwards.
 
 ### §1.2 What this unit does NOT own
 

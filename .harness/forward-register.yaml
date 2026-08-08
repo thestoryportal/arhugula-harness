@@ -6543,7 +6543,11 @@ items:
     event attributes through so the conditional rows keep conservative-absent, and forwards the carrier
     immediately on a match. Venue (b) REFUSED as the X-AL-3 extension this row already classified it as.
     Contract at OD spec v1.38 NEW §C-OD-09 §9.2.1 (five normative terms); unit at OD plan v2.33 U-OD-59;
-    FOURTEEN witnesses W1-W14 (35 cases under parametrization) plus SIX PD-8 probes. TWO probes changed the
+    FOURTEEN witnesses W1-W14 (35 cases under parametrization; homed across the axis boundary -- the FIVE
+    real-dispatch witnesses at harness-runtime/tests/test_b133_event_aware_tail_floor_real_dispatch.py, the NINE
+    processor-contract witnesses at harness-od/tests/test_b133_event_aware_tail_floor.py, which stays
+    harness_runtime-FREE because the axis-isolation CI leg prunes every sibling of harness-od) plus SIX PD-8
+    probes. TWO probes changed the
     deliverable: probe (ii) caught the trigger-flag mirror witness PASSING under the mutation it existed to
     catch -- it asserted membership where the arm''s discriminator is export ORDER, and was sharpened, then
     re-run at 27 failed / 5 passed -- and probe (iii) returned GREEN and was recorded as the CORRECT result,
