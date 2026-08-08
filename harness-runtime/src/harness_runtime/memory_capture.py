@@ -263,7 +263,14 @@ class MemoryCaptureFailureKind(StrEnum):
 class MemoryCaptureResult(BaseModel):
     """Result returned by all capture API methods."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    # `arbitrary_types_allowed` is required by `failure_cause` below, which
+    # carries a live exception. It permits non-pydantic FIELD TYPES and weakens
+    # NOTHING else - `extra="forbid"` and `frozen=True` are unchanged, and this
+    # model is never serialized (no `model_dump` / `model_dump_json` consumer
+    # exists; the only readers are the memory tool executor and
+    # `automatic_memory._raise_capture_failure`, both of which consume it
+    # immediately and raise).
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
     status: MemoryCaptureStatus
     event_kind: str
@@ -275,6 +282,41 @@ class MemoryCaptureResult(BaseModel):
     # `B-115` (b′). `None` on the CAPTURED path BY CONSTRUCTION - a succeeded
     # capture cannot carry a failure kind - and set on every `FAILED` result.
     failure_kind: MemoryCaptureFailureKind | None = None
+    # `B-115` (b′), round 2. The ORIGINAL ledger refusal, retained so the
+    # executor's re-type can `raise ... from` it. Without this the capture path
+    # produced an UNCHAINED `MemoryToolExecutionLedgerConflictError` while the
+    # two direct-append paths chained - the same substrate event losing its
+    # traceback origin depending on which surface caught it.
+    #
+    # Typed as the CONCRETE ledger exception rather than `BaseException`, so
+    # "this field only ever carries the divergent-replay refusal" is a type fact
+    # a reader does not have to take on trust.
+    #
+    # Lifetime is bounded by construction: the field is set only on the FAILED
+    # path, and every consumer of a FAILED result raises immediately, so the
+    # retained traceback does not outlive the dispatch that produced it.
+    failure_cause: MemoryOperationIdempotencyConflictError | None = None
+
+    @model_validator(mode="after")
+    def _cause_accompanies_exactly_the_ledger_conflict_kind(self) -> Self:
+        """`failure_cause` is present IFF `failure_kind is LEDGER_CONFLICT`.
+
+        Both directions are enforced, and each one closes a real hazard. A
+        LEDGER_CONFLICT WITHOUT a cause would make the executor's
+        `raise ... from result.failure_cause` degrade to `raise ... from None`,
+        which does not merely skip chaining - it SUPPRESSES the context, so the
+        origin would be actively hidden rather than merely absent. A cause on
+        any other kind would assert a ledger refusal that did not happen.
+        """
+
+        has_cause = self.failure_cause is not None
+        is_conflict = self.failure_kind is MemoryCaptureFailureKind.LEDGER_CONFLICT
+        if has_cause != is_conflict:
+            raise ValueError(
+                "failure_cause must be set exactly when failure_kind is "
+                f"LEDGER_CONFLICT (kind={self.failure_kind!r}, cause set={has_cause})"
+            )
+        return self
 
 
 class MemoryCaptureStore(Protocol):
@@ -954,13 +996,13 @@ class EpisodicMemoryCapture:
                 # capture span and the outer standard-tool span AGREEING about
                 # the same event - the property `B-88` round 2 introduced the
                 # store subtype to protect.
-                conflict = isinstance(exc, MemoryOperationIdempotencyConflictError)
+                conflict = exc if isinstance(exc, MemoryOperationIdempotencyConflictError) else None
                 set_memory_telemetry_attributes(
                     span,
                     policy_decision=MemoryCaptureStatus.FAILED.value,
                     failure_class=(
                         MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
-                        if conflict
+                        if conflict is not None
                         else MemoryTelemetryFailureClass.IO_FAILURE
                     ),
                 )
@@ -971,9 +1013,13 @@ class EpisodicMemoryCapture:
                     failure_reason=f"{type(exc).__name__}: {exc}",
                     failure_kind=(
                         MemoryCaptureFailureKind.LEDGER_CONFLICT
-                        if conflict
+                        if conflict is not None
                         else MemoryCaptureFailureKind.STORE_IO
                     ),
+                    # The exception OBJECT, not a reconstruction: the executor
+                    # chains it, so the raised type carries the refusal's own
+                    # traceback rather than a fabricated stand-in.
+                    failure_cause=conflict,
                 )
             return MemoryCaptureResult(
                 status=MemoryCaptureStatus.CAPTURED,

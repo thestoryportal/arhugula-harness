@@ -44,6 +44,7 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
 from harness_runtime.memory_capture import (
     EpisodicMemoryCapture,
     MemoryCaptureFailureKind,
+    MemoryCaptureResult,
     MemoryCaptureStatus,
     SummaryProvenance,
     SummarySource,
@@ -56,6 +57,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionStoreError,
     StandardMemoryToolExecutor,
 )
+from pydantic import ValidationError
 
 _NOW = datetime(2026, 8, 8, 12, 0, 0, tzinfo=UTC)
 _POLICY_REF = "policy:b115"
@@ -221,9 +223,9 @@ def test_surface_1_capture_path_write_note(tmp_path: Path) -> None:
     (U-MEM-26 / Codex R6+R8 - see
     `test_u_mem_26_write_boundary.py::test_a_non_run_start_idempotency_conflict_still_fails_the_capture`,
     whose docstring says widening the catch would silently mask the divergence).
-    So the capture layer reports `failure_kind` and the executor re-types from
-    it; provenance survives in `failure_reason`, which still names the ledger's
-    own exception type.
+    So the capture layer reports `failure_kind` AND retains the exception on
+    `failure_cause`, and the executor re-types `from` it — so this surface
+    chains exactly like the two direct-append surfaces do.
     """
 
     _store, executor = executor_for(tmp_path)
@@ -234,6 +236,10 @@ def test_surface_1_capture_path_write_note(tmp_path: Path) -> None:
 
     assert MemoryOperationIdempotencyConflictError.__name__ in str(excinfo.value), (
         "the re-type must carry the ledger's own exception name, not discard the provenance"
+    )
+    assert isinstance(excinfo.value.__cause__, MemoryOperationIdempotencyConflictError), (
+        "the capture surface must CHAIN the ledger's own exception (AC #2), not "
+        "reduce it to a message — an unchained re-type loses the refusal's traceback origin"
     )
 
 
@@ -278,13 +284,92 @@ def test_surface_1_discriminates_on_the_value_not_on_the_status(tmp_path: Path) 
     # A CAPTURED result cannot carry a failure kind - illegal state, not policy.
     assert first.status is MemoryCaptureStatus.CAPTURED
     assert first.failure_kind is None
+    assert first.failure_cause is None
 
     # Control flow is BYTE-UNCHANGED for every existing caller: still FAILED.
     assert second.status is MemoryCaptureStatus.FAILED
-    # What is new is the discriminator, carried as a value.
+    # What is new is the discriminator, carried as a value...
     assert second.failure_kind is MemoryCaptureFailureKind.LEDGER_CONFLICT
+    # ...and the ORIGINAL exception, retained so the executor can chain it.
+    assert isinstance(second.failure_cause, MemoryOperationIdempotencyConflictError)
     # Provenance survives without the executor having to parse it.
     assert MemoryOperationIdempotencyConflictError.__name__ in (second.failure_reason or "")
+
+
+def test_every_conflict_surface_chains_the_ledger_exception(tmp_path: Path) -> None:
+    """The SYMMETRY claim, asserted once over all three surfaces together.
+
+    Each surface witness above asserts its own chaining, but only a joint
+    assertion catches the failure mode that actually occurred at this leg's
+    first round: two surfaces chained and one did not, so the same substrate
+    event lost its traceback origin depending on which surface caught it. A
+    per-surface witness passes happily in that world.
+    """
+
+    causes: list[BaseException | None] = []
+
+    store_a, exec_a = executor_for(tmp_path / "capture")
+    write_note(exec_a, provider="openai")
+    with pytest.raises(MemoryToolExecutionLedgerConflictError) as capture_exc:
+        write_note(exec_a, provider="azure-openai")
+    causes.append(capture_exc.value.__cause__)
+
+    store_b, exec_b = executor_for(tmp_path / "tool-call")
+    exec_b.execute(request_for(MemoryToolName.SEARCH, search_args(), provider="openai"))
+    with pytest.raises(MemoryToolExecutionLedgerConflictError) as call_exc:
+        exec_b.execute(request_for(MemoryToolName.SEARCH, search_args(), provider="ollama"))
+    causes.append(call_exc.value.__cause__)
+
+    store_c, exec_c = executor_for(tmp_path / "redaction")
+    ref = str(write_note(exec_c, provider="openai")["memory_ref"])
+    args = redaction_args(ref)
+    exec_c.execute(request_for(MemoryToolName.REQUEST_REDACTION, args, provider="openai"))
+    with pytest.raises(MemoryToolExecutionLedgerConflictError) as redact_exc:
+        exec_c.execute(request_for(MemoryToolName.REQUEST_REDACTION, args, provider="ollama"))
+    causes.append(redact_exc.value.__cause__)
+
+    assert len(causes) == 3
+    for cause in causes:
+        assert isinstance(cause, MemoryOperationIdempotencyConflictError), (
+            "every conflict surface must chain the ledger's own exception - "
+            f"got {type(cause).__name__}"
+        )
+
+
+def test_the_result_model_forbids_a_kind_cause_mismatch() -> None:
+    """The `failure_cause` invariant, asserted in BOTH directions.
+
+    A `LEDGER_CONFLICT` without a cause is the dangerous half: the executor's
+    `raise ... from result.failure_cause` would become `raise ... from None`,
+    which SUPPRESSES the context rather than merely omitting it - actively
+    hiding the origin. A cause on any other kind asserts a ledger refusal that
+    did not happen.
+    """
+
+    with pytest.raises(ValidationError):
+        MemoryCaptureResult(
+            status=MemoryCaptureStatus.FAILED,
+            event_kind="tool_event",
+            failure_kind=MemoryCaptureFailureKind.LEDGER_CONFLICT,
+            failure_cause=None,
+        )
+
+    with pytest.raises(ValidationError):
+        MemoryCaptureResult(
+            status=MemoryCaptureStatus.FAILED,
+            event_kind="tool_event",
+            failure_kind=MemoryCaptureFailureKind.STORE_IO,
+            failure_cause=MemoryOperationIdempotencyConflictError("k"),
+        )
+
+    # And the legal pairing constructs cleanly.
+    ok = MemoryCaptureResult(
+        status=MemoryCaptureStatus.FAILED,
+        event_kind="tool_event",
+        failure_kind=MemoryCaptureFailureKind.LEDGER_CONFLICT,
+        failure_cause=MemoryOperationIdempotencyConflictError("k"),
+    )
+    assert isinstance(ok.failure_cause, MemoryOperationIdempotencyConflictError)
 
 
 def test_surface_2_standard_tool_call_append(tmp_path: Path) -> None:
@@ -304,8 +389,10 @@ def test_surface_2_standard_tool_call_append(tmp_path: Path) -> None:
     _store, executor = executor_for(tmp_path)
     executor.execute(request_for(MemoryToolName.SEARCH, search_args(), provider="openai"))
 
-    with pytest.raises(MemoryToolExecutionLedgerConflictError):
+    with pytest.raises(MemoryToolExecutionLedgerConflictError) as excinfo:
         executor.execute(request_for(MemoryToolName.SEARCH, search_args(), provider="ollama"))
+
+    assert isinstance(excinfo.value.__cause__, MemoryOperationIdempotencyConflictError)
 
 
 def test_surface_3_request_redaction_append(tmp_path: Path) -> None:
@@ -322,8 +409,10 @@ def test_surface_3_request_redaction_append(tmp_path: Path) -> None:
     args = redaction_args(memory_ref)
     executor.execute(request_for(MemoryToolName.REQUEST_REDACTION, args, provider="openai"))
 
-    with pytest.raises(MemoryToolExecutionLedgerConflictError):
+    with pytest.raises(MemoryToolExecutionLedgerConflictError) as excinfo:
         executor.execute(request_for(MemoryToolName.REQUEST_REDACTION, args, provider="ollama"))
+
+    assert isinstance(excinfo.value.__cause__, MemoryOperationIdempotencyConflictError)
 
 
 def test_no_executor_surface_leaks_the_raw_ledger_type(tmp_path: Path) -> None:

@@ -697,9 +697,18 @@ class StandardMemoryToolExecutor:
             # pre-`B-115` behaviour - the conservative direction, since it keeps
             # an unclassified failure retryable rather than silently permanent.
             if result.failure_kind is MemoryCaptureFailureKind.LEDGER_CONFLICT:
+                # CHAINED from the ledger's own exception, which the capture
+                # layer retains on the result for exactly this purpose. Without
+                # the `from`, this surface would produce an UNCHAINED error
+                # while the two direct-append surfaces below chain - the same
+                # substrate event losing its traceback origin depending on which
+                # surface caught it. `failure_cause` is non-`None` here by the
+                # result model's own validator, so this can never degrade to
+                # `raise ... from None`, which would SUPPRESS the context rather
+                # than merely omit it.
                 raise MemoryToolExecutionLedgerConflictError(
                     result.failure_reason or "write_note capture refused a divergent replay"
-                )
+                ) from result.failure_cause
             raise MemoryToolExecutionStoreError(
                 result.failure_reason or "write_note capture failed"
             )

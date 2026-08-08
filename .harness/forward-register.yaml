@@ -5523,7 +5523,17 @@ items:
     semantics. The discriminator is therefore carried as a VALUE (a closed
     MemoryCaptureFailureKind enum on the existing result model), leaving every caller''s
     control flow BYTE-UNCHANGED and NOT widening the closed two-value status enum. AC #9 pins
-    it: the two U-MEM-26 witnesses pass UNMODIFIED. ARTIFACTS: Runtime spec v1.113 (three amendment sites, all
+    it: the two U-MEM-26 witnesses pass UNMODIFIED. ROUND 2 COMPLETED THE REALIZATION rather
+    than relaxing it: out-of-family review found the value discriminator had left the CAPTURE
+    surface raising an UNCHAINED error while the two direct-append surfaces chained -- the same
+    substrate event losing its traceback origin depending on which surface caught it. The
+    capture result now also RETAINS the ledger exception (failure_cause, present IFF the kind
+    is LEDGER_CONFLICT, enforced BOTH ways by a validator because the missing-cause direction
+    would degrade the wrapper to raise-from-None, which SUPPRESSES the context rather than
+    omitting it) and the wrapper chains from it. The plan AC was STRENGTHENED -- chaining on
+    EVERY surface plus a joint symmetry witness, since the observed failure mode was
+    two-of-three chaining, which per-surface witnesses alone do not catch -- NOT narrowed to
+    fit what was built. ARTIFACTS: Runtime spec v1.113 (three amendment sites, all
     inside section 14.6.3 -- row 6 discharged, guard tuple four -> five with a sibling-not-subclass
     constraint, and the declared residual narrowed), plan v2.61 U-RT-153 (a NEW unit, NOT an amendment
     of the LANDED-and-CLOSED U-RT-152, per the B-97(a) -> U-RT-149 and B-111 -> U-RT-151 precedent),
