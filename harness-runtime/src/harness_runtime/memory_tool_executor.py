@@ -20,6 +20,7 @@ from harness_is.memory_observability import (
 )
 from harness_is.memory_operation_ledger import (
     MemoryOperationEngineClass,
+    MemoryOperationIdempotencyConflictError,
     MemoryOperationKind,
     MemoryOperationPayload,
     MemoryOperationProjection,
@@ -54,6 +55,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from harness_runtime.memory_capture import (
     EpisodicMemoryCapture,
+    MemoryCaptureFailureKind,
     MemoryCaptureMode,
     MemoryCaptureStatus,
     SummaryProvenance,
@@ -146,6 +148,62 @@ class MemoryToolExecutionStoreError(MemoryToolExecutionError):
     memory_failure_class: ClassVar[MemoryTelemetryFailureClass] = (
         MemoryTelemetryFailureClass.IO_FAILURE
     )
+
+
+class MemoryToolExecutionLedgerConflictError(MemoryToolExecutionError):
+    """Raised when the C-MEM-08 operation ledger REFUSES a divergent replay.
+
+    `B-115` (b′). The DETERMINISTIC half of what `MemoryToolExecutionStoreError`
+    used to carry wholesale. `append_memory_operation` compares an 18-field
+    equivalence payload against the entry already occupying an
+    `idempotency_key` and raises `MemoryOperationIdempotencyConflictError` when
+    they diverge (`harness-is/src/harness_is/memory_operation_ledger.py`, the
+    single raise site inside `append_memory_operation`'s locked critical
+    section). That refusal is a pure comparison over durable state under the
+    cross-process write lock — no clock, no network, no retry-sensitive input —
+    so it is NOT the transient store I/O the store subtype exists for, and
+    re-running it cannot change the answer.
+
+    WHY THE SPLIT EXISTS. The store subtype classified `TRANSIENT_RETRY`, so a
+    divergent replay RE-ENTERED the retry staircase and re-appended the record
+    JSONL line once per attempt, then charged the provider's breaker at
+    exhaustion — for a fault the provider had nothing to do with. That is the
+    measured `B-84` W-5 cell-(3) residual this type closes. The store subtype
+    KEEPS its transient disposition: its raise site genuinely wraps disk-full,
+    permission and other I/O faults, which a retry CAN clear, and fail-fasting
+    those would kill retries for real flakes.
+
+    Three constraints fix the shape, each load-bearing — the same three
+    `MemoryToolExecutionInternalError` carries, for the same reasons:
+
+    - NOT a subclass of `MemoryToolExecutionStoreError`: `getattr` walks the
+      MRO, so an inheriting subtype would carry `io_failure` straight back into
+      this population and void the split.
+    - NOT the family base: the next constraint admits this type to `isinstance`
+      tuples, and `isinstance` is subclass-inclusive, so admitting the base
+      would silently fail-fast the denied and store subtypes too — which
+      `_classify_provider_exception`'s own docstring refuses.
+    - Declares NO class of its own, inheriting the base's RESIDUAL
+      `provider_adapter_failure`. Per C-MEM-19 v1.3 a residual report is the
+      ABSENCE of a claim, not an assertion of adapter-hood, so this does not
+      label a ledger refusal an adapter fault — it withdraws the positively
+      WRONG `io_failure` claim without inventing a replacement. The workspace
+      already maps the underlying type this way at its other consumer
+      (`memory_redaction.py`'s `classify_memory_failure` call site reports
+      `MemoryOperationIdempotencyConflictError` as `provider_adapter_failure`,
+      pinned by a two-row discriminating witness), so the split makes the two
+      consumers AGREE rather than introducing a third answer. Minting a
+      dedicated `ledger_conflict` class would widen C-MEM-19's ratified
+      vocabulary, which is an operator-gated Class 2 decision and NOT an impl
+      leg's to take — registered instead as forward row `B-134`.
+
+    Fail-fast is admitted BY NAME at
+    `retry_breaker_fallback._classify_provider_exception`, and the breaker
+    charge is WAIVED by name at `_BREAKER_CHARGE_WAIVED_TYPES` per
+    `Spec_Harness_Runtime_v1.md` v1.113 §14.6.3 row 6, whose determinism
+    condition this leg discharged at
+    `harness-is/tests/test_b115_ledger_conflict_determinism.py` (W-D1..W-D4).
+    """
 
 
 class MemoryToolExecutionInputError(MemoryToolExecutionError, ValueError):
@@ -619,21 +677,37 @@ class StandardMemoryToolExecutor:
             capture_mode=capture_mode,
         )
         if result.status is MemoryCaptureStatus.FAILED:
-            # B-88 round 2: discriminated on the capture API's OWN closed status
-            # enum, never on the wording of `failure_reason`. `FAILED` is
-            # produced at exactly one place - `EpisodicMemoryCapture._capture`'s
-            # `except` around `write_record` (`memory_capture.py:818`) +
-            # `append_memory_operation` (`:820`), whose FAILED result is built at
-            # `:899` - so the status IS the statement
-            # "the durable store/ledger write raised".
+            # B-88 round 2: discriminated on the capture API's OWN closed enums,
+            # never on the wording of `failure_reason`. `FAILED` says a durable
+            # write raised; `B-115` (b′) added `failure_kind`, which says WHICH -
+            # and the two kinds have OPPOSITE retry dispositions, so the split
+            # is a control-flow fact and not a telemetry nicety.
+            #
+            # `LEDGER_CONFLICT` is the deterministic C-MEM-08 divergent-replay
+            # refusal: a comparison over durable state under the ledger's own
+            # cross-process lock, which no retry can clear. It gets the sibling
+            # type, which fail-fasts and is breaker-charge-WAIVED.
+            #
+            # `STORE_IO` keeps the store subtype, its `io_failure` class and its
+            # `TRANSIENT_RETRY` disposition, because disk-full and permission
+            # faults genuinely can clear on a retry.
+            #
+            # `None` is unreachable through the real capture API (every `FAILED`
+            # result sets a kind) and falls to the store subtype, which is the
+            # pre-`B-115` behaviour - the conservative direction, since it keeps
+            # an unclassified failure retryable rather than silently permanent.
+            if result.failure_kind is MemoryCaptureFailureKind.LEDGER_CONFLICT:
+                raise MemoryToolExecutionLedgerConflictError(
+                    result.failure_reason or "write_note capture refused a divergent replay"
+                )
             raise MemoryToolExecutionStoreError(
                 result.failure_reason or "write_note capture failed"
             )
         if result.memory_id is None:
-            # Defensive residual: a CAPTURED result always carries a memory_id
-            # (`memory_capture.py:905`), so this is unreachable through the
-            # real capture API. It stays on the base's residual class because
-            # nothing about it says which substrate fault occurred.
+            # Defensive residual: a CAPTURED result always carries a memory_id,
+            # so this is unreachable through the real capture API. It stays on
+            # the base's residual class because nothing about it says which
+            # substrate fault occurred.
             raise MemoryToolExecutionError(result.failure_reason or "write_note capture failed")
         return {
             "memory_ref": str(result.memory_id),
@@ -737,7 +811,16 @@ class StandardMemoryToolExecutor:
             }
         )
         action_id = Identifier(f"delete_request:{event_hash[:32]}")
-        self._store.append_memory_operation(
+        # `B-115` (b′): SAME shape as the capture path and REACHABLE, measured
+        # rather than assumed - `event_hash` above hashes tool_name / memory_ref
+        # / reason / policy_ref / run_id and NOT the provider, while the payload
+        # below sets `provider=context.provider`, so an identical redaction
+        # request replayed from a different candidate lands on this key and
+        # diverges on that field. Executed at this leg: the second call raises.
+        # Without the re-type the refusal escaped RAW, hit
+        # `_classify_provider_exception`'s catch-all, and travelled the retry
+        # staircase - the same defect the capture path carried.
+        self._append_operation_refusing_divergent_replay(
             MemoryOperationPayload(
                 action_id=action_id,
                 idempotency_key=Identifier(f"delete_request:{event_hash}"),
@@ -885,7 +968,16 @@ class StandardMemoryToolExecutor:
             }
         )
         action_id = Identifier(f"standard-tool-call:{event_hash[:32]}")
-        self._store.append_memory_operation(
+        # `B-115` (b′): the WIDEST of the three surfaces, and the one the
+        # register row did not enumerate - this runs after EVERY successful
+        # standard tool call (`execute`), so a read-only tool replayed with
+        # identical arguments from a different candidate reaches it with no
+        # `write_note` in the picture at all. `event_hash` above is
+        # provider-blind while the payload below sets `provider`, so the replay
+        # diverges here. Executed at this leg via `memory.search`: call 1 on one
+        # provider succeeds, calls 2 and 3 on two other providers raise, and a
+        # return to the original provider succeeds again.
+        self._append_operation_refusing_divergent_replay(
             MemoryOperationPayload(
                 action_id=action_id,
                 idempotency_key=Identifier(f"standard-tool-call:{event_hash}"),
@@ -904,6 +996,31 @@ class StandardMemoryToolExecutor:
                 procedural_snapshot_ref=context.procedural_snapshot_ref,
             )
         )
+
+    def _append_operation_refusing_divergent_replay(
+        self,
+        payload: MemoryOperationPayload,
+    ) -> None:
+        """Append one operation row, re-typing the ledger's divergent-replay
+        refusal to `MemoryToolExecutionLedgerConflictError`. `B-115` (b′).
+
+        ONE helper for the executor's two DIRECT ledger appends rather than a
+        `try` at each: the two differ only in which payload they build, and a
+        second inline handler is a second place for the re-type to be forgotten
+        when a third direct append is added. The capture path does NOT route
+        through here - it re-types at `_capture_tool_event`, because its refusal
+        surfaces from inside `EpisodicMemoryCapture` rather than from a call
+        this class makes.
+
+        Only the ledger's OWN refusal is re-typed. Every other exception from
+        the append - genuine store I/O - propagates untouched and keeps its
+        existing transient disposition, which is the whole point of the split.
+        """
+
+        try:
+            self._store.append_memory_operation(payload)
+        except MemoryOperationIdempotencyConflictError as exc:
+            raise MemoryToolExecutionLedgerConflictError(f"{type(exc).__name__}: {exc}") from exc
 
     def _span_context(self, request: MemoryToolExecutionRequest) -> Any:
         if self._tracer_provider is None:
@@ -1263,6 +1380,7 @@ __all__ = [
     "MemoryToolExecutionError",
     "MemoryToolExecutionInputError",
     "MemoryToolExecutionInternalError",
+    "MemoryToolExecutionLedgerConflictError",
     "MemoryToolExecutionRequest",
     "MemoryToolExecutionStoreError",
     "StandardMemoryToolExecutor",

@@ -105,6 +105,7 @@ from harness_runtime.lifecycle.retry_breaker import BreakerStateMachine
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionInputError,
     MemoryToolExecutionInternalError,
+    MemoryToolExecutionLedgerConflictError,
 )
 from harness_runtime.types import LLMDispatcher, RetryBreakerRegistry
 
@@ -325,6 +326,32 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
       only consumes the chain. Admitting the family BASE instead would be
       subclass-inclusive and would silently fail-fast the denied and store
       subtypes too, which the paragraph below refuses.
+    - ``MemoryToolExecutionLedgerConflictError`` → ``None`` (fail-fast, `B-115`
+      (b′)). The C-MEM-08 operation ledger's divergent-replay refusal: an entry
+      already occupies this ``idempotency_key`` and its 18-field equivalence
+      payload differs. Admitted BY NAME and as a SIBLING of the store subtype,
+      never via the family base or via inheritance from
+      ``MemoryToolExecutionStoreError`` — the same subclass-inclusion refusal
+      the two bullets above already carry, and load-bearing in BOTH directions
+      here: inheriting from the store type would have dragged ``io_failure``
+      back onto this population, while admitting the base would fail-fast the
+      store and denied subtypes this bullet deliberately leaves transient.
+      The comparison runs inside ``append_memory_operation``'s cross-process
+      write lock over durable append-only state, reads no clock (the
+      equivalence payload excludes ``timestamp`` by construction) and takes no
+      network input, so a retry — and, under a fallback chain, an advance to a
+      different candidate — cannot change the answer; only re-presenting the
+      ORIGINATING candidate's own payload can, and that is a payload change
+      rather than a provider recovering. Witnessed at
+      ``harness-is/tests/test_b115_ledger_conflict_determinism.py`` (W-D1
+      repeat-invariance, W-D2 candidate-independence, W-D3 the
+      state-driven-not-stochastic boundary, W-D4 clock-exclusion), which is the
+      evidence `Spec_Harness_Runtime_v1.md` v1.113 §14.6.3 row 6 conditions the
+      breaker-charge waiver on. The harm this closes (`B-84` W-5 cell (3),
+      MEASURED not inferred): the refusal used to surface as
+      ``MemoryToolExecutionStoreError`` and classify ``TRANSIENT_RETRY``, so the
+      staircase re-ran the whole dispatch and appended the record JSONL line
+      once per attempt against a refusal that could never clear.
     - ``MemoryToolExecutionInputError`` → ``None`` (fail-fast, B-84). A
       contract-invalid C-MEM-14 memory tool call is a PERMANENT malformed-input
       failure, not a provider transient: spec §14.6 D2 makes an exception
@@ -376,6 +403,7 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
             LLMDispatchPayloadShapeInternalError,
             MemoryToolExecutionInputError,
             MemoryToolExecutionInternalError,
+            MemoryToolExecutionLedgerConflictError,
         ),
     ):
         return None
@@ -390,9 +418,16 @@ _BREAKER_CHARGE_WAIVED_TYPES: tuple[type[BaseException], ...] = (
     LLMDispatchPayloadShapeInternalError,
     MemoryToolExecutionInternalError,
     MemoryToolExecutionInputError,
+    MemoryToolExecutionLedgerConflictError,
 )
-"""The `B-116` four-type harness-internal breaker-charge waiver tuple
-(`Spec_Harness_Runtime_v1.md` v1.112 §14.6.3, ratified Reading (II)).
+"""The `B-116` FIVE-type harness-internal breaker-charge waiver tuple
+(`Spec_Harness_Runtime_v1.md` v1.113 §14.6.3, ratified Reading (II)).
+
+Four members at v1.112; the fifth, `MemoryToolExecutionLedgerConflictError`,
+joined at v1.113 when `B-115` (b′) discharged §14.6.3 row 6's determinism
+condition (`harness-is/tests/test_b115_ledger_conflict_determinism.py`,
+W-D1..W-D4). Row 6 was PROSPECTIVE-CONDITIONAL and would have been VOID had
+the refusal proved racy; it did not.
 
 Enumerated BY NAME, never as a family base — the same subclass-inclusion
 refusal `_classify_provider_exception` already carries for the memory
@@ -401,9 +436,13 @@ family. `MemoryToolExecutionError` and its OTHER subtypes
 waived: they never reach the guarded fail-fast branch anyway (the
 classifier's catch-all routes them to the staircase) and still charge at
 the staircase sites — the declared `B-132` residual, deliberately outside
-this guard's ratified scope.
+this guard's ratified scope. `B-115` (b′) NARROWED that residual rather
+than closing it: the DETERMINISTIC ledger-refusal population left the
+store subtype for the fifth member above, so what still rides the catch-all
+is the genuinely transient store I/O the store subtype now exclusively
+carries, plus the denied class.
 
-Membership is the four CONCRETE types `_classify_provider_exception`
+Membership is the five CONCRETE types `_classify_provider_exception`
 admits to fail-fast, so guard and classifier cannot diverge on a subclass:
 no exception may be admitted to fail-fast via a tuple member yet charged,
 nor the reverse."""
@@ -1081,7 +1120,7 @@ class RetryBreakerFallbackDispatcher:
                         # half-open trial could return a different result
                         # than the trip did, attributably to the
                         # `{provider, model}` the breaker is keyed to. The
-                        # four harness-internal waiver types fail that test,
+                        # five harness-internal waiver types fail that test,
                         # so they do NOT charge — but the candidate is still
                         # abandoned and the chain still advances: the waiver
                         # changes the CHARGE, never the control flow. t1+t2

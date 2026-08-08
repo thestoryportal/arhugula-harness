@@ -60,6 +60,7 @@ from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionContext,
     MemoryToolExecutionDeniedError,
     MemoryToolExecutionInputError,
+    MemoryToolExecutionLedgerConflictError,
     MemoryToolExecutionRequest,
     MemoryToolExecutionStoreError,
     StandardMemoryToolExecutor,
@@ -1159,7 +1160,7 @@ def test_w5_case_2_same_text_different_model_yields_a_second_distinct_note(
     assert _tool_event_lines(tmp_path, second) == 1
 
 
-def test_w5_case_3_same_model_name_different_provider_raises_a_store_error(
+def test_w5_case_3_same_model_name_different_provider_raises_a_ledger_conflict(
     tmp_path: Path,
 ) -> None:
     """W-5 cell (3), the ONLY cell carrying the duplicate-line + re-opened-
@@ -1168,23 +1169,45 @@ def test_w5_case_3_same_model_name_different_provider_raises_a_store_error(
     Same text, same model NAME, different PROVIDER: the content hash is
     unchanged (provider is not hashed) so the `memory_id` collides, the record
     line is appended a second time, and then the ledger's 18-field equivalence
-    payload DIFFERS on `provider` - so `append_memory_operation` raises. The
-    capture wraps it into a `FAILED` result and `_write_note` re-raises
-    `MemoryToolExecutionStoreError`, which is NOT in the fail-fast tuple and so
-    classifies `TRANSIENT_RETRY`: the landed fail-fast half IS re-enterable
-    through this class.
+    payload DIFFERS on `provider` - so `append_memory_operation` raises.
+
+    INVERTED at `B-115` (b′), and the inversion is the whole point of that leg.
+    The refusal used to be folded into a `FAILED` capture result and re-raised
+    as `MemoryToolExecutionStoreError`, which is NOT in the fail-fast tuple and
+    so classified `TRANSIENT_RETRY` - the measured re-enterability that answered
+    `B-84`'s D-2 falsifier affirmatively. It now propagates out of the capture
+    layer and is re-typed to `MemoryToolExecutionLedgerConflictError`, which IS
+    admitted to fail-fast BY NAME. The staircase is therefore closed to this
+    class: the assertion below flipped from `TRANSIENT_RETRY` to `None`.
+
+    The duplicate-line assertion is PRESERVED VERBATIM and deliberately so.
+    `B-115` (b′) addressed the STAIRCASE half, not the duplicate-record half -
+    `write_record` still appends before the ledger append is attempted, so the
+    second physical line still lands. Weakening this assertion would silently
+    claim a closure the leg did not deliver. What the leg DID change is that
+    the line is now appended ONCE rather than once per retry attempt, which is
+    witnessed separately at `test_b115_ledger_conflict_split.py`.
     """
 
     _store, executor = _executor(tmp_path)
     first = str(_write_note(executor, provider="openai")["memory_ref"])
 
-    with pytest.raises(MemoryToolExecutionStoreError) as exc:
+    with pytest.raises(MemoryToolExecutionLedgerConflictError) as exc:
         _write_note(executor, provider="azure-openai")
 
     assert _tool_event_lines(tmp_path, first) == 2, (
         "the record line is appended before the ledger append raises"
     )
-    assert _classify_provider_exception(exc.value) is ValidatorRetryExitClass.TRANSIENT_RETRY
+    assert _classify_provider_exception(exc.value) is None, (
+        "the ledger-conflict class fail-fasts; it must not re-enter the staircase"
+    )
+    # The store subtype it split OFF keeps its transient disposition - the
+    # counterfactual that makes the flip above a SPLIT rather than a wholesale
+    # reclassification of the memory family.
+    assert (
+        _classify_provider_exception(MemoryToolExecutionStoreError("OSError: disk full"))
+        is ValidatorRetryExitClass.TRANSIENT_RETRY
+    )
 
 
 def test_w5_case_3_collapses_into_case_1_when_the_idempotency_key_is_resampled(

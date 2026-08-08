@@ -232,6 +232,34 @@ class SummaryProvenance(BaseModel):
         return self
 
 
+class MemoryCaptureFailureKind(StrEnum):
+    """WHICH substrate fault produced a `FAILED` capture. `B-115` (b′).
+
+    The closed two-value `MemoryCaptureStatus` says a capture failed; this says
+    what failed, and it exists because the two answers have OPPOSITE retry
+    dispositions. `LEDGER_CONFLICT` is the C-MEM-08 operation ledger's
+    divergent-replay refusal - a pure comparison over durable state under the
+    cross-process write lock, deterministic over the same inputs, which a retry
+    cannot clear. `STORE_IO` is everything else the durable-write pair can
+    raise - disk-full, permission, codec faults - which a retry genuinely can.
+
+    Before this enum the executor could only see the merged population and had
+    to adopt the coarser `io_failure` reading for all of it (`B-88` round 2
+    recorded that coarseness honestly, noting the result "carries no exception
+    to re-classify from"). It carries one now, as a VALUE rather than as a
+    propagated exception: `_capture`'s `FAILED`-on-conflict outcome is
+    CONTRACTED for at least two of its six entry points (U-MEM-26), so the
+    exception could not be allowed to escape without changing control flow
+    those callers rely on.
+
+    A closed enum rather than a bool so that a third failure kind is a type
+    error at every consumer rather than a silent third meaning for `False`.
+    """
+
+    LEDGER_CONFLICT = "ledger_conflict"
+    STORE_IO = "store_io"
+
+
 class MemoryCaptureResult(BaseModel):
     """Result returned by all capture API methods."""
 
@@ -244,6 +272,9 @@ class MemoryCaptureResult(BaseModel):
     operation_action_id: Identifier | None = None
     operation_result: MemoryOperationWriteResult | None = None
     failure_reason: str | None = None
+    # `B-115` (b′). `None` on the CAPTURED path BY CONSTRUCTION - a succeeded
+    # capture cannot carry a failure kind - and set on every `FAILED` result.
+    failure_kind: MemoryCaptureFailureKind | None = None
 
 
 class MemoryCaptureStore(Protocol):
@@ -890,16 +921,59 @@ class EpisodicMemoryCapture:
                         raise
                     operation_result = None
             except Exception as exc:
+                # `B-115` (b′): the DETERMINISTIC ledger refusal is discriminated
+                # from transient store I/O on this result, as a VALUE - not by
+                # propagating the exception, and not by widening the closed
+                # two-value status enum.
+                #
+                # Propagating was tried and FALSIFIED at the build: `_capture`
+                # has six public entry points, and `FAILED`-on-conflict is a
+                # CONTRACTED outcome for at least two of them (U-MEM-26 / Codex
+                # R6+R8 - a divergent second run-start must be REPORTED rather
+                # than read as completion, and a non-run-start conflict "must
+                # still surface as FAILED"; both are pinned by landed witnesses
+                # whose docstrings say widening the catch would silently mask
+                # the divergence). `_repair_capture_operation` does propagate
+                # the same exception, but that method has ONE caller and no
+                # contracted FAILED semantics, so its precedent does not reach
+                # here.
+                #
+                # Every caller's control flow is therefore BYTE-UNCHANGED: the
+                # status is still `FAILED`, `failure_reason` still carries the
+                # same string. What is added is a discriminator the executor can
+                # re-type from, replacing the message-guessing the B-88 docstring
+                # correctly refused. Carried as a closed enum rather than a bool
+                # so a third failure kind is a type error rather than a silent
+                # third meaning for `False`, and as `None` on the CAPTURED path
+                # so "succeeded" cannot carry a failure kind.
+                #
+                # The span's `failure_class` follows the same split: the RESIDUAL
+                # for a ledger refusal (not an I/O fault, and per C-MEM-19 v1.3 a
+                # residual report is the ABSENCE of a claim rather than a wrong
+                # one), `io_failure` for everything else. This keeps the inner
+                # capture span and the outer standard-tool span AGREEING about
+                # the same event - the property `B-88` round 2 introduced the
+                # store subtype to protect.
+                conflict = isinstance(exc, MemoryOperationIdempotencyConflictError)
                 set_memory_telemetry_attributes(
                     span,
                     policy_decision=MemoryCaptureStatus.FAILED.value,
-                    failure_class=MemoryTelemetryFailureClass.IO_FAILURE,
+                    failure_class=(
+                        MemoryTelemetryFailureClass.PROVIDER_ADAPTER_FAILURE
+                        if conflict
+                        else MemoryTelemetryFailureClass.IO_FAILURE
+                    ),
                 )
                 return MemoryCaptureResult(
                     status=MemoryCaptureStatus.FAILED,
                     event_kind=event_kind,
                     record_kind=record_kind,
                     failure_reason=f"{type(exc).__name__}: {exc}",
+                    failure_kind=(
+                        MemoryCaptureFailureKind.LEDGER_CONFLICT
+                        if conflict
+                        else MemoryCaptureFailureKind.STORE_IO
+                    ),
                 )
             return MemoryCaptureResult(
                 status=MemoryCaptureStatus.CAPTURED,
@@ -1055,6 +1129,10 @@ class EpisodicMemoryCapture:
                     event_kind=event_kind,
                     record_kind=envelope.kind,
                     failure_reason=f"{type(exc).__name__}: {exc}",
+                    # `B-115` (b′): unconditionally `STORE_IO` here - the arm
+                    # above already re-raised the ledger conflict, so this one
+                    # by construction sees only store I/O.
+                    failure_kind=MemoryCaptureFailureKind.STORE_IO,
                 )
             return MemoryCaptureResult(
                 status=MemoryCaptureStatus.CAPTURED,
