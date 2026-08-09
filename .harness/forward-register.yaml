@@ -61,11 +61,11 @@ snapshot:
   total: 142
   open: 0
   design_substrate_gated: 0
-  registered_finding: 32
+  registered_finding: 31
   operator_gated: 0
   held: 1
-  closed: 109
-  identity_digest: b2df1a8c952c55ff
+  closed: 110
+  identity_digest: fee9604e1d29c9c0
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7450,7 +7450,7 @@ items:
   title: Two harness-inspect pause-journal witnesses assert that no usable config exists without isolating
     an ambient auto-discovered harness.toml, so they pass in CI and fail on any machine carrying the documented
     local config
-  status: registered_finding
+  status: closed
   summary: 'WHAT IT IS. harness-runtime/tests/test_pause_journal_enumeration_b97a.py contains two witnesses
     -- test_an_undeterminable_scope_is_reported_not_assumed_untenanted and test_round4_an_unknown_scope_does_not_classify_an_untenanted_journal_current_format
     -- whose end-to-end legs drive main([--ledger-path, ..., --json]) and assert payload[pause_journal_deployment_scope_known]
@@ -7485,10 +7485,61 @@ items:
     and the tests own docstrings record it as a mutation probe (the flag is consumed in exactly one place,
     so a weakened assertion would silently restore the false all-clear the B-97(a) round-4 [P2] review existed
     to prevent). NOT BLOCKING the B-123 arc: pre-existing, environment-only, unrelated to that diff, and disclosed
-    in PR #1279s body rather than absorbed.'
+    in PR #1279s body rather than absorbed.  CLOSED
+    2026-08-09 AT PR #1281, ALL FOUR STEPS DISCHARGED. STEP (1) RE-GROUNDED NON-DESTRUCTIVELY -- the
+    discriminator is confirmed to be EXACTLY the ambient file, and it was proven WITHOUT touching the
+    operators real gitignored config: the same test file was run twice, once with cwd = repo root (2
+    failed / 19 passed) and once with cwd = a clean temp dir via uv run --project with absolute test
+    paths (21 PASSED). The mechanism is RuntimeConfigSource._discover_default_config resolving Path.cwd()
+    / harness.toml -- PROCESS CWD ONLY, no parent walk. STEP (2) MECHANISM SELECTED -- candidate (a).
+    Both exposed tests now call a shared helper that monkeypatch.chdir-s to an empty tmp_path AND asserts
+    the premise, so the isolation is a POSITIVE CONTROL rather than an assumption: if it ever silently
+    stops working the test fails loudly at the premise instead of mysteriously at the scope_known
+    outcome. monkeypatch.chdir is used rather than a bare os.chdir so the cwd restores even on failure.
+    Candidates (b) and (c) were REJECTED on grounds, not cost: (b) a suite-wide autouse fixture can mask
+    a genuinely config-dependent regression elsewhere, and (c) an injectable discovery root touches src/
+    and could owe a contract question for no benefit here. ZERO src change; the C-OD/inspect precedence-
+    chain widening at _authoritative_tenant_scope is CONTRACTED and CORRECT and is preserved verbatim.
+    STEP (3) SIBLING SWEEP -- COMPLETENESS ARGUED, NOT ASSUMED. All harness-*/tests trees swept;
+    RuntimeConfigSource is runtime-axis-only (zero importers in the other five tests trees). ELEVEN
+    candidate files checked and cleared with a stated reason each (test_config_source.py already carries
+    an equivalent autouse chdir fixture -- the pre-existing precedent this fix follows;
+    test_admin_inspect.py never creates a pause-journal dir so the tenant-scope path is unreachable; two
+    cli_overrides callers are CLI-precedence-dominated and their asserted fields are absent from the
+    ambient file; the rest touch unrelated surfaces). The decisive bound: grep -rn Path.cwd() over all
+    harness-*/src returns EXACTLY ONE hit -- config_source.py -- so this auto-discovery defect class has
+    exactly ONE production site and no further siblings can exist. STEP (4) HONORED -- no assertion
+    weakened, deleted or relaxed; the scope_known mutation-probe semantics the B-97(a) round-4 [P2]
+    review established are byte-preserved. LOAD-BEARING BY MUTATION: removing the isolation line
+    reproduces the original RED from the repo root; restored from a cp backup and verified byte-identical
+    with diff -q. THE ARCS PURPOSE, VERIFIED BY EXECUTION: just check on the developer machine WITH the
+    ambient harness.toml present now exits 0 at 7714 passed / 0 failed, where it was 2 failed / 7705
+    passed before. The operators harness.toml was never moved, renamed, deleted or modified at any point.  NAMED
+    OPEN RESIDUAL ON THE CLOSED ROW (the B-104 / B-133 precedent), raised by the merge-gate test-witness
+    lens at PR #1281 and recorded rather than absorbed: THE ISOLATION IS NOT STRUCTURALLY GUARANTEED. A
+    future edit that drops the helper call from ONE of the two tests -- or reorders it after main() --
+    reproduces this exact defect for that test, and CI STRUCTURALLY CANNOT CATCH IT, because CI never
+    carries the ambient harness.toml that exposes the divergence. The option landscape at step (2)
+    considered a SUITE-WIDE autouse fixture (rejected: can mask a genuinely config-dependent regression
+    elsewhere) and an injectable discovery root (rejected: touches src/), but did NOT consider a FILE-
+    SCOPED autouse fixture -- which is precedented in this very test tree at harness-
+    runtime/tests/test_config_source.py, whose module-local autouse fixture chdir-s every test in that
+    file. A file-scoped fixture would make the isolation structural for the whole module without the
+    suite-wide masking risk, leaving the explicit premise assertion where it carries meaning. NOT a
+    correctness defect in what shipped -- the lens verified the shipped isolation is load-bearing and
+    non-vacuous and returned APPROVE -- and NOT a hidden gap, since it is named here. A second named
+    caveat from the same lens: the premise assertion could in principle pass for the WRONG reason if a
+    malformed ambient HARNESS_* env var made RuntimeConfigSource.load raise via the env-coercion path
+    BEFORE file discovery is consulted; narrow, absent in the verified environment, and recorded for
+    honesty rather than because it fired.'
   council: No. A test-isolation defect with a named, reproducible discriminator and a repair that is local
     unless step (2) selects candidate (c). Convene only if (c) is chosen and it turns out to owe a contract
     question at the RuntimeConfigSource precedence chain.
+  pr: '#1281 (the B-142 test-isolation leg -- both exposed pause-journal witnesses pinned to a
+    deterministic empty CWD with the no-config premise asserted as a positive control; sibling sweep
+    bounded by the single Path.cwd() production site; zero src change)'
   heading: '### B-142 · Two `harness-inspect` pause-journal witnesses assert *"no usable config exists"* without
     isolating an ambient auto-discovered `harness.toml`, so they pass in CI and fail on any machine with the
     documented local config *(surfaced at the `B-123` arc by a full `just check` run, 2026-08-09)*'
+
+
