@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 137
+  total: 138
   open: 0
   design_substrate_gated: 0
-  registered_finding: 31
+  registered_finding: 30
   operator_gated: 0
   held: 1
-  closed: 105
-  identity_digest: 585270b5e1a5687d
+  closed: 107
+  identity_digest: fc7faa70f7908db5
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -5877,7 +5877,12 @@ items:
 - id: B-119
   title: 'No per-provider breaker is constructed anywhere, so BreakerScope.PER_PROVIDER is a
     declared-but-unbuilt scope'
-  status: registered_finding
+  status: closed
+  pr: '#1277 (the B-119/B-125 observability-family disposition leg -- doc/register only, no code and no
+    design-substrate edit). Closed as a FORWARD-ONLY RECORD in the capability_shortfall shape
+    (Spec_Operational_Discipline_v1_32.md:50), NOT as built. The enum member stays a forward-compatible
+    slot with a four-disjunct demand trigger stated at close_out; a future arc electing BUILD re-opens
+    the row rather than amending this closure.'
   summary: 'WHAT IT IS. BreakerScope declares two values — PER_MODEL and PER_PROVIDER
     (harness-od/src/harness_od/harness_breaker_schema.py:105-112) — and both are contract-declared: CP
     §3.5 gives harness.breaker.scope ∈ {per_model, per_provider}
@@ -5913,7 +5918,59 @@ items:
     registered. The dyad is NOT dissolved (a provider-scope breaker still has a wider blast radius than
     a per-model one, and a recovery probe still costs one real call), but any future step-(2)
     deliberation MUST re-ground the C11 position against escapable-OPEN rather than quoting the
-    registered text.'
+    registered text. GROUNDED + DISPOSITIONED 2026-08-08 (#1277) -- FORWARD-ONLY RECORD. This paragraph
+    states the CURRENT result; the registration text above is preserved and superseded where it
+    conflicts. STEP (1) RE-VERIFIED AT HEAD 49591934. PER_MODEL is still the ONLY constructed scope: the
+    sole production get_breaker call is retry_breaker_fallback.py:774-776 (breaker_identifier =
+    f"{candidate.provider}:{candidate.model}" at :774, then get_breaker(BreakerScope.PER_MODEL,
+    breaker_identifier) at :775-776). The registration cite :662-665 is LINE-DRIFTED, not falsified --
+    B-118 (#1275) moved it. PER_PROVIDER appears in src ONLY at its enum declaration
+    harness_breaker_schema.py:112 plus one docstring mention at config/audit_signing.py:81; the only
+    constructions anywhere are TESTS (test_lifecycle_retry_breaker.py:187 and :497) through the
+    scope-agnostic registry (retry_breaker.py:546-568). The falsifier ("a PER_PROVIDER construction site
+    appearing anywhere in harness-*/src") is NOT met. STEP (3) PRICED HONESTLY, POST-B-118, AND THE
+    REGISTRATION FRAMING UNDERSTATES IT. The B-116 waiver predicate is FREE to inherit:
+    _is_breaker_charge_waived(exc) (retry_breaker_fallback.py:456-467) is purely exception-type-based
+    over the five-member tuple at :420-427 and is KEY-AGNOSTIC, so a second charge site reuses it
+    verbatim -- the registration''s fear that "the four demoted harness-internal members re-enter the
+    breaker through the provider scope" is unfounded at HEAD (and the tuple is FIVE, not four, since
+    B-115 (b-prime)). What is NOT free is the B-118 machinery. The pre-check block at
+    retry_breaker_fallback.py:804-895 is a SINGLE-breaker state machine: one half_open_trial flag, one
+    trial_token = breaker.trial_epoch, one effective_policy = RetryPolicy(max_attempts=1, ...) trial cap,
+    and a try/except BaseException -> re_arm_half_open_trial protection boundary added at round 3
+    specifically because an unguarded raise strands the breaker with no owner. A second scope makes
+    admission a PRODUCT OF TWO INDEPENDENT PERMITS -- per-model CLOSED x per-provider HALF_OPEN has no
+    defined cell, and Runtime spec v1.114 §14.6.4''s nine-cell trial-outcome matrix is written for ONE
+    machine -- so ONE dispatch outcome would have to resolve TWO trial tokens. That is a Runtime SPEC
+    DELTA (§14.6/§14.6.4 generalization), not the "a second get_breaker charge alongside the per-model
+    one" the registration priced. HALF-OPEN COHERENCE, ANSWERED: a provider-scope trial is semantically
+    coherent (any model of that provider probes provider health) and §14.6.3''s normative test is
+    satisfiable at {provider} keying -- the incoherence is COMPOSITIONAL (two breakers, one call, one
+    outcome), not semantic. STEP (2)/(4) -- DEMAND IS ABSENT AT HEAD, MEASURED NOT ASSUMED. ZERO
+    consumers branch on harness.breaker.scope; the ONLY production read of the value is B-125''s own
+    default at retry_breaker.py:627. Every other occurrence is declaration/manifest
+    (harness_breaker_schema.py:93 and :267, harness-cp retry_fallback_namespace.py:150, harness-od
+    attribute_class_enforcement.py:53, content_structure_discipline.py:177). NO CONFIG SURFACE --
+    fail_threshold / cooldown_seconds are module constants on RetryBreakerRegistry, not RuntimeConfig
+    fields; the only configurable breaker knobs under config/ belong to the SIGNING breaker
+    (audit_signing.py:60-61). NO OPERATOR SURFACE -- a breaker grep over
+    harness-runtime/src/harness_runtime/admin/inspect.py and cli/app.py returns ZERO hits. Step (4)
+    ("witness scope discrimination at the emission") is therefore VOID BY CONSTRUCTION under this
+    disposition: with one scope there is nothing to discriminate, and the witness becomes owed only if
+    the demand trigger fires. STEP (5) COUPLING TO B-125 -- DISCHARGED IN THE SAME LEG: because
+    PER_MODEL remains the only scope, the :627 scope guard stays vacuously-true and B-125 collapses to a
+    declared bound (closed at #1277 under disposition (a)). THE FOUR-DISJUNCT DEMAND TRIGGER (verbatim,
+    falsifiable, any ONE re-opens this row) -- (i) a RuntimeConfig scalar or HARNESS_* env knob selecting
+    breaker scope; (ii) a consumer that BRANCHES on harness.breaker.scope (as opposed to declaring or
+    echoing it); (iii) an operator-facing surface (a harness-inspect row or a CLI subcommand) reporting
+    breaker state; (iv) a SECOND get_breaker(...) call site appearing anywhere in harness-*/src. A bare
+    "we might want provider-level trips someday" is NOT a trigger -- this is the demand-trigger shape the
+    workspace requires of a forward-only record, not a bare deferral. COUNCIL: the conditional C9 (x)
+    C11 dyad registered below convenes ONLY if a future arc elects BUILD at step (2); under this
+    forward-only-record disposition it is NOT convened, and any such future deliberation MUST re-ground
+    the C11 position against escapable-OPEN per the 2026-08-08 cross-note above -- BreakerStateMachine
+    now carries attempt_half_open + opened_at + trial_epoch (retry_breaker.py:236-268), so the
+    irreversibility clause the registered C11 text rests on is FALSIFIED.'
   council: 'No at registration — nothing is decided here. Conditionally yes at step (2): building a second
     breaker scope trades detection breadth (C9 — a provider outage should be visible as one fact, not
     inferred from N per-model facts) against operator recoverability under a materially wider blast
@@ -6089,7 +6146,63 @@ items:
     pinning fallback.exhausted to the §9.2 floor leaned on head=1.0 precisely because the tail-keep
     mitigation might be inert. If this probe returns the trigger fires, t3''s merits argument changes —
     it does not evaporate (a head=1.0 guarantee does not depend on a trigger), but the row it rests on
-    becomes weaker and should be re-stated rather than carried.'
+    becomes weaker and should be re-stated rather than carried. GROUNDED 2026-08-08 (#1277) -- STEPS (3)
+    AND (4) ANSWERED, STEP (2) SETTLED; ROW STAYS registered_finding AND CLOSES AT THE LEG-1 IMPL. This
+    paragraph states the CURRENT result; the registration text above is preserved and superseded where
+    it conflicts. STEP (3), THE sandbox.violation ARM -- RESOLVED NEGATIVE, THE SIBLING IS FINE.
+    sandbox.violation is emitted as a REAL SPAN, not an event:
+    tracer.start_as_current_span("sandbox.violation") at
+    harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py:725, inside
+    _emit_sandbox_violation (:707-728). An EXHAUSTIVE add_event( sweep over all seven harness-*/src trees
+    returns exactly SIX sites -- harness_breaker_schema.py:282, alignment_floor_drift_detection.py:242,
+    retry_breaker_fallback.py:749 / :879 / :1151, and retry_breaker_tool.py:314 -- and NONE is named
+    sandbox.violation. So tail_keep_classification.py:92-93 matches a name that is genuinely produced.
+    The row''s scope NARROWS to the breaker arm alone; the registration''s "cover both rather than
+    assuming the sibling is fine" was the right instinct and the answer is that the sibling IS fine.
+    WHAT IS STILL BROKEN AFTER B-133, SHARPENED BY DIRECT READ. The landed §9.2.1 event-aware arm is
+    tail_keep_span_processor.py:364-388. It forwards the carrier span, then at :376-377 calls
+    is_classification_trigger(span) -- which at tail_keep_classification.py:91-95 matches SPAN NAMES
+    ONLY. The carrier is named harness.runtime.retry_breaker_fallback, so the predicate returns False,
+    the per-trace keep flag is NEVER set, and :386-387 then calls _materialize_trace_decision(trace_id),
+    which at :445-452 DROPS the buffered spans when keep is False. NET EFFECT AT HEAD: the trip''s own
+    CARRIER span survives (B-133''s delivery), but its entire SIBLING TREE is dropped at root close.
+    B-133 changed SIGNAL delivery, not TREE preservation. The code states this deliberately at :369-375
+    and names this row as owner, and U-OD-59''s W7 pins the boundary -- so the debt is test-visible, not
+    silent. STEP (2), THE REPAIR -- SETTLED, AND NOT AN OPERATOR GATE. The §10.2 contract table at
+    design-substrate/Spec_Operational_Discipline_v1_2.md:582-584 reads VERBATIM "Parent + sibling spans
+    of any sandbox.violation EVENT preserved" and "Parent + sibling spans of any breaker.tripped EVENT
+    preserved". THE CONTRACT ALREADY SAYS EVENT. The code''s name-only predicate is therefore
+    NON-CONFORMANT TO THE CONTRACT AS WRITTEN, and widening is_classification_trigger to also scan
+    span.events is a CONFORMANCE FIX, not a contestable spec direction -- there is no genuine fork here
+    and nothing to route to the operator. Of the registration''s two candidates ("match the event name as
+    well as the span name" vs "emit a span so named"), the FIRST is selected: the second mints a new
+    emission primitive and is the X-AL-3 back-flow route B-133 already refused as venue (b). SHAPE AND
+    VENUE: single-domain C7/OD as the council disposition says; roughly four lines in
+    tail_keep_classification.py reusing the _carries_always_sampled_event pattern
+    (tail_keep_span_processor.py:190-223) but matched against the TWO §10.2 names rather than the §9.2
+    SSOT, plus the AC that the keep flag now sets for an event-carried trip, witnessed BY EXECUTION
+    through the real processor and a real exhausted dispatch (the B-133 harnesses are the template).
+    ONE DOC OBLIGATION RIDES IT: OD spec v1.38 §9.2.1 term 3 explicitly DECLINED to widen and named this
+    row, so the impl leg owes a small OD spec realization delta flipping term 3 plus an OD plan unit in
+    the U-OD-58/U-OD-59 precedent shape. REALISM CAVEAT THE LEG MUST STATE RATHER THAN OVERCLAIM: per
+    B-137, NON-ROOT spans are head-starved (~9% preservation measured at base-rate 0.1 for a non-root
+    sandbox.violation trigger), so this repair delivers the sibling tree only for head-ADMITTED
+    carriers. It is still correct to build; it must not be sold as a full floor. STEP (4), THE
+    B-116-t3 RESTATEMENT -- ONE LINE, AND THE DIRECTION IS THE OPPOSITE OF THE ONE THE REGISTRATION
+    ANTICIPATED. B-116 is CLOSED (PRs #1271 + #1272). C7''s E2b argument for pinning fallback.exhausted
+    to the §9.2 floor leaned on head=1.0 PRECISELY BECAUSE the tail-keep mitigation might be inert; the
+    probe returned that the trigger IS inert, so that argument is CONFIRMED, not weakened. t3''s
+    head=1.0 guarantee never depended on a trigger either way. The registration''s conditional ("if this
+    probe returns the trigger fires, t3''s merits argument changes") is therefore NOT triggered and needs
+    no carry. CLASS-3 INFORMATIONAL, HOMED HERE BECAUSE IT SITS ON THE SAME §10.2 TABLE AND A FULL ROW
+    WOULD BE OVERWEIGHT: §10.2 row 1 cites "classification == permanent-fail per ADR-D2 §1.8 fail-class
+    taxonomy" (Spec_Operational_Discipline_v1_2.md:582), but ADR-D2 §1.8 is the SANDBOX-VIOLATION
+    fail-class taxonomy -- escape_attempt / egress_denied / timeout / oom / signal / exit_nonzero /
+    policy_override (design-substrate/ADR-D2.md:285 and :301) -- and contains NO permanent-fail value.
+    The cite does NOT resolve. Non-blocking; the code''s realization (validator.fail.permanence ==
+    "permanent" per C-CP-21 §21.6, Spec_Control_Plane_v1_2.md:1914-1921) is a downstream interpretation
+    that happens to be sound. Carry as a rider on the next OD §10.2 spec delta -- which IS the Leg-1
+    term-3 flip, so it costs nothing extra. REPAIR OWED AT LEG 1; this row closes there, not here.'
   council: 'No. A probe with a binary answer and a named positive control. Convene nothing until it has run; if
     it returns inert, the repair is single-domain (C7 owns both the predicate and the emission shape).'
   heading: '### B-123 · The tail-keep breaker trigger matches a **span name** while the breaker emits a span
@@ -6125,7 +6238,57 @@ items:
     always-sampled lookup and the §10.2 trigger both fire, by execution rather than by grep. (4) Carry
     it as rider (c) of the B-116-t3 leg, per C7''s own registration — t3 is the arc that opens OD §9.2,
     and touching the table twice is the waste to avoid. WHAT WOULD FALSIFY IT. An emission site existing
-    on a path this search missed — the search covered harness-{runtime,cp,od}/src only.'
+    on a path this search missed — the search covered harness-{runtime,cp,od}/src only. GROUNDED 2026-08-08
+    (#1277) -- THE ROW SPLITS; IT IS NOT ONE FINDING. This paragraph states the CURRENT result; the
+    registration text above is preserved and superseded where it conflicts. Rider (c) of B-116-t3 is
+    RETIRED as a routing (step (4)): B-116 closed at #1271 + #1272 and the t3 leg is gone, so the two
+    halves below route independently. STEP (1) RE-VERIFIED AT HEAD 49591934 -- BOTH HALVES HOLD.
+    validator_fail_permanence() is defined at harness-cp/src/harness_cp/validator_fail_taxonomy.py:169-176
+    and has ZERO src callers: a repo-wide search returns only the definition, one docstring reference at
+    harness-od/src/harness_od/tail_keep_classification.py:60, and three test assertions at
+    harness-cp/tests/test_validator_fail_taxonomy.py:76-83. NO span-attribute set site for
+    "validator.fail.permanence" exists anywhere. The sole structured carrier remains the frozen Pydantic
+    field at idempotency_join_dedup.py:366. STEP (2) ANSWERED -- AN EMISSION DOES EXIST, SO THE ROW DOES
+    NOT RE-SCOPE UPWARD; BUT THE HONEST ANSWER IS SHARPER THAN THE REGISTRATION''S BINARY. A live
+    validator.evaluate span is opened at harness-cp/src/harness_cp/workflow_driver.py:5600 and its
+    attributes are set from evaluation.span_attributes at :5620-5622. Those are built at
+    harness-cp/src/harness_cp/validator_framework.py:320-352, and on non-PASS the builder sets FOUR
+    sibling validator.fail.* attributes at :343-349 -- next_action, escalation_owed, class, detail_hash --
+    but NOT permanence. So the emission exists and already carries the namespace. The registration''s
+    falsifier ("an emission site existing on a path this search missed") IS met: the search covered the
+    DERIVATION function and the ATTRIBUTE NAME, and missed the emission because the emission never names
+    the attribute. STEP (3) -- THE TWO READERS DO NOT SHARE A FIX, AND THAT IS THE LOAD-BEARING RESULT.
+    (A) THE §10.2 HALF IS CLOSEABLE. is_classification_trigger reads the attribute off ANY span
+    (tail_keep_classification.py:96-100), so setting validator.fail.permanence on the validator.evaluate
+    span WOULD make row 1 fire. OWED AT LEG 1, NAMED: pr: pending-leg-1 -- roughly three functional lines
+    at validator_framework.py:_build_span_attributes deriving from result.outcome
+    (ValidatorOutcome.PERMANENT_FAIL -> "permanent", else "transient"), witnessed BY EXECUTION through
+    the real TailKeepSpanProcessor (the trigger fires and the buffered siblings are preserved), NOT by
+    grep. (B) THE §9.2 HALF IS NOT CLOSEABLE BY WIRING THE ATTRIBUTE, AND MUST BE RE-SCOPED FORWARD.
+    is_always_sampled resolves the validator.fail.* row against the span/event NAME, never against a
+    carrier''s attributes: _conditional_always_sampled gates on event_name.startswith("validator.fail.")
+    at harness-od/src/harness_od/sampling_mode.py:239-241, and the literal / dot-anchored-prefix
+    fallbacks at :264-269 also key on name. The live span is named validator.evaluate, so setting the
+    attribute changes NOTHING there. Nor does B-133''s arm reach it -- that arm resolves EVENT NAMES
+    (tail_keep_span_processor.py:190-223) and the validator data is ATTRIBUTES, not events. Note too that
+    a span named exactly "validator.fail" (the declared SPAN_SITE_VALIDATOR_FAIL at
+    harness-od/src/harness_od/validator_namespace.py:54) would ALSO miss, the derived prefix carrying the
+    dot anchor. THIS IS A THIRD REALIZATION-MISMATCH SHAPE -- attribute-on-a-differently-named-span --
+    distinct from B-133''s (event-on-carrier-span) and B-123''s (event-vs-name at the §10.2 predicate).
+    The family is now four rows, not three. DEMAND TRIGGER FOR THE §9.2 HALF: any arc that touches §9.2
+    REALIZATION (as opposed to §9.2 membership) -- the natural rider is B-137''s step-(3) posture
+    decision, since candidate A/B/C all re-open how the floor is resolved at the SDK boundary. Until
+    then the §9.2 half is recorded, not repaired. THE TAXONOMY-COLLISION CAUTION -- SEQUENCING, NOT
+    OPTIONAL. The naive wire (calling validator_fail_permanence at the emission) is BLOCKED by a type
+    boundary: that function consumes ValidatorRetryExitClass (the C-CP-21 §21.1 five-value retry-exit
+    taxonomy at validator_fail_taxonomy.py:38-62) while the live span''s validator.fail.class carries
+    ValidatorFailClass (the C-CP-25 §25.2 pre-emit categorization at
+    harness-cp/src/harness_cp/validator_framework_types.py:70-90, whose own docstring says it is
+    "Distinct from C-CP-21 §21.1 ValidatorRetryExitClass"). That collision is registered SEPARATELY as
+    B-138, and B-138 MUST be dispositioned BEFORE any arc touches _build_span_attributes -- including
+    Leg 1''s (A) above -- because deriving permanence from result.outcome mints a second derivation from
+    a third taxonomy on a function whose authoritative domain is itself unsettled. ROW STAYS
+    registered_finding; it closes when (A) lands.'
   council: 'No. Wiring a declared-but-unset attribute inside a cleared schema, with a named owner (C7/OD). The
     only judgement is step (2)''s scope question, which grounding answers rather than deliberation.'
   heading: '### B-124 · `validator.fail.permanence` is never set on any span, so its OD §9.2 always-sampled row
@@ -6134,7 +6297,13 @@ items:
 - id: B-125
   title: 'harness.breaker.tool_id is a homonym-in-waiting: it echoes the breaker KEY at every shipped trip
     while its contract gloss promises a tool identity'
-  status: registered_finding
+  status: closed
+  pr: '#1277 (the B-119/B-125 observability-family disposition leg -- doc/register only, no code and no
+    design-substrate edit). Closed under DISPOSITION (a): the breaker-key echo is KEPT, real tool ids
+    are FORBIDDEN on this attribute, and the limit is DECLARED with a promotion trigger -- the B-101
+    (b)-PLUS declared-bound shape (Runtime v1.114). NO shipped behaviour changes. The OD §7.1 / CP §3.5
+    gloss corrections are OWED and carried as a NAMED RIDER on the next OD/CP spec delta (see close_out);
+    they are NOT applied here because this leg is doc/register-pure and edits no design-substrate file.'
   summary: 'WHAT IT IS. The attribute is declared at OD §7.1 as "Specific tool ID the failures correlate with
     (when scope is per-model and failures correlate with a specific tool)"
     (design-substrate/Spec_Operational_Discipline_v1_32.md:43) and at CP §3.5 as "per-model scope
@@ -6173,7 +6342,54 @@ items:
     owe a correction; or (b) suppress the default and mint a separate attribute for the key echo, at
     C7''s enumerated price above. (3) The trigger is a caller passing a real tool id — that is the
     moment the homonym goes live and the attribute becomes uninterpretable without a string-shape
-    heuristic. This row must be dispositioned before that, not after.'
+    heuristic. This row must be dispositioned before that, not after. GROUNDED + DISPOSITIONED 2026-08-08
+    (#1277) -- DISPOSITION (a), DECLARED BOUND. This paragraph states the CURRENT result; the
+    registration text above is preserved and superseded where it conflicts. STEP (1) RE-VERIFIED AT HEAD
+    49591934, WITH A LINE-DRIFT CORRECTION. B-118 (#1275) MOVED the default: it is now at
+    harness-runtime/src/harness_runtime/lifecycle/retry_breaker.py:626-628 (effective_tool_id = tool_id
+    at :626; if effective_tool_id is None and transition.scope is BreakerScope.PER_MODEL at :627;
+    effective_tool_id = transition.identifier at :628), and the contract docstring is now at :609-612.
+    The registration''s :459-461 and :445-446 are STALE CITES, not falsified findings -- the mechanism is
+    byte-identical. The attribute still sits at harness_breaker_schema.py:98 in the nine-member tuple.
+    PER_MODEL is still the ONLY constructed scope (B-119, closed at this same leg as a forward-only
+    record), so EVERY shipped trip carries harness.breaker.tool_id = "provider:model". TWO GROUNDED
+    FACTS THAT CHANGE THE CALCULUS. (i) THE TRIGGER IS ARCHITECTURALLY DISTANT, NOT IMMINENT. Step (3)
+    names the trigger as "a caller passing a real tool id". At HEAD there is exactly ONE production
+    caller -- _emit_breaker_transition at retry_breaker_fallback.py:1477-1482 -- and it passes NO
+    tool_id. The composer that would supply one does not participate at all: retry_breaker_tool.py:152-153
+    states "per Q1a=(i) ratification, get_breaker / breaker transition events are NOT invoked at v1.15".
+    So a real tool id can arrive only AFTER a tool-scope breaker lands -- a separate, explicitly-ratified-
+    as-absent surface. The homonym cannot go live by accident. (ii) C7''S ENUMERATED PRICE FOR OPTION (b)
+    IS OVERSTATED AT HEAD, FALSIFIED BY COUNT. "Every witness asserting the default" is ONE test:
+    harness-runtime/tests/test_lifecycle_retry_breaker.py:583-604 -- and it asserts only
+    emission.attribute_count == 8, never the VALUE. The only other harness.breaker.tool_id occurrences in
+    tests are attribute-NAME list assertions (harness-od/tests/test_harness_breaker_schema.py:33,
+    harness-cp/tests/test_retry_fallback_namespace.py:49). (That witness constructs the breaker with
+    identifier "search-tool" -- a tool-shaped key at PER_MODEL scope, the homonym in miniature.) The
+    price correction does NOT flip the disposition: C7''s substantive objection -- that suppressing the
+    default DELETES the only populated meaning the attribute has at every shipped trip, violating his own
+    B-131 "demote the detail, never delete it" standard -- stands unchanged and is what decides it.
+    STEP (2) DECIDED -- (a), NOT (b). Keep the breaker-key echo; FORBID real tool ids on this attribute;
+    declare the limit. This is the B-101 (b)-PLUS shape ratified at Runtime v1.114: a limit DECLARED, not
+    fixed, with a normative promotion trigger keyed on MECHANISM. THE PROMOTION TRIGGER (falsifiable, one
+    disjunct): the FIRST caller passing a non-None tool_id to emit_breaker_transition_event. That is the
+    instant the attribute carries two domains discriminable only by string shape, and it re-opens this
+    row to disposition (b) -- suppress the default, mint a separate attribute for the key echo -- at the
+    (now measured) price above. A second, weaker trigger is B-119''s: constructing PER_PROVIDER changes
+    which trips receive the default at all. STEP (5) OF B-119 IS THEREFORE DISCHARGED HERE: with one
+    scope, the :627 guard is vacuously-true and this row collapses to the declaration. THE OWED GLOSS
+    CORRECTIONS, CARRIED AS A NAMED RIDER RATHER THAN APPLIED (the #1263 stale-prose-carrier rider
+    precedent). Under (a) the two contract glosses are WRONG AS WRITTEN and owe a correction, which this
+    doc/register leg deliberately does NOT make because it edits no design-substrate file: (1) OD §7.1
+    "Specific tool ID the failures correlate with (when scope is per-model and failures correlate with a
+    specific tool)" (design-substrate/Spec_Operational_Discipline_v1_32.md:43) -- owed correction: the
+    shipped meaning is the BREAKER KEY ("provider:model"), a real tool id is forbidden until the
+    promotion trigger fires. (2) CP §3.5 "harness.breaker.tool_id (string; per-model scope correlation)"
+    (design-substrate/Spec_Control_Plane_v1_2.md:402) -- owed correction: same. RIDER OWNER: the NEXT
+    OD or CP spec delta that opens §7.1 or §3.5 respectively MUST carry these two corrections; they are
+    NOT a standalone arc. The code-side docstring at retry_breaker.py:609-612 already states the default
+    as contract and needs no change. ROW CLOSED; the limit is declared, the trigger is stated, and no
+    shipped behaviour moves.'
   council: 'No. An attribute-domain call owned by C7/OD, already argued to a conclusion in venue by two voices
     including a formal withdrawal. What remains is choosing (a) or (b) and paying for it.'
   heading: '### B-125 · `harness.breaker.tool_id` is a homonym-in-waiting: it echoes the breaker **key** at
@@ -6929,3 +7145,76 @@ items:
     *(surfaced by out-of-family Codex round 1 against the `B-133` leg''s commit `ff63c725`, 2026-08-08;
     premise adjudicated empirically at the real production wiring and CONFIRMED, with the
     non-uniformity falsifying the first framing)*'
+- id: B-138
+  title: 'validator.fail.class carries TWO taxonomies at one attribute name -- the shipped value is
+    C-CP-25 ValidatorFailClass while C-CP-21 declares the attribute as ValidatorRetryExitClass'
+  status: registered_finding
+  summary: 'WHAT IT IS, AND IT IS LIVE RATHER THAN IN-WAITING. The span attribute validator.fail.class is
+    declared by CP as an ENUM_REF at Cardinality.LOW with the schema docstring stating "validator.fail.class
+    is bounded(5)" (harness-cp/src/harness_cp/validator_fail_taxonomy.py:137-141, docstring at :154-159,
+    per C-CP-21 §21.5 verbatim). The five values that declaration names are ValidatorRetryExitClass --
+    transient-retry / Reflexion-recoverable / HITL-recoverable / permanent-fail-exit / terminal-fail-exit
+    (:38-62, C-CP-21 §21.1). But the ONLY live producer of the attribute writes a DIFFERENT enum:
+    harness-cp/src/harness_cp/validator_framework.py:346 sets attrs["validator.fail.class"] =
+    result.fail_class.value where result.fail_class is a ValidatorFailClass -- the C-CP-25 §25.2 pre-emit
+    categorization whose members are schema_violation / semantic_inconsistency / safety_policy /
+    resource_constraint / external_rejection (harness-cp/src/harness_cp/validator_framework_types.py:70-90).
+    That class''s OWN docstring names the collision without resolving it: "Distinct from C-CP-21 §21.1
+    ValidatorRetryExitClass (post-fail retry-exit classification) homed at
+    harness_cp.validator_fail_taxonomy" (:73-74). The attribute reaches the wire through the live
+    validator.evaluate span at harness-cp/src/harness_cp/workflow_driver.py:5600 with attributes applied
+    at :5620-5622. SO ONE ATTRIBUTE NAME CARRIES TWO CLOSED FIVE-VALUE DOMAINS WITH DISJOINT MEMBER SETS,
+    discriminable only by string shape -- EXACTLY the cross-namespace homonym class as B-125, except that
+    B-125''s is a homonym-IN-WAITING (no caller can trigger it, retry_breaker_tool.py:152-153) while this
+    one is ALREADY SHIPPED at every non-PASS validator evaluation. A SECOND, SMALLER DIVERGENCE ON THE
+    SAME NAMESPACE, RECORDED BECAUSE IT IS THE SAME DEFECT CLASS. CP declares THREE validator.fail.*
+    attributes -- class, cause_attribution, permanence (validator_fail_taxonomy.py:137-153, C-CP-21 §21.5).
+    OD declares FOUR, at span-site "validator.fail" -- class, detail_hash, next_action, escalation_owed
+    (harness-od/src/harness_od/validator_namespace.py:112-136, C-OD-29.1). The two sets OVERLAP ON class
+    ONLY: CP''s cause_attribution and permanence are absent from OD''s, OD''s detail_hash / next_action /
+    escalation_owed are absent from CP''s. The live emission
+    (validator_framework.py:_build_span_attributes, :343-349) produces OD''s four minus permanence and
+    NONE of CP''s two remaining -- so neither declaration describes what ships. SURFACED BY DIRECT READ
+    AT THE B-124 GROUNDING PASS, 2026-08-08 (#1277) -- not by any council, and not previously registered.'
+  close_out: '(1) RE-GROUND BOTH HALVES AT HEAD before pricing. Confirm validator_framework.py:346 still writes
+    a ValidatorFailClass value and that CP §21.5''s declaration still names the ValidatorRetryExitClass
+    domain; confirm the CP-3 / OD-4 attribute-set divergence still stands. Direct read, not recall -- the
+    B-124 pass found the registration cites of three sibling rows line-drifted by one intervening arc.
+    (2) DECIDE THE AUTHORITATIVE TAXONOMY FOR validator.fail.class -- this is the whole row, and it is a
+    genuine fork rather than a wiring bug. Three candidates, none free. (a) C-CP-25 ValidatorFailClass is
+    authoritative: the shipped value is correct and CP §21.5''s bounded(5) gloss plus the §21.1 five-value
+    table are wrong as written and owe a design-substrate correction; the consequence is that
+    validator_fail_permanence(ValidatorRetryExitClass) is derived from a taxonomy the attribute does NOT
+    carry, which is exactly why B-124''s naive wire is blocked. (b) C-CP-21 ValidatorRetryExitClass is
+    authoritative: the shipped value is a CONTRACT VIOLATION and validator_framework.py:346 must be
+    re-typed or its value projected, which changes a live wire value every downstream consumer of the
+    attribute sees. (c) TWO attributes: keep validator.fail.class for one domain and mint a distinct name
+    for the other -- the B-125 disposition-(b) shape, priced against the same "demote the detail, never
+    delete it" standard. Do NOT pick by preference; ground it on which declaration the DOWNSTREAM readers
+    were built against (start with harness-od attribute_class_enforcement.py:56, namespace_map.py:185,
+    cp_source_namespace_verification.py:64, and the CP export-manifest cardinality sums, which is where a
+    wrong choice breaks a count gate). (3) DISPOSITION THE CP-3-vs-OD-4 SET DIVERGENCE in the same pass
+    -- it is the same defect class at set granularity and splitting it across two arcs guarantees one is
+    forgotten. Note the emission produces neither set exactly, so "make code match the spec" is
+    under-determined until (2) resolves. (4) SEQUENCING, AND IT IS BINDING RATHER THAN ADVISORY: this row
+    MUST be dispositioned BEFORE any arc touches
+    harness-cp/src/harness_cp/validator_framework.py:_build_span_attributes -- specifically before
+    B-124''s §10.2 half is wired there, because deriving validator.fail.permanence from result.outcome
+    mints a THIRD derivation on a function whose authoritative domain is unsettled, and a later (b)
+    would then have to unpick two changes instead of one. WHAT WOULD FALSIFY IT. A cleared spec surface
+    stating that validator.fail.class carries the C-CP-25 domain (which would make this a stale-CP-gloss
+    doc fix rather than a live homonym), or a projection function between the two taxonomies existing on
+    a path this read missed -- the search covered harness-{cp,od,runtime}/src.'
+  council: 'Not at registration -- nothing is decided here and step (1) is a re-grounding pass. Conditionally
+    yes at step (2), and the discriminator is which candidate survives: (a) and (c) are single-domain
+    C5/CP attribute-domain calls of the kind B-125 settled in venue, but (b) changes a LIVE wire value
+    that OD-side readers and cardinality gates are built against, which puts C5 (validator semantics --
+    the shipped categorization is the one operators actually see) against C7 (observability contract --
+    a declared ENUM_REF domain that no producer honours is not a contract). That is nameable in advance
+    and dyadic, so if step (2) trends toward (b), convene dyadic C5 + C7 AFTER the step-(1) re-grounding
+    and the downstream-reader inventory, never before -- the pilot lesson that councils convened ahead of
+    the probe collapse to one voice applies directly.'
+  heading: '### B-138 · `validator.fail.class` carries **two taxonomies** at one attribute name — the shipped
+    value is C-CP-25 `ValidatorFailClass` while C-CP-21 §21.5 declares the attribute as
+    `ValidatorRetryExitClass` *(surfaced by direct read at the `B-124` grounding pass, 2026-08-08 — a
+    LIVE homonym, same class as `B-125` but already shipped)*'
