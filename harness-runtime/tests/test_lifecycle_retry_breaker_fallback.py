@@ -766,6 +766,274 @@ async def test_breaker_open_skips_candidate_emits_retry_skipped() -> None:
     assert skipped.attributes["retry.skipped.candidate"] == "anthropic:claude-test-1"
 
 
+# ---------------------------------------------------------------------------
+# `B-127` + `B-131` — the breaker-skip branch's `fallback.exhausted`
+# attribution (wrong exhaustion cause; skip erasing a real prior failure).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_b127_all_candidates_breaker_open_exhaustion_reports_breaker_open_cause() -> None:
+    """`B-127`: when EVERY candidate in the chain is skipped because its
+    breaker is OPEN — zero provider attempts ever ran — the terminal
+    ``fallback.exhausted`` event must attribute ``fallback.exhaustion_cause``
+    to ``"breaker-open"``, not the ``"per-candidate-retry-exhaustion"``
+    default (which implies retries were attempted and exhausted)."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    clock = _FakeClock(0.0)
+    registry = _retry_breaker_with_llm_policy(
+        max_attempts=3, fail_threshold=2, cooldown_seconds=30.0
+    )
+    for identifier in ("anthropic:claude-test-1", "anthropic:claude-test-2"):
+        breaker = registry.get_breaker(BreakerScope.PER_MODEL, identifier)
+        for _ in range(2):
+            breaker.record_failure(now=clock())
+        assert breaker.state is BreakerState.OPEN
+
+    inner = _MockInnerDispatcher(outcomes=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=registry,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        monotonic=clock,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    # No provider attempt ran — both candidates were skipped on their OPEN breakers.
+    assert len(inner.calls) == 0
+
+    spans = exporter.get_finished_spans()
+    outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
+    exhausted = next(e for e in outer.events if e.name == "fallback.exhausted")
+    assert exhausted.attributes is not None
+    assert exhausted.attributes["fallback.exhaustion_cause"] == "breaker-open"
+
+
+@pytest.mark.asyncio
+async def test_b127_ordinary_retry_exhaustion_still_reports_default_cause() -> None:
+    """B-127 discriminator: a chain that exhausts via genuine per-candidate
+    retry exhaustion (real provider attempts ran and failed) must STILL
+    report ``fallback.exhaustion_cause == "per-candidate-retry-exhaustion"``
+    — guards against a mutation that hard-codes the threaded skip-reason
+    everywhere, which would wrongly flip this case too."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=2)
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            LLMDispatchProviderUnreachableError("anthropic"),
+            LLMDispatchProviderUnreachableError("anthropic"),
+        ]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert len(inner.calls) == 2  # both candidates genuinely attempted.
+
+    spans = exporter.get_finished_spans()
+    outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
+    exhausted = next(e for e in outer.events if e.name == "fallback.exhausted")
+    assert exhausted.attributes is not None
+    assert exhausted.attributes["fallback.exhaustion_cause"] == "per-candidate-retry-exhaustion"
+
+
+@pytest.mark.asyncio
+async def test_b127_half_open_trial_in_flight_exhaustion_reports_that_cause() -> None:
+    """B-127 half-open variant: a single-candidate chain exhausting via the
+    ``half-open-trial-in-flight`` skip reason must report THAT value as
+    ``fallback.exhaustion_cause`` — not a hard-coded ``"breaker-open"``. This
+    is the witness that kills a mutation hard-coding the literal instead of
+    threading the actual ``skip_reason`` through (PD-8 probe P2).
+
+    Constructing a genuine half-open-trial-in-flight state requires a REAL
+    in-flight trial concurrently sharing ONE breaker — mirrors
+    ``test_b118_concurrent_dispatches_share_exactly_one_trial_permit``'s
+    ``asyncio.Event``-gated real-concurrency device (no other production path
+    reaches this skip reason). The chain has exactly ONE candidate (no
+    fallback), so the sibling dispatch that observes the in-flight trial
+    exhausts immediately on that same skip.
+    """
+    clock = _FakeClock(0.0)
+    trial_entered = asyncio.Event()
+    released = asyncio.Event()
+
+    class _GatedSoleInner:
+        async def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> Mapping[str, Any]:
+            trial_entered.set()
+            await released.wait()
+            return {"result": "trial-ok"}
+
+    primary = _candidate("anthropic", "claude-test-1")
+    chain = _chain(primary)  # sole candidate — no fallback.
+    registry = _retry_breaker_with_llm_policy(fail_threshold=2, cooldown_seconds=30.0)
+    primary_breaker = registry.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-1")
+    primary_breaker.record_failure(now=0.0)
+    primary_breaker.record_failure(now=0.0)
+    assert primary_breaker.state is BreakerState.OPEN
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=cast(Any, _GatedSoleInner()),
+        retry_breaker=registry,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        monotonic=clock,
+    )
+    clock.advance(30.0)  # cooldown elapsed — the next dispatch admits the trial.
+
+    async def _trial() -> Mapping[str, Any]:
+        return await wrapper.dispatch(_binding(), _step(), step_context=_step_context(0))
+
+    async with asyncio.timeout(10):
+        trial_task = asyncio.create_task(_trial())
+        await trial_entered.wait()  # the permit is now held, mid-dispatch.
+        with pytest.raises(RetryBreakerFallbackExhaustedError):
+            await wrapper.dispatch(_binding(), _step(), step_context=_step_context(1))
+        released.set()
+        trial_result = await trial_task
+
+    assert trial_result == {"result": "trial-ok"}
+    assert primary_breaker.state is BreakerState.CLOSED
+
+    spans = exporter.get_finished_spans()
+    outer_spans = [s for s in spans if s.name == "harness.runtime.retry_breaker_fallback"]
+    # Two outer spans: the trial's (success, no exhaustion event) and the
+    # sibling's (skip -> immediate exhaustion, sole candidate).
+    exhausted_events = [e for s in outer_spans for e in s.events if e.name == "fallback.exhausted"]
+    assert len(exhausted_events) == 1
+    exhausted = exhausted_events[0]
+    assert exhausted.attributes is not None
+    assert exhausted.attributes["fallback.exhaustion_cause"] == "half-open-trial-in-flight"
+
+
+@pytest.mark.asyncio
+async def test_b131_real_candidate_failure_survives_a_trailing_breaker_skip() -> None:
+    """`B-131`: candidate 0 fails with a real, uniquely-identifiable
+    diagnostic; candidate 1 (the LAST candidate) is breaker-open-skipped.
+    The ``fallback.exhausted`` event must still carry candidate 0's REAL
+    ``fallback.last_failure_class`` + ``fallback.last_failure_detail`` — a
+    trailing skip must not erase the one genuine diagnostic the chain
+    produced."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    clock = _FakeClock(0.0)
+    registry = _retry_breaker_with_llm_policy(
+        max_attempts=5, fail_threshold=2, cooldown_seconds=30.0
+    )
+    # Pre-trip candidate 1's breaker OPEN so it is skipped when reached — the
+    # trailing skip this witness exercises.
+    trailing_breaker = registry.get_breaker(BreakerScope.PER_MODEL, "anthropic:claude-test-2")
+    for _ in range(2):
+        trailing_breaker.record_failure(now=clock())
+    assert trailing_breaker.state is BreakerState.OPEN
+
+    inner = _MockInnerDispatcher(
+        outcomes=[LLMDispatchPayloadShapeError("candidate-0 real diagnostic detail")]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=registry,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        monotonic=clock,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    # Exactly one real attempt (candidate 0); candidate 1 was skipped, never dispatched.
+    assert len(inner.calls) == 1
+
+    spans = exporter.get_finished_spans()
+    outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
+    event_names = [e.name for e in outer.events]
+    assert "retry.skipped" in event_names
+    skipped = next(e for e in outer.events if e.name == "retry.skipped")
+    assert skipped.attributes is not None
+    assert skipped.attributes["retry.skipped.reason"] == "breaker-open"
+    assert skipped.attributes["retry.skipped.candidate"] == "anthropic:claude-test-2"
+
+    exhausted = next(e for e in outer.events if e.name == "fallback.exhausted")
+    assert exhausted.attributes is not None
+    # Candidate 0's REAL diagnostic survives the trailing skip — not
+    # clobbered with the skip reason "breaker-open".
+    assert exhausted.attributes["fallback.last_failure_class"] == "LLMDispatchPayloadShapeError"
+    assert "fallback.last_failure_detail" in exhausted.attributes
+    assert "candidate-0 real diagnostic detail" in str(
+        exhausted.attributes["fallback.last_failure_detail"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_b131_pure_skip_chain_with_no_prior_real_failure_reports_skip_reason() -> None:
+    """B-131 preservation-of-existing-behaviour: a chain with NO real
+    candidate attempt at all (every candidate skipped on an OPEN breaker)
+    must still report the (final) skip reason as ``last_failure_class`` and
+    omit ``last_failure_detail`` — exactly as before this fix, since there is
+    no real diagnostic to preserve."""
+    primary = _candidate("anthropic", "claude-test-1")
+    same_family = (_candidate("anthropic", "claude-test-2"),)
+    chain = _chain(primary, same_family=same_family)
+    clock = _FakeClock(0.0)
+    registry = _retry_breaker_with_llm_policy(
+        max_attempts=3, fail_threshold=2, cooldown_seconds=30.0
+    )
+    for identifier in ("anthropic:claude-test-1", "anthropic:claude-test-2"):
+        breaker = registry.get_breaker(BreakerScope.PER_MODEL, identifier)
+        for _ in range(2):
+            breaker.record_failure(now=clock())
+        assert breaker.state is BreakerState.OPEN
+
+    inner = _MockInnerDispatcher(outcomes=[])
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=registry,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        monotonic=clock,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert len(inner.calls) == 0
+
+    spans = exporter.get_finished_spans()
+    outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
+    exhausted = next(e for e in outer.events if e.name == "fallback.exhausted")
+    assert exhausted.attributes is not None
+    assert exhausted.attributes["fallback.last_failure_class"] == "breaker-open"
+    assert "fallback.last_failure_detail" not in exhausted.attributes
+
+
 @pytest.mark.asyncio
 async def test_breaker_transition_emitted_via_registry() -> None:
     """When the breaker trips CLOSED → OPEN after the fail-threshold, the

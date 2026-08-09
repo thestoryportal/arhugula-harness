@@ -719,6 +719,12 @@ class RetryBreakerFallbackDispatcher:
             candidate: ProviderCandidate = chain.primary
             last_failure_class: str | None = None
             last_failure_detail: str | None = None
+            # `B-131`: distinguishes a REAL per-candidate attempt failure
+            # (set alongside `last_failure_class`/`last_failure_detail` at
+            # the per-attempt-loop abandon site below) from a breaker-skip
+            # pseudo-failure — a subsequent skip must not clobber a real
+            # attempt's diagnostic (see the skip branch below).
+            last_failure_is_real_attempt = False
             chain_length = _chain_length(chain)
             outer_span.set_attribute("fallback.chain_length", chain_length)
             # C-CP-03 §3.3 ``capability_required`` — constant across the chain
@@ -883,14 +889,34 @@ class RetryBreakerFallbackDispatcher:
                             "retry.skipped.candidate": breaker_identifier,
                         },
                     )
-                    last_failure_class = skip_reason
-                    last_failure_detail = None
+                    # `B-131`: a skip is not a candidate diagnostic. If a
+                    # real per-candidate attempt already recorded a failure
+                    # (class + detail), a subsequent skip must leave BOTH
+                    # intact rather than overwriting them with the skip
+                    # reason and erasing the detail — an all-skipped tail
+                    # would otherwise silently discard the one real
+                    # diagnostic the chain produced. Only in the no-prior
+                    # -real-failure case does the skip populate
+                    # `last_failure_class` (today's pure-skip behaviour,
+                    # preserved); `last_failure_detail` stays `None` there
+                    # too, since a skip carries no detail of its own.
+                    if not last_failure_is_real_attempt:
+                        last_failure_class = skip_reason
+                        last_failure_detail = None
+                    # `B-127`: attribute the terminal exhaustion event to
+                    # the ACTUAL skip reason (`breaker-open` or
+                    # `half-open-trial-in-flight`) rather than silently
+                    # defaulting to `per-candidate-retry-exhaustion` — no
+                    # provider attempt ever ran on this path, so the default
+                    # (which implies retries were attempted and exhausted)
+                    # would mis-classify the terminal cause.
                     candidate = self._advance_or_exhaust(
                         candidate,
                         outer_span,
                         last_failure_class,
                         chain_length,
                         chain=chain,
+                        exhaustion_cause=skip_reason,
                         last_failure_detail=last_failure_detail,
                     )
                     continue
@@ -986,6 +1012,11 @@ class RetryBreakerFallbackDispatcher:
                 # Candidate abandoned; advance to next.
                 last_failure_class = attempt_terminal.last_failure_class
                 last_failure_detail = attempt_terminal.last_failure_detail
+                # `B-131`: a genuine attempt ran and failed — this IS a real
+                # candidate diagnostic, so a later breaker-skip on a
+                # subsequent candidate must not overwrite it (see the skip
+                # branch above).
+                last_failure_is_real_attempt = True
                 candidate = self._advance_or_exhaust(
                     candidate,
                     outer_span,
