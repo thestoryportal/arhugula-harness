@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 142
+  total: 143
   open: 0
   design_substrate_gated: 0
-  registered_finding: 31
+  registered_finding: 30
   operator_gated: 0
   held: 1
-  closed: 110
-  identity_digest: fee9604e1d29c9c0
+  closed: 112
+  identity_digest: 436f5cfb6ce6fddd
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -6476,7 +6476,23 @@ items:
     list the manifest acknowledges without ingesting — no §3.5 amendment, no cardinality bump. (4) Do
     NOT use this row to block B-116''s t1/t2: those were ratified in venue under exactly this
     discretion, and C7''s requirement was filing, not refusal. Reading this row as a veto would invert
-    its author''s own position.'
+    its author''s own position.  RE-GROUNDED
+    2026-08-09 (PR #1285, batch pass) -- SHARPENED, AND THIS ROWS OWN COUNT IS WRONG. The three-
+    divergent-cardinalities structure holds (manifest attribute_count=4 at
+    cp_namespace_export_manifest.py:129-135; RETRY_NAMESPACE_SCHEMA exactly 6, test-enforced at harness-
+    cp/tests/test_retry_fallback_namespace.py:99), but the wire figure is UNDERCOUNTED. An exhaustive
+    literal sweep of harness-*/src returns FIVE undeclared keys, not four: retry.skipped.reason,
+    retry.skipped.candidate, retry.breaker_waived.reason, retry.breaker_waived.candidate, AND
+    retry.terminal (retry_breaker_fallback.py:1253, the audit-signing fail-closed path). git log -S shows
+    retry.terminal landed at PR #1065 / U-RT-136, BEFORE the 2026-08-07 council that filed this row -- so
+    it is not new drift, it was missed at filing. Corrected total: 5 declared literal retry.-prefixed + 5
+    undeclared = TEN distinct wire keys, not eight. STEP (2) IS ANSWERED BY THE SPEC, NOT OPEN: Runtime
+    section 14.6s discretion bullet (Spec_Harness_Runtime_v1.md:4279, drifted from the rows :4213) states
+    no cap -- the lane is intentionally unbounded, so this is manifest-conformance, not a fork. SHAPE:
+    BUILD-NOW -- declare the discretion lane (the rows own cheapest option) without ingesting the five
+    into the 63-sum, correct the count language, and add a drift-catching test asserting the wire-literal
+    set equals the schema names UNION the declared lane. NOT superseded: no commit has touched either
+    file since PR #1109.'
   council: 'No at registration — nothing is decided until the recount. Conditionally yes at step (2) if it leans
     toward closing the lane, which trades emission-site observability freedom (C7) against the
     cardinality and cost guarantees the pinned manifest exists to give (C2/C6). Do not convene before
@@ -6515,7 +6531,23 @@ items:
     are different attributes, and the value domains must be checked before reuse — the same homonym
     discipline C7 applied when refusing capability_shortfall. (3) Pass it at :684-691. (4) Witness both
     — a breaker-open exhaustion carrying the new value, and a per-candidate retry exhaustion still
-    carrying the default, so the fix is discriminating rather than blanket.'
+    carrying the default, so the fix is discriminating rather than blanket.  RE-GROUNDED
+    2026-08-09 (PR #1285, batch pass) -- INTACT, AND CONFIRMED BY EXECUTION RATHER THAN READING. A
+    standalone probe tripped BOTH chain candidates breakers OPEN with cooldown unexpired and dispatched:
+    inner provider calls = 0, skip reasons = [breaker-open, breaker-open], and fallback.exhaustion_cause
+    = per-candidate-retry-exhaustion. A chain in which NO ATTEMPT EVER RAN reports retry exhaustion.
+    Cites re-pinned (the rows drifted): the capability-shortfall pre-check passes exhaustion_cause
+    explicitly at retry_breaker_fallback.py:768, while the breaker-open / half-open-trial skip branch
+    calls _advance_or_exhaust at :888-895 with NO exhaustion_cause kwarg, taking the default at the :1122
+    signature; skip_reason is set at :809. STEP (2) SETTLED EMPIRICALLY: fallback.exhaustion_cause is
+    declared in NO spec (zero hits across the CP and OD specs) -- it is a free str carrying its own
+    hyphenated local vocabulary, so the fix is a matching literal breaker-open, NOT reuse of the
+    underscored CP FallThroughCause enum. SHAPE: BUILD-NOW -- one keyword argument at one call site, zero
+    contract risk. Witness: an all-breakers-open chain asserting exhaustion_cause == breaker-open with
+    zero inner dispatches, PLUS a companion assertion that ordinary per-candidate retry exhaustion still
+    defaults correctly (a discriminating pair, per the rows own step 4). NOT superseded -- B-118 touched
+    adjacent lines in the same block but did not add the kwarg. LAND TOGETHER WITH B-131: same call site,
+    different attributes, neither fix resolves the other.'
   council: 'No. A one-value fix inside a closed, declared domain with a shipped sibling precedent and a named
     value owner. Route to C7 plus advisor() if step (2)''s reuse question is contested.'
   heading: '### B-127 · The breaker-open advance passes no `exhaustion_cause`, so an all-breakers-open chain
@@ -6524,7 +6556,7 @@ items:
 - id: B-128
   title: 'The dispatcher borrows the validator-side PERMANENT_FAIL_EXIT label while performing none of the
     escalation that label routes to'
-  status: registered_finding
+  status: closed
   summary: 'WHAT IT IS. The fail-fast branch tags the inner attempt span retry.fail_class =
     ValidatorRetryExitClass.PERMANENT_FAIL_EXIT.value
     (harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:1024-1027). C-CP-21
@@ -6552,10 +6584,29 @@ items:
     gate belongs on this path, and B-116 ratified term t5 (no HITL gate here). A fix that adds one would
     contradict a ratified term. WHAT WOULD FALSIFY IT. A consumer that routes on the dispatcher-set
     value would upgrade this from a labelling note to a live defect — that is the single check step (1)
-    exists to run.'
+    exists to run.  RE-GROUNDED
+    2026-08-09 (PR #1285) -- CLOSED AS A FORWARD-ONLY RECORD, BECAUSE THIS ROWS OWN FALSIFIER WAS RUN AND
+    DOES NOT FIRE. Premise INTACT as stated: the fail-fast branch sets retry.fail_class =
+    PERMANENT_FAIL_EXIT at retry_breaker_fallback.py:1281-1284 (row cited :1024-1027, drifted) and
+    returns _PerCandidateTerminal at :1315-1318 without raising; the chain then raises
+    RetryBreakerFallbackExhaustedError, and workflow_driver.py has NO name-match arm for it among its
+    :5401-5560 handlers, so it falls to the generic terminal branch at :5558-5566 -- no HITL routing
+    anywhere, while CP section 21.1 says permanent-fail-exit routes directly to C11 HITL. BUT the rows
+    close-out step (1) demanded an enumeration of readers, and it was run: SIX hits for retry.fail_class
+    across harness-*/src, of which five are producers and the ONLY consumer-shaped reference is
+    per_class_attribute_composition.py:209s tail_keep_on_attribute -- a PRESENCE-ONLY tail-sampling
+    trigger (corroborated by the in-code comment at retry_breaker_fallback.py:1392). NOTHING branches
+    control flow on the string value. The row states its own disposition for exactly this result: If
+    there is none, the row is documentation-shaped, and that is the honest outcome to record rather than
+    a reason to build. Closed on that instruction. NOTE: B-138 demoted ValidatorRetryExitClass off
+    validator.fail.class -- a DIFFERENT attribute from retry.fail_class -- so it does not touch this
+    site. DEMAND TRIGGER IF IT RETURNS: any future commit adding a reader that branches on the VALUE of
+    retry.fail_class (re-run the six-hit enumeration and inspect for value-based branching).'
   council: 'No at registration. Conditionally yes at step (2) only if the enum-extension branch is chosen, which
     touches a closed C5/C7-owned domain and trades vocabulary precision against domain closure — and
     only after step (1) shows a routing consumer exists.'
+  pr: '#1285 (the B-126..B-132 batch re-grounding pass; B-128 closed as a forward-only record on its own
+    falsifier)'
   heading: '### B-128 · The dispatcher borrows the validator-side `PERMANENT_FAIL_EXIT` label while performing
     none of the escalation that label routes to *(surfaced at the B-116 council deliberation (C1 A2
     consultant, HITL pre-check), 2026-08-07)*'
@@ -6595,7 +6646,24 @@ items:
     at all, so the emission must be placed on the fall-through path itself, not inherited from the old
     one. (5) Note the B-116-t3 coupling — C11''s acceptance is conditioned on the sampling guarantee, so
     landing a value onto a base-rate-only surface satisfies C1''s placement while failing C11''s
-    condition.'
+    condition.  RE-GROUNDED
+    2026-08-09 (PR #1285) -- INTACT, WITH ONE OF ITS TWO STATED OBSTACLES ALREADY REMOVED BY A LATER ARC.
+    Raise site re-pinned to llm_dispatch.py:4414-4419 (row cited :4376-4383) with the discriminating
+    comment at :4397-4404; the harness-internal siblings raise MemoryToolExecutionInternalError at
+    :4406-4411; MemoryToolExecutionInputError is confirmed in the B-116 waiver set at
+    retry_breaker_fallback.py:425; BreakerCause.CAPABILITY_SHORTFALLs out-of-scope disclaimer is byte-
+    exact at harness_breaker_schema.py:141-143; FallThroughCause is confirmed CLOSED at four members with
+    the Class-2-D-revision docstring at fall_through_procedure.py:52-70. THE SHARPENING: this rows close-
+    out step (5) worries that its own preferred placement (the fall-through path) lands on a base-rate-
+    only surface dropped nine times in ten, making C11s condition unmet. THAT WORRY IS STALE.
+    fallback.exhausted was already declared always-sampled at CP section 3.5, and the OD-side ingestion
+    gap was CLOSED by the landed B-116-t3 leg -- it is now row 19 of the OD section 9.2 roster
+    (Spec_Operational_Discipline_v1_38.md:78). So C11s stated condition is ALREADY SATISFIED for the
+    placement the row itself recommends, and the placement is cheaper than the row assumes. SHAPE: DEFER-
+    WITH-TRIGGER, unchanged -- step (2) is a MEASUREMENT question (does the shape actually recur in
+    practice) that a read-only pass cannot answer, and minting a FallThroughCause member is a closed-
+    domain Class 2 D-revision owing a spec leg. TRIGGER: a measured recurrence population, or an
+    operator-visible incident.'
   council: 'No at registration. Conditionally yes at step (3): extending a closed, CP-declared domain to carry a
     reliability signal is the C9 ⊥ C7 tension (signal fidelity versus vocabulary closure) the
     deliberation already surfaced once and resolved by refusal. Convene only after step (2) produces a
@@ -6606,7 +6674,7 @@ items:
     by C9, conditioned by C11), 2026-08-07)*'
 - id: B-130
   title: 'All-candidates-permanently-ineligible is a reachable terminal state no canonical artifact declares'
-  status: registered_finding
+  status: closed
   summary: 'WHAT IT IS. The breaker pre-check at
     harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:674-683 is not telemetry —
     it is a topology gate that deletes a candidate slot from the chain. Combined with B-118 (OPEN is
@@ -6633,12 +6701,33 @@ items:
     the honest argument for leaving the state undeclared. (3) If it is declared, do not mint twice — the
     natural carrier is the fallback.exhaustion_cause value B-127 is already about. (4) SEQUENCE B-118
     FIRST: wiring the half-open latch stops OPEN being absorbing, which weakens this row''s premise
-    substantially and may retire it.'
+    substantially and may retire it.  RE-GROUNDED
+    2026-08-09 (PR #1285) -- CLOSED AS A FORWARD-ONLY RECORD; THE ROW IS PARTIALLY FALSIFIED AND ITS OWN
+    STEP (4) ANTICIPATED THIS. The row bundles two claims and they part company at HEAD. CLAIM A (a
+    fault-driven ZERO-ATTEMPT exhaustion is reachable) is STILL TRUE and was reproduced BY EXECUTION: a
+    3-candidate chain with all three breakers pre-tripped OPEN and the clock pinned raised
+    RetryBreakerFallbackExhaustedError with inner.calls == 0, three retry.skipped events and
+    fallback.chain_length == 3. CLAIM B (that this is PERMANENT / IRREVERSIBLE, combined with B-118
+    making OPEN absorbing for the process lifetime) is FALSE at HEAD: B-118 LANDED, and the SAME repro
+    extended past the cooldown window recovered -- candidate 1 transitioned OPEN -> half_open -> closed
+    on a successful trial and the dispatch returned normally. The state is BOUNDED AND SELF-HEALING, not
+    an irreversible candidate-set deletion. The rows close-out step (4) said SEQUENCE B-118 FIRST ... may
+    retire it; B-118 retired the framing that made this look like topology corruption rather than a
+    circuit breaker working as designed for a genuinely-down provider set. The negative claim was still
+    enumerated and HOLDS (only RT-FAIL-FALLBACK-EXHAUSTED and RunStatus.FAILED are declared), but with
+    self-healing confirmed, the rows own step (2) lean -- the state may not need naming at all -- is
+    stronger, not weaker. NO new terminal-state enum is warranted. The one useful residual -- making
+    zero-attempt exhaustion DISTINGUISHABLE in telemetry -- is already owned by the cheaper sibling B-127
+    and is not duplicated here. DEMAND TRIGGER IF IT RETURNS: any arc that removes or weakens cooldown-
+    based half-open recovery, or a correlated-fault case that does NOT recover after cooldown while a
+    candidates provider is healthy.'
   council: 'No at registration. A C1-domain termination-criterion question with C9''s mechanism underneath
     (T-perm-3, C1 ⊥ C9, fires literally here — the breaker is a reliability primitive performing an
     irreversible topology edit, and C1 asked that it be recorded as such on the row). But C1 argued both
     halves in venue and the probe-first answer — the driver''s own terminality — is grounded at HEAD.
     Re-convene only if step (2) leans toward declaring a new terminal state.'
+  pr: '#1285 (the B-126..B-132 batch re-grounding pass; B-130 closed as a forward-only record on its own
+    falsifier)'
   heading: '### B-130 · All-candidates-permanently-ineligible is a reachable terminal state no canonical
     artifact declares *(surfaced at the B-116 council deliberation (C1 A2 consultant), 2026-08-07)*'
 - id: B-131
@@ -6683,7 +6772,26 @@ items:
     1''s detail. A single-candidate test cannot see this defect. (5) Note B-127 — the same terminal
     event''s exhaustion_cause is mislabelled on the same path; the two are one event apart and should be
     priced together. WHAT WOULD FALSIFY IT. Nothing found. Two voices grounded the mechanism
-    independently at HEAD, and the one contested claim was withdrawn by its author rather than carried.'
+    independently at HEAD, and the one contested claim was withdrawn by its author rather than carried.  RE-GROUNDED
+    2026-08-09 (PR #1285) -- INTACT IN MECHANISM, SHARPENED IN ONE SUB-CLAIM, AND REPRODUCED BY
+    EXECUTION. The rows own step (4) scenario was run: candidate 0 fails with a real
+    LLMDispatchPayloadShapeError diagnostic, candidate 1 (last) is breaker-open-skipped, and the
+    fallback.exhausted event carries {chain_length: 2, last_failure_class: breaker-open,
+    exhaustion_cause: per-candidate-retry-exhaustion} with the fallback.last_failure_detail key ABSENT
+    ENTIRELY -- candidate 0s diagnostic is gone. THE SHARPENING: the row says last_failure_class falls
+    through to the literal unknown. IT DOES NOT. last_failure_class is SET to the skip reason (breaker-
+    open), which is truthy, so the or unknown fallback at :1146 never fires -- the attribute is
+    overwritten with a REAL-BUT-WRONG value that masks candidate 0s actual failure class. That is worse
+    than unknown, because it looks legitimate to a reader. Substance of the defect is unchanged; the rows
+    wording was imprecise. Cites re-pinned (all drifted ~190-260 lines by B-118s insertions): erasure at
+    retry_breaker_fallback.py:886-887 (row cited :682-683); conditional detail write at :1149-1150 (row
+    cited :893-894); real detail set at :1256 (row cited :998). WITNESS GAP CONFIRMED: no existing test
+    exercises the multi-candidate erasure -- test_breaker_open_skips_candidate_emits_retry_skipped skips
+    candidate 0 with no prior real failure to erase. Zero breaker hits in harness-
+    runtime/src/harness_runtime/cli/ confirms no compensating operator-facing surface. SHAPE: BUILD-NOW
+    -- first-write-wins retention across a skip. NOT superseded: B-118 reshaped the surrounding control
+    flow but the erasure line is untouched in substance. LAND TOGETHER WITH B-127: same call site,
+    different attributes of the same event; neither fix resolves the other.'
   council: 'No. C7 (attribute and schema owner) and C11 (operator surface) converged in venue on both the
     mechanism and the framing, including one concession in each direction. What remains is choosing the
     retention shape — a single-domain implementation judgement.'
@@ -6738,7 +6846,25 @@ items:
     through the B-116 normative test PER-MEMBER, per the section 14.6.3 discipline -- a wholesale
     reclassification would repeat the exact mistake the per-member table exists to prevent. WHAT
     WOULD FALSIFY IT: the catch-all arm gaining member-specific handling for the denied/store
-    subtypes, or an operator decision recording the staircase charge as accepted behaviour.'
+    subtypes, or an operator decision recording the staircase charge as accepted behaviour.  RE-GROUNDED
+    2026-08-09 (PR #1285) -- INTACT, AND CORROBORATED BY THE SHIPPED CODES OWN COMMENTS. Verified by
+    direct classifier calls, not grep: MemoryToolExecutionDeniedError -> transient-retry / waived False;
+    MemoryToolExecutionStoreError -> transient-retry / waived False;
+    MemoryToolExecutionLedgerConflictError -> classify None / waived True (the B-115 (b-prime) split,
+    confirmed live). The two staircase charge sites are unconditional record_failure calls now at
+    retry_breaker_fallback.py:1353 (max-attempts exhaustion) and :1376 (escalation) -- the rows cites
+    :1072/:1091 have drifted. The _BREAKER_CHARGE_WAIVED_TYPES docstring at :428-448 states the residual
+    near-verbatim, and Spec_Harness_Runtime_v1.md:65-73 / :4346 independently record B-132 stays OPEN /
+    NARROWED, NOT closed. WHAT PRECISELY REMAINS AFTER THE B-115 NARROWING: exactly TWO members --
+    MemoryToolExecutionDeniedError, and MemoryToolExecutionStoreError minus the ledger-conflict slice
+    that left it (now exclusively disk-full / permission / other genuinely-transient I/O). Both still
+    charge the PROVIDER-MODEL breaker for a candidate-independent harness-local fault. SHAPE: FORK-
+    SHAPED, not Claude-closeable. The two live alternatives: (a) a finer split on the WRAPPED exceptions
+    own type for whatever slice of store errors is provably deterministic (the B-115 worked precedent),
+    or (b) a staircase-side charge waiver keyed on the B-116 recovery-model test, which REOPENS the B-116
+    C1/C9 vs C11 dyad (under-counting vs over-counting) on a new path. The hard part is untouched:
+    whether transient store I/O can be discriminated from a persistent local fault WITHOUT message-
+    sniffing.'
   council: 'No at registration. Conditionally yes at step (2) if a staircase-side waiver is
     proposed: that re-opens the B-116 C1/C9-vs-C11 dyad (under-counting fails to protect a
     genuinely failing chain vs over-counting opens healthy providers on harness-side faults) on a
@@ -7562,6 +7688,42 @@ items:
   heading: '### B-142 · Two `harness-inspect` pause-journal witnesses assert *"no usable config exists"* without
     isolating an ambient auto-discovered `harness.toml`, so they pass in CI and fail on any machine with the
     documented local config *(surfaced at the `B-123` arc by a full `just check` run, 2026-08-09)*'
-
-
-
+- id: B-143
+  title: A wall-clock shutdown-bounding assertion has zero headroom -- its threshold equals the simulated hang,
+    so scheduler noise on a loaded CI runner flips it
+  status: registered_finding
+  summary: 'WHAT IT IS. harness-runtime/tests/test_shutdown.py::test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs
+    asserts `elapsed < 0.3` at :894. The simulated hang is `drain_sleep_seconds=0.3` (:886) and the bound under
+    test is `shutdown(ctx, timeout=0.02)` (:892), so the INTENDED elapsed is ~0.02s while the assertion threshold
+    is 0.3 -- the SAME value as the hang. The margin between bounded (0.02) and not-bounded (0.3) is therefore
+    entirely consumed by event-loop scheduling delay, and on a loaded CI runner the measurement overshoots.
+    OBSERVED TWICE IN ONE SESSION, both on DOC-ONLY PRs where no code changed and the test could not have regressed:
+    2026-08-09 at PR #1280 (`assert 0.34517101499997693 < 0.3`) and again at PR #1285 (`assert 0.3072814269999924
+    < 0.3`). The #1280 occurrence was rerun and passed green, confirming flakiness rather than breakage. IT
+    CANNOT SIMPLY BE DELETED. The sibling assertions at :895-896 (`sub_agent_dispatch_executor` in report.failures,
+    report.timed_out is True) do NOT discriminate the mutation this test exists to catch: the test''s own docstring
+    (:884-885) says a regression makes shutdown revert to waiting out the full 0.3s sleep instead of bounding
+    to ~0.02s -- and that regression STILL sets timed_out, so :894 is the only assertion that can see it. The
+    defect is the THRESHOLD''s lack of headroom, not the assertion''s existence.'
+  close_out: '(1) RE-GROUND by re-reading :884-896 at HEAD and confirming the three figures still stand (hang
+    0.3, timeout 0.02, threshold 0.3) -- if any has moved the analysis changes. (2) CONFIRM THE FAILURE MODE
+    IS TIMING, NOT LOGIC, by running the test under artificial load or with a deliberately delayed event loop
+    and observing elapsed cross 0.3 while report.timed_out stays True; a logic regression would flip the sibling
+    assertions too. (3) CHOOSE THE FIX. The workspace precedent is PR #1226, which hardened an analogous wall-clock
+    flake TEST-ONLY by moving to a scripted clock rather than by widening a bound -- prefer that shape, since
+    widening the threshold toward the hang duration destroys the discrimination the assertion exists for, and
+    widening the hang instead makes every run slower. A scripted/injected clock keeps the discriminator exact
+    and removes the scheduler dependency entirely. (4) DO NOT weaken or delete :894 -- it is the ONLY assertion
+    that discriminates the documented regression, per the analysis above; the sibling structural assertions
+    are satisfied by both the good and the bad behaviour. (5) SWEEP FOR SIBLINGS: enumerate other wall-clock
+    elapsed-time assertions across harness-*/tests whose threshold is within the same order of magnitude as
+    the delay they measure, and report whether any share this zero-headroom shape. WHAT WOULD FALSIFY IT. The
+    test failing with report.timed_out False or the failures set empty -- that would be a real logic regression,
+    not a timing flake. Or a run under deliberate load where elapsed stays comfortably under 0.3, which would
+    mean the two observations had another cause.'
+  council: No. A test-hygiene defect with two measured occurrences, a named precedent for the fix shape (#1226's
+    scripted clock) and no contract surface. The only judgement is step (3)'s fix shape, which the precedent
+    already answers.
+  heading: '### B-143 · A wall-clock shutdown-bounding assertion has **zero headroom** — its threshold equals
+    the simulated hang, so scheduler noise on a loaded CI runner flips it *(observed twice on doc-only PRs,
+    2026-08-09)*'
