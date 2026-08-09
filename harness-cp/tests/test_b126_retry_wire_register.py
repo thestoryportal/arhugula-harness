@@ -99,7 +99,9 @@ def _sweep(
     return found
 
 
-#: Parsed live-tree modules, cached. Parsing 398 modules is the whole cost here
+#: Parsed live-tree modules, cached. Lowercase deliberately: this is MUTABLE
+#: module state, and pyright strict refuses to let an UPPERCASE name be rebound
+#: (reportConstantRedefinition). Parsing 398 modules is the whole cost here
 #: (~5s), and three checks need it, so an uncached scan multiplied it on EVERY
 #: suite run — out-of-family round 6 [P2], measured at 11.2s + 9.8s of a 23s run.
 #: Caching the PARSE rather than each consumer's result is what actually fixes it:
@@ -107,16 +109,16 @@ def _sweep(
 #: full-tree check immediately re-introduced the cost it was meant to remove.
 #: Fixture calls pass `modules` explicitly and are deliberately NEVER cached — each
 #: fixture is a different tree, and sharing them would make the witnesses lie.
-_LIVE_TREES: list[tuple[Path, ast.Module]] | None = None
+_live_trees_cache: list[tuple[Path, ast.Module]] | None = None
 
 
 def _parsed(modules: list[Path] | None) -> list[tuple[Path, ast.Module]]:
-    global _LIVE_TREES
+    global _live_trees_cache
     if modules is not None:
         return [(m, ast.parse(m.read_text(encoding="utf-8"))) for m in modules]
-    if _LIVE_TREES is None:
-        _LIVE_TREES = [(m, ast.parse(m.read_text(encoding="utf-8"))) for m in _src_modules()]
-    return _LIVE_TREES
+    if _live_trees_cache is None:
+        _live_trees_cache = [(m, ast.parse(m.read_text(encoding="utf-8"))) for m in _src_modules()]
+    return _live_trees_cache
 
 
 def _composed_key_sites(modules: list[Path] | None = None) -> list[str]:
