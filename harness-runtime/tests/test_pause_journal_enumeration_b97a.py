@@ -621,8 +621,33 @@ def test_the_tenant_scope_comes_from_the_normal_config_precedence_chain(
     assert row["identity_actionable"] is False
 
 
+def _isolate_no_ambient_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Pin the process CWD to an empty `tmp_path` and PROVE no config is
+    discoverable from it, before any leg that depends on that absence.
+
+    `_authoritative_tenant_scope` (admin/inspect.py) deliberately loads through
+    the NORMAL `RuntimeConfigSource` precedence chain rather than only an
+    explicit `--runtime-config` (round 3's own fix, preserved verbatim here).
+    That chain's file layer auto-discovers `harness.toml` at `Path.cwd()`
+    (`RuntimeConfigSource._discover_default_config`, CWD-only, no parent walk)
+    — so a test asserting "no usable config exists" is silently FALSE whenever
+    the test process's CWD holds its own config file (e.g. an operator's real,
+    gitignored, repo-root `harness.toml`), and the two callers below would pass
+    for the wrong reason. `monkeypatch.chdir` is used (never a bare `os.chdir`)
+    so the CWD is restored automatically even if the test fails midway. The
+    `pytest.raises` below makes the premise an assertion, not an assumption: if
+    isolation ever silently stops working, this fails loudly HERE rather than
+    mysteriously at the `scope_known` outcome downstream.
+    """
+    monkeypatch.chdir(tmp_path)
+    from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
+
+    with pytest.raises(RuntimeConfigLoadError):
+        RuntimeConfigSource.load(config_file=None)
+
+
 def test_an_undeterminable_scope_is_reported_not_assumed_untenanted(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Round 3 [P2], the other half — when NO usable config exists the scope is
     reported UNAVAILABLE rather than silently taken to be untenanted.
@@ -633,6 +658,7 @@ def test_an_undeterminable_scope_is_reported_not_assumed_untenanted(
     taken here, because a stopped-harness admin binary genuinely may not be able
     to reconstruct the config.
     """
+    _isolate_no_ambient_config(monkeypatch, tmp_path)
     ledger = tmp_path / "state.jsonl"
     _write_n_entries(ledger, 1)
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
@@ -653,7 +679,7 @@ def test_an_undeterminable_scope_is_reported_not_assumed_untenanted(
 
 
 def test_round4_an_unknown_scope_does_not_classify_an_untenanted_journal_current_format(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Round 4 [P2] — **an UNKNOWN scope is not an UNTENANTED one.**
 
@@ -693,6 +719,7 @@ def test_round4_an_unknown_scope_does_not_classify_an_untenanted_journal_current
     )
 
     # And end-to-end through the binary, where no usable config exists at all.
+    _isolate_no_ambient_config(monkeypatch, tmp_path)
     ledger = tmp_path / "state.jsonl"
     _write_n_entries(ledger, 1)
     assert main(["--ledger-path", str(ledger), "--json"]) == 0
