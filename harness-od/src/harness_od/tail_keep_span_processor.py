@@ -367,12 +367,13 @@ class TailKeepSpanProcessor(SpanProcessor):
             assert ctx is not None  # a span reaching on_end always has a context
             # Mirror of the name arm's trigger-flag step: an event-carrying span
             # that is ALSO a §10.2 classification trigger must still preserve its
-            # buffered tree-siblings. `is_classification_trigger` itself matches
-            # `breaker.tripped` by span NAME only, so an event-carried trip does
-            # NOT set the flag here — that is register row `B-123`'s scope (the
-            # §10.2 half of the same span-name-vs-span-event mismatch), NOT
-            # widened at this leg, and confirmed inert by the `B-133` positive
-            # control.
+            # buffered tree-siblings. `is_classification_trigger` now ALSO scans
+            # `span.events` for the two §10.2 event-shaped trigger names (register
+            # row `B-123`, OD spec v1.39 §9.2.1 term 3 — CLOSED), so an
+            # event-carried `breaker.tripped` sets the flag here too, preserving
+            # the trip's sibling tree at root close subject to the §9.2/§10.2
+            # head-admission bound `B-137` measured (the arm delivers only for
+            # carriers the head sampler admitted).
             if is_classification_trigger(span):
                 self._keep[ctx.trace_id] = True
             # The name arm returns unconditionally, so an always-sampled ROOT

@@ -454,3 +454,160 @@ async def test_w16_member_survives_when_a_non_member_event_comes_first() -> None
     assert event_names.index("fallback.exhausted") > 0, (
         "the member must NOT be first — otherwise this witness cannot constrain the scan"
     )
+
+
+# ---------------------------------------------------------------------------
+# AC4 (`B-123`) — a REAL charging-fault dispatch preserves a buffered SIBLING
+# span in the same trace, end to end, with no `force_flush`.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac4_buffered_sibling_span_survives_a_real_breaker_trip() -> None:
+    """`B-123` end-to-end: `is_classification_trigger`'s new event-name arm
+    (`tail_keep_classification.py`) now flags the trace on an event-carried
+    `breaker.tripped`, so an ordinary BUFFERED sibling span in the SAME trace
+    as the REAL dispatch carrier is preserved at root close — not just the
+    carrier itself (that half is `B-133`'s W4, unaffected by this change).
+
+    **Trace arrangement, stated rather than assumed.** The dispatch carrier
+    (`harness.runtime.retry_breaker_fallback`, per `test_w4_...`) is NOT the
+    trace root here: it is opened INSIDE an ambient `ac4.root` span via
+    `tracer.start_as_current_span`, so OTel context propagation makes it a
+    CHILD of `ac4.root` — asserted below via `.parent is not None`. A plain
+    sibling span, `ac4.sibling.work`, is opened and closed as another child
+    of `ac4.root` BEFORE the dispatch runs, so it buffers (it matches no
+    §9.2/§10.2 name) pending the trace's root close. The carrier's own
+    on_end forwards it immediately (the pre-existing `B-133` §9.2.1 arm) and
+    sets the §10.2 keep flag via the widened `is_classification_trigger`
+    (`B-123`); `ac4.root`'s own close is the trace's actual root close, which
+    materializes the trace decision and flushes the buffered sibling.
+
+    **No `force_flush`** — per the arc brief, survival must come from the
+    arm, not the drain path; the file's convention (see `test_w2_...`) is
+    preserved here.
+
+    **The bound (AC9), stated so it is not overclaimed.** This test uses
+    `base_rate=1.0` (unconditional head admission), so it proves the arm
+    works for a head-ADMITTED carrier. Per `B-137`, a `TAIL_BASED_PROD` cell
+    at its real §10.3 base rate (e.g. 0.1) admits only ~10% of event
+    carriers to this processor at all — this repair does not change that;
+    it only changes what happens to the sibling tree for carriers the head
+    already let through.
+
+    **PD-8 honesty note (measured, not assumed).** This test's nested
+    arrangement does NOT reach `tail_keep_span_processor.py`'s root-close
+    materialize call inside the event arm (the deleted-line probe P5
+    targets) — that line only fires when the EVENT-CARRYING span is ITSELF
+    the trace root, which cannot coexist with a true SIBLING (a root span
+    has no siblings), so this witness's own "Parent + sibling" shape
+    structurally cannot exercise it. Deleting that line does NOT redden
+    this test; it DOES redden six others, including this file's pre-
+    existing `test_w2_...` / `test_w4_...` (both assert
+    `buffered_trace_count == 0` on the carrier-IS-root shape those tests
+    use) plus this arc's `test_w6_...` / `test_w7_...` / `AC5` in the OD
+    module. P5 is caught by the suite; it is caught by a sibling, not by
+    this test.
+    """
+    provider, exporter, tail = _tail_provider(base_rate=1.0)
+    tracer = provider.get_tracer("ac4")
+
+    with tracer.start_as_current_span("ac4.root") as root:
+        with tracer.start_as_current_span("ac4.sibling.work"):
+            pass
+        await _dispatch_exhausted(
+            provider,
+            fault=LLMDispatchPayloadShapeError("bad shape"),
+            step=_step(),
+            fail_threshold=1,
+        )
+
+    # No `force_flush()` call anywhere above — survival must come from the arm.
+    spans = exporter.get_finished_spans()
+    names = [s.name for s in spans]
+    carrier = next((s for s in spans if s.name == CARRIER_SPAN_NAME), None)
+    assert carrier is not None, "the dispatch carrier itself did not survive (B-133 regression)"
+    assert carrier.parent is not None, (
+        "the carrier was the trace root in this arrangement — the materialization path "
+        "this witness targets (a buffered sibling flushed at an ANCESTOR's root close) "
+        "was not exercised; re-arrange so the carrier is nested under an ambient span"
+    )
+    assert root is not None
+    assert "breaker.tripped" in _exported_event_names(exporter)
+    assert "ac4.sibling.work" in names, (
+        "the buffered sibling was dropped — the B-123 widening did not reach the real dispatch path"
+    )
+    assert "ac4.root" in names  # the actual trace root, materializing the decision
+    assert tail.buffered_trace_count == 0  # the slot is freed, not leaked
+
+
+# ---------------------------------------------------------------------------
+# AC4b (`B-123`, adjudicated follow-up) — the PRODUCTION shape: the carrier
+# span itself IS the trace root, and the event arm's OWN root-close
+# materialize call must resolve a buffered CHILD, not merely a sibling
+# resolved via an ancestor's close.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac4b_carrier_as_root_preserves_buffered_children_on_a_real_breaker_trip() -> None:
+    """`B-123`, the shape OD spec v1.38 §9.2.1 term 4's module docstring names
+    verbatim: *"the carrier span IS routinely the root close"*
+    (`tail_keep_span_processor.py`'s module docstring, "Event-shaped §9.2
+    members"). `test_ac4_...` deliberately nests the carrier under an
+    ambient span so a true SIBLING exists (§10.2's own "Parent + sibling"
+    language structurally requires a parent, which a root span lacks) — but
+    that means AC4's own root close is the ORDINARY buffer-path materialize
+    call, never the EVENT ARM's own root-close line
+    (`if span.parent is None: self._materialize_trace_decision(ctx.trace_id)`
+    at `tail_keep_span_processor.py`, immediately after the event-aware
+    forward). PD-8 probe P5 (deleting that line) confirmed AC4 does not
+    reach it. This witness targets exactly that line, at the shape that
+    actually ships: no ambient span, so the dispatch carrier is genuinely
+    the trace root.
+
+    **No span is injected — the child is the dispatcher's OWN, real,
+    production-emitted child.** `RetryBreakerFallbackDispatcher.dispatch`
+    opens `harness.runtime.retry_attempt` as a CHILD of the carrier
+    (`outer_span`) on EVERY attempt (`retry_breaker_fallback.py:1226`),
+    closing it via its own `with`-block before the candidate loop advances
+    or the carrier itself closes. With the charging `LLMDispatchPayloadShapeError`
+    fault and `fail_threshold=1`: attempt 1 (candidate `claude-test-1`)
+    raises, is classified fail-fast (not one of the §14.6.3 five waived
+    types, so it CHARGES), trips that candidate's breaker, and
+    `breaker.tripped` is emitted onto the CARRIER (`outer_span`) — then the
+    inner attempt span closes as the function returns (buffering under the
+    still-open carrier's trace), the chain advances to the `same_family`
+    candidate, which repeats the same shape (a second buffered
+    `harness.runtime.retry_attempt` + a second `breaker.tripped` event on
+    the same carrier), and only THEN does the chain exhaust and the carrier
+    itself close — LAST, as the trace root.
+
+    **No `force_flush`.**
+    """
+    provider, exporter, tail = _tail_provider(base_rate=1.0)
+    await _dispatch_exhausted(
+        provider,
+        fault=LLMDispatchPayloadShapeError("bad shape"),
+        step=_step(),
+        fail_threshold=1,
+    )
+
+    # No `force_flush()` call anywhere above — survival must come from the arm.
+    spans = exporter.get_finished_spans()
+    names = [s.name for s in spans]
+    carrier = next((s for s in spans if s.name == CARRIER_SPAN_NAME), None)
+    assert carrier is not None, "the dispatch carrier itself did not survive (B-133 regression)"
+    assert carrier.parent is None, (
+        "the carrier was NOT the trace root in this arrangement — this witness "
+        "specifically targets the event arm's OWN root-close materialize call, which "
+        "only fires when the event-carrying span IS the trace root; re-arrange so no "
+        "ambient span wraps the dispatch"
+    )
+    assert "breaker.tripped" in _exported_event_names(exporter)
+    assert "harness.runtime.retry_attempt" in names, (
+        "the buffered CHILD (the dispatcher's own per-attempt span) was dropped — the "
+        "event arm's root-close materialize call did not resolve it (this is the exact "
+        "line PD-8 probe P5 deletes)"
+    )
+    assert tail.buffered_trace_count == 0  # the slot is freed, not leaked
