@@ -117,7 +117,7 @@ def _sweep(
 #: Parsed live-tree modules, cached. Lowercase deliberately: this is MUTABLE
 #: module state, and pyright strict refuses to let an UPPERCASE name be rebound
 #: (reportConstantRedefinition). Parsing 398 modules is the whole cost here
-#: (~5s), and three checks need it, so an uncached scan multiplied it on EVERY
+#: (~5s), and FOUR checks need it, so an uncached scan multiplied it on EVERY
 #: suite run — out-of-family round 6 [P2], measured at 11.2s + 9.8s of a 23s run.
 #: Caching the PARSE rather than each consumer's result is what actually fixes it:
 #: a first attempt memoized only one consumer's answer, and adding the next
@@ -636,13 +636,14 @@ def test_the_resolver_credits_the_real_emission_shapes(tmp_path: Path) -> None:
     }
 
 
-def test_the_unemitted_rows_have_no_site_outside_their_declaration() -> None:
-    """The converse of the liveness check, for the `emitted=False` rows.
+def test_the_unemitted_rows_are_not_emitted_anywhere() -> None:
+    """The converse of the precise sweep, for the `emitted=False` rows.
 
-    Liveness excludes them by design, so without this a producer added for either
-    key would leave `emitted=False` unchallenged from BOTH directions (merge-gate
-    lens 3, non-blocking). Asserting the converse keeps `B-145`'s record honest
-    until the wiring lands, at which point this fails and forces the flag to move.
+    Liveness excludes them by design, so asserting the converse keeps `B-145`'s
+    record honest until the wiring lands, at which point this fails and forces the
+    flag to move. RENAMED at the arc close: it keys on EMISSION and does not exclude
+    the declaration home, so the former "…have_no_site_outside_their_declaration"
+    described neither — the U-OD-60 precedent moves the name with the assertion.
 
     Keyed on EMISSION, not on literal presence. A literal-presence check rejected a
     legitimate consumer-only change: a sampler or schema merely MENTIONING the key,
