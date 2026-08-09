@@ -57,7 +57,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from opentelemetry.sdk.trace import ReadableSpan
+    from collections.abc import Sequence
+
+    from opentelemetry.sdk.trace import Event, ReadableSpan
 
 __all__ = [
     "BREAKER_TRIPPED_SPAN_NAME",
@@ -110,7 +112,7 @@ SUBAGENT_RESULT_STATUS_ATTR: str = "subagent.result_status"
 SUBAGENT_RESULT_STATUS_FAILED_VALUE: str = "failed"
 
 
-def is_classification_trigger(span: ReadableSpan) -> bool:
+def is_classification_trigger(span: ReadableSpan, *, events: Sequence[Event] | None = None) -> bool:
     """Return True iff `span` carries a tail-keep classification trigger: the 3
     §10.2 triggers (sandbox.violation / breaker.tripped / validator.fail-permanent)
     OR the §14.3 subagent-failure tail-keep.
@@ -122,14 +124,30 @@ def is_classification_trigger(span: ReadableSpan) -> bool:
 
     Order of checks: span-name matches first (cheapest — single
     string-equality), then attribute lookup, then — only if none of those
-    fired — a scan of `span.events` for either §10.2 event-shaped trigger
-    name (register row `B-123`). The event scan is LAST because it is the
-    most expensive check (`span.events` is an OTel property that takes a
-    lock and copies a deque on every access, per
-    `_carries_always_sampled_event`'s docstring at
+    fired — a scan for either §10.2 event-shaped trigger name (register row
+    `B-123`) over `events` if supplied, else over a freshly-read
+    `span.events`. The event scan is LAST because it is the most expensive
+    check (`span.events` is an OTel property that takes a lock and copies a
+    deque on every access, per `_carries_always_sampled_event`'s docstring at
     `tail_keep_span_processor.py`) and because every existing name-matching
     span (the common case for the two event-shaped triggers' name-carried
-    siblings) must never pay for it.
+    siblings) must never pay for it. This ordering is a NORMATIVE term (OD
+    spec v1.39 §1 term 3), not a preference.
+
+    `events` — an OPTIONAL pre-read snapshot (out-of-family Codex [P2],
+    register row `B-123` fix-forward). `TailKeepSpanProcessor.on_end` calls
+    this function AND `_carries_always_sampled_event` against the SAME span
+    in the SAME `on_end` invocation; without a shared snapshot each function
+    would independently pay `span.events`'s lock-acquire + deque-copy cost,
+    doubling it for every ordinary (non-name-matched) span reaching the event
+    checks, including zero-event ones. `on_end` reads `span.events` exactly
+    ONCE and threads that snapshot into both call sites via this parameter.
+    `events=None` (the default) means "read it yourself" — every OTHER
+    caller, and every pre-existing test, sees byte-identical behaviour to a
+    fresh `span.events` read; when a snapshot IS supplied, this function
+    performs ZERO reads of the property. Total either way: an empty or
+    absent (`None`-defaulted but genuinely empty) snapshot returns False
+    rather than raising, mirroring the `attrs is None` tolerance above.
     """
     name = span.name
     if name == SANDBOX_VIOLATION_SPAN_NAME:
@@ -156,12 +174,13 @@ def is_classification_trigger(span: ReadableSpan) -> bool:
     # `sandbox.violation` / `breaker.tripped` when the trigger rides as a
     # span EVENT rather than a span of its own — the real `breaker.tripped`
     # producer does exactly that (`harness_breaker_schema.py:282`, event on
-    # a `harness.runtime.retry_breaker_fallback` carrier). Read `span.events`
-    # ONCE into a local — it is an OTel PROPERTY that takes a lock and copies
-    # a deque on every access, not a field — and return False tolerantly
-    # when there are none, mirroring the `attrs is None` tolerance above so
-    # this predicate never raises.
-    events = span.events
-    if not events:
+    # a `harness.runtime.retry_breaker_fallback` carrier). Use the supplied
+    # snapshot if the caller pre-read one (single-read discipline, see the
+    # docstring above); else read `span.events` ONCE here — it is an OTel
+    # PROPERTY that takes a lock and copies a deque on every access, not a
+    # field. Return False tolerantly when there are none, mirroring the
+    # `attrs is None` tolerance above so this predicate never raises.
+    resolved_events = span.events if events is None else events
+    if not resolved_events:
         return False
-    return any(event.name in SECTION_10_2_EVENT_TRIGGER_NAMES for event in events)
+    return any(event.name in SECTION_10_2_EVENT_TRIGGER_NAMES for event in resolved_events)

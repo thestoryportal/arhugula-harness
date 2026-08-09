@@ -180,14 +180,18 @@ from harness_od.tail_keep_classification import (
 )
 
 if TYPE_CHECKING:
-    pass
+    from collections.abc import Sequence
+
+    from opentelemetry.sdk.trace import Event
 
 __all__ = [
     "TailKeepSpanProcessor",
 ]
 
 
-def _carries_always_sampled_event(span: ReadableSpan) -> bool:
+def _carries_always_sampled_event(
+    span: ReadableSpan, *, events: Sequence[Event] | None = None
+) -> bool:
     """Return True iff any of `span`'s EVENT names is a §9.2 always-sampled member.
 
     The `B-133` event-aware companion to the `span.name` check. Resolves the
@@ -205,22 +209,34 @@ def _carries_always_sampled_event(span: ReadableSpan) -> bool:
     own §9.2 status, including its root-conditional membership, because an
     event's class is the event's and not the span's.
 
-    **Cost, stated at what it actually costs.** `span.events` is a PROPERTY, not
-    a field: OTel's `ReadableSpan.events` returns `tuple(event for event in
-    self._events)` over a `BoundedList` whose `__iter__` takes a lock and copies
-    the deque — so one lock acquisition, one deque copy and one tuple build per
-    access, even when the result is empty. It is read ONCE here and bound, so
-    that cost is paid once per non-name-forwarded span and the emptiness guard
-    is then a plain truthiness test. When events are present the scan
-    early-exits on the first match, and each step is one frozenset lookup plus
-    a two-prefix `startswith` scan. The worst case is bounded by the OTel SDK's
-    per-span event limit (default 128) — the same bound the SDK already accepts
-    when it serializes those events for export.
+    **`events` — an OPTIONAL pre-read snapshot (register row `B-123`,
+    out-of-family Codex [P2]).** `span.events` is a PROPERTY, not a field:
+    OTel's `ReadableSpan.events` returns `tuple(event for event in
+    self._events)` over a `BoundedList` whose `__iter__` takes a lock and
+    copies the deque — one lock acquisition, one deque copy and one tuple
+    build **per access**, even when the result is empty. `TailKeepSpanProcessor.
+    on_end` calls this function AND (on some paths) `is_classification_trigger`
+    against the SAME span in the SAME `on_end` invocation; without a shared
+    snapshot each function would read the property independently, paying the
+    cost TWICE per span for every ordinary (non-name-matched) span, including
+    zero-event ones. `on_end` reads `span.events` exactly ONCE and passes the
+    resulting tuple to both call sites via this parameter. `events=None` (the
+    default) means "read it yourself" — every OTHER caller, and every
+    pre-existing test, is unaffected; behaviour is byte-identical to a fresh
+    `span.events` read. When a snapshot IS supplied, this function performs
+    ZERO reads of the property.
+
+    Once a snapshot is in hand (supplied or self-read), the emptiness guard is
+    a plain truthiness test; when events are present the scan early-exits on
+    the first match, and each step is one frozenset lookup plus a two-prefix
+    `startswith` scan. The worst case is bounded by the OTel SDK's per-span
+    event limit (default 128) — the same bound the SDK already accepts when it
+    serializes those events for export.
     """
-    events = span.events
-    if not events:
+    resolved_events = span.events if events is None else events
+    if not resolved_events:
         return False
-    return any(is_always_sampled(event.name, event.attributes) for event in events)
+    return any(is_always_sampled(event.name, event.attributes) for event in resolved_events)
 
 
 class TailKeepSpanProcessor(SpanProcessor):
@@ -361,7 +377,19 @@ class TailKeepSpanProcessor(SpanProcessor):
         # dropped at root close with the always-sampled event inside it. Reached
         # only after the name check failed, so an always-sampled span never pays
         # for the scan.
-        if _carries_always_sampled_event(span):
+        #
+        # `B-123` single-read discipline (out-of-family Codex [P2]): `span.events`
+        # is read ONCE here — for every span reaching this point, whether or not
+        # it carries an always-sampled event — and the SAME snapshot is threaded
+        # into `_carries_always_sampled_event` below AND into whichever
+        # `is_classification_trigger` call site this span reaches (this arm's, or
+        # the ordinary buffer path's further down). Before this read was shared,
+        # a span falling through to the ordinary path paid the lock-acquire +
+        # deque-copy TWICE per `on_end` call — once here, once inside
+        # `is_classification_trigger`'s own self-read — for every ordinary span,
+        # including zero-event ones.
+        events = span.events
+        if _carries_always_sampled_event(span, events=events):
             self._downstream.on_end(span)
             ctx = span.get_span_context()
             assert ctx is not None  # a span reaching on_end always has a context
@@ -374,7 +402,7 @@ class TailKeepSpanProcessor(SpanProcessor):
             # the trip's sibling tree at root close subject to the §9.2/§10.2
             # head-admission bound `B-137` measured (the arm delivers only for
             # carriers the head sampler admitted).
-            if is_classification_trigger(span):
+            if is_classification_trigger(span, events=events):
                 self._keep[ctx.trace_id] = True
             # The name arm returns unconditionally, so an always-sampled ROOT
             # leaves its trace's buffered siblings pending until `force_flush`
@@ -419,7 +447,7 @@ class TailKeepSpanProcessor(SpanProcessor):
         else:
             bucket.append(span)
 
-        if is_classification_trigger(span):
+        if is_classification_trigger(span, events=events):
             self._keep[trace_id] = True
 
         # Root close detection: parent SpanContext is None means this span

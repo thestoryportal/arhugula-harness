@@ -37,6 +37,7 @@ for the mutation → red-witness correspondence):
 | AC6 | `test_ac6_zero_events_does_not_raise_and_preserves_pre_existing_verdict` |
 | AC7 | `test_ac7_name_matching_span_never_touches_events_cheapest_first` |
 | AC8 | `test_ac8_event_trigger_names_are_derived_not_re_literalled` |
+| AC11 | `test_ac11_span_events_is_read_exactly_once_per_on_end` (+ `test_ac7_confirmed_by_counting_double_zero_events_touches`) |
 
 AC3/AC4/AC9/AC10 are proven elsewhere per the arc brief: AC3 at
 `test_b133_event_aware_tail_floor.py` (the rewritten `test_w7_...`), AC4 at
@@ -45,6 +46,21 @@ AC3/AC4/AC9/AC10 are proven elsewhere per the arc brief: AC3 at
 overclaim a full floor) stated in this module's + the real-dispatch
 witness's docstrings rather than as a separate assertion, AC10 by running
 the full suite.
+
+**AC11 (out-of-family Codex [P2] fix-forward, adjudicated CORRECT).** The
+event-aware arm at `TailKeepSpanProcessor.on_end` calls BOTH
+`_carries_always_sampled_event` and `is_classification_trigger` against the
+SAME span in the SAME `on_end` invocation; before this fix each function
+independently read `span.events` (a locked, deque-copying OTel property),
+doubling the cost for every ordinary span reaching the event checks,
+including zero-event ones. Both functions now accept an OPTIONAL
+keyword-only `events` snapshot (default `None` = self-read, byte-identical
+to prior behaviour for every OTHER caller), and `on_end` reads
+`span.events` exactly once and threads that snapshot into both calls.
+AC11 proves the count structurally, via a COUNTING double (not a
+"small enough" bound) at the `on_end` orchestration level — this is
+OD-local (`TailKeepSpanProcessor` is `harness_od`-owned), so no
+`harness_runtime` import is needed.
 """
 
 from __future__ import annotations
@@ -52,6 +68,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
 from harness_od.sampling_mode import ALWAYS_SAMPLED_EVENT_CLASSES
 from harness_od.tail_keep_classification import (
     BREAKER_TRIPPED_SPAN_NAME,
@@ -234,6 +251,143 @@ def test_ac8_event_trigger_names_are_derived_not_re_literalled() -> None:
         SANDBOX_VIOLATION_SPAN_NAME,
         BREAKER_TRIPPED_SPAN_NAME,
     }
+
+
+# ---------------------------------------------------------------------------
+# AC11 — `span.events` is read EXACTLY ONCE per `on_end` (out-of-family Codex
+# [P2] fix-forward, register row `B-123`). This is the OPPOSITE bound from
+# AC7's raising double: not "never touched" but "touched exactly once" for a
+# span that DOES reach the event checks — proven at the `TailKeepSpanProcessor
+# .on_end` orchestration level with a COUNTING double, since the double-read
+# defect was in HOW `on_end` composed `_carries_always_sampled_event` and
+# `is_classification_trigger`, not in either function alone.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _FakeEvent:
+    """A minimal `Event`-shaped double: `.name` + `.attributes`, nothing more."""
+
+    name: str
+    attributes: dict[str, Any] | None = None
+
+
+class _SpanContextDouble:
+    """A minimal `SpanContext`-shaped double carrying only `.trace_id`."""
+
+    def __init__(self, trace_id: int) -> None:
+        self.trace_id = trace_id
+
+
+class _EventAccessCountingSpan:
+    """A `ReadableSpan`-shaped double whose `.events` PROPERTY increments a
+    counter on every access, instead of raising (AC7's technique) — the
+    counting sibling that proves the AC11 bound. Implements exactly the
+    surface `TailKeepSpanProcessor.on_end` touches (`.name`, `.attributes`,
+    `.parent`, `.events`, `.get_span_context()`) and nothing more; every span
+    here is a trace root (`.parent = None`) so `on_end` runs to a root-close
+    decision without needing a second span.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        events: tuple[_FakeEvent, ...] = (),
+        attributes: dict[str, Any] | None = None,
+    ) -> None:
+        self.name = name
+        self.attributes = attributes
+        self.parent = None
+        self._events = events
+        self.access_count = 0
+        self._ctx = _SpanContextDouble(trace_id=0xAC11)
+
+    @property
+    def events(self) -> tuple[_FakeEvent, ...]:
+        self.access_count += 1
+        return self._events
+
+    def get_span_context(self) -> _SpanContextDouble:
+        return self._ctx
+
+
+class _RecordingDownstream:
+    """A minimal `SpanProcessor`-shaped downstream double. Deliberately does
+    NOT inspect the forwarded span — the AC11 synthetic span doubles above
+    implement only what `on_end` itself touches, and a real `SimpleSpanProcessor`
+    / `InMemorySpanExporter` would additionally require a `.context` property
+    + other `ReadableSpan` surface these doubles do not carry.
+    """
+
+    def __init__(self) -> None:
+        self.on_end_calls: list[Any] = []
+
+    def on_start(self, span: Any, parent_context: Any = None) -> None:
+        pass
+
+    def on_end(self, span: Any) -> None:
+        self.on_end_calls.append(span)
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return True
+
+    def shutdown(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("span_name", "events"),
+    [
+        ("ac11.ordinary.zero_events", ()),
+        ("ac11.ordinary.nonmatching_event", (_FakeEvent("retry.skipped"),)),
+        ("ac11.always_sampled_event_carrier", (_FakeEvent("breaker.tripped"),)),
+    ],
+    ids=["zero-events", "nonmatching-event-ordinary-path", "always-sampled-event-path"],
+)
+def test_ac11_span_events_is_read_exactly_once_per_on_end(
+    span_name: str, events: tuple[_FakeEvent, ...]
+) -> None:
+    """AC11 — before this fix, a span reaching the event checks paid
+    `span.events`'s lock-acquire + deque-copy cost TWICE per `on_end` call:
+    once inside `_carries_always_sampled_event`, once inside
+    `is_classification_trigger`'s own self-read — for EVERY ordinary span,
+    including zero-event ones. This asserts the count is EXACTLY 1, not
+    merely small: an assertion of `<= 2` would pass against the very code
+    being fixed, so equality is required.
+
+    Three cases, covering both branches `on_end` can take after the single
+    read: the ordinary buffer path with zero events, the ordinary buffer
+    path with a non-matching event (the scan must still run, just once),
+    and the always-sampled-event path (`_carries_always_sampled_event`
+    returns True, which ALSO calls `is_classification_trigger` — the exact
+    double-call shape Codex flagged).
+    """
+    tail = TailKeepSpanProcessor(downstream=_RecordingDownstream())  # type: ignore[arg-type]
+    span = _EventAccessCountingSpan(span_name, events=events)
+    tail.on_end(span)  # type: ignore[arg-type]
+    assert span.access_count == 1, (
+        f"span.events was accessed {span.access_count} times in one on_end call — "
+        "expected EXACTLY 1 per register row B-123's single-read discipline "
+        "(out-of-family Codex [P2])"
+    )
+
+
+def test_ac7_confirmed_by_counting_double_zero_events_touches() -> None:
+    """AC7 reconfirmation after the single-read refactor, stated as an
+    explicit COUNT rather than a raise: a span NAMED `breaker.tripped` is
+    ALSO a §9.2 always-sampled member by name, so `on_end`'s first branch
+    forwards it and returns before `events = span.events` is ever reached —
+    `.events` must be touched ZERO times, at the same `on_end` orchestration
+    level AC11 tests, using the SAME counting technique.
+    """
+    tail = TailKeepSpanProcessor(downstream=_RecordingDownstream())  # type: ignore[arg-type]
+    span = _EventAccessCountingSpan(BREAKER_TRIPPED_SPAN_NAME)
+    tail.on_end(span)  # type: ignore[arg-type]
+    assert span.access_count == 0, (
+        f"span.events was accessed {span.access_count} times for a NAME-matching span — "
+        "expected ZERO (the name arm must short-circuit before on_end ever reads events)"
+    )
 
 
 # ---------------------------------------------------------------------------
