@@ -7514,7 +7514,24 @@ items:
     reproduces the original RED from the repo root; restored from a cp backup and verified byte-identical
     with diff -q. THE ARCS PURPOSE, VERIFIED BY EXECUTION: just check on the developer machine WITH the
     ambient harness.toml present now exits 0 at 7714 passed / 0 failed, where it was 2 failed / 7705
-    passed before. The operators harness.toml was never moved, renamed, deleted or modified at any point.'
+    passed before. The operators harness.toml was never moved, renamed, deleted or modified at any point.  NAMED
+    OPEN RESIDUAL ON THE CLOSED ROW (the B-104 / B-133 precedent), raised by the merge-gate test-witness
+    lens at PR #1281 and recorded rather than absorbed: THE ISOLATION IS NOT STRUCTURALLY GUARANTEED. A
+    future edit that drops the helper call from ONE of the two tests -- or reorders it after main() --
+    reproduces this exact defect for that test, and CI STRUCTURALLY CANNOT CATCH IT, because CI never
+    carries the ambient harness.toml that exposes the divergence. The option landscape at step (2)
+    considered a SUITE-WIDE autouse fixture (rejected: can mask a genuinely config-dependent regression
+    elsewhere) and an injectable discovery root (rejected: touches src/), but did NOT consider a FILE-
+    SCOPED autouse fixture -- which is precedented in this very test tree at harness-
+    runtime/tests/test_config_source.py, whose module-local autouse fixture chdir-s every test in that
+    file. A file-scoped fixture would make the isolation structural for the whole module without the
+    suite-wide masking risk, leaving the explicit premise assertion where it carries meaning. NOT a
+    correctness defect in what shipped -- the lens verified the shipped isolation is load-bearing and
+    non-vacuous and returned APPROVE -- and NOT a hidden gap, since it is named here. A second named
+    caveat from the same lens: the premise assertion could in principle pass for the WRONG reason if a
+    malformed ambient HARNESS_* env var made RuntimeConfigSource.load raise via the env-coercion path
+    BEFORE file discovery is consulted; narrow, absent in the verified environment, and recorded for
+    honesty rather than because it fired.'
   council: No. A test-isolation defect with a named, reproducible discriminator and a repair that is local
     unless step (2) selects candidate (c). Convene only if (c) is chosen and it turns out to owe a contract
     question at the RuntimeConfigSource precedence chain.
@@ -7524,4 +7541,5 @@ items:
   heading: '### B-142 · Two `harness-inspect` pause-journal witnesses assert *"no usable config exists"* without
     isolating an ambient auto-discovered `harness.toml`, so they pass in CI and fail on any machine with the
     documented local config *(surfaced at the `B-123` arc by a full `just check` run, 2026-08-09)*'
+
 
