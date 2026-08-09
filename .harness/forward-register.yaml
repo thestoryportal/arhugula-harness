@@ -6512,7 +6512,7 @@ items:
     toward closing the lane, which trades emission-site observability freedom (C7) against the cardinality and cost
     guarantees the pinned manifest exists to give (C2/C6). Do not convene before the recount, per the workspace
     probe-first discipline.
-  pr: pending-b126 (the retry.* wire register + drift catchers; B-144 + B-145 minted)
+  pr: '#1289 (the retry.* wire register + drift catchers; B-144 + B-145 minted)'
   heading: '### B-126 · The `retry.*` namespace has three different cardinalities (manifest 4, code 6, wire 8 after
     `B-116`) and only the first is verified *(surfaced at the B-116 council deliberation (C7 A2 consultant, registered
     adjacency 3), 2026-08-07)*'

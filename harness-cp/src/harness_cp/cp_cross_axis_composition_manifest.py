@@ -115,7 +115,7 @@ CP_CROSS_AXIS_COMPOSITION_MANIFEST: tuple[CrossAxisCompositionExport, ...] = (
         _u("U-CP-54"),
         AxisName.OD,
         SurfaceKind.NAMESPACE_EXPORT,
-        ("11 CP namespaces; 63 attributes exported to OD plan Session 4 D6",),
+        ("11 CP namespaces; 65 attributes exported to OD plan Session 4 D6",),
     ),
     _export(
         "T_perm_3_three_layer_composition",

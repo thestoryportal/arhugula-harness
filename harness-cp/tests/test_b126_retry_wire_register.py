@@ -104,14 +104,28 @@ def _emitted_attribute_keys() -> dict[str, set[str]]:
     every real `retry.attempt_number` producer was deleted — out-of-family review
     round 2 [P2], demonstrated by that exact mutation in a temporary tree.
 
-    DECLARED BOUND, stated rather than glossed: an emission whose key is passed as
-    a NAMED CONSTANT is invisible here, because the first argument is a `Name`
-    rather than a `Constant`. There is one such site at HEAD —
-    `webhook_delivery_composer.py:293` emits `ATTR_RETRY_ATTEMPT_NUMBER`
-    (declared `:59`) through a `_set(...)` helper. The residual is covered from
-    the other side: the constant's own literal is caught by the BROAD sweep, and
-    its site by the liveness check, so an undeclared key cannot hide behind the
-    indirection — only its `emitted` CLASSIFICATION could be understated.
+    A THIRD shape counts, and it is NOT cosmetic: a call argument that is a NAME
+    resolving to a module's own `retry.`-prefixed string constant. That closes a
+    demonstrated FALSE NEGATIVE sitting squarely on `B-145`'s closure path
+    (out-of-family round 3 [P2]) — the live pattern at
+    `webhook_delivery_composer.py:59` + `:293` emits `ATTR_RETRY_ATTEMPT_NUMBER`
+    through a `_set(...)` helper, so `B-145` wiring done the same way would leave
+    `emitted=False` FALSELY green: the broad sweep sees an already-registered
+    name, and the liveness check excludes `emitted=False` rows by design.
+
+    Any `retry.`-prefixed constant passed into a call is treated as that key's
+    emission. There is no other plausible use for such a value, and the bias is
+    deliberately toward COUNTING: over-counting makes an `emitted=False` row fail
+    loudly, whereas under-counting is the silent direction.
+
+    REMAINING BOUND, stated rather than glossed: an `attributes=<Name>` mapping
+    passed by variable is still invisible (the shape is live in-tree at
+    `retry_breaker_fallback.py:1194`, though it carries no `retry.*` key at HEAD),
+    as are `set_attributes` (zero occurrences tree-wide) and positional
+    `add_event(name, dict)` (every in-tree call uses the keyword). The residual is
+    covered from the other side: a constant's own literal is caught by the BROAD
+    sweep and its site by the liveness check, so an undeclared key cannot hide
+    behind indirection — only an `emitted` classification could be understated.
     """
     found: dict[str, set[str]] = {}
 
@@ -121,6 +135,21 @@ def _emitted_attribute_keys() -> dict[str, set[str]]:
 
     for module in _src_modules():
         tree = ast.parse(module.read_text(encoding="utf-8"))
+
+        # `NAME = "retry.xxx"` within this module, so a call passing NAME can be
+        # resolved back to the key it stands for.
+        aliases: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+                and node.value.value.startswith(_RETRY_PREFIX)
+            ):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        aliases[target.id] = node.value.value
+
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -134,6 +163,9 @@ def _emitted_attribute_keys() -> dict[str, set[str]]:
                     for key_node in keyword.value.keys:
                         if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
                             record(key_node.value, module, "attributes=")
+            for argument in [*node.args, *(k.value for k in node.keywords)]:
+                if isinstance(argument, ast.Name) and argument.id in aliases:
+                    record(aliases[argument.id], module, "via-constant")
     return found
 
 
@@ -206,6 +238,23 @@ def test_emitted_attribute_keys_match_the_declared_emitted_set() -> None:
         f"declared-emitted but never set: {sorted(expected - found)})"
     )
     assert len(found) == 10
+
+
+def test_a_helper_based_emission_is_resolved_not_missed() -> None:
+    """The named-constant shape is CREDITED — `B-145`'s closure path depends on it.
+
+    `webhook_delivery_composer.py:59` declares `ATTR_RETRY_ATTEMPT_NUMBER` and
+    `:293` emits it through `_set(...)`, never naming the literal at the call. If
+    the sweep ignored that shape, wiring `retry.backoff_ms` the same way would
+    leave its `emitted=False` row falsely green (out-of-family round 3 [P2]).
+
+    Asserted on the LIVE site rather than a fixture, so the check dies with the
+    pattern it guards instead of outliving it.
+    """
+    shapes = _emitted_attribute_keys()["retry.attempt_number"]
+    assert any(s.endswith(":via-constant") and "webhook_delivery_composer" in s for s in shapes), (
+        f"helper-based emission no longer resolved: {sorted(shapes)}"
+    )
 
 
 def test_the_register_is_disjoint_from_the_cp_declared_schema() -> None:

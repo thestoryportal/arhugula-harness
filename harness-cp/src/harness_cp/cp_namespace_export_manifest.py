@@ -9,7 +9,8 @@ The manifest is **descriptive, not declarative** (acceptance #9): the namespace
 declarations themselves live at the source units (U-CP-01/07/11/21/31/46/47);
 this manifest exports references only. 11 namespaces — 6 specialization-layer
 (§24.1.A), 4 F3-lifecycle-event (§24.1.B), 1 inheritance-composition (§24.1.C)
-— 63 CP-axis attributes total.
+— 65 CP-axis attributes total (34 + 27 + 4; was stated as 63 until `B-126`
+recomputed it — `harness.breaker.*` grew 7 -> 9 at CP spec v1.32).
 
 Authority: Implementation_Plan_Control_Plane_v2_1.md §2.9 U-CP-54 (preserved
 verbatim through v2.9); Spec_Control_Plane_v1_2.md §24 C-CP-24
