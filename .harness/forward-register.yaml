@@ -7761,39 +7761,55 @@ items:
   summary: 'WHAT IT IS. harness-runtime/tests/test_shutdown.py::test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs
     asserts `elapsed < 0.3` at :894. The simulated hang is `drain_sleep_seconds=0.3` (:886) and the bound under
     test is `shutdown(ctx, timeout=0.02)` (:892), so the INTENDED elapsed is ~0.02s while the assertion threshold
-    is 0.3 -- the SAME value as the hang. The margin between bounded (0.02) and not-bounded (0.3) is therefore
-    entirely consumed by event-loop scheduling delay, and on a loaded CI runner the measurement overshoots.
-    OBSERVED TWICE IN ONE SESSION, both on DOC-ONLY PRs where no code changed and the test could not have regressed:
-    2026-08-09 at PR #1280 (`assert 0.34517101499997693 < 0.3`) and again at PR #1285 (`assert 0.3072814269999924
-    < 0.3`). The #1280 occurrence was rerun and passed green, confirming flakiness rather than breakage. IT
-    CANNOT SIMPLY BE DELETED. The sibling assertions at :895-896 (`sub_agent_dispatch_executor` in report.failures,
-    report.timed_out is True) do NOT discriminate the mutation this test exists to catch: the test''s own docstring
-    (:884-885) says a regression makes shutdown revert to waiting out the full 0.3s sleep instead of bounding
-    to ~0.02s -- and that regression STILL sets timed_out, so :894 is the only assertion that can see it. The
-    defect is the THRESHOLD''s lack of headroom, not the assertion''s existence.'
-  close_out: '(1) RE-GROUND by re-reading :884-896 at HEAD and confirming the three figures still stand (hang
-    0.3, timeout 0.02, threshold 0.3) -- if any has moved the analysis changes. (2) CONFIRM THE FAILURE MODE
-    IS TIMING, NOT LOGIC, by running the test under artificial load or with a deliberately delayed event loop
-    and observing elapsed cross 0.3 while report.timed_out stays True; a logic regression would flip the sibling
-    assertions too. (3) CHOOSE THE FIX. The workspace precedent is PR #1226, which hardened an analogous wall-clock
-    flake TEST-ONLY by moving to a scripted clock rather than by widening a bound -- prefer that shape, since
-    widening the threshold toward the hang duration destroys the discrimination the assertion exists for, and
-    widening the hang instead makes every run slower. A scripted/injected clock keeps the discriminator exact
-    and removes the scheduler dependency entirely. (4) DO NOT weaken or delete :894 -- it is the ONLY assertion
-    that discriminates the documented regression, per the analysis above; the sibling structural assertions
-    are satisfied by both the good and the bad behaviour. (5) SWEEP FOR SIBLINGS: enumerate other wall-clock
-    elapsed-time assertions across harness-*/tests whose threshold is within the same order of magnitude as
-    the delay they measure, and report whether any share this zero-headroom shape. WHAT WOULD FALSIFY IT. The
-    test failing with report.timed_out False or the failures set empty -- that would be a real logic regression,
-    not a timing flake. Or a run under deliberate load where elapsed stays comfortably under 0.3, which would
-    mean the two observations had another cause.'
+    is 0.3 -- the SAME value as the hang. The margin between bounded (0.02) and not-bounded (0.3) is therefore entirely
+    consumed by event-loop scheduling delay, and on a loaded CI runner the measurement overshoots. OBSERVED TWICE
+    IN ONE SESSION, both on DOC-ONLY PRs where no code changed and the test could not have regressed: 2026-08-09
+    at PR #1280 (`assert 0.34517101499997693 < 0.3`) and again at PR #1285 (`assert 0.3072814269999924 < 0.3`).
+    The #1280 occurrence was rerun and passed green, confirming flakiness rather than breakage. IT CANNOT SIMPLY
+    BE DELETED. The sibling assertions at :895-896 (`sub_agent_dispatch_executor` in report.failures, report.timed_out
+    is True) do NOT discriminate the mutation this test exists to catch: the test''s own docstring (:884-885) says
+    a regression makes shutdown revert to waiting out the full 0.3s sleep instead of bounding to ~0.02s -- and that
+    regression STILL sets timed_out, so :894 is the only assertion that can see it. The defect is the THRESHOLD''s
+    lack of headroom, not the assertion''s existence.'
+  close_out: '(1) RE-GROUND by re-reading :884-896 at HEAD and confirming the three figures still stand (hang 0.3,
+    timeout 0.02, threshold 0.3) -- if any has moved the analysis changes. (2) CONFIRM THE FAILURE MODE IS TIMING,
+    NOT LOGIC, by running the test under artificial load or with a deliberately delayed event loop and observing
+    elapsed cross 0.3 while report.timed_out stays True; a logic regression would flip the sibling assertions too.
+    (3) CHOOSE THE FIX. The workspace precedent is PR #1226, which hardened an analogous wall-clock flake TEST-ONLY
+    by moving to a scripted clock rather than by widening a bound -- prefer that shape, since widening the threshold
+    toward the hang duration destroys the discrimination the assertion exists for, and widening the hang instead
+    makes every run slower. A scripted/injected clock keeps the discriminator exact and removes the scheduler dependency
+    entirely. (4) DO NOT weaken or delete :894 -- it is the ONLY assertion that discriminates the documented regression,
+    per the analysis above; the sibling structural assertions are satisfied by both the good and the bad behaviour.
+    (5) SWEEP FOR SIBLINGS: enumerate other wall-clock elapsed-time assertions across harness-*/tests whose threshold
+    is within the same order of magnitude as the delay they measure, and report whether any share this zero-headroom
+    shape. WHAT WOULD FALSIFY IT. The test failing with report.timed_out False or the failures set empty -- that
+    would be a real logic regression, not a timing flake. Or a run under deliberate load where elapsed stays comfortably
+    under 0.3, which would mean the two observations had another cause. SIBLING FOUND 2026-08-09 (#1289, the B-126
+    arc) -- STEP (5)''s SWEEP HAS ITS FIRST CONCRETE HIT, AND IT IS A DIFFERENT MECHANISM IN THE SAME CLASS. harness-runtime/tests/test_lifecycle_protected_result_store.py::test_gc_sweep_blocks_across_separate_processes_via_cross_process_lock
+    asserts a child process signals readiness within a 10.0s deadline (:1481, ''child never signaled readiness'').
+    The child is a COLD interpreter that must import the harness packages before it can write the marker, and that
+    import cost is what the deadline is really racing. MEASURED, NOT INFERRED: three consecutive standalone runs
+    of the very same child script gave time-to-ready of 5.39s / 33.89s / 7.69s -- so the deadline sits INSIDE the
+    observed spread and one trial exceeded it by 3.4x. THE FAILURE MODE IS TIMING, NOT LOGIC, established by positive
+    control: the child run standalone exits rc 0 with an empty stderr and DOES write its marker, so it is not crashing
+    on import. Observed RED once during this arc''s own gate run (which was competing with three review subagents
+    plus an out-of-family reviewer) and again in ISOLATION on the loaded machine, while passing in FOUR earlier
+    full-gate runs on the same commit range -- the signature of load-sensitive variance rather than a regression.
+    DISTINCT FROM THIS ROW''S OWN CASE in mechanism and therefore in remedy: :894''s threshold EQUALS the simulated
+    hang, whereas this one''s deadline is unrelated to what it measures (interpreter startup + package import),
+    so the #1226 scripted-clock shape does NOT transfer -- a clock cannot make a real cold import faster. The candidate
+    remedies are instead to warm/pre-import in the child before the handshake, to raise the deadline to a real multiple
+    of measured cold-import cost, or to replace the readiness handshake with a deterministic signal the parent can
+    await. The handshake itself must NOT simply be deleted: its own docstring records that it is LOAD-BEARING (a
+    cold child''s import cost would otherwise mask a missing lock, which is the defect the test exists to catch).
+    NOT A DEFECT INTRODUCED BY #1289 -- that arc touches harness-cp tests plus register prose only, and harness-runtime/
+    is byte-unchanged in its diff.'
   council: No. A test-hygiene defect with two measured occurrences, a named precedent for the fix shape (#1226's
-    scripted clock) and no contract surface. The only judgement is step (3)'s fix shape, which the precedent
-    already answers.
-  heading: '### B-143 · A wall-clock shutdown-bounding assertion has **zero headroom** — its threshold equals
-    the simulated hang, so scheduler noise on a loaded CI runner flips it *(observed twice on doc-only PRs,
-    2026-08-09)*'
-
+    scripted clock) and no contract surface. The only judgement is step (3)'s fix shape, which the precedent already
+    answers.
+  heading: '### B-143 · A wall-clock shutdown-bounding assertion has **zero headroom** — its threshold equals the
+    simulated hang, so scheduler noise on a loaded CI runner flips it *(observed twice on doc-only PRs, 2026-08-09)*'
 - id: B-144
   title: C-CP-24 24.1.B's Attribute count column was never re-tabled after C-CP-03 3.5's two amendments, and the
     code manifest resolves the divergence inconsistently per row
