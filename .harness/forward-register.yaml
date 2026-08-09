@@ -7835,41 +7835,55 @@ items:
     amendments, and the code manifest resolves the divergence inconsistently per row *(surfaced at the B-126 build
     arc, 2026-08-09)*'
 - id: B-145
-  title: retry.backoff_ms and retry.cause_class are mandated by name at four Runtime step bullets and set by zero
-    producers
+  title: retry.backoff_ms + retry.cause_class have zero producers, and the mandated retry.terminal = escalate value
+    is never emitted -- collapsed into max-attempts
   status: registered_finding
-  summary: 'WHAT IT IS. Runtime 14.6 and 14.9 both prescribe these two attributes in normative step text, not in
-    a discretion bullet: Spec_Harness_Runtime_v1.md:4229 says ''annotate inner span with retry.terminal = "retry"
-    + retry.backoff_ms'' and :5685 says the same for the tool path; :4228 says ''annotate inner span with retry.terminal
-    = "fail-fast" + retry.cause_class = "{class_name}"'' and :5686 says the same for the tool path. A sweep of every
-    retry.-prefixed literal across all seven harness-*/src trees returns ZERO occurrences of either name -- not
-    a missing set_attribute call, the strings do not appear at all. The sibling attribute named in the very same
-    bullets, retry.terminal, IS emitted (8 sites). A SECOND, NARROWER GAP IN THE SAME FAMILY, found by the same
-    read: 14.6 :4227-:4230 mandates FOUR retry.terminal values on the LLM-dispatch path (success / fail-fast / retry
-    / max-attempts) and retry_breaker_fallback.py sets retry.terminal at exactly ONE site (:1294, value ''audit-signing-fail-closed''
-    -- not one of the four). The TOOL path is conformant: retry_breaker_tool.py carries all four 14.9 values plus
-    the same audit-signing extra. So the dispatch path is missing four mandated values and the tool path is missing
-    none. SURFACED at the B-126 build arc, 2026-08-09. The two key-level rows are carried as emitted=False in RETRY_WIRE_REGISTER
-    with a test pinning that set exactly, so wiring either one forces the flag to flip rather than letting the gap
-    quietly vanish; the value-level half is NOT expressible at key-level granularity and is recorded here only.'
+  summary: 'WHAT IT IS. TWO DISTINCT GAPS AT ONE ATTRIBUTE FAMILY, both against normative Runtime step text rather
+    than a discretion bullet. GAP 1 -- TWO KEYS WITH ZERO PRODUCERS. Spec_Harness_Runtime_v1.md:4229 says ''annotate
+    inner span with retry.terminal = "retry" + retry.backoff_ms'' and :5685 says the same for the tool path; :4228
+    says ''annotate inner span with retry.terminal = "fail-fast" + retry.cause_class = "{class_name}"'' and :5686
+    says the same for the tool path. An emission-position sweep across all seven harness-*/src trees returns ZERO
+    sites for either name; before this row''s own register landed, the bare string did not appear in src at all
+    (checked for f-string / concatenated construction too -- none). GAP 2 -- A MANDATED retry.terminal VALUE THAT
+    IS NEVER EMITTED, AND A COLLAPSE THAT MISATTRIBUTES TWO DISPOSITIONS ONTO ONE VALUE. Each path mandates FIVE
+    values, not four: success / fail-fast / retry / max-attempts / escalate -- the fifth at :4229 (''If staircase
+    result escalates beyond RETRY_WITH_BACKOFF (e.g., CROSS_FAMILY_FALLBACK / LOCAL_TERMINAL / HITL_ESCALATION):
+    annotate inner span with retry.terminal = "escalate"'') and at :5685 (same clause, LOCAL_TERMINAL / HITL_ESCALATION).
+    THE TOOL PATH CARRIES FOUR OF FIVE: retry_breaker_tool.py emits success / retry / fail-fast / max-attempts (plus
+    a non-mandated ''audit-signing-fail-closed''), and NEVER emits ''escalate'' -- its else branch at :275-286,
+    whose OWN COMMENT reads ''Exhaustion: either last attempt or staircase escalation past STAGE_2'', stamps ''max-attempts''
+    for BOTH, so an escalation is indistinguishable on the wire from a retry-budget exhaustion. That is the same
+    misattribution class B-127 + B-131 just closed at the sibling skip call site. THE DISPATCH PATH CARRIES ZERO
+    OF FIVE: retry_breaker_fallback.py sets retry.terminal at exactly ONE site (:1294, value ''audit-signing-fail-closed'',
+    which §14.6 does not name), DESPITE having the staircase branch the values belong to at :1364-:1383. SURFACED
+    at the B-126 build arc, 2026-08-09. GAP 2''s five-value inventory and the tool-path non-conformance were supplied
+    by OUT-OF-FAMILY REVIEW ROUND 1, which caught this row''s first filing claiming FOUR values and calling the
+    tool path conformant -- the author''s spec read had been truncated at exactly the escalate clause. The two GAP-1
+    keys are carried as emitted=False in RETRY_WIRE_REGISTER with a test pinning that set exactly; GAP 2 is value-level,
+    not expressible at key-level granularity, and is recorded here only.'
   close_out: '(1) RE-GROUND by re-reading :4227-:4230 + :5684-:5687 at the then-current HEAD (the Runtime spec is
-    a delta chain and these offsets move) and re-running the zero-occurrence sweep -- a nonzero result closes this
-    row on its own falsifier. (2) SEPARATE THE TWO HALVES BEFORE PRICING. The key-level half (two never-emitted
-    attributes) and the value-level half (four missing retry.terminal values on the dispatch path) sit at different
-    granularities and may not want one commit. (3) FOR THE KEY-LEVEL HALF, note the derivation is NOT free: retry.backoff_ms
-    wants the jittered delay already computed at the retry branch, so it is nearly free THERE, while retry.cause_class
-    wants a class name at the fail-fast branch -- check first whether that duplicates retry.fail_class, which IS
-    emitted; if it does, the honest disposition may be a spec correction retiring the redundant attribute rather
-    than an emission. DO NOT assume both keys are wanted just because both are written. (4) FOR THE VALUE-LEVEL
-    HALF, treat B-127/B-131''s lesson as binding: the dispatch loop''s terminal disposition is exactly the surface
-    where a hard-coded literal misattributes a cause, so any wiring must pass the value through and carry a witness
-    per branch. (5) UPDATE RETRY_WIRE_REGISTER''s emitted flags in the SAME commit as any emission -- test_unemitted_keys_are_exactly_the_two_b145_registers
-    exists to force that edit. WHAT WOULD FALSIFY IT. A later Runtime delta demoting these two attributes to discretion
-    or deleting them from the step bullets -- in which case the register rows should be dropped, not wired. Or an
-    emission site on a path the sweep missed; the sweep covered harness-*/src literals only, and was additionally
-    checked for f-string / concatenated key construction (none found).'
+    a delta chain and these offsets move) and re-running the sweep. USE THE EMISSION-POSITION SWEEP, NOT A BARE
+    LITERAL SWEEP -- this is load-bearing and was an out-of-family round-1 catch against this row''s own first filing:
+    since the B-126 register declares both GAP-1 names as data, a literal sweep over harness-*/src now NECESSARILY
+    returns nonzero, so a closer running the obvious probe would discharge the row without wiring anything. The
+    correct probe is the one at harness-cp/tests/test_b126_retry_wire_register.py -- set_attribute first-argument
+    plus attributes-dict key position -- or a literal sweep that explicitly excludes the declaration home. (2) SEPARATE
+    THE TWO GAPS BEFORE PRICING. They sit at different granularities (key-level vs value-level) and may not want
+    one commit. (3) FOR GAP 1, the derivation is NOT free: retry.backoff_ms wants the jittered delay already computed
+    at the retry branch, so it is nearly free THERE, while retry.cause_class wants a class name at the fail-fast
+    branch -- CHECK FIRST whether that duplicates retry.fail_class, which IS emitted at both producers; if it does,
+    the honest disposition may be a spec correction retiring the redundant attribute rather than an emission. DO
+    NOT assume both keys are wanted just because both are written. (4) FOR GAP 2, treat B-127/B-131''s lesson as
+    binding: the collapse of escalation into ''max-attempts'' is precisely a hard-coded literal misattributing a
+    cause, so any fix must pass the disposition through and carry a per-branch witness; and note the dispatch path
+    needs all five values wired, not one added. (5) UPDATE RETRY_WIRE_REGISTER''s emitted flags in the SAME commit
+    as any GAP-1 emission -- test_unemitted_keys_are_exactly_the_two_b145_registers exists to force that edit. WHAT
+    WOULD FALSIFY IT. A later Runtime delta demoting these attributes or values to discretion, or deleting them
+    from the step bullets -- in which case the register rows should be dropped, not wired. Or an emission site on
+    a path the sweep missed; the sweep covered harness-*/src only.'
   council: No. Conformance to already-cleared normative step text with a named owner, and the only judgement --
     step (3)'s question of whether retry.cause_class duplicates the emitted retry.fail_class -- is answered by reading
     the two contracts, not by deliberation.
-  heading: '### B-145 · `retry.backoff_ms` and `retry.cause_class` are mandated by name at four Runtime step bullets
-    and set by **zero** producers *(surfaced at the B-126 build arc, 2026-08-09)*'
+  heading: '### B-145 · `retry.backoff_ms` + `retry.cause_class` have **zero** producers, and the mandated `retry.terminal
+    = "escalate"` value is never emitted — collapsed into `max-attempts` *(surfaced at the B-126 build arc, 2026-08-09;
+    Gap 2 from out-of-family review round 1)*'

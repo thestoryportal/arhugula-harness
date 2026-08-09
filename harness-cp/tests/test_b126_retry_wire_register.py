@@ -43,8 +43,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: Any `retry.`-prefixed literal. `"retry.*"` (the namespace NAME, as it appears
 #: in the export manifest) deliberately does NOT match — `*` is outside the
-#: class, and the namespace name is not a wire key.
-_RETRY_LITERAL = re.compile(r'"(retry\.[a-z_.]+)"')
+#: class, and the namespace name is not a wire key. The class admits uppercase
+#: and digits even though every current key is lower-snake: a drift catcher whose
+#: pattern is narrower than the space it guards has a hole, and an off-convention
+#: key is exactly the kind a reviewer would miss (self-caught while probing the
+#: liveness check, where a renamed `retry.attempt.FIRSTX` slipped the sweep).
+_RETRY_LITERAL = re.compile(r'"(retry\.[A-Za-z0-9_.]+)"')
 
 #: An attribute key in emission position: the first argument of
 #: `set_attribute(...)`, or a key of an `attributes={...}` mapping.
@@ -62,16 +66,27 @@ _REGISTERED = frozenset(e.attribute_name for e in RETRY_WIRE_REGISTER)
 _REGISTERED_EMITTED = frozenset(e.attribute_name for e in RETRY_WIRE_REGISTER if e.emitted)
 
 
-def _src_modules() -> list[Path]:
-    return [
+#: The module that DECLARES the registers. Every registered name occurs here by
+#: definition, so a liveness check that scans it is vacuous — see
+#: `test_every_declared_name_has_a_site_outside_its_own_declaration`.
+_DECLARATION_HOME = "harness-cp/src/harness_cp/retry_fallback_namespace.py"
+
+
+def _src_modules(*, exclude_declaration_home: bool = False) -> list[Path]:
+    modules = [
         m for src in sorted(_REPO_ROOT.glob("harness-*/src")) for m in sorted(src.rglob("*.py"))
     ]
+    if exclude_declaration_home:
+        modules = [m for m in modules if m.relative_to(_REPO_ROOT).as_posix() != _DECLARATION_HOME]
+    return modules
 
 
-def _sweep(pattern: re.Pattern[str]) -> dict[str, set[str]]:
+def _sweep(
+    pattern: re.Pattern[str], *, exclude_declaration_home: bool = False
+) -> dict[str, set[str]]:
     """Every match of `pattern`, mapped to the modules it was found in."""
     found: dict[str, set[str]] = {}
-    for module in _src_modules():
+    for module in _src_modules(exclude_declaration_home=exclude_declaration_home):
         for key in pattern.findall(module.read_text(encoding="utf-8")):
             found.setdefault(key, set()).add(module.relative_to(_REPO_ROOT).as_posix())
     return found
@@ -81,6 +96,9 @@ def test_the_sweep_reads_a_populated_source_tree() -> None:
     """A sweep over an empty file list passes every set comparison vacuously."""
     modules = _src_modules()
     assert len(modules) > 100, f"source sweep found only {len(modules)} modules"
+    # The exclusion must remove exactly one module — a rename that silently
+    # disabled it would otherwise weaken the liveness check below.
+    assert len(modules) - len(_src_modules(exclude_declaration_home=True)) == 1
 
 
 def test_every_retry_literal_in_src_is_declared_somewhere() -> None:
@@ -99,8 +117,30 @@ def test_every_retry_literal_in_src_is_declared_somewhere() -> None:
         f"its authorizing clause, or to RETRY_SPAN_AND_EVENT_NAMES: {undeclared}"
     )
 
-    unused = expected - set(found)
-    assert not unused, f"declared `retry.*` name(s) with no site in src: {sorted(unused)}"
+
+def test_every_declared_name_has_a_site_outside_its_own_declaration() -> None:
+    """Liveness — a declared name whose last real site disappears fails HERE.
+
+    Scanning the declaration home would make this vacuous: every registered name
+    occurs there by construction, so the check would pass even after the only
+    producer or consumer was deleted (out-of-family review round 1 [P2], which
+    demonstrated it by restricting the sweep to that one module and getting an
+    empty diff). The home is therefore excluded.
+
+    The two `emitted=False` rows are excluded from the expectation, not from the
+    sweep: they are mandated-but-unwired BY RECORD (`B-145`), so having no site
+    outside their declaration is their CURRENT truth, and asserting otherwise
+    would demand the very wiring that row exists to track.
+    """
+    expected_live = _CP_DECLARED | _REGISTERED_EMITTED | frozenset(RETRY_SPAN_AND_EVENT_NAMES)
+    found = _sweep(_RETRY_LITERAL, exclude_declaration_home=True)
+
+    dead = expected_live - set(found)
+    assert not dead, (
+        "declared `retry.*` name(s) with no site outside their own declaration — "
+        f"the last producer/consumer went away, or the row should be dropped: {sorted(dead)}"
+    )
+    assert len(expected_live) == 13
 
 
 def test_emitted_attribute_keys_match_the_declared_emitted_set() -> None:
