@@ -30,7 +30,7 @@ runtime to state it.
 | ID | Witness |
 |---|---|
 | W6  | Trigger-flag mirror — an event-matching span that is ALSO a §10.2 trigger sets the per-trace keep flag, preserving buffered siblings |
-| W7  | `breaker.tripped` carried as an EVENT does NOT set the keep flag (`B-123` scope, NOT widened here) |
+| W7  | `breaker.tripped` carried as an EVENT DOES set the keep flag — `B-123` CLOSED, sibling preserved |
 | W8  | Conservative-absent — a `files.operation` event with no `kind` forwards; with a non-mutation `kind` it does not |
 | W9  | Non-matching spans still buffer; drop counters untouched |
 | W10 | Root-close carrier materializes the trace decision (no buffer leak) and frees its `max_buffered_traces` slot |
@@ -109,7 +109,9 @@ EVENT_SHAPED_MEMBERS = ("fallback.triggered", "breaker.tripped", "fallback.exhau
 
 
 # ---------------------------------------------------------------------------
-# W6 / W7 — the trigger-flag mirror, and its `B-123` boundary.
+# W6 / W7 — the trigger-flag mirror, INCLUDING the `B-123` event-name arm
+# (CLOSED — `is_classification_trigger` now scans `span.events`, so an
+# event-carried `breaker.tripped` sets the keep flag too).
 # ---------------------------------------------------------------------------
 
 
@@ -148,14 +150,29 @@ def test_w6_event_matching_span_that_is_also_a_trigger_sets_the_keep_flag() -> N
     assert tail.buffered_trace_count == 0
 
 
-def test_w7_event_carried_breaker_tripped_does_not_set_the_keep_flag() -> None:
-    """`B-123` boundary — NOT widened at this leg.
+def test_w7_event_carried_breaker_tripped_now_sets_the_keep_flag() -> None:
+    """`B-123` boundary — CLOSED (was: "NOT widened at this leg").
 
-    `is_classification_trigger` matches `breaker.tripped` by span NAME only, so
-    an event-carried trip forwards its OWN carrier (the §9.2 floor) but does NOT
-    flag the trace for §10.2 sibling preservation. Register row `B-123` owns
-    that half; this witness pins the boundary so widening it is a deliberate,
-    test-visible act rather than a silent drift.
+    Rewritten in place per the arc brief: this test was deliberately written
+    by the `B-133` leg to PIN the pre-`B-123` boundary so widening it later
+    would be test-visible rather than silent — and it now proves the
+    widening happened. `is_classification_trigger` (`tail_keep_classification.py`)
+    now scans `span.events` for the two §10.2 event-shaped trigger names
+    AFTER its name/attribute checks, so an event-carried `breaker.tripped`
+    both forwards its OWN carrier (the pre-existing §9.2 floor) AND flags the
+    trace, preserving the buffered sibling at root close — the §10.2 sibling
+    preservation this row's `close_out` step (2) settled as a conformance
+    repair to already-cleared contract text
+    (`design-substrate/Spec_Operational_Discipline_v1_2.md` §10.2, lines
+    582-584, which reads "Parent + sibling spans of any `breaker.tripped`
+    EVENT preserved" — the contract already said event).
+
+    **The bound this delivers, stated so it is not overclaimed (AC9).** This
+    test runs at the module's plain `TracerProvider()` — an unconditional
+    sampler, i.e. the head-ADMITTED case. Per `B-137`, production tail cells
+    only admit event carriers to this processor at their §10.3 base rate
+    (~10-20% measured), so the repair delivers the sibling tree only for
+    carriers the head sampler let through, not a full floor.
     """
     exporter = InMemorySpanExporter()
     tail = TailKeepSpanProcessor(downstream=SimpleSpanProcessor(exporter))
@@ -168,9 +185,11 @@ def test_w7_event_carried_breaker_tripped_does_not_set_the_keep_flag() -> None:
             pass
         root.add_event("breaker.tripped")
 
+    # The trigger-carrying root forwarded IMMEDIATELY via the event arm
+    # (first), and its buffered sibling preserved by the now-set keep flag
+    # (second) — the same order W6 pins for the attribute-triggered case.
     names = [s.name for s in exporter.get_finished_spans()]
-    assert "ordinary.root" in names  # §9.2 floor delivered
-    assert "sibling.work" not in names  # §10.2 sibling preservation NOT delivered
+    assert names == ["ordinary.root", "sibling.work"]
     assert tail.buffered_trace_count == 0
 
 
