@@ -6496,8 +6496,11 @@ items:
     keys. BUILT: RETRY_WIRE_REGISTER (7 rows: attribute_name + declaring_authority + binding + emitted) and RETRY_SPAN_AND_EVENT_NAMES
     (3 rows, keeping span/event NAMES out of the attribute count -- the row''s own count conflated them) at harness-cp/src/harness_cp/retry_fallback_namespace.py,
     homed beside the 3.5 schema because splitting the namespace''s accounting across two packages is the fragmentation
-    this row names; count-language corrections at cp_namespace_export_manifest.py; and 8 drift-catching assertions
-    at harness-cp/tests/test_b126_retry_wire_register.py, each shown RED under a mutation probe (an undeclared emitted
+    this row names; count-language corrections at cp_namespace_export_manifest.py; and SEVENTEEN drift-catching tests /
+    29 assertions at harness-cp/tests/test_b126_retry_wire_register.py, each load-bearing line shown RED under a
+    mutation probe -- recounted programmatically at the arc close, correcting an earlier 8 here and a
+    contradictory 10 in the prose home, both round-1/round-3 figures never refreshed as the file grew and both
+    caught by the merge gate (the very count-drift class this arc kept finding elsewhere) (an undeclared emitted
     key fails BOTH sweeps; a lying `emitted` flag fails the precise sweep in either direction; relabelling an attribute
     as a span NAME to silence the broad sweep fails the precise one). STEP (2) IS ANSWERED AS THE RE-GROUNDING SAID
     -- the lane is unbounded (Runtime :4279 and :5729 state no cap) -- so the register is a REGISTER, not a cap:
@@ -7843,7 +7846,7 @@ items:
     drive-by: the sum feeds acceptance #6 and its test, so a count edit is a contract-count change needing the venue
     decision at (2) first. WHAT WOULD FALSIFY IT. A later CP spec delta re-tabling 24.1.B (see step 1). Or a declaration,
     somewhere in the chain, that 24.1''s counts are deliberately v1.2-frozen historical figures rather than live
-    export claims -- which would make the code manifest''s harness.breaker.* 9 the nonconformant row instead.'
+    export claims -- which would make the code manifest''s harness.breaker.* 9 the nonconformant row instead. THIRD SAME-CLASS CASE, ADDED 2026-08-09 (merge-gate lens 2, non-blocking at the B-126 arc): the divergence is NOT confined to 24.1.B. Spec_Control_Plane_v1_2.md:2148 gives hitl.* NO attribute count at all -- it reads ''per-event attributes across 4 span names'' -- while cp_namespace_export_manifest.py pins attribute_count=4 for it, i.e. the code counts SPAN NAMES as attributes, and that 4 feeds both the 24.1.A subtotal of 34 and the 65 sum. Pre-existing, untouched by #1289, and it makes nothing this row says false (the row claims nothing about 24.1.A). But step (2)''s pricing of ''bumps the sum 65 -> 67'' covers only the two 24.1.B rows, so a closer acting on that figure would not learn of a third, structurally different case whose repair is not a count bump at all but a decision about what the column MEANS.'
   council: Conditionally yes at step (2). The venue decision trades OD-facing export-count stability and the acceptance-#6
     gate's meaning (C2/C6) against a contract table that knowingly misreports what CP exports (C7). Do not convene
     before step (1)'s re-verification, per the workspace probe-first discipline.
@@ -7946,7 +7949,7 @@ items:
     6 already flagged once. WHAT WOULD FALSIFY IT. A demonstration that the enumerated residuals are all unreachable
     in this codebase''s conventions -- which would make the row dormant rather than wrong. Or the opposite: a producer
     landing one of the shapes, which promotes the specific shape to a build item and leaves the rest of the row
-    standing.'
+    standing. RESIDUAL (5), ADDED 2026-08-09 (merge-gate lens 3, non-blocking): the rebind invalidation that stops a stale alias being credited keys on ast.Assign only, so a name rebound by += (AugAssign), an annotated assignment, a tuple-unpack, a for target, a walrus, or with...as is NOT invalidated and its old literal is still credited. Reported here for completeness rather than as a hole, because the escape is structurally unreachable where it would matter: every in-tree attribute-key constant follows the UPPERCASE convention, and lens 3 confirmed by running the repo''s own pyright config that AugAssign / tuple-unpack / for-target rebinds of such a name produce THREE reportConstantRedefinition errors in a BLOCKING CI lane. If that convention ever relaxes, this residual becomes live and the cheap fix is to widen the invalidation to every binding form. ALSO NOTE, same source: an AnnAssign constant (X: str = ''retry.x'') is not registered as an alias at all, so it fails in the UNDER-count direction -- loud, not silent.'
   council: No. A recorded limit of a test-side static analysis, with a named owner and no contract surface. The
     only judgement -- whether to chase shapes or record the boundary -- was answered by the arms-race discipline
     the workspace already holds, and by measurement (twelve false positives versus zero).

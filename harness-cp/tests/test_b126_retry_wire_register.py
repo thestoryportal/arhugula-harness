@@ -334,9 +334,14 @@ def _emitted_attribute_keys(modules: list[Path] | None = None) -> dict[str, set[
                     aliases[name] = literal
             elif isinstance(node.value, ast.Dict):
                 rebound.update(names)
+                # REPLACE, never accumulate: a mapping rebound to a fresh dict no
+                # longer carries the earlier keys, and `setdefault().update()` kept
+                # crediting them — reporting emissions the runtime never sends
+                # (out-of-family round 8 [P2], the map-shaped sibling of the scalar
+                # alias rebinding handled just below).
                 keys = {k for k in (retry_str(k) for k in node.value.keys) if k}
                 for name in names:
-                    map_aliases.setdefault(name, set()).update(keys)
+                    map_aliases[name] = keys
             if literal is None:
                 rebound.update(names)
 
@@ -638,12 +643,20 @@ def test_the_unemitted_rows_have_no_site_outside_their_declaration() -> None:
     key would leave `emitted=False` unchallenged from BOTH directions (merge-gate
     lens 3, non-blocking). Asserting the converse keeps `B-145`'s record honest
     until the wiring lands, at which point this fails and forces the flag to move.
+
+    Keyed on EMISSION, not on literal presence. A literal-presence check rejected a
+    legitimate consumer-only change: a sampler or schema merely MENTIONING the key,
+    with no producer anywhere, would fail here while the precise sweep correctly saw
+    no emission — so CI could not go green on a valid diff (out-of-family round 8
+    [P2]). That makes this partly redundant with the precise sweep, accepted
+    deliberately: the diagnostic here names `B-145` and the flag to flip, which a
+    bare set-equality failure does not.
     """
-    found = _sweep(_RETRY_LITERAL, exclude_declaration_home=True)
+    found = _emitted_attribute_keys()
     for entry in RETRY_WIRE_REGISTER:
         if not entry.emitted:
             assert entry.attribute_name not in found, (
-                f"{entry.attribute_name} is marked emitted=False but now has a site at "
+                f"{entry.attribute_name} is marked emitted=False but is now EMITTED at "
                 f"{sorted(found[entry.attribute_name])} — flip the flag (B-145)"
             )
 
