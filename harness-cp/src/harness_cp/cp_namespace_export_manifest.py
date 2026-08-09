@@ -9,7 +9,8 @@ The manifest is **descriptive, not declarative** (acceptance #9): the namespace
 declarations themselves live at the source units (U-CP-01/07/11/21/31/46/47);
 this manifest exports references only. 11 namespaces — 6 specialization-layer
 (§24.1.A), 4 F3-lifecycle-event (§24.1.B), 1 inheritance-composition (§24.1.C)
-— 63 CP-axis attributes total.
+— 65 CP-axis attributes total (34 + 27 + 4; was stated as 63 until `B-126`
+recomputed it — `harness.breaker.*` grew 7 -> 9 at CP spec v1.32).
 
 Authority: Implementation_Plan_Control_Plane_v2_1.md §2.9 U-CP-54 (preserved
 verbatim through v2.9); Spec_Control_Plane_v1_2.md §24 C-CP-24
@@ -129,6 +130,10 @@ CP_NAMESPACE_EXPORT_MANIFEST: tuple[NamespaceExport, ...] = (
         source_authority_posture=_OWNED,
     ),
     NamespaceExport(
+        # 4 is the §24.1.B DECLARED-SUBSET figure, not a namespace cardinality:
+        # C-CP-03 §3.5 carries 6 at v1.3 and the wire carries 10 (B-126). See
+        # `retry_fallback_namespace.RETRY_WIRE_REGISTER`. Changing this bumps
+        # the export sum — a contract-count change, deliberately NOT done here.
         namespace_name="retry.*",
         attribute_count=4,
         source_unit=UnitId("U-CP-07"),
@@ -163,8 +168,19 @@ CP_NAMESPACE_EXPORT_MANIFEST: tuple[NamespaceExport, ...] = (
     ),
 )
 """The CP-axis namespace export manifest — 11 entries (6 §24.1.A + 4 §24.1.B +
-1 §24.1.C), C-CP-24 §24.1 verbatim. 63 CP-axis attributes total."""
+1 §24.1.C), C-CP-24 §24.1 verbatim. 65 CP-axis attributes total.
+
+**What the per-row `attribute_count` is, and is not (register row `B-126`).** It
+reports the count DECLARED for that namespace, which is not the same as the
+count that reaches the wire. `retry.*` is the live case: this manifest reports 4,
+C-CP-03 §3.5 declares 6 at v1.3, and 10 distinct `retry.`-prefixed keys are set
+by producers. The sum below is therefore a declared-subset total, not a
+cardinality guarantee over the namespaces it names.
+"""
 
 #: Total CP-axis attribute count exported to the OD plan Session 4 D6 — the
-#: §24.1 (34 + 25 + 4) = 63 sum (acceptance #6).
+#: §24.1 (34 + 27 + 4) = 65 sum (acceptance #6). The 65 is a DERIVED sum, so
+#: this arithmetic is a reader's aid: §24.1.B is 27, not the 25 its v1.2 rows
+#: total, because `harness.breaker.*` grew 7 -> 9 at CP spec v1.32
+#: (B-19-BREAKER-AMBIENT-ATTRS) while §24.1.B's own table was never re-tabled.
 CP_EXPORTED_ATTRIBUTE_COUNT: int = sum(e.attribute_count for e in CP_NAMESPACE_EXPORT_MANIFEST)

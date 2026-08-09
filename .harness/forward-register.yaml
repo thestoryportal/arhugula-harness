@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 143
+  total: 146
   open: 0
   design_substrate_gated: 0
-  registered_finding: 28
+  registered_finding: 30
   operator_gated: 0
   held: 1
-  closed: 114
-  identity_digest: e6d7d6aa84035d2e
+  closed: 115
+  identity_digest: a87b45d52b26a1b3
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -6445,61 +6445,80 @@ items:
     every shipped trip while its contract gloss promises a **tool identity** *(surfaced at the B-116
     council deliberation (C7 A2 -> C11 cross-read falsification -> C7 E2b withdrawal), 2026-08-07)*'
 - id: B-126
-  title: 'The retry.* namespace has three different cardinalities (manifest 4, code 6, wire 8 after B-116) and
-    only the first is verified'
-  status: registered_finding
-  summary: 'WHAT IT IS. CP §3.5 declares the retry.* namespace, and the CP export manifest pins it at
-    attribute_count=4 (harness-cp/src/harness_cp/cp_namespace_export_manifest.py:131-138), feeding the
-    CP_EXPORTED_ATTRIBUTE_COUNT 63-sum acceptance (:165-170). The code-side RETRY_NAMESPACE_SCHEMA
-    already carries six (harness-cp/src/harness_cp/retry_fallback_namespace.py:168-207, whose own
-    docstring records "v2.3 amendment from 4"; the contract re-table is
-    design-substrate/Spec_Control_Plane_v1_3.md:76, against the four-attribute v1.2 row at
-    Spec_Control_Plane_v1_2.md:403). On top of that, the shipped retry.skipped.reason /
-    retry.skipped.candidate pair
-    (harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:678-679) rides the retry.*
-    namespace outside any §3.5 declaration. WHY THAT IS LEGAL TODAY, AND WHY C7 STILL FILED IT [HIGH].
-    The pair is authorized by the Runtime §14.6 discretion bullet — "Whether the wrapper emits a
-    separate retry.skipped span event on breaker-open candidate skip, or just an outer-span attribute —
-    defer to OTel telemetry-volume discretion at implementation; spec-MUST is just that the skip is
-    observable" (design-substrate/Spec_Harness_Runtime_v1.md:4213; re-grounded at HEAD — C7 cited :4195,
-    which at HEAD is blank). C7''s point is that this is precedent, and precedent accumulates: B-116''s
-    ratified terms t1+t2 add two more undeclared retry.* attributes (retry.breaker_waived.reason /
-    .candidate), which he required be "filed alongside" the existing pair rather than silently added.
-    The manifest''s 4, the code''s 6, and the wire''s 8-after-B-116 are three numbers for one namespace,
-    and only the first is cardinality-verified. SURFACED AT THE B-116 COUNCIL DELIBERATION, C7 A2
-    consultant registered adjacency 3, 2026-08-07.'
+  title: The retry.* namespace has three different cardinalities (manifest 4, code 6, wire 8 after B-116) and only
+    the first is verified
+  status: closed
+  summary: 'WHAT IT IS. CP §3.5 declares the retry.* namespace, and the CP export manifest pins it at attribute_count=4
+    (harness-cp/src/harness_cp/cp_namespace_export_manifest.py:131-138), feeding the CP_EXPORTED_ATTRIBUTE_COUNT
+    63-sum acceptance (:165-170). The code-side RETRY_NAMESPACE_SCHEMA already carries six (harness-cp/src/harness_cp/retry_fallback_namespace.py:168-207,
+    whose own docstring records "v2.3 amendment from 4"; the contract re-table is design-substrate/Spec_Control_Plane_v1_3.md:76,
+    against the four-attribute v1.2 row at Spec_Control_Plane_v1_2.md:403). On top of that, the shipped retry.skipped.reason
+    / retry.skipped.candidate pair (harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:678-679)
+    rides the retry.* namespace outside any §3.5 declaration. WHY THAT IS LEGAL TODAY, AND WHY C7 STILL FILED IT
+    [HIGH]. The pair is authorized by the Runtime §14.6 discretion bullet — "Whether the wrapper emits a separate
+    retry.skipped span event on breaker-open candidate skip, or just an outer-span attribute — defer to OTel telemetry-volume
+    discretion at implementation; spec-MUST is just that the skip is observable" (design-substrate/Spec_Harness_Runtime_v1.md:4213;
+    re-grounded at HEAD — C7 cited :4195, which at HEAD is blank). C7''s point is that this is precedent, and precedent
+    accumulates: B-116''s ratified terms t1+t2 add two more undeclared retry.* attributes (retry.breaker_waived.reason
+    / .candidate), which he required be "filed alongside" the existing pair rather than silently added. The manifest''s
+    4, the code''s 6, and the wire''s 8-after-B-116 are three numbers for one namespace, and only the first is cardinality-verified.
+    SURFACED AT THE B-116 COUNCIL DELIBERATION, C7 A2 consultant registered adjacency 3, 2026-08-07.'
   close_out: '(1) Recount all three at the then-current HEAD — these drift every arc, so a stale count is worse
-    than none. (2) Decide whether the discretion lane has a boundary. If it does not, say so in the
-    contract: an unbounded lane means the pinned attribute_count=4 is not a cardinality guarantee about
-    the namespace, only about the declared subset, and the 63-sum acceptance means less than it reads.
-    That is the finding either way. (3) If bounded, the cheapest shape is a declared discretion-lane
-    list the manifest acknowledges without ingesting — no §3.5 amendment, no cardinality bump. (4) Do
-    NOT use this row to block B-116''s t1/t2: those were ratified in venue under exactly this
-    discretion, and C7''s requirement was filing, not refusal. Reading this row as a veto would invert
-    its author''s own position.  RE-GROUNDED
-    2026-08-09 (PR #1285, batch pass) -- SHARPENED, AND THIS ROWS OWN COUNT IS WRONG. The three-
-    divergent-cardinalities structure holds (manifest attribute_count=4 at
-    cp_namespace_export_manifest.py:129-135; RETRY_NAMESPACE_SCHEMA exactly 6, test-enforced at harness-
-    cp/tests/test_retry_fallback_namespace.py:99), but the wire figure is UNDERCOUNTED. An exhaustive
-    literal sweep of harness-*/src returns FIVE undeclared keys, not four: retry.skipped.reason,
-    retry.skipped.candidate, retry.breaker_waived.reason, retry.breaker_waived.candidate, AND
-    retry.terminal (retry_breaker_fallback.py:1253, the audit-signing fail-closed path). git log -S shows
-    retry.terminal landed at PR #1065 / U-RT-136, BEFORE the 2026-08-07 council that filed this row -- so
-    it is not new drift, it was missed at filing. Corrected total: 5 declared literal retry.-prefixed + 5
-    undeclared = TEN distinct wire keys, not eight. STEP (2) IS ANSWERED BY THE SPEC, NOT OPEN: Runtime
-    section 14.6s discretion bullet (Spec_Harness_Runtime_v1.md:4279, drifted from the rows :4213) states
-    no cap -- the lane is intentionally unbounded, so this is manifest-conformance, not a fork. SHAPE:
-    BUILD-NOW -- declare the discretion lane (the rows own cheapest option) without ingesting the five
-    into the 63-sum, correct the count language, and add a drift-catching test asserting the wire-literal
-    set equals the schema names UNION the declared lane. NOT superseded: no commit has touched either
-    file since PR #1109.'
-  council: 'No at registration — nothing is decided until the recount. Conditionally yes at step (2) if it leans
-    toward closing the lane, which trades emission-site observability freedom (C7) against the
-    cardinality and cost guarantees the pinned manifest exists to give (C2/C6). Do not convene before
-    the recount, per the workspace probe-first discipline.'
-  heading: '### B-126 · The `retry.*` namespace has three different cardinalities (manifest 4, code 6, wire 8
-    after `B-116`) and only the first is verified *(surfaced at the B-116 council deliberation (C7 A2
-    consultant, registered adjacency 3), 2026-08-07)*'
+    than none. (2) Decide whether the discretion lane has a boundary. If it does not, say so in the contract: an
+    unbounded lane means the pinned attribute_count=4 is not a cardinality guarantee about the namespace, only about
+    the declared subset, and the 63-sum acceptance means less than it reads. That is the finding either way. (3)
+    If bounded, the cheapest shape is a declared discretion-lane list the manifest acknowledges without ingesting
+    — no §3.5 amendment, no cardinality bump. (4) Do NOT use this row to block B-116''s t1/t2: those were ratified
+    in venue under exactly this discretion, and C7''s requirement was filing, not refusal. Reading this row as a
+    veto would invert its author''s own position.  RE-GROUNDED 2026-08-09 (PR #1285, batch pass) -- SHARPENED, AND
+    THIS ROWS OWN COUNT IS WRONG. The three- divergent-cardinalities structure holds (manifest attribute_count=4
+    at cp_namespace_export_manifest.py:129-135; RETRY_NAMESPACE_SCHEMA exactly 6, test-enforced at harness- cp/tests/test_retry_fallback_namespace.py:99),
+    but the wire figure is UNDERCOUNTED. An exhaustive literal sweep of harness-*/src returns FIVE undeclared keys,
+    not four: retry.skipped.reason, retry.skipped.candidate, retry.breaker_waived.reason, retry.breaker_waived.candidate,
+    AND retry.terminal (retry_breaker_fallback.py:1253, the audit-signing fail-closed path). git log -S shows retry.terminal
+    landed at PR #1065 / U-RT-136, BEFORE the 2026-08-07 council that filed this row -- so it is not new drift,
+    it was missed at filing. Corrected total: 5 declared literal retry.-prefixed + 5 undeclared = TEN distinct wire
+    keys, not eight. STEP (2) IS ANSWERED BY THE SPEC, NOT OPEN: Runtime section 14.6s discretion bullet (Spec_Harness_Runtime_v1.md:4279,
+    drifted from the rows :4213) states no cap -- the lane is intentionally unbounded, so this is manifest-conformance,
+    not a fork. SHAPE: BUILD-NOW -- declare the discretion lane (the rows own cheapest option) without ingesting
+    the five into the 63-sum, correct the count language, and add a drift-catching test asserting the wire-literal
+    set equals the schema names UNION the declared lane. NOT superseded: no commit has touched either file since
+    PR #1109. CLOSED 2026-08-09 (this arc) -- BUILT, AND THE ROW''S OWN FRAMING WAS FALSIFIED IN THE PROCESS. The
+    three-cardinality structure holds and the corrected wire count of TEN is CONFIRMED by two independent sweep
+    shapes (a broad literal sweep and a precise emission-position sweep, both over harness-*/src, both returning
+    exactly 10 distinct retry.-prefixed ATTRIBUTE keys = 5 declared at C-CP-03 3.5 + 5 undeclared). BUT THE ''DISCRETION
+    LANE'' PREMISE IS WRONG, and that is the arc''s load-bearing finding: of the 5 keys beyond 3.5, only retry.skipped.candidate
+    rides pure telemetry-volume discretion. The other FOUR are MANDATED BY NAME at Runtime-spec normative step bullets
+    and binding terms -- retry.skipped.reason at Spec_Harness_Runtime_v1.md:4217 (14.6 step 4, which names the token),
+    retry.breaker_waived.reason/.candidate at :4364 (14.6.3 terms t1+t2, ''Every waived charge sets a string attribute
+    pair''), and retry.terminal at :4227-4230 (14.6) plus :5684-5687 (14.9). So retry.* is declared at TWO contract
+    venues and the C-CP-24 24.1 manifest counts only one of them; it is not an unbounded free-for-all with 4 declared
+    keys. BUILT: RETRY_WIRE_REGISTER (7 rows: attribute_name + declaring_authority + binding + emitted) and RETRY_SPAN_AND_EVENT_NAMES
+    (3 rows, keeping span/event NAMES out of the attribute count -- the row''s own count conflated them) at harness-cp/src/harness_cp/retry_fallback_namespace.py,
+    homed beside the 3.5 schema because splitting the namespace''s accounting across two packages is the fragmentation
+    this row names; count-language corrections at cp_namespace_export_manifest.py; and SEVENTEEN drift-catching tests /
+    29 assertions at harness-cp/tests/test_b126_retry_wire_register.py, each load-bearing line shown RED under a
+    mutation probe -- recounted programmatically at the arc close, correcting an earlier 8 here and a
+    contradictory 10 in the prose home, both round-1/round-3 figures never refreshed as the file grew and both
+    caught by the merge gate (the very count-drift class this arc kept finding elsewhere) (an undeclared emitted
+    key fails BOTH sweeps; a lying `emitted` flag fails the precise sweep in either direction; relabelling an attribute
+    as a span NAME to silence the broad sweep fails the precise one). STEP (2) IS ANSWERED AS THE RE-GROUNDING SAID
+    -- the lane is unbounded (Runtime :4279 and :5729 state no cap) -- so the register is a REGISTER, not a cap:
+    a new key is permitted, but not invisibly. NO cardinality bump, NO 3.5 amendment, NO contract number, NO plan
+    leg, NO design-substrate edit. TWO NEW FINDINGS SURFACED AND REGISTERED RATHER THAN ABSORBED: `B-144` (24.1.B''s
+    Attribute count column was never re-tabled after 3.5''s two amendments, and the code manifest resolves the resulting
+    divergence INCONSISTENTLY per row) and `B-145` (retry.backoff_ms + retry.cause_class are mandated at four Runtime
+    step bullets and set by ZERO producers). A THIRD stale figure was found and fixed in place: the manifest''s
+    docstring and comment both claimed a 63-attribute sum while the derived constant is 65, and the sibling test
+    misattributed the +2 to 24.1.A (34->36) when it belongs to 24.1.B (25->27).'
+  council: No at registration — nothing is decided until the recount. Conditionally yes at step (2) if it leans
+    toward closing the lane, which trades emission-site observability freedom (C7) against the cardinality and cost
+    guarantees the pinned manifest exists to give (C2/C6). Do not convene before the recount, per the workspace
+    probe-first discipline.
+  pr: '#1289 (the retry.* wire register + drift catchers; B-144 + B-145 minted)'
+  heading: '### B-126 · The `retry.*` namespace has three different cardinalities (manifest 4, code 6, wire 8 after
+    `B-116`) and only the first is verified *(surfaced at the B-116 council deliberation (C7 A2 consultant, registered
+    adjacency 3), 2026-08-07)*'
 - id: B-127
   title: 'The breaker-open advance passes no exhaustion_cause, so an all-breakers-open chain reports RETRY
     exhaustion when no attempt ran'
@@ -7745,36 +7764,195 @@ items:
   summary: 'WHAT IT IS. harness-runtime/tests/test_shutdown.py::test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs
     asserts `elapsed < 0.3` at :894. The simulated hang is `drain_sleep_seconds=0.3` (:886) and the bound under
     test is `shutdown(ctx, timeout=0.02)` (:892), so the INTENDED elapsed is ~0.02s while the assertion threshold
-    is 0.3 -- the SAME value as the hang. The margin between bounded (0.02) and not-bounded (0.3) is therefore
-    entirely consumed by event-loop scheduling delay, and on a loaded CI runner the measurement overshoots.
-    OBSERVED TWICE IN ONE SESSION, both on DOC-ONLY PRs where no code changed and the test could not have regressed:
-    2026-08-09 at PR #1280 (`assert 0.34517101499997693 < 0.3`) and again at PR #1285 (`assert 0.3072814269999924
-    < 0.3`). The #1280 occurrence was rerun and passed green, confirming flakiness rather than breakage. IT
-    CANNOT SIMPLY BE DELETED. The sibling assertions at :895-896 (`sub_agent_dispatch_executor` in report.failures,
-    report.timed_out is True) do NOT discriminate the mutation this test exists to catch: the test''s own docstring
-    (:884-885) says a regression makes shutdown revert to waiting out the full 0.3s sleep instead of bounding
-    to ~0.02s -- and that regression STILL sets timed_out, so :894 is the only assertion that can see it. The
-    defect is the THRESHOLD''s lack of headroom, not the assertion''s existence.'
-  close_out: '(1) RE-GROUND by re-reading :884-896 at HEAD and confirming the three figures still stand (hang
-    0.3, timeout 0.02, threshold 0.3) -- if any has moved the analysis changes. (2) CONFIRM THE FAILURE MODE
-    IS TIMING, NOT LOGIC, by running the test under artificial load or with a deliberately delayed event loop
-    and observing elapsed cross 0.3 while report.timed_out stays True; a logic regression would flip the sibling
-    assertions too. (3) CHOOSE THE FIX. The workspace precedent is PR #1226, which hardened an analogous wall-clock
-    flake TEST-ONLY by moving to a scripted clock rather than by widening a bound -- prefer that shape, since
-    widening the threshold toward the hang duration destroys the discrimination the assertion exists for, and
-    widening the hang instead makes every run slower. A scripted/injected clock keeps the discriminator exact
-    and removes the scheduler dependency entirely. (4) DO NOT weaken or delete :894 -- it is the ONLY assertion
-    that discriminates the documented regression, per the analysis above; the sibling structural assertions
-    are satisfied by both the good and the bad behaviour. (5) SWEEP FOR SIBLINGS: enumerate other wall-clock
-    elapsed-time assertions across harness-*/tests whose threshold is within the same order of magnitude as
-    the delay they measure, and report whether any share this zero-headroom shape. WHAT WOULD FALSIFY IT. The
-    test failing with report.timed_out False or the failures set empty -- that would be a real logic regression,
-    not a timing flake. Or a run under deliberate load where elapsed stays comfortably under 0.3, which would
-    mean the two observations had another cause.'
+    is 0.3 -- the SAME value as the hang. The margin between bounded (0.02) and not-bounded (0.3) is therefore entirely
+    consumed by event-loop scheduling delay, and on a loaded CI runner the measurement overshoots. OBSERVED TWICE
+    IN ONE SESSION, both on DOC-ONLY PRs where no code changed and the test could not have regressed: 2026-08-09
+    at PR #1280 (`assert 0.34517101499997693 < 0.3`) and again at PR #1285 (`assert 0.3072814269999924 < 0.3`).
+    The #1280 occurrence was rerun and passed green, confirming flakiness rather than breakage. IT CANNOT SIMPLY
+    BE DELETED. The sibling assertions at :895-896 (`sub_agent_dispatch_executor` in report.failures, report.timed_out
+    is True) do NOT discriminate the mutation this test exists to catch: the test''s own docstring (:884-885) says
+    a regression makes shutdown revert to waiting out the full 0.3s sleep instead of bounding to ~0.02s -- and that
+    regression STILL sets timed_out, so :894 is the only assertion that can see it. The defect is the THRESHOLD''s
+    lack of headroom, not the assertion''s existence.'
+  close_out: '(1) RE-GROUND by re-reading :884-896 at HEAD and confirming the three figures still stand (hang 0.3,
+    timeout 0.02, threshold 0.3) -- if any has moved the analysis changes. (2) CONFIRM THE FAILURE MODE IS TIMING,
+    NOT LOGIC, by running the test under artificial load or with a deliberately delayed event loop and observing
+    elapsed cross 0.3 while report.timed_out stays True; a logic regression would flip the sibling assertions too.
+    (3) CHOOSE THE FIX. The workspace precedent is PR #1226, which hardened an analogous wall-clock flake TEST-ONLY
+    by moving to a scripted clock rather than by widening a bound -- prefer that shape, since widening the threshold
+    toward the hang duration destroys the discrimination the assertion exists for, and widening the hang instead
+    makes every run slower. A scripted/injected clock keeps the discriminator exact and removes the scheduler dependency
+    entirely. (4) DO NOT weaken or delete :894 -- it is the ONLY assertion that discriminates the documented regression,
+    per the analysis above; the sibling structural assertions are satisfied by both the good and the bad behaviour.
+    (5) SWEEP FOR SIBLINGS: enumerate other wall-clock elapsed-time assertions across harness-*/tests whose threshold
+    is within the same order of magnitude as the delay they measure, and report whether any share this zero-headroom
+    shape. WHAT WOULD FALSIFY IT. The test failing with report.timed_out False or the failures set empty -- that
+    would be a real logic regression, not a timing flake. Or a run under deliberate load where elapsed stays comfortably
+    under 0.3, which would mean the two observations had another cause. SIBLING FOUND 2026-08-09 (#1289, the B-126
+    arc) -- STEP (5)''s SWEEP HAS ITS FIRST CONCRETE HIT, AND IT IS A DIFFERENT MECHANISM IN THE SAME CLASS. harness-runtime/tests/test_lifecycle_protected_result_store.py::test_gc_sweep_blocks_across_separate_processes_via_cross_process_lock
+    asserts a child process signals readiness within a 10.0s deadline (:1481, ''child never signaled readiness'').
+    The child is a COLD interpreter that must import the harness packages before it can write the marker, and that
+    import cost is what the deadline is really racing. MEASURED, NOT INFERRED: three consecutive standalone runs
+    of the very same child script gave time-to-ready of 5.39s / 33.89s / 7.69s -- so the deadline sits INSIDE the
+    observed spread and one trial exceeded it by 3.4x. THE FAILURE MODE IS TIMING, NOT LOGIC, established by positive
+    control: the child run standalone exits rc 0 with an empty stderr and DOES write its marker, so it is not crashing
+    on import. Observed RED once during this arc''s own gate run (which was competing with three review subagents
+    plus an out-of-family reviewer) and again in ISOLATION on the loaded machine, while passing in FOUR earlier
+    full-gate runs on the same commit range -- the signature of load-sensitive variance rather than a regression.
+    DISTINCT FROM THIS ROW''S OWN CASE in mechanism and therefore in remedy: :894''s threshold EQUALS the simulated
+    hang, whereas this one''s deadline is unrelated to what it measures (interpreter startup + package import),
+    so the #1226 scripted-clock shape does NOT transfer -- a clock cannot make a real cold import faster. The candidate
+    remedies are instead to warm/pre-import in the child before the handshake, to raise the deadline to a real multiple
+    of measured cold-import cost, or to replace the readiness handshake with a deterministic signal the parent can
+    await. The handshake itself must NOT simply be deleted: its own docstring records that it is LOAD-BEARING (a
+    cold child''s import cost would otherwise mask a missing lock, which is the defect the test exists to catch).
+    NOT A DEFECT INTRODUCED BY #1289 -- that arc touches harness-cp tests plus register prose only, and harness-runtime/
+    is byte-unchanged in its diff.'
   council: No. A test-hygiene defect with two measured occurrences, a named precedent for the fix shape (#1226's
-    scripted clock) and no contract surface. The only judgement is step (3)'s fix shape, which the precedent
-    already answers.
-  heading: '### B-143 · A wall-clock shutdown-bounding assertion has **zero headroom** — its threshold equals
-    the simulated hang, so scheduler noise on a loaded CI runner flips it *(observed twice on doc-only PRs,
-    2026-08-09)*'
-
+    scripted clock) and no contract surface. The only judgement is step (3)'s fix shape, which the precedent already
+    answers.
+  heading: '### B-143 · A wall-clock shutdown-bounding assertion has **zero headroom** — its threshold equals the
+    simulated hang, so scheduler noise on a loaded CI runner flips it *(observed twice on doc-only PRs, 2026-08-09)*'
+- id: B-144
+  title: C-CP-24 24.1.B's Attribute count column was never re-tabled after C-CP-03 3.5's two amendments, and the
+    code manifest resolves the divergence inconsistently per row
+  status: registered_finding
+  summary: 'WHAT IT IS. 24.1.B (the four F3-capability-floor lifecycle-event-attribute export rows) is declared
+    at exactly ONE place in the whole CP spec chain -- Spec_Control_Plane_v1_2.md:2152-2159 -- verified by scanning
+    all 115 Spec_Control_Plane_v1_*.md files on disk for the string ''24.1.B'', which matches only that file (:2152
+    the sub-heading, :2167 a summary paragraph). Its table pins retry.* at ''4 attributes'' (:2157) and harness.breaker.*
+    at ''7 attributes'' (:2159). BOTH figures were superseded at the OTHER venue and never carried across: C-CP-03
+    3.5 extended retry.* 4 -> 6 at v1.3 (Spec_Control_Plane_v1_3.md:76, an outright REPLACEMENT of the attribute
+    set -- the v1.2 four were retry.attempt / retry.cause / retry.backoff_ms / retry.policy, none of which survive),
+    and extended harness.breaker.* 7 -> 9 at v1.32 (B-19-BREAKER-AMBIENT-ATTRS, +cause +cooldown_ms). The v1.3 change-note
+    even routes a downstream export update (Spec_Control_Plane_v1_3.md:44 names ''8.4 F2-12 closure -> U-CP-55 24.4
+    export manifest update'') but never names 24.1''s own sub-table. WHY IT IS MORE THAN A STALE COUNT. The code
+    manifest resolves the two-venue divergence INCONSISTENTLY, one row each way: cp_namespace_export_manifest.py
+    pins retry.* at 4 (tracking the stale 24.1.B row, NOT 3.5) and harness.breaker.* at 9 (tracking 3.5, NOT 24.1.B).
+    So the manifest conforms to neither venue as a whole, and its test named test_per_namespace_attribute_count_match_spec
+    asserts a mixture. This is the spec-vs-spec ingestion-gap shape B-116-t3 closed for OD 9.2, not code drift:
+    each individual code row is byte-exact to SOME cleared contract text. SURFACED at the B-126 build arc, 2026-08-09,
+    by direct read; B-126 itself is closed and deliberately did NOT touch these counts.'
+  close_out: '(1) RE-VERIFY the single-venue claim at the then-current HEAD by re-scanning every Spec_Control_Plane_v1_*.md
+    for ''24.1.B'' -- if a later delta has re-tabled it, the finding is discharged and this row closes on its own
+    falsifier. (2) DECIDE THE VENUE, and note this is a genuine fork, not a lookup: amending 24.1.B to match 3.5
+    (retry 4 -> 6, breaker 7 -> 9) bumps the declared export sum 65 -> 67 and moves what CP claims to export for
+    ADR-D6 1.2 ingestion, which is an OD-facing count change; leaving 24.1.B as-is means the 24.1 table is knowingly
+    a historical snapshot and should SAY so. Do not pick silently. (3) NOTE THE ASYMMETRY when pricing: the retry.*
+    row''s 4 refers to a RETIRED attribute set (all four names were replaced at v1.3), whereas the harness.breaker.*
+    row''s 7 is a proper subset of the current 9 -- the two rows are stale in different ways and may not want the
+    same remedy. (4) The 65-vs-63 arithmetic that used to be carried in the manifest''s own comments is ALREADY
+    FIXED at the B-126 arc; do not re-open that as part of this row. (5) DO NOT change any attribute_count as a
+    drive-by: the sum feeds acceptance #6 and its test, so a count edit is a contract-count change needing the venue
+    decision at (2) first. WHAT WOULD FALSIFY IT. A later CP spec delta re-tabling 24.1.B (see step 1). Or a declaration,
+    somewhere in the chain, that 24.1''s counts are deliberately v1.2-frozen historical figures rather than live
+    export claims -- which would make the code manifest''s harness.breaker.* 9 the nonconformant row instead. THIRD SAME-CLASS CASE, ADDED 2026-08-09 (merge-gate lens 2, non-blocking at the B-126 arc): the divergence is NOT confined to 24.1.B. Spec_Control_Plane_v1_2.md:2148 gives hitl.* NO attribute count at all -- it reads ''per-event attributes across 4 span names'' -- while cp_namespace_export_manifest.py pins attribute_count=4 for it, i.e. the code counts SPAN NAMES as attributes, and that 4 feeds both the 24.1.A subtotal of 34 and the 65 sum. Pre-existing, untouched by #1289, and it makes nothing this row says false (the row claims nothing about 24.1.A). But step (2)''s pricing of ''bumps the sum 65 -> 67'' covers only the two 24.1.B rows, so a closer acting on that figure would not learn of a third, structurally different case whose repair is not a count bump at all but a decision about what the column MEANS.'
+  council: Conditionally yes at step (2). The venue decision trades OD-facing export-count stability and the acceptance-#6
+    gate's meaning (C2/C6) against a contract table that knowingly misreports what CP exports (C7). Do not convene
+    before step (1)'s re-verification, per the workspace probe-first discipline.
+  heading: '### B-144 · C-CP-24 §24.1.B''s `Attribute count` column was never re-tabled after C-CP-03 §3.5''s two
+    amendments, and the code manifest resolves the divergence inconsistently per row *(surfaced at the B-126 build
+    arc, 2026-08-09)*'
+- id: B-145
+  title: retry.backoff_ms + retry.cause_class have zero producers, and the mandated retry.terminal = escalate value
+    is never emitted -- collapsed into max-attempts
+  status: registered_finding
+  summary: 'WHAT IT IS. TWO DISTINCT GAPS AT ONE ATTRIBUTE FAMILY, both against normative Runtime step text rather
+    than a discretion bullet. GAP 1 -- TWO KEYS WITH ZERO PRODUCERS. Spec_Harness_Runtime_v1.md:4229 says ''annotate
+    inner span with retry.terminal = "retry" + retry.backoff_ms'' and :5685 says the same for the tool path; :4228
+    says ''annotate inner span with retry.terminal = "fail-fast" + retry.cause_class = "{class_name}"'' and :5686
+    says the same for the tool path. An emission-position sweep across all seven harness-*/src trees returns ZERO
+    sites for either name; before this row''s own register landed, the bare string did not appear in src at all
+    (checked for f-string / concatenated construction too -- none). GAP 2 -- A MANDATED retry.terminal VALUE THAT
+    IS NEVER EMITTED, AND A COLLAPSE THAT MISATTRIBUTES TWO DISPOSITIONS ONTO ONE VALUE. Each path mandates FIVE
+    values, not four: success / fail-fast / retry / max-attempts / escalate -- the fifth at :4229 (''If staircase
+    result escalates beyond RETRY_WITH_BACKOFF (e.g., CROSS_FAMILY_FALLBACK / LOCAL_TERMINAL / HITL_ESCALATION):
+    annotate inner span with retry.terminal = "escalate"'') and at :5685 (same clause, LOCAL_TERMINAL / HITL_ESCALATION).
+    THE TOOL PATH CARRIES FOUR OF FIVE: retry_breaker_tool.py emits success / retry / fail-fast / max-attempts (plus
+    a non-mandated ''audit-signing-fail-closed''), and NEVER emits ''escalate'' -- its else branch at :275-286,
+    whose OWN COMMENT reads ''Exhaustion: either last attempt or staircase escalation past STAGE_2'', stamps ''max-attempts''
+    for BOTH, so an escalation is indistinguishable on the wire from a retry-budget exhaustion. That is the same
+    misattribution class B-127 + B-131 just closed at the sibling skip call site. THE DISPATCH PATH CARRIES ZERO
+    OF FIVE: retry_breaker_fallback.py sets retry.terminal at exactly ONE site (:1294, value ''audit-signing-fail-closed'',
+    which §14.6 does not name), DESPITE having the staircase branch the values belong to at :1364-:1383. SURFACED
+    at the B-126 build arc, 2026-08-09. GAP 2''s five-value inventory and the tool-path non-conformance were supplied
+    by OUT-OF-FAMILY REVIEW ROUND 1, which caught this row''s first filing claiming FOUR values and calling the
+    tool path conformant -- the author''s spec read had been truncated at exactly the escalate clause. The two GAP-1
+    keys are carried as emitted=False in RETRY_WIRE_REGISTER with a test pinning that set exactly; GAP 2 is value-level,
+    not expressible at key-level granularity, and is recorded here only.'
+  close_out: '(1) RE-GROUND by re-reading :4227-:4230 + :5684-:5687 at the then-current HEAD (the Runtime spec is
+    a delta chain and these offsets move) and re-running the sweep. USE THE EMISSION-POSITION SWEEP, NOT A BARE
+    LITERAL SWEEP -- this is load-bearing and was an out-of-family round-1 catch against this row''s own first filing:
+    since the B-126 register declares both GAP-1 names as data, a literal sweep over harness-*/src now NECESSARILY
+    returns nonzero, so a closer running the obvious probe would discharge the row without wiring anything. The
+    correct probe is the one at harness-cp/tests/test_b126_retry_wire_register.py -- set_attribute first-argument
+    plus attributes-dict key position -- or a literal sweep that explicitly excludes the declaration home. (2) SEPARATE
+    THE TWO GAPS BEFORE PRICING. They sit at different granularities (key-level vs value-level) and may not want
+    one commit. (3) FOR GAP 1, the derivation is NOT free: retry.backoff_ms wants the jittered delay already computed
+    at the retry branch, so it is nearly free THERE, while retry.cause_class wants a class name at the fail-fast
+    branch -- CHECK FIRST whether that duplicates retry.fail_class, which IS emitted at both producers; if it does,
+    the honest disposition may be a spec correction retiring the redundant attribute rather than an emission. DO
+    NOT assume both keys are wanted just because both are written. (4) FOR GAP 2, treat B-127/B-131''s lesson as
+    binding: the collapse of escalation into ''max-attempts'' is precisely a hard-coded literal misattributing a
+    cause, so any fix must pass the disposition through and carry a per-branch witness; and note the dispatch path
+    needs all five values wired, not one added. (5) UPDATE RETRY_WIRE_REGISTER''s emitted flags in the SAME commit
+    as any GAP-1 emission -- test_unemitted_keys_are_exactly_the_two_b145_registers exists to force that edit. WHAT
+    WOULD FALSIFY IT. A later Runtime delta demoting these attributes or values to discretion, or deleting them
+    from the step bullets -- in which case the register rows should be dropped, not wired. Or an emission site on
+    a path the sweep missed; the sweep covered harness-*/src only.'
+  council: No. Conformance to already-cleared normative step text with a named owner, and the only judgement --
+    step (3)'s question of whether retry.cause_class duplicates the emitted retry.fail_class -- is answered by reading
+    the two contracts, not by deliberation.
+  heading: '### B-145 · `retry.backoff_ms` + `retry.cause_class` have **zero** producers, and the mandated `retry.terminal
+    = "escalate"` value is never emitted — collapsed into `max-attempts` *(surfaced at the B-126 build arc, 2026-08-09;
+    Gap 2 from out-of-family review round 1)*'
+- id: B-146
+  title: The retry.* static drift catcher cannot guarantee that no undeclared key hides -- the enumerated escape
+    shapes, recorded rather than chased
+  status: registered_finding
+  summary: 'WHAT IT IS. The B-126 arc shipped a source-sweep drift catcher for the retry.* wire surface (harness-cp/tests/test_b126_retry_wire_register.py).
+    Its header originally claimed ''an undeclared key cannot hide''. THAT CLAIM IS FALSIFIED AND HAS BEEN RETRACTED
+    IN PLACE, by execution rather than argument, at two independent reviewers: (a) out-of-family round 7 built a
+    key as NAMESPACE = ''retry'' followed by NAMESPACE + ''.'' + suffix, where NO fragment contains the literal
+    ''retry.'', and the whole suite stayed green; (b) merge-gate lens 3 declared a key constant IN THE DECLARATION
+    HOME and emitted it from a producer module, wiring an emitted=False key with all tests green, because the literal
+    then lives only in the one module the liveness check excludes. WHY THIS IS A ROW AND NOT A FIX. Seven consecutive
+    review rounds each closed one or two indirection shapes and each surfaced more: a regex that credited declarations,
+    an alias arm that credited any call argument, a rebound alias crediting a stale literal, a dict write with no
+    telemetry sink, split-literal composition, f-string interpolation, join/format/%-formatting. That is the non-convergent
+    adversarial-hardening signature, and the workspace''s own discipline says re-scope rather than chase. The arc
+    therefore CLOSED the shapes that were cheap and measured, and RECORDED the boundary here. THE ENUMERATED RESIDUALS
+    AT THE ARC''S CLOSE. (1) A fragment held as a class attribute, imported from another module, accumulated with
+    +=, or routed through functools.partial escapes the composition refusal. (2) A key constant declared in the
+    declaration home and imported by a producer escapes every arm, including the liveness check by construction.
+    (3) A forwarding helper reached as a METHOD (self._set(...)), a helper-to-helper chain, and a key passed to
+    a helper BY KEYWORD are not resolved. (4) An inline attributes={...} at a NON-emitting callee is still credited
+    as an emission -- the same class as the defect the arc fixed, narrowed but not eliminated; reachability is low
+    because the only two in-tree non-emitter attributes= sites pass a parameter rather than an inline dict. A MEASURED
+    BOUNDARY, NOT A GUESS: widening the composition net to any string merely CONTAINING ''retry'' was measured at
+    HEAD and flags TWELVE sites, all log and error messages, so the net is drawn at the bare namespace plus the
+    dotted prefix, which flags ZERO. SURFACED at #1289 across out-of-family rounds 2/3/5/6/7 and merge-gate lens
+    3.'
+  close_out: '(1) DO NOT reflexively chase another shape. Re-read the arms-race note above first: the value of this
+    row is the recorded boundary, and a shape-by-shape campaign is what it exists to stop. Only act when a PRODUCER
+    actually adopts one of the escape shapes, which makes the hole concrete rather than hypothetical. (2) IF a producer
+    does adopt one, prefer FAIL-CLOSED over resolution, per the precedent already in the file: refuse the shape
+    and require the key be written whole, rather than teaching the resolver to evaluate it. Resolution is unbounded
+    work; refusal is a one-line net plus a witness. (3) THE ONE RESIDUAL WORTH PRE-EMPTIVE THOUGHT is (2) in the
+    list above -- a key constant declared in the declaration home and imported. It defeats the liveness check BY
+    CONSTRUCTION, so it cannot be closed by widening a net; it needs either a rule that the home declares no emittable
+    key constants (cheap, enforceable, and true today) or cross-module import resolution (expensive). Prefer the
+    former. (4) RE-MEASURE BEFORE WIDENING ANY NET. The twelve-versus-zero figure above is the reason the boundary
+    sits where it does; a future widening that skips that measurement will re-introduce false positives into a blocking
+    test. (5) NOTE THE COST BUDGET: FOUR checks share one cached parse of ~398 modules (~5s). A FIFTH full-tree
+    pass, or any per-shape scan added outside the shared cache, re-introduces the cost that out-of-family round
+    6 already flagged once. WHAT WOULD FALSIFY IT. A demonstration that the enumerated residuals are all unreachable
+    in this codebase''s conventions -- which would make the row dormant rather than wrong. Or the opposite: a producer
+    landing one of the shapes, which promotes the specific shape to a build item and leaves the rest of the row
+    standing. RESIDUAL (5), ADDED 2026-08-09 (merge-gate lens 3, non-blocking): the rebind invalidation that stops a stale alias being credited keys on ast.Assign only, so a name rebound by += (AugAssign), an annotated assignment, a tuple-unpack, a for target, a walrus, or with...as is NOT invalidated and its old literal is still credited. Reported here for completeness rather than as a hole, because the escape is structurally unreachable where it would matter: every in-tree attribute-key constant follows the UPPERCASE convention, and lens 3 confirmed by running the repo''s own pyright config that AugAssign / tuple-unpack / for-target rebinds of such a name produce THREE reportConstantRedefinition errors in a BLOCKING CI lane. If that convention ever relaxes, this residual becomes live and the cheap fix is to widen the invalidation to every binding form. ALSO NOTE, same source: an AnnAssign constant (X: str = ''retry.x'') is not registered as an alias at all, so it fails in the UNDER-count direction -- loud, not silent. RESIDUAL (6), ADDED 2026-08-09 (merge-gate lens 3, non-blocking): the ATTRIBUTES-MAP alias arm invalidates only on rebinding to another dict literal, whereas the scalar arm invalidates on rebinding to ANY non-literal. So ATTRS = {''retry.backoff_ms'': 1} followed by ATTRS = compute() and then attributes=ATTRS still credits the stale key, where the scalar analogue correctly credits nothing. The in-code comment calling the map fix ''the map-shaped sibling'' of the scalar one therefore OVERSTATES the parity, and that is recorded here rather than silently corrected. Pre-existing in substance (the earlier setdefault/update form purged neither channel) and ZERO live sites -- every **-unpack dict literal at HEAD carries no retry.* key and none targets a sink name -- so the record-don''t-chase discipline applies. Also from the same source: a mapping rebuilt as ATTRS = {**ATTRS, ...} now credits only the new keys.'
+  council: No. A recorded limit of a test-side static analysis, with a named owner and no contract surface. The
+    only judgement -- whether to chase shapes or record the boundary -- was answered by the arms-race discipline
+    the workspace already holds, and by measurement (twelve false positives versus zero).
+  heading: '### B-146 · The `retry.*` static drift catcher **cannot** guarantee that no undeclared key hides — the
+    enumerated escape shapes, recorded rather than chased *(surfaced across out-of-family rounds 2/3/5/6/7 + merge-gate
+    lens 3 at #1289, 2026-08-09)*'

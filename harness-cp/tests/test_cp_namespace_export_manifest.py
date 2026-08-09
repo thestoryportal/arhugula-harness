@@ -94,11 +94,13 @@ def test_per_namespace_attribute_count_match_spec() -> None:
 
 
 def test_total_attribute_count_sixty_five() -> None:
-    """#6 — total exported attribute count is 65 (36 + 25 + 4).
+    """#6 — total exported attribute count is 65 (34 + 27 + 4).
 
     v1.32 (B-19-BREAKER-AMBIENT-ATTRS): harness.breaker.* grew 7 -> 9
-    (+cause +cooldown_ms), so the §24.1.B ingest-target subtotal grows
-    34 -> 36 and the manifest total grows 63 -> 65.
+    (+cause +cooldown_ms), so the manifest total grows 63 -> 65. The +2 lands
+    in §24.1.B (25 -> 27), which is where harness.breaker.* lives — NOT in
+    §24.1.A, which stays at 34. Corrected at register row `B-126`, whose
+    grounding pass recomputed all three subtotals programmatically.
     """
     assert CP_EXPORTED_ATTRIBUTE_COUNT == 65
 
