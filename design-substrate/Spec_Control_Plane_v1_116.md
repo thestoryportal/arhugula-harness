@@ -77,15 +77,25 @@ in place.
 The span attribute `validator.fail.class` carries the C-CP-25→C-CP-28 §25.2 `ValidatorFailClass`
 domain: enum string ∈
 `{schema_violation, semantic_inconsistency, safety_policy, resource_constraint, external_rejection}`,
-bounded (5), cardinality LOW, emitted on the `validator.fail` span per C-CP-28 §25.5. The §21.5
+bounded (5), cardinality LOW, declared at C-CP-28 §25.5 on the `validator.fail` span.
+**Span-site realization gap — recorded, not closed:** no production path opens a
+`validator.fail` span at HEAD. The attributes ride the `validator.evaluate` span
+(`workflow_driver.py:5600`, attach loop at the §C-OD-29.1 envelope) and the runtime composer's
+`validator.escalation` span (`validator_escalation_composer.py:141`), while C-OD-29.1 declares
+span-site `validator.fail` and OD sampling fixtures match `validator.fail.*`-shaped span NAMES
+that production never emits. This declared-vs-shipped divergence is minted as register row
+`B-140` and is load-bearing for `B-124`'s sampling half; this amendment settles the attribute
+DOMAIN only. The §21.5
 row-1 value-set gloss naming the retry-exit values is corrected accordingly; the row's type,
 cardinality, and ownership cell are unchanged. The **always-emitted condition is corrected to
 match the C-CP-28 §25.2 type**: `ValidatorResult.fail_class` is `ValidatorFailClass | None`, so
 the attribute is emitted on every validator-failure event **carrying a populated `fail_class`**
 and is ABSENT when `fail_class=None` (a live shape — a non-PASS result may carry `None`); the
 runtime escalation composer additionally materializes the sentinel `unspecified` on a `None`
-brief, so the observed wire alphabet is the five domain members plus that sentinel. Neither the
-absent case nor the sentinel is a domain member.
+brief — a shipped out-of-domain value under this closed declaration. Its disposition
+(absent-on-`None`, matching the framework producer, vs widening the wire alphabet) is NOT
+decided here and routes to `B-140` with the span-site gap. The absent case is not a domain
+member.
 
 ### §1.2 Retry-exit taxonomy binding (governs every §21 occurrence)
 
@@ -138,8 +148,9 @@ Class 3 residual riding the next arc that touches that file, not a spec matter.
   outcome projection is lossy and routes the decision to `B-124`).
 - It does not mint a wire attribute for the retry-exit classification.
 - It does not amend OD's C-OD-29.1 declaration, any Runtime surface, or any CXA row.
-- It does not touch code or tests: the shipped producers are already conformant to the ratified
-  reading.
+- It does not touch code or tests: the shipped producers are conformant to the ratified DOMAIN
+  reading; the span-site realization gap and the composer sentinel are recorded at `B-140`, not
+  silently absorbed as conformance.
 
 ## §3 Filing footer
 
@@ -149,6 +160,6 @@ Class 3 residual riding the next arc that touches that file, not a spec matter.
 | Amendment sites | THREE, all within C-CP-21 §21: §21.5 row-1 domain + emission condition; the §21 retry-exit binding declaration; §21.5 row-3 derivation-clause demotion. ONE reconciliation: stale cross-cites (§1.4). BUNDLED: ADR-D5 v1.5 → v1.6 (§1.10.1, the upstream canonical declaration site — authority-chain reconciliation at the source) |
 | Preserved | §21.1 routing table substance; §21.2 staircase; §21.3 palette rule; §21.4; §21.6; §21.7; §21.5 attribute count (3); all untouched prior bodies |
 | Contract numbers | ZERO new |
-| Register | `B-138` closes at this leg (disposition (a)); `B-139` MINTED (`cause_attribution` declared-required, zero producers); `B-124` unblocked on the taxonomy question, owns the permanence-derivation sub-decision |
+| Register | `B-138` closes at this leg (disposition (a)); `B-139` MINTED (`cause_attribution` declared-required, zero producers); `B-140` MINTED (span-site realization gap + composer sentinel); `B-124` unblocked on the taxonomy question, owns the permanence-derivation sub-decision |
 | Runtime / OD / CXA | No delta owed |
 | Implementation | ZERO code owed by this delta |
