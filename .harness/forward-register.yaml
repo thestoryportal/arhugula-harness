@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 145
+  total: 146
   open: 0
   design_substrate_gated: 0
-  registered_finding: 29
+  registered_finding: 30
   operator_gated: 0
   held: 1
   closed: 115
-  identity_digest: 96e73622aa44a202
+  identity_digest: a87b45d52b26a1b3
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7903,3 +7903,53 @@ items:
   heading: '### B-145 · `retry.backoff_ms` + `retry.cause_class` have **zero** producers, and the mandated `retry.terminal
     = "escalate"` value is never emitted — collapsed into `max-attempts` *(surfaced at the B-126 build arc, 2026-08-09;
     Gap 2 from out-of-family review round 1)*'
+- id: B-146
+  title: The retry.* static drift catcher cannot guarantee that no undeclared key hides -- the enumerated escape
+    shapes, recorded rather than chased
+  status: registered_finding
+  summary: 'WHAT IT IS. The B-126 arc shipped a source-sweep drift catcher for the retry.* wire surface (harness-cp/tests/test_b126_retry_wire_register.py).
+    Its header originally claimed ''an undeclared key cannot hide''. THAT CLAIM IS FALSIFIED AND HAS BEEN RETRACTED
+    IN PLACE, by execution rather than argument, at two independent reviewers: (a) out-of-family round 7 built a
+    key as NAMESPACE = ''retry'' followed by NAMESPACE + ''.'' + suffix, where NO fragment contains the literal
+    ''retry.'', and the whole suite stayed green; (b) merge-gate lens 3 declared a key constant IN THE DECLARATION
+    HOME and emitted it from a producer module, wiring an emitted=False key with all tests green, because the literal
+    then lives only in the one module the liveness check excludes. WHY THIS IS A ROW AND NOT A FIX. Seven consecutive
+    review rounds each closed one or two indirection shapes and each surfaced more: a regex that credited declarations,
+    an alias arm that credited any call argument, a rebound alias crediting a stale literal, a dict write with no
+    telemetry sink, split-literal composition, f-string interpolation, join/format/%-formatting. That is the non-convergent
+    adversarial-hardening signature, and the workspace''s own discipline says re-scope rather than chase. The arc
+    therefore CLOSED the shapes that were cheap and measured, and RECORDED the boundary here. THE ENUMERATED RESIDUALS
+    AT THE ARC''S CLOSE. (1) A fragment held as a class attribute, imported from another module, accumulated with
+    +=, or routed through functools.partial escapes the composition refusal. (2) A key constant declared in the
+    declaration home and imported by a producer escapes every arm, including the liveness check by construction.
+    (3) A forwarding helper reached as a METHOD (self._set(...)), a helper-to-helper chain, and a key passed to
+    a helper BY KEYWORD are not resolved. (4) An inline attributes={...} at a NON-emitting callee is still credited
+    as an emission -- the same class as the defect the arc fixed, narrowed but not eliminated; reachability is low
+    because the only two in-tree non-emitter attributes= sites pass a parameter rather than an inline dict. A MEASURED
+    BOUNDARY, NOT A GUESS: widening the composition net to any string merely CONTAINING ''retry'' was measured at
+    HEAD and flags TWELVE sites, all log and error messages, so the net is drawn at the bare namespace plus the
+    dotted prefix, which flags ZERO. SURFACED at #1289 across out-of-family rounds 2/3/5/6/7 and merge-gate lens
+    3.'
+  close_out: '(1) DO NOT reflexively chase another shape. Re-read the arms-race note above first: the value of this
+    row is the recorded boundary, and a shape-by-shape campaign is what it exists to stop. Only act when a PRODUCER
+    actually adopts one of the escape shapes, which makes the hole concrete rather than hypothetical. (2) IF a producer
+    does adopt one, prefer FAIL-CLOSED over resolution, per the precedent already in the file: refuse the shape
+    and require the key be written whole, rather than teaching the resolver to evaluate it. Resolution is unbounded
+    work; refusal is a one-line net plus a witness. (3) THE ONE RESIDUAL WORTH PRE-EMPTIVE THOUGHT is (2) in the
+    list above -- a key constant declared in the declaration home and imported. It defeats the liveness check BY
+    CONSTRUCTION, so it cannot be closed by widening a net; it needs either a rule that the home declares no emittable
+    key constants (cheap, enforceable, and true today) or cross-module import resolution (expensive). Prefer the
+    former. (4) RE-MEASURE BEFORE WIDENING ANY NET. The twelve-versus-zero figure above is the reason the boundary
+    sits where it does; a future widening that skips that measurement will re-introduce false positives into a blocking
+    test. (5) NOTE THE COST BUDGET: three checks share one cached parse of ~398 modules (~5s). A fourth full-tree
+    pass, or any per-shape scan added outside the shared cache, re-introduces the cost that out-of-family round
+    6 already flagged once. WHAT WOULD FALSIFY IT. A demonstration that the enumerated residuals are all unreachable
+    in this codebase''s conventions -- which would make the row dormant rather than wrong. Or the opposite: a producer
+    landing one of the shapes, which promotes the specific shape to a build item and leaves the rest of the row
+    standing.'
+  council: No. A recorded limit of a test-side static analysis, with a named owner and no contract surface. The
+    only judgement -- whether to chase shapes or record the boundary -- was answered by the arms-race discipline
+    the workspace already holds, and by measurement (twelve false positives versus zero).
+  heading: '### B-146 · The `retry.*` static drift catcher **cannot** guarantee that no undeclared key hides — the
+    enumerated escape shapes, recorded rather than chased *(surfaced across out-of-family rounds 2/3/5/6/7 + merge-gate
+    lens 3 at #1289, 2026-08-09)*'

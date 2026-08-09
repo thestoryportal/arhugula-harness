@@ -31,6 +31,21 @@ any call argument). Its contract, and both retracted arguments, are recorded at
 `_emitted_attribute_keys`; precision and recall are each witnessed against
 synthetic fixtures rather than asserted in prose.
 
+**WHAT THIS SUITE DOES AND DOES NOT GUARANTEE.** Earlier revisions of this header
+claimed *"an undeclared key cannot hide"*. That claim is RETRACTED: it was
+falsified by execution twice — a composed key and an imported key constant each
+passed the whole suite while wiring an unregistered or `emitted=False` attribute.
+Static analysis of arbitrary Python cannot deliver that guarantee, and each round
+of chasing one more indirection shape surfaced another. The honest statement is
+narrower and is what the tests actually enforce:
+
+  * a key written as a whole literal, or as a resolvable module constant, in an
+    attribute-key position, is checked against the register — in BOTH directions;
+  * a key ASSEMBLED from fragments is REFUSED outright for the enumerated
+    composition shapes, rather than silently resolved;
+  * everything else is a NAMED RESIDUAL, enumerated at register row `B-146` rather
+    than left for a reader to discover.
+
 Line numbers in `declaring_authority` strings are NOT asserted — the Runtime
 spec is a delta chain whose line offsets move on every unrelated amendment, so
 pinning them here would manufacture failures in arcs that touched nothing. The
@@ -121,6 +136,49 @@ def _parsed(modules: list[Path] | None) -> list[tuple[Path, ast.Module]]:
     return _live_trees_cache
 
 
+def _is_fragment(value: str) -> bool:
+    """A string that could become part of a `retry.*` key.
+
+    Includes the bare namespace `"retry"`, because a producer can split the key at
+    the separator (`NAMESPACE + "." + suffix`) and then NO fragment contains
+    `retry.` — the shape out-of-family round 7 raised, which the first net missed
+    entirely. Measured at HEAD: this form flags ZERO sites, while a looser net
+    matching any string merely CONTAINING "retry" flags TWELVE (log and error
+    messages) — so the boundary is drawn where it is by measurement, not taste.
+    """
+    return value == "retry" or _RETRY_PREFIX in value
+
+
+def _composition_parts(node: ast.AST) -> list[ast.expr]:
+    """Operands of any string-composition shape, flattened one level.
+
+    `+`, f-strings (unwrapping interpolations, so `f"{PREFIX}x"` counts — the
+    sibling of the shape the first net DID catch), `str.join`, `str.format` and
+    `%`. Not exhaustive over everything Python can do, which is the point of the
+    residual note at `_composed_key_sites`.
+    """
+    parts: list[ast.expr] = []
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        parts = [node.left, node.right]
+    elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        parts = [node.left]
+    elif isinstance(node, ast.JoinedStr):
+        parts = [p.value if isinstance(p, ast.FormattedValue) else p for p in node.values]
+    elif (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"join", "format"}
+    ):
+        parts = [node.func.value, *node.args]
+    flat: list[ast.expr] = []
+    for part in parts:
+        if isinstance(part, ast.List | ast.Tuple):
+            flat.extend(part.elts)
+        else:
+            flat.append(part)
+    return flat
+
+
 def _composed_key_sites(modules: list[Path] | None = None) -> list[str]:
     """Sites where a `retry.`-prefixed key is ASSEMBLED rather than written whole.
 
@@ -130,9 +188,19 @@ def _composed_key_sites(modules: list[Path] | None = None) -> list[str]:
     than merely bound it (out-of-family round 6 [P2]).
 
     Statically evaluating arbitrary expressions is the wrong ambition here. This
-    FAILS CLOSED instead: any composition involving a `retry.`-prefixed fragment is
-    reported, and the paired test refuses it. Zero sites exist at HEAD, so the
-    refusal costs nothing today and converts a silent hole into a loud one.
+    FAILS CLOSED instead, over the shapes enumerated at `_composition_parts`: `+`,
+    f-strings (including interpolated fragment names), `str.join`, `str.format` and
+    `%`, with the bare namespace `"retry"` treated as a fragment so a key split at
+    the separator is still caught. Zero sites exist at HEAD, so the refusal costs
+    nothing today and converts a silent hole into a loud one.
+
+    **NOT EXHAUSTIVE, and the earlier claim that it was is RETRACTED.** A fragment
+    held as a class attribute, imported from another module, accumulated by
+    `+=`, or routed through `functools.partial` is not detected. Widening further
+    was measured and rejected: a net matching any string merely CONTAINING "retry"
+    flags TWELVE sites at HEAD, all of them log and error messages. The residual is
+    recorded at `B-146`, not chased — closing shapes one at a time is what turned
+    the preceding review rounds into an arms race.
     """
     sites: list[str] = []
     for module, tree in _parsed(modules):
@@ -149,23 +217,18 @@ def _composed_key_sites(modules: list[Path] | None = None) -> list[str]:
             if isinstance(node, ast.Assign)
             and isinstance(node.value, ast.Constant)
             and isinstance(node.value.value, str)
-            and _RETRY_PREFIX in node.value.value
+            and _is_fragment(node.value.value)
             for target in node.targets
             if isinstance(target, ast.Name)
         }
 
         def is_retry_fragment(part: ast.expr, names: set[str] = fragment_names) -> bool:
             if isinstance(part, ast.Constant) and isinstance(part.value, str):
-                return _RETRY_PREFIX in part.value
+                return _is_fragment(part.value)
             return isinstance(part, ast.Name) and part.id in names
 
         for node in ast.walk(tree):
-            parts: list[ast.expr] = []
-            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-                parts = [node.left, node.right]
-            elif isinstance(node, ast.JoinedStr):
-                parts = list(node.values)
-            if any(is_retry_fragment(part) for part in parts):
+            if any(is_retry_fragment(part) for part in _composition_parts(node)):
                 sites.append(f"{label}:{node.lineno}")
     return sites
 
@@ -212,16 +275,20 @@ def _emitted_attribute_keys(modules: list[Path] | None = None) -> dict[str, set[
     see `test_the_resolver_does_not_credit_declarations_as_emissions` and
     `test_the_resolver_credits_the_real_emission_shapes`.
 
-    **REMAINING BOUNDS, stated rather than glossed.** `set_attributes` (plural) has
-    zero occurrences tree-wide; every in-tree `add_event` passes `attributes=` by
-    keyword rather than positionally; a key assembled by f-string or concatenation
-    is unresolvable in principle (none exist at HEAD). A dict built across several
-    statements and then passed by name resolves only the keys present at its
-    literal assignment. Each residual is covered from the other side — a literal is
-    caught by the BROAD sweep and its site by the liveness check — so an undeclared
-    key cannot hide; only an `emitted` classification could be understated, which
-    `test_the_unemitted_rows_have_no_site_outside_their_declaration` guards for the
-    two rows where it would matter.
+    **REMAINING BOUNDS, stated rather than glossed, and no longer claimed to be
+    harmless.** `set_attributes` (plural) has zero occurrences tree-wide and every
+    in-tree `add_event` passes `attributes=` by keyword. Not resolved: a helper
+    reached as a METHOD (`self._set(...)`), a forwarding chain, a key passed to a
+    helper BY KEYWORD, and — the one that genuinely escapes every arm — a key
+    constant DECLARED IN THE DECLARATION HOME and imported by a producer, since the
+    literal then lives only in the module the liveness check excludes. A dict built
+    across several statements resolves only the keys present at its literal
+    assignment.
+
+    The earlier claim that each residual is "covered from the other side" is
+    NARROWED: it holds for locally-declared literals, and NOT for the imported-
+    constant case, which merge-gate lens 3 demonstrated end-to-end. Enumerated at
+    `B-146`.
     """
     found: dict[str, set[str]] = {}
 
@@ -236,8 +303,24 @@ def _emitted_attribute_keys(modules: list[Path] | None = None) -> dict[str, set[
         return None
 
     for module, tree in _parsed(modules):
+        # Mappings that actually REACH a telemetry sink as `attributes=<Name>`. A
+        # `mapping["retry.x"] = v` write is credited only for these: an ordinary
+        # dict (`cache["retry.terminal"] = v`) is not an emission, and crediting it
+        # was a live false-positive path (out-of-family round 7 [P2]).
+        sink_mappings = {
+            keyword.value.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            for keyword in node.keywords
+            if keyword.arg == "attributes" and isinstance(keyword.value, ast.Name)
+        }
+
         # `NAME = "retry.xxx"` — a constant standing in for one key.
         aliases: dict[str, str] = {}
+        # A name rebound to anything else is no longer trustworthy: crediting the
+        # stale literal would report an emission the code does not make, and could
+        # mask real producer loss (out-of-family round 7 [P2]).
+        rebound: set[str] = set()
         # `ATTRS = {"retry.xxx": ...}` — a variable-backed attribute mapping,
         # so `attributes=ATTRS` can be resolved instead of silently skipped.
         map_aliases: dict[str, set[str]] = {}
@@ -250,15 +333,26 @@ def _emitted_attribute_keys(modules: list[Path] | None = None) -> dict[str, set[
                 for name in names:
                     aliases[name] = literal
             elif isinstance(node.value, ast.Dict):
+                rebound.update(names)
                 keys = {k for k in (retry_str(k) for k in node.value.keys) if k}
                 for name in names:
                     map_aliases.setdefault(name, set()).update(keys)
+            if literal is None:
+                rebound.update(names)
+
             # `attributes["retry.xxx"] = value` — mutation of a mapping in place.
             for target in node.targets:
-                if isinstance(target, ast.Subscript):
+                if (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id in sink_mappings
+                ):
                     key = retry_str(target.slice)
                     if key is not None:
                         record(key, module, "dict-item")
+
+        for name in rebound:
+            aliases.pop(name, None)
 
         # A module-local forwarding helper: some parameter is handed straight to
         # `.set_attribute(...)` as the KEY. `webhook_delivery_composer._set` is the
@@ -470,6 +564,40 @@ def test_the_composition_refusal_is_not_vacuous(tmp_path: Path) -> None:
     assert not _composed_key_sites(_fixture(tmp_path / "c", 'K = "retry.delay_ms"\n'))
 
 
+def test_a_rebound_alias_is_not_credited(tmp_path: Path) -> None:
+    """A name rebound before use must not credit its old literal.
+
+    `KEY = "retry.terminal"` then `KEY = compute()` then `set_attribute(KEY, ...)`
+    emits something unknown — reporting the stale literal would claim an emission
+    the code does not make, and could mask real producer loss (out-of-family round
+    7 [P2]). Distrusting any rebound name is the conservative direction.
+    """
+    modules = _fixture(
+        tmp_path,
+        'KEY = "retry.terminal"\nKEY = compute()\nspan.set_attribute(KEY, 1)\n',
+    )
+    assert _emitted_attribute_keys(modules) == {}
+
+
+def test_the_composition_refusal_covers_the_split_namespace(tmp_path: Path) -> None:
+    """A key split AT THE SEPARATOR must still be refused.
+
+    `NAMESPACE = "retry"` then `NAMESPACE + "." + suffix` leaves NO fragment
+    containing `retry.`, so the first version of the refusal — and the broad literal
+    sweep, and the resolver — all missed it entirely (out-of-family round 7 [P2]).
+    The f-string interpolation form is the sibling merge-gate lens 3 raised.
+    """
+    for body in (
+        'NAMESPACE = "retry"\nKEY = NAMESPACE + "." + suffix\n',
+        'PREFIX = "retry."\nKEY = f"{PREFIX}new_metric"\n',
+        'PREFIX = "retry."\nKEY = "".join([PREFIX, "new_metric"])\n',
+        'KEY = "retry.{}".format(suffix)\n',
+        'KEY = "retry.%s" % suffix\n',
+    ):
+        target = tmp_path / str(abs(hash(body)))
+        assert _composed_key_sites(_fixture(target, body)), f"not refused: {body!r}"
+
+
 def test_the_resolver_credits_the_real_emission_shapes(tmp_path: Path) -> None:
     """RECALL — the shapes a producer actually uses are all resolved.
 
@@ -489,7 +617,10 @@ def test_the_resolver_credits_the_real_emission_shapes(tmp_path: Path) -> None:
         'span.add_event("e", attributes={"retry.attempt_number": 1})\n'
         'ATTRS = {"retry.backoff_ms": 250}\n'
         'span.add_event("e", attributes=ATTRS)\n'
-        'other["retry.cause_class"] = "z"\n',
+        "sink = {}\n"
+        'sink["retry.cause_class"] = "z"\n'
+        'span.add_event("e", attributes=sink)\n'
+        'cache["retry.original_span_id"] = "not-an-emission"\n',
     )
     assert set(_emitted_attribute_keys(modules)) == {
         "retry.delay_ms",
