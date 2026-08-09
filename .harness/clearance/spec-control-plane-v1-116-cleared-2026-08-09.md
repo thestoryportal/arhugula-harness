@@ -31,9 +31,19 @@ falsifier (a cleared surface declaring the C-CP-25 domain) fired at C-CP-28 §25
 The CP-3/OD-4 attribute-set divergence is dispositioned in the same pass as two contracts
 declaring disjoint-except-`class` subsets of one namespace: §21.5's declared count stays THREE,
 so the export-manifest / namespace-map count gates pinned to it are untouched.
-`validator.fail.permanence`'s derivation base is re-declared from the validator OUTCOME
-(`permanent` iff `PERMANENT_FAIL`), unblocking B-124's build; its emission stays build-owed
-there. ZERO contract numbers, ZERO code/plan/Runtime/OD/CXA edits, ZERO hash impact.
 
-`B-138` closes at this leg. Code-side Class 3 residual (the stale `"NEW at C-CP-25"` docstring
-at `validator_framework_types.py:71`) rides the next arc touching that file.
+The out-of-family codex round (2 P1 + 2 P2, all confirmed against source) reshaped the leg:
+(1) the amendment is BUNDLED with ADR-D5 v1.5 → v1.6 at §1.10.1 — the upstream canonical
+declaration site — because the authority chain forbids a spec-only override of an accepted ADR
+(see `ADR-D5-v1-6-cleared-2026-08-09.md`); (2) `validator.fail.permanence`'s derivation is NOT
+re-based on the outcome (the projection is lossy — `ESCALATE` conflates `permanent-fail-exit`
+with `HITL-recoverable`); the former clause is demoted and the derivation sub-decision routes
+to B-124, which stays unblocked on the taxonomy question; (3) §1.1's emission condition is
+corrected to conditional-on-populated-`fail_class`, with the composer's out-of-domain
+`"unspecified"` sentinel declared a non-member; (4) `cause_attribution`'s
+declared-required-with-zero-producers gap is minted as register row `B-139`, not absorbed.
+ZERO contract numbers, ZERO code/plan/Runtime/OD/CXA edits, ZERO hash impact.
+
+`B-138` closes at this leg; `B-139` is minted. Code-side Class 3 residual (the stale
+`"NEW at C-CP-25"` docstring at `validator_framework_types.py:71`) rides the next arc touching
+that file.
