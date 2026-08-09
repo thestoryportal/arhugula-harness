@@ -71,9 +71,13 @@ it is minted as register row `B-139` at this leg.
 
 ### §0.4 Zero-surface statement
 
-ZERO contract numbers minted; ZERO code, test, plan, Runtime, OD, or CXA edits; ZERO hash
+ZERO contract numbers minted; ZERO code, test, Runtime, OD, or CXA edits at this leg; ZERO hash
 impact; ZERO change to §21.5's declared attribute count, to §21.6's sampling rows, or to any
-routing/recovery semantics. Historical delta files are preserved verbatim per the delta-chain
+routing/recovery semantics. ONE plan obligation is ROUTED, not performed: the landed U-CP-47
+criteria (`Implementation_Plan_Control_Plane_v2_4.md:631-638`, preserved at v2.16) still bind
+the retry-exit values to the wire attribute and derive permanence from it — an ACTIVE spec/plan
+contradiction for any future re-validation arc, not mere history; the CP plan-note delta
+superseding those criteria as-domain is an owed component of the `B-141` cascade. Historical delta files are preserved verbatim per the delta-chain
 convention — the stale cross-cites named at §1.4 are superseded by declaration here, not edited
 in place.
 

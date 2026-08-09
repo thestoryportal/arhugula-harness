@@ -7341,8 +7341,10 @@ items:
     rounds (round 2 P1 + round 1/2 P2), 2026-08-09; CP v1.116 §1.1 records both gaps and routes them
     here rather than absorbing them as conformance.'
   close_out: '(1) RE-GROUND both gaps at HEAD (span-open sites; the OD sampling key shapes; the two
-    None-path behaviours). (2) SPAN-SITE DECISION: open the declared validator.fail span at the
-    producer(s), OR re-declare the span-site at both contracts (C-CP-28 §25.5 + C-OD-29.1) to the
+    None-path behaviours). (2) SPAN-SITE DECISION: open a validator.fail.-PREFIXED span (a concrete
+    suffixed name -- the exact name "validator.fail" alone leaves sampling_mode.py:239''s
+    trailing-dot prefix match INERT, so this option MUST pair a suffixed name or a sampler change)
+    at the producer(s), OR re-declare the span-site at both contracts (C-CP-28 §25.5 + C-OD-29.1) to the
     shipped validator.evaluate/validator.escalation carriers, OR alias at the OD classification layer
     -- grounded on what the OD samplers + B-123/B-133 tail machinery actually key on, and priced
     against the B-124 §10.2 wire it gates. (3) SENTINEL DECISION: absent-on-None at the composer
@@ -7382,7 +7384,10 @@ items:
   close_out: '(1) RE-GROUND at HEAD: the carrier defaults + test; the ADR-D6 rows; confirm production
     emission sites are still ZERO. (2) CASCADE at the owning venues, per the B-138 disposition: an
     ADR-D6 amendment (in-place revision, the ADR-D5 v1.6 mechanics) + an OD spec leg for C-OD-14
-    §14.5.3 + the carrier-default/test updates -- deciding WHAT the divergence escalation carries
+    §14.5.3 + the carrier-default/test updates + a CP PLAN-NOTE DELTA superseding the landed
+    U-CP-47 criteria as-domain (Implementation_Plan_Control_Plane_v2_4.md:631-638, preserved at
+    v2.16 -- an ACTIVE spec/plan contradiction for any future re-validation arc, per codex round 4;
+    the landed unit is NOT amended, per the B-97(a)/B-118 new-unit precedent) -- deciding WHAT the divergence escalation carries
     under the new domain: a ValidatorFailClass member (semantic_inconsistency is the natural
     candidate), a distinct attribute for the retry-exit classification (the B-138 candidate-(c)
     shape), or a re-declaration of the §14.5.3 fixed attributes. The permanence="permanent" +
