@@ -6194,12 +6194,12 @@ items:
     probe returned that the trigger IS inert, so that argument is CONFIRMED, not weakened. t3''s
     head=1.0 guarantee never depended on a trigger either way. The registration''s conditional ("if this
     probe returns the trigger fires, t3''s merits argument changes") is therefore NOT triggered and needs
-    no carry. CLASS-3 INFORMATIONAL, HOMED HERE BECAUSE IT SITS ON THE SAME §10.2 TABLE AND A FULL ROW
+    no carry. [SUPERSEDED 2026-08-09 -- THIS PARAGRAPH IS FALSIFIED; see the CLOSED paragraph at the end of this field. Its premise was checked by direct read and the cite DOES resolve. Preserved verbatim below per the registration-text convention, NOT restated as current.] CLASS-3 INFORMATIONAL, HOMED HERE BECAUSE IT SITS ON THE SAME §10.2 TABLE AND A FULL ROW
     WOULD BE OVERWEIGHT: §10.2 row 1 cites "classification == permanent-fail per ADR-D2 §1.8 fail-class
     taxonomy" (Spec_Operational_Discipline_v1_2.md:582), but ADR-D2 §1.8 is the SANDBOX-VIOLATION
     fail-class taxonomy -- escape_attempt / egress_denied / timeout / oom / signal / exit_nonzero /
     policy_override (design-substrate/ADR-D2.md:285 and :301) -- and contains NO permanent-fail value.
-    The cite does NOT resolve. Non-blocking; the code''s realization (validator.fail.permanence ==
+    The cite does NOT resolve. [FALSIFIED -- IT DOES; see below.] Non-blocking; the code''s realization (validator.fail.permanence ==
     "permanent" per C-CP-21 §21.6, Spec_Control_Plane_v1_2.md:1914-1921) is a downstream interpretation
     that happens to be sound. Carry as a rider on the next OD §10.2 spec delta -- which IS the Leg-1
     term-3 flip, so it costs nothing extra. REPAIR OWED AT LEG 1; this row closes there, not here.  CLOSED
@@ -6231,7 +6231,7 @@ items:
   council: 'No. A probe with a binary answer and a named positive control. Convene nothing until it has run; if
     it returns inert, the repair is single-domain (C7 owns both the predicate and the emission shape).'
   pr: '#1279 (the B-123 repair leg -- OD spec v1.39 section 9.2.1 term 3 replaced in full + plan v2.34
-    U-OD-60 + the event-scan arm at is_classification_trigger + the ten-AC witness set incl. the U-OD-59
+    U-OD-60 + the event-scan arm at is_classification_trigger + the eleven-AC witness set incl. the U-OD-59
     W7 in-place inversion and BOTH real-dispatch witnesses; both clearance markers filed)'
   heading: '### B-123 · The tail-keep breaker trigger matches a **span name** while the breaker emits a span
     **event**, so the trigger may be inert *(surfaced at the B-116 council deliberation (C7 A2
