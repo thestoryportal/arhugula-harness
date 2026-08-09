@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 142
+  total: 143
   open: 0
   design_substrate_gated: 0
-  registered_finding: 29
+  registered_finding: 30
   operator_gated: 0
   held: 1
   closed: 112
-  identity_digest: 4dc0fa413ef80489
+  identity_digest: 436f5cfb6ce6fddd
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7688,7 +7688,42 @@ items:
   heading: '### B-142 · Two `harness-inspect` pause-journal witnesses assert *"no usable config exists"* without
     isolating an ambient auto-discovered `harness.toml`, so they pass in CI and fail on any machine with the
     documented local config *(surfaced at the `B-123` arc by a full `just check` run, 2026-08-09)*'
-
-
-
-
+- id: B-143
+  title: A wall-clock shutdown-bounding assertion has zero headroom -- its threshold equals the simulated hang,
+    so scheduler noise on a loaded CI runner flips it
+  status: registered_finding
+  summary: 'WHAT IT IS. harness-runtime/tests/test_shutdown.py::test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs
+    asserts `elapsed < 0.3` at :894. The simulated hang is `drain_sleep_seconds=0.3` (:886) and the bound under
+    test is `shutdown(ctx, timeout=0.02)` (:892), so the INTENDED elapsed is ~0.02s while the assertion threshold
+    is 0.3 -- the SAME value as the hang. The margin between bounded (0.02) and not-bounded (0.3) is therefore
+    entirely consumed by event-loop scheduling delay, and on a loaded CI runner the measurement overshoots.
+    OBSERVED TWICE IN ONE SESSION, both on DOC-ONLY PRs where no code changed and the test could not have regressed:
+    2026-08-09 at PR #1280 (`assert 0.34517101499997693 < 0.3`) and again at PR #1285 (`assert 0.3072814269999924
+    < 0.3`). The #1280 occurrence was rerun and passed green, confirming flakiness rather than breakage. IT
+    CANNOT SIMPLY BE DELETED. The sibling assertions at :895-896 (`sub_agent_dispatch_executor` in report.failures,
+    report.timed_out is True) do NOT discriminate the mutation this test exists to catch: the test''s own docstring
+    (:884-885) says a regression makes shutdown revert to waiting out the full 0.3s sleep instead of bounding
+    to ~0.02s -- and that regression STILL sets timed_out, so :894 is the only assertion that can see it. The
+    defect is the THRESHOLD''s lack of headroom, not the assertion''s existence.'
+  close_out: '(1) RE-GROUND by re-reading :884-896 at HEAD and confirming the three figures still stand (hang
+    0.3, timeout 0.02, threshold 0.3) -- if any has moved the analysis changes. (2) CONFIRM THE FAILURE MODE
+    IS TIMING, NOT LOGIC, by running the test under artificial load or with a deliberately delayed event loop
+    and observing elapsed cross 0.3 while report.timed_out stays True; a logic regression would flip the sibling
+    assertions too. (3) CHOOSE THE FIX. The workspace precedent is PR #1226, which hardened an analogous wall-clock
+    flake TEST-ONLY by moving to a scripted clock rather than by widening a bound -- prefer that shape, since
+    widening the threshold toward the hang duration destroys the discrimination the assertion exists for, and
+    widening the hang instead makes every run slower. A scripted/injected clock keeps the discriminator exact
+    and removes the scheduler dependency entirely. (4) DO NOT weaken or delete :894 -- it is the ONLY assertion
+    that discriminates the documented regression, per the analysis above; the sibling structural assertions
+    are satisfied by both the good and the bad behaviour. (5) SWEEP FOR SIBLINGS: enumerate other wall-clock
+    elapsed-time assertions across harness-*/tests whose threshold is within the same order of magnitude as
+    the delay they measure, and report whether any share this zero-headroom shape. WHAT WOULD FALSIFY IT. The
+    test failing with report.timed_out False or the failures set empty -- that would be a real logic regression,
+    not a timing flake. Or a run under deliberate load where elapsed stays comfortably under 0.3, which would
+    mean the two observations had another cause.'
+  council: No. A test-hygiene defect with two measured occurrences, a named precedent for the fix shape (#1226's
+    scripted clock) and no contract surface. The only judgement is step (3)'s fix shape, which the precedent
+    already answers.
+  heading: '### B-143 · A wall-clock shutdown-bounding assertion has **zero headroom** — its threshold equals
+    the simulated hang, so scheduler noise on a loaded CI runner flips it *(observed twice on doc-only PRs,
+    2026-08-09)*'

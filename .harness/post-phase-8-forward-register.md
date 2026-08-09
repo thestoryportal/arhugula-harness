@@ -1660,3 +1660,13 @@ same spec leg.
 - **What would falsify it.** The two tests failing in CI as well, or passing locally with the root `harness.toml` present — either would mean the discriminator is not the ambient file.
 - **Council:** **No.** A test-isolation defect with a reproducible discriminator; convene only if step (2) selects candidate (c) and it owes a contract question.
 - **Cross-ref.** `B-123` (the arc that surfaced it; not blocked by it — disclosed in PR #1279 rather than absorbed).
+
+### B-143 · A wall-clock shutdown-bounding assertion has **zero headroom** — its threshold equals the simulated hang, so scheduler noise on a loaded CI runner flips it *(observed twice on doc-only PRs, 2026-08-09)*
+
+- **What it is.** `test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs` asserts `elapsed < 0.3` (`harness-runtime/tests/test_shutdown.py:894`) while the simulated hang is `drain_sleep_seconds=0.3` (`:886`) and the bound under test is `timeout=0.02` (`:892`). The threshold **equals the hang**, so the headroom between bounded (~0.02s) and not-bounded (0.3s) is entirely consumed by event-loop scheduling delay.
+- **Observed twice in one session, both on DOC-ONLY PRs** where no code changed and the test could not have regressed: #1280 (`0.345 < 0.3`) and #1285 (`0.307 < 0.3`). The first was rerun green, confirming flakiness.
+- **It cannot simply be deleted.** The sibling assertions at `:895-896` do NOT discriminate the documented regression — the test's own docstring says a regression waits out the full 0.3s sleep, which **still** sets `timed_out`. `:894` is the only assertion that can see it. The defect is the threshold's lack of headroom, not the assertion's existence.
+- **Close-out.** Re-ground the three figures; confirm timing-not-logic under load; prefer **#1226's scripted-clock shape** over widening a bound (widening toward the hang destroys the discrimination); do NOT weaken `:894`; sweep for sibling zero-headroom wall-clock assertions across `harness-*/tests`.
+- **Council:** **No.** Test hygiene, two measured occurrences, a named precedent for the fix shape.
+- **Cross-ref.** Surfaced during the `B-126`..`B-132` grounding arc (#1285); unrelated to that diff.
+
