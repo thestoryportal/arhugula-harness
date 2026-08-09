@@ -7377,8 +7377,14 @@ items:
     sites construct the carrier at HEAD (declaration + test only), so no live wire value violates
     the B-138 disposition -- but the DECLARED surfaces contradict it and the register''s B-138
     grounding claim ("no reader asserts a retry-exit value") was falsified by this family at codex
-    round 3. The CP plan delta-chain history (Implementation_Plan_Control_Plane_v2_4.md:604/:624,
-    the U-CP-47-era criteria) also carries the five-value wire framing -- HISTORY, not retroactively
+    round 3. A SECOND deferred carrier is in the same family (codex round 5):
+    VerifierResult.validator_fail_class (both_by_tier_overlay.py:78-95, the U-CP-41 two-agent-observer
+    verifier output) is documented as drawn from the C-CP-21 §21.5 five-value set, enforced at
+    test_both_by_tier_overlay.py:121-126, with U-CP-41 plan criteria at
+    Implementation_Plan_Control_Plane_v2_9.md:621-630/:683-686 -- deferred (no live producer), but its
+    audit contract routes to validator.fail.*, so it would violate the authoritative wire domain when
+    the observer activates. The CP plan delta-chain history (Implementation_Plan_Control_Plane_v2_4.md
+    :604/:624, the U-CP-47-era criteria) also carries the five-value wire framing -- HISTORY, not retroactively
     edited, recorded here so no future reader mistakes it for current authority. SURFACED at the
     B-138 spec-leg codex round 3 (P1), 2026-08-09.'
   close_out: '(1) RE-GROUND at HEAD: the carrier defaults + test; the ADR-D6 rows; confirm production
@@ -7387,7 +7393,9 @@ items:
     §14.5.3 + the carrier-default/test updates + a CP PLAN-NOTE DELTA superseding the landed
     U-CP-47 criteria as-domain (Implementation_Plan_Control_Plane_v2_4.md:631-638, preserved at
     v2.16 -- an ACTIVE spec/plan contradiction for any future re-validation arc, per codex round 4;
-    the landed unit is NOT amended, per the B-97(a)/B-118 new-unit precedent) -- deciding WHAT the divergence escalation carries
+    the landed unit is NOT amended, per the B-97(a)/B-118 new-unit precedent) + the U-CP-41
+    family (the VerifierResult carrier docstrings + test_both_by_tier_overlay.py:121-126 + the
+    U-CP-41 plan-note, same as-domain supersession) -- deciding WHAT the divergence escalation carries
     under the new domain: a ValidatorFailClass member (semantic_inconsistency is the natural
     candidate), a distinct attribute for the retry-exit classification (the B-138 candidate-(c)
     shape), or a re-declaration of the §14.5.3 fixed attributes. The permanence="permanent" +
