@@ -27,14 +27,21 @@ Two cleared surfaces declared one attribute name with disjoint five-value domain
 §25.2 declares `ValidatorFailClass`
 (`schema_violation / semantic_inconsistency / safety_policy / resource_constraint / external_rejection`)
 and §25.5 declares the `validator.fail` span emitting `validator.fail.class` — the contract
-renamed C-CP-25 → C-CP-28 at v1.13. Every live surface agrees with the §25 reading: both
+renamed C-CP-25 → C-CP-28 at v1.13. Every live wire surface agrees with the §25 reading: both
 producers (`validator_framework.py:_build_span_attributes` and
 `harness-runtime/.../validator_escalation_composer.py`) write `ValidatorFailClass` values; OD's
 ingestion schema (`validator_namespace.py`, C-OD-29.1) declares exactly the §25.5 four-attribute
-shape; no reader anywhere asserts a `ValidatorRetryExitClass` value on the attribute; no
-projection function exists in `harness-{cp,od,runtime}/src`. The operator ratified reading (a):
-**the shipped `ValidatorFailClass` domain is authoritative for the wire attribute
-`validator.fail.class`.**
+shape; no LIVE reader or emission site asserts a `ValidatorRetryExitClass` value on the
+attribute; no projection function exists in `harness-{cp,od,runtime}/src`. **One DECLARED
+exception exists and is not silently absorbed** (surfaced at codex round 3): the C-OD-14
+§14.5.3 replay-semantic-divergence carrier `ReplaySemanticDivergenceError`
+(`idempotency_join_dedup.py:345-367`, declaration + test only, ZERO production emission sites)
+fixes `validator.fail.class = "terminal-fail-exit"`, and ADR-D6 v1.2 declares the retry-exit
+domain for the attribute at its §1.5.2 ingestion row. The cascade those surfaces owe under this
+disposition (ADR-D6 + C-OD-14 + the carrier defaults + the plan-history criteria) is OD/D6
+venue work, out of this CP leg's scope, and is minted as register row `B-141`. The operator
+ratified reading (a): **the shipped `ValidatorFailClass` domain is authoritative for the wire
+attribute `validator.fail.class`.**
 
 ### §0.2 What is corrected, what is demoted, what is preserved
 
@@ -84,8 +91,12 @@ bounded (5), cardinality LOW, declared at C-CP-28 §25.5 on the `validator.fail`
 `validator.escalation` span (`validator_escalation_composer.py:141`), while C-OD-29.1 declares
 span-site `validator.fail` and OD sampling fixtures match `validator.fail.*`-shaped span NAMES
 that production never emits. This declared-vs-shipped divergence is minted as register row
-`B-140` and is load-bearing for `B-124`'s sampling half; this amendment settles the attribute
-DOMAIN only. The §21.5
+`B-140`; this amendment settles the attribute DOMAIN only. (Venue note, corrected at codex
+round 3: the span-site gap is load-bearing for the NAME/prefix-keyed always-sample family —
+the §9.2-style keying `B-123`/`B-133`/`B-137` own, where `is_always_sampled` matches the
+trailing-dot prefix `validator.fail.` and would not even match a span named exactly
+`validator.fail` — NOT for `B-124`'s §10.2 half, whose trigger reads the permanence ATTRIBUTE
+from any span and is not gated by span naming.) The §21.5
 row-1 value-set gloss naming the retry-exit values is corrected accordingly; the row's type,
 cardinality, and ownership cell are unchanged. The **always-emitted condition is corrected to
 match the C-CP-28 §25.2 type**: `ValidatorResult.fail_class` is `ValidatorFailClass | None`, so
@@ -147,7 +158,9 @@ Class 3 residual riding the next arc that touches that file, not a spec matter.
 - It does not declare a wire derivation for `validator.fail.permanence` (§1.3 states why the
   outcome projection is lossy and routes the decision to `B-124`).
 - It does not mint a wire attribute for the retry-exit classification.
-- It does not amend OD's C-OD-29.1 declaration, any Runtime surface, or any CXA row.
+- It does not amend OD's C-OD-29.1 declaration, any Runtime surface, or any CXA row at this
+  leg — but it does not pretend the OD side is clean: the C-OD-14 §14.5.3 / ADR-D6 v1.2
+  retry-exit cascade is OWED and registered at `B-141`.
 - It does not touch code or tests: the shipped producers are conformant to the ratified DOMAIN
   reading; the span-site realization gap and the composer sentinel are recorded at `B-140`, not
   silently absorbed as conformance.
@@ -160,6 +173,6 @@ Class 3 residual riding the next arc that touches that file, not a spec matter.
 | Amendment sites | THREE, all within C-CP-21 §21: §21.5 row-1 domain + emission condition; the §21 retry-exit binding declaration; §21.5 row-3 derivation-clause demotion. ONE reconciliation: stale cross-cites (§1.4). BUNDLED: ADR-D5 v1.5 → v1.6 (§1.10.1, the upstream canonical declaration site — authority-chain reconciliation at the source) |
 | Preserved | §21.1 routing table substance; §21.2 staircase; §21.3 palette rule; §21.4; §21.6; §21.7; §21.5 attribute count (3); all untouched prior bodies |
 | Contract numbers | ZERO new |
-| Register | `B-138` closes at this leg (disposition (a)); `B-139` MINTED (`cause_attribution` declared-required, zero producers); `B-140` MINTED (span-site realization gap + composer sentinel); `B-124` unblocked on the taxonomy question, owns the permanence-derivation sub-decision |
-| Runtime / OD / CXA | No delta owed |
+| Register | `B-138` closes at this leg (disposition (a)); `B-139` MINTED (`cause_attribution` declared-required, zero producers); `B-140` MINTED (span-site realization gap + composer sentinel); `B-141` MINTED (the C-OD-14 §14.5.3 / ADR-D6 v1.2 retry-exit cascade); `B-124` unblocked on the taxonomy question, owns the permanence-derivation sub-decision |
+| Runtime / OD / CXA | No delta at THIS leg; the OD/ADR-D6 retry-exit cascade is owed at `B-141` |
 | Implementation | ZERO code owed by this delta |

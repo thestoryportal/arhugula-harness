@@ -44,6 +44,6 @@ corrected to conditional-on-populated-`fail_class`, with the composer's out-of-d
 declared-required-with-zero-producers gap is minted as register row `B-139`, not absorbed.
 ZERO contract numbers, ZERO code/plan/Runtime/OD/CXA edits, ZERO hash impact.
 
-`B-138` closes at this leg; `B-139` and `B-140` are minted (`B-140`: the `validator.fail` span-site realization gap — no production path opens the declared span; attributes ride `validator.evaluate`/`validator.escalation` — plus the composer sentinel disposition, both routed rather than absorbed). Code-side Class 3 residual (the stale
+`B-138` closes at this leg; `B-139`, `B-140` and `B-141` are minted (`B-140`: the `validator.fail` span-site realization gap — no production path opens the declared span; attributes ride `validator.evaluate`/`validator.escalation` — plus the composer sentinel disposition, both routed rather than absorbed). Code-side Class 3 residual (the stale
 `"NEW at C-CP-25"` docstring at `validator_framework_types.py:71`) rides the next arc touching
 that file.
