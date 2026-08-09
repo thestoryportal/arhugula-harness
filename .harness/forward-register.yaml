@@ -61,11 +61,11 @@ snapshot:
   total: 143
   open: 0
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 28
   operator_gated: 0
   held: 1
-  closed: 112
-  identity_digest: 436f5cfb6ce6fddd
+  closed: 114
+  identity_digest: e6d7d6aa84035d2e
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -6503,7 +6503,7 @@ items:
 - id: B-127
   title: 'The breaker-open advance passes no exhaustion_cause, so an all-breakers-open chain reports RETRY
     exhaustion when no attempt ran'
-  status: registered_finding
+  status: closed
   summary: 'WHAT IT IS. _advance_or_exhaust takes exhaustion_cause: str = "per-candidate-retry-exhaustion"
     (harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:866) and writes it onto the
     terminal fallback.exhausted event as fallback.exhaustion_cause (:891, in the attribute dict at
@@ -6547,9 +6547,38 @@ items:
     zero inner dispatches, PLUS a companion assertion that ordinary per-candidate retry exhaustion still
     defaults correctly (a discriminating pair, per the rows own step 4). NOT superseded -- B-118 touched
     adjacent lines in the same block but did not add the kwarg. LAND TOGETHER WITH B-131: same call site,
-    different attributes, neither fix resolves the other.'
-  council: 'No. A one-value fix inside a closed, declared domain with a shipped sibling precedent and a named
-    value owner. Route to C7 plus advisor() if step (2)''s reuse question is contested.'
+    different attributes, neither fix resolves the other.  CLOSED
+    2026-08-09 AT PR #1287, PAIRED WITH B-131 (same call site). The skip branch now passes
+    exhaustion_cause=skip_reason to _advance_or_exhaust, so an all-breakers-open chain reports the ACTUAL
+    terminal cause instead of silently defaulting to per-candidate-retry-exhaustion. THE VALUE IS PASSED
+    THROUGH, NOT HARD-CODED, AND THAT IS LOAD-BEARING: skip_reason takes TWO values on this path --
+    breaker-open and half-open-trial-in-flight (the second added by the B-118 arc) -- so a hard-coded
+    breaker-open literal would MISLABEL every half-open-trial skip. A dedicated witness exists for
+    exactly that mutation and PD-8 probe P2 (hard-code the literal) turns it RED. No new vocabulary is
+    invented: the emitted cause now matches the retry.skipped.reason already emitted on the same path.
+    THREE WITNESSES: the all-breakers-open chain asserting cause == breaker-open AND zero inner
+    dispatches (the no-attempt-ran half is the point); a DISCRIMINATOR asserting ordinary retry
+    exhaustion still reports per-candidate-retry-exhaustion (without it, a mutation hard-coding the new
+    value everywhere would pass); and the half-open-trial variant, built on a REAL event-gated concurrent
+    in-flight trial mirroring the B-118 permit test rather than a synthesized state. PD-8: P1 (drop the
+    kwarg) turns witnesses 1+3 RED; P2 (hard-code the literal) turns witness 3 RED. Both matched
+    prediction. _advance_or_exhaust signature and default UNCHANGED; the capability-shortfall pre-check
+    and the retry.skipped event UNTOUCHED.'
+  council: 'No -- and the ORIGINAL premise of this field was WRONG, corrected here rather than carried
+    into a closed row. It read: a one-value fix inside a closed, declared domain with a shipped sibling
+    precedent and a named value owner. THE DOMAIN IS NOT CLOSED AND NOT DECLARED. Grounding at PR #1285
+    established, and the merge-gate spec-conformance lens at PR #1287 independently re-verified, that
+    fallback.exhaustion_cause has NO declared value domain anywhere in design-substrate/**: the only
+    mention outside the register is Spec_Harness_Runtime_v1.md:4231, which merely NAMES the attribute in
+    a list, while C-CP-04 section 4.2 (Spec_Control_Plane_v1_2.md:448-455) declares a value domain for a
+    DIFFERENT attribute, fallback.cause (breaker_open / rate_limit_storm), and section 4.4 says only emit
+    fallback.exhausted with no domain at all. The conclusion is UNCHANGED -- still No council -- but for
+    a STRONGER reason than the field originally gave: because the attribute is a free str with its own
+    local hyphenated vocabulary, adding values owes no spec leg and there is no closed domain to contest.
+    The step (2) reuse question the field wanted routed was itself settled empirically at the grounding
+    pass (the emitted cause now matches the retry.skipped.reason already emitted at the same site, rather
+    than reusing the underscored CP FallThroughCause enum).'
+  pr: '#1287 (the paired B-127 + B-131 exhaustion-attribution fix at the shared skip call site)'
   heading: '### B-127 · The breaker-open advance passes no `exhaustion_cause`, so an all-breakers-open chain
     reports **retry** exhaustion when no attempt ran *(surfaced at the B-116 council deliberation (C1 A2
     consultant, standing observability pre-check), 2026-08-07)*'
@@ -6733,7 +6762,7 @@ items:
 - id: B-131
   title: 'The breaker-open skip DELETES the prior candidate''s failure detail instead of demoting it, so a
     chain exhaustion reports no cause at all'
-  status: registered_finding
+  status: closed
   summary: 'WHAT IT IS. Before the breakers open, the operator''s terminal is correct and loud: _failure_detail
     composes "<Type>: <message>" bounded
     (harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:178-187),
@@ -6791,10 +6820,31 @@ items:
     runtime/src/harness_runtime/cli/ confirms no compensating operator-facing surface. SHAPE: BUILD-NOW
     -- first-write-wins retention across a skip. NOT superseded: B-118 reshaped the surrounding control
     flow but the erasure line is untouched in substance. LAND TOGETHER WITH B-127: same call site,
-    different attributes of the same event; neither fix resolves the other.'
+    different attributes of the same event; neither fix resolves the other.  CLOSED
+    2026-08-09 AT PR #1287, PAIRED WITH B-127 (same call site, different attributes of the same
+    fallback.exhausted event; neither fix resolved the other). A skip no longer clobbers a REAL candidate
+    diagnostic: the unconditional last_failure_class = skip_reason / last_failure_detail = None overwrite
+    is now gated on a new local flag last_failure_is_real_attempt, set only at the one site where a
+    genuine per-candidate attempt ran and failed. THE FLAG SHAPE WAS CHOSEN OVER A last_failure_class is
+    None CHECK, AND THE REASONING IS LOAD-BEARING: a chain can take CONSECUTIVE skips with DIFFERENT
+    reasons (breaker-open, then half-open-trial-in-flight on a later candidate), and those must keep
+    overwriting each other exactly as before -- a None-check would have frozen the FIRST skip reason
+    instead of the last, silently breaking pre-existing multi-skip behaviour. THE ROWS OWN SUB-CLAIM WAS
+    CORRECTED AT GROUNDING and the fix reflects the corrected reading: last_failure_class never fell
+    through to the literal unknown on this path, because the skip reason is truthy and the or unknown
+    fallback never fired -- the attribute carried a REAL-BUT-WRONG value masking the actual failure
+    class, which is worse than unknown because it looks legitimate. TWO WITNESSES: candidate 0 fails with
+    a uniquely-identifiable real diagnostic and candidate 1 is breaker-open-skipped, asserting the event
+    STILL carries candidate 0s detail AND its real class; plus a preservation witness proving the pure-
+    skip chain with no prior real failure still reports the skip reason with detail absent, exactly as
+    today. PD-8: P3 (restore the unconditional erasure) turns the first RED; P4 (over-correct so a skip
+    never touches the class at all) turns the second RED, surfacing unknown instead of breaker-open. Both
+    matched prediction. The witness gap the grounding identified is closed: no test previously exercised
+    the multi-candidate erasure.'
   council: 'No. C7 (attribute and schema owner) and C11 (operator surface) converged in venue on both the
     mechanism and the framing, including one concession in each direction. What remains is choosing the
     retention shape — a single-domain implementation judgement.'
+  pr: '#1287 (the paired B-127 + B-131 exhaustion-attribution fix at the shared skip call site)'
   heading: '### B-131 · The breaker-open skip **deletes** the prior candidate''s failure detail instead of
     demoting it, so a chain exhaustion reports no cause at all *(surfaced at the B-116 council
     deliberation (C11 A1 primary (c), reframed by C7 A2, re-grounded by C11 at cross-read), 2026-08-07)*'
@@ -7727,3 +7777,4 @@ items:
   heading: '### B-143 · A wall-clock shutdown-bounding assertion has **zero headroom** — its threshold equals
     the simulated hang, so scheduler noise on a loaded CI runner flips it *(observed twice on doc-only PRs,
     2026-08-09)*'
+
