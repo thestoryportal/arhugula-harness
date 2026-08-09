@@ -99,6 +99,75 @@ def _sweep(
     return found
 
 
+#: Parsed live-tree modules, cached. Parsing 398 modules is the whole cost here
+#: (~5s), and three checks need it, so an uncached scan multiplied it on EVERY
+#: suite run — out-of-family round 6 [P2], measured at 11.2s + 9.8s of a 23s run.
+#: Caching the PARSE rather than each consumer's result is what actually fixes it:
+#: a first attempt memoized only one consumer's answer, and adding the next
+#: full-tree check immediately re-introduced the cost it was meant to remove.
+#: Fixture calls pass `modules` explicitly and are deliberately NEVER cached — each
+#: fixture is a different tree, and sharing them would make the witnesses lie.
+_LIVE_TREES: list[tuple[Path, ast.Module]] | None = None
+
+
+def _parsed(modules: list[Path] | None) -> list[tuple[Path, ast.Module]]:
+    global _LIVE_TREES
+    if modules is not None:
+        return [(m, ast.parse(m.read_text(encoding="utf-8"))) for m in modules]
+    if _LIVE_TREES is None:
+        _LIVE_TREES = [(m, ast.parse(m.read_text(encoding="utf-8"))) for m in _src_modules()]
+    return _LIVE_TREES
+
+
+def _composed_key_sites(modules: list[Path] | None = None) -> list[str]:
+    """Sites where a `retry.`-prefixed key is ASSEMBLED rather than written whole.
+
+    A key built by concatenation or f-string (`PREFIX + "new_metric"`) is invisible
+    to both the literal regex and the constant resolver, so an unregistered emitted
+    key could hide behind it — which would void this suite's core guarantee rather
+    than merely bound it (out-of-family round 6 [P2]).
+
+    Statically evaluating arbitrary expressions is the wrong ambition here. This
+    FAILS CLOSED instead: any composition involving a `retry.`-prefixed fragment is
+    reported, and the paired test refuses it. Zero sites exist at HEAD, so the
+    refusal costs nothing today and converts a silent hole into a loud one.
+    """
+    sites: list[str] = []
+    for module, tree in _parsed(modules):
+        label = module.name if modules is not None else module.relative_to(_REPO_ROOT).as_posix()
+
+        # A fragment is often held in its own constant — `PREFIX = "retry."` — so the
+        # operand at the concatenation is a Name, not a literal. Resolving those is
+        # required, not optional: the canonical example in the finding that prompted
+        # this check has exactly that shape, and the first draft missed it (caught by
+        # this function's own vacuity witness before it shipped).
+        fragment_names = {
+            target.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+            and _RETRY_PREFIX in node.value.value
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+
+        def is_retry_fragment(part: ast.expr, names: set[str] = fragment_names) -> bool:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                return _RETRY_PREFIX in part.value
+            return isinstance(part, ast.Name) and part.id in names
+
+        for node in ast.walk(tree):
+            parts: list[ast.expr] = []
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                parts = [node.left, node.right]
+            elif isinstance(node, ast.JoinedStr):
+                parts = list(node.values)
+            if any(is_retry_fragment(part) for part in parts):
+                sites.append(f"{label}:{node.lineno}")
+    return sites
+
+
 def _emitted_attribute_keys(modules: list[Path] | None = None) -> dict[str, set[str]]:
     """`retry.*` keys in genuine EMISSION position, resolved by AST not regex.
 
@@ -164,9 +233,7 @@ def _emitted_attribute_keys(modules: list[Path] | None = None) -> dict[str, set[
             return node.value if node.value.startswith(_RETRY_PREFIX) else None
         return None
 
-    for module in _src_modules() if modules is None else modules:
-        tree = ast.parse(module.read_text(encoding="utf-8"))
-
+    for module, tree in _parsed(modules):
         # `NAME = "retry.xxx"` — a constant standing in for one key.
         aliases: dict[str, str] = {}
         # `ATTRS = {"retry.xxx": ...}` — a variable-backed attribute mapping,
@@ -337,6 +404,7 @@ def test_a_helper_based_emission_is_resolved_not_missed() -> None:
 
 
 def _fixture(tmp_path: Path, body: str) -> list[Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     module = tmp_path / "fixture_module.py"
     module.write_text(body, encoding="utf-8")
     return [module]
@@ -369,6 +437,35 @@ def test_the_resolver_does_not_credit_declarations_as_emissions(tmp_path: Path) 
         "log.info(ATTR)\n",
     )
     assert _emitted_attribute_keys(modules) == {}
+
+
+def test_no_retry_key_is_assembled_rather_than_written_whole() -> None:
+    """FAIL CLOSED on a composed key, rather than silently missing it.
+
+    A key built by concatenation or f-string is invisible to both the literal
+    regex and the constant resolver, so an unregistered emitted key could hide —
+    voiding this suite's core guarantee rather than merely bounding it
+    (out-of-family round 6 [P2]). Statically evaluating arbitrary expressions is
+    the wrong ambition; refusing composition outright is exact and cheap.
+
+    ZERO sites at HEAD, so this costs nothing today. If a future producer needs a
+    composed key, the fix is to write it whole and register it — not to relax this.
+    """
+    sites = _composed_key_sites()
+    assert not sites, (
+        "`retry.`-prefixed key(s) assembled by concatenation or f-string, which the "
+        f"drift resolver cannot see — write the key whole and register it: {sites}"
+    )
+
+
+def test_the_composition_refusal_is_not_vacuous(tmp_path: Path) -> None:
+    """The fail-closed check must actually fire on the shape it forbids."""
+    concatenated = _fixture(tmp_path, 'PREFIX = "retry."\nKEY = PREFIX + "new_metric"\n')
+    interpolated = _fixture(tmp_path / "b", 'KEY = f"retry.{suffix}"\n')
+    assert _composed_key_sites(concatenated), "concatenation not detected"
+    assert _composed_key_sites(interpolated), "f-string not detected"
+    # And a whole literal must NOT trip it.
+    assert not _composed_key_sites(_fixture(tmp_path / "c", 'K = "retry.delay_ms"\n'))
 
 
 def test_the_resolver_credits_the_real_emission_shapes(tmp_path: Path) -> None:
