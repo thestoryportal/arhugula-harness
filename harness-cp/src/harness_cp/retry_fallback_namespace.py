@@ -9,6 +9,10 @@ Declares `FallbackAttributeSchema` / `FALLBACK_NAMESPACE_SCHEMA` (9 entries),
 `RetryAttributeSchema` / `RETRY_NAMESPACE_SCHEMA` (6), `RetryAttemptEventField`
 / `RETRY_ATTEMPT_EVENT_SCHEMA` (3), and the `RetryCause` enum (5).
 
+Also declares `RetryWireRegisterEntry` / `RETRY_WIRE_REGISTER` (7) — the
+`retry.*` wire keys declared at Runtime §14.6/§14.9 rather than at C-CP-03 §3.5
+— and `RETRY_SPAN_AND_EVENT_NAMES` (3). Register row `B-126`.
+
 **Substitution-mechanism note.** `harness.breaker.*` is substrate-anchored at
 the `c9-reliability-recovery` skill; canonical schema at OD C-OD-07 §7.1 — this
 unit emits the CP-side composition surface without claiming canonical
@@ -228,3 +232,113 @@ RETRY_ATTEMPT_EVENT_SCHEMA: tuple[RetryAttemptEventField, ...] = (
 )
 """The 3 `retry.attempt` parent-event fields per ADR-D6 v1.2 §1.2.2.2 verbatim
 — `parent.next_delay_ms` is optional (omitted at retry-budget-exit boundary)."""
+
+
+# --- retry.* wire surface beyond C-CP-03 §3.5 (register, NOT a cap) — B-126 --
+
+
+class RetryWireRegisterEntry(BaseModel):
+    """One `retry.*`-prefixed span attribute NOT declared at C-CP-03 §3.5."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    attribute_name: str
+    declaring_authority: str
+    """The clause that authorizes the key — a Runtime-spec normative step, a
+    binding term, or a telemetry-volume discretion bullet."""
+    binding: bool
+    """`True` when the authority names the key and MANDATES it; `False` for a
+    key riding pure implementation discretion."""
+    emitted: bool
+    """`False` for a key its authority mandates that no producer sets."""
+
+
+RETRY_WIRE_REGISTER: tuple[RetryWireRegisterEntry, ...] = (
+    RetryWireRegisterEntry(
+        attribute_name="retry.skipped.reason",
+        declaring_authority="Runtime §14.6 step 4 (Spec_Harness_Runtime_v1.md:4217)",
+        binding=True,
+        emitted=True,
+    ),
+    RetryWireRegisterEntry(
+        attribute_name="retry.skipped.candidate",
+        declaring_authority="Runtime §14.6 discretion bullet (Spec_Harness_Runtime_v1.md:4279)",
+        binding=False,
+        emitted=True,
+    ),
+    RetryWireRegisterEntry(
+        attribute_name="retry.breaker_waived.reason",
+        declaring_authority="Runtime §14.6.3 term t1+t2 (Spec_Harness_Runtime_v1.md:4364)",
+        binding=True,
+        emitted=True,
+    ),
+    RetryWireRegisterEntry(
+        attribute_name="retry.breaker_waived.candidate",
+        declaring_authority="Runtime §14.6.3 term t1+t2 (Spec_Harness_Runtime_v1.md:4364)",
+        binding=True,
+        emitted=True,
+    ),
+    RetryWireRegisterEntry(
+        attribute_name="retry.terminal",
+        declaring_authority="Runtime §14.6 steps (Spec_Harness_Runtime_v1.md:4227-4230)"
+        " + §14.9 steps (:5684-5687)",
+        binding=True,
+        emitted=True,
+    ),
+    RetryWireRegisterEntry(
+        attribute_name="retry.backoff_ms",
+        declaring_authority="Runtime §14.6 step (Spec_Harness_Runtime_v1.md:4229)"
+        " + §14.9 step (:5685)",
+        binding=True,
+        emitted=False,
+    ),
+    RetryWireRegisterEntry(
+        attribute_name="retry.cause_class",
+        declaring_authority="Runtime §14.6 step (Spec_Harness_Runtime_v1.md:4228)"
+        " + §14.9 step (:5686)",
+        binding=True,
+        emitted=False,
+    ),
+)
+"""The `retry.*` wire keys that C-CP-03 §3.5 does NOT declare — register row
+`B-126`.
+
+**Why this exists.** `retry.*` is declared at TWO contract venues, not one.
+C-CP-03 §3.5 declares the 6-attribute child-span schema above (5 of them
+`retry.`-prefixed; `engine.replay_disposition` is the sixth). Runtime §14.6 and
+§14.9 independently name seven MORE `retry.`-prefixed keys at their own step
+bullets and binding terms. The namespace's wire surface is therefore the union
+of two contracts, and the C-CP-24 §24.1 export manifest counts only the first.
+
+**This is a REGISTER, not a cap.** The Runtime discretion bullets at
+`Spec_Harness_Runtime_v1.md:4279` and `:5729` state NO upper bound — the lane is
+intentionally unbounded, so a future producer MAY add a key. What it may not do
+is add one *invisibly*: the drift test over this tuple fails until the new key
+is registered here with its authorizing clause. Six of the seven rows are
+`binding=True`, which is the finding B-126 was filed to surface — the surface is
+mostly *mandated elsewhere*, not discretionary.
+
+**`emitted=False` marks a conformance gap, not an optional key.**
+`retry.backoff_ms` and `retry.cause_class` are mandated by name at four Runtime
+step bullets and set by ZERO producers. Registered at `B-145`; do NOT drop these
+rows to make a count line up.
+
+**NOT ingested into the §24.1 count.** These keys are deliberately absent from
+`CP_NAMESPACE_EXPORT_MANIFEST`'s `retry.*` `attribute_count`, which reports the
+§24.1-declared subset. See that module's own note.
+"""
+
+RETRY_SPAN_AND_EVENT_NAMES: tuple[str, ...] = (
+    "retry.attempt",
+    "retry.attempt.first",
+    "retry.skipped",
+)
+"""The `retry.`-prefixed SPAN / EVENT / sampling-key NAMES — deliberately kept
+apart from the attribute registers above, because a name is not a wire attribute
+and must not be counted as one.
+
+`retry.attempt` is the ADR-D6 v1.2 §1.2.2.2 parent event + its dual-emission
+child span; `retry.attempt.first` is the OD C-OD-10 §10.1 base-rate key;
+`retry.skipped` is the Runtime §14.6 breaker-open skip event that CARRIES the
+two `retry.skipped.*` attributes registered above.
+"""
