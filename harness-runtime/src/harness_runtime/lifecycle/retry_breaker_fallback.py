@@ -765,6 +765,16 @@ class RetryBreakerFallbackDispatcher:
                     )
                     last_failure_class = "capability-shortfall"
                     last_failure_detail = None
+                    # `B-131`: the flag must describe what the outer state
+                    # CURRENTLY holds, not what once wrote it. This branch
+                    # just replaced any prior real diagnostic with a
+                    # capability-shortfall pseudo-diagnostic (pre-existing
+                    # behaviour, unchanged) — so a later skip must be free to
+                    # overwrite it again, exactly as it could before `B-131`.
+                    # Leaving the flag `True` here (inherited from an earlier
+                    # real attempt) would make the skip guard "preserve" this
+                    # pseudo-diagnostic instead.
+                    last_failure_is_real_attempt = False
                     candidate = self._advance_or_exhaust(
                         candidate,
                         outer_span,

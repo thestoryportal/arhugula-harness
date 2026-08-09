@@ -1035,6 +1035,99 @@ async def test_b131_pure_skip_chain_with_no_prior_real_failure_reports_skip_reas
 
 
 @pytest.mark.asyncio
+async def test_b131_capability_shortfall_between_real_failure_and_trailing_skip_resets_flag() -> (
+    None
+):
+    """`B-131` out-of-family-Codex [P2] follow-up: the capability-shortfall
+    pre-check (`:766-767`) writes the SAME outer `last_failure_class`/
+    `last_failure_detail` state the skip branch guards, but sits OUTSIDE the
+    skip branch's guard. Without resetting `last_failure_is_real_attempt`
+    there, the sequence **real attempt fails -> a later candidate hits a
+    capability shortfall -> the final candidate is breaker-skipped** would
+    leave the flag stale `True` (set by the real attempt), so the trailing
+    skip's guard would wrongly "preserve" the capability-shortfall
+    PSEUDO-diagnostic instead of overwriting it with the skip reason —
+    exactly the pre-existing (correct) behaviour this fix must not disturb.
+
+    Three-candidate chain, each branch genuinely exercised and its
+    intermediate evidence asserted (not merely assumed):
+      - candidate 0 (anthropic, thinking-capable): a REAL attempt that fails
+        fail-fast with a uniquely-identifiable diagnostic.
+      - candidate 1 (openai, never thinking-capable): a genuine
+        capability-shortfall pre-check trip — asserted via its
+        ``fallback.triggered`` event.
+      - candidate 2 (anthropic, thinking-capable, LAST): breaker-open
+        pre-tripped — asserted via its ``retry.skipped`` event.
+
+    The terminal ``fallback.exhausted`` event must report the SKIP reason
+    (``"breaker-open"``), matching pre-existing behaviour — NOT the stale
+    ``"capability-shortfall"`` — and must carry no ``last_failure_detail``
+    (no detail survives this sequence today; the fix must not invent one).
+    """
+    primary = _candidate("anthropic", "claude-opus-4-7")  # thinking-capable.
+    capability_short = _candidate("openai", "gpt-test-1")  # never thinking-capable.
+    trailing = _candidate("anthropic", "sonnet-4-6")  # thinking-capable; breaker OPEN.
+    chain = _chain(primary, cross_family=(capability_short, trailing))
+    clock = _FakeClock(0.0)
+    registry = _retry_breaker_with_llm_policy(
+        max_attempts=3, fail_threshold=2, cooldown_seconds=30.0
+    )
+    trailing_breaker = registry.get_breaker(BreakerScope.PER_MODEL, "anthropic:sonnet-4-6")
+    for _ in range(2):
+        trailing_breaker.record_failure(now=clock())
+    assert trailing_breaker.state is BreakerState.OPEN
+
+    inner = _MockInnerDispatcher(
+        outcomes=[LLMDispatchPayloadShapeError("candidate-0 capability-then-skip diagnostic")]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=registry,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        monotonic=clock,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _thinking_step(), step_context=_step_context())
+
+    # Exactly one real attempt (candidate 0); candidates 1 + 2 never reach
+    # the inner dispatcher (shortfall / skip both pre-empt the provider call).
+    assert len(inner.calls) == 1
+
+    spans = exporter.get_finished_spans()
+    outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
+
+    # Intermediate evidence: candidate 1 genuinely hit the capability-shortfall
+    # pre-check (not skipped for some other reason).
+    triggered = [e for e in outer.events if e.name == "fallback.triggered"]
+    assert len(triggered) == 1
+    assert triggered[0].attributes is not None
+    assert triggered[0].attributes["fallback.cause"] == "capability_shortfall"
+    assert triggered[0].attributes["fallback.from_provider"] == "openai"
+    assert triggered[0].attributes["fallback.from_model"] == "gpt-test-1"
+    assert triggered[0].attributes["fallback.required_capability"] == "thinking"
+
+    # Intermediate evidence: candidate 2 genuinely hit the breaker-open skip.
+    skipped = [e for e in outer.events if e.name == "retry.skipped"]
+    assert len(skipped) == 1
+    assert skipped[0].attributes is not None
+    assert skipped[0].attributes["retry.skipped.reason"] == "breaker-open"
+    assert skipped[0].attributes["retry.skipped.candidate"] == "anthropic:sonnet-4-6"
+
+    exhausted = next(e for e in outer.events if e.name == "fallback.exhausted")
+    assert exhausted.attributes is not None
+    assert exhausted.attributes["fallback.exhaustion_cause"] == "breaker-open"
+    # The stale-flag defect: without the reset, this would read
+    # "capability-shortfall" (inherited from candidate 0's real-attempt flag,
+    # wrongly "preserved" through candidate 1's pseudo-diagnostic).
+    assert exhausted.attributes["fallback.last_failure_class"] == "breaker-open"
+    assert "fallback.last_failure_detail" not in exhausted.attributes
+
+
+@pytest.mark.asyncio
 async def test_breaker_transition_emitted_via_registry() -> None:
     """When the breaker trips CLOSED → OPEN after the fail-threshold, the
     composer invokes ``RuntimeRetryBreaker.emit_breaker_transition_event``.
