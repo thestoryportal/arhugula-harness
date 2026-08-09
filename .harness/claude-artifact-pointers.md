@@ -34,7 +34,7 @@ All canonical artifacts reside at the **design-phase context** (separate Claude 
 | ADR-D2 | v1.2 | Per-deployment-surface sandbox provider commitment |
 | ADR-D3 | v1.2 | Anthropic-primitive adoption depth |
 | ADR-D4 | v1.1 | Multi-agent topology — six-pattern taxonomy |
-| ADR-D5 | v1.4 | HITL synchrony palette — §1.4 storage-form reconciliation (SQLite → JSONL via IS composition) + §1.4.1 `entry_hash` recipe tightening per U-RT-59 Fork 2 Path B-revised-a (2026-05-20) |
+| ADR-D5 | v1.6 | HITL synchrony palette — v1.6: B-138 disposition-(a) §1.10/§1.10.1 wire-domain reconciliation per CP spec v1.116 (2026-08-09); v1.5: B-36/ADR-D8 cross-reference (2026-07-16); v1.4: §1.4 storage-form reconciliation (SQLite → JSONL via IS composition) + §1.4.1 `entry_hash` recipe tightening per U-RT-59 Fork 2 Path B-revised-a (2026-05-20) |
 | ADR-D6 | v1.2 | Observability backend + OTel schema (12 namespaces) |
 | `Architectural_Design_Document_v1_3.md` | v1.3 | ADR consolidation; coherent architectural overview |
 | `PRD_v1_1.md` | v1.1 | Product requirements; observable behavior |
