@@ -7,7 +7,7 @@ a discretion free-for-all: `retry.*` is declared at TWO contract venues, and six
 of the seven keys beyond C-CP-03 §3.5 are MANDATED by name at Runtime §14.6 /
 §14.9. `RETRY_WIRE_REGISTER` records them; these tests keep the record true.
 
-Two sweeps, deliberately different in shape, because either alone has a hole:
+Three sweeps, deliberately different in shape, because each alone has a hole:
 
   * `test_every_retry_literal_in_src_is_declared_somewhere` — the BROAD sweep.
     Every `retry.`-prefixed string literal anywhere in `harness-*/src` must
@@ -17,10 +17,19 @@ Two sweeps, deliberately different in shape, because either alone has a hole:
     sweep. The keys actually SET as span attributes must equal the CP-declared
     subset plus the register's `emitted=True` rows. Catches an `emitted` flag
     that lies in either direction, which the broad sweep cannot see.
+  * `test_every_declared_name_has_a_site_outside_its_own_declaration` — LIVENESS.
+    A declared name whose last real producer or consumer disappears fails here;
+    scanning the declaration home would make it vacuous, so the home is excluded.
 
-Together they also foreclose the cheap way to silence either one: relabelling an
+Together they also foreclose the cheap way to silence any one: relabelling an
 emitted attribute as a span NAME keeps the broad union intact but drops it out
 of the precise sweep's expectation, so the precise test fails.
+
+The precise sweep's resolver is the part that has been wrong twice — once too
+narrow (a regex crediting declarations) and once too wide (an alias arm crediting
+any call argument). Its contract, and both retracted arguments, are recorded at
+`_emitted_attribute_keys`; precision and recall are each witnessed against
+synthetic fixtures rather than asserted in prose.
 
 Line numbers in `declaring_authority` strings are NOT asserted — the Runtime
 spec is a delta chain whose line offsets move on every unrelated amendment, so
@@ -90,82 +99,152 @@ def _sweep(
     return found
 
 
-def _emitted_attribute_keys() -> dict[str, set[str]]:
+def _emitted_attribute_keys(modules: list[Path] | None = None) -> dict[str, set[str]]:
     """`retry.*` keys in genuine EMISSION position, resolved by AST not regex.
 
-    Two shapes count: the first argument of a `.set_attribute(...)` call, and a
-    string key of an `attributes={...}` KEYWORD mapping (the `add_event` /
-    `start_span` form). A key sitting in any OTHER dict is a DECLARATION, not an
-    emission, and must not count.
+    `modules` overrides the swept set so the resolver's PRECISION can be witnessed
+    against synthetic fixtures. It had no such parameter at first, which is exactly
+    why a false positive shipped untested — the live pin could only ever witness
+    RECALL (out-of-family round 5 + merge-gate lens 3, converging).
 
-    That distinction is the whole point, and a regex could not draw it. A
-    `"retry.*":`-shaped pattern also matched the `AttributeSpec` schema mapping at
-    `harness_od/hitl_webhook_namespace.py:119`, so this check stayed GREEN after
-    every real `retry.attempt_number` producer was deleted — out-of-family review
-    round 2 [P2], demonstrated by that exact mutation in a temporary tree.
+    **What counts — an ATTRIBUTE-KEY POSITION, never a mere mention.** Six shapes,
+    each one a position whose value definitionally becomes the key:
 
-    A THIRD shape counts, and it is NOT cosmetic: a call argument that is a NAME
-    resolving to a module's own `retry.`-prefixed string constant. That closes a
-    demonstrated FALSE NEGATIVE sitting squarely on `B-145`'s closure path
-    (out-of-family round 3 [P2]) — the live pattern at
-    `webhook_delivery_composer.py:59` + `:293` emits `ATTR_RETRY_ATTEMPT_NUMBER`
-    through a `_set(...)` helper, so `B-145` wiring done the same way would leave
-    `emitted=False` FALSELY green: the broad sweep sees an already-registered
-    name, and the liveness check excludes `emitted=False` rows by design.
+      1. a literal first argument of `.set_attribute(...)`
+      2. a literal key of an inline `attributes={...}` keyword mapping
+      3. a NAME resolving to a module `retry.*` constant, at either position above
+      4. that same NAME at the forwarded parameter INDEX of a module-local helper
+         that hands a parameter straight to `.set_attribute(...)` as the key — the
+         in-tree instance is `webhook_delivery_composer._set`
+      5. `attributes=<Name>` where the Name was assigned an inline dict
+      6. `mapping["retry.xxx"] = value`, the in-place mutation shape
 
-    Any `retry.`-prefixed constant passed into a call is treated as that key's
-    emission. There is no other plausible use for such a value, and the bias is
-    deliberately toward COUNTING: over-counting makes an `emitted=False` row fail
-    loudly, whereas under-counting is the silent direction.
+    **What does NOT count, and why the restriction is load-bearing.** A regex could
+    not tell a declaration from an emission: a `"retry.*":`-shaped pattern matched
+    the `AttributeSpec` schema mapping at `hitl_webhook_namespace.py:119`, leaving
+    this check GREEN after every real `retry.attempt_number` producer was deleted
+    (out-of-family round 2 [P2]). The AST rewrite fixed that — and then its own
+    first alias arm credited ANY call argument, which **re-opened the same hole
+    from the other side**: a lint-clean DRY hoist of a declaration literal into a
+    module constant made a schema declaration read as a producer, and merge-gate
+    lens 3 proved it by deleting all seven real `retry.fail_class` producers and
+    watching the suite stay green. Restricting to key positions closes both.
 
-    REMAINING BOUND, stated rather than glossed: an `attributes=<Name>` mapping
-    passed by variable is still invisible (the shape is live in-tree at
-    `retry_breaker_fallback.py:1194`, though it carries no `retry.*` key at HEAD),
-    as are `set_attributes` (zero occurrences tree-wide) and positional
-    `add_event(name, dict)` (every in-tree call uses the keyword). The residual is
-    covered from the other side: a constant's own literal is caught by the BROAD
-    sweep and its site by the liveness check, so an undeclared key cannot hide
-    behind indirection — only an `emitted` classification could be understated.
+    **A retracted argument, recorded because it was wrong.** That loose arm was
+    defended as "biased toward counting, and over-counting fails loudly". It does
+    not: over-counting is loud only for the two `emitted=False` rows and for
+    unregistered keys. For the ten keys already in the expected set — exactly the
+    population this sweep protects — over-counting is SILENT and masks total
+    producer loss. The bias inverted the risk where it mattered most.
+
+    Precision and recall are both witnessed against fixtures, not just asserted:
+    see `test_the_resolver_does_not_credit_declarations_as_emissions` and
+    `test_the_resolver_credits_the_real_emission_shapes`.
+
+    **REMAINING BOUNDS, stated rather than glossed.** `set_attributes` (plural) has
+    zero occurrences tree-wide; every in-tree `add_event` passes `attributes=` by
+    keyword rather than positionally; a key assembled by f-string or concatenation
+    is unresolvable in principle (none exist at HEAD). A dict built across several
+    statements and then passed by name resolves only the keys present at its
+    literal assignment. Each residual is covered from the other side — a literal is
+    caught by the BROAD sweep and its site by the liveness check — so an undeclared
+    key cannot hide; only an `emitted` classification could be understated, which
+    `test_the_unemitted_rows_have_no_site_outside_their_declaration` guards for the
+    two rows where it would matter.
     """
     found: dict[str, set[str]] = {}
 
     def record(key: str, module: Path, shape: str) -> None:
         if key.startswith(_RETRY_PREFIX):
-            found.setdefault(key, set()).add(f"{module.relative_to(_REPO_ROOT).as_posix()}:{shape}")
+            name = module.name if modules is not None else module.relative_to(_REPO_ROOT).as_posix()
+            found.setdefault(key, set()).add(f"{name}:{shape}")
 
-    for module in _src_modules():
+    def retry_str(node: ast.expr | None) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value if node.value.startswith(_RETRY_PREFIX) else None
+        return None
+
+    for module in _src_modules() if modules is None else modules:
         tree = ast.parse(module.read_text(encoding="utf-8"))
 
-        # `NAME = "retry.xxx"` within this module, so a call passing NAME can be
-        # resolved back to the key it stands for.
+        # `NAME = "retry.xxx"` — a constant standing in for one key.
         aliases: dict[str, str] = {}
+        # `ATTRS = {"retry.xxx": ...}` — a variable-backed attribute mapping,
+        # so `attributes=ATTRS` can be resolved instead of silently skipped.
+        map_aliases: dict[str, set[str]] = {}
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Assign)
-                and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, str)
-                and node.value.value.startswith(_RETRY_PREFIX)
-            ):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        aliases[target.id] = node.value.value
+            if not isinstance(node, ast.Assign):
+                continue
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            literal = retry_str(node.value)
+            if literal is not None:
+                for name in names:
+                    aliases[name] = literal
+            elif isinstance(node.value, ast.Dict):
+                keys = {k for k in (retry_str(k) for k in node.value.keys) if k}
+                for name in names:
+                    map_aliases.setdefault(name, set()).update(keys)
+            # `attributes["retry.xxx"] = value` — mutation of a mapping in place.
+            for target in node.targets:
+                if isinstance(target, ast.Subscript):
+                    key = retry_str(target.slice)
+                    if key is not None:
+                        record(key, module, "dict-item")
+
+        # A module-local forwarding helper: some parameter is handed straight to
+        # `.set_attribute(...)` as the KEY. `webhook_delivery_composer._set` is the
+        # in-tree instance. Recorded WITH ITS PARAMETER INDEX, so a call is credited
+        # only at the position that actually becomes the attribute key — never for
+        # merely mentioning a constant somewhere in an argument list.
+        helper_key_index: dict[str, int] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            params = [a.arg for a in node.args.args]
+            for inner in ast.walk(node):
+                if (
+                    isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr == "set_attribute"
+                    and inner.args
+                    and isinstance(inner.args[0], ast.Name)
+                    and inner.args[0].id in params
+                ):
+                    helper_key_index[node.name] = params.index(inner.args[0].id)
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
+
             if isinstance(func, ast.Attribute) and func.attr == "set_attribute" and node.args:
                 first = node.args[0]
-                if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                    record(first.value, module, "set_attribute")
+                literal = retry_str(first)
+                if literal is not None:
+                    record(literal, module, "set_attribute")
+                elif isinstance(first, ast.Name) and first.id in aliases:
+                    record(aliases[first.id], module, "set_attribute-via-constant")
+
             for keyword in node.keywords:
-                if keyword.arg == "attributes" and isinstance(keyword.value, ast.Dict):
+                if keyword.arg != "attributes":
+                    continue
+                if isinstance(keyword.value, ast.Dict):
                     for key_node in keyword.value.keys:
-                        if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
-                            record(key_node.value, module, "attributes=")
-            for argument in [*node.args, *(k.value for k in node.keywords)]:
-                if isinstance(argument, ast.Name) and argument.id in aliases:
-                    record(aliases[argument.id], module, "via-constant")
+                        literal = retry_str(key_node)
+                        if literal is not None:
+                            record(literal, module, "attributes=")
+                        elif isinstance(key_node, ast.Name) and key_node.id in aliases:
+                            record(aliases[key_node.id], module, "attributes=-via-constant")
+                elif isinstance(keyword.value, ast.Name):
+                    for key in map_aliases.get(keyword.value.id, ()):
+                        record(key, module, "attributes=-via-map")
+
+            if isinstance(func, ast.Name) and func.id in helper_key_index:
+                index = helper_key_index[func.id]
+                if index < len(node.args):
+                    argument = node.args[index]
+                    if isinstance(argument, ast.Name) and argument.id in aliases:
+                        record(aliases[argument.id], module, "via-constant")
     return found
 
 
@@ -255,6 +334,88 @@ def test_a_helper_based_emission_is_resolved_not_missed() -> None:
     assert any(s.endswith(":via-constant") and "webhook_delivery_composer" in s for s in shapes), (
         f"helper-based emission no longer resolved: {sorted(shapes)}"
     )
+
+
+def _fixture(tmp_path: Path, body: str) -> list[Path]:
+    module = tmp_path / "fixture_module.py"
+    module.write_text(body, encoding="utf-8")
+    return [module]
+
+
+def test_the_resolver_does_not_credit_declarations_as_emissions(tmp_path: Path) -> None:
+    """PRECISION — a constant MENTIONED in a declaration is not an emission.
+
+    This is the defect that shipped and had to be corrected: the first version of
+    the alias arm credited ANY call argument, so a lint-clean DRY hoist of a
+    declaration literal into a module constant made a pure schema declaration read
+    as a producer — silently voiding the precise sweep for a key already in the
+    expected set. Merge-gate lens 3 proved it by deleting all seven real
+    `retry.fail_class` producers and watching the suite stay green.
+
+    Two shapes are asserted NOT credited, one from each reviewer:
+      * a keyword-argument declaration (`AttributeSpec(attribute_name=CONST)`)
+      * a span/event NAME constant handed to `add_event` (out-of-family round 5 —
+        crediting it would make a legitimate refactor of a
+        `RETRY_SPAN_AND_EVENT_NAMES` member fail the exact-set test)
+    """
+    modules = _fixture(
+        tmp_path,
+        'ATTR = "retry.fail_class"\n'
+        'EVENT = "retry.skipped"\n'
+        "SPEC = AttributeSpec(attribute_name=ATTR)\n"
+        "MAPPING = {ATTR: 1}\n"
+        "record(tail_keep_on_attribute=ATTR)\n"
+        "span.add_event(EVENT)\n"
+        "log.info(ATTR)\n",
+    )
+    assert _emitted_attribute_keys(modules) == {}
+
+
+def test_the_resolver_credits_the_real_emission_shapes(tmp_path: Path) -> None:
+    """RECALL — the shapes a producer actually uses are all resolved.
+
+    The two mapping shapes were BOTH declared bounds until out-of-family round 5
+    pointed out that `attributes=<Name>` is already live in-tree, so a `B-145` key
+    wired that way would leave `emitted=False` falsely green. Closing them is
+    cheaper than documenting them.
+    """
+    modules = _fixture(
+        tmp_path,
+        "def _set(span, key, value):\n"
+        "    span.set_attribute(key, value)\n"
+        'KEY = "retry.terminal"\n'
+        'span.set_attribute("retry.delay_ms", 1)\n'
+        'span.set_attribute(KEY, "x")\n'
+        '_set(span, KEY, "y")\n'
+        'span.add_event("e", attributes={"retry.attempt_number": 1})\n'
+        'ATTRS = {"retry.backoff_ms": 250}\n'
+        'span.add_event("e", attributes=ATTRS)\n'
+        'other["retry.cause_class"] = "z"\n',
+    )
+    assert set(_emitted_attribute_keys(modules)) == {
+        "retry.delay_ms",
+        "retry.terminal",
+        "retry.attempt_number",
+        "retry.backoff_ms",
+        "retry.cause_class",
+    }
+
+
+def test_the_unemitted_rows_have_no_site_outside_their_declaration() -> None:
+    """The converse of the liveness check, for the `emitted=False` rows.
+
+    Liveness excludes them by design, so without this a producer added for either
+    key would leave `emitted=False` unchallenged from BOTH directions (merge-gate
+    lens 3, non-blocking). Asserting the converse keeps `B-145`'s record honest
+    until the wiring lands, at which point this fails and forces the flag to move.
+    """
+    found = _sweep(_RETRY_LITERAL, exclude_declaration_home=True)
+    for entry in RETRY_WIRE_REGISTER:
+        if not entry.emitted:
+            assert entry.attribute_name not in found, (
+                f"{entry.attribute_name} is marked emitted=False but now has a site at "
+                f"{sorted(found[entry.attribute_name])} — flip the flag (B-145)"
+            )
 
 
 def test_the_register_is_disjoint_from_the_cp_declared_schema() -> None:
