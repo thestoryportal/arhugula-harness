@@ -36,11 +36,11 @@ checks fail. This is a conformance repair to already-cleared contract text,
 not a design extension; the `sandbox.violation` producer
 (`runtime_tool_dispatcher.py:725`) emits a real span (not an event) on every
 live path, so the widening is inert-but-harmless for that row today and
-exists for contract completeness + future-producer safety. The OD spec
-v1.38 §9.2.1 term 3 boundary this widens ("the trigger predicate is NOT
-widened to events — that half is `B-123`") is realized forward at OD spec
-v1.39 §9.2.1 term 3 (spec delta owed separately at that leg per register row
-`B-123`'s close-out; this repair is code + tests only).
+exists for contract completeness + future-producer safety. OD spec v1.39
+§1 AMENDS §C-OD-09 §9.2.1 term 3 in the SAME PR as this module, retracting
+v1.38 term 3's explicit decline to widen ("the trigger predicate is NOT
+widened to events — that half is `B-123`") and requiring the predicate to
+resolve both shapes; `B-123` CLOSES at this leg's implementation.
 
 `is_classification_trigger(span)` returns True iff the span carries any of
 the three §10.2 triggers, by span name/attribute OR (for the two event-

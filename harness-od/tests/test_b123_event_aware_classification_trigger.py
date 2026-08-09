@@ -6,9 +6,12 @@ head — the contract table already reads "Parent + sibling spans of any
 `sandbox.violation` EVENT preserved" / "...`breaker.tripped` EVENT
 preserved") + register row `B-123` (the widening this module witnesses is a
 conformance repair to that already-cleared text, not a design extension).
-Spec delta owed forward at OD spec v1.39 §9.2.1 term 3 (currently v1.38
-term 3 DECLINES to widen and names this row); that doc delta is out of
-scope for this module.
+`Spec_Operational_Discipline_v1_39.md` §1 lands in the SAME PR as this
+module: it AMENDS §C-OD-09 §9.2.1 term 3 in full, retracting v1.38 term 3's
+explicit decline to widen and requiring the predicate to resolve BOTH the
+span-name and span-event shapes of the two §10.2 trigger names. `B-123`
+CLOSES at this leg's implementation (this module + `tail_keep_classification
+.py` + `tail_keep_span_processor.py`).
 
 **Why a new file rather than extending `test_b133_event_aware_tail_floor.py`
 or `test_tail_keep_span_processor.py`.** `B-133`'s module pins the
@@ -38,6 +41,7 @@ for the mutation → red-witness correspondence):
 | AC7 | `test_ac7_name_matching_span_never_touches_events_cheapest_first` |
 | AC8 | `test_ac8_event_trigger_names_are_derived_not_re_literalled` |
 | AC11 | `test_ac11_span_events_is_read_exactly_once_per_on_end` (+ `test_ac7_confirmed_by_counting_double_zero_events_touches`) |
+| AC12 | `test_ac12_keep_flag_scans_the_whole_event_list_not_just_the_first` |
 
 AC3/AC4/AC9/AC10 are proven elsewhere per the arc brief: AC3 at
 `test_b133_event_aware_tail_floor.py` (the rewritten `test_w7_...`), AC4 at
@@ -61,6 +65,26 @@ AC11 proves the count structurally, via a COUNTING double (not a
 "small enough" bound) at the `on_end` orchestration level — this is
 OD-local (`TailKeepSpanProcessor` is `harness_od`-owned), so no
 `harness_runtime` import is needed.
+
+**AC12 (merge-gate BLOCK, test-witness lens, adjudicated CORRECT).** A
+mutation reducing `is_classification_trigger`'s event-scan `any(...)` to a
+FIRST-EVENT-ONLY check slipped through the ENTIRE changed test set
+undetected: every single-function witness above (AC1/AC2/AC5/AC6/AC7/AC11)
+uses a span with zero or exactly one event, where `any()` and "first event
+only" are indistinguishable; the one multi-event witness that reaches this
+line (`test_w15_...`, `member_index=2`, in `test_b133_event_aware_tail_floor
+.py`) asserts only carrier export + `buffered_trace_count == 0`, both
+driven by the SEPARATE `_carries_always_sampled_event` §9.2 arm (there is no
+buffered sibling in that trace for the keep flag to gate); and AC4/AC4b's
+real dispatch happens to put `breaker.tripped` FIRST in its event list
+(`['breaker.tripped', 'breaker.tripped', 'fallback.exhausted', 'exception']`),
+so a first-event-only reduction still finds it. AC12 closes the gap:
+its assertion depends on the KEEP FLAG (a buffered SIBLING surviving root
+close), not on carrier export — carrier export stays green under the
+mutation regardless, since it is decided by the unmutated
+`_carries_always_sampled_event`. Parametrized over member position (first /
+middle / LAST), mirroring `W15`'s coverage for the sibling function; the
+last-position case is the strongest discriminator.
 """
 
 from __future__ import annotations
@@ -391,6 +415,86 @@ def test_ac7_confirmed_by_counting_double_zero_events_touches() -> None:
 
 
 # ---------------------------------------------------------------------------
+# AC12 — merge-gate BLOCK (test-witness lens): the event scan must examine
+# the WHOLE event list, not just the first entry. Unlike AC1/AC2/AC5/AC6/AC7,
+# this witness's PASS/FAIL depends on the KEEP FLAG (a buffered sibling
+# surviving root close) — carrier export alone (what AC1/AC2/AC5 assert) is
+# decided by the SEPARATE, unmutated `_carries_always_sampled_event`, which
+# would stay green under a first-event-only reduction of THIS function's scan.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("event_names", "member_index"),
+    [
+        (("breaker.tripped", "exception"), 0),
+        (("retry.skipped", "breaker.tripped", "exception"), 1),
+        (("retry.skipped", "exception", "breaker.tripped"), 2),
+    ],
+    ids=["member-first", "member-middle", "member-last"],
+)
+def test_ac12_keep_flag_scans_the_whole_event_list_not_just_the_first(
+    event_names: tuple[str, ...], member_index: int
+) -> None:
+    """AC12 — a mutation reducing the event-scan `any(...)` at
+    `tail_keep_classification.py` to a FIRST-EVENT-ONLY check slipped through
+    the entire pre-AC12 changed test set: every single-function witness
+    (AC1/AC2/AC5/AC6/AC7/AC11) uses ≤ 1 event, where `any()` and
+    "first event only" cannot be told apart; the one multi-event witness
+    reaching this line (`test_w15_...`, `member_index=2`) asserts only carrier
+    export + `buffered_trace_count == 0`, both driven by the DIFFERENT
+    `_carries_always_sampled_event` §9.2 arm — there is no buffered sibling in
+    that trace for the §10.2 keep flag to gate; and AC4/AC4b's real dispatch
+    happens to put `breaker.tripped` first in its actual event list, so a
+    first-event-only reduction still finds it there too.
+
+    This witness is different: the carrier's NAME is not a §10.2 trigger, it
+    carries MULTIPLE events with a non-member (`retry.skipped` — the real
+    non-member the dispatcher emits when a candidate's breaker is pre-open,
+    per `test_w15_...`/`test_w16_...`'s production grounding) at every
+    position BEFORE the §10.2 member, and a plain sibling span closes BEFORE
+    the carrier so it BUFFERS. The assertion is on the SIBLING's survival —
+    gated by the keep flag `is_classification_trigger` sets — not on the
+    carrier's own export (gated by the separate, unmutated
+    `_carries_always_sampled_event`, since `breaker.tripped` is BOTH a §9.2
+    member and a §10.2 trigger, so the carrier always also takes the
+    event-aware arm regardless of this function's verdict).
+
+    Parametrized over member position — first / middle / LAST — mirroring
+    `test_w15_...`'s coverage for the sibling function; the last-position
+    case is the strongest discriminator (a first-event-only scan cannot find
+    a member it never examines).
+    """
+    # Precondition: every event BEFORE the member is genuinely a non-member,
+    # so a passing case cannot be vacuous.
+    for name in event_names[:member_index]:
+        assert name not in SECTION_10_2_EVENT_TRIGGER_NAMES, f"{name!r} is itself a §10.2 trigger"
+    assert event_names[member_index] == BREAKER_TRIPPED_SPAN_NAME
+
+    exporter = InMemorySpanExporter()
+    tail = TailKeepSpanProcessor(downstream=SimpleSpanProcessor(exporter))
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("ac12")
+
+    with tracer.start_as_current_span(CARRIER_SPAN_NAME) as root:
+        with tracer.start_as_current_span("ac12.sibling.work"):
+            pass
+        for name in event_names:
+            root.add_event(name)
+
+    names = [s.name for s in exporter.get_finished_spans()]
+    assert CARRIER_SPAN_NAME in names  # the §9.2 floor — unaffected by this arc's mutation
+    assert "ac12.sibling.work" in names, (
+        f"the buffered sibling was dropped with the §10.2 member at index {member_index} of "
+        f"{event_names!r} — is_classification_trigger's event scan did not find "
+        "`breaker.tripped` unless it happened to be first (this is the exact first-event-only "
+        "reduction the merge gate's test-witness lens flagged)"
+    )
+    assert tail.buffered_trace_count == 0
+
+
+# ---------------------------------------------------------------------------
 # PD-8 mutation probes (run manually per the arc brief; not test-encoded —
 # see the report for the recorded red/green outcome per probe).
 # ---------------------------------------------------------------------------
@@ -400,3 +504,4 @@ def test_ac7_confirmed_by_counting_double_zero_events_touches() -> None:
 # P3 move the event scan to the TOP of the predicate                       -> reported honestly per probe run
 # P4 remove SANDBOX_VIOLATION_SPAN_NAME from the event set                 -> AC2 RED
 # P6 hard-code SECTION_10_2_EVENT_TRIGGER_NAMES + rename one source constant -> AC8 RED
+# P7 (merge-gate BLOCK) reduce the event-scan any(...) to first-event-only  -> AC12 RED (member-middle + member-last cases)

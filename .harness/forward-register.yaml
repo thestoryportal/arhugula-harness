@@ -6231,7 +6231,7 @@ items:
   council: 'No. A probe with a binary answer and a named positive control. Convene nothing until it has run; if
     it returns inert, the repair is single-domain (C7 owns both the predicate and the emission shape).'
   pr: '#1279 (the B-123 repair leg -- OD spec v1.39 section 9.2.1 term 3 replaced in full + plan v2.34
-    U-OD-60 + the event-scan arm at is_classification_trigger + the eleven-AC witness set incl. the U-OD-59
+    U-OD-60 + the event-scan arm at is_classification_trigger + the twelve-AC witness set incl. the U-OD-59
     W7 in-place inversion and BOTH real-dispatch witnesses; both clearance markers filed)'
   heading: '### B-123 · The tail-keep breaker trigger matches a **span name** while the breaker emits a span
     **event**, so the trigger may be inert *(surfaced at the B-116 council deliberation (C7 A2
