@@ -24,9 +24,13 @@ canonical for §21's routing/staircase semantics, which are preserved byte-for-b
 
 The grounding that decided it: both live producers (`validator_framework.py:347`,
 `validator_escalation_composer.py:152`) write `ValidatorFailClass` values; OD's C-OD-29.1
-ingestion schema declares exactly the C-CP-28 §25.5 four-attribute shape; no reader asserts a
-retry-exit value on the attribute; no projection function exists. The register row's own
-falsifier (a cleared surface declaring the C-CP-25 domain) fired at C-CP-28 §25.2/§25.5.
+ingestion schema declares exactly the C-CP-28 §25.5 four-attribute shape; no LIVE reader or
+emission site asserts a retry-exit value on the attribute; no projection function exists. The
+register row's own falsifier (a cleared surface declaring the C-CP-25 domain) fired at C-CP-28
+§25.2/§25.5. ONE DECLARED exception was found at codex round 3 and is recorded, not absorbed:
+the C-OD-14 §14.5.3 carrier `ReplaySemanticDivergenceError` (declaration + test, zero
+production emission sites) fixes `terminal-fail-exit`, and ADR-D6 v1.2 declares the retry-exit
+domain — the cascade is register row `B-141`'s (see spec §0.1).
 
 The CP-3/OD-4 attribute-set divergence is dispositioned in the same pass as two contracts
 declaring disjoint-except-`class` subsets of one namespace: §21.5's declared count stays THREE,

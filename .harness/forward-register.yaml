@@ -7343,13 +7343,16 @@ items:
   close_out: '(1) RE-GROUND both gaps at HEAD (span-open sites; the OD sampling key shapes; the two
     None-path behaviours). (2) SPAN-SITE DECISION: open a validator.fail.-PREFIXED span (a concrete
     suffixed name -- the exact name "validator.fail" alone leaves sampling_mode.py:239''s
-    trailing-dot prefix match INERT, so this option MUST pair a suffixed name or a sampler change)
+    trailing-dot prefix match INERT, so this option MUST pair a suffixed name or a sampler change, AND MUST
+    amend the exact-span declarations it diverges from -- C-CP-28 §25.5 + C-OD-29.1 -- to declare
+    the suffixed/prefix family, else the repair itself re-opens the contract violation)
     at the producer(s), OR re-declare the span-site at both contracts (C-CP-28 §25.5 + C-OD-29.1) to the
     shipped validator.evaluate/validator.escalation carriers, OR alias at the OD classification layer
-    -- grounded on what the OD samplers + B-123/B-133 tail machinery actually key on, and priced
-    against the B-124 §10.2 wire it gates. (3) SENTINEL DECISION: absent-on-None at the composer
+    -- grounded on what the OD samplers + B-123/B-133 tail machinery actually key on, and
+    coordinated with B-124 as ADJACENCY, not a gate -- its §10.2 trigger is attribute-keyed
+    (tail_keep_classification.py:96-100) and is not blocked by span naming. (3) SENTINEL DECISION: absent-on-None at the composer
     (matching the framework producer) OR widen the wire alphabet at both canonical surfaces; either
-    way the two producers must agree. (4) COORDINATE: B-124 (sampling half), B-123/B-133 family
+    way the two producers must agree. (4) COORDINATE: B-124 (ADJACENT -- attribute-keyed §10.2 trigger, not gated), B-123/B-133 family
     (tail keying), B-139 (sibling §21.5 gap). WHAT WOULD FALSIFY IT: a production
     start_as_current_span("validator.fail...") site, or a cleared surface declaring
     validator.evaluate as the canonical carrier span for these attributes.'
