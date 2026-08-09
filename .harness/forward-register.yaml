@@ -6564,8 +6564,20 @@ items:
     kwarg) turns witnesses 1+3 RED; P2 (hard-code the literal) turns witness 3 RED. Both matched
     prediction. _advance_or_exhaust signature and default UNCHANGED; the capability-shortfall pre-check
     and the retry.skipped event UNTOUCHED.'
-  council: 'No. A one-value fix inside a closed, declared domain with a shipped sibling precedent and a named
-    value owner. Route to C7 plus advisor() if step (2)''s reuse question is contested.'
+  council: 'No -- and the ORIGINAL premise of this field was WRONG, corrected here rather than carried
+    into a closed row. It read: a one-value fix inside a closed, declared domain with a shipped sibling
+    precedent and a named value owner. THE DOMAIN IS NOT CLOSED AND NOT DECLARED. Grounding at PR #1285
+    established, and the merge-gate spec-conformance lens at PR #1287 independently re-verified, that
+    fallback.exhaustion_cause has NO declared value domain anywhere in design-substrate/**: the only
+    mention outside the register is Spec_Harness_Runtime_v1.md:4231, which merely NAMES the attribute in
+    a list, while C-CP-04 section 4.2 (Spec_Control_Plane_v1_2.md:448-455) declares a value domain for a
+    DIFFERENT attribute, fallback.cause (breaker_open / rate_limit_storm), and section 4.4 says only emit
+    fallback.exhausted with no domain at all. The conclusion is UNCHANGED -- still No council -- but for
+    a STRONGER reason than the field originally gave: because the attribute is a free str with its own
+    local hyphenated vocabulary, adding values owes no spec leg and there is no closed domain to contest.
+    The step (2) reuse question the field wanted routed was itself settled empirically at the grounding
+    pass (the emitted cause now matches the retry.skipped.reason already emitted at the same site, rather
+    than reusing the underscored CP FallThroughCause enum).'
   pr: '#1287 (the paired B-127 + B-131 exhaustion-attribution fix at the shared skip call site)'
   heading: '### B-127 · The breaker-open advance passes no `exhaustion_cause`, so an all-breakers-open chain
     reports **retry** exhaustion when no attempt ran *(surfaced at the B-116 council deliberation (C1 A2

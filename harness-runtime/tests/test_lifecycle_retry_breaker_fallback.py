@@ -988,6 +988,18 @@ async def test_b131_real_candidate_failure_survives_a_trailing_breaker_skip() ->
     assert "candidate-0 real diagnostic detail" in str(
         exhausted.attributes["fallback.last_failure_detail"]
     )
+    # `B-127`: this is the ONLY witness in this file where
+    # `last_failure_class` ("LLMDispatchPayloadShapeError", above) and
+    # `skip_reason` ("breaker-open") genuinely diverge — every other
+    # exhaustion-cause witness hits the skip branch's no-prior-real-failure
+    # case, where the guard sets `last_failure_class = skip_reason` and the
+    # two values coincide, making them indistinguishable there. Asserting
+    # `exhaustion_cause` here (not just `last_failure_class` above) is what
+    # proves the terminal cause is attributed to the SKIP REASON
+    # independently of the failure class — the property `B-127`'s fix rests
+    # on. Do not delete this as "redundant" with witness 1: it is the only
+    # place this independence is observable.
+    assert exhausted.attributes["fallback.exhaustion_cause"] == "breaker-open"
 
 
 @pytest.mark.asyncio
