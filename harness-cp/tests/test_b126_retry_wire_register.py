@@ -30,6 +30,7 @@ named FILE is asserted to exist; the offsets are a reader's aid.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -50,10 +51,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 #: liveness check, where a renamed `retry.attempt.FIRSTX` slipped the sweep).
 _RETRY_LITERAL = re.compile(r'"(retry\.[A-Za-z0-9_.]+)"')
 
-#: An attribute key in emission position: the first argument of
-#: `set_attribute(...)`, or a key of an `attributes={...}` mapping.
-_SET_ATTRIBUTE_KEY = re.compile(r'set_attribute\(\s*"(retry\.[^"]+)"')
-_ATTRIBUTE_DICT_KEY = re.compile(r'"(retry\.[^"]+)"\s*:')
+_RETRY_PREFIX = "retry."
 
 #: The `retry.`-prefixed subset of C-CP-03 §3.5. The sixth schema member is
 #: `engine.replay_disposition`, which rides the `engine.*` namespace and is
@@ -89,6 +87,53 @@ def _sweep(
     for module in _src_modules(exclude_declaration_home=exclude_declaration_home):
         for key in pattern.findall(module.read_text(encoding="utf-8")):
             found.setdefault(key, set()).add(module.relative_to(_REPO_ROOT).as_posix())
+    return found
+
+
+def _emitted_attribute_keys() -> dict[str, set[str]]:
+    """`retry.*` keys in genuine EMISSION position, resolved by AST not regex.
+
+    Two shapes count: the first argument of a `.set_attribute(...)` call, and a
+    string key of an `attributes={...}` KEYWORD mapping (the `add_event` /
+    `start_span` form). A key sitting in any OTHER dict is a DECLARATION, not an
+    emission, and must not count.
+
+    That distinction is the whole point, and a regex could not draw it. A
+    `"retry.*":`-shaped pattern also matched the `AttributeSpec` schema mapping at
+    `harness_od/hitl_webhook_namespace.py:119`, so this check stayed GREEN after
+    every real `retry.attempt_number` producer was deleted — out-of-family review
+    round 2 [P2], demonstrated by that exact mutation in a temporary tree.
+
+    DECLARED BOUND, stated rather than glossed: an emission whose key is passed as
+    a NAMED CONSTANT is invisible here, because the first argument is a `Name`
+    rather than a `Constant`. There is one such site at HEAD —
+    `webhook_delivery_composer.py:293` emits `ATTR_RETRY_ATTEMPT_NUMBER`
+    (declared `:59`) through a `_set(...)` helper. The residual is covered from
+    the other side: the constant's own literal is caught by the BROAD sweep, and
+    its site by the liveness check, so an undeclared key cannot hide behind the
+    indirection — only its `emitted` CLASSIFICATION could be understated.
+    """
+    found: dict[str, set[str]] = {}
+
+    def record(key: str, module: Path, shape: str) -> None:
+        if key.startswith(_RETRY_PREFIX):
+            found.setdefault(key, set()).add(f"{module.relative_to(_REPO_ROOT).as_posix()}:{shape}")
+
+    for module in _src_modules():
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "set_attribute" and node.args:
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    record(first.value, module, "set_attribute")
+            for keyword in node.keywords:
+                if keyword.arg == "attributes" and isinstance(keyword.value, ast.Dict):
+                    for key_node in keyword.value.keys:
+                        if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
+                            record(key_node.value, module, "attributes=")
     return found
 
 
@@ -148,8 +193,11 @@ def test_emitted_attribute_keys_match_the_declared_emitted_set() -> None:
 
     This is `B-126`'s corrected count of TEN, re-derived by a sweep shape
     independent of the one that produced it: 5 CP-declared + 5 registered.
+
+    Emission position is resolved by AST — see `_emitted_attribute_keys` for why
+    a regex could not, and for the one declared bound.
     """
-    found = set(_sweep(_SET_ATTRIBUTE_KEY)) | set(_sweep(_ATTRIBUTE_DICT_KEY))
+    found = set(_emitted_attribute_keys())
     expected = _CP_DECLARED | _REGISTERED_EMITTED
 
     assert found == expected, (
