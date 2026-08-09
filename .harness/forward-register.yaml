@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 138
+  total: 141
   open: 0
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 32
   operator_gated: 0
   held: 1
-  closed: 107
-  identity_digest: fc7faa70f7908db5
+  closed: 108
+  identity_digest: 23d31fb2ad4d946f
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -6288,7 +6288,7 @@ items:
     B-138, and B-138 MUST be dispositioned BEFORE any arc touches _build_span_attributes -- including
     Leg 1''s (A) above -- because deriving permanence from result.outcome mints a second derivation from
     a third taxonomy on a function whose authoritative domain is itself unsettled. ROW STAYS
-    registered_finding; it closes when (A) lands.'
+    registered_finding; it closes when (A) lands. CROSS-NOTE 2026-08-09 (B-138 CLOSED at #1278, disposition (a)): the B-138 sequencing gate on _build_span_attributes is DISCHARGED -- the authoritative domain is settled (ValidatorFailClass, CP v1.116). BUT the naive outcome wire this row planned (permanent iff PERMANENT_FAIL from result.outcome) is FORECLOSED as LOSSY at CP v1.116 §1.3: ESCALATE conflates permanent-fail-exit with HITL-recoverable, so that wire would silently narrow §21.6''s always-sample-permanent coverage to the abort path. This row now OWNS the derivation sub-decision (materialize the retry-exit classification at the emission site / ratify the narrowing WITH §21.6 re-specified / another carrier) and notes B-140 (the validator.fail span-site gap) as ADJACENT, not gating: this row''s §10.2 trigger reads the permanence ATTRIBUTE from any span, so the span-site gap gates the §9.2-style NAME keying family (B-123/B-133/B-137), not this half (codex round-3 venue correction).'
   council: 'No. Wiring a declared-but-unset attribute inside a cleared schema, with a named owner (C7/OD). The
     only judgement is step (2)''s scope question, which grounding answers rather than deliberation.'
   heading: '### B-124 · `validator.fail.permanence` is never set on any span, so its OD §9.2 always-sampled row
@@ -7148,7 +7148,71 @@ items:
 - id: B-138
   title: 'validator.fail.class carries TWO taxonomies at one attribute name -- the shipped value is
     C-CP-25 ValidatorFailClass while C-CP-21 declares the attribute as ValidatorRetryExitClass'
-  status: registered_finding
+  status: closed
+  pr: '#1278 (the B-138 spec-correction leg -- design-substrate + register only, ZERO code). CLOSED
+    2026-08-09 under operator-ratified DISPOSITION (a) (AskUserQuestion, after a full grounding pass with
+    every cite re-read by content at HEAD): the wire attribute validator.fail.class carries the
+    C-CP-25->C-CP-28 §25.2 ValidatorFailClass domain. STEP (1) EXECUTED: the producer write re-verified
+    (drifted :346 -> :347); a SECOND live producer found that the registration missed --
+    harness-runtime/src/harness_runtime/lifecycle/validator_escalation_composer.py:151-153 writes
+    brief.fail_class.value (ValidatorFailClass | None, "unspecified" on None). STEP (2): the row''s OWN
+    FALSIFIER FIRED -- C-CP-28 §25.5 (Spec_Control_Plane_v1_10.md:228-233, with §25.2''s ValidatorFailClass
+    + ValidatorResult declarations at :140-206) is a cleared surface declaring the validator.fail span
+    emitting exactly the shipped four attributes, so this was a stale-CP-gloss doc fix rather than a
+    genuine live homonym; OD''s C-OD-29.1 ingestion schema (validator_namespace.py:112-136) was built
+    against that shape; the downstream reader inventory came back ALL-AGNOSTIC (bare-name membership sets
+    + count gates only -- attribute_class_enforcement.py:56, cp_source_namespace_verification.py:61-66,
+    namespace_map.py:185 attribute_count=3, cp_namespace_export_manifest.py:114-121 attribute_count=3);
+    NO reader asserts a ValidatorRetryExitClass value on the attribute; two CP tests assert
+    "safety_policy" (test_validator_framework.py:274, test_workflow_driver_validator_hook.py:327); NO
+    projection function exists in harness-{cp,od,runtime}/src. The conditional C5-C7 dyad NEVER FIRED --
+    it was conditioned on (b) trending, and (b) was contradicted by every downstream fact. STEP (3)
+    dispositioned in the same pass: the CP-3/OD-4 divergence is two contracts declaring
+    disjoint-except-class subsets of one namespace, NOT one contract violated; §21.5''s declared count
+    stays THREE so the count gates are untouched; validator.fail.permanence''s former derivation clause DEMOTED
+    (the replacement derivation is NOT declared -- see STEP (4) below for why the outcome projection
+    was rejected as lossy);
+    cause_attribution stays declared-unwired (pre-existing). SPEC LEG: Spec_Control_Plane_v1_116.md
+    (three amendment sites, all within C-CP-21 §21: §21.5 row-1 domain; the §21 retry-exit binding
+    declaration; §21.5 row-3 derivation clause; plus the §1.4 stale-cross-cite reconciliation covering
+    Spec_Control_Plane_v1_18.md item (iii) and v1_10 §25.2''s H_T-CP-21 parenthetical) + clearance
+    marker spec-control-plane-v1-116-cleared-2026-08-09.md. STEP (4) DISCHARGED: B-124 is UNBLOCKED on the
+    TAXONOMY question; the permanence-derivation SUB-DECISION is routed to B-124 explicitly (v1.116 §1.3
+    -- the outcome projection is LOSSY: ESCALATE conflates permanent-fail-exit with HITL-recoverable, so
+    a naive PERMANENT_FAIL wire would silently narrow §21.6''s always-sample-permanent coverage to the
+    abort path; B-124 must materialize the retry-exit classification at the emission site, ratify the
+    narrowing WITH §21.6 re-specified, or select another carrier). OUT-OF-FAMILY REVIEW (codex, 3 rounds -- round 1:
+    2 P1 + 2 P2; round 2: 1 P1 + 4 P2; round 3: 3 P1 + 1 P2 -- all verified against source; one
+    declined-then-accommodated): (P1) the ADR-D5 §1.10.1 authority-chain
+    conflict -- fixed by the BUNDLED ADR-D5 v1.5 -> v1.6 amendment at the canonical declaration site,
+    not overridden downstream; (P1) the lossy outcome-derivation -- §1.3 rewritten from a re-basing to
+    the routed sub-decision above; (P2) the fail_class=None emission gap + the composer''s out-of-domain
+    "unspecified" sentinel -- §1.1''s emission condition corrected to conditional-on-populated-fail_class
+    with the sentinel declared non-member; (P2) cause_attribution declared-required with zero producers
+    -- MINTED as B-139 rather than absorbed. ROUND 2: (P1) NO production
+    path opens the declared validator.fail span -- attributes ride validator.evaluate
+    (workflow_driver.py:5600) and validator.escalation (validator_escalation_composer.py:141) while OD
+    sampling keys on validator.fail.*-shaped span NAMES production never emits -- MINTED as B-140
+    together with the round-1/2 sentinel disposition, and §1.1 re-scoped to the attribute DOMAIN with
+    the span-site gap recorded; (P2) the closure prose''s own stale re-based clause fixed on BOTH
+    register surfaces; (P2) B-124''s row cross-noted (gate discharged, naive wire foreclosed, B-140
+    coordination owed); (P2) the harness-cp CLAUDE.md ADR-D5 pointer row bumped v1.5 -> v1.6; (P2
+    DECLINED, STANDING -- re-raised at rounds 5/6/8 and accommodated three ways: the close_out
+    supersession marker, the section-leading banner, and per-bullet HISTORY marking in place; full
+    replacement remains declined per the B-119 append-with-supersession precedent, recorded here as
+    a standing reviewer disagreement) the replace-not-append register-prose demand -- the workspace convention is
+    append-with-supersession-note per the B-119 precedent; the internal contradiction it flagged was
+    real and IS fixed; at round 3 a SUPERSEDED-BY-CLOSURE marker was prepended to this row''s
+    close_out so --detail output leads with the operative record. ROUND 3: (P1) the grounding claim
+    "no reader asserts a retry-exit value" was FALSIFIED -- the C-OD-14 §14.5.3 replay-divergence
+    carrier ReplaySemanticDivergenceError (declaration + test, ZERO production emission sites) fixes
+    terminal-fail-exit and ADR-D6 v1.2 declares the retry-exit domain -- MINTED as B-141 (the OD/D6
+    cascade) with the corrected claim stated at v1.116 §0.1; (P1) ADR-D5 §1.10''s own normative
+    carrier references renamed IN PLACE (four sites -- the interpretive-note-only approach rejected);
+    (P2) B-140''s remedy sharpened (trailing-dot prefix precision) and its venue corrected §10.2 ->
+    §9.2-family, with B-124''s cross-note corrected to ADJACENT-not-gating. RESIDUALS: the stale "NEW at C-CP-25" docstring at
+    validator_framework_types.py:71 (Class 3, rides the next arc touching that file); the second
+    producer recorded here for B-124''s witness scope.'
   summary: 'WHAT IT IS, AND IT IS LIVE RATHER THAN IN-WAITING. The span attribute validator.fail.class is
     declared by CP as an ENUM_REF at Cardinality.LOW with the schema docstring stating "validator.fail.class
     is bounded(5)" (harness-cp/src/harness_cp/validator_fail_taxonomy.py:137-141, docstring at :154-159,
@@ -7176,7 +7240,7 @@ items:
     (validator_framework.py:_build_span_attributes, :343-349) produces OD''s four minus permanence and
     NONE of CP''s two remaining -- so neither declaration describes what ships. SURFACED BY DIRECT READ
     AT THE B-124 GROUNDING PASS, 2026-08-08 (#1277) -- not by any council, and not previously registered.'
-  close_out: '(1) RE-GROUND BOTH HALVES AT HEAD before pricing. Confirm validator_framework.py:346 still writes
+  close_out: 'SUPERSEDED BY CLOSURE (#1278, disposition (a)) -- the steps below are REGISTRATION HISTORY; the operative record is this row''s pr: field. (1) RE-GROUND BOTH HALVES AT HEAD before pricing. Confirm validator_framework.py:346 still writes
     a ValidatorFailClass value and that CP §21.5''s declaration still names the ValidatorRetryExitClass
     domain; confirm the CP-3 / OD-4 attribute-set divergence still stands. Direct read, not recall -- the
     B-124 pass found the registration cites of three sibling rows line-drifted by one intervening arc.
@@ -7218,3 +7282,139 @@ items:
     value is C-CP-25 `ValidatorFailClass` while C-CP-21 §21.5 declares the attribute as
     `ValidatorRetryExitClass` *(surfaced by direct read at the `B-124` grounding pass, 2026-08-08 — a
     LIVE homonym, same class as `B-125` but already shipped)*'
+
+- id: B-139
+  title: 'validator.fail.cause_attribution is declared always-emitted at TWO canonical surfaces
+    (ADR-D5 §1.10.1 + C-CP-21 §21.5) but has ZERO producers'
+  status: registered_finding
+  summary: 'WHAT IT IS. Both canonical declaration surfaces state the attribute is always-emitted on every
+    validator-failure event -- ADR-D5 §1.10.1 bullet 2 (open-set enum, 10 base values + 5 F5 secret-*
+    refinements, with the FM-J framing "a fail-class without cause_attribution is FM-J per
+    c5-validation-contract SKILL.md") and C-CP-21 §21.5 row 2 (Spec_Control_Plane_v1_2.md §21.5,
+    medium/open-set cardinality). But ZERO producers exist: the framework producer
+    (validator_framework.py:_build_span_attributes, :320-352) sets class/detail_hash/next_action/
+    escalation_owed and never this key; the runtime escalation composer (validator_escalation_composer.py
+    :143-153) likewise; an rg over harness-*/src finds no write site. SURFACED at the B-138 spec-leg
+    out-of-family codex round (P2), 2026-08-09 -- the B-138 leg corrected the class domain and demoted
+    the permanence derivation clause, and without this row the third §21.5 attribute would be left
+    declared-required with no owner.'
+  close_out: '(1) RE-VERIFY zero producers at HEAD (rg "validator.fail.cause_attribution" over
+    harness-*/src -- declaration/manifest hits only). (2) DECIDE: (a) wire the emission at the
+    fail-classification site per the declared C5 ownership cell -- pricing availability honestly: the
+    cause values live in §21.2''s staircase branches and the retry/breaker machinery, NOT in
+    ValidatorResult, so the producer does not currently hold a cause to emit; or (b) re-declare the
+    emission condition at BOTH canonical surfaces via back-flow (demote "always-emitted" to
+    conditional-or-deferred, the same demote-not-delete standard B-138 used). (3) Whichever way,
+    ADDRESS THE FM-J FRAMING explicitly -- decide whether it is live debt or aspirational, and record
+    it; a declared failure-mode name attached to an unwired attribute is exactly the
+    stale-carry-text class. WHAT WOULD FALSIFY IT: a producer writing the key anywhere in
+    harness-*/src.'
+  council: 'No at registration -- grounding first. Conditionally at step (2): wiring a medium-cardinality
+    open-set attribute trades validation-contract completeness (C5 -- the FM-J rule exists because
+    cause-blind fail classes defeat the staircase''s cause-conditioned branch) against emission cost and
+    operator signal value (C7/C8). Nameable and dyadic if (a) trends; a probe-first pass over what the
+    staircase machinery actually holds may resolve it without convening.'
+  heading: '### B-139 · `validator.fail.cause_attribution` is declared always-emitted at TWO canonical
+    surfaces (ADR-D5 §1.10.1 + C-CP-21 §21.5) but has ZERO producers *(surfaced at the B-138 codex
+    round, 2026-08-09)*'
+
+- id: B-140
+  title: 'The validator.fail.* wire realization diverges from its declared span-site and value alphabet --
+    no production path opens a validator.fail span, and the escalation composer ships an out-of-domain
+    sentinel'
+  status: registered_finding
+  summary: 'TWO GAPS, ONE FAMILY -- both are declared-vs-shipped divergences on the validator.fail.*
+    namespace that survive B-138''s domain settlement. (A) SPAN-SITE: C-CP-28 §25.5 declares a
+    validator.fail SPAN (Spec_Control_Plane_v1_10.md:233) and OD''s C-OD-29.1 declares span_site
+    "validator.fail" (validator_namespace.py:54, :112-136), but NO production path opens such a span --
+    the attributes ride the validator.evaluate span (workflow_driver.py:5600, §C-OD-29.1 envelope
+    attach loop) and the runtime composer''s validator.escalation span
+    (validator_escalation_composer.py:141). OD sampling fixtures are built against
+    validator.fail.*-SHAPED SPAN NAMES production never emits (test_sampling_mode.py:215
+    "validator.fail.semantic_inconsistency"; test_composite_sampler.py:265-268), so the declared
+    §21.6/§25.5 always-sample keying cannot match a live span name -- LOAD-BEARING for the NAME/prefix-keyed always-sample family
+    (B-123/B-133/B-137''s §9.2-style keying -- is_always_sampled matches the trailing-dot prefix
+    "validator.fail." and would NOT match a span named exactly "validator.fail", so the step-(2)
+    open-the-span remedy MUST use a concrete prefixed name or change the sampler) -- NOT for B-124''s
+    §10.2 half, whose trigger reads the permanence ATTRIBUTE from any span and is not gated by span
+    naming (codex round-3 venue correction). (B) SENTINEL: on HITLEscalationBrief.fail_class=None the composer writes
+    validator.fail.class="unspecified" (validator_escalation_composer.py:151-153) -- an out-of-domain
+    value under the closed five-member declaration (CP v1.116 §1.1; ADR-D5 v1.6 §1.10.1), while the
+    framework producer OMITS the attribute on fail_class=None. SURFACED at the B-138 spec-leg codex
+    rounds (round 2 P1 + round 1/2 P2), 2026-08-09; CP v1.116 §1.1 records both gaps and routes them
+    here rather than absorbing them as conformance.'
+  close_out: '(1) RE-GROUND both gaps at HEAD (span-open sites; the OD sampling key shapes; the two
+    None-path behaviours). (2) SPAN-SITE DECISION: open a validator.fail.-PREFIXED span (a concrete
+    suffixed name -- the exact name "validator.fail" alone leaves sampling_mode.py:239''s
+    trailing-dot prefix match INERT, so this option MUST pair a suffixed name or a sampler change, AND MUST
+    amend the exact-span declarations it diverges from -- C-CP-28 §25.5 + C-OD-29.1 -- to declare
+    the suffixed/prefix family, else the repair itself re-opens the contract violation)
+    at the producer(s), OR re-declare the span-site at both contracts (C-CP-28 §25.5 + C-OD-29.1) to the
+    shipped validator.evaluate/validator.escalation carriers, OR alias at the OD classification layer
+    -- grounded on what the OD samplers + B-123/B-133 tail machinery actually key on, and
+    coordinated with B-124 as ADJACENCY, not a gate -- its §10.2 trigger is attribute-keyed
+    (tail_keep_classification.py:96-100) and is not blocked by span naming. (3) SENTINEL DECISION: absent-on-None at the composer
+    (matching the framework producer) OR widen the wire alphabet at both canonical surfaces; either
+    way the two producers must agree. (4) COORDINATE: B-124 (ADJACENT -- attribute-keyed §10.2 trigger, not gated), B-123/B-133 family
+    (tail keying), B-139 (sibling §21.5 gap). WHAT WOULD FALSIFY IT: a production
+    start_as_current_span("validator.fail...") site, or a cleared surface declaring
+    validator.evaluate as the canonical carrier span for these attributes.'
+  council: 'No at registration -- grounding first. Conditionally at step (2): span-site repair trades
+    contract fidelity (C7 -- a declared span-site no sampler can match is dead contract) against
+    emission-shape churn every OD consumer sees (C5/C8). Nameable and dyadic if the re-declare route
+    trends; probe-first over the OD keying may resolve it.'
+  heading: '### B-140 · The `validator.fail.*` wire realization diverges from its declared span-site and
+    value alphabet *(surfaced at the B-138 codex rounds, 2026-08-09)*'
+
+- id: B-141
+  title: 'The replay-semantic-divergence surfaces (C-OD-14 §14.5.3 + ADR-D6 v1.2) fix
+    validator.fail.class = terminal-fail-exit -- a retry-exit value now out-of-domain under the B-138
+    disposition (a) -- and owe a cascade at the OD/D6 venue'
+  status: registered_finding
+  summary: 'WHAT IT IS. B-138 settled the wire attribute validator.fail.class on the C-CP-25->C-CP-28
+    ValidatorFailClass domain (CP v1.116, operator-ratified (a), 2026-08-09). ONE DECLARED surface
+    family still binds the OLD retry-exit domain to the wire name: C-OD-14 §14.5.3''s
+    replay-semantic-divergence escalation carrier ReplaySemanticDivergenceError
+    (harness-od/src/harness_od/idempotency_join_dedup.py:345-367) fixes validator_fail_class =
+    "terminal-fail-exit" (plus cause_attribution = "replay_semantic_divergence", permanence =
+    "permanent", always_sampled = True), enforced by test_idempotency_join_dedup.py:304-306; and
+    ADR-D6 v1.2 declares the retry-exit five-value domain for the attribute at its ingestion rows
+    (ADR-D6_v1_2.md:120 domain row; :298 requiring terminal-fail-exit). ZERO production emission
+    sites construct the carrier at HEAD (declaration + test only), so no live wire value violates
+    the B-138 disposition -- but the DECLARED surfaces contradict it and the register''s B-138
+    grounding claim ("no reader asserts a retry-exit value") was falsified by this family at codex
+    round 3. A SECOND deferred carrier is in the same family (codex round 5):
+    VerifierResult.validator_fail_class (both_by_tier_overlay.py:78-95, the U-CP-41 two-agent-observer
+    verifier output) is documented as drawn from the C-CP-21 §21.5 five-value set, enforced at
+    test_both_by_tier_overlay.py:121-126, with U-CP-41 plan criteria at
+    Implementation_Plan_Control_Plane_v2_9.md:621-630/:683-686 -- deferred (no live producer), but its
+    audit contract routes to validator.fail.*, so it would violate the authoritative wire domain when
+    the observer activates. The CP plan delta-chain history (Implementation_Plan_Control_Plane_v2_4.md
+    :604/:624, the U-CP-47-era criteria) also carries the five-value wire framing -- HISTORY, not retroactively
+    edited, recorded here so no future reader mistakes it for current authority. SURFACED at the
+    B-138 spec-leg codex round 3 (P1), 2026-08-09.'
+  close_out: '(1) RE-GROUND at HEAD: the carrier defaults + test; the ADR-D6 rows; confirm production
+    emission sites are still ZERO. (2) CASCADE at the owning venues, per the B-138 disposition: an
+    ADR-D6 amendment (in-place revision, the ADR-D5 v1.6 mechanics) + an OD spec leg for C-OD-14
+    §14.5.3 + the carrier-default/test updates + a CP PLAN-NOTE DELTA superseding the landed
+    U-CP-47 criteria as-domain (Implementation_Plan_Control_Plane_v2_4.md:631-638, preserved at
+    v2.16 -- an ACTIVE spec/plan contradiction for any future re-validation arc, per codex round 4;
+    the landed unit is NOT amended, per the B-97(a)/B-118 new-unit precedent) + the U-CP-41
+    family (the VerifierResult carrier docstrings + test_both_by_tier_overlay.py:121-126 + the
+    U-CP-41 plan-note, same as-domain supersession) -- deciding WHAT the divergence escalation carries
+    under the new domain: a ValidatorFailClass member (semantic_inconsistency is the natural
+    candidate), a distinct attribute for the retry-exit classification (the B-138 candidate-(c)
+    shape), or a re-declaration of the §14.5.3 fixed attributes. The permanence="permanent" +
+    always-sampled intent MUST survive whichever choice (coordinate with B-124''s derivation
+    sub-decision and B-140''s keying family). (3) The choice changes DECLARED event shape only at
+    HEAD (zero emission sites) -- price accordingly; do not let the cascade silently widen into
+    wiring the emission (that would be its own arc). WHAT WOULD FALSIFY IT: a production
+    construction site of ReplaySemanticDivergenceError appearing before the cascade lands (that
+    would make the out-of-domain value LIVE and upgrade urgency).'
+  council: 'No at registration -- the cascade direction is largely forced by the ratified B-138
+    disposition; the step-(2) carried-value choice is a C5/C7 attribute-semantics call of the kind
+    B-125/B-138 settled in venue. Convene only if the distinct-attribute route (candidate-(c) shape)
+    trends AND it would mint a new wire attribute.'
+  heading: '### B-141 · The replay-semantic-divergence surfaces (C-OD-14 §14.5.3 + ADR-D6 v1.2) fix
+    `validator.fail.class = terminal-fail-exit` -- out-of-domain under B-138 (a); cascade owed at the
+    OD/D6 venue *(surfaced at the B-138 codex round 3, 2026-08-09)*'
