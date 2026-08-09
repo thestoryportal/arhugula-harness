@@ -59,7 +59,11 @@ C-CP-21 §21.5 declares THREE attributes (`class`, `cause_attribution`, `permane
 C-OD-29.1 ingests FOUR (`class`, `detail_hash`, `next_action`, `escalation_owed`); the live
 emission produces OD's four. **This is two contracts declaring disjoint-except-`class` subsets
 of one namespace, not one contract violated**: `detail_hash` / `next_action` / `escalation_owed`
-are C-CP-28 §25.5 members, not §21.5 members, and §21.5's declared count stays THREE — the
+are C-CP-28 §25.5 members, not §21.5 members — and the shipped shape is the C-CP-28 four
+with BOTH Optional-backed members conditional: `class` is omitted on `fail_class=None` (§1.1)
+and `detail_hash` is likewise omitted on `fail_detail_hash=None`
+(`validator_framework.py:348-349`), so "produces OD's four" means UP TO four, never a claim of
+unconditional presence. §21.5's declared count stays THREE — the
 `namespace_map` / export-manifest count gates that pin `validator.fail.* = 3` against C-CP-21
 §21.5 remain correct and untouched. Of §21.5's other two rows: `cause_attribution` is declared
 and not yet emitted at HEAD (pre-existing, unchanged by this delta);
