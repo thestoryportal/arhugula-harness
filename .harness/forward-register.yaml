@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 146
+  total: 147
   open: 0
   design_substrate_gated: 0
   registered_finding: 30
   operator_gated: 0
   held: 1
-  closed: 115
-  identity_digest: a87b45d52b26a1b3
+  closed: 116
+  identity_digest: 7797b4f2beab9d77
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7760,15 +7760,15 @@ items:
 - id: B-143
   title: A wall-clock shutdown-bounding assertion has zero headroom -- its threshold equals the simulated hang,
     so scheduler noise on a loaded CI runner flips it
-  status: registered_finding
-  summary: 'WHAT IT IS. harness-runtime/tests/test_shutdown.py::test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs
-    asserts `elapsed < 0.3` at :894. The simulated hang is `drain_sleep_seconds=0.3` (:886) and the bound under
+  status: closed
+  summary: 'HISTORICAL REGISTRATION GROUNDING (anchors resolve against the pre-closure PR #1285 tree). harness-runtime/tests/test_shutdown.py::test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs
+    asserted `elapsed < 0.3` at :894. The simulated hang was `drain_sleep_seconds=0.3` (:886) and the bound under
     test is `shutdown(ctx, timeout=0.02)` (:892), so the INTENDED elapsed is ~0.02s while the assertion threshold
     is 0.3 -- the SAME value as the hang. The margin between bounded (0.02) and not-bounded (0.3) is therefore entirely
     consumed by event-loop scheduling delay, and on a loaded CI runner the measurement overshoots. OBSERVED TWICE
     IN ONE SESSION, both on DOC-ONLY PRs where no code changed and the test could not have regressed: 2026-08-09
     at PR #1280 (`assert 0.34517101499997693 < 0.3`) and again at PR #1285 (`assert 0.3072814269999924 < 0.3`).
-    The #1280 occurrence was rerun and passed green, confirming flakiness rather than breakage. IT CANNOT SIMPLY
+    The #1280 occurrence was rerun and passed green, confirming flakiness rather than breakage. THE DISCRIMINATOR CANNOT SIMPLY
     BE DELETED. The sibling assertions at :895-896 (`sub_agent_dispatch_executor` in report.failures, report.timed_out
     is True) do NOT discriminate the mutation this test exists to catch: the test''s own docstring (:884-885) says
     a regression makes shutdown revert to waiting out the full 0.3s sleep instead of bounding to ~0.02s -- and that
@@ -7782,15 +7782,18 @@ items:
     by moving to a scripted clock rather than by widening a bound -- prefer that shape, since widening the threshold
     toward the hang duration destroys the discrimination the assertion exists for, and widening the hang instead
     makes every run slower. A scripted/injected clock keeps the discriminator exact and removes the scheduler dependency
-    entirely. (4) DO NOT weaken or delete :894 -- it is the ONLY assertion that discriminates the documented regression,
-    per the analysis above; the sibling structural assertions are satisfied by both the good and the bad behaviour.
+    entirely. (4) SUPERSEDED AT CLOSURE: preserve :894''s discriminating INTENT; the literal elapsed assertion may
+    be replaced by a structural witness that fails on the same missing-wait_for mutation. The sibling report assertions
+    alone remain satisfied by both the good and the bad behaviour.
     (5) SWEEP FOR SIBLINGS: enumerate other wall-clock elapsed-time assertions across harness-*/tests whose threshold
     is within the same order of magnitude as the delay they measure, and report whether any share this zero-headroom
     shape. WHAT WOULD FALSIFY IT. The test failing with report.timed_out False or the failures set empty -- that
     would be a real logic regression, not a timing flake. Or a run under deliberate load where elapsed stays comfortably
     under 0.3, which would mean the two observations had another cause. SIBLING FOUND 2026-08-09 (#1289, the B-126
     arc) -- STEP (5)''s SWEEP HAS ITS FIRST CONCRETE HIT, AND IT IS A DIFFERENT MECHANISM IN THE SAME CLASS. harness-runtime/tests/test_lifecycle_protected_result_store.py::test_gc_sweep_blocks_across_separate_processes_via_cross_process_lock
-    asserts a child process signals readiness within a 10.0s deadline (:1481, ''child never signaled readiness'').
+    asserted a child process signals readiness within a 10.0s deadline (historical pre-closure anchor :1481;
+    current shared readiness helper at :252, child-script gc_sweep call at :238, and readiness-helper invocation
+    in the gc_sweep test at :1533).
     The child is a COLD interpreter that must import the harness packages before it can write the marker, and that
     import cost is what the deadline is really racing. MEASURED, NOT INFERRED: three consecutive standalone runs
     of the very same child script gave time-to-ready of 5.39s / 33.89s / 7.69s -- so the deadline sits INSIDE the
@@ -7807,10 +7810,39 @@ items:
     await. The handshake itself must NOT simply be deleted: its own docstring records that it is LOAD-BEARING (a
     cold child''s import cost would otherwise mask a missing lock, which is the defect the test exists to catch).
     NOT A DEFECT INTRODUCED BY #1289 -- that arc touches harness-cp tests plus register prose only, and harness-runtime/
-    is byte-unchanged in its diff.'
+    is byte-unchanged in its diff. CLOSED 2026-08-09 (this arc) -- THE CLASS WAS CLOSED TEST-ONLY WITHOUT WEAKENING
+    ITS MUTATION DISCRIMINATORS. The named dispatch-executor witness and its three exact shutdown siblings (tracer,
+    provider and MCP host) no longer compare real elapsed time to the same 0.3s hang they simulate. Each now parks
+    the fake operation on an explicit release gate beneath an outer mutation bound that fails if the production wait_for
+    wrapper is removed. The synchronous tracer/dispatch witnesses record the to_thread call attempt without requiring
+    the worker body to win the same 0.02s scheduling race and prove non-completion; the dispatch stage separately
+    proves its reachable timeout-before-worker-start venue. The async provider/MCP fakes isolate already-witnessed
+    predecessor stages, use a 0.5s per-stage budget beneath a 2.0s outer mutation bound, and record start, cancellation,
+    and non-completion at an asyncio.Event wait. This is the #1226 principle -- make the discriminating state exact rather than widen
+    a wall-clock bound -- applied with a structural gate because the state under test is cancellation, not TTL arithmetic.
+    The sibling sweep found FOUR zero-headroom shutdown tests, not one, and all four are hardened. The two cross-process
+    lock witnesses shared the cold-import shape (write_once as well as the registered gc_sweep test): their 10s deadlines
+    are replaced by one 60s cold-child budget, above the measured 33.89s maximum and consistent with existing process
+    witnesses, plus early failure when the child exits before reaching flock. The ready-marker handshake itself is
+    preserved verbatim and remains load-bearing. The aggregate gate then measured TWO additional process-start siblings:
+    the Antigravity CLI descendant witness missed its arbitrary 5s startup deadline, and a Codex session-start hook
+    exceeded the shared 30s subprocess deadline; both passed immediately in isolation (6.49s and 3.04s complete test
+    durations), falsifying a logic defect. Their startup budgets are now 60s, and the reviewer witness also fails
+    immediately if its controller exits before creating the child. Its independent 3s descendant-reap discriminator
+    and 10s SIGTERM-completion bound remain unchanged. ZERO src change, ZERO design-substrate change, ZERO load-bearing
+    discriminator deletion; elapsed assertions were replaced by stronger state/call witnesses. A later aggregate rerun exposed one observation-layer sibling: the pure PR-head mismatch unit test could
+    be preempted by the production session-state shell probe returning UNKNOWN after its own 10s timeout. The four
+    pure merge-proof classifier tests now declare SessionState.INACTIVE as an explicit precondition; all session-state
+    integration tests retain the real hook path, so the classifier assertions remain discriminating without inheriting
+    unrelated shell-probe timing. A third aggregate rerun found the exact original shape in the session-start advisory-hygiene
+    witness: real elapsed was 5.77s against a 5s assertion despite the 1s hygiene bound returning correctly. That test
+    now captures the exact `1` argument passed at the real hook_bounded entry and asserts the deliberately hung hygiene
+    process received TERM; a 15s outer subprocess bound still kills a mutation that removes the hook''s bound before
+    the fake''s 30s sleep completes. ZERO production-tool change.'
   council: No. A test-hygiene defect with two measured occurrences, a named precedent for the fix shape (#1226's
     scripted clock) and no contract surface. The only judgement is step (3)'s fix shape, which the precedent already
     answers.
+  pr: '#1290'
   heading: '### B-143 · A wall-clock shutdown-bounding assertion has **zero headroom** — its threshold equals the
     simulated hang, so scheduler noise on a loaded CI runner flips it *(observed twice on doc-only PRs, 2026-08-09)*'
 - id: B-144
@@ -7956,3 +7988,26 @@ items:
   heading: '### B-146 · The `retry.*` static drift catcher **cannot** guarantee that no undeclared key hides — the
     enumerated escape shapes, recorded rather than chased *(surfaced across out-of-family rounds 2/3/5/6/7 + merge-gate
     lens 3 at #1289, 2026-08-09)*'
+- id: B-147
+  title: shutdown can hang before tracer close when force_flush waits in the saturated default executor queue
+  status: registered_finding
+  summary: 'WHAT IT IS. shutdown() bounds dispatch drain before observability flush, but flush_observability()
+    submits tracer force_flush through asyncio.to_thread without an outer wait_for covering default-executor queue
+    delay. A timed-out workflow worker can still occupy that same loop default executor when api.run() enters shutdown.
+    With a one-worker executor saturated, force_flush queues without starting, the top-level deadline expires without
+    being observed, tracer close is never reached, and the caller receives no ShutdownReport. Reproduced at PR #1290
+    merge-gate Lens 1 with a real saturated executor: the outer positive-control probe printed OUTER_TIMEOUT_BEFORE_REPORT.
+    This is production behavior discovered while hardening B-143 tests; B-143 remains test-only and does not absorb it.'
+  close_out: '(1) Reproduce through the shipped api.run/MCP call chain, not only a constructed HarnessContext, and
+    prove the timed-out CP worker and shutdown share the same loop default executor. (2) Bound force_flush submission
+    plus execution by the remaining shutdown budget; do not rely only on the OTel timeout_millis argument, which begins
+    mattering only after the worker starts. (3) Preserve per-surface failure isolation and decide the exact failure tag
+    when queue delay exhausts the budget. (4) Add a real-executor witness that does not stub away an upstream stage,
+    plus a wrapper-removal mutation proving the witness fails. (5) Sweep the later flush fsync offloads for the same
+    queue-delay venue before closing. WHAT WOULD FALSIFY IT. A shipped call-chain trace showing the workflow worker
+    cannot still occupy the same default executor when shutdown begins, or an existing outer deadline around the
+    force_flush to_thread submission that the merge-gate probe bypassed.'
+  council: No. This is a concrete bounded-shutdown conformance defect with a reproduced venue and a local mechanical
+    repair; escalate only if the failure-tag contract requires a new public surface.
+  heading: '### B-147 · `shutdown()` can hang before tracer close when `force_flush` waits in the saturated default-executor
+    queue *(surfaced by PR #1290 merge-gate Lens 1, 2026-08-09)*'

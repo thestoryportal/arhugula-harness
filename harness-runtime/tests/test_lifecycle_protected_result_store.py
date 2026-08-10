@@ -241,6 +241,63 @@ Path(done_marker).write_text("done")
 )
 
 
+# A cold child must import cryptography plus every harness dependency before it
+# reaches the lock. B-143 measured 5.39s / 33.89s / 7.69s on the same host, so
+# the former 10s deadline sat inside the observed distribution. Sixty seconds
+# matches the repo's other cold-process witnesses while preserving a bounded
+# failure; `_wait_for_child_ready` separately fails immediately on child exit.
+_COLD_CHILD_READY_TIMEOUT_SECONDS = 60.0
+
+
+def _wait_for_child_ready(child: subprocess.Popen[bytes], ready_marker: Path) -> None:
+    deadline = time.monotonic() + _COLD_CHILD_READY_TIMEOUT_SECONDS
+    while not ready_marker.exists():
+        returncode = child.poll()
+        assert returncode is None, f"child exited with status {returncode} before lock readiness"
+        assert time.monotonic() < deadline, (
+            "child never signaled lock readiness within the cold-import budget"
+        )
+        time.sleep(0.02)
+
+
+def test_wait_for_child_ready_fails_immediately_when_child_exits(tmp_path: Path) -> None:
+    child = subprocess.Popen([sys.executable, "-c", "raise SystemExit(7)"])
+    child.wait(timeout=5.0)
+
+    with pytest.raises(AssertionError, match="status 7 before lock readiness"):
+        _wait_for_child_ready(child, tmp_path / "never-written")
+
+
+def test_wait_for_child_ready_bounds_a_live_non_signaling_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(globals(), "_COLD_CHILD_READY_TIMEOUT_SECONDS", 0.05)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    failures: list[BaseException] = []
+    completed = threading.Event()
+
+    def wait_for_ready() -> None:
+        try:
+            _wait_for_child_ready(child, tmp_path / "never-written")
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            completed.set()
+
+    waiter = threading.Thread(target=wait_for_ready)
+    waiter.start()
+    try:
+        assert completed.wait(timeout=1.0), "readiness helper ignored its cold-import budget"
+        assert child.poll() is None
+        assert len(failures) == 1
+        assert isinstance(failures[0], AssertionError)
+        assert "cold-import budget" in str(failures[0])
+    finally:
+        child.terminate()
+        child.wait(timeout=5.0)
+        waiter.join(timeout=5.0)
+
+
 class _ProviderResponse:
     """Module-level (pickle requires a class resolvable by qualified name —
     a locally-defined class inside a test function is NOT picklable)."""
@@ -1415,10 +1472,7 @@ def test_write_once_blocks_across_separate_processes_via_cross_process_lock(
             ]
         )
         try:
-            deadline = time.monotonic() + 10.0
-            while not ready_marker.exists():
-                assert time.monotonic() < deadline, "child never signaled readiness"
-                time.sleep(0.02)
+            _wait_for_child_ready(child, ready_marker)
             # Bounded wait for a chance to run past the held lock, timed
             # from the moment the child is actually about to contend on
             # it — the marker file must still be absent, not merely
@@ -1476,10 +1530,7 @@ def test_gc_sweep_blocks_across_separate_processes_via_cross_process_lock(
             ]
         )
         try:
-            deadline = time.monotonic() + 10.0
-            while not ready_marker.exists():
-                assert time.monotonic() < deadline, "child never signaled readiness"
-                time.sleep(0.02)
+            _wait_for_child_ready(child, ready_marker)
             time.sleep(0.5)
             assert not done_marker.exists(), (
                 "a separate OS process's gc_sweep() completed while the "
