@@ -73,7 +73,16 @@ for _try in $(seq 1 "${CAPTURE_FAILURE_LOCK_TRIES:-50}"); do
   _now=$(date +%s)
   _lockts=$(stat -f %m "$LOCKDIR" 2>/dev/null || stat -c %Y "$LOCKDIR" 2>/dev/null || echo "$_now")
   if [ $((_now - _lockts)) -gt 10 ]; then
-    rmdir "$LOCKDIR" 2>/dev/null || true
+    # Ownership-safe takeover (codex round-3): a bare rmdir raced — contender A
+    # observes stale, B rmdirs+re-acquires, then A rmdirs B's FRESH lock and the
+    # critical sections overlap (a 20-way aged-lock probe emitted 3). rename(2)
+    # is atomic: exactly ONE contender wins the mv of the stale dir to a unique
+    # name and disposes of it; the LIVE pathname is never removed, so a freshly
+    # acquired lock cannot be destroyed. Everyone then re-contends mkdir.
+    _stale="${LOCKDIR}.stale.$$"
+    if mv "$LOCKDIR" "$_stale" 2>/dev/null; then
+      rm -rf "$_stale" 2>/dev/null || true
+    fi
     continue
   fi
   sleep 0.1

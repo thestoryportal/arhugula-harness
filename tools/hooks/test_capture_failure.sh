@@ -133,5 +133,23 @@ rmdir "$LOG.lock"
 [ "$(wc -l < "$LOG" | tr -d ' ')" = "2" ] && ok "lock timeout still logs the row" || bad "lock-timeout row not logged"
 [ "$(tail -1 "$LOG" | jq -r .emitted)" = "false" ] && ok "lock-timeout row marked emitted:false" || bad "lock-timeout row emitted flag wrong"
 
+# 13) codex round-3: stale-lock takeover must be OWNERSHIP-SAFE — with an AGED
+#     stale lock pre-seeded and 12 parallel qualifying contenders, the bare-rmdir
+#     reclaim let one contender destroy another's fresh acquisition (3 emitted).
+#     The mv-takeover keeps the cap exact: still exactly 2 emitted.
+: > "$LOG"
+ST='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"stale_test","session_id":"sess-ST"}'
+run "$ST" >/dev/null   # seed: recur=1 so every parallel run qualifies
+mkdir "$LOG.lock"
+touch -t 202001010000 "$LOG.lock" 2>/dev/null || touch -d '2020-01-01' "$LOG.lock" 2>/dev/null
+for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  ( printf '%s' "$ST" | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" >/dev/null 2>&1 ) &
+done
+wait
+EMITTED=$(grep -c '"emitted":true' "$LOG")
+[ "$EMITTED" = "2" ] && ok "aged-stale-lock 12-way probe emits exactly 2 (ownership-safe takeover)" || bad "stale-takeover cap broken: $EMITTED emitted"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "13" ] && ok "stale-takeover probe: all 13 occurrences logged" || bad "stale probe: log rows $(wc -l < "$LOG")"
+[ ! -d "$LOG.lock" ] && ok "lock released after stale-takeover probe" || bad "lock directory leaked after stale probe"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
