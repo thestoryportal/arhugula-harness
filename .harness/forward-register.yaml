@@ -8030,10 +8030,14 @@ items:
     the gstack checkpoint copy is the advisory origin per AGENTS.md cross-runner-state discipline) —
     units U-CTX-00..22, wave/gate structure, routing law, sub-agent brief contract. Arc 8 / Floor C is
     the SIBLING held row B-149 — not part of this open scope.'
-  close_out: 'Program AC (U-CTX-21/22): measured cold-start + post-compaction preload ≤ 76k (gate; target
-    ~71k) via component-separated A/B with `just context-budget`; all new CI gates green on main; `git
-    log --stat` audit shows ZERO design-substrate/** diffs across all program PRs; register flip to closed
-    + memory entries + final terminating refresh at U-CTX-22.'
+  close_out: 'Program AC (U-CTX-21/22): measured cold-start preload ≤ 76k (gate; target ~71k) via `just
+    context-budget` first-turn metric, AND a post-compaction measurement via a TESTED compaction-generation
+    selector in the tool (first assistant call after each compaction boundary) or a separate documented
+    post-compaction acceptance procedure — the first-turn metric alone CANNOT satisfy the post-compaction
+    half (a post-compaction request is not the session''s first turn; plan errata E4); component-separated
+    A/B for both; all new CI gates green on main; `git log --stat` audit shows ZERO design-substrate/**
+    diffs across all program PRs; register flip to closed + memory entries + final terminating refresh
+    at U-CTX-22.'
   council: 'No. The 3-model reconciliation pipeline (Codex × Opus × Fable reconciler) already served
     as the decorrelated deliberation for this program, and the operator ratified R1–R3 + all-waves execution
     2026-08-10 — no further multi-voice fork remains open.'

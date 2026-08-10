@@ -6,6 +6,8 @@ Reconciliation artifact: https://claude.ai/code/artifact/f045b45e-ecb1-43ae-873a
 Source record: /Users/robertrhu/.claude/jobs/9b1bdd92/tmp/{neutral-brief,codex-r1,opus-r1,deliberation-divergences,codex-r2,opus-r2}.md
 (job tmp is ephemeral — the reconciliation artifact + this plan are the durable record).
 
+**Execution errata (2026-08-10, from codex out-of-family rounds 2–3 on PR #1293; ratified text preserved, corrections marked inline):** E1 (U-CTX-00 arc-ledger step impossible → informational note only) · E2 (Gate G1: Arc 4 additionally gates on the U-CTX-06 merge; #1292 is Codex-owned — poll, never touch) · E3 (U-CTX-14 citation count derived at build time, not hardcoded 635) · E4 (U-CTX-21 post-compaction half needs a compaction-generation selector or separate procedure — the first-turn metric alone is a non-measurement).
+
 ## Ratifications (operator, 2026-08-10)
 - **R1**: Arc 2's three rules (roadmap_status truncation + archive + query-not-Read for the .harness working set).
 - **R2**: Floor B is TERMINAL. Arc 8 / Floor C parked in forward register with D-H probe preconditions. Do not run probes.
@@ -27,7 +29,7 @@ Source record: /Users/robertrhu/.claude/jobs/9b1bdd92/tmp/{neutral-brief,codex-r
 ## Waves and units
 
 ### Wave 0 — orchestrator-direct [NOW]
-- **U-CTX-00 Program registration.** `R-CTX-1` row in `.harness/forward-register.yaml` + arc-ledger row/snapshot bump same commit; Arc 8/Floor C parked row carrying R2 + D-H probe preconditions verbatim. AC: `tools/forward_register.py --check` + `tools/arc_ledger.py --check` green; row quotes R1–R3 with date.
+- **U-CTX-00 Program registration.** `R-CTX-1` rows in `.harness/forward-register.yaml` (program row + Arc 8/Floor C parked row carrying R2 + D-H probe preconditions verbatim) with snapshot + identity_digest bump same commit; arc-ledger gets an **informational comment note only** *(errata E1: the originally-worded "arc-ledger row/snapshot bump" is impossible — `rfs1_status: resolved` forbids any open standalone row per `tools/arc_ledger.py`'s `RFS1_ZERO_OPEN_ALLOWED` invariant and the forward-register header's own "do not fold" directive)*. AC: `tools/forward_register.py --check` + `tools/arc_ledger.py --check` green; row quotes R1–R3 with date.
 - **U-CTX-01 Arc 0 config hygiene (snapshot-first).** Snapshot → `.harness/audit/ctx-opt-baseline-2026-08-10.md` (skillOverrides, plugin scopes, global mcpServers, symlinks) BEFORE changes. Then: +18 skillOverrides off (algorithmic-art, cate-theme, add-molab-badge, connect-chrome, scrape, skillify, setup-gbrain, sync-gbrain, ios-clean, ios-sync, ios-design-review, ios-qa, ios-fix, freeze, landing-report, make-pdf, benchmark-models, plan-tune; KEEP context-save/restore/_gstack-command/gstack (bin/ is runtime dep of context-save), icm-workspace, notebooklm, document-generate/-release, brainstorming, writing-plans, diagram, spec); uninstall local `understand-anything` plugin; global Neon/blender/pencil → destination projects (unknown dest → leave + note); disable context7; delete dangling `~/.claude/skills/library` symlink. AC: snapshot committed first; next-session listing reduced; every change has a one-line revert recipe.
 
 ### Wave 1 — orchestrator PR + one Sonnet worker, parallel [NOW]
@@ -38,7 +40,7 @@ Source record: /Users/robertrhu/.claude/jobs/9b1bdd92/tmp/{neutral-brief,codex-r
   - **U-CTX-05 Query-not-Read prose.** One sentence each: root CLAUDE.md §12.1/§12.2, Project_Roadmap_v1.md §7.2, roadmap-continue/SKILL.md (PINNED body — run `bash tools/hooks/test_skill_*.sh` pre-commit; must not disturb pinned needles/ordering), AGENTS.md pointer. Archive named as mandated reading NOWHERE.
   - **U-CTX-06 claude-artifact-pointers per-family split.** `.harness/artifact-pointers/{is,as,cp,od,runtime,memory,cxa,plans}.md` + resolving stub at old path (BEFORE Arc 4 consumes it); query-first prose for forward-register.yaml/loop_status.md/arc-ledger.yaml pointing at existing tools/*.py. AC gate: `just check` green; YAML parse-check on touched .yaml.
 
-### GATE G1 — PR #1292 merges. Arcs 3–7 rebase onto its final adapter contract. (Monitor-based watch.)
+### GATE G1 — PR #1292 merges. Arcs 3–7 rebase onto its final adapter contract. (Monitor-based watch.) *(errata E2: Agent C / Arc 4 additionally gates on the Arc 2 / U-CTX-06 MERGE — U-CTX-12 consumes the per-family `.harness/artifact-pointers/` files U-CTX-06 creates, so Arc 4 launches only after BOTH #1292 AND PR-2 are merged; Agent B / Arc 3 gates on #1292 only. 2026-08-10 operator directive: #1292 is Codex-owned and still under Codex's own out-of-family review — poll, never merge or touch it from this program.)*
 
 ### Wave 2 — two parallel workers [AFTER #1292]
 - **Agent B · Sonnet 5 · worktree — Arc 3 hooks (PR-3, THE single hook PR):**
@@ -55,7 +57,7 @@ Source record: /Users/robertrhu/.claude/jobs/9b1bdd92/tmp/{neutral-brief,codex-r
 ### Wave 3 — two parallel workers [AFTER Wave 2 merges]
 - **Agent D · Opus 5 · worktree — Arc 5 root → Floor B (PR-5, via /optimize-claude-md discipline):**
   - **U-CTX-13** `docs/governance/*.md` packs + root slimmed to ~26 KB. EVERY §N.M heading keeps number+position; body → pack behind resolving pointer. Safety kernel VERBATIM-IN-FORCE in root: §1.3, §3.1/§3.2, §4.3/§4.4, §5, §8, §11 posture, §12.2.1, §12.4.1, §13.1. `check_pointers.py --baseline` pre/post.
-  - **U-CTX-14** CI citation resolver: root heading set ⊇ all 635 tracked `CLAUDE.md §N` cites (design-substrate 68, .harness 401, .claude 58, root-md 47, harness-* 40, tools 16, .github 4, .githooks 1). tools/ + CI wiring + test.
+  - **U-CTX-14** CI citation resolver: root heading set ⊇ ALL tracked `CLAUDE.md §N` cites — **count derived at build time by `git grep`, never hardcoded** *(errata E3: the 635 figure — design-substrate 68, .harness 401, .claude 58, root-md 47, harness-* 40, tools 16, .github 4, .githooks 1 — was already 636 by round 3 of this PR's own review, because program docs add cites as they land; the resolver + its completeness gate must recount the corpus at execution, treating the reconciliation-time figures as historical)*. tools/ + CI wiring + test.
   - **U-CTX-15** Runner load matrix (rule → load path per runner, tested) + AGENTS.md/CONTEXT.md router updates (AGENTS.md:46 §12.2 cite preserved-or-updated atomically) + router set-EQUALITY test over docs/governance/.
 - **Agent E · Sonnet 5 · worktree — Arc 7 skills (PR-6):**
   - **U-CTX-16** D2 tracked deletions: .claude-side + .agents bridges SAME commit (never .agents-first); dirs + `.gitignore:88-91` together; BOTH parametrize lists (test:979-991 AND :994-1010); parity-note "no deletion" line struck with ratification ref; 5 tracked bmads + bridges.
@@ -68,7 +70,7 @@ Source record: /Users/robertrhu/.claude/jobs/9b1bdd92/tmp/{neutral-brief,codex-r
   - **U-CTX-20** Axis §1.2 slimming → heads-row + archive pointer; harness-as §4.1 rows BYTE-VERBATIM (CI-pinned: `.harness/substitutions.yaml` + `tools/substitution_ledger.py` strings, `| H_T-AS-8e ` row prefix + SUBSTANTIVE_RETIRED + batch-52); axis AGENTS.md projections co-updated.
 
 ### Wave 5 — orchestrator acceptance [CLOSE]
-- **U-CTX-21** Cold-start + post-compaction A/B (component-separated) vs Floor-B ~71k target; per-PR context-budget delta table.
+- **U-CTX-21** Cold-start + post-compaction A/B (component-separated) vs Floor-B ~71k target; per-PR context-budget delta table. *(errata E4: `context_budget.py`'s first-turn metric alone CANNOT satisfy the post-compaction half — a post-compaction request is not the session's first turn. U-CTX-21 requires either a TESTED compaction-generation selector in the tool (first assistant call after each compaction boundary, selected by transcript compact markers) or a separate documented post-compaction acceptance procedure; closing on the first-turn number alone is a non-measurement.)*
 - **U-CTX-22** Program close: register flip; memory entries (≥2-cardinality patterns); MEMORY.md byte-measured single-pass; /context-save; final terminating refresh.
 - **Program AC:** measured preload ≤ 76k (gate; target 71k); all new CI gates green on main; `git log --stat` audit shows zero design-substrate diffs.
 
