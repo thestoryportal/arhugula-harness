@@ -1592,7 +1592,9 @@ hook_bounded() {
     assert "roadmap" in proc.stdout
 
 
-def test_session_start_wrapper_routes_compact_context(tmp_path: Path) -> None:
+def test_compaction_round_trip_routes_real_checkpoint_to_both_codex_consumers(
+    tmp_path: Path,
+) -> None:
     hook_dir = tmp_path / "tools" / "hooks"
     roadmap_dir = tmp_path / "tools" / "roadmap-audit"
     codex_hooks = tmp_path / ".codex" / "hooks"
@@ -1603,6 +1605,7 @@ def test_session_start_wrapper_routes_compact_context(tmp_path: Path) -> None:
         "codex-session-start.sh",
         "session-lease.sh",
         "lib.sh",
+        "precompact-checkpoint.sh",
         "postcompact-reinject.sh",
     ):
         shutil.copy2(ROOT / "tools" / "hooks" / name, hook_dir / name)
@@ -1624,11 +1627,11 @@ def test_session_start_wrapper_routes_compact_context(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     checkpoint = ".harness/.checkpoints/precompact-latest-wrapper-session.md"
-    (tmp_path / checkpoint).write_text(
-        "wrapper pre-compaction checkpoint\n",
-        encoding="utf-8",
-    )
-    for script in (roadmap_dir / "session-start.sh", hook_dir / "loop-gc.sh"):
+    for script in (
+        roadmap_dir / "session-start.sh",
+        hook_dir / "loop-gc.sh",
+        hook_dir / "precompact-checkpoint.sh",
+    ):
         script.chmod(0o755)
     subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
@@ -1637,6 +1640,38 @@ def test_session_start_wrapper_routes_compact_context(tmp_path: Path) -> None:
     subprocess.run(["git", "commit", "-qm", "wrapper base"], cwd=tmp_path, check=True)
     env = os.environ.copy()
     env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
+
+    precompact = subprocess.run(
+        ["bash", str(hook_dir / "precompact-checkpoint.sh")],
+        cwd=tmp_path,
+        input=json.dumps(
+            {
+                "hook_event_name": "PreCompact",
+                "trigger": "auto",
+                "session_id": "wrapper-session",
+                "cwd": str(tmp_path),
+            }
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+        env=env,
+    )
+    assert precompact.returncode == 0, precompact.stderr
+    assert (tmp_path / checkpoint).is_file()
+
+    post_compact = _run_adapter(
+        "post-compact",
+        {
+            "hook_event_name": "PostCompact",
+            "session_id": "wrapper-session",
+            "cwd": str(tmp_path),
+        },
+        cwd=tmp_path,
+    )
+    assert post_compact.returncode == 0, post_compact.stderr
+    assert checkpoint in json.loads(post_compact.stdout)["systemMessage"]
 
     def run_session(source: str, session_id: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
