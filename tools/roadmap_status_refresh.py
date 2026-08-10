@@ -384,6 +384,19 @@ def validate(text: str, status_path: Path = DEFAULT_STATUS) -> list[str]:
                 "instead of accumulating it inline (defeats the U-CTX-03 byte-budget "
                 "truncation)"
             )
+        # Exactly ONE `**Current next action (...)**` paragraph (codex round-5):
+        # a second one would leave hook_roadmap_next consuming whichever comes
+        # first — a potentially stale live pointer — while the inline-history
+        # regex above (which matches only the demoted `Prior`/`Round N` shapes)
+        # stayed silent. Zero means the live pointer is gone entirely.
+        current_count = next_action_body.count("**Current next action (")
+        if current_count != 1:
+            violations.append(
+                f"{NEXT_ACTION_HEADING}: expected exactly ONE `**Current next "
+                f"action (...)**` paragraph, found {current_count} — the live "
+                "pointer must be single and unambiguous (a superseded round is "
+                "relabelled `Prior` and archived, never left as a second Current)"
+            )
     except RoadmapStatusError as e:
         violations.append(str(e))
 
@@ -417,7 +430,7 @@ _REFRESH_TITLE_PREFIX = "ops: roadmap status refresh "
 _REFRESH_ONLY_FILE_SET = frozenset({".harness/roadmap_status.md"})
 
 
-def check_head_refresh_shape(root: Path) -> list[str]:
+def check_head_refresh_shape(root: Path, ref: str = "HEAD") -> list[str]:
     """U-CTX-03 AC #2, git-shape half (codex round-2): if HEAD is a
     terminating-refresh-titled commit, its changed-file set must be EXACTLY
     `.harness/roadmap_status.md` — a refresh that also writes the next-action
@@ -443,7 +456,7 @@ def check_head_refresh_shape(root: Path) -> list[str]:
         return []
     try:
         title = subprocess.run(
-            ["git", "log", "-1", "--format=%s"],
+            ["git", "log", "-1", "--format=%s", ref],
             cwd=root,
             capture_output=True,
             text=True,
@@ -460,7 +473,7 @@ def check_head_refresh_shape(root: Path) -> list[str]:
         # job now checks out full history, so the gate still enforces in CI).
         parent_ok = (
             subprocess.run(
-                ["git", "rev-parse", "--verify", "-q", "HEAD^"],
+                ["git", "rev-parse", "--verify", "-q", f"{ref}^"],
                 cwd=root,
                 capture_output=True,
                 text=True,
@@ -482,7 +495,7 @@ def check_head_refresh_shape(root: Path) -> list[str]:
             if shallow:
                 return []
         changed = subprocess.run(
-            ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
+            ["git", "show", "--name-only", "--pretty=format:", ref],
             cwd=root,
             capture_output=True,
             text=True,
@@ -513,6 +526,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--archive", type=Path, default=DEFAULT_ARCHIVE)
     ap.add_argument("--state", action="store_true", help="print computed WorkspaceState as JSON")
     ap.add_argument("--check", action="store_true", help="validate; exit 1 on any violation")
+    ap.add_argument(
+        "--shape-ref",
+        default="HEAD",
+        help="git ref the terminating-refresh shape gate judges (default HEAD). "
+        "CI pull_request runs pass the PR HEAD sha: actions/checkout puts the "
+        "SYNTHETIC merge ref at HEAD, whose 'Merge ...' subject would make the "
+        "gate silently no-op pre-merge (codex round-5)",
+    )
     ap.add_argument("--trim-drift-log", action="store_true", help="cap+archive drift log only")
     ap.add_argument(
         "--refresh",
@@ -564,7 +585,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check:
         violations = validate(text, args.status)
-        violations.extend(check_head_refresh_shape(status_root))
+        violations.extend(check_head_refresh_shape(status_root, args.shape_ref))
         hard = [v for v in violations if "informational" not in v]
         for v in violations:
             print(f"  - {v}", file=sys.stderr)

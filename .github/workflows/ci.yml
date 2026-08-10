@@ -310,7 +310,13 @@ jobs:
         run: uv run python tools/forward_register.py --check
 
       - name: Validate roadmap_status.md table caps (stray/uncapped rows = CI failure)
-        run: uv run python tools/roadmap_status_refresh.py --check
+        # On pull_request, actions/checkout puts the SYNTHETIC merge ref at
+        # HEAD ("Merge ..." subject) — the refresh-shape gate would silently
+        # no-op pre-merge; judge the PR's real head instead (push events fall
+        # back to HEAD).
+        run: >
+          uv run python tools/roadmap_status_refresh.py --check
+          --shape-ref "${{ github.event.pull_request.head.sha || 'HEAD' }}"
 
       - name: Arc-ledger + forward-register + runtime contract-id tests
         working-directory: tools

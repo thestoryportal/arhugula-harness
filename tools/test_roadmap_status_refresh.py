@@ -79,6 +79,8 @@ SAMPLE = """# Roadmap status dashboard
 
 Some agent-authored prose that must survive untouched.
 
+**Current next action (post-#1).** The next implementable unit is `R-1`.
+
 ---
 
 ## In-flight (open PRs)
@@ -288,6 +290,26 @@ def test_next_action_archive_is_distinct_from_drift_log_archive():
     # into the same file, or a drift-log trim's write would silently also be a
     # next-action-archive write.
     assert rsr.NEXT_ACTION_ARCHIVE.resolve() != rsr.DEFAULT_ARCHIVE.resolve()
+
+
+def test_validate_flags_zero_current_next_action_paragraphs():
+    # codex round-5: zero Current paragraphs = the live pointer is gone.
+    broken = SAMPLE.replace("**Current next action (post-#1).**", "**Formerly current.**")
+    violations = rsr.validate(broken)
+    assert any("exactly ONE" in v and "found 0" in v for v in violations)
+
+
+def test_validate_flags_duplicate_current_next_action_paragraphs():
+    # codex round-5: a forgotten replace leaves TWO Currents; hook_roadmap_next
+    # would consume whichever comes first (a potentially stale pointer) while
+    # the Prior/Round-N inline-history regex stays silent.
+    doubled = SAMPLE.replace(
+        "**Current next action (post-#1).** The next implementable unit is `R-1`.",
+        "**Current next action (post-#1).** The next implementable unit is `R-1`.\n\n"
+        "**Current next action (post-#2).** The next implementable unit is `R-2`.",
+    )
+    violations = rsr.validate(doubled)
+    assert any("exactly ONE" in v and "found 2" in v for v in violations)
 
 
 def _git_scratch_repo(tmp_path: Path, title: str, files: dict[str, str]) -> Path:

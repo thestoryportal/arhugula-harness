@@ -24,6 +24,30 @@ needed.*
 Query, do not read wholesale: `rg <term> .harness/artifact-pointers/*.md` for a
 specific artifact/version/`B-`-id, rather than loading every family file.
 
+## §2 redirect anchors
+
+Root `CLAUDE.md` §2 cites this file by section number (`§2.1`..`§2.5`); those
+anchors resolve HERE to their family-file destinations (codex catch — the
+first stub dropped them, landing byte-exact-citation followers on nothing):
+
+### §2.1 Governance + Execution Discipline
+→ `.harness/artifact-pointers/plans.md` (governance-anchor roles + lineage).
+
+### §2.2 ADR + ADD + PRD
+→ `.harness/artifact-pointers/plans.md` (ADR-F/D + ADD + PRD version notes).
+
+### §2.3 Per-Axis Specs (Phase 5 Contract Authority)
+→ per-family: `.harness/artifact-pointers/{is,as,cp,od,runtime,memory}.md`
+(each carries its axis's spec-pointer lineage).
+
+### §2.4 Per-Axis Plans + CXA (Phase 6 Execution Authority)
+→ per-family: `.harness/artifact-pointers/{is,as,cp,od,runtime,memory}.md`
+(plan-pointer lineage) + `.harness/artifact-pointers/cxa.md` (CXA) +
+`.harness/artifact-pointers/plans.md` (core plan + cross-family notes).
+
+### §2.5 Per-Axis Subdirectory `CLAUDE.md` Pointers
+→ `.harness/artifact-pointers/plans.md` (the prior §2.5 pointer text).
+
 ## Other `.harness` working-set surfaces — query, not Read
 
 These carry their own live-derivation tooling; read the derived/rendered
