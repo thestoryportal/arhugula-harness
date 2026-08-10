@@ -40,6 +40,12 @@ WTC=$(git -C "$PROJECT_DIR" worktree list 2>/dev/null | grep -c .)
 CF_LOCK="$PROJECT_DIR/.harness/session-issues.jsonl.lock"
 if [ -d "$CF_LOCK" ]; then
   _cfnow=$(date +%s)
+  # IDENTITY BEFORE AGE (codex round-8): the owner token is captured FIRST so
+  # it is bound to the same lock instance whose mtime the age check judges —
+  # capturing after the check let a lagging reaper bind to a fresh SUCCESSOR's
+  # token and delete the live lock. If the dir is replaced between token-read
+  # and stat, the stat sees the YOUNG successor and the reap is skipped.
+  _cfobs=$(cat "$CF_LOCK/owner" 2>/dev/null || echo "")
   # SEPARATE assignments per stat dialect (codex round-7 P1): `$(A || B)`
   # captures BOTH commands' stdout — on GNU, BSD-form `stat -f %m` PRINTS
   # filesystem info for the valid path while exiting nonzero, so the combined
@@ -47,15 +53,12 @@ if [ -d "$CF_LOCK" ]; then
   _cfts=$(stat -f %m "$CF_LOCK" 2>/dev/null) || _cfts=$(stat -c %Y "$CF_LOCK" 2>/dev/null) || _cfts="$_cfnow"
   case "$_cfts" in '' | *[!0-9]*) _cfts="$_cfnow" ;; esac
   if [ $((_cfnow - _cfts)) -gt 60 ]; then
-    # Identity-bound reap (codex round-7 P2): two concurrent SessionStarts can
-    # both age the OLD lock; after one reaps and a failure hook acquires a
-    # fresh successor, the other's pathname rm would delete the successor.
-    # Observe the owner token, mv atomically, verify the MOVED dir carries the
-    # observed token; a mismatch means we displaced a fresh lock — restore it.
-    # (Residual, recorded: the restore can itself collide with a re-mkdir —
-    # needs a second µs-race inside the same 60s-stale window; per the
-    # arms-race discipline this boundary is recorded, not chased.)
-    _cfobs=$(cat "$CF_LOCK/owner" 2>/dev/null || echo "")
+    # Identity-bound reap (codex rounds 7+8): mv atomically, verify the MOVED
+    # dir carries the token captured WITH the age observation; a mismatch means
+    # we displaced a fresh lock — restore it. (Residual, recorded: the restore
+    # can itself collide with a re-mkdir — needs a second µs-race inside the
+    # same 60s-stale window; per the arms-race discipline this boundary is
+    # recorded, not chased.)
     _cfmv="${CF_LOCK}.reap.$$"
     if mv "$CF_LOCK" "$_cfmv" 2>/dev/null; then
       _cfgot=$(cat "$_cfmv/owner" 2>/dev/null || echo "")
