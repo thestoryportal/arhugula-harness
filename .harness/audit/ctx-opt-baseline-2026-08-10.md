@@ -68,9 +68,13 @@ Pre-change `enabledPlugins` (`~/.claude/settings.json`):
 (minimal-change; revert of the uninstall is a one-line reinstall).
 
 **Changes applied (post-snapshot):**
-- `claude plugin uninstall understand-anything` (both local-scope entries).
-  **Revert:** `claude plugin install understand-anything@understand-anything`
-  from `~/Projects/arhugula-v2` (marketplace registration retained).
+- `claude plugin uninstall understand-anything --scope local` (run twice: once
+  from `~/Projects/arhugula-v2`, once from
+  `~/Projects/arhugula-v2/.codex-worktrees/codex-hook-contract-fix-plan`).
+  **Revert:** `claude plugin install understand-anything@understand-anything --scope local`,
+  run from EACH original directory (`~/Projects/arhugula-v2` and
+  `…/.codex-worktrees/codex-hook-contract-fix-plan`) — the default user scope
+  would NOT restore the recorded pre-state (marketplace registration retained).
 - `claude plugin disable context7@claude-plugins-official`.
   **Revert:** `claude plugin enable context7@claude-plugins-official`.
 
