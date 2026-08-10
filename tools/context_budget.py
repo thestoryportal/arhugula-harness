@@ -86,18 +86,19 @@ def first_turn_total(path: Path) -> dict[str, Any] | None:
             if rec.get("type") != "assistant" or rec.get("isSidechain"):
                 continue
             request_id = rec.get("requestId")
-            if request_id is not None:
-                if request_id in seen_request_ids:
-                    continue
-                seen_request_ids.add(request_id)
+            if request_id is not None and request_id in seen_request_ids:
+                continue
             usage = _usage_of(rec)
             if usage is None:
                 continue
             parts = {f: int(usage.get(f) or 0) for f in USAGE_FIELDS}
             if sum(parts.values()) == 0:
-                # aborted/empty call (all-zero usage) — not a measurement;
-                # keep scanning for the session's first real API call.
+                # aborted/empty call (all-zero usage) — not a measurement; do
+                # NOT mark the requestId seen (a later chunk of the SAME
+                # request may carry the real usage); keep scanning.
                 continue
+            if request_id is not None:
+                seen_request_ids.add(request_id)
             return {
                 "session": path.stem,
                 "timestamp": rec.get("timestamp"),
@@ -149,16 +150,18 @@ def post_compaction_first_turns(path: Path) -> list[dict[str, Any]]:
             if rec.get("type") != "assistant" or rec.get("isSidechain"):
                 continue
             request_id = rec.get("requestId")
-            if request_id is not None:
-                if request_id in seen_request_ids:
-                    continue
-                seen_request_ids.add(request_id)
+            if request_id is not None and request_id in seen_request_ids:
+                continue
             usage = _usage_of(rec)
             if usage is None:
                 continue
             parts = {f: int(usage.get(f) or 0) for f in USAGE_FIELDS}
             if sum(parts.values()) == 0:
+                # zero-usage chunk: do NOT mark seen — a later chunk of the
+                # same request may carry the real usage.
                 continue
+            if request_id is not None:
+                seen_request_ids.add(request_id)
             rows.append(
                 {
                     "session": path.stem,
@@ -199,16 +202,18 @@ def sidechain_first_turns(path: Path) -> list[dict[str, Any]]:
                 if rec.get("type") != "assistant":
                     continue
                 request_id = rec.get("requestId")
-                if request_id is not None:
-                    if request_id in seen_request_ids:
-                        continue
-                    seen_request_ids.add(request_id)
+                if request_id is not None and request_id in seen_request_ids:
+                    continue
                 usage = _usage_of(rec)
                 if usage is None:
                     continue
                 total = sum(int(usage.get(f) or 0) for f in USAGE_FIELDS)
                 if total == 0:
+                    # zero-usage chunk: do NOT mark seen — a later chunk of
+                    # the same request may carry the real usage.
                     continue
+                if request_id is not None:
+                    seen_request_ids.add(request_id)
                 rows.append(
                     {
                         "session": path.stem,
@@ -372,6 +377,8 @@ def main(argv: list[str] | None = None) -> int:
         payload: dict[str, Any] = {"summary": summary, "sessions": rows}
         if args.post_compaction:
             payload["post_compaction"] = post_compaction_rows
+        if args.sidechains:
+            payload["sidechains"] = side_rows
         print(json.dumps(payload, indent=2))
         return 0
 
