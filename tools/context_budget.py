@@ -73,14 +73,12 @@ def first_turn_total(path: Path) -> dict[str, Any] | None:
     Walks the file in order; the first non-sidechain assistant record carrying
     a ``message.usage`` with a fresh ``requestId`` is the session's first API
     call. Malformed lines are skipped (transcripts are append-only and a
-    mid-write tail line may be truncated).
+    mid-write tail line may be truncated). An UNREADABLE file propagates
+    ``OSError`` — silently substituting older sessions would let the
+    acceptance metric shift without revealing the missing input (fail closed).
     """
     seen_request_ids: set[str] = set()
-    try:
-        fh = path.open(encoding="utf-8")
-    except OSError:
-        return None
-    with fh:
+    with path.open(encoding="utf-8") as fh:
         for line in fh:
             rec = _loads_record(line)
             if rec is None:
@@ -134,11 +132,7 @@ def post_compaction_first_turns(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen_request_ids: set[str] = set()
     pending_trigger: str | None = None
-    try:
-        fh = path.open(encoding="utf-8")
-    except OSError:
-        return rows
-    with fh:
+    with path.open(encoding="utf-8") as fh:
         for line in fh:
             rec = _loads_record(line)
             if rec is None:
@@ -179,27 +173,25 @@ def post_compaction_first_turns(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def sidechain_first_turns(path: Path) -> list[int]:
-    """First-turn total of each subagent spawned by one session.
+def sidechain_first_turns(path: Path) -> list[dict[str, Any]]:
+    """First-turn row of each subagent spawned by one session.
 
     Subagent transcripts are NOT inlined in the parent session file — each
     lives at ``<session-stem>/subagents/agent-*.jsonl`` beside it. The first
     non-zero assistant usage record per agent file (request-ID-deduplicated
     within the file, so stream chunks of one call never count twice) is that
-    subagent's first turn. Reported separately from the headline — subagent
+    subagent's first turn; its own timestamp rides along so callers can rank
+    by event recency. Reported separately from the headline — subagent
     preload is an additive cost, never folded into the main-session number.
+    Unreadable agent files propagate ``OSError`` (fail closed).
     """
-    totals: list[int] = []
+    rows: list[dict[str, Any]] = []
     subagents_dir = path.parent / path.stem / "subagents"
     if not subagents_dir.is_dir():
-        return totals
+        return rows
     for agent_file in sorted(subagents_dir.glob("agent-*.jsonl")):
         seen_request_ids: set[str] = set()
-        try:
-            fh = agent_file.open(encoding="utf-8")
-        except OSError:
-            continue
-        with fh:
+        with agent_file.open(encoding="utf-8") as fh:
             for line in fh:
                 rec = _loads_record(line)
                 if rec is None:
@@ -217,19 +209,26 @@ def sidechain_first_turns(path: Path) -> list[int]:
                 total = sum(int(usage.get(f) or 0) for f in USAGE_FIELDS)
                 if total == 0:
                     continue
-                totals.append(total)
+                rows.append(
+                    {
+                        "session": path.stem,
+                        "agent": agent_file.stem,
+                        "timestamp": rec.get("timestamp"),
+                        "sidechain_total": total,
+                    }
+                )
                 break  # first real call only — one first turn per agent file
-    return totals
+    return rows
 
 
-def collect(directory: Path, limit: int) -> list[dict[str, Any]]:
-    """The ``limit`` most-recent measurable sessions, ranked by FIRST-TURN time.
+def collect_all(directory: Path) -> list[dict[str, Any]]:
+    """Every measurable session's first-turn row, ranked by FIRST-TURN time.
 
     Not by file mtime: resuming an old session after a config change bumps its
     mtime while its first turn (what we measure) stays historical — mtime
     ranking would mix pre-change measurements into a post-change cohort and
     corrupt the program's A/B delta. Every session file is scanned; the row's
-    own first-turn timestamp decides recency.
+    own first-turn timestamp decides recency. Callers slice the window.
     """
     rows: list[dict[str, Any]] = []
     for path in directory.glob("*.jsonl"):
@@ -237,7 +236,7 @@ def collect(directory: Path, limit: int) -> list[dict[str, Any]]:
         if row is not None:
             rows.append(row)
     rows.sort(key=lambda r: str(r.get("timestamp") or ""), reverse=True)
-    return rows[:limit]
+    return rows
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -275,7 +274,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no transcript dir at {directory}", file=sys.stderr)
         return 1
 
-    rows = collect(directory, args.sessions)
+    try:
+        all_rows = collect_all(directory)
+    except OSError as e:
+        # Fail closed: silently substituting older sessions would let the
+        # acceptance metric change without revealing the missing input.
+        print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
+        return 1
+    rows = all_rows[: args.sessions]
     if not rows:
         print(f"no measurable sessions under {directory}", file=sys.stderr)
         return 1
@@ -318,15 +324,30 @@ def main(argv: list[str] | None = None) -> int:
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
 
-    # The deep-scan views (post-compaction, sidechains) follow the HEADLINE
-    # rows only — an excluded headless session's compact boundaries or
-    # subagents must not leak into the acceptance aggregates.
-    recent_files = [directory / f"{r['session']}.jsonl" for r in headline_rows]
+    # The deep-scan views (post-compaction, sidechains) are cohort-filtered
+    # AND event-time-windowed: they scan EVERY eligible CLI session (an
+    # excluded headless session's compact boundaries or subagents never leak
+    # in) and keep events whose OWN timestamp falls inside the headline
+    # window's time span, ranked by that event timestamp. Selecting by the
+    # parent's first-turn time would drop a fresh compaction inside a resumed
+    # old session while keeping stale events from newer parents.
+    eligible_files = [directory / f"{r['session']}.jsonl" for r in all_rows if _eligible(r)]
+    window_start = min(str(r.get("timestamp") or "") for r in headline_rows)
+
+    def _windowed(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        kept = [e for e in events if str(e.get("timestamp") or "") >= window_start]
+        kept.sort(key=lambda e: str(e.get("timestamp") or ""), reverse=True)
+        return kept
 
     post_compaction_rows: list[dict[str, Any]] = []
     if args.post_compaction:
-        for path in recent_files:
-            post_compaction_rows.extend(post_compaction_first_turns(path))
+        try:
+            for path in eligible_files:
+                post_compaction_rows.extend(post_compaction_first_turns(path))
+        except OSError as e:
+            print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
+            return 1
+        post_compaction_rows = _windowed(post_compaction_rows)
         pc_totals = [r["post_compaction_total"] for r in post_compaction_rows]
         summary["post_compaction_measured"] = len(pc_totals)
         if pc_totals:
@@ -334,9 +355,15 @@ def main(argv: list[str] | None = None) -> int:
             summary["post_compaction_mean"] = int(statistics.mean(pc_totals))
 
     if args.sidechains:
-        side: list[int] = []
-        for path in recent_files:
-            side.extend(sidechain_first_turns(path))
+        side_rows: list[dict[str, Any]] = []
+        try:
+            for path in eligible_files:
+                side_rows.extend(sidechain_first_turns(path))
+        except OSError as e:
+            print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
+            return 1
+        side_rows = _windowed(side_rows)
+        side = [r["sidechain_total"] for r in side_rows]
         summary["sidechain_first_turns_measured"] = len(side)
         if side:
             summary["sidechain_median_first_turn"] = int(statistics.median(side))
