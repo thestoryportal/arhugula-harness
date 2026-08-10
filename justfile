@@ -141,6 +141,12 @@ overlay-check:
 overlay-query *ARGS:
     uv run python tools/semantic_overlay/overlay.py query "$@"
 
+# R-CTX-1 context-budget instrument: first-turn preload per session (median/mean),
+# plus --post-compaction (errata E4 selector) and --sidechains views.
+# e.g.: just context-budget --sessions 20 --post-compaction
+context-budget *ARGS:
+    uv run python tools/context_budget.py "$@"
+
 # ─── forward register — structured post-Phase-8 B-* forward-work schema ─────
 # Sibling to arc-ledger.yaml (see tools/forward_register.py's own header for why
 # arc-ledger.yaml itself cannot carry these rows). Prose home stays at

@@ -1,0 +1,462 @@
+#!/usr/bin/env python3
+"""First-turn context-budget measurement over Claude Code session transcripts.
+
+R-CTX-1 U-CTX-02 instrument. For each session JSONL under the project's
+transcript directory (``~/.claude/projects/<cwd-slug>/``), find the FIRST
+main-loop assistant API call and report its context size:
+
+    input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+
+— i.e. everything the model read on turn 1: the preloaded system prompt,
+CLAUDE.md corpus, hook output, and the first user message. This is the
+program's headline metric (baseline ~98-100k; Floor-B target ~71k; gate 76k).
+
+Records are DEDUPLICATED BY REQUEST ID: stream chunks and retries of one API
+call share a ``requestId``, so only the first record per requestId counts.
+Sidechain records (subagent transcripts inlined with ``isSidechain: true``)
+are excluded — subagent preload is a separate, additive cost (reported by
+``--sidechains``), never folded into the main-session first-turn number.
+
+Stdlib-only by design (no workspace deps; runs under any ``uv run python``).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import statistics
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, cast
+
+USAGE_FIELDS = (
+    "input_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+_DESCRIPTION = "First-turn context-budget measurement over Claude Code session transcripts."
+
+
+class MalformedTranscriptError(ValueError):
+    """A non-tail transcript line failed to parse — the file's record stream
+    cannot be trusted, so measurement aborts rather than silently selecting a
+    later call as the session's first turn."""
+
+
+def _loads_record(line: str) -> dict[str, Any] | None:
+    """One transcript line as a dict, or None (malformed / non-object)."""
+    try:
+        rec = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(rec, dict):
+        return None
+    return cast("dict[str, Any]", rec)
+
+
+def _records(path: Path) -> list[dict[str, Any]]:
+    """Every record of one transcript file, failing closed on corruption.
+
+    Only a malformed FINAL line is benign (an append in progress at read
+    time). A malformed line with records after it means the transcript was
+    interrupted and resumed — the true first turn may be inside the damaged
+    region, so any measurement over the file would be silently wrong; raise
+    instead. Propagates ``OSError`` for unreadable files (same posture).
+    """
+    records: list[dict[str, Any]] = []
+    pending_bad: int | None = None
+    with path.open(encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, start=1):
+            if not line.strip():
+                continue
+            rec = _loads_record(line)
+            if pending_bad is not None:
+                # anything after a malformed line makes that line non-tail
+                raise MalformedTranscriptError(
+                    f"{path}:{pending_bad}: malformed non-tail record "
+                    f"(line {lineno} follows it) — refusing to measure this file"
+                )
+            if rec is None:
+                pending_bad = lineno
+                continue
+            records.append(rec)
+    return records
+
+
+def _usage_of(rec: dict[str, Any]) -> dict[str, Any] | None:
+    """The record's ``message.usage`` dict, or None."""
+    message = rec.get("message")
+    if not isinstance(message, dict):
+        return None
+    usage = cast("dict[str, Any]", message).get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return cast("dict[str, Any]", usage)
+
+
+def _positive_int(value: str) -> int:
+    """argparse type for ``--sessions``: a negative count would be read by
+    Python slicing as "all but the last N" and silently measure an unintended
+    cohort; zero is equally meaningless for an acceptance metric."""
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
+    return n
+
+
+def project_transcript_dir(cwd: Path) -> Path:
+    """Claude Code's per-project transcript dir: cwd path with '/' -> '-'."""
+    slug = str(cwd.resolve()).replace("/", "-")
+    return Path.home() / ".claude" / "projects" / slug
+
+
+def first_turn_total(path: Path) -> dict[str, Any] | None:
+    """First main-loop assistant usage record of one session file, or None.
+
+    Walks the file in order; the first non-sidechain assistant record carrying
+    a ``message.usage`` with a fresh ``requestId`` is the session's first API
+    call. Malformed lines are skipped (transcripts are append-only and a
+    mid-write tail line may be truncated). An UNREADABLE file propagates
+    ``OSError`` — silently substituting older sessions would let the
+    acceptance metric shift without revealing the missing input (fail closed).
+    """
+    seen_request_ids: set[str] = set()
+    for rec in _records(path):
+        if rec.get("type") != "assistant" or rec.get("isSidechain"):
+            continue
+        request_id = rec.get("requestId")
+        if request_id is not None and request_id in seen_request_ids:
+            continue
+        usage = _usage_of(rec)
+        if usage is None:
+            continue
+        parts = {f: int(usage.get(f) or 0) for f in USAGE_FIELDS}
+        if sum(parts.values()) == 0:
+            # aborted/empty call (all-zero usage) — not a measurement; do
+            # NOT mark the requestId seen (a later chunk of the SAME
+            # request may carry the real usage); keep scanning.
+            continue
+        if request_id is not None:
+            seen_request_ids.add(request_id)
+        return {
+            "session": path.stem,
+            "timestamp": rec.get("timestamp"),
+            "request_id": request_id,
+            # cohort discriminator: a `claude -p` / SDK / restricted-tool run
+            # preloads a different config surface than a real session, and
+            # enough of them would let the ≤76k gate pass without the real
+            # preload shrinking. (sessionKind, entrypoint) separates them —
+            # e.g. ('bg','cli') for background sessions vs (None,'sdk-cli')
+            # for headless SDK runs.
+            "cohort": (
+                f"{rec.get('sessionKind') or 'interactive'}/{rec.get('entrypoint') or 'unknown'}"
+            ),
+            **parts,
+            "first_turn_total": sum(parts.values()),
+        }
+    return None
+
+
+def post_compaction_first_turns(path: Path) -> list[dict[str, Any]]:
+    """First main-loop assistant usage after EACH compaction boundary (errata E4).
+
+    A compaction lands in the transcript as ``{"type": "system", "subtype":
+    "compact_boundary", "compactMetadata": {"trigger": "manual"|"auto", ...}}``.
+    A post-compaction request is NOT the session's first turn, so
+    ``first_turn_total`` structurally cannot see it — this selector walks the
+    file and captures the first non-sidechain, non-zero assistant usage record
+    following each boundary (request-ID-deduplicated), giving the program's
+    post-compaction acceptance measurement its own instrument.
+    """
+    rows: list[dict[str, Any]] = []
+    seen_request_ids: set[str] = set()
+    pending_trigger: str | None = None
+    for rec in _records(path):
+        if rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
+            meta = rec.get("compactMetadata")
+            if isinstance(meta, dict):
+                pending_trigger = str(cast("dict[str, Any]", meta).get("trigger", "unknown"))
+            else:
+                pending_trigger = "unknown"
+            continue
+        if pending_trigger is None:
+            continue
+        if rec.get("type") != "assistant" or rec.get("isSidechain"):
+            continue
+        request_id = rec.get("requestId")
+        if request_id is not None and request_id in seen_request_ids:
+            continue
+        usage = _usage_of(rec)
+        if usage is None:
+            continue
+        parts = {f: int(usage.get(f) or 0) for f in USAGE_FIELDS}
+        if sum(parts.values()) == 0:
+            # zero-usage chunk: do NOT mark seen — a later chunk of the
+            # same request may carry the real usage.
+            continue
+        if request_id is not None:
+            seen_request_ids.add(request_id)
+        rows.append(
+            {
+                "session": path.stem,
+                "timestamp": rec.get("timestamp"),
+                "request_id": request_id,
+                "trigger": pending_trigger,
+                **parts,
+                "post_compaction_total": sum(parts.values()),
+            }
+        )
+        pending_trigger = None
+    return rows
+
+
+def sidechain_first_turns(path: Path) -> list[dict[str, Any]]:
+    """First-turn row of each subagent spawned by one session.
+
+    Subagent transcripts are NOT inlined in the parent session file — each
+    lives at ``<session-stem>/subagents/agent-*.jsonl`` beside it. The first
+    non-zero assistant usage record per agent file (request-ID-deduplicated
+    within the file, so stream chunks of one call never count twice) is that
+    subagent's first turn; its own timestamp rides along so callers can rank
+    by event recency. Reported separately from the headline — subagent
+    preload is an additive cost, never folded into the main-session number.
+    Unreadable agent files propagate ``OSError`` (fail closed).
+    """
+    rows: list[dict[str, Any]] = []
+    subagents_dir = path.parent / path.stem / "subagents"
+    if not subagents_dir.is_dir():
+        return rows
+    for agent_file in sorted(subagents_dir.glob("agent-*.jsonl")):
+        seen_request_ids: set[str] = set()
+        for rec in _records(agent_file):
+            if rec.get("type") != "assistant":
+                continue
+            request_id = rec.get("requestId")
+            if request_id is not None and request_id in seen_request_ids:
+                continue
+            usage = _usage_of(rec)
+            if usage is None:
+                continue
+            total = sum(int(usage.get(f) or 0) for f in USAGE_FIELDS)
+            if total == 0:
+                # zero-usage chunk: do NOT mark seen — a later chunk of
+                # the same request may carry the real usage.
+                continue
+            if request_id is not None:
+                seen_request_ids.add(request_id)
+            rows.append(
+                {
+                    "session": path.stem,
+                    "agent": agent_file.stem,
+                    "timestamp": rec.get("timestamp"),
+                    "sidechain_total": total,
+                }
+            )
+            break  # first real call only — one first turn per agent file
+    return rows
+
+
+def collect_all(directory: Path) -> list[dict[str, Any]]:
+    """Every measurable session's first-turn row, ranked by FIRST-TURN time.
+
+    Not by file mtime: resuming an old session after a config change bumps its
+    mtime while its first turn (what we measure) stays historical — mtime
+    ranking would mix pre-change measurements into a post-change cohort and
+    corrupt the program's A/B delta. Every session file is scanned; the row's
+    own first-turn timestamp decides recency. Callers slice the window.
+    """
+    rows: list[dict[str, Any]] = []
+    for path in directory.glob("*.jsonl"):
+        row = first_turn_total(path)
+        if row is not None:
+            rows.append(row)
+    rows.sort(key=lambda r: str(r.get("timestamp") or ""), reverse=True)
+    return rows
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
+    parser.add_argument(
+        "--project-dir",
+        type=Path,
+        default=Path.cwd(),
+        help="project whose transcripts to measure (default: cwd)",
+    )
+    parser.add_argument(
+        "--sessions",
+        type=_positive_int,
+        default=20,
+        help="most-recent eligible-session count (default 20; must be >= 1)",
+    )
+    parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument(
+        "--post-compaction",
+        action="store_true",
+        help="also report the first assistant call after each compaction boundary "
+        "(errata E4 — the post-compaction acceptance selector; a post-compaction "
+        "request is never the session's first turn)",
+    )
+    parser.add_argument(
+        "--sidechains",
+        action="store_true",
+        help="also report per-session sidechain (subagent) first-turn totals — "
+        "a separate additive cost, never folded into the headline",
+    )
+    args = parser.parse_args(argv)
+
+    directory = project_transcript_dir(args.project_dir)
+    if not directory.is_dir():
+        print(f"no transcript dir at {directory}", file=sys.stderr)
+        return 1
+
+    try:
+        all_rows = collect_all(directory)
+    except (OSError, MalformedTranscriptError, UnicodeDecodeError) as e:
+        # Fail closed: silently substituting older sessions would let the
+        # acceptance metric change without revealing the missing input.
+        print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
+        return 1
+    if not all_rows:
+        print(f"no measurable sessions under {directory}", file=sys.stderr)
+        return 1
+
+    # Headline statistics come from the ELIGIBLE cohort only: real CLI
+    # sessions (entrypoint `cli` — bg or interactive alike). Eligibility is
+    # EXPLICIT, never plurality — and the window is filled with ELIGIBLE rows
+    # (the N most-recent CLI sessions), never sliced first: slicing before
+    # filtering would let an SDK-dominated window shrink the sample to a
+    # handful of sessions and still pass the ≤76k acceptance gate. If the
+    # corpus cannot supply the requested eligible count, the measurement
+    # REFUSES rather than silently undersizing.
+    def _eligible(r: dict[str, Any]) -> bool:
+        return str(r.get("cohort") or "").endswith("/cli")
+
+    eligible_all = [r for r in all_rows if _eligible(r)]
+    if len(eligible_all) < args.sessions:
+        cohorts_seen: dict[str, int] = {}
+        for r in all_rows:
+            c = str(r.get("cohort") or "unknown")
+            cohorts_seen[c] = cohorts_seen.get(c, 0) + 1
+        print(
+            f"only {len(eligible_all)} eligible CLI session(s) (entrypoint 'cli') in the "
+            f"corpus, but --sessions {args.sessions} requested — cohorts seen: "
+            f"{cohorts_seen}. Refusing to compute an undersized headline; pass "
+            f"--sessions {max(len(eligible_all), 1)} to measure what exists.",
+            file=sys.stderr,
+        )
+        return 1
+    headline_rows = eligible_all[: args.sessions]
+    headline_cohort = "*/cli"
+    window_floor = min(str(r.get("timestamp") or "") for r in headline_rows)
+    # ineligible sessions inside the headline window's time span, for the record
+    excluded: dict[str, int] = {}
+    for r in all_rows:
+        if not _eligible(r) and str(r.get("timestamp") or "") >= window_floor:
+            c = str(r.get("cohort") or "unknown")
+            excluded[c] = excluded.get(c, 0) + 1
+    rows = headline_rows
+
+    totals = [r["first_turn_total"] for r in headline_rows]
+    summary = {
+        "headline_cohort": headline_cohort,
+        "headline_sessions": len(headline_rows),
+        "excluded_in_window": excluded,
+        "median_first_turn": float(statistics.median(totals)),
+        "mean_first_turn": float(statistics.mean(totals)),
+        "min_first_turn": min(totals),
+        "max_first_turn": max(totals),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+
+    # The deep-scan views (post-compaction, sidechains) are cohort-filtered
+    # AND event-time-windowed: they scan EVERY eligible CLI session (an
+    # excluded headless session's compact boundaries or subagents never leak
+    # in) and keep events whose OWN timestamp falls inside the headline
+    # window's time span, ranked by that event timestamp. Selecting by the
+    # parent's first-turn time would drop a fresh compaction inside a resumed
+    # old session while keeping stale events from newer parents.
+    eligible_files = [directory / f"{r['session']}.jsonl" for r in all_rows if _eligible(r)]
+    window_start = min(str(r.get("timestamp") or "") for r in headline_rows)
+
+    def _windowed(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        kept = [e for e in events if str(e.get("timestamp") or "") >= window_start]
+        kept.sort(key=lambda e: str(e.get("timestamp") or ""), reverse=True)
+        return kept
+
+    post_compaction_rows: list[dict[str, Any]] = []
+    if args.post_compaction:
+        try:
+            for path in eligible_files:
+                post_compaction_rows.extend(post_compaction_first_turns(path))
+        except (OSError, MalformedTranscriptError, UnicodeDecodeError) as e:
+            print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
+            return 1
+        post_compaction_rows = _windowed(post_compaction_rows)
+        pc_totals = [r["post_compaction_total"] for r in post_compaction_rows]
+        summary["post_compaction_measured"] = len(pc_totals)
+        if pc_totals:
+            summary["post_compaction_median"] = float(statistics.median(pc_totals))
+            summary["post_compaction_mean"] = float(statistics.mean(pc_totals))
+
+    side_rows: list[dict[str, Any]] = []
+    if args.sidechains:
+        try:
+            for path in eligible_files:
+                side_rows.extend(sidechain_first_turns(path))
+        except (OSError, MalformedTranscriptError, UnicodeDecodeError) as e:
+            print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
+            return 1
+        side_rows = _windowed(side_rows)
+        side = [r["sidechain_total"] for r in side_rows]
+        summary["sidechain_first_turns_measured"] = len(side)
+        if side:
+            summary["sidechain_median_first_turn"] = float(statistics.median(side))
+
+    if args.json:
+        payload: dict[str, Any] = {"summary": summary, "sessions": rows}
+        if args.post_compaction:
+            payload["post_compaction"] = post_compaction_rows
+        if args.sidechains:
+            payload["sidechains"] = side_rows
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    print(f"context-budget — {len(rows)} eligible CLI session(s) from {directory}")
+    for r in rows:
+        ts = (r["timestamp"] or "")[:19]
+        print(
+            f"  {r['session'][:8]}  {ts}  input={r['input_tokens']:>7,}"
+            f"  cache_new={r['cache_creation_input_tokens']:>8,}"
+            f"  cache_read={r['cache_read_input_tokens']:>8,}"
+            f"  TOTAL={r['first_turn_total']:>8,}"
+        )
+    excluded_note = f"; excluded in window: {excluded}" if excluded else ""
+    print(
+        f"median={summary['median_first_turn']:,}  mean={summary['mean_first_turn']:,.1f}"
+        f"  min={summary['min_first_turn']:,}  max={summary['max_first_turn']:,}"
+        f"  (headline cohort {headline_cohort}: {len(headline_rows)} sessions{excluded_note})"
+    )
+    if args.post_compaction:
+        n = summary.get("post_compaction_measured", 0)
+        if n:
+            print(
+                f"post-compaction: n={n}"
+                f"  median={summary.get('post_compaction_median', 0):,}"
+                f"  mean={summary.get('post_compaction_mean', 0):,.1f}"
+                f"  (first call after each compact_boundary — the E4 selector)"
+            )
+        else:
+            print("post-compaction: no compact_boundary records in the measured sessions")
+    if args.sidechains and summary.get("sidechain_first_turns_measured"):
+        print(
+            f"sidechains: n={summary['sidechain_first_turns_measured']}"
+            f"  median={summary.get('sidechain_median_first_turn', 0):,}"
+            f"  (separate additive cost — NOT in the headline)"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
