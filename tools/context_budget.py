@@ -280,22 +280,37 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no measurable sessions under {directory}", file=sys.stderr)
         return 1
 
-    # Headline statistics come from the DOMINANT cohort only. A `claude -p` /
-    # SDK / restricted-tool run preloads a different config surface; enough of
-    # them in the window would let the ≤76k acceptance gate pass without the
-    # real preload shrinking. Other cohorts are still listed, separately.
-    by_cohort: dict[str, list[dict[str, Any]]] = {}
+    # Headline statistics come from the ELIGIBLE cohort only: real CLI
+    # sessions (entrypoint `cli` — bg or interactive alike). Eligibility is
+    # EXPLICIT, never plurality: a window dominated by `claude -p` / SDK /
+    # restricted-tool runs (entrypoint `sdk-cli` etc.) must not become the
+    # headline, or the ≤76k acceptance gate could pass without the real
+    # preload shrinking. Ineligible cohorts are listed separately.
+    def _eligible(r: dict[str, Any]) -> bool:
+        return str(r.get("cohort") or "").endswith("/cli")
+
+    headline_rows = [r for r in rows if _eligible(r)]
+    excluded: dict[str, int] = {}
     for r in rows:
-        by_cohort.setdefault(str(r.get("cohort") or "unknown"), []).append(r)
-    headline_cohort = max(by_cohort, key=lambda c: len(by_cohort[c]))
-    headline_rows = by_cohort[headline_cohort]
+        if not _eligible(r):
+            c = str(r.get("cohort") or "unknown")
+            excluded[c] = excluded.get(c, 0) + 1
+    if not headline_rows:
+        print(
+            f"no eligible CLI sessions (entrypoint 'cli') among the {len(rows)} "
+            f"selected — cohorts seen: {excluded}. Refusing to compute a headline "
+            "from ineligible (headless/SDK) sessions.",
+            file=sys.stderr,
+        )
+        return 1
+    headline_cohort = "*/cli"
 
     totals = [r["first_turn_total"] for r in headline_rows]
     summary = {
         "sessions_measured": len(rows),
         "headline_cohort": headline_cohort,
         "headline_sessions": len(headline_rows),
-        "excluded_cohorts": {c: len(rs) for c, rs in by_cohort.items() if c != headline_cohort},
+        "excluded_cohorts": excluded,
         "median_first_turn": int(statistics.median(totals)),
         "mean_first_turn": int(statistics.mean(totals)),
         "min_first_turn": min(totals),
@@ -303,8 +318,10 @@ def main(argv: list[str] | None = None) -> int:
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
 
-    # The deep-scan views follow the SELECTED sessions, not an mtime re-glob.
-    recent_files = [directory / f"{r['session']}.jsonl" for r in rows]
+    # The deep-scan views (post-compaction, sidechains) follow the HEADLINE
+    # rows only — an excluded headless session's compact boundaries or
+    # subagents must not leak into the acceptance aggregates.
+    recent_files = [directory / f"{r['session']}.jsonl" for r in headline_rows]
 
     post_compaction_rows: list[dict[str, Any]] = []
     if args.post_compaction:
@@ -334,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"context-budget — {len(rows)} session(s) from {directory}")
     for r in rows:
         ts = (r["timestamp"] or "")[:19]
-        marker = "" if r.get("cohort") == headline_cohort else f"  [{r.get('cohort')} — excluded]"
+        marker = "" if _eligible(r) else f"  [{r.get('cohort')} — excluded]"
         print(
             f"  {r['session'][:8]}  {ts}  input={r['input_tokens']:>7,}"
             f"  cache_new={r['cache_creation_input_tokens']:>8,}"
