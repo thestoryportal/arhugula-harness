@@ -44,14 +44,20 @@ TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
 # this differentiates e.g. "Bash:command_failed" failures from `git status` vs
 # `npm test` instead of collapsing them into one bucket.
 EXITCODE=$(hook_json "$PAYLOAD" '.tool_error.exit_code')
-if [ -n "$EXITCODE" ]; then
+CMDRAW=$(hook_json "$PAYLOAD" '.tool_input.command')
+# Flatten BEFORE truncating (codex P2): `cut -c1-40` alone keeps 40 chars of
+# EVERY line, so a heredoc/generated script produced an arbitrarily large
+# signature despite the cap. Newlines/tabs become spaces, then one global cut.
+CMDHEAD=$(printf '%s' "$CMDRAW" | tr '\n\t' '  ' | cut -c1-40)
+# Exit code and command identity COMPOSE (codex round-4): exit code alone
+# collapsed unrelated commands that both exit 1 (`git status` vs `npm test`)
+# into one signature — false recurrence, wasted nudge slots.
+if [ -n "$EXITCODE" ] && [ -n "$CMDHEAD" ]; then
+  EXIT_OR_CMDHEAD="${EXITCODE}:${CMDHEAD}"
+elif [ -n "$EXITCODE" ]; then
   EXIT_OR_CMDHEAD="$EXITCODE"
 else
-  CMDRAW=$(hook_json "$PAYLOAD" '.tool_input.command')
-  # Flatten BEFORE truncating (codex P2): `cut -c1-40` alone keeps 40 chars of
-  # EVERY line, so a heredoc/generated script produced an arbitrarily large
-  # signature despite the cap. Newlines/tabs become spaces, then one global cut.
-  EXIT_OR_CMDHEAD=$(printf '%s' "$CMDRAW" | tr '\n\t' '  ' | cut -c1-40)
+  EXIT_OR_CMDHEAD="$CMDHEAD"
 fi
 SIG="${EVENT}:${TOOL}:${ERRTYPE}:${EXIT_OR_CMDHEAD}"   # recurrence key (semantic, for display)
 
@@ -67,8 +73,27 @@ SIG="${EVENT}:${TOOL}:${ERRTYPE}:${EXIT_OR_CMDHEAD}"   # recurrence key (semanti
 # CAPTURE_FAILURE_LOCK_TRIES: test seam (default 50 × 0.1s ≈ 5s).
 LOCKDIR="${LOG}.lock"
 _LOCKED=false
+_LOCK_TOKEN=""
+# Release ONLY the lock instance this process acquired: verify the ownership
+# token before deleting (codex round-4 — a displaced >10s holder's pathname
+# rmdir deleted its successor's fresh lock, re-breaking the emission cap).
+_release_lock() {
+  [ "$_LOCKED" = true ] || return 0
+  [ "$(cat "$LOCKDIR/owner" 2>/dev/null)" = "$_LOCK_TOKEN" ] && rm -rf "$LOCKDIR" 2>/dev/null
+  return 0
+}
 for _try in $(seq 1 "${CAPTURE_FAILURE_LOCK_TRIES:-50}"); do
-  if mkdir "$LOCKDIR" 2>/dev/null; then _LOCKED=true; break; fi
+  if mkdir "$LOCKDIR" 2>/dev/null; then
+    # Ownership token (codex round-4): a holder that exceeds the 10s stale
+    # threshold mid-section can be taken over; its pathname-based release then
+    # deleted the SUCCESSOR's lock. Release verifies this token first, so a
+    # displaced holder never removes a lock it no longer owns. (Residual: the
+    # token-read→delete window is microseconds against the 10s takeover
+    # threshold — accepted, recorded here.)
+    _LOCK_TOKEN="$$.$(date +%s).$RANDOM"
+    printf '%s' "$_LOCK_TOKEN" > "$LOCKDIR/owner" 2>/dev/null || true
+    _LOCKED=true; break
+  fi
   # stale-lock reclaim (crashed holder): BSD stat first (macOS), GNU fallback (CI)
   _now=$(date +%s)
   _lockts=$(stat -f %m "$LOCKDIR" 2>/dev/null || stat -c %Y "$LOCKDIR" 2>/dev/null || echo "$_now")
@@ -119,9 +144,9 @@ if [ "$WOULD_NUDGE" = true ] && [ "$_LOCKED" = true ]; then
 fi
 
 ROW=$(jq -nc --arg ts "$TS" --arg ev "$EVENT" --arg tool "$TOOL" --arg et "$ERRTYPE" --arg sig "$SIG" --arg sess "$SESSION" --argjson emitted "$EMIT_NOW" \
-  '{ts:$ts,event:$ev,tool:$tool,error_type:$et,sig:$sig,session:$sess,emitted:$emitted}' 2>/dev/null) || { [ "$_LOCKED" = true ] && rmdir "$LOCKDIR" 2>/dev/null; exit 0; }
-printf '%s\n' "$ROW" >> "$LOG" 2>/dev/null || { [ "$_LOCKED" = true ] && rmdir "$LOCKDIR" 2>/dev/null; exit 0; }
-[ "$_LOCKED" = true ] && rmdir "$LOCKDIR" 2>/dev/null || true
+  '{ts:$ts,event:$ev,tool:$tool,error_type:$et,sig:$sig,session:$sess,emitted:$emitted}' 2>/dev/null) || { _release_lock; exit 0; }
+printf '%s\n' "$ROW" >> "$LOG" 2>/dev/null || { _release_lock; exit 0; }
+_release_lock
 # --- End critical section.
 
 if [ "$EMIT_NOW" = true ]; then

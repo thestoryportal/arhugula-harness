@@ -52,13 +52,21 @@ OUT=$(run "$S2")                           # sess-B second occurrence → count=
 printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "same-session recurrence still nudges at 2" || bad "same-session nudge missing: $OUT"
 [ "$(grep -c '"session":"sess-B"' "$LOG")" = "2" ] && ok "rows tagged with session_id" || bad "session_id not recorded"
 
-# 6) U-CTX-07: signature gains a 4th segment — exit code when tool_error carries one.
+# 6) U-CTX-07 (+ codex round-4): the 4th segment COMPOSES exit code and command
+#    head — exit code alone collapsed unrelated commands that both exit 1.
 : > "$LOG"
 EC='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-EC","tool_input":{"command":"npm test"},"tool_error":{"exit_code":"1"}}'
 run "$EC" >/dev/null
 SIG_ROW=$(tail -1 "$LOG")
-printf '%s' "$SIG_ROW" | jq -e '.sig == "PostToolUseFailure:Bash:command_failed:1"' >/dev/null \
-  && ok "sig carries exit_code as 4th segment" || bad "sig missing exit_code segment: $SIG_ROW"
+printf '%s' "$SIG_ROW" | jq -e '.sig == "PostToolUseFailure:Bash:command_failed:1:npm test"' >/dev/null \
+  && ok "sig composes exit_code + command head" || bad "sig not composed: $SIG_ROW"
+
+# 6b) codex round-4: same exit code, DIFFERENT commands → distinct signatures — the
+#     second command's first failure must NOT count as a recurrence of the first.
+EC2='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-EC","tool_input":{"command":"git status"},"tool_error":{"exit_code":"1"}}'
+OUT=$(run "$EC2")
+[ -z "$OUT" ] && ok "distinct command with same exit code is NOT a recurrence" || bad "cross-command false recurrence: $OUT"
+[ "$(jq -rs '[.[].sig] | unique | length' "$LOG")" = "2" ] && ok "two distinct sigs logged for two commands" || bad "sigs collapsed: $(jq -rs '[.[].sig]' "$LOG")"
 
 # 7) U-CTX-07: falls back to a (truncated) command head when no exit_code is present.
 : > "$LOG"
@@ -150,6 +158,18 @@ EMITTED=$(grep -c '"emitted":true' "$LOG")
 [ "$EMITTED" = "2" ] && ok "aged-stale-lock 12-way probe emits exactly 2 (ownership-safe takeover)" || bad "stale-takeover cap broken: $EMITTED emitted"
 [ "$(wc -l < "$LOG" | tr -d ' ')" = "13" ] && ok "stale-takeover probe: all 13 occurrences logged" || bad "stale probe: log rows $(wc -l < "$LOG")"
 [ ! -d "$LOG.lock" ] && ok "lock released after stale-takeover probe" || bad "lock directory leaked after stale probe"
+
+# 14) codex round-4: release must verify OWNERSHIP — a hook must never delete a
+#     lock it does not own. Seed a foreign-owned FRESH lock; the hook times out
+#     (suppressed emission per #12) and the foreign lock must SURVIVE.
+: > "$LOG"
+FO='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"own_test","session_id":"sess-FO"}'
+run "$FO" >/dev/null
+mkdir "$LOG.lock"; printf '%s' "someone-else" > "$LOG.lock/owner"
+printf '%s' "$FO" | CLAUDE_PROJECT_DIR="$REPO" CAPTURE_FAILURE_LOCK_TRIES=2 bash "$HOOK" >/dev/null 2>&1
+[ -d "$LOG.lock" ] && [ "$(cat "$LOG.lock/owner")" = "someone-else" ] \
+  && ok "foreign-owned fresh lock survives (ownership-checked release)" || bad "foreign lock deleted or mutated"
+rm -rf "$LOG.lock"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
