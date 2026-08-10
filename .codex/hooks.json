@@ -47,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/bin/bash \"$(git rev-parse --show-toplevel)/tools/hooks/permission-guard.sh\"",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/codex_hook_adapter.py\" permission-guard",
             "statusMessage": "Applying autonomous-loop guardrails",
             "timeout": 20
           }
@@ -97,7 +97,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/bin/bash \"$(git rev-parse --show-toplevel)/tools/hooks/postcompact-reinject.sh\"",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/codex_hook_adapter.py\" post-compact",
             "statusMessage": "Restoring compacted context",
             "timeout": 30
           }

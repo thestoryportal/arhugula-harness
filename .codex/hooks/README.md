@@ -31,7 +31,8 @@ Every Claude hook behavior supported by Codex's lifecycle is wired here. The Cod
 | `PreToolUse` | cache clear + permission guard + Codex boundary guard | Equivalent plus Codex guard |
 | `PreToolUse Bash(git commit*)` | `codex_hook_adapter.py pre-commit` runs pyright and root validation only for commit commands | Equivalent |
 | `PermissionRequest` | permission guard + Codex request classifier | Equivalent plus Codex classifier |
-| `PreCompact` / `PostCompact` | generation-ordered atomic session-specific checkpoint and reinjection scripts | Direct |
+| `PreCompact` | generation-ordered atomic session-specific checkpoint | Direct |
+| `PostCompact` | shared reinjection producer through the Codex adapter; compact SessionStart context uses the same producer | Equivalent effect |
 | `PostToolUse` | roadmap refresh audit + adapter-driven edit lint | Equivalent; Codex `apply_patch` paths are parsed from `tool_input.command` |
 | `PostToolUseFailure` | Codex `PostToolUse` receives structured nonzero Bash results; the adapter normalizes them into `capture-failure.sh`'s Claude payload | Behavior-equivalent adapter |
 | `UserPromptSubmit` | prompt context + skill activation + prompt lint | Direct |
@@ -39,6 +40,27 @@ Every Claude hook behavior supported by Codex's lifecycle is wired here. The Cod
 | `SessionEnd` | lease-first release + local-only cleanup in one three-second handler | Direct |
 | `Stop` | Claude stop gate + git arc guard + loop stop, alongside the Codex context gate | Direct plus Codex guard |
 | `StopFailure` | no dedicated Codex lifecycle event exists | Not event-exact; stop failures remain visible and recurring command failures still flow through the adapter |
+
+## Hook contract map
+
+Parity means **equivalent effect**, not byte-identical output schemas. The shared
+Claude producers retain their Claude contracts; Codex adapters translate only the
+effects that Codex accepts.
+
+| Case | Claude producer and boundary | Codex effect |
+|---|---|---|
+| Bare safe `PreToolUse` allow | `permission-guard.sh` -> `permission-guard` adapter | No Codex opinion; it does not approve execution. `PermissionRequest` decides approval through its supported boundary. An allow carrying `updatedInput` is instead denied because the adapter cannot safely translate a Claude rewrite. |
+| Hard `PreToolUse` deny | `permission-guard.sh` -> `permission-guard` adapter | Reconstructs only the supported deny decision and its reason; Claude-only fields never cross the Codex boundary. |
+| Post-compaction context | `postcompact-reinject.sh` -> `post-compact` adapter | Universal `systemMessage` only, including producer diagnostics; the Claude-shaped producer output is not itself a Codex hook response. A silent producer yields no output and exit 0. |
+| Compact model context | `postcompact-reinject.sh` -> `compact-context` adapter -> SessionStart wrapper | Appends only when `source=compact`; any producer failure preserves the rest of SessionStart and appends an explicit recovery instruction. |
+
+Shared-producer tests prove the original Claude contracts. PostCompact translation
+validity is covered by shared-producer and adapter behavioral tests. The installed-host runtime witness
+keeps the real `PreToolUse:permission-guard` and `PostCompact:post-compact` adapters;
+the remaining handlers for `SessionStart`, `PreToolUse`, `PostToolUse`, `PreCompact`,
+`Stop`, and `SessionEnd` are recorder substitutes. Events outside that bounded set,
+including `PermissionRequest`, are omitted from the live fixture; their contracts are
+covered by hermetic shared-producer and registration tests.
 
 Codex has no dedicated `PostToolUseFailure` or `StopFailure` event. The first is covered for
 structured Bash results because `PostToolUse` fires for failed Bash calls. Its documented
@@ -48,10 +70,21 @@ exactly until Codex exposes that lifecycle event; it is the only hook-level comp
 
 Run `just codex-hook-runtime-witness` to verify the installed Codex CLI host itself. The
 witness derives its matcher groups from `.codex/hooks.json`, removes provider credentials,
-serves three deterministic Responses exchanges from `127.0.0.1`, and proves SessionStart,
-Bash and apply_patch Pre/PostToolUse, Stop, SessionEnd, and both tool effects. It uses
+serves five deterministic Responses exchanges from `127.0.0.1`, forces one automatic
+compaction, and proves PreCompact, accepted PostCompact output, compact SessionStart, Bash
+and apply_patch Pre/PostToolUse, Stop, SessionEnd, and both allowed tool effects. It also
+proves the exact registered command shapes, executes absolute-path equivalents three times
+for permission and once for PostCompact, requires positive non-empty PostCompact output
+evidence, and verifies that a force-push command's pre-effect marker stayed absent after
+Codex parsed the real deny. It reports the installed Codex version and uses the production
+`/usr/bin/python3` interpreter for both real adapters and
 `--dangerously-bypass-hook-trust` only inside that vetted temporary fixture; normal sessions
 still require explicit trust through `/hooks`.
+
+The shared `PreToolUse` producer currently emits only bare `allow` or `deny` and never emits
+`updatedInput`. The Codex adapter intentionally treats any future unsupported decision or
+allow-side rewrite as a structured deny until that new producer contract has explicit Codex
+coverage.
 
 ## Trust and startup failures
 
