@@ -85,5 +85,39 @@ printf '%s' "$O3" | grep -q "recurring failure" && ok "cap: occurrence 3 nudges 
 [ "$(wc -l < "$LOG" | tr -d ' ')" = "5" ] && ok "cap: all 5 occurrences still logged (cap only suppresses emission)" || bad "cap: log row count wrong"
 [ "$(grep -c '"emitted":true' "$LOG")" = "2" ] && ok "cap: exactly 2 rows marked emitted:true this session" || bad "cap: emitted:true row count wrong"
 
+# 9) codex P2: a command with JSON-escaped characters (quotes) must still reach the
+#    recurrence threshold — the old raw grep compared the raw sig against the
+#    JSON-escaped logged value and never matched, so quoted commands never nudged.
+: > "$LOG"
+QC='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-QC","tool_input":{"command":"python -c \"print(1)\" --flag"}}'
+run "$QC" >/dev/null
+OUT=$(run "$QC")
+printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "quoted-command recurrence reaches threshold (parsed count)" || bad "quoted-command recurrence broken: $OUT"
+
+# 10) codex P2: a MULTILINE command head must be flattened then globally truncated —
+#     cut -c1-40 alone kept 40 chars of EVERY line (unbounded signature).
+: > "$LOG"
+ML='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-ML","tool_input":{"command":"line-one-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nline-two-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nline-three-ccccc"}}'
+run "$ML" >/dev/null
+SIGLEN=$(tail -1 "$LOG" | jq -r .sig | wc -c | tr -d ' ')
+# sig = "PostToolUseFailure:Bash:command_failed:" (39 chars) + <=40 head + newline from wc
+[ "$SIGLEN" -le 81 ] && ok "multiline command head globally bounded (sig ${SIGLEN}B)" || bad "multiline sig unbounded: ${SIGLEN}B"
+[ "$(tail -1 "$LOG" | wc -l | tr -d ' ')" = "1" ] && ok "multiline command produced a single JSONL row" || bad "row not single-line"
+
+# 11) codex P2: the emission cap must hold under PARALLEL invocations — the unlocked
+#     read-then-append let overlapping hooks all see the same prior count (a 12-way
+#     probe emitted 6). With the mkdir lock, exactly 2 of these emit.
+: > "$LOG"
+PAR='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"par_test","session_id":"sess-PAR"}'
+run "$PAR" >/dev/null   # seed: recur=1 (below threshold) so every parallel run qualifies
+for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  ( printf '%s' "$PAR" | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" >/dev/null 2>&1 ) &
+done
+wait
+EMITTED=$(grep -c '"emitted":true' "$LOG")
+[ "$EMITTED" = "2" ] && ok "parallel 12-way probe emits exactly 2 (lock holds the cap)" || bad "parallel cap broken: $EMITTED emitted"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "13" ] && ok "parallel probe: all 13 occurrences logged" || bad "parallel probe: log row count $(wc -l < "$LOG")"
+[ ! -d "$LOG.lock" ] && ok "lock released after parallel probe" || bad "lock directory leaked"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

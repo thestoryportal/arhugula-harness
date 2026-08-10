@@ -48,17 +48,46 @@ if [ -n "$EXITCODE" ]; then
   EXIT_OR_CMDHEAD="$EXITCODE"
 else
   CMDRAW=$(hook_json "$PAYLOAD" '.tool_input.command')
-  EXIT_OR_CMDHEAD=$(printf '%s' "$CMDRAW" | cut -c1-40)
+  # Flatten BEFORE truncating (codex P2): `cut -c1-40` alone keeps 40 chars of
+  # EVERY line, so a heredoc/generated script produced an arbitrarily large
+  # signature despite the cap. Newlines/tabs become spaces, then one global cut.
+  EXIT_OR_CMDHEAD=$(printf '%s' "$CMDRAW" | tr '\n\t' '  ' | cut -c1-40)
 fi
 SIG="${EVENT}:${TOOL}:${ERRTYPE}:${EXIT_OR_CMDHEAD}"   # recurrence key (semantic, for display)
+
+# --- Critical section: count + append must be atomic (codex P2 — overlapping
+# failure hooks for parallel tool calls all read the same prior counts before any
+# appends; a 12-way identical-failure probe emitted SIX rows past the 2-cap).
+# mkdir is the portable atomic primitive (macOS ships no flock binary). On a
+# crashed holder the lock goes stale: reclaim when older than 10s. If the lock
+# cannot be acquired in ~5s, proceed WITHOUT it — a hook must degrade to at-worst
+# an extra emission, never block or fail the tool flow.
+LOCKDIR="${LOG}.lock"
+_LOCKED=false
+for _try in $(seq 1 50); do
+  if mkdir "$LOCKDIR" 2>/dev/null; then _LOCKED=true; break; fi
+  # stale-lock reclaim (crashed holder): BSD stat first (macOS), GNU fallback (CI)
+  _now=$(date +%s)
+  _lockts=$(stat -f %m "$LOCKDIR" 2>/dev/null || stat -c %Y "$LOCKDIR" 2>/dev/null || echo "$_now")
+  if [ $((_now - _lockts)) -gt 10 ]; then
+    rmdir "$LOCKDIR" 2>/dev/null || true
+    continue
+  fi
+  sleep 0.1
+done
 
 # Recurrence: count PRIOR rows with this signature WITHIN THE CURRENT SESSION (i.e.
 # before this occurrence is appended below). The log is a gitignored append-only file
 # that persists across sessions in the same worktree, so an unscoped count would
 # report the first repeat of an old failure as "2x this session" on a fresh open.
-# Scoping on session_id keeps the "this session" claim true. >=2 (cardinality, per
-# §12.5.1) → this occurrence would nudge, subject to the per-session emission cap below.
-PRIOR_SIG_COUNT=$(grep -F "\"sig\":\"$SIG\"" "$LOG" 2>/dev/null | grep -cF "\"session\":\"$SESSION\"")
+# Scoping on session_id keeps the "this session" claim true. Counting PARSES each
+# JSONL row (codex P2: a raw grep for "sig":"$SIG" missed every command containing
+# JSON-escaped characters — e.g. quotes in `python -c "..."` — so quoted-command
+# failures never reached the threshold); `fromjson?` skips torn/malformed lines.
+# >=2 (cardinality, per §12.5.1) → this occurrence would nudge, subject to the
+# per-session emission cap below.
+PRIOR_SIG_COUNT=$(jq -Rr --arg sig "$SIG" --arg sess "$SESSION" \
+  'fromjson? | select(.sig == $sig and .session == $sess) | 1' "$LOG" 2>/dev/null | grep -c . || true)
 RECUR_COUNT=$((${PRIOR_SIG_COUNT:-0} + 1))
 WOULD_NUDGE=false
 [ "$EVENT" = "PostToolUseFailure" ] && [ "$RECUR_COUNT" -ge 2 ] && WOULD_NUDGE=true
@@ -69,13 +98,16 @@ WOULD_NUDGE=false
 # nudges per session, independent of the per-signature recurrence threshold above.
 EMIT_NOW=false
 if [ "$WOULD_NUDGE" = true ]; then
-  PRIOR_EMIT_COUNT=$(grep -F "\"session\":\"$SESSION\"" "$LOG" 2>/dev/null | grep -cF '"emitted":true')
+  PRIOR_EMIT_COUNT=$(jq -Rr --arg sess "$SESSION" \
+    'fromjson? | select(.session == $sess and .emitted == true) | 1' "$LOG" 2>/dev/null | grep -c . || true)
   [ "${PRIOR_EMIT_COUNT:-0}" -lt 2 ] && EMIT_NOW=true
 fi
 
 ROW=$(jq -nc --arg ts "$TS" --arg ev "$EVENT" --arg tool "$TOOL" --arg et "$ERRTYPE" --arg sig "$SIG" --arg sess "$SESSION" --argjson emitted "$EMIT_NOW" \
-  '{ts:$ts,event:$ev,tool:$tool,error_type:$et,sig:$sig,session:$sess,emitted:$emitted}' 2>/dev/null) || exit 0
-printf '%s\n' "$ROW" >> "$LOG" 2>/dev/null || exit 0
+  '{ts:$ts,event:$ev,tool:$tool,error_type:$et,sig:$sig,session:$sess,emitted:$emitted}' 2>/dev/null) || { [ "$_LOCKED" = true ] && rmdir "$LOCKDIR" 2>/dev/null; exit 0; }
+printf '%s\n' "$ROW" >> "$LOG" 2>/dev/null || { [ "$_LOCKED" = true ] && rmdir "$LOCKDIR" 2>/dev/null; exit 0; }
+[ "$_LOCKED" = true ] && rmdir "$LOCKDIR" 2>/dev/null || true
+# --- End critical section.
 
 if [ "$EMIT_NOW" = true ]; then
   hook_emit "PostToolUseFailure" "[session-learning] recurring failure (${RECUR_COUNT}x this session): ${SIG}. Per CLAUDE.md §12.5.1 (cardinality >=2) consider a memory entry or a fix — see .harness/session-issues.jsonl."
