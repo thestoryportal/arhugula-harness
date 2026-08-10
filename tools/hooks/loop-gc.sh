@@ -31,6 +31,20 @@ CANDS=""
 WTC=$(git -C "$PROJECT_DIR" worktree list 2>/dev/null | grep -c .)
 [ "${WTC:-0}" -ge 2 ] 2>/dev/null && CANDS=$(loop_gc_worktrees report)
 
+# U-CTX-07 companion: reap a STALE capture-failure lock (crashed holder). The
+# failure hook itself NEVER reclaims — in-band reclamation on a reusable
+# pathname is unwinnable under a thundering herd (codex rounds 3/4/6), so a
+# crashed holder just suppresses nudges until THIS single-threaded SessionStart
+# venue reaps the lock (>60s old; a live holder is sub-second). Orphaned
+# `.stale.*` takeover remnants from pre-fix builds are swept with it.
+CF_LOCK="$PROJECT_DIR/.harness/session-issues.jsonl.lock"
+if [ -d "$CF_LOCK" ]; then
+  _cfnow=$(date +%s)
+  _cfts=$(stat -f %m "$CF_LOCK" 2>/dev/null || stat -c %Y "$CF_LOCK" 2>/dev/null || echo "$_cfnow")
+  [ $((_cfnow - _cfts)) -gt 60 ] && rm -rf "$CF_LOCK" 2>/dev/null
+fi
+rm -rf "$PROJECT_DIR/.harness/session-issues.jsonl.lock.stale."* 2>/dev/null || true
+
 MEMFLAG=""
 # Claude Code keys project memory by the MAIN repo path (not a worktree) with '/' -> '-'.
 # The first `git worktree list` entry is always the main working tree, so derive the

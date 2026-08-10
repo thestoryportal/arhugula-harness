@@ -107,22 +107,16 @@ for _try in $(seq 1 "${CAPTURE_FAILURE_LOCK_TRIES:-50}"); do
     printf '%s' "$_LOCK_TOKEN" > "$LOCKDIR/owner" 2>/dev/null || true
     _LOCKED=true; break
   fi
-  # stale-lock reclaim (crashed holder): BSD stat first (macOS), GNU fallback (CI)
-  _now=$(date +%s)
-  _lockts=$(stat -f %m "$LOCKDIR" 2>/dev/null || stat -c %Y "$LOCKDIR" 2>/dev/null || echo "$_now")
-  if [ $((_now - _lockts)) -gt 10 ]; then
-    # Ownership-safe takeover (codex round-3): a bare rmdir raced — contender A
-    # observes stale, B rmdirs+re-acquires, then A rmdirs B's FRESH lock and the
-    # critical sections overlap (a 20-way aged-lock probe emitted 3). rename(2)
-    # is atomic: exactly ONE contender wins the mv of the stale dir to a unique
-    # name and disposes of it; the LIVE pathname is never removed, so a freshly
-    # acquired lock cannot be destroyed. Everyone then re-contends mkdir.
-    _stale="${LOCKDIR}.stale.$$"
-    if mv "$LOCKDIR" "$_stale" 2>/dev/null; then
-      rm -rf "$_stale" 2>/dev/null || true
-    fi
-    continue
-  fi
+  # NO in-band stale reclamation (codex rounds 3/4/6 closed one takeover race
+  # per round and each fix surfaced the next — mkdir-locks on a REUSABLE
+  # pathname cannot be reclaimed race-free in portable sh under a thundering
+  # herd; the round-6 identity-conditional restore measured WORSE, 4 emitted).
+  # Structural resolution: this hook NEVER removes or moves a lock it did not
+  # create — only the token-verified owner releases (see _release_lock). A
+  # crashed holder's stale lock makes contenders time out into the SAFE path
+  # (log-only, emission suppressed; the cap is unviolable by construction).
+  # Reaping stale locks belongs to the SessionStart venue (loop-gc.sh), which
+  # runs single-threaded — no herd exists there by construction.
   sleep 0.1
 done
 

@@ -141,23 +141,26 @@ rmdir "$LOG.lock"
 [ "$(wc -l < "$LOG" | tr -d ' ')" = "2" ] && ok "lock timeout still logs the row" || bad "lock-timeout row not logged"
 [ "$(tail -1 "$LOG" | jq -r .emitted)" = "false" ] && ok "lock-timeout row marked emitted:false" || bad "lock-timeout row emitted flag wrong"
 
-# 13) codex round-3: stale-lock takeover must be OWNERSHIP-SAFE — with an AGED
-#     stale lock pre-seeded and 12 parallel qualifying contenders, the bare-rmdir
-#     reclaim let one contender destroy another's fresh acquisition (3 emitted).
-#     The mv-takeover keeps the cap exact: still exactly 2 emitted.
+# 13) codex rounds 3/4/6 (structural resolution): the hook performs NO in-band
+#     stale reclamation — an aged foreign lock makes every contender time out
+#     into the SAFE log-only path (cap unviolable by construction: only the
+#     token-owner ever removes a lock). Reaping belongs to loop-gc's
+#     single-threaded SessionStart venue (see test_loop_gc.sh).
 : > "$LOG"
 ST='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"stale_test","session_id":"sess-ST"}'
 run "$ST" >/dev/null   # seed: recur=1 so every parallel run qualifies
-mkdir "$LOG.lock"
+mkdir "$LOG.lock"; printf '%s' "crashed-holder" > "$LOG.lock/owner"
 touch -t 202001010000 "$LOG.lock" 2>/dev/null || touch -d '2020-01-01' "$LOG.lock" 2>/dev/null
 for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-  ( printf '%s' "$ST" | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" >/dev/null 2>&1 ) &
+  ( printf '%s' "$ST" | CLAUDE_PROJECT_DIR="$REPO" CAPTURE_FAILURE_LOCK_TRIES=2 bash "$HOOK" >/dev/null 2>&1 ) &
 done
 wait
 EMITTED=$(grep -c '"emitted":true' "$LOG")
-[ "$EMITTED" = "2" ] && ok "aged-stale-lock 12-way probe emits exactly 2 (ownership-safe takeover)" || bad "stale-takeover cap broken: $EMITTED emitted"
-[ "$(wc -l < "$LOG" | tr -d ' ')" = "13" ] && ok "stale-takeover probe: all 13 occurrences logged" || bad "stale probe: log rows $(wc -l < "$LOG")"
-[ ! -d "$LOG.lock" ] && ok "lock released after stale-takeover probe" || bad "lock directory leaked after stale probe"
+[ "$EMITTED" = "0" ] && ok "aged foreign lock: all 12 contenders suppressed (cap unviolable)" || bad "aged-lock suppression broken: $EMITTED emitted"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "13" ] && ok "aged-lock probe: all 13 occurrences still logged" || bad "aged probe: log rows $(wc -l < "$LOG")"
+[ -d "$LOG.lock" ] && [ "$(cat "$LOG.lock/owner")" = "crashed-holder" ] \
+  && ok "hook never reaps a foreign stale lock (loop-gc's job)" || bad "hook reaped/mutated the stale lock"
+rm -rf "$LOG.lock"
 
 # 13b) codex round-5 P1: a command carrying a literal credential must never leak
 #      it — not into the sig, not into the durable log, not into emitted context.

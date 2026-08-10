@@ -574,6 +574,27 @@ printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
   && ok "S15 surplus stop does not mask the later start" \
   || bad "S15 masked by banked stop credit: '$OUT'"
 
+# ── U-CTX-07 companion: SessionStart reaper for the capture-failure lock ──────
+# capture-failure.sh NEVER reclaims in-band (unwinnable herd races, codex rounds
+# 3/4/6 on the U-CTX-07 arc); THIS single-threaded venue reaps instead.
+export CLAUDE_PROJECT_DIR="$BASE/main"
+mkdir -p "$BASE/main/.harness"
+CFL="$BASE/main/.harness/session-issues.jsonl.lock"
+
+# aged lock (>60s) → reaped
+mkdir "$CFL"; printf 'x' > "$CFL/owner"
+touch -t 202001010000 "$CFL" 2>/dev/null || touch -d '2020-01-01' "$CFL" 2>/dev/null
+mkdir "${CFL}.stale.12345"   # orphaned pre-fix takeover remnant → swept
+bash "$SCRIPT_DIR/loop-gc.sh" >/dev/null 2>&1
+[ ! -d "$CFL" ] && ok "CF-reaper: aged capture-failure lock reaped at SessionStart" || bad "CF-reaper: aged lock survived"
+[ ! -d "${CFL}.stale.12345" ] && ok "CF-reaper: orphaned .stale.* remnant swept" || bad "CF-reaper: stale remnant survived"
+
+# fresh lock (live holder) → left alone
+mkdir "$CFL"; printf 'y' > "$CFL/owner"
+bash "$SCRIPT_DIR/loop-gc.sh" >/dev/null 2>&1
+[ -d "$CFL" ] && [ "$(cat "$CFL/owner")" = "y" ] && ok "CF-reaper: fresh lock left untouched" || bad "CF-reaper: fresh lock reaped/mutated"
+rm -rf "$CFL"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
