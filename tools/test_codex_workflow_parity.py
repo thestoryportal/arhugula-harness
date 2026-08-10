@@ -48,6 +48,8 @@ def test_hook_contract_documentation_preserves_codex_semantics() -> None:
     plain_parity = normalized_parity.replace("`", "")
 
     assert "`PermissionRequest` decides approval" in readme
+    assert "An allow carrying `updatedInput` is instead denied" in readme
+    assert "allow-side rewrite as a structured deny" in normalized_readme
     assert "compact-context" in readme
     assert "equivalent effect" in readme
     assert "`PostCompact` | shared reinjection producer through the Codex adapter" in readme

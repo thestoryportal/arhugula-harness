@@ -49,7 +49,7 @@ effects that Codex accepts.
 
 | Case | Claude producer and boundary | Codex effect |
 |---|---|---|
-| Safe `PreToolUse` allow | `permission-guard.sh` -> `permission-guard` adapter | No Codex opinion, even if the Claude producer includes `updatedInput`; it does not approve or rewrite execution. `PermissionRequest` decides approval through its supported boundary. |
+| Bare safe `PreToolUse` allow | `permission-guard.sh` -> `permission-guard` adapter | No Codex opinion; it does not approve execution. `PermissionRequest` decides approval through its supported boundary. An allow carrying `updatedInput` is instead denied because the adapter cannot safely translate a Claude rewrite. |
 | Hard `PreToolUse` deny | `permission-guard.sh` -> `permission-guard` adapter | Reconstructs only the supported deny decision and its reason; Claude-only fields never cross the Codex boundary. |
 | Post-compaction context | `postcompact-reinject.sh` -> `post-compact` adapter | Universal `systemMessage` only, including producer diagnostics; the Claude-shaped producer output is not itself a Codex hook response. A silent producer yields no output and exit 0. |
 | Compact model context | `postcompact-reinject.sh` -> `compact-context` adapter -> SessionStart wrapper | Appends only when `source=compact`; any producer failure preserves the rest of SessionStart and appends an explicit recovery instruction. |
@@ -81,10 +81,10 @@ Codex parsed the real deny. It reports the installed Codex version and uses the 
 `--dangerously-bypass-hook-trust` only inside that vetted temporary fixture; normal sessions
 still require explicit trust through `/hooks`.
 
-The shared `PreToolUse` producer currently emits only `allow` or `deny` and never emits
-`updatedInput`. The Codex adapter intentionally treats any future unsupported decision as a
-structured deny and suppresses any future allow-side rewrite until that new producer contract
-has explicit Codex coverage.
+The shared `PreToolUse` producer currently emits only bare `allow` or `deny` and never emits
+`updatedInput`. The Codex adapter intentionally treats any future unsupported decision or
+allow-side rewrite as a structured deny until that new producer contract has explicit Codex
+coverage.
 
 ## Trust and startup failures
 
