@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -48,14 +49,34 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STATUS = ROOT / ".harness" / "roadmap_status.md"
 DEFAULT_ARCHIVE = ROOT / ".harness" / "roadmap_drift_log_archive.md"
+# U-CTX-03: the "## Next action" section's round-by-round history (every
+# `Prior next action (post-#NNN)` / `Round N` paragraph) lives here, verbatim,
+# once superseded by a newer round. Never written by an ordinary --refresh —
+# it is populated by hand at each next-action update, mirroring the existing
+# DEFAULT_ARCHIVE convention for the drift log.
+NEXT_ACTION_ARCHIVE = ROOT / ".harness" / "roadmap-next-action-archive.md"
 
 RECENTLY_COMPLETED_HEADING = "Recently completed (last 5)"
 IN_FLIGHT_HEADING = "In-flight (open PRs)"
 DRIFT_LOG_HEADING = "Drift detection log"
 ANCHOR_HEADING = "Workspace state anchor"
+NEXT_ACTION_HEADING = "Next action"
 
 RECENTLY_COMPLETED_CAP = 5
+# U-CTX-03 AC #3: the whole-file byte budget the truncated `roadmap_status.md`
+# must stay under (was 316,894 B pre-truncation; the "## Next action" body
+# alone was 292,031 B of that).
+HEAD_BYTE_BUDGET = 25_600
+# Paragraph shapes that belong in NEXT_ACTION_ARCHIVE, never inline in the
+# live "## Next action" section — re-accumulating them here is exactly the
+# regression the archive split (U-CTX-03) exists to prevent.
+_ARCHIVED_PARAGRAPH_RE = re.compile(r"^\*\*(Prior next action|Round \d+)", re.MULTILINE)
 DRIFT_LOG_CAP = 10
+#: structural soft-severity marker (codex round-8): ONLY messages the validator
+#: itself prefixes with this are non-hard — substring matching on "informational"
+#: would let interpolated filenames/titles containing the word soften a real
+#: violation.
+INFORMATIONAL_PREFIX = "[informational] "
 
 
 class RoadmapStatusError(ValueError):
@@ -332,6 +353,59 @@ def validate(text: str, status_path: Path = DEFAULT_STATUS) -> list[str]:
     except RoadmapStatusError as e:
         violations.append(str(e))
 
+    # U-CTX-03 AC #3: whole-file byte budget. The pre-truncation file grew to
+    # 316,894 B (292,031 B of it the "## Next action" body alone) before
+    # NEXT_ACTION_ARCHIVE existed — this is the regression guard against that
+    # recurring.
+    status_bytes = len(text.encode("utf-8"))
+    if status_bytes > HEAD_BYTE_BUDGET:
+        violations.append(
+            f"roadmap_status.md is {status_bytes} B, exceeds the {HEAD_BYTE_BUDGET} B "
+            f"head byte budget (archive growth belongs in {NEXT_ACTION_ARCHIVE.name}, "
+            "not inline)"
+        )
+
+    # U-CTX-03 AC #2: the archive is never (re-)written by an ordinary terminating
+    # refresh, and the live "## Next action" section never re-accumulates the
+    # archived paragraph shapes it was truncated to move out — that would defeat
+    # the byte-budget truncation and silently regrow the file this arc just
+    # shrank. A --refresh call's own write set is a single Path.write_text call
+    # against `args.status` (plus, only on drift-log overflow, `args.archive` —
+    # DEFAULT_ARCHIVE, a distinct file from NEXT_ACTION_ARCHIVE); asserting the
+    # two archive constants are distinct paths keeps that separation structural,
+    # and the content check below keeps the live section from silently regrowing
+    # into what would have to be the next-action archive's job.
+    if DEFAULT_ARCHIVE.resolve() == NEXT_ACTION_ARCHIVE.resolve():
+        violations.append(
+            "DEFAULT_ARCHIVE and NEXT_ACTION_ARCHIVE must be distinct files — a "
+            "--refresh call's drift-log trim must never touch the next-action archive"
+        )
+    try:
+        next_action_start, next_action_end = _section_span(text, NEXT_ACTION_HEADING)
+        next_action_body = text[next_action_start:next_action_end]
+        if _ARCHIVED_PARAGRAPH_RE.search(next_action_body):
+            violations.append(
+                f"{NEXT_ACTION_HEADING}: contains an inline `Prior next action`/"
+                f"`Round N` paragraph — archive it to {NEXT_ACTION_ARCHIVE.name} "
+                "instead of accumulating it inline (defeats the U-CTX-03 byte-budget "
+                "truncation)"
+            )
+        # Exactly ONE `**Current next action (...)**` paragraph (codex round-5):
+        # a second one would leave hook_roadmap_next consuming whichever comes
+        # first — a potentially stale live pointer — while the inline-history
+        # regex above (which matches only the demoted `Prior`/`Round N` shapes)
+        # stayed silent. Zero means the live pointer is gone entirely.
+        current_count = next_action_body.count("**Current next action (")
+        if current_count != 1:
+            violations.append(
+                f"{NEXT_ACTION_HEADING}: expected exactly ONE `**Current next "
+                f"action (...)**` paragraph, found {current_count} — the live "
+                "pointer must be single and unambiguous (a superseded round is "
+                "relabelled `Prior` and archived, never left as a second Current)"
+            )
+    except RoadmapStatusError as e:
+        violations.append(str(e))
+
     m = re.search(r"`workspace_state_hash`\s*\|\s*`([a-f0-9]{12})`", text)
     stored_hash = m.group(1) if m else None
     if stored_hash is None:
@@ -345,8 +419,8 @@ def validate(text: str, status_path: Path = DEFAULT_STATUS) -> list[str]:
             # as informational rather than a hard violation; the SessionStart hook
             # is the authoritative halt-or-proceed gate for this.
             violations.append(
-                f"workspace_state_hash stored={stored_hash} computed={computed} "
-                "(informational — verify against §12.1 fixed-point carve-out "
+                f"{INFORMATIONAL_PREFIX}workspace_state_hash stored={stored_hash} "
+                f"computed={computed} (verify against §12.1 fixed-point carve-out "
                 "before treating as drift)"
             )
 
@@ -356,12 +430,215 @@ def validate(text: str, status_path: Path = DEFAULT_STATUS) -> list[str]:
 # --- CLI ------------------------------------------------------------------
 
 
+#: mirrors codex_context_guard.TERMINATING_REFRESH_FILE_SETS (kept literal here
+#: so `--check` stays import-light; the guard module drags in codex_loop).
+_REFRESH_TITLE_PREFIX = "ops: roadmap status refresh "
+_REFRESH_ONLY_FILE_SET = frozenset({".harness/roadmap_status.md"})
+
+
+def check_head_refresh_shape(
+    root: Path,
+    ref: str = "HEAD",
+    base: str | None = None,
+    title_override: str | None = None,
+) -> list[str]:
+    """U-CTX-03 AC #2, git-shape half (codex round-2): if HEAD is a
+    terminating-refresh-titled commit, its changed-file set must be EXACTLY
+    `.harness/roadmap_status.md` — a refresh that also writes the next-action
+    archive (or anything else) breaks the §12.2.1 one-file invariant that the
+    fixed-point machinery keys on. Constant-distinctness alone cannot see a
+    commit's actual write set. No-op (empty list) when HEAD is not
+    refresh-titled or git is unavailable (e.g. a tarball checkout)."""
+    # Distinguish "intentionally not a git checkout" (tarball / missing root /
+    # no git binary — skip) from "git ERRORED inside a real checkout" (fail
+    # CLOSED: returning [] there would report success without enforcing the
+    # refresh file-set at all — codex round-4).
+    checkout_marker = (root / ".git").exists()
+    try:
+        probe = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        if checkout_marker:
+            # codex round-8: a .git marker exists, so this is a real checkout
+            # whose probe ERRORED (timeout/permissions) — skipping would report
+            # success without enforcing the refresh shape at all.
+            return [
+                f"git probe errored in a directory carrying a .git marker — "
+                f"failing closed rather than skipping the refresh-shape gate: {e}"
+            ]
+        return []
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        if checkout_marker:
+            return [
+                f"git refused --is-inside-work-tree in a directory carrying a .git "
+                f"marker (rc={probe.returncode}, stderr={probe.stderr.strip()!r}) — "
+                f"failing closed rather than skipping the refresh-shape gate"
+            ]
+        return []
+    try:
+        # Pin the (possibly symbolic) ref to an immutable SHA ONCE — merge-gate
+        # lens 1 on this arc: with `--shape-ref HEAD` a concurrent commit
+        # landing between the title read and the file-set read would make the
+        # gate judge commit A's title against commit B's diff (spurious hard
+        # failure, or transient fail-open). Every subsequent git call uses the
+        # pinned SHA.
+        resolved_ref = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout.strip()
+        ref = resolved_ref
+        if title_override is not None:
+            # codex round-10: the §12.2.1 invariant binds on the PR TITLE —
+            # a refresh-titled PR whose head commit carries an ordinary
+            # subject must still be judged (and a content PR is governed by
+            # its own title regardless of inner commit subjects).
+            title = title_override
+        else:
+            title = subprocess.run(
+                ["git", "log", "-1", "--format=%s", ref],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            ).stdout.strip()
+        if not title.startswith(_REFRESH_TITLE_PREFIX):
+            return []
+        # Shallow-boundary guard (codex round-3): on a depth-1 CI checkout,
+        # HEAD's parent is absent and `git show HEAD` lists the ENTIRE tree
+        # (parentless root-commit diff) — the same documented failure shape as
+        # ci.yml's codex-context-guard checkout comment. Judging the set there
+        # would fail every legitimate refresh; skip instead (the arc-ledger CI
+        # job now checks out full history, so the gate still enforces in CI).
+        parent_ok = (
+            subprocess.run(
+                ["git", "rev-parse", "--verify", "-q", f"{ref}^"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).returncode
+            == 0
+        )
+        if not parent_ok:
+            shallow = (
+                subprocess.run(
+                    ["git", "rev-parse", "--is-shallow-repository"],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).stdout.strip()
+                == "true"
+            )
+            if shallow:
+                return []
+        # Merge-wrapped refresh (codex round-9): a `git merge --no-ff`-landed
+        # refresh keeps the reserved prefix on a MERGE commit, where plain
+        # `git show --name-only` uses combined-diff semantics and can return
+        # NO paths (the result matches a parent) — an empty set would wrongly
+        # fail every such legitimate refresh. §12.2.1 recognizes merge-wrapped
+        # refresh points; judge merges by their FIRST-PARENT diff instead.
+        if base is not None:
+            # PR context: the invariant covers the PR's WHOLE base..head diff,
+            # not just the head commit (a multi-commit refresh PR must not
+            # hide extra files in earlier commits).
+            changed = subprocess.run(
+                ["git", "diff", "--name-only", f"{base}...{ref}"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            ).stdout
+            files = frozenset(line.strip() for line in changed.splitlines() if line.strip())
+            if files != _REFRESH_ONLY_FILE_SET:
+                return [
+                    f"refresh-titled PR ({title!r}) changes {sorted(files)} across "
+                    f"base...head — a terminating refresh must touch EXACTLY "
+                    f"{sorted(_REFRESH_ONLY_FILE_SET)} (§12.2.1)"
+                ]
+            return []
+        parents = subprocess.run(
+            ["git", "rev-list", "--parents", "-n", "1", ref],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout.split()[1:]
+        if len(parents) >= 2:
+            changed = subprocess.run(
+                ["git", "diff", "--name-only", f"{ref}^1", ref],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            ).stdout
+        else:
+            changed = subprocess.run(
+                ["git", "show", "--name-only", "--pretty=format:", ref],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            ).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        return [
+            f"git errored inside a detected work tree while validating the "
+            f"terminating-refresh shape — failing closed rather than skipping "
+            f"the file-set gate: {e}"
+        ]
+    files = frozenset(line.strip() for line in changed.splitlines() if line.strip())
+    if files != _REFRESH_ONLY_FILE_SET:
+        return [
+            f"HEAD is a terminating-refresh-titled commit ({title!r}) but its "
+            f"changed-file set is {sorted(files)} — a terminating refresh must "
+            f"touch EXACTLY {sorted(_REFRESH_ONLY_FILE_SET)} (§12.2.1; "
+            f"U-CTX-03 AC #2: the next-action archive is written by content "
+            f"PRs, never by the refresh commit)"
+        ]
+    return []
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Deterministic roadmap_status.md skeleton refresh.")
     ap.add_argument("--status", type=Path, default=DEFAULT_STATUS)
     ap.add_argument("--archive", type=Path, default=DEFAULT_ARCHIVE)
     ap.add_argument("--state", action="store_true", help="print computed WorkspaceState as JSON")
     ap.add_argument("--check", action="store_true", help="validate; exit 1 on any violation")
+    ap.add_argument(
+        "--shape-ref",
+        default="HEAD",
+        help="git ref the terminating-refresh shape gate judges (default HEAD). "
+        "CI pull_request runs pass the PR HEAD sha: actions/checkout puts the "
+        "SYNTHETIC merge ref at HEAD, whose 'Merge ...' subject would make the "
+        "gate silently no-op pre-merge (codex round-5)",
+    )
+    ap.add_argument(
+        "--shape-base",
+        default=None,
+        help="base sha for the shape gate: judge the WHOLE base...shape-ref diff "
+        "(PR context) instead of the single ref commit",
+    )
+    ap.add_argument(
+        "--shape-title-env",
+        default=None,
+        help="NAME of an env var holding the authoritative title for the shape "
+        "gate (the PR title on pull_request events — passed via env, never "
+        "shell-interpolated; codex round-10)",
+    )
     ap.add_argument("--trim-drift-log", action="store_true", help="cap+archive drift log only")
     ap.add_argument(
         "--refresh",
@@ -380,6 +657,43 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="print the diff instead of writing")
     args = ap.parse_args(argv)
 
+    # U-CTX-03 AC #2, runtime half: the structural constant check in validate()
+    # only compares the hard-coded defaults — it cannot see a caller aliasing
+    # the drift-log archive onto the PROTECTED next-action archive via
+    # `--archive`, which would let a drift-log overflow rewrite the round
+    # history. Reject the effective path before any write-capable mode runs.
+    # Derive the TARGET checkout's root + protected archive from --status
+    # (codex round-3): with `--status` pointing at another checkout, comparing
+    # only this module's hard-coded constant would leave THAT checkout's own
+    # next-action archive unprotected and shape-check the wrong repo. The
+    # module-global constant stays in the comparison so the default-invocation
+    # protection is unchanged.
+    status_root = args.status.resolve().parent.parent
+    target_protected_archive = status_root / ".harness" / "roadmap-next-action-archive.md"
+
+    def _aliases_protected(candidate: Path, protected: Path) -> bool:
+        # Path equality first; then FILE IDENTITY for existing files — on a
+        # case-insensitive filesystem (macOS default) a case-variant spelling
+        # names the same inode while resolve() preserves casing (codex
+        # round-11), and samefile also covers hard/symlink aliases.
+        if candidate.resolve() == protected.resolve():
+            return True
+        try:
+            return candidate.exists() and protected.exists() and candidate.samefile(protected)
+        except OSError:
+            return False
+
+    if _aliases_protected(args.archive, NEXT_ACTION_ARCHIVE) or _aliases_protected(
+        args.archive, target_protected_archive
+    ):
+        print(
+            f"--archive must not point at the protected next-action archive "
+            f"({NEXT_ACTION_ARCHIVE}) — the drift-log trim would rewrite the "
+            f"round history (U-CTX-03 AC #2)",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.state:
         print(json.dumps(compute_state().as_dict(), indent=2))
         return 0
@@ -388,7 +702,31 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check:
         violations = validate(text, args.status)
-        hard = [v for v in violations if "informational" not in v]
+        shape_title = None
+        if args.shape_title_env:
+            shape_title = os.environ.get(args.shape_title_env)
+            if not shape_title:
+                # codex round-12: --shape-title-env names the AUTHORITATIVE
+                # title source; a missing/empty variable silently falling back
+                # to the commit subject would let a refresh-titled PR bypass
+                # the base...head file-set check. Fail closed.
+                print(
+                    f"--shape-title-env {args.shape_title_env!r} is unset or empty — "
+                    "refusing to fall back to the commit subject (the PR title is "
+                    "the authoritative §12.2.1 invariant source)",
+                    file=sys.stderr,
+                )
+                return 2
+        violations.extend(
+            check_head_refresh_shape(
+                status_root, args.shape_ref, base=args.shape_base, title_override=shape_title
+            )
+        )
+        # Severity is STRUCTURAL: only messages the validator itself prefixed
+        # with INFORMATIONAL_PREFIX are soft (codex round-8 — a substring
+        # search would let an attacker-controlled filename/title containing
+        # the word "informational" silently soften a hard violation).
+        hard = [v for v in violations if not v.startswith(INFORMATIONAL_PREFIX)]
         for v in violations:
             print(f"  - {v}", file=sys.stderr)
         if hard:

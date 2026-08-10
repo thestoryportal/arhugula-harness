@@ -32,7 +32,10 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # `edited` included so a PR retitled to (or from) the reserved
+    # `ops: roadmap status refresh ` prefix re-runs the refresh-shape gate
+    # against the new title (codex round-10 on the U-CTX-03 arc).
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -284,6 +287,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # FULL history: roadmap_status_refresh.py --check's terminating-refresh
+          # shape gate (U-CTX-03 AC #2) needs HEAD's PARENT — on a depth-1 clone
+          # `git show HEAD` lists the ENTIRE tree (parentless root-commit diff),
+          # which would fail every legitimate refresh push. Same documented
+          # failure shape as the codex-context-guard job's checkout below; the
+          # check additionally skips (rather than misjudges) at a shallow
+          # boundary, so this fetch is what makes it ENFORCE in CI.
+          fetch-depth: 0
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -301,14 +313,28 @@ jobs:
         run: uv run python tools/forward_register.py --check
 
       - name: Validate roadmap_status.md table caps (stray/uncapped rows = CI failure)
-        run: uv run python tools/roadmap_status_refresh.py --check
+        # On pull_request, actions/checkout puts the SYNTHETIC merge ref at
+        # HEAD ("Merge ..." subject) — the refresh-shape gate would silently
+        # no-op pre-merge; judge the PR's real head instead. The §12.2.1
+        # invariant binds on the PR TITLE over the PR's WHOLE base..head diff
+        # (a refresh-titled PR whose head commit has an ordinary subject must
+        # not slip through) — pass both explicitly; push events fall back to
+        # the HEAD commit's own subject + single-commit diff.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: >
+          uv run python tools/roadmap_status_refresh.py --check
+          --shape-ref "${{ github.event.pull_request.head.sha || 'HEAD' }}"
+          ${{ github.event.pull_request.base.sha && format('--shape-base {0}', github.event.pull_request.base.sha) || '' }}
+          ${{ github.event.pull_request.title && '--shape-title-env PR_TITLE' || '' }}
 
       - name: Arc-ledger + forward-register + runtime contract-id tests
         working-directory: tools
         run: >
           uv run python -m pytest
           test_arc_ledger.py test_forward_register.py test_runtime_contract_ids.py
-          test_roadmap_status_refresh.py test_memory_compact.py -q
+          test_roadmap_status_refresh.py test_roadmap_status_consumers.py
+          test_memory_compact.py -q
 
   semantic-overlay:
     # R-IF-112 — the spec ↔ code ↔ CXA-seam ↔ substitution overlay drift gate.
