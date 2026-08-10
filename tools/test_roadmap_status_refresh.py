@@ -290,6 +290,64 @@ def test_next_action_archive_is_distinct_from_drift_log_archive():
     assert rsr.NEXT_ACTION_ARCHIVE.resolve() != rsr.DEFAULT_ARCHIVE.resolve()
 
 
+def _git_scratch_repo(tmp_path: Path, title: str, files: dict[str, str]) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env_cmds = [
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "t@t"],
+        ["git", "config", "user.name", "t"],
+    ]
+    for cmd in env_cmds:
+        subprocess.run(cmd, cwd=repo, check=True, capture_output=True)
+    for rel, content in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        subprocess.run(["git", "add", rel], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-q", "-m", title], cwd=repo, check=True, capture_output=True)
+    return repo
+
+
+def test_head_refresh_shape_flags_refresh_commit_touching_archive(tmp_path):
+    # U-CTX-03 AC #2's git-shape half (codex round-2): a refresh-titled HEAD
+    # whose changed-set includes the next-action archive must be a violation.
+    repo = _git_scratch_repo(
+        tmp_path,
+        "ops: roadmap status refresh post-#9999",
+        {
+            ".harness/roadmap_status.md": "x",
+            ".harness/roadmap-next-action-archive.md": "y",
+        },
+    )
+    violations = rsr.check_head_refresh_shape(repo)
+    assert len(violations) == 1
+    assert "EXACTLY" in violations[0]
+
+
+def test_head_refresh_shape_clean_on_single_file_refresh(tmp_path):
+    repo = _git_scratch_repo(
+        tmp_path,
+        "ops: roadmap status refresh post-#9999",
+        {".harness/roadmap_status.md": "x"},
+    )
+    assert rsr.check_head_refresh_shape(repo) == []
+
+
+def test_head_refresh_shape_noop_on_content_commit(tmp_path):
+    # a content-titled commit may touch anything — the shape rule binds only
+    # refresh-titled commits.
+    repo = _git_scratch_repo(
+        tmp_path,
+        "feat: some content change",
+        {
+            ".harness/roadmap_status.md": "x",
+            ".harness/roadmap-next-action-archive.md": "y",
+        },
+    )
+    assert rsr.check_head_refresh_shape(repo) == []
+
+
 def test_cli_rejects_archive_aliased_onto_next_action_archive(capsys):
     # U-CTX-03 AC #2's runtime half: the structural check above compares only
     # the hard-coded defaults, so a caller passing
@@ -320,4 +378,9 @@ def test_actual_next_action_archive_exists_and_is_not_referenced_as_a_read_targe
     assert rsr.NEXT_ACTION_ARCHIVE.is_file()
     archive_text = rsr.NEXT_ACTION_ARCHIVE.read_text(encoding="utf-8")
     assert "Prior next action (post-#1285)" in archive_text
-    assert "Current next action (post-#1290)" in archive_text
+    # Superseded rounds carry the label the LIVE dashboard demoted them to —
+    # verbatim provenance (codex round-2 catch: an archived round labelled
+    # "Current" after supersession left two "Current" entries).
+    assert "Prior next action (post-#1290)" in archive_text
+    # Exactly ONE round is labelled Current in the archive: the live one.
+    assert archive_text.count("**Current next action (") == 1

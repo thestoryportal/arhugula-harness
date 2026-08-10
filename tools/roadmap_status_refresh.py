@@ -411,6 +411,53 @@ def validate(text: str, status_path: Path = DEFAULT_STATUS) -> list[str]:
 # --- CLI ------------------------------------------------------------------
 
 
+#: mirrors codex_context_guard.TERMINATING_REFRESH_FILE_SETS (kept literal here
+#: so `--check` stays import-light; the guard module drags in codex_loop).
+_REFRESH_TITLE_PREFIX = "ops: roadmap status refresh "
+_REFRESH_ONLY_FILE_SET = frozenset({".harness/roadmap_status.md"})
+
+
+def check_head_refresh_shape(root: Path) -> list[str]:
+    """U-CTX-03 AC #2, git-shape half (codex round-2): if HEAD is a
+    terminating-refresh-titled commit, its changed-file set must be EXACTLY
+    `.harness/roadmap_status.md` — a refresh that also writes the next-action
+    archive (or anything else) breaks the §12.2.1 one-file invariant that the
+    fixed-point machinery keys on. Constant-distinctness alone cannot see a
+    commit's actual write set. No-op (empty list) when HEAD is not
+    refresh-titled or git is unavailable (e.g. a tarball checkout)."""
+    try:
+        title = subprocess.run(
+            ["git", "log", "-1", "--format=%s"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout.strip()
+        if not title.startswith(_REFRESH_TITLE_PREFIX):
+            return []
+        changed = subprocess.run(
+            ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    files = frozenset(line.strip() for line in changed.splitlines() if line.strip())
+    if files != _REFRESH_ONLY_FILE_SET:
+        return [
+            f"HEAD is a terminating-refresh-titled commit ({title!r}) but its "
+            f"changed-file set is {sorted(files)} — a terminating refresh must "
+            f"touch EXACTLY {sorted(_REFRESH_ONLY_FILE_SET)} (§12.2.1; "
+            f"U-CTX-03 AC #2: the next-action archive is written by content "
+            f"PRs, never by the refresh commit)"
+        ]
+    return []
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Deterministic roadmap_status.md skeleton refresh.")
     ap.add_argument("--status", type=Path, default=DEFAULT_STATUS)
@@ -457,6 +504,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check:
         violations = validate(text, args.status)
+        violations.extend(check_head_refresh_shape(ROOT))
         hard = [v for v in violations if "informational" not in v]
         for v in violations:
             print(f"  - {v}", file=sys.stderr)

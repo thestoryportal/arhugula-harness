@@ -171,17 +171,21 @@ def test_hook_roadmap_next_still_extracts_a_backtick_token_when_present(tmp_path
     assert out.stdout.strip() == "U-CTX-07"
 
 
-def test_hook_roadmap_next_on_real_truncated_file_returns_no_stale_history_token():
+def test_hook_roadmap_next_on_real_truncated_file_returns_the_live_token():
     """GROUNDED FINDING (recorded, not silently absorbed): pre-truncation, this
     same function returned a STALE `U-IS-11` token — the first `` `U-`/`R-` ``
     backtick match anywhere in the 292KB "## Next action" body, buried deep in
-    OLD "Prior next action" history, NOT the actual current pointer (which is a
-    `B-143`/`B-124`/... token the fallback grep is blind to — the pre-existing
-    `[[roadmap-hook-next-parser-b-token-blind]]` defect class). Post-truncation
-    the function (UNCHANGED — lib.sh was not edited by this arc) now correctly
-    finds no token at all, since the stale history it used to bleed from is no
-    longer inline. This is a data-shape difference, not a function-behavior
-    change — hook_roadmap_next's own code is byte-identical."""
+    OLD "Prior next action" history, NOT the actual current pointer (the
+    pre-existing `[[roadmap-hook-next-parser-b-token-blind]]` defect class).
+    Post-truncation, the LIVE pointer requirement (AGENTS.md) demands the hook
+    surface the CURRENT round's own token — the truncated head carries the
+    canonical `next implementable unit is \\`<token>\\`` phrase precisely so
+    the hook's primary sed path resolves it. Empty output would silently strip
+    the autonomous loop of its dashboard item (codex round-2 catch against the
+    earlier `== \"\"` pin, which had normalized the regression). The token is
+    asserted non-empty AND non-stale rather than pinned to one literal, so a
+    future round rotating the pointer doesn't break this witness.
+    hook_roadmap_next's own code is byte-identical — lib.sh was not edited."""
     out = subprocess.run(
         ["bash", "-c", f"source {LIB_SH} && hook_roadmap_next .harness/roadmap_status.md"],
         cwd=ROOT,
@@ -190,7 +194,15 @@ def test_hook_roadmap_next_on_real_truncated_file_returns_no_stale_history_token
         timeout=10,
     )
     assert out.returncode == 0
-    assert out.stdout.strip() == ""
+    token = out.stdout.strip()
+    assert token != "", "live pointer must resolve — empty next= strips the loop's dashboard item"
+    assert token != "U-IS-11", "the pre-truncation stale-history token must never resurface"
+    # the token must come from the CURRENT round's line, not archived history
+    status_text = (ROOT / ".harness" / "roadmap_status.md").read_text()
+    current_line = next(
+        line for line in status_text.splitlines() if line.startswith("**Current next action (")
+    )
+    assert f"`{token}`" in current_line
 
 
 # --- Table-driven: the real bash-hook callers of hook_roadmap_next ------------
