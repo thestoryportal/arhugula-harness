@@ -247,12 +247,27 @@ def test_session_start_runs_against_truncated_file(scratch_repo):
     assert "next=" in ctx
 
 
-def test_post_merge_refresh_reads_anchor_head_from_truncated_file(scratch_repo):
+def _rewrite_stored_git_head(repo: Path, head8: str) -> None:
+    import re as _re
+
+    status = repo / ".harness" / "roadmap_status.md"
+    text = status.read_text(encoding="utf-8")
+    new_text, n = _re.subn(
+        r"(\| *`git_head` *\| *`)[a-f0-9]{8}(`)", rf"\g<1>{head8}\g<2>", text, count=1
+    )
+    assert n == 1, "anchor git_head row not found — truncation must preserve it"
+    status.write_text(new_text, encoding="utf-8")
+
+
+def test_post_merge_refresh_silent_when_stored_head_matches(scratch_repo):
     """post-merge-refresh.sh's only roadmap_status.md read is the anchor table's
-    `git_head` grep (unaffected by the Next-action truncation). Real ORIGIN_HEAD
-    == STORED_HEAD (no advance) exercises the "stay silent" early exit, proving
-    the grep against the truncated file's actual anchor table succeeds."""
+    `git_head` grep. Discriminating direction 1 (codex round-4 — the earlier
+    form accepted silence OR any output, a vacuous probe): with the stored
+    head REWRITTEN to equal ORIGIN_HEAD, the no-advance early exit MUST be
+    silent — which only happens if the grep against the truncated file's
+    anchor table actually parsed the stored head."""
     head = _git(scratch_repo, "rev-parse", "HEAD").stdout.strip()[:8]
+    _rewrite_stored_git_head(scratch_repo, head)
     result = _run_hook(
         POST_MERGE_REFRESH_HOOK,
         scratch_repo,
@@ -260,12 +275,34 @@ def test_post_merge_refresh_reads_anchor_head_from_truncated_file(scratch_repo):
         extra_env={"POST_MERGE_REFRESH_REF": head},
     )
     assert result.returncode == 0, result.stderr
-    # Real anchor `git_head` (`6108ac32`) != this scratch repo's HEAD, so the
-    # ORIGIN_HEAD==STORED_HEAD "no advance" silent path only fires if the grep
-    # itself worked; assert no crash and (silence OR a well-formed emit) either way.
-    if result.stdout.strip():
-        payload = json.loads(result.stdout)
-        assert "additionalContext" in payload["hookSpecificOutput"]
+    assert result.stdout.strip() == "", (
+        "stored==origin head must be the SILENT path; output means the git_head "
+        "grep failed against the truncated anchor table"
+    )
+
+
+def test_post_merge_refresh_emits_when_origin_advanced(scratch_repo):
+    """Discriminating direction 2: stored head pinned to the PARENT commit and
+    ORIGIN_HEAD at a newer non-refresh-titled commit MUST emit the §12.2
+    refresh-owed reminder. A truncation that broke the git_head row would make
+    STORED_HEAD empty and this exact emit-branch assertion fail."""
+    base = _git(scratch_repo, "rev-parse", "HEAD").stdout.strip()[:8]
+    (scratch_repo / "feature.txt").write_text("x", encoding="utf-8")
+    _git(scratch_repo, "add", "feature.txt")
+    _git(scratch_repo, "commit", "-qm", "feat: substantive change")
+    new_head = _git(scratch_repo, "rev-parse", "HEAD").stdout.strip()[:8]
+    _rewrite_stored_git_head(scratch_repo, base)
+    result = _run_hook(
+        POST_MERGE_REFRESH_HOOK,
+        scratch_repo,
+        stdin=json.dumps({"tool_input": {"command": "gh pr merge 123"}}),
+        extra_env={"POST_MERGE_REFRESH_REF": new_head},
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    ctx = payload["hookSpecificOutput"]["additionalContext"]
+    assert "terminating refresh is owed" in ctx
+    assert new_head in ctx
 
 
 # --- Python tool consumers (path-presence / anchor-table only) ----------------

@@ -425,6 +425,22 @@ def check_head_refresh_shape(root: Path) -> list[str]:
     fixed-point machinery keys on. Constant-distinctness alone cannot see a
     commit's actual write set. No-op (empty list) when HEAD is not
     refresh-titled or git is unavailable (e.g. a tarball checkout)."""
+    # Distinguish "intentionally not a git checkout" (tarball / missing root /
+    # no git binary — skip) from "git ERRORED inside a real checkout" (fail
+    # CLOSED: returning [] there would report success without enforcing the
+    # refresh file-set at all — codex round-4).
+    try:
+        probe = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        return []
     try:
         title = subprocess.run(
             ["git", "log", "-1", "--format=%s"],
@@ -473,8 +489,12 @@ def check_head_refresh_shape(root: Path) -> list[str]:
             check=True,
             timeout=10,
         ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return []
+    except (OSError, subprocess.SubprocessError) as e:
+        return [
+            f"git errored inside a detected work tree while validating the "
+            f"terminating-refresh shape — failing closed rather than skipping "
+            f"the file-set gate: {e}"
+        ]
     files = frozenset(line.strip() for line in changed.splitlines() if line.strip())
     if files != _REFRESH_ONLY_FILE_SET:
         return [

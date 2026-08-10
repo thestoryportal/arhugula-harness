@@ -383,6 +383,33 @@ def test_cli_rejects_archive_aliased_onto_target_checkouts_archive(tmp_path, cap
     assert "protected next-action archive" in capsys.readouterr().err
 
 
+def test_head_refresh_shape_fails_closed_on_git_error_inside_work_tree(tmp_path, monkeypatch):
+    # codex round-4: a git failure INSIDE a detected work tree must be a
+    # violation, not a skip — returning [] there reports success without
+    # enforcing the file-set gate at all. (A non-git dir still skips: the
+    # is-inside-work-tree probe answers that intentionally.)
+    repo = _git_scratch_repo(
+        tmp_path,
+        "ops: roadmap status refresh post-#9999",
+        {".harness/roadmap_status.md": "x"},
+    )
+    real_run = subprocess.run
+
+    def failing_git(cmd, *args, **kwargs):
+        if cmd[:2] == ["git", "log"]:
+            raise subprocess.TimeoutExpired(cmd, 10)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(rsr.subprocess, "run", failing_git)
+    violations = rsr.check_head_refresh_shape(repo)
+    assert len(violations) == 1
+    assert "failing closed" in violations[0]
+
+
+def test_head_refresh_shape_skips_non_git_directory(tmp_path):
+    assert rsr.check_head_refresh_shape(tmp_path) == []
+
+
 def test_head_refresh_shape_noop_on_content_commit(tmp_path):
     # a content-titled commit may touch anything — the shape rule binds only
     # refresh-titled commits.
