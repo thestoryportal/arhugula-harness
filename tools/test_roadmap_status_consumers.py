@@ -195,14 +195,30 @@ def test_hook_roadmap_next_on_real_truncated_file_returns_the_live_token():
     )
     assert out.returncode == 0
     token = out.stdout.strip()
-    assert token != "", "live pointer must resolve — empty next= strips the loop's dashboard item"
     assert token != "U-IS-11", "the pre-truncation stale-history token must never resurface"
-    # the token must come from the CURRENT round's line, not archived history
     status_text = (ROOT / ".harness" / "roadmap_status.md").read_text()
     current_line = next(
         line for line in status_text.splitlines() if line.startswith("**Current next action (")
     )
-    assert f"`{token}`" in current_line
+    # Conditional demand (codex round-7): a B-only round LEGITIMATELY yields
+    # empty — hook_roadmap_next is documented + pinned (tools/hooks/lib.sh,
+    # test_lib.sh) to surface only `U-`/`R-` tokens. So: when the CURRENT line
+    # carries a backticked U-/R- token, the hook MUST resolve one of the
+    # current line's own tokens (never empty, never archived history); when it
+    # carries none, empty is the documented correct answer.
+    import re as _re
+
+    current_ur_tokens = {
+        t for t in _re.findall(r"`((?:U|R)-[A-Za-z0-9._-]+)`", current_line) if ".." not in t
+    }
+    if current_ur_tokens:
+        assert token in current_ur_tokens, (
+            f"hook returned {token!r} but the live Current line's own tokens are "
+            f"{sorted(current_ur_tokens)} — a stale/archived pointer leaked "
+            "(empty would silently strip the loop's dashboard item)"
+        )
+    else:
+        assert token == "", "B-only round: the documented contract is an empty token"
 
 
 # --- Table-driven: the real bash-hook callers of hook_roadmap_next ------------
