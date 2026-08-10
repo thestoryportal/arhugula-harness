@@ -509,6 +509,41 @@ def test_head_refresh_shape_flags_merge_wrapped_refresh_touching_extra_files(tmp
     assert "extra.md" in violations[0]
 
 
+def test_head_refresh_shape_pr_title_governs_over_commit_subject(tmp_path):
+    # codex round-10: the §12.2.1 invariant binds on the PR TITLE. A refresh-
+    # titled PR whose head commit carries an ORDINARY subject, with an extra
+    # file hidden across base..head, must be flagged when judged in PR context
+    # (title_override + base) — the head-commit subject alone would skip.
+    repo = _git_scratch_repo(tmp_path, "seed: base", {".harness/roadmap_status.md": "base"})
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (repo / ".harness" / "roadmap_status.md").write_text("refreshed")
+    (repo / "extra.md").write_text("x")
+    subprocess.run(["git", "add", "extra.md"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-aqm", "chore: ordinary commit subject"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    # head-commit-subject judgement alone: skips (ordinary subject)
+    assert rsr.check_head_refresh_shape(repo) == []
+    # PR-context judgement: PR title + whole base...head diff → violation
+    violations = rsr.check_head_refresh_shape(
+        repo,
+        base=base_sha,
+        title_override="ops: roadmap status refresh post-#9999",
+    )
+    assert len(violations) == 1
+    assert "extra.md" in violations[0]
+    # ...and a content-titled PR with the same diff is not the gate's business
+    assert (
+        rsr.check_head_refresh_shape(repo, base=base_sha, title_override="feat: some content PR")
+        == []
+    )
+
+
 def test_head_refresh_shape_noop_on_content_commit(tmp_path):
     # a content-titled commit may touch anything — the shape rule binds only
     # refresh-titled commits.

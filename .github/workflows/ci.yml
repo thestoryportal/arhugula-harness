@@ -32,7 +32,10 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # `edited` included so a PR retitled to (or from) the reserved
+    # `ops: roadmap status refresh ` prefix re-runs the refresh-shape gate
+    # against the new title (codex round-10 on the U-CTX-03 arc).
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -312,11 +315,18 @@ jobs:
       - name: Validate roadmap_status.md table caps (stray/uncapped rows = CI failure)
         # On pull_request, actions/checkout puts the SYNTHETIC merge ref at
         # HEAD ("Merge ..." subject) — the refresh-shape gate would silently
-        # no-op pre-merge; judge the PR's real head instead (push events fall
-        # back to HEAD).
+        # no-op pre-merge; judge the PR's real head instead. The §12.2.1
+        # invariant binds on the PR TITLE over the PR's WHOLE base..head diff
+        # (a refresh-titled PR whose head commit has an ordinary subject must
+        # not slip through) — pass both explicitly; push events fall back to
+        # the HEAD commit's own subject + single-commit diff.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: >
           uv run python tools/roadmap_status_refresh.py --check
           --shape-ref "${{ github.event.pull_request.head.sha || 'HEAD' }}"
+          ${{ github.event.pull_request.base.sha && format('--shape-base {0}', github.event.pull_request.base.sha) || '' }}
+          ${{ github.event.pull_request.title && '--shape-title-env PR_TITLE' || '' }}
 
       - name: Arc-ledger + forward-register + runtime contract-id tests
         working-directory: tools

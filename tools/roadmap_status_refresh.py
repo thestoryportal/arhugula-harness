@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -435,7 +436,12 @@ _REFRESH_TITLE_PREFIX = "ops: roadmap status refresh "
 _REFRESH_ONLY_FILE_SET = frozenset({".harness/roadmap_status.md"})
 
 
-def check_head_refresh_shape(root: Path, ref: str = "HEAD") -> list[str]:
+def check_head_refresh_shape(
+    root: Path,
+    ref: str = "HEAD",
+    base: str | None = None,
+    title_override: str | None = None,
+) -> list[str]:
     """U-CTX-03 AC #2, git-shape half (codex round-2): if HEAD is a
     terminating-refresh-titled commit, its changed-file set must be EXACTLY
     `.harness/roadmap_status.md` — a refresh that also writes the next-action
@@ -475,14 +481,21 @@ def check_head_refresh_shape(root: Path, ref: str = "HEAD") -> list[str]:
             ]
         return []
     try:
-        title = subprocess.run(
-            ["git", "log", "-1", "--format=%s", ref],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=10,
-        ).stdout.strip()
+        if title_override is not None:
+            # codex round-10: the §12.2.1 invariant binds on the PR TITLE —
+            # a refresh-titled PR whose head commit carries an ordinary
+            # subject must still be judged (and a content PR is governed by
+            # its own title regardless of inner commit subjects).
+            title = title_override
+        else:
+            title = subprocess.run(
+                ["git", "log", "-1", "--format=%s", ref],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            ).stdout.strip()
         if not title.startswith(_REFRESH_TITLE_PREFIX):
             return []
         # Shallow-boundary guard (codex round-3): on a depth-1 CI checkout,
@@ -520,6 +533,26 @@ def check_head_refresh_shape(root: Path, ref: str = "HEAD") -> list[str]:
         # NO paths (the result matches a parent) — an empty set would wrongly
         # fail every such legitimate refresh. §12.2.1 recognizes merge-wrapped
         # refresh points; judge merges by their FIRST-PARENT diff instead.
+        if base is not None:
+            # PR context: the invariant covers the PR's WHOLE base..head diff,
+            # not just the head commit (a multi-commit refresh PR must not
+            # hide extra files in earlier commits).
+            changed = subprocess.run(
+                ["git", "diff", "--name-only", f"{base}...{ref}"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            ).stdout
+            files = frozenset(line.strip() for line in changed.splitlines() if line.strip())
+            if files != _REFRESH_ONLY_FILE_SET:
+                return [
+                    f"refresh-titled PR ({title!r}) changes {sorted(files)} across "
+                    f"base...head — a terminating refresh must touch EXACTLY "
+                    f"{sorted(_REFRESH_ONLY_FILE_SET)} (§12.2.1)"
+                ]
+            return []
         parents = subprocess.run(
             ["git", "rev-list", "--parents", "-n", "1", ref],
             cwd=root,
@@ -578,6 +611,19 @@ def main(argv: list[str] | None = None) -> int:
         "SYNTHETIC merge ref at HEAD, whose 'Merge ...' subject would make the "
         "gate silently no-op pre-merge (codex round-5)",
     )
+    ap.add_argument(
+        "--shape-base",
+        default=None,
+        help="base sha for the shape gate: judge the WHOLE base...shape-ref diff "
+        "(PR context) instead of the single ref commit",
+    )
+    ap.add_argument(
+        "--shape-title-env",
+        default=None,
+        help="NAME of an env var holding the authoritative title for the shape "
+        "gate (the PR title on pull_request events — passed via env, never "
+        "shell-interpolated; codex round-10)",
+    )
     ap.add_argument("--trim-drift-log", action="store_true", help="cap+archive drift log only")
     ap.add_argument(
         "--refresh",
@@ -629,7 +675,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check:
         violations = validate(text, args.status)
-        violations.extend(check_head_refresh_shape(status_root, args.shape_ref))
+        shape_title = os.environ.get(args.shape_title_env) if args.shape_title_env else None
+        violations.extend(
+            check_head_refresh_shape(
+                status_root, args.shape_ref, base=args.shape_base, title_override=shape_title
+            )
+        )
         # Severity is STRUCTURAL: only messages the validator itself prefixed
         # with INFORMATIONAL_PREFIX are soft (codex round-8 — a substring
         # search would let an attacker-controlled filename/title containing
