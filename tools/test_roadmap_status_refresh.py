@@ -480,5 +480,14 @@ def test_actual_next_action_archive_exists_and_is_not_referenced_as_a_read_targe
     # verbatim provenance (codex round-2 catch: an archived round labelled
     # "Current" after supersession left two "Current" entries).
     assert "Prior next action (post-#1290)" in archive_text
-    # Exactly ONE round is labelled Current in the archive: the live one.
-    assert archive_text.count("**Current next action (") == 1
+    # PRIOR-ONLY (codex round-6, resolution (b)): the current round lives ONLY
+    # in the live head — R1 rule 2 means the one-file terminating refresh can
+    # never rotate this archive, so it must not claim currency at all.
+    assert archive_text.count("**Current next action (") == 0
+    # ...and the live head's current round must NOT already sit in the archive.
+    status_text = (ROOT / ".harness" / "roadmap_status.md").read_text(encoding="utf-8")
+    import re as _re
+
+    m = _re.search(r"\*\*Current next action \((post-#\d+)\)", status_text)
+    assert m is not None
+    assert f"({m.group(1)})" not in archive_text
