@@ -687,7 +687,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check:
         violations = validate(text, args.status)
-        shape_title = os.environ.get(args.shape_title_env) if args.shape_title_env else None
+        shape_title = None
+        if args.shape_title_env:
+            shape_title = os.environ.get(args.shape_title_env)
+            if not shape_title:
+                # codex round-12: --shape-title-env names the AUTHORITATIVE
+                # title source; a missing/empty variable silently falling back
+                # to the commit subject would let a refresh-titled PR bypass
+                # the base...head file-set check. Fail closed.
+                print(
+                    f"--shape-title-env {args.shape_title_env!r} is unset or empty — "
+                    "refusing to fall back to the commit subject (the PR title is "
+                    "the authoritative §12.2.1 invariant source)",
+                    file=sys.stderr,
+                )
+                return 2
         violations.extend(
             check_head_refresh_shape(
                 status_root, args.shape_ref, base=args.shape_base, title_override=shape_title

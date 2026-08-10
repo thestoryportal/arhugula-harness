@@ -558,6 +558,18 @@ def test_head_refresh_shape_noop_on_content_commit(tmp_path):
     assert rsr.check_head_refresh_shape(repo) == []
 
 
+def test_cli_fails_closed_on_unset_shape_title_env(monkeypatch, capsys):
+    # codex round-12: an unset/empty --shape-title-env variable must be a hard
+    # refusal, not a silent fallback to the commit subject.
+    monkeypatch.delenv("SHAPE_TITLE_PROBE", raising=False)
+    rc = rsr.main(["--check", "--shape-title-env", "SHAPE_TITLE_PROBE"])
+    assert rc == 2
+    assert "unset or empty" in capsys.readouterr().err
+    monkeypatch.setenv("SHAPE_TITLE_PROBE", "")
+    rc = rsr.main(["--check", "--shape-title-env", "SHAPE_TITLE_PROBE"])
+    assert rc == 2
+
+
 def test_cli_rejects_case_variant_archive_alias_on_case_insensitive_fs(tmp_path, capsys):
     # codex round-11: on a case-insensitive filesystem (macOS default) an
     # upper-cased spelling names the SAME file while resolve() preserves
