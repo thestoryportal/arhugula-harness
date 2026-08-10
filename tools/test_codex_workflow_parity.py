@@ -683,11 +683,12 @@ def test_hook_adapter_timeout_delivers_cooperative_sigterm(tmp_path: Path) -> No
             ),
         ],
         cwd=tmp_path,
-        timeout=0.2,
+        timeout=2,
         env=env,
     )
 
     assert proc.returncode == 124
+    assert marker.exists(), proc.stderr
     assert marker.read_text(encoding="utf-8") == "term"
 
 
