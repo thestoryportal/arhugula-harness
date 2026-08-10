@@ -18,7 +18,7 @@ Source record: /Users/robertrhu/.claude/jobs/9b1bdd92/tmp/{neutral-brief,codex-r
 - Mode-agnostic ops. **ZERO `design-substrate/**` edits in any PR** (X-AL-3). Audit every diff.
 - No `git add -A`; explicit paths only. No force-push/history rewrite. No branch deletion (operator-only). Never `.agents`-before-`.claude` skill deletions. No paid provider calls. Worktree removal only via `tools/hooks/safe-worktree-remove.sh`.
 - Parallel BUILD, strictly SERIAL merge: PR → CI green (evidence: terminal status+conclusion, poll ~80s) → `just codex-review` converged → `merge-gate` (code-touching only) → merge → **terminating refresh as immediate next commit** → main CI green → next merge. *(errata E5: every CI gate binds to a SHA, not a moment — (i) the pre-merge CI evidence must be for the FINAL PR head (any codex-review/merge-gate fix commit stales earlier runs; re-verify after the last commit) against current base main; (ii) after merge, verify the MERGE SHA's own main CI green BEFORE the terminating refresh; (iii) verify the refresh commit's CI before the next arc's merge.)*
-- Codex coexistence: Arcs 3+ branch from post-#1292 main. Hook edits confined to PR-3 (one `/hooks` re-trust ceremony, flag operator immediately after merge). If Codex opens a colliding PR, halt affected agent and re-sequence.
+- Codex coexistence: ~~Arcs 3+ branch from post-#1292 main~~ *(SUPERSEDED by errata E8 — #1292 is parked; Arcs 3–7 branch from CURRENT main)*. Hook edits confined to PR-3 (one `/hooks` re-trust ceremony, flag operator immediately after merge). If Codex opens a colliding PR, halt affected agent and re-sequence.
 
 ## Token-efficiency doctrine (routing law)
 1. **Batch, don't scatter** — one agent per ARC (units sequential inside it). Rationale: each subagent re-pays the full ~98k preload (review finding F-16). Six worker spawns total.
@@ -40,9 +40,9 @@ Source record: /Users/robertrhu/.claude/jobs/9b1bdd92/tmp/{neutral-brief,codex-r
   - **U-CTX-05 Query-not-Read prose.** One sentence each: root CLAUDE.md §12.1/§12.2, Project_Roadmap_v1.md §7.2, roadmap-continue/SKILL.md (PINNED body — run `bash tools/hooks/test_skill_*.sh` pre-commit; must not disturb pinned needles/ordering), AGENTS.md pointer. Archive named as mandated reading NOWHERE.
   - **U-CTX-06 claude-artifact-pointers per-family split.** `.harness/artifact-pointers/{is,as,cp,od,runtime,memory,cxa,plans}.md` + resolving stub at old path (BEFORE Arc 4 consumes it); query-first prose for forward-register.yaml/loop_status.md/arc-ledger.yaml pointing at existing tools/*.py. AC gate: `just check` green; YAML parse-check on touched .yaml.
 
-### GATE G1 — PR #1292 merges. Arcs 3–7 rebase onto its final adapter contract. (Monitor-based watch.) *(errata E2: Agent C / Arc 4 additionally gates on the Arc 2 / U-CTX-06 MERGE — U-CTX-12 consumes the per-family `.harness/artifact-pointers/` files U-CTX-06 creates, so Arc 4 launches only after BOTH #1292 AND PR-2 are merged; Agent B / Arc 3 gates on #1292 only. 2026-08-10 operator directive: #1292 is Codex-owned and still under Codex's own out-of-family review — poll, never merge or touch it from this program.)*
+### ~~GATE G1 — PR #1292 merges. Arcs 3–7 rebase onto its final adapter contract. (Monitor-based watch.)~~ *(GATE DISSOLVED by errata E8 — operator directive 2026-08-10: #1292 is PARKED unmerged; Arcs 3–7 build from CURRENT main. The E2 half survives: Arc 4 launches only after the Arc 2 / PR-2 MERGE, because U-CTX-12 consumes the per-family `.harness/artifact-pointers/` files U-CTX-06 creates. #1292 remains Codex-owned — never merge or touch it from this program.)*
 
-### Wave 2 — two parallel workers [AFTER #1292]
+### Wave 2 — two parallel workers ~~[AFTER #1292]~~ *(E8: #1292 parked — Wave 2 proceeds from current main; Arc 4 still after the PR-2 merge per E2)*
 - **Agent B · Sonnet 5 · worktree — Arc 3 hooks (PR-3, THE single hook PR):**
   - **U-CTX-07** capture-failure.sh signature → `EVENT:TOOL:ERRTYPE:exit_or_cmdhead` + per-session emission cap (first two always emitted) + tests.
   - **U-CTX-08** loop-gc hygiene block top-3 + "(+N more)" reusing `loop_lib.sh:201` + test.

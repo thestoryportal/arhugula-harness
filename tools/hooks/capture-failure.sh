@@ -60,11 +60,14 @@ SIG="${EVENT}:${TOOL}:${ERRTYPE}:${EXIT_OR_CMDHEAD}"   # recurrence key (semanti
 # appends; a 12-way identical-failure probe emitted SIX rows past the 2-cap).
 # mkdir is the portable atomic primitive (macOS ships no flock binary). On a
 # crashed holder the lock goes stale: reclaim when older than 10s. If the lock
-# cannot be acquired in ~5s, proceed WITHOUT it — a hook must degrade to at-worst
-# an extra emission, never block or fail the tool flow.
+# cannot be acquired, the row is STILL LOGGED but emission is SUPPRESSED (codex
+# round-2: a lockless fallback let 20 contenders emit 3-6 nudges — the cap
+# decision must stay serialized, and losing one nudge is the safe direction).
+# A hook never blocks or fails the tool flow either way.
+# CAPTURE_FAILURE_LOCK_TRIES: test seam (default 50 × 0.1s ≈ 5s).
 LOCKDIR="${LOG}.lock"
 _LOCKED=false
-for _try in $(seq 1 50); do
+for _try in $(seq 1 "${CAPTURE_FAILURE_LOCK_TRIES:-50}"); do
   if mkdir "$LOCKDIR" 2>/dev/null; then _LOCKED=true; break; fi
   # stale-lock reclaim (crashed holder): BSD stat first (macOS), GNU fallback (CI)
   _now=$(date +%s)
@@ -97,7 +100,10 @@ WOULD_NUDGE=false
 # that is capped — logged to the jsonl as always, but never re-emitted. Bounds TOTAL
 # nudges per session, independent of the per-signature recurrence threshold above.
 EMIT_NOW=false
-if [ "$WOULD_NUDGE" = true ]; then
+if [ "$WOULD_NUDGE" = true ] && [ "$_LOCKED" = true ]; then
+  # Emission requires the lock: an unserialized cap decision is exactly the
+  # overlapping-hooks spam this cap exists to stop (codex round-2). Unlocked
+  # invocations log their row below but never emit.
   PRIOR_EMIT_COUNT=$(jq -Rr --arg sess "$SESSION" \
     'fromjson? | select(.session == $sess and .emitted == true) | 1' "$LOG" 2>/dev/null | grep -c . || true)
   [ "${PRIOR_EMIT_COUNT:-0}" -lt 2 ] && EMIT_NOW=true

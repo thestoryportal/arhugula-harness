@@ -119,5 +119,19 @@ EMITTED=$(grep -c '"emitted":true' "$LOG")
 [ "$(wc -l < "$LOG" | tr -d ' ')" = "13" ] && ok "parallel probe: all 13 occurrences logged" || bad "parallel probe: log row count $(wc -l < "$LOG")"
 [ ! -d "$LOG.lock" ] && ok "lock released after parallel probe" || bad "lock directory leaked"
 
+# 12) codex round-2: when the lock CANNOT be acquired, the row is still logged but
+#     emission is SUPPRESSED — an unserialized cap decision re-opens the spam (a
+#     20-contender lockless run emitted 3-6). Hold the lock externally with a fresh
+#     mtime; CAPTURE_FAILURE_LOCK_TRIES=2 keeps the test fast.
+: > "$LOG"
+LT='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"lock_test","session_id":"sess-LT"}'
+run "$LT" >/dev/null   # recur=1 seed
+mkdir "$LOG.lock"      # fresh external holder (mtime now — not stale-reclaimable)
+OUT=$(printf '%s' "$LT" | CLAUDE_PROJECT_DIR="$REPO" CAPTURE_FAILURE_LOCK_TRIES=2 bash "$HOOK" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+rmdir "$LOG.lock"
+[ -z "$OUT" ] && ok "lock timeout suppresses emission (cap stays serialized)" || bad "lock timeout emitted: $OUT"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "2" ] && ok "lock timeout still logs the row" || bad "lock-timeout row not logged"
+[ "$(tail -1 "$LOG" | jq -r .emitted)" = "false" ] && ok "lock-timeout row marked emitted:false" || bad "lock-timeout row emitted flag wrong"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
