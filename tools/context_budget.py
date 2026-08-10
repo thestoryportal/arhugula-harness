@@ -61,6 +61,16 @@ def _usage_of(rec: dict[str, Any]) -> dict[str, Any] | None:
     return cast("dict[str, Any]", usage)
 
 
+def _positive_int(value: str) -> int:
+    """argparse type for ``--sessions``: a negative count would be read by
+    Python slicing as "all but the last N" and silently measure an unintended
+    cohort; zero is equally meaningless for an acceptance metric."""
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
+    return n
+
+
 def project_transcript_dir(cwd: Path) -> Path:
     """Claude Code's per-project transcript dir: cwd path with '/' -> '-'."""
     slug = str(cwd.resolve()).replace("/", "-")
@@ -254,9 +264,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--sessions",
-        type=int,
+        type=_positive_int,
         default=20,
-        help="most-recent session count (default 20)",
+        help="most-recent eligible-session count (default 20; must be >= 1)",
     )
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument(
@@ -286,42 +296,51 @@ def main(argv: list[str] | None = None) -> int:
         # acceptance metric change without revealing the missing input.
         print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
         return 1
-    rows = all_rows[: args.sessions]
-    if not rows:
+    if not all_rows:
         print(f"no measurable sessions under {directory}", file=sys.stderr)
         return 1
 
     # Headline statistics come from the ELIGIBLE cohort only: real CLI
     # sessions (entrypoint `cli` — bg or interactive alike). Eligibility is
-    # EXPLICIT, never plurality: a window dominated by `claude -p` / SDK /
-    # restricted-tool runs (entrypoint `sdk-cli` etc.) must not become the
-    # headline, or the ≤76k acceptance gate could pass without the real
-    # preload shrinking. Ineligible cohorts are listed separately.
+    # EXPLICIT, never plurality — and the window is filled with ELIGIBLE rows
+    # (the N most-recent CLI sessions), never sliced first: slicing before
+    # filtering would let an SDK-dominated window shrink the sample to a
+    # handful of sessions and still pass the ≤76k acceptance gate. If the
+    # corpus cannot supply the requested eligible count, the measurement
+    # REFUSES rather than silently undersizing.
     def _eligible(r: dict[str, Any]) -> bool:
         return str(r.get("cohort") or "").endswith("/cli")
 
-    headline_rows = [r for r in rows if _eligible(r)]
-    excluded: dict[str, int] = {}
-    for r in rows:
-        if not _eligible(r):
+    eligible_all = [r for r in all_rows if _eligible(r)]
+    if len(eligible_all) < args.sessions:
+        cohorts_seen: dict[str, int] = {}
+        for r in all_rows:
             c = str(r.get("cohort") or "unknown")
-            excluded[c] = excluded.get(c, 0) + 1
-    if not headline_rows:
+            cohorts_seen[c] = cohorts_seen.get(c, 0) + 1
         print(
-            f"no eligible CLI sessions (entrypoint 'cli') among the {len(rows)} "
-            f"selected — cohorts seen: {excluded}. Refusing to compute a headline "
-            "from ineligible (headless/SDK) sessions.",
+            f"only {len(eligible_all)} eligible CLI session(s) (entrypoint 'cli') in the "
+            f"corpus, but --sessions {args.sessions} requested — cohorts seen: "
+            f"{cohorts_seen}. Refusing to compute an undersized headline; pass "
+            f"--sessions {max(len(eligible_all), 1)} to measure what exists.",
             file=sys.stderr,
         )
         return 1
+    headline_rows = eligible_all[: args.sessions]
     headline_cohort = "*/cli"
+    window_floor = min(str(r.get("timestamp") or "") for r in headline_rows)
+    # ineligible sessions inside the headline window's time span, for the record
+    excluded: dict[str, int] = {}
+    for r in all_rows:
+        if not _eligible(r) and str(r.get("timestamp") or "") >= window_floor:
+            c = str(r.get("cohort") or "unknown")
+            excluded[c] = excluded.get(c, 0) + 1
+    rows = headline_rows
 
     totals = [r["first_turn_total"] for r in headline_rows]
     summary = {
-        "sessions_measured": len(rows),
         "headline_cohort": headline_cohort,
         "headline_sessions": len(headline_rows),
-        "excluded_cohorts": excluded,
+        "excluded_in_window": excluded,
         "median_first_turn": int(statistics.median(totals)),
         "mean_first_turn": int(statistics.mean(totals)),
         "min_first_turn": min(totals),
@@ -359,8 +378,8 @@ def main(argv: list[str] | None = None) -> int:
             summary["post_compaction_median"] = int(statistics.median(pc_totals))
             summary["post_compaction_mean"] = int(statistics.mean(pc_totals))
 
+    side_rows: list[dict[str, Any]] = []
     if args.sidechains:
-        side_rows: list[dict[str, Any]] = []
         try:
             for path in eligible_files:
                 side_rows.extend(sidechain_first_turns(path))
@@ -382,20 +401,20 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=2))
         return 0
 
-    print(f"context-budget — {len(rows)} session(s) from {directory}")
+    print(f"context-budget — {len(rows)} eligible CLI session(s) from {directory}")
     for r in rows:
         ts = (r["timestamp"] or "")[:19]
-        marker = "" if _eligible(r) else f"  [{r.get('cohort')} — excluded]"
         print(
             f"  {r['session'][:8]}  {ts}  input={r['input_tokens']:>7,}"
             f"  cache_new={r['cache_creation_input_tokens']:>8,}"
             f"  cache_read={r['cache_read_input_tokens']:>8,}"
-            f"  TOTAL={r['first_turn_total']:>8,}{marker}"
+            f"  TOTAL={r['first_turn_total']:>8,}"
         )
+    excluded_note = f"; excluded in window: {excluded}" if excluded else ""
     print(
         f"median={summary['median_first_turn']:,}  mean={summary['mean_first_turn']:,}"
         f"  min={summary['min_first_turn']:,}  max={summary['max_first_turn']:,}"
-        f"  (headline cohort {headline_cohort}: {len(headline_rows)}/{len(rows)} sessions)"
+        f"  (headline cohort {headline_cohort}: {len(headline_rows)} sessions{excluded_note})"
     )
     if args.post_compaction:
         n = summary.get("post_compaction_measured", 0)
