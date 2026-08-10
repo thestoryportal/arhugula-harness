@@ -48,13 +48,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STATUS = ROOT / ".harness" / "roadmap_status.md"
 DEFAULT_ARCHIVE = ROOT / ".harness" / "roadmap_drift_log_archive.md"
+# U-CTX-03: the "## Next action" section's round-by-round history (every
+# `Prior next action (post-#NNN)` / `Round N` paragraph) lives here, verbatim,
+# once superseded by a newer round. Never written by an ordinary --refresh —
+# it is populated by hand at each next-action update, mirroring the existing
+# DEFAULT_ARCHIVE convention for the drift log.
+NEXT_ACTION_ARCHIVE = ROOT / ".harness" / "roadmap-next-action-archive.md"
 
 RECENTLY_COMPLETED_HEADING = "Recently completed (last 5)"
 IN_FLIGHT_HEADING = "In-flight (open PRs)"
 DRIFT_LOG_HEADING = "Drift detection log"
 ANCHOR_HEADING = "Workspace state anchor"
+NEXT_ACTION_HEADING = "Next action"
 
 RECENTLY_COMPLETED_CAP = 5
+# U-CTX-03 AC #3: the whole-file byte budget the truncated `roadmap_status.md`
+# must stay under (was 316,894 B pre-truncation; the "## Next action" body
+# alone was 292,031 B of that).
+HEAD_BYTE_BUDGET = 25_600
+# Paragraph shapes that belong in NEXT_ACTION_ARCHIVE, never inline in the
+# live "## Next action" section — re-accumulating them here is exactly the
+# regression the archive split (U-CTX-03) exists to prevent.
+_ARCHIVED_PARAGRAPH_RE = re.compile(r"^\*\*(Prior next action|Round \d+)", re.MULTILINE)
 DRIFT_LOG_CAP = 10
 
 
@@ -328,6 +343,46 @@ def validate(text: str, status_path: Path = DEFAULT_STATUS) -> list[str]:
             violations.append(
                 f"{DRIFT_LOG_HEADING}: {len(drift)} rows exceeds cap {DRIFT_LOG_CAP} "
                 f"(run --trim-drift-log)"
+            )
+    except RoadmapStatusError as e:
+        violations.append(str(e))
+
+    # U-CTX-03 AC #3: whole-file byte budget. The pre-truncation file grew to
+    # 316,894 B (292,031 B of it the "## Next action" body alone) before
+    # NEXT_ACTION_ARCHIVE existed — this is the regression guard against that
+    # recurring.
+    status_bytes = len(text.encode("utf-8"))
+    if status_bytes > HEAD_BYTE_BUDGET:
+        violations.append(
+            f"roadmap_status.md is {status_bytes} B, exceeds the {HEAD_BYTE_BUDGET} B "
+            f"head byte budget (archive growth belongs in {NEXT_ACTION_ARCHIVE.name}, "
+            "not inline)"
+        )
+
+    # U-CTX-03 AC #2: the archive is never (re-)written by an ordinary terminating
+    # refresh, and the live "## Next action" section never re-accumulates the
+    # archived paragraph shapes it was truncated to move out — that would defeat
+    # the byte-budget truncation and silently regrow the file this arc just
+    # shrank. A --refresh call's own write set is a single Path.write_text call
+    # against `args.status` (plus, only on drift-log overflow, `args.archive` —
+    # DEFAULT_ARCHIVE, a distinct file from NEXT_ACTION_ARCHIVE); asserting the
+    # two archive constants are distinct paths keeps that separation structural,
+    # and the content check below keeps the live section from silently regrowing
+    # into what would have to be the next-action archive's job.
+    if DEFAULT_ARCHIVE.resolve() == NEXT_ACTION_ARCHIVE.resolve():
+        violations.append(
+            "DEFAULT_ARCHIVE and NEXT_ACTION_ARCHIVE must be distinct files — a "
+            "--refresh call's drift-log trim must never touch the next-action archive"
+        )
+    try:
+        next_action_start, next_action_end = _section_span(text, NEXT_ACTION_HEADING)
+        next_action_body = text[next_action_start:next_action_end]
+        if _ARCHIVED_PARAGRAPH_RE.search(next_action_body):
+            violations.append(
+                f"{NEXT_ACTION_HEADING}: contains an inline `Prior next action`/"
+                f"`Round N` paragraph — archive it to {NEXT_ACTION_ARCHIVE.name} "
+                "instead of accumulating it inline (defeats the U-CTX-03 byte-budget "
+                "truncation)"
             )
     except RoadmapStatusError as e:
         violations.append(str(e))

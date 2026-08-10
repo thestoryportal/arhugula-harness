@@ -232,3 +232,80 @@ def test_validate_clean_sample_has_no_cap_violations():
     violations = rsr.validate(SAMPLE)
     cap_violations = [v for v in violations if "exceeds cap" in v or "duplicate" in v]
     assert cap_violations == []
+
+
+# --- U-CTX-03: head byte budget + archive-bypass guard ------------------------
+
+
+def test_validate_clean_sample_is_under_byte_budget():
+    violations = rsr.validate(SAMPLE)
+    assert not any("head byte budget" in v for v in violations)
+
+
+def test_validate_flags_byte_budget_violation():
+    # Bloat the Next action prose well past HEAD_BYTE_BUDGET without touching
+    # any other section's structure.
+    bloated = SAMPLE.replace(
+        "Some agent-authored prose that must survive untouched.",
+        "x" * (rsr.HEAD_BYTE_BUDGET + 500),
+    )
+    violations = rsr.validate(bloated)
+    assert any("head byte budget" in v for v in violations)
+
+
+def test_validate_clean_sample_has_no_inline_history_violation():
+    violations = rsr.validate(SAMPLE)
+    assert not any("Prior next action" in v and "Round N" in v for v in violations)
+
+
+def test_validate_flags_inline_prior_next_action_paragraph():
+    # This is the U-CTX-03 AC #2 mutation-probe target: a `Prior next action`
+    # paragraph re-accumulating inline in "## Next action" instead of living in
+    # NEXT_ACTION_ARCHIVE is exactly the regression the archive split guards
+    # against.
+    regressed = SAMPLE.replace(
+        "Some agent-authored prose that must survive untouched.",
+        "Some agent-authored prose that must survive untouched.\n\n"
+        "**Prior next action (post-#999).** Some stale round that should have "
+        "been archived instead.",
+    )
+    violations = rsr.validate(regressed)
+    assert any("Prior next action" in v for v in violations)
+
+
+def test_validate_flags_inline_round_n_paragraph():
+    regressed = SAMPLE.replace(
+        "Some agent-authored prose that must survive untouched.",
+        "Some agent-authored prose that must survive untouched.\n\n"
+        "**Round 12 — some stale round that should have been archived.**",
+    )
+    violations = rsr.validate(regressed)
+    assert any("Round N" in v for v in violations)
+
+
+def test_next_action_archive_is_distinct_from_drift_log_archive():
+    # U-CTX-03 AC #2's structural half: the two archives must never collapse
+    # into the same file, or a drift-log trim's write would silently also be a
+    # next-action-archive write.
+    assert rsr.NEXT_ACTION_ARCHIVE.resolve() != rsr.DEFAULT_ARCHIVE.resolve()
+
+
+def test_actual_roadmap_status_is_under_byte_budget_and_has_no_inline_history():
+    """Runs --check's own validate() against the REAL post-truncation
+    .harness/roadmap_status.md (not a synthetic SAMPLE) — the concrete AC #2 +
+    AC #3 regression guard for the U-CTX-03 truncation itself."""
+    text = rsr.DEFAULT_STATUS.read_text(encoding="utf-8")
+    assert len(text.encode("utf-8")) <= rsr.HEAD_BYTE_BUDGET
+    violations = rsr.validate(text)
+    hard = [v for v in violations if "informational" not in v]
+    assert hard == [], hard
+
+
+def test_actual_next_action_archive_exists_and_is_not_referenced_as_a_read_target():
+    """U-CTX-05: the archive must exist (nothing was silently dropped) and must
+    never be named as something to be READ WHOLESALE by any doc in-repo — grep
+    is the query-not-Read discipline, not a wholesale read instruction."""
+    assert rsr.NEXT_ACTION_ARCHIVE.is_file()
+    archive_text = rsr.NEXT_ACTION_ARCHIVE.read_text(encoding="utf-8")
+    assert "Prior next action (post-#1285)" in archive_text
+    assert "Current next action (post-#1290)" in archive_text
