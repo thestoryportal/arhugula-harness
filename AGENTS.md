@@ -43,7 +43,7 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - Start with the narrowest meaningful test or static check.
 - For PR-ready code or governance changes, run `just check` unless the change is documentation-only and a narrower documented gate is sufficient.
 - For governance/context changes, also verify instruction discovery or pointer integrity when applicable.
-- For roadmap/status changes, update `.harness/roadmap_status.md` directly (recompute `workspace_state_hash`, `recently_completed`, `next_action` per CLAUDE.md §12.2); do not hand-maintain volatile facts inconsistently with the recipe there.
+- For roadmap/status changes, update `.harness/roadmap_status.md` directly (recompute `workspace_state_hash`, `recently_completed`, `next_action` per CLAUDE.md §12.2); do not hand-maintain volatile facts inconsistently with the recipe there. `.harness/roadmap_status.md`'s `## Next action` holds only the live pointer — historical rounds live at `.harness/roadmap-next-action-archive.md`, queried by grep, never read wholesale.
 - Run `just codex-closeout` before final response, commit, or PR; it writes a fresh pre-closeout checkpoint and hard-fails if the guard cannot verify it. Resolve hard findings and report warnings explicitly.
 - If `.harness/codex_loop_state.json` exists, closeout also verifies the active autonomous loop has reached every pre-closeout gate from linked worktree readiness through decorrelated review.
 - Before claiming green, report exactly which checks ran and which did not.
