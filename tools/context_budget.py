@@ -39,6 +39,12 @@ USAGE_FIELDS = (
 _DESCRIPTION = "First-turn context-budget measurement over Claude Code session transcripts."
 
 
+class MalformedTranscriptError(ValueError):
+    """A non-tail transcript line failed to parse — the file's record stream
+    cannot be trusted, so measurement aborts rather than silently selecting a
+    later call as the session's first turn."""
+
+
 def _loads_record(line: str) -> dict[str, Any] | None:
     """One transcript line as a dict, or None (malformed / non-object)."""
     try:
@@ -48,6 +54,35 @@ def _loads_record(line: str) -> dict[str, Any] | None:
     if not isinstance(rec, dict):
         return None
     return cast("dict[str, Any]", rec)
+
+
+def _records(path: Path) -> list[dict[str, Any]]:
+    """Every record of one transcript file, failing closed on corruption.
+
+    Only a malformed FINAL line is benign (an append in progress at read
+    time). A malformed line with records after it means the transcript was
+    interrupted and resumed — the true first turn may be inside the damaged
+    region, so any measurement over the file would be silently wrong; raise
+    instead. Propagates ``OSError`` for unreadable files (same posture).
+    """
+    records: list[dict[str, Any]] = []
+    pending_bad: int | None = None
+    with path.open(encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, start=1):
+            if not line.strip():
+                continue
+            rec = _loads_record(line)
+            if pending_bad is not None:
+                # anything after a malformed line makes that line non-tail
+                raise MalformedTranscriptError(
+                    f"{path}:{pending_bad}: malformed non-tail record "
+                    f"(line {lineno} follows it) — refusing to measure this file"
+                )
+            if rec is None:
+                pending_bad = lineno
+                continue
+            records.append(rec)
+    return records
 
 
 def _usage_of(rec: dict[str, Any]) -> dict[str, Any] | None:
@@ -88,44 +123,39 @@ def first_turn_total(path: Path) -> dict[str, Any] | None:
     acceptance metric shift without revealing the missing input (fail closed).
     """
     seen_request_ids: set[str] = set()
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            rec = _loads_record(line)
-            if rec is None:
-                continue
-            if rec.get("type") != "assistant" or rec.get("isSidechain"):
-                continue
-            request_id = rec.get("requestId")
-            if request_id is not None and request_id in seen_request_ids:
-                continue
-            usage = _usage_of(rec)
-            if usage is None:
-                continue
-            parts = {f: int(usage.get(f) or 0) for f in USAGE_FIELDS}
-            if sum(parts.values()) == 0:
-                # aborted/empty call (all-zero usage) — not a measurement; do
-                # NOT mark the requestId seen (a later chunk of the SAME
-                # request may carry the real usage); keep scanning.
-                continue
-            if request_id is not None:
-                seen_request_ids.add(request_id)
-            return {
-                "session": path.stem,
-                "timestamp": rec.get("timestamp"),
-                "request_id": request_id,
-                # cohort discriminator: a `claude -p` / SDK / restricted-tool run
-                # preloads a different config surface than a real session, and
-                # enough of them would let the ≤76k gate pass without the real
-                # preload shrinking. (sessionKind, entrypoint) separates them —
-                # e.g. ('bg','cli') for background sessions vs (None,'sdk-cli')
-                # for headless SDK runs.
-                "cohort": (
-                    f"{rec.get('sessionKind') or 'interactive'}"
-                    f"/{rec.get('entrypoint') or 'unknown'}"
-                ),
-                **parts,
-                "first_turn_total": sum(parts.values()),
-            }
+    for rec in _records(path):
+        if rec.get("type") != "assistant" or rec.get("isSidechain"):
+            continue
+        request_id = rec.get("requestId")
+        if request_id is not None and request_id in seen_request_ids:
+            continue
+        usage = _usage_of(rec)
+        if usage is None:
+            continue
+        parts = {f: int(usage.get(f) or 0) for f in USAGE_FIELDS}
+        if sum(parts.values()) == 0:
+            # aborted/empty call (all-zero usage) — not a measurement; do
+            # NOT mark the requestId seen (a later chunk of the SAME
+            # request may carry the real usage); keep scanning.
+            continue
+        if request_id is not None:
+            seen_request_ids.add(request_id)
+        return {
+            "session": path.stem,
+            "timestamp": rec.get("timestamp"),
+            "request_id": request_id,
+            # cohort discriminator: a `claude -p` / SDK / restricted-tool run
+            # preloads a different config surface than a real session, and
+            # enough of them would let the ≤76k gate pass without the real
+            # preload shrinking. (sessionKind, entrypoint) separates them —
+            # e.g. ('bg','cli') for background sessions vs (None,'sdk-cli')
+            # for headless SDK runs.
+            "cohort": (
+                f"{rec.get('sessionKind') or 'interactive'}/{rec.get('entrypoint') or 'unknown'}"
+            ),
+            **parts,
+            "first_turn_total": sum(parts.values()),
+        }
     return None
 
 
@@ -143,46 +173,42 @@ def post_compaction_first_turns(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen_request_ids: set[str] = set()
     pending_trigger: str | None = None
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            rec = _loads_record(line)
-            if rec is None:
-                continue
-            if rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
-                meta = rec.get("compactMetadata")
-                if isinstance(meta, dict):
-                    pending_trigger = str(cast("dict[str, Any]", meta).get("trigger", "unknown"))
-                else:
-                    pending_trigger = "unknown"
-                continue
-            if pending_trigger is None:
-                continue
-            if rec.get("type") != "assistant" or rec.get("isSidechain"):
-                continue
-            request_id = rec.get("requestId")
-            if request_id is not None and request_id in seen_request_ids:
-                continue
-            usage = _usage_of(rec)
-            if usage is None:
-                continue
-            parts = {f: int(usage.get(f) or 0) for f in USAGE_FIELDS}
-            if sum(parts.values()) == 0:
-                # zero-usage chunk: do NOT mark seen — a later chunk of the
-                # same request may carry the real usage.
-                continue
-            if request_id is not None:
-                seen_request_ids.add(request_id)
-            rows.append(
-                {
-                    "session": path.stem,
-                    "timestamp": rec.get("timestamp"),
-                    "request_id": request_id,
-                    "trigger": pending_trigger,
-                    **parts,
-                    "post_compaction_total": sum(parts.values()),
-                }
-            )
-            pending_trigger = None
+    for rec in _records(path):
+        if rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
+            meta = rec.get("compactMetadata")
+            if isinstance(meta, dict):
+                pending_trigger = str(cast("dict[str, Any]", meta).get("trigger", "unknown"))
+            else:
+                pending_trigger = "unknown"
+            continue
+        if pending_trigger is None:
+            continue
+        if rec.get("type") != "assistant" or rec.get("isSidechain"):
+            continue
+        request_id = rec.get("requestId")
+        if request_id is not None and request_id in seen_request_ids:
+            continue
+        usage = _usage_of(rec)
+        if usage is None:
+            continue
+        parts = {f: int(usage.get(f) or 0) for f in USAGE_FIELDS}
+        if sum(parts.values()) == 0:
+            # zero-usage chunk: do NOT mark seen — a later chunk of the
+            # same request may carry the real usage.
+            continue
+        if request_id is not None:
+            seen_request_ids.add(request_id)
+        rows.append(
+            {
+                "session": path.stem,
+                "timestamp": rec.get("timestamp"),
+                "request_id": request_id,
+                "trigger": pending_trigger,
+                **parts,
+                "post_compaction_total": sum(parts.values()),
+            }
+        )
+        pending_trigger = None
     return rows
 
 
@@ -204,35 +230,31 @@ def sidechain_first_turns(path: Path) -> list[dict[str, Any]]:
         return rows
     for agent_file in sorted(subagents_dir.glob("agent-*.jsonl")):
         seen_request_ids: set[str] = set()
-        with agent_file.open(encoding="utf-8") as fh:
-            for line in fh:
-                rec = _loads_record(line)
-                if rec is None:
-                    continue
-                if rec.get("type") != "assistant":
-                    continue
-                request_id = rec.get("requestId")
-                if request_id is not None and request_id in seen_request_ids:
-                    continue
-                usage = _usage_of(rec)
-                if usage is None:
-                    continue
-                total = sum(int(usage.get(f) or 0) for f in USAGE_FIELDS)
-                if total == 0:
-                    # zero-usage chunk: do NOT mark seen — a later chunk of
-                    # the same request may carry the real usage.
-                    continue
-                if request_id is not None:
-                    seen_request_ids.add(request_id)
-                rows.append(
-                    {
-                        "session": path.stem,
-                        "agent": agent_file.stem,
-                        "timestamp": rec.get("timestamp"),
-                        "sidechain_total": total,
-                    }
-                )
-                break  # first real call only — one first turn per agent file
+        for rec in _records(agent_file):
+            if rec.get("type") != "assistant":
+                continue
+            request_id = rec.get("requestId")
+            if request_id is not None and request_id in seen_request_ids:
+                continue
+            usage = _usage_of(rec)
+            if usage is None:
+                continue
+            total = sum(int(usage.get(f) or 0) for f in USAGE_FIELDS)
+            if total == 0:
+                # zero-usage chunk: do NOT mark seen — a later chunk of
+                # the same request may carry the real usage.
+                continue
+            if request_id is not None:
+                seen_request_ids.add(request_id)
+            rows.append(
+                {
+                    "session": path.stem,
+                    "agent": agent_file.stem,
+                    "timestamp": rec.get("timestamp"),
+                    "sidechain_total": total,
+                }
+            )
+            break  # first real call only — one first turn per agent file
     return rows
 
 
@@ -291,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         all_rows = collect_all(directory)
-    except OSError as e:
+    except (OSError, MalformedTranscriptError) as e:
         # Fail closed: silently substituting older sessions would let the
         # acceptance metric change without revealing the missing input.
         print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
@@ -341,8 +363,8 @@ def main(argv: list[str] | None = None) -> int:
         "headline_cohort": headline_cohort,
         "headline_sessions": len(headline_rows),
         "excluded_in_window": excluded,
-        "median_first_turn": int(statistics.median(totals)),
-        "mean_first_turn": int(statistics.mean(totals)),
+        "median_first_turn": float(statistics.median(totals)),
+        "mean_first_turn": round(float(statistics.mean(totals)), 1),
         "min_first_turn": min(totals),
         "max_first_turn": max(totals),
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -368,29 +390,29 @@ def main(argv: list[str] | None = None) -> int:
         try:
             for path in eligible_files:
                 post_compaction_rows.extend(post_compaction_first_turns(path))
-        except OSError as e:
+        except (OSError, MalformedTranscriptError) as e:
             print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
             return 1
         post_compaction_rows = _windowed(post_compaction_rows)
         pc_totals = [r["post_compaction_total"] for r in post_compaction_rows]
         summary["post_compaction_measured"] = len(pc_totals)
         if pc_totals:
-            summary["post_compaction_median"] = int(statistics.median(pc_totals))
-            summary["post_compaction_mean"] = int(statistics.mean(pc_totals))
+            summary["post_compaction_median"] = float(statistics.median(pc_totals))
+            summary["post_compaction_mean"] = round(float(statistics.mean(pc_totals)), 1)
 
     side_rows: list[dict[str, Any]] = []
     if args.sidechains:
         try:
             for path in eligible_files:
                 side_rows.extend(sidechain_first_turns(path))
-        except OSError as e:
+        except (OSError, MalformedTranscriptError) as e:
             print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
             return 1
         side_rows = _windowed(side_rows)
         side = [r["sidechain_total"] for r in side_rows]
         summary["sidechain_first_turns_measured"] = len(side)
         if side:
-            summary["sidechain_median_first_turn"] = int(statistics.median(side))
+            summary["sidechain_median_first_turn"] = float(statistics.median(side))
 
     if args.json:
         payload: dict[str, Any] = {"summary": summary, "sessions": rows}
