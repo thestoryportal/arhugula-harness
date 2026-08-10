@@ -4,6 +4,8 @@
 
 ---
 
+**Current head is DERIVED, not carried here.** This file is a lineage ARCHIVE; the authoritative per-family head version is derived from the `.harness/clearance/` marker corpus into `.harness/artifact-heads.md` by `tools/artifact_heads.py` (R-CTX-1 / U-CTX-11), and two CI gates keep that table current. Head labels inline below are reconciled at each arc but the generated table wins on any disagreement.
+
 All canonical artifacts reside at the **design-phase context** (separate Claude Code CLI session; venue details pending operator definition — historical authoring through 2026-05-28 occurred at a separate Claude.ai project, but forward design-phase work moves to Claude Code CLI per operator decision 2026-05-29). When this `CLAUDE.md` cites a canonical artifact, consult the design-phase substrate copy. Citation byte-exact discipline per `Project_Workflow_v1_8.md` §7.4.2.
 
 ---
@@ -49,10 +51,12 @@ The catch-all family file: content that is not per-axis (§2.1 governance, §2.2
 
 | Subdirectory | CLAUDE.md role |
 |---|---|
-| `harness-is/CLAUDE.md` | IS-axis scope; plan unit entry-points; IS substitution surface (9 entries); IS anti-leakage rules |
-| `harness-as/CLAUDE.md` | AS-axis scope; plan unit entry-points; AS substitution surface (6 entries); AS anti-leakage rules |
-| `harness-cp/CLAUDE.md` | CP-axis scope; plan unit entry-points; CP substitution surface (21 entries); CP anti-leakage rules |
-| `harness-od/CLAUDE.md` | OD-axis scope; plan unit entry-points; OD substitution surface (8 entries); OD anti-leakage rules |
+| `harness-is/CLAUDE.md` | IS-axis scope; plan unit entry-points; IS substitution surface; IS anti-leakage rules |
+| `harness-as/CLAUDE.md` | AS-axis scope; plan unit entry-points; AS substitution surface; AS anti-leakage rules |
+| `harness-cp/CLAUDE.md` | CP-axis scope; plan unit entry-points; CP substitution surface; CP anti-leakage rules |
+| `harness-od/CLAUDE.md` | OD-axis scope; plan unit entry-points; OD substitution surface; OD anti-leakage rules |
+
+Per-axis substitution-surface cardinalities were carried inline here and had gone stale (AS read `6 entries` against a live ledger that batch-24 decomposed further). They are removed rather than corrected, per root `CLAUDE.md` §4.2: the live counts are DERIVED from `.harness/substitutions.yaml` by `tools/substitution_ledger.py --summary`, never hand-maintained in guidance.
 
 `harness-core/` hosts shared types + cross-axis utilities. `harness-cxa/` hosts CXA seam instantiation (5 CXA-axis substitution entries; CXA-AL-1 anti-leakage); cross-axis edges per CXA v2.1 §2.3.
 

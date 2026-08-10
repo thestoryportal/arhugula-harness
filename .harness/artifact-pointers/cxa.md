@@ -4,6 +4,8 @@
 
 ---
 
+**Current head is DERIVED, not carried here.** This file is a lineage ARCHIVE; the authoritative per-family head version is derived from the `.harness/clearance/` marker corpus into `.harness/artifact-heads.md` by `tools/artifact_heads.py` (R-CTX-1 / U-CTX-11), and two CI gates keep that table current. Head labels inline below are reconciled at each arc but the generated table wins on any disagreement.
+
 ## §2.4 plan pointer
 
 | Axis | Plan | Unit count |

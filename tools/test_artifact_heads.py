@@ -9,6 +9,7 @@ Plus the two gates (generated-vs-committed, marker-completeness) in both directi
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import artifact_heads as ah
@@ -232,3 +233,112 @@ def test_every_family_carrying_a_marker_appears_in_the_committed_table() -> None
     assert families, "the corpus must not be empty"
     for family in families:
         assert f"| `{family}` |" in table, family
+
+
+# ── R-CTX-1 / U-CTX-12: live head venues agree with the derived table ───────────────────
+# The stale-carry defect this arc closed: root `CLAUDE.md` §2.3 named the AS spec head as
+# `v1.13` and §2.4 named `Implementation_Plan_Action_Surface_v1_4.md`, while the corpus had
+# cleared `v1.14` / `v1.6` on 2026-07-15 — a gap the AS spec's own clearance marker Notes
+# had flagged as owed. These pins keep every live head venue tied to the DERIVED head.
+# Nothing below hardcodes a version; every expectation comes from `derive()`.
+
+LIVE_HEAD_VENUES = (
+    "CLAUDE.md",
+    ".harness/artifact-pointers/is.md",
+    ".harness/artifact-pointers/as.md",
+    ".harness/artifact-pointers/cp.md",
+    ".harness/artifact-pointers/od.md",
+    ".harness/artifact-pointers/runtime.md",
+    ".harness/artifact-pointers/memory.md",
+    ".harness/artifact-pointers/cxa.md",
+    "harness-is/CLAUDE.md",
+    "harness-as/CLAUDE.md",
+    "harness-cp/CLAUDE.md",
+    "harness-od/CLAUDE.md",
+    "AGENTS.md",
+    "CONTEXT.md",
+)
+
+# (venue, family) pairs that MUST name the derived head adjacent to the artifact name.
+HEAD_PINS = (
+    ("CLAUDE.md", "spec-action-surface"),
+    ("CLAUDE.md", "spec-information-substrate"),
+    ("CLAUDE.md", "spec-memory-substrate"),
+    ("CLAUDE.md", "spec-control-plane"),
+    ("CLAUDE.md", "spec-operational-discipline"),
+    ("CLAUDE.md", "spec-harness-runtime"),
+    (".harness/artifact-pointers/as.md", "spec-action-surface"),
+    (".harness/artifact-pointers/is.md", "spec-information-substrate"),
+    (".harness/artifact-pointers/memory.md", "spec-memory-substrate"),
+    ("harness-as/CLAUDE.md", "spec-action-surface"),
+    ("harness-is/CLAUDE.md", "spec-information-substrate"),
+)
+
+# Families whose head is encoded in a VERSIONED filename — the venue must name that file.
+FILENAME_PINS = (
+    ("CLAUDE.md", "implementation-plan-action-surface"),
+    ("CLAUDE.md", "implementation-plan-information-substrate"),
+    ("CLAUDE.md", "implementation-plan-control-plane"),
+    ("CLAUDE.md", "implementation-plan-operational-discipline"),
+    ("CLAUDE.md", "implementation-plan-harness-runtime"),
+    ("CLAUDE.md", "cross-axis-composition-document"),
+    (".harness/artifact-pointers/as.md", "implementation-plan-action-surface"),
+    (".harness/artifact-pointers/is.md", "implementation-plan-information-substrate"),
+    (".harness/artifact-pointers/cxa.md", "cross-axis-composition-document"),
+)
+
+_ADJACENT_WINDOW = 90
+
+
+@pytest.mark.parametrize(("venue", "family"), HEAD_PINS)
+def test_live_venue_names_the_derived_head_adjacent_to_the_artifact(
+    venue: str, family: str
+) -> None:
+    head = next(h for h in ah.derive() if h.family == family)
+    basename = head.artifact.rsplit("/", 1)[-1]
+    text = (ah.REPO_ROOT / venue).read_text(encoding="utf-8")
+    windows = []
+    start = 0
+    while (idx := text.find(basename, start)) != -1:
+        windows.append(text[idx : idx + len(basename) + _ADJACENT_WINDOW])
+        start = idx + 1
+    assert windows, f"{venue} does not mention {basename}"
+    assert any(head.version in w for w in windows), (
+        f"{venue} names {basename} but not its derived head {head.version} within "
+        f"{_ADJACENT_WINDOW} chars — the stale-carry shape this pin exists to catch"
+    )
+
+
+@pytest.mark.parametrize(("venue", "family"), FILENAME_PINS)
+def test_live_venue_names_the_derived_head_filename(venue: str, family: str) -> None:
+    head = next(h for h in ah.derive() if h.family == family)
+    basename = head.artifact.rsplit("/", 1)[-1]
+    text = (ah.REPO_ROOT / venue).read_text(encoding="utf-8")
+    assert basename in text, f"{venue} does not name the derived head file {basename}"
+
+
+def test_no_live_venue_still_carries_the_superseded_as_head() -> None:
+    """The E6-scoped stale-AS gate, as an assertion rather than a one-off grep.
+
+    Scoped to LIVE head venues with the version bound ADJACENT to the AS artifact name.
+    `design-substrate/**` is excluded by construction: it is immutable here (X-AL-3) and
+    legitimately contains the whole version history.
+    """
+    stale = re.compile(
+        r"Action_Surface_v1_4"
+        r"|Spec_Action_Surface_v1\.md[^\n]{0,60}v1\.13"
+        r"|v1\.13[^\n]{0,60}Spec_Action_Surface"
+    )
+    # Positive control: the pattern must fire on the pre-repair shape.
+    assert stale.search("AS `Spec_Action_Surface_v1.md` (v1.13), CP ...")
+    assert stale.search("AS `Implementation_Plan_Action_Surface_v1_4.md`, CP ...")
+
+    hits = []
+    for venue in LIVE_HEAD_VENUES:
+        path = ah.REPO_ROOT / venue
+        if not path.exists():
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if stale.search(line):
+                hits.append(f"{venue}:{lineno}")
+    assert hits == [], f"superseded AS head still carried at: {hits}"
