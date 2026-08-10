@@ -23,6 +23,7 @@ import asyncio
 import os
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -593,7 +594,6 @@ def _observe_to_thread_method(
     *,
     owner: object,
     method_name: str,
-    block_before_submit: bool = False,
 ) -> asyncio.Event:
     """Record a production ``to_thread`` attempt without requiring worker start."""
     real_to_thread = asyncio.to_thread
@@ -606,12 +606,41 @@ def _observe_to_thread_method(
         )
         if is_target:
             attempted.set()
-            if block_before_submit:
-                await asyncio.Event().wait()
         return await real_to_thread(func, *args, **kwargs)
 
     monkeypatch.setattr(asyncio, "to_thread", observed_to_thread)
     return attempted
+
+
+async def _successful_flush_observability(*_args: Any, **_kwargs: Any) -> FlushReport:
+    """Isolate later shutdown stages from the independently tested flush venue."""
+    return FlushReport(
+        tracer_flushed=True,
+        ledger_fsynced=True,
+        cost_chain_noop=True,
+        timed_out=False,
+        failures=(),
+    )
+
+
+async def _occupy_default_executor() -> tuple[
+    ThreadPoolExecutor, threading.Event, asyncio.Future[Any]
+]:
+    """Occupy a one-worker default executor and prove the worker has started."""
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(executor)
+    release = threading.Event()
+    started = threading.Event()
+
+    def block_worker() -> None:
+        started.set()
+        release.wait()
+
+    blocker = loop.run_in_executor(None, block_worker)
+    while not started.is_set():
+        await asyncio.sleep(0)
+    return executor, release, blocker
 
 
 class _FakeCtx:
@@ -993,19 +1022,25 @@ async def test_shutdown_dispatch_timeout_includes_worker_scheduling_delay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The dispatch deadline includes queue delay before ``drain`` starts."""
+    monkeypatch.setattr(shutdown_mod, "flush_observability", _successful_flush_observability)
     dispatch_executor = _FakeDispatchExecutor()
     drain_attempted = _observe_to_thread_method(
         monkeypatch,
         owner=dispatch_executor,
         method_name="drain",
-        block_before_submit=True,
     )
     ctx = _shutdown_ctx(
         tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
     )
     ctx.sub_agent_dispatch_executor = dispatch_executor
+    executor, release_worker, blocker = await _occupy_default_executor()
 
-    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+    try:
+        report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+    finally:
+        release_worker.set()
+        await blocker
+        executor.shutdown(wait=True)
 
     assert drain_attempted.is_set()
     assert not dispatch_executor.drain_started.is_set()
@@ -1371,6 +1406,7 @@ async def test_shutdown_bounded_by_timeout_when_tracer_shutdown_hangs(
     `asyncio.wait_for`/deadline wrapper at all, despite the docstring's
     "bounded by timeout: each step is allotted the remaining budget"
     invariant."""
+    monkeypatch.setattr(shutdown_mod, "flush_observability", _successful_flush_observability)
     release_shutdown = threading.Event()
     tracer = _FakeTracerWithShutdown(shutdown_release=release_shutdown)
     shutdown_attempted = _observe_to_thread_method(
@@ -1397,12 +1433,12 @@ async def test_shutdown_tracer_timeout_includes_worker_scheduling_delay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The tracer deadline includes queue delay before ``shutdown`` starts."""
+    monkeypatch.setattr(shutdown_mod, "flush_observability", _successful_flush_observability)
     tracer = _FakeTracerWithShutdown()
     shutdown_attempted = _observe_to_thread_method(
         monkeypatch,
         owner=tracer,
         method_name="shutdown",
-        block_before_submit=True,
     )
     ctx = _shutdown_ctx(
         tmp_path,
@@ -1410,8 +1446,14 @@ async def test_shutdown_tracer_timeout_includes_worker_scheduling_delay(
         daemon=_FakeCollectorDaemon(),
         providers={},
     )
+    executor, release_worker, blocker = await _occupy_default_executor()
 
-    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+    try:
+        report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+    finally:
+        release_worker.set()
+        await blocker
+        executor.shutdown(wait=True)
 
     assert shutdown_attempted.is_set()
     assert not tracer.shutdown_started.is_set()

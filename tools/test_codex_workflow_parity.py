@@ -684,7 +684,10 @@ hook_bounded() {
     hygiene_term_marker = tmp_path / "hygiene-term"
     hygiene_bound_marker = tmp_path / "hygiene-bound"
     (hook_dir / "loop-gc.sh").write_text(
-        "#!/bin/sh\ntrap 'printf term > \"$HYGIENE_TERM_MARKER\"; exit 0' TERM\nsleep 30\n",
+        "#!/bin/sh\n"
+        'trap \'printf term > "$HYGIENE_TERM_MARKER"; '
+        'kill "$sleeper" 2>/dev/null; wait "$sleeper" 2>/dev/null; exit 0\' TERM\n'
+        'sleep 30 &\nsleeper=$!\nwait "$sleeper"\n',
         encoding="utf-8",
     )
     subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
