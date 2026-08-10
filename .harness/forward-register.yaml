@@ -7836,7 +7836,7 @@ items:
   council: No. A test-hygiene defect with two measured occurrences, a named precedent for the fix shape (#1226's
     scripted clock) and no contract surface. The only judgement is step (3)'s fix shape, which the precedent already
     answers.
-  pr: 'pending (B-143 test-only timing-hardening arc)'
+  pr: '#1290'
   heading: '### B-143 · A wall-clock shutdown-bounding assertion has **zero headroom** — its threshold equals the
     simulated hang, so scheduler noise on a loaded CI runner flips it *(observed twice on doc-only PRs, 2026-08-09)*'
 - id: B-144
