@@ -61,11 +61,11 @@ snapshot:
   total: 146
   open: 0
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 29
   operator_gated: 0
   held: 1
-  closed: 115
-  identity_digest: a87b45d52b26a1b3
+  closed: 116
+  identity_digest: 0350d62c97644ae0
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7760,7 +7760,7 @@ items:
 - id: B-143
   title: A wall-clock shutdown-bounding assertion has zero headroom -- its threshold equals the simulated hang,
     so scheduler noise on a loaded CI runner flips it
-  status: registered_finding
+  status: closed
   summary: 'WHAT IT IS. harness-runtime/tests/test_shutdown.py::test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs
     asserts `elapsed < 0.3` at :894. The simulated hang is `drain_sleep_seconds=0.3` (:886) and the bound under
     test is `shutdown(ctx, timeout=0.02)` (:892), so the INTENDED elapsed is ~0.02s while the assertion threshold
@@ -7807,10 +7807,36 @@ items:
     await. The handshake itself must NOT simply be deleted: its own docstring records that it is LOAD-BEARING (a
     cold child''s import cost would otherwise mask a missing lock, which is the defect the test exists to catch).
     NOT A DEFECT INTRODUCED BY #1289 -- that arc touches harness-cp tests plus register prose only, and harness-runtime/
-    is byte-unchanged in its diff.'
+    is byte-unchanged in its diff. CLOSED 2026-08-09 (this arc) -- THE CLASS WAS CLOSED TEST-ONLY WITHOUT WEAKENING
+    ITS MUTATION DISCRIMINATORS. The named dispatch-executor witness and its three exact shutdown siblings (tracer,
+    provider and MCP host) no longer compare real elapsed time to the same 0.3s hang they simulate. Each now parks
+    the fake operation on an explicit release gate, proves the operation started but did NOT complete before the
+    0.02s shutdown budget returned, and retains a 1.0s outer bound that fails if the production wait_for wrapper is
+    removed. The synchronous tracer/dispatch fakes use threading.Event; the async provider/MCP fakes record cancellation
+    at an asyncio.Event wait. This is the #1226 principle -- make the discriminating state exact rather than widen
+    a wall-clock bound -- applied with a structural gate because the state under test is cancellation, not TTL arithmetic.
+    The sibling sweep found FOUR zero-headroom shutdown tests, not one, and all four are hardened. The two cross-process
+    lock witnesses shared the cold-import shape (write_once as well as the registered gc_sweep test): their 10s deadlines
+    are replaced by one 60s cold-child budget, above the measured 33.89s maximum and consistent with existing process
+    witnesses, plus early failure when the child exits before reaching flock. The ready-marker handshake itself is
+    preserved verbatim and remains load-bearing. The aggregate gate then measured TWO additional process-start siblings:
+    the Antigravity CLI descendant witness missed its arbitrary 5s startup deadline, and a Codex session-start hook
+    exceeded the shared 30s subprocess deadline; both passed immediately in isolation (6.49s and 3.04s complete test
+    durations), falsifying a logic defect. Their startup budgets are now 60s, and the reviewer witness also fails
+    immediately if its controller exits before creating the child. Its independent 3s descendant-reap discriminator
+    and 10s SIGTERM-completion bound remain unchanged. ZERO src change, ZERO design-substrate change, ZERO assertion
+    deletion. A later aggregate rerun exposed one observation-layer sibling: the pure PR-head mismatch unit test could
+    be preempted by the production session-state shell probe returning UNKNOWN after its own 10s timeout. The four
+    pure merge-proof classifier tests now declare SessionState.INACTIVE as an explicit precondition; all session-state
+    integration tests retain the real hook path, so the classifier assertions remain discriminating without inheriting
+    unrelated shell-probe timing. A third aggregate rerun found the exact original shape in the session-start advisory-hygiene
+    witness: real elapsed was 5.77s against a 5s assertion despite the 1s hygiene bound returning correctly. That test
+    now asserts the deliberately hung hygiene process received TERM, while a 15s outer subprocess bound still kills
+    the mutation that removes the hook''s 1s bound before the fake''s 30s sleep completes. ZERO production-tool change.'
   council: No. A test-hygiene defect with two measured occurrences, a named precedent for the fix shape (#1226's
     scripted clock) and no contract surface. The only judgement is step (3)'s fix shape, which the precedent already
     answers.
+  pr: 'pending (B-143 test-only timing-hardening arc)'
   heading: '### B-143 · A wall-clock shutdown-bounding assertion has **zero headroom** — its threshold equals the
     simulated hang, so scheduler noise on a loaded CI runner flips it *(observed twice on doc-only PRs, 2026-08-09)*'
 - id: B-144

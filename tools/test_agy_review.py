@@ -16,6 +16,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 REVIEWER = ROOT / "tools" / "agy_review.py"
+_REVIEWER_START_TIMEOUT_SECONDS = 60.0
 
 
 def _reviewer_module():
@@ -945,10 +946,16 @@ def test_cli_sigterm_reaps_reviewer_tree(tmp_path: Path) -> None:
     )
     orphaned = False
     try:
-        deadline = time.monotonic() + 5
-        while not child_pid_file.exists() and time.monotonic() < deadline:
+        deadline = time.monotonic() + _REVIEWER_START_TIMEOUT_SECONDS
+        while not child_pid_file.exists():
+            returncode = controller.poll()
+            assert returncode is None, (
+                f"reviewer exited with status {returncode} before starting its descendant"
+            )
+            assert time.monotonic() < deadline, (
+                "fake reviewer did not start its descendant within the process-start budget"
+            )
             time.sleep(0.01)
-        assert child_pid_file.exists(), "fake reviewer did not start its descendant"
         controller.send_signal(signal.SIGTERM)
         controller.communicate(timeout=10)
         child_pid = int(child_pid_file.read_text(encoding="utf-8"))

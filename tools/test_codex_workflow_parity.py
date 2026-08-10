@@ -666,7 +666,11 @@ def test_session_start_bounds_advisory_hygiene(tmp_path: Path) -> None:
         '#!/bin/sh\nprintf \'%s\\n\' \'{"hookSpecificOutput":{"additionalContext":"roadmap"}}\'\n',
         encoding="utf-8",
     )
-    (hook_dir / "loop-gc.sh").write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    hygiene_term_marker = tmp_path / "hygiene-term"
+    (hook_dir / "loop-gc.sh").write_text(
+        "#!/bin/sh\ntrap 'printf term > \"$HYGIENE_TERM_MARKER\"; exit 0' TERM\nsleep 30\n",
+        encoding="utf-8",
+    )
     subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
     payload = json.dumps({"session_id": "bounded-hygiene", "cwd": str(tmp_path)})
     env = os.environ.copy()
@@ -674,10 +678,10 @@ def test_session_start_bounds_advisory_hygiene(tmp_path: Path) -> None:
         {
             "CLAUDE_PROJECT_DIR": str(tmp_path),
             "HARNESS_SESSION_START_HYGIENE_SECONDS": "1",
+            "HYGIENE_TERM_MARKER": str(hygiene_term_marker),
         }
     )
 
-    started = time.monotonic()
     proc = subprocess.run(
         ["bash", str(hook_dir / "codex-session-start.sh")],
         cwd=tmp_path,
@@ -685,13 +689,12 @@ def test_session_start_bounds_advisory_hygiene(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=6,
+        timeout=15,
         env=env,
     )
-    elapsed = time.monotonic() - started
 
     assert proc.returncode == 0, proc.stderr
-    assert elapsed < 5
+    assert hygiene_term_marker.read_text(encoding="utf-8") == "term"
     assert "bounded posture" in proc.stdout
     assert "roadmap" in proc.stdout
 

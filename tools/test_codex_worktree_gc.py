@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import codex_worktree_gc as gc
 
 ROOT = Path(__file__).resolve().parents[1]
+_HOOK_PROCESS_TIMEOUT_SECONDS = 60.0
 # This module exercises normal hooks even when invoked from an isolated reviewer.
 os.environ.pop("HARNESS_CODEX_REVIEW_ISOLATED", None)
 
@@ -91,7 +92,7 @@ def _run_hook(
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=_HOOK_PROCESS_TIMEOUT_SECONDS,
         env=env,
     )
 
@@ -110,7 +111,15 @@ def _dispositions(repo: Path) -> list[gc.Disposition]:
     )
 
 
-def test_merged_clean_nondefault_worktree_is_candidate_by_ancestry(tmp_path: Path) -> None:
+@pytest.fixture
+def _inactive_session_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate merge-proof unit tests from the production session probe."""
+    monkeypatch.setattr(gc, "session_state", lambda _path, *, home: gc.SessionState.INACTIVE)
+
+
+def test_merged_clean_nondefault_worktree_is_candidate_by_ancestry(
+    tmp_path: Path, _inactive_session_state: None
+) -> None:
     repo = _init_repo(tmp_path)
     path = _add_worktree(repo, tmp_path, "codex/done")
 
@@ -133,7 +142,9 @@ def test_dirty_worktree_is_skipped_even_when_branch_is_merged(tmp_path: Path) ->
     assert skipped.reason.startswith("local-state:")
 
 
-def test_unmerged_worktree_is_skipped_without_pr_proof(tmp_path: Path) -> None:
+def test_unmerged_worktree_is_skipped_without_pr_proof(
+    tmp_path: Path, _inactive_session_state: None
+) -> None:
     repo = _init_repo(tmp_path)
     path = _add_worktree(repo, tmp_path, "codex/unmerged")
     (path / "feature.txt").write_text("feature\n", encoding="utf-8")
@@ -147,7 +158,9 @@ def test_unmerged_worktree_is_skipped_without_pr_proof(tmp_path: Path) -> None:
     assert skipped.reason == "no-merge-proof-gh-unavailable"
 
 
-def test_exact_merged_pr_head_is_candidate_without_ancestry(tmp_path: Path) -> None:
+def test_exact_merged_pr_head_is_candidate_without_ancestry(
+    tmp_path: Path, _inactive_session_state: None
+) -> None:
     repo = _init_repo(tmp_path)
     path = _add_worktree(repo, tmp_path, "codex/squashed")
     (path / "feature.txt").write_text("feature\n", encoding="utf-8")
@@ -173,7 +186,9 @@ def test_exact_merged_pr_head_is_candidate_without_ancestry(tmp_path: Path) -> N
     assert candidate.proof == "PR #12"
 
 
-def test_merged_pr_name_with_different_head_is_skipped(tmp_path: Path) -> None:
+def test_merged_pr_name_with_different_head_is_skipped(
+    tmp_path: Path, _inactive_session_state: None
+) -> None:
     repo = _init_repo(tmp_path)
     path = _add_worktree(repo, tmp_path, "codex/reused")
     (path / "feature.txt").write_text("feature\n", encoding="utf-8")

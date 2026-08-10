@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -451,45 +452,89 @@ class _FakeTracerWithShutdown(_FakeTracerProvider):
         raises: Exception | None = None,
         shutdown_raises: Exception | None = None,
         shutdown_sleep: float = 0.0,
+        shutdown_release: threading.Event | None = None,
     ) -> None:
         super().__init__(returns=returns, raises=raises)
         self.shutdown_called = False
+        self.shutdown_started = threading.Event()
+        self.shutdown_completed = threading.Event()
         self._shutdown_raises = shutdown_raises
         self._shutdown_sleep = shutdown_sleep
+        self._shutdown_release = shutdown_release
 
     def shutdown(self) -> None:
+        self.shutdown_started.set()
+        if self._shutdown_release is not None:
+            self._shutdown_release.wait()
         if self._shutdown_sleep:
             import time as _time
 
             _time.sleep(self._shutdown_sleep)
+        self.shutdown_completed.set()
         self.shutdown_called = True
         if self._shutdown_raises is not None:
             raise self._shutdown_raises
 
 
 class _FakeProvider:
-    def __init__(self, *, raises: Exception | None = None, aclose_sleep: float = 0.0) -> None:
+    def __init__(
+        self,
+        *,
+        raises: Exception | None = None,
+        aclose_sleep: float = 0.0,
+        aclose_release: asyncio.Event | None = None,
+    ) -> None:
         self.closed = False
+        self.aclose_started = False
+        self.aclose_cancelled = False
+        self.aclose_completed = False
         self._raises = raises
         self._aclose_sleep = aclose_sleep
+        self._aclose_release = aclose_release
 
     async def aclose(self) -> None:
-        if self._aclose_sleep:
-            await asyncio.sleep(self._aclose_sleep)
+        self.aclose_started = True
+        try:
+            if self._aclose_release is not None:
+                await self._aclose_release.wait()
+            if self._aclose_sleep:
+                await asyncio.sleep(self._aclose_sleep)
+        except asyncio.CancelledError:
+            self.aclose_cancelled = True
+            raise
+        self.aclose_completed = True
         if self._raises is not None:
             raise self._raises
         self.closed = True
 
 
 class _FakeMcpHost:
-    def __init__(self, *, started: bool = True, shutdown_sleep: float = 0.0) -> None:
+    def __init__(
+        self,
+        *,
+        started: bool = True,
+        shutdown_sleep: float = 0.0,
+        shutdown_release: asyncio.Event | None = None,
+    ) -> None:
         self.started = started
         self.shutdown_called = False
+        self.shutdown_started = False
+        self.shutdown_cancelled = False
+        self.shutdown_completed = False
         self._shutdown_sleep = shutdown_sleep
+        self._shutdown_release = shutdown_release
 
     async def shutdown(self) -> None:
-        if self._shutdown_sleep:
-            await asyncio.sleep(self._shutdown_sleep)
+        self.shutdown_started = True
+        try:
+            if self._shutdown_release is not None:
+                await self._shutdown_release.wait()
+            if self._shutdown_sleep:
+                await asyncio.sleep(self._shutdown_sleep)
+        except asyncio.CancelledError:
+            self.shutdown_cancelled = True
+            raise
+        self.shutdown_completed = True
         self.shutdown_called = True
 
 
@@ -512,21 +557,34 @@ class _FakeAuditWriter:
 class _FakeDispatchExecutor:
     """Spy for the B-48 stage-5 sub-agent-dispatch executor's `drain()`."""
 
-    def __init__(self, *, still_outstanding: int = 0, drain_sleep_seconds: float = 0.0) -> None:
+    def __init__(
+        self,
+        *,
+        still_outstanding: int = 0,
+        drain_sleep_seconds: float = 0.0,
+        drain_release: threading.Event | None = None,
+    ) -> None:
         self.drain_called_with: float | None = None
         self.begin_draining_called = False
+        self.drain_started = threading.Event()
+        self.drain_completed = threading.Event()
         self._still_outstanding = still_outstanding
         self._drain_sleep_seconds = drain_sleep_seconds
+        self._drain_release = drain_release
 
     def begin_draining(self) -> None:
         self.begin_draining_called = True
 
     def drain(self, *, deadline_seconds: float) -> tuple[int, int]:
         self.drain_called_with = deadline_seconds
+        self.drain_started.set()
+        if self._drain_release is not None:
+            self._drain_release.wait()
         if self._drain_sleep_seconds:
             import time as _time
 
             _time.sleep(self._drain_sleep_seconds)
+        self.drain_completed.set()
         return (0, self._still_outstanding)
 
 
@@ -881,17 +939,21 @@ async def test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs(
     whole shutdown sequence past its overall deadline.
 
     Mutation probe: removing the `asyncio.wait_for(...)` wrapper around this
-    step reverts to waiting out the full 0.3s sleep instead of bounding to
-    ~0.02s — this test's elapsed-time assertion would then fail."""
-    dispatch_executor = _FakeDispatchExecutor(drain_sleep_seconds=0.3)
+    step leaves shutdown blocked on `release_drain`; the outer 1s test bound
+    then fails instead of returning a report. The structural started/not-
+    completed pair avoids racing a 0.3s elapsed threshold against CI load."""
+    release_drain = threading.Event()
+    dispatch_executor = _FakeDispatchExecutor(drain_release=release_drain)
     ctx = _shutdown_ctx(
         tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
     )
     ctx.sub_agent_dispatch_executor = dispatch_executor
-    start = asyncio.get_event_loop().time()
-    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
-    elapsed = asyncio.get_event_loop().time() - start
-    assert elapsed < 0.3, "shutdown() waited out the full hang instead of bounding it"
+    try:
+        report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+        assert dispatch_executor.drain_started.is_set()
+        assert not dispatch_executor.drain_completed.is_set()
+    finally:
+        release_drain.set()
     assert "sub_agent_dispatch_executor" in report.failures
     assert report.timed_out is True
 
@@ -1252,17 +1314,20 @@ async def test_shutdown_bounded_by_timeout_when_tracer_shutdown_hangs(tmp_path: 
     `asyncio.wait_for`/deadline wrapper at all, despite the docstring's
     "bounded by timeout: each step is allotted the remaining budget"
     invariant."""
-    tracer = _FakeTracerWithShutdown(shutdown_sleep=0.3)
+    release_shutdown = threading.Event()
+    tracer = _FakeTracerWithShutdown(shutdown_release=release_shutdown)
     ctx = _shutdown_ctx(
         tmp_path,
         tracer=tracer,
         daemon=_FakeCollectorDaemon(),
         providers={},
     )
-    start = asyncio.get_event_loop().time()
-    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
-    elapsed = asyncio.get_event_loop().time() - start
-    assert elapsed < 0.3, "shutdown() waited out the full hang instead of bounding it"
+    try:
+        report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+        assert tracer.shutdown_started.is_set()
+        assert not tracer.shutdown_completed.is_set()
+    finally:
+        release_shutdown.set()
     assert "tracer_provider" in report.failures
     assert report.timed_out is True
 
@@ -1270,17 +1335,22 @@ async def test_shutdown_bounded_by_timeout_when_tracer_shutdown_hangs(tmp_path: 
 @pytest.mark.asyncio
 async def test_shutdown_bounded_by_timeout_when_provider_aclose_hangs(tmp_path: Path) -> None:
     """Regression — a hanging provider `aclose()` must not block shutdown."""
-    providers = {"anthropic": _FakeProvider(aclose_sleep=0.3)}
+    release_aclose = asyncio.Event()
+    provider = _FakeProvider(aclose_release=release_aclose)
+    providers = {"anthropic": provider}
     ctx = _shutdown_ctx(
         tmp_path,
         tracer=_FakeTracerWithShutdown(),
         daemon=_FakeCollectorDaemon(),
         providers=providers,
     )
-    start = asyncio.get_event_loop().time()
-    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
-    elapsed = asyncio.get_event_loop().time() - start
-    assert elapsed < 0.3, "shutdown() waited out the full hang instead of bounding it"
+    try:
+        report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+        assert provider.aclose_started is True
+        assert provider.aclose_cancelled is True
+        assert provider.aclose_completed is False
+    finally:
+        release_aclose.set()
     assert "provider:anthropic" in report.failures
     assert report.timed_out is True
 
@@ -1324,7 +1394,8 @@ async def test_shutdown_recomputes_budget_across_multiple_slow_providers(
 async def test_shutdown_bounded_by_timeout_when_mcp_host_shutdown_hangs(tmp_path: Path) -> None:
     """Regression — a hanging MCP client host `shutdown()` must not block
     shutdown."""
-    host = _FakeMcpHost(shutdown_sleep=0.3)
+    release_shutdown = asyncio.Event()
+    host = _FakeMcpHost(shutdown_release=release_shutdown)
     ctx = _shutdown_ctx(
         tmp_path,
         tracer=_FakeTracerWithShutdown(),
@@ -1332,10 +1403,13 @@ async def test_shutdown_bounded_by_timeout_when_mcp_host_shutdown_hangs(tmp_path
         providers={},
     )
     ctx.mcp_client_hosts = {"server-a": host}  # type: ignore[attr-defined]
-    start = asyncio.get_event_loop().time()
-    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
-    elapsed = asyncio.get_event_loop().time() - start
-    assert elapsed < 0.3, "shutdown() waited out the full hang instead of bounding it"
+    try:
+        report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+        assert host.shutdown_started is True
+        assert host.shutdown_cancelled is True
+        assert host.shutdown_completed is False
+    finally:
+        release_shutdown.set()
     assert "mcp_client_host" in report.failures
     assert report.timed_out is True
 
