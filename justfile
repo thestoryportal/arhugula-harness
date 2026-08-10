@@ -44,7 +44,7 @@ fmt-check:
     uv run ruff format --check .
 
 # Full pre-merge gate: workspace sync + lint + typecheck + docs/closure + provider-free tests.
-check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check clearance-parse-check test
+check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check clearance-parse-check artifact-heads-check test
 
 # Codex provider-free pytest lane. Strips live provider env and mirrors CI's non-e2e gate.
 codex-test *args:
@@ -63,7 +63,7 @@ codex-hook-runtime-witness:
     /usr/bin/python3 tools/codex_hook_runtime_witness.py
 
 # Codex PR-ready local gate without live provider credentials.
-codex-check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check clearance-parse-check codex-parity-check
+codex-check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check clearance-parse-check artifact-heads-check codex-parity-check
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"
 
 # ─── Codex deterministic context guard ─────────────────────────────────────
@@ -160,6 +160,23 @@ clearance-parse-check:
 # Quote-only repair of broken/lossy marker scalars (no content is reworded).
 clearance-parse-fix:
     uv run python tools/clearance_frontmatter.py --fix
+
+# ─── artifact heads (R-CTX-1 / U-CTX-11) — per-family head versions ─────────
+# Derives .harness/artifact-heads.md from the clearance corpus (the version-
+# binding record per root CLAUDE.md §4.5) instead of hand-maintained prose.
+# Fail-closed: an unparseable marker aborts the derivation, never a skipped row.
+# Two gates: generated-vs-committed, and marker-completeness.
+artifact-heads-check:
+    uv run python tools/artifact_heads.py --check
+    uv run python tools/artifact_heads.py --check-completeness
+
+# Regenerate the committed table after a new clearance marker lands.
+artifact-heads-write:
+    uv run python tools/artifact_heads.py --write
+
+# Print the derived table without touching the committed one.
+artifact-heads:
+    uv run python tools/artifact_heads.py --print
 
 # ─── forward register — structured post-Phase-8 B-* forward-work schema ─────
 # Sibling to arc-ledger.yaml (see tools/forward_register.py's own header for why
