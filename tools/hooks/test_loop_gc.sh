@@ -581,13 +581,17 @@ export CLAUDE_PROJECT_DIR="$BASE/main"
 mkdir -p "$BASE/main/.harness"
 CFL="$BASE/main/.harness/session-issues.jsonl.lock"
 
-# aged lock (>60s) → reaped
+# aged lock (>60s) → reaped (identity-bound: observe→mv→verify→delete)
 mkdir "$CFL"; printf 'x' > "$CFL/owner"
 touch -t 202001010000 "$CFL" 2>/dev/null || touch -d '2020-01-01' "$CFL" 2>/dev/null
-mkdir "${CFL}.stale.12345"   # orphaned pre-fix takeover remnant → swept
+mkdir "${CFL}.stale.12345"   # orphaned takeover remnant, AGED → swept
+touch -t 202001010000 "${CFL}.stale.12345" 2>/dev/null || touch -d '2020-01-01' "${CFL}.stale.12345" 2>/dev/null
+mkdir "${CFL}.reap.99999"    # a CONCURRENT reaper's FRESH in-flight dir → must survive
 bash "$SCRIPT_DIR/loop-gc.sh" >/dev/null 2>&1
 [ ! -d "$CFL" ] && ok "CF-reaper: aged capture-failure lock reaped at SessionStart" || bad "CF-reaper: aged lock survived"
-[ ! -d "${CFL}.stale.12345" ] && ok "CF-reaper: orphaned .stale.* remnant swept" || bad "CF-reaper: stale remnant survived"
+[ ! -d "${CFL}.stale.12345" ] && ok "CF-reaper: AGED orphaned remnant swept" || bad "CF-reaper: aged remnant survived"
+[ -d "${CFL}.reap.99999" ] && ok "CF-reaper: fresh concurrent .reap.* dir survives (aged-only sweep)" || bad "CF-reaper: fresh reap dir destroyed"
+rm -rf "${CFL}.reap.99999"
 
 # fresh lock (live holder) → left alone
 mkdir "$CFL"; printf 'y' > "$CFL/owner"

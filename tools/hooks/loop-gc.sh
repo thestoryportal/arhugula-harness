@@ -40,10 +40,44 @@ WTC=$(git -C "$PROJECT_DIR" worktree list 2>/dev/null | grep -c .)
 CF_LOCK="$PROJECT_DIR/.harness/session-issues.jsonl.lock"
 if [ -d "$CF_LOCK" ]; then
   _cfnow=$(date +%s)
-  _cfts=$(stat -f %m "$CF_LOCK" 2>/dev/null || stat -c %Y "$CF_LOCK" 2>/dev/null || echo "$_cfnow")
-  [ $((_cfnow - _cfts)) -gt 60 ] && rm -rf "$CF_LOCK" 2>/dev/null
+  # SEPARATE assignments per stat dialect (codex round-7 P1): `$(A || B)`
+  # captures BOTH commands' stdout — on GNU, BSD-form `stat -f %m` PRINTS
+  # filesystem info for the valid path while exiting nonzero, so the combined
+  # substitution yielded multiline garbage and the arithmetic below aborted.
+  _cfts=$(stat -f %m "$CF_LOCK" 2>/dev/null) || _cfts=$(stat -c %Y "$CF_LOCK" 2>/dev/null) || _cfts="$_cfnow"
+  case "$_cfts" in '' | *[!0-9]*) _cfts="$_cfnow" ;; esac
+  if [ $((_cfnow - _cfts)) -gt 60 ]; then
+    # Identity-bound reap (codex round-7 P2): two concurrent SessionStarts can
+    # both age the OLD lock; after one reaps and a failure hook acquires a
+    # fresh successor, the other's pathname rm would delete the successor.
+    # Observe the owner token, mv atomically, verify the MOVED dir carries the
+    # observed token; a mismatch means we displaced a fresh lock — restore it.
+    # (Residual, recorded: the restore can itself collide with a re-mkdir —
+    # needs a second µs-race inside the same 60s-stale window; per the
+    # arms-race discipline this boundary is recorded, not chased.)
+    _cfobs=$(cat "$CF_LOCK/owner" 2>/dev/null || echo "")
+    _cfmv="${CF_LOCK}.reap.$$"
+    if mv "$CF_LOCK" "$_cfmv" 2>/dev/null; then
+      _cfgot=$(cat "$_cfmv/owner" 2>/dev/null || echo "")
+      if [ "$_cfgot" = "$_cfobs" ]; then
+        rm -rf "$_cfmv" 2>/dev/null || true
+      else
+        mv "$_cfmv" "$CF_LOCK" 2>/dev/null || rm -rf "$_cfmv" 2>/dev/null || true
+      fi
+    fi
+  fi
 fi
-rm -rf "$PROJECT_DIR/.harness/session-issues.jsonl.lock.stale."* 2>/dev/null || true
+# Sweep orphaned takeover/reap remnants — but only AGED ones (>60s): a blanket
+# rm would destroy a CONCURRENT reaper's in-flight .reap.$$ dir (which may hold
+# a displaced fresh lock awaiting restore).
+for _cfrem in "$PROJECT_DIR/.harness/session-issues.jsonl.lock.stale."* \
+              "$PROJECT_DIR/.harness/session-issues.jsonl.lock.reap."*; do
+  [ -d "$_cfrem" ] || continue
+  _cfrnow=$(date +%s)
+  _cfrts=$(stat -f %m "$_cfrem" 2>/dev/null) || _cfrts=$(stat -c %Y "$_cfrem" 2>/dev/null) || _cfrts="$_cfrnow"
+  case "$_cfrts" in '' | *[!0-9]*) _cfrts="$_cfrnow" ;; esac
+  [ $((_cfrnow - _cfrts)) -gt 60 ] && rm -rf "$_cfrem" 2>/dev/null
+done
 
 MEMFLAG=""
 # Claude Code keys project memory by the MAIN repo path (not a worktree) with '/' -> '-'.
