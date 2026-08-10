@@ -2896,7 +2896,7 @@ Actions where genuine human decision is required (not Claude judgment). Flagged 
    - `last_refreshed` → now (ISO 8601)
    - `recently_completed` → prepend (R-NNN, PR-link)
    - `in_flight` → remove merged PR, add new opened PRs
-   - `next_action` → recompute via §4 rule; the paragraph it supersedes moves verbatim to `.harness/roadmap-next-action-archive.md` (query it by grep for a specific PR/`B-`/`R-`-id/round — the live head stays authoritative and is never re-grown by re-inlining history)
+   - `next_action` → recompute via §4 rule; the superseded paragraph is REPLACED in the live head (never re-grown by re-inlining history) and its verbatim text is appended to `.harness/roadmap-next-action-archive.md` by the NEXT content PR — never by the terminating refresh commit itself, whose changed-set stays exactly `.harness/roadmap_status.md` (query the archive by grep for a specific PR/`B-`/`R-`-id/round)
 3. Commit the dashboard refresh with a title beginning `ops: roadmap status refresh ` (e.g. `…post-PR-NN` or `…post-#NN`; the §12.2.1 carve-out + session-start hook key on the prefix, suffix format-free).
 4. Push.
 

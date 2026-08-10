@@ -545,7 +545,7 @@ After any PR merges to main (whether merged by Claude or operator):
    - `last_refreshed` → ISO 8601 now
    - `recently_completed` → prepend the merged PR (drop oldest if >5 entries)
    - `in_flight` → remove merged PR, add any newly-opened PRs
-   - `next_action` → re-derive per `Project_Roadmap_v1.md` §4 (the superseded paragraph moves to `.harness/roadmap-next-action-archive.md`, verbatim, never left accumulating inline — U-CTX-03's head-byte-budget `--check` gate enforces this)
+   - `next_action` → re-derive per `Project_Roadmap_v1.md` §4 (the superseded paragraph is REPLACED in the live head, never left accumulating inline — U-CTX-03's head-byte-budget `--check` gate enforces this; its verbatim text is appended to `.harness/roadmap-next-action-archive.md` by the NEXT content PR, never by the terminating refresh commit itself, whose changed-set stays exactly `.harness/roadmap_status.md` per §12.2.1)
    - **arc-ledger** — if an R-FS-1 arc transited (an arc closed/resolved, or a new arc/unit surfaced), edit the `.harness/arc-ledger.yaml` row **AND** bump its `snapshot:` block in the **same commit** (forward-only; the blocking CI `arc-ledger` job + `tools/arc_ledger.py --check` fail on an impossible/stale tally). There is no parseable markdown copy to drift (the old `.harness/r-fs-1-arc-and-unit-map.md` is a retired pointer stub).
 3. If any R-NNN entry at `Project_Roadmap_v1.md` §5 closed at this PR, mark it `RESOLVED` and refresh `next_pointer` propagation.
 4. Commit with a title beginning `ops: roadmap status refresh ` (e.g. `…post-PR-NN` or `…post-#NN`; the §12.2.1 carve-out keys on the prefix, suffix format-free). Push.
