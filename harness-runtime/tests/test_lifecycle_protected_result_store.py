@@ -268,6 +268,36 @@ def test_wait_for_child_ready_fails_immediately_when_child_exits(tmp_path: Path)
         _wait_for_child_ready(child, tmp_path / "never-written")
 
 
+def test_wait_for_child_ready_bounds_a_live_non_signaling_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(globals(), "_COLD_CHILD_READY_TIMEOUT_SECONDS", 0.05)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    failures: list[BaseException] = []
+    completed = threading.Event()
+
+    def wait_for_ready() -> None:
+        try:
+            _wait_for_child_ready(child, tmp_path / "never-written")
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            completed.set()
+
+    waiter = threading.Thread(target=wait_for_ready)
+    waiter.start()
+    try:
+        assert completed.wait(timeout=1.0), "readiness helper ignored its cold-import budget"
+        assert child.poll() is None
+        assert len(failures) == 1
+        assert isinstance(failures[0], AssertionError)
+        assert "cold-import budget" in str(failures[0])
+    finally:
+        child.terminate()
+        child.wait(timeout=5.0)
+        waiter.join(timeout=5.0)
+
+
 class _ProviderResponse:
     """Module-level (pickle requires a class resolvable by qualified name —
     a locally-defined class inside a test function is NOT picklable)."""

@@ -629,10 +629,15 @@ async def _successful_shutdown_stage(*_args: Any, **_kwargs: Any) -> bool:
 
 
 async def _occupy_default_executor() -> tuple[
-    ThreadPoolExecutor, threading.Event, asyncio.Future[Any]
+    ThreadPoolExecutor,
+    ThreadPoolExecutor | None,
+    threading.Event,
+    asyncio.Future[Any],
 ]:
     """Occupy a one-worker default executor and prove the worker has started."""
     loop = asyncio.get_running_loop()
+    prior_default_executor = getattr(loop, "_default_executor", None)
+    assert prior_default_executor is None or isinstance(prior_default_executor, ThreadPoolExecutor)
     executor = ThreadPoolExecutor(max_workers=1)
     loop.set_default_executor(executor)
     release = threading.Event()
@@ -645,7 +650,7 @@ async def _occupy_default_executor() -> tuple[
     blocker = loop.run_in_executor(None, block_worker)
     while not started.is_set():
         await asyncio.sleep(0)
-    return executor, release, blocker
+    return executor, prior_default_executor, release, blocker
 
 
 class _FakeCtx:
@@ -1038,7 +1043,7 @@ async def test_shutdown_dispatch_timeout_includes_worker_scheduling_delay(
         tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
     )
     ctx.sub_agent_dispatch_executor = dispatch_executor
-    executor, release_worker, blocker = await _occupy_default_executor()
+    executor, prior_default_executor, release_worker, blocker = await _occupy_default_executor()
 
     try:
         report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
@@ -1047,7 +1052,10 @@ async def test_shutdown_dispatch_timeout_includes_worker_scheduling_delay(
     finally:
         release_worker.set()
         await blocker
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(prior_default_executor or ThreadPoolExecutor(max_workers=1))
         executor.shutdown(wait=True)
+        assert await asyncio.to_thread(lambda: True) is True
 
     assert "sub_agent_dispatch_executor" in report.failures
     assert report.timed_out is True
