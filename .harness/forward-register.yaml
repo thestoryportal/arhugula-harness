@@ -8012,22 +8012,24 @@ items:
   heading: '### B-147 · `shutdown()` can hang before tracer close when `force_flush` waits in the saturated default-executor
     queue *(surfaced by PR #1290 merge-gate Lens 1, 2026-08-09)*'
 - id: B-148
-  title: R-CTX-1 context-optimization program — approved 9-arc execution (Waves 0–5)
+  title: R-CTX-1 context-optimization program — approved execution of Arcs 0–7, Waves 0–5 (Arc 8 parked at B-149)
   status: open
   summary: 'WHAT IT IS. The context-preload optimization program (R-CTX-1): baseline ~98–100k tokens
     preloaded per session, reconciled Floor-B target ~71k (−28%), acceptance gate ≤76k measured. Plan
     authored via a 3-model adversarial pipeline (Codex gpt-5.6-sol × Claude Opus 5 independent reviews
     → 10-item deliberation → Fable 5 reconciliation); reconciled verdict BLOCK-as-written → APPROVE-WITH-CONDITIONS
-    on a re-scoped 9-arc plan. OPERATOR RATIFICATIONS (2026-08-10, verbatim from the approved plan):
+    on a re-scoped plan of 9 arcs of which 8 ARE EXECUTABLE (Arcs 0–7; Arc 8 / Floor C is PARKED at
+    sibling row B-149 and NOT authorized — this open row''s scope is Arcs 0–7 only). OPERATOR RATIFICATIONS (2026-08-10, verbatim from the approved plan):
     R1 — "Arc 2''s three rules (roadmap_status truncation + archive + query-not-Read for the .harness
     working set)". R2 — "Floor B is TERMINAL. Arc 8 / Floor C parked in forward register with D-H probe
     preconditions. Do not run probes." R3 — "12 machine-local bmad payloads: move ignore entries `.git/info/exclude`
     → `.gitignore` + documented reversible local removal." Earlier ratifications this program: D1 runner-neutral
     docs/governance/; D2 design-skills + bmad removal both runners; D3 per-repo skill disconnect preserving
     other repos + Codex superpowers/CodeRabbit intact. Operator approved "execute all waves" 2026-08-10.
-    EXECUTION DOC: ~/.gstack/projects/arhugula-v2/checkpoints/r-ctx-1-implementation-plan-v1.md (units
-    U-CTX-00..22, wave/gate structure, routing law, sub-agent brief contract). Arc 8 / Floor C is the
-    SIBLING held row B-149 — not part of this open scope.'
+    EXECUTION DOC: .harness/r-ctx-1-implementation-plan-v1.md (repo-committed at this row''s own PR;
+    the gstack checkpoint copy is the advisory origin per AGENTS.md cross-runner-state discipline) —
+    units U-CTX-00..22, wave/gate structure, routing law, sub-agent brief contract. Arc 8 / Floor C is
+    the SIBLING held row B-149 — not part of this open scope.'
   close_out: 'Program AC (U-CTX-21/22): measured cold-start + post-compaction preload ≤ 76k (gate; target
     ~71k) via component-separated A/B with `just context-budget`; all new CI gates green on main; `git
     log --stat` audit shows ZERO design-substrate/** diffs across all program PRs; register flip to closed
@@ -8035,7 +8037,7 @@ items:
   council: 'No. The 3-model reconciliation pipeline (Codex × Opus × Fable reconciler) already served
     as the decorrelated deliberation for this program, and the operator ratified R1–R3 + all-waves execution
     2026-08-10 — no further multi-voice fork remains open.'
-  heading: '### B-148 · R-CTX-1 context-optimization program — approved 9-arc execution, Waves 0–5 *(operator-ratified 2026-08-10; 3-model reconciliation)*'
+  heading: '### B-148 · R-CTX-1 context-optimization program — approved execution, Arcs 0–7 / Waves 0–5 *(operator-ratified 2026-08-10; 3-model reconciliation; Arc 8 parked at B-149)*'
 - id: B-149
   title: R-CTX-1 Arc 8 / Floor C conditional-pack redesign — PARKED (Floor B terminal per operator R2)
   status: held
