@@ -588,6 +588,32 @@ class _FakeDispatchExecutor:
         return (0, self._still_outstanding)
 
 
+def _observe_to_thread_method(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    owner: object,
+    method_name: str,
+    block_before_submit: bool = False,
+) -> asyncio.Event:
+    """Record a production ``to_thread`` attempt without requiring worker start."""
+    real_to_thread = asyncio.to_thread
+    attempted = asyncio.Event()
+
+    async def observed_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        is_target = (
+            getattr(func, "__self__", None) is owner
+            and getattr(func, "__name__", None) == method_name
+        )
+        if is_target:
+            attempted.set()
+            if block_before_submit:
+                await asyncio.Event().wait()
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", observed_to_thread)
+    return attempted
+
+
 class _FakeCtx:
     """Plain class so weakref + WeakValueDictionary work (SimpleNamespace doesn't)."""
 
@@ -927,7 +953,7 @@ async def test_shutdown_drains_dispatch_executor_before_flushing_observability(
 
 @pytest.mark.asyncio
 async def test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """codex round-4 [P2] "include drain scheduling in the shutdown deadline":
     a hanging (or scheduling-delayed) dispatch-executor drain must not block
@@ -940,20 +966,49 @@ async def test_shutdown_bounded_by_timeout_when_dispatch_executor_drain_hangs(
 
     Mutation probe: removing the `asyncio.wait_for(...)` wrapper around this
     step leaves shutdown blocked on `release_drain`; the outer 1s test bound
-    then fails instead of returning a report. The structural started/not-
-    completed pair avoids racing a 0.3s elapsed threshold against CI load."""
+    then fails instead of returning a report. The structural attempt/not-
+    completed pair avoids racing either a 0.3s elapsed threshold or worker
+    startup against CI load."""
     release_drain = threading.Event()
     dispatch_executor = _FakeDispatchExecutor(drain_release=release_drain)
+    drain_attempted = _observe_to_thread_method(
+        monkeypatch, owner=dispatch_executor, method_name="drain"
+    )
     ctx = _shutdown_ctx(
         tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
     )
     ctx.sub_agent_dispatch_executor = dispatch_executor
     try:
         report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
-        assert dispatch_executor.drain_started.is_set()
+        assert drain_attempted.is_set()
         assert not dispatch_executor.drain_completed.is_set()
     finally:
         release_drain.set()
+    assert "sub_agent_dispatch_executor" in report.failures
+    assert report.timed_out is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_dispatch_timeout_includes_worker_scheduling_delay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dispatch deadline includes queue delay before ``drain`` starts."""
+    dispatch_executor = _FakeDispatchExecutor()
+    drain_attempted = _observe_to_thread_method(
+        monkeypatch,
+        owner=dispatch_executor,
+        method_name="drain",
+        block_before_submit=True,
+    )
+    ctx = _shutdown_ctx(
+        tmp_path, tracer=_FakeTracerWithShutdown(), daemon=_FakeCollectorDaemon(), providers={}
+    )
+    ctx.sub_agent_dispatch_executor = dispatch_executor
+
+    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+
+    assert drain_attempted.is_set()
+    assert not dispatch_executor.drain_started.is_set()
     assert "sub_agent_dispatch_executor" in report.failures
     assert report.timed_out is True
 
@@ -1308,7 +1363,9 @@ async def test_shutdown_timed_out_when_collector_slow(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_shutdown_bounded_by_timeout_when_tracer_shutdown_hangs(tmp_path: Path) -> None:
+async def test_shutdown_bounded_by_timeout_when_tracer_shutdown_hangs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Regression — a hanging `tracer_provider.shutdown()` must not block the
     rest of the shutdown sequence indefinitely. Previously this call had no
     `asyncio.wait_for`/deadline wrapper at all, despite the docstring's
@@ -1316,6 +1373,9 @@ async def test_shutdown_bounded_by_timeout_when_tracer_shutdown_hangs(tmp_path: 
     invariant."""
     release_shutdown = threading.Event()
     tracer = _FakeTracerWithShutdown(shutdown_release=release_shutdown)
+    shutdown_attempted = _observe_to_thread_method(
+        monkeypatch, owner=tracer, method_name="shutdown"
+    )
     ctx = _shutdown_ctx(
         tmp_path,
         tracer=tracer,
@@ -1324,10 +1384,37 @@ async def test_shutdown_bounded_by_timeout_when_tracer_shutdown_hangs(tmp_path: 
     )
     try:
         report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
-        assert tracer.shutdown_started.is_set()
+        assert shutdown_attempted.is_set()
         assert not tracer.shutdown_completed.is_set()
     finally:
         release_shutdown.set()
+    assert "tracer_provider" in report.failures
+    assert report.timed_out is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_tracer_timeout_includes_worker_scheduling_delay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tracer deadline includes queue delay before ``shutdown`` starts."""
+    tracer = _FakeTracerWithShutdown()
+    shutdown_attempted = _observe_to_thread_method(
+        monkeypatch,
+        owner=tracer,
+        method_name="shutdown",
+        block_before_submit=True,
+    )
+    ctx = _shutdown_ctx(
+        tmp_path,
+        tracer=tracer,
+        daemon=_FakeCollectorDaemon(),
+        providers={},
+    )
+
+    report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+
+    assert shutdown_attempted.is_set()
+    assert not tracer.shutdown_started.is_set()
     assert "tracer_provider" in report.failures
     assert report.timed_out is True
 

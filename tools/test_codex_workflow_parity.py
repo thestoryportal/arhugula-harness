@@ -658,6 +658,21 @@ def test_session_start_bounds_advisory_hygiene(tmp_path: Path) -> None:
     posture_dir.mkdir(parents=True)
     for name in ("codex-session-start.sh", "session-lease.sh", "lib.sh"):
         shutil.copy2(ROOT / "tools" / "hooks" / name, hook_dir / name)
+    lib_path = hook_dir / "lib.sh"
+    lib_source = lib_path.read_text(encoding="utf-8")
+    assert "hook_bounded() {" in lib_source
+    lib_path.write_text(
+        lib_source.replace("hook_bounded() {", "_real_hook_bounded() {", 1)
+        + """
+hook_bounded() {
+  if [ "${3##*/}" = "loop-gc.sh" ]; then
+    printf '%s' "$1" > "$HYGIENE_BOUND_MARKER"
+  fi
+  _real_hook_bounded "$@"
+}
+""",
+        encoding="utf-8",
+    )
     (posture_dir / "session_start.py").write_text(
         "print('bounded posture')\n",
         encoding="utf-8",
@@ -667,6 +682,7 @@ def test_session_start_bounds_advisory_hygiene(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     hygiene_term_marker = tmp_path / "hygiene-term"
+    hygiene_bound_marker = tmp_path / "hygiene-bound"
     (hook_dir / "loop-gc.sh").write_text(
         "#!/bin/sh\ntrap 'printf term > \"$HYGIENE_TERM_MARKER\"; exit 0' TERM\nsleep 30\n",
         encoding="utf-8",
@@ -678,6 +694,7 @@ def test_session_start_bounds_advisory_hygiene(tmp_path: Path) -> None:
         {
             "CLAUDE_PROJECT_DIR": str(tmp_path),
             "HARNESS_SESSION_START_HYGIENE_SECONDS": "1",
+            "HYGIENE_BOUND_MARKER": str(hygiene_bound_marker),
             "HYGIENE_TERM_MARKER": str(hygiene_term_marker),
         }
     )
@@ -694,6 +711,7 @@ def test_session_start_bounds_advisory_hygiene(tmp_path: Path) -> None:
     )
 
     assert proc.returncode == 0, proc.stderr
+    assert hygiene_bound_marker.read_text(encoding="utf-8") == "1"
     assert hygiene_term_marker.read_text(encoding="utf-8") == "term"
     assert "bounded posture" in proc.stdout
     assert "roadmap" in proc.stdout
