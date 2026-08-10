@@ -21,6 +21,17 @@ from typing import Any, ClassVar
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET_EVENTS = ("SessionStart", "PreToolUse", "PostToolUse", "Stop", "SessionEnd")
+REAL_PERMISSION_HANDLER = "PreToolUse:permission-guard"
+CANONICAL_PERMISSION_GUARD_COMMAND = (
+    '/usr/bin/python3 "$(git rev-parse --show-toplevel)/.codex/hooks/'
+    'codex_hook_adapter.py" permission-guard'
+)
+PROHIBITED_HOST_DIAGNOSTICS = (
+    "unsupported permissionDecision:allow",
+    "PreToolUse Failed",
+    "invalid PostCompact hook JSON output",
+    "PostCompact Failed",
+)
 
 
 def _remove_temp_tree(path: Path, *, attempts: int = 40, delay: float = 0.1) -> None:
@@ -152,10 +163,49 @@ class _LoopbackResponsesHandler(BaseHTTPRequestHandler):
         return
 
 
-def _witness_hooks(recorder: Path) -> dict[str, Any]:
+def _reset_loopback_state() -> None:
+    _LoopbackResponsesHandler.request_count = 0
+    _LoopbackResponsesHandler.errors = []
+
+
+def _is_permission_guard_adapter(command: object) -> bool:
+    return (
+        isinstance(command, str)
+        and "codex_hook_adapter.py" in command
+        and command.rstrip().endswith("permission-guard")
+    )
+
+
+def _permission_guard_adapter_command() -> str:
+    adapter = ROOT / ".codex" / "hooks" / "codex_hook_adapter.py"
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(adapter))} permission-guard"
+
+
+def _registered_permission_handlers(project_hooks: dict[str, Any]) -> list[str]:
+    handlers: list[str] = []
+    for event, groups in project_hooks["hooks"].items():
+        for group in groups:
+            for hook in group["hooks"]:
+                command = hook.get("command")
+                if not _is_permission_guard_adapter(command):
+                    continue
+                if command != CANONICAL_PERMISSION_GUARD_COMMAND:
+                    raise RuntimeError("unexpected permission-guard command shape")
+                handlers.append(f"{event}:permission-guard")
+    return handlers
+
+
+def _witness_hooks(recorder: Path) -> tuple[dict[str, Any], list[str]]:
     project_hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    registered_handlers = _registered_permission_handlers(project_hooks)
+    if registered_handlers != [REAL_PERMISSION_HANDLER]:
+        raise RuntimeError(
+            "expected exactly one Codex permission-guard adapter registration; "
+            f"found {len(registered_handlers)}"
+        )
     recorder_command = f"{shlex.quote(sys.executable)} {shlex.quote(str(recorder))}"
     hooks: dict[str, list[dict[str, Any]]] = {}
+    real_handlers: list[str] = []
     for event in TARGET_EVENTS:
         groups = project_hooks["hooks"].get(event)
         if not groups:
@@ -163,14 +213,56 @@ def _witness_hooks(recorder: Path) -> dict[str, Any]:
         hooks[event] = []
         for group in groups:
             witness_group = {key: value for key, value in group.items() if key != "hooks"}
-            witness_group["hooks"] = [
-                {"type": "command", "command": recorder_command, "timeout": 3}
-            ]
+            witness_group["hooks"] = []
+            for hook in group["hooks"]:
+                if _is_permission_guard_adapter(hook.get("command")):
+                    real_handlers.append(f"{event}:permission-guard")
+                    witness_hook = dict(hook)
+                    witness_hook["command"] = _permission_guard_adapter_command()
+                else:
+                    witness_hook = {"type": "command", "command": recorder_command, "timeout": 3}
+                witness_group["hooks"].append(witness_hook)
             hooks[event].append(witness_group)
-    return {"hooks": hooks}
+    if real_handlers != registered_handlers:
+        raise RuntimeError(
+            "expected exactly one Codex permission-guard adapter registration; "
+            f"found {len(real_handlers)}"
+        )
+    return {"hooks": hooks}, real_handlers
 
 
-def _assert_witness(repo: Path, events_path: Path, request_count: int) -> dict[str, Any]:
+def _witness_environment(codex_home: Path, repo: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env["CODEX_HOME"] = str(codex_home)
+    env["HARNESS_LOOP"] = "1"
+    env["CLAUDE_PROJECT_DIR"] = str(repo)
+    for name in (
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    ):
+        env.pop(name, None)
+    return env
+
+
+def _assert_no_prohibited_host_diagnostics(stdout: str, stderr: str) -> None:
+    combined_output = f"{stdout}\n{stderr}"
+    diagnostics = [
+        diagnostic for diagnostic in PROHIBITED_HOST_DIAGNOSTICS if diagnostic in combined_output
+    ]
+    if diagnostics:
+        raise RuntimeError(f"prohibited host diagnostic: {', '.join(diagnostics)}")
+
+
+def _assert_witness(
+    repo: Path,
+    events_path: Path,
+    request_count: int,
+    *,
+    real_handlers: list[str],
+) -> dict[str, Any]:
     events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
     if not events:
         raise RuntimeError("Codex CLI emitted no hook events")
@@ -198,6 +290,8 @@ def _assert_witness(repo: Path, events_path: Path, request_count: int) -> dict[s
     session_ids = {event["session_id"] for event in events}
     if len(session_ids) != 1:
         raise RuntimeError(f"hook events span multiple sessions: {sorted(session_ids)}")
+    if real_handlers != [REAL_PERMISSION_HANDLER]:
+        raise RuntimeError(f"invalid real handler evidence: {real_handlers}")
     return {
         "status": "PASS",
         "provider": "loopback-responses-no-auth",
@@ -206,6 +300,7 @@ def _assert_witness(repo: Path, events_path: Path, request_count: int) -> dict[s
         "events": event_names,
         "tool_events": sorted(f"{phase}:{tool}" for phase, tool in tool_events),
         "effects": ["shell-marker.txt", "patch-marker.txt"],
+        "real_handlers": real_handlers,
     }
 
 
@@ -230,10 +325,10 @@ def main() -> int:
             "    stream.write(sys.stdin.read().strip() + '\\n')\n",
             encoding="utf-8",
         )
-        (codex_home / "hooks.json").write_text(
-            json.dumps(_witness_hooks(recorder), indent=2) + "\n", encoding="utf-8"
-        )
+        hooks, real_handlers = _witness_hooks(recorder)
+        (codex_home / "hooks.json").write_text(json.dumps(hooks, indent=2) + "\n", encoding="utf-8")
 
+        _reset_loopback_state()
         server = ThreadingHTTPServer(("127.0.0.1", 0), _LoopbackResponsesHandler)
         server_thread = threading.Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
@@ -253,16 +348,7 @@ def main() -> int:
             encoding="utf-8",
         )
 
-        env = os.environ.copy()
-        env["CODEX_HOME"] = str(codex_home)
-        for name in (
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "GEMINI_API_KEY",
-            "GOOGLE_API_KEY",
-            "GOOGLE_APPLICATION_CREDENTIALS",
-        ):
-            env.pop(name, None)
+        env = _witness_environment(codex_home, repo)
         try:
             result = subprocess.run(
                 [
@@ -289,6 +375,11 @@ def main() -> int:
             server.server_close()
             server_thread.join(timeout=2)
 
+        try:
+            _assert_no_prohibited_host_diagnostics(result.stdout, result.stderr)
+        except RuntimeError as exc:
+            print(f"codex-hook-runtime-witness: {exc}", file=sys.stderr)
+            return 1
         if result.returncode != 0:
             print(result.stderr, file=sys.stderr)
             return result.returncode
@@ -296,7 +387,12 @@ def main() -> int:
             print("; ".join(_LoopbackResponsesHandler.errors), file=sys.stderr)
             return 1
         try:
-            evidence = _assert_witness(repo, events_path, _LoopbackResponsesHandler.request_count)
+            evidence = _assert_witness(
+                repo,
+                events_path,
+                _LoopbackResponsesHandler.request_count,
+                real_handlers=real_handlers,
+            )
         except (FileNotFoundError, KeyError, RuntimeError, json.JSONDecodeError) as exc:
             print(result.stderr, file=sys.stderr)
             print(f"codex-hook-runtime-witness: {exc}", file=sys.stderr)

@@ -146,7 +146,7 @@ def project_dir(payload: dict[str, Any]) -> Path:
 
 
 def run_claude_hook(
-    relative_path: str, payload: dict[str, Any], cwd: Path
+    relative_path: str, payload: dict[str, Any], cwd: Path, *, timeout: float = 30
 ) -> dict[str, Any] | None:
     env = os.environ.copy()
     env["CLAUDE_PROJECT_DIR"] = str(cwd)
@@ -155,7 +155,7 @@ def run_claude_hook(
         ["/bin/bash", str(ROOT / relative_path)],
         cwd=cwd,
         input_text=json.dumps(payload),
-        timeout=30,
+        timeout=timeout,
         env=env,
     )
     if proc.returncode != 0:
@@ -171,7 +171,14 @@ def run_claude_hook(
                 f"Codex hook adapter: {relative_path} returned invalid JSON: {proc.stdout.strip()}"
             )
         }
-    return value if isinstance(value, dict) else None
+    if not isinstance(value, dict):
+        return {
+            "systemMessage": (
+                f"Codex hook adapter: {relative_path} returned non-object JSON: "
+                f"{proc.stdout.strip()}"
+            )
+        }
+    return value
 
 
 def additional_context(value: dict[str, Any] | None) -> str | None:
@@ -279,6 +286,97 @@ def post_tool_use(payload: dict[str, Any]) -> int:
     return 0
 
 
+class CompactContextError(ValueError):
+    """The shared PostCompact producer returned unusable output."""
+
+
+def compact_context(payload: dict[str, Any]) -> str | None:
+    value = run_claude_hook(
+        "tools/hooks/postcompact-reinject.sh", payload, project_dir(payload), timeout=10
+    )
+    if value is None:
+        return None
+    if "systemMessage" in value:
+        detail = value["systemMessage"]
+        raise CompactContextError(
+            detail
+            if isinstance(detail, str) and detail.strip()
+            else "producer returned a diagnostic"
+        )
+    specific = value.get("hookSpecificOutput")
+    if not isinstance(specific, dict):
+        raise CompactContextError("producer returned no PostCompact output")
+    if specific.get("hookEventName") != "PostCompact":
+        raise CompactContextError("producer returned the wrong hook event")
+    context = specific.get("additionalContext")
+    if not isinstance(context, str) or not context.strip():
+        raise CompactContextError("producer returned no usable context")
+    return context
+
+
+def post_compact(payload: dict[str, Any]) -> int:
+    try:
+        context = compact_context(payload)
+    except CompactContextError as exc:
+        print(f"post-compact adapter: {exc}", file=sys.stderr)
+        return 2
+    if context:
+        print(json.dumps({"systemMessage": context}, separators=(",", ":")))
+    return 0
+
+
+def print_compact_context(payload: dict[str, Any]) -> int:
+    try:
+        context = compact_context(payload)
+    except CompactContextError as exc:
+        print(f"compact-context adapter: {exc}", file=sys.stderr)
+        return 2
+    if context:
+        print(context)
+    return 0
+
+
+def permission_guard(payload: dict[str, Any]) -> int:
+    if payload.get("hook_event_name") != "PreToolUse":
+        print("permission-guard adapter requires PreToolUse", file=sys.stderr)
+        return 2
+
+    value = run_claude_hook("tools/hooks/permission-guard.sh", payload, project_dir(payload))
+    if value is None:
+        return 0
+    specific = value.get("hookSpecificOutput")
+    if not isinstance(specific, dict) or specific.get("hookEventName") != "PreToolUse":
+        diagnostic = value.get("systemMessage")
+        if isinstance(diagnostic, str) and diagnostic.strip():
+            print(diagnostic, file=sys.stderr)
+        else:
+            print("permission-guard adapter received invalid PreToolUse output", file=sys.stderr)
+        return 2
+
+    decision = specific.get("permissionDecision")
+    if decision == "allow":
+        if "updatedInput" not in specific:
+            return 0
+        if isinstance(specific["updatedInput"], dict):
+            print(json.dumps(value, separators=(",", ":")))
+            return 0
+        print(
+            "permission-guard adapter received allow with non-object updatedInput",
+            file=sys.stderr,
+        )
+        return 2
+    if decision == "deny":
+        reason = specific.get("permissionDecisionReason")
+        if isinstance(reason, str) and reason.strip():
+            print(json.dumps(value, separators=(",", ":")))
+            return 0
+        print("permission-guard adapter received deny without a reason", file=sys.stderr)
+        return 2
+
+    print("permission-guard adapter received unsupported permission decision", file=sys.stderr)
+    return 2
+
+
 def pre_commit(payload: dict[str, Any]) -> int:
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
@@ -307,13 +405,31 @@ def pre_commit(payload: dict[str, Any]) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in {"post-tool-use", "pre-commit"}:
-        print("usage: codex_hook_adapter.py post-tool-use|pre-commit", file=sys.stderr)
+    if len(sys.argv) != 2 or sys.argv[1] not in {
+        "post-tool-use",
+        "pre-commit",
+        "permission-guard",
+        "post-compact",
+        "compact-context",
+    }:
+        print(
+            "usage: codex_hook_adapter.py "
+            "post-tool-use|pre-commit|permission-guard|post-compact|compact-context",
+            file=sys.stderr,
+        )
         return 2
     if os.environ.get("HARNESS_CODEX_REVIEW_ISOLATED") == "1":
         return 0
     payload = read_payload()
-    return post_tool_use(payload) if sys.argv[1] == "post-tool-use" else pre_commit(payload)
+    if sys.argv[1] == "post-tool-use":
+        return post_tool_use(payload)
+    if sys.argv[1] == "pre-commit":
+        return pre_commit(payload)
+    if sys.argv[1] == "permission-guard":
+        return permission_guard(payload)
+    if sys.argv[1] == "post-compact":
+        return post_compact(payload)
+    return print_compact_context(payload)
 
 
 if __name__ == "__main__":

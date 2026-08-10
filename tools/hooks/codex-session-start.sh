@@ -52,15 +52,26 @@ if hook_review_isolated; then
 fi
 
 POSTURE=$(printf '%s' "$PAYLOAD" | /usr/bin/python3 "$_DIR/../../.codex/hooks/session_start.py") || exit $?
-# SessionStart has a 105-second host budget and posture may consume 75 seconds. Keep
-# both advisory companions inside explicit aggregate slices so worktree cardinality or
-# a slow remote cannot make the wrapper exceed the host deadline.
+# SessionStart has a 105-second host budget and posture may consume 75 seconds.
+# Roadmap and hygiene each have 8-second slices plus up to 2 seconds of fallback
+# grace; compact has a 4-second slice plus the same grace. The 75+10+10+6=101
+# worst case leaves four seconds for source parsing, lease activation, and output.
 ROADMAP=$(printf '%s' "$PAYLOAD" \
   | hook_bounded "${HARNESS_SESSION_START_ROADMAP_SECONDS:-8}" \
       /bin/bash "$_DIR/../roadmap-audit/session-start.sh") || true
 HYGIENE=$(printf '%s' "$PAYLOAD" \
   | hook_bounded "${HARNESS_SESSION_START_HYGIENE_SECONDS:-8}" \
       /bin/bash "$_DIR/loop-gc.sh") || true
+if ! SOURCE=$(printf '%s' "$PAYLOAD" | jq -er \
+  'if .source == null then "" elif (.source | type) == "string" then .source else error("source must be a string") end'); then
+  echo "codex-session-start: invalid SessionStart payload source" >&2
+  exit 2
+fi
+COMPACT_CONTEXT=""
+if [ "$SOURCE" = "compact" ]; then
+  COMPACT_CONTEXT=$(printf '%s' "$PAYLOAD" | hook_bounded "${HARNESS_SESSION_START_COMPACT_SECONDS:-4}" \
+    /usr/bin/python3 "$_DIR/../../.codex/hooks/codex_hook_adapter.py" compact-context) || exit $?
+fi
 
 context_from_hook() {
   printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null
@@ -73,6 +84,8 @@ CONTEXT="$POSTURE"
 ${ROADMAP_CONTEXT}"
 [ -z "$HYGIENE_CONTEXT" ] || CONTEXT="${CONTEXT}
 ${HYGIENE_CONTEXT}"
+[ -z "$COMPACT_CONTEXT" ] || CONTEXT="${CONTEXT}
+${COMPACT_CONTEXT}"
 if ! lease_action activate; then
   echo "codex-session-start: could not activate the worktree session lease" >&2
   exit 2

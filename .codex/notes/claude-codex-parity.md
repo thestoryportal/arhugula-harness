@@ -53,6 +53,18 @@ handler-definition hash in `~/.codex/config.toml`. After this hook set lands,
 use `/hooks` in the Codex TUI to inspect and trust every new or changed handler.
 Do not normalize bypassing trust in the autonomous launcher.
 
+### Runtime-witness scope
+
+Hook parity means equivalent effect, not byte-identical output schemas. The
+installed-host runtime witness uses recorder substitutes for every handler
+except one real `PreToolUse` permission adapter. That adapter is invoked by an
+absolute source-worktree path, while its policy evaluates in the synthetic
+witness repository. The witness fails closed when the permission adapter is
+absent, duplicated, registered under a different event, or its canonical command
+shape changes; it does not claim to detect general matcher, timeout, or status
+drift. It also fails when the installed Codex host reports a prohibited parser
+diagnostic.
+
 The operator granted standing authorization on 2026-08-01 for `just gemini-review` to use
 the OAuth-authenticated Antigravity `agy` CLI subscription and disclose the current repository
 diff on every forward arc; Codex must not ask for that approval again. Direct Gemini/Google

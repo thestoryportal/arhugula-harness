@@ -6,6 +6,7 @@ import errno
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -36,6 +37,37 @@ def test_live_runtime_witness_is_provider_free_and_operator_runnable() -> None:
     assert "/usr/bin/python3 tools/codex_hook_runtime_witness.py" in justfile
 
 
+def test_hook_contract_documentation_preserves_codex_semantics() -> None:
+    readme = (ROOT / ".codex" / "hooks" / "README.md").read_text(encoding="utf-8")
+    parity = (ROOT / ".codex" / "notes" / "claude-codex-parity.md").read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
+    normalized_parity = " ".join(parity.split())
+    plain_readme = normalized_readme.replace("`", "")
+    plain_parity = normalized_parity.replace("`", "")
+
+    assert "`PermissionRequest` decides approval" in readme
+    assert "compact-context" in readme
+    assert "equivalent effect" in readme
+    assert "`PostCompact` | shared reinjection producer through the Codex adapter" in readme
+    assert "`PostCompact` | Direct" not in readme
+    assert "only for the single real `PreToolUse:permission-guard` adapter" in normalized_readme
+    assert "including `PostCompact`, are recorder substitutes" in normalized_readme
+    assert (
+        "all other lifecycle handlers, including PostCompact, are recorder substitutes"
+        in plain_readme
+    )
+    assert (
+        "PostCompact translation validity is covered by shared-producer and "
+        "adapter behavioral tests" in normalized_readme
+    )
+    assert "one real `PreToolUse` permission adapter" in parity
+    assert (
+        "permission adapter is absent, duplicated, registered under a different event, "
+        "or its canonical command shape changes"
+    ) in normalized_parity
+    assert "does not claim to detect general matcher, timeout, or status drift" in plain_parity
+
+
 def _runtime_witness_module():
     spec = importlib.util.spec_from_file_location(
         "codex_hook_runtime_witness_test", RUNTIME_WITNESS
@@ -46,13 +78,161 @@ def _runtime_witness_module():
     return module
 
 
+def _hook_commands(payload: dict[str, Any]) -> list[str]:
+    return [
+        hook["command"]
+        for groups in payload["hooks"].values()
+        for group in groups
+        for hook in group["hooks"]
+    ]
+
+
+def test_runtime_witness_preserves_only_real_permission_guard_adapter(tmp_path: Path) -> None:
+    witness = _runtime_witness_module()
+    recorder = tmp_path / "record_hook.py"
+
+    hooks, real_handlers = witness._witness_hooks(recorder)
+
+    real_command = (
+        f"{shlex.quote(sys.executable)} "
+        f"{shlex.quote(str(ROOT / '.codex' / 'hooks' / 'codex_hook_adapter.py'))} permission-guard"
+    )
+    recorder_command = f"{shlex.quote(sys.executable)} {shlex.quote(str(recorder))}"
+    commands = _hook_commands(hooks)
+    project_hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    expected_handler_count = sum(
+        len(group["hooks"])
+        for event in witness.TARGET_EVENTS
+        for group in project_hooks["hooks"][event]
+    )
+
+    assert set(hooks["hooks"]) == set(witness.TARGET_EVENTS)
+    assert len(commands) == expected_handler_count
+    assert real_handlers == ["PreToolUse:permission-guard"]
+    assert commands.count(real_command) == 1
+    assert all(command in {real_command, recorder_command} for command in commands)
+    assert all(command == recorder_command for command in commands if command != real_command)
+
+
+@pytest.mark.parametrize("match_count", [0, 2])
+def test_runtime_witness_refuses_missing_or_ambiguous_permission_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, match_count: int
+) -> None:
+    witness = _runtime_witness_module()
+    payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    permission_hook = payload["hooks"]["PreToolUse"][-1]["hooks"][0]
+    payload["hooks"]["PreToolUse"][-1]["hooks"] = [permission_hook] * match_count
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "hooks.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(witness, "ROOT", tmp_path)
+
+    with pytest.raises(RuntimeError, match="permission-guard"):
+        witness._witness_hooks(tmp_path / "record_hook.py")
+
+
+def test_runtime_witness_refuses_permission_guard_outside_witness_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    witness = _runtime_witness_module()
+    payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    permission_hook = payload["hooks"]["PreToolUse"][-1]["hooks"].pop()
+    payload["hooks"]["PreCompact"][0]["hooks"].append(permission_hook)
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "hooks.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(witness, "ROOT", tmp_path)
+
+    with pytest.raises(RuntimeError, match="permission-guard"):
+        witness._witness_hooks(tmp_path / "record_hook.py")
+
+
+def test_runtime_witness_refuses_permission_guard_command_shape_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    witness = _runtime_witness_module()
+    payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    permission_hook = payload["hooks"]["PreToolUse"][-1]["hooks"][0]
+    permission_hook["command"] = f"env FOO=1 {permission_hook['command']}"
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "hooks.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(witness, "ROOT", tmp_path)
+
+    with pytest.raises(RuntimeError, match="command shape"):
+        witness._witness_hooks(tmp_path / "record_hook.py")
+
+
+def test_runtime_witness_environment_uses_synthetic_project_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    witness = _runtime_witness_module()
+    provider_variables = (
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    )
+    for name in provider_variables:
+        monkeypatch.setenv(name, "provider-credential")
+
+    environment = witness._witness_environment(tmp_path / "codex-home", tmp_path / "repo")
+
+    assert environment["CODEX_HOME"] == str(tmp_path / "codex-home")
+    assert environment["HARNESS_LOOP"] == "1"
+    assert environment["CLAUDE_PROJECT_DIR"] == str(tmp_path / "repo")
+    assert not set(provider_variables) & set(environment)
+
+
+def test_runtime_witness_resets_loopback_state() -> None:
+    witness = _runtime_witness_module()
+    witness._LoopbackResponsesHandler.request_count = 7
+    witness._LoopbackResponsesHandler.errors = ["stale error"]
+
+    witness._reset_loopback_state()
+
+    assert witness._LoopbackResponsesHandler.request_count == 0
+    assert witness._LoopbackResponsesHandler.errors == []
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr"),
+    [
+        (diagnostic, "")
+        for diagnostic in (
+            "unsupported permissionDecision:allow",
+            "PreToolUse Failed",
+            "invalid PostCompact hook JSON output",
+            "PostCompact Failed",
+        )
+    ]
+    + [
+        ("", diagnostic)
+        for diagnostic in (
+            "unsupported permissionDecision:allow",
+            "PreToolUse Failed",
+            "invalid PostCompact hook JSON output",
+            "PostCompact Failed",
+        )
+    ],
+)
+def test_runtime_witness_rejects_prohibited_host_diagnostics(stdout: str, stderr: str) -> None:
+    witness = _runtime_witness_module()
+
+    with pytest.raises(RuntimeError, match="prohibited host diagnostic"):
+        witness._assert_no_prohibited_host_diagnostics(stdout, stderr)
+
+
 def test_live_runtime_witness_reports_empty_hook_stream(tmp_path: Path) -> None:
     witness = _runtime_witness_module()
     events_path = tmp_path / "events.jsonl"
     events_path.write_text("", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="no hook events"):
-        witness._assert_witness(tmp_path, events_path, 0)
+        witness._assert_witness(
+            tmp_path,
+            events_path,
+            0,
+            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+        )
 
 
 def test_live_runtime_witness_retries_directory_not_empty_cleanup(
@@ -100,7 +280,26 @@ def test_live_runtime_witness_accepts_complete_fixture(tmp_path: Path) -> None:
     witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
     _write_runtime_events(events_path, events)
 
-    assert witness._assert_witness(tmp_path, events_path, 3)["status"] == "PASS"
+    evidence = witness._assert_witness(
+        tmp_path,
+        events_path,
+        3,
+        real_handlers=[witness.REAL_PERMISSION_HANDLER],
+    )
+
+    assert evidence["status"] == "PASS"
+    assert evidence["real_handlers"] == ["PreToolUse:permission-guard"]
+
+
+@pytest.mark.parametrize("real_handlers", [[], ["PreToolUse:another-handler"]])
+def test_live_runtime_witness_rejects_untrusted_real_handler_evidence(
+    tmp_path: Path, real_handlers: list[str]
+) -> None:
+    witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
+    _write_runtime_events(events_path, events)
+
+    with pytest.raises(RuntimeError, match="real handler evidence"):
+        witness._assert_witness(tmp_path, events_path, 3, real_handlers=real_handlers)
 
 
 @pytest.mark.parametrize("missing", ["SessionStart", "Stop", "SessionEnd"])
@@ -113,7 +312,12 @@ def test_live_runtime_witness_rejects_each_missing_lifecycle_event(
     )
 
     with pytest.raises(RuntimeError):
-        witness._assert_witness(tmp_path, events_path, 3)
+        witness._assert_witness(
+            tmp_path,
+            events_path,
+            3,
+            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+        )
 
 
 @pytest.mark.parametrize(
@@ -134,7 +338,12 @@ def test_live_runtime_witness_rejects_each_missing_tool_phase(
     )
 
     with pytest.raises(RuntimeError, match="missing tool hook dispatch"):
-        witness._assert_witness(tmp_path, events_path, 3)
+        witness._assert_witness(
+            tmp_path,
+            events_path,
+            3,
+            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+        )
 
 
 def test_live_runtime_witness_rejects_wrong_request_count(tmp_path: Path) -> None:
@@ -142,7 +351,12 @@ def test_live_runtime_witness_rejects_wrong_request_count(tmp_path: Path) -> Non
     _write_runtime_events(events_path, events)
 
     with pytest.raises(RuntimeError, match="expected 3"):
-        witness._assert_witness(tmp_path, events_path, 2)
+        witness._assert_witness(
+            tmp_path,
+            events_path,
+            2,
+            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+        )
 
 
 @pytest.mark.parametrize("marker", ["shell-marker.txt", "patch-marker.txt"])
@@ -152,7 +366,12 @@ def test_live_runtime_witness_rejects_each_missing_effect(tmp_path: Path, marker
     (tmp_path / marker).unlink()
 
     with pytest.raises((RuntimeError, FileNotFoundError)):
-        witness._assert_witness(tmp_path, events_path, 3)
+        witness._assert_witness(
+            tmp_path,
+            events_path,
+            3,
+            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+        )
 
 
 def test_live_runtime_witness_rejects_multiple_session_identities(tmp_path: Path) -> None:
@@ -161,7 +380,12 @@ def test_live_runtime_witness_rejects_multiple_session_identities(tmp_path: Path
     _write_runtime_events(events_path, events)
 
     with pytest.raises(RuntimeError, match="multiple sessions"):
-        witness._assert_witness(tmp_path, events_path, 3)
+        witness._assert_witness(
+            tmp_path,
+            events_path,
+            3,
+            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+        )
 
 
 def _adapter_module():
@@ -322,14 +546,14 @@ def _event_commands(event: str) -> list[str]:
                 "codex_hook_adapter.py pre-commit",
             ],
         ),
-        ("PreToolUse", "*", ["permission-guard.sh"]),
+        ("PreToolUse", "*", ["codex_hook_adapter.py", "permission-guard"]),
         (
             "PermissionRequest",
             "*",
             ["permission_request.py", "permission-guard.sh"],
         ),
         ("PreCompact", "*", ["precompact-checkpoint.sh"]),
-        ("PostCompact", "*", ["postcompact-reinject.sh"]),
+        ("PostCompact", "*", ["codex_hook_adapter.py", "post-compact"]),
         ("SessionEnd", "*", ["codex-session-end.sh"]),
         (
             "Stop",
@@ -424,6 +648,235 @@ def _run_adapter(
         timeout=30,
         env=env,
     )
+
+
+def _checkpoint_repo(tmp_path: Path, session_id: str = "session-a") -> Path:
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True)
+    harness = tmp_path / ".harness"
+    checkpoints = harness / ".checkpoints"
+    checkpoints.mkdir(parents=True)
+    (harness / "roadmap_status.md").write_text(
+        "# Test roadmap\n\n## Next action\n\nU-TEST-01\n",
+        encoding="utf-8",
+    )
+    (checkpoints / f"precompact-latest-{session_id}.md").write_text(
+        "test pre-compaction checkpoint\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", ".harness/roadmap_status.md"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "test checkpoint repository"], cwd=tmp_path, check=True)
+    return tmp_path
+
+
+def test_post_compact_adapter_emits_only_universal_output(tmp_path: Path) -> None:
+    repo = _checkpoint_repo(tmp_path)
+    checkpoint = ".harness/.checkpoints/precompact-latest-session-a.md"
+
+    proc = _run_adapter(
+        "post-compact",
+        {"hook_event_name": "PostCompact", "session_id": "session-a", "cwd": str(repo)},
+        cwd=repo,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    output = json.loads(proc.stdout)
+    assert set(output) == {"systemMessage"}
+    assert checkpoint in output["systemMessage"]
+
+
+def test_compact_context_mode_returns_raw_model_context(tmp_path: Path) -> None:
+    repo = _checkpoint_repo(tmp_path)
+    checkpoint = ".harness/.checkpoints/precompact-latest-session-a.md"
+
+    proc = _run_adapter(
+        "compact-context",
+        {
+            "hook_event_name": "SessionStart",
+            "source": "compact",
+            "session_id": "session-a",
+            "cwd": str(repo),
+        },
+        cwd=repo,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert checkpoint in proc.stdout
+    assert "hookSpecificOutput" not in proc.stdout
+
+
+def test_compact_context_uses_ten_second_producer_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter_module()
+    timeouts: list[float] = []
+    monkeypatch.setattr(
+        adapter,
+        "run_bounded",
+        lambda *_args, **kwargs: (
+            timeouts.append(kwargs["timeout"])
+            or subprocess.CompletedProcess(
+                ["hook"],
+                0,
+                '{"hookSpecificOutput":{"hookEventName":"PostCompact","additionalContext":"context"}}',
+                "",
+            )
+        ),
+    )
+
+    assert adapter.compact_context({"cwd": str(ROOT)}) == "context"
+    assert timeouts == [10]
+
+
+@pytest.mark.parametrize("handler_name", ["post_compact", "print_compact_context"])
+@pytest.mark.parametrize(
+    "producer_result",
+    [
+        subprocess.CompletedProcess(["hook"], 1, "", "producer failed"),
+        subprocess.CompletedProcess(["hook"], 0, "not json", ""),
+        subprocess.CompletedProcess(["hook"], 0, "[]", ""),
+        subprocess.CompletedProcess(
+            ["hook"],
+            0,
+            '{"hookSpecificOutput":'
+            '{"hookEventName":"SessionStart","additionalContext":"wrong event"}}',
+            "",
+        ),
+        subprocess.CompletedProcess(
+            ["hook"],
+            0,
+            '{"hookSpecificOutput":{"hookEventName":"PostCompact"}}',
+            "",
+        ),
+        subprocess.CompletedProcess(
+            ["hook"],
+            0,
+            '{"hookSpecificOutput":{"hookEventName":"PostCompact","additionalContext":"  "}}',
+            "",
+        ),
+    ],
+)
+def test_compact_context_adapter_modes_reject_invalid_producer_output(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    handler_name: str,
+    producer_result: subprocess.CompletedProcess[str],
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter, "run_bounded", lambda *_args, **_kwargs: producer_result)
+
+    assert getattr(adapter, handler_name)({"cwd": str(ROOT)}) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err
+
+
+def _loop_active_git_repo(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    harness = tmp_path / ".harness"
+    harness.mkdir()
+    (harness / ".loop-active").touch()
+
+
+def test_permission_guard_adapter_suppresses_bare_pretool_allow(tmp_path: Path) -> None:
+    _loop_active_git_repo(tmp_path)
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Grep",
+        "tool_input": {"path": str(tmp_path / "src")},
+    }
+
+    proc = _run_adapter("permission-guard", payload, cwd=tmp_path)
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ""
+
+
+def test_permission_guard_adapter_preserves_supported_pretool_deny(tmp_path: Path) -> None:
+    _loop_active_git_repo(tmp_path)
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "git push --force origin main"},
+    }
+
+    proc = _run_adapter("permission-guard", payload, cwd=tmp_path)
+
+    assert proc.returncode == 0, proc.stderr
+    decision = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert decision["hookEventName"] == "PreToolUse"
+    assert decision["permissionDecision"] == "deny"
+    assert decision["permissionDecisionReason"]
+
+
+def test_permission_guard_adapter_fails_closed_on_non_decision_output(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(
+        adapter,
+        "run_claude_hook",
+        lambda *_args, **_kwargs: {"systemMessage": "shared producer failed: exact detail"},
+    )
+
+    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "shared producer failed: exact detail\n"
+
+
+def test_permission_guard_adapter_rejects_malformed_allow_updated_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(
+        adapter,
+        "run_claude_hook",
+        lambda *_args, **_kwargs: {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": "not-an-object",
+            }
+        },
+    )
+
+    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 2
+
+
+def test_permission_guard_adapter_fails_closed_on_non_object_shared_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(
+        adapter,
+        "run_bounded",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["hook"], 0, "[]", ""),
+    )
+
+    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 2
+
+
+def test_permission_guard_adapter_passes_through_dict_updated_input(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    adapter = _adapter_module()
+    shared_response = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "updatedInput": {"command": "git status"},
+        }
+    }
+    monkeypatch.setattr(
+        adapter,
+        "run_claude_hook",
+        lambda *_args, **_kwargs: shared_response,
+    )
+
+    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 0
+    assert json.loads(capsys.readouterr().out) == shared_response
 
 
 def test_post_tool_adapter_captures_nonzero_bash_result(tmp_path: Path) -> None:
@@ -691,7 +1144,9 @@ hook_bounded() {
         encoding="utf-8",
     )
     subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
-    payload = json.dumps({"session_id": "bounded-hygiene", "cwd": str(tmp_path)})
+    payload = json.dumps(
+        {"source": "startup", "session_id": "bounded-hygiene", "cwd": str(tmp_path)}
+    )
     env = os.environ.copy()
     env.update(
         {
@@ -718,6 +1173,262 @@ hook_bounded() {
     assert hygiene_term_marker.read_text(encoding="utf-8") == "term"
     assert "bounded posture" in proc.stdout
     assert "roadmap" in proc.stdout
+
+
+def test_session_start_wrapper_routes_compact_context(tmp_path: Path) -> None:
+    hook_dir = tmp_path / "tools" / "hooks"
+    roadmap_dir = tmp_path / "tools" / "roadmap-audit"
+    codex_hooks = tmp_path / ".codex" / "hooks"
+    hook_dir.mkdir(parents=True)
+    roadmap_dir.mkdir(parents=True)
+    codex_hooks.mkdir(parents=True)
+    for name in (
+        "codex-session-start.sh",
+        "session-lease.sh",
+        "lib.sh",
+        "postcompact-reinject.sh",
+    ):
+        shutil.copy2(ROOT / "tools" / "hooks" / name, hook_dir / name)
+    shutil.copy2(ADAPTER, codex_hooks / "codex_hook_adapter.py")
+    (codex_hooks / "session_start.py").write_text("print('posture')\n", encoding="utf-8")
+    (roadmap_dir / "session-start.sh").write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"hookSpecificOutput":{"additionalContext":"roadmap"}}\'\n',
+        encoding="utf-8",
+    )
+    (hook_dir / "loop-gc.sh").write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"hookSpecificOutput":{"additionalContext":"hygiene"}}\'\n',
+        encoding="utf-8",
+    )
+    harness = tmp_path / ".harness"
+    checkpoints = harness / ".checkpoints"
+    checkpoints.mkdir(parents=True)
+    (harness / "roadmap_status.md").write_text(
+        "# Test roadmap\n\n## Next action\n\nU-TEST-01\n",
+        encoding="utf-8",
+    )
+    checkpoint = ".harness/.checkpoints/precompact-latest-wrapper-session.md"
+    (tmp_path / checkpoint).write_text(
+        "wrapper pre-compaction checkpoint\n",
+        encoding="utf-8",
+    )
+    for script in (roadmap_dir / "session-start.sh", hook_dir / "loop-gc.sh"):
+        script.chmod(0o755)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", ".harness/roadmap_status.md"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "wrapper base"], cwd=tmp_path, check=True)
+    env = os.environ.copy()
+    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
+
+    def run_session(source: str, session_id: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(hook_dir / "codex-session-start.sh")],
+            cwd=tmp_path,
+            input=json.dumps(
+                {
+                    "hook_event_name": "SessionStart",
+                    "source": source,
+                    "session_id": session_id,
+                    "cwd": str(tmp_path),
+                }
+            ),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env=env,
+        )
+
+    startup = run_session("startup", "wrapper-startup")
+    compact = run_session("compact", "wrapper-session")
+
+    assert startup.returncode == 0, startup.stderr
+    assert compact.returncode == 0, compact.stderr
+    startup_context = json.loads(startup.stdout)["hookSpecificOutput"]["additionalContext"]
+    compact_context = json.loads(compact.stdout)["hookSpecificOutput"]["additionalContext"]
+    assert "[CONTEXT] Post-compaction" not in startup_context
+    assert checkpoint not in startup_context
+    for earlier, later in zip(
+        ("posture", "roadmap", "hygiene", "[CONTEXT] Post-compaction"),
+        ("roadmap", "hygiene", "[CONTEXT] Post-compaction", checkpoint),
+        strict=True,
+    ):
+        assert compact_context.index(earlier) < compact_context.index(later)
+    leases = sorted(
+        path.name for path in (tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease")
+    )
+    assert leases == ["session-wrapper-session.lease", "session-wrapper-startup.lease"]
+
+
+def test_session_start_wrapper_routes_compact_producer_failure(tmp_path: Path) -> None:
+    hook_dir = tmp_path / "tools" / "hooks"
+    roadmap_dir = tmp_path / "tools" / "roadmap-audit"
+    codex_hooks = tmp_path / ".codex" / "hooks"
+    hook_dir.mkdir(parents=True)
+    roadmap_dir.mkdir(parents=True)
+    codex_hooks.mkdir(parents=True)
+    for name in (
+        "codex-session-start.sh",
+        "session-lease.sh",
+        "lib.sh",
+        "postcompact-reinject.sh",
+    ):
+        shutil.copy2(ROOT / "tools" / "hooks" / name, hook_dir / name)
+    shutil.copy2(ADAPTER, codex_hooks / "codex_hook_adapter.py")
+    (hook_dir / "postcompact-reinject.sh").write_text(
+        "#!/bin/sh\necho 'compact producer failed' >&2\nexit 9\n",
+        encoding="utf-8",
+    )
+    (codex_hooks / "session_start.py").write_text("print('posture')\n", encoding="utf-8")
+    (roadmap_dir / "session-start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (hook_dir / "loop-gc.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    for script in (
+        hook_dir / "postcompact-reinject.sh",
+        roadmap_dir / "session-start.sh",
+        hook_dir / "loop-gc.sh",
+    ):
+        script.chmod(0o755)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    env = os.environ.copy()
+    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
+
+    proc = subprocess.run(
+        ["bash", str(hook_dir / "codex-session-start.sh")],
+        cwd=tmp_path,
+        input=json.dumps(
+            {
+                "hook_event_name": "SessionStart",
+                "source": "compact",
+                "session_id": "producer-failure",
+                "cwd": str(tmp_path),
+            }
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert proc.returncode == 2, proc.stderr
+    assert "compact producer failed" in proc.stderr
+    assert proc.stdout == ""
+    assert not list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
+
+
+def test_session_start_wrapper_routes_compact_through_four_second_bound() -> None:
+    start = (ROOT / "tools" / "hooks" / "codex-session-start.sh").read_text(encoding="utf-8")
+
+    assert 'hook_bounded "$' + '{HARNESS_SESSION_START_COMPACT_SECONDS:-4}"' in start
+
+
+@pytest.mark.parametrize(
+    ("source_payload", "label"),
+    [
+        ({"source": 1}, "number"),
+        ({"source": False}, "bool"),
+        ({"source": []}, "list"),
+        ({"source": {}}, "dict"),
+    ],
+)
+def test_session_start_wrapper_routes_compact_rejects_invalid_source(
+    tmp_path: Path, source_payload: dict[str, object], label: str
+) -> None:
+    hook_dir = tmp_path / "tools" / "hooks"
+    roadmap_dir = tmp_path / "tools" / "roadmap-audit"
+    posture_dir = tmp_path / ".codex" / "hooks"
+    hook_dir.mkdir(parents=True)
+    roadmap_dir.mkdir(parents=True)
+    posture_dir.mkdir(parents=True)
+    for name in ("codex-session-start.sh", "session-lease.sh", "lib.sh"):
+        shutil.copy2(ROOT / "tools" / "hooks" / name, hook_dir / name)
+    (posture_dir / "session_start.py").write_text("print('posture')\n", encoding="utf-8")
+    (roadmap_dir / "session-start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (hook_dir / "loop-gc.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    for script in (roadmap_dir / "session-start.sh", hook_dir / "loop-gc.sh"):
+        script.chmod(0o755)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    payload = {
+        "hook_event_name": "SessionStart",
+        "session_id": f"invalid-source-{label}",
+        "cwd": str(tmp_path),
+        **source_payload,
+    }
+    env = os.environ.copy()
+    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
+
+    proc = subprocess.run(
+        ["bash", str(hook_dir / "codex-session-start.sh")],
+        cwd=tmp_path,
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert proc.returncode == 2, proc.stderr
+    assert "invalid SessionStart payload source" in proc.stderr
+    assert not list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
+
+
+@pytest.mark.parametrize(
+    ("source_payload", "label"),
+    [({}, "missing"), ({"source": None}, "null")],
+)
+def test_session_start_wrapper_routes_compact_accepts_absent_or_null_source(
+    tmp_path: Path, source_payload: dict[str, object], label: str
+) -> None:
+    hook_dir = tmp_path / "tools" / "hooks"
+    roadmap_dir = tmp_path / "tools" / "roadmap-audit"
+    posture_dir = tmp_path / ".codex" / "hooks"
+    hook_dir.mkdir(parents=True)
+    roadmap_dir.mkdir(parents=True)
+    posture_dir.mkdir(parents=True)
+    for name in ("codex-session-start.sh", "session-lease.sh", "lib.sh"):
+        shutil.copy2(ROOT / "tools" / "hooks" / name, hook_dir / name)
+    (posture_dir / "session_start.py").write_text("print('posture')\n", encoding="utf-8")
+    (posture_dir / "codex_hook_adapter.py").write_text(
+        "raise SystemExit('compact-context must not run')\n",
+        encoding="utf-8",
+    )
+    (roadmap_dir / "session-start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (hook_dir / "loop-gc.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    for script in (roadmap_dir / "session-start.sh", hook_dir / "loop-gc.sh"):
+        script.chmod(0o755)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    payload = {
+        "hook_event_name": "SessionStart",
+        "session_id": f"absent-source-{label}",
+        "cwd": str(tmp_path),
+        **source_payload,
+    }
+    env = os.environ.copy()
+    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
+
+    proc = subprocess.run(
+        ["bash", str(hook_dir / "codex-session-start.sh")],
+        cwd=tmp_path,
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    output = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert output["hookEventName"] == "SessionStart"
+    assert output["additionalContext"] == "posture"
+    lease = next(
+        (tmp_path / ".git" / "codex-worktree-sessions").rglob(
+            f"session-absent-source-{label}.lease"
+        )
+    )
+    assert lease.read_text(encoding="utf-8").splitlines()[0] == "active"
 
 
 def test_registered_session_lifecycle_round_trips_active_lease(tmp_path: Path) -> None:
@@ -773,7 +1484,8 @@ def test_session_lifecycle_wrappers_order_registration_and_release() -> None:
     assert start.index("lease_action start") < start.index("session_start.py")
     assert start.index("session_start.py") < start.index("roadmap-audit/session-start.sh")
     assert start.index("roadmap-audit/session-start.sh") < start.index("loop-gc.sh")
-    assert start.index("loop-gc.sh") < start.rindex("lease_action activate")
+    assert start.index("loop-gc.sh") < start.index("compact-context")
+    assert start.index("compact-context") < start.rindex("lease_action activate")
     assert "lease_action end" in start
     assert end.index('session-lease.sh" end') < end.index("session-end-cleanup.sh")
 
