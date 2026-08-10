@@ -680,6 +680,234 @@ def test_hook_adapter_interrupt_terminates_detached_process_group(
     assert process.returncode == -15
 
 
+def test_hook_adapter_teardown_tolerates_permission_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter, "TERMINATION_GRACE_SECONDS", 0)
+    attempted: list[str] = []
+
+    class PermissionDeniedProcess:
+        pid = 454545
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            attempted.append("terminate")
+            raise PermissionError
+
+        def kill(self) -> None:
+            attempted.append("kill")
+            raise PermissionError
+
+        def wait(self, timeout: float) -> int:
+            raise subprocess.TimeoutExpired("hook", timeout)
+
+    monkeypatch.setattr(
+        adapter.os,
+        "killpg",
+        lambda _pid, sent_signal: (
+            attempted.append(f"killpg:{sent_signal}") or (_ for _ in ()).throw(PermissionError)
+        ),
+    )
+
+    adapter.terminate_bounded(PermissionDeniedProcess())
+    assert attempted == [
+        f"killpg:{signal.SIGTERM}",
+        "terminate",
+        f"killpg:{signal.SIGKILL}",
+        "kill",
+    ]
+
+
+def test_hook_adapter_preserves_unnamed_inherited_signal_numbers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter, "can_manage_signal_handlers", lambda: True)
+    monkeypatch.setattr(
+        adapter.signal,
+        "pthread_sigmask",
+        lambda _operation, _signals: {999},
+    )
+
+    assert adapter.block_termination_signals() == {999}
+
+
+def test_hook_adapter_teardown_replays_deferred_sigterm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter, "TERMINATION_GRACE_SECONDS", 0)
+
+    class RepeatedSignalProcess:
+        pid = 464646
+        returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            signal.raise_signal(signal.SIGTERM)
+            self.returncode = -signal.SIGTERM
+
+        def kill(self) -> None:
+            self.returncode = -signal.SIGKILL
+
+        def wait(self, timeout: float) -> int:
+            _ = timeout
+            assert self.returncode is not None
+            return self.returncode
+
+    monkeypatch.setattr(adapter.os, "killpg", lambda _pid, _sent_signal: None)
+    previous_sigterm = signal.signal(signal.SIGTERM, adapter.handle_termination_signal)
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    try:
+        process = RepeatedSignalProcess()
+        with pytest.raises(adapter.TerminationRequested):
+            adapter.terminate_bounded(process)
+        assert signal.getsignal(signal.SIGTERM) is adapter.handle_termination_signal
+        assert signal.getsignal(signal.SIGINT) is previous_sigint
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
+        signal.signal(signal.SIGINT, previous_sigint)
+
+    assert process.returncode == -signal.SIGTERM
+
+
+def test_hook_adapter_defers_sigterm_until_spawn_handle_is_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter, "TERMINATION_GRACE_SECONDS", 0)
+
+    class SpawnedProcess:
+        pid = 474747
+        returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = -signal.SIGTERM
+
+        def kill(self) -> None:
+            self.returncode = -signal.SIGKILL
+
+        def wait(self, timeout: float) -> int:
+            _ = timeout
+            assert self.returncode is not None
+            return self.returncode
+
+    process = SpawnedProcess()
+
+    def signal_during_spawn(*_args: object, **_kwargs: object) -> SpawnedProcess:
+        signal.raise_signal(signal.SIGTERM)
+        return process
+
+    monkeypatch.setattr(adapter.subprocess, "Popen", signal_during_spawn)
+    monkeypatch.setattr(adapter.os, "killpg", lambda _pid, _sent_signal: None)
+    previous_sigterm = signal.signal(signal.SIGTERM, adapter.handle_termination_signal)
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    try:
+        with pytest.raises(adapter.TerminationRequested):
+            adapter.run_bounded(["hook"], cwd=tmp_path, timeout=30, env=os.environ.copy())
+        assert signal.getsignal(signal.SIGTERM) is adapter.handle_termination_signal
+        assert signal.getsignal(signal.SIGINT) is previous_sigint
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
+        signal.signal(signal.SIGINT, previous_sigint)
+
+    assert process.returncode == -signal.SIGTERM
+
+
+@pytest.mark.skipif(os.name != "posix", reason="signal teardown witness requires POSIX")
+def test_hook_adapter_sigterm_cleans_live_producer_process_group(tmp_path: Path) -> None:
+    adapter = _adapter_module()
+    cleanup_timeout = 2 * adapter.TERMINATION_GRACE_SECONDS + 3
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    producer = fake_bin / "uv"
+    producer.write_text(
+        "#!/bin/sh\n"
+        'printf "%s" "$$" > "$PRODUCER_PID_FILE"\n'
+        "trap '' TERM\n"
+        "while :; do sleep 1; done\n",
+        encoding="utf-8",
+    )
+    producer.chmod(0o755)
+    producer_pid_file = tmp_path / "producer.pid"
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["PRODUCER_PID_FILE"] = str(producer_pid_file)
+    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
+    payload = {
+        "cwd": str(tmp_path),
+        "tool_name": "Bash",
+        "tool_input": {"command": "git commit -m test"},
+    }
+    adapter_process = subprocess.Popen(
+        [sys.executable, str(ADAPTER), "pre-commit"],
+        cwd=ROOT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    producer_pid: int | None = None
+    producer_pgid: int | None = None
+    producer_survived = False
+    returncode: int | None = None
+    adapter_stdout = ""
+    adapter_stderr = ""
+    try:
+        assert adapter_process.stdin is not None
+        adapter_process.stdin.write(json.dumps(payload))
+        adapter_process.stdin.close()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not producer_pid_file.exists():
+            time.sleep(0.02)
+        assert producer_pid_file.exists(), "adapter never started its hook producer"
+        producer_pid = int(producer_pid_file.read_text(encoding="utf-8"))
+        producer_pgid = os.getpgid(producer_pid)
+
+        adapter_process.send_signal(signal.SIGTERM)
+        returncode = adapter_process.wait(timeout=cleanup_timeout)
+        assert adapter_process.stdout is not None
+        assert adapter_process.stderr is not None
+        adapter_stdout = adapter_process.stdout.read()
+        adapter_stderr = adapter_process.stderr.read()
+        deadline = time.monotonic() + cleanup_timeout
+        while time.monotonic() < deadline:
+            try:
+                os.kill(producer_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            producer_survived = True
+    finally:
+        if adapter_process.poll() is None:
+            adapter_process.kill()
+            adapter_process.wait(timeout=3)
+        if producer_pgid is not None:
+            try:
+                os.killpg(producer_pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if adapter_process.stdout is not None:
+            adapter_process.stdout.close()
+        if adapter_process.stderr is not None:
+            adapter_process.stderr.close()
+
+    assert returncode == -signal.SIGTERM
+    assert not producer_survived, f"SIGTERM left producer group alive: pgid={producer_pid}"
+    assert adapter_stderr == ""
+    assert adapter_stdout == ""
+
+
 def _commands(event: str, matcher: str) -> list[str]:
     payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
     return [
@@ -1152,6 +1380,137 @@ def test_permission_guard_adapter_normalizes_supported_pretool_deny(
     }
 
 
+def test_permission_guard_dispatch_denies_internal_adapter_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter.sys, "argv", [str(ADAPTER), "permission-guard"])
+    monkeypatch.setattr(adapter, "read_payload", lambda: {"hook_event_name": "PreToolUse"})
+    monkeypatch.setattr(
+        adapter,
+        "permission_guard",
+        lambda _payload: (_ for _ in ()).throw(OSError("temporary stream unavailable")),
+    )
+
+    assert adapter.dispatch() == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    decision = json.loads(captured.out)["hookSpecificOutput"]
+    assert decision["hookEventName"] == "PreToolUse"
+    assert decision["permissionDecision"] == "deny"
+    assert "internal failure" in decision["permissionDecisionReason"]
+
+
+def test_permission_guard_dispatch_does_not_duplicate_an_emitted_deny(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter.sys, "argv", [str(ADAPTER), "permission-guard"])
+    monkeypatch.setattr(adapter, "read_payload", lambda: {"hook_event_name": "PreToolUse"})
+
+    def emit_then_fail(_payload: dict[str, object]) -> int:
+        adapter.emit_permission_deny("original denial")
+        raise OSError("failure after emission")
+
+    monkeypatch.setattr(adapter, "permission_guard", emit_then_fail)
+
+    assert adapter.dispatch() == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["hookSpecificOutput"]["permissionDecisionReason"] == "original denial"
+
+
+def test_permission_guard_dispatch_resets_emission_state_between_calls(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter.sys, "argv", [str(ADAPTER), "permission-guard"])
+    monkeypatch.setattr(adapter, "read_payload", lambda: {"hook_event_name": "PreToolUse"})
+    monkeypatch.setattr(
+        adapter,
+        "permission_guard",
+        lambda _payload: adapter.emit_permission_deny("first denial"),
+    )
+    assert adapter.dispatch() == 0
+    assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+
+    monkeypatch.setattr(
+        adapter,
+        "permission_guard",
+        lambda _payload: (_ for _ in ()).throw(OSError("second call failed")),
+    )
+    assert adapter.dispatch() == 0
+    second = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert "internal failure" in second["permissionDecisionReason"]
+
+
+def test_permission_guard_main_converts_termination_to_deny(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter.sys, "argv", [str(ADAPTER), "permission-guard"])
+    monkeypatch.setattr(
+        adapter,
+        "dispatch",
+        lambda: (_ for _ in ()).throw(adapter.TerminationRequested(signal.SIGTERM)),
+    )
+    original_emit_permission_deny = adapter.emit_permission_deny
+
+    def emit_with_repeated_sigterm(reason: str) -> int:
+        signal.raise_signal(signal.SIGTERM)
+        return original_emit_permission_deny(reason)
+
+    monkeypatch.setattr(adapter, "emit_permission_deny", emit_with_repeated_sigterm)
+
+    assert adapter.main() == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    decision = json.loads(captured.out)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert "terminated by signal" in decision["permissionDecisionReason"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="signal masking requires POSIX")
+@pytest.mark.parametrize(
+    "termination_signal",
+    [signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT],
+)
+def test_permission_guard_deny_emission_is_atomic_against_termination(
+    termination_signal: signal.Signals, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter.sys, "argv", [str(ADAPTER), "permission-guard"])
+
+    class SignalDuringWrite:
+        def __init__(self) -> None:
+            self.parts: list[str] = []
+            self.signaled = False
+            self.flushed = False
+
+        def write(self, value: str) -> int:
+            self.parts.append(value)
+            if value == "\n" and not self.signaled:
+                self.signaled = True
+                signal.raise_signal(termination_signal)
+            return len(value)
+
+        def flush(self) -> None:
+            self.flushed = True
+
+    stdout = SignalDuringWrite()
+    monkeypatch.setattr(adapter.sys, "stdout", stdout)
+    monkeypatch.setattr(
+        adapter,
+        "dispatch",
+        lambda: adapter.emit_permission_deny("blocked during cancellation"),
+    )
+
+    assert adapter.main() == 0
+    assert stdout.flushed
+    decision = json.loads("".join(stdout.parts))["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert decision["permissionDecisionReason"] == "blocked during cancellation"
+
+
 def test_permission_guard_adapter_denies_non_decision_output(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1204,8 +1563,8 @@ def test_hook_adapter_uses_stdout_when_stderr_is_only_whitespace(
     assert result.message.endswith("producer stdout detail")
 
 
-def test_permission_guard_adapter_suppresses_allow_with_malformed_updated_input(
-    monkeypatch: pytest.MonkeyPatch,
+def test_permission_guard_adapter_denies_allow_with_malformed_updated_input(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     adapter = _adapter_module()
     monkeypatch.setattr(
@@ -1221,6 +1580,9 @@ def test_permission_guard_adapter_suppresses_allow_with_malformed_updated_input(
     )
 
     assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 0
+    decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert "updatedInput" in decision["permissionDecisionReason"]
 
 
 def test_permission_guard_adapter_denies_non_object_shared_json(
@@ -1272,7 +1634,7 @@ def test_permission_guard_adapter_normalizes_invalid_decisions_to_deny(
     assert output["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_permission_guard_adapter_suppresses_allow_with_dict_updated_input(
+def test_permission_guard_adapter_denies_allow_with_dict_updated_input(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     adapter = _adapter_module()
@@ -1293,7 +1655,26 @@ def test_permission_guard_adapter_suppresses_allow_with_dict_updated_input(
     )
 
     assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 0
-    assert capsys.readouterr().out == ""
+    decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert "updatedInput" in decision["permissionDecisionReason"]
+
+
+def test_post_compact_dispatch_normalizes_internal_failure_to_universal_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter.sys, "argv", [str(ADAPTER), "post-compact"])
+    monkeypatch.setattr(
+        adapter,
+        "read_payload",
+        lambda: (_ for _ in ()).throw(OSError("stdin unavailable")),
+    )
+
+    assert adapter.dispatch() == 0
+    output = json.loads(capsys.readouterr().out)
+    assert set(output) == {"systemMessage"}
+    assert "internal failure" in output["systemMessage"]
 
 
 def test_post_tool_adapter_captures_nonzero_bash_result(tmp_path: Path) -> None:

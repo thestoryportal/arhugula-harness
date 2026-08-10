@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,51 @@ WITNESS_TRACE_ENV = "HARNESS_CODEX_HOOK_WITNESS_FILE"
 WITNESS_MODE_ENV = "HARNESS_CODEX_HOOK_WITNESS"
 WITNESS_TRACE_NAME = ".codex-hook-adapter-invocations"
 MAX_HOOK_DIAGNOSTIC_CHARS = 4000
+_PERMISSION_DENY_EMITTED = False
+_POST_COMPACT_OUTPUT_EMITTED = False
+MANAGED_TERMINATION_SIGNALS = tuple(
+    signal.Signals(value)
+    for name in ("SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT")
+    if isinstance(value := getattr(signal, name, None), int)
+)
+
+
+class TerminationRequested(BaseException):
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+
+
+def handle_termination_signal(signum: int, _frame: object) -> None:
+    raise TerminationRequested(signum)
+
+
+def can_manage_signal_handlers() -> bool:
+    return os.name == "posix" and threading.current_thread() is threading.main_thread()
+
+
+def block_termination_signals() -> set[int] | None:
+    if not can_manage_signal_handlers():
+        return None
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, MANAGED_TERMINATION_SIGNALS)
+    return {int(signum) for signum in previous_mask}
+
+
+def restore_signal_mask(previous_mask: set[int] | None) -> None:
+    if previous_mask is not None:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
+def discard_repeated_termination_signals() -> None:
+    previous_mask = block_termination_signals()
+    for managed_signal in MANAGED_TERMINATION_SIGNALS:
+        signal.signal(managed_signal, signal.SIG_IGN)
+    restore_signal_mask(previous_mask)
+
+
+def reraise_termination_signal(signum: int) -> int:
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+    return 128 + signum
 
 
 def bounded_diagnostic(value: str) -> str:
@@ -37,54 +83,58 @@ def bounded_diagnostic(value: str) -> str:
 
 def terminate_bounded(process: subprocess.Popen[str]) -> None:
     """Terminate the direct child and its original process group without an unbounded wait."""
-    if os.name == "posix":
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except (PermissionError, ProcessLookupError):
-            pass
-    if process.poll() is None:
-        try:
-            process.terminate()
-        except ProcessLookupError:
-            pass
-    deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        direct_alive = process.poll() is None
-        group_alive = False
+    previous_mask = block_termination_signals()
+    try:
         if os.name == "posix":
             try:
-                os.killpg(process.pid, 0)
-                group_alive = True
-            except ProcessLookupError:
+                os.killpg(process.pid, signal.SIGTERM)
+            except (PermissionError, ProcessLookupError):
                 pass
-            except PermissionError:
-                group_alive = True
-        if not direct_alive and not group_alive:
-            return
-        remaining = deadline - time.monotonic()
-        if direct_alive:
+        if process.poll() is None:
             try:
-                process.wait(timeout=min(0.05, remaining))
-            except subprocess.TimeoutExpired:
+                process.terminate()
+            except (PermissionError, ProcessLookupError):
                 pass
-        else:
-            time.sleep(min(0.05, remaining))
-    # The leader may exit on TERM while a background descendant ignores it. Escalate
-    # the still-live original process group only after the real group grace period.
-    if os.name == "posix":
+        deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            direct_alive = process.poll() is None
+            group_alive = False
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, 0)
+                    group_alive = True
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    group_alive = True
+            if not direct_alive and not group_alive:
+                return
+            remaining = deadline - time.monotonic()
+            if direct_alive:
+                try:
+                    process.wait(timeout=min(0.05, remaining))
+                except subprocess.TimeoutExpired:
+                    pass
+            else:
+                time.sleep(min(0.05, remaining))
+        # The leader may exit on TERM while a background descendant ignores it. Escalate
+        # the still-live original process group only after the real group grace period.
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except (PermissionError, ProcessLookupError):
+                pass
+        if process.poll() is None:
+            try:
+                process.kill()
+            except (PermissionError, ProcessLookupError):
+                pass
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except (PermissionError, ProcessLookupError):
+            process.wait(timeout=TERMINATION_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
             pass
-    if process.poll() is None:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
-    try:
-        process.wait(timeout=TERMINATION_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        pass
+    finally:
+        restore_signal_mask(previous_mask)
 
 
 def run_bounded(
@@ -97,6 +147,7 @@ def run_bounded(
 ) -> subprocess.CompletedProcess[str]:
     """Run one hook command with bounded waits and best-effort process-group cleanup."""
     streams = []
+    process: subprocess.Popen[str] | None = None
     try:
         stdin_stream = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
         streams.append(stdin_stream)
@@ -107,33 +158,47 @@ def run_bounded(
         if input_text is not None:
             stdin_stream.write(input_text)
             stdin_stream.seek(0)
+        previous_mask = block_termination_signals()
+        popen_error: OSError | None = None
         try:
-            process = subprocess.Popen(
-                args,
-                cwd=cwd,
-                stdin=stdin_stream,
-                stdout=stdout_stream,
-                stderr=stderr_stream,
-                text=True,
-                errors="replace",
-                env=env,
-                start_new_session=os.name == "posix",
-            )
-        except OSError as exc:
-            return subprocess.CompletedProcess(args, 127, "", str(exc))
-        timed_out = False
-        try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            terminate_bounded(process)
+            try:
+                try:
+                    process = subprocess.Popen(
+                        args,
+                        cwd=cwd,
+                        stdin=stdin_stream,
+                        stdout=stdout_stream,
+                        stderr=stderr_stream,
+                        text=True,
+                        errors="replace",
+                        env=env,
+                        start_new_session=os.name == "posix",
+                    )
+                except OSError as exc:
+                    popen_error = exc
+            finally:
+                restore_signal_mask(previous_mask)
+            if popen_error is not None:
+                return subprocess.CompletedProcess(args, 127, "", str(popen_error))
+            assert process is not None
+            timed_out = False
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                terminate_bounded(process)
+            else:
+                # Hooks are one-shot commands: a successful leader must not leave a background
+                # descendant holding the temporary stdio files open.
+                terminate_bounded(process)
         except BaseException:
-            terminate_bounded(process)
+            cleanup_mask = block_termination_signals()
+            try:
+                if process is not None:
+                    terminate_bounded(process)
+            finally:
+                restore_signal_mask(cleanup_mask)
             raise
-        else:
-            # Hooks are one-shot commands: a successful leader must not leave a background
-            # descendant holding the temporary stdio files open.
-            terminate_bounded(process)
         stdout_stream.seek(0)
         stderr_stream.seek(0)
         stdout = stdout_stream.read()
@@ -352,6 +417,7 @@ def compact_context(
 
 
 def post_compact(payload: dict[str, Any]) -> int:
+    global _POST_COMPACT_OUTPUT_EMITTED
     try:
         context = compact_context(payload, timeout=POST_COMPACT_PRODUCER_TIMEOUT_SECONDS)
     except CompactContextError as exc:
@@ -363,6 +429,8 @@ def post_compact(payload: dict[str, Any]) -> int:
         return 2
     if output:
         print(output)
+        sys.stdout.flush()
+        _POST_COMPACT_OUTPUT_EMITTED = True
     return 0
 
 
@@ -378,18 +446,25 @@ def print_compact_context(payload: dict[str, Any]) -> int:
 
 
 def emit_permission_deny(reason: str) -> int:
-    print(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": bounded_diagnostic(reason),
-                }
-            },
-            separators=(",", ":"),
+    global _PERMISSION_DENY_EMITTED
+    previous_mask = block_termination_signals()
+    try:
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": bounded_diagnostic(reason),
+                    }
+                },
+                separators=(",", ":"),
+            )
         )
-    )
+        sys.stdout.flush()
+        _PERMISSION_DENY_EMITTED = True
+    finally:
+        restore_signal_mask(previous_mask)
     return 0
 
 
@@ -416,6 +491,11 @@ def permission_guard(payload: dict[str, Any]) -> int:
 
     decision = specific.get("permissionDecision")
     if decision == "allow":
+        if "updatedInput" in specific:
+            return emit_permission_deny(
+                "permission-guard adapter cannot apply Claude updatedInput at the Codex "
+                "PreToolUse boundary"
+            )
         return 0
     if decision == "deny":
         reason = specific.get("permissionDecisionReason")
@@ -479,7 +559,10 @@ def pre_commit(payload: dict[str, Any]) -> int:
     return 0
 
 
-def main() -> int:
+def dispatch() -> int:
+    global _PERMISSION_DENY_EMITTED, _POST_COMPACT_OUTPUT_EMITTED
+    _PERMISSION_DENY_EMITTED = False
+    _POST_COMPACT_OUTPUT_EMITTED = False
     if len(sys.argv) != 2 or sys.argv[1] not in {
         "post-tool-use",
         "pre-commit",
@@ -493,20 +576,73 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    mode = sys.argv[1]
     if os.environ.get("HARNESS_CODEX_REVIEW_ISOLATED") == "1":
         return 0
-    if sys.argv[1] == "permission-guard" and not record_witness_invocation(sys.argv[1]):
-        return 2
+    if mode == "permission-guard":
+        try:
+            if not record_witness_invocation(mode):
+                return 2
+            return permission_guard(read_payload())
+        except Exception as exc:
+            if _PERMISSION_DENY_EMITTED:
+                return 0
+            return emit_permission_deny(
+                f"permission-guard adapter internal failure: {type(exc).__name__}: {exc}"
+            )
+    if mode == "post-compact":
+        try:
+            return post_compact(read_payload())
+        except Exception as exc:
+            if _POST_COMPACT_OUTPUT_EMITTED:
+                return 0
+            print(
+                json.dumps(
+                    {
+                        "systemMessage": "post-compact adapter internal failure: "
+                        f"{type(exc).__name__}: {bounded_diagnostic(str(exc))}"
+                    },
+                    separators=(",", ":"),
+                ),
+                flush=True,
+            )
+            return 0
     payload = read_payload()
-    if sys.argv[1] == "post-tool-use":
+    if mode == "post-tool-use":
         return post_tool_use(payload)
-    if sys.argv[1] == "pre-commit":
+    if mode == "pre-commit":
         return pre_commit(payload)
-    if sys.argv[1] == "permission-guard":
-        return permission_guard(payload)
-    if sys.argv[1] == "post-compact":
-        return post_compact(payload)
     return print_compact_context(payload)
+
+
+def main() -> int:
+    if not can_manage_signal_handlers():
+        return dispatch()
+    previous_handlers = {
+        managed_signal: signal.signal(managed_signal, handle_termination_signal)
+        for managed_signal in MANAGED_TERMINATION_SIGNALS
+    }
+    try:
+        return dispatch()
+    except TerminationRequested as exc:
+        if len(sys.argv) == 2 and sys.argv[1] == "permission-guard":
+            discard_repeated_termination_signals()
+            if _PERMISSION_DENY_EMITTED:
+                return 0
+            return emit_permission_deny(
+                f"permission-guard adapter terminated by signal {exc.signum}"
+            )
+        return reraise_termination_signal(exc.signum)
+    except KeyboardInterrupt:
+        if len(sys.argv) == 2 and sys.argv[1] == "permission-guard":
+            discard_repeated_termination_signals()
+            if _PERMISSION_DENY_EMITTED:
+                return 0
+            return emit_permission_deny("permission-guard adapter interrupted")
+        return reraise_termination_signal(signal.SIGINT)
+    finally:
+        for managed_signal, previous_handler in previous_handlers.items():
+            signal.signal(managed_signal, previous_handler)
 
 
 if __name__ == "__main__":
