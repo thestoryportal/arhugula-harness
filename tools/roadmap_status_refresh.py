@@ -655,9 +655,21 @@ def main(argv: list[str] | None = None) -> int:
     # protection is unchanged.
     status_root = args.status.resolve().parent.parent
     target_protected_archive = status_root / ".harness" / "roadmap-next-action-archive.md"
-    if args.archive.resolve() in (
-        NEXT_ACTION_ARCHIVE.resolve(),
-        target_protected_archive.resolve(),
+
+    def _aliases_protected(candidate: Path, protected: Path) -> bool:
+        # Path equality first; then FILE IDENTITY for existing files — on a
+        # case-insensitive filesystem (macOS default) a case-variant spelling
+        # names the same inode while resolve() preserves casing (codex
+        # round-11), and samefile also covers hard/symlink aliases.
+        if candidate.resolve() == protected.resolve():
+            return True
+        try:
+            return candidate.exists() and protected.exists() and candidate.samefile(protected)
+        except OSError:
+            return False
+
+    if _aliases_protected(args.archive, NEXT_ACTION_ARCHIVE) or _aliases_protected(
+        args.archive, target_protected_archive
     ):
         print(
             f"--archive must not point at the protected next-action archive "

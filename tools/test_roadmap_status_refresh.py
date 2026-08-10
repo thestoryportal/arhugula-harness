@@ -558,6 +558,22 @@ def test_head_refresh_shape_noop_on_content_commit(tmp_path):
     assert rsr.check_head_refresh_shape(repo) == []
 
 
+def test_cli_rejects_case_variant_archive_alias_on_case_insensitive_fs(tmp_path, capsys):
+    # codex round-11: on a case-insensitive filesystem (macOS default) an
+    # upper-cased spelling names the SAME file while resolve() preserves
+    # casing — file identity (samefile) must close the alias. Skipped on
+    # case-sensitive filesystems where the variant is genuinely a different
+    # (nonexistent) path.
+    probe = tmp_path / "case_probe.txt"
+    probe.write_text("x")
+    if not (tmp_path / "CASE_PROBE.TXT").exists():
+        pytest.skip("case-sensitive filesystem — the alias cannot exist here")
+    variant = Path(str(rsr.NEXT_ACTION_ARCHIVE).upper())
+    rc = rsr.main(["--archive", str(variant), "--check"])
+    assert rc == 2
+    assert "protected next-action archive" in capsys.readouterr().err
+
+
 def test_cli_rejects_archive_aliased_onto_next_action_archive(capsys):
     # U-CTX-03 AC #2's runtime half: the structural check above compares only
     # the hard-coded defaults, so a caller passing
