@@ -6,6 +6,7 @@ import errno
 import importlib.util
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -401,6 +402,38 @@ def test_codex_hook_map_tracks_every_canonical_claude_hook_command() -> None:
                     assert command == "uv run pyright && git rev-parse --show-toplevel"
                     assert '["uv", "run", "pyright"]' in adapter
                     assert '["git", "rev-parse", "--show-toplevel"]' in adapter
+
+
+def test_parity_doc_hook_counts_are_computed_not_hand_maintained() -> None:
+    """U-CTX-09: `.codex/notes/claude-codex-parity.md`'s hook/matcher counts must track
+    `.claude/settings.json` by construction — a hand-maintained figure silently drifts the
+    moment a matcher is added or removed (as the now-removed dead `Bash(git commit*)`
+    matcher's departure would have, had this assertion not existed). Event types = top-
+    level hook lifecycle keys; matcher groups = total `{"matcher": ..., "hooks": [...]}`
+    entries across every event; command handlers = total individual `"type": "command"`
+    hook objects across every matcher group."""
+    claude = json.loads((ROOT / ".claude/settings.json").read_text(encoding="utf-8"))["hooks"]
+    event_types = len(claude)
+    matcher_groups = sum(len(groups) for groups in claude.values())
+    command_handlers = sum(
+        1
+        for groups in claude.values()
+        for group in groups
+        for hook in group["hooks"]
+        if hook.get("type") == "command"
+    )
+
+    parity = (ROOT / ".codex" / "notes" / "claude-codex-parity.md").read_text(encoding="utf-8")
+    match = re.search(
+        r"(\d+) event types, (\d+) matcher groups, and (\d+) command handlers",
+        parity,
+    )
+    assert match is not None, "claude-codex-parity.md no longer states the hook-count claim"
+    doc_events, doc_matchers, doc_commands = (int(g) for g in match.groups())
+
+    assert doc_events == event_types, (doc_events, event_types)
+    assert doc_matchers == matcher_groups, (doc_matchers, matcher_groups)
+    assert doc_commands == command_handlers, (doc_commands, command_handlers)
 
 
 def _run_adapter(
