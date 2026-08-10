@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Hermetic test for capture-failure.sh (U-HK-07). Asserts logging + recurrence nudge.
+# Hermetic test for capture-failure.sh (U-HK-07 + U-CTX-07). Asserts logging +
+# recurrence nudge + the 4-segment signature + the per-session emission cap.
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,6 +51,39 @@ printf '%s' "$OUT" | grep -q "recurring" && bad "cross-session count leaked (P3)
 OUT=$(run "$S2")                           # sess-B second occurrence → count=2 → nudge
 printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "same-session recurrence still nudges at 2" || bad "same-session nudge missing: $OUT"
 [ "$(grep -c '"session":"sess-B"' "$LOG")" = "2" ] && ok "rows tagged with session_id" || bad "session_id not recorded"
+
+# 6) U-CTX-07: signature gains a 4th segment — exit code when tool_error carries one.
+: > "$LOG"
+EC='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-EC","tool_input":{"command":"npm test"},"tool_error":{"exit_code":"1"}}'
+run "$EC" >/dev/null
+SIG_ROW=$(tail -1 "$LOG")
+printf '%s' "$SIG_ROW" | jq -e '.sig == "PostToolUseFailure:Bash:command_failed:1"' >/dev/null \
+  && ok "sig carries exit_code as 4th segment" || bad "sig missing exit_code segment: $SIG_ROW"
+
+# 7) U-CTX-07: falls back to a (truncated) command head when no exit_code is present.
+: > "$LOG"
+CH='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-CH","tool_input":{"command":"some very long failing command that keeps going past forty characters for sure"}}'
+run "$CH" >/dev/null
+SIG_ROW=$(tail -1 "$LOG")
+printf '%s' "$SIG_ROW" | jq -e '.sig == "PostToolUseFailure:Bash:command_failed:some very long failing command that keep"' >/dev/null \
+  && ok "sig falls back to a 40-char command head" || bad "sig missing cmdhead fallback: $SIG_ROW"
+
+# 8) U-CTX-07: per-session emission cap — only the first TWO nudges of a session are
+#    ever emitted; every qualifying nudge after that is capped (logged, not re-emitted).
+: > "$LOG"
+CAP='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"cap_test","session_id":"sess-CAP"}'
+O1=$(run "$CAP")   # recur=1 → no nudge (below cardinality threshold)
+O2=$(run "$CAP")   # recur=2 → nudge #1
+O3=$(run "$CAP")   # recur=3 → nudge #2
+O4=$(run "$CAP")   # recur=4 → would-nudge but cap reached → suppressed
+O5=$(run "$CAP")   # recur=5 → still suppressed
+[ -z "$O1" ] && ok "cap: occurrence 1 no nudge" || bad "cap: occurrence 1 nudged: $O1"
+printf '%s' "$O2" | grep -q "recurring failure" && ok "cap: occurrence 2 nudges (1st emission)" || bad "cap: occurrence 2 missing nudge: $O2"
+printf '%s' "$O3" | grep -q "recurring failure" && ok "cap: occurrence 3 nudges (2nd emission)" || bad "cap: occurrence 3 missing nudge: $O3"
+[ -z "$O4" ] && ok "cap: occurrence 4 suppressed (cap reached)" || bad "cap: occurrence 4 not capped: $O4"
+[ -z "$O5" ] && ok "cap: occurrence 5 suppressed (cap reached)" || bad "cap: occurrence 5 not capped: $O5"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "5" ] && ok "cap: all 5 occurrences still logged (cap only suppresses emission)" || bad "cap: log row count wrong"
+[ "$(grep -c '"emitted":true' "$LOG")" = "2" ] && ok "cap: exactly 2 rows marked emitted:true this session" || bad "cap: emitted:true row count wrong"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
