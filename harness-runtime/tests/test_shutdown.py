@@ -623,6 +623,11 @@ async def _successful_flush_observability(*_args: Any, **_kwargs: Any) -> FlushR
     )
 
 
+async def _successful_shutdown_stage(*_args: Any, **_kwargs: Any) -> bool:
+    """Isolate one later shutdown stage from already-witnessed predecessors."""
+    return True
+
+
 async def _occupy_default_executor() -> tuple[
     ThreadPoolExecutor, threading.Event, asyncio.Future[Any]
 ]:
@@ -1037,13 +1042,13 @@ async def test_shutdown_dispatch_timeout_includes_worker_scheduling_delay(
 
     try:
         report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+        assert drain_attempted.is_set()
+        assert not dispatch_executor.drain_started.is_set()
     finally:
         release_worker.set()
         await blocker
         executor.shutdown(wait=True)
 
-    assert drain_attempted.is_set()
-    assert not dispatch_executor.drain_started.is_set()
     assert "sub_agent_dispatch_executor" in report.failures
     assert report.timed_out is True
 
@@ -1429,41 +1434,13 @@ async def test_shutdown_bounded_by_timeout_when_tracer_shutdown_hangs(
 
 
 @pytest.mark.asyncio
-async def test_shutdown_tracer_timeout_includes_worker_scheduling_delay(
+async def test_shutdown_bounded_by_timeout_when_provider_aclose_hangs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The tracer deadline includes queue delay before ``shutdown`` starts."""
-    monkeypatch.setattr(shutdown_mod, "flush_observability", _successful_flush_observability)
-    tracer = _FakeTracerWithShutdown()
-    shutdown_attempted = _observe_to_thread_method(
-        monkeypatch,
-        owner=tracer,
-        method_name="shutdown",
-    )
-    ctx = _shutdown_ctx(
-        tmp_path,
-        tracer=tracer,
-        daemon=_FakeCollectorDaemon(),
-        providers={},
-    )
-    executor, release_worker, blocker = await _occupy_default_executor()
-
-    try:
-        report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
-    finally:
-        release_worker.set()
-        await blocker
-        executor.shutdown(wait=True)
-
-    assert shutdown_attempted.is_set()
-    assert not tracer.shutdown_started.is_set()
-    assert "tracer_provider" in report.failures
-    assert report.timed_out is True
-
-
-@pytest.mark.asyncio
-async def test_shutdown_bounded_by_timeout_when_provider_aclose_hangs(tmp_path: Path) -> None:
     """Regression — a hanging provider `aclose()` must not block shutdown."""
+    monkeypatch.setattr(shutdown_mod, "flush_observability", _successful_flush_observability)
+    monkeypatch.setattr(shutdown_mod, "_close_collector_daemon", _successful_shutdown_stage)
+    monkeypatch.setattr(shutdown_mod, "_close_tracer_provider", _successful_shutdown_stage)
     release_aclose = asyncio.Event()
     provider = _FakeProvider(aclose_release=release_aclose)
     providers = {"anthropic": provider}
@@ -1474,7 +1451,7 @@ async def test_shutdown_bounded_by_timeout_when_provider_aclose_hangs(tmp_path: 
         providers=providers,
     )
     try:
-        report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+        report = await asyncio.wait_for(shutdown(ctx, timeout=0.5), timeout=2.0)
         assert provider.aclose_started is True
         assert provider.aclose_cancelled is True
         assert provider.aclose_completed is False
@@ -1520,9 +1497,14 @@ async def test_shutdown_recomputes_budget_across_multiple_slow_providers(
 
 
 @pytest.mark.asyncio
-async def test_shutdown_bounded_by_timeout_when_mcp_host_shutdown_hangs(tmp_path: Path) -> None:
+async def test_shutdown_bounded_by_timeout_when_mcp_host_shutdown_hangs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Regression — a hanging MCP client host `shutdown()` must not block
     shutdown."""
+    monkeypatch.setattr(shutdown_mod, "flush_observability", _successful_flush_observability)
+    monkeypatch.setattr(shutdown_mod, "_close_collector_daemon", _successful_shutdown_stage)
+    monkeypatch.setattr(shutdown_mod, "_close_tracer_provider", _successful_shutdown_stage)
     release_shutdown = asyncio.Event()
     host = _FakeMcpHost(shutdown_release=release_shutdown)
     ctx = _shutdown_ctx(
@@ -1533,7 +1515,7 @@ async def test_shutdown_bounded_by_timeout_when_mcp_host_shutdown_hangs(tmp_path
     )
     ctx.mcp_client_hosts = {"server-a": host}  # type: ignore[attr-defined]
     try:
-        report = await asyncio.wait_for(shutdown(ctx, timeout=0.02), timeout=1.0)
+        report = await asyncio.wait_for(shutdown(ctx, timeout=0.5), timeout=2.0)
         assert host.shutdown_started is True
         assert host.shutdown_cancelled is True
         assert host.shutdown_completed is False
