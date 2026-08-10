@@ -31,7 +31,9 @@ def test_live_runtime_witness_is_provider_free_and_operator_runnable() -> None:
 
     assert 'base_url = "http://127.0.0.1:' in source
     assert "requires_openai_auth = false" in source
-    assert '"SessionStart", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"' in source
+    assert '"PreCompact",' in source
+    assert '"PostCompact",' in source
+    assert 'evidence["codex_version"]' in source
     assert 'for tool in ("Bash", "apply_patch")' in source
     assert "codex-hook-runtime-witness:" in justfile
     assert "/usr/bin/python3 tools/codex_hook_runtime_witness.py" in justfile
@@ -50,19 +52,22 @@ def test_hook_contract_documentation_preserves_codex_semantics() -> None:
     assert "equivalent effect" in readme
     assert "`PostCompact` | shared reinjection producer through the Codex adapter" in readme
     assert "`PostCompact` | Direct" not in readme
-    assert "only for the single real `PreToolUse:permission-guard` adapter" in normalized_readme
-    assert "including `PostCompact`, are recorder substitutes" in normalized_readme
     assert (
-        "all other lifecycle handlers, including PostCompact, are recorder substitutes"
-        in plain_readme
+        "real `PreToolUse:permission-guard` and `PostCompact:post-compact` adapters"
+        in normalized_readme
     )
+    assert (
+        "the remaining handlers for SessionStart, PreToolUse, PostToolUse, PreCompact, "
+        "Stop, and SessionEnd are recorder substitutes"
+    ) in plain_readme
+    assert "including PermissionRequest, are omitted from the live fixture" in plain_readme
     assert (
         "PostCompact translation validity is covered by shared-producer and "
         "adapter behavioral tests" in normalized_readme
     )
-    assert "one real `PreToolUse` permission adapter" in parity
+    assert "real `PreToolUse` permission and `PostCompact` adapters" in parity
     assert (
-        "permission adapter is absent, duplicated, registered under a different event, "
+        "either real adapter is absent, duplicated, registered under a different event, "
         "or its canonical command shape changes"
     ) in normalized_parity
     assert "does not claim to detect general matcher, timeout, or status drift" in plain_parity
@@ -87,15 +92,19 @@ def _hook_commands(payload: dict[str, Any]) -> list[str]:
     ]
 
 
-def test_runtime_witness_preserves_only_real_permission_guard_adapter(tmp_path: Path) -> None:
+def test_runtime_witness_preserves_real_contract_adapters(tmp_path: Path) -> None:
     witness = _runtime_witness_module()
     recorder = tmp_path / "record_hook.py"
 
     hooks, real_handlers = witness._witness_hooks(recorder)
 
     real_command = (
-        f"{shlex.quote(sys.executable)} "
+        "/usr/bin/python3 "
         f"{shlex.quote(str(ROOT / '.codex' / 'hooks' / 'codex_hook_adapter.py'))} permission-guard"
+    )
+    post_compact_command = (
+        "/usr/bin/python3 "
+        f"{shlex.quote(str(ROOT / '.codex' / 'hooks' / 'codex_hook_adapter.py'))} post-compact"
     )
     recorder_command = f"{shlex.quote(sys.executable)} {shlex.quote(str(recorder))}"
     commands = _hook_commands(hooks)
@@ -108,10 +117,17 @@ def test_runtime_witness_preserves_only_real_permission_guard_adapter(tmp_path: 
 
     assert set(hooks["hooks"]) == set(witness.TARGET_EVENTS)
     assert len(commands) == expected_handler_count
-    assert real_handlers == ["PreToolUse:permission-guard"]
+    assert real_handlers == ["PostCompact:post-compact", "PreToolUse:permission-guard"]
     assert commands.count(real_command) == 1
-    assert all(command in {real_command, recorder_command} for command in commands)
-    assert all(command == recorder_command for command in commands if command != real_command)
+    assert commands.count(post_compact_command) == 1
+    assert all(
+        command in {real_command, post_compact_command, recorder_command} for command in commands
+    )
+    assert all(
+        command == recorder_command
+        for command in commands
+        if command not in {real_command, post_compact_command}
+    )
 
 
 @pytest.mark.parametrize("match_count", [0, 2])
@@ -126,8 +142,32 @@ def test_runtime_witness_refuses_missing_or_ambiguous_permission_guard(
     (tmp_path / ".codex" / "hooks.json").write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(witness, "ROOT", tmp_path)
 
-    with pytest.raises(RuntimeError, match="permission-guard"):
+    expected = sorted(
+        [witness.REAL_POST_COMPACT_HANDLER] + [witness.REAL_PERMISSION_HANDLER] * match_count
+    )
+    with pytest.raises(RuntimeError) as exc_info:
         witness._witness_hooks(tmp_path / "record_hook.py")
+    assert f"found {expected}" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("match_count", [0, 2])
+def test_runtime_witness_refuses_missing_or_ambiguous_post_compact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, match_count: int
+) -> None:
+    witness = _runtime_witness_module()
+    payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    post_compact_hook = payload["hooks"]["PostCompact"][0]["hooks"][0]
+    payload["hooks"]["PostCompact"][0]["hooks"] = [post_compact_hook] * match_count
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "hooks.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(witness, "ROOT", tmp_path)
+
+    expected = sorted(
+        [witness.REAL_POST_COMPACT_HANDLER] * match_count + [witness.REAL_PERMISSION_HANDLER]
+    )
+    with pytest.raises(RuntimeError) as exc_info:
+        witness._witness_hooks(tmp_path / "record_hook.py")
+    assert f"found {expected}" in str(exc_info.value)
 
 
 def test_runtime_witness_refuses_permission_guard_outside_witness_events(
@@ -160,26 +200,67 @@ def test_runtime_witness_refuses_permission_guard_command_shape_drift(
         witness._witness_hooks(tmp_path / "record_hook.py")
 
 
+def test_runtime_witness_refuses_post_compact_command_shape_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    witness = _runtime_witness_module()
+    payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    hook = payload["hooks"]["PostCompact"][0]["hooks"][0]
+    hook["command"] = f"env FOO=1 {hook['command']}"
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "hooks.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(witness, "ROOT", tmp_path)
+
+    with pytest.raises(RuntimeError, match="command shape"):
+        witness._witness_hooks(tmp_path / "record_hook.py")
+
+
 def test_runtime_witness_environment_uses_synthetic_project_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     witness = _runtime_witness_module()
-    provider_variables = (
+    stripped_variables = (
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "GOOGLE_APPLICATION_CREDENTIALS",
+        "HARNESS_CODEX_REVIEW_ISOLATED",
     )
-    for name in provider_variables:
-        monkeypatch.setenv(name, "provider-credential")
+    for name in stripped_variables:
+        monkeypatch.setenv(name, "must-not-reach-witness")
 
     environment = witness._witness_environment(tmp_path / "codex-home", tmp_path / "repo")
 
     assert environment["CODEX_HOME"] == str(tmp_path / "codex-home")
     assert environment["HARNESS_LOOP"] == "1"
     assert environment["CLAUDE_PROJECT_DIR"] == str(tmp_path / "repo")
-    assert not set(provider_variables) & set(environment)
+    assert environment["HARNESS_CODEX_HOOK_WITNESS"] == "1"
+    assert environment["HARNESS_CODEX_HOOK_WITNESS_FILE"] == str(
+        tmp_path / "repo" / ".codex-hook-adapter-invocations"
+    )
+    assert not set(stripped_variables) & set(environment)
+
+
+def test_hook_witness_trace_requires_sentinel_and_exact_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _adapter_module()
+    expected = tmp_path / adapter.WITNESS_TRACE_NAME
+    other = tmp_path / "pyproject.toml"
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.setenv(adapter.WITNESS_TRACE_ENV, str(other))
+
+    assert adapter.record_witness_invocation("permission-guard")
+    assert not other.exists()
+
+    monkeypatch.setenv(adapter.WITNESS_MODE_ENV, "1")
+    assert not adapter.record_witness_invocation("permission-guard")
+    assert not other.exists()
+
+    monkeypatch.setenv(adapter.WITNESS_TRACE_ENV, str(expected))
+    assert adapter.record_witness_invocation("permission-guard")
+    assert expected.read_text(encoding="utf-8") == "permission-guard\n"
 
 
 def test_runtime_witness_resets_loopback_state() -> None:
@@ -221,6 +302,32 @@ def test_runtime_witness_rejects_prohibited_host_diagnostics(stdout: str, stderr
         witness._assert_no_prohibited_host_diagnostics(stdout, stderr)
 
 
+def test_runtime_witness_requires_real_handler_host_completions() -> None:
+    witness = _runtime_witness_module()
+    complete = "hook: PreToolUse Blocked\nhook: PostCompact Completed\n"
+
+    witness._assert_real_handler_host_completions(complete)
+    with pytest.raises(RuntimeError, match="PostCompact Completed"):
+        witness._assert_real_handler_host_completions("hook: PreToolUse Blocked\n")
+    with pytest.raises(RuntimeError, match="PreToolUse Blocked"):
+        witness._assert_real_handler_host_completions("hook: PostCompact Completed\n")
+
+
+def test_runtime_witness_requires_a_canonical_codex_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    witness = _runtime_witness_module()
+    monkeypatch.setattr(
+        witness.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["codex", "--version"], 0, "codex-cli 0.146.0\n", ""
+        ),
+    )
+
+    assert witness._installed_codex_version("codex") == "codex-cli 0.146.0"
+
+
 def test_live_runtime_witness_reports_empty_hook_stream(tmp_path: Path) -> None:
     witness = _runtime_witness_module()
     events_path = tmp_path / "events.jsonl"
@@ -231,7 +338,7 @@ def test_live_runtime_witness_reports_empty_hook_stream(tmp_path: Path) -> None:
             tmp_path,
             events_path,
             0,
-            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+            real_handlers=list(witness.REAL_HANDLERS),
         )
 
 
@@ -261,6 +368,8 @@ def _valid_runtime_witness_fixture(tmp_path: Path) -> tuple[Any, Path, list[dict
     events = [
         {"hook_event_name": "SessionStart", "session_id": "one"},
         {"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "one"},
+        {"hook_event_name": "PreCompact", "session_id": "one", "trigger": "auto"},
+        {"hook_event_name": "SessionStart", "session_id": "one", "source": "compact"},
         {"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": "one"},
         {"hook_event_name": "PreToolUse", "tool_name": "apply_patch", "session_id": "one"},
         {"hook_event_name": "PostToolUse", "tool_name": "apply_patch", "session_id": "one"},
@@ -269,6 +378,10 @@ def _valid_runtime_witness_fixture(tmp_path: Path) -> tuple[Any, Path, list[dict
     ]
     (tmp_path / "shell-marker.txt").write_text("codex-shell-witness", encoding="utf-8")
     (tmp_path / "patch-marker.txt").write_text("codex-patch-witness\n", encoding="utf-8")
+    (tmp_path / ".codex-hook-adapter-invocations").write_text(
+        "permission-guard\npost-compact-output:123\npermission-guard\npermission-guard\n",
+        encoding="utf-8",
+    )
     return witness, tmp_path / "events.jsonl", events
 
 
@@ -283,12 +396,67 @@ def test_live_runtime_witness_accepts_complete_fixture(tmp_path: Path) -> None:
     evidence = witness._assert_witness(
         tmp_path,
         events_path,
-        3,
-        real_handlers=[witness.REAL_PERMISSION_HANDLER],
+        5,
+        real_handlers=list(witness.REAL_HANDLERS),
     )
 
     assert evidence["status"] == "PASS"
-    assert evidence["real_handlers"] == ["PreToolUse:permission-guard"]
+    assert evidence["real_handlers"] == ["PostCompact:post-compact", "PreToolUse:permission-guard"]
+    assert evidence["executed_handlers"] == [
+        "permission-guard",
+        "post-compact-output:123",
+        "permission-guard",
+        "permission-guard",
+    ]
+    assert evidence["post_compact_output_bytes"] == 123
+
+
+@pytest.mark.parametrize("trace_entry", ["post-compact-output:0", "post-compact-output:nope"])
+def test_live_runtime_witness_rejects_empty_or_invalid_post_compact_output(
+    tmp_path: Path, trace_entry: str
+) -> None:
+    witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
+    _write_runtime_events(events_path, events)
+    (tmp_path / ".codex-hook-adapter-invocations").write_text(
+        f"permission-guard\n{trace_entry}\npermission-guard\npermission-guard\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="PostCompact output"):
+        witness._assert_witness(
+            tmp_path,
+            events_path,
+            5,
+            real_handlers=list(witness.REAL_HANDLERS),
+        )
+
+
+def test_live_runtime_witness_rejects_missing_adapter_execution_trace(tmp_path: Path) -> None:
+    witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
+    _write_runtime_events(events_path, events)
+    (tmp_path / ".codex-hook-adapter-invocations").unlink()
+
+    with pytest.raises(RuntimeError, match="execution trace"):
+        witness._assert_witness(
+            tmp_path,
+            events_path,
+            5,
+            real_handlers=list(witness.REAL_HANDLERS),
+        )
+
+
+def test_live_runtime_witness_rejects_denied_command_effect(tmp_path: Path) -> None:
+    witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
+    _write_runtime_events(events_path, events)
+    (tmp_path / "denied-marker.txt").write_text("guard failed open", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="denied Bash tool effect completed"):
+        witness._assert_witness(
+            tmp_path,
+            events_path,
+            5,
+            real_handlers=list(witness.REAL_HANDLERS),
+        )
 
 
 @pytest.mark.parametrize("real_handlers", [[], ["PreToolUse:another-handler"]])
@@ -299,10 +467,10 @@ def test_live_runtime_witness_rejects_untrusted_real_handler_evidence(
     _write_runtime_events(events_path, events)
 
     with pytest.raises(RuntimeError, match="real handler evidence"):
-        witness._assert_witness(tmp_path, events_path, 3, real_handlers=real_handlers)
+        witness._assert_witness(tmp_path, events_path, 5, real_handlers=real_handlers)
 
 
-@pytest.mark.parametrize("missing", ["SessionStart", "Stop", "SessionEnd"])
+@pytest.mark.parametrize("missing", ["SessionStart", "PreCompact", "Stop", "SessionEnd"])
 def test_live_runtime_witness_rejects_each_missing_lifecycle_event(
     tmp_path: Path, missing: str
 ) -> None:
@@ -315,8 +483,8 @@ def test_live_runtime_witness_rejects_each_missing_lifecycle_event(
         witness._assert_witness(
             tmp_path,
             events_path,
-            3,
-            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+            5,
+            real_handlers=list(witness.REAL_HANDLERS),
         )
 
 
@@ -341,8 +509,8 @@ def test_live_runtime_witness_rejects_each_missing_tool_phase(
         witness._assert_witness(
             tmp_path,
             events_path,
-            3,
-            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+            5,
+            real_handlers=list(witness.REAL_HANDLERS),
         )
 
 
@@ -350,12 +518,12 @@ def test_live_runtime_witness_rejects_wrong_request_count(tmp_path: Path) -> Non
     witness, events_path, events = _valid_runtime_witness_fixture(tmp_path)
     _write_runtime_events(events_path, events)
 
-    with pytest.raises(RuntimeError, match="expected 3"):
+    with pytest.raises(RuntimeError, match="expected 5"):
         witness._assert_witness(
             tmp_path,
             events_path,
             2,
-            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+            real_handlers=list(witness.REAL_HANDLERS),
         )
 
 
@@ -369,8 +537,8 @@ def test_live_runtime_witness_rejects_each_missing_effect(tmp_path: Path, marker
         witness._assert_witness(
             tmp_path,
             events_path,
-            3,
-            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+            5,
+            real_handlers=list(witness.REAL_HANDLERS),
         )
 
 
@@ -383,8 +551,8 @@ def test_live_runtime_witness_rejects_multiple_session_identities(tmp_path: Path
         witness._assert_witness(
             tmp_path,
             events_path,
-            3,
-            real_handlers=[witness.REAL_PERMISSION_HANDLER],
+            5,
+            real_handlers=list(witness.REAL_HANDLERS),
         )
 
 
@@ -399,11 +567,11 @@ def _adapter_module():
 @pytest.mark.skipif(os.name != "posix", reason="process-group witness requires POSIX")
 def test_hook_adapter_timeout_terminates_descendant_process_tree(tmp_path: Path) -> None:
     adapter = _adapter_module()
-    adapter.TERMINATION_GRACE_SECONDS = 0.2
     child_pid_file = tmp_path / "child.pid"
     env = os.environ.copy()
     env["CHILD_PID_FILE"] = str(child_pid_file)
 
+    started = time.monotonic()
     proc = adapter.run_bounded(
         [
             "/bin/sh",
@@ -417,8 +585,10 @@ def test_hook_adapter_timeout_terminates_descendant_process_tree(tmp_path: Path)
         timeout=2,
         env=env,
     )
+    elapsed = time.monotonic() - started
 
     assert proc.returncode == 124
+    assert elapsed < 4
     child_pid = int(child_pid_file.read_text(encoding="utf-8"))
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
@@ -686,6 +856,83 @@ def test_post_compact_adapter_emits_only_universal_output(tmp_path: Path) -> Non
     assert checkpoint in output["systemMessage"]
 
 
+@pytest.mark.parametrize(
+    ("producer_result", "expected_detail"),
+    [
+        (subprocess.CompletedProcess(["hook"], 1, "", "producer failed"), "producer failed"),
+        (subprocess.CompletedProcess(["hook"], 0, "not json", ""), "not json"),
+        (subprocess.CompletedProcess(["hook"], 0, "[]", ""), "non-object JSON"),
+        (
+            subprocess.CompletedProcess(
+                ["hook"],
+                0,
+                '{"hookSpecificOutput":'
+                '{"hookEventName":"SessionStart","additionalContext":"wrong event"}}',
+                "",
+            ),
+            "wrong hook event",
+        ),
+        (
+            subprocess.CompletedProcess(
+                ["hook"],
+                0,
+                '{"hookSpecificOutput":{"hookEventName":"PostCompact"}}',
+                "",
+            ),
+            "no usable context",
+        ),
+        (
+            subprocess.CompletedProcess(
+                ["hook"],
+                0,
+                '{"hookSpecificOutput":{"hookEventName":"PostCompact","additionalContext":"  "}}',
+                "",
+            ),
+            "no usable context",
+        ),
+    ],
+)
+def test_post_compact_adapter_preserves_invalid_producer_as_valid_output(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    producer_result: subprocess.CompletedProcess[str],
+    expected_detail: str,
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(
+        adapter,
+        "run_bounded",
+        lambda *_args, **_kwargs: producer_result,
+    )
+
+    assert adapter.post_compact({"cwd": str(ROOT)}) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    output = json.loads(captured.out)
+    assert set(output) == {"systemMessage"}
+    assert output["systemMessage"].startswith("post-compact adapter: ")
+    assert expected_detail in output["systemMessage"]
+
+
+def test_compact_context_prefers_valid_context_over_advisory_system_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(
+        adapter,
+        "run_claude_hook",
+        lambda *_args, **_kwargs: {
+            "systemMessage": "advisory warning",
+            "hookSpecificOutput": {
+                "hookEventName": "PostCompact",
+                "additionalContext": "checkpoint context",
+            },
+        },
+    )
+
+    assert adapter.compact_context({"cwd": str(ROOT)}) == "checkpoint context"
+
+
 def test_compact_context_mode_returns_raw_model_context(tmp_path: Path) -> None:
     repo = _checkpoint_repo(tmp_path)
     checkpoint = ".harness/.checkpoints/precompact-latest-session-a.md"
@@ -706,7 +953,7 @@ def test_compact_context_mode_returns_raw_model_context(tmp_path: Path) -> None:
     assert "hookSpecificOutput" not in proc.stdout
 
 
-def test_compact_context_uses_ten_second_producer_timeout(
+def test_compact_adapter_modes_use_separate_producer_timeouts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = _adapter_module()
@@ -725,11 +972,54 @@ def test_compact_context_uses_ten_second_producer_timeout(
         ),
     )
 
-    assert adapter.compact_context({"cwd": str(ROOT)}) == "context"
-    assert timeouts == [10]
+    assert adapter.post_compact({"cwd": str(ROOT)}) == 0
+    assert adapter.print_compact_context({"cwd": str(ROOT)}) == 0
+    assert timeouts == [20, 2]
 
 
-@pytest.mark.parametrize("handler_name", ["post_compact", "print_compact_context"])
+def test_permission_guard_uses_eight_second_producer_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter_module()
+    timeouts: list[float] = []
+    monkeypatch.setattr(
+        adapter,
+        "run_bounded",
+        lambda *_args, **kwargs: (
+            timeouts.append(kwargs["timeout"])
+            or subprocess.CompletedProcess(
+                ["hook"],
+                0,
+                '{"hookSpecificOutput":{"hookEventName":"PreToolUse",'
+                '"permissionDecision":"allow"}}',
+                "",
+            )
+        ),
+    )
+
+    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 0
+    assert timeouts == [8]
+
+
+def test_nested_hook_supervisors_finish_before_outer_deadlines() -> None:
+    adapter = _adapter_module()
+    hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    permission_host_timeout = hooks["hooks"]["PreToolUse"][-1]["hooks"][0]["timeout"]
+    post_compact_host_timeout = hooks["hooks"]["PostCompact"][0]["hooks"][0]["timeout"]
+
+    assert (
+        adapter.PERMISSION_PRODUCER_TIMEOUT_SECONDS + 2 * adapter.TERMINATION_GRACE_SECONDS
+        < permission_host_timeout
+    )
+    assert (
+        adapter.COMPACT_SESSION_PRODUCER_TIMEOUT_SECONDS + 2 * adapter.TERMINATION_GRACE_SECONDS < 4
+    )
+    assert (
+        adapter.POST_COMPACT_PRODUCER_TIMEOUT_SECONDS + 2 * adapter.TERMINATION_GRACE_SECONDS
+        < post_compact_host_timeout
+    )
+
+
 @pytest.mark.parametrize(
     "producer_result",
     [
@@ -757,19 +1047,36 @@ def test_compact_context_uses_ten_second_producer_timeout(
         ),
     ],
 )
-def test_compact_context_adapter_modes_reject_invalid_producer_output(
+def test_compact_context_raw_mode_rejects_invalid_producer_output(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    handler_name: str,
     producer_result: subprocess.CompletedProcess[str],
 ) -> None:
     adapter = _adapter_module()
     monkeypatch.setattr(adapter, "run_bounded", lambda *_args, **_kwargs: producer_result)
 
-    assert getattr(adapter, handler_name)({"cwd": str(ROOT)}) == 2
+    assert adapter.print_compact_context({"cwd": str(ROOT)}) == 2
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err
+
+
+def test_compact_context_raw_mode_preserves_timeout_status(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(
+        adapter,
+        "run_bounded",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["hook"], 124, "", "command timed out after 2 seconds"
+        ),
+    )
+
+    assert adapter.print_compact_context({"cwd": str(ROOT)}) == 124
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "timed out" in captured.err
 
 
 def _loop_active_git_repo(tmp_path: Path) -> None:
@@ -804,13 +1111,48 @@ def test_permission_guard_adapter_preserves_supported_pretool_deny(tmp_path: Pat
     proc = _run_adapter("permission-guard", payload, cwd=tmp_path)
 
     assert proc.returncode == 0, proc.stderr
-    decision = json.loads(proc.stdout)["hookSpecificOutput"]
+    output = json.loads(proc.stdout)
+    assert set(output) == {"hookSpecificOutput"}
+    decision = output["hookSpecificOutput"]
+    assert set(decision) == {
+        "hookEventName",
+        "permissionDecision",
+        "permissionDecisionReason",
+    }
     assert decision["hookEventName"] == "PreToolUse"
     assert decision["permissionDecision"] == "deny"
     assert decision["permissionDecisionReason"]
 
 
-def test_permission_guard_adapter_fails_closed_on_non_decision_output(
+def test_permission_guard_adapter_normalizes_supported_pretool_deny(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(
+        adapter,
+        "run_claude_hook",
+        lambda *_args, **_kwargs: {
+            "systemMessage": "Claude-only advisory",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "unsafe command",
+                "claudeOnlyField": True,
+            },
+        },
+    )
+
+    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "unsafe command",
+        }
+    }
+
+
+def test_permission_guard_adapter_denies_non_decision_output(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     adapter = _adapter_module()
@@ -820,13 +1162,49 @@ def test_permission_guard_adapter_fails_closed_on_non_decision_output(
         lambda *_args, **_kwargs: {"systemMessage": "shared producer failed: exact detail"},
     )
 
-    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 2
+    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 0
     captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == "shared producer failed: exact detail\n"
+    assert captured.err == ""
+    decision = json.loads(captured.out)["hookSpecificOutput"]
+    assert decision["hookEventName"] == "PreToolUse"
+    assert decision["permissionDecision"] == "deny"
+    assert decision["permissionDecisionReason"] == "shared producer failed: exact detail"
 
 
-def test_permission_guard_adapter_rejects_malformed_allow_updated_input(
+def test_hook_adapter_bounds_producer_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(
+        adapter,
+        "run_bounded",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["hook"], 9, "", "x" * 5000),
+    )
+
+    result = adapter.run_claude_hook("tools/hooks/failing.sh", {}, ROOT)
+
+    assert isinstance(result, adapter.HookFailure)
+    assert result.message.endswith("...")
+    assert len(result.message) < 4100
+
+
+def test_hook_adapter_uses_stdout_when_stderr_is_only_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(
+        adapter,
+        "run_bounded",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["hook"], 9, "producer stdout detail", "  \n"
+        ),
+    )
+
+    result = adapter.run_claude_hook("tools/hooks/failing.sh", {}, ROOT)
+
+    assert isinstance(result, adapter.HookFailure)
+    assert result.message.endswith("producer stdout detail")
+
+
+def test_permission_guard_adapter_suppresses_allow_with_malformed_updated_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = _adapter_module()
@@ -842,11 +1220,11 @@ def test_permission_guard_adapter_rejects_malformed_allow_updated_input(
         },
     )
 
-    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 2
+    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 0
 
 
-def test_permission_guard_adapter_fails_closed_on_non_object_shared_json(
-    monkeypatch: pytest.MonkeyPatch,
+def test_permission_guard_adapter_denies_non_object_shared_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     adapter = _adapter_module()
     monkeypatch.setattr(
@@ -855,19 +1233,58 @@ def test_permission_guard_adapter_fails_closed_on_non_object_shared_json(
         lambda *_args, **_kwargs: subprocess.CompletedProcess(["hook"], 0, "[]", ""),
     )
 
-    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 2
+    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 0
+    decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert "non-object JSON" in decision["permissionDecisionReason"]
 
 
-def test_permission_guard_adapter_passes_through_dict_updated_input(
+@pytest.mark.parametrize(
+    "shared_response",
+    [
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+            }
+        },
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+            }
+        },
+        {"hookSpecificOutput": {"hookEventName": "PostToolUse"}},
+    ],
+)
+def test_permission_guard_adapter_normalizes_invalid_decisions_to_deny(
+    shared_response: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    adapter = _adapter_module()
+    monkeypatch.setattr(adapter, "run_claude_hook", lambda *_args, **_kwargs: shared_response)
+
+    assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert output["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_permission_guard_adapter_suppresses_allow_with_dict_updated_input(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     adapter = _adapter_module()
     shared_response = {
+        "systemMessage": "Claude-only advisory",
+        "continue": True,
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
             "updatedInput": {"command": "git status"},
-        }
+            "claudeOnlyField": True,
+        },
     }
     monkeypatch.setattr(
         adapter,
@@ -876,7 +1293,7 @@ def test_permission_guard_adapter_passes_through_dict_updated_input(
     )
 
     assert adapter.permission_guard({"hook_event_name": "PreToolUse"}) == 0
-    assert json.loads(capsys.readouterr().out) == shared_response
+    assert capsys.readouterr().out == ""
 
 
 def test_post_tool_adapter_captures_nonzero_bash_result(tmp_path: Path) -> None:
@@ -1311,16 +1728,80 @@ def test_session_start_wrapper_routes_compact_producer_failure(tmp_path: Path) -
         env=env,
     )
 
-    assert proc.returncode == 2, proc.stderr
+    assert proc.returncode == 0, proc.stderr
     assert "compact producer failed" in proc.stderr
-    assert proc.stdout == ""
-    assert not list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
+    context = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+    assert "posture" in context
+    assert "compact checkpoint reinjection unavailable" in context
+    leases = list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
+    assert len(leases) == 1
+
+
+def test_session_start_wrapper_degrades_compact_producer_timeout(tmp_path: Path) -> None:
+    hook_dir = tmp_path / "tools" / "hooks"
+    roadmap_dir = tmp_path / "tools" / "roadmap-audit"
+    codex_hooks = tmp_path / ".codex" / "hooks"
+    hook_dir.mkdir(parents=True)
+    roadmap_dir.mkdir(parents=True)
+    codex_hooks.mkdir(parents=True)
+    for name in (
+        "codex-session-start.sh",
+        "session-lease.sh",
+        "lib.sh",
+        "postcompact-reinject.sh",
+    ):
+        shutil.copy2(ROOT / "tools" / "hooks" / name, hook_dir / name)
+    shutil.copy2(ADAPTER, codex_hooks / "codex_hook_adapter.py")
+    (hook_dir / "postcompact-reinject.sh").write_text(
+        "#!/bin/sh\nsleep 30\n",
+        encoding="utf-8",
+    )
+    (codex_hooks / "session_start.py").write_text("print('posture')\n", encoding="utf-8")
+    (roadmap_dir / "session-start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (hook_dir / "loop-gc.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    for script in (
+        hook_dir / "postcompact-reinject.sh",
+        roadmap_dir / "session-start.sh",
+        hook_dir / "loop-gc.sh",
+    ):
+        script.chmod(0o755)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    env = os.environ.copy()
+    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
+
+    proc = subprocess.run(
+        ["bash", str(hook_dir / "codex-session-start.sh")],
+        cwd=tmp_path,
+        input=json.dumps(
+            {
+                "hook_event_name": "SessionStart",
+                "source": "compact",
+                "session_id": "producer-timeout",
+                "cwd": str(tmp_path),
+            }
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+        env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    context = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+    assert "posture" in context
+    assert "compact checkpoint reinjection timed out" in context
+    assert "timed out" in proc.stderr
+    leases = list((tmp_path / ".git" / "codex-worktree-sessions").rglob("*.lease"))
+    assert len(leases) == 1
 
 
 def test_session_start_wrapper_routes_compact_through_four_second_bound() -> None:
     start = (ROOT / "tools" / "hooks" / "codex-session-start.sh").read_text(encoding="utf-8")
 
     assert 'hook_bounded "$' + '{HARNESS_SESSION_START_COMPACT_SECONDS:-4}"' in start
+    assert "compact_rc=0" in start
+    assert ") || compact_rc=$?" in start
 
 
 @pytest.mark.parametrize(

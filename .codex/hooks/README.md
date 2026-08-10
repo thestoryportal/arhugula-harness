@@ -49,16 +49,18 @@ effects that Codex accepts.
 
 | Case | Claude producer and boundary | Codex effect |
 |---|---|---|
-| Safe `PreToolUse` allow | `permission-guard.sh` -> `permission-guard` adapter | No Codex opinion; it does not approve execution. `PermissionRequest` decides approval through its supported boundary. |
-| Hard `PreToolUse` deny | `permission-guard.sh` -> `permission-guard` adapter | Preserves the deny decision and its reason. |
-| Post-compaction context | `postcompact-reinject.sh` -> `post-compact` adapter | Universal `systemMessage` only; the Claude-shaped producer output is not itself a Codex hook response. |
-| Compact model context | `postcompact-reinject.sh` -> `compact-context` adapter -> SessionStart wrapper | Appends only when `source=compact`. |
+| Safe `PreToolUse` allow | `permission-guard.sh` -> `permission-guard` adapter | No Codex opinion, even if the Claude producer includes `updatedInput`; it does not approve or rewrite execution. `PermissionRequest` decides approval through its supported boundary. |
+| Hard `PreToolUse` deny | `permission-guard.sh` -> `permission-guard` adapter | Reconstructs only the supported deny decision and its reason; Claude-only fields never cross the Codex boundary. |
+| Post-compaction context | `postcompact-reinject.sh` -> `post-compact` adapter | Universal `systemMessage` only, including producer diagnostics; the Claude-shaped producer output is not itself a Codex hook response. A silent producer yields no output and exit 0. |
+| Compact model context | `postcompact-reinject.sh` -> `compact-context` adapter -> SessionStart wrapper | Appends only when `source=compact`; any producer failure preserves the rest of SessionStart and appends an explicit recovery instruction. |
 
 Shared-producer tests prove the original Claude contracts. PostCompact translation
 validity is covered by shared-producer and adapter behavioral tests. The installed-host runtime witness
-proves Codex parser acceptance only for the single real
-`PreToolUse:permission-guard` adapter; all other lifecycle handlers, including
-`PostCompact`, are recorder substitutes.
+keeps the real `PreToolUse:permission-guard` and `PostCompact:post-compact` adapters;
+the remaining handlers for `SessionStart`, `PreToolUse`, `PostToolUse`, `PreCompact`,
+`Stop`, and `SessionEnd` are recorder substitutes. Events outside that bounded set,
+including `PermissionRequest`, are omitted from the live fixture; their contracts are
+covered by hermetic shared-producer and registration tests.
 
 Codex has no dedicated `PostToolUseFailure` or `StopFailure` event. The first is covered for
 structured Bash results because `PostToolUse` fires for failed Bash calls. Its documented
@@ -68,10 +70,21 @@ exactly until Codex exposes that lifecycle event; it is the only hook-level comp
 
 Run `just codex-hook-runtime-witness` to verify the installed Codex CLI host itself. The
 witness derives its matcher groups from `.codex/hooks.json`, removes provider credentials,
-serves three deterministic Responses exchanges from `127.0.0.1`, and proves SessionStart,
-Bash and apply_patch Pre/PostToolUse, Stop, SessionEnd, and both tool effects. It uses
+serves five deterministic Responses exchanges from `127.0.0.1`, forces one automatic
+compaction, and proves PreCompact, accepted PostCompact output, compact SessionStart, Bash
+and apply_patch Pre/PostToolUse, Stop, SessionEnd, and both allowed tool effects. It also
+proves the exact registered command shapes, executes absolute-path equivalents three times
+for permission and once for PostCompact, requires positive non-empty PostCompact output
+evidence, and verifies that a force-push command's pre-effect marker stayed absent after
+Codex parsed the real deny. It reports the installed Codex version and uses the production
+`/usr/bin/python3` interpreter for both real adapters and
 `--dangerously-bypass-hook-trust` only inside that vetted temporary fixture; normal sessions
 still require explicit trust through `/hooks`.
+
+The shared `PreToolUse` producer currently emits only `allow` or `deny` and never emits
+`updatedInput`. The Codex adapter intentionally treats any future unsupported decision as a
+structured deny and suppresses any future allow-side rewrite until that new producer contract
+has explicit Codex coverage.
 
 ## Trust and startup failures
 

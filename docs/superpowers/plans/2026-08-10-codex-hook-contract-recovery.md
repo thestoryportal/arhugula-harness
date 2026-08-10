@@ -6,13 +6,15 @@
 
 **Architecture:** Keep the shared Claude hook producers authoritative and unchanged. Route only the incompatible Codex event registrations through the existing `.codex/hooks/codex_hook_adapter.py` host boundary: suppress an unsupported bare `PreToolUse allow` so Codex can continue into the already-supported `PermissionRequest allow`, preserve a valid `PreToolUse deny`, convert Claude `PostCompact.additionalContext` into Codex-supported universal output, and replay the same context during `SessionStart(source=compact)` for model-facing recovery. Treat leaked legacy loop markers as lifecycle state, not JSON adaptation: clean the current stale markers once and use the existing canonical `loop_deactivate` path for future Codex pause/stop requests.
 
-**Tech Stack:** Python 3.13, Bash, JSON/jq, pytest, installed Codex CLI loopback witness, just, Git/GitHub CI.
+**Tech Stack:** Python 3.12, Bash, JSON/jq, pytest, installed Codex CLI loopback witness, just, Git/GitHub CI.
 
 ---
 
 ## Review contract
 
 This plan implements an operational compatibility repair. It does not change `design-substrate/**`, semantic contracts, roadmap ordering, Claude hook schemas, the permission allowlist, or the autonomous-loop safety policy.
+
+> **Execution record:** Tasks 2-4 preserve the original pre-implementation design and RED examples. Where their sample code conflicts with the later **Claude Code Opus 5 review reconciliation**, the reconciliation and final regression tests are authoritative; notably, malformed permission output ships as structured deny with exit 0, timeout budgets are split by host path, and both real adapters remain in the installed-host witness.
 
 Assumptions verified before this plan was written:
 
@@ -30,7 +32,7 @@ Assumptions verified before this plan was written:
 | Safe loop-mode `PreToolUse` no longer fails parsing | Adapter unit test plus installed-Codex loopback run with the real adapter enabled | Adapter emits no `PreToolUse` output for bare allow; runtime stderr contains neither the unsupported-decision diagnostic nor a failed-hook diagnostic |
 | Loop-mode safe operations can still be approved | Existing direct `PermissionRequest` registration and shared guard test | `PermissionRequest decision.behavior=allow` remains registered and its hermetic test passes |
 | Hard stops still block | Adapter unit test using a destructive Git command | Supported `PreToolUse deny` and non-empty reason are preserved exactly |
-| `PostCompact` output is host-valid | Adapter unit test and registration test | Output contains only supported universal top-level fields and no `hookSpecificOutput` |
+| `PostCompact` output is host-valid | Adapter unit test, registration test, and installed-host automatic-compaction witness | Output contains only supported universal top-level fields; the real host reports `PostCompact Completed` with no parser diagnostic |
 | Compacted sessions recover the checkpoint pointer | Compact-context adapter test plus SessionStart wrapper test | Only `source=compact` appends the session-scoped precompact checkpoint path |
 | Claude behavior is unchanged | Existing shared-hook shell tests | Shared allow/deny and `PostCompact.additionalContext` assertions remain green without editing their producers |
 | Legacy mode is actually off after the requested pause | Canonical lifecycle command and filesystem checks | `.loop-active`, `.loop-halt`, and `.loop-iter` are absent and a `DEACTIVATE` row is present |
@@ -57,7 +59,7 @@ The implementation must not edit:
 - `tools/hooks/postcompact-reinject.sh`
 - their Claude-facing shell tests except to add a non-mutating invocation to an aggregate gate
 - `design-substrate/**`
-- `.harness/roadmap_status.md`; this repair does not advance the semantic roadmap, so the PR body must state that U-IS-11 remains the next roadmap unit
+- `.harness/roadmap_status.md` in the implementation PR; this repair does not advance a semantic roadmap unit, but the mandatory §12.2 one-file terminating refresh still follows the substantive merge. The current next action remains the operator-owned `B-124` ratification, followed by `B-147`, `B-145`, and `B-144`.
 
 ---
 
@@ -220,9 +222,7 @@ def permission_guard(payload: dict[str, Any]) -> int:
 
     decision = specific.get("permissionDecision")
     if decision == "allow":
-        updated = specific.get("updatedInput")
-        if isinstance(updated, dict):
-            print(json.dumps(response, separators=(",", ":")))
+        # Codex approval and rewrites belong to PermissionRequest, not PreToolUse.
         return 0
     if decision == "deny" and isinstance(
         specific.get("permissionDecisionReason"), str
@@ -734,10 +734,11 @@ Re-read every file/line claim in the PR draft, recompute the registration count 
 - [ ] **Step 2: Run out-of-family review for Codex-authored work**
 
 ```bash
-just gemini-review
+claude -p --model opus --output-format json --disable-slash-commands --tools "" \
+  --safe-mode --strict-mcp-config --mcp-config '{"mcpServers":{}}'
 ```
 
-Expected: authenticated Antigravity review returns exit 0, non-empty output, and final `VERDICT: APPROVE`. A malformed response, empty output, or `BLOCK` is a failed gate.
+Expected: a fresh authenticated Claude Code Opus 5 review returns exit 0, a successful JSON envelope with non-empty output, and final `VERDICT: APPROVE`. The prompt contains the final diff and acceptance contract but no Gemini findings. A malformed response, empty output, wrong model, or `BLOCK` is a failed gate.
 
 - [ ] **Step 3: Reconcile review findings and replay affected checks**
 
@@ -747,8 +748,8 @@ For each finding, verify it against the actual diff. Fix only confirmed defects.
 
 ```bash
 just codex-loop-record --phase decorrelated_review --status passed \
-  --command "just gemini-review" \
-  --evidence "Antigravity OAuth review ended VERDICT: APPROVE on final diff"
+  --command "claude -p --model opus --output-format json --disable-slash-commands --tools '' --safe-mode --strict-mcp-config" \
+  --evidence "fresh Claude Code Opus 5 review returned a successful non-empty JSON envelope and VERDICT: APPROVE on final diff without Gemini findings"
 just codex-closeout
 just codex-loop-record --phase closeout --status passed \
   --command "just codex-closeout" \
@@ -790,7 +791,7 @@ Push `fix/codex-hook-contract-recovery` and open a PR whose body includes:
 - the two original diagnostics;
 - the acceptance matrix results and exact commands;
 - the installed Codex version;
-- the statement that `.harness/roadmap_status.md` is not changed because this is an operational compatibility repair and U-IS-11 remains next;
+- the statement that `.harness/roadmap_status.md` is not changed in the implementation PR because this is an operational compatibility repair; the mandatory §12.2 one-file refresh still follows, and the current next action remains the operator-owned `B-124` ratification;
 - the one-time ignored marker cleanup result;
 - any skipped checks, with reason.
 
@@ -802,11 +803,7 @@ Wait until every required CI job on the final PR HEAD is terminal green. Then ex
 
 - [ ] **Step 9: Merge and prove post-merge health**
 
-Merge only with `--match-head-commit`, wait for the merge SHA's own `main` CI, record `merged`, and record `post_merge_refresh` as not applicable with this exact rationale:
-
-```text
-Operational Codex compatibility repair; no semantic roadmap unit changed state and U-IS-11 remains next.
-```
+Merge only with `--match-head-commit`, wait for the merge SHA's own `main` CI, and record `merged`. Then execute the mandatory §12.2 audit and land a terminating refresh PR whose only changed file is `.harness/roadmap_status.md`; record `post_merge_refresh` only after that refresh merge and its own `main` CI are green. The refresh must state that the compatibility repair changed no semantic roadmap-unit status and that the operator-owned `B-124` ratification remains next.
 
 Sync local `main` to `origin/main`, record `main_synced`, emit the arc exit report while the worktree exists, dispose of the worktree and verified merged branch, record `worktree_disposition`, then run:
 
@@ -818,7 +815,11 @@ Expected: the full loop check passes only after disposition.
 
 - [ ] **Step 10: Preserve context and pause for HIL**
 
-Run the gstack `context-save` skill after the merge fixed point. The saved context must name the PR, merge SHA, CI state, runtime-witness result, loop-marker cleanup result, unchanged next roadmap unit U-IS-11, and the exact resume command. Stop after presenting the result; do not initialize U-IS-11 until the operator reviews the completed repair.
+Run the gstack `context-save` skill after the merge fixed point. The saved context must name the implementation and refresh PRs, both merge SHAs and CI states, runtime-witness result, loop-marker cleanup result, the operator-owned `B-124` ratification as the unchanged next action, and the exact resume posture. Stop after presenting the result; do not select a `B-124` reading or start `B-147` until the operator reviews the completed repair.
+
+### Claude Code Opus 5 review reconciliation
+
+The operator replaced the planned Gemini artifact gate with fresh tool-less Claude Code Opus 5 reviews. Each review received the complete then-current diff, contract, and verification claims, but no Gemini or prior-Claude findings. Confirmed findings were closed with regression coverage: Codex permission responses are reconstructed from supported fields only; every `allow`, including one carrying `updatedInput`, is suppressed so `PermissionRequest` remains the sole approval/rewrite boundary; producer failures and malformed permission decisions become the same structured deny already proven against the installed host; PostCompact producer failures return valid universal diagnostic JSON with exit 0; compact context prefers a valid event payload over an accompanying advisory; PostCompact and compact SessionStart have separate 20-second and 2-second producer budgets; every compact producer failure preserves the rest of SessionStart with an explicit recovery instruction; and the witness uses the exact production `/usr/bin/python3` commands. The strengthened witness records three real permission-adapter entries and one real PostCompact-adapter entry, drives a force-push deny whose pre-effect marker must stay absent, forces automatic compaction, requires the host's `PostCompact Completed` status without parser diagnostics, and proves safe Bash and apply_patch effects across five complete model exchanges. Claims about `HARNESS_LOOP=1` not enabling the real permission path and about the witness accepting a noncanonical adapter command were rejected against `loop_mode_active` and the exact-command guards.
 
 ---
 
@@ -828,6 +829,6 @@ If the adapter causes a new Codex startup or permission regression before merge,
 
 ## Final go/no-go record
 
-The repair is a **GO** only when all eight acceptance rows are green, the real installed Codex witness has exercised the actual permission adapter under `HARNESS_LOOP=1`, Claude producer tests remain unchanged and green, the three merge lenses approve final HEAD, CI is green on both PR HEAD and merge SHA, ignored legacy markers are absent, and context-save records a pause for HIL.
+The repair is a **GO** only when all eight acceptance rows are green, the real installed Codex witness has recorded three executions of the actual permission adapter and one execution of the actual PostCompact adapter under `HARNESS_LOOP=1`, the host reports `PostCompact Completed`, the force-push deny marker is absent, both allowed tool effects exist, Claude producer tests remain unchanged and green, the three merge lenses approve final HEAD, CI is green on both PR HEAD and merge SHA, ignored legacy markers are absent, and context-save records a pause for HIL.
 
-The repair is a **NO-GO** if any parser failure remains, safe approval depends on a bare Codex `PreToolUse allow`, a deny reason is lost, compact SessionStart lacks its session-scoped checkpoint pointer, a shared Claude producer had to change, or the runtime witness still substitutes a recorder for the adapter it claims to validate.
+The repair is a **NO-GO** if any parser failure remains, safe approval depends on a bare Codex `PreToolUse allow`, any producer failure can fall through rather than returning a structured deny, a deny reason is lost, compact SessionStart lacks its session-scoped checkpoint pointer or recovery instruction, a shared Claude producer had to change, or the runtime witness still substitutes a recorder for either adapter it claims to validate.

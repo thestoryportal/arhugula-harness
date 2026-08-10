@@ -40,7 +40,7 @@ The Codex-native `roadmap-continue`, `ship-pr`, `codex-autonomous-loop`, and
 
 ## Hooks and trust
 
-Codex 0.144.4 exposes `SessionStart`, `SessionEnd`, `SubagentStart`,
+Codex 0.146.0 exposes `SessionStart`, `SessionEnd`, `SubagentStart`,
 `SubagentStop`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`,
 `PostCompact`, `UserPromptSubmit`, and `Stop`. It does not expose dedicated
 `PostToolUseFailure` or `StopFailure` events. Failed Bash calls still emit
@@ -56,14 +56,24 @@ Do not normalize bypassing trust in the autonomous launcher.
 ### Runtime-witness scope
 
 Hook parity means equivalent effect, not byte-identical output schemas. The
-installed-host runtime witness uses recorder substitutes for every handler
-except one real `PreToolUse` permission adapter. That adapter is invoked by an
+installed-host runtime witness uses recorder substitutes except for the
+real `PreToolUse` permission and `PostCompact` adapters. Both are invoked by
 absolute source-worktree path, while its policy evaluates in the synthetic
-witness repository. The witness fails closed when the permission adapter is
-absent, duplicated, registered under a different event, or its canonical command
-shape changes; it does not claim to detect general matcher, timeout, or status
-drift. It also fails when the installed Codex host reports a prohibited parser
-diagnostic.
+witness repository, using the same `/usr/bin/python3` interpreter registered in
+production. The permission adapter reconstructs only Codex-supported fields, and
+PostCompact producer failures become valid universal diagnostic output rather than
+a failed-hook exit. A synthetic-root invocation trace proves both real adapters entered,
+and a force-push command proves Codex accepts its deny while the forbidden pre-effect
+stays absent; safe Bash and apply_patch effects then prove the loop continues. A forced
+automatic compaction proves `PreCompact`, accepted `PostCompact` output, and compact
+`SessionStart` on the installed host. A positive byte count proves the PostCompact adapter
+emitted non-empty JSON before the host reported completion. The live fixture omits
+`PermissionRequest`, `UserPromptSubmit`, and subagent events; their contracts remain
+hermetic-test evidence rather than installed-host evidence. The witness fails closed when either real adapter is
+absent, duplicated, registered under a different event, or its canonical command shape
+changes; it does not claim to detect general matcher, timeout, or status drift. It also
+fails when the installed Codex host reports a prohibited parser diagnostic or omits the
+real-handler completion statuses.
 
 The operator granted standing authorization on 2026-08-01 for `just gemini-review` to use
 the OAuth-authenticated Antigravity `agy` CLI subscription and disclose the current repository

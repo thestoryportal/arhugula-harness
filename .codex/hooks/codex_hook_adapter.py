@@ -18,7 +18,21 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_UV_CACHE_DIR = "/tmp/arhugula-uv-cache"
 PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Add|Update) File:\s+(.+?)\s*$", re.MULTILINE)
 COMMIT_RE = re.compile(r"^\s*(?:(?:/usr/local/bin/)?rtk\s+)?(?:/usr/bin/)?git\s+commit(?:\s|$)")
-TERMINATION_GRACE_SECONDS = 5.0
+TERMINATION_GRACE_SECONDS = 0.5
+COMPACT_SESSION_PRODUCER_TIMEOUT_SECONDS = 2
+POST_COMPACT_PRODUCER_TIMEOUT_SECONDS = 20
+PERMISSION_PRODUCER_TIMEOUT_SECONDS = 8
+WITNESS_TRACE_ENV = "HARNESS_CODEX_HOOK_WITNESS_FILE"
+WITNESS_MODE_ENV = "HARNESS_CODEX_HOOK_WITNESS"
+WITNESS_TRACE_NAME = ".codex-hook-adapter-invocations"
+MAX_HOOK_DIAGNOSTIC_CHARS = 4000
+
+
+def bounded_diagnostic(value: str) -> str:
+    detail = value.strip()
+    if len(detail) <= MAX_HOOK_DIAGNOSTIC_CHARS:
+        return detail
+    return f"{detail[: MAX_HOOK_DIAGNOSTIC_CHARS - 3]}..."
 
 
 def terminate_bounded(process: subprocess.Popen[str]) -> None:
@@ -26,7 +40,7 @@ def terminate_bounded(process: subprocess.Popen[str]) -> None:
     if os.name == "posix":
         try:
             os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
+        except (PermissionError, ProcessLookupError):
             pass
     if process.poll() is None:
         try:
@@ -43,6 +57,8 @@ def terminate_bounded(process: subprocess.Popen[str]) -> None:
                 group_alive = True
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                group_alive = True
         if not direct_alive and not group_alive:
             return
         remaining = deadline - time.monotonic()
@@ -58,7 +74,7 @@ def terminate_bounded(process: subprocess.Popen[str]) -> None:
     if os.name == "posix":
         try:
             os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except (PermissionError, ProcessLookupError):
             pass
     if process.poll() is None:
         try:
@@ -66,7 +82,7 @@ def terminate_bounded(process: subprocess.Popen[str]) -> None:
         except ProcessLookupError:
             pass
     try:
-        process.wait(timeout=5)
+        process.wait(timeout=TERMINATION_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
         pass
 
@@ -145,9 +161,17 @@ def project_dir(payload: dict[str, Any]) -> Path:
     return Path(candidate).resolve() if isinstance(candidate, str) and candidate else ROOT
 
 
+class HookFailure:
+    """A producer failed before returning a usable hook object."""
+
+    def __init__(self, message: str, returncode: int | None = None) -> None:
+        self.message = message
+        self.returncode = returncode
+
+
 def run_claude_hook(
     relative_path: str, payload: dict[str, Any], cwd: Path, *, timeout: float = 30
-) -> dict[str, Any] | None:
+) -> dict[str, Any] | HookFailure | None:
     env = os.environ.copy()
     env["CLAUDE_PROJECT_DIR"] = str(cwd)
     env.setdefault("UV_CACHE_DIR", DEFAULT_UV_CACHE_DIR)
@@ -159,31 +183,37 @@ def run_claude_hook(
         env=env,
     )
     if proc.returncode != 0:
-        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
-        return {"systemMessage": f"Codex hook adapter: {relative_path} failed: {detail}"}
+        detail = (
+            bounded_diagnostic(proc.stderr)
+            or bounded_diagnostic(proc.stdout)
+            or f"exit {proc.returncode}"
+        )
+        return HookFailure(
+            f"Codex hook adapter: {relative_path} failed: {detail}",
+            returncode=proc.returncode,
+        )
     if not proc.stdout.strip():
         return None
     try:
         value = json.loads(proc.stdout)
     except json.JSONDecodeError:
-        return {
-            "systemMessage": (
-                f"Codex hook adapter: {relative_path} returned invalid JSON: {proc.stdout.strip()}"
-            )
-        }
+        return HookFailure(
+            f"Codex hook adapter: {relative_path} returned invalid JSON: "
+            f"{bounded_diagnostic(proc.stdout)}"
+        )
     if not isinstance(value, dict):
-        return {
-            "systemMessage": (
-                f"Codex hook adapter: {relative_path} returned non-object JSON: "
-                f"{proc.stdout.strip()}"
-            )
-        }
+        return HookFailure(
+            f"Codex hook adapter: {relative_path} returned non-object JSON: "
+            f"{bounded_diagnostic(proc.stdout)}"
+        )
     return value
 
 
-def additional_context(value: dict[str, Any] | None) -> str | None:
+def additional_context(value: dict[str, Any] | HookFailure | None) -> str | None:
     if not value:
         return None
+    if isinstance(value, HookFailure):
+        return value.message
     message = value.get("systemMessage")
     if isinstance(message, str) and message.strip():
         return message
@@ -289,39 +319,50 @@ def post_tool_use(payload: dict[str, Any]) -> int:
 class CompactContextError(ValueError):
     """The shared PostCompact producer returned unusable output."""
 
+    def __init__(self, message: str, *, returncode: int | None = None) -> None:
+        super().__init__(message)
+        self.returncode = returncode
 
-def compact_context(payload: dict[str, Any]) -> str | None:
+
+def compact_context(
+    payload: dict[str, Any], *, timeout: float = COMPACT_SESSION_PRODUCER_TIMEOUT_SECONDS
+) -> str | None:
     value = run_claude_hook(
-        "tools/hooks/postcompact-reinject.sh", payload, project_dir(payload), timeout=10
+        "tools/hooks/postcompact-reinject.sh",
+        payload,
+        project_dir(payload),
+        timeout=timeout,
     )
     if value is None:
         return None
-    if "systemMessage" in value:
-        detail = value["systemMessage"]
-        raise CompactContextError(
-            detail
-            if isinstance(detail, str) and detail.strip()
-            else "producer returned a diagnostic"
-        )
+    if isinstance(value, HookFailure):
+        raise CompactContextError(value.message, returncode=value.returncode)
     specific = value.get("hookSpecificOutput")
-    if not isinstance(specific, dict):
-        raise CompactContextError("producer returned no PostCompact output")
-    if specific.get("hookEventName") != "PostCompact":
-        raise CompactContextError("producer returned the wrong hook event")
-    context = specific.get("additionalContext")
-    if not isinstance(context, str) or not context.strip():
-        raise CompactContextError("producer returned no usable context")
-    return context
+    if isinstance(specific, dict):
+        if specific.get("hookEventName") != "PostCompact":
+            raise CompactContextError("producer returned the wrong hook event")
+        context = specific.get("additionalContext")
+        if not isinstance(context, str) or not context.strip():
+            raise CompactContextError("producer returned no usable context")
+        return context
+    detail = value.get("systemMessage")
+    if isinstance(detail, str) and detail.strip():
+        raise CompactContextError(detail)
+    raise CompactContextError("producer returned no PostCompact output")
 
 
 def post_compact(payload: dict[str, Any]) -> int:
     try:
-        context = compact_context(payload)
+        context = compact_context(payload, timeout=POST_COMPACT_PRODUCER_TIMEOUT_SECONDS)
     except CompactContextError as exc:
-        print(f"post-compact adapter: {exc}", file=sys.stderr)
+        context = f"post-compact adapter: {exc}"
+    output = json.dumps({"systemMessage": context}, separators=(",", ":")) if context else ""
+    if witness_active() and not record_witness_invocation(
+        f"post-compact-output:{len(output.encode('utf-8'))}"
+    ):
         return 2
-    if context:
-        print(json.dumps({"systemMessage": context}, separators=(",", ":")))
+    if output:
+        print(output)
     return 0
 
 
@@ -330,51 +371,85 @@ def print_compact_context(payload: dict[str, Any]) -> int:
         context = compact_context(payload)
     except CompactContextError as exc:
         print(f"compact-context adapter: {exc}", file=sys.stderr)
-        return 2
+        return 124 if exc.returncode == 124 else 2
     if context:
         print(context)
     return 0
 
 
+def emit_permission_deny(reason: str) -> int:
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": bounded_diagnostic(reason),
+                }
+            },
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
 def permission_guard(payload: dict[str, Any]) -> int:
     if payload.get("hook_event_name") != "PreToolUse":
-        print("permission-guard adapter requires PreToolUse", file=sys.stderr)
-        return 2
+        return emit_permission_deny("permission-guard adapter requires PreToolUse")
 
-    value = run_claude_hook("tools/hooks/permission-guard.sh", payload, project_dir(payload))
+    value = run_claude_hook(
+        "tools/hooks/permission-guard.sh",
+        payload,
+        project_dir(payload),
+        timeout=PERMISSION_PRODUCER_TIMEOUT_SECONDS,
+    )
     if value is None:
         return 0
+    if isinstance(value, HookFailure):
+        return emit_permission_deny(value.message)
     specific = value.get("hookSpecificOutput")
     if not isinstance(specific, dict) or specific.get("hookEventName") != "PreToolUse":
         diagnostic = value.get("systemMessage")
         if isinstance(diagnostic, str) and diagnostic.strip():
-            print(diagnostic, file=sys.stderr)
-        else:
-            print("permission-guard adapter received invalid PreToolUse output", file=sys.stderr)
-        return 2
+            return emit_permission_deny(diagnostic)
+        return emit_permission_deny("permission-guard adapter received invalid PreToolUse output")
 
     decision = specific.get("permissionDecision")
     if decision == "allow":
-        if "updatedInput" not in specific:
-            return 0
-        if isinstance(specific["updatedInput"], dict):
-            print(json.dumps(value, separators=(",", ":")))
-            return 0
-        print(
-            "permission-guard adapter received allow with non-object updatedInput",
-            file=sys.stderr,
-        )
-        return 2
+        return 0
     if decision == "deny":
         reason = specific.get("permissionDecisionReason")
         if isinstance(reason, str) and reason.strip():
-            print(json.dumps(value, separators=(",", ":")))
-            return 0
-        print("permission-guard adapter received deny without a reason", file=sys.stderr)
-        return 2
+            return emit_permission_deny(reason)
+        return emit_permission_deny("permission-guard adapter received deny without a reason")
 
-    print("permission-guard adapter received unsupported permission decision", file=sys.stderr)
-    return 2
+    return emit_permission_deny(
+        f"permission-guard adapter received unsupported permission decision: {decision!r}"
+    )
+
+
+def record_witness_invocation(mode: str) -> bool:
+    if not witness_active():
+        return True
+    trace_value = os.environ.get(WITNESS_TRACE_ENV)
+    if not trace_value:
+        return False
+    trace_path = Path(trace_value).resolve()
+    project_root = project_dir({})
+    if trace_path != project_root / WITNESS_TRACE_NAME:
+        print("Codex hook witness trace path is not the exact witness path", file=sys.stderr)
+        return False
+    try:
+        with trace_path.open("a", encoding="utf-8") as stream:
+            stream.write(f"{mode}\n")
+    except OSError as exc:
+        print(f"Codex hook witness trace failed: {exc}", file=sys.stderr)
+        return False
+    return True
+
+
+def witness_active() -> bool:
+    return os.environ.get(WITNESS_MODE_ENV) == "1"
 
 
 def pre_commit(payload: dict[str, Any]) -> int:
@@ -420,6 +495,8 @@ def main() -> int:
         return 2
     if os.environ.get("HARNESS_CODEX_REVIEW_ISOLATED") == "1":
         return 0
+    if sys.argv[1] == "permission-guard" and not record_witness_invocation(sys.argv[1]):
+        return 2
     payload = read_payload()
     if sys.argv[1] == "post-tool-use":
         return post_tool_use(payload)

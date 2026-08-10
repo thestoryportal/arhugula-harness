@@ -69,8 +69,16 @@ if ! SOURCE=$(printf '%s' "$PAYLOAD" | jq -er \
 fi
 COMPACT_CONTEXT=""
 if [ "$SOURCE" = "compact" ]; then
+  compact_rc=0
   COMPACT_CONTEXT=$(printf '%s' "$PAYLOAD" | hook_bounded "${HARNESS_SESSION_START_COMPACT_SECONDS:-4}" \
-    /usr/bin/python3 "$_DIR/../../.codex/hooks/codex_hook_adapter.py" compact-context) || exit $?
+    /usr/bin/python3 "$_DIR/../../.codex/hooks/codex_hook_adapter.py" compact-context) || compact_rc=$?
+  if [ "$compact_rc" -eq 124 ]; then
+    echo "codex-session-start: compact checkpoint reinjection timed out" >&2
+    COMPACT_CONTEXT="[CONTEXT] compact checkpoint reinjection timed out; read the latest session-scoped precompact checkpoint before continuing."
+  elif [ "$compact_rc" -ne 0 ]; then
+    echo "codex-session-start: compact checkpoint reinjection unavailable" >&2
+    COMPACT_CONTEXT="[CONTEXT] compact checkpoint reinjection unavailable; read the latest session-scoped precompact checkpoint before continuing."
+  fi
 fi
 
 context_from_hook() {
