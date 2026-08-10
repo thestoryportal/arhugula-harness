@@ -436,6 +436,35 @@ def check_head_refresh_shape(root: Path) -> list[str]:
         ).stdout.strip()
         if not title.startswith(_REFRESH_TITLE_PREFIX):
             return []
+        # Shallow-boundary guard (codex round-3): on a depth-1 CI checkout,
+        # HEAD's parent is absent and `git show HEAD` lists the ENTIRE tree
+        # (parentless root-commit diff) — the same documented failure shape as
+        # ci.yml's codex-context-guard checkout comment. Judging the set there
+        # would fail every legitimate refresh; skip instead (the arc-ledger CI
+        # job now checks out full history, so the gate still enforces in CI).
+        parent_ok = (
+            subprocess.run(
+                ["git", "rev-parse", "--verify", "-q", "HEAD^"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).returncode
+            == 0
+        )
+        if not parent_ok:
+            shallow = (
+                subprocess.run(
+                    ["git", "rev-parse", "--is-shallow-repository"],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).stdout.strip()
+                == "true"
+            )
+            if shallow:
+                return []
         changed = subprocess.run(
             ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
             cwd=root,
@@ -487,7 +516,18 @@ def main(argv: list[str] | None = None) -> int:
     # the drift-log archive onto the PROTECTED next-action archive via
     # `--archive`, which would let a drift-log overflow rewrite the round
     # history. Reject the effective path before any write-capable mode runs.
-    if args.archive.resolve() == NEXT_ACTION_ARCHIVE.resolve():
+    # Derive the TARGET checkout's root + protected archive from --status
+    # (codex round-3): with `--status` pointing at another checkout, comparing
+    # only this module's hard-coded constant would leave THAT checkout's own
+    # next-action archive unprotected and shape-check the wrong repo. The
+    # module-global constant stays in the comparison so the default-invocation
+    # protection is unchanged.
+    status_root = args.status.resolve().parent.parent
+    target_protected_archive = status_root / ".harness" / "roadmap-next-action-archive.md"
+    if args.archive.resolve() in (
+        NEXT_ACTION_ARCHIVE.resolve(),
+        target_protected_archive.resolve(),
+    ):
         print(
             f"--archive must not point at the protected next-action archive "
             f"({NEXT_ACTION_ARCHIVE}) — the drift-log trim would rewrite the "
@@ -504,7 +544,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check:
         violations = validate(text, args.status)
-        violations.extend(check_head_refresh_shape(ROOT))
+        violations.extend(check_head_refresh_shape(status_root))
         hard = [v for v in violations if "informational" not in v]
         for v in violations:
             print(f"  - {v}", file=sys.stderr)

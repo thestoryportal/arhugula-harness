@@ -334,6 +334,55 @@ def test_head_refresh_shape_clean_on_single_file_refresh(tmp_path):
     assert rsr.check_head_refresh_shape(repo) == []
 
 
+def test_head_refresh_shape_skips_at_shallow_boundary(tmp_path):
+    # codex round-3: a depth-1 CI checkout makes `git show HEAD` list the
+    # ENTIRE tree (parentless root-commit diff) — judging the set there would
+    # fail every legitimate refresh. The check must SKIP at a shallow
+    # boundary (the arc-ledger CI job fetches full history, so the gate still
+    # enforces where a parent exists).
+    origin = _git_scratch_repo(
+        tmp_path,
+        "seed: base",
+        {".harness/roadmap_status.md": "base", "other.md": "x"},
+    )
+    (origin / ".harness" / "roadmap_status.md").write_text("refreshed")
+    subprocess.run(
+        ["git", "commit", "-aqm", "ops: roadmap status refresh post-#9999"],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+    )
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{origin}", str(shallow)],
+        check=True,
+        capture_output=True,
+    )
+    # sanity: this IS the failure shape being guarded against — at depth 1 the
+    # refresh-titled HEAD's `git show` lists both tracked files.
+    assert rsr.check_head_refresh_shape(shallow) == []
+
+
+def test_cli_rejects_archive_aliased_onto_target_checkouts_archive(tmp_path, capsys):
+    # codex round-3: with --status pointing at ANOTHER checkout, that
+    # checkout's own next-action archive must be recognized as protected too.
+    other = tmp_path / "other"
+    (other / ".harness").mkdir(parents=True)
+    status = other / ".harness" / "roadmap_status.md"
+    status.write_text("stub")
+    rc = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(other / ".harness" / "roadmap-next-action-archive.md"),
+            "--check",
+        ]
+    )
+    assert rc == 2
+    assert "protected next-action archive" in capsys.readouterr().err
+
+
 def test_head_refresh_shape_noop_on_content_commit(tmp_path):
     # a content-titled commit may touch anything — the shape rule binds only
     # refresh-titled commits.

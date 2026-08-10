@@ -284,6 +284,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # FULL history: roadmap_status_refresh.py --check's terminating-refresh
+          # shape gate (U-CTX-03 AC #2) needs HEAD's PARENT — on a depth-1 clone
+          # `git show HEAD` lists the ENTIRE tree (parentless root-commit diff),
+          # which would fail every legitimate refresh push. Same documented
+          # failure shape as the codex-context-guard job's checkout below; the
+          # check additionally skips (rather than misjudges) at a shallow
+          # boundary, so this fetch is what makes it ENFORCE in CI.
+          fetch-depth: 0
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
