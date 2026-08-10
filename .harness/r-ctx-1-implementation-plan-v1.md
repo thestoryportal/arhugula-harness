@@ -6,7 +6,7 @@ Reconciliation artifact: https://claude.ai/code/artifact/f045b45e-ecb1-43ae-873a
 Source record: /Users/robertrhu/.claude/jobs/9b1bdd92/tmp/{neutral-brief,codex-r1,opus-r1,deliberation-divergences,codex-r2,opus-r2}.md
 (job tmp is ephemeral — the reconciliation artifact + this plan are the durable record).
 
-**Execution errata (2026-08-10, from codex out-of-family rounds 2–3 on PR #1293; ratified text preserved, corrections marked inline):** E1 (U-CTX-00 arc-ledger step impossible → informational note only) · E2 (Gate G1: Arc 4 additionally gates on the U-CTX-06 merge; #1292 is Codex-owned — poll, never touch) · E3 (U-CTX-14 citation count derived at build time, not hardcoded 635) · E4 (U-CTX-21 post-compaction half needs a compaction-generation selector or separate procedure — the first-turn metric alone is a non-measurement).
+**Execution errata (2026-08-10, from codex out-of-family rounds 2–3 on PR #1293; ratified text preserved, corrections marked inline):** E1 (U-CTX-00 arc-ledger step impossible → informational note only) · E2 (Gate G1: Arc 4 additionally gates on the U-CTX-06 merge; #1292 is Codex-owned — poll, never touch) · E3 (U-CTX-14 citation count derived at build time, not hardcoded 635) · E4 (U-CTX-21 post-compaction half needs a compaction-generation selector or separate procedure — the first-turn metric alone is a non-measurement) · E5 (round 4: every serial-merge CI gate binds to a SHA — final-PR-head CI before merge, merge-SHA main CI before refresh, refresh CI before next merge).
 
 ## Ratifications (operator, 2026-08-10)
 - **R1**: Arc 2's three rules (roadmap_status truncation + archive + query-not-Read for the .harness working set).
@@ -17,7 +17,7 @@ Source record: /Users/robertrhu/.claude/jobs/9b1bdd92/tmp/{neutral-brief,codex-r
 ## Posture + hard constraints
 - Mode-agnostic ops. **ZERO `design-substrate/**` edits in any PR** (X-AL-3). Audit every diff.
 - No `git add -A`; explicit paths only. No force-push/history rewrite. No branch deletion (operator-only). Never `.agents`-before-`.claude` skill deletions. No paid provider calls. Worktree removal only via `tools/hooks/safe-worktree-remove.sh`.
-- Parallel BUILD, strictly SERIAL merge: PR → CI green (evidence: terminal status+conclusion, poll ~80s) → `just codex-review` converged → `merge-gate` (code-touching only) → merge → **terminating refresh as immediate next commit** → main CI green → next merge.
+- Parallel BUILD, strictly SERIAL merge: PR → CI green (evidence: terminal status+conclusion, poll ~80s) → `just codex-review` converged → `merge-gate` (code-touching only) → merge → **terminating refresh as immediate next commit** → main CI green → next merge. *(errata E5: every CI gate binds to a SHA, not a moment — (i) the pre-merge CI evidence must be for the FINAL PR head (any codex-review/merge-gate fix commit stales earlier runs; re-verify after the last commit) against current base main; (ii) after merge, verify the MERGE SHA's own main CI green BEFORE the terminating refresh; (iii) verify the refresh commit's CI before the next arc's merge.)*
 - Codex coexistence: Arcs 3+ branch from post-#1292 main. Hook edits confined to PR-3 (one `/hooks` re-trust ceremony, flag operator immediately after merge). If Codex opens a colliding PR, halt affected agent and re-sequence.
 
 ## Token-efficiency doctrine (routing law)
