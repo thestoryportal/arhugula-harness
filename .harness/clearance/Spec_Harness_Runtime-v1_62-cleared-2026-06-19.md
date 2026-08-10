@@ -8,7 +8,7 @@ back_reference:
   - .harness/beyond-mvp-capability-boundary-ledger.md (B-EDIT-CARRIER spine BUILT note)
 merge_commit: <pending — co-published bundled-absorption PR>
 reviewer_chain:
-  - advisor (full-transcript) — pre-substantive: foreclosed the mutation-discipline "fork" to (A) via the discriminator "preserves vs overrides replace-not-merge" → mine-to-build, no operator gate; designed the full-chain witness obligation (real str → Mapping → dispatched step_payload, no Mapping-returning mock); flagged the flip-don't-delete interim-raise test + the ledger (d)/(e) items (taxonomy + post-mutation hash)
+  - "advisor (full-transcript) — pre-substantive: foreclosed the mutation-discipline \"fork\" to (A) via the discriminator \"preserves vs overrides replace-not-merge\" → mine-to-build, no operator gate; designed the full-chain witness obligation (real str → Mapping → dispatched step_payload, no Mapping-returning mock); flagged the flip-don't-delete interim-raise test + the ledger (d)/(e) items (taxonomy + post-mutation hash)"
   - standing FULL-SPEC operator directive 2026-06-12 (design back-flow pre-authorized; no operator gate owed — nothing committed is sacrificed, the deferred decode semantics are filled)
   - out-of-family Codex review at the impl-diff PR (decorrelated; pending)
 supersedes:

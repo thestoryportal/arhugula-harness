@@ -4,7 +4,7 @@ version: v1.97
 cleared_at: 2026-07-13T22:00:00-06:00
 clearance_type: Phase-7-absorbed-via-architect-recommendation
 back_reference:
-  - .harness/post-phase-8-forward-register.md (B-21 entry, surfaced at PR #964's preflight review HIGH #6)
+  - ".harness/post-phase-8-forward-register.md (B-21 entry, surfaced at PR #964's preflight review HIGH #6)"
   - design-substrate/Spec_Control_Plane_v1_45.md (B-HIERARCHICAL-PAUSE prerequisite mechanism, reused verbatim)
   - design-substrate/Spec_Control_Plane_v1_44.md (PeerFanOutResumeState carrier this delta extends)
 merge_commit: pending (pre-merge at filing time)
@@ -12,7 +12,7 @@ reviewer_chain:
   - advisor() pre-build grounding (confirmed the gap is reachable — a failing witness test before any fix)
   - impl-to-cleared-spec disposition (§25.15.1 already commits pause -> PAUSED; v1.45 already materialized the child-pause mechanism generally; this delta is a carrier-completeness extension, not new design surface)
   - just codex-review pre-merge (§13.1 out-of-family review), 3 rounds — round 1 caught a nested-carrier hash byte-compat gap + a step-kind-changed resume hole (both fixed); round 2 caught a broader nested byte-compat scoping regression against the ALREADY-SHIPPED v1.45 mechanism (fixed via per-carrier-kind-scoped strip); rounds 2-3 surfaced 3 pre-existing, symmetric-with-v1.45 gaps registered as forward work, not fixed inline (child-workflow-identity validation, cross-branch HITL resume-context routing, nested pause-reason propagation)
-  - advisor() pre-done review (flagged the spec-delta/clearance obligation per the #679/#680 bundled-absorption precedent — this marker discharges it)
+  - "advisor() pre-done review (flagged the spec-delta/clearance obligation per the #679/#680 bundled-absorption precedent — this marker discharges it)"
 supersedes: null
 superseded_by: null
 ---

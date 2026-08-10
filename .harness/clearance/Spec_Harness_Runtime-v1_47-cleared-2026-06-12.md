@@ -5,14 +5,14 @@ cleared_at: 2026-06-12T18:00:00-06:00
 clearance_type: Phase-7-absorbed-via-fork (bundled-absorption — spec + impl + tests)
 back_reference:
   - .harness/class_1_fork_api_run_unconditional_provider_ping_for_tool_only_workflows.md (Class-1 fork — Reading B, operator-ratified 2026-06-12)
-  - .harness/capability-completion-inventory-v1.md (R-CC-1 arc #4 / item #4 / B-10 / R-100 AC#2)
-  - PR (R-CC-1 arc #4 — this arc) — TBD at PR creation
+  - ".harness/capability-completion-inventory-v1.md (R-CC-1 arc #4 / item #4 / B-10 / R-100 AC#2)"
+  - "PR (R-CC-1 arc #4 — this arc) — TBD at PR creation"
 merge_commit: TBD-at-PR-merge
 reviewer_chain:
-  - advisor (pre-build, full transcript) — required the probe-first discriminator (is inference-need statically determinable?) BEFORE convening a council; on the probe resolving the C9⊥C11 tension, ruled the genuine multi-agent council hollow (§10.9 #1 collapse) and endorsed naming the voice positions in the fork; sharpened Reading B to key on StepKind (not model-binding presence), thread requires_inference, and confirm the EmptyProviderCoverageError/stage-5 sites can be made conditional cleanly without breaking downstream stages
+  - "advisor (pre-build, full transcript) — required the probe-first discriminator (is inference-need statically determinable?) BEFORE convening a council; on the probe resolving the C9⊥C11 tension, ruled the genuine multi-agent council hollow (§10.9 #1 collapse) and endorsed naming the voice positions in the fork; sharpened Reading B to key on StepKind (not model-binding presence), thread requires_inference, and confirm the EmptyProviderCoverageError/stage-5 sites can be made conditional cleanly without breaking downstream stages"
   - empirical grounding passes — 5 StepKinds, dispatch statically keyed via the frozen {StepKind → StepDispatcher} registry (no TOOL→inference escalation); only INFERENCE_STEP + SUB_AGENT_DISPATCH reach a provider; stage 3b CP_ROUTING + every pre-line-197 stage-5 factory are provider-agnostic; ONLY stage_5_loop_init.py:197 reads ctx.providers; llm_dispatcher non-optional + in _REQUIRED_FIELDS → sentinel keeps C-RT-04 + _REQUIRED_FIELDS byte-unchanged
   - impl-time green — predicate units (9 cases) + 2 full-bootstrap integration tests (registry-omission + contrasting baseline) + the AC#2 e2e converted to provider-free/unconditional; full harness-runtime suite green; pyright strict 0/0/0; ruff clean
-  - out-of-family Codex (pre-merge, decorrelated) — caught a genuine P1: the first-cut `require_coverage` approach only suppressed the FINAL empty-provider check, so a tool-only `api.run` with the DEFAULT config (`*_optional=False`) + no credentials still hard-failed in stage 3a per-provider construction. Fix: stage 3a now SKIPS provider construction entirely when `not requires_inference` (no construction failure of any kind can abort a tool-only bootstrap); the `require_coverage` param was reverted (composer unchanged)
+  - "out-of-family Codex (pre-merge, decorrelated) — caught a genuine P1: the first-cut `require_coverage` approach only suppressed the FINAL empty-provider check, so a tool-only `api.run` with the DEFAULT config (`*_optional=False`) + no credentials still hard-failed in stage 3a per-provider construction. Fix: stage 3a now SKIPS provider construction entirely when `not requires_inference` (no construction failure of any kind can abort a tool-only bootstrap); the `require_coverage` param was reverted (composer unchanged)"
   - harness-adversarial-reviewer (pre-merge) — TBD at PR
   - advisor (pre-done) — TBD at PR
 ---

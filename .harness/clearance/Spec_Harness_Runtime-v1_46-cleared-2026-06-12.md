@@ -6,13 +6,13 @@ clearance_type: Phase-7-absorbed-via-design-doc (bundled-absorption — spec + i
 back_reference:
   - .harness/r-cc-1-arc-3-workflow-durable-resume-design-v1.md (design doc §7b — grounded cascade-step-2 impl plan; advisor-de-risked)
   - .harness/clearance/Spec_Harness_Runtime-v1_45-cleared-2026-06-12.md (cascade step 1 — the resume surface this extends)
-  - PR #513 (cascade step 1 — api.resume + C-RT-35, caller-supplied snapshot)
+  - "PR #513 (cascade step 1 — api.resume + C-RT-35, caller-supplied snapshot)"
   - PR (cascade step 2 — this arc) — TBD at PR creation
 merge_commit: TBD-at-PR-merge
 reviewer_chain:
   - advisor (pre-build, full transcript) — sharpened the arc to runtime-only (driver byte-unchanged on both paths; durability at the protocol subclass; resume reads at the api.resume boundary); identified D2-bis as the one real blocker, decidable by C-IS-01 §1 + a glob-safety check (not guessing); flagged keying (workflow_id vs run_id) + restart-determinism + the anchor-validation-deferred carry
-  - empirical grounding passes — #475 is fully dormant (never constructed in src → no bootstrap journal-dir precedent); bootstrap path model (materialize_path_registry resolves the 4 PathClass dirs); capture site (workflow_driver.py:795/951 calls ctx.pause_resume_protocol.capture_pause_snapshot via duck-cast); C-IS-01 §1 frames the 4 PathClasses as canonical *artifact* classes (NOT exhaustive over all paths); glob-safety (nothing globs the STATE_LEDGER dir; ledger opens specific state.jsonl); JsonlLedgerHandle.canonical_path is the file (parent = the dir)
-  - impl-time green — 11 new tests (5 store-unit, 1 durable-wrapper-unit, 1 durable-handle restart-proof e2e, 4 api.resume arg-guards) + 6 prior #513 resume tests all pass; full harness-runtime suite 1628 passed / 18 skipped (live-provider-gated, unrelated); pyright strict 0/0/0; ruff clean
+  - "empirical grounding passes — #475 is fully dormant (never constructed in src → no bootstrap journal-dir precedent); bootstrap path model (materialize_path_registry resolves the 4 PathClass dirs); capture site (workflow_driver.py:795/951 calls ctx.pause_resume_protocol.capture_pause_snapshot via duck-cast); C-IS-01 §1 frames the 4 PathClasses as canonical *artifact* classes (NOT exhaustive over all paths); glob-safety (nothing globs the STATE_LEDGER dir; ledger opens specific state.jsonl); JsonlLedgerHandle.canonical_path is the file (parent = the dir)"
+  - "impl-time green — 11 new tests (5 store-unit, 1 durable-wrapper-unit, 1 durable-handle restart-proof e2e, 4 api.resume arg-guards) + 6 prior #513 resume tests all pass; full harness-runtime suite 1628 passed / 18 skipped (live-provider-gated, unrelated); pyright strict 0/0/0; ruff clean"
   - out-of-family Codex (pre-merge, decorrelated) — TBD at PR (run on the full diff)
   - advisor (pre-done) — TBD at PR (reconcile the keying divergence + final review)
 ---

@@ -7,12 +7,12 @@ back_reference:
   - .harness/r-fs-1-final-closure-plan.md (arc-a)
   - .harness/r-fs-1-arc-a-postjoin-14.23-hollow-finding.md (the two-layer hollow-trap finding + the A AUQ resolution)
   - .harness/r-fs-1-b-fanout-output-replay-impl-design.md (the §25.12-D1 materializability finding; B-full refuted → A)
-  - .harness/council/b-postjoin-llm-synthesis/30-synthesis.md (C1⊥C9 dyadic council, PR #711)
+  - ".harness/council/b-postjoin-llm-synthesis/30-synthesis.md (C1⊥C9 dyadic council, PR #711)"
   - PR for the arc-a bundle (this branch arc-a-postjoin-llm-synthesis)
 merge_commit: <filled at merge>
 reviewer_chain:
-  - C1⊥C9 dyadic council (genuine dedicated-agent voices, independent → cross-read) + §10.9 probe-resolution + advisor red-team (PR #711)
-  - advisor — surfaced the OPTION-B-capture-only #705 hollow trap (reachability ≠ consistency) AND the coherent-B-full §25.12-D1 binary-ledger blocker (no partial fan-out state); both verified empirically against harness_cp.workflow_driver
+  - "C1⊥C9 dyadic council (genuine dedicated-agent voices, independent → cross-read) + §10.9 probe-resolution + advisor red-team (PR #711)"
+  - "advisor — surfaced the OPTION-B-capture-only #705 hollow trap (reachability ≠ consistency) AND the coherent-B-full §25.12-D1 binary-ledger blocker (no partial fan-out state); both verified empirically against harness_cp.workflow_driver"
   - Operator AskUserQuestion 2026-06-23 — chose A (synthesis + loud disclosure now; reproducibility = the registered B-FANOUT-OUTPUT-REPLAY follow-on) over the hollow capture-only B and the larger B-full
   - spec-writer apply pass (this arc, applied by the core agent holding the grounded materializable design)
 supersedes: <none>

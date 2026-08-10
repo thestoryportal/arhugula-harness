@@ -12,9 +12,9 @@ back_reference:
   - .harness/clearance/Spec_Control_Plane-v1_67-cleared-2026-06-25.md (the paired CP marker — full reviewer chain)
 merge_commit: <filled at merge>
 reviewer_chain:
-  - advisor (full-transcript) — the LEAF-vs-recursive distinction that makes the arc sound (managed-agents never reconstructs harness-side → result-fidelity by construction; the #746 recursive-RESULT-fidelity [P1] does not transfer); the disposition-matrix risk surface (non-success / poll-exhausted leaving the fence ambiguous; the SKIP_AS_FIRED empty-fold cell); the payload-independent-key constraint.
+  - "advisor (full-transcript) — the LEAF-vs-recursive distinction that makes the arc sound (managed-agents never reconstructs harness-side → result-fidelity by construction; the #746 recursive-RESULT-fidelity [P1] does not transfer); the disposition-matrix risk surface (non-success / poll-exhausted leaving the fence ambiguous; the SKIP_AS_FIRED empty-fold cell); the payload-independent-key constraint."
   - out-of-family Codex (gpt-5.5, 3-round) — R1 [P1] a test-helper pyright redeclaration (FIXED); R2 [P2] the fence-key collision against a TOOL_STEP whose tool_id=="managed_agents" (FIXED by leading the digest with the domain tag + a disjointness regression guard); R3 clean. Full detail in the paired CP v1.67 marker.
-  - by-execution witnesses: 14 real-fence dispatcher witnesses through a counting vendor port (test_managed_agents_dispatch_effect_fence.py) — the full disposition matrix + at-most-once across crash-resume + durability across a fresh fence instance + the tool-key disjointness + the _DURABLE_AUTO_FENCE_ENGINE_CLASSES drift guard; the existing 15 managed-agents dispatch tests + the full harness-runtime regression (238 passed / 3 e2e-skipped); pyright 0/0/0; ruff clean.
+  - "by-execution witnesses: 14 real-fence dispatcher witnesses through a counting vendor port (test_managed_agents_dispatch_effect_fence.py) — the full disposition matrix + at-most-once across crash-resume + durability across a fresh fence instance + the tool-key disjointness + the _DURABLE_AUTO_FENCE_ENGINE_CLASSES drift guard; the existing 15 managed-agents dispatch tests + the full harness-runtime regression (238 passed / 3 e2e-skipped); pyright 0/0/0; ruff clean."
 supersedes: <none>
 superseded_by: <none>
 ---

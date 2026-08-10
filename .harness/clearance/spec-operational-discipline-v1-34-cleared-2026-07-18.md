@@ -4,7 +4,7 @@ version: v1.34
 cleared_at: 2026-07-18T00:00:00-06:00
 clearance_type: Phase-7-absorbed-via-Class-1-fork-ratification (B-51/B-52/B-54 OD audit-signing amendment arc; spec-writer apply pass per CLAUDE.md §4.3 back-flow + §4.5)
 back_reference:
-  - .harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (the ratified filing — ALL TEN gate items RATIFIED 2026-07-18 AS RECOMMENDED, operator decision recorded at PR #1054)
+  - ".harness/class_1_fork_b51_b52_b54_od_signing_amendment_arc.md (the ratified filing — ALL TEN gate items RATIFIED 2026-07-18 AS RECOMMENDED, operator decision recorded at PR #1054)"
   - design-substrate/Spec_Operational_Discipline_v1_33.md (predecessor — the §21.2.1 SigningBackend seam this delta amends)
   - design-substrate/Spec_Control_Plane_v1_101.md (same-arc CP rider — §13.5.1 tenant amendment, §28.10.4 carve-out, §20.3.1 reconciliation, §20.1.1 historical exception)
   - design-substrate/Spec_Harness_Runtime_v1.md (same-arc Runtime v1.101 rider — flag carrier, MTC validation invariants, prewarm/keepalive disable, §13.5 verifier inputs, §13.4 B-53 row)

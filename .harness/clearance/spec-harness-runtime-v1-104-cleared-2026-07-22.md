@@ -4,7 +4,7 @@ version: v1.104
 cleared_at: 2026-07-22T00:00:00-06:00
 clearance_type: Phase-7-absorbed-via-Class-2-fork-ratification (B-59 apply arc; spec-writer apply pass per CLAUDE.md §4.3 + §4.5)
 back_reference:
-  - .harness/class_2_fork_b59_capacity_authority_across_bootstraps.md (RATIFIED 2026-07-21 — option A AS RECOMMENDED: process-scoped capacity-authority singleton, adopt-new-budget-carry-occupied reconciliation, every-admission-surface rider)
+  - ".harness/class_2_fork_b59_capacity_authority_across_bootstraps.md (RATIFIED 2026-07-21 — option A AS RECOMMENDED: process-scoped capacity-authority singleton, adopt-new-budget-carry-occupied reconciliation, every-admission-surface rider)"
 merge_commit: pending (pre-merge at filing time; B-59-A apply PR)
 reviewer_chain:
   - operator ratification (2026-07-21) — option A as recommended

@@ -5,7 +5,7 @@ cleared_at: 2026-07-27T00:00:00-07:00
 clearance_type: Phase-7-absorbed-via-advisor-directed-reread
 back_reference:
   - .harness/forward-register.yaml (B-79 row, unchanged; B-80 row, unchanged)
-  - PR #1130 (filled at merge)
+  - "PR #1130 (filled at merge)"
 merge_commit: <filled at merge>
 reviewer_chain:
   - advisor() consulted before opening the B-79/B-80 impl leg; recommended a fresh full re-read of the just-merged v1.110 body against 3 specific consistency risks

@@ -44,7 +44,7 @@ fmt-check:
     uv run ruff format --check .
 
 # Full pre-merge gate: workspace sync + lint + typecheck + docs/closure + provider-free tests.
-check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check test
+check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check clearance-parse-check test
 
 # Codex provider-free pytest lane. Strips live provider env and mirrors CI's non-e2e gate.
 codex-test *args:
@@ -63,7 +63,7 @@ codex-hook-runtime-witness:
     /usr/bin/python3 tools/codex_hook_runtime_witness.py
 
 # Codex PR-ready local gate without live provider credentials.
-codex-check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check codex-parity-check
+codex-check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check clearance-parse-check codex-parity-check
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"
 
 # ─── Codex deterministic context guard ─────────────────────────────────────
@@ -146,6 +146,20 @@ overlay-query *ARGS:
 # e.g.: just context-budget --sessions 20 --post-compaction
 context-budget *ARGS:
     uv run python tools/context_budget.py "$@"
+
+# ─── clearance corpus (R-CTX-1 / U-CTX-10) — marker frontmatter parse gate ──
+# Fail-closed over .harness/clearance/*.md: every marker's YAML frontmatter must
+# parse to a mapping carrying artifact + version AND carry no lossy scalar (the
+# whitespace-`#` value that parses and then silently truncates). The only
+# exemptions are the rows explicitly enumerated in
+# .harness/clearance/parse-manifest.md — an unlisted unparseable file is an
+# ERROR, never a skip.
+clearance-parse-check:
+    uv run python tools/clearance_frontmatter.py --check
+
+# Quote-only repair of broken/lossy marker scalars (no content is reworded).
+clearance-parse-fix:
+    uv run python tools/clearance_frontmatter.py --fix
 
 # ─── forward register — structured post-Phase-8 B-* forward-work schema ─────
 # Sibling to arc-ledger.yaml (see tools/forward_register.py's own header for why

@@ -5,7 +5,7 @@ cleared_at: 2026-07-31T00:00:00-04:00
 clearance_type: spec-writer-apply-pass
 back_reference:
   - .harness/class_2_fork_b97a_pause_journal_tenant_binding.md
-  - .harness/class_2_fork_b97a_pause_journal_tenant_binding.md §11 (ratification addendum — operator AskUserQuestion #1 gate 1 = READING A, 2026-07-31; AskUserQuestion #2 gate 2 = (3a) abandon-by-default + §5.3.1 (i)+(iii) with (iii) a PRECONDITION, 2026-07-31)
+  - ".harness/class_2_fork_b97a_pause_journal_tenant_binding.md §11 (ratification addendum — operator AskUserQuestion #1 gate 1 = READING A, 2026-07-31; AskUserQuestion #2 gate 2 = (3a) abandon-by-default + §5.3.1 (i)+(iii) with (iii) a PRECONDITION, 2026-07-31)"
   - .harness/council-b97a-tenant-path-segregation-2026-07-31.md (C3 ⊥ C11 dyadic — CONFIRM-WITH-CONDITIONS, 17 conditions K-1…K-17)
   - .harness/forward-register.yaml row B-97
   - .harness/forward-register.yaml row B-102 (spec half folded in at this leg)
@@ -13,7 +13,7 @@ merge_commit: <pending — this PR>
 reviewer_chain:
   - fork filing `.harness/class_2_fork_b97a_pause_journal_tenant_binding.md` — 11 out-of-family `just codex-review-uncommitted` rounds, SOUNDNESS EXIT declared after round 11 (first declared after round 9, REOPENED by round 10's [P1] against the recommended reading, re-declared and held)
   - operator AskUserQuestion gate 1, 2026-07-31 — READING A (path segregation; injective constant encoding; five-cause vocabulary stays at five; mandatory quiesced cutover; no run_id rider)
-  - council voices C3 (state / memory / persistence) + C11 (operator loop / local deployment) — dyadic, both primary, genuine dedicated-agent invocations, blind then cross-read, reconciled to zero (5 seams: 2 probe-resolved, 1 orchestrator-adjudicated, 2 converged)
+  - "council voices C3 (state / memory / persistence) + C11 (operator loop / local deployment) — dyadic, both primary, genuine dedicated-agent invocations, blind then cross-read, reconciled to zero (5 seams: 2 probe-resolved, 1 orchestrator-adjudicated, 2 converged)"
   - harness-adversarial-reviewer in-family pass on the council record — CLEAR-WITH-FOLD, 7 findings (1 [P1], 3 [P2], 3 [P3]), all accepted
   - out-of-family `just codex-review-uncommitted` (GPT-5.6) on the council record — 6 findings (3 [P1], 3 [P2]); 3 reached by BOTH reviewers independently, 3 Codex-only
   - operator AskUserQuestion gate 2, 2026-07-31 — (3a) abandon-by-default CONFIRMED; §5.3.1 = (i)+(iii), (iii) a PRECONDITION of (3a)

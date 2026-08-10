@@ -5,12 +5,12 @@ cleared_at: 2026-05-29T16:30:00-06:00
 clearance_type: Phase-7-absorbed-via-fork-doc
 back_reference:
   - .harness/class_1_tension_u_cp_14_dual_emission_stubs_and_disambiguator_semantics_gap.md
-  - PR #65 (fork doc filing; merged at squash commit d8d091e 2026-05-29)
+  - "PR #65 (fork doc filing; merged at squash commit d8d091e 2026-05-29)"
   - PR for v1.27 apply pass (this PR)
 merge_commit: <filled at merge>
 reviewer_chain:
   - Operator AskUserQuestion ratification 2026-05-29 Q1=A + Q2=iii + Q3=i + Q5=i + Q6=α
-  - Advisor 45th application of [[advisor-before-substantive-work-for-cross-axis-blockers]] pre-substantive consultation at fork-doc authoring (PR #65); reframed checkpoint narrow framing "Override disambiguator extension arc" → composite blocker "named-but-undefined disambiguator + both-halves-stub" per [[advisor-45th-application-reframe-checkpoint-narrow-framing-to-composite-blocker]]
+  - "Advisor 45th application of [[advisor-before-substantive-work-for-cross-axis-blockers]] pre-substantive consultation at fork-doc authoring (PR #65); reframed checkpoint narrow framing \"Override disambiguator extension arc\" → composite blocker \"named-but-undefined disambiguator + both-halves-stub\" per [[advisor-45th-application-reframe-checkpoint-narrow-framing-to-composite-blocker]]"
   - Empirical orientation at HEAD `d8d091e` verifying (a) §16.5.4 row U-CP-14 disambiguator-notes absence at lines 67-90; (b) StepOverride / WorkflowManifestEntry field-sets carry no override_id / policy_id; (c) `emit_override_audit_entry` stub functional gap at `per_step_override_evaluator.py:208-231`
   - spec-writer apply pass (this arc)
 supersedes: <none>

@@ -8,7 +8,7 @@ back_reference:
   - .harness/post-mvp-full-closure-plan-v1.md §2 "Phase P6 — Spec-prose ↔ impl hygiene"
   - .harness/substitutions.yaml rows H_T-AS-8e / H_T-AS-8f / H_T-CP-17 (all SUBSTANTIVE_RETIRED, batch-52) — the authoritative landed-reality source
   - R-810-files-api-integration (Project_Roadmap_v1.md §5.9) — live Files proof, Cloud Trace bfd28fa8fc8ecc3ba973d1e405cdb865
-  - R-820-managed-agents-integration (PR #380) — live Managed Agents proof, Cloud Trace 009d7716b19c75e4ad7edb93e78f8d2b
+  - "R-820-managed-agents-integration (PR #380) — live Managed Agents proof, Cloud Trace 009d7716b19c75e4ad7edb93e78f8d2b"
   - .harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md §14.C (the v1.5 Files-deferred ratification this discharges)
   - .harness/class_1_fork_as_8f_managed_agents_namespace_production_only_exclusion.md Q1=(C) (the v1.8 managed_agents-deferred ratification this supersedes)
 merge_commit: (pending)

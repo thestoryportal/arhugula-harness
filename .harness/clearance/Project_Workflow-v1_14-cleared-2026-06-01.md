@@ -4,13 +4,13 @@ version: v1.14
 cleared_at: 2026-06-01T00:00:00-06:00
 clearance_type: doc-hygiene-refresh
 back_reference:
-  - .harness/R-600-pattern-bake-in-sweep.md (PR #196) — survey evidence base; §2 recommendation for a NEW non-§7.4.7 process-discipline catalogue
+  - ".harness/R-600-pattern-bake-in-sweep.md (PR #196) — survey evidence base; §2 recommendation for a NEW non-§7.4.7 process-discipline catalogue"
   - Project_Roadmap_v1.md §5.6 R-600-workflow-v1-14-amendment (PROPOSED → operator-authorized 2026-06-01)
   - design-substrate/Project_Workflow_v1_13.md §3(a) — forward-routing of the plan-revision pattern to a NEW catalogue at v1.14/v1.15
   - Operator AskUserQuestion 2026-06-01 (session-focus = "Both, OD first" → v1.14 second)
 merge_commit: <pending — set at v1.14 PR merge>
 reviewer_chain:
-  - Operator authorization: AskUserQuestion 2026-06-01 (R-600 workflow v1.14 selected; meta-questions on ultracode + council answered — neither convened, per §13 nameable-tension discriminator + §13.3 ultracode-not-default)
+  - "Operator authorization: AskUserQuestion 2026-06-01 (R-600 workflow v1.14 selected; meta-questions on ultracode + council answered — neither convened, per §13 nameable-tension discriminator + §13.3 ultracode-not-default)"
   - Advisor pre-substantive consultation 2026-06-01 — per-candidate inclusion gate (independent-arc cardinality ≥2); v1.9 framework-establishing precedent over single-focus narrowing; PD-4 supersession of the v2.36 §7.4.7.2-sub-species framing + single-unit-multi-rescope honesty; carried-fork-audit + impl-time-grounding parked for failing the independence check; landed-substrate-pending-upstream exclusion confirmed (operator-ratified to the .harness/ retirement-event catalogue as 7d)
   - Pre-substantive empirical-verification audit per v1.13 §7.4.7.3.B at v1.14 arc opening (memory-store grounding of each candidate's instance-cardinality; the survey's citation-count caveat applied)
 ---

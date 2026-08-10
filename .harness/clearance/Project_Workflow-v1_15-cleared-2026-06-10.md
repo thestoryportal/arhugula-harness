@@ -9,7 +9,7 @@ back_reference:
   - design-substrate/Project_Workflow_v1_14.md §7.5.1 + §7.5.3
 merge_commit: <pending — set at v1.15 PR merge>
 reviewer_chain:
-  - Operator authorization: "Proceed to R-600" 2026-06-10
+  - "Operator authorization: \"Proceed to R-600\" 2026-06-10"
   - Pre-substantive empirical cadence-3 memory-store enumeration
   - Codex grounding pass against v1.14 inclusion gate and parked-candidate list
 supersedes: Project_Workflow-v1_14-cleared-2026-06-01.md

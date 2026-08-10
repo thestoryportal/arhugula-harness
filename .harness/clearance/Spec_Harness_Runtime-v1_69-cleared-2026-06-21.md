@@ -2,7 +2,7 @@
 artifact: design-substrate/Spec_Harness_Runtime_v1.md
 version: v1.69
 cleared_at: 2026-06-21T00:00:00+00:00
-clearance_type: Phase-7-absorbed-via-spine-ledger (NO operator gate — change-note-level amendment closing the §14.6.1 scope-boundary + marking B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION BUILT: the routed-primary gen_ai span now reports the real EMBEDDING/L3 routing.layer instead of the DECLARATIVE echo, via a RoutedPrimaryResolution return + a ROUTED_PRIMARY_SPAN_TRACE ContextVar the wrapper publishes for the routed primary only; observability-additive, no selection/dispatch behavior change, no new contract/fail-class/hash)
+clearance_type: "Phase-7-absorbed-via-spine-ledger (NO operator gate — change-note-level amendment closing the §14.6.1 scope-boundary + marking B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION BUILT: the routed-primary gen_ai span now reports the real EMBEDDING/L3 routing.layer instead of the DECLARATIVE echo, via a RoutedPrimaryResolution return + a ROUTED_PRIMARY_SPAN_TRACE ContextVar the wrapper publishes for the routed primary only; observability-additive, no selection/dispatch behavior change, no new contract/fail-class/hash)"
 back_reference:
   - .harness/beyond-mvp-capability-boundary-ledger.md (B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION spine BUILT note)
   - design-substrate/Spec_Harness_Runtime_v1.md (v1.65 — the §14.6.1 scope-boundary this arc closes; B-L2-FALLBACK-COMPOSITION composition contract PRESERVED VERBATIM)

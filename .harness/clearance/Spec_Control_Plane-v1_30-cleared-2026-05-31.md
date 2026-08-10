@@ -5,8 +5,8 @@ cleared_at: 2026-05-31T13:00:00-06:00
 clearance_type: Phase-7-absorbed-via-fork-doc
 back_reference:
   - .harness/class_1_fork_pr_2_workflow_layer_ctx_access_recipe_underspecified.md
-  - PR #105 (fork-doc filing)
-  - PR #<this PR> (Reading C apply pass)
+  - "PR #105 (fork-doc filing)"
+  - "PR #<this PR> (Reading C apply pass)"
 merge_commit: pending
 reviewer_chain:
   - probe-first discipline at PR-2 impl-arc opening 2026-05-31 (workspace CLAUDE.md §10.9 standing posture amendment 5)

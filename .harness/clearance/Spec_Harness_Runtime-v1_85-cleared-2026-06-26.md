@@ -8,7 +8,7 @@ back_reference:
   - .harness/b-fanout-crash-resume-maybe-ran-subagent-design-finding-v1.md
 merge_commit: a7704abe
 reviewer_chain:
-  - advisor full-transcript (BEFORE substantive work — the GO + the corrected predicate + the seed-gating correction over the #746 reverted branch)
+  - "advisor full-transcript (BEFORE substantive work — the GO + the corrected predicate + the seed-gating correction over the #746 reverted branch)"
   - out-of-family Codex on the diff (caught the [P1] sibling-collision — branch_path + fan-out-worker scope added in response)
   - by-execution witnesses (E1-live full-chain reconstruction + recoverability-predicate negative controls + fan-out sibling distinctness)
   - empirical loop-suppression confirmation at workflow_driver.py:2040

@@ -12,7 +12,7 @@ merge_commit: <filled at merge>
 reviewer_chain:
   - advisor (full-transcript) — directed the replay-store-vs-IS-ledger determination (the store terminal_status is a free str disjoint from the IS Literal → record the distinguishing value in the store, keep the IS ledger at "completed") + caught that the read-back guard is ENFORCED (an unknown disposition is treated as corruption → fail-closed), so "scoped_aborted" MUST be added to the accept-set or a mixed abort+survivor recovery wrongly fails closed. Full chain in the paired CP v1.74 marker.
   - out-of-family Codex — diff review owed pre-merge.
-  - by-execution witnesses: the real-store scoped_aborted round-trip + not-in-corrupt-set (test_engine_output_store.py — RED-without-fix verified: without the accept-set extension the record is dropped → surfaced as corrupt); 37 store tests pass; the CP consumer full-chain witnesses (paired CP v1.74). pyright 0/0/0; ruff clean.
+  - "by-execution witnesses: the real-store scoped_aborted round-trip + not-in-corrupt-set (test_engine_output_store.py — RED-without-fix verified: without the accept-set extension the record is dropped → surfaced as corrupt); 37 store tests pass; the CP consumer full-chain witnesses (paired CP v1.74). pyright 0/0/0; ruff clean."
 supersedes: <none>
 superseded_by: <none>
 ---

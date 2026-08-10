@@ -5,7 +5,7 @@ cleared_at: 2026-05-29T21:30:00-06:00
 clearance_type: Phase-7-absorbed-via-fork-doc
 back_reference:
   - .harness/class_2_fork_audit_stub_timestamp_universal_fix_plus_per_tier_annotation.md
-  - PR # (this PR)
+  - "PR # (this PR)"
 merge_commit: (pending)
 reviewer_chain:
   - advisor 51st application (multi-site-pattern + per-tier-carve-out framing caught pre-substantive)

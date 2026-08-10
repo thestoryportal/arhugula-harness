@@ -5,14 +5,14 @@ cleared_at: 2026-06-23T20:00:00-06:00
 clearance_type: Phase-7-absorbed-via-operator-ratified-amendment
 back_reference:
   - .harness/r-fs-1-b-fanout-output-replay-impl-design.md (the materializable impl design; ✅ GATE RESOLVED)
-  - PR #719 (C1⊥C9 dyadic council DESIGN pass — D1 framing narrowed)
-  - PR #721 (operator RATIFIED A — non-attested branch-index-keyed sidecar)
+  - "PR #719 (C1⊥C9 dyadic council DESIGN pass — D1 framing narrowed)"
+  - "PR #721 (operator RATIFIED A — non-attested branch-index-keyed sidecar)"
   - PR for the B-FANOUT-OUTPUT-REPLAY PR1 core slice (this branch feat/b-fanout-output-replay)
 merge_commit: <filled at merge>
 reviewer_chain:
-  - C1⊥C9 dyadic council + advisor red-team (PR #719) — the D1 framing correction
+  - "C1⊥C9 dyadic council + advisor red-team (PR #719) — the D1 framing correction"
   - advisor — the store-as-authority correction (the binary ledger holds no mid-fan-out branch set), the synthesis-crash open-path catch, the shared-gate / wire-both-or-fail-closed traps
-  - Operator AskUserQuestion 2026-06-23 — chose A (PR #721)
+  - "Operator AskUserQuestion 2026-06-23 — chose A (PR #721)"
   - spec-writer apply pass (this arc; the as-built EngineOutputStore branch API + the CP crash-resume consumer)
 supersedes: <none>
 superseded_by: <none>

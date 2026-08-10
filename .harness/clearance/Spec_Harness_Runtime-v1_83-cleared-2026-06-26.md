@@ -7,13 +7,13 @@ back_reference:
   - design-substrate/Spec_Control_Plane_v1_71.md §2 (registered B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID, owner_axis "CP + runtime" — "likely a per-branch dispatch-step_id store reader (runtime)")
   - design-substrate/Spec_Harness_Runtime_v1.md §14.23 C-RT-32 (the EngineOutputStore reserve-before-dispatch marker — record_branch_dispatched persists {step_id, step_kind} since v1.55/v1.80; this delta adds the step_id read accessor) + the v1.80 dispatched_branch_kinds sibling reader it mirrors
   - harness-runtime/src/harness_runtime/lifecycle/engine_output_store.py (the dispatched_branch_step_ids reader)
-  - design-substrate/Spec_Control_Plane_v1_72.md (the paired PRIMARY consumer delta — the fence-recoverable PAUSE-reconstruct lift + the #742 crash-time step_id conjunct)
+  - "design-substrate/Spec_Control_Plane_v1_72.md (the paired PRIMARY consumer delta — the fence-recoverable PAUSE-reconstruct lift + the #742 crash-time step_id conjunct)"
   - .harness/clearance/Spec_Control_Plane-v1_72-cleared-2026-06-26.md (the paired CP marker — full reviewer chain)
 merge_commit: <filled at merge>
 reviewer_chain:
   - advisor (full-transcript) — directed the reader (the marker already records step_id "for parity"; a sibling accessor of dispatched_branch_kinds avoids reading the opaque step_payload); confirmed the derivability finding (CP cannot derive the runtime fence key → the reader exposes only the step_id half, which is what the changed-step_id guard needs). Full chain in the paired CP v1.72 marker.
   - out-of-family Codex — diff review owed pre-merge.
-  - by-execution witnesses: the real-store dispatched_branch_step_ids round-trip across restart + the torn-marker None boundary (test_engine_output_store.py); 36 store tests pass; the CP consumer full-chain witnesses (paired CP v1.72). pyright 0/0/0; ruff clean.
+  - "by-execution witnesses: the real-store dispatched_branch_step_ids round-trip across restart + the torn-marker None boundary (test_engine_output_store.py); 36 store tests pass; the CP consumer full-chain witnesses (paired CP v1.72). pyright 0/0/0; ruff clean."
 supersedes: <none>
 superseded_by: <none>
 ---

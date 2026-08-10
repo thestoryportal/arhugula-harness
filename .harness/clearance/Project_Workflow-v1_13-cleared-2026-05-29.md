@@ -4,12 +4,12 @@ version: v1.13
 cleared_at: 2026-05-29T09:15:00-06:00
 clearance_type: doc-hygiene-refresh
 back_reference:
-  - PR #62 (merge commit `ac802a6`) — empirical anchor for `2.strike-revision-on-refined-second-tier-reason`
-  - .harness/class_1_tension_u_rt_111_engine_layer_substrate_absence.md §12 (closure for v2.39 AC #4 STRIKE refinement)
-  - Operator AskUserQuestion 2026-05-29 mid-arc reframe option 1 "Document Reading B + keep AC #4 STRUCK"
+  - "PR #62 (merge commit `ac802a6`) — empirical anchor for `2.strike-revision-on-refined-second-tier-reason`"
+  - ".harness/class_1_tension_u_rt_111_engine_layer_substrate_absence.md §12 (closure for v2.39 AC #4 STRIKE refinement)"
+  - "Operator AskUserQuestion 2026-05-29 mid-arc reframe option 1 \"Document Reading B + keep AC #4 STRUCK\""
 merge_commit: <pending — set at v1.13 PR merge>
 reviewer_chain:
-  - Operator routing: checkpoint §"Remaining Work" item 5 2026-05-29
+  - "Operator routing: checkpoint §\"Remaining Work\" item 5 2026-05-29"
   - Pre-substantive empirical-verification audit per v1.12 §7.4.7.3.B (session-resumption inherited-framing audit) — discriminated 1-of-2 candidates as §7.4.7.2-shape; second candidate routed at §3 (a) to future revision
   - Advisor 43rd application lineage (Reading B confirmation + grep-verification recommendation)
 ---

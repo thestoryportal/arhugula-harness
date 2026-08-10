@@ -2,8 +2,8 @@
 artifact: design-substrate/Cross_Axis_Composition_Document_v2_21.md
 version: v2.21 (in-place status flip; no new delta version)
 clearance_event: prescribed in-place amendment — §2.3.9 row 1 `R-planned` → `R-live`
-reviewer_chain: 9 out-of-family codex rounds + merge-gate 3-lens (concurrency / spec-conformance / test-witness, all APPROVE) at PR #1067; the flip itself was flagged as the owed post-merge follow-up by the spec-conformance lens
-merge_commit: d0c07ac8 (PR #1067, 2026-07-20)
+reviewer_chain: "9 out-of-family codex rounds + merge-gate 3-lens (concurrency / spec-conformance / test-witness, all APPROVE) at PR #1067; the flip itself was flagged as the owed post-merge follow-up by the spec-conformance lens"
+merge_commit: "d0c07ac8 (PR #1067, 2026-07-20)"
 date: 2026-07-20
 ---
 

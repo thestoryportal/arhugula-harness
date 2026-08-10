@@ -6,14 +6,14 @@ clearance_type: implementation-planner-apply-pass
 back_reference:
   - .harness/halt-overnight-expansion-2026-05-31.md (Halt-3 — Item 12)
   - design-substrate/Implementation_Plan_Operational_Discipline_v2_4.md §0.4.2 (C3-15 Path (i-refined) deletion record — source for the 2 canonical examples)
-  - design-substrate/Cross_Axis_Composition_Document_v2_18.md (sibling PR #110 — halt-doc Item 11 closure)
+  - "design-substrate/Cross_Axis_Composition_Document_v2_18.md (sibling PR #110 — halt-doc Item 11 closure)"
   - operator AskUserQuestion 2026-05-31 Option (B) carve-out + C3-15 examples ratification
 merge_commit: (pending)
 reviewer_chain:
-  - probe-first empirical orientation at v2.27 arc (PR #94 standing-posture amendment 5)
+  - "probe-first empirical orientation at v2.27 arc (PR #94 standing-posture amendment 5)"
   - operator AskUserQuestion 2026-05-31 (Option B carve-out + C3-15 examples scope)
   - design-phase posture session 2026-05-31 (operator-declared per workspace CLAUDE.md §11.3)
-  - sibling-PR convention per `[[advisor-44th-application-dont-bundle-distinct-structural-shapes]]` (refresh-vs-new-authoring shape distinction; PR #110 is the refresh sibling)
+  - "sibling-PR convention per `[[advisor-44th-application-dont-bundle-distinct-structural-shapes]]` (refresh-vs-new-authoring shape distinction; PR #110 is the refresh sibling)"
 ---
 
 # Clearance — `Implementation_Plan_Operational_Discipline v2.27`

@@ -5,7 +5,7 @@ cleared_at: 2026-06-16T00:00:00-06:00
 clearance_type: Phase-6-plan-amendment (atomic-unit decomposition of the B2 multi-server-MCP reshape + gate-axis producer runtime surfaces — impl-against-cleared-spec post runtime-v1.51 / CP-v1.34 / CP-v1.35; R-FS-1 B2-plan; runtime-axis leg)
 back_reference:
   - .harness/r-fs-1-b2-plan-decomposition.md (the B2-plan decomposition summary + coverage matrix + DAG + the U-RT-131 ⊕ U-CP-98 co-land finding)
-  - design-substrate/Spec_Harness_Runtime_v1.md §14.9.10 (v1.51 — the B2-spec-1 multi-server reshape: C-RT-04 singular→mapping + routing index + RT-FAIL-MCP-TOOL-NAME-COLLISION + per-host sandbox)
+  - "design-substrate/Spec_Harness_Runtime_v1.md §14.9.10 (v1.51 — the B2-spec-1 multi-server reshape: C-RT-04 singular→mapping + routing index + RT-FAIL-MCP-TOOL-NAME-COLLISION + per-host sandbox)"
   - design-substrate/Spec_Control_Plane_v1_34.md §27.8 (the identity-by-ordinal trust telemetry projection, D3) + Spec_Control_Plane_v1_35.md §19.1.2 Producer ¶ (the composer resolved-host trust feed)
   - .harness/class_1_fork_b2_multi_server_mcp_client_reshape.md (✅ APPLIED) + .harness/class_1_fork_b2_spec_2_gate_axis_materialization.md (✅ APPLIED)
   - design-substrate/Implementation_Plan_Harness_Runtime_v2_46.md (the delta base — preserved verbatim per delta-only-plan-chain; 0 prior unit-body lines changed, full-file diff verified)

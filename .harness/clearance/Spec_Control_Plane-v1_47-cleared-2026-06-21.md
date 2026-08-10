@@ -2,7 +2,7 @@
 artifact: design-substrate/Spec_Control_Plane_v1_47.md
 version: v1.47
 cleared_at: 2026-06-21T00:00:00+00:00
-clearance_type: Phase-7-absorbed-via-spine-ledger (NO operator gate — one additive C-CP-08 §8.1 capability clause: the `segment_replay`/`WAL-segment` resumption-kind row gains "activity outputs cached and replayed", reaching capability-parity with the `event-sourced-replay` row for the cached-output clause; the CP-side capability declaration paired with runtime spec v1.66's §14.23 producer-gate extension)
+clearance_type: "Phase-7-absorbed-via-spine-ledger (NO operator gate — one additive C-CP-08 §8.1 capability clause: the `segment_replay`/`WAL-segment` resumption-kind row gains \"activity outputs cached and replayed\", reaching capability-parity with the `event-sourced-replay` row for the cached-output clause; the CP-side capability declaration paired with runtime spec v1.66's §14.23 producer-gate extension)"
 back_reference:
   - .harness/beyond-mvp-capability-boundary-ledger.md (B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT spine BUILT note)
   - design-substrate/Spec_Harness_Runtime_v1.md (v1.66 — the runtime §14.23.5 producer-gate extension + §14.23.7 follow-on-LANDED; co-published in the same bundled-absorption PR)

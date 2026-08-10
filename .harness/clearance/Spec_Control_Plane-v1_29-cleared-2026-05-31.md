@@ -9,9 +9,9 @@ back_reference:
   - Council orchestrator pilot session 2026-05-31 (T1 cascade-grouping-shape resolution at empirical probe)
 merge_commit: <pending — to be filled at PR merge>
 reviewer_chain:
-  - council orchestrator pilot 2026-05-31: C3 (primary) + C1 (co-primary) + C9 (consultant) + C7 (consultant); T1 resolved in C1's favor via empirical probe of §16.5.7 floor-vs-ceiling semantics
-  - empirical orientation at HEAD: 12 EntryPayload construction sites enumerated (8 CP-axis + 4 runtime-axis); IS spec v1.3 §5.2 amendment 2 cite-verified as engine-layer pattern pre-authorization
-  - spec-writer recipe-completion authoring: NEW §16.5.12 per-composer population recipe + §16.5.3 canonical-reading amendment for IS HEAD 4→5 field-set extension
+  - "council orchestrator pilot 2026-05-31: C3 (primary) + C1 (co-primary) + C9 (consultant) + C7 (consultant); T1 resolved in C1's favor via empirical probe of §16.5.7 floor-vs-ceiling semantics"
+  - "empirical orientation at HEAD: 12 EntryPayload construction sites enumerated (8 CP-axis + 4 runtime-axis); IS spec v1.3 §5.2 amendment 2 cite-verified as engine-layer pattern pre-authorization"
+  - "spec-writer recipe-completion authoring: NEW §16.5.12 per-composer population recipe + §16.5.3 canonical-reading amendment for IS HEAD 4→5 field-set extension"
 ---
 
 # Clearance — `Spec_Control_Plane v1.29`

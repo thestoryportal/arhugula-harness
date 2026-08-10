@@ -9,7 +9,7 @@ back_reference:
 merge_commit: (pending — co-landed in this arc's PR)
 reviewer_chain:
   - advisor full-transcript (BEFORE substantive work — discharged the registered two-authorities probe by BODY-reading the reconciler substrate; GO on store-reuse over the "second authority" anticipation, with the BLOCKING producer-half full-chain witness criterion + the resolving owner_axis CP-only check + the CAS-ordering witness)
-  - by-execution witnesses (the producer→crash→consumer RECONCILER round-trip through the real execute_workflow [RED-without-fix], the engine-class gate-load-bearing guard, the CAS-abort-short-circuit + CAS-clean-falls-through ordering witnesses, and the preserved ESR/WAL/SAVE_POINT reconstruct / skew-fail-closed / no-journal-degrade / DRAINED partial_state / #680 override-path witnesses)
+  - "by-execution witnesses (the producer→crash→consumer RECONCILER round-trip through the real execute_workflow [RED-without-fix], the engine-class gate-load-bearing guard, the CAS-abort-short-circuit + CAS-clean-falls-through ordering witnesses, and the preserved ESR/WAL/SAVE_POINT reconstruct / skew-fail-closed / no-journal-degrade / DRAINED partial_state / #680 override-path witnesses)"
   - out-of-family Codex on the diff (pending pre-merge — `just codex-review`)
 supersedes:
 superseded_by:

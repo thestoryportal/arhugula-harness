@@ -12,14 +12,9 @@ back_reference:
 merge_commit: pending (pre-merge at filing time; B-47 PR A)
 reviewer_chain:
   - empirical grounding sweep (Explore subagent, 2026-07-16) — traced the REAL production audit-signing path to harness_od.multi_tenant_trace_separation_and_audit_ledger.sign_audit_entry (hash-only placeholder "unsigned:{key_id}:{prior_entry_hash}") invoked via harness_cxa.cp_audit_conversion.cp_audit_to_od_audit at every runtime audit write; confirmed the CP-side B-22 seam has zero production callers, so the OD-side mirror is the only path by which §21.2's committed signature reaches persisted entries
-  - precedent alignment — the seam shape (optional backend keyword, absent-path preserved verbatim, canonical message binding, per-algorithm length enforcement, base64 value representation) is a byte-faithful mirror of two already-cleared decisions: C-CP-20 §20.2.1 (B-22, operator chose build-the-seam-now 2026-07-14) and the B-34 representation enforcement (PR #1032, merge-gate 3-lens all-APPROVE)
+  - "precedent alignment — the seam shape (optional backend keyword, absent-path preserved verbatim, canonical message binding, per-algorithm length enforcement, base64 value representation) is a byte-faithful mirror of two already-cleared decisions: C-CP-20 §20.2.1 (B-22, operator chose build-the-seam-now 2026-07-14) and the B-34 representation enforcement (PR #1032, merge-gate 3-lens all-APPROVE)"
   - out-of-family `just codex-review` to convergence + merge-gate 3-lens review at the landing PR (recorded at .harness/merge-gate-log.md)
-notes: |
-  Purely additive delta — §21.2's table/prose preserved verbatim; the 4-attribute
-  AuditSignatureAttributes carrier is shape-unchanged. The delta commits the seam
-  only; backend selection/construction/config (RuntimeConfig surface, bootstrap
-  factory, C9 breaker on the signing call) remain B-47's registered remainder.
-  Rotation-aware key-period selection remains B-33.
+notes: "| Purely additive delta — §21.2's table/prose preserved verbatim; the 4-attribute AuditSignatureAttributes carrier is shape-unchanged. The delta commits the seam only; backend selection/construction/config (RuntimeConfig surface, bootstrap factory, C9 breaker on the signing call) remain B-47's registered remainder. Rotation-aware key-period selection remains B-33."
 ---
 
 # Clearance — `Spec_Operational_Discipline_v1_33.md` (v1.33)

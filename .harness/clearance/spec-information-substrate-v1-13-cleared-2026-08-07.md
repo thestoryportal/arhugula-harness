@@ -4,8 +4,8 @@ version: v1.13
 cleared_at: 2026-08-07T00:00:00-06:00
 clearance_type: Phase-7-absorbed-via-Class-2-fork-ratification (B-57 spec leg; spec-writer apply pass per CLAUDE.md §4.3 + §4.5)
 back_reference:
-  - .harness/class_2_fork_b57_direct_append_writer_owned_opt_in.md (FILED 2026-08-07 PR #1253; RATIFIED 2026-08-07 — Reading A; ratification stamp at that filing's §11)
-  - .harness/forward-register.yaml — B-57 (remedy owner; registered_finding → open at this PR) + B-112 (cause-and-evidence record, PR #1241)
+  - ".harness/class_2_fork_b57_direct_append_writer_owned_opt_in.md (FILED 2026-08-07 PR #1253; RATIFIED 2026-08-07 — Reading A; ratification stamp at that filing's §11)"
+  - ".harness/forward-register.yaml — B-57 (remedy owner; registered_finding → open at this PR) + B-112 (cause-and-evidence record, PR #1241)"
 merge_commit: pending (pre-merge at filing time; B-57 spec leg PR)
 reviewer_chain:
   - operator ratification (2026-08-07) — Reading A (per-call-site opt-in); Reading B (HOLD) declined

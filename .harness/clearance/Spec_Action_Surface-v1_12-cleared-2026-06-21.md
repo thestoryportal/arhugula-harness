@@ -2,14 +2,14 @@
 artifact: design-substrate/Spec_Action_Surface_v1.md
 version: v1.12
 cleared_at: 2026-06-21T00:00:00+00:00
-clearance_type: Phase-7-absorbed-via-spine-ledger (NO operator gate — one additive optional `ToolContract.idempotent: bool = False` field at C-AS-03 §3.1, the AS-side leg of the runtime `B-EFFECT-FENCE-PER-TOOL` arc. Read ONLY by the runtime effect fence (§14.22/§14.22.7) to exempt declared-idempotent tools from the at-most-once reserve. Additive with a safe fence-by-default; the v1.11 `forces_*`/`is_deterministic_inhouse` additive-discriminator precedent. NOT a sandbox discriminator — does NOT enter the §2.2/§2.3 sandbox_tier_floor composition.)
+clearance_type: "Phase-7-absorbed-via-spine-ledger (NO operator gate — one additive optional `ToolContract.idempotent: bool = False` field at C-AS-03 §3.1, the AS-side leg of the runtime `B-EFFECT-FENCE-PER-TOOL` arc. Read ONLY by the runtime effect fence (§14.22/§14.22.7) to exempt declared-idempotent tools from the at-most-once reserve. Additive with a safe fence-by-default; the v1.11 `forces_*`/`is_deterministic_inhouse` additive-discriminator precedent. NOT a sandbox discriminator — does NOT enter the §2.2/§2.3 sandbox_tier_floor composition.)"
 back_reference:
   - .harness/beyond-mvp-capability-boundary-ledger.md (B-EFFECT-FENCE-PER-TOOL spine BUILT note)
   - design-substrate/Spec_Harness_Runtime_v1.md (the runtime §14.22.7 follow-on this AS leg cascades from; co-amended v1.69 → v1.70)
   - design-substrate/Spec_Action_Surface_v1.md (v1.11 — the forces_*/is_deterministic_inhouse additive-discriminator precedent this mirrors; PRESERVED VERBATIM)
 merge_commit: <pending — co-published bundled-absorption PR>
 reviewer_chain:
-  - advisor (full-transcript) — BUILD-vs-gate discriminator: fence-all is the conservative IMPL of the at-most-once-for-non-idempotent intent (NOT a committed invariant); §14.22.7 NAMES per-tool as the follow-on; the tool-intrinsic-vs-invocation-dependent strict-semantic catch (a per-tool flag is sound only as an all-invocations property; default fence-by-default)
+  - "advisor (full-transcript) — BUILD-vs-gate discriminator: fence-all is the conservative IMPL of the at-most-once-for-non-idempotent intent (NOT a committed invariant); §14.22.7 NAMES per-tool as the follow-on; the tool-intrinsic-vs-invocation-dependent strict-semantic catch (a per-tool flag is sound only as an all-invocations property; default fence-by-default)"
   - standing FULL-SPEC operator directive 2026-06-12 (design back-flow pre-authorized; additive field, no operator gate)
   - out-of-family Codex review at the impl-diff PR (decorrelated; <pending>)
 supersedes:

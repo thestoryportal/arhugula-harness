@@ -5,28 +5,12 @@ cleared_at: 2026-08-01T00:00:00-06:00
 clearance_type: spec-writer-apply-pass
 back_reference:
   - .harness/forward-register.yaml row `B-101` (the filed finding; `close_out` pre-selects disposition (b), and its NEAREST-APPROACH VECTOR note is what makes this leg (b)-PLUS)
-  - PR #1166 (the `B-69` impl leg, where `B-101` was surfaced at out-of-family review round 3 [P1] and REPORTED not absorbed)
+  - "PR #1166 (the `B-69` impl leg, where `B-101` was surfaced at out-of-family review round 3 [P1] and REPORTED not absorbed)"
   - PR '#pending' (this arc)
 merge_commit: pending
 reviewer_chain:
-  - >-
-      spec-writer apply pass — applies the PRE-SELECTED disposition (b) in its (b)-PLUS form and EXTENDS NOTHING
-      beyond what the authorizing row's own NEAREST-APPROACH VECTOR note demands. Disposition (a), a closed variant
-      discriminator on ResumeContext, is deliberately NOT applied — it breaks the field-set-preserved-verbatim
-      guarantee Spec_Control_Plane_v1_112.md §0.4 makes, and the row conditions it on a serialization boundary
-      appearing on a real resume path, which does not exist at HEAD (verified, not assumed). ONE scope question is
-      DECIDED and stated rather than buried — whether §1.3(c)'s 'no construction path produces a legacy variant from
-      an accessor-derived one' reaches generic base-schema serialization, or only the CP-owned affordances its own
-      detect-then-refuse witness exercises. The narrower reading is applied, which IS the row's pre-selected
-      disposition (b) verbatim; the broad reading (under which this is a NARROWING, not a clarification) is recorded
-      in full at §0.5 finding (vi) with its one-step escalation route named, so a reviewer can overturn it rather
-      than discover it. No fresh operator gate was owed — the row's own council field routes this to a spec-writer
-      apply pass, and the underlying residual was already on the record at v1.112 §1.2. Rationale at
-      Spec_Control_Plane_v1_114.md §0.3 + §0.5 finding (vi).
-  - empirical grounding pass at this leg — every HEAD claim the appended paragraph makes was re-verified by direct
-    read rather than carried from the row's 2026-07-31 note (`ResumeContext`-typed annotation census, the
-    `model_dump`/`TypeAdapter` sweep across src AND tests, `model_copy` shallowness, `revalidate_instances` absence,
-    the pin test's location). Recorded as a table at §0.4.
+  - ">- spec-writer apply pass — applies the PRE-SELECTED disposition (b) in its (b)-PLUS form and EXTENDS NOTHING beyond what the authorizing row's own NEAREST-APPROACH VECTOR note demands. Disposition (a), a closed variant discriminator on ResumeContext, is deliberately NOT applied — it breaks the field-set-preserved-verbatim guarantee Spec_Control_Plane_v1_112.md §0.4 makes, and the row conditions it on a serialization boundary appearing on a real resume path, which does not exist at HEAD (verified, not assumed). ONE scope question is DECIDED and stated rather than buried — whether §1.3(c)'s 'no construction path produces a legacy variant from an accessor-derived one' reaches generic base-schema serialization, or only the CP-owned affordances its own detect-then-refuse witness exercises. The narrower reading is applied, which IS the row's pre-selected disposition (b) verbatim; the broad reading (under which this is a NARROWING, not a clarification) is recorded in full at §0.5 finding (vi) with its one-step escalation route named, so a reviewer can overturn it rather than discover it. No fresh operator gate was owed — the row's own council field routes this to a spec-writer apply pass, and the underlying residual was already on the record at v1.112 §1.2. Rationale at Spec_Control_Plane_v1_114.md §0.3 + §0.5 finding (vi)."
+  - "empirical grounding pass at this leg — every HEAD claim the appended paragraph makes was re-verified by direct read rather than carried from the row's 2026-07-31 note (`ResumeContext`-typed annotation census, the `model_dump`/`TypeAdapter` sweep across src AND tests, `model_copy` shallowness, `revalidate_instances` absence, the pin test's location). Recorded as a table at §0.4."
   - out-of-family Codex review (`just codex-review-uncommitted`) to convergence
 supersedes: spec-control-plane-v1-113-cleared-2026-07-31.md
 ---

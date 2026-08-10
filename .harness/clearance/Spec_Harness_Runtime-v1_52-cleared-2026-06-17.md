@@ -9,7 +9,7 @@ back_reference:
   - .harness/clearance/Spec_Control_Plane-v1_38-cleared-2026-06-17.md (the paired additive CP carrier)
 merge_commit: <pending — co-published bundled-absorption PR; merge blocked on operator ratification of the §14.5.3 relaxation>
 reviewer_chain:
-  - advisor (pre-substantive, full-transcript) — confirmed Option B; caught + reversed the probe-resolves attempt to dissolve the gate (the decisive asymmetry: default_gate_level had no invariant forbidding it; role has the explicit §14.5.3 invariant 2)
+  - "advisor (pre-substantive, full-transcript) — confirmed Option B; caught + reversed the probe-resolves attempt to dissolve the gate (the decisive asymmetry: default_gate_level had no invariant forbidding it; role has the explicit §14.5.3 invariant 2)"
   - out-of-family Codex review at PR (decorrelated diff review)
   - operator ratification via AskUserQuestion (the §14.5.3 invariant-2/3 relaxation gate) — THIS is the gated clearance event
 supersedes:

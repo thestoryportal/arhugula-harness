@@ -9,7 +9,7 @@ back_reference:
   - design-substrate/Spec_Control_Plane_v1_43.md (the immediately-prior head — B-LAYER-BUDGET-OVERRIDE §2.5.3 amendment; PRESERVED VERBATIM)
 merge_commit: <pending — co-published bundled-absorption PR>
 reviewer_chain:
-  - advisor (full-transcript) — confirmed the pick + classification (impl-to-cleared-spec, no operator gate), steered the carrier fork to Option B (a NEW `PeerFanOutResumeState`, NOT a loosened `FanOutResumeState` — illegal-states-unrepresentable: loosening the orchestrator fields to optional would make `orchestrator_output=None` representable for an ORCHESTRATOR_WORKERS snapshot), prescribed the second-additive-field route over a union, and named the 5 carried correctness items (resumed-terminal PARTIAL; recovered-output→aggregate fold; re-keyed material-diff guard; drop `pause_resumable`; full-chain witness)
+  - "advisor (full-transcript) — confirmed the pick + classification (impl-to-cleared-spec, no operator gate), steered the carrier fork to Option B (a NEW `PeerFanOutResumeState`, NOT a loosened `FanOutResumeState` — illegal-states-unrepresentable: loosening the orchestrator fields to optional would make `orchestrator_output=None` representable for an ORCHESTRATOR_WORKERS snapshot), prescribed the second-additive-field route over a union, and named the 5 carried correctness items (resumed-terminal PARTIAL; recovered-output→aggregate fold; re-keyed material-diff guard; drop `pause_resumable`; full-chain witness)"
   - standing FULL-SPEC operator directive 2026-06-12 (design back-flow pre-authorized; no operator gate owed)
   - out-of-family Codex review at the impl-diff PR (decorrelated; pending)
 supersedes:

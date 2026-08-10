@@ -5,12 +5,12 @@ cleared_at: 2026-05-29T16:00:00-06:00
 clearance_type: Phase-7-absorbed-via-fork-doc
 back_reference:
   - .harness/class_1_fork_yaml_loader_step_payload_scalar_coercion_gap.md
-  - PR #79 (filing)
-  - PR #82 (apply arc — TBD at PR creation)
-  - PR #81 (sibling apply for PR #80; spec v1.37 → v1.38)
+  - "PR #79 (filing)"
+  - "PR #82 (apply arc — TBD at PR creation)"
+  - "PR #81 (sibling apply for PR #80; spec v1.37 → v1.38)"
 merge_commit: TBD-at-PR-merge
 reviewer_chain:
-  - use-the-product probe (post-PR-#78 session, 2026-05-29) — finding #16/#17
+  - "use-the-product probe (post-PR-#78 session, 2026-05-29) — finding #16/#17"
   - advisor 56th + 57th applications (pre-substantive scope-discipline + apply-order + empirical-shim-verify-before-spec-text)
   - operator AskUserQuestion ratification 2026-05-29 Q-set (Q1=A + Q2=α + Q3→routes-to-#80 + Q4=b)
   - empirical pyyaml StrictSafeLoader shim feasibility check (78 LOC; 10/10 strictness tests pass at scratch BEFORE spec authoring)

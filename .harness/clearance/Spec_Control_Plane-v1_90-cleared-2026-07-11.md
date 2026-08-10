@@ -10,7 +10,7 @@ merge_commit: pending (pre-push; bg-session push-blocked — see close report)
 reviewer_chain:
   - Fable-5 adversarial pre-build DDR review (2026-07-11) — R1-R5/C1-C4/M1 incorporated at the DDR before build
   - Empirical §3b probe on HEAD (2026-07-11, pre-build) — refuted the R2 crash-window gap; Option A vacuous
-  - Fable-5 adversarial diff review (this session; Codex TLS-blocked in bg jobs — standing fallback ladder) — VERDICT 0 blocking / 3 concern / 5 cosmetic; D4 independently re-ran the probe + confirmed the §3b vacuity (and sharpened it: unguarded-as-sketched Option A would regress the W3 resume leg); all concerns resolved in-arc (spec+clearance bundled, DDR §10 addendum, W7 added)
+  - "Fable-5 adversarial diff review (this session; Codex TLS-blocked in bg jobs — standing fallback ladder) — VERDICT 0 blocking / 3 concern / 5 cosmetic; D4 independently re-ran the probe + confirmed the §3b vacuity (and sharpened it: unguarded-as-sketched Option A would regress the W3 resume leg); all concerns resolved in-arc (spec+clearance bundled, DDR §10 addendum, W7 added)"
   - impl witnesses (10 new B-18-3C-PREWARM-CASCADE tests incl. W7 R3-guard pair; harness-cp full suite green, runtime non-e2e 2360 green, other axes 1590 green, workspace pyright 0/0/0)
 ---
 

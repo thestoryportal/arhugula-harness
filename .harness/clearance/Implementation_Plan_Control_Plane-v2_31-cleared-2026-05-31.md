@@ -5,8 +5,8 @@ cleared_at: 2026-05-31T13:00:00-06:00
 clearance_type: Phase-7-absorbed-via-fork-doc
 back_reference:
   - .harness/class_1_fork_pr_2_workflow_layer_ctx_access_recipe_underspecified.md
-  - PR #105 (fork-doc filing)
-  - PR #<this PR> (Reading C apply pass)
+  - "PR #105 (fork-doc filing)"
+  - "PR #<this PR> (Reading C apply pass)"
 merge_commit: pending
 reviewer_chain:
   - implementation-planner apply-pass discipline (canonical-reading amendment at U-CP-74..U-CP-79 absorbing CP spec v1.30 §1.1–§1.6)

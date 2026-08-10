@@ -6,12 +6,12 @@ clearance_type: Phase-7-absorbed-via-fork-doc
 back_reference:
   - .harness/class_1_fork_tool_step_no_operator_supplied_converter.md (RATIFIED-AS-READING-B 2026-06-01; this apply arc)
   - .harness/class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md (sibling gap surfaced + filed at this arc; PROPOSING)
-  - PR #169 (converter fork ratification)
+  - "PR #169 (converter fork ratification)"
   - PR (this apply arc — TBD at PR creation)
 merge_commit: TBD-at-PR-merge
 reviewer_chain:
   - use-the-product probe (R-100-mvp-real-workflow-execution, 2026-05-31) — surfaced the converter gap
-  - operator AskUserQuestion ratification 2026-06-01 (Reading B — per-server default tool-contract policy; PR #169)
+  - "operator AskUserQuestion ratification 2026-06-01 (Reading B — per-server default tool-contract policy; PR #169)"
   - advisor (apply-arc pre-substantive — field-shape +2-as-ratified discipline + tier-floor warning) + advisor reconcile call (resolver-gap discovery — converter-necessary-but-not-sufficient)
   - spec-writer apply pass (this arc — Reading B absorption into §14.9.3 stage-3a body + change-note)
   - impl-time grounding pass (1344/1344 harness-runtime non-e2e tests pass + 1 xfail AC#2 marker; pyright strict + ruff clean on touched files)
