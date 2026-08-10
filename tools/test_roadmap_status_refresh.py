@@ -458,6 +458,57 @@ def test_informational_severity_is_prefix_structural_not_substring():
     assert soft_msg.startswith(rsr.INFORMATIONAL_PREFIX)
 
 
+def _merge_no_ff(repo: Path, branch: str, merge_title: str) -> None:
+    subprocess.run(
+        ["git", "merge", "--no-ff", "-q", "-m", merge_title, branch],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_head_refresh_shape_accepts_merge_wrapped_single_file_refresh(tmp_path):
+    # codex round-9: a `git merge --no-ff`-landed refresh keeps the reserved
+    # prefix on a MERGE commit, where plain `git show --name-only` (combined
+    # diff) can return NO paths — the gate must judge the FIRST-PARENT diff
+    # and accept the legitimate one-file shape.
+    repo = _git_scratch_repo(tmp_path, "seed: base", {".harness/roadmap_status.md": "base"})
+    subprocess.run(
+        ["git", "checkout", "-q", "-b", "refresh-branch"], cwd=repo, check=True, capture_output=True
+    )
+    (repo / ".harness" / "roadmap_status.md").write_text("refreshed")
+    subprocess.run(
+        ["git", "commit", "-aqm", "ops: roadmap status refresh post-#9999"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "checkout", "-q", "-"], cwd=repo, check=True, capture_output=True)
+    _merge_no_ff(repo, "refresh-branch", "ops: roadmap status refresh post-#9999")
+    assert rsr.check_head_refresh_shape(repo) == []
+
+
+def test_head_refresh_shape_flags_merge_wrapped_refresh_touching_extra_files(tmp_path):
+    repo = _git_scratch_repo(tmp_path, "seed: base", {".harness/roadmap_status.md": "base"})
+    subprocess.run(
+        ["git", "checkout", "-q", "-b", "wide-branch"], cwd=repo, check=True, capture_output=True
+    )
+    (repo / ".harness" / "roadmap_status.md").write_text("refreshed")
+    (repo / "extra.md").write_text("x")
+    subprocess.run(["git", "add", "extra.md"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-aqm", "ops: roadmap status refresh post-#9999"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "checkout", "-q", "-"], cwd=repo, check=True, capture_output=True)
+    _merge_no_ff(repo, "wide-branch", "ops: roadmap status refresh post-#9999")
+    violations = rsr.check_head_refresh_shape(repo)
+    assert len(violations) == 1
+    assert "extra.md" in violations[0]
+
+
 def test_head_refresh_shape_noop_on_content_commit(tmp_path):
     # a content-titled commit may touch anything — the shape rule binds only
     # refresh-titled commits.

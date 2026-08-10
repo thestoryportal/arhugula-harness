@@ -4,6 +4,10 @@
 
 ---
 
+All canonical artifacts reside at the **design-phase context** (separate Claude Code CLI session; venue details pending operator definition — historical authoring through 2026-05-28 occurred at a separate Claude.ai project, but forward design-phase work moves to Claude Code CLI per operator decision 2026-05-29). When this `CLAUDE.md` cites a canonical artifact, consult the design-phase substrate copy. Citation byte-exact discipline per `Project_Workflow_v1_8.md` §7.4.2.
+
+---
+
 The catch-all family file: content that is not per-axis (§2.1 governance, §2.2 ADR/ADD/PRD, §2.5 axis `CLAUDE.md` pointers) plus the `core` Implementation Plan pointer, which has no dedicated axis letter.
 
 ### 2.1 Governance + execution discipline

@@ -514,14 +514,38 @@ def check_head_refresh_shape(root: Path, ref: str = "HEAD") -> list[str]:
             )
             if shallow:
                 return []
-        changed = subprocess.run(
-            ["git", "show", "--name-only", "--pretty=format:", ref],
+        # Merge-wrapped refresh (codex round-9): a `git merge --no-ff`-landed
+        # refresh keeps the reserved prefix on a MERGE commit, where plain
+        # `git show --name-only` uses combined-diff semantics and can return
+        # NO paths (the result matches a parent) — an empty set would wrongly
+        # fail every such legitimate refresh. §12.2.1 recognizes merge-wrapped
+        # refresh points; judge merges by their FIRST-PARENT diff instead.
+        parents = subprocess.run(
+            ["git", "rev-list", "--parents", "-n", "1", ref],
             cwd=root,
             capture_output=True,
             text=True,
             check=True,
             timeout=10,
-        ).stdout
+        ).stdout.split()[1:]
+        if len(parents) >= 2:
+            changed = subprocess.run(
+                ["git", "diff", "--name-only", f"{ref}^1", ref],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            ).stdout
+        else:
+            changed = subprocess.run(
+                ["git", "show", "--name-only", "--pretty=format:", ref],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            ).stdout
     except (OSError, subprocess.SubprocessError) as e:
         return [
             f"git errored inside a detected work tree while validating the "
