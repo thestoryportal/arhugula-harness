@@ -481,6 +481,21 @@ def check_head_refresh_shape(
             ]
         return []
     try:
+        # Pin the (possibly symbolic) ref to an immutable SHA ONCE — merge-gate
+        # lens 1 on this arc: with `--shape-ref HEAD` a concurrent commit
+        # landing between the title read and the file-set read would make the
+        # gate judge commit A's title against commit B's diff (spurious hard
+        # failure, or transient fail-open). Every subsequent git call uses the
+        # pinned SHA.
+        resolved_ref = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout.strip()
+        ref = resolved_ref
         if title_override is not None:
             # codex round-10: the §12.2.1 invariant binds on the PR TITLE —
             # a refresh-titled PR whose head commit carries an ordinary

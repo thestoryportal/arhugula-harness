@@ -244,6 +244,13 @@ def test_validate_clean_sample_is_under_byte_budget():
     assert not any("head byte budget" in v for v in violations)
 
 
+def test_head_byte_budget_constant_is_pinned():
+    # Merge-gate lens 3 on this arc: the bloat test below reads the constant
+    # and therefore SELF-SCALES — a silent 10x raise of the budget would keep
+    # every witness green. The ratified R1 rule-3 figure is a literal pin.
+    assert rsr.HEAD_BYTE_BUDGET == 25_600
+
+
 def test_validate_flags_byte_budget_violation():
     # Bloat the Next action prose well past HEAD_BYTE_BUDGET without touching
     # any other section's structure.
