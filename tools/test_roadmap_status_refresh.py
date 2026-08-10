@@ -290,6 +290,18 @@ def test_next_action_archive_is_distinct_from_drift_log_archive():
     assert rsr.NEXT_ACTION_ARCHIVE.resolve() != rsr.DEFAULT_ARCHIVE.resolve()
 
 
+def test_cli_rejects_archive_aliased_onto_next_action_archive(capsys):
+    # U-CTX-03 AC #2's runtime half: the structural check above compares only
+    # the hard-coded defaults, so a caller passing
+    # `--archive .harness/roadmap-next-action-archive.md` would otherwise let a
+    # drift-log overflow rewrite the protected round history. main() must
+    # reject the effective path before any write-capable mode runs.
+    rc = rsr.main(["--archive", str(rsr.NEXT_ACTION_ARCHIVE), "--check"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "protected next-action archive" in err
+
+
 def test_actual_roadmap_status_is_under_byte_budget_and_has_no_inline_history():
     """Runs --check's own validate() against the REAL post-truncation
     .harness/roadmap_status.md (not a synthetic SAMPLE) — the concrete AC #2 +

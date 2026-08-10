@@ -435,6 +435,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="print the diff instead of writing")
     args = ap.parse_args(argv)
 
+    # U-CTX-03 AC #2, runtime half: the structural constant check in validate()
+    # only compares the hard-coded defaults — it cannot see a caller aliasing
+    # the drift-log archive onto the PROTECTED next-action archive via
+    # `--archive`, which would let a drift-log overflow rewrite the round
+    # history. Reject the effective path before any write-capable mode runs.
+    if args.archive.resolve() == NEXT_ACTION_ARCHIVE.resolve():
+        print(
+            f"--archive must not point at the protected next-action archive "
+            f"({NEXT_ACTION_ARCHIVE}) — the drift-log trim would rewrite the "
+            f"round history (U-CTX-03 AC #2)",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.state:
         print(json.dumps(compute_state().as_dict(), indent=2))
         return 0
