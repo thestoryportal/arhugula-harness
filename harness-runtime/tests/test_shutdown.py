@@ -630,14 +630,15 @@ async def _successful_shutdown_stage(*_args: Any, **_kwargs: Any) -> bool:
 
 async def _occupy_default_executor() -> tuple[
     ThreadPoolExecutor,
-    ThreadPoolExecutor | None,
+    ThreadPoolExecutor,
     threading.Event,
     asyncio.Future[Any],
 ]:
     """Occupy a one-worker default executor and prove the worker has started."""
     loop = asyncio.get_running_loop()
+    await asyncio.to_thread(lambda: None)
     prior_default_executor = getattr(loop, "_default_executor", None)
-    assert prior_default_executor is None or isinstance(prior_default_executor, ThreadPoolExecutor)
+    assert isinstance(prior_default_executor, ThreadPoolExecutor)
     executor = ThreadPoolExecutor(max_workers=1)
     loop.set_default_executor(executor)
     release = threading.Event()
@@ -1053,7 +1054,7 @@ async def test_shutdown_dispatch_timeout_includes_worker_scheduling_delay(
         release_worker.set()
         await blocker
         loop = asyncio.get_running_loop()
-        loop.set_default_executor(prior_default_executor or ThreadPoolExecutor(max_workers=1))
+        loop.set_default_executor(prior_default_executor)
         executor.shutdown(wait=True)
         assert await asyncio.to_thread(lambda: True) is True
 

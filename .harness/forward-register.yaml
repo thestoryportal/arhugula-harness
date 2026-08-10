@@ -7792,7 +7792,7 @@ items:
     under 0.3, which would mean the two observations had another cause. SIBLING FOUND 2026-08-09 (#1289, the B-126
     arc) -- STEP (5)''s SWEEP HAS ITS FIRST CONCRETE HIT, AND IT IS A DIFFERENT MECHANISM IN THE SAME CLASS. harness-runtime/tests/test_lifecycle_protected_result_store.py::test_gc_sweep_blocks_across_separate_processes_via_cross_process_lock
     asserted a child process signals readiness within a 10.0s deadline (historical pre-closure anchor :1481;
-    current shared readiness helper at :252 and gc_sweep call at :1503).
+    current shared readiness helper at :252 and gc_sweep call at :1533).
     The child is a COLD interpreter that must import the harness packages before it can write the marker, and that
     import cost is what the deadline is really racing. MEASURED, NOT INFERRED: three consecutive standalone runs
     of the very same child script gave time-to-ready of 5.39s / 33.89s / 7.69s -- so the deadline sits INSIDE the
