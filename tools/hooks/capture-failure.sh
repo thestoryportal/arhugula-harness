@@ -45,10 +45,23 @@ TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
 # `npm test` instead of collapsing them into one bucket.
 EXITCODE=$(hook_json "$PAYLOAD" '.tool_error.exit_code')
 CMDRAW=$(hook_json "$PAYLOAD" '.tool_input.command')
-# Flatten BEFORE truncating (codex P2): `cut -c1-40` alone keeps 40 chars of
-# EVERY line, so a heredoc/generated script produced an arbitrarily large
-# signature despite the cap. Newlines/tabs become spaces, then one global cut.
-CMDHEAD=$(printf '%s' "$CMDRAW" | tr '\n\t' '  ' | cut -c1-40)
+# Command identity WITHOUT argument text (codex round-5 P1): a raw 40-char head
+# persisted literal credentials (`API_TOKEN=... cmd`) into the durable log AND
+# re-emitted them into model context on recurrence. Structural fix, no pattern
+# enumeration: keep only the FIRST TOKEN'S NAME (an env-assignment first token
+# keeps just the variable name + `=<redacted>`) for human display, plus an 8-hex
+# hash of the flattened full command for exact recurrence identity — argument
+# text cannot leak by construction. (Flatten first: multiline heads, codex P2.)
+CMDFLAT=$(printf '%s' "$CMDRAW" | tr '\n\t' '  ')
+if [ -n "$CMDFLAT" ]; then
+  CMDNAME=${CMDFLAT%% *}
+  case "$CMDNAME" in *=*) CMDNAME="${CMDNAME%%=*}=<redacted>" ;; esac
+  CMDNAME=$(printf '%s' "$CMDNAME" | cut -c1-24)
+  CMDHASH=$(printf '%s' "$CMDFLAT" | shasum -a 256 2>/dev/null | cut -c1-8)
+  CMDHEAD="${CMDNAME}#${CMDHASH:-nohash}"
+else
+  CMDHEAD=""
+fi
 # Exit code and command identity COMPOSE (codex round-4): exit code alone
 # collapsed unrelated commands that both exit 1 (`git status` vs `npm test`)
 # into one signature — false recurrence, wasted nudge slots.

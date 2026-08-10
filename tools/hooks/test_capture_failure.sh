@@ -58,8 +58,8 @@ printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "same-session recurre
 EC='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-EC","tool_input":{"command":"npm test"},"tool_error":{"exit_code":"1"}}'
 run "$EC" >/dev/null
 SIG_ROW=$(tail -1 "$LOG")
-printf '%s' "$SIG_ROW" | jq -e '.sig == "PostToolUseFailure:Bash:command_failed:1:npm test"' >/dev/null \
-  && ok "sig composes exit_code + command head" || bad "sig not composed: $SIG_ROW"
+printf '%s' "$SIG_ROW" | jq -e '.sig | test("^PostToolUseFailure:Bash:command_failed:1:npm#[0-9a-f]{8}$")' >/dev/null \
+  && ok "sig composes exit_code + command-name#hash identity" || bad "sig not composed: $SIG_ROW"
 
 # 6b) codex round-4: same exit code, DIFFERENT commands → distinct signatures — the
 #     second command's first failure must NOT count as a recurrence of the first.
@@ -68,13 +68,13 @@ OUT=$(run "$EC2")
 [ -z "$OUT" ] && ok "distinct command with same exit code is NOT a recurrence" || bad "cross-command false recurrence: $OUT"
 [ "$(jq -rs '[.[].sig] | unique | length' "$LOG")" = "2" ] && ok "two distinct sigs logged for two commands" || bad "sigs collapsed: $(jq -rs '[.[].sig]' "$LOG")"
 
-# 7) U-CTX-07: falls back to a (truncated) command head when no exit_code is present.
+# 7) U-CTX-07: falls back to the command-name#hash identity when no exit_code.
 : > "$LOG"
 CH='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-CH","tool_input":{"command":"some very long failing command that keeps going past forty characters for sure"}}'
 run "$CH" >/dev/null
 SIG_ROW=$(tail -1 "$LOG")
-printf '%s' "$SIG_ROW" | jq -e '.sig == "PostToolUseFailure:Bash:command_failed:some very long failing command that keep"' >/dev/null \
-  && ok "sig falls back to a 40-char command head" || bad "sig missing cmdhead fallback: $SIG_ROW"
+printf '%s' "$SIG_ROW" | jq -e '.sig | test("^PostToolUseFailure:Bash:command_failed:some#[0-9a-f]{8}$")' >/dev/null \
+  && ok "sig falls back to command-name#hash (no argument text)" || bad "sig cmdhead fallback wrong: $SIG_ROW"
 
 # 8) U-CTX-07: per-session emission cap — only the first TWO nudges of a session are
 #    ever emitted; every qualifying nudge after that is capped (logged, not re-emitted).
@@ -158,6 +158,18 @@ EMITTED=$(grep -c '"emitted":true' "$LOG")
 [ "$EMITTED" = "2" ] && ok "aged-stale-lock 12-way probe emits exactly 2 (ownership-safe takeover)" || bad "stale-takeover cap broken: $EMITTED emitted"
 [ "$(wc -l < "$LOG" | tr -d ' ')" = "13" ] && ok "stale-takeover probe: all 13 occurrences logged" || bad "stale probe: log rows $(wc -l < "$LOG")"
 [ ! -d "$LOG.lock" ] && ok "lock released after stale-takeover probe" || bad "lock directory leaked after stale probe"
+
+# 13b) codex round-5 P1: a command carrying a literal credential must never leak
+#      it — not into the sig, not into the durable log, not into emitted context.
+: > "$LOG"
+SEC='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-SEC","tool_input":{"command":"SECRET_TOKEN=hunter2abc deploy --prod"}}'
+run "$SEC" >/dev/null
+OUT=$(run "$SEC")   # recurrence → emits
+grep -q "hunter2abc" "$LOG" && bad "secret value persisted in log" || ok "secret value absent from durable log"
+printf '%s' "$OUT" | grep -q "hunter2abc" && bad "secret value emitted into context" || ok "secret value absent from emitted context"
+tail -1 "$LOG" | jq -e '.sig | test("SECRET_TOKEN=<redacted>#[0-9a-f]{8}")' >/dev/null \
+  && ok "env-assignment first token redacted to name only" || bad "redaction shape wrong: $(tail -1 "$LOG" | jq -r .sig)"
+printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "redacted sig still recurs correctly" || bad "redacted recurrence broken: $OUT"
 
 # 14) codex round-4: release must verify OWNERSHIP — a hook must never delete a
 #     lock it does not own. Seed a foreign-owned FRESH lock; the hook times out
