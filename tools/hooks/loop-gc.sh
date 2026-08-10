@@ -314,10 +314,14 @@ fi
 MSG="[hygiene]"
 if [ -n "$CANDS" ]; then
   N=$(printf '%s\n' "$CANDS" | grep -c .)
-  LIST=$(printf '%s\n' "$CANDS" | paste -sd'; ' -)
+  # U-CTX-08: bounded to the first 3 candidates + a "(+N more)" tail (loop_lib.sh's
+  # loop_cap_list, shared with loop_pending_hil_summary) — an unbounded worktree list
+  # was unbounded SessionStart context growth on a checkout with many stale worktrees.
+  LIST=$(printf '%s\n' "$CANDS" | loop_cap_list)
   # Branch refs are presented as a comma-separated DATA list, never an executable
   # `git branch -d ...` string — a ref name can contain shell metacharacters (codex P2).
-  BRANCHES=$(printf '%s\n' "$CANDS" | sed -E 's/.*\(([^)]+)\)$/\1/' | paste -sd', ' -)
+  # Capped to the SAME top-3 subset as LIST, so every branch shown has a visible entry.
+  BRANCHES=$(printf '%s\n' "$CANDS" | head -3 | sed -E 's/.*\(([^)]+)\)$/\1/' | paste -sd', ' -)
   MSG="$MSG ${N} stale merged worktree(s) — the explicit post-merge closeout reaps them, or remove manually: ${LIST}. Their merged branch refs (prune each with git branch -d; listed as data): ${BRANCHES}."
 fi
 [ -n "$MEMFLAG" ] && MSG="$MSG ${MEMFLAG}"

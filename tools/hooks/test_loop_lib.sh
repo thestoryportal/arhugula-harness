@@ -207,6 +207,18 @@ printf '%s' "$LIST_BODY" | grep -q '_loop_pending_hil_rows' && ok "loop_pending_
 printf '%s' "$SUM_BODY" | grep -q '_loop_pending_hil_rows' && ok "loop_pending_hil_summary uses the shared extraction" || bad "loop_pending_hil_summary does not call _loop_pending_hil_rows"
 printf '%s' "$SUM_BODY" | grep -q 'awk' && bad "loop_pending_hil_summary still carries its own awk parser (forked parse)" || ok "loop_pending_hil_summary carries no second awk parser"
 
+# 17c-bis) loop_cap_list (U-CTX-08): the generic "top-3 + (+N more)" cap extracted out of
+#     loop_pending_hil_summary so a second caller (loop-gc.sh's stale-worktree hygiene
+#     block) can reuse the SAME cap arithmetic instead of re-deriving it.
+CAP3=$(printf 'a\nb\nc\n' | loop_cap_list)
+[ "$CAP3" = "a; b; c" ] && ok "loop_cap_list: exactly 3 items, no '+N more' tail" || bad "loop_cap_list 3-item form: [$CAP3]"
+CAP5=$(printf 'a\nb\nc\nd\ne\n' | loop_cap_list)
+[ "$CAP5" = "a; b; c (+2 more)" ] && ok "loop_cap_list: 5 items caps to 3 + '(+2 more)'" || bad "loop_cap_list 5-item form: [$CAP5]"
+CAP0=$(printf '' | loop_cap_list)
+[ -z "$CAP0" ] && ok "loop_cap_list: empty input yields empty output (no '(+0 more)')" || bad "loop_cap_list empty-input form: [$CAP0]"
+GC_BODY=$(cat "$SCRIPT_DIR/loop-gc.sh" 2>/dev/null)
+printf '%s' "$GC_BODY" | grep -q 'loop_cap_list' && ok "loop-gc.sh reuses loop_cap_list (no duplicated cap logic)" || bad "loop-gc.sh does not call loop_cap_list"
+
 # 17d) The list obeys the SAME semantics as the summary/skip-set: RESOLVED clears, a new
 #      ACTIVATE scopes to the current run, and only the leading token keys the item.
 loop_resolve R-103 "answered" >/dev/null

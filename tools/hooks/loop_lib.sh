@@ -198,20 +198,37 @@ loop_pending_hil_list() {
   _loop_pending_hil_rows
 }
 
+# Generic "top-3 + (+N more)" cap (U-CTX-08): given a newline-separated list of items on
+# stdin, echo them joined "; ", bounded to the first 3, with a "(+N more)" tail when the
+# list is longer. Extracted from loop_pending_hil_summary below so every SessionStart-
+# context list this hook family renders (pending HIL items, stale worktrees, ...) shares
+# ONE cap implementation instead of re-deriving the "head -3 / N-3 more" arithmetic per
+# caller — a second copy would be free to drift on the boundary (item #3 vs #4, off-by-
+# one on the "more" count). Silent on an empty list (no items ⇒ no output, no "(+0 more)").
+# Usage: CAP=$(printf '%s\n' "$rows" | loop_cap_list)
+loop_cap_list() {
+  local rows; rows=$(cat)
+  [ -z "$rows" ] && return 0
+  local n; n=$(printf '%s\n' "$rows" | grep -c .)
+  local head3; head3=$(printf '%s\n' "$rows" | head -3 | paste -sd';' - | sed 's/;/; /g')
+  local more=""; [ "$n" -gt 3 ] && more=" (+$((n-3)) more)"
+  printf '%s%s' "$head3" "$more"
+}
+
 # Operator-facing summary of the LAST run's still-PENDING deferrals (a RESOLVED-HIL row
 # clears an item per the same last-write-wins rule as loop_skip_set), for SessionStart
 # surfacing ("clearly presented when they engage next"). Compact one line; empty when
 # there are none. Lists up to 3 items + a "+N more" tail so the SessionStart context
-# stays bounded. Item order is item-ID-sorted (the shared extraction sorts), so which 3
-# items head the summary is deterministic rather than awk-iteration-order dependent.
+# stays bounded (via loop_cap_list above). Item order is item-ID-sorted (the shared
+# extraction sorts), so which 3 items head the summary is deterministic rather than
+# awk-iteration-order dependent.
 loop_pending_hil_summary() {
   local rows n
   rows=$(_loop_pending_hil_rows)
   [ -z "$rows" ] && return 0
   n=$(printf '%s\n' "$rows" | grep -c .)
-  local head3; head3=$(printf '%s\n' "$rows" | head -3 | paste -sd';' - | sed 's/;/; /g')
-  local more=""; [ "$n" -gt 3 ] && more=" (+$((n-3)) more)"
-  printf '[loop] ⏸ %s item(s) await your input from the last loop run: %s%s. See .harness/loop_status.md' "$n" "$head3" "$more"
+  local cap; cap=$(printf '%s\n' "$rows" | loop_cap_list)
+  printf '[loop] ⏸ %s item(s) await your input from the last loop run: %s. See .harness/loop_status.md' "$n" "$cap"
 }
 
 # Turn loop mode ON: create the marker + log the activation. Usage: loop_activate [reason]
