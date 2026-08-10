@@ -54,6 +54,13 @@ snapshot:
   standalone_registered: 0
   rfs1_status: resolved
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (2026-08-10, R-CTX-1 context-optimization program OPENED —
+  # tracked at .harness/forward-register.yaml rows B-148 (open program) +
+  # B-149 (Arc 8 / Floor C held per operator R2), NOT here: this ledger's
+  # rfs1_status: resolved pin forbids open standalone rows (see this file's
+  # own header + forward-register.yaml's header — "do not fold this register
+  # into arc-ledger.yaml", verified empirically). Comment-only note; zero
+  # derivation change; snapshot counts untouched by design.
   # FRONTIER NOTE (2026-07-13, R-FS-2 umbrella CLOSED — G2 closure criterion
   # satisfied). standalone_resolved 4->5. All 15 Wave 1-4 arcs closed; Wave 5
   # hygiene sweep landed (PR #958, docs/cite-only, registered a new B-20
