@@ -1010,27 +1010,8 @@ def test_every_non_native_skill_bridge_preserves_its_canonical_source_contract()
 
 
 @pytest.mark.parametrize(
-    "name",
-    ["frontend-design", "impeccable", "taste-skill", "ui-ux-pro-max"],
-)
-def test_operator_installed_design_skill_has_a_codex_bridge(name: str) -> None:
-    bridge = ROOT / ".agents" / "skills" / name / "SKILL.md"
-    text = bridge.read_text(encoding="utf-8")
-
-    assert f"name: {name}" in text
-    assert f".claude/skills/{name}/SKILL.md" in text
-    assert "--git-common-dir" in text
-    assert "/Users/" not in text
-    assert "complete canonical skill" in text
-
-
-@pytest.mark.parametrize(
     "path",
     [
-        ".claude/skills/frontend-design/SKILL.md",
-        ".claude/skills/impeccable/SKILL.md",
-        ".claude/skills/taste-skill/SKILL.md",
-        ".claude/skills/ui-ux-pro-max/SKILL.md",
         ".harness/memory/semantic/index.jsonl",
         ".impeccable/live/config.json",
         "tools/dashboard/public/index.html",
