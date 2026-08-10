@@ -364,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         "headline_sessions": len(headline_rows),
         "excluded_in_window": excluded,
         "median_first_turn": float(statistics.median(totals)),
-        "mean_first_turn": round(float(statistics.mean(totals)), 1),
+        "mean_first_turn": float(statistics.mean(totals)),
         "min_first_turn": min(totals),
         "max_first_turn": max(totals),
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -398,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
         summary["post_compaction_measured"] = len(pc_totals)
         if pc_totals:
             summary["post_compaction_median"] = float(statistics.median(pc_totals))
-            summary["post_compaction_mean"] = round(float(statistics.mean(pc_totals)), 1)
+            summary["post_compaction_mean"] = float(statistics.mean(pc_totals))
 
     side_rows: list[dict[str, Any]] = []
     if args.sidechains:
@@ -434,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     excluded_note = f"; excluded in window: {excluded}" if excluded else ""
     print(
-        f"median={summary['median_first_turn']:,}  mean={summary['mean_first_turn']:,}"
+        f"median={summary['median_first_turn']:,}  mean={summary['mean_first_turn']:,.1f}"
         f"  min={summary['min_first_turn']:,}  max={summary['max_first_turn']:,}"
         f"  (headline cohort {headline_cohort}: {len(headline_rows)} sessions{excluded_note})"
     )
@@ -444,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"post-compaction: n={n}"
                 f"  median={summary.get('post_compaction_median', 0):,}"
-                f"  mean={summary.get('post_compaction_mean', 0):,}"
+                f"  mean={summary.get('post_compaction_mean', 0):,.1f}"
                 f"  (first call after each compact_boundary — the E4 selector)"
             )
         else:
