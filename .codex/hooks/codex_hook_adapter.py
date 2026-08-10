@@ -159,6 +159,13 @@ def run_bounded(
             stdin_stream.write(input_text)
             stdin_stream.seek(0)
         previous_mask = block_termination_signals()
+
+        def restore_original_signal_mask_in_child() -> None:
+            # The parent blocks cancellation only to bind the Popen handle safely. A
+            # producer must enter exec with the caller's original mask so TERM remains
+            # a cooperative teardown step rather than an automatic KILL escalation.
+            restore_signal_mask(previous_mask)
+
         popen_error: OSError | None = None
         try:
             try:
@@ -173,6 +180,11 @@ def run_bounded(
                         errors="replace",
                         env=env,
                         start_new_session=os.name == "posix",
+                        preexec_fn=(
+                            restore_original_signal_mask_in_child
+                            if previous_mask is not None
+                            else None
+                        ),
                     )
                 except OSError as exc:
                     popen_error = exc

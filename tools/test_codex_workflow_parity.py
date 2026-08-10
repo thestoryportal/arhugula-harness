@@ -636,6 +636,59 @@ def test_hook_adapter_success_terminates_background_descendant(tmp_path: Path) -
         pytest.fail(f"successful hook left descendant alive: pid={child_pid}")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="signal-mask witness requires POSIX")
+def test_hook_adapter_restores_original_signal_mask_in_producer(tmp_path: Path) -> None:
+    adapter = _adapter_module()
+
+    proc = adapter.run_bounded(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json, signal; "
+                "print(json.dumps([int(value) for value in "
+                "signal.pthread_sigmask(signal.SIG_BLOCK, [])]))"
+            ),
+        ],
+        cwd=tmp_path,
+        timeout=5,
+        env=os.environ.copy(),
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    inherited_mask = set(json.loads(proc.stdout))
+    assert inherited_mask.isdisjoint(map(int, adapter.MANAGED_TERMINATION_SIGNALS))
+
+
+@pytest.mark.skipif(os.name != "posix", reason="signal delivery witness requires POSIX")
+def test_hook_adapter_timeout_delivers_cooperative_sigterm(tmp_path: Path) -> None:
+    adapter = _adapter_module()
+    marker = tmp_path / "producer-terminated"
+    env = os.environ.copy()
+    env["TERMINATION_MARKER"] = str(marker)
+
+    proc = adapter.run_bounded(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os, pathlib, signal, time\n"
+                "def handle_term(*_args):\n"
+                "    pathlib.Path(os.environ['TERMINATION_MARKER']).write_text('term')\n"
+                "    raise SystemExit(0)\n"
+                "signal.signal(signal.SIGTERM, handle_term)\n"
+                "time.sleep(30)\n"
+            ),
+        ],
+        cwd=tmp_path,
+        timeout=0.2,
+        env=env,
+    )
+
+    assert proc.returncode == 124
+    assert marker.read_text(encoding="utf-8") == "term"
+
+
 def test_hook_adapter_interrupt_terminates_detached_process_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
