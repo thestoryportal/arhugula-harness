@@ -71,6 +71,11 @@ HEAD_BYTE_BUDGET = 25_600
 # regression the archive split (U-CTX-03) exists to prevent.
 _ARCHIVED_PARAGRAPH_RE = re.compile(r"^\*\*(Prior next action|Round \d+)", re.MULTILINE)
 DRIFT_LOG_CAP = 10
+#: structural soft-severity marker (codex round-8): ONLY messages the validator
+#: itself prefixes with this are non-hard — substring matching on "informational"
+#: would let interpolated filenames/titles containing the word soften a real
+#: violation.
+INFORMATIONAL_PREFIX = "[informational] "
 
 
 class RoadmapStatusError(ValueError):
@@ -413,8 +418,8 @@ def validate(text: str, status_path: Path = DEFAULT_STATUS) -> list[str]:
             # as informational rather than a hard violation; the SessionStart hook
             # is the authoritative halt-or-proceed gate for this.
             violations.append(
-                f"workspace_state_hash stored={stored_hash} computed={computed} "
-                "(informational — verify against §12.1 fixed-point carve-out "
+                f"{INFORMATIONAL_PREFIX}workspace_state_hash stored={stored_hash} "
+                f"computed={computed} (verify against §12.1 fixed-point carve-out "
                 "before treating as drift)"
             )
 
@@ -442,6 +447,7 @@ def check_head_refresh_shape(root: Path, ref: str = "HEAD") -> list[str]:
     # no git binary — skip) from "git ERRORED inside a real checkout" (fail
     # CLOSED: returning [] there would report success without enforcing the
     # refresh file-set at all — codex round-4).
+    checkout_marker = (root / ".git").exists()
     try:
         probe = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
@@ -450,9 +456,23 @@ def check_head_refresh_shape(root: Path, ref: str = "HEAD") -> list[str]:
             text=True,
             timeout=10,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as e:
+        if checkout_marker:
+            # codex round-8: a .git marker exists, so this is a real checkout
+            # whose probe ERRORED (timeout/permissions) — skipping would report
+            # success without enforcing the refresh shape at all.
+            return [
+                f"git probe errored in a directory carrying a .git marker — "
+                f"failing closed rather than skipping the refresh-shape gate: {e}"
+            ]
         return []
     if probe.returncode != 0 or probe.stdout.strip() != "true":
+        if checkout_marker:
+            return [
+                f"git refused --is-inside-work-tree in a directory carrying a .git "
+                f"marker (rc={probe.returncode}, stderr={probe.stderr.strip()!r}) — "
+                f"failing closed rather than skipping the refresh-shape gate"
+            ]
         return []
     try:
         title = subprocess.run(
@@ -586,7 +606,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         violations = validate(text, args.status)
         violations.extend(check_head_refresh_shape(status_root, args.shape_ref))
-        hard = [v for v in violations if "informational" not in v]
+        # Severity is STRUCTURAL: only messages the validator itself prefixed
+        # with INFORMATIONAL_PREFIX are soft (codex round-8 — a substring
+        # search would let an attacker-controlled filename/title containing
+        # the word "informational" silently soften a hard violation).
+        hard = [v for v in violations if not v.startswith(INFORMATIONAL_PREFIX)]
         for v in violations:
             print(f"  - {v}", file=sys.stderr)
         if hard:

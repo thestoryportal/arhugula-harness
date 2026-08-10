@@ -24,7 +24,7 @@
 
 **Current next action (post-#1294).** The next implementable unit is `R-CTX-1` (context-optimization program, register row B-148). PR-1 merged (`a8850e31`): RB-SUB-03 MCP cleanup + `tools/context_budget.py` / `just context-budget` (merge-gate ALL-APPROVE; codex R8; baseline: cold-start `*/cli` median ~106.8k, post-compaction ~124.7k, sidechains n=165 ~75.2k). CARRIED: E4 selector needs a TEST before U-CTX-21/B-148 close. Next serial merge: PR-2 (Arc 2). Gate G1: #1292 Codex-owned — poll, never touch; Wave 2 after it (Arc 4 also after PR-2). `B-124` HIL stays the harness-code gate (then `B-147`→`B-145`→`B-144`). `held=2` honored.
 
-**Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head).
+**Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
 ## Remaining forward work
 

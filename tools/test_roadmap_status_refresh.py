@@ -432,6 +432,32 @@ def test_head_refresh_shape_skips_non_git_directory(tmp_path):
     assert rsr.check_head_refresh_shape(tmp_path) == []
 
 
+def test_head_refresh_shape_fails_closed_when_probe_errors_with_git_marker(tmp_path, monkeypatch):
+    # codex round-8: probe error in a dir carrying a .git marker is a real
+    # checkout whose git is broken — must be a violation, not a skip.
+    repo = _git_scratch_repo(
+        tmp_path, "ops: roadmap status refresh post-#9999", {".harness/roadmap_status.md": "x"}
+    )
+
+    def raising_probe(cmd, *args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, 10)
+
+    monkeypatch.setattr(rsr.subprocess, "run", raising_probe)
+    violations = rsr.check_head_refresh_shape(repo)
+    assert len(violations) == 1
+    assert "failing closed" in violations[0]
+
+
+def test_informational_severity_is_prefix_structural_not_substring():
+    # codex round-8: a HARD violation whose interpolated text merely CONTAINS
+    # the word "informational" must never be softened — severity is carried by
+    # the validator's own prefix, not by substring search.
+    hard_msg = "refresh touched informational-notes.md — wrong changed-file set"
+    assert not hard_msg.startswith(rsr.INFORMATIONAL_PREFIX)
+    soft_msg = rsr.INFORMATIONAL_PREFIX + "hash lag, verify carve-out"
+    assert soft_msg.startswith(rsr.INFORMATIONAL_PREFIX)
+
+
 def test_head_refresh_shape_noop_on_content_commit(tmp_path):
     # a content-titled commit may touch anything — the shape rule binds only
     # refresh-titled commits.
@@ -465,7 +491,7 @@ def test_actual_roadmap_status_is_under_byte_budget_and_has_no_inline_history():
     text = rsr.DEFAULT_STATUS.read_text(encoding="utf-8")
     assert len(text.encode("utf-8")) <= rsr.HEAD_BYTE_BUDGET
     violations = rsr.validate(text)
-    hard = [v for v in violations if "informational" not in v]
+    hard = [v for v in violations if not v.startswith(rsr.INFORMATIONAL_PREFIX)]
     assert hard == [], hard
 
 
