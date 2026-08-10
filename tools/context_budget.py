@@ -313,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         all_rows = collect_all(directory)
-    except (OSError, MalformedTranscriptError) as e:
+    except (OSError, MalformedTranscriptError, UnicodeDecodeError) as e:
         # Fail closed: silently substituting older sessions would let the
         # acceptance metric change without revealing the missing input.
         print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
@@ -390,7 +390,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             for path in eligible_files:
                 post_compaction_rows.extend(post_compaction_first_turns(path))
-        except (OSError, MalformedTranscriptError) as e:
+        except (OSError, MalformedTranscriptError, UnicodeDecodeError) as e:
             print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
             return 1
         post_compaction_rows = _windowed(post_compaction_rows)
@@ -405,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             for path in eligible_files:
                 side_rows.extend(sidechain_first_turns(path))
-        except (OSError, MalformedTranscriptError) as e:
+        except (OSError, MalformedTranscriptError, UnicodeDecodeError) as e:
             print(f"unreadable transcript — aborting measurement: {e}", file=sys.stderr)
             return 1
         side_rows = _windowed(side_rows)
