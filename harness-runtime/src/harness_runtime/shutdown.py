@@ -478,7 +478,24 @@ def _disarm_standalone_atexit_backstop(ctx: object) -> None:
     atexit.unregister(backstop)
 
 
-def _spawn_deferred_tracer_close(ctx: object) -> None:
+def _claim_closing_gate_if_drained(ctx: object) -> bool:
+    """ATOMICALLY (codex round-3 P1): either commit the per-ctx closing gate
+    when NO flush worker is registered — so a concurrent public
+    `flush_observability()` REFUSES instead of registering while the
+    collector stop below is in progress — or report the registry non-empty
+    without touching the gate. The check and the gate commit must be one
+    critical section: a worker registering between them would export against
+    a stopping collector with only the tracer deferring (the span-loss
+    ordering C-RT-10 v1.117 exists to prevent), on the NORMAL path too."""
+    with _inflight_lock:
+        entry = _inflight_tracer_flush.get(id(ctx))
+        if entry is not None and not _entry_is_stale(entry, ctx):
+            return False
+        _deferred_closing[id(ctx)] = _try_weakref(ctx)
+        return True
+
+
+def _spawn_deferred_tracer_close(ctx: object, *, defer_collector: bool = False) -> None:
     """Best-effort deferred close (codex round-5 P1): a step-3b close skipped
     for an in-flight flush would otherwise NEVER happen — `shutdown()` caches
     its report and every later call returns the cache — leaving a long-lived
@@ -488,7 +505,17 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
     the close strictly follows the last worker's completion signal. The
     close failure is deliberately swallowed: the returned report already
     tagged `tracer_provider`, and this runs long after that report was
-    delivered — there is no caller left to surface to."""
+    delivered — there is no caller left to surface to.
+
+    ``defer_collector`` (C-RT-10 v1.117, B-150 collector half): step 3a was
+    also skipped for the same in-flight worker, so the watcher executes the
+    collector stop FIRST — the 3a→3b relative order holds on every path.
+    The stop is loop-bound (`CollectorDaemonSupervisor.stop` awaits the
+    daemon task on the harness loop); the watcher schedules it thread-safely
+    and treats a CLOSED loop as already-terminated (the daemon task died
+    with the loop). The exit-time ordered backstop stays tracer-only: at
+    interpreter exit the loop is gone, so the collector is terminated by
+    construction."""
     ctx_key = id(ctx)
     ctx_ref = _try_weakref(ctx)
     with _inflight_lock:
@@ -500,6 +527,44 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
     shutdown_fn = getattr(provider, "shutdown", None)
     if shutdown_fn is None:
         return
+
+    # Captured ON the loop (we are inside `shutdown()` here): the watcher
+    # thread cannot call `asyncio.get_running_loop()` itself.
+    _deferred_daemon = getattr(ctx, "collector_daemon", None) if defer_collector else None
+    try:
+        _harness_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+    except RuntimeError:
+        _harness_loop = None
+
+    def _deferred_collector_stop() -> None:
+        """Run the deferred 3a stop from the watcher thread (loop-dead-safe).
+
+        A closed/absent — or no-longer-RUNNING — loop means the daemon's
+        `_run_loop` task cannot execute the stop: closed ⇒ the task was
+        destroyed with it; stopped-but-open (codex round-1 P1b) ⇒ a queued
+        `run_coroutine_threadsafe` callback would never run, the bounded
+        `result()` below would time out, and the tracer would close with the
+        stop still pending — so both are treated terminated per C-RT-10
+        v1.117. (Residual TOCTOU: a loop stopping between this check and the
+        callback executing degrades to that same bounded timeout — swallowed,
+        tracer still closes.) Failures are swallowed for the same
+        no-caller-left reason as the tracer close; the report already
+        carries `collector_daemon`."""
+        if (
+            _deferred_daemon is None
+            or _harness_loop is None
+            or _harness_loop.is_closed()
+            or not _harness_loop.is_running()
+        ):
+            return
+        try:
+            stop = cast(Callable[..., object], _deferred_daemon.stop)  # type: ignore[attr-defined]
+            coro = stop(timeout_seconds=5.0)
+            if asyncio.iscoroutine(coro):
+                future = asyncio.run_coroutine_threadsafe(coro, _harness_loop)
+                future.result(timeout=10.0)
+        except Exception:
+            pass
 
     def _live_workers_or_gate() -> tuple[threading.Event, ...]:
         """ATOMICALLY (round-10 P1) either return the still-live workers —
@@ -579,6 +644,8 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
             pending = _live_workers_or_gate()
             if not pending:
                 break
+        # Deferred 3a strictly before the deferred 3b (C-RT-10 v1.117).
+        _deferred_collector_stop()
         if _close_once_serialized():
             atexit.unregister(_ordered_backstop)
         # else: ordered backstop stays registered; retries at exit
@@ -1150,10 +1217,23 @@ async def shutdown(
     if flush_report.timed_out:
         timed_out = True
 
-    # Step 3a — collector daemon.
+    # Step 3a — collector daemon. In-flight-conditional per C-RT-10 v1.117
+    # (B-150 collector half): a timed-out flush worker still exporting means
+    # a late-completing export would land on a stopped collector — skip the
+    # inline stop, report it, and let the deferred chain (step 3b below)
+    # execute it in 3a→3b order after the last worker completes.
+    collector_deferred = False
     remaining = max(0.0, deadline - time.monotonic())
     try:
-        await _close_collector_daemon(ctx, remaining)
+        if _claim_closing_gate_if_drained(ctx):
+            # Gate committed atomically with the drained check (codex
+            # round-3 P1): late flush calls now refuse, so the stop below
+            # cannot race a fresh registration on the normal path either.
+            await _close_collector_daemon(ctx, remaining)
+        else:
+            failures.append("collector_daemon")
+            timed_out = True
+            collector_deferred = True
     except Exception:
         failures.append("collector_daemon")
 
@@ -1179,9 +1259,42 @@ async def shutdown(
             # shutdown() call would ever retry this close).
             failures.append("tracer_provider")
             timed_out = True
-            _spawn_deferred_tracer_close(ctx)
+            _spawn_deferred_tracer_close(ctx, defer_collector=collector_deferred)
         else:
-            await asyncio.wait_for(_close_tracer_provider(ctx), timeout=remaining)
+            proceed_inline = True
+            if collector_deferred:
+                # The worker finished between 3a and 3b. Before completing
+                # the deferred collector stop INLINE, atomically re-check
+                # the registry AND commit the closing gate (out-of-family
+                # codex round-1 P1a; same critical section as the round-3
+                # normal-path claim): the inline collector await below
+                # widens the check-then-close window, and a concurrent
+                # `flush_observability()` registering during it would leave
+                # the tracer close overlapping a live export. The gate makes
+                # late flush calls refuse instead.
+                proceed_inline = _claim_closing_gate_if_drained(ctx)
+            if not proceed_inline:
+                # A NEW worker registered between the checks — this is the
+                # deferred path after all.
+                failures.append("tracer_provider")
+                timed_out = True
+                _spawn_deferred_tracer_close(ctx, defer_collector=True)
+            else:
+                if collector_deferred:
+                    # Complete the deferred collector stop INLINE, still
+                    # ahead of the tracer close (C-RT-10 v1.117 — the 3a→3b
+                    # order holds on EVERY path), and withdraw the report
+                    # tag on success.
+                    try:
+                        await _close_collector_daemon(ctx, max(0.0, deadline - time.monotonic()))
+                        failures.remove("collector_daemon")
+                    except Exception:
+                        pass  # tag already reported at 3a; stop failed for real
+                    # Recompute the tracer budget AFTER the collector stop
+                    # (codex round-1 P1c): the stale pre-collector remainder
+                    # would let the two closes nearly double the deadline.
+                    remaining = max(0.0, deadline - time.monotonic())
+                await asyncio.wait_for(_close_tracer_provider(ctx), timeout=remaining)
     except TimeoutError:
         failures.append("tracer_provider")
         timed_out = True

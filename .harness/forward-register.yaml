@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 151
+  total: 152
   open: 1
   design_substrate_gated: 0
   registered_finding: 30
   operator_gated: 0
   held: 2
-  closed: 118
-  identity_digest: '0e76747056ddbe1a'
+  closed: 119
+  identity_digest: '9cde00dac80b2723'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -8112,7 +8112,7 @@ items:
   heading: '### B-149 · R-CTX-1 Arc 8 / Floor C conditional-pack redesign — PARKED, Floor B terminal *(operator R2, 2026-08-10; D-H probe preconditions carried)*'
 - id: B-150
   title: deferred-flush aftermath surfaces — collector stopped before a timed-out flush completes; standalone flush timeout leaves the SDK atexit racing the worker
-  status: registered_finding
+  status: closed
   summary: 'WHAT IT IS. Two aftermath surfaces of the B-147 bounded-flush machinery (PR #1303), surfaced by the
     codex delta round AFTER the 10-round loop closed and deliberately REGISTERED rather than absorbed (the
     #1290 precedent). (1) COLLECTOR ORDERING (codex P1): C-RT-10 orders collector stop (step 3a) before the
@@ -8153,7 +8153,51 @@ items:
     force_flush checks _shutdown only at entry then blocks in _export. The SDK does NOT internally
     serialize shutdown against an in-flight force_flush, so the standalone-flush atexit-arming half stays
     warranted for any future external caller of the public primitive.'
+  closed_2026_08_11: 'BOTH HALVES CLOSED. Atexit half at PR #1307 (impl-only; ordered backstop armed on
+    the standalone flush-timeout path). Collector half at the Runtime v1.117 spec leg (this PR): C-RT-10
+    step-3a gains the in-flight-conditional deferral mirroring 3b (deferred watcher runs 3a->3b in order;
+    between-3a-and-3b worker finish completes the stop inline with the tag withdrawn); deferred-close
+    discipline ratified in contract text (ordered atexit backstop, loop-bound stop with closed-loop treated
+    terminated, timeout-bound exclusion, narrows-not-eliminates honesty); both step-6 invariants qualified
+    deferred-path-only. Impl companion same-PR: 3a mirror condition + inline race completion + watcher-chain
+    collector stop with loop-dead guard; 3 witnesses, 2 mutation probes RED (probe 2 caught a vacuous
+    first-draft race witness -- fixed to frame-scoped scripting), #1303 witness set re-run 84/84 per
+    close_out step 3. /resolve advisor=A (3 corrections absorbed) + codex unparseable-recorded. Fork doc
+    class_1_fork_b150_collector_stop_ordering_deferral.md; clearance
+    spec-harness-runtime-v1-117-cleared-2026-08-11.md.'
+  pr: '#1310 (the B-150 collector-half spec+impl leg; atexit half at #1307)'
   heading: '### B-150 · deferred-flush aftermath — collector-stop ordering + standalone-flush atexit arming *(surfaced by PR #1303 codex delta round post-cap, 2026-08-11)*'
+- id: B-152
+  title: B-150 deferral-unavailable residuals -- stalled-loop stop can land after tracer close; watcher
+    start-failure orphans the collector in a long-lived process
+  status: registered_finding
+  summary: 'TWO residuals of the B-150 collector-half deferral (PR #1310), surfaced by out-of-family codex
+    round 2 and independently adjudicated BENIGN-DIRECTION/BOUNDED by merge-gate lens 1 on the same PR --
+    the weight disagreement (codex P1/P2 vs lens-1 non-blocking) is recorded per the disagreement-is-signal
+    discipline. (1) STALLED-LOOP LATE STOP (codex P1; shutdown.py _deferred_collector_stop): when the
+    harness loop is stopped-but-open the guard treats the collector terminated and the tracer closes; a loop
+    that later RESUMES leaves the daemon task alive (collector outlives, tracer-before-collector inversion),
+    and a loop stalled >10s can run the queued stop AFTER the tracer close. Lens-1 adjudication: the
+    inversion is in the HARMLESS direction relative to the B-150 hazard (collector stopping LATE cannot lose
+    late-export spans; stopping EARLY was the defect) and the bound is declared best-effort by the v1.117
+    deferred-close paragraph. Absorbing it would require proof-of-termination on a loop that cannot execute
+    -- an unbounded wait, the exact class B-147 removed. (2) WATCHER START-FAILURE ORPHAN (codex P2): if
+    Thread.start() fails after the collector handoff (thread exhaustion at shutdown), nothing ever stops the
+    collector in a long-lived process (the ordered backstop is tracer-only, exit-only). Lens-1: bounded
+    resource leak (one health-check task), already reported in ShutdownReport failures. An on-loop fallback
+    watcher is a second ownership mechanism -- design work, not a patch.'
+  close_out: '(1) Ground whether any production path can hold the harness loop stopped-but-open across a
+    shutdown with a lingering flush worker (the daemon-thread-loop deployment lens-1 named) -- if none, (1)
+    is vacuous and closes as a declared boundary. (2) For the start-failure orphan, price an on-loop
+    fallback task (await workers then stop collector) vs a boundary declaration; either lands as a small
+    Runtime delta per X-AL-3 if spec-touching. (3) Both fixes, if built, need witnesses per the #1310
+    subprocess/ordering shapes. WHAT WOULD FALSIFY IT: a Runtime delta retiring the deferred chain entirely,
+    or the live OTLP receiver arc restructuring collector ownership -- re-ground there first.'
+  council: No. Bounded sequencing residuals inside one axis with a named owner; the only judgement is the
+    benign-direction adjudication, already made by two decorrelated reviewers on the filing PR.
+  pr: '#1310 (registered at the B-150 collector-half close; codex round-2 findings, lens-1 adjudication)'
+  heading: '### B-152 · B-150 deferral-unavailable residuals -- stalled-loop late stop + watcher
+    start-failure orphan *(surfaced at PR #1310 codex round 2, 2026-08-11)*'
 - id: B-151
   title: standalone atexit backstop residual concurrency shapes -- re-arm after deferred takeover creates one
     unserialized shutdown-vs-shutdown pair; dead-probe gate overwrite under id reuse
