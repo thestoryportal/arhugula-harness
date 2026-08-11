@@ -255,25 +255,43 @@ class RetryBreakerToolDispatcher:
                             attempt,
                         )
                         next_stage = transition.to_stage
-                        if (
-                            next_stage is StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF
-                            and not is_last_attempt
-                        ):
-                            backoff_seconds = self.retry_breaker.compute_delay_seconds(attempt)
-                            inner_span.set_attribute("retry.delay_ms", int(backoff_seconds * 1000))
-                            inner_span.set_attribute(
-                                "retry.cause_attribution",
-                                ValidatorRetryExitClass.TRANSIENT_RETRY.value,
-                            )
-                            inner_span.set_attribute(
-                                "retry.fail_class",
-                                ValidatorRetryExitClass.TRANSIENT_RETRY.value,
-                            )
-                            inner_span.set_attribute("retry.terminal", "retry")
-                            last_failure_class = cause_class
+                        if next_stage is StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF:
+                            if not is_last_attempt:
+                                backoff_seconds = self.retry_breaker.compute_delay_seconds(attempt)
+                                inner_span.set_attribute(
+                                    "retry.delay_ms", int(backoff_seconds * 1000)
+                                )
+                                inner_span.set_attribute(
+                                    "retry.cause_attribution",
+                                    ValidatorRetryExitClass.TRANSIENT_RETRY.value,
+                                )
+                                inner_span.set_attribute(
+                                    "retry.fail_class",
+                                    ValidatorRetryExitClass.TRANSIENT_RETRY.value,
+                                )
+                                inner_span.set_attribute("retry.terminal", "retry")
+                                last_failure_class = cause_class
+                            else:
+                                # The stage-fresh classifier would retry, but
+                                # the independent transport-attempt budget is
+                                # exhausted.
+                                inner_span.set_attribute("retry.delay_ms", 0)
+                                inner_span.set_attribute(
+                                    "retry.cause_attribution",
+                                    ValidatorRetryExitClass.TRANSIENT_RETRY.value,
+                                )
+                                inner_span.set_attribute(
+                                    "retry.fail_class",
+                                    ValidatorRetryExitClass.TERMINAL_FAIL_EXIT.value,
+                                )
+                                inner_span.set_attribute("retry.terminal", "max-attempts")
+                                last_failure_class = cause_class
+                                break
+
                         else:
-                            # Exhaustion: either last attempt or staircase
-                            # escalation past STAGE_2.
+                            # Defensive branch contract: current classifiers
+                            # cannot reach beyond STAGE_2 from the stage-fresh
+                            # call above.
                             inner_span.set_attribute("retry.delay_ms", 0)
                             inner_span.set_attribute(
                                 "retry.cause_attribution",
@@ -281,11 +299,10 @@ class RetryBreakerToolDispatcher:
                             )
                             inner_span.set_attribute(
                                 "retry.fail_class",
-                                ValidatorRetryExitClass.TERMINAL_FAIL_EXIT.value,
+                                ValidatorRetryExitClass.TRANSIENT_RETRY.value,
                             )
-                            inner_span.set_attribute("retry.terminal", "max-attempts")
-                            last_failure_class = cause_class
-                            break
+                            inner_span.set_attribute("retry.terminal", "escalate")
+                            raise
                     except Exception as exc:
                         # Fail-fast: any other §14.9.5 typed error propagates.
                         inner_span.set_attribute("retry.delay_ms", 0)

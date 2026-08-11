@@ -61,11 +61,11 @@ snapshot:
   total: 151
   open: 1
   design_substrate_gated: 0
-  registered_finding: 31
+  registered_finding: 30
   operator_gated: 0
   held: 2
-  closed: 117
-  identity_digest: '261d685f7fea2732'
+  closed: 118
+  identity_digest: '0e76747056ddbe1a'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7888,7 +7888,7 @@ items:
 - id: B-145
   title: retry.backoff_ms + retry.cause_class have zero producers, and the mandated retry.terminal = escalate value
     is never emitted -- collapsed into max-attempts
-  status: registered_finding
+  status: closed
   summary: 'WHAT IT IS. TWO DISTINCT GAPS AT ONE ATTRIBUTE FAMILY, both against normative Runtime step text rather
     than a discretion bullet. GAP 1 -- TWO KEYS WITH ZERO PRODUCERS. Spec_Harness_Runtime_v1.md:4229 says ''annotate
     inner span with retry.terminal = "retry" + retry.backoff_ms'' and :5685 says the same for the tool path; :4228
@@ -7954,8 +7954,20 @@ items:
     routed to the GAP-2a leg). GAP-1 SPEC LEG LANDED at the Runtime v1.115 delta (this arc): four bullet
     mentions aligned to the CP 3.5 names + the two emitted=False RETRY_WIRE_REGISTER alias rows removed with
     the pinning test re-pinned to the empty set in the same commit; clearance
-    spec-harness-runtime-v1-115-cleared-2026-08-11.md. REMAINING: GAP-2a only (tool-path escalate
-    control-flow/spec leg).'
+    spec-harness-runtime-v1-115-cleared-2026-08-11.md. GAP-2a CLOSED at the Runtime v1.116 delta
+    (the GAP-2a carve-out PR, 2026-08-11): the phantom attempt-indexed advance_staircase
+    signature in the two escalate bullets corrected to the landed stage-keyed API consulted
+    stage-fresh as a cause-class classifier; retry.terminal = escalate ratified a DEFENSIVE
+    BRANCH CONTRACT (unreachable-by-construction at the v1.116 classifiers, witness-pinned on
+    both composers -- tool-path collapsed else split into max-attempts vs defensive escalate
+    with branch-contract + stage-fresh-lookup witnesses); stage-threading REJECTED (operator
+    max_attempts dead-letter; CROSS_FAMILY_FALLBACK void on the candidate-less tool path;
+    escalation already structural) and declared a future design arc; /resolve codex=B
+    advisor=B agreement; fork doc class_1_fork_b145_gap2a_escalate_clause_phantom_api.md;
+    clearance spec-harness-runtime-v1-116-cleared-2026-08-11.md. ALL THREE B-145 LEGS CLOSED
+    (GAP-1 #1308 / GAP-2b #1306 / GAP-2a this PR); row CLOSES.'
+  pr: 'the B-145 GAP-2a carve-out PR, 2026-08-11 (GAP-1 at #1308; GAP-2b at #1306; number of this
+    closing PR recorded at the post-merge roadmap refresh)'
   heading: '### B-145 · `retry.backoff_ms` + `retry.cause_class` have **zero** producers, and the mandated `retry.terminal
     = "escalate"` value is never emitted — collapsed into `max-attempts` *(surfaced at the B-126 build arc, 2026-08-09;
     Gap 2 from out-of-family review round 1)*'

@@ -40,6 +40,11 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.routing_manifest_residence import RetryPolicy
+from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
+from harness_cp.validator_fail_transient_staircase import (
+    StaircaseStage,
+    StaircaseTransition,
+)
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
@@ -405,6 +410,144 @@ async def test_max_attempts_exhaustion_on_mcp_host_unreachable() -> None:
         await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
 
     assert excinfo.value.last_failure_class == "MCPHostUnreachableError"
+
+
+class _EscalatingToolRetryBreaker(RuntimeRetryBreaker):
+    """Registry double that returns a beyond-backoff transition."""
+
+    def advance_staircase(
+        self,
+        current: StaircaseStage,
+        cause: ValidatorRetryExitClass,
+        attempt: int,
+    ) -> StaircaseTransition:
+        return StaircaseTransition(
+            from_stage=current,
+            on_cause=cause,
+            to_stage=StaircaseStage.STAGE_5_HITL_ESCALATION,
+            preserves_cache_state=False,
+            emits_fallback_event=False,
+        )
+
+
+class _RecordingToolRetryBreaker(RuntimeRetryBreaker):
+    """Registry double that records the real stage-fresh lookup inputs."""
+
+    calls: list[tuple[StaircaseStage, ValidatorRetryExitClass, int, StaircaseStage]]
+
+    def __init__(self, *, max_attempts: int) -> None:
+        super().__init__(
+            retry_policies={
+                RESERVED_TOOL_DISPATCH_KEY: RetryPolicy(
+                    max_attempts=max_attempts,
+                    backoff="full_jitter",
+                    jitter="full_jitter",
+                )
+            },
+            default_policy=DEFAULT_RETRY_POLICY,
+            base_delay_seconds=0.0,
+            delay_cap_seconds=0.01,
+        )
+        self.calls = []
+
+    def advance_staircase(
+        self,
+        current: StaircaseStage,
+        cause: ValidatorRetryExitClass,
+        attempt: int,
+    ) -> StaircaseTransition:
+        transition = super().advance_staircase(current, cause, attempt)
+        self.calls.append((current, cause, attempt, transition.to_stage))
+        return transition
+
+
+@pytest.mark.asyncio
+async def test_b145_tool_escalate_is_unreachable_at_current_classifier() -> None:
+    """Every shipped transient attempt performs the same stage-fresh lookup."""
+    breaker = _RecordingToolRetryBreaker(max_attempts=3)
+    inner = _MockInnerToolDispatcher(
+        outcomes=[
+            ToolInvocationTimeoutError("t1"),
+            MCPHostUnreachableError("t2"),
+            ToolInvocationTimeoutError("t3"),
+        ]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerToolDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        tracer_provider=tp,
+        sleep_fn=_RecordingSleep(),
+    )
+
+    with pytest.raises(RetryToolExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert breaker.calls == [
+        (
+            StaircaseStage.STAGE_1_REFLEXION,
+            ValidatorRetryExitClass.TRANSIENT_RETRY,
+            attempt,
+            StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF,
+        )
+        for attempt in range(3)
+    ]
+    attempts = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.name == "harness.runtime.tool_retry_attempt"
+    ]
+    assert [span.attributes["retry.terminal"] for span in attempts] == [
+        "retry",
+        "retry",
+        "max-attempts",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_b145_tool_terminal_escalate_branch_contract() -> None:
+    """A defensive beyond-stage-2 transition is distinct from exhaustion."""
+    tp, exporter = _tracer_provider_with_exporter()
+    transient = ToolInvocationTimeoutError("escalated timeout")
+    inner = _MockInnerToolDispatcher(outcomes=[transient])
+    breaker = _EscalatingToolRetryBreaker(
+        retry_policies={
+            RESERVED_TOOL_DISPATCH_KEY: RetryPolicy(
+                max_attempts=3,
+                backoff="full_jitter",
+                jitter="full_jitter",
+            )
+        },
+        default_policy=DEFAULT_RETRY_POLICY,
+        base_delay_seconds=0.0,
+        delay_cap_seconds=0.01,
+    )
+    wrapper = RetryBreakerToolDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        tracer_provider=tp,
+        sleep_fn=_RecordingSleep(),
+    )
+
+    with pytest.raises(ToolInvocationTimeoutError) as excinfo:
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+
+    assert excinfo.value is transient
+    assert len(inner.calls) == 1
+    attempts = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.name == "harness.runtime.tool_retry_attempt"
+    ]
+    assert len(attempts) == 1
+    assert attempts[0].attributes["retry.terminal"] == "escalate"
+    assert attempts[0].attributes["retry.fail_class"] == "transient-retry"
+    outer = next(
+        span
+        for span in exporter.get_finished_spans()
+        if span.name == "harness.runtime.retry_tool_dispatch"
+    )
+    assert "tool_retry.exhausted" not in [event.name for event in outer.events]
 
 
 # ---------------------------------------------------------------------------

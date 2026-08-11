@@ -492,8 +492,10 @@ def test_a_helper_based_emission_is_resolved_not_missed() -> None:
 
     `webhook_delivery_composer.py:59` declares `ATTR_RETRY_ATTEMPT_NUMBER` and
     `:293` emits it through `_set(...)`, never naming the literal at the call. If
-    the sweep ignored that shape, wiring `retry.backoff_ms` the same way would
-    leave its `emitted=False` row falsely green (out-of-family round 3 [P2]).
+    the sweep ignored that shape, a mandated-but-unwired key (as `retry.backoff_ms`
+    was before its row retired at the B-145 GAP-1 spec leg) wired the same way
+    would have left its `emitted=False` row falsely green (out-of-family round 3
+    [P2]).
 
     Asserted on the LIVE site rather than a fixture, so the check dies with the
     pattern it guards instead of outliving it.
@@ -607,9 +609,10 @@ def test_the_resolver_credits_the_real_emission_shapes(tmp_path: Path) -> None:
     """RECALL — the shapes a producer actually uses are all resolved.
 
     The two mapping shapes were BOTH declared bounds until out-of-family round 5
-    pointed out that `attributes=<Name>` is already live in-tree, so a `B-145` key
-    wired that way would leave `emitted=False` falsely green. Closing them is
-    cheaper than documenting them.
+    pointed out that `attributes=<Name>` is already live in-tree, so a
+    mandated-but-unwired key (the then-open `B-145` rows, since retired at the
+    GAP-1 spec leg) wired that way would have left `emitted=False` falsely green.
+    Closing them is cheaper than documenting them.
     """
     modules = _fixture(
         tmp_path,
@@ -639,9 +642,10 @@ def test_the_resolver_credits_the_real_emission_shapes(tmp_path: Path) -> None:
 def test_the_unemitted_rows_are_not_emitted_anywhere() -> None:
     """The converse of the precise sweep, for the `emitted=False` rows.
 
-    Liveness excludes them by design, so asserting the converse keeps `B-145`'s
-    record honest until the wiring lands, at which point this fails and forces the
-    flag to move. RENAMED at the arc close: it keys on EMISSION and does not exclude
+    Liveness excludes them by design, so asserting the converse keeps the
+    register's record honest until such a row closes — wired, or retired as the
+    two `B-145` rows were at the GAP-1 spec leg — at which point this fails and
+    forces the flag to move. RENAMED at the arc close: it keys on EMISSION and does not exclude
     the declaration home, so the former "…have_no_site_outside_their_declaration"
     described neither — the U-OD-60 precedent moves the name with the assertion.
 

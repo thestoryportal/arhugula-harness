@@ -1417,16 +1417,16 @@ class RetryBreakerFallbackDispatcher:
                         inner_span.set_attribute("retry.delay_ms", 0)
                         inner_span.set_attribute("retry.cause_attribution", cause.value)
                         inner_span.set_attribute("retry.fail_class", cause.value)
-                        # B-145 GAP-2b: `retry.terminal = "escalate"` per Runtime
-                        # §14.6 (Spec_Harness_Runtime_v1.md:4229). UNREACHABLE BY
-                        # CONSTRUCTION today: `_classify_provider_exception` only
-                        # returns TRANSIENT_RETRY (or None → fail-fast above), and
-                        # (STAGE_1, TRANSIENT_RETRY) maps unconditionally to
-                        # STAGE_2, so this else can only fire if the classifier
-                        # grows a skip-class return or the stage is threaded
-                        # across attempts — the same control-flow/spec
-                        # discrepancy as the tool path's GAP-2a
-                        # (.harness/b145-grounding-split-2026-08-11.md).
+                        # B-145 GAP-2b: `retry.terminal = "escalate"` per the
+                        # Runtime §14.6 escalate clause. DEFENSIVE BRANCH
+                        # CONTRACT ratified at Runtime v1.116 (GAP-2a carve-out,
+                        # .harness/class_1_fork_b145_gap2a_escalate_clause_
+                        # phantom_api.md): `_classify_provider_exception` only
+                        # returns TRANSIENT_RETRY (or None → fail-fast above),
+                        # and (STAGE_1, TRANSIENT_RETRY) maps unconditionally to
+                        # STAGE_2, so this else fires only if the classifier
+                        # grows a skip-class return; stage-threading is a future
+                        # design arc per the carve-out.
                         inner_span.set_attribute("retry.terminal", "escalate")
                         transition = breaker.record_failure(
                             cause=breaker_cause,
