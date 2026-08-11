@@ -32,13 +32,21 @@ Pre-slim median 108,544 → post-slim 76,656: **program delta ≈ −31.9k token
 ~87k arithmetic projection recorded at B-148's build-state note. Excluded by
 design: 2 `interactive/sdk-cli` sessions (lighter stack; the earlier 49,324 probe).
 
-## 2. Component separation (A/B halves)
+## 2. Component separation (A/B halves) — PARTIAL
 
-- **Static shared prefix ≈ 23,734 tokens** (`cache_read` — byte-identical across
-  sessions; matches c2643c8a's first turn exactly): system prompt + tool schemas.
-  Not a Floor-B lever (harness-owned, not repo-owned).
-- **Variable half ≈ 52,920 tokens** (`cache_new`), decomposing into repo/operator
-  surfaces (byte sizes measured 2026-08-11, ≈4 B/token):
+*Caveat (codex round-1 finding): the `cache_read`/`cache_new` split reflects
+cache warmth and prefix match, not component ownership — tokens move between
+those buckets when the cached prefix changes. The buckets below are an
+observation, not the component evidence; the source-level byte measurements are
+the component evidence, and a full source-level before/after A/B (incl. MCP
+schemas, triggered axis files, and the post-compaction split) remains PENDING
+for U-CTX-22 (see §6).*
+
+- **Cache-bucket observation:** `cache_read` = 23,734 (identical to c2643c8a's
+  first turn — a stable shared prefix this window: system prompt + tool
+  schemas); `cache_new` = 52,920.
+- **Source-level component measurements** (byte sizes measured 2026-08-11,
+  ≈4 B/token):
   - project root `CLAUDE.md`: 44,853 B ≈ 11.2k tokens (was 123,442 B pre-Arc-5)
   - operator global `~/.claude/CLAUDE.md` + `RTK.md`: 14,555 B ≈ 3.6k tokens
   - auto-memory `MEMORY.md`: 18,817 B ≈ 4.7k tokens
@@ -62,10 +70,9 @@ operator command (classifier-blocked for the agent):
 B-149 probes now would misattribute a known, already-ratified, removable
 ~650-token mass as structural remaining mass. Sequence: operator runs the E7
 move → next fresh `*/cli` session → `just context-budget --sessions 1` →
-expected ≈76.0k. If the re-measure still exceeds 76,000, THEN the residual split
-(§2: static prefix 23.7k + root CLAUDE.md 11.2k + memory 4.7k + operator-global
-3.6k + listings) routes to the held B-149 probes for the operator decision per
-B-148's close-out note. n=1 caveat: the cohort should accumulate 2–3 post-slim
+expected ≈76.0k. If the re-measure still exceeds 76,000, THEN the residual source-level component split (§2)
+routes to the held B-149 probes for the operator decision per B-148's close-out
+note. n=1 caveat: the cohort should accumulate 2–3 post-slim
 sessions (incl. an `interactive/cli` one) before treating any single reading as
 the program number.
 
@@ -86,7 +93,8 @@ measurement itself awaits an eligible event.
 |---|---|
 | Cold-start ≤76k, eligible cohort | 76,656 @ n=1 — PENDING-REMEASURE after E7 move |
 | Post-compaction measurement (E4 selector) | Instrument tested + live; no post-slim boundary yet |
-| Component-separated A/B | §2 above |
+| Component-separated A/B | **PARTIAL** — source-level byte measurements at §2; full source-level before/after A/B (MCP schemas, triggered axis files, post-compaction split) PENDING |
+| Per-PR context-budget delta table | **PENDING** — this record carries only aggregate pre/post-slim values; the plan-required per-PR table (`.harness/r-ctx-1-implementation-plan-v1.md:73`) must exist (or be explicitly re-scoped) before U-CTX-22 closes |
 | CI gates green on main | Green at ea454fd7 (post-#1301 refresh) |
 | Zero design-substrate diffs across program PRs | Verified per-PR 2026-08-11 (B-148 build-state note) |
 | Register flip + memory + final refresh (U-CTX-22) | Blocked on the two PENDING rows above |
