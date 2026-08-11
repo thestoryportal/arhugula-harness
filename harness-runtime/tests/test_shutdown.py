@@ -23,6 +23,7 @@ import asyncio
 import os
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -2724,3 +2725,158 @@ async def test_b150_backstop_close_decision_gates_new_flushes(
     late_report = await flush_observability(ctx, timeout_millis=100)
     assert "tracer" in late_report.failures
     assert len(tracer.calls) == calls_before_close  # no new force_flush ran
+
+
+# ---------------------------------------------------------------------------
+# B-150 collector half — C-RT-10 v1.117 in-flight-conditional step-3a deferral
+# (spec leg + impl companion; fork doc
+# .harness/class_1_fork_b150_collector_stop_ordering_deferral.md). One witness
+# per path: deferred 3a→3b ordering, the between-3a-and-3b inline completion,
+# and the loop-dead guard.
+# ---------------------------------------------------------------------------
+
+
+class _TimelineCollectorDaemon(_FakeCollectorDaemon):
+    """Records stop into a shared timeline for happens-before asserts."""
+
+    def __init__(self, timeline: list[str]) -> None:
+        super().__init__()
+        self._timeline = timeline
+
+    async def stop(self, *, timeout_seconds: float = 5.0) -> None:
+        await super().stop(timeout_seconds=timeout_seconds)
+        self._timeline.append("collector")
+
+
+@pytest.mark.asyncio
+async def test_b150_collector_stop_deferred_and_ordered_before_tracer_close(
+    tmp_path: Path,
+) -> None:
+    """Deferred path: with a timed-out flush worker still exporting, step 3a
+    is SKIPPED inline (collector not stopped, `collector_daemon` reported),
+    and the deferred watcher executes collector-stop strictly BEFORE the
+    tracer close once the worker completes (C-RT-10 v1.117 3a→3b order)."""
+    timeline: list[str] = []
+    release = threading.Event()
+
+    class _StallingTimelineTracer(_FakeTracerWithShutdown):
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            self.calls.append(timeout_millis)
+            if len(self.calls) == 1:
+                release.wait()
+            return True
+
+        def shutdown(self) -> None:
+            super().shutdown()
+            timeline.append("tracer")
+
+    tracer = _StallingTimelineTracer()
+    daemon = _TimelineCollectorDaemon(timeline)
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=daemon, providers={})
+    try:
+        first = await asyncio.wait_for(flush_observability(ctx, timeout_millis=100), timeout=5.0)
+        assert "tracer" in first.failures
+        report = await asyncio.wait_for(shutdown(ctx, timeout=0.5), timeout=10.0)
+        # Asserted BEFORE releasing the worker: neither close ran inline.
+        assert daemon.stopped is False
+        assert tracer.shutdown_called is False
+        assert "collector_daemon" in report.failures
+        assert "tracer_provider" in report.failures
+    finally:
+        release.set()
+
+    for _ in range(500):
+        if tracer.shutdown_called:
+            break
+        await asyncio.sleep(0.01)
+    assert tracer.shutdown_called is True
+    assert daemon.stopped is True
+    assert timeline == ["collector", "tracer"]  # 3a strictly before 3b
+
+
+@pytest.mark.asyncio
+async def test_b150_worker_finish_between_3a_and_3b_completes_stop_inline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Race path: in-flight at the 3a check but finished by the 3b check —
+    the deferred collector stop completes INLINE at 3b time, still ahead of
+    the tracer close, and the `collector_daemon` report tag is WITHDRAWN."""
+    timeline: list[str] = []
+
+    class _TimelineTracer(_FakeTracerWithShutdown):
+        def shutdown(self) -> None:
+            super().shutdown()
+            timeline.append("tracer")
+
+    tracer = _TimelineTracer()
+    daemon = _TimelineCollectorDaemon(timeline)
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=daemon, providers={})
+
+    verdicts = iter([True, False])  # 3a sees in-flight; 3b sees drained
+    real = shutdown_mod._tracer_flush_in_flight  # type: ignore[attr-defined]
+
+    def _sequenced(target: object) -> bool:
+        # Script ONLY the consults made from `shutdown()` itself (the 3a and
+        # 3b checks); the step-2 flush wait loop and any other site consult
+        # the real registry — the first probe run of this witness showed the
+        # step-2 loop consuming the scripted verdicts before 3a ever ran.
+        caller = sys._getframe(1).f_code.co_name
+        if target is ctx and caller == "shutdown":
+            try:
+                return next(verdicts)
+            except StopIteration:
+                return False
+        return real(target)
+
+    monkeypatch.setattr(shutdown_mod, "_tracer_flush_in_flight", _sequenced)
+    report = await asyncio.wait_for(shutdown(ctx, timeout=2.0), timeout=10.0)
+
+    assert daemon.stopped is True
+    assert tracer.shutdown_called is True
+    assert timeline == ["collector", "tracer"]  # order holds on EVERY path
+    assert "collector_daemon" not in report.failures  # tag withdrawn
+    assert "tracer_provider" not in report.failures
+
+
+def test_b150_deferred_stop_treats_closed_loop_as_terminated(tmp_path: Path) -> None:
+    """Loop-dead guard: the watcher runs after the harness loop closed — the
+    daemon task died with the loop, so the deferred stop is SKIPPED without
+    raising and the tracer close still lands (sync, off-loop)."""
+    release = threading.Event()
+
+    class _StallingTracer(_FakeTracerWithShutdown):
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            self.calls.append(timeout_millis)
+            if len(self.calls) == 1:
+                release.wait()
+            return True
+
+    tracer = _StallingTracer()
+    daemon = _FakeCollectorDaemon()
+
+    async def _register_and_spawn() -> object:
+        ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=daemon, providers={})
+        first = await flush_observability(ctx, timeout_millis=100)
+        assert "tracer" in first.failures
+        shutdown_mod._spawn_deferred_tracer_close(  # type: ignore[attr-defined]
+            ctx, defer_collector=True
+        )
+        return ctx
+
+    loop = asyncio.new_event_loop()
+    try:
+        ctx = loop.run_until_complete(_register_and_spawn())
+    finally:
+        loop.close()  # the harness loop is now CLOSED before the worker ends
+
+    release.set()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if tracer.shutdown_called:
+            break
+        time.sleep(0.01)
+
+    assert tracer.shutdown_called is True  # tracer half unaffected
+    assert daemon.stopped is False  # treated terminated; never scheduled
+    assert ctx is not None

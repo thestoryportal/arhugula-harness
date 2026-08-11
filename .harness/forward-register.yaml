@@ -61,11 +61,11 @@ snapshot:
   total: 151
   open: 1
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 29
   operator_gated: 0
   held: 2
-  closed: 118
-  identity_digest: '0e76747056ddbe1a'
+  closed: 119
+  identity_digest: '0becf476f86c5724'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -8112,7 +8112,7 @@ items:
   heading: '### B-149 · R-CTX-1 Arc 8 / Floor C conditional-pack redesign — PARKED, Floor B terminal *(operator R2, 2026-08-10; D-H probe preconditions carried)*'
 - id: B-150
   title: deferred-flush aftermath surfaces — collector stopped before a timed-out flush completes; standalone flush timeout leaves the SDK atexit racing the worker
-  status: registered_finding
+  status: closed
   summary: 'WHAT IT IS. Two aftermath surfaces of the B-147 bounded-flush machinery (PR #1303), surfaced by the
     codex delta round AFTER the 10-round loop closed and deliberately REGISTERED rather than absorbed (the
     #1290 precedent). (1) COLLECTOR ORDERING (codex P1): C-RT-10 orders collector stop (step 3a) before the
@@ -8153,6 +8153,20 @@ items:
     force_flush checks _shutdown only at entry then blocks in _export. The SDK does NOT internally
     serialize shutdown against an in-flight force_flush, so the standalone-flush atexit-arming half stays
     warranted for any future external caller of the public primitive.'
+  closed_2026_08_11: 'BOTH HALVES CLOSED. Atexit half at PR #1307 (impl-only; ordered backstop armed on
+    the standalone flush-timeout path). Collector half at the Runtime v1.117 spec leg (this PR): C-RT-10
+    step-3a gains the in-flight-conditional deferral mirroring 3b (deferred watcher runs 3a->3b in order;
+    between-3a-and-3b worker finish completes the stop inline with the tag withdrawn); deferred-close
+    discipline ratified in contract text (ordered atexit backstop, loop-bound stop with closed-loop treated
+    terminated, timeout-bound exclusion, narrows-not-eliminates honesty); both step-6 invariants qualified
+    deferred-path-only. Impl companion same-PR: 3a mirror condition + inline race completion + watcher-chain
+    collector stop with loop-dead guard; 3 witnesses, 2 mutation probes RED (probe 2 caught a vacuous
+    first-draft race witness -- fixed to frame-scoped scripting), #1303 witness set re-run 84/84 per
+    close_out step 3. /resolve advisor=A (3 corrections absorbed) + codex unparseable-recorded. Fork doc
+    class_1_fork_b150_collector_stop_ordering_deferral.md; clearance
+    spec-harness-runtime-v1-117-cleared-2026-08-11.md.'
+  pr: 'the B-150 collector-half PR, 2026-08-11 (atexit half at #1307; number recorded at the post-merge
+    roadmap refresh)'
   heading: '### B-150 · deferred-flush aftermath — collector-stop ordering + standalone-flush atexit arming *(surfaced by PR #1303 codex delta round post-cap, 2026-08-11)*'
 - id: B-151
   title: standalone atexit backstop residual concurrency shapes -- re-arm after deferred takeover creates one

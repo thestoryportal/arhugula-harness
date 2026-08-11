@@ -39,7 +39,7 @@ is the one that resolved the head.
 | `project-workflow` | `v1.19` | 2026-07-24 | `design-substrate/Project_Workflow_v1_19.md` | 7 | `Project_Workflow-v1_19-cleared-2026-07-24.md` |
 | `spec-action-surface` | `v1.14` | 2026-07-15 | `design-substrate/Spec_Action_Surface_v1.md` | 6 | `spec-action-surface-v1-14-cleared-2026-07-15.md` |
 | `spec-control-plane` | `v1.116` | 2026-08-09 | `design-substrate/Spec_Control_Plane_v1_116.md` | 91 | `spec-control-plane-v1-116-cleared-2026-08-09.md` |
-| `spec-harness-runtime` | `v1.116` | 2026-08-11 | `design-substrate/Spec_Harness_Runtime_v1.md` | 79 | `spec-harness-runtime-v1-116-cleared-2026-08-11.md` |
+| `spec-harness-runtime` | `v1.117` | 2026-08-11 | `design-substrate/Spec_Harness_Runtime_v1.md` | 80 | `spec-harness-runtime-v1-117-cleared-2026-08-11.md` |
 | `spec-information-substrate` | `v1.13` | 2026-08-07 | `design-substrate/Spec_Information_Substrate_v1.md` | 11 | `spec-information-substrate-v1-13-cleared-2026-08-07.md` |
 | `spec-memory-substrate` | `v1.3` | 2026-08-06 | `design-substrate/Spec_Memory_Substrate_v1.md` | 4 | `spec-memory-substrate-v1-3-cleared-2026-08-06.md` |
 | `spec-operational-discipline` | `v1.39` | 2026-08-09 | `design-substrate/Spec_Operational_Discipline_v1_39.md` | 13 | `spec-operational-discipline-v1-39-cleared-2026-08-09.md` |
