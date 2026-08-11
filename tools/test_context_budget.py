@@ -21,6 +21,10 @@ Mutation-probe map (what regresses silently if each witness is removed):
   merging/dropping per-boundary rows; trigger not threaded from its boundary
 - test_post_compaction_consecutive_boundaries_only_latest:
   pending_trigger not reset/overwritten on a second boundary
+- test_post_compaction_only_first_turn_per_boundary_captured:
+  merging per-boundary rows — deleting the pending_trigger reset (one row
+  per boundary is the selector's core invariant; every other fixture has
+  exactly one capturable record per boundary, so only this one catches it)
 - test_post_compaction_dedup_within_request:
   removing the seen_request_ids dedup in the E4 selector
 - test_post_compaction_zero_usage_skip_then_real_usage:
@@ -54,11 +58,15 @@ Mutation-probe map (what regresses silently if each witness is removed):
 - test_sidechains_excluded_for_ineligible_sdk_parent_session:
   scanning an ineligible session's subagents directory
 - test_sidechain_first_turns_one_per_agent_file:
-  reading past the first real call in one agent file / dropping a sibling
+  dropping a sibling agent file from the per-agent enumeration
+- test_sidechain_first_turns_only_first_real_call_per_agent_file:
+  reading past the first real call in one agent file (missing break)
 - test_summary_mean_is_exact_float_not_truncated:
   int() truncation instead of float() on the mean/median
 - test_main_unreadable_transcript_file_aborts_cleanly:
   an uncaught OSError propagating out of main() instead of exit 1
+- test_main_malformed_transcript_aborts_cleanly:
+  MalformedTranscriptError missing from main()'s except tuples
 - test_main_unicode_decode_error_from_torn_multibyte_tail:
   UnicodeDecodeError not in main()'s except tuple
 - test_project_transcript_dir_derives_real_home_slug:
@@ -212,6 +220,25 @@ def test_post_compaction_consecutive_boundaries_only_latest_trigger_counts(
     assert rows[0]["trigger"] == "auto"
 
 
+def test_post_compaction_only_first_turn_per_boundary_captured(tmp_path: Path) -> None:
+    # merge-gate lens 3 (PR #1297): every earlier fixture had exactly ONE
+    # capturable record per boundary, so deleting the `pending_trigger = None`
+    # reset — the selector's one-row-per-boundary invariant — survived the
+    # entire suite. Here a boundary is followed by TWO distinct capturable
+    # records; only the FIRST may yield a row.
+    path = tmp_path / "sess1.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _compact("manual"),
+            _rec(request_id="ra", timestamp="t1", input_tokens=111),
+            _rec(request_id="rb", timestamp="t2", input_tokens=222),
+        ],
+    )
+    rows = context_budget.post_compaction_first_turns(path)
+    assert [r["post_compaction_total"] for r in rows] == [111]
+
+
 def test_post_compaction_dedup_within_request(tmp_path: Path) -> None:
     # codex P2 (vacuous-probe repair): the repeated requestId sits AFTER a
     # SECOND boundary, so `pending_trigger` is armed again and dedup is the
@@ -274,17 +301,20 @@ def test_post_compaction_no_boundary_returns_empty(tmp_path: Path) -> None:
 
 
 def test_post_compaction_missing_trigger_metadata_defaults_unknown(tmp_path: Path) -> None:
+    # Both absence shapes (merge-gate lens 3): compactMetadata missing entirely
+    # (non-dict branch) AND present-but-trigger-keyless (dict .get default).
     path = tmp_path / "sess1.jsonl"
     _write_jsonl(
         path,
         [
             {"type": "system", "subtype": "compact_boundary"},
             _rec(request_id="r1", timestamp="t1", input_tokens=100),
+            {"type": "system", "subtype": "compact_boundary", "compactMetadata": {}},
+            _rec(request_id="r2", timestamp="t2", input_tokens=200),
         ],
     )
     rows = context_budget.post_compaction_first_turns(path)
-    assert len(rows) == 1
-    assert rows[0]["trigger"] == "unknown"
+    assert [r["trigger"] for r in rows] == ["unknown", "unknown"]
 
 
 # --------------------------------------------------------------------------
@@ -852,6 +882,27 @@ def test_main_unicode_decode_error_from_torn_multibyte_tail_aborts_cleanly(
         fh.write("☺".encode()[:2])
     # main() must return 1 cleanly — an uncaught UnicodeDecodeError would
     # make this call raise instead of returning, failing the test itself.
+    rc = context_budget.main(["--project-dir", str(project_dir), "--sessions", "1", "--json"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "unreadable transcript" in err
+
+
+def test_main_malformed_transcript_aborts_cleanly(
+    td: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # merge-gate lens 3: MalformedTranscriptError was proven to raise at the
+    # HELPER but never driven through main()'s except tuples — removing it
+    # from those tuples survived the suite (it is a ValueError, covered by
+    # neither OSError nor UnicodeDecodeError).
+    project_dir, transcript_dir = td
+    _write_jsonl(
+        transcript_dir / "corrupt.jsonl",
+        [
+            "{malformed non-tail line",
+            json.dumps(_rec(request_id="r1", timestamp="t1", input_tokens=100)),
+        ],
+    )
     rc = context_budget.main(["--project-dir", str(project_dir), "--sessions", "1", "--json"])
     err = capsys.readouterr().err
     assert rc == 1
