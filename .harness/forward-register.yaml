@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 152
+  total: 153
   open: 1
   design_substrate_gated: 0
   registered_finding: 30
   operator_gated: 0
   held: 2
-  closed: 119
-  identity_digest: '9cde00dac80b2723'
+  closed: 120
+  identity_digest: 'b5fcdf7a1676862e'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7848,7 +7848,8 @@ items:
 - id: B-144
   title: C-CP-24 24.1.B's Attribute count column was never re-tabled after C-CP-03 3.5's two amendments, and the
     code manifest resolves the divergence inconsistently per row
-  status: registered_finding
+  status: closed
+  pr: '#1311 (venue-A re-table, CP v1.117; hitl third case split out as B-153)'
   summary: 'WHAT IT IS. 24.1.B (the four F3-capability-floor lifecycle-event-attribute export rows) is declared
     at exactly ONE place in the whole CP spec chain -- Spec_Control_Plane_v1_2.md:2152-2159 -- verified by scanning
     all 115 Spec_Control_Plane_v1_*.md files on disk for the string ''24.1.B'', which matches only that file (:2152
@@ -8198,6 +8199,35 @@ items:
   pr: '#1310 (registered at the B-150 collector-half close; codex round-2 findings, lens-1 adjudication)'
   heading: '### B-152 · B-150 deferral-unavailable residuals -- stalled-loop late stop + watcher
     start-failure orphan *(surfaced at PR #1310 codex round 2, 2026-08-11)*'
+- id: B-153
+  title: C-CP-24 24.1 Attribute-count column semantics undefined at the hitl.* row -- code counts span
+    names as attributes
+  status: registered_finding
+  summary: 'THE THIRD SAME-CLASS CASE split out of B-144 at its venue-A close (PR #1311): the hitl.* row
+    of 24.1.A (Spec_Control_Plane_v1_2.md:2148) carries NO attribute count at all -- it reads ''per-event
+    attributes across 4 span names'' -- while cp_namespace_export_manifest.py pins attribute_count=4,
+    i.e. the code counts SPAN NAMES as attributes. That 4 feeds the 24.1.A subtotal of 34 and the declared
+    export sum (67 since CP v1.117). Unlike the two B-144 rows this is not a stale count with a live
+    figure waiting at another venue -- no venue declares ANY hitl.* attribute count -- so the repair is a
+    decision about what the Attribute-count COLUMN MEANS, which may ripple to other qualified 24.1.A rows
+    (audit.* reads ''7 attributes per persona-tier emission discipline''). CP v1.117 §0.5 explicitly
+    declares the re-table does NOT ratify the span-names-as-attributes reading. Adjudication lineage: at
+    the B-144 /resolve the scope call SPLIT (codex: fix in-delta; advisor: separate follow-up) and the
+    safer surgical option was taken per the resolver split rule (RESOLVE-SPLIT row, 2026-08-11).'
+  close_out: '(1) ENUMERATE the actual per-event attribute inventory across the 4 HITL span names from
+    C-CP-20 §20.6 at the then-current HEAD -- the column decision needs the real cardinality on the
+    table, not just the span-name count. (2) DECIDE THE COLUMN SEMANTICS (a declared live export claim
+    in attributes is the B-144 venue-A precedent) and, under that definition, correct the hitl.* cell --
+    and audit the audit.* qualifier row under the same definition or record why it already conforms.
+    (3) Any resulting count edit is a contract-count change feeding acceptance #6 and its test -- same
+    discipline as B-144: spec delta first (X-AL-3 back-flow pairing), manifest + test cascade same-PR.
+    (4) WHAT WOULD FALSIFY IT: a CP delta defining the column semantics, or one declaring hitl.* exports
+    at span-event granularity deliberately.'
+  council: 'No. Single-axis column-semantics decision with the B-144 venue-A precedent on file; the
+    U-HK-13 decorrelated resolver suffices at the decision point.'
+  pr: '#1311 (minted at the B-144 close)'
+  heading: '### B-153 · C-CP-24 §24.1 Attribute-count column semantics undefined at hitl.* — span names
+    counted as attributes *(split from B-144 at the CP v1.117 re-table, 2026-08-11)*'
 - id: B-151
   title: standalone atexit backstop residual concurrency shapes -- re-arm after deferred takeover creates one
     unserialized shutdown-vs-shutdown pair; dead-probe gate overwrite under id reuse
