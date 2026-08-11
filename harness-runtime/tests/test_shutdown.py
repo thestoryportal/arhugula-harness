@@ -2652,3 +2652,37 @@ async def test_b150_disarm_winning_the_publish_register_window_leaves_no_orphan(
     assert not shutdown_mod._standalone_backstops  # type: ignore[attr-defined]
     assert sentinel_handler not in unregistered
     tracer.release.set()  # unwedge the worker before the test returns
+
+
+@pytest.mark.asyncio
+async def test_b150_backstop_close_decision_gates_new_flushes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-2 P2 — the backstop's close decision must set the per-ctx
+    closing gate atomically with its empty-registry check (the
+    `_live_workers_or_gate()` discipline): a `flush_observability()` landing
+    after the check but before `shutdown_fn()` must be REFUSED by
+    `_register_inflight_tracer_flush`, not allowed to force_flush a
+    provider whose shutdown is running."""
+    registered, _unregistered = _spy_atexit(monkeypatch)
+    tracer = _BlockingFlushTracer()
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+
+    report = await flush_observability(ctx, timeout_millis=100)
+    assert report.timed_out is True
+    backstop = _standalone_backstops_registered(registered)[0]
+
+    tracer.release.set()
+    for _ in range(500):
+        if not shutdown_mod._tracer_flush_in_flight(ctx):  # type: ignore[attr-defined]
+            break
+        await asyncio.sleep(0.01)
+
+    calls_before_close = len(tracer.calls)
+    backstop()  # simulated exit: closes, and commits the closing gate
+    assert tracer.shutdown_called is True
+    assert id(ctx) in shutdown_mod._deferred_closing  # type: ignore[attr-defined]
+
+    late_report = await flush_observability(ctx, timeout_millis=100)
+    assert "tracer" in late_report.failures
+    assert len(tracer.calls) == calls_before_close  # no new force_flush ran

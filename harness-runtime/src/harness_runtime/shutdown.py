@@ -422,6 +422,16 @@ def _arm_standalone_atexit_backstop(ctx: object) -> None:
                 )
                 if live_entry is not None and not entry_is_stale and live_entry[1]:
                     return  # worker still live — never race it
+                # Close-decision commits HERE (codex round-2 P2): set the
+                # per-ctx closing gate atomically with the empty-registry
+                # check, exactly as `_live_workers_or_gate()` does — a
+                # `flush_observability()` on another thread registering a
+                # NEW worker between this check and `shutdown_fn()` would
+                # otherwise force_flush a provider whose shutdown is
+                # running. The gate makes `_register_inflight_tracer_flush`
+                # refuse it instead (and stays set forever — a closed
+                # provider must not be flushed again).
+                _deferred_closing[ctx_key] = ctx_ref
             try:
                 shutdown_fn()
             except Exception:
