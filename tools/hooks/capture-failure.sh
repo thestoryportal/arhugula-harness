@@ -57,7 +57,13 @@ if [ -n "$CMDFLAT" ]; then
   CMDNAME=${CMDFLAT%% *}
   case "$CMDNAME" in *=*) CMDNAME="${CMDNAME%%=*}=<redacted>" ;; esac
   CMDNAME=$(printf '%s' "$CMDNAME" | cut -c1-24)
-  CMDHASH=$(printf '%s' "$CMDFLAT" | shasum -a 256 2>/dev/null | cut -c1-8)
+  # Hash the SANITIZED command, not the raw one (codex round-9): an unsalted
+  # digest over a raw command carrying a low-entropy credential is offline
+  # dictionary-attackable from the persisted log. Every `NAME=value` token is
+  # value-stripped before hashing; identical templates with rotated secret
+  # values also (correctly) share one recurrence identity.
+  CMDSANITIZED=$(printf '%s' "$CMDFLAT" | sed -E 's/([A-Za-z_][A-Za-z0-9_]*)=[^ ]*/\1=<redacted>/g')
+  CMDHASH=$(printf '%s' "$CMDSANITIZED" | shasum -a 256 2>/dev/null | cut -c1-8)
   CMDHEAD="${CMDNAME}#${CMDHASH:-nohash}"
 else
   CMDHEAD=""
@@ -113,10 +119,17 @@ for _try in $(seq 1 "${CAPTURE_FAILURE_LOCK_TRIES:-50}"); do
   # herd; the round-6 identity-conditional restore measured WORSE, 4 emitted).
   # Structural resolution: this hook NEVER removes or moves a lock it did not
   # create — only the token-verified owner releases (see _release_lock). A
-  # crashed holder's stale lock makes contenders time out into the SAFE path
-  # (log-only, emission suppressed; the cap is unviolable by construction).
-  # Reaping stale locks belongs to the SessionStart venue (loop-gc.sh), which
-  # runs single-threaded — no herd exists there by construction.
+  # crashed holder's stale lock makes contenders take the SAFE path (log-only,
+  # emission suppressed; the cap is unviolable by construction). Reaping
+  # belongs to the SessionStart venue (loop-gc.sh) — single-threaded, no herd.
+  # FAST-PATH on an already-stale foreign lock (codex round-9): without this, a
+  # crashed holder cost EVERY subsequent failure hook the full ~5s retry sleep
+  # until the next SessionStart reaped — detect >10s staleness READ-ONLY and
+  # go straight to the suppression path (no reclamation here, ever).
+  _cfa_now=$(date +%s)
+  _cfa_ts=$(stat -f %m "$LOCKDIR" 2>/dev/null) || _cfa_ts=$(stat -c %Y "$LOCKDIR" 2>/dev/null) || _cfa_ts="$_cfa_now"
+  case "$_cfa_ts" in '' | *[!0-9]*) _cfa_ts="$_cfa_now" ;; esac
+  [ $((_cfa_now - _cfa_ts)) -gt 10 ] && break
   sleep 0.1
 done
 

@@ -186,5 +186,33 @@ printf '%s' "$FO" | CLAUDE_PROJECT_DIR="$REPO" CAPTURE_FAILURE_LOCK_TRIES=2 bash
   && ok "foreign-owned fresh lock survives (ownership-checked release)" || bad "foreign lock deleted or mutated"
 rm -rf "$LOG.lock"
 
+# 15) codex round-9: the digest is over the SANITIZED command — rotated secret
+#     values share one recurrence identity, and the hash cannot be dictionary-
+#     attacked from a known template + guessed low-entropy value.
+: > "$LOG"
+R1='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-ROT","tool_input":{"command":"DEPLOY_KEY=aaa111 deploy --prod"}}'
+R2='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-ROT","tool_input":{"command":"DEPLOY_KEY=bbb222 deploy --prod"}}'
+run "$R1" >/dev/null
+OUT=$(run "$R2")
+printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "rotated secret values share one recurrence identity (sanitized hash)" || bad "rotated-secret recurrence broken: $OUT"
+[ "$(jq -rs '[.[].sig] | unique | length' "$LOG")" = "1" ] && ok "sanitized hash: one sig across rotated values" || bad "sigs diverged across rotated values"
+grep -q "aaa111\|bbb222" "$LOG" && bad "secret value leaked to log" || ok "rotated secret values absent from log"
+
+# 16) codex round-9: an ALREADY-STALE foreign lock takes the fast suppression
+#     path — no ~5s retry sleep per failure while awaiting the SessionStart reap.
+: > "$LOG"
+FP='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"fast_test","session_id":"sess-FP"}'
+run "$FP" >/dev/null
+mkdir "$LOG.lock"; printf '%s' "crashed" > "$LOG.lock/owner"
+touch -t 202001010000 "$LOG.lock" 2>/dev/null || touch -d '2020-01-01' "$LOG.lock" 2>/dev/null
+_t0=$(date +%s)
+OUT=$(printf '%s' "$FP" | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+_t1=$(date +%s)
+[ $((_t1 - _t0)) -le 2 ] && ok "aged foreign lock: fast path ($((_t1 - _t0))s, no 5s stall)" || bad "aged-lock fast path too slow: $((_t1 - _t0))s"
+[ -z "$OUT" ] && ok "aged-lock fast path suppresses emission" || bad "aged-lock fast path emitted: $OUT"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "2" ] && ok "aged-lock fast path still logs" || bad "fast-path row missing"
+[ -d "$LOG.lock" ] && ok "fast path never reclaims (loop-gc's job)" || bad "fast path reaped the lock"
+rm -rf "$LOG.lock"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
