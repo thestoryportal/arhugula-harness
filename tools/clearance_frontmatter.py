@@ -57,6 +57,8 @@ _ITEM_INLINE = re.compile(r"^([ \t]+)- (.+)$")
 _ITEM_BLOCK = re.compile(r"^([ \t]+)-[ \t]*$")
 _CONTINUATION = re.compile(r"^[ \t]+\S")
 _BLOCK_HEADER = re.compile(r"[|>](?:[0-9][+-]?|[+-][0-9]?)?(?:[ \t]+#.*)?")
+# One or more leading anchor/tag tokens (`&name `, `!tag `) ahead of the scalar text.
+_STRUCTURAL_HEAD = re.compile(r"^((?:[&!]\S+[ \t]+)+)(.*)$")
 
 # `| `README.md` | class | reason |` rows in the manifest table.
 _MANIFEST_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$")
@@ -173,12 +175,22 @@ def _scalar_is_clean(source_lines: list[str]) -> bool:
     if len(source_lines) != 1:
         return False
     raw = source_lines[0]
-    if raw.lstrip()[:1] in ("&", "*", "!"):
-        # Anchor / alias / tag: structural YAML, not a plain-prose scalar.
-        # Quoting `&n value` or `*n` would turn the syntax into content and
-        # silently destroy alias semantics (codex round-4 on PR-4) — leave
-        # byte-identical; the parse gate still reports it if it is broken.
+    stripped = raw.lstrip()
+    if stripped.startswith("*"):
+        # Alias: a pure reference — no represented text of its own to lose.
+        # Quoting `*n` would destroy the alias (codex round-4 on PR-4).
         return True
+    structural = _STRUCTURAL_HEAD.match(stripped)
+    if structural:
+        # Anchor / tag ahead of a scalar: the SYNTAX is preserved, but the
+        # represented text must still round-trip — `&n merged at PR #529`
+        # silently truncates at the `#` (codex round-5 on PR-4), so the
+        # remainder is checked like any plain scalar and repaired (anchor
+        # kept, remainder quoted) when lossy.
+        rest = structural.group(2)
+        if not rest.strip():
+            return True
+        return _scalar_is_clean([rest])
     try:
         node = yaml.compose("x: " + raw)
     except yaml.YAMLError:
@@ -239,7 +251,17 @@ def repair_frontmatter(block: str) -> str:
             out.append(prefix + values[0])
             return
         # YAML folds a plain multi-line scalar's newlines to single spaces; joining with a
-        # space is therefore the value the source text denotes.
+        # space is therefore the value the source text denotes. A leading
+        # anchor/tag head stays OUTSIDE the quotes so the structural syntax
+        # survives the repair (codex round-5 on PR-4).
+        structural = _STRUCTURAL_HEAD.match(values[0])
+        if structural:
+            out.append(
+                prefix
+                + structural.group(1)
+                + _double_quote(" ".join([structural.group(2), *values[1:]]))
+            )
+            return
         out.append(prefix + _double_quote(" ".join(values)))
 
     # While accumulating a block scalar, every line indented DEEPER than the

@@ -285,3 +285,19 @@ def test_full_block_header_grammar_and_anchors_preserved() -> None:
     repaired = cf.repair_frontmatter(block)
     assert repaired == block
     assert cf.repair_frontmatter(repaired) == repaired
+
+
+def test_anchored_lossy_scalar_repaired_with_anchor_preserved() -> None:
+    """codex round-5 (PR-4): an anchor/tag wrapping LOSSY prose must not pass
+    clean — the represented text is validated and repaired with the
+    structural head kept outside the quotes."""
+    block = (
+        "artifact: design-substrate/X_v1.md\nversion: v1.0\nnote: &n merged at PR #529\ncopy: *n\n"
+    )
+    repaired = cf.repair_frontmatter(block)
+    assert 'note: &n "merged at PR #529"\n' in repaired
+    assert "copy: *n\n" in repaired
+    assert cf.repair_frontmatter(repaired) == repaired
+    parsed = yaml.safe_load(repaired)
+    assert parsed["note"] == "merged at PR #529"
+    assert parsed["copy"] == "merged at PR #529"
