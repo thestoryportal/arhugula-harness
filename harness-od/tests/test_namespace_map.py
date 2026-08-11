@@ -103,6 +103,18 @@ def test_hitl_namespace_cp_source() -> None:
     assert row.source_axis is NamespaceSourceAxis.CP_SOURCE
 
 
+def test_engine_namespace_cp_source_four_attributes() -> None:
+    """Acceptance #3 — engine.* is CP-source with 4 attributes per §5.1 row 9.
+
+    OD v1.40 (B-144 OD leg): 3 -> 4 (+engine.replay_disposition), carrying the
+    C-CP-09 §9.1 v1.3 supersession the row's own citation points at.
+    """
+    row = lookup_namespace("engine.")
+    assert row is not None
+    assert row.source_axis is NamespaceSourceAxis.CP_SOURCE
+    assert row.attribute_count == 4
+
+
 def test_harness_breaker_substrate_anchored_outside_cp() -> None:
     """Acceptance #3 — harness.breaker.* is the sole SUBSTRATE_ANCHORED_OUTSIDE_CP
     row per F-CP-01 Stage 3b alignment.

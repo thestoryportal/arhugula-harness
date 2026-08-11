@@ -32,6 +32,17 @@ def test_cross_axis_composition_manifest_cardinality_nine() -> None:
     assert len(CP_CROSS_AXIS_COMPOSITION_MANIFEST) == 9
 
 
+def test_namespace_exports_invariant_derives_from_export_sum() -> None:
+    """The CP_namespace_exports invariant string carries the live declared sum
+    (derived from `CP_EXPORTED_ATTRIBUTE_COUNT` since CP v1.117 — the frozen
+    '65 attributes' literal was the B-144 round-2 defect)."""
+    from harness_cp.cp_namespace_export_manifest import CP_EXPORTED_ATTRIBUTE_COUNT
+
+    (invariant,) = _by_name("CP_namespace_exports").exported_invariants
+    assert f"{CP_EXPORTED_ATTRIBUTE_COUNT} attributes" in invariant
+    assert "11 CP namespaces" in invariant
+
+
 def test_per_composition_source_units_match_spec() -> None:
     """#1 — per-composition CP source units match C-CP-24 §24.2 verbatim."""
     assert _by_name("CP_namespace_exports").composition_surfaces[0].cp_source_units == ("U-CP-54",)
