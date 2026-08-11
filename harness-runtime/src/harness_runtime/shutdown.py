@@ -307,6 +307,23 @@ _inflight_lock = threading.Lock()
 # close (a closed provider must not be flushed again); weak identity guards
 # id reuse just like the registry entries.
 _deferred_closing: dict[int, weakref.ref[Any] | None] = {}
+# Per-ctx standalone-flush ordered atexit backstops (B-150 atexit half): a
+# STANDALONE `flush_observability()` tracer timeout followed by process exit
+# WITHOUT `shutdown(ctx)` leaves OTel's own `shutdown_on_exit` handler racing
+# the still-live daemon flush worker (the SDK does not serialize shutdown
+# against an in-flight force_flush — pinned 1.41.1 closes the exporter
+# outside `_export_lock`). The same SDK-backstop swap `_spawn_deferred_tracer_close`
+# performs on the shutdown path is armed here on the flush-surface timeout
+# path itself. Ownership hand-off: the deferred-close machinery disarms this
+# backstop when it takes over (its own ordered backstop + watcher then own
+# the close), and a NORMAL step-3b close disarms it too (the SDK handler is
+# already self-unregistered by `TracerProvider.shutdown()`). Keyed by
+# `id(ctx)` with the same weak-identity staleness guard as the registries
+# above; all access under `_inflight_lock`.
+_standalone_backstops: dict[int, tuple[weakref.ref[Any] | None, Callable[[], None]]] = {}
+# Sentinel distinguishing "no `_deferred_closing` gate at all" from a stored
+# `None` gate (the non-weakref-able duck-typed ctx case stores None).
+_GATE_ABSENT: object = object()
 
 
 def _try_weakref(ctx: object) -> weakref.ref[Any] | None:
@@ -354,6 +371,111 @@ def _discard_inflight_tracer_flush(ctx_key: int, evt: threading.Event) -> None:
             entry[1].discard(evt)
             if not entry[1]:
                 _inflight_tracer_flush.pop(ctx_key, None)
+
+
+def _arm_standalone_atexit_backstop(ctx: object) -> None:
+    """Arm the ordered SDK-backstop replacement on a standalone flush timeout
+    (B-150 atexit half).
+
+    Called from `flush_observability`'s tracer-surface failure paths. A no-op
+    unless a flush worker for this ctx is genuinely still live — the race
+    this closes only exists while a daemon worker may still be exporting at
+    process exit. Idempotent per ctx (repeated flush timeouts arm once).
+
+    The swap follows the round-7 P2 replacement-first rule: the ordered
+    backstop is registered BEFORE the SDK's unordered handler is removed. At
+    exit the ordered backstop closes the provider ONLY when no flush worker
+    remains live AND the deferred-close machinery has not taken ownership;
+    a still-live worker means spans are lost either way — but never raced."""
+    ctx_key = id(ctx)
+    ctx_ref = _try_weakref(ctx)
+    provider = getattr(ctx, "tracer_provider", None)
+    shutdown_fn = getattr(provider, "shutdown", None)
+    if shutdown_fn is None:
+        return
+    with _inflight_lock:
+        entry = _inflight_tracer_flush.get(ctx_key)
+        if entry is None or _entry_is_stale(entry, ctx) or not entry[1]:
+            return  # no live worker — no race to guard
+        if ctx_key in _deferred_closing:
+            return  # deferred-close machinery already owns this ctx
+        armed = _standalone_backstops.get(ctx_key)
+        if armed is not None:
+            armed_ref = armed[0]
+            if armed_ref is None or armed_ref() is ctx:
+                return  # already armed for this ctx
+            _standalone_backstops.pop(ctx_key, None)  # dead ctx's entry; id reused
+
+        def _ctx_probe() -> object | None:
+            return ctx_ref() if ctx_ref is not None else None
+
+        def _standalone_ordered_backstop() -> None:
+            with _inflight_lock:
+                gate_ref = _deferred_closing.get(ctx_key, _GATE_ABSENT)
+                if gate_ref is not _GATE_ABSENT:
+                    gate_is_stale = gate_ref is not None and gate_ref() is not _ctx_probe()  # type: ignore[union-attr]
+                    if not gate_is_stale:
+                        return  # ownership moved to the deferred watcher/backstop
+                live_entry = _inflight_tracer_flush.get(ctx_key)
+                entry_is_stale = live_entry is not None and (
+                    live_entry[0] is not None and live_entry[0]() is not _ctx_probe()
+                )
+                if live_entry is not None and not entry_is_stale and live_entry[1]:
+                    return  # worker still live — never race it
+                # Close-decision commits HERE (codex round-2 P2): set the
+                # per-ctx closing gate atomically with the empty-registry
+                # check, exactly as `_live_workers_or_gate()` does — a
+                # `flush_observability()` on another thread registering a
+                # NEW worker between this check and `shutdown_fn()` would
+                # otherwise force_flush a provider whose shutdown is
+                # running. The gate makes `_register_inflight_tracer_flush`
+                # refuse it instead (and stays set forever — a closed
+                # provider must not be flushed again).
+                _deferred_closing[ctx_key] = ctx_ref
+            try:
+                shutdown_fn()
+            except Exception:
+                pass  # exit-time; no caller left to surface to
+
+        _standalone_backstops[ctx_key] = (ctx_ref, _standalone_ordered_backstop)
+    # Registration + SDK-handler removal OUTSIDE the lock (atexit's own
+    # internal lock must not nest inside `_inflight_lock` — the backstop
+    # body takes `_inflight_lock` and atexit may serialize registrations).
+    atexit.register(_standalone_ordered_backstop)
+    # Publication→registration is not atomic (codex round-1 P2): a
+    # concurrent `_disarm_standalone_atexit_backstop` (normal step-3b close
+    # runs on a `to_thread` worker; deferred takeover on another loop) can
+    # pop the just-published entry and no-op its unregister BEFORE the
+    # `atexit.register` above ran — leaving an orphaned, undiscoverable
+    # callback that would re-close the provider at exit. Re-check ownership
+    # AFTER registering: if the entry is gone (or replaced), the disarmer
+    # won — undo our registration and leave the SDK handler alone (the
+    # winning close path manages it: a normal close self-unregisters it, a
+    # deferred takeover removes it itself).
+    with _inflight_lock:
+        still_armed = _standalone_backstops.get(ctx_key)
+        lost_disarm_race = still_armed is None or still_armed[1] is not _standalone_ordered_backstop
+    if lost_disarm_race:
+        atexit.unregister(_standalone_ordered_backstop)
+        return
+    atexit_handler = getattr(provider, "_atexit_handler", None)
+    if atexit_handler is not None:
+        atexit.unregister(atexit_handler)
+
+
+def _disarm_standalone_atexit_backstop(ctx: object) -> None:
+    """Remove the per-ctx standalone backstop when close ownership moves —
+    to the deferred-close machinery (which installs its own ordered backstop)
+    or to a completed normal step-3b close."""
+    with _inflight_lock:
+        armed = _standalone_backstops.get(id(ctx))
+        if armed is None:
+            return
+        armed_ref, backstop = armed
+        if armed_ref is not None and armed_ref() is not ctx:
+            return  # someone else's (id-reused) entry — leave it
+        _standalone_backstops.pop(id(ctx), None)
+    atexit.unregister(backstop)
 
 
 def _spawn_deferred_tracer_close(ctx: object) -> None:
@@ -465,6 +587,11 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
     atexit_handler = getattr(provider, "_atexit_handler", None)
     if atexit_handler is not None:
         atexit.unregister(atexit_handler)
+    # B-150 atexit half: a standalone-flush backstop armed earlier for this
+    # ctx is superseded — the watcher + `_ordered_backstop` above own the
+    # close from here (replacement registered first, per the round-7 P2
+    # rule; the standalone one is only removed now).
+    _disarm_standalone_atexit_backstop(ctx)
     try:
         threading.Thread(target=_watcher, daemon=True, name="harness-deferred-tracer-close").start()
     except Exception:
@@ -626,7 +753,12 @@ async def flush_observability(
             # timeout OR a caller cancellation lands here the worker exists
             # and may still be running (codex round-4 P1). Registration
             # stays; the worker's own finally clears it whenever it
-            # completes.
+            # completes. B-150 atexit half: a process exit from here without
+            # `shutdown(ctx)` would let the SDK's unordered atexit handler
+            # race that worker — swap in the ordered backstop now (armed on
+            # this path too, not only the outer TimeoutError arm, because a
+            # caller CancelledError propagates past it).
+            _arm_standalone_atexit_backstop(ctx)
             raise
         except BaseException:
             # The worker either never launched (`Thread.start()` failure —
@@ -638,6 +770,9 @@ async def flush_observability(
         if not tracer_flushed:
             timed_out = True
     except TimeoutError:
+        # (B-150: no arm here — the prior-worker-still-in-flight raises
+        # above never create a worker, and a live PRIOR worker implies the
+        # call that spawned it already armed via its own inner handler.)
         failures.append("tracer")
         timed_out = True
     except Exception:
@@ -818,6 +953,10 @@ async def _close_tracer_provider(ctx: HarnessContext) -> bool:
         ctx.tracer_provider.shutdown,  # type: ignore[attr-defined]
     )
     await asyncio.to_thread(shutdown_fn)
+    # B-150 atexit half: the provider is closed (and the SDK's own atexit
+    # handler self-unregistered inside `shutdown()`); a standalone-flush
+    # backstop armed earlier must not re-close it at exit.
+    _disarm_standalone_atexit_backstop(ctx)
     return True
 
 
