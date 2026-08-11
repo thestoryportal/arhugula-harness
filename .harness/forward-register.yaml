@@ -7955,7 +7955,7 @@ items:
     mentions aligned to the CP 3.5 names + the two emitted=False RETRY_WIRE_REGISTER alias rows removed with
     the pinning test re-pinned to the empty set in the same commit; clearance
     spec-harness-runtime-v1-115-cleared-2026-08-11.md. GAP-2a CLOSED at the Runtime v1.116 delta
-    (the GAP-2a carve-out PR, 2026-08-11): the phantom attempt-indexed advance_staircase
+    (PR #1309, 2026-08-11): the phantom attempt-indexed advance_staircase
     signature in the two escalate bullets corrected to the landed stage-keyed API consulted
     stage-fresh as a cause-class classifier; retry.terminal = escalate ratified a DEFENSIVE
     BRANCH CONTRACT (unreachable-by-construction at the v1.116 classifiers, witness-pinned on
@@ -7965,9 +7965,8 @@ items:
     escalation already structural) and declared a future design arc; /resolve codex=B
     advisor=B agreement; fork doc class_1_fork_b145_gap2a_escalate_clause_phantom_api.md;
     clearance spec-harness-runtime-v1-116-cleared-2026-08-11.md. ALL THREE B-145 LEGS CLOSED
-    (GAP-1 #1308 / GAP-2b #1306 / GAP-2a this PR); row CLOSES.'
-  pr: 'the B-145 GAP-2a carve-out PR, 2026-08-11 (GAP-1 at #1308; GAP-2b at #1306; number of this
-    closing PR recorded at the post-merge roadmap refresh)'
+    (GAP-1 #1308 / GAP-2b #1306 / GAP-2a #1309); row CLOSES.'
+  pr: '#1309 (the B-145 GAP-2a carve-out; GAP-1 at #1308; GAP-2b at #1306)'
   heading: '### B-145 · `retry.backoff_ms` + `retry.cause_class` have **zero** producers, and the mandated `retry.terminal
     = "escalate"` value is never emitted — collapsed into `max-attempts` *(surfaced at the B-126 build arc, 2026-08-09;
     Gap 2 from out-of-family review round 1)*'
