@@ -285,20 +285,6 @@ RETRY_WIRE_REGISTER: tuple[RetryWireRegisterEntry, ...] = (
         binding=True,
         emitted=True,
     ),
-    RetryWireRegisterEntry(
-        attribute_name="retry.backoff_ms",
-        declaring_authority="Runtime §14.6 step (Spec_Harness_Runtime_v1.md:4229)"
-        " + §14.9 step (:5685)",
-        binding=True,
-        emitted=False,
-    ),
-    RetryWireRegisterEntry(
-        attribute_name="retry.cause_class",
-        declaring_authority="Runtime §14.6 step (Spec_Harness_Runtime_v1.md:4228)"
-        " + §14.9 step (:5686)",
-        binding=True,
-        emitted=False,
-    ),
 )
 """The `retry.*` wire keys that C-CP-03 §3.5 does NOT declare — register row
 `B-126`.
@@ -306,7 +292,7 @@ RETRY_WIRE_REGISTER: tuple[RetryWireRegisterEntry, ...] = (
 **Why this exists.** `retry.*` is declared at TWO contract venues, not one.
 C-CP-03 §3.5 declares the 6-attribute child-span schema above (5 of them
 `retry.`-prefixed; `engine.replay_disposition` is the sixth). Runtime §14.6 and
-§14.9 independently name seven MORE `retry.`-prefixed keys at their own step
+§14.9 independently name five MORE `retry.`-prefixed keys at their own step
 bullets and binding terms. The namespace's wire surface is therefore the union
 of two contracts, and the C-CP-24 §24.1 export manifest counts only the first.
 
@@ -314,14 +300,20 @@ of two contracts, and the C-CP-24 §24.1 export manifest counts only the first.
 `Spec_Harness_Runtime_v1.md:4279` and `:5729` state NO upper bound — the lane is
 intentionally unbounded, so a future producer MAY add a key. What it may not do
 is add one *invisibly*: the drift test over this tuple fails until the new key
-is registered here with its authorizing clause. Six of the seven rows are
+is registered here with its authorizing clause. Four of the five rows are
 `binding=True`, which is the finding B-126 was filed to surface — the surface is
 mostly *mandated elsewhere*, not discretionary.
 
-**`emitted=False` marks a conformance gap, not an optional key.**
-`retry.backoff_ms` and `retry.cause_class` are mandated by name at four Runtime
-step bullets and set by ZERO producers. Registered at `B-145`; do NOT drop these
-rows to make a count line up.
+**Two rows retired at the B-145 GAP-1 spec leg (Runtime v1.115), not wired.**
+`retry.backoff_ms` and `retry.cause_class` were carried here `emitted=False` as
+mandated-but-unwired (`B-145`). Grounding found both are the RETIRED v1.2-era
+names the CP §3.5 v1.3 amendment replaced (`retry.delay_ms` /
+`retry.cause_attribution` — both emitted by both producers), and Runtime v1.115
+aligned its four step-bullet mentions to the canonical names — so the two-venue
+union no longer contains the aliases and the rows are REMOVED rather than
+flipped `emitted=True`. Wiring them as-written would have put duplicate keys on
+the wire for every retry attempt. The prior "do NOT drop these rows" guard
+bound only while the Runtime bullets still named the keys.
 
 **NOT ingested into the §24.1 count.** These keys are deliberately absent from
 `CP_NAMESPACE_EXPORT_MANIFEST`'s `retry.*` `attribute_count`, which reports the
