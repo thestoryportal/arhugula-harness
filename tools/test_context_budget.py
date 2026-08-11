@@ -41,8 +41,10 @@ Mutation-probe map (what regresses silently if each witness is removed):
   marking a zero-usage requestId seen in first_turn_total
 - test_first_turn_malformed_non_tail_line_raises:
   swallowing a malformed non-tail line instead of failing closed
-- test_first_turn_trailing_malformed_line_tolerated:
-  over-eagerly raising on a benign in-progress-write tail line
+- test_first_turn_unterminated_trailing_fragment_tolerated:
+  over-eagerly raising on a benign in-progress (unterminated) tail fragment
+- test_first_turn_newline_terminated_malformed_tail_fails_closed:
+  tolerating a COMPLETED (newline-terminated) corrupt final record
 - test_collect_all_ranks_by_first_turn_timestamp_not_mtime:
   ranking by file mtime instead of the row's own first-turn timestamp
 - test_post_compaction_excludes_ineligible_sdk_sessions_boundary:
@@ -414,18 +416,32 @@ def test_first_turn_malformed_non_tail_line_raises(tmp_path: Path) -> None:
         context_budget.first_turn_total(path)
 
 
-def test_first_turn_trailing_malformed_line_tolerated(tmp_path: Path) -> None:
+def test_first_turn_unterminated_trailing_fragment_tolerated(tmp_path: Path) -> None:
+    # codex round-3: the benign shape is an UNTERMINATED final fragment — the
+    # write is in progress, so no trailing newline exists yet. (_write_jsonl
+    # always appends one, so this fixture writes manually.)
+    path = tmp_path / "sess1.jsonl"
+    good = json.dumps(_rec(request_id="r1", timestamp="t0", input_tokens=10))
+    path.write_text(good + "\n{still writing...", encoding="utf-8")
+    row = context_budget.first_turn_total(path)
+    assert row is not None
+    assert row["first_turn_total"] == 10
+
+
+def test_first_turn_newline_terminated_malformed_tail_fails_closed(tmp_path: Path) -> None:
+    # codex round-3: a NEWLINE-TERMINATED malformed final record was COMPLETED
+    # by its writer — real corruption, not an append in progress. Tolerating
+    # it returned a plausible metric for a corrupt transcript.
     path = tmp_path / "sess1.jsonl"
     _write_jsonl(
         path,
         [
             json.dumps(_rec(request_id="r1", timestamp="t0", input_tokens=10)),
-            "{still writing...",
+            "{completed corrupt record",
         ],
     )
-    row = context_budget.first_turn_total(path)
-    assert row is not None
-    assert row["first_turn_total"] == 10
+    with pytest.raises(context_budget.MalformedTranscriptError, match="newline-terminated"):
+        context_budget.first_turn_total(path)
 
 
 # --------------------------------------------------------------------------
