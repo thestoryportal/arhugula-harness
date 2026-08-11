@@ -15,6 +15,11 @@ reviewer_chain:
   - "precedent alignment — the seam shape (optional backend keyword, absent-path preserved verbatim, canonical message binding, per-algorithm length enforcement, base64 value representation) is a byte-faithful mirror of two already-cleared decisions: C-CP-20 §20.2.1 (B-22, operator chose build-the-seam-now 2026-07-14) and the B-34 representation enforcement (PR #1032, merge-gate 3-lens all-APPROVE)"
   - out-of-family `just codex-review` to convergence + merge-gate 3-lens review at the landing PR (recorded at .harness/merge-gate-log.md)
 notes: |
+  Purely additive delta — §21.2's table/prose preserved verbatim; the 4-attribute
+  AuditSignatureAttributes carrier is shape-unchanged. The delta commits the seam
+  only; backend selection/construction/config (RuntimeConfig surface, bootstrap
+  factory, C9 breaker on the signing call) remain B-47's registered remainder.
+  Rotation-aware key-period selection remains B-33.
 ---
 
 # Clearance — `Spec_Operational_Discipline_v1_33.md` (v1.33)

@@ -165,17 +165,9 @@ def _scalar_is_clean(source_lines: list[str]) -> bool:
     clean by construction. A multi-line value is never clean: it is collapsed to one quoted
     line so the stored text is unambiguous.
     """
-    raw = source_lines[0]
-    # Block scalars (codex round-1 on PR-4): an inline value that is exactly a
-    # literal/folded header (`|`, `|-`, `>-`, optionally with an indentation
-    # indicator) carries an EXPLICIT YAML style whose body is the indented
-    # continuation below — the `: `/`#` hazards cannot apply, and collapsing it
-    # to a quoted string CORRUPTS the value (the style token becomes content).
-    # Preserve byte-identically.
-    if re.fullmatch(r"[|>][+-]?[0-9]?", raw.strip()):
-        return True
     if len(source_lines) != 1:
         return False
+    raw = source_lines[0]
     try:
         node = yaml.compose("x: " + raw)
     except yaml.YAMLError:
@@ -213,15 +205,25 @@ def repair_frontmatter(block: str) -> str:
     """
     lines = block.split("\n")
     out: list[str] = []
-    # The scalar currently being accumulated: (emit prefix, [value lines]).
-    pending: tuple[str, list[str]] | None = None
+    # The scalar currently being accumulated:
+    # (emit prefix, [stripped value lines], [raw source lines]).
+    pending: tuple[str, list[str], list[str]] | None = None
 
     def flush() -> None:
         nonlocal pending
         if pending is None:
             return
-        prefix, values = pending
+        prefix, values, raws = pending
         pending = None
+        # Block scalars (codex rounds 1+2 on PR-4): a literal/folded header
+        # (`|`, `|-`, `>-`, optional indentation indicator) carries an EXPLICIT
+        # style whose BODY is the indented continuation — re-emit the RAW
+        # source lines byte-identically. Emitting values[0] alone DELETED the
+        # bodies (shipped on two real markers, since restored); quoting them
+        # corrupted the style token into content (round 1).
+        if re.fullmatch(r"[|>][+-]?[0-9]?", values[0].strip()):
+            out.extend(raws)
+            return
         if _scalar_is_clean(values):
             out.append(prefix + values[0])
             return
@@ -237,7 +239,7 @@ def repair_frontmatter(block: str) -> str:
         key_inline = _KEY_INLINE.match(raw_line)
         if key_inline:
             flush()
-            pending = (f"{key_inline.group(1)}: ", [key_inline.group(2)])
+            pending = (f"{key_inline.group(1)}: ", [key_inline.group(2)], [raw_line])
             continue
         key_block = _KEY_BLOCK.match(raw_line)
         if key_block:
@@ -247,7 +249,7 @@ def repair_frontmatter(block: str) -> str:
         item_inline = _ITEM_INLINE.match(raw_line)
         if item_inline:
             flush()
-            pending = (f"{item_inline.group(1)}- ", [item_inline.group(2)])
+            pending = (f"{item_inline.group(1)}- ", [item_inline.group(2)], [raw_line])
             continue
         if _ITEM_BLOCK.match(raw_line):
             flush()
@@ -255,6 +257,7 @@ def repair_frontmatter(block: str) -> str:
             continue
         if _CONTINUATION.match(raw_line) and pending is not None:
             pending[1].append(raw_line.strip())
+            pending[2].append(raw_line)
             continue
         raise ClearanceFrontmatterError(f"unmodelled frontmatter line: {raw_line[:80]!r}")
 

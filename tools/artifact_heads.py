@@ -133,19 +133,34 @@ def _cleared_at(value: object) -> str:
     return text.split("T")[0] if text else "-"
 
 
+_FILENAME_DATE = re.compile(r"cleared-(\d{4}-\d{2}-\d{2})")
+
+
+def _marker_date(marker: cf.Marker) -> str:
+    """The marker's effective date: `cleared_at` when present, else the date
+    encoded in the marker filename (codex round-2 on PR-4: several in-place
+    correction markers omit `cleared_at`, and `-` would rank them BELOW an
+    older dated marker of the same numeric version)."""
+    cleared = _cleared_at(marker.data.get("cleared_at"))
+    if cleared != "-":
+        return cleared
+    match = _FILENAME_DATE.search(marker.path.name)
+    return match.group(1) if match else "-"
+
+
 def _marker_sort_key(marker: cf.Marker) -> tuple[int, tuple[int, ...], str, str, str]:
-    """Highest version wins; ties break on clearance date, then marker filename.
+    """Highest version wins; ties break on effective date, then marker filename.
 
     The version's raw TEXT participates only as the FINAL tie-break (codex
     round-1 on PR-4): two markers sharing one numeric version but differing in
-    annotation — a shape present in this corpus — must be ordered by clearance
-    date, not by which annotation string sorts higher.
+    annotation — a shape present in this corpus — must be ordered by their
+    effective dates, not by which annotation string sorts higher.
     """
     kind, nums, text = version_key(marker.version)
     return (
         kind,
         nums,
-        _cleared_at(marker.data.get("cleared_at")),
+        _marker_date(marker),
         marker.path.name,
         text,
     )

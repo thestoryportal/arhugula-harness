@@ -221,5 +221,12 @@ def test_block_scalar_frontmatter_is_preserved_byte_identically(tmp_path: Path) 
     assert "notes: |\n" in repaired
     assert "- >-\n" in repaired
     assert '"|' not in repaired and '">-' not in repaired
+    # round-2 hardening: the block BODIES survive byte-identically — round 1's
+    # header-only assertion passed while flush() emitted values[0] alone and
+    # DELETED the bodies on two real markers.
+    assert "  A body line with a : colon-space hazard inside the block.\n" in repaired
+    assert "  A second line # with a hash.\n" in repaired
+    assert "    folded entry line one\n" in repaired
+    assert "    line two\n" in repaired
     # idempotent: a second pass changes nothing
     assert cf.repair_frontmatter(repaired) == repaired
