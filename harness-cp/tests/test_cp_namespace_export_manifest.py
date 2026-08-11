@@ -84,7 +84,7 @@ def test_per_namespace_attribute_count_match_spec() -> None:
         "audit.*": 7,
         "validator.fail.*": 3,
         "fallback.*": 9,
-        "retry.*": 4,
+        "retry.*": 6,
         "lease.*": 5,
         "harness.breaker.*": 9,
         "routing.*": 4,
@@ -93,16 +93,16 @@ def test_per_namespace_attribute_count_match_spec() -> None:
         assert _by_name(name).attribute_count == count
 
 
-def test_total_attribute_count_sixty_five() -> None:
-    """#6 — total exported attribute count is 65 (34 + 27 + 4).
+def test_total_attribute_count_sixty_seven() -> None:
+    """#6 — total exported attribute count is 67 (34 + 29 + 4).
 
-    v1.32 (B-19-BREAKER-AMBIENT-ATTRS): harness.breaker.* grew 7 -> 9
-    (+cause +cooldown_ms), so the manifest total grows 63 -> 65. The +2 lands
-    in §24.1.B (25 -> 27), which is where harness.breaker.* lives — NOT in
-    §24.1.A, which stays at 34. Corrected at register row `B-126`, whose
-    grounding pass recomputed all three subtotals programmatically.
+    OD v1.32 (B-19-BREAKER-AMBIENT-ATTRS): harness.breaker.* grew 7 -> 9
+    (+cause +cooldown_ms), 63 -> 65. CP v1.117 (B-144 venue-A re-table):
+    retry.* 4 -> 6 per C-CP-03 §3.5 v1.3, 65 -> 67. Both changes land in
+    §24.1.B (25 -> 29 declared) — NOT in §24.1.A, which stays at 34 pending
+    the B-153 column-semantics question on its hitl.* row.
     """
-    assert CP_EXPORTED_ATTRIBUTE_COUNT == 65
+    assert CP_EXPORTED_ATTRIBUTE_COUNT == 67
 
 
 def test_harness_breaker_substrate_anchored_outside_cp() -> None:
