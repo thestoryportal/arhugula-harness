@@ -7935,6 +7935,20 @@ items:
   council: No. Conformance to already-cleared normative step text with a named owner, and the only judgement --
     step (3)'s question of whether retry.cause_class duplicates the emitted retry.fail_class -- is answered by reading
     the two contracts, not by deliberation.
+  grounded_2026_08_11: 'SPLIT DISPOSITION (loop grounding + codex round-1 corrections; full doc at
+    .harness/b145-grounding-split-2026-08-11.md). GAP 1 keys are STALE PRE-RENAME ALIASES, not missing
+    derivations: retry.backoff_ms is the v1.2-era name the CP §3.5 v1.3 amendment RENAMED to retry.delay_ms
+    (Spec_Control_Plane_v1_3.md:76 says so verbatim), and the same Runtime sections that carry the stale
+    bullets also bind the §3.5 names at :4225/:5682 (rows repeated at Spec_Harness_Runtime_v1.md:2715-2716);
+    both producers already emit the §3.5 names (retry_breaker_tool.py:263/:292; fallback staircase region).
+    GAP 1 routes as a SPEC LEG (align the four bullet mentions to the post-rename names + re-disposition the
+    two emitted=False RETRY_WIRE_REGISTER rows + pinning test; X-AL-3). GAP 2a (tool path escalate value):
+    UNREACHABLE BY CONSTRUCTION — the tool dispatcher hard-codes STAGE_1 on every advance_staircase call
+    (retry_breaker_tool.py:252-256) and (STAGE_1, TRANSIENT_RETRY) maps unconditionally to STAGE_2
+    (validator_fail_transient_staircase.py:114-119, stage-keyed, attempt ignored), so the collapsed else is
+    genuinely last-attempt-only today; routes as a control-flow/spec leg (thread the stage across attempts
+    OR ratify the carve-out), NOT a telemetry stamp. GAP 2b (dispatch path zero-of-five) stays the impl
+    repair, with per-branch staircase reachability re-grounded before wiring.'
   heading: '### B-145 · `retry.backoff_ms` + `retry.cause_class` have **zero** producers, and the mandated `retry.terminal
     = "escalate"` value is never emitted — collapsed into `max-attempts` *(surfaced at the B-126 build arc, 2026-08-09;
     Gap 2 from out-of-family review round 1)*'
