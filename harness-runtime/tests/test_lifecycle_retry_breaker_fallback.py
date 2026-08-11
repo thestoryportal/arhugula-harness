@@ -59,7 +59,7 @@ from harness_cp.sub_agent_dispatch_cancellation import (
     FenceAckOutcome,
 )
 from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
-from harness_cp.validator_fail_transient_staircase import StaircaseStage
+from harness_cp.validator_fail_transient_staircase import StaircaseStage, StaircaseTransition
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
@@ -4614,3 +4614,185 @@ async def test_b118_a_base_exception_in_the_admission_window_still_re_arms(
     assert primary_breaker.state is BreakerState.OPEN, "NOT stranded in half_open"
     assert primary_breaker.opened_at == 30.0
     assert primary_breaker.attempt_half_open(now=60.0) is not None, "genuinely recoverable"
+
+
+# ---------------------------------------------------------------------------
+# B-145 GAP-2b — `retry.terminal` per-branch emission per Runtime §14.6 step
+# bullets (Spec_Harness_Runtime_v1.md:4227-4230). One witness per terminal
+# branch; the escalate witness is a BRANCH-CONTRACT witness (see its
+# docstring), not a reachability claim. Reuses the `_attempt_spans` helper
+# defined above.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_b145_terminal_success_and_retry_stamped() -> None:
+    """A transient failure followed by success stamps `retry.terminal =
+    "retry"` on the retried attempt and `"success"` on the succeeding one
+    (Runtime §14.6: the retry bullet at :4229, the success bullet at :4227)."""
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(outcomes=[RuntimeError("transient attempt 0"), {"result": "ok"}])
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=_chain(_candidate("anthropic", "claude-test-1")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    attempts = _attempt_spans(exporter)
+    assert len(attempts) == 2
+    assert attempts[0].attributes is not None
+    assert attempts[0].attributes["retry.terminal"] == "retry"
+    assert attempts[1].attributes is not None
+    assert attempts[1].attributes["retry.terminal"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_b145_terminal_fail_fast_stamped() -> None:
+    """A fail-fast classification (`_classify_provider_exception` → None)
+    stamps `retry.terminal = "fail-fast"` on the attempt span (Runtime §14.6
+    fail-fast bullet at :4228). The mandated sibling `retry.cause_class` is
+    the GAP-1 stale alias — its canonical form `retry.cause_attribution` is
+    asserted instead; aligning the bullet text is the GAP-1 spec leg."""
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(outcomes=[LLMDispatchProviderUnreachableError("anthropic")])
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=_chain(_candidate("anthropic", "claude-test-1")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    attempts = _attempt_spans(exporter)
+    assert len(attempts) == 1
+    assert attempts[0].attributes is not None
+    assert attempts[0].attributes["retry.terminal"] == "fail-fast"
+    assert attempts[0].attributes["retry.cause_attribution"] == (
+        "LLMDispatchProviderUnreachableError"
+    )
+
+
+@pytest.mark.asyncio
+async def test_b145_terminal_max_attempts_stamped() -> None:
+    """Last-attempt exhaustion (staircase would retry, but `max_attempts` is
+    spent) stamps `retry.terminal = "max-attempts"` (Runtime §14.6 exhaustion
+    bullet at :4230); the earlier attempts of the same candidate carry
+    `"retry"`. Distinguishability from a genuine escalation is exactly the
+    misattribution class B-127/B-131 closed at the skip call site."""
+    breaker = _retry_breaker_with_llm_policy(max_attempts=2)
+    inner = _MockInnerDispatcher(
+        outcomes=[RuntimeError("transient attempt 0"), RuntimeError("transient attempt 1")]
+    )
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=_chain(_candidate("anthropic", "claude-test-1")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    attempts = _attempt_spans(exporter)
+    assert len(attempts) == 2
+    assert attempts[0].attributes is not None
+    assert attempts[0].attributes["retry.terminal"] == "retry"
+    assert attempts[1].attributes is not None
+    assert attempts[1].attributes["retry.terminal"] == "max-attempts"
+
+
+class _EscalatingRetryBreaker(RuntimeRetryBreaker):
+    """Registry double whose staircase escalates past STAGE_2 on every call.
+
+    Exists ONLY for the branch-contract witness below — the real
+    `advance_staircase` cannot reach an escalating transition from this
+    dispatcher (see the witness docstring)."""
+
+    def advance_staircase(
+        self,
+        current: StaircaseStage,
+        cause: ValidatorRetryExitClass,
+        attempt: int,
+    ) -> StaircaseTransition:
+        return StaircaseTransition(
+            from_stage=current,
+            on_cause=cause,
+            to_stage=StaircaseStage.STAGE_5_HITL_ESCALATION,
+            preserves_cache_state=False,
+            emits_fallback_event=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_b145_terminal_escalate_branch_contract() -> None:
+    """BRANCH-CONTRACT witness, not a reachability claim: IF the staircase
+    returns a stage beyond STAGE_2_RETRY_WITH_BACKOFF, the escalation branch
+    stamps `retry.terminal = "escalate"` (Runtime §14.6 escalate clause at
+    :4229) and abandons the candidate on the FIRST attempt.
+
+    The transition is injected via a registry double because it is
+    unreachable through the real classifier + staircase today:
+    `_classify_provider_exception` returns only TRANSIENT_RETRY or None, and
+    `(STAGE_1, TRANSIENT_RETRY)` maps unconditionally to STAGE_2 — the same
+    control-flow/spec discrepancy as the tool path's GAP-2a, routed at
+    `.harness/b145-grounding-split-2026-08-11.md`. If that leg later makes
+    escalation genuinely reachable, this witness should be superseded by a
+    real-path one."""
+    breaker = _EscalatingRetryBreaker(
+        retry_policies={
+            RESERVED_LLM_DISPATCH_KEY: RetryPolicy(
+                max_attempts=3, backoff="full_jitter", jitter="full_jitter"
+            )
+        },
+        default_policy=DEFAULT_RETRY_POLICY,
+        base_delay_seconds=0.0,
+        delay_cap_seconds=0.01,
+    )
+    inner = _MockInnerDispatcher(outcomes=[RuntimeError("transient attempt 0")])
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=_chain(_candidate("anthropic", "claude-test-1")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    attempts = _attempt_spans(exporter)
+    assert len(attempts) == 1, "escalation abandons the candidate on the first attempt"
+    assert attempts[0].attributes is not None
+    assert attempts[0].attributes["retry.terminal"] == "escalate"
+
+
+@pytest.mark.asyncio
+async def test_b145_audit_signing_terminal_value_unchanged() -> None:
+    """The pre-existing non-mandated `audit-signing-fail-closed` stamp is
+    untouched by the GAP-2b wiring (it is the U-RT-136 fail-closed carrier,
+    not one of the five §14.6 values)."""
+    breaker = _retry_breaker_with_llm_policy(max_attempts=3)
+    inner = _MockInnerDispatcher(outcomes=[AuditSigningFailedError("signing backend down")])
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=_chain(_candidate("anthropic", "claude-test-1")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(AuditSigningFailedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    attempts = _attempt_spans(exporter)
+    assert len(attempts) == 1
+    assert attempts[0].attributes is not None
+    assert attempts[0].attributes["retry.terminal"] == "audit-signing-fail-closed"

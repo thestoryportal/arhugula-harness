@@ -1323,6 +1323,7 @@ class RetryBreakerFallbackDispatcher:
                             "retry.fail_class",
                             ValidatorRetryExitClass.PERMANENT_FAIL_EXIT.value,
                         )
+                        inner_span.set_attribute("retry.terminal", "fail-fast")
                         # B-116 (§14.6.3, ratified Reading (II)): a fault
                         # charges the provider-model breaker ONLY if a
                         # half-open trial could return a different result
@@ -1374,6 +1375,7 @@ class RetryBreakerFallbackDispatcher:
                         inner_span.set_attribute("retry.delay_ms", int(backoff_seconds * 1000))
                         inner_span.set_attribute("retry.cause_attribution", cause.value)
                         inner_span.set_attribute("retry.fail_class", cause.value)
+                        inner_span.set_attribute("retry.terminal", "retry")
                         last_failure_class = cause.value
                         # Sleep outside the span CM is fine; OTel ends the span
                         # at the with-exit. We sleep after recording the
@@ -1391,6 +1393,7 @@ class RetryBreakerFallbackDispatcher:
                             "retry.fail_class",
                             ValidatorRetryExitClass.TERMINAL_FAIL_EXIT.value,
                         )
+                        inner_span.set_attribute("retry.terminal", "max-attempts")
                         transition = breaker.record_failure(
                             cause=breaker_cause,
                             now=self.monotonic(),
@@ -1414,6 +1417,17 @@ class RetryBreakerFallbackDispatcher:
                         inner_span.set_attribute("retry.delay_ms", 0)
                         inner_span.set_attribute("retry.cause_attribution", cause.value)
                         inner_span.set_attribute("retry.fail_class", cause.value)
+                        # B-145 GAP-2b: `retry.terminal = "escalate"` per Runtime
+                        # §14.6 (Spec_Harness_Runtime_v1.md:4229). UNREACHABLE BY
+                        # CONSTRUCTION today: `_classify_provider_exception` only
+                        # returns TRANSIENT_RETRY (or None → fail-fast above), and
+                        # (STAGE_1, TRANSIENT_RETRY) maps unconditionally to
+                        # STAGE_2, so this else can only fire if the classifier
+                        # grows a skip-class return or the stage is threaded
+                        # across attempts — the same control-flow/spec
+                        # discrepancy as the tool path's GAP-2a
+                        # (.harness/b145-grounding-split-2026-08-11.md).
+                        inner_span.set_attribute("retry.terminal", "escalate")
                         transition = breaker.record_failure(
                             cause=breaker_cause,
                             now=self.monotonic(),
@@ -1434,6 +1448,7 @@ class RetryBreakerFallbackDispatcher:
                     # per C-CP-03 §3.5 sampling discipline). `retry.delay_ms = 0`
                     # makes the success span numerically distinct from retries.
                     inner_span.set_attribute("retry.delay_ms", 0)
+                    inner_span.set_attribute("retry.terminal", "success")
                     transition = breaker.record_success(trial_token=trial_token)
                     if transition is not None:
                         self._emit_breaker_transition(transition, outer_span)
