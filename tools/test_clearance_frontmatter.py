@@ -264,3 +264,24 @@ def test_non_string_required_fields_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(cf.ClearanceFrontmatterError, match="non-empty string"):
         cf.parse_marker(bad)
+
+
+def test_full_block_header_grammar_and_anchors_preserved() -> None:
+    """codex round-4 (PR-4): indicator-before-chomping headers (`|2-`, `>2+`),
+    an inline header comment, and anchor/alias scalars are all structural —
+    preserved byte-identically, never folded into quoted strings."""
+    block = (
+        "artifact: design-substrate/X_v1.md\n"
+        "version: v1.0\n"
+        "a: |2-\n"
+        "  indented body A\n"
+        "b: >2+\n"
+        "  folded body B\n"
+        "c: | # header comment\n"
+        "  body C\n"
+        "note: &n anchored value\n"
+        "copy: *n\n"
+    )
+    repaired = cf.repair_frontmatter(block)
+    assert repaired == block
+    assert cf.repair_frontmatter(repaired) == repaired

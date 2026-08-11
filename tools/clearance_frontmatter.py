@@ -56,7 +56,7 @@ _KEY_BLOCK = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):[ \t]*$")
 _ITEM_INLINE = re.compile(r"^([ \t]+)- (.+)$")
 _ITEM_BLOCK = re.compile(r"^([ \t]+)-[ \t]*$")
 _CONTINUATION = re.compile(r"^[ \t]+\S")
-_BLOCK_HEADER = re.compile(r"[|>][+-]?[0-9]?")
+_BLOCK_HEADER = re.compile(r"[|>](?:[0-9][+-]?|[+-][0-9]?)?(?:[ \t]+#.*)?")
 
 # `| `README.md` | class | reason |` rows in the manifest table.
 _MANIFEST_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$")
@@ -173,6 +173,12 @@ def _scalar_is_clean(source_lines: list[str]) -> bool:
     if len(source_lines) != 1:
         return False
     raw = source_lines[0]
+    if raw.lstrip()[:1] in ("&", "*", "!"):
+        # Anchor / alias / tag: structural YAML, not a plain-prose scalar.
+        # Quoting `&n value` or `*n` would turn the syntax into content and
+        # silently destroy alias semantics (codex round-4 on PR-4) — leave
+        # byte-identical; the parse gate still reports it if it is broken.
+        return True
     try:
         node = yaml.compose("x: " + raw)
     except yaml.YAMLError:
