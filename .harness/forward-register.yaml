@@ -8041,6 +8041,21 @@ items:
   council: 'No. The 3-model reconciliation pipeline (Codex × Opus × Fable reconciler) already served
     as the decorrelated deliberation for this program, and the operator ratified R1–R3 + all-waves execution
     2026-08-10 — no further multi-voice fork remains open.'
+  build_state_2026_08_11: 'ALL BUILD ARCS LANDED — PRs #1293/#1294/#1295/#1296/#1297/#1298/#1299/#1300/#1301
+    merged with terminating refreshes; zero design-substrate/** paths across all nine PRs (verified by
+    per-PR file enumeration 2026-08-11). Root CLAUDE.md 123,442 → 44,853 B; axis CLAUDE.mds −73,509 B;
+    roadmap_status head ≤25,600 B gated; E4 post-compaction selector TESTED (#1297, 32 witnesses).
+    REMAINING for close: the ≤76k cold-start gate is NOT yet conclusively measured in the eligible
+    */cli cohort — every eligible session predates the slim merges (pre-slim first turns 107,968–131,020).
+    A fresh post-merge sdk-cli probe measured 49,324 total (10 in + 31,232 cw + 18,082 cr), well under
+    the gate, but sdk-cli loads a lighter stack and is cohort-excluded by design; the arithmetic
+    projection from the bg/cli baseline (~108k − ~21k root-slim) sits near ~87k. The two bracket the
+    gate, so the row stays OPEN pending the first post-merge eligible cli session: run `just
+    context-budget --sessions 1` after the operator''s next interactive session and flip this row if
+    ≤76k; if >76k the remaining mass is the measured component split (system prompt + tools + memory),
+    routed back to the held B-149 probes for an operator decision. Lean review protocol (operator
+    cost directive 2026-08-11) recorded at PRs #1298–#1301: codex 1-round caps + single/skipped
+    merge-gate lenses with residual classes in PR bodies.'
   heading: '### B-148 · R-CTX-1 context-optimization program — approved execution, Arcs 0–7 / Waves 0–5 *(operator-ratified 2026-08-10; 3-model reconciliation; Arc 8 parked at B-149)*'
 - id: B-149
   title: R-CTX-1 Arc 8 / Floor C conditional-pack redesign — PARKED (Floor B terminal per operator R2)
