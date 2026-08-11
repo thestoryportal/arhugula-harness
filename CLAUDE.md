@@ -47,11 +47,35 @@ Foundational authority remains ADR-F1..F5 plus ADR-D1..D6, then `Architectural_D
 
 ### 2.3 Per-Axis Specs (Phase 5 Contract Authority)
 
-Canonical spec heads: IS `Spec_Information_Substrate_v1.md` **v1.13** (cleared 2026-08-07) · AS `Spec_Action_Surface_v1.md` **v1.14** (2026-07-15) · CP `Spec_Control_Plane_v1_116.md` **v1.116** (2026-08-09) · OD `Spec_Operational_Discipline_v1_39.md` **v1.39** (2026-08-09) · Runtime `Spec_Harness_Runtime_v1.md` **v1.114** (2026-08-08) · Memory `Spec_Memory_Substrate_v1.md` **v1.3** (2026-08-06). Full per-version change-note lineage lives at `.harness/artifact-pointers/spec-heads.md` and, per family, at `.harness/artifact-pointers/{is,as,cp,od,runtime,memory}.md` — **query, do not read wholesale** (`rg <term> .harness/artifact-pointers/*.md`).
+Canonical spec heads — **one family per row, so each version stays bound to its own artifact name** (the flat one-line form put an unrelated `v1.13` inside the stale-AS detector's 60-char window):
+
+| Axis | Head spec artifact | Head version |
+|---|---|---|
+| IS | `Spec_Information_Substrate_v1.md` | **v1.13** (cleared 2026-08-07) |
+| AS | `Spec_Action_Surface_v1.md` | **v1.14** (cleared 2026-07-15) |
+| CP | `Spec_Control_Plane_v1_116.md` | **v1.116** (cleared 2026-08-09) |
+| OD | `Spec_Operational_Discipline_v1_39.md` | **v1.39** (cleared 2026-08-09) |
+| Runtime | `Spec_Harness_Runtime_v1.md` | **v1.114** (cleared 2026-08-08) |
+| Memory | `Spec_Memory_Substrate_v1.md` | **v1.3** (cleared 2026-08-06) |
+
+Full per-version change-note lineage lives at `.harness/artifact-pointers/spec-heads.md` and, per family, at `.harness/artifact-pointers/{is,as,cp,od,runtime,memory}.md` — **query, do not read wholesale** (`rg <term> .harness/artifact-pointers/*.md`).
 
 ### 2.4 Per-Axis Plans + CXA (Phase 6 Execution Authority)
 
-Canonical plan heads: core `Implementation_Plan_Harness_Core_v1_3.md` · IS `Implementation_Plan_Information_Substrate_v2_9.md` · AS `Implementation_Plan_Action_Surface_v1_6.md` (v1.6, cleared 2026-07-15) · CP `Implementation_Plan_Control_Plane_v2_49.md` · OD `Implementation_Plan_Operational_Discipline_v2_34.md` · Runtime `Implementation_Plan_Harness_Runtime_v2_62.md` · CXA `Cross_Axis_Composition_Document_v2_23.md` · Memory `Implementation_Plan_Memory_Substrate_v1.md` v1.3. Full per-version change-note lineage lives at `.harness/artifact-pointers/plan-heads.md` and, per family, at `.harness/artifact-pointers/`. **Query, do not read wholesale.**
+Canonical plan heads — one family per row (same adjacency rule as §2.3):
+
+| Axis | Head plan artifact |
+|---|---|
+| core | `Implementation_Plan_Harness_Core_v1_3.md` |
+| IS | `Implementation_Plan_Information_Substrate_v2_9.md` |
+| AS | `Implementation_Plan_Action_Surface_v1_6.md` (v1.6, cleared 2026-07-15) |
+| CP | `Implementation_Plan_Control_Plane_v2_49.md` |
+| OD | `Implementation_Plan_Operational_Discipline_v2_34.md` |
+| Runtime | `Implementation_Plan_Harness_Runtime_v2_62.md` |
+| CXA | `Cross_Axis_Composition_Document_v2_23.md` |
+| Memory | `Implementation_Plan_Memory_Substrate_v1.md` v1.3 (cleared 2026-08-06) |
+
+Full per-version change-note lineage lives at `.harness/artifact-pointers/plan-heads.md` and, per family, at `.harness/artifact-pointers/`. **Query, do not read wholesale.**
 
 ### 2.5 Per-Axis Subdirectory `CLAUDE.md` Pointers
 

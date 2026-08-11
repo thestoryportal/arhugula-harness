@@ -198,35 +198,64 @@ def test_row_count_drift_is_caught(data):
     assert any("canonical row count" in v or "snapshot" in v for v in violations), violations
 
 
-# ── R-CTX-1 / U-CTX-12: root CLAUDE.md §4.1 must not re-hardcode a LIVE tally ───────────
+# ── R-CTX-1 / U-CTX-12: §4.1 must not re-hardcode a LIVE tally ─────────────────────────
 # §4.1 carried two tables that read as live counts but were the FROZEN design-phase
 # `Phase_7_Meta_Architecture_v1.md` §5 declaration; its per-axis line said `AS=6` against a
 # live ledger the batch-24 decomposition had already moved past. The repair labels both
 # tables as design-phase history and routes the live tally to this tool. These pins keep
 # that split intact — no literal is asserted, the live figure is derived here.
+#
+# R-CTX-1 / U-CTX-13 relocated the §4.1 BODY (both frozen tables) into the governance pack
+# `docs/governance/substitution-and-clearance.md`, leaving root §4.1 as a heading plus a
+# resolving pointer. The split above is unchanged in substance, so the pins are SPLIT BY
+# VENUE rather than weakened: the frozen figures are pinned where they now live, the
+# live-count routing is pinned in root, and the negative — never paste the live split —
+# now binds BOTH venues, since the pack is where a future editor would be tempted to
+# "helpfully update" the frozen numbers.
+
+_GOVERNANCE_PACK = "docs/governance/substitution-and-clearance.md"
 
 
-def _root_claude_md() -> str:
-    return (sl.DEFAULT_LEDGER.parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
+def _repo_file(relative: str) -> str:
+    return (sl.DEFAULT_LEDGER.parents[1] / relative).read_text(encoding="utf-8")
+
+
+def _section_4_1(relative: str) -> str:
+    return _repo_file(relative).split("### 4.1 ")[1].split("### 4.2 ")[0]
 
 
 def test_root_claude_section_4_1_routes_live_counts_to_the_derivation(data) -> None:
-    text = _root_claude_md()
-    section = text.split("### 4.1 ")[1].split("### 4.2 ")[0]
+    """Root keeps the ROUTING half: frozen-vs-live labelling + the derivation recipe."""
+    section = _section_4_1("CLAUDE.md")
     assert "tools/substitution_ledger.py --summary" in section
     assert "FROZEN design-phase" in section
-    # The design-phase figures are retained, but explicitly as history.
+    # Root must hand the reader onward rather than restating the frozen tables.
+    assert _GOVERNANCE_PACK in section
+
+
+def test_governance_pack_section_4_1_retains_the_frozen_design_phase_figures() -> None:
+    """The frozen figures survive the relocation, still labelled as history."""
+    section = _section_4_1(_GOVERNANCE_PACK)
+    assert "FROZEN design-phase" in section
+    # The per-axis line and the mechanism table, both totalling the design-phase 49.
     assert "IS=9 / AS=6 / CP=21 / OD=8 / CXA=5" in section
+    assert "(totals 49)" in section
+    for mechanism_row in ("| H_E-direct     | 11    |", "| Authoring-only | 4     |"):
+        assert mechanism_row in section, mechanism_row
     assert "The live per-axis split is different and is derived, not written here" in section
+    # The pack must route live counts to the tool too — a reader who lands here directly
+    # must not conclude the frozen tables are current.
+    assert "tools/substitution_ledger.py --summary" in section
 
 
-def test_root_claude_section_4_1_does_not_assert_the_live_per_axis_split(data) -> None:
+@pytest.mark.parametrize("venue", ["CLAUDE.md", _GOVERNANCE_PACK])
+def test_section_4_1_does_not_assert_the_live_per_axis_split(data, venue: str) -> None:
     """The live split must never be pasted in — that is exactly how `AS=6` went stale."""
-    section = _root_claude_md().split("### 4.1 ")[1].split("### 4.2 ")[0]
+    section = _section_4_1(venue)
     derived = sl.derive(data)["axis_rowcount"]
     live_line = " / ".join(f"{axis}={derived[axis]}" for axis in ("IS", "AS", "CP", "OD", "CXA"))
     assert live_line not in section, (
-        f"root CLAUDE.md §4.1 hardcodes the live per-axis split ({live_line}); "
+        f"{venue} §4.1 hardcodes the live per-axis split ({live_line}); "
         "§4.2 requires it be derived from tools/substitution_ledger.py instead"
     )
 
