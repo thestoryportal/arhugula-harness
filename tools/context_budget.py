@@ -59,14 +59,18 @@ def _loads_record(line: str) -> dict[str, Any] | None:
 def _records(path: Path) -> list[dict[str, Any]]:
     """Every record of one transcript file, failing closed on corruption.
 
-    Only a malformed FINAL line is benign (an append in progress at read
-    time). A malformed line with records after it means the transcript was
-    interrupted and resumed — the true first turn may be inside the damaged
-    region, so any measurement over the file would be silently wrong; raise
-    instead. Propagates ``OSError`` for unreadable files (same posture).
+    Only an UNTERMINATED malformed final line is benign — that is the shape an
+    append-in-progress leaves at read time. A malformed final line that ends
+    with a newline was COMPLETED by its writer and is real corruption (codex
+    on the E4-test PR: tolerating it would return a plausible metric for a
+    corrupt transcript); a malformed line with records after it means the
+    transcript was interrupted and resumed — either way the true first turn
+    may be inside the damaged region, so raise instead of measuring.
+    Propagates ``OSError`` for unreadable files (same posture).
     """
     records: list[dict[str, Any]] = []
     pending_bad: int | None = None
+    pending_bad_terminated = False
     with path.open(encoding="utf-8") as fh:
         for lineno, line in enumerate(fh, start=1):
             if not line.strip():
@@ -80,8 +84,15 @@ def _records(path: Path) -> list[dict[str, Any]]:
                 )
             if rec is None:
                 pending_bad = lineno
+                pending_bad_terminated = line.endswith("\n")
                 continue
             records.append(rec)
+    if pending_bad is not None and pending_bad_terminated:
+        raise MalformedTranscriptError(
+            f"{path}:{pending_bad}: malformed FINAL record is newline-terminated — "
+            f"a completed corrupt write, not an append in progress; refusing to "
+            f"measure this file"
+        )
     return records
 
 
