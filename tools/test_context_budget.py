@@ -4,17 +4,16 @@ instrument, including the errata E4 post-compaction selector
 being TESTED before the program can close.
 
 Every numbered witness below traces to a codex review finding on PR #1294
-(regression protection is the point, not novel coverage). Fixtures write real
-transcript JSONL files under the tool's ACTUAL derived transcript directory
-(``Path.home()/".claude"/"projects"/<slug>``, via ``project_transcript_dir``)
-for any test that exercises ``main()`` / ``collect_all()`` end-to-end — those
-are the surfaces that read from that real location in production. Pure
-functions that take an arbitrary ``Path`` (``first_turn_total``,
+(regression protection is the point, not novel coverage). End-to-end tests of
+``main()`` / ``collect_all()`` use the ``td`` fixture, which MONKEYPATCHES the
+home directory to a per-test ``tmp_path`` (codex P2 on this PR: writing under
+the operator's real ``~/.claude/projects`` both touched real data and
+PermissionError'd under managed sandbox profiles) and then exercises the
+tool's real ``project_transcript_dir`` derivation against that fake home.
+Pure functions that take an arbitrary ``Path`` (``first_turn_total``,
 ``post_compaction_first_turns``, ``sidechain_first_turns``, ``collect_all``)
-are exercised directly against plain ``tmp_path`` fixtures instead — no need
-to touch the real home directory for those. Every fixture that DOES write
-under the real derived location cleans up via ``shutil.rmtree`` in a
-``finally`` block (or pytest's own ``tmp_path`` for the plain case).
+are exercised directly against plain ``tmp_path`` fixtures. pytest's tmp_path
+lifecycle owns all cleanup — nothing outside the test tree is ever written.
 
 Mutation-probe map (what regresses silently if each witness is removed):
 
@@ -69,7 +68,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import shutil
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -138,21 +136,27 @@ def _write_jsonl(path: Path, records: list[dict[str, Any] | str]) -> None:
 
 
 @pytest.fixture
-def td(tmp_path: Path) -> Iterator[tuple[Path, Path]]:
-    """A (project_dir, transcript_dir) pair where transcript_dir is the REAL
-    ``project_transcript_dir(project_dir)`` location under the actual home
-    directory. project_dir lives under a unique per-test tmp_path, so its
-    derived slug never collides with a real project's transcript dir. Cleaned
-    up unconditionally via shutil.rmtree in a finally block.
+def td(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Path, Path]]:
+    """A (project_dir, transcript_dir) pair with HOME redirected to tmp_path
+    (codex P2: writing into the REAL ``~/.claude/projects`` both touched
+    operator data and PermissionError'd under the managed workspace-write
+    profile). ``project_transcript_dir`` derives from ``Path.home()``, so the
+    monkeypatched HOME keeps every fixture inside the writable test tree;
+    pytest's tmp_path lifecycle owns cleanup.
     """
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    def _fake_home() -> Path:
+        return fake_home
+
+    monkeypatch.setattr(Path, "home", staticmethod(_fake_home))
     project_dir = tmp_path / "proj"
     project_dir.mkdir()
     transcript_dir = context_budget.project_transcript_dir(project_dir)
     transcript_dir.mkdir(parents=True)
-    try:
-        yield project_dir, transcript_dir
-    finally:
-        shutil.rmtree(transcript_dir, ignore_errors=True)
+    yield project_dir, transcript_dir
 
 
 # --------------------------------------------------------------------------
@@ -207,18 +211,25 @@ def test_post_compaction_consecutive_boundaries_only_latest_trigger_counts(
 
 
 def test_post_compaction_dedup_within_request(tmp_path: Path) -> None:
+    # codex P2 (vacuous-probe repair): the repeated requestId sits AFTER a
+    # SECOND boundary, so `pending_trigger` is armed again and dedup is the
+    # ONLY reason the duplicate is skipped — removing `seen_request_ids`
+    # would capture r1's 999-token chunk for boundary 2 and fail both
+    # assertions below.
     path = tmp_path / "sess1.jsonl"
     _write_jsonl(
         path,
         [
             _compact("manual"),
             _rec(request_id="r1", timestamp="t1", input_tokens=100),
+            _compact("auto"),
             _rec(request_id="r1", timestamp="t1b", input_tokens=999),
+            _rec(request_id="r2", timestamp="t2", input_tokens=200),
         ],
     )
     rows = context_budget.post_compaction_first_turns(path)
-    assert len(rows) == 1
-    assert rows[0]["post_compaction_total"] == 100
+    assert [r["post_compaction_total"] for r in rows] == [100, 200]
+    assert [r["trigger"] for r in rows] == ["manual", "auto"]
 
 
 def test_post_compaction_zero_usage_skip_then_real_usage_same_request(
