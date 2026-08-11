@@ -156,7 +156,7 @@ def test_gate_fails_on_a_marker_missing_artifact_or_version(tmp_path: Path) -> N
     _seed(tmp_path, "m.md", "---\nartifact: design-substrate/X.md\n---\n\nbody\n")
     violations = cf.check(tmp_path, tmp_path / "parse-manifest.md")
     assert len(violations) == 1
-    assert "missing `version`" in violations[0]
+    assert "`version` must be a non-empty string" in violations[0]
 
 
 def test_gate_fails_on_a_manifest_row_whose_file_vanished(tmp_path: Path) -> None:
@@ -230,3 +230,37 @@ def test_block_scalar_frontmatter_is_preserved_byte_identically(tmp_path: Path) 
     assert "    line two\n" in repaired
     # idempotent: a second pass changes nothing
     assert cf.repair_frontmatter(repaired) == repaired
+
+
+def test_block_scalar_body_shaped_like_list_item_stays_body() -> None:
+    """codex round-3 (PR-4): a body line shaped like a YAML list item or key
+    inside a block scalar must remain body VERBATIM — indentation relative to
+    the owning key decides, never the line's own shape."""
+    block = (
+        "artifact: design-substrate/X_v1.md\n"
+        "version: v1.0\n"
+        "notes: |\n"
+        "  - item: value\n"
+        "  plain body after the item-shaped line\n"
+        "\n"
+        "  body after a blank line inside the block\n"
+        "next_key: after the block\n"
+    )
+    repaired = cf.repair_frontmatter(block)
+    assert "  - item: value\n" in repaired
+    assert "  plain body after the item-shaped line\n" in repaired
+    assert "  body after a blank line inside the block\n" in repaired
+    assert '- "item: value"' not in repaired
+    assert cf.repair_frontmatter(repaired) == repaired
+
+
+def test_non_string_required_fields_rejected(tmp_path: Path) -> None:
+    """codex round-3 (PR-4): a sequence `artifact` or boolean `version` must be
+    an ERROR, not stringified into a bogus family."""
+    bad = tmp_path / "bad-v1-0-cleared-2026-01-01.md"
+    bad.write_text(
+        "---\nartifact:\n  - a\n  - b\nversion: true\n---\nbody\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(cf.ClearanceFrontmatterError, match="non-empty string"):
+        cf.parse_marker(bad)

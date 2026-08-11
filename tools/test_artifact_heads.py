@@ -379,3 +379,13 @@ def test_same_version_tie_breaks_on_clearance_date_not_annotation_text() -> None
     )
     assert max([older, undated_newer], key=ah._marker_sort_key) is undated_newer
     assert max([undated_newer, older], key=ah._marker_sort_key) is undated_newer
+
+
+def test_undated_winner_row_carries_filename_date() -> None:
+    """codex round-3 (PR-4): when the winning marker omits `cleared_at`, the
+    generated row must carry the filename-encoded effective date, not `-`."""
+    winner = cf.Marker(
+        path=Path("x-v2-0-correction-cleared-2026-07-01.md"),
+        data={"artifact": "design-substrate/X_v1.md", "version": "v2.0 (correction)"},
+    )
+    assert ah._marker_date(winner) == "2026-07-01"

@@ -190,7 +190,7 @@ def derive(
                 family=family,
                 artifact=winner.artifact,
                 version=winner.version.strip(),
-                cleared_at=_cleared_at(winner.data.get("cleared_at")),
+                cleared_at=_marker_date(winner),
                 marker=winner.path.name,
                 marker_count=len(family_markers),
             )

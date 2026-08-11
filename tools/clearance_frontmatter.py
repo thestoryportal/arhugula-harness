@@ -56,6 +56,7 @@ _KEY_BLOCK = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):[ \t]*$")
 _ITEM_INLINE = re.compile(r"^([ \t]+)- (.+)$")
 _ITEM_BLOCK = re.compile(r"^([ \t]+)-[ \t]*$")
 _CONTINUATION = re.compile(r"^[ \t]+\S")
+_BLOCK_HEADER = re.compile(r"[|>][+-]?[0-9]?")
 
 # `| `README.md` | class | reason |` rows in the manifest table.
 _MANIFEST_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$")
@@ -116,8 +117,12 @@ def parse_marker(path: Path) -> Marker:
         raise ClearanceFrontmatterError(f"{path.name}: frontmatter is not a mapping")
     for key in REQUIRED_KEYS:
         value = data.get(key)
-        if value is None or (isinstance(value, str) and not value.strip()):
-            raise ClearanceFrontmatterError(f"{path.name}: frontmatter is missing `{key}`")
+        if not isinstance(value, str) or not value.strip():
+            # Non-string shapes (a sequence artifact, `version: true`) would
+            # stringify into bogus families downstream (codex round-3 on PR-4).
+            raise ClearanceFrontmatterError(
+                f"{path.name}: frontmatter `{key}` must be a non-empty string"
+            )
     return Marker(path=path, data=data)
 
 
@@ -221,7 +226,7 @@ def repair_frontmatter(block: str) -> str:
         # source lines byte-identically. Emitting values[0] alone DELETED the
         # bodies (shipped on two real markers, since restored); quoting them
         # corrupted the style token into content (round 1).
-        if re.fullmatch(r"[|>][+-]?[0-9]?", values[0].strip()):
+        if _BLOCK_HEADER.fullmatch(values[0].strip()):
             out.extend(raws)
             return
         if _scalar_is_clean(values):
@@ -231,7 +236,34 @@ def repair_frontmatter(block: str) -> str:
         # space is therefore the value the source text denotes.
         out.append(prefix + _double_quote(" ".join(values)))
 
-    for raw_line in lines:
+    # While accumulating a block scalar, every line indented DEEPER than the
+    # owning key/item belongs to its body VERBATIM — even one shaped like a
+    # list item or key (codex round-3 on PR-4: `  - item: value` inside a
+    # `notes: |` body was reclassified as a YAML list item and quoted). The
+    # owner's indent is recorded when the block header is seen; -1 = not in a
+    # block scalar.
+    block_owner_indent = -1
+
+    def _indent(line: str) -> int:
+        return len(line) - len(line.lstrip(" \t"))
+
+    for idx, raw_line in enumerate(lines):
+        if block_owner_indent >= 0 and pending is not None:
+            if raw_line != "" and _indent(raw_line) > block_owner_indent:
+                pending[1].append(raw_line.strip())
+                pending[2].append(raw_line)
+                continue
+            if raw_line == "":
+                # A blank line INSIDE a block body (more-indented body follows)
+                # is body; a trailing blank ends the block.
+                nxt = next((ln for ln in lines[idx + 1 :] if ln != ""), None)
+                if nxt is not None and _indent(nxt) > block_owner_indent:
+                    pending[1].append("")
+                    pending[2].append(raw_line)
+                    continue
+            block_owner_indent = -1
+            flush()
+            # fall through: process raw_line normally
         if raw_line == "":
             flush()
             out.append(raw_line)
@@ -240,6 +272,8 @@ def repair_frontmatter(block: str) -> str:
         if key_inline:
             flush()
             pending = (f"{key_inline.group(1)}: ", [key_inline.group(2)], [raw_line])
+            if _BLOCK_HEADER.fullmatch(key_inline.group(2).strip()):
+                block_owner_indent = _indent(raw_line)
             continue
         key_block = _KEY_BLOCK.match(raw_line)
         if key_block:
@@ -250,6 +284,8 @@ def repair_frontmatter(block: str) -> str:
         if item_inline:
             flush()
             pending = (f"{item_inline.group(1)}- ", [item_inline.group(2)], [raw_line])
+            if _BLOCK_HEADER.fullmatch(item_inline.group(2).strip()):
+                block_owner_indent = _indent(raw_line)
             continue
         if _ITEM_BLOCK.match(raw_line):
             flush()
