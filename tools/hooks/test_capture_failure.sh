@@ -68,7 +68,7 @@ OUT=$(run "$EC2")
 [ -z "$OUT" ] && ok "distinct command with same exit code is NOT a recurrence" || bad "cross-command false recurrence: $OUT"
 [ "$(jq -rs '[.[].sig] | unique | length' "$LOG")" = "2" ] && ok "two distinct sigs logged for two commands" || bad "sigs collapsed: $(jq -rs '[.[].sig]' "$LOG")"
 
-# 7) U-CTX-07: falls back to the command-name#hash identity when no exit_code.
+# 7) U-CTX-07: falls back to the structure-only identity when no exit_code.
 : > "$LOG"
 CH='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-CH","tool_input":{"command":"some very long failing command that keeps going past forty characters for sure"}}'
 run "$CH" >/dev/null
@@ -92,6 +92,20 @@ printf '%s' "$O3" | grep -q "recurring failure" && ok "cap: occurrence 3 nudges 
 [ -z "$O5" ] && ok "cap: occurrence 5 suppressed (cap reached)" || bad "cap: occurrence 5 not capped: $O5"
 [ "$(wc -l < "$LOG" | tr -d ' ')" = "5" ] && ok "cap: all 5 occurrences still logged (cap only suppresses emission)" || bad "cap: log row count wrong"
 [ "$(grep -c '"emitted":true' "$LOG")" = "2" ] && ok "cap: exactly 2 rows marked emitted:true this session" || bad "cap: emitted:true row count wrong"
+
+# 8b) merge-gate lens 3: the cap is TOTAL per session, not per-signature — with
+#     TWO distinct sigs both past threshold, the third qualifying nudge (first
+#     of sig B after two sig-A emissions) must be suppressed. Kills the
+#     `and .sig == $sig` mutation on PRIOR_EMIT_COUNT that single-sig fixtures
+#     let survive.
+: > "$LOG"
+TA='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"total_a","session_id":"sess-TOT"}'
+TB='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"total_b","session_id":"sess-TOT"}'
+run "$TA" >/dev/null; run "$TA" >/dev/null; run "$TA" >/dev/null   # sig A: nudges at 2 and 3 → cap reached
+run "$TB" >/dev/null                                               # sig B occurrence 1
+OUTB=$(run "$TB")                                                  # sig B occurrence 2 → would-nudge, cap reached
+[ -z "$OUTB" ] && ok "cap is TOTAL: distinct sig's nudge suppressed after 2 emissions" || bad "per-sig cap mutation possible: $OUTB"
+[ "$(grep -c '"emitted":true' "$LOG")" = "2" ] && ok "total cap: exactly 2 emitted across two sigs" || bad "total-cap emitted count wrong"
 
 # 9) codex P2: a command with JSON-escaped characters (quotes) must still reach the
 #    recurrence threshold — the old raw grep compared the raw sig against the
@@ -198,16 +212,16 @@ printf '%s' "$FO" | CLAUDE_PROJECT_DIR="$REPO" CAPTURE_FAILURE_LOCK_TRIES=2 bash
   && ok "foreign-owned fresh lock survives (ownership-checked release)" || bad "foreign lock deleted or mutated"
 rm -rf "$LOG.lock"
 
-# 15) codex round-9: the digest is over the SANITIZED command — rotated secret
-#     values share one recurrence identity, and the hash cannot be dictionary-
-#     attacked from a known template + guessed low-entropy value.
+# 15) codex rounds 9+10: rotated secret values share ONE recurrence identity —
+#     the structure-only construction carries no values at all (and since
+#     round 10, no digest either, so no oracle surface exists).
 : > "$LOG"
 R1='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-ROT","tool_input":{"command":"DEPLOY_KEY=aaa111 deploy --prod"}}'
 R2='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-ROT","tool_input":{"command":"DEPLOY_KEY=bbb222 deploy --prod"}}'
 run "$R1" >/dev/null
 OUT=$(run "$R2")
-printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "rotated secret values share one recurrence identity (sanitized hash)" || bad "rotated-secret recurrence broken: $OUT"
-[ "$(jq -rs '[.[].sig] | unique | length' "$LOG")" = "1" ] && ok "sanitized hash: one sig across rotated values" || bad "sigs diverged across rotated values"
+printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "rotated secret values share one recurrence identity (structure-only)" || bad "rotated-secret recurrence broken: $OUT"
+[ "$(jq -rs '[.[].sig] | unique | length' "$LOG")" = "1" ] && ok "structure-only: one sig across rotated values" || bad "sigs diverged across rotated values"
 grep -q "aaa111\|bbb222" "$LOG" && bad "secret value leaked to log" || ok "rotated secret values absent from log"
 
 # 16) codex round-9: an ALREADY-STALE foreign lock takes the fast suppression

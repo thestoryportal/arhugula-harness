@@ -78,7 +78,7 @@ Source record: /Users/robertrhu/.claude/jobs/9b1bdd92/tmp/{neutral-brief,codex-r
 Baseline 98–100k. Floor-B target ~71k (−28%); range 67–71k; conservative −24%. roadmap_status lever ~76k/reading-session (46/58 sessions) — separate from preload headline. Subagent multiplier saving×(1+N) reported separately (merge-gate N=3). Withdrawn: 59.5k/−39%.
 
 ## Asset leverage
-roadmap-continue (cadence) · ship-pr (PR/refresh ritual) · merge-gate (code PRs) · red-first (U-CTX-04/07/08/11/14) · overlay-query (grounding) · /optimize-claude-md (Arc 5) · just codex-review (every PR) · advisor() at wave gates · context-save at arc closes · mutation_probe.py · Monitor (#1292 gate) · TaskCreate/TaskList (unit tracking).
+roadmap-continue (cadence) · ship-pr (PR/refresh ritual) · merge-gate (code PRs) · red-first (U-CTX-04/07/08/11/14) · overlay-query (grounding) · /optimize-claude-md (Arc 5) · just codex-review (every PR) · advisor() at wave gates · context-save at arc closes · mutation_probe.py · ~~Monitor (#1292 gate)~~ *(E8: gate dissolved)* · TaskCreate/TaskList (unit tracking).
 
 ## Sub-agent brief contract (every worker)
 Carries: unit ACs verbatim; the ratification text it implements; file allowlist (its arc's surfaces ONLY); the prohibitions block above; negative examples (what bad output looks like); reviewer chain; "return the diff summary — orchestrator reads the DIFF, not your self-report." Worktree isolation mandatory. H_E parallelism only — no H_T topology claims (CP-AL-1).
