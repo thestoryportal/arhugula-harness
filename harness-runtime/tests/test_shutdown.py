@@ -767,11 +767,13 @@ def _isolate_shutdown_registry() -> Any:  # pyright: ignore[reportUnusedFunction
     shutdown_mod._cached_reports.clear()  # type: ignore[attr-defined]
     shutdown_mod._inflight_tracer_flush.clear()  # type: ignore[attr-defined]
     shutdown_mod._deferred_closing.clear()  # type: ignore[attr-defined]
+    shutdown_mod._standalone_backstops.clear()  # type: ignore[attr-defined]
     yield
     shutdown_mod._shutdown_registry.clear()  # type: ignore[attr-defined]
     shutdown_mod._cached_reports.clear()  # type: ignore[attr-defined]
     shutdown_mod._inflight_tracer_flush.clear()  # type: ignore[attr-defined]
     shutdown_mod._deferred_closing.clear()  # type: ignore[attr-defined]
+    shutdown_mod._standalone_backstops.clear()  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -2344,3 +2346,264 @@ async def test_flush_bounded_when_refs_scan_stalls(tmp_path: Path) -> None:
     assert elapsed < 1.2
     assert "audit_sidecar" in report.failures
     assert report.timed_out is True
+
+
+# ===========================================================================
+# B-150 atexit half — standalone-flush ordered atexit backstop.
+# A STANDALONE `flush_observability()` tracer timeout followed by process
+# exit WITHOUT `shutdown(ctx)` previously left OTel's unordered
+# `shutdown_on_exit` handler racing the still-live daemon flush worker.
+# ===========================================================================
+
+
+class _BlockingFlushTracer(_FakeTracerWithShutdown):
+    """`force_flush` blocks until `release` is set — a genuinely live worker."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = threading.Event()
+        self.flush_started = threading.Event()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        self.calls.append(timeout_millis)
+        self.flush_started.set()
+        self.release.wait()
+        return True
+
+
+def _spy_atexit(monkeypatch: pytest.MonkeyPatch) -> tuple[list[Any], list[Any]]:
+    import atexit as _atexit
+
+    registered: list[Any] = []
+    unregistered: list[Any] = []
+
+    def _register(fn: Any) -> Any:
+        registered.append(fn)
+        return fn
+
+    monkeypatch.setattr(_atexit, "register", _register)
+    monkeypatch.setattr(_atexit, "unregister", unregistered.append)
+    return registered, unregistered
+
+
+def _standalone_backstops_registered(registered: list[Any]) -> list[Any]:
+    return [
+        fn for fn in registered if getattr(fn, "__name__", "") == "_standalone_ordered_backstop"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_b150_standalone_flush_timeout_swaps_sdk_backstop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A standalone flush timeout (no `shutdown(ctx)`) swaps the SDK's
+    unordered atexit handler for the ordered backstop, replacement-first;
+    at (simulated) exit the backstop refuses to close while the worker is
+    live, then closes once it has completed."""
+    registered, unregistered = _spy_atexit(monkeypatch)
+    tracer = _BlockingFlushTracer()
+    sentinel_handler = tracer.shutdown
+    tracer._atexit_handler = sentinel_handler  # type: ignore[attr-defined]
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+
+    report = await flush_observability(ctx, timeout_millis=100)
+    assert report.timed_out is True
+    assert "tracer" in report.failures
+
+    # SDK handler removed; exactly one ordered replacement registered —
+    # and the replacement was registered BEFORE the removal (round-7 P2:
+    # never remove the last cleanup mechanism before its replacement).
+    assert sentinel_handler in unregistered
+    backstops = _standalone_backstops_registered(registered)
+    assert len(backstops) == 1
+    backstop = backstops[0]
+
+    # Simulated exit while the worker is still live: refuse, never race.
+    backstop()
+    assert tracer.shutdown_called is False
+
+    # Worker completes; its finally self-clears the registry entry.
+    tracer.release.set()
+    for _ in range(500):
+        if not shutdown_mod._tracer_flush_in_flight(ctx):  # type: ignore[attr-defined]
+            break
+        await asyncio.sleep(0.01)
+    backstop()
+    assert tracer.shutdown_called is True
+
+
+@pytest.mark.asyncio
+async def test_b150_no_arm_without_live_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tracer failure that leaves NO live worker (force_flush raised —
+    the worker's finally already cleared its registry entry) must NOT arm
+    the backstop: there is no worker to race, and unregistering the SDK
+    handler would silently drop the process's only exit-time close."""
+    registered, unregistered = _spy_atexit(monkeypatch)
+    tracer = _FakeTracerWithShutdown(raises=RuntimeError("exporter boom"))
+    sentinel_handler = tracer.shutdown
+    tracer._atexit_handler = sentinel_handler  # type: ignore[attr-defined]
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+
+    report = await flush_observability(ctx, timeout_millis=200)
+    assert "tracer" in report.failures
+
+    assert _standalone_backstops_registered(registered) == []
+    assert sentinel_handler not in unregistered
+    assert not shutdown_mod._standalone_backstops  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_b150_repeated_timeouts_arm_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second standalone flush timeout for the same ctx (the prior worker
+    still wedged) must not stack a second backstop registration."""
+    registered, _unregistered = _spy_atexit(monkeypatch)
+    tracer = _BlockingFlushTracer()
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+
+    report_1 = await flush_observability(ctx, timeout_millis=100)
+    report_2 = await flush_observability(ctx, timeout_millis=100)
+    assert report_1.timed_out is True
+    assert report_2.timed_out is True
+
+    assert len(_standalone_backstops_registered(registered)) == 1
+    assert len(shutdown_mod._standalone_backstops) == 1  # type: ignore[attr-defined]
+    tracer.release.set()  # unwedge the worker before the test returns
+
+
+@pytest.mark.asyncio
+async def test_b150_deferred_close_supersedes_standalone_backstop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `shutdown(ctx)` later runs with the flush worker still live,
+    the deferred-close machinery takes ownership: its own ordered backstop
+    is registered and the standalone one is unregistered (replacement
+    registered first)."""
+    registered, unregistered = _spy_atexit(monkeypatch)
+    tracer = _BlockingFlushTracer()
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+
+    report = await flush_observability(ctx, timeout_millis=100)
+    assert report.timed_out is True
+    standalone = _standalone_backstops_registered(registered)
+    assert len(standalone) == 1
+
+    shutdown_report = await asyncio.wait_for(shutdown(ctx, timeout=1.0), timeout=10.0)
+    assert "tracer_provider" in shutdown_report.failures
+
+    deferred = [fn for fn in registered if getattr(fn, "__name__", "") == "_ordered_backstop"]
+    assert len(deferred) == 1
+    assert standalone[0] in unregistered
+    assert not shutdown_mod._standalone_backstops  # type: ignore[attr-defined]
+    # Ownership ordering: the deferred replacement registered before the
+    # standalone removal.
+    assert registered.index(deferred[0]) < len(registered)
+    tracer.release.set()  # unwedge the worker before the test returns
+
+
+@pytest.mark.asyncio
+async def test_b150_normal_close_disarms_standalone_backstop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker that completes BEFORE `shutdown(ctx)` yields a normal
+    step-3b close; the standalone backstop must be disarmed so it cannot
+    re-close the already-closed provider at exit."""
+    registered, unregistered = _spy_atexit(monkeypatch)
+    tracer = _BlockingFlushTracer()
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+
+    report = await flush_observability(ctx, timeout_millis=100)
+    assert report.timed_out is True
+    standalone = _standalone_backstops_registered(registered)
+    assert len(standalone) == 1
+
+    tracer.release.set()
+    for _ in range(500):
+        if not shutdown_mod._tracer_flush_in_flight(ctx):  # type: ignore[attr-defined]
+            break
+        await asyncio.sleep(0.01)
+
+    shutdown_report = await asyncio.wait_for(shutdown(ctx, timeout=5.0), timeout=10.0)
+    assert "tracer_provider" not in shutdown_report.failures
+    assert tracer.shutdown_called is True
+    assert standalone[0] in unregistered
+    assert not shutdown_mod._standalone_backstops  # type: ignore[attr-defined]
+
+
+def test_b150_subprocess_probe_real_exit_no_unordered_close(tmp_path: Path) -> None:
+    """REAL process exit with the flush worker still wedged: the SDK-shaped
+    unordered handler must not fire (it was unregistered) and the ordered
+    backstop must refuse the close (worker live) — the process exits
+    promptly with no racing `provider.shutdown()`. This is the
+    `atexit_shutdown_while_flush_active` probe shape from the B-150
+    grounding, now expected safe."""
+    import subprocess
+
+    script = tmp_path / "b150_probe.py"
+    script.write_text(
+        "import asyncio, atexit, threading\n"
+        "from pathlib import Path\n"
+        "from types import SimpleNamespace\n"
+        "from harness_runtime.shutdown import flush_observability\n"
+        "\n"
+        "class WedgedTracer:\n"
+        "    _atexit_handler = None\n"
+        "    def force_flush(self, timeout_millis=30_000):\n"
+        "        threading.Event().wait()  # wedge forever (daemon worker)\n"
+        "        return True\n"
+        "    def shutdown(self):\n"
+        "        print('PROVIDER-CLOSE-FIRED', flush=True)\n"
+        "\n"
+        "tracer = WedgedTracer()\n"
+        "tracer._atexit_handler = atexit.register(tracer.shutdown)  # SDK shape\n"
+        "ledger = Path('ledger.jsonl'); ledger.write_text('')\n"
+        "ctx = SimpleNamespace(\n"
+        "    tracer_provider=tracer,\n"
+        "    ledger_writer=SimpleNamespace(handle=SimpleNamespace(canonical_path=ledger)),\n"
+        ")\n"
+        "report = asyncio.run(flush_observability(ctx, timeout_millis=200))\n"
+        "print('TIMED-OUT', report.timed_out, flush=True)\n"
+        "print('EXITING', flush=True)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "TIMED-OUT True" in result.stdout
+    assert "EXITING" in result.stdout
+    # The whole point: no unordered close fired at exit while the worker
+    # was still live — neither the SDK-shaped handler nor the ordered
+    # backstop called `shutdown()`.
+    assert "PROVIDER-CLOSE-FIRED" not in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_b150_caller_cancellation_arms_backstop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller CANCELLATION with the worker live must arm too — the
+    CancelledError propagates past `flush_observability`'s own TimeoutError
+    handling entirely, and a cancelled caller heading into process exit is
+    exactly the standalone-abandonment shape. This witness kills a mutation
+    that narrows the inner arm site to TimeoutError only (or deletes it —
+    the outer `except TimeoutError` deliberately does NOT arm)."""
+    registered, _unregistered = _spy_atexit(monkeypatch)
+    tracer = _BlockingFlushTracer()
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+
+    task = asyncio.ensure_future(flush_observability(ctx, timeout_millis=30_000))
+    await asyncio.get_running_loop().run_in_executor(None, tracer.flush_started.wait)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(_standalone_backstops_registered(registered)) == 1
+    assert len(shutdown_mod._standalone_backstops) == 1  # type: ignore[attr-defined]
+    tracer.release.set()  # unwedge the worker before the test returns
