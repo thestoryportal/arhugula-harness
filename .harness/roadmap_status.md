@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `3ffe412dd4f7` |
-| `last_refreshed` | 2026-08-10T00:00:00Z |
-| `git_head` | `b89c54d9` — ops(r-ctx-1): Arc 3 — hook signature/cap hygiene + dead matcher removal |
+| `workspace_state_hash` | `04151c316636` |
+| `last_refreshed` | 2026-08-11T00:00:00Z |
+| `git_head` | `9867f4c2` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 112 |
 
@@ -43,7 +43,8 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
-| #1297 | `r-ctx-1-e4-test` | — | — |
+| #1298 | `r-ctx-1-arc4` | — | — |
+| #1299 | `r-ctx-1-arc7` | — | — |
 
 ---
 
@@ -51,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1297 | 2026-08-11 | E4 selector test suite merged (32 witnesses + fail-closed newline-terminated tail split); B-148 TESTED-selector precondition discharged. Next: #1298 single-lens gate verdict, Arc 7 PR codex round, Arc 5 phase 2 build (root CLAUDE.md slim), Arc 6 last; lean review protocol active per operator cost directive 2026-08-11. |
 | PR #1296 | 2026-08-10 | R-CTX-1 Arc 3 (U-CTX-07/08/09): failure-signature+cap, loop-gc caps+reaper, dead matcher removal (codex 10R cap-closed; merge-gate all-approve) |
 | PR #1295 | 2026-08-10 | R-CTX-1 Arc 2 (U-CTX-03..06): roadmap_status truncation + consumer witnesses + query-not-Read + artifact-pointers split (merge-gate all-approve; codex 12R closed) |
 | PR #1294 | 2026-08-10 | R-CTX-1 U-CTX-02: RB-SUB-03 MCP cleanup + context-budget instrument (merge-gate all-approve; codex R8 converged) |
 | PR #1293 | 2026-08-10 | R-CTX-1 Wave 0: B-148/B-149 registered + config-hygiene baseline snapshot (U-CTX-00/01) |
-| PR #1290 | 2026-08-09 | B-143 closed test-only: structural shutdown, cold-child, reviewer, hook, and classifier timing witnesses; 294 affected tests; three-lens gate and Gemini 3.1 Pro High approved; PR and content-merge CI 16/16; B-147 registered separately for the saturated-default-executor force_flush queue-delay defect. |
 ---
 
 ---
