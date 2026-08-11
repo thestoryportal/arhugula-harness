@@ -165,9 +165,17 @@ def _scalar_is_clean(source_lines: list[str]) -> bool:
     clean by construction. A multi-line value is never clean: it is collapsed to one quoted
     line so the stored text is unambiguous.
     """
+    raw = source_lines[0]
+    # Block scalars (codex round-1 on PR-4): an inline value that is exactly a
+    # literal/folded header (`|`, `|-`, `>-`, optionally with an indentation
+    # indicator) carries an EXPLICIT YAML style whose body is the indented
+    # continuation below — the `: `/`#` hazards cannot apply, and collapsing it
+    # to a quoted string CORRUPTS the value (the style token becomes content).
+    # Preserve byte-identically.
+    if re.fullmatch(r"[|>][+-]?[0-9]?", raw.strip()):
+        return True
     if len(source_lines) != 1:
         return False
-    raw = source_lines[0]
     try:
         node = yaml.compose("x: " + raw)
     except yaml.YAMLError:

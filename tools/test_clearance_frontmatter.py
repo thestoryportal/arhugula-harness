@@ -200,3 +200,26 @@ def test_gate_passes_when_every_broken_file_is_listed(tmp_path: Path) -> None:
         "| `stray.md` | `no-frontmatter` | narrative record |\n",
     )
     assert cf.check(tmp_path, manifest) == []
+
+
+def test_block_scalar_frontmatter_is_preserved_byte_identically(tmp_path: Path) -> None:
+    """codex round-1 (PR-4): a literal/folded block scalar carries an explicit
+    YAML style — the repairer must NEVER collapse it into a quoted string with
+    the style token as content (the corruption shipped on two real markers)."""
+    block = (
+        "artifact: design-substrate/X_v1.md\n"
+        "version: v1.0\n"
+        "notes: |\n"
+        "  A body line with a : colon-space hazard inside the block.\n"
+        "  A second line # with a hash.\n"
+        "summary:\n"
+        "  - >-\n"
+        "    folded entry line one\n"
+        "    line two\n"
+    )
+    repaired = cf.repair_frontmatter(block)
+    assert "notes: |\n" in repaired
+    assert "- >-\n" in repaired
+    assert '"|' not in repaired and '">-' not in repaired
+    # idempotent: a second pass changes nothing
+    assert cf.repair_frontmatter(repaired) == repaired

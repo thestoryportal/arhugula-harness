@@ -342,3 +342,29 @@ def test_no_live_venue_still_carries_the_superseded_as_head() -> None:
             if stale.search(line):
                 hits.append(f"{venue}:{lineno}")
     assert hits == [], f"superseded AS head still carried at: {hits}"
+
+
+def test_same_version_tie_breaks_on_clearance_date_not_annotation_text() -> None:
+    """codex round-1 (PR-4): two markers sharing one numeric version but with
+    different annotations must be won by the NEWER clearance date — the raw
+    version text participates only as the final tie-break."""
+    from pathlib import Path as _P
+
+    older = cf.Marker(
+        path=_P("x-v1-32-cleared-2026-01-01.md"),
+        data={
+            "artifact": "design-substrate/X_v1.md",
+            "version": "v1.32 (z-annotation)",
+            "cleared_at": "2026-01-01",
+        },
+    )
+    newer = cf.Marker(
+        path=_P("x-v1-32-cleared-2026-06-01.md"),
+        data={
+            "artifact": "design-substrate/X_v1.md",
+            "version": "v1.32 (a-annotation)",
+            "cleared_at": "2026-06-01",
+        },
+    )
+    assert max([older, newer], key=ah._marker_sort_key) is newer
+    assert max([newer, older], key=ah._marker_sort_key) is newer

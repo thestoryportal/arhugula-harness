@@ -133,12 +133,21 @@ def _cleared_at(value: object) -> str:
     return text.split("T")[0] if text else "-"
 
 
-def _marker_sort_key(marker: cf.Marker) -> tuple[tuple[int, tuple[int, ...], str], str, str]:
-    """Highest version wins; ties break on clearance date, then marker filename."""
+def _marker_sort_key(marker: cf.Marker) -> tuple[int, tuple[int, ...], str, str, str]:
+    """Highest version wins; ties break on clearance date, then marker filename.
+
+    The version's raw TEXT participates only as the FINAL tie-break (codex
+    round-1 on PR-4): two markers sharing one numeric version but differing in
+    annotation — a shape present in this corpus — must be ordered by clearance
+    date, not by which annotation string sorts higher.
+    """
+    kind, nums, text = version_key(marker.version)
     return (
-        version_key(marker.version),
+        kind,
+        nums,
         _cleared_at(marker.data.get("cleared_at")),
         marker.path.name,
+        text,
     )
 
 
