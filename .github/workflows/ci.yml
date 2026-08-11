@@ -267,6 +267,44 @@ jobs:
         working-directory: tools
         run: uv run python -m pytest test_substitution_ledger.py -q
 
+  claude-md-citations:
+    # R-CTX-1 U-CTX-14 — the CLAUDE.md §-citation resolution gate. Invariant I-1 requires
+    # canonical citations to resolve, and Arc 5 relocates root CLAUDE.md §-bodies into
+    # governance packs; this job is what makes that relocation safe. It inventories every
+    # `CLAUDE.md §N[.M]` citation across ALL TRACKED FILES, attributes each to the
+    # CLAUDE.md file it names (root vs. a `harness-*/` axis file), and FAILS when a cited
+    # section is absent from that file's declared anchors — i.e. the moment a slimming
+    # pass drops a section something still cites.
+    #
+    # Counts are DERIVED AT EXECUTION and only PRINTED (plan errata E3): the corpus grows
+    # whenever a doc lands, so nothing here pins a total. The three pre-existing broken
+    # citations are enumerated at the tool's KNOWN_BROKEN baseline with a rationale each,
+    # and a waiver that stops being needed FAILS the job so the baseline cannot rot.
+    #
+    # Like the ledger jobs above, the tools/ test module lives outside the 7 testpaths
+    # packages, so the blocking `test` job does not collect it — this job is its home.
+    runs-on: ubuntu-latest
+    name: CLAUDE.md citations (I-1 resolution gate) — blocking
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members)
+        run: uv sync --all-packages
+
+      - name: Resolve every tracked CLAUDE.md citation (unresolvable cite = CI failure)
+        run: uv run python tools/claude_md_citation_resolver.py --check
+
+      - name: Citation-resolver tests (shape coverage + attribution + negative tests)
+        working-directory: tools
+        run: uv run python -m pytest test_claude_md_citation_resolver.py -q
+
   arc-ledger:
     # R-FS-1 roadmap overhaul — the arc-ledger tally-validation gate (byte-parallel to the
     # substitution-ledger job above). Derives every R-FS-1 arc + unit count from the single
