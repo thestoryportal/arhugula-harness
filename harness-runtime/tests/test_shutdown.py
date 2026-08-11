@@ -765,9 +765,11 @@ def _isolate_shutdown_registry() -> Any:  # pyright: ignore[reportUnusedFunction
     """Reset module-level registries between tests."""
     shutdown_mod._shutdown_registry.clear()  # type: ignore[attr-defined]
     shutdown_mod._cached_reports.clear()  # type: ignore[attr-defined]
+    shutdown_mod._inflight_tracer_flush.clear()  # type: ignore[attr-defined]
     yield
     shutdown_mod._shutdown_registry.clear()  # type: ignore[attr-defined]
     shutdown_mod._cached_reports.clear()  # type: ignore[attr-defined]
+    shutdown_mod._inflight_tracer_flush.clear()  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -1217,6 +1219,52 @@ async def test_shutdown_invokes_tracer_shutdown_via_to_thread(
         if getattr(fn, "__func__", None) is _FakeTracerProvider.force_flush
     ]
     assert force_flush_targets == []
+
+
+@pytest.mark.asyncio
+async def test_shutdown_skips_tracer_close_while_flush_worker_lingers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-147 codex round-2 P1 — C-RT-10 flush-before-close under a
+    timed-out flush: while step 2's force_flush worker is still exporting on
+    its daemon thread (in-flight registry entry, event unset), step 3b must
+    NOT close — nor even SUBMIT the close of — the tracer provider. In the
+    shipped orchestrator the reachable overlap window is the sub-millisecond
+    `int(remaining * 1000)` truncation fraction (a full-budget flush timeout
+    leaves step 3b at ~zero remaining, where `wait_for` cancels the close
+    coroutine before its `to_thread` submission), so this witness exercises
+    the guard branch at its registry seam WITH real remaining budget:
+    guard present → close skipped + tagged; guard removed → the close runs
+    concurrently and `shutdown_called` flips True (the mutation
+    discriminator)."""
+    tracer = _FakeTracerWithShutdown()
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+    lingering = threading.Event()  # never set — the worker is "still exporting"
+
+    async def _flush_leaving_lingering_worker(
+        ctx_arg: Any, *, timeout_millis: int = 30_000
+    ) -> FlushReport:
+        _ = timeout_millis
+        shutdown_mod._inflight_tracer_flush[id(ctx_arg)] = lingering  # type: ignore[attr-defined]
+        return FlushReport(
+            tracer_flushed=False,
+            ledger_fsynced=True,
+            cost_chain_noop=True,
+            timed_out=True,
+            failures=("tracer",),
+        )
+
+    monkeypatch.setattr(shutdown_mod, "flush_observability", _flush_leaving_lingering_worker)
+
+    report = await asyncio.wait_for(shutdown(ctx, timeout=5.0), timeout=5.0)
+
+    assert report.timed_out is True
+    assert "flush:tracer" in report.failures
+    assert "tracer_provider" in report.failures
+    # The load-bearing half: with budget REMAINING, the provider close was
+    # still skipped rather than overlapped with the in-flight flush.
+    assert tracer.shutdown_called is False
 
 
 @pytest.mark.asyncio

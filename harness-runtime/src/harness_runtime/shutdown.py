@@ -278,6 +278,15 @@ class FlushReport(BaseModel):
 # Flush primitive.
 # ---------------------------------------------------------------------------
 
+# In-flight tracer force_flush workers, keyed by `id(ctx)` (codex round-2 P1,
+# B-147). An entry exists while the daemon flush worker may still be running;
+# the worker's own finally sets the Event and removes the entry (if it still
+# owns it). `shutdown()` step 3b consults this to preserve C-RT-10's
+# flush-before-close order — the provider close is skipped (and reported)
+# while its flush is still exporting. An eternally-stalled worker leaks one
+# Event alongside its already-lingering daemon thread — same bounded cost.
+_inflight_tracer_flush: dict[int, threading.Event] = {}
+
 
 async def flush_observability(
     ctx: HarnessContext,
@@ -349,8 +358,29 @@ async def flush_observability(
         # shared budget; on expiry the surface reports like the fsync
         # surfaces below ('tracer' tag + timed_out) and the daemon worker
         # lingers harmlessly (never joined at teardown).
+        #
+        # The lingering worker is TRACKED per-ctx (codex round-2 P1): a
+        # timed-out force_flush may still be exporting on its daemon thread
+        # when `shutdown()` reaches step 3b, and closing the provider then
+        # would overlap teardown with an in-flight export — violating
+        # C-RT-10's flush-before-close order. The worker's own finally sets
+        # the signal and unregisters itself (only if it still owns the slot
+        # — an idempotent re-flush may have re-registered); step 3b consults
+        # the registry and skips the close while the flush is in flight.
+        flush_done = threading.Event()
+        ctx_key = id(ctx)
+        _inflight_tracer_flush[ctx_key] = flush_done
+
+        def _tracked_force_flush() -> bool:
+            try:
+                return force_flush(timeout_millis)
+            finally:
+                flush_done.set()
+                if _inflight_tracer_flush.get(ctx_key) is flush_done:
+                    _inflight_tracer_flush.pop(ctx_key, None)
+
         result = await _run_blocking_bounded(
-            functools.partial(force_flush, timeout_millis),
+            _tracked_force_flush,
             max(0.0, deadline - time.monotonic()),
             thread_name="harness-flush-tracer",
         )
@@ -745,7 +775,20 @@ async def shutdown(
     # remaining budget" invariant.
     remaining = max(0.0, deadline - time.monotonic())
     try:
-        await asyncio.wait_for(_close_tracer_provider(ctx), timeout=remaining)
+        lingering_flush = _inflight_tracer_flush.get(id(ctx))
+        if lingering_flush is not None and not lingering_flush.is_set():
+            # C-RT-10 flush-before-close (codex round-2 P1): step 2's
+            # timed-out force_flush worker is still exporting on its daemon
+            # thread. Closing the provider now — or even submitting the
+            # close, which would execute later regardless of the wait_for
+            # below — would overlap teardown with the in-flight export
+            # (span loss / thread-unsafe exporter teardown). Skip the close
+            # entirely and report it; the flush already burned the shared
+            # budget, so this surface had (at most) a fractional remainder.
+            failures.append("tracer_provider")
+            timed_out = True
+        else:
+            await asyncio.wait_for(_close_tracer_provider(ctx), timeout=remaining)
     except TimeoutError:
         failures.append("tracer_provider")
         timed_out = True
