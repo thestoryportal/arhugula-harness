@@ -18,11 +18,15 @@ through v2.49 — stale across two ratified supersessions and the v1.117 re-tabl
 
 - criterion #3 pins `retry.*` at **4 attrs** (v1.3 replaced the set wholesale — 6) and
   `harness.breaker.*` at **7 attrs** (OD v1.32 grew the C-OD-07 §7.1 canonical schema — 9);
+- criterion #2 pins `engine.*` at **3 attrs** (v1.3 C-CP-09 §9.1 added the ratified 4th
+  row `engine.replay_disposition` — and even routed "U-CP-21 engine.* 4-attribute" to
+  plan v2.2, which amended U-CP-21 but never U-CP-54's export table; out-of-family
+  round-2 catch at PR #1311);
 - criterion #6 totals **63** (34 + 25 + 4);
 - the test roster names `test_total_attribute_count_sixty_three`.
 
 The as-built manifest and its test moved 63 → 65 at the OD v1.32 absorption (register
-row B-126 recomputed the subtotals) and 65 → 67 at CP v1.117, so plan-driven
+row B-126 recomputed the subtotals) and 65 → 68 at CP v1.117, so plan-driven
 conformance work reading v2_1's figures would expect retired values.
 
 ### §0.2 The amendment (U-CP-54, acceptance-figure re-pin only)
@@ -35,12 +39,15 @@ PRESERVED VERBATIM:
 2. **Criterion #3** `harness.breaker.*` row now reads **9 attrs** (canonical schema at
    OD C-OD-07 §7.1 as amended at OD v1.32, B-19-BREAKER-AMBIENT-ATTRS); the
    `SUBSTRATE_ANCHORED_OUTSIDE_CP` posture clause unchanged.
-3. **Criterion #6** now reads: Total attribute count:
-   (3 + 10 + 7 + 4 + 7 + 3) + (9 + 6 + 5 + 9) + (4) = 34 + 29 + 4 = **67 CP-axis
+3. **Criterion #2** `engine.*` row now reads: `engine.*` (**4 attrs** per C-CP-09
+   §9.1 v1.3, +`engine.replay_disposition`) → U-CP-21 →
+   `OD_PLAN_SESSION_4_D6_SECTION_1_2`.
+4. **Criterion #6** now reads: Total attribute count:
+   (4 + 10 + 7 + 4 + 7 + 3) + (9 + 6 + 5 + 9) + (4) = 35 + 29 + 4 = **68 CP-axis
    attributes** exported to OD plan Session 4 D6 §1.2 + §1.4 + §1.5, per C-CP-24
    §24.1 as re-tabled at spec v1.117.
-4. **Test roster:** `test_total_attribute_count_sixty_three` is superseded by
-   `test_total_attribute_count_sixty_seven` (the as-built name at
+5. **Test roster:** `test_total_attribute_count_sixty_three` is superseded by
+   `test_total_attribute_count_sixty_eight` (the as-built name at
    `harness-cp/tests/test_cp_namespace_export_manifest.py`); all other listed test
    names unchanged.
 

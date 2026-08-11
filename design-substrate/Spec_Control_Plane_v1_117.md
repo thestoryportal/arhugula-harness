@@ -1,15 +1,17 @@
 # Spec: Control Plane — v1.117 (delta over v1.116)
 
 *Delta-only file. v1.116, v1.115, and every earlier C-CP-01 … C-CP-29 body are preserved
-verbatim except at the single amendment site named below: the C-CP-24 §24.1.B
-F3-capability-floor lifecycle-event-attribute export table is RE-TABLED to the live,
-already-ratified attribute counts. This is the register row `B-144` step-(2) venue
-resolution: the two-venue count divergence (§24.1.B vs C-CP-03 §3.5 / OD C-OD-07 §7.1)
-is resolved by carrying the superseding figures INTO §24.1.B, not by declaring §24.1 a
-v1.2-frozen historical snapshot. No new attribute, name, sampling rule, or contract
-number is minted — both count changes propagate supersessions ratified years-of-deltas
-ago at their own venues (CP v1.3; OD v1.32). No Runtime, OD, CXA, or plan artifact is
-amended.*
+verbatim except at the two amendment sites named below: the C-CP-24 §24.1.B
+F3-capability-floor lifecycle-event-attribute export table, and the §24.1.A `engine.*`
+row, are RE-TABLED to the live, already-ratified attribute counts. This is the register
+row `B-144` step-(2) venue resolution: the multi-venue count divergence (§24.1 vs
+C-CP-03 §3.5 / C-CP-09 §9.1 / OD C-OD-07 §7.1) is resolved by carrying the superseding
+figures INTO §24.1, not by declaring §24.1 a v1.2-frozen historical snapshot. No new
+attribute, name, sampling rule, or contract number is minted — all three count changes
+propagate supersessions ratified years-of-deltas ago at their own venues (CP v1.3
+twice; OD v1.32). No Runtime, OD, or CXA artifact is amended; the owed CP plan re-pin
+(U-CP-54's inherited acceptance figures) lands as the same-PR companion delta
+`Implementation_Plan_Control_Plane_v2_50.md`.*
 
 **Filed:** 2026-08-11
 **Authority:** Register row `B-144` close_out step (2), resolved venue **A** via the
@@ -42,10 +44,21 @@ at other venues superseded its `Attribute count` column:
    mentions. Code-side comments citing a bare "v1.32" for this growth are corrected to
    "OD v1.32" in the same-PR cascade (§0.4).
 
+3. **`engine.*` 3 → 4 at CP v1.3 C-CP-09 §9.1** (out-of-family round-2 catch at this
+   delta's own PR #1311): the same v1.3 delta that replaced the retry set also
+   extended §9.1's attribute table with a ratified 4th row
+   (`engine.replay_disposition`, ADR-D1 v1.2 §1.1.1) and routed "U-CP-21 engine.*
+   4-attribute" downstream — but §24.1.A's `engine.*` row (v1_2:2145) kept "3" with
+   the three v1.2 names. Same class, third instance, one delta upstream of the other
+   two.
+
 The code manifest (`harness-cp/src/harness_cp/cp_namespace_export_manifest.py`)
-resolved the divergence inconsistently, one row each way — `retry.* = 4` (tracking the
-stale §24.1.B row) but `harness.breaker.* = 9` (tracking the live C-OD-07 §7.1) — so
-the manifest conformed to neither venue as a whole.
+resolved the divergence inconsistently, row by row — `retry.* = 4` and `engine.* = 3`
+(tracking the stale §24.1 rows) but `harness.breaker.* = 9` (tracking the live
+C-OD-07 §7.1) — even though the same package's `ENGINE_NAMESPACE_SCHEMA` already
+carries the 4-attribute §9.1 set. The manifest conformed to no venue as a whole, and
+its own terminal sibling (`cp_cross_axis_composition_manifest.py`) froze the sum at
+"65 attributes exported" independently of both.
 
 ### §0.2 The ratified venue
 
@@ -62,14 +75,24 @@ figure (D6 ingestion is per-attribute-set, not sum-pinned); the only consumer is
 own acceptance-#6 test, whose docstring already records the sum as a moving figure
 (63 → 65 at the OD v1.32 absorption).
 
-### §0.3 Amendment site (the re-tabled §24.1.B)
+### §0.3 Amendment sites (the re-tabled §24.1.B + the §24.1.A `engine.*` row)
 
-The §24.1.B table at `Spec_Control_Plane_v1_2.md:2154-2159` is superseded by the table
-below. The `fallback.*` and `lease.*` rows are carried BYTE-VERBATIM; only the
-`retry.*` and `harness.breaker.*` `Attribute count` cells change (plus, on the breaker
-row, the explicit OD-v1.32 lineage note inside the existing citation parenthetical).
-The §24.1.B sub-heading, the §24.1.C table, and the composition-path summary paragraph
-at `:2167` are PRESERVED VERBATIM.
+**Site 1 — §24.1.B.** The table at `Spec_Control_Plane_v1_2.md:2154-2159` is
+superseded by the table below. The `fallback.*` and `lease.*` rows are carried
+BYTE-VERBATIM. The changed cells, exhaustively: the `retry.*` row's `Attribute count`
+cell (4 → 6) and its `Source contract` cell (gains "(v1.3 amendment)"); the
+`harness.breaker.*` row's `Attribute count` cell (7 → 9, with the OD-v1.32 lineage
+note added inside the existing citation parenthetical) and its `D6 lifecycle event
+mapping` cell ("seven-attribute schema" → "nine-attribute schema"). The §24.1.B
+sub-heading, the §24.1.C table, and the composition-path summary paragraph at `:2167`
+are PRESERVED VERBATIM.
+
+**Site 2 — the §24.1.A `engine.*` row** (`Spec_Control_Plane_v1_2.md:2145`). Its
+`Attribute count` cell is superseded: "3 (`engine.class`, `engine.event_history.tier`,
+`engine.event.id`)" → "4 (`engine.class`, `engine.event_history.tier`,
+`engine.event.id`, `engine.replay_disposition`) per C-CP-09 §9.1 (v1.3 amendment)".
+Every other cell of that row, and every other §24.1.A row — including `hitl.*`, per
+§0.5 — PRESERVED VERBATIM.
 
 | Namespace | Source contract | Attribute count | Always-sampled discipline | D6 lifecycle event mapping | Canonical anchor |
 |---|---|---|---|---|---|
@@ -79,22 +102,30 @@ at `:2167` are PRESERVED VERBATIM.
 | `harness.breaker.*` | C-CP-03 §3.5 (CP-side deployment composition); `c9-reliability-recovery` SKILL.md (substrate-anchored canonical declaration per F2-16 closure and Workflow v1.3 §2.3.3.1 clause (iii)) | 9 attributes (per OD C-OD-07 §7.1 canonical schema as amended at OD v1.32, B-19-BREAKER-AMBIENT-ATTRS; enumerated at D6 §1.2.1) | `breaker.tripped` always-sampled per C-CP-03 §3.5 + D6 §1.3 | `breaker.tripped` span event on parent (D6 §1.2 line 129); nine-attribute schema at D6 §1.2.1 | `c9-reliability-recovery` SKILL.md substrate (NOT CP-anchored); CP consumes but does not own the canonical declaration |
 
 The §24.1.B subtotal therefore moves 25 → 29 as declared (the code manifest's
-previously-derived 27 was the half-absorbed state: breaker carried, retry not), and
-the declared CP-axis export sum moves 65 → 67 (34 + 29 + 4).
+previously-derived 27 was the half-absorbed state: breaker carried, retry not), the
+§24.1.A subtotal moves 34 → 35, and the declared CP-axis export sum moves 65 → 68
+(35 + 29 + 4). The sum counts `engine.replay_disposition` under both `engine.*` and
+the §3.5 retry set (a declared cross-namespace composition attribute) — it is a sum
+of declared row counts, not a distinct-key cardinality.
 
 ### §0.4 Same-PR downstream cascade (bundled absorption per root `CLAUDE.md` §11.4)
 
-`cp_namespace_export_manifest.py`: `retry.*` `attribute_count` 4 → 6 (comment rewritten
-— the declared-subset caveat retires; the count now matches C-CP-03 §3.5 v1.3, though
-the WIRE still carries more `retry.`-prefixed keys than the declared set, per the
-`B-126` register discipline, which this delta does not change); breaker-row and
-module-docstring comments correct the bare "v1.32" lineage cite to OD v1.32; the
-module docstring's sum arithmetic updates to 67. Test
-`test_cp_namespace_export_manifest.py`: per-row expectation `retry.*` 4 → 6;
-acceptance-#6 sum assertion 65 → 67. The Runtime bootstrap inversion check
-(`verify_harness_breaker_namespace_inversion`) compares the breaker row only (9 == 9)
-and is unaffected. No other consumer of the sum exists in any `harness-*/src` tree
-(swept 2026-08-11).
+`cp_namespace_export_manifest.py`: `retry.*` `attribute_count` 4 → 6 and `engine.*`
+3 → 4 (comments rewritten — the declared-subset caveat retires; the counts now match
+C-CP-03 §3.5 v1.3 and C-CP-09 §9.1 v1.3, though the WIRE still carries more
+`retry.`-prefixed keys than the declared set, per the `B-126` register discipline,
+which this delta does not change); breaker-row and module-docstring comments correct
+the bare "v1.32" lineage cite to OD v1.32; the module docstring's sum arithmetic
+updates to 68. `cp_cross_axis_composition_manifest.py`: the frozen
+"65 attributes exported" invariant literal is replaced by a derivation from
+`CP_EXPORTED_ATTRIBUTE_COUNT` (one source of truth — out-of-family round-2 catch).
+Test `test_cp_namespace_export_manifest.py`: per-row expectations `retry.*` 4 → 6 +
+`engine.*` 3 → 4; acceptance-#6 sum assertion 65 → 68
+(`test_total_attribute_count_sixty_eight`). The companion plan delta v2.50 re-pins
+U-CP-54's inherited acceptance figures to the same values. The Runtime bootstrap
+inversion check (`verify_harness_breaker_namespace_inversion`) compares the breaker
+row only (9 == 9) and is unaffected. No other consumer of the sum exists in any
+`harness-*/src` tree (swept 2026-08-11, re-swept after the round-2 invariant catch).
 
 ### §0.5 Explicitly OUT OF SCOPE — the `hitl.*` column-semantics question (→ `B-153`)
 
@@ -104,8 +135,9 @@ carries NO count ("per-event attributes across 4 span names",
 i.e. counts span names as attributes — is NOT adjudicated here. Its repair is a
 decision about what the `Attribute count` COLUMN MEANS, which could ripple to other
 §24.1.A rows (e.g. `audit.*` "7 attributes per persona-tier emission discipline") and
-requires enumerating C-CP-20 §20.6. It is minted as register row `B-153`. The 67 sum
-above carries hitl's unadjudicated 4 unchanged; this delta's re-table must NOT be read
-as ratifying the span-names-as-attributes interpretation.
+requires enumerating C-CP-20 §20.6. It is minted as register row `B-153`. The 68 sum
+above carries hitl's unadjudicated 4 unchanged (inside the §24.1.A subtotal of 35);
+this delta's re-table must NOT be read as ratifying the span-names-as-attributes
+interpretation.
 
 *End of v1.117 delta. All other content of the C-CP chain preserved verbatim.*

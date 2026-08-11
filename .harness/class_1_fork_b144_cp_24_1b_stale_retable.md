@@ -31,8 +31,12 @@ were superseded at other venues and never carried back:
   zero breaker mentions, so code comments citing a bare "v1.32" were mislabeled.
 
 `cp_namespace_export_manifest.py` resolved the divergence inconsistently — `retry.*=4`
-(stale §24.1.B) but `harness.breaker.*=9` (live §7.1) — conforming to neither venue as
-a whole; its test asserted the mixture (sum 65).
+and `engine.*=3` (stale §24.1 rows) but `harness.breaker.*=9` (live §7.1) — conforming
+to no venue as a whole; its test asserted the mixture (sum 65), and the terminal
+sibling `cp_cross_axis_composition_manifest.py` froze "65 attributes exported"
+independently. A THIRD same-class row surfaced at out-of-family round 2 on this PR:
+§24.1.A's `engine.*` kept 3 after CP v1.3 C-CP-09 §9.1 ratified the 4th attribute
+(`engine.replay_disposition`) — absorbed into the same re-table.
 
 ## Classification + routing
 
@@ -45,7 +49,9 @@ delta + manifest/test cascade in one PR.
 ## The resolution (venue A)
 
 `Spec_Control_Plane_v1_117.md` re-tables §24.1.B to the live counts (retry 6,
-breaker 9 with explicit OD-v1.32 lineage), declared sum 65 → 67. Grounding that
+breaker 9 with explicit OD-v1.32 lineage) and the §24.1.A `engine.*` row to 4
+(C-CP-09 §9.1 v1.3), declared sum 65 → 68 (35 + 29 + 4); the terminal manifest's
+frozen invariant now derives from `CP_EXPORTED_ATTRIBUTE_COUNT`. Grounding that
 collapsed the register's OD-facing worry: NO OD-side consumer of the 65 sum exists
 (D6 ingestion is per-attribute-set); the sole consumer is CP's own acceptance-#6
 test, whose docstring already records the sum as a moving figure (63 → 65 at the OD

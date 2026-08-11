@@ -73,8 +73,12 @@ _OWNED = SourceAuthorityPosture.OWNED_BY_CP
 CP_NAMESPACE_EXPORT_MANIFEST: tuple[NamespaceExport, ...] = (
     # --- §24.1.A — 6 specialization-layer namespaces (D6 §1.2 direct ingest) -
     NamespaceExport(
+        # 4 per C-CP-09 §9.1 as extended at CP v1.3 (+engine.replay_disposition,
+        # the ratified 4th row), carried into §24.1.A at CP v1.117 (B-144
+        # venue-A rule, out-of-family round-2 catch). See
+        # `engine_namespace.ENGINE_NAMESPACE_SCHEMA` (already 4).
         namespace_name="engine.*",
-        attribute_count=3,
+        attribute_count=4,
         source_unit=UnitId("U-CP-21"),
         ingestion_target=_D6_1_2,
         sub_section_authority="C-CP-24 §24.1.A",
@@ -169,7 +173,7 @@ CP_NAMESPACE_EXPORT_MANIFEST: tuple[NamespaceExport, ...] = (
 )
 """The CP-axis namespace export manifest — 11 entries (6 §24.1.A + 4 §24.1.B +
 1 §24.1.C), C-CP-24 §24.1 verbatim (as re-tabled at CP v1.117, B-144 venue A).
-67 CP-axis attributes total.
+68 CP-axis attributes total.
 
 **What the per-row `attribute_count` is, and is not (register row `B-126`).** It
 reports the count DECLARED for that namespace, which is not the same as the
@@ -180,8 +184,12 @@ cardinality guarantee over the namespaces it names.
 """
 
 #: Total CP-axis attribute count exported to the OD plan Session 4 D6 — the
-#: §24.1 (34 + 29 + 4) = 67 sum (acceptance #6). Both §24.1.B count amendments
-#: (`retry.*` 4 -> 6 at C-CP-03 §3.5 v1.3; `harness.breaker.*` 7 -> 9 at OD
-#: spec v1.32, B-19-BREAKER-AMBIENT-ATTRS) are carried in §24.1.B itself since
-#: the CP v1.117 re-table, so the declared table and this sum now agree.
+#: §24.1 (35 + 29 + 4) = 68 sum (acceptance #6). All three ratified count
+#: amendments (`retry.*` 4 -> 6 at C-CP-03 §3.5 v1.3; `harness.breaker.*`
+#: 7 -> 9 at OD spec v1.32, B-19-BREAKER-AMBIENT-ATTRS; `engine.*` 3 -> 4 at
+#: C-CP-09 §9.1 v1.3) are carried in §24.1 itself since the CP v1.117
+#: re-table, so the declared table and this sum now agree. The sum counts
+#: `engine.replay_disposition` under both `engine.*` and the §3.5 retry set
+#: (a declared cross-namespace composition attribute) — it is a sum of
+#: declared row counts, not a distinct-key cardinality.
 CP_EXPORTED_ATTRIBUTE_COUNT: int = sum(e.attribute_count for e in CP_NAMESPACE_EXPORT_MANIFEST)

@@ -31,6 +31,8 @@ from enum import StrEnum
 from harness_core import UnitId
 from pydantic import BaseModel, ConfigDict
 
+from harness_cp.cp_namespace_export_manifest import CP_EXPORTED_ATTRIBUTE_COUNT
+
 
 class SessionTarget(StrEnum):
     """The downstream session a CP composition export is consumed at (§24.2)."""
@@ -115,7 +117,13 @@ CP_CROSS_AXIS_COMPOSITION_MANIFEST: tuple[CrossAxisCompositionExport, ...] = (
         _u("U-CP-54"),
         AxisName.OD,
         SurfaceKind.NAMESPACE_EXPORT,
-        ("11 CP namespaces; 65 attributes exported to OD plan Session 4 D6",),
+        # Derived from the export manifest's own sum — one source of truth
+        # (B-144 out-of-family round-2 catch: this literal froze at 65 while
+        # the declared table moved).
+        (
+            f"11 CP namespaces; {CP_EXPORTED_ATTRIBUTE_COUNT} attributes "
+            f"exported to OD plan Session 4 D6",
+        ),
     ),
     _export(
         "T_perm_3_three_layer_composition",

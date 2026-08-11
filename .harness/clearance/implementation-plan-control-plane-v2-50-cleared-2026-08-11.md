@@ -17,7 +17,8 @@ supersedes: implementation-plan-control-plane-v2-49 (no marker on file; v2.49 pr
 # Clearance — Implementation_Plan_Control_Plane v2.50 (U-CP-54 acceptance re-pin)
 
 **What v2.50 changes.** U-CP-54 only: criterion #3 `retry.*` 4 → 6 (C-CP-03 §3.5
-v1.3) and `harness.breaker.*` 7 → 9 (OD C-OD-07 §7.1 at OD v1.32); criterion #6 total
-63 → 67 (34 + 29 + 4) per spec v1.117; test roster
-`test_total_attribute_count_sixty_three` → `test_total_attribute_count_sixty_seven`.
+v1.3) and `harness.breaker.*` 7 → 9 (OD C-OD-07 §7.1 at OD v1.32); criterion #2
+`engine.*` 3 → 4 (C-CP-09 §9.1 v1.3); criterion #6 total 63 → 68 (35 + 29 + 4) per
+spec v1.117; test roster
+`test_total_attribute_count_sixty_three` → `test_total_attribute_count_sixty_eight`.
 Everything else preserved verbatim. The hitl.* row deliberately untouched (B-153).

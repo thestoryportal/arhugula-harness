@@ -8206,8 +8206,8 @@ items:
   summary: 'THE THIRD SAME-CLASS CASE split out of B-144 at its venue-A close (PR #1311): the hitl.* row
     of 24.1.A (Spec_Control_Plane_v1_2.md:2148) carries NO attribute count at all -- it reads ''per-event
     attributes across 4 span names'' -- while cp_namespace_export_manifest.py pins attribute_count=4,
-    i.e. the code counts SPAN NAMES as attributes. That 4 feeds the 24.1.A subtotal of 34 and the declared
-    export sum (67 since CP v1.117). Unlike the two B-144 rows this is not a stale count with a live
+    i.e. the code counts SPAN NAMES as attributes. That 4 feeds the 24.1.A subtotal (35 since CP v1.117,
+    which also carried engine.* 3 -> 4 per C-CP-09 §9.1 v1.3) and the declared export sum (68). Unlike the two B-144 rows this is not a stale count with a live
     figure waiting at another venue -- no venue declares ANY hitl.* attribute count -- so the repair is a
     decision about what the Attribute-count COLUMN MEANS, which may ripple to other qualified 24.1.A rows
     (audit.* reads ''7 attributes per persona-tier emission discipline''). CP v1.117 §0.5 explicitly
