@@ -1454,8 +1454,10 @@ async def test_deferred_close_unregisters_otel_atexit_backstop(
     # ORDERED backstop is registered, and at (simulated) process exit it
     # refuses to close while the flush is still live, then closes once the
     # flush has completed.
-    assert len(registered) == 1
-    ordered_backstop = registered[0]
+    backstops = [fn for fn in registered if getattr(fn, "__name__", "") == "_ordered_backstop"]
+    assert len(backstops) == 1  # (weakref.finalize lazily registers its own
+    # process-wide atexit hook on first use — filter by name, not count)
+    ordered_backstop = backstops[0]
     ordered_backstop()  # flush still live → no close, no race
     assert tracer.shutdown_called is False
     # Flush completes — a real worker's finally sets its event AND discards
@@ -1525,6 +1527,82 @@ async def test_queued_flush_never_overlaps_deferred_close(tmp_path: Path) -> Non
     assert "flush" not in order[close_idx + 1 :]
     # B either flushed successfully before the close, or was refused.
     assert b_report.tracer_flushed is True or "tracer" in b_report.failures
+
+
+@pytest.mark.asyncio
+async def test_exit_backstop_never_blocks_behind_wedged_watcher_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-147 merge-gate lens 1 — the atexit backstop runs on the MAIN
+    thread at interpreter exit; while the daemon watcher is wedged inside an
+    unbounded `provider.shutdown()` (stuck OTLP teardown) holding the
+    close-once lock, the backstop must return promptly (non-blocking
+    acquire) instead of hanging process exit forever behind it."""
+    import atexit as _atexit
+
+    registered: list[Any] = []
+    monkeypatch.setattr(_atexit, "unregister", lambda fn: None)
+
+    def _spy_register(fn: Any) -> Any:
+        registered.append(fn)
+        return fn
+
+    monkeypatch.setattr(_atexit, "register", _spy_register)
+
+    close_started = threading.Event()
+    close_release = threading.Event()
+
+    class _WedgedCloseTracer(_FakeTracerWithShutdown):
+        def shutdown(self) -> None:
+            close_started.set()
+            close_release.wait()  # the stuck TCP teardown
+            super().shutdown()
+
+    tracer = _WedgedCloseTracer()
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+    lingering = threading.Event()
+
+    async def _flush_leaving_lingering_worker(
+        ctx_arg: Any, *, timeout_millis: int = 30_000
+    ) -> FlushReport:
+        _ = timeout_millis
+        shutdown_mod._register_inflight_tracer_flush(ctx_arg, lingering)  # type: ignore[attr-defined]
+        return FlushReport(
+            tracer_flushed=False,
+            ledger_fsynced=True,
+            cost_chain_noop=True,
+            timed_out=True,
+            failures=("tracer",),
+        )
+
+    monkeypatch.setattr(shutdown_mod, "flush_observability", _flush_leaving_lingering_worker)
+    try:
+        report = await asyncio.wait_for(shutdown(ctx, timeout=5.0), timeout=5.0)
+        assert "tracer_provider" in report.failures
+        backstops = [fn for fn in registered if getattr(fn, "__name__", "") == "_ordered_backstop"]
+        assert len(backstops) == 1
+        ordered_backstop = backstops[0]
+
+        # Worker completes (both halves) — the watcher proceeds into the
+        # close and WEDGES inside provider.shutdown, holding the close lock.
+        lingering.set()
+        shutdown_mod._discard_inflight_tracer_flush(id(ctx), lingering)  # type: ignore[attr-defined]
+        assert await asyncio.to_thread(close_started.wait, 5.0)
+
+        # Simulated interpreter exit: the backstop must return promptly.
+        backstop_thread = threading.Thread(target=ordered_backstop, daemon=True)
+        backstop_thread.start()
+        backstop_thread.join(timeout=2.0)
+        assert not backstop_thread.is_alive()  # returned; no exit hang
+    finally:
+        close_release.set()
+
+    for _ in range(500):  # the watcher's own close still completes
+        if tracer.shutdown_called:
+            break
+        await asyncio.sleep(0.01)
+    assert tracer.shutdown_called is True
 
 
 def test_stale_inflight_entry_from_dead_context_does_not_veto_close() -> None:

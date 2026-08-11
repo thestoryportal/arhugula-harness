@@ -416,8 +416,17 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
     close_lock = threading.Lock()
     close_state = {"closed": False}
 
-    def _close_once_serialized() -> bool:
-        with close_lock:
+    def _close_once_serialized(*, blocking: bool = True) -> bool:
+        # `blocking=False` is the atexit path (merge-gate lens 1): the
+        # backstop runs on the MAIN thread at interpreter exit, and a bare
+        # blocking acquire behind a daemon watcher wedged inside an
+        # unbounded `shutdown_fn()` (stuck OTLP teardown — the exact B-147
+        # environment) would hang process exit forever, re-creating the
+        # class this fix eliminates. Lock held → a close is already in
+        # progress; the backstop skips without racing.
+        if not close_lock.acquire(blocking=blocking):
+            return False
+        try:
             if close_state["closed"]:
                 return True
             try:
@@ -426,13 +435,15 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
                 return False
             close_state["closed"] = True
             return True
+        finally:
+            close_lock.release()
 
     def _ordered_backstop() -> None:
         # Exit-time close: only when the ORIGINAL snapshot has completed AND
         # no worker (including late registrations) remains live; setting the
         # gate atomically with that check refuses any still-later flush.
         if all(evt.is_set() for evt in events) and not _live_workers_or_gate():
-            _close_once_serialized()
+            _close_once_serialized(blocking=False)
 
     def _watcher() -> None:
         pending = events
