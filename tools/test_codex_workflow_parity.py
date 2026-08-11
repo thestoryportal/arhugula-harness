@@ -1023,6 +1023,64 @@ def test_local_skill_and_runtime_state_does_not_dirty_root(path: str) -> None:
     assert proc.returncode == 0, path
 
 
+# R-CTX-1 D2 (U-CTX-16) removed these 9 skills entirely — nothing tracked remains from
+# which to DERIVE this roster, so they are pinned literals (see the completeness
+# assertion in the test below, which fails loudly the moment the 21-total drifts).
+_REMOVED_DESIGN_SKILLS = ("frontend-design", "impeccable", "taste-skill", "ui-ux-pro-max")
+_REMOVED_TRACKED_BMAD_SKILLS = (
+    "bmad-agent-pm",
+    "bmad-prd",
+    "bmad-prfaq",
+    "bmad-product-brief",
+    "bmad-technical-research",
+)
+
+
+def _removed_local_bmad_skill_names() -> tuple[str, ...]:
+    """The 12 machine-local bmad-* skill names R-CTX-1 R3 (U-CTX-17) newly gitignores,
+    DERIVED from the .gitignore R3 block rather than hardcoded — a future edit to that
+    block is picked up automatically instead of silently drifting from this test."""
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    return tuple(
+        sorted(re.findall(r"^\.claude/skills/(bmad-[a-z0-9-]+)/$", gitignore, re.MULTILINE))
+    )
+
+
+def test_r_ctx_1_removed_skill_roster_is_21_and_absent_from_tracked_state() -> None:
+    """R-CTX-1 D2 + R3 catalog-assertion test for the 21 skills removed from this repo:
+    4 operator-installed design skills + 5 tracked bmad-* skills DELETED at U-CTX-16,
+    plus 12 machine-local bmad-* skills newly GITIGNORED at U-CTX-17.
+
+    Per plan errata E7 this asserts against TRACKED state only — whether a gitignored
+    local payload directory still exists on disk in the root checkout is an
+    ORCHESTRATOR post-merge acceptance step, not this CI test's job.
+    """
+    local_bmad = _removed_local_bmad_skill_names()
+    assert len(local_bmad) == 12, local_bmad  # completeness assertion: catches .gitignore drift
+
+    roster = (*_REMOVED_DESIGN_SKILLS, *_REMOVED_TRACKED_BMAD_SKILLS, *local_bmad)
+    assert len(roster) == 21, roster
+    assert len(set(roster)) == len(roster), "duplicate name across the three removed-skill rosters"
+
+    for name in roster:
+        claude_side = subprocess.run(
+            ["git", "ls-files", f".claude/skills/{name}/"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        agents_side = subprocess.run(
+            ["git", "ls-files", f".agents/skills/{name}/"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert claude_side.stdout == "", (name, "still tracked under .claude/skills/")
+        assert agents_side.stdout == "", (name, "still tracked under .agents/skills/")
+
+
 def test_codex_shipping_skills_encode_current_review_and_ci_fixed_point() -> None:
     combined = "\n".join(
         (ROOT / path).read_text(encoding="utf-8")
