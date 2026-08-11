@@ -2832,6 +2832,11 @@ async def test_b150_worker_finish_between_3a_and_3b_completes_stop_inline(
     monkeypatch.setattr(shutdown_mod, "_tracer_flush_in_flight", _sequenced)
     report = await asyncio.wait_for(shutdown(ctx, timeout=2.0), timeout=10.0)
 
+    # Vacuity guard (merge-gate lens 3): if the 3a/3b consults are ever
+    # hoisted out of `shutdown()` (frame scope no longer matches), the
+    # verdicts go unconsumed and this witness would silently degrade into a
+    # normal-path run — fail loudly instead.
+    assert next(verdicts, None) is None, "scripted verdicts were not consumed"
     assert daemon.stopped is True
     assert tracer.shutdown_called is True
     assert timeline == ["collector", "tracer"]  # order holds on EVERY path
@@ -2879,4 +2884,9 @@ def test_b150_deferred_stop_treats_closed_loop_as_terminated(tmp_path: Path) -> 
 
     assert tracer.shutdown_called is True  # tracer half unaffected
     assert daemon.stopped is False  # treated terminated; never scheduled
+    # Sharper than `stopped is False` (merge-gate lens 3): stop() records
+    # `last_timeout` as its first statement, so None proves the coroutine
+    # never began executing — the guard returned, not a swallowed failure
+    # mid-stop.
+    assert daemon.last_timeout is None
     assert ctx is not None
