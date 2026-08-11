@@ -8111,16 +8111,15 @@ items:
     worker (subprocess probe: atexit_shutdown_while_flush_active=True). The shipped call graph has exactly
     one flush caller — shutdown() itself (shutdown.py, verified PR #1303 round 9) — so this is reachable only
     by a future external caller of the public primitive.'
-  close_out: '(1) Decide the collector half: either extend the in-flight deferral to step 3a (collector stop
-    waits for lingering flush workers, mirroring 3b, bounded by the same never-race-at-exit doctrine) or
-    ratify the current order as the bounded-shutdown cost with the loss already surfaced via the tagged flush
-    failure — if the former, check whether C-RT-10 step-order prose needs a spec leg (X-AL-3: route before
-    building). (2) Arm the ordered atexit replacement on the flush surface TIMEOUT path itself, not only in
-    the deferred-close spawn, so a standalone timeout is exit-safe; witness with the existing subprocess-probe
-    shape. (3) Re-run the #1303 witness set green after either change. WHAT WOULD FALSIFY IT. For (1): a
-    reading of C-RT-10 showing collector stop is already conditional on flush completion; for (2): the OTel
-    SDK internally serializing shutdown against an in-flight force_flush on the same provider (verify in the
-    pinned SDK version before building).'
+  close_out: '(GROUNDED 2026-08-11 — the decide/check halves of the original steps are ANSWERED; see
+    grounded_2026_08_11. What remains:) (1) COLLECTOR HALF — confirmed spec-touching: author the C-RT-10
+    spec leg FIRST (either an in-flight-conditional step-3a deferral mirroring 3b, or an explicit
+    ratified-cost carve-out), with clearance marker, THEN the impl if the deferral reading is chosen.
+    (2) ATEXIT HALF — confirmed warranted (SDK does not serialize): arm the ordered atexit replacement on
+    the flush-surface timeout path itself, witnessed with the subprocess-probe shape; impl-only, no spec
+    touch. (3) Re-run the #1303 witness set green after either change. Original falsifiers: both checked
+    2026-08-11, neither fired (C-RT-10 order unconditional at :3718-3733; OTel 1.41.1 BatchProcessor
+    closes the exporter outside _export_lock with an admitted in-flight-export window).'
   council: No. Bounded sequencing repairs inside one axis with a named owner; the only judgement is close_out
     step (1), which grounding against the C-RT-10 text answers.
   grounded_2026_08_11: 'BOTH FALSIFIERS CHECKED AT HEAD — NEITHER FIRES; the row stands as filed. (1)
