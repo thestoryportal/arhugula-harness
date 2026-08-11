@@ -7935,6 +7935,17 @@ items:
   council: No. Conformance to already-cleared normative step text with a named owner, and the only judgement --
     step (3)'s question of whether retry.cause_class duplicates the emitted retry.fail_class -- is answered by reading
     the two contracts, not by deliberation.
+  grounded_2026_08_11: 'SPLIT DISPOSITION (loop grounding, all cites re-read at HEAD 5f2852cf; full doc at
+    .harness/b145-grounding-split-2026-08-11.md). GAP 1 is an INTRA-SPEC SELF-DUPLICATE, not a missing
+    derivation: the same Runtime step sections that mandate retry.backoff_ms / retry.cause_class at
+    :4228-4229/:5685-5686 ALSO declare (at :4225/:5682) that the inner span carries the C-CP-03 §3.5
+    schema, whose retry.delay_ms + retry.cause_attribution rows (Spec_Control_Plane_v1_116.md:2715-2716)
+    carry the same values — and BOTH are already emitted by both producers (retry_breaker_tool.py:263/:292,
+    retry_breaker_fallback.py staircase region). Wiring the bullet names would duplicate keys on the wire.
+    GAP 1 therefore routes as a SPEC LEG (align the four bullet mentions to the §3.5 names + re-disposition
+    the two emitted=False RETRY_WIRE_REGISTER rows + its pinning test; X-AL-3: not silent impl). GAP 2
+    (missing escalate value on the tool path; zero-of-five terminal values on the dispatch staircase)
+    stays a self-contained Phase-7 impl repair, buildable independent of GAP 1.'
   heading: '### B-145 · `retry.backoff_ms` + `retry.cause_class` have **zero** producers, and the mandated `retry.terminal
     = "escalate"` value is never emitted — collapsed into `max-attempts` *(surfaced at the B-126 build arc, 2026-08-09;
     Gap 2 from out-of-family review round 1)*'
