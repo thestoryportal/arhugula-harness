@@ -515,7 +515,13 @@ async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatc
 async def test_run_returns_report_with_saturated_executor_after_worker_timeout(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
-    """B-147 shipped-call-chain witness (register close-out step 1).
+    """B-147 seam-level companion witness (fast, deterministic). The FULL
+    shipped-call-chain witness — real FastMCP `run_workflow` handler, real
+    driver dispatch, nothing stubbed upstream — is
+    `tests/integration/test_run_smoke.py::
+    test_e2e_run_returns_bounded_report_with_saturated_executor`; this one
+    pins the api.run seam (real `shutdown()`, faked invoke) so the hang
+    class stays covered in the fast suite too.
 
     The `run_workflow` tool body dispatches the CP worker via
     `asyncio.to_thread(execute_workflow, ...)` (the composition api.py's own
