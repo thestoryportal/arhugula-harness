@@ -8165,8 +8165,7 @@ items:
     close_out step 3. /resolve advisor=A (3 corrections absorbed) + codex unparseable-recorded. Fork doc
     class_1_fork_b150_collector_stop_ordering_deferral.md; clearance
     spec-harness-runtime-v1-117-cleared-2026-08-11.md.'
-  pr: 'the B-150 collector-half PR, 2026-08-11 (atexit half at #1307; number recorded at the post-merge
-    roadmap refresh)'
+  pr: '#1310 (the B-150 collector-half spec+impl leg; atexit half at #1307)'
   heading: '### B-150 · deferred-flush aftermath — collector-stop ordering + standalone-flush atexit arming *(surfaced by PR #1303 codex delta round post-cap, 2026-08-11)*'
 - id: B-151
   title: standalone atexit backstop residual concurrency shapes -- re-arm after deferred takeover creates one
