@@ -370,21 +370,35 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
     # launches (Thread.start failure under thread exhaustion) or whose close
     # raises leaves the ordered backstop registered for one exit-time retry.
 
-    def _ordered_backstop() -> None:
-        if all(evt.is_set() for evt in events):
+    # One-shot coordination between the watcher and the exit-time backstop
+    # (codex round-8 P2): process exit can begin just as the last flush
+    # event sets, putting both paths inside `shutdown_fn()` concurrently.
+    # The lock serializes them; `closed` flips only on a SUCCESSFUL close,
+    # so a raised close still leaves the backstop retry meaningful.
+    close_lock = threading.Lock()
+    close_state = {"closed": False}
+
+    def _close_once_serialized() -> bool:
+        with close_lock:
+            if close_state["closed"]:
+                return True
             try:
                 shutdown_fn()
             except Exception:
-                pass
+                return False
+            close_state["closed"] = True
+            return True
+
+    def _ordered_backstop() -> None:
+        if all(evt.is_set() for evt in events):
+            _close_once_serialized()
 
     def _watcher() -> None:
         for evt in events:
             evt.wait()
-        try:
-            shutdown_fn()
-        except Exception:
-            return  # ordered backstop stays registered; retries at exit
-        atexit.unregister(_ordered_backstop)
+        if _close_once_serialized():
+            atexit.unregister(_ordered_backstop)
+        # else: ordered backstop stays registered; retries at exit
 
     atexit.register(_ordered_backstop)
     atexit_handler = getattr(provider, "_atexit_handler", None)
@@ -492,15 +506,22 @@ async def flush_observability(
         # discards too so a `Thread.start()` that never launched a worker
         # cannot strand a stale entry. Step 3b consults the registry and
         # skips the close while any flush worker is in flight.
-        if _tracer_flush_in_flight(ctx):
-            # A prior force_flush worker for THIS ctx is still blocked
-            # (codex round-4 P2): spawning another permanent daemon thread
-            # per call could exhaust native threads under retry loops, and
-            # a provider whose flush is wedged will wedge the new worker
-            # too. Report this surface as timed out without a duplicate
-            # worker; step 3b's flush-before-close skip still holds via the
-            # existing registration.
-            raise TimeoutError("prior tracer force_flush still in flight")
+        # A prior force_flush worker for THIS ctx may still be blocked
+        # (codex round-4 P2): spawning another permanent daemon thread per
+        # call could exhaust native threads under retry loops, and a
+        # provider whose flush is wedged will wedge the new worker too.
+        # Spend the CURRENT budget waiting for the prior worker(s) to finish
+        # (codex round-8 P2: a later shutdown with a fresh budget must not
+        # instantly cache a false failure while the worker completes within
+        # that budget) — thread-free poll; the registry self-cleans on
+        # worker completion. Only on budget exhaustion is this surface
+        # reported timed out without a duplicate worker; step 3b's
+        # flush-before-close skip still holds via the surviving
+        # registration.
+        while _tracer_flush_in_flight(ctx):
+            if time.monotonic() >= deadline:
+                raise TimeoutError("prior tracer force_flush still in flight")
+            await asyncio.sleep(0.01)
 
         flush_done = threading.Event()
         ctx_key = id(ctx)

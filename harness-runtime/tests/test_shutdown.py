@@ -1294,9 +1294,9 @@ async def test_shutdown_skips_tracer_close_when_earlier_flush_worker_still_linge
         # Standalone flush: worker A times out and lingers, registered.
         first = await asyncio.wait_for(flush_observability(ctx, timeout_millis=100), timeout=5.0)
         assert "tracer" in first.failures
-        # Full shutdown: its step-2 re-flush detects A still in flight and
-        # reports without spawning worker B.
-        report = await asyncio.wait_for(shutdown(ctx, timeout=5.0), timeout=10.0)
+        # Full shutdown: its step-2 re-flush polls for A within its (small)
+        # budget, then reports without ever spawning worker B.
+        report = await asyncio.wait_for(shutdown(ctx, timeout=0.5), timeout=10.0)
         # Asserted BEFORE releasing A: the close never overlapped worker A
         # (after release the round-5 deferred watcher legitimately closes).
         assert tracer.shutdown_called is False
@@ -1313,6 +1313,45 @@ async def test_shutdown_skips_tracer_close_when_earlier_flush_worker_still_linge
             break
         await asyncio.sleep(0.01)
     assert tracer.shutdown_called is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_prior_flush_worker_within_its_own_budget(
+    tmp_path: Path,
+) -> None:
+    """B-147 codex round-8 P2 — a later `shutdown()` with a fresh budget
+    must SPEND that budget waiting for a previously timed-out flush worker
+    rather than instantly caching a false failure: when the prior worker
+    completes within the new budget, the re-flush runs normally and the
+    provider closes in order."""
+    first_call_release = threading.Event()
+    calls: list[int] = []
+
+    class _FirstCallStallsTracer(_FakeTracerWithShutdown):
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            calls.append(timeout_millis)
+            if len(calls) == 1:
+                first_call_release.wait()  # worker A: released mid-shutdown
+            return True
+
+    tracer = _FirstCallStallsTracer()
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+    # Standalone flush: worker A times out and lingers, registered.
+    first = await asyncio.wait_for(flush_observability(ctx, timeout_millis=50), timeout=5.0)
+    assert "tracer" in first.failures
+
+    async def _release_soon() -> None:
+        await asyncio.sleep(0.1)
+        first_call_release.set()
+
+    releaser = asyncio.create_task(_release_soon())
+    report = await asyncio.wait_for(shutdown(ctx, timeout=5.0), timeout=10.0)
+    await releaser
+
+    assert len(calls) == 2  # A completed within the budget; fresh flush ran
+    assert report.flush.tracer_flushed is True
+    assert "tracer_provider" not in report.failures
+    assert tracer.shutdown_called is True  # step 3b closed normally, in order
 
 
 @pytest.mark.asyncio
@@ -1373,7 +1412,16 @@ async def test_deferred_close_unregisters_otel_atexit_backstop(
 
     monkeypatch.setattr(_atexit, "register", _spy_register)
 
-    tracer = _FakeTracerWithShutdown()
+    class _CountingTracer(_FakeTracerWithShutdown):
+        def __init__(self) -> None:
+            super().__init__()
+            self.shutdown_count = 0
+
+        def shutdown(self) -> None:
+            self.shutdown_count += 1
+            super().shutdown()
+
+    tracer = _CountingTracer()
     sentinel_handler = tracer.shutdown
     tracer._atexit_handler = sentinel_handler  # type: ignore[attr-defined]
     ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
@@ -1408,9 +1456,16 @@ async def test_deferred_close_unregisters_otel_atexit_backstop(
     ordered_backstop = registered[0]
     ordered_backstop()  # flush still live → no close, no race
     assert tracer.shutdown_called is False
-    lingering.set()  # flush completes
-    ordered_backstop()  # exit-time retry now closes, strictly after flush
+    lingering.set()  # flush completes — BOTH the watcher and the (simulated
+    # exit) backstop now race toward the close; round-8 P2 requires exactly
+    # one serialized close between them.
+    ordered_backstop()
+    for _ in range(500):
+        if tracer.shutdown_called:
+            break
+        await asyncio.sleep(0.01)
     assert tracer.shutdown_called is True
+    assert tracer.shutdown_count == 1  # close-once held across both paths
 
 
 def test_stale_inflight_entry_from_dead_context_does_not_veto_close() -> None:
