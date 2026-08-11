@@ -1297,13 +1297,22 @@ async def test_shutdown_skips_tracer_close_when_earlier_flush_worker_still_linge
         # Full shutdown: its step-2 re-flush detects A still in flight and
         # reports without spawning worker B.
         report = await asyncio.wait_for(shutdown(ctx, timeout=5.0), timeout=10.0)
+        # Asserted BEFORE releasing A: the close never overlapped worker A
+        # (after release the round-5 deferred watcher legitimately closes).
+        assert tracer.shutdown_called is False
     finally:
         first_call_release.set()
 
     assert len(calls) == 1  # A only — no duplicate worker was spawned
     assert "flush:tracer" in report.failures
     assert "tracer_provider" in report.failures
-    assert tracer.shutdown_called is False  # close never overlapped worker A
+    # Round-5 P1: the skipped close is deferred, not lost — once A finishes,
+    # the daemon watcher closes the provider (flush-before-close preserved).
+    for _ in range(500):
+        if tracer.shutdown_called:
+            break
+        await asyncio.sleep(0.01)
+    assert tracer.shutdown_called is True
 
 
 @pytest.mark.asyncio
@@ -1333,11 +1342,13 @@ async def test_cancelled_flush_keeps_registration_for_flush_before_close(
         with pytest.raises(asyncio.CancelledError):
             await flush_task
         report = await asyncio.wait_for(shutdown(ctx, timeout=2.0), timeout=10.0)
+        # Asserted BEFORE releasing: the close never overlapped the worker
+        # (after release the round-5 deferred watcher legitimately closes).
+        assert tracer.shutdown_called is False
     finally:
         release.set()
 
     assert "tracer_provider" in report.failures
-    assert tracer.shutdown_called is False  # close never overlapped the worker
 
 
 def test_stale_inflight_entry_from_dead_context_does_not_veto_close() -> None:

@@ -320,7 +320,8 @@ def _register_inflight_tracer_flush(ctx: object, evt: threading.Event) -> None:
     with _inflight_lock:
         entry = _inflight_tracer_flush.get(ctx_key)
         if entry is None or _entry_is_stale(entry, ctx):
-            entry = (_try_weakref(ctx), set())
+            events: set[threading.Event] = set()
+            entry = (_try_weakref(ctx), events)
             _inflight_tracer_flush[ctx_key] = entry
         entry[1].add(evt)
 
@@ -332,6 +333,37 @@ def _discard_inflight_tracer_flush(ctx_key: int, evt: threading.Event) -> None:
             entry[1].discard(evt)
             if not entry[1]:
                 _inflight_tracer_flush.pop(ctx_key, None)
+
+
+def _spawn_deferred_tracer_close(ctx: object) -> None:
+    """Best-effort deferred close (codex round-5 P1): a step-3b close skipped
+    for an in-flight flush would otherwise NEVER happen — `shutdown()` caches
+    its report and every later call returns the cache — leaving a long-lived
+    process's tracer provider open forever. A daemon watcher (never joined)
+    waits for every currently-registered flush worker to finish, then closes
+    the provider; C-RT-10's flush-before-close order is preserved because
+    the close strictly follows the last worker's completion signal. The
+    close failure is deliberately swallowed: the returned report already
+    tagged `tracer_provider`, and this runs long after that report was
+    delivered — there is no caller left to surface to."""
+    with _inflight_lock:
+        entry = _inflight_tracer_flush.get(id(ctx))
+        events: tuple[threading.Event, ...] = (
+            tuple(entry[1]) if entry is not None and not _entry_is_stale(entry, ctx) else ()
+        )
+    shutdown_fn = getattr(getattr(ctx, "tracer_provider", None), "shutdown", None)
+    if shutdown_fn is None:
+        return
+
+    def _watcher() -> None:
+        for evt in events:
+            evt.wait()
+        try:
+            shutdown_fn()
+        except Exception:
+            pass
+
+    threading.Thread(target=_watcher, daemon=True, name="harness-deferred-tracer-close").start()
 
 
 def _tracer_flush_in_flight(ctx: object) -> bool:
@@ -870,9 +902,13 @@ async def shutdown(
             # provider now — or even submitting the close, which would
             # execute later regardless of the wait_for below — would overlap
             # teardown with the in-flight export (span loss / thread-unsafe
-            # exporter teardown). Skip the close entirely and report it.
+            # exporter teardown). Skip the close entirely and report it; a
+            # deferred daemon watcher closes the provider once the lingering
+            # flush completes (round-5 P1 — the cached report means no later
+            # shutdown() call would ever retry this close).
             failures.append("tracer_provider")
             timed_out = True
+            _spawn_deferred_tracer_close(ctx)
         else:
             await asyncio.wait_for(_close_tracer_provider(ctx), timeout=remaining)
     except TimeoutError:
