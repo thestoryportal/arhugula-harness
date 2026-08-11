@@ -583,8 +583,8 @@ loop *ARGS:
 loop-start:
     bash -c 'source tools/hooks/lib.sh && source tools/hooks/loop_lib.sh && \
         loop_activate "just loop-start" && \
-        loop_gc_worktrees reap; \
-        echo "loop mode: $(loop_mode_active && echo ON || echo OFF)"'
+        { loop_gc_worktrees reap || true; } && \
+        loop_mode_active && echo "loop mode: ON"'
 
 # Turn OFF loop mode (see .claude/skills/loop-stop/SKILL.md for the full contract).
 loop-stop:
