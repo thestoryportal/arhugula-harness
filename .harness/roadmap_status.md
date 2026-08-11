@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `0897fa8defa1` |
+| `workspace_state_hash` | `06fd239f1155` |
 | `last_refreshed` | 2026-08-11T00:00:00Z |
-| `git_head` | `a17946db` —  |
+| `git_head` | `0f05512c` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 112 |
 
@@ -43,7 +43,6 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
-| #1300 | `r-ctx-1-arc5` | — | — |
 
 ---
 
@@ -51,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1300 | 2026-08-11 | Arc 5 merged (U-CTX-14/13/15: citation-resolver CI gate 2620 cites 0 broken; root CLAUDE.md 123,442 -> 44,853 B (-63.7%), 73 anchors + safety kernel byte-identical, lineage to .harness/artifact-pointers + 7 docs/governance packs; governance router with 4-venue set-equality tests). Codex round 1 closed with resolver coverage-widening residual class recorded. Remaining: Arc 6 (axis CLAUDE.md slims, rebase + ship), Wave 5 U-CTX-21 measurement vs <=76k gate + U-CTX-22 close. |
 | 1299 | 2026-08-11 | Arc 7 merged (U-CTX-16/17/18: 60 files -5,830 lines — design-skill + bmad payload deletions incl. the dependent scan workflows, R3 .gitignore migration tracked half, fail-closed loop-start/loop-stop dispatchers). E7 machine-local orchestrator step now owed post-merge. Remaining: #1300 Arc 5 codex round in flight, Arc 6, Wave 5 measurement + close. |
 | 1298 | 2026-08-11 | Arc 4 merged (U-CTX-10/11/12: clearance frontmatter gate + quote-only repairer, derived artifact-heads table, 171 repaired markers, root CLAUDE.md pointer corrections); codex closed round 6 with exotic-YAML residual class recorded; single-lens gate APPROVE under lean protocol. Remaining: Arc 7 PR (open, codex round 1), Arc 5 phase 2 building (root CLAUDE.md slim), Arc 6, Wave 5 measurement + close. |
 | 1297 | 2026-08-11 | E4 selector test suite merged (32 witnesses + fail-closed newline-terminated tail split); B-148 TESTED-selector precondition discharged. Next: #1298 single-lens gate verdict, Arc 7 PR codex round, Arc 5 phase 2 build (root CLAUDE.md slim), Arc 6 last; lean review protocol active per operator cost directive 2026-08-11. |
 | PR #1296 | 2026-08-10 | R-CTX-1 Arc 3 (U-CTX-07/08/09): failure-signature+cap, loop-gc caps+reaper, dead matcher removal (codex 10R cap-closed; merge-gate all-approve) |
-| PR #1295 | 2026-08-10 | R-CTX-1 Arc 2 (U-CTX-03..06): roadmap_status truncation + consumer witnesses + query-not-Read + artifact-pointers split (merge-gate all-approve; codex 12R closed) |
 ---
 
 ---
