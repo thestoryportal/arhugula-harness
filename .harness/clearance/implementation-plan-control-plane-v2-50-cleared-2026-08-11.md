@@ -11,7 +11,7 @@ merge_commit: pending (this leg's PR merge; recorded at the PR)
 reviewer_chain:
   - "codex round 1 P2 at PR #1311: U-CP-54's inherited acceptance figures (retry 4 / breaker 7 / total 63 / test_total_attribute_count_sixty_three at Implementation_Plan_Control_Plane_v2_1.md:3113-3138) never re-pinned through v2.49 — absorbed as this delta"
   - out-of-family `just codex-review` re-run at this PR (to convergence)
-supersedes: implementation-plan-control-plane-v2-49 (no marker on file; v2.49 predates the marker convention's plan coverage at CP)
+supersedes: implementation-plan-control-plane-v2-49-cleared-2026-08-03.md
 ---
 
 # Clearance — Implementation_Plan_Control_Plane v2.50 (U-CP-54 acceptance re-pin)

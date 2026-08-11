@@ -9,9 +9,10 @@ C-CP-03 §3.5 / C-CP-09 §9.1 / OD C-OD-07 §7.1) is resolved by carrying the su
 figures INTO §24.1, not by declaring §24.1 a v1.2-frozen historical snapshot. No new
 attribute, name, sampling rule, or contract number is minted — all three count changes
 propagate supersessions ratified years-of-deltas ago at their own venues (CP v1.3
-twice; OD v1.32). No Runtime, OD, or CXA artifact is amended; the owed CP plan re-pin
-(U-CP-54's inherited acceptance figures) lands as the same-PR companion delta
-`Implementation_Plan_Control_Plane_v2_50.md`.*
+twice; OD v1.32). No Runtime or CXA artifact is amended; two same-PR companion deltas
+carry the owed sibling halves — `Implementation_Plan_Control_Plane_v2_50.md` (the
+U-CP-54 acceptance re-pin) and `Spec_Operational_Discipline_v1_40.md` (the C-OD-05
+§5.1 row-9 ingestion-count carry).*
 
 **Filed:** 2026-08-11
 **Authority:** Register row `B-144` close_out step (2), resolved venue **A** via the
@@ -71,9 +72,12 @@ snapshot posture would force the manifest's `harness.breaker.* = 9` row to regre
 (`Spec_Control_Plane_v1_2.md:2167`) states the export table exists "to prevent the
 export-claim ↔ ingest-reality structural conflation" — venue B would institutionalize
 exactly that conflation. A repo-wide probe found no OD-side consumer of the 65-sum
-figure (D6 ingestion is per-attribute-set, not sum-pinned); the only consumer is CP's
-own acceptance-#6 test, whose docstring already records the sum as a moving figure
-(63 → 65 at the OD v1.32 absorption).
+figure (D6 ingestion is per-attribute-set, not sum-pinned); the sum's consumers are
+CP-internal only — the acceptance-#6 test, whose docstring already records the sum as
+a moving figure (63 → 65 at the OD v1.32 absorption), and the terminal
+`cp_cross_axis_composition_manifest.py` invariant literal, which had independently
+frozen at 65 and is converted to a derivation from `CP_EXPORTED_ATTRIBUTE_COUNT` in
+this delta's cascade (§0.4).
 
 ### §0.3 Amendment sites (the re-tabled §24.1.B + the §24.1.A `engine.*` row)
 
