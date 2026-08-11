@@ -35,7 +35,8 @@ PROMPT=$(hook_json "$PAYLOAD" '.prompt')
 _BUILTINS=" clear compact help config model fast review continue resume init add-dir \
 agents bug cost doctor exit login logout mcp memory permissions pr-comments release-notes \
 status terminal-setup vim ide hooks export rewind usage code-review security-review verify \
-run loop schedule simplify library graphify resolve loop-start loop-stop fewer-permission-prompts "
+run loop schedule simplify library graphify resolve loop-start loop-stop overlay-query \
+fewer-permission-prompts "
 
 # Collect known skill names from project + user skill directories. Skills can be NESTED
 # (e.g. .claude/skills/council/<voice>/SKILL.md), so walk recursively for every SKILL.md

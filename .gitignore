@@ -83,12 +83,24 @@ coverage.xml
 # Skill-eval run artifacts (regenerable; eval sets in .claude/skills/*/evals/ are version-controlled)
 .claude/skills/*-workspace/
 
-# Operator-installed Claude design skills. Their durable Codex discovery entrypoints
-# are tracked under .agents/skills; do not treat local marketplace payloads as repo source.
-.claude/skills/frontend-design/
-.claude/skills/impeccable/
-.claude/skills/taste-skill/
-.claude/skills/ui-ux-pro-max/
+# R-CTX-1 R3 (2026-08-10): machine-local bmad-* skill payloads. Previously ignored only
+# via the shared `.git/info/exclude` (invisible to a fresh clone/CI, and not durably
+# documented); migrated here so the ignore rule travels with the repo and is reversible
+# by anyone. To re-track a given payload once it is ready to ship: delete its line below
+# (and, if it was ever accidentally staged, `git rm --cached -r <path>` first), then
+# `git add` it normally. See `.harness/r-ctx-1-implementation-plan-v1.md` U-CTX-17.
+.claude/skills/bmad-editorial-review-prose/
+.claude/skills/bmad-editorial-review-structure/
+.claude/skills/bmad-agent-architect/
+.claude/skills/bmad-check-implementation-readiness/
+.claude/skills/bmad-create-architecture/
+.claude/skills/bmad-create-epics-and-stories/
+.claude/skills/bmad-generate-project-context/
+.claude/skills/bmad-shard-doc/
+.claude/skills/bmad-advanced-elicitation/
+.claude/skills/bmad-brainstorming/
+.claude/skills/bmad-review-edge-case-hunter/
+.claude/skills/bmad-spec/
 
 # Local design-tool sessions and generated dashboard/memory artifacts.
 .impeccable/

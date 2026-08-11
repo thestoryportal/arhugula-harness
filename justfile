@@ -602,3 +602,23 @@ coderabbit-review *ARGS: _require-coderabbit
 #   HARNESS_LOOP_PROMPT="do X then Y" just loop
 loop *ARGS:
     bash tools/04-loop/run.sh "$@"
+
+# ─── U-HK-11 guardrailed loop-mode toggle (thin CLI dispatchers) ────────────
+# Not to be confused with `just loop` (U-HK-15's separate overnight `claude -p`
+# runner) or `just codex-loop-*` (the Codex autonomous-arc gate ledger). These two
+# recipes run the EXACT commands the loop-start / loop-stop SKILL.md files
+# document, giving a shell-invocable path to the same guardrailed auto-approve /
+# Stop-continue tier (U-HK-12 / U-HK-14) without going through the Skill tool.
+
+# Turn ON loop mode (see .claude/skills/loop-start/SKILL.md for the full contract).
+loop-start:
+    bash -c 'source tools/hooks/lib.sh && source tools/hooks/loop_lib.sh && \
+        loop_activate "just loop-start" && \
+        { loop_gc_worktrees reap || true; } && \
+        loop_mode_active && echo "loop mode: ON"'
+
+# Turn OFF loop mode (see .claude/skills/loop-stop/SKILL.md for the full contract).
+loop-stop:
+    bash -c 'source tools/hooks/lib.sh && source tools/hooks/loop_lib.sh && \
+        loop_deactivate "just loop-stop" && \
+        echo "loop mode: $(loop_mode_active && echo ON || echo OFF)"'

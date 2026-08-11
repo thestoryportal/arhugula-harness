@@ -12,7 +12,7 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - For task-relevant historical lessons, query the Claude memory index at `~/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/MEMORY.md`, then read only the linked topic files needed for the task. Treat gstack checkpoints under `~/.gstack/projects/arhugula-v2/checkpoints/` as additional resume evidence. Both are advisory until verified against HEAD, the handoff, and live repo instruments.
 - Read `.codex/notes/deterministic-context-workflow.md` and run `just codex-preflight` before substantive work. This writes the required local context checkpoint.
 - For axis-specific work, read the closest `harness-{is,as,cp,od}/AGENTS.md` first; consult the matching `CLAUDE.md` only when exact Claude lineage or axis posture is needed.
-- For `C-*`, `U-*`, `H_T-*`, ADR, or CXA seam claims, ground with the semantic overlay instead of free-form recall.
+- For `C-*`, `U-*`, `H_T-*`, ADR, or CXA seam claims, ground with `just overlay-query` (the semantic overlay) instead of free-form recall.
 
 ## Working Pattern
 
