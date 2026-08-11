@@ -105,8 +105,15 @@ tools/dashboard/public/
 # Hook-written local checkpoints (U-HK-05 pre-compaction snapshots)
 .harness/.checkpoints/
 
-# Hook-written session issue log (U-HK-07)
+# Hook-written session issue log (U-HK-07) + its capture-failure mkdir-lock and
+# the lock's crash-recovery artifacts (U-CTX-07: `.lock` while held; `.lock.reap.*`
+# a reaper interrupted mid-recovery; `.lock.stale.*` a legacy takeover remnant —
+# all transient, reaped by loop-gc, never tracked; an untracked crash artifact
+# must not dirty worktree/closeout gates).
 .harness/session-issues.jsonl
+.harness/session-issues.jsonl.lock/
+.harness/session-issues.jsonl.lock.reap.*/
+.harness/session-issues.jsonl.lock.stale.*/
 
 # Hook-written subagent lifecycle registry + its advisory-lock sibling (U-HK-43).
 # Local observability substrate only — transient per-machine state, never tracked.

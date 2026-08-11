@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Hermetic test for capture-failure.sh (U-HK-07). Asserts logging + recurrence nudge.
+# Hermetic test for capture-failure.sh (U-HK-07 + U-CTX-07). Asserts logging +
+# recurrence nudge + the 4-segment signature + the per-session emission cap.
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,6 +51,194 @@ printf '%s' "$OUT" | grep -q "recurring" && bad "cross-session count leaked (P3)
 OUT=$(run "$S2")                           # sess-B second occurrence → count=2 → nudge
 printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "same-session recurrence still nudges at 2" || bad "same-session nudge missing: $OUT"
 [ "$(grep -c '"session":"sess-B"' "$LOG")" = "2" ] && ok "rows tagged with session_id" || bad "session_id not recorded"
+
+# 6) U-CTX-07 (+ codex round-4): the 4th segment COMPOSES exit code and command
+#    head — exit code alone collapsed unrelated commands that both exit 1.
+: > "$LOG"
+EC='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-EC","tool_input":{"command":"npm test"},"tool_error":{"exit_code":"1"}}'
+run "$EC" >/dev/null
+SIG_ROW=$(tail -1 "$LOG")
+printf '%s' "$SIG_ROW" | jq -e '.sig == "PostToolUseFailure:Bash:command_failed:1:npm test [2]"' >/dev/null \
+  && ok "sig composes exit_code + structure-only identity" || bad "sig not composed: $SIG_ROW"
+
+# 6b) codex round-4: same exit code, DIFFERENT commands → distinct signatures — the
+#     second command's first failure must NOT count as a recurrence of the first.
+EC2='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-EC","tool_input":{"command":"git status"},"tool_error":{"exit_code":"1"}}'
+OUT=$(run "$EC2")
+[ -z "$OUT" ] && ok "distinct command with same exit code is NOT a recurrence" || bad "cross-command false recurrence: $OUT"
+[ "$(jq -rs '[.[].sig] | unique | length' "$LOG")" = "2" ] && ok "two distinct sigs logged for two commands" || bad "sigs collapsed: $(jq -rs '[.[].sig]' "$LOG")"
+
+# 7) U-CTX-07: falls back to the structure-only identity when no exit_code.
+: > "$LOG"
+CH='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-CH","tool_input":{"command":"some very long failing command that keeps going past forty characters for sure"}}'
+run "$CH" >/dev/null
+SIG_ROW=$(tail -1 "$LOG")
+printf '%s' "$SIG_ROW" | jq -e '.sig == "PostToolUseFailure:Bash:command_failed:some very [13]"' >/dev/null \
+  && ok "sig falls back to structure-only identity (no values)" || bad "sig cmdhead fallback wrong: $SIG_ROW"
+
+# 8) U-CTX-07: per-session emission cap — only the first TWO nudges of a session are
+#    ever emitted; every qualifying nudge after that is capped (logged, not re-emitted).
+: > "$LOG"
+CAP='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"cap_test","session_id":"sess-CAP"}'
+O1=$(run "$CAP")   # recur=1 → no nudge (below cardinality threshold)
+O2=$(run "$CAP")   # recur=2 → nudge #1
+O3=$(run "$CAP")   # recur=3 → nudge #2
+O4=$(run "$CAP")   # recur=4 → would-nudge but cap reached → suppressed
+O5=$(run "$CAP")   # recur=5 → still suppressed
+[ -z "$O1" ] && ok "cap: occurrence 1 no nudge" || bad "cap: occurrence 1 nudged: $O1"
+printf '%s' "$O2" | grep -q "recurring failure" && ok "cap: occurrence 2 nudges (1st emission)" || bad "cap: occurrence 2 missing nudge: $O2"
+printf '%s' "$O3" | grep -q "recurring failure" && ok "cap: occurrence 3 nudges (2nd emission)" || bad "cap: occurrence 3 missing nudge: $O3"
+[ -z "$O4" ] && ok "cap: occurrence 4 suppressed (cap reached)" || bad "cap: occurrence 4 not capped: $O4"
+[ -z "$O5" ] && ok "cap: occurrence 5 suppressed (cap reached)" || bad "cap: occurrence 5 not capped: $O5"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "5" ] && ok "cap: all 5 occurrences still logged (cap only suppresses emission)" || bad "cap: log row count wrong"
+[ "$(grep -c '"emitted":true' "$LOG")" = "2" ] && ok "cap: exactly 2 rows marked emitted:true this session" || bad "cap: emitted:true row count wrong"
+
+# 8b) merge-gate lens 3: the cap is TOTAL per session, not per-signature — with
+#     TWO distinct sigs both past threshold, the third qualifying nudge (first
+#     of sig B after two sig-A emissions) must be suppressed. Kills the
+#     `and .sig == $sig` mutation on PRIOR_EMIT_COUNT that single-sig fixtures
+#     let survive.
+: > "$LOG"
+TA='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"total_a","session_id":"sess-TOT"}'
+TB='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"total_b","session_id":"sess-TOT"}'
+run "$TA" >/dev/null; run "$TA" >/dev/null; run "$TA" >/dev/null   # sig A: nudges at 2 and 3 → cap reached
+run "$TB" >/dev/null                                               # sig B occurrence 1
+OUTB=$(run "$TB")                                                  # sig B occurrence 2 → would-nudge, cap reached
+[ -z "$OUTB" ] && ok "cap is TOTAL: distinct sig's nudge suppressed after 2 emissions" || bad "per-sig cap mutation possible: $OUTB"
+[ "$(grep -c '"emitted":true' "$LOG")" = "2" ] && ok "total cap: exactly 2 emitted across two sigs" || bad "total-cap emitted count wrong"
+
+# 9) codex P2: a command with JSON-escaped characters (quotes) must still reach the
+#    recurrence threshold — the old raw grep compared the raw sig against the
+#    JSON-escaped logged value and never matched, so quoted commands never nudged.
+: > "$LOG"
+QC='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-QC","tool_input":{"command":"python -c \"print(1)\" --flag"}}'
+run "$QC" >/dev/null
+OUT=$(run "$QC")
+printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "quoted-command recurrence reaches threshold (parsed count)" || bad "quoted-command recurrence broken: $OUT"
+
+# 10) codex P2: a MULTILINE command head must be flattened then globally truncated —
+#     cut -c1-40 alone kept 40 chars of EVERY line (unbounded signature).
+: > "$LOG"
+ML='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-ML","tool_input":{"command":"line-one-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nline-two-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nline-three-ccccc"}}'
+run "$ML" >/dev/null
+SIGLEN=$(tail -1 "$LOG" | jq -r .sig | wc -c | tr -d ' ')
+# sig = "PostToolUseFailure:Bash:command_failed:" (39 chars) + <=40 head + newline from wc
+[ "$SIGLEN" -le 81 ] && ok "multiline command head globally bounded (sig ${SIGLEN}B)" || bad "multiline sig unbounded: ${SIGLEN}B"
+[ "$(tail -1 "$LOG" | wc -l | tr -d ' ')" = "1" ] && ok "multiline command produced a single JSONL row" || bad "row not single-line"
+
+# 11) codex P2: the emission cap must hold under PARALLEL invocations — the unlocked
+#     read-then-append let overlapping hooks all see the same prior count (a 12-way
+#     probe emitted 6). With the mkdir lock, exactly 2 of these emit.
+: > "$LOG"
+PAR='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"par_test","session_id":"sess-PAR"}'
+run "$PAR" >/dev/null   # seed: recur=1 (below threshold) so every parallel run qualifies
+for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  ( printf '%s' "$PAR" | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" >/dev/null 2>&1 ) &
+done
+wait
+EMITTED=$(grep -c '"emitted":true' "$LOG")
+[ "$EMITTED" = "2" ] && ok "parallel 12-way probe emits exactly 2 (lock holds the cap)" || bad "parallel cap broken: $EMITTED emitted"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "13" ] && ok "parallel probe: all 13 occurrences logged" || bad "parallel probe: log row count $(wc -l < "$LOG")"
+[ ! -d "$LOG.lock" ] && ok "lock released after parallel probe" || bad "lock directory leaked"
+
+# 12) codex round-2: when the lock CANNOT be acquired, the row is still logged but
+#     emission is SUPPRESSED — an unserialized cap decision re-opens the spam (a
+#     20-contender lockless run emitted 3-6). Hold the lock externally with a fresh
+#     mtime; CAPTURE_FAILURE_LOCK_TRIES=2 keeps the test fast.
+: > "$LOG"
+LT='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"lock_test","session_id":"sess-LT"}'
+run "$LT" >/dev/null   # recur=1 seed
+mkdir "$LOG.lock"      # fresh external holder (mtime now — not stale-reclaimable)
+OUT=$(printf '%s' "$LT" | CLAUDE_PROJECT_DIR="$REPO" CAPTURE_FAILURE_LOCK_TRIES=2 bash "$HOOK" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+rmdir "$LOG.lock"
+[ -z "$OUT" ] && ok "lock timeout suppresses emission (cap stays serialized)" || bad "lock timeout emitted: $OUT"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "2" ] && ok "lock timeout still logs the row" || bad "lock-timeout row not logged"
+[ "$(tail -1 "$LOG" | jq -r .emitted)" = "false" ] && ok "lock-timeout row marked emitted:false" || bad "lock-timeout row emitted flag wrong"
+
+# 13) codex rounds 3/4/6 (structural resolution): the hook performs NO in-band
+#     stale reclamation — an aged foreign lock makes every contender time out
+#     into the SAFE log-only path (cap unviolable by construction: only the
+#     token-owner ever removes a lock). Reaping belongs to loop-gc's
+#     single-threaded SessionStart venue (see test_loop_gc.sh).
+: > "$LOG"
+ST='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"stale_test","session_id":"sess-ST"}'
+run "$ST" >/dev/null   # seed: recur=1 so every parallel run qualifies
+mkdir "$LOG.lock"; printf '%s' "crashed-holder" > "$LOG.lock/owner"
+touch -t 202001010000 "$LOG.lock" 2>/dev/null || touch -d '2020-01-01' "$LOG.lock" 2>/dev/null
+for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  ( printf '%s' "$ST" | CLAUDE_PROJECT_DIR="$REPO" CAPTURE_FAILURE_LOCK_TRIES=2 bash "$HOOK" >/dev/null 2>&1 ) &
+done
+wait
+EMITTED=$(grep -c '"emitted":true' "$LOG")
+[ "$EMITTED" = "0" ] && ok "aged foreign lock: all 12 contenders suppressed (cap unviolable)" || bad "aged-lock suppression broken: $EMITTED emitted"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "13" ] && ok "aged-lock probe: all 13 occurrences still logged" || bad "aged probe: log rows $(wc -l < "$LOG")"
+[ -d "$LOG.lock" ] && [ "$(cat "$LOG.lock/owner")" = "crashed-holder" ] \
+  && ok "hook never reaps a foreign stale lock (loop-gc's job)" || bad "hook reaped/mutated the stale lock"
+rm -rf "$LOG.lock"
+
+# 13b) codex round-5 P1: a command carrying a literal credential must never leak
+#      it — not into the sig, not into the durable log, not into emitted context.
+: > "$LOG"
+SEC='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-SEC","tool_input":{"command":"SECRET_TOKEN=hunter2abc deploy --prod"}}'
+run "$SEC" >/dev/null
+OUT=$(run "$SEC")   # recurrence → emits
+grep -q "hunter2abc" "$LOG" && bad "secret value persisted in log" || ok "secret value absent from durable log"
+printf '%s' "$OUT" | grep -q "hunter2abc" && bad "secret value emitted into context" || ok "secret value absent from emitted context"
+tail -1 "$LOG" | jq -e '.sig | test("SECRET_TOKEN=<v> deploy --prod \\[3\\]")' >/dev/null \
+  && ok "env-assignment keeps var name only; structure-only tail" || bad "redaction shape wrong: $(tail -1 "$LOG" | jq -r .sig)"
+
+# 13c) codex round-10 P1: a secret passed as a FLAG VALUE must not appear anywhere —
+#      no digest exists, so no offline oracle exists either.
+: > "$LOG"
+FV='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-FV","tool_input":{"command":"deploy --token hunter9xyz --prod"}}'
+run "$FV" >/dev/null
+OUT=$(run "$FV")
+grep -q "hunter9xyz" "$LOG" && bad "flag-value secret persisted" || ok "flag-value secret absent from log"
+printf '%s' "$OUT" | grep -q "hunter9xyz" && bad "flag-value secret emitted" || ok "flag-value secret absent from context"
+tail -1 "$LOG" | jq -e '.sig | test("deploy --token --prod \\[4\\]")' >/dev/null \
+  && ok "flag names kept, values dropped, count kept" || bad "flag-structure sig wrong: $(tail -1 "$LOG" | jq -r .sig)"
+[ "$(jq -rs "[.[].sig] | unique | length" "$LOG")" = "1" ] && ok "no digest: identity purely structural" || bad "structural identity unstable"
+printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "redacted sig still recurs correctly" || bad "redacted recurrence broken: $OUT"
+
+# 14) codex round-4: release must verify OWNERSHIP — a hook must never delete a
+#     lock it does not own. Seed a foreign-owned FRESH lock; the hook times out
+#     (suppressed emission per #12) and the foreign lock must SURVIVE.
+: > "$LOG"
+FO='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"own_test","session_id":"sess-FO"}'
+run "$FO" >/dev/null
+mkdir "$LOG.lock"; printf '%s' "someone-else" > "$LOG.lock/owner"
+printf '%s' "$FO" | CLAUDE_PROJECT_DIR="$REPO" CAPTURE_FAILURE_LOCK_TRIES=2 bash "$HOOK" >/dev/null 2>&1
+[ -d "$LOG.lock" ] && [ "$(cat "$LOG.lock/owner")" = "someone-else" ] \
+  && ok "foreign-owned fresh lock survives (ownership-checked release)" || bad "foreign lock deleted or mutated"
+rm -rf "$LOG.lock"
+
+# 15) codex rounds 9+10: rotated secret values share ONE recurrence identity —
+#     the structure-only construction carries no values at all (and since
+#     round 10, no digest either, so no oracle surface exists).
+: > "$LOG"
+R1='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-ROT","tool_input":{"command":"DEPLOY_KEY=aaa111 deploy --prod"}}'
+R2='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-ROT","tool_input":{"command":"DEPLOY_KEY=bbb222 deploy --prod"}}'
+run "$R1" >/dev/null
+OUT=$(run "$R2")
+printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "rotated secret values share one recurrence identity (structure-only)" || bad "rotated-secret recurrence broken: $OUT"
+[ "$(jq -rs '[.[].sig] | unique | length' "$LOG")" = "1" ] && ok "structure-only: one sig across rotated values" || bad "sigs diverged across rotated values"
+grep -q "aaa111\|bbb222" "$LOG" && bad "secret value leaked to log" || ok "rotated secret values absent from log"
+
+# 16) codex round-9: an ALREADY-STALE foreign lock takes the fast suppression
+#     path — no ~5s retry sleep per failure while awaiting the SessionStart reap.
+: > "$LOG"
+FP='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"fast_test","session_id":"sess-FP"}'
+run "$FP" >/dev/null
+mkdir "$LOG.lock"; printf '%s' "crashed" > "$LOG.lock/owner"
+touch -t 202001010000 "$LOG.lock" 2>/dev/null || touch -d '2020-01-01' "$LOG.lock" 2>/dev/null
+_t0=$(date +%s)
+OUT=$(printf '%s' "$FP" | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+_t1=$(date +%s)
+[ $((_t1 - _t0)) -le 2 ] && ok "aged foreign lock: fast path ($((_t1 - _t0))s, no 5s stall)" || bad "aged-lock fast path too slow: $((_t1 - _t0))s"
+[ -z "$OUT" ] && ok "aged-lock fast path suppresses emission" || bad "aged-lock fast path emitted: $OUT"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "2" ] && ok "aged-lock fast path still logs" || bad "fast-path row missing"
+[ -d "$LOG.lock" ] && ok "fast path never reclaims (loop-gc's job)" || bad "fast path reaped the lock"
+rm -rf "$LOG.lock"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

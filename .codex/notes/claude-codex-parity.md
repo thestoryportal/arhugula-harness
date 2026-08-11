@@ -9,7 +9,7 @@ repo churn; it does not mean reduced parity.
 | Surface | Claude posture immediately before handoff | Codex adoption |
 |---|---|---|
 | Project governance | `CLAUDE.md`, axis files, `CONTEXT.md` | `AGENTS.md` compact projections plus targeted canonical `CLAUDE.md` lineage |
-| Hooks | 13 event types, 16 matcher groups, and 21 command handlers in `.claude/settings.json` | Every Codex-supported behavior is wired in `.codex/hooks.json`; see `.codex/hooks/README.md` |
+| Hooks | 13 event types, 15 matcher groups, and 20 command handlers in `.claude/settings.json` (U-CTX-09: the dead `Bash(git commit*)` matcher was removed 2026-08-10; counts are computed at test time by `tools/test_codex_workflow_parity.py`, never hand-maintained) | Every Codex-supported behavior is wired in `.codex/hooks.json`; see `.codex/hooks/README.md` |
 | Tracked project skills | 35 canonical skills, including council and shipping workflows | 35/35 discovery entrypoints; native workflow skills where runner mechanics differ, full-body bridges elsewhere |
 | Operator-installed design skills | `frontend-design`, `impeccable`, `taste-skill`, `ui-ux-pro-max` under the root checkout's project `.claude/skills/` | Same source bodies adopted through tracked Codex bridge entrypoints; no copy, deletion, shortening, or deprecation |
 | Global gstack skills | Claude skill catalog | Same gstack packages are already present in Codex's discovered skill catalog |

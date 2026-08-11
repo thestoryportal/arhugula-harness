@@ -120,6 +120,43 @@ wt_present wt-merged && ok "loop reap rechecks lease after candidate report" \
 hook_release_session_lease "$BASE/wt-merged" "classified-live"
 export HOME="$OLDHOME"
 
+# ── 3b) U-CTX-08: loop-gc.sh's SessionStart hygiene block caps the stale-worktree
+#      list at 3 + "(+N more)" (reusing loop_lib.sh's loop_cap_list, shared with
+#      loop_pending_hil_summary — see test_loop_lib.sh). The library's `report` mode
+#      itself stays UNCAPPED (it's the read-only candidate-enumeration API; the cap is
+#      a presentation concern owned by the hook that renders SessionStart context), so
+#      this drives a REAL 4-candidate report through the exact cap the hook applies.
+rm -rf "$BASE"/* "$BASE"/.[!.]* 2>/dev/null || true
+git init -q -b main "$BASE/main"
+git -C "$BASE/main" config user.email t@t
+git -C "$BASE/main" config user.name t
+git -C "$BASE/main" commit -q -m init --allow-empty
+for b in feat-a feat-b feat-c feat-d; do
+  git -C "$BASE/main" worktree add -q "$BASE/wt-$b" -b "$b"
+done
+_loop_gc_gh_ok() { return 0; }
+_loop_gc_merged_oid() {
+  local oid; oid=$(git -C "$BASE/main" rev-parse main 2>/dev/null)
+  case "$1" in feat-a|feat-b|feat-c|feat-d) printf '%s' "$oid" ;; *) : ;; esac
+}
+export CLAUDE_PROJECT_DIR="$BASE/main"
+CANDS4=$(loop_gc_worktrees report)
+N4=$(printf '%s\n' "$CANDS4" | grep -c .)
+[ "$N4" -eq 4 ] && ok "U-CTX-08 fixture: report lists all 4 reapable candidates (library API stays uncapped)" || bad "U-CTX-08 fixture: report count $N4 != 4: [$CANDS4]"
+CAPPED4=$(printf '%s\n' "$CANDS4" | loop_cap_list)
+printf '%s' "$CAPPED4" | grep -q '(+1 more)' && ok "U-CTX-08: 4 real stale-worktree candidates cap to 3 + '(+1 more)'" || bad "U-CTX-08 cap on real CANDS: [$CAPPED4]"
+[ "$(printf '%s' "$CAPPED4" | tr ';' '\n' | grep -c 'wt-feat-')" -eq 3 ] && ok "U-CTX-08: capped rendering names exactly 3 candidates" || bad "U-CTX-08 capped list wrong length: [$CAPPED4]"
+# Restore the build_fixture-compatible stubs (feat-merged/feat-dirty/...) for every
+# test below — this block's narrower feat-a..d stub must not leak past its own scope.
+_loop_gc_gh_ok() { return 0; }
+_loop_gc_merged_oid() {
+  local oid; oid=$(git -C "$BASE/main" rev-parse main 2>/dev/null)
+  case "$1" in
+    feat-merged|feat-dirty|feat-precious|feat-settings|feat-collision) printf '%s' "$oid" ;;
+    *) : ;;
+  esac
+}
+
 # ── 4) self-exclusion: current worktree is never reaped ───────────────────────
 build_fixture
 export CLAUDE_PROJECT_DIR="$BASE/wt-merged"   # we ARE the merged+clean worktree now
@@ -536,6 +573,39 @@ OUT=$(sw_ctx)
 printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
   && ok "S15 surplus stop does not mask the later start" \
   || bad "S15 masked by banked stop credit: '$OUT'"
+
+# ── U-CTX-07 companion: SessionStart reaper for the capture-failure lock ──────
+# capture-failure.sh NEVER reclaims in-band (unwinnable herd races, codex rounds
+# 3/4/6 on the U-CTX-07 arc); THIS single-threaded venue reaps instead.
+export CLAUDE_PROJECT_DIR="$BASE/main"
+mkdir -p "$BASE/main/.harness"
+CFL="$BASE/main/.harness/session-issues.jsonl.lock"
+
+# aged lock (>60s) → reaped (identity-bound: observe→mv→verify→delete)
+mkdir "$CFL"; printf 'x' > "$CFL/owner"
+touch -t 202001010000 "$CFL" 2>/dev/null || touch -d '2020-01-01' "$CFL" 2>/dev/null
+mkdir "${CFL}.stale.12345"   # orphaned takeover remnant, AGED → swept
+touch -t 202001010000 "${CFL}.stale.12345" 2>/dev/null || touch -d '2020-01-01' "${CFL}.stale.12345" 2>/dev/null
+mkdir "${CFL}.reap.99999"    # a CONCURRENT reaper's FRESH in-flight dir → must survive
+bash "$SCRIPT_DIR/loop-gc.sh" >/dev/null 2>&1
+[ ! -d "$CFL" ] && ok "CF-reaper: aged capture-failure lock reaped at SessionStart" || bad "CF-reaper: aged lock survived"
+[ ! -d "${CFL}.stale.12345" ] && ok "CF-reaper: AGED orphaned remnant swept" || bad "CF-reaper: aged remnant survived"
+[ -d "${CFL}.reap.99999" ] && ok "CF-reaper: fresh concurrent .reap.* dir survives (aged-only sweep)" || bad "CF-reaper: fresh reap dir destroyed"
+rm -rf "${CFL}.reap.99999"
+
+# fresh lock (live holder) → left alone
+mkdir "$CFL"; printf 'y' > "$CFL/owner"
+bash "$SCRIPT_DIR/loop-gc.sh" >/dev/null 2>&1
+[ -d "$CFL" ] && [ "$(cat "$CFL/owner")" = "y" ] && ok "CF-reaper: fresh lock left untouched" || bad "CF-reaper: fresh lock reaped/mutated"
+rm -rf "$CFL"
+
+# AGED lock whose owner PID is ALIVE (codex round-10: laptop sleep / SIGSTOP /
+# slow holder) → NOT reaped; age alone is not abandonment.
+mkdir "$CFL"; printf '%s' "$$.1700000000.123" > "$CFL/owner"   # our own live PID
+touch -t 202001010000 "$CFL" 2>/dev/null || touch -d '2020-01-01' "$CFL" 2>/dev/null
+bash "$SCRIPT_DIR/loop-gc.sh" >/dev/null 2>&1
+[ -d "$CFL" ] && ok "CF-reaper: aged lock with LIVE owner PID survives (liveness gate)" || bad "CF-reaper: live-owner lock reaped"
+rm -rf "$CFL"
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"

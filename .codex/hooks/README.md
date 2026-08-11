@@ -29,7 +29,7 @@ Every Claude hook behavior supported by Codex's lifecycle is wired here. The Cod
 |---|---|---|
 | `SessionStart` | session lease + roadmap audit + read-only hygiene report + Codex context guard | Equivalent plus Codex guard |
 | `PreToolUse` | cache clear + permission guard + Codex boundary guard | Equivalent plus Codex guard |
-| `PreToolUse Bash(git commit*)` | `codex_hook_adapter.py pre-commit` runs pyright and root validation only for commit commands | Equivalent |
+| *(none — the Claude-side `PreToolUse Bash(git commit*)` matcher was removed, U-CTX-09)* | `codex_hook_adapter.py pre-commit` runs pyright and root validation for commit commands and blocks (exit 2) on failure | Codex-only gate; the removed Claude matcher ran `uv run pyright && git rev-parse --show-toplevel` as one compound command whose exit code was never Claude's blocking sentinel `2` on a pyright failure, so it never actually gated a commit — it was never truly equivalent |
 | `PermissionRequest` | permission guard + Codex request classifier | Equivalent plus Codex classifier |
 | `PreCompact` / `PostCompact` | generation-ordered atomic session-specific checkpoint and reinjection scripts | Direct |
 | `PostToolUse` | roadmap refresh audit + adapter-driven edit lint | Equivalent; Codex `apply_patch` paths are parsed from `tool_input.command` |

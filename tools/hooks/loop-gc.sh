@@ -31,6 +31,67 @@ CANDS=""
 WTC=$(git -C "$PROJECT_DIR" worktree list 2>/dev/null | grep -c .)
 [ "${WTC:-0}" -ge 2 ] 2>/dev/null && CANDS=$(loop_gc_worktrees report)
 
+# U-CTX-07 companion: reap a STALE capture-failure lock (crashed holder). The
+# failure hook itself NEVER reclaims — in-band reclamation on a reusable
+# pathname is unwinnable under a thundering herd (codex rounds 3/4/6), so a
+# crashed holder just suppresses nudges until THIS single-threaded SessionStart
+# venue reaps the lock (>60s old; a live holder is sub-second). Orphaned
+# `.stale.*` takeover remnants from pre-fix builds are swept with it.
+CF_LOCK="$PROJECT_DIR/.harness/session-issues.jsonl.lock"
+if [ -d "$CF_LOCK" ]; then
+  _cfnow=$(date +%s)
+  # IDENTITY BEFORE AGE (codex round-8): the owner token is captured FIRST so
+  # it is bound to the same lock instance whose mtime the age check judges —
+  # capturing after the check let a lagging reaper bind to a fresh SUCCESSOR's
+  # token and delete the live lock. If the dir is replaced between token-read
+  # and stat, the stat sees the YOUNG successor and the reap is skipped.
+  _cfobs=$(cat "$CF_LOCK/owner" 2>/dev/null || echo "")
+  # SEPARATE assignments per stat dialect (codex round-7 P1): `$(A || B)`
+  # captures BOTH commands' stdout — on GNU, BSD-form `stat -f %m` PRINTS
+  # filesystem info for the valid path while exiting nonzero, so the combined
+  # substitution yielded multiline garbage and the arithmetic below aborted.
+  _cfts=$(stat -f %m "$CF_LOCK" 2>/dev/null) || _cfts=$(stat -c %Y "$CF_LOCK" 2>/dev/null) || _cfts="$_cfnow"
+  case "$_cfts" in '' | *[!0-9]*) _cfts="$_cfnow" ;; esac
+  # Owner-liveness gate (codex round-10 P2): age alone is not abandonment — a
+  # holder paused >60s (laptop sleep, SIGSTOP, a slow scan) is still LIVE. The
+  # owner token's first dot-field is the holder's PID; if that process exists,
+  # skip the reap. (PID-reuse false-liveness is the recorded residual — it
+  # only DELAYS a reap, never deletes a live lock.)
+  _cfpid=${_cfobs%%.*}
+  case "$_cfpid" in '' | *[!0-9]*) _cfpid="" ;; esac
+  if [ -n "$_cfpid" ] && kill -0 "$_cfpid" 2>/dev/null; then
+    _cfts="$_cfnow"   # holder alive — treat as fresh, no reap this pass
+  fi
+  if [ $((_cfnow - _cfts)) -gt 60 ]; then
+    # Identity-bound reap (codex rounds 7+8): mv atomically, verify the MOVED
+    # dir carries the token captured WITH the age observation; a mismatch means
+    # we displaced a fresh lock — restore it. (Residual, recorded: the restore
+    # can itself collide with a re-mkdir — needs a second µs-race inside the
+    # same 60s-stale window; per the arms-race discipline this boundary is
+    # recorded, not chased.)
+    _cfmv="${CF_LOCK}.reap.$$"
+    if mv "$CF_LOCK" "$_cfmv" 2>/dev/null; then
+      _cfgot=$(cat "$_cfmv/owner" 2>/dev/null || echo "")
+      if [ "$_cfgot" = "$_cfobs" ]; then
+        rm -rf "$_cfmv" 2>/dev/null || true
+      else
+        mv "$_cfmv" "$CF_LOCK" 2>/dev/null || rm -rf "$_cfmv" 2>/dev/null || true
+      fi
+    fi
+  fi
+fi
+# Sweep orphaned takeover/reap remnants — but only AGED ones (>60s): a blanket
+# rm would destroy a CONCURRENT reaper's in-flight .reap.$$ dir (which may hold
+# a displaced fresh lock awaiting restore).
+for _cfrem in "$PROJECT_DIR/.harness/session-issues.jsonl.lock.stale."* \
+              "$PROJECT_DIR/.harness/session-issues.jsonl.lock.reap."*; do
+  [ -d "$_cfrem" ] || continue
+  _cfrnow=$(date +%s)
+  _cfrts=$(stat -f %m "$_cfrem" 2>/dev/null) || _cfrts=$(stat -c %Y "$_cfrem" 2>/dev/null) || _cfrts="$_cfrnow"
+  case "$_cfrts" in '' | *[!0-9]*) _cfrts="$_cfrnow" ;; esac
+  [ $((_cfrnow - _cfrts)) -gt 60 ] && rm -rf "$_cfrem" 2>/dev/null
+done
+
 MEMFLAG=""
 # Claude Code keys project memory by the MAIN repo path (not a worktree) with '/' -> '-'.
 # The first `git worktree list` entry is always the main working tree, so derive the
@@ -314,10 +375,14 @@ fi
 MSG="[hygiene]"
 if [ -n "$CANDS" ]; then
   N=$(printf '%s\n' "$CANDS" | grep -c .)
-  LIST=$(printf '%s\n' "$CANDS" | paste -sd'; ' -)
+  # U-CTX-08: bounded to the first 3 candidates + a "(+N more)" tail (loop_lib.sh's
+  # loop_cap_list, shared with loop_pending_hil_summary) — an unbounded worktree list
+  # was unbounded SessionStart context growth on a checkout with many stale worktrees.
+  LIST=$(printf '%s\n' "$CANDS" | loop_cap_list)
   # Branch refs are presented as a comma-separated DATA list, never an executable
   # `git branch -d ...` string — a ref name can contain shell metacharacters (codex P2).
-  BRANCHES=$(printf '%s\n' "$CANDS" | sed -E 's/.*\(([^)]+)\)$/\1/' | paste -sd', ' -)
+  # Capped to the SAME top-3 subset as LIST, so every branch shown has a visible entry.
+  BRANCHES=$(printf '%s\n' "$CANDS" | head -3 | sed -E 's/.*\(([^)]+)\)$/\1/' | paste -sd', ' -)
   MSG="$MSG ${N} stale merged worktree(s) — the explicit post-merge closeout reaps them, or remove manually: ${LIST}. Their merged branch refs (prune each with git branch -d; listed as data): ${BRANCHES}."
 fi
 [ -n "$MEMFLAG" ] && MSG="$MSG ${MEMFLAG}"
