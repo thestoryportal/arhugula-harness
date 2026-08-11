@@ -58,8 +58,8 @@ printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "same-session recurre
 EC='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-EC","tool_input":{"command":"npm test"},"tool_error":{"exit_code":"1"}}'
 run "$EC" >/dev/null
 SIG_ROW=$(tail -1 "$LOG")
-printf '%s' "$SIG_ROW" | jq -e '.sig | test("^PostToolUseFailure:Bash:command_failed:1:npm#[0-9a-f]{8}$")' >/dev/null \
-  && ok "sig composes exit_code + command-name#hash identity" || bad "sig not composed: $SIG_ROW"
+printf '%s' "$SIG_ROW" | jq -e '.sig == "PostToolUseFailure:Bash:command_failed:1:npm test [2]"' >/dev/null \
+  && ok "sig composes exit_code + structure-only identity" || bad "sig not composed: $SIG_ROW"
 
 # 6b) codex round-4: same exit code, DIFFERENT commands → distinct signatures — the
 #     second command's first failure must NOT count as a recurrence of the first.
@@ -73,8 +73,8 @@ OUT=$(run "$EC2")
 CH='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-CH","tool_input":{"command":"some very long failing command that keeps going past forty characters for sure"}}'
 run "$CH" >/dev/null
 SIG_ROW=$(tail -1 "$LOG")
-printf '%s' "$SIG_ROW" | jq -e '.sig | test("^PostToolUseFailure:Bash:command_failed:some#[0-9a-f]{8}$")' >/dev/null \
-  && ok "sig falls back to command-name#hash (no argument text)" || bad "sig cmdhead fallback wrong: $SIG_ROW"
+printf '%s' "$SIG_ROW" | jq -e '.sig == "PostToolUseFailure:Bash:command_failed:some very [13]"' >/dev/null \
+  && ok "sig falls back to structure-only identity (no values)" || bad "sig cmdhead fallback wrong: $SIG_ROW"
 
 # 8) U-CTX-07: per-session emission cap — only the first TWO nudges of a session are
 #    ever emitted; every qualifying nudge after that is capped (logged, not re-emitted).
@@ -170,8 +170,20 @@ run "$SEC" >/dev/null
 OUT=$(run "$SEC")   # recurrence → emits
 grep -q "hunter2abc" "$LOG" && bad "secret value persisted in log" || ok "secret value absent from durable log"
 printf '%s' "$OUT" | grep -q "hunter2abc" && bad "secret value emitted into context" || ok "secret value absent from emitted context"
-tail -1 "$LOG" | jq -e '.sig | test("SECRET_TOKEN=<redacted>#[0-9a-f]{8}")' >/dev/null \
-  && ok "env-assignment first token redacted to name only" || bad "redaction shape wrong: $(tail -1 "$LOG" | jq -r .sig)"
+tail -1 "$LOG" | jq -e '.sig | test("SECRET_TOKEN=<v> deploy --prod \\[3\\]")' >/dev/null \
+  && ok "env-assignment keeps var name only; structure-only tail" || bad "redaction shape wrong: $(tail -1 "$LOG" | jq -r .sig)"
+
+# 13c) codex round-10 P1: a secret passed as a FLAG VALUE must not appear anywhere —
+#      no digest exists, so no offline oracle exists either.
+: > "$LOG"
+FV='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"command_failed","session_id":"sess-FV","tool_input":{"command":"deploy --token hunter9xyz --prod"}}'
+run "$FV" >/dev/null
+OUT=$(run "$FV")
+grep -q "hunter9xyz" "$LOG" && bad "flag-value secret persisted" || ok "flag-value secret absent from log"
+printf '%s' "$OUT" | grep -q "hunter9xyz" && bad "flag-value secret emitted" || ok "flag-value secret absent from context"
+tail -1 "$LOG" | jq -e '.sig | test("deploy --token --prod \\[4\\]")' >/dev/null \
+  && ok "flag names kept, values dropped, count kept" || bad "flag-structure sig wrong: $(tail -1 "$LOG" | jq -r .sig)"
+[ "$(jq -rs "[.[].sig] | unique | length" "$LOG")" = "1" ] && ok "no digest: identity purely structural" || bad "structural identity unstable"
 printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "redacted sig still recurs correctly" || bad "redacted recurrence broken: $OUT"
 
 # 14) codex round-4: release must verify OWNERSHIP — a hook must never delete a

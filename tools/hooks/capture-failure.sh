@@ -54,17 +54,31 @@ CMDRAW=$(hook_json "$PAYLOAD" '.tool_input.command')
 # text cannot leak by construction. (Flatten first: multiline heads, codex P2.)
 CMDFLAT=$(printf '%s' "$CMDRAW" | tr '\n\t' '  ')
 if [ -n "$CMDFLAT" ]; then
-  CMDNAME=${CMDFLAT%% *}
-  case "$CMDNAME" in *=*) CMDNAME="${CMDNAME%%=*}=<redacted>" ;; esac
-  CMDNAME=$(printf '%s' "$CMDNAME" | cut -c1-24)
-  # Hash the SANITIZED command, not the raw one (codex round-9): an unsalted
-  # digest over a raw command carrying a low-entropy credential is offline
-  # dictionary-attackable from the persisted log. Every `NAME=value` token is
-  # value-stripped before hashing; identical templates with rotated secret
-  # values also (correctly) share one recurrence identity.
-  CMDSANITIZED=$(printf '%s' "$CMDFLAT" | sed -E 's/([A-Za-z_][A-Za-z0-9_]*)=[^ ]*/\1=<redacted>/g')
-  CMDHASH=$(printf '%s' "$CMDSANITIZED" | shasum -a 256 2>/dev/null | cut -c1-8)
-  CMDHEAD="${CMDNAME}#${CMDHASH:-nohash}"
+  # STRUCTURE-ONLY identity (codex round-10 P1, category-closing): NO argument
+  # VALUE ever enters the identity — not displayed, not hashed. Every prior
+  # construction (raw head → name#hash → sanitized-hash) left some secret
+  # shape in a digest preimage, making the persisted 8-hex an offline oracle
+  # for low-entropy credentials; with no digest and no values there is no
+  # oracle AT ALL. Identity = first token's name (assignments keep the var
+  # name only) + the second token IF verb-shaped (a lowercase subcommand) and
+  # not following a flag + every flag token's name part + the total token
+  # count. Value-only variants (MODE=alpha vs beta) correctly share one
+  # recurrence class. RECORDED RESIDUAL (not chased): a lowercase-verb-shaped
+  # secret passed as the SECOND bare token leaks that word; position 2 is
+  # overwhelmingly a subcommand, and high-entropy/mixed-case secrets never
+  # match the verb filter.
+  CMDHEAD=$(printf '%s\n' "$CMDFLAT" | awk '{
+    n = NF
+    t1 = $1
+    if (t1 ~ /=/) { sub(/=.*/, "", t1); t1 = t1 "=<v>" }
+    out = t1
+    if (n >= 2 && $2 ~ /^[a-z][a-z0-9_-]{0,15}$/ && $1 !~ /^-/) out = out " " $2
+    for (i = 2; i <= n; i++) {
+      f = $i
+      if (f ~ /^-/) { sub(/=.*/, "", f); out = out " " f }
+    }
+    printf "%s [%d]", out, n
+  }' | cut -c1-40)
 else
   CMDHEAD=""
 fi

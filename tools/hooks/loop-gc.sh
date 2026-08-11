@@ -52,6 +52,16 @@ if [ -d "$CF_LOCK" ]; then
   # substitution yielded multiline garbage and the arithmetic below aborted.
   _cfts=$(stat -f %m "$CF_LOCK" 2>/dev/null) || _cfts=$(stat -c %Y "$CF_LOCK" 2>/dev/null) || _cfts="$_cfnow"
   case "$_cfts" in '' | *[!0-9]*) _cfts="$_cfnow" ;; esac
+  # Owner-liveness gate (codex round-10 P2): age alone is not abandonment — a
+  # holder paused >60s (laptop sleep, SIGSTOP, a slow scan) is still LIVE. The
+  # owner token's first dot-field is the holder's PID; if that process exists,
+  # skip the reap. (PID-reuse false-liveness is the recorded residual — it
+  # only DELAYS a reap, never deletes a live lock.)
+  _cfpid=${_cfobs%%.*}
+  case "$_cfpid" in '' | *[!0-9]*) _cfpid="" ;; esac
+  if [ -n "$_cfpid" ] && kill -0 "$_cfpid" 2>/dev/null; then
+    _cfts="$_cfnow"   # holder alive — treat as fresh, no reap this pass
+  fi
   if [ $((_cfnow - _cfts)) -gt 60 ]; then
     # Identity-bound reap (codex rounds 7+8): mv atomically, verify the MOVED
     # dir carries the token captured WITH the age observation; a mismatch means

@@ -599,6 +599,14 @@ bash "$SCRIPT_DIR/loop-gc.sh" >/dev/null 2>&1
 [ -d "$CFL" ] && [ "$(cat "$CFL/owner")" = "y" ] && ok "CF-reaper: fresh lock left untouched" || bad "CF-reaper: fresh lock reaped/mutated"
 rm -rf "$CFL"
 
+# AGED lock whose owner PID is ALIVE (codex round-10: laptop sleep / SIGSTOP /
+# slow holder) → NOT reaped; age alone is not abandonment.
+mkdir "$CFL"; printf '%s' "$$.1700000000.123" > "$CFL/owner"   # our own live PID
+touch -t 202001010000 "$CFL" 2>/dev/null || touch -d '2020-01-01' "$CFL" 2>/dev/null
+bash "$SCRIPT_DIR/loop-gc.sh" >/dev/null 2>&1
+[ -d "$CFL" ] && ok "CF-reaper: aged lock with LIVE owner PID survives (liveness gate)" || bad "CF-reaper: live-owner lock reaped"
+rm -rf "$CFL"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
