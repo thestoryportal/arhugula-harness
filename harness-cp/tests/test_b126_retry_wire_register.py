@@ -4,7 +4,7 @@
 4, code schema 6, wire 8) and observed that only the first was verified. The
 grounding pass corrected the wire figure to TEN and found the divergence is not
 a discretion free-for-all: `retry.*` is declared at TWO contract venues, and six
-of the seven keys beyond C-CP-03 §3.5 are MANDATED by name at Runtime §14.6 /
+of the keys beyond C-CP-03 §3.5 are MANDATED by name at Runtime §14.6 /
 §14.9. `RETRY_WIRE_REGISTER` records them; these tests keep the record true.
 
 Three sweeps, deliberately different in shape, because each alone has a hole:
@@ -667,7 +667,7 @@ def test_the_register_is_disjoint_from_the_cp_declared_schema() -> None:
     assert not (_REGISTERED & _CP_DECLARED)
     assert len(_CP_DECLARED) == 5
     assert len(RETRY_NAMESPACE_SCHEMA) == 6  # the sixth is `engine.replay_disposition`
-    assert len(RETRY_WIRE_REGISTER) == 7
+    assert len(RETRY_WIRE_REGISTER) == 5
 
 
 def test_names_are_not_attribute_keys() -> None:
@@ -681,13 +681,17 @@ def test_names_are_not_attribute_keys() -> None:
 def test_unemitted_keys_are_exactly_the_two_b145_registers() -> None:
     """The mandated-but-unwired set is DATA, so closing it must edit this line.
 
-    `retry.backoff_ms` and `retry.cause_class` are named at four Runtime step
-    bullets and set by zero producers (`B-145`). Wiring either one flips its
-    `emitted` flag, and this assertion forces that edit rather than letting the
-    gap quietly disappear — or quietly grow.
+    Re-pinned at the B-145 GAP-1 spec leg: `retry.backoff_ms` and
+    `retry.cause_class` were the RETIRED v1.2-era aliases of the emitted
+    `retry.delay_ms` / `retry.cause_attribution` (CP §3.5 v1.3 rename), and
+    Runtime v1.115 aligned its four step-bullet mentions — so their rows are
+    REMOVED (the two-venue union no longer contains them) and the
+    mandated-but-unwired set is EMPTY. A future mandated-unwired key must land
+    here as data, exactly as before; the name keeps its B-145 lineage per the
+    U-OD-60 rename-with-the-assertion precedent.
     """
     unemitted = {e.attribute_name for e in RETRY_WIRE_REGISTER if not e.emitted}
-    assert unemitted == {"retry.backoff_ms", "retry.cause_class"}
+    assert unemitted == set()
 
 
 def test_every_registered_key_cites_an_authority_that_resolves() -> None:
