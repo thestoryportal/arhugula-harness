@@ -511,6 +511,122 @@ async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatc
     assert not _api._run_lock.locked()  # pyright: ignore[reportPrivateUsage]
 
 
+@pytest.mark.asyncio
+async def test_run_returns_report_with_saturated_executor_after_worker_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """B-147 seam-level companion witness (fast, deterministic). The FULL
+    shipped-call-chain witness — real FastMCP `run_workflow` handler, real
+    driver dispatch, nothing stubbed upstream — is
+    `tests/integration/test_run_smoke.py::
+    test_e2e_run_returns_bounded_report_with_saturated_executor`; this one
+    pins the api.run seam (real `shutdown()`, faked invoke) so the hang
+    class stays covered in the fast suite too.
+
+    The `run_workflow` tool body dispatches the CP worker via
+    `asyncio.to_thread(execute_workflow, ...)` (the composition api.py's own
+    run() body documents; CPython cannot kill the thread on timeout per
+    `harness_cp/workflow_driver.py`), so a step that outruns its `wait_for`
+    deadline leaves a live worker OCCUPYING the loop's default executor at
+    the exact moment `api.run()` enters the REAL `shutdown()` — which this
+    test deliberately does NOT fake, unlike the ingress tests above. The
+    1-worker default executor makes the sharing physical: the stuck worker
+    holds the only slot. Pre-B-147 the flush's `asyncio.to_thread(
+    force_flush, ...)` queued behind it and `run()` never produced a report
+    (PR #1290 merge-gate probe: OUTER_TIMEOUT_BEFORE_REPORT); post-B-147 the
+    tracer flush runs on a bounded daemon worker, so `run()` must come back
+    with a real `ShutdownReport` inside the outer bound.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    release = threading.Event()
+    started = threading.Event()
+
+    class _Ctx:  # plain class — the real shutdown()'s weakref registry needs it
+        pass
+
+    class _RecordingTracer:
+        def __init__(self) -> None:
+            self.flush_calls: list[int] = []
+            self.shutdown_called = False
+
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            self.flush_calls.append(timeout_millis)
+            # Free the executor slot only once the flush has provably run
+            # WHILE the stuck worker still held it (also keeps the step-3b
+            # to_thread tracer close prompt afterwards).
+            release.set()
+            return True
+
+        def shutdown(self) -> None:
+            self.shutdown_called = True
+
+    class _Daemon:
+        async def stop(self, *, timeout_seconds: float = 5.0) -> None:
+            _ = timeout_seconds
+
+    ledger_path = tmp_path / "state.jsonl"
+    ledger_path.write_text("")
+    tracer = _RecordingTracer()
+    ctx = _Ctx()
+    ctx.tracer_provider = tracer  # type: ignore[attr-defined]
+    ctx.ledger_writer = SimpleNamespace(  # type: ignore[attr-defined]
+        handle=SimpleNamespace(canonical_path=ledger_path)
+    )
+    ctx.drained_flag = asyncio.Event()  # type: ignore[attr-defined]
+    ctx.collector_daemon = _Daemon()  # type: ignore[attr-defined]
+    ctx.providers = {}  # type: ignore[attr-defined]
+    ctx.mcp_server = SimpleNamespace(  # type: ignore[attr-defined]
+        server=object(), _state={}, workflow_registry={}
+    )
+    ctx.cost_record_accumulator = CostRecordAccumulator()  # type: ignore[attr-defined]
+
+    async def _fake_bootstrap(config, *, workload_class, requires_inference=True):  # type: ignore[no-untyped-def]
+        _ = config, workload_class, requires_inference
+        return ctx
+
+    async def _stuck_worker_invoke(fastmcp_server, workflow_id):  # type: ignore[no-untyped-def]
+        _ = fastmcp_server
+
+        # The shipped composition: CP worker via to_thread, bounded by wait_for.
+        def _worker() -> None:
+            started.set()
+            release.wait()
+
+        try:
+            await asyncio.wait_for(asyncio.to_thread(_worker), timeout=0.05)
+        except TimeoutError:
+            pass  # the worker thread lives on, still holding the only slot
+        from harness_cp.workflow_driver_types import RunResult as _CpRR
+        from harness_cp.workflow_driver_types import RunStatus as _CpRS
+
+        return _CpRR(
+            workflow_id=workflow_id,
+            run_id="run-b147",
+            status=_CpRS.SUCCESS,
+            final_state={},
+        )
+
+    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
+    monkeypatch.setattr(_api, "_default_config", lambda: SimpleNamespace(drain_timeout_seconds=5.0))
+    monkeypatch.setattr(_api, "_invoke_run_workflow_via_in_process_mcp", _stuck_worker_invoke)
+    # `harness_runtime.shutdown.shutdown` is deliberately NOT patched.
+
+    try:
+        result = await asyncio.wait_for(run(_Workflow()), timeout=10.0)
+    finally:
+        release.set()  # never leave the pool thread blocked on a failure path
+
+    assert started.is_set()  # the worker genuinely ran on the default executor
+    assert tracer.flush_calls  # the REAL flush executed despite the saturation
+    assert tracer.shutdown_called is True
+    assert result.status == "completed"
+
+
 # ---------------------------------------------------------------------------
 # AC #6 — Module-level lock + package-root re-export.
 # ---------------------------------------------------------------------------

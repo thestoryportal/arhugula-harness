@@ -10,9 +10,15 @@ discipline mirrors U-RT-43's 9-stage modular split.
 **Flush surfaces.** C-RT-10 step 2 commits 4 surfaces:
 
 1. **`tracer_provider.force_flush(timeout_millis)`** — actual work. OTel SDK's
-   `TracerProvider.force_flush` is synchronous and returns `bool`; we wrap
-   it in `asyncio.to_thread` so the bounded-wait discipline survives (the
-   call can block for up to `timeout_millis` per OTel docs).
+   `TracerProvider.force_flush` is synchronous and returns `bool`; we run
+   it on a bounded DAEMON worker (`_run_blocking_bounded`) so the bounded-wait
+   discipline survives (the call can block for up to `timeout_millis` per
+   OTel docs) — NOT `asyncio.to_thread` (B-147): a timed-out workflow worker
+   spawned by `asyncio.to_thread` from `harness_runtime.api.run` can still
+   occupy the loop's default executor when shutdown begins, so a to_thread
+   submission queues without starting and the deadline expires unobserved
+   (no `ShutdownReport` ever returned; reproduced at PR #1290 merge-gate
+   Lens 1 with a real saturated executor).
 
 2. **Ledger fsync** — actual work. The IS state-ledger writer closes its
    file handle after every append (`with handle.canonical_path.open("a")
@@ -65,6 +71,7 @@ pattern.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import functools
 import os
 import stat
@@ -167,27 +174,31 @@ def _fsync_ledger_sync(ledger_path: Path) -> None:
         os.close(fd)
 
 
-async def _run_fsync_bounded(
-    fn: Callable[[Path], None], path: Path, timeout_seconds: float
-) -> None:
-    """Run a blocking fsync half on a DAEMON thread with a bounded await.
+async def _run_blocking_bounded[T](
+    fn: Callable[[], T], timeout_seconds: float, *, thread_name: str
+) -> T:
+    """Run a blocking callable on a DAEMON thread with a bounded await.
 
-    NOT `asyncio.to_thread` (codex round-48 P1): to_thread uses the loop's
-    default executor, whose worker threads `asyncio.run`'s teardown JOINS —
-    a genuinely stalled fsync would still hang process exit AFTER the
-    timeout report was returned, defeating the bound at the process level.
-    A daemon thread is never joined; the stalled syscall lingers harmlessly
-    until process end. Raises `TimeoutError` on expiry (via
-    `asyncio.timeout` — expiry converts the internal CancelledError at the
-    block boundary); relays the worker's exception on failure.
+    NOT `asyncio.to_thread` (codex round-48 P1; B-147): to_thread uses the
+    loop's default executor, so (a) a saturated executor queues the
+    submission indefinitely BEFORE the callable's own internal timeout can
+    start counting, and (b) the executor's worker threads `asyncio.run`'s
+    teardown JOINS — a genuinely stalled call would still hang process exit
+    AFTER the timeout report was returned, defeating the bound at the
+    process level. A daemon thread starts immediately and is never joined;
+    the stalled call lingers harmlessly until process end. Raises
+    `TimeoutError` on expiry (via `asyncio.timeout` — expiry converts the
+    internal CancelledError at the block boundary); relays the worker's
+    exception on failure; returns the callable's value on success.
     """
     loop = asyncio.get_running_loop()
     done = asyncio.Event()
+    outcome: list[T] = []
     failure: list[BaseException] = []
 
     def _worker() -> None:
         try:
-            fn(path)
+            outcome.append(fn())
         except BaseException as exc:  # relayed to the awaiting side
             failure.append(exc)
         finally:
@@ -199,11 +210,25 @@ async def _run_fsync_bounded(
                 # listening for this completion signal anymore.
                 pass
 
-    threading.Thread(target=_worker, daemon=True, name="harness-flush-fsync").start()
+    threading.Thread(target=_worker, daemon=True, name=thread_name).start()
     async with asyncio.timeout(timeout_seconds):
         await done.wait()
     if failure:
         raise failure[0]
+    return outcome[0]
+
+
+async def _run_fsync_bounded(
+    fn: Callable[[Path], None], path: Path, timeout_seconds: float
+) -> None:
+    """Run a blocking fsync half on a DAEMON thread with a bounded await.
+
+    Thin wrapper over `_run_blocking_bounded` (see its docstring for the
+    daemon-thread rationale); kept as the fsync-shaped call surface.
+    """
+    await _run_blocking_bounded(
+        functools.partial(fn, path), timeout_seconds, thread_name="harness-flush-fsync"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +279,211 @@ class FlushReport(BaseModel):
 # Flush primitive.
 # ---------------------------------------------------------------------------
 
+# In-flight tracer force_flush workers, keyed by `id(ctx)` (codex round-2 P1
+# + round-3 P1/P2, B-147). Each ctx maps to the SET of daemon flush workers
+# that may still be running — a set, not a single slot, because a standalone
+# `flush_observability()` timeout followed by `shutdown()`'s own step-2
+# re-flush yields two concurrent workers, and the later one completing must
+# not erase evidence of the earlier one still exporting. A worker's own
+# finally discards its event (popping the key when the set empties); the
+# tracer surface's failure path discards too, so a `Thread.start()` that
+# never launched a worker cannot leave a stale entry. `shutdown()` step 3b
+# consults this to preserve C-RT-10's flush-before-close order — the
+# provider close is skipped (and reported) while ANY flush worker is still
+# in flight. All access under `_inflight_lock` (registration racing a
+# concurrent worker's empty-set pop could otherwise strand an add on an
+# orphaned set). An eternally-stalled worker leaks one Event alongside its
+# already-lingering daemon thread — same bounded cost.
+_InflightEntry = tuple["weakref.ref[Any] | None", set[threading.Event]]
+_inflight_tracer_flush: dict[int, _InflightEntry] = {}
+_inflight_lock = threading.Lock()
+# Per-ctx "deferred close has begun" gate (codex round-10 P1): once the
+# deferred watcher (or exit backstop) decides to close, NEW flush workers
+# must be refused — a queued flush_observability() call registering after
+# the watcher's registry-empty check would otherwise force_flush a provider
+# whose shutdown is already running (the C-RT-10 flush-before-close race
+# through the registration door). The gate is set ATOMICALLY with the
+# registry-empty check under `_inflight_lock` and stays set forever after a
+# close (a closed provider must not be flushed again); weak identity guards
+# id reuse just like the registry entries.
+_deferred_closing: dict[int, weakref.ref[Any] | None] = {}
+
+
+def _try_weakref(ctx: object) -> weakref.ref[Any] | None:
+    """Weak identity for the registry entry (codex round-4 P2: a bare
+    `id()` key can be reused by a later context after gc, making it adopt an
+    unrelated stalled worker and skip its own tracer close). Duck-typed test
+    contexts (`SimpleNamespace`) are not weakref-able — fall back to
+    id-only identity there."""
+    try:
+        return weakref.ref(ctx)
+    except TypeError:
+        return None
+
+
+def _entry_is_stale(entry: _InflightEntry, ctx: object) -> bool:
+    ref, _events = entry
+    return ref is not None and ref() is not ctx
+
+
+def _register_inflight_tracer_flush(ctx: object, evt: threading.Event) -> bool:
+    """Register a new flush worker; returns False (refusal) when this ctx's
+    deferred close has already begun — the caller must not start a worker
+    against a closing/closed provider (codex round-10 P1)."""
+    ctx_key = id(ctx)
+    with _inflight_lock:
+        if ctx_key in _deferred_closing:
+            gate_ref = _deferred_closing[ctx_key]
+            gate_is_stale = gate_ref is not None and gate_ref() is not ctx
+            if not gate_is_stale:
+                return False
+            _deferred_closing.pop(ctx_key, None)  # dead ctx's gate; id reused
+        entry = _inflight_tracer_flush.get(ctx_key)
+        if entry is None or _entry_is_stale(entry, ctx):
+            events: set[threading.Event] = set()
+            entry = (_try_weakref(ctx), events)
+            _inflight_tracer_flush[ctx_key] = entry
+        entry[1].add(evt)
+        return True
+
+
+def _discard_inflight_tracer_flush(ctx_key: int, evt: threading.Event) -> None:
+    with _inflight_lock:
+        entry = _inflight_tracer_flush.get(ctx_key)
+        if entry is not None:
+            entry[1].discard(evt)
+            if not entry[1]:
+                _inflight_tracer_flush.pop(ctx_key, None)
+
+
+def _spawn_deferred_tracer_close(ctx: object) -> None:
+    """Best-effort deferred close (codex round-5 P1): a step-3b close skipped
+    for an in-flight flush would otherwise NEVER happen — `shutdown()` caches
+    its report and every later call returns the cache — leaving a long-lived
+    process's tracer provider open forever. A daemon watcher (never joined)
+    waits for every currently-registered flush worker to finish, then closes
+    the provider; C-RT-10's flush-before-close order is preserved because
+    the close strictly follows the last worker's completion signal. The
+    close failure is deliberately swallowed: the returned report already
+    tagged `tracer_provider`, and this runs long after that report was
+    delivered — there is no caller left to surface to."""
+    ctx_key = id(ctx)
+    ctx_ref = _try_weakref(ctx)
+    with _inflight_lock:
+        entry = _inflight_tracer_flush.get(ctx_key)
+        events: tuple[threading.Event, ...] = (
+            tuple(entry[1]) if entry is not None and not _entry_is_stale(entry, ctx) else ()
+        )
+    provider = getattr(ctx, "tracer_provider", None)
+    shutdown_fn = getattr(provider, "shutdown", None)
+    if shutdown_fn is None:
+        return
+
+    def _live_workers_or_gate() -> tuple[threading.Event, ...]:
+        """ATOMICALLY (round-10 P1) either return the still-live workers —
+        including any registered AFTER the initial snapshot by a queued
+        `flush_observability()` call — or, when none remain, set the
+        per-ctx closing gate so no NEW worker can register from here on.
+        Empty result == gate is set, closing may proceed."""
+        with _inflight_lock:
+            live_entry = _inflight_tracer_flush.get(ctx_key)
+            live: tuple[threading.Event, ...] = (
+                tuple(live_entry[1]) if live_entry is not None else ()
+            )
+            if not live:
+                _deferred_closing[ctx_key] = ctx_ref
+            return live
+
+    # OTel's own atexit backstop (`shutdown_on_exit=True` at construction,
+    # `lifecycle/tracer_provider.py`) fires at process exit WITHOUT waiting
+    # for daemon threads — it would close the provider concurrently with the
+    # still-live force_flush and recreate exactly the race this deferral
+    # exists to prevent (codex round-6 P1). The runtime owns the close from
+    # here — but never remove the LAST cleanup mechanism before its
+    # replacement is known good (codex round-7 P2): an ORDERED backstop is
+    # registered first (at exit it closes only when no flush worker remains
+    # live — spans are lost either way in that case, but never raced), the
+    # SDK backstop is unregistered second, and the ordered backstop is
+    # removed only after the watcher's close succeeds. A watcher that never
+    # launches (Thread.start failure under thread exhaustion) or whose close
+    # raises leaves the ordered backstop registered for one exit-time retry.
+
+    # One-shot coordination between the watcher and the exit-time backstop
+    # (codex round-8 P2): process exit can begin just as the last flush
+    # event sets, putting both paths inside `shutdown_fn()` concurrently.
+    # The lock serializes them; `closed` flips only on a SUCCESSFUL close,
+    # so a raised close still leaves the backstop retry meaningful.
+    close_lock = threading.Lock()
+    close_state = {"closed": False}
+
+    def _close_once_serialized(*, blocking: bool = True) -> bool:
+        # `blocking=False` is the atexit path (merge-gate lens 1): the
+        # backstop runs on the MAIN thread at interpreter exit, and a bare
+        # blocking acquire behind a daemon watcher wedged inside an
+        # unbounded `shutdown_fn()` (stuck OTLP teardown — the exact B-147
+        # environment) would hang process exit forever, re-creating the
+        # class this fix eliminates. Lock held → a close is already in
+        # progress; the backstop skips without racing.
+        if not close_lock.acquire(blocking=blocking):
+            return False
+        try:
+            if close_state["closed"]:
+                return True
+            try:
+                shutdown_fn()
+            except Exception:
+                return False
+            close_state["closed"] = True
+            return True
+        finally:
+            close_lock.release()
+
+    def _ordered_backstop() -> None:
+        # Exit-time close: only when the ORIGINAL snapshot has completed AND
+        # no worker (including late registrations) remains live; setting the
+        # gate atomically with that check refuses any still-later flush.
+        if all(evt.is_set() for evt in events) and not _live_workers_or_gate():
+            _close_once_serialized(blocking=False)
+
+    def _watcher() -> None:
+        pending = events
+        while True:
+            for evt in pending:
+                evt.wait()
+            # Re-consult the LIVE registry (round-10 P1): a queued
+            # flush_observability() call may have registered a new worker
+            # after our snapshot; wait for those too. Only an atomically
+            # empty registry sets the closing gate and lets us proceed.
+            pending = _live_workers_or_gate()
+            if not pending:
+                break
+        if _close_once_serialized():
+            atexit.unregister(_ordered_backstop)
+        # else: ordered backstop stays registered; retries at exit
+
+    atexit.register(_ordered_backstop)
+    atexit_handler = getattr(provider, "_atexit_handler", None)
+    if atexit_handler is not None:
+        atexit.unregister(atexit_handler)
+    try:
+        threading.Thread(target=_watcher, daemon=True, name="harness-deferred-tracer-close").start()
+    except Exception:
+        # Watcher never launched — the ordered backstop remains the closer.
+        pass
+
+
+def _tracer_flush_in_flight(ctx: object) -> bool:
+    with _inflight_lock:
+        entry = _inflight_tracer_flush.get(id(ctx))
+        if entry is None:
+            return False
+        if _entry_is_stale(entry, ctx):
+            # id reuse after gc — the stalled worker belonged to a dead
+            # context; it must not veto THIS context's close.
+            _inflight_tracer_flush.pop(id(ctx), None)
+            return False
+        return bool(entry[1])
+
 
 async def flush_observability(
     ctx: HarnessContext,
@@ -263,7 +493,8 @@ async def flush_observability(
     """Flush observability state per C-RT-10 step 2.
 
     1. `tracer_provider.force_flush(timeout_millis)` — dispatched to a
-       thread so a slow flush doesn't block the loop.
+       bounded daemon worker so a slow flush doesn't block the loop and a
+       saturated default executor can't queue it past the deadline (B-147).
     2. `os.fsync` on `ctx.ledger_writer.handle.canonical_path` — opens RO,
        fsyncs, closes.
     3. Cost-attribution chain — no-op (stateless-by-design; Class 3 drift).
@@ -314,10 +545,101 @@ async def flush_observability(
             Callable[[int], bool],
             ctx.tracer_provider.force_flush,  # type: ignore[attr-defined]
         )
-        result = await asyncio.to_thread(force_flush, timeout_millis)
+        # Bounded daemon worker, NOT `asyncio.to_thread` (B-147): a
+        # timed-out workflow worker (spawned by `asyncio.to_thread` from
+        # `harness_runtime.api.run` — CPython cannot kill its thread) can
+        # still occupy the loop default executor here, so a to_thread
+        # submission queues without starting; OTel's own `timeout_millis`
+        # begins mattering only AFTER the call starts. The outer
+        # `asyncio.timeout` bounds submission + execution by the remaining
+        # shared budget; on expiry the surface reports like the fsync
+        # surfaces below ('tracer' tag + timed_out) and the daemon worker
+        # lingers harmlessly (never joined at teardown).
+        #
+        # The lingering worker is TRACKED per-ctx (codex round-2 P1 +
+        # round-3 P1/P2): a timed-out force_flush may still be exporting on
+        # its daemon thread when `shutdown()` reaches step 3b, and closing
+        # the provider then would overlap teardown with an in-flight export
+        # — violating C-RT-10's flush-before-close order. Registration is a
+        # per-ctx SET (concurrent workers from a standalone flush timeout +
+        # shutdown's re-flush each keep their own entry); the worker's own
+        # finally discards its entry, and the non-timeout failure path below
+        # discards too so a `Thread.start()` that never launched a worker
+        # cannot strand a stale entry. Step 3b consults the registry and
+        # skips the close while any flush worker is in flight.
+        # A prior force_flush worker for THIS ctx may still be blocked
+        # (codex round-4 P2): spawning another permanent daemon thread per
+        # call could exhaust native threads under retry loops, and a
+        # provider whose flush is wedged will wedge the new worker too.
+        # Spend the CURRENT budget waiting for the prior worker(s) to finish
+        # (codex round-8 P2: a later shutdown with a fresh budget must not
+        # instantly cache a false failure while the worker completes within
+        # that budget) — thread-free poll; the registry self-cleans on
+        # worker completion. Only on budget exhaustion is this surface
+        # reported timed out without a duplicate worker; step 3b's
+        # flush-before-close skip still holds via the surviving
+        # registration.
+        waited_for_prior = False
+        while _tracer_flush_in_flight(ctx):
+            waited_for_prior = True
+            if time.monotonic() >= deadline:
+                raise TimeoutError("prior tracer force_flush still in flight")
+            await asyncio.sleep(0.01)
+        # Round-9 P2: a prior worker clearing AT the deadline must not spawn
+        # a fresh worker that then runs on the ORIGINAL full internal
+        # timeout with a ~zero outer bound (it would linger and defer the
+        # provider close for no observable benefit). Recheck the remaining
+        # budget and shrink the internal bound to it. The no-wait path keeps
+        # the full `timeout_millis` (first surface — the full value IS the
+        # remaining budget there, and callers observe the exact value).
+        surface_timeout_millis = timeout_millis
+        if waited_for_prior:
+            remaining_after_wait = max(0.0, deadline - time.monotonic())
+            if remaining_after_wait <= 0.0:
+                raise TimeoutError("prior tracer force_flush consumed the budget")
+            surface_timeout_millis = min(timeout_millis, max(1, int(remaining_after_wait * 1000)))
+
+        flush_done = threading.Event()
+        ctx_key = id(ctx)
+        if not _register_inflight_tracer_flush(ctx, flush_done):
+            # This ctx's deferred close has begun (round-10 P1): starting a
+            # worker now would force_flush a provider whose shutdown is
+            # already running/complete.
+            raise RuntimeError("tracer provider deferred close in progress")
+
+        def _tracked_force_flush() -> bool:
+            try:
+                return force_flush(surface_timeout_millis)
+            finally:
+                flush_done.set()
+                _discard_inflight_tracer_flush(ctx_key, flush_done)
+
+        try:
+            result = await _run_blocking_bounded(
+                _tracked_force_flush,
+                max(0.0, deadline - time.monotonic()),
+                thread_name="harness-flush-tracer",
+            )
+        except (TimeoutError, asyncio.CancelledError):
+            # Worker genuinely in flight — `Thread.start()` runs
+            # synchronously before the first await point, so by the time a
+            # timeout OR a caller cancellation lands here the worker exists
+            # and may still be running (codex round-4 P1). Registration
+            # stays; the worker's own finally clears it whenever it
+            # completes.
+            raise
+        except BaseException:
+            # The worker either never launched (`Thread.start()` failure —
+            # nothing would ever clear the entry) or already finished by
+            # raising (its finally cleared it; discard is then a no-op).
+            _discard_inflight_tracer_flush(ctx_key, flush_done)
+            raise
         tracer_flushed = bool(result)
         if not tracer_flushed:
             timed_out = True
+    except TimeoutError:
+        failures.append("tracer")
+        timed_out = True
     except Exception:
         failures.append("tracer")
 
@@ -703,7 +1025,24 @@ async def shutdown(
     # remaining budget" invariant.
     remaining = max(0.0, deadline - time.monotonic())
     try:
-        await asyncio.wait_for(_close_tracer_provider(ctx), timeout=remaining)
+        if _tracer_flush_in_flight(ctx):
+            # C-RT-10 flush-before-close (codex round-2 P1): at least one
+            # timed-out force_flush worker is still exporting on its daemon
+            # thread (a completed worker removes itself from the registry —
+            # round-3 P1: a later re-flush completing must not erase the
+            # evidence of an earlier worker still in flight). Closing the
+            # provider now — or even submitting the close, which would
+            # execute later regardless of the wait_for below — would overlap
+            # teardown with the in-flight export (span loss / thread-unsafe
+            # exporter teardown). Skip the close entirely and report it; a
+            # deferred daemon watcher closes the provider once the lingering
+            # flush completes (round-5 P1 — the cached report means no later
+            # shutdown() call would ever retry this close).
+            failures.append("tracer_provider")
+            timed_out = True
+            _spawn_deferred_tracer_close(ctx)
+        else:
+            await asyncio.wait_for(_close_tracer_provider(ctx), timeout=remaining)
     except TimeoutError:
         failures.append("tracer_provider")
         timed_out = True

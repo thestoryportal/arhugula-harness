@@ -677,6 +677,139 @@ async def test_e2e_run_surfaces_drain_timeout_when_step_exceeds_budget(
     assert result.failure_cause.runtime_fail_class == "RT-FAIL-DRAIN-TIMEOUT"
 
 
+@pytest.mark.asyncio
+async def test_e2e_run_returns_bounded_report_with_saturated_executor(
+    tmp_path: Path,
+    _patched_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-147 shipped-call-chain witness (register close-out step 1) — the
+    PRODUCTION venue with no upstream stage stubbed: real bootstrap (the
+    fixture fakes only provider/tracer/collector materialization, as every
+    smoke test here does), the real FastMCP `run_workflow` handler, its real
+    `asyncio.to_thread(execute_workflow, ...)` dispatch, and the REAL
+    `shutdown()`.
+
+    The default executor is pinned to ONE worker, so the drain-timed-out
+    workflow worker (uncancellable per spec §11 — it sits blocked inside
+    `dispatch`) still holds the only slot when `api.run()` enters shutdown.
+    That saturation starves EVERY subsequent to_thread hop: step 1b's drain
+    submission queues for its whole `remaining` bound first, so the flush
+    reaches its surfaces with a ~zero budget. The B-147 guarantee under
+    test is exactly this venue's contract: `run()` still comes back with a
+    DRAINED result inside the outer bound, every starved shutdown surface
+    individually tagged — instead of the pre-fix behavior where the flush's
+    own unbounded `asyncio.to_thread(force_flush, ...)` submission queued
+    behind the stuck worker forever and the caller never received a report
+    (PR #1290 merge-gate probe: OUTER_TIMEOUT_BEFORE_REPORT). Mutation
+    proof: reverting the tracer surface to `asyncio.to_thread` makes this
+    test fail (the outer wait_for expires).
+    """
+    import asyncio
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from harness_core.identity import StepID
+    from harness_core.persona_tier import PersonaTier
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+    from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+    from harness_runtime.api import run as _run
+
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    release = threading.Event()
+    started = threading.Event()
+
+    config = _config(tmp_path).model_copy(update={"drain_timeout_seconds": 0.2})
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    # The REAL shutdown, on a tighter budget: with the executor saturated the
+    # step-1b drain submission queues for its whole `remaining` bound before
+    # the flush even starts, so the default 30s budget would push this test's
+    # wall time past 30s. The budget VALUE is not what B-147 pins — the
+    # bounded-return property is — so shrink it while keeping every real
+    # shutdown step in play (api.py late-imports `shutdown`, so patching the
+    # module attribute reroutes its call to this pass-through).
+    _real_shutdown = shutdown
+
+    async def _tight_budget_shutdown(ctx: Any, *, timeout: float = 30.0) -> Any:
+        _ = timeout
+        return await _real_shutdown(ctx, timeout=2.0)
+
+    # `harness_runtime.shutdown` the attribute is the re-exported FUNCTION
+    # (it shadows the submodule at the package root); reach the module via
+    # sys.modules to patch its `shutdown` symbol.
+    import sys
+
+    monkeypatch.setattr(sys.modules["harness_runtime.shutdown"], "shutdown", _tight_budget_shutdown)
+
+    class _StuckDispatcher:
+        def dispatch(self, binding: Any, step: Any, *, step_context: Any = None) -> dict[str, Any]:
+            _ = binding, step
+            started.set()
+            release.wait()  # holds the only executor slot through shutdown
+            return {}
+
+    class _Workflow:
+        @property
+        def workflow_id(self) -> str:
+            return "wf-b147-smoke"
+
+        @property
+        def workload_class(self) -> WorkloadClass:
+            return _WORKLOAD
+
+        @property
+        def manifest_entry(self) -> Any:
+            return WorkflowManifestEntry(
+                workflow_id="wf-b147-smoke",
+                workload_class=_WORKLOAD,
+                persona_tier=PersonaTier.TEAM_BINDING,
+                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+                layer_budgets=(),
+                fallback_chain=_CHAIN,
+                hitl_placements=(),
+                per_step_overrides={},
+            )
+
+        @property
+        def steps(self) -> Any:
+            return (
+                WorkflowStep(
+                    step_id=StepID("step-stuck"),
+                    step_kind=StepKind.INFERENCE_STEP,
+                    step_payload={},
+                ),
+            )
+
+        @property
+        def step_dispatcher(self) -> Any:
+            return _StuckDispatcher()
+
+        @property
+        def step_dispatchers(self) -> Any:
+            return _test_step_dispatchers(_StuckDispatcher())
+
+        @property
+        def default_model_binding(self) -> Any:
+            return ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+
+    try:
+        # Outer bound is generous headroom over shutdown()'s own 5s budget —
+        # it discriminates hang-vs-bounded, never scheduler noise (B-143).
+        result = await asyncio.wait_for(_run(_Workflow(), config=config), timeout=20.0)
+    finally:
+        release.set()  # never leave the pool thread blocked on a failure path
+
+    assert started.is_set()  # the real worker genuinely held the only slot
+    assert result.status == "drained"
+    assert result.failure_cause is not None
+    assert result.failure_cause.runtime_fail_class == "RT-FAIL-DRAIN-TIMEOUT"
+
+
 # ---------------------------------------------------------------------------
 # CP spec v1.5 §25.9 — step body owns cost-attribution chain invocation
 # (Q1e propagated pattern; Q3c mock-rate bypass; un-strikes U-RT-49 cost AC)
