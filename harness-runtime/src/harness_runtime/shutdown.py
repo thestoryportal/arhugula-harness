@@ -293,27 +293,58 @@ class FlushReport(BaseModel):
 # concurrent worker's empty-set pop could otherwise strand an add on an
 # orphaned set). An eternally-stalled worker leaks one Event alongside its
 # already-lingering daemon thread — same bounded cost.
-_inflight_tracer_flush: dict[int, set[threading.Event]] = {}
+_InflightEntry = tuple["weakref.ref[Any] | None", set[threading.Event]]
+_inflight_tracer_flush: dict[int, _InflightEntry] = {}
 _inflight_lock = threading.Lock()
 
 
-def _register_inflight_tracer_flush(ctx_key: int, evt: threading.Event) -> None:
+def _try_weakref(ctx: object) -> weakref.ref[Any] | None:
+    """Weak identity for the registry entry (codex round-4 P2: a bare
+    `id()` key can be reused by a later context after gc, making it adopt an
+    unrelated stalled worker and skip its own tracer close). Duck-typed test
+    contexts (`SimpleNamespace`) are not weakref-able — fall back to
+    id-only identity there."""
+    try:
+        return weakref.ref(ctx)
+    except TypeError:
+        return None
+
+
+def _entry_is_stale(entry: _InflightEntry, ctx: object) -> bool:
+    ref, _events = entry
+    return ref is not None and ref() is not ctx
+
+
+def _register_inflight_tracer_flush(ctx: object, evt: threading.Event) -> None:
+    ctx_key = id(ctx)
     with _inflight_lock:
-        _inflight_tracer_flush.setdefault(ctx_key, set()).add(evt)
+        entry = _inflight_tracer_flush.get(ctx_key)
+        if entry is None or _entry_is_stale(entry, ctx):
+            entry = (_try_weakref(ctx), set())
+            _inflight_tracer_flush[ctx_key] = entry
+        entry[1].add(evt)
 
 
 def _discard_inflight_tracer_flush(ctx_key: int, evt: threading.Event) -> None:
     with _inflight_lock:
-        events = _inflight_tracer_flush.get(ctx_key)
-        if events is not None:
-            events.discard(evt)
-            if not events:
+        entry = _inflight_tracer_flush.get(ctx_key)
+        if entry is not None:
+            entry[1].discard(evt)
+            if not entry[1]:
                 _inflight_tracer_flush.pop(ctx_key, None)
 
 
-def _tracer_flush_in_flight(ctx_key: int) -> bool:
+def _tracer_flush_in_flight(ctx: object) -> bool:
     with _inflight_lock:
-        return bool(_inflight_tracer_flush.get(ctx_key))
+        entry = _inflight_tracer_flush.get(id(ctx))
+        if entry is None:
+            return False
+        if _entry_is_stale(entry, ctx):
+            # id reuse after gc — the stalled worker belonged to a dead
+            # context; it must not veto THIS context's close.
+            _inflight_tracer_flush.pop(id(ctx), None)
+            return False
+        return bool(entry[1])
 
 
 async def flush_observability(
@@ -398,9 +429,19 @@ async def flush_observability(
         # discards too so a `Thread.start()` that never launched a worker
         # cannot strand a stale entry. Step 3b consults the registry and
         # skips the close while any flush worker is in flight.
+        if _tracer_flush_in_flight(ctx):
+            # A prior force_flush worker for THIS ctx is still blocked
+            # (codex round-4 P2): spawning another permanent daemon thread
+            # per call could exhaust native threads under retry loops, and
+            # a provider whose flush is wedged will wedge the new worker
+            # too. Report this surface as timed out without a duplicate
+            # worker; step 3b's flush-before-close skip still holds via the
+            # existing registration.
+            raise TimeoutError("prior tracer force_flush still in flight")
+
         flush_done = threading.Event()
         ctx_key = id(ctx)
-        _register_inflight_tracer_flush(ctx_key, flush_done)
+        _register_inflight_tracer_flush(ctx, flush_done)
 
         def _tracked_force_flush() -> bool:
             try:
@@ -415,13 +456,17 @@ async def flush_observability(
                 max(0.0, deadline - time.monotonic()),
                 thread_name="harness-flush-tracer",
             )
-        except TimeoutError:
-            # Worker genuinely in flight — registration stays (the worker's
-            # finally clears it whenever it completes).
+        except (TimeoutError, asyncio.CancelledError):
+            # Worker genuinely in flight — `Thread.start()` runs
+            # synchronously before the first await point, so by the time a
+            # timeout OR a caller cancellation lands here the worker exists
+            # and may still be running (codex round-4 P1). Registration
+            # stays; the worker's own finally clears it whenever it
+            # completes.
             raise
         except BaseException:
             # The worker either never launched (`Thread.start()` failure —
-            # nothing will ever clear the entry) or already finished by
+            # nothing would ever clear the entry) or already finished by
             # raising (its finally cleared it; discard is then a no-op).
             _discard_inflight_tracer_flush(ctx_key, flush_done)
             raise
@@ -816,7 +861,7 @@ async def shutdown(
     # remaining budget" invariant.
     remaining = max(0.0, deadline - time.monotonic())
     try:
-        if _tracer_flush_in_flight(id(ctx)):
+        if _tracer_flush_in_flight(ctx):
             # C-RT-10 flush-before-close (codex round-2 P1): at least one
             # timed-out force_flush worker is still exporting on its daemon
             # thread (a completed worker removes itself from the registry —

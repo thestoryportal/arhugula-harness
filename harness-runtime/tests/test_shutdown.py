@@ -1246,7 +1246,7 @@ async def test_shutdown_skips_tracer_close_while_flush_worker_lingers(
         ctx_arg: Any, *, timeout_millis: int = 30_000
     ) -> FlushReport:
         _ = timeout_millis
-        shutdown_mod._register_inflight_tracer_flush(id(ctx_arg), lingering)  # type: ignore[attr-defined]
+        shutdown_mod._register_inflight_tracer_flush(ctx_arg, lingering)  # type: ignore[attr-defined]
         return FlushReport(
             tracer_flushed=False,
             ledger_fsynced=True,
@@ -1271,11 +1271,13 @@ async def test_shutdown_skips_tracer_close_while_flush_worker_lingers(
 async def test_shutdown_skips_tracer_close_when_earlier_flush_worker_still_lingers(
     tmp_path: Path,
 ) -> None:
-    """B-147 codex round-3 P1 — the registry tracks EVERY in-flight worker,
-    not a single slot: a standalone `flush_observability()` timeout leaves
-    worker A exporting; `shutdown()`'s own step-2 re-flush then runs worker
-    B to completion. B's completion must not erase the evidence of A, so
-    step 3b still skips the provider close."""
+    """B-147 codex round-3 P1 + round-4 P2 — a standalone
+    `flush_observability()` timeout leaves worker A exporting; `shutdown()`'s
+    own step-2 re-flush must neither erase the evidence of A NOR spawn a
+    duplicate worker against the same wedged provider (each such worker is a
+    permanent daemon thread). The re-flush reports its tracer surface timed
+    out without a second `force_flush` call, and step 3b still skips the
+    provider close."""
     first_call_release = threading.Event()
     calls: list[int] = []
 
@@ -1292,15 +1294,70 @@ async def test_shutdown_skips_tracer_close_when_earlier_flush_worker_still_linge
         # Standalone flush: worker A times out and lingers, registered.
         first = await asyncio.wait_for(flush_observability(ctx, timeout_millis=100), timeout=5.0)
         assert "tracer" in first.failures
-        # Full shutdown: its step-2 re-flush (worker B) completes promptly,
-        # discarding only ITS OWN registry entry — A's must survive.
+        # Full shutdown: its step-2 re-flush detects A still in flight and
+        # reports without spawning worker B.
         report = await asyncio.wait_for(shutdown(ctx, timeout=5.0), timeout=10.0)
     finally:
         first_call_release.set()
 
-    assert len(calls) == 2  # A (stalled) + B (completed)
+    assert len(calls) == 1  # A only — no duplicate worker was spawned
+    assert "flush:tracer" in report.failures
     assert "tracer_provider" in report.failures
     assert tracer.shutdown_called is False  # close never overlapped worker A
+
+
+@pytest.mark.asyncio
+async def test_cancelled_flush_keeps_registration_for_flush_before_close(
+    tmp_path: Path,
+) -> None:
+    """B-147 codex round-4 P1 — a caller cancelling `flush_observability()`
+    while the worker is mid-export must NOT unregister the worker: it is
+    still running (`Thread.start()` happened synchronously before the first
+    await point), and a later `shutdown()` of the same ctx must still skip
+    the provider close."""
+    release = threading.Event()
+
+    class _StallingTracer(_FakeTracerWithShutdown):
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            self.calls.append(timeout_millis)
+            release.wait()
+            return True
+
+    tracer = _StallingTracer()
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+    flush_task = asyncio.create_task(flush_observability(ctx, timeout_millis=30_000))
+    try:
+        while not tracer.calls:  # worker is provably mid-export
+            await asyncio.sleep(0.01)
+        flush_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await flush_task
+        report = await asyncio.wait_for(shutdown(ctx, timeout=2.0), timeout=10.0)
+    finally:
+        release.set()
+
+    assert "tracer_provider" in report.failures
+    assert tracer.shutdown_called is False  # close never overlapped the worker
+
+
+def test_stale_inflight_entry_from_dead_context_does_not_veto_close() -> None:
+    """B-147 codex round-4 P2 — weak ctx identity: after a context dies with
+    a stalled worker still registered, a NEW context whose `id()` collides
+    must not adopt the dead context's worker and skip its own close. The id
+    collision is simulated by transplanting the entry onto the new key."""
+
+    class _C:
+        pass
+
+    dead, alive = _C(), _C()
+    evt = threading.Event()  # never set — the dead ctx's stalled worker
+    shutdown_mod._register_inflight_tracer_flush(dead, evt)  # type: ignore[attr-defined]
+    entry = shutdown_mod._inflight_tracer_flush.pop(id(dead))  # type: ignore[attr-defined]
+    shutdown_mod._inflight_tracer_flush[id(alive)] = entry  # type: ignore[attr-defined]
+
+    assert shutdown_mod._tracer_flush_in_flight(alive) is False  # type: ignore[attr-defined]
+    # The stale entry is reaped, not just ignored.
+    assert id(alive) not in shutdown_mod._inflight_tracer_flush  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
