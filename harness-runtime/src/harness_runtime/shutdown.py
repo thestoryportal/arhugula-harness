@@ -10,9 +10,15 @@ discipline mirrors U-RT-43's 9-stage modular split.
 **Flush surfaces.** C-RT-10 step 2 commits 4 surfaces:
 
 1. **`tracer_provider.force_flush(timeout_millis)`** — actual work. OTel SDK's
-   `TracerProvider.force_flush` is synchronous and returns `bool`; we wrap
-   it in `asyncio.to_thread` so the bounded-wait discipline survives (the
-   call can block for up to `timeout_millis` per OTel docs).
+   `TracerProvider.force_flush` is synchronous and returns `bool`; we run
+   it on a bounded DAEMON worker (`_run_blocking_bounded`) so the bounded-wait
+   discipline survives (the call can block for up to `timeout_millis` per
+   OTel docs) — NOT `asyncio.to_thread` (B-147): a timed-out workflow worker
+   spawned by `asyncio.to_thread` from `harness_runtime.api.run` can still
+   occupy the loop's default executor when shutdown begins, so a to_thread
+   submission queues without starting and the deadline expires unobserved
+   (no `ShutdownReport` ever returned; reproduced at PR #1290 merge-gate
+   Lens 1 with a real saturated executor).
 
 2. **Ledger fsync** — actual work. The IS state-ledger writer closes its
    file handle after every append (`with handle.canonical_path.open("a")
@@ -167,27 +173,31 @@ def _fsync_ledger_sync(ledger_path: Path) -> None:
         os.close(fd)
 
 
-async def _run_fsync_bounded(
-    fn: Callable[[Path], None], path: Path, timeout_seconds: float
-) -> None:
-    """Run a blocking fsync half on a DAEMON thread with a bounded await.
+async def _run_blocking_bounded[T](
+    fn: Callable[[], T], timeout_seconds: float, *, thread_name: str
+) -> T:
+    """Run a blocking callable on a DAEMON thread with a bounded await.
 
-    NOT `asyncio.to_thread` (codex round-48 P1): to_thread uses the loop's
-    default executor, whose worker threads `asyncio.run`'s teardown JOINS —
-    a genuinely stalled fsync would still hang process exit AFTER the
-    timeout report was returned, defeating the bound at the process level.
-    A daemon thread is never joined; the stalled syscall lingers harmlessly
-    until process end. Raises `TimeoutError` on expiry (via
-    `asyncio.timeout` — expiry converts the internal CancelledError at the
-    block boundary); relays the worker's exception on failure.
+    NOT `asyncio.to_thread` (codex round-48 P1; B-147): to_thread uses the
+    loop's default executor, so (a) a saturated executor queues the
+    submission indefinitely BEFORE the callable's own internal timeout can
+    start counting, and (b) the executor's worker threads `asyncio.run`'s
+    teardown JOINS — a genuinely stalled call would still hang process exit
+    AFTER the timeout report was returned, defeating the bound at the
+    process level. A daemon thread starts immediately and is never joined;
+    the stalled call lingers harmlessly until process end. Raises
+    `TimeoutError` on expiry (via `asyncio.timeout` — expiry converts the
+    internal CancelledError at the block boundary); relays the worker's
+    exception on failure; returns the callable's value on success.
     """
     loop = asyncio.get_running_loop()
     done = asyncio.Event()
+    outcome: list[T] = []
     failure: list[BaseException] = []
 
     def _worker() -> None:
         try:
-            fn(path)
+            outcome.append(fn())
         except BaseException as exc:  # relayed to the awaiting side
             failure.append(exc)
         finally:
@@ -199,11 +209,25 @@ async def _run_fsync_bounded(
                 # listening for this completion signal anymore.
                 pass
 
-    threading.Thread(target=_worker, daemon=True, name="harness-flush-fsync").start()
+    threading.Thread(target=_worker, daemon=True, name=thread_name).start()
     async with asyncio.timeout(timeout_seconds):
         await done.wait()
     if failure:
         raise failure[0]
+    return outcome[0]
+
+
+async def _run_fsync_bounded(
+    fn: Callable[[Path], None], path: Path, timeout_seconds: float
+) -> None:
+    """Run a blocking fsync half on a DAEMON thread with a bounded await.
+
+    Thin wrapper over `_run_blocking_bounded` (see its docstring for the
+    daemon-thread rationale); kept as the fsync-shaped call surface.
+    """
+    await _run_blocking_bounded(
+        functools.partial(fn, path), timeout_seconds, thread_name="harness-flush-fsync"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +287,8 @@ async def flush_observability(
     """Flush observability state per C-RT-10 step 2.
 
     1. `tracer_provider.force_flush(timeout_millis)` — dispatched to a
-       thread so a slow flush doesn't block the loop.
+       bounded daemon worker so a slow flush doesn't block the loop and a
+       saturated default executor can't queue it past the deadline (B-147).
     2. `os.fsync` on `ctx.ledger_writer.handle.canonical_path` — opens RO,
        fsyncs, closes.
     3. Cost-attribution chain — no-op (stateless-by-design; Class 3 drift).
@@ -314,10 +339,27 @@ async def flush_observability(
             Callable[[int], bool],
             ctx.tracer_provider.force_flush,  # type: ignore[attr-defined]
         )
-        result = await asyncio.to_thread(force_flush, timeout_millis)
+        # Bounded daemon worker, NOT `asyncio.to_thread` (B-147): a
+        # timed-out workflow worker (spawned by `asyncio.to_thread` from
+        # `harness_runtime.api.run` — CPython cannot kill its thread) can
+        # still occupy the loop default executor here, so a to_thread
+        # submission queues without starting; OTel's own `timeout_millis`
+        # begins mattering only AFTER the call starts. The outer
+        # `asyncio.timeout` bounds submission + execution by the remaining
+        # shared budget; on expiry the surface reports like the fsync
+        # surfaces below ('tracer' tag + timed_out) and the daemon worker
+        # lingers harmlessly (never joined at teardown).
+        result = await _run_blocking_bounded(
+            functools.partial(force_flush, timeout_millis),
+            max(0.0, deadline - time.monotonic()),
+            thread_name="harness-flush-tracer",
+        )
         tracer_flushed = bool(result)
         if not tracer_flushed:
             timed_out = True
+    except TimeoutError:
+        failures.append("tracer")
+        timed_out = True
     except Exception:
         failures.append("tracer")
 

@@ -260,32 +260,33 @@ async def test_flush_surfaces_share_one_timeout_budget(
 @pytest.mark.asyncio
 async def test_flush_observability_runs_tracer_in_thread(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Sync `force_flush` must be dispatched off the event loop."""
-    to_thread_calls: list[tuple[object, tuple[object, ...]]] = []
+    """Sync `force_flush` must be dispatched off the event loop — on a bounded
+    DAEMON worker, not `asyncio.to_thread` (B-147: a saturated default
+    executor must not be able to queue the submission past the deadline, and
+    teardown must not join a stalled flush)."""
 
-    async def _spy_to_thread(fn: object, *args: object) -> object:
-        to_thread_calls.append((fn, args))
-        return fn(*args)  # type: ignore[operator]
+    class _ThreadRecordingTracer(_FakeTracerProvider):
+        def __init__(self) -> None:
+            super().__init__(returns=True)
+            self.threads: list[threading.Thread] = []
 
-    monkeypatch.setattr(asyncio, "to_thread", _spy_to_thread)
-    tracer = _FakeTracerProvider(returns=True)
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            self.threads.append(threading.current_thread())
+            return super().force_flush(timeout_millis)
+
+    tracer = _ThreadRecordingTracer()
     ctx = _ctx_with(tmp_path, tracer=tracer)
+    main_thread = threading.current_thread()
 
     await flush_observability(ctx, timeout_millis=1_000)
 
-    # The ledger fsync ALSO dispatches via to_thread (codex round-47 P2);
-    # assert the tracer call specifically rather than an exact count.
-    tracer_calls = [
-        (fn, args)
-        for fn, args in to_thread_calls
-        # Bound-method identity isn't stable across attribute accesses;
-        # compare by __func__ (the underlying function) instead.
-        if getattr(fn, "__func__", None) is _FakeTracerProvider.force_flush
-    ]
-    assert len(tracer_calls) == 1
-    assert tracer_calls[0][1] == (1_000,)
+    assert tracer.calls == [1_000]
+    assert len(tracer.threads) == 1
+    worker = tracer.threads[0]
+    assert worker is not main_thread
+    assert worker.daemon is True
+    assert worker.name == "harness-flush-tracer"
 
 
 @pytest.mark.asyncio
@@ -387,6 +388,84 @@ async def test_force_flush_returning_false_surfaces_timed_out(tmp_path: Path) ->
     assert report.tracer_flushed is False
     assert report.timed_out is True
     assert report.failures == ()  # not a failure — it's a timeout result
+
+
+@pytest.mark.asyncio
+async def test_force_flush_completes_despite_saturated_default_executor(
+    tmp_path: Path,
+) -> None:
+    """B-147 real-executor witness: the tracer flush must not route through
+    the loop's default executor — a timed-out `api.run` workflow worker
+    (dispatched via `asyncio.to_thread`, and unkillable per
+    `harness_cp/workflow_driver.py:7311`) can still occupy it when shutdown
+    begins, and a queued submission would let the deadline expire unobserved.
+    The saturation here is REAL (1-worker default executor, genuinely
+    occupied by a running job) — no upstream stage is stubbed out of the
+    venue. Wrapper-removal mutation: reverting the tracer surface to
+    `asyncio.to_thread` makes this test fail (the outer wait_for expires
+    while force_flush sits queued behind the stuck worker).
+    """
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    release = threading.Event()
+    started = threading.Event()
+
+    def _occupier() -> None:
+        started.set()
+        release.wait()
+
+    occupier = loop.run_in_executor(None, _occupier)
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+    try:
+        assert started.wait(2.0)  # the worker genuinely holds the only slot
+        report = await asyncio.wait_for(flush_observability(ctx, timeout_millis=1_000), timeout=5.0)
+    finally:
+        release.set()
+    await occupier
+
+    assert tracer.calls == [1_000]  # force_flush ran despite the saturation
+    assert report.tracer_flushed is True
+    assert report.timed_out is False
+    assert "tracer" not in report.failures
+
+
+@pytest.mark.asyncio
+async def test_force_flush_exceeding_budget_reports_tracer_timeout(
+    tmp_path: Path,
+) -> None:
+    """B-147 close-out step 3 (failure-tag decision): when submission plus
+    execution exhausts the flush budget, the tracer surface reports exactly
+    like the fsync surfaces below it — `'tracer'` failure tag AND
+    `timed_out=True` — and per-surface isolation holds under the ONE shared
+    budget (codex round-48 P2): the later surfaces are still ATTEMPTED and
+    individually tagged on their own ~zero remaining budget rather than
+    hung or silently skipped. The stalled daemon worker lingers harmlessly
+    (never joined)."""
+    release = threading.Event()
+
+    class _BlockingTracer(_FakeTracerProvider):
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            self.calls.append(timeout_millis)
+            release.wait()
+            return True
+
+    tracer = _BlockingTracer(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+    try:
+        report = await asyncio.wait_for(flush_observability(ctx, timeout_millis=200), timeout=5.0)
+    finally:
+        release.set()
+
+    assert tracer.calls == [200]  # the call started, then outran its budget
+    assert report.tracer_flushed is False
+    assert report.timed_out is True
+    assert "tracer" in report.failures
+    # Shared-budget semantics: the tracer burned the whole 200ms, so the
+    # ledger surface was attempted on ~zero remaining budget and reports
+    # its own bounded timeout instead of hanging or being skipped.
+    assert report.ledger_fsynced is False
+    assert "ledger" in report.failures
 
 
 # ---------------------------------------------------------------------------
@@ -1122,9 +1201,22 @@ async def test_shutdown_invokes_tracer_shutdown_via_to_thread(
 
     await shutdown(ctx)
 
-    # to_thread was used for both flush (force_flush) AND shutdown.
+    # Step-3b `provider.shutdown()` still routes through to_thread (bounded
+    # by an outer wait_for); the flush's force_flush no longer does (B-147 —
+    # it runs on a bounded daemon worker instead).
     assert tracer.shutdown_called is True
-    assert len(to_thread_targets) >= 2  # force_flush + shutdown
+    shutdown_targets = [
+        fn
+        for fn in to_thread_targets
+        if getattr(fn, "__func__", None) is _FakeTracerWithShutdown.shutdown
+    ]
+    assert len(shutdown_targets) >= 1
+    force_flush_targets = [
+        fn
+        for fn in to_thread_targets
+        if getattr(fn, "__func__", None) is _FakeTracerProvider.force_flush
+    ]
+    assert force_flush_targets == []
 
 
 @pytest.mark.asyncio
