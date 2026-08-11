@@ -171,7 +171,11 @@ NAMESPACE_MAP: tuple[NamespaceMapRow, ...] = (
     ),
     NamespaceMapRow(
         namespace_prefix="engine.",
-        attribute_count=3,
+        # 4 per the cited authority itself: C-CP-09 §9.1 declares four
+        # attributes since CP v1.3 (+engine.replay_disposition); this row's 3
+        # was stale against its own source_contract_ref. Aligned in the
+        # B-144 CP v1.117 re-table cascade (PR #1311, codex round-4 catch).
+        attribute_count=4,
         source_axis=NamespaceSourceAxis.CP_SOURCE,
         source_contract_ref="C-CP-09 §9.1",
     ),

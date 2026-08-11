@@ -126,6 +126,11 @@ U-CP-54's inherited acceptance figures to the same values. The Runtime bootstrap
 inversion check (`verify_harness_breaker_namespace_inversion`) compares the breaker
 row only (9 == 9) and is unaffected. No other consumer of the sum exists in any
 `harness-*/src` tree (swept 2026-08-11, re-swept after the round-2 invariant catch).
+OD-side per-namespace ingestion: `harness-od/src/harness_od/namespace_map.py`'s
+`engine.` row (which cites C-CP-09 §9.1 as its own source authority and had been
+stale against it since CP v1.3) moves 3 → 4 with its test in the same cascade
+(out-of-family round-4 catch); no OD design-substrate artifact declares an engine
+count, so no OD spec delta is owed.
 
 ### §0.5 Explicitly OUT OF SCOPE — the `hitl.*` column-semantics question (→ `B-153`)
 
