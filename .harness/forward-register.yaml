@@ -8123,4 +8123,17 @@ items:
     pinned SDK version before building).'
   council: No. Bounded sequencing repairs inside one axis with a named owner; the only judgement is close_out
     step (1), which grounding against the C-RT-10 text answers.
+  grounded_2026_08_11: 'BOTH FALSIFIERS CHECKED AT HEAD — NEITHER FIRES; the row stands as filed. (1)
+    C-RT-10 read in full (design-substrate/Spec_Harness_Runtime_v1.md §10, :3718-3733): the sequence is
+    unconditional — step 2 flush, then step 3 closes in fixed reverse order with "Stop collector daemon
+    (structured-stop per C-RT-07)" BEFORE "await tracer_provider.shutdown()", with no conditionality of the
+    collector stop on flush completion anywhere in the section. Any in-flight-conditional deferral of step
+    3a is therefore a spec-behavior change: the collector half is CONFIRMED spec-touching and routes as a
+    spec leg per X-AL-3 before building. (2) Pinned OTel SDK 1.41.1 read at the installed source
+    (opentelemetry/sdk/_shared_internal/__init__.py:224-258): BatchProcessor.shutdown() sets _shutdown,
+    joins the worker bounded, then calls exporter.shutdown() DIRECTLY — not under _export_lock — and its
+    own comment admits an in-flight export may still be running ("we will return instead of waiting");
+    force_flush checks _shutdown only at entry then blocks in _export. The SDK does NOT internally
+    serialize shutdown against an in-flight force_flush, so the standalone-flush atexit-arming half stays
+    warranted for any future external caller of the public primitive.'
   heading: '### B-150 · deferred-flush aftermath — collector-stop ordering + standalone-flush atexit arming *(surfaced by PR #1303 codex delta round post-cap, 2026-08-11)*'
