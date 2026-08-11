@@ -478,6 +478,23 @@ def _disarm_standalone_atexit_backstop(ctx: object) -> None:
     atexit.unregister(backstop)
 
 
+def _claim_closing_gate_if_drained(ctx: object) -> bool:
+    """ATOMICALLY (codex round-3 P1): either commit the per-ctx closing gate
+    when NO flush worker is registered — so a concurrent public
+    `flush_observability()` REFUSES instead of registering while the
+    collector stop below is in progress — or report the registry non-empty
+    without touching the gate. The check and the gate commit must be one
+    critical section: a worker registering between them would export against
+    a stopping collector with only the tracer deferring (the span-loss
+    ordering C-RT-10 v1.117 exists to prevent), on the NORMAL path too."""
+    with _inflight_lock:
+        entry = _inflight_tracer_flush.get(id(ctx))
+        if entry is not None and not _entry_is_stale(entry, ctx):
+            return False
+        _deferred_closing[id(ctx)] = _try_weakref(ctx)
+        return True
+
+
 def _spawn_deferred_tracer_close(ctx: object, *, defer_collector: bool = False) -> None:
     """Best-effort deferred close (codex round-5 P1): a step-3b close skipped
     for an in-flight flush would otherwise NEVER happen — `shutdown()` caches
@@ -1208,12 +1225,15 @@ async def shutdown(
     collector_deferred = False
     remaining = max(0.0, deadline - time.monotonic())
     try:
-        if _tracer_flush_in_flight(ctx):
+        if _claim_closing_gate_if_drained(ctx):
+            # Gate committed atomically with the drained check (codex
+            # round-3 P1): late flush calls now refuse, so the stop below
+            # cannot race a fresh registration on the normal path either.
+            await _close_collector_daemon(ctx, remaining)
+        else:
             failures.append("collector_daemon")
             timed_out = True
             collector_deferred = True
-        else:
-            await _close_collector_daemon(ctx, remaining)
     except Exception:
         failures.append("collector_daemon")
 
@@ -1245,17 +1265,14 @@ async def shutdown(
             if collector_deferred:
                 # The worker finished between 3a and 3b. Before completing
                 # the deferred collector stop INLINE, atomically re-check
-                # the registry AND commit the closing gate under the lock
-                # (out-of-family codex round-1 P1a): the inline collector
-                # await below widens the check-then-close window, and a
-                # concurrent `flush_observability()` registering during it
-                # would leave the tracer close overlapping a live export.
-                # The gate makes late flush calls refuse instead.
-                with _inflight_lock:
-                    if _inflight_tracer_flush.get(id(ctx)) is not None:
-                        proceed_inline = False
-                    else:
-                        _deferred_closing[id(ctx)] = _try_weakref(ctx)
+                # the registry AND commit the closing gate (out-of-family
+                # codex round-1 P1a; same critical section as the round-3
+                # normal-path claim): the inline collector await below
+                # widens the check-then-close window, and a concurrent
+                # `flush_observability()` registering during it would leave
+                # the tracer close overlapping a live export. The gate makes
+                # late flush calls refuse instead.
+                proceed_inline = _claim_closing_gate_if_drained(ctx)
             if not proceed_inline:
                 # A NEW worker registered between the checks — this is the
                 # deferred path after all.

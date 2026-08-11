@@ -2813,30 +2813,29 @@ async def test_b150_worker_finish_between_3a_and_3b_completes_stop_inline(
     daemon = _TimelineCollectorDaemon(timeline)
     ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=daemon, providers={})
 
-    verdicts = iter([True, False])  # 3a sees in-flight; 3b sees drained
-    real = shutdown_mod._tracer_flush_in_flight  # type: ignore[attr-defined]
+    # 3a consults the atomic claim helper (codex round-3 shape): script its
+    # FIRST call to report not-drained (the in-flight window), delegating
+    # every later call to the real helper — so 3b's inline-race branch runs
+    # the genuine critical section against the (empty) registry.
+    verdicts = iter([False])
+    real_claim = shutdown_mod._claim_closing_gate_if_drained  # type: ignore[attr-defined]
 
-    def _sequenced(target: object) -> bool:
-        # Script ONLY the consults made from `shutdown()` itself (the 3a and
-        # 3b checks); the step-2 flush wait loop and any other site consult
-        # the real registry — the first probe run of this witness showed the
-        # step-2 loop consuming the scripted verdicts before 3a ever ran.
-        caller = sys._getframe(1).f_code.co_name
-        if target is ctx and caller == "shutdown":
+    def _scripted_claim(target: object) -> bool:
+        if target is ctx:
             try:
                 return next(verdicts)
             except StopIteration:
-                return False
-        return real(target)
+                return real_claim(target)
+        return real_claim(target)
 
-    monkeypatch.setattr(shutdown_mod, "_tracer_flush_in_flight", _sequenced)
+    monkeypatch.setattr(shutdown_mod, "_claim_closing_gate_if_drained", _scripted_claim)
     report = await asyncio.wait_for(shutdown(ctx, timeout=2.0), timeout=10.0)
 
-    # Vacuity guard (merge-gate lens 3): if the 3a/3b consults are ever
-    # hoisted out of `shutdown()` (frame scope no longer matches), the
-    # verdicts go unconsumed and this witness would silently degrade into a
-    # normal-path run — fail loudly instead.
-    assert next(verdicts, None) is None, "scripted verdicts were not consumed"
+    # Vacuity guard (merge-gate lens 3): if the 3a claim is ever hoisted or
+    # renamed so the script never fires, the verdict goes unconsumed and
+    # this witness would silently degrade into a normal-path run — fail
+    # loudly instead.
+    assert next(verdicts, None) is None, "scripted verdict was not consumed"
     assert daemon.stopped is True
     assert tracer.shutdown_called is True
     assert timeline == ["collector", "tracer"]  # order holds on EVERY path
