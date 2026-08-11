@@ -2371,19 +2371,32 @@ class _BlockingFlushTracer(_FakeTracerWithShutdown):
         return True
 
 
-def _spy_atexit(monkeypatch: pytest.MonkeyPatch) -> tuple[list[Any], list[Any]]:
+def _spy_atexit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[Any], list[Any], list[tuple[str, Any]]]:
+    """Spy atexit register/unregister. Returns (registered, unregistered,
+    events) — `events` is a SHARED timeline of ("reg"/"unreg", fn) tuples so
+    cross-list ordering (replacement-registered-BEFORE-removal, the round-7
+    P2 rule) is observable; two separate lists cannot witness it (merge-gate
+    lens 3, PR #1307)."""
     import atexit as _atexit
 
     registered: list[Any] = []
     unregistered: list[Any] = []
+    events: list[tuple[str, Any]] = []
 
     def _register(fn: Any) -> Any:
         registered.append(fn)
+        events.append(("reg", fn))
         return fn
 
+    def _unregister(fn: Any) -> None:
+        unregistered.append(fn)
+        events.append(("unreg", fn))
+
     monkeypatch.setattr(_atexit, "register", _register)
-    monkeypatch.setattr(_atexit, "unregister", unregistered.append)
-    return registered, unregistered
+    monkeypatch.setattr(_atexit, "unregister", _unregister)
+    return registered, unregistered, events
 
 
 def _standalone_backstops_registered(registered: list[Any]) -> list[Any]:
@@ -2400,7 +2413,7 @@ async def test_b150_standalone_flush_timeout_swaps_sdk_backstop(
     unordered atexit handler for the ordered backstop, replacement-first;
     at (simulated) exit the backstop refuses to close while the worker is
     live, then closes once it has completed."""
-    registered, unregistered = _spy_atexit(monkeypatch)
+    registered, unregistered, events = _spy_atexit(monkeypatch)
     tracer = _BlockingFlushTracer()
     sentinel_handler = tracer.shutdown
     tracer._atexit_handler = sentinel_handler  # type: ignore[attr-defined]
@@ -2412,11 +2425,13 @@ async def test_b150_standalone_flush_timeout_swaps_sdk_backstop(
 
     # SDK handler removed; exactly one ordered replacement registered —
     # and the replacement was registered BEFORE the removal (round-7 P2:
-    # never remove the last cleanup mechanism before its replacement).
+    # never remove the last cleanup mechanism before its replacement),
+    # witnessed on the shared spy timeline.
     assert sentinel_handler in unregistered
     backstops = _standalone_backstops_registered(registered)
     assert len(backstops) == 1
     backstop = backstops[0]
+    assert events.index(("reg", backstop)) < events.index(("unreg", sentinel_handler))
 
     # Simulated exit while the worker is still live: refuse, never race.
     backstop()
@@ -2440,7 +2455,7 @@ async def test_b150_no_arm_without_live_worker(
     the worker's finally already cleared its registry entry) must NOT arm
     the backstop: there is no worker to race, and unregistering the SDK
     handler would silently drop the process's only exit-time close."""
-    registered, unregistered = _spy_atexit(monkeypatch)
+    registered, unregistered, _events = _spy_atexit(monkeypatch)
     tracer = _FakeTracerWithShutdown(raises=RuntimeError("exporter boom"))
     sentinel_handler = tracer.shutdown
     tracer._atexit_handler = sentinel_handler  # type: ignore[attr-defined]
@@ -2454,13 +2469,34 @@ async def test_b150_no_arm_without_live_worker(
     assert not shutdown_mod._standalone_backstops  # type: ignore[attr-defined]
 
 
+def test_b150_direct_arm_is_noop_with_empty_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Merge-gate lens 3 (PR #1307) — the no-live-worker guard INSIDE
+    `_arm_standalone_atexit_backstop` gets a direct witness: calling the arm
+    with an empty registry must register nothing and leave the SDK handler
+    alone. (The flush-path test above witnesses the arm-site placement; this
+    one pins the guard itself.)"""
+    registered, unregistered, _events = _spy_atexit(monkeypatch)
+    tracer = _FakeTracerWithShutdown()
+    sentinel_handler = tracer.shutdown
+    tracer._atexit_handler = sentinel_handler  # type: ignore[attr-defined]
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+
+    shutdown_mod._arm_standalone_atexit_backstop(ctx)  # type: ignore[attr-defined]
+
+    assert registered == []
+    assert sentinel_handler not in unregistered
+    assert not shutdown_mod._standalone_backstops  # type: ignore[attr-defined]
+
+
 @pytest.mark.asyncio
 async def test_b150_repeated_timeouts_arm_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A second standalone flush timeout for the same ctx (the prior worker
     still wedged) must not stack a second backstop registration."""
-    registered, _unregistered = _spy_atexit(monkeypatch)
+    registered, _unregistered, _events = _spy_atexit(monkeypatch)
     tracer = _BlockingFlushTracer()
     ctx = _ctx_with(tmp_path, tracer=tracer)
 
@@ -2482,7 +2518,7 @@ async def test_b150_deferred_close_supersedes_standalone_backstop(
     the deferred-close machinery takes ownership: its own ordered backstop
     is registered and the standalone one is unregistered (replacement
     registered first)."""
-    registered, unregistered = _spy_atexit(monkeypatch)
+    registered, unregistered, events = _spy_atexit(monkeypatch)
     tracer = _BlockingFlushTracer()
     ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
 
@@ -2499,8 +2535,10 @@ async def test_b150_deferred_close_supersedes_standalone_backstop(
     assert standalone[0] in unregistered
     assert not shutdown_mod._standalone_backstops  # type: ignore[attr-defined]
     # Ownership ordering: the deferred replacement registered before the
-    # standalone removal.
-    assert registered.index(deferred[0]) < len(registered)
+    # standalone removal (real cross-list witness on the shared timeline —
+    # the prior `registered.index(x) < len(registered)` form was a
+    # tautology; merge-gate lens 3, PR #1307).
+    assert events.index(("reg", deferred[0])) < events.index(("unreg", standalone[0]))
     tracer.release.set()  # unwedge the worker before the test returns
 
 
@@ -2511,7 +2549,7 @@ async def test_b150_normal_close_disarms_standalone_backstop(
     """A worker that completes BEFORE `shutdown(ctx)` yields a normal
     step-3b close; the standalone backstop must be disarmed so it cannot
     re-close the already-closed provider at exit."""
-    registered, unregistered = _spy_atexit(monkeypatch)
+    registered, unregistered, _events = _spy_atexit(monkeypatch)
     tracer = _BlockingFlushTracer()
     ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
 
@@ -2594,7 +2632,7 @@ async def test_b150_caller_cancellation_arms_backstop(
     exactly the standalone-abandonment shape. This witness kills a mutation
     that narrows the inner arm site to TimeoutError only (or deletes it —
     the outer `except TimeoutError` deliberately does NOT arm)."""
-    registered, _unregistered = _spy_atexit(monkeypatch)
+    registered, _unregistered, _events = _spy_atexit(monkeypatch)
     tracer = _BlockingFlushTracer()
     ctx = _ctx_with(tmp_path, tracer=tracer)
 
@@ -2664,7 +2702,7 @@ async def test_b150_backstop_close_decision_gates_new_flushes(
     after the check but before `shutdown_fn()` must be REFUSED by
     `_register_inflight_tracer_flush`, not allowed to force_flush a
     provider whose shutdown is running."""
-    registered, _unregistered = _spy_atexit(monkeypatch)
+    registered, _unregistered, _events = _spy_atexit(monkeypatch)
     tracer = _BlockingFlushTracer()
     ctx = _ctx_with(tmp_path, tracer=tracer)
 

@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 150
+  total: 151
   open: 1
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 31
   operator_gated: 0
   held: 2
   closed: 117
-  identity_digest: '7b1a2f32093a156d'
+  identity_digest: '261d685f7fea2732'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -8136,3 +8136,37 @@ items:
     serialize shutdown against an in-flight force_flush, so the standalone-flush atexit-arming half stays
     warranted for any future external caller of the public primitive.'
   heading: '### B-150 · deferred-flush aftermath — collector-stop ordering + standalone-flush atexit arming *(surfaced by PR #1303 codex delta round post-cap, 2026-08-11)*'
+- id: B-151
+  title: standalone atexit backstop residual concurrency shapes -- re-arm after deferred takeover creates one
+    unserialized shutdown-vs-shutdown pair; dead-probe gate overwrite under id reuse
+  status: registered_finding
+  summary: 'TWO NARROW RESIDUALS of the B-150 atexit half (PR #1307), surfaced by merge-gate lens 1 at that PR
+    and deliberately REGISTERED rather than absorbed (the #1290/#1303 precedent; lens verdict was APPROVE with
+    register-do-not-block). (1) RE-ARM AFTER DEFERRED TAKEOVER: flush timeout arms the standalone backstop ->
+    shutdown(ctx) spawns the deferred close and disarms it -> a LATER standalone flush_observability registers a
+    new worker (legal: the _deferred_closing gate is only set when the registry empties) and times out -> the
+    arm''s gate check does not detect the in-progress takeover, so a fresh standalone backstop is armed alongside
+    the live watcher. If process exit lands in the gap where the last worker just finished but the watcher has
+    not yet set the gate, the standalone backstop and the watcher''s _close_once_serialized can run
+    provider.shutdown() CONCURRENTLY -- shutdown-vs-shutdown only: whichever closer commits the gate first fences
+    any new force_flush, so the export-vs-teardown race B-150 closed is NOT reintroduced, and OTel 1.41.1''s
+    TracerProvider.shutdown is idempotent-with-warning on this shape. The one closer pair with no serializer.
+    (2) DEAD-PROBE GATE OVERWRITE UNDER ID REUSE: if the armed ctx is gc''d while its worker is wedged and its
+    id() is reused by a live ctx, the exit-time backstop treats the new ctx''s gate/entry as stale (weak probe
+    returns None) and commits _deferred_closing[ctx_key] with a dead ref -- clobbering the live ctx''s closing
+    gate, which _register_inflight_tracer_flush would then pop as stale, re-opening the round-10 registration
+    door for the NEW provider mid-close. Requires gc + id reuse + exit concurrent with another thread''s loop;
+    the identical overwrite shape PRE-EXISTS in _live_workers_or_gate.'
+  close_out: '(1) RE-GROUND both shapes at the then-current HEAD -- the B-150 collector-half spec leg (still
+    open) may restructure the close-ownership machinery and moot either. (2) For shape 1, candidate repairs
+    named by the lens: the arm refuses while any worker event from a deferred snapshot is outstanding, OR the
+    deferred takeover leaves a per-ctx deferred-owns-forever tombstone the arm checks; either wants a
+    deterministic interleaving witness (spy-injected, the PR #1307 pattern). (3) For shape 2, candidate repair:
+    skip the gate commit when the ctx weak probe returns None (a dead ctx needs no flush fence; registration is
+    keyed on a live object) -- and if fixed here, fix the SAME shape in _live_workers_or_gate in the same commit
+    or record why not. (4) Severity honest-labeling: both are benign-in-consequence today (idempotent double
+    shutdown; astronomically narrow preconditions) -- do not inflate; close as wont-fix-with-rationale is a
+    legitimate disposition if re-grounding confirms consequence-free.'
+  council: No. Bounded intra-file concurrency repairs with a named owner and the lens''s own candidate fixes on
+    file; no cross-domain tension.
+  heading: '### B-151 · standalone atexit backstop residual concurrency shapes *(surfaced by merge-gate lens 1 at PR #1307, 2026-08-11)*'
