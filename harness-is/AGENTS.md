@@ -1,6 +1,6 @@
 # AGENTS.md — IS Axis Codex Projection
 
-Read this file before IS-axis work. `harness-is/CLAUDE.md` remains the canonical Claude-native lineage; consult it only for exact posture, substitution, and anti-leakage details.
+Read this file before IS-axis work. `harness-is/CLAUDE.md` remains the canonical Claude-native lineage (full per-version §1.2 spec/plan lineage archived at `.harness/artifact-pointers/is.md`); consult it only for exact posture, substitution, and anti-leakage details.
 
 ## Scope
 

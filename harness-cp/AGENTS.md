@@ -1,6 +1,6 @@
 # AGENTS.md — CP Axis Codex Projection
 
-Read this file before CP-axis work. `harness-cp/CLAUDE.md` remains the canonical Claude-native lineage; consult it only for exact posture, substitution, and anti-leakage details.
+Read this file before CP-axis work. `harness-cp/CLAUDE.md` remains the canonical Claude-native lineage (full per-version §1.2 spec/plan lineage archived at `.harness/artifact-pointers/cp.md`); consult it only for exact posture, substitution, and anti-leakage details.
 
 ## Scope
 

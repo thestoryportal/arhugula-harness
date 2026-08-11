@@ -1,6 +1,6 @@
 # AGENTS.md — OD Axis Codex Projection
 
-Read this file before OD-axis work. `harness-od/CLAUDE.md` remains the canonical Claude-native lineage; consult it only for exact posture, substitution, and anti-leakage details.
+Read this file before OD-axis work. `harness-od/CLAUDE.md` remains the canonical Claude-native lineage (full per-version §1.2 spec/plan lineage archived at `.harness/artifact-pointers/od.md`); consult it only for exact posture, substitution, and anti-leakage details.
 
 ## Scope
 
