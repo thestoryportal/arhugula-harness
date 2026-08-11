@@ -2607,3 +2607,48 @@ async def test_b150_caller_cancellation_arms_backstop(
     assert len(_standalone_backstops_registered(registered)) == 1
     assert len(shutdown_mod._standalone_backstops) == 1  # type: ignore[attr-defined]
     tracer.release.set()  # unwedge the worker before the test returns
+
+
+@pytest.mark.asyncio
+async def test_b150_disarm_winning_the_publish_register_window_leaves_no_orphan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-1 P2 — publication (registry insert under the lock) and
+    `atexit.register` are not atomic: a disarm landing in that window pops
+    the entry and no-ops its unregister, and the arm's register would then
+    orphan an undiscoverable callback that re-closes the provider at exit.
+    The arm must re-check ownership AFTER registering and undo itself when
+    the disarmer won. The disarm is injected deterministically into the
+    window via the register spy."""
+    import atexit as _atexit
+
+    registered: list[Any] = []
+    unregistered: list[Any] = []
+    tracer = _BlockingFlushTracer()
+    sentinel_handler = tracer.shutdown
+    tracer._atexit_handler = sentinel_handler  # type: ignore[attr-defined]
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+
+    def _register_with_concurrent_disarm(fn: Any) -> Any:
+        # Simulate the disarmer winning between publication and
+        # registration: the entry is already published (the arm holds no
+        # lock here), so the disarm pops it and no-ops its unregister.
+        shutdown_mod._disarm_standalone_atexit_backstop(ctx)  # type: ignore[attr-defined]
+        registered.append(fn)
+        return fn
+
+    monkeypatch.setattr(_atexit, "register", _register_with_concurrent_disarm)
+    monkeypatch.setattr(_atexit, "unregister", unregistered.append)
+
+    report = await flush_observability(ctx, timeout_millis=100)
+    assert report.timed_out is True
+
+    # The arm detected the lost race: its own callback was registered then
+    # immediately unregistered (no orphan), the registry stayed empty, and
+    # the SDK handler was left alone for the winning close path to manage.
+    backstops = _standalone_backstops_registered(registered)
+    assert len(backstops) == 1
+    assert backstops[0] in unregistered
+    assert not shutdown_mod._standalone_backstops  # type: ignore[attr-defined]
+    assert sentinel_handler not in unregistered
+    tracer.release.set()  # unwedge the worker before the test returns

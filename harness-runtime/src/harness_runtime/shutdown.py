@@ -432,6 +432,22 @@ def _arm_standalone_atexit_backstop(ctx: object) -> None:
     # internal lock must not nest inside `_inflight_lock` — the backstop
     # body takes `_inflight_lock` and atexit may serialize registrations).
     atexit.register(_standalone_ordered_backstop)
+    # Publication→registration is not atomic (codex round-1 P2): a
+    # concurrent `_disarm_standalone_atexit_backstop` (normal step-3b close
+    # runs on a `to_thread` worker; deferred takeover on another loop) can
+    # pop the just-published entry and no-op its unregister BEFORE the
+    # `atexit.register` above ran — leaving an orphaned, undiscoverable
+    # callback that would re-close the provider at exit. Re-check ownership
+    # AFTER registering: if the entry is gone (or replaced), the disarmer
+    # won — undo our registration and leave the SDK handler alone (the
+    # winning close path manages it: a normal close self-unregisters it, a
+    # deferred takeover removes it itself).
+    with _inflight_lock:
+        still_armed = _standalone_backstops.get(ctx_key)
+        lost_disarm_race = still_armed is None or still_armed[1] is not _standalone_ordered_backstop
+    if lost_disarm_race:
+        atexit.unregister(_standalone_ordered_backstop)
+        return
     atexit_handler = getattr(provider, "_atexit_handler", None)
     if atexit_handler is not None:
         atexit.unregister(atexit_handler)
