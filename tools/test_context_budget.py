@@ -612,6 +612,108 @@ def test_sidechains_excluded_for_ineligible_sdk_parent_session(
     assert payload["sidechains"] == []
 
 
+def test_sidechain_rows_reach_main_json_for_eligible_parent(
+    td: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # codex round-2: the negative case alone let the whole
+    # `side_rows.extend(...)` wiring be deleted with the suite green — this
+    # positive round trip pins that an ELIGIBLE parent's subagent rows reach
+    # the JSON entry point with the right totals AND that all three USAGE
+    # fields (incl. both cache components) are summed.
+    project_dir, transcript_dir = td
+    _write_jsonl(
+        transcript_dir / "cli9.jsonl",
+        [
+            _rec(
+                request_id="c9",
+                timestamp="2026-08-10T09:00:00Z",
+                input_tokens=100,
+                cache_creation_input_tokens=70000,
+                cache_read_input_tokens=23000,
+                entrypoint="cli",
+            )
+        ],
+    )
+    subagents_dir = transcript_dir / "cli9" / "subagents"
+    subagents_dir.mkdir(parents=True)
+    _write_jsonl(
+        subagents_dir / "agent-a.jsonl",
+        [
+            _rec(
+                request_id="sa1",
+                timestamp="2026-08-10T09:01:00Z",
+                input_tokens=5,
+                cache_creation_input_tokens=60000,
+                cache_read_input_tokens=15000,
+            )
+        ],
+    )
+    rc = context_budget.main(
+        ["--project-dir", str(project_dir), "--sessions", "1", "--json", "--sidechains"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert [r["sidechain_total"] for r in payload["sidechains"]] == [75005]
+    assert payload["summary"]["sidechain_first_turns_measured"] == 1
+    # headline itself must sum input + BOTH cache components (kills a
+    # USAGE_FIELDS shrink): 100 + 70000 + 23000
+    assert payload["sessions"][0]["first_turn_total"] == 93100
+
+
+def test_post_compaction_summary_aggregates_are_exact(
+    td: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # codex round-2: rows existed but the AGGREGATES were never asserted —
+    # post_compaction_mean could be hardcoded 0.0 with the suite green.
+    # Three distinct events with cache components: totals 1000, 2000, 4000
+    # → median 2000.0, mean 7000/3 (exact float, not truncated).
+    project_dir, transcript_dir = td
+    _write_jsonl(
+        transcript_dir / "cli7.jsonl",
+        [
+            _rec(
+                request_id="h1", timestamp="2026-08-10T08:00:00Z", input_tokens=50, entrypoint="cli"
+            ),
+            _compact("manual"),
+            _rec(
+                request_id="e1",
+                timestamp="2026-08-10T08:10:00Z",
+                input_tokens=200,
+                cache_creation_input_tokens=500,
+                cache_read_input_tokens=300,
+                entrypoint="cli",
+            ),
+            _compact("auto"),
+            _rec(
+                request_id="e2",
+                timestamp="2026-08-10T08:20:00Z",
+                input_tokens=1000,
+                cache_creation_input_tokens=600,
+                cache_read_input_tokens=400,
+                entrypoint="cli",
+            ),
+            _compact("auto"),
+            _rec(
+                request_id="e3",
+                timestamp="2026-08-10T08:30:00Z",
+                input_tokens=3000,
+                cache_creation_input_tokens=700,
+                cache_read_input_tokens=300,
+                entrypoint="cli",
+            ),
+        ],
+    )
+    rc = context_budget.main(
+        ["--project-dir", str(project_dir), "--sessions", "1", "--json", "--post-compaction"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert [r["post_compaction_total"] for r in payload["post_compaction"]] == [4000, 2000, 1000]
+    assert payload["summary"]["post_compaction_measured"] == 3
+    assert payload["summary"]["post_compaction_median"] == 2000.0
+    assert math.isclose(payload["summary"]["post_compaction_mean"], 7000 / 3)
+
+
 # --------------------------------------------------------------------------
 # 6. Sidechains — one first-turn row per subagent file
 # --------------------------------------------------------------------------
