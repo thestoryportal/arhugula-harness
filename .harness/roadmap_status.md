@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `cb30a1a5077f` |
+| `workspace_state_hash` | `99dce3aa0b8e` |
 | `last_refreshed` | 2026-08-11T00:00:00Z |
-| `git_head` | `4b75df1b` —  |
+| `git_head` | `d6f4d6a7` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 112 |
 
@@ -50,7 +50,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| 1301 | 2026-08-11 | Arc 6 merged (U-CTX-19/20: axis CLAUDE.md slims -73,509 B total — IS 18,578 / AS 27,224 / CP 39,383 / OD 20,497 — lineage archived at .harness/artifact-pointers/{axis}.md; 14 parametrized axis pins + 4 AGENTS.md mirrors). ALL content arcs landed. Remaining: Wave 5 — U-CTX-21 cold-start + post-compaction A/B vs <=76k gate via just context-budget, U-CTX-22 program close (B-148 register flip, memory entries, final refresh, zero design-substrate git-log audit). |
+| 1301 | 2026-08-11 | R-CTX-1 BUILD PHASE COMPLETE: nine PRs merged (#1293-#1301), zero design-substrate diffs verified, B-148 register note updated (open pending the <=76k eligible-cohort cold-start — every eligible session predates the slims; sdk-cli probe 49,324 vs bg/cli projection ~87k bracket the gate). NEXT: after the operator's next interactive session, run just context-budget --sessions 1; flip B-148 if <=76k, else route the measured component split to B-149's held probes. |
 | 1300 | 2026-08-11 | Arc 5 merged (U-CTX-14/13/15: citation-resolver CI gate 2620 cites 0 broken; root CLAUDE.md 123,442 -> 44,853 B (-63.7%), 73 anchors + safety kernel byte-identical, lineage to .harness/artifact-pointers + 7 docs/governance packs; governance router with 4-venue set-equality tests). Codex round 1 closed with resolver coverage-widening residual class recorded. Remaining: Arc 6 (axis CLAUDE.md slims, rebase + ship), Wave 5 U-CTX-21 measurement vs <=76k gate + U-CTX-22 close. |
 | 1299 | 2026-08-11 | Arc 7 merged (U-CTX-16/17/18: 60 files -5,830 lines — design-skill + bmad payload deletions incl. the dependent scan workflows, R3 .gitignore migration tracked half, fail-closed loop-start/loop-stop dispatchers). E7 machine-local orchestrator step now owed post-merge. Remaining: #1300 Arc 5 codex round in flight, Arc 6, Wave 5 measurement + close. |
 | 1298 | 2026-08-11 | Arc 4 merged (U-CTX-10/11/12: clearance frontmatter gate + quote-only repairer, derived artifact-heads table, 171 repaired markers, root CLAUDE.md pointer corrections); codex closed round 6 with exotic-YAML residual class recorded; single-lens gate APPROVE under lean protocol. Remaining: Arc 7 PR (open, codex round 1), Arc 5 phase 2 building (root CLAUDE.md slim), Arc 6, Wave 5 measurement + close. |
