@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `99dce3aa0b8e` |
+| `workspace_state_hash` | `40f20761247d` |
 | `last_refreshed` | 2026-08-11T00:00:00Z |
-| `git_head` | `d6f4d6a7` —  |
+| `git_head` | `47fb9373` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 112 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1296).** The next implementable unit is `R-CTX-1` (context-optimization program, register row B-148). Arc 3 merged (`b89c54d9`, THE program's single hook PR — merge-gate ALL-APPROVE; codex loop closed at the 10-round cap with residuals recorded in-file): failure-signature + total 2-emission cap (structure-only secret-safe identity), loop-gc top-3 caps + the SessionStart lock reaper, dead `Bash(git commit*)` matcher removed with computed parity counts; errata E8 recorded (#1292 PARKED per operator — Arcs 3–7 from current main). **OPERATOR ACTION OWED: Codex `/hooks` re-trust ceremony (fail-open until done).** Serial queue: #1297 (E4 selector tests, discharges the B-148 TESTED-selector obligation) → PR-4 (Arc 4 heads table, rebased+green) → PR-6 (Arc 7 skills) → Arc 5 (U-CTX-14 resolver built — 2,567-cite corpus, 0 broken; U-CTX-13/15 after PR-4) → PR-7 (Arc 6 axis slimming, built: −73.5KB) → Wave 5 acceptance vs the ≤76k gate. `B-124` HIL stays the harness-code gate (then `B-147`→`B-145`→`B-144`). `held=2` honored.
+**Current next action (post-#1302).** `R-CTX-1` (register row B-148) is at Wave 5 acceptance. #1302 recorded the FIRST eligible-cohort measurement: post-slim bg/cli first turn = **76,656 vs the ≤76,000 gate** (miss 656 tokens / 0.86%, n=1; pre-slim median 108,544 → program delta −29.4%) — verdict **PENDING-REMEASURE**, not routed to B-149. The miss equals the removable ~650-token description mass of the 4 design-skill dirs still on disk (E7 machine-local half owed since #1299). **OPERATOR ACTIONS OWED: (1) the reversible E7 move — exact command at `.harness/r-ctx-1-e7-machine-local-orchestrator-step.md` (agent `mv` classifier-denied, DEFERRED-HIL logged); (2) Codex `/hooks` re-trust ceremony (fail-open until done).** After the E7 move: next fresh `*/cli` session → `just context-budget --sessions 1` → flip B-148 if ≤76k; if still >76k route the source-level component split to the held B-149 probes. U-CTX-22 close additionally owes: per-PR context-budget delta table + full source-level component A/B (PARTIAL/PENDING rows at `.harness/r-ctx-1-u-ctx-21-measurement-2026-08-11.md` §6) + a post-slim post-compaction boundary (E4 instrument live, none observed yet). `B-124` HIL stays the harness-code gate (then `B-147`→`B-145`→`B-144`). `held=2` honored.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1302 | 2026-08-11 | U-CTX-21 first eligible measurement (76,656 vs 76,000 gate — miss 656 @ n=1, PENDING-REMEASURE) + E7 machine-local record: 4 design-skill dirs still on disk carry ~650 removable tokens; operator mv command recorded (agent mv classifier-denied, DEFERRED-HIL); B-148 build_state note; codex round-1 absorbed (component A/B PARTIAL, per-PR delta table PENDING). |
 | 1301 | 2026-08-11 | R-CTX-1 BUILD PHASE COMPLETE: nine PRs merged (#1293-#1301), zero design-substrate diffs verified, B-148 register note updated (open pending the <=76k eligible-cohort cold-start — every eligible session predates the slims; sdk-cli probe 49,324 vs bg/cli projection ~87k bracket the gate). NEXT: after the operator's next interactive session, run just context-budget --sessions 1; flip B-148 if <=76k, else route the measured component split to B-149's held probes. |
 | 1300 | 2026-08-11 | Arc 5 merged (U-CTX-14/13/15: citation-resolver CI gate 2620 cites 0 broken; root CLAUDE.md 123,442 -> 44,853 B (-63.7%), 73 anchors + safety kernel byte-identical, lineage to .harness/artifact-pointers + 7 docs/governance packs; governance router with 4-venue set-equality tests). Codex round 1 closed with resolver coverage-widening residual class recorded. Remaining: Arc 6 (axis CLAUDE.md slims, rebase + ship), Wave 5 U-CTX-21 measurement vs <=76k gate + U-CTX-22 close. |
 | 1299 | 2026-08-11 | Arc 7 merged (U-CTX-16/17/18: 60 files -5,830 lines — design-skill + bmad payload deletions incl. the dependent scan workflows, R3 .gitignore migration tracked half, fail-closed loop-start/loop-stop dispatchers). E7 machine-local orchestrator step now owed post-merge. Remaining: #1300 Arc 5 codex round in flight, Arc 6, Wave 5 measurement + close. |
 | 1298 | 2026-08-11 | Arc 4 merged (U-CTX-10/11/12: clearance frontmatter gate + quote-only repairer, derived artifact-heads table, 171 repaired markers, root CLAUDE.md pointer corrections); codex closed round 6 with exotic-YAML residual class recorded; single-lens gate APPROVE under lean protocol. Remaining: Arc 7 PR (open, codex round 1), Arc 5 phase 2 building (root CLAUDE.md slim), Arc 6, Wave 5 measurement + close. |
-| 1297 | 2026-08-11 | E4 selector test suite merged (32 witnesses + fail-closed newline-terminated tail split); B-148 TESTED-selector precondition discharged. Next: #1298 single-lens gate verdict, Arc 7 PR codex round, Arc 5 phase 2 build (root CLAUDE.md slim), Arc 6 last; lean review protocol active per operator cost directive 2026-08-11. |
 ---
 
 ---
