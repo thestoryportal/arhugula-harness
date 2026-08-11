@@ -297,6 +297,16 @@ class FlushReport(BaseModel):
 _InflightEntry = tuple["weakref.ref[Any] | None", set[threading.Event]]
 _inflight_tracer_flush: dict[int, _InflightEntry] = {}
 _inflight_lock = threading.Lock()
+# Per-ctx "deferred close has begun" gate (codex round-10 P1): once the
+# deferred watcher (or exit backstop) decides to close, NEW flush workers
+# must be refused — a queued flush_observability() call registering after
+# the watcher's registry-empty check would otherwise force_flush a provider
+# whose shutdown is already running (the C-RT-10 flush-before-close race
+# through the registration door). The gate is set ATOMICALLY with the
+# registry-empty check under `_inflight_lock` and stays set forever after a
+# close (a closed provider must not be flushed again); weak identity guards
+# id reuse just like the registry entries.
+_deferred_closing: dict[int, weakref.ref[Any] | None] = {}
 
 
 def _try_weakref(ctx: object) -> weakref.ref[Any] | None:
@@ -316,15 +326,25 @@ def _entry_is_stale(entry: _InflightEntry, ctx: object) -> bool:
     return ref is not None and ref() is not ctx
 
 
-def _register_inflight_tracer_flush(ctx: object, evt: threading.Event) -> None:
+def _register_inflight_tracer_flush(ctx: object, evt: threading.Event) -> bool:
+    """Register a new flush worker; returns False (refusal) when this ctx's
+    deferred close has already begun — the caller must not start a worker
+    against a closing/closed provider (codex round-10 P1)."""
     ctx_key = id(ctx)
     with _inflight_lock:
+        if ctx_key in _deferred_closing:
+            gate_ref = _deferred_closing[ctx_key]
+            gate_is_stale = gate_ref is not None and gate_ref() is not ctx
+            if not gate_is_stale:
+                return False
+            _deferred_closing.pop(ctx_key, None)  # dead ctx's gate; id reused
         entry = _inflight_tracer_flush.get(ctx_key)
         if entry is None or _entry_is_stale(entry, ctx):
             events: set[threading.Event] = set()
             entry = (_try_weakref(ctx), events)
             _inflight_tracer_flush[ctx_key] = entry
         entry[1].add(evt)
+        return True
 
 
 def _discard_inflight_tracer_flush(ctx_key: int, evt: threading.Event) -> None:
@@ -347,8 +367,10 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
     close failure is deliberately swallowed: the returned report already
     tagged `tracer_provider`, and this runs long after that report was
     delivered — there is no caller left to surface to."""
+    ctx_key = id(ctx)
+    ctx_ref = _try_weakref(ctx)
     with _inflight_lock:
-        entry = _inflight_tracer_flush.get(id(ctx))
+        entry = _inflight_tracer_flush.get(ctx_key)
         events: tuple[threading.Event, ...] = (
             tuple(entry[1]) if entry is not None and not _entry_is_stale(entry, ctx) else ()
         )
@@ -356,6 +378,22 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
     shutdown_fn = getattr(provider, "shutdown", None)
     if shutdown_fn is None:
         return
+
+    def _live_workers_or_gate() -> tuple[threading.Event, ...]:
+        """ATOMICALLY (round-10 P1) either return the still-live workers —
+        including any registered AFTER the initial snapshot by a queued
+        `flush_observability()` call — or, when none remain, set the
+        per-ctx closing gate so no NEW worker can register from here on.
+        Empty result == gate is set, closing may proceed."""
+        with _inflight_lock:
+            live_entry = _inflight_tracer_flush.get(ctx_key)
+            live: tuple[threading.Event, ...] = (
+                tuple(live_entry[1]) if live_entry is not None else ()
+            )
+            if not live:
+                _deferred_closing[ctx_key] = ctx_ref
+            return live
+
     # OTel's own atexit backstop (`shutdown_on_exit=True` at construction,
     # `lifecycle/tracer_provider.py`) fires at process exit WITHOUT waiting
     # for daemon threads — it would close the provider concurrently with the
@@ -390,12 +428,24 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
             return True
 
     def _ordered_backstop() -> None:
-        if all(evt.is_set() for evt in events):
+        # Exit-time close: only when the ORIGINAL snapshot has completed AND
+        # no worker (including late registrations) remains live; setting the
+        # gate atomically with that check refuses any still-later flush.
+        if all(evt.is_set() for evt in events) and not _live_workers_or_gate():
             _close_once_serialized()
 
     def _watcher() -> None:
-        for evt in events:
-            evt.wait()
+        pending = events
+        while True:
+            for evt in pending:
+                evt.wait()
+            # Re-consult the LIVE registry (round-10 P1): a queued
+            # flush_observability() call may have registered a new worker
+            # after our snapshot; wait for those too. Only an atomically
+            # empty registry sets the closing gate and lets us proceed.
+            pending = _live_workers_or_gate()
+            if not pending:
+                break
         if _close_once_serialized():
             atexit.unregister(_ordered_backstop)
         # else: ordered backstop stays registered; retries at exit
@@ -540,7 +590,11 @@ async def flush_observability(
 
         flush_done = threading.Event()
         ctx_key = id(ctx)
-        _register_inflight_tracer_flush(ctx, flush_done)
+        if not _register_inflight_tracer_flush(ctx, flush_done):
+            # This ctx's deferred close has begun (round-10 P1): starting a
+            # worker now would force_flush a provider whose shutdown is
+            # already running/complete.
+            raise RuntimeError("tracer provider deferred close in progress")
 
         def _tracked_force_flush() -> bool:
             try:

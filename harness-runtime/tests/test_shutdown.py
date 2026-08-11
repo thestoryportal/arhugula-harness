@@ -766,10 +766,12 @@ def _isolate_shutdown_registry() -> Any:  # pyright: ignore[reportUnusedFunction
     shutdown_mod._shutdown_registry.clear()  # type: ignore[attr-defined]
     shutdown_mod._cached_reports.clear()  # type: ignore[attr-defined]
     shutdown_mod._inflight_tracer_flush.clear()  # type: ignore[attr-defined]
+    shutdown_mod._deferred_closing.clear()  # type: ignore[attr-defined]
     yield
     shutdown_mod._shutdown_registry.clear()  # type: ignore[attr-defined]
     shutdown_mod._cached_reports.clear()  # type: ignore[attr-defined]
     shutdown_mod._inflight_tracer_flush.clear()  # type: ignore[attr-defined]
+    shutdown_mod._deferred_closing.clear()  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -1456,9 +1458,12 @@ async def test_deferred_close_unregisters_otel_atexit_backstop(
     ordered_backstop = registered[0]
     ordered_backstop()  # flush still live → no close, no race
     assert tracer.shutdown_called is False
-    lingering.set()  # flush completes — BOTH the watcher and the (simulated
-    # exit) backstop now race toward the close; round-8 P2 requires exactly
-    # one serialized close between them.
+    # Flush completes — a real worker's finally sets its event AND discards
+    # its registry entry; mirror both halves. BOTH the watcher and the
+    # (simulated exit) backstop now race toward the close; round-8 P2
+    # requires exactly one serialized close between them.
+    lingering.set()
+    shutdown_mod._discard_inflight_tracer_flush(id(ctx), lingering)  # type: ignore[attr-defined]
     ordered_backstop()
     for _ in range(500):
         if tracer.shutdown_called:
@@ -1466,6 +1471,60 @@ async def test_deferred_close_unregisters_otel_atexit_backstop(
         await asyncio.sleep(0.01)
     assert tracer.shutdown_called is True
     assert tracer.shutdown_count == 1  # close-once held across both paths
+
+
+@pytest.mark.asyncio
+async def test_queued_flush_never_overlaps_deferred_close(tmp_path: Path) -> None:
+    """B-147 codex round-10 P1 — a `flush_observability()` call QUEUED
+    behind a timed-out worker races the deferred close when that worker
+    finally completes. The atomic gate guarantees exactly one of two legal
+    outcomes: the queued flush registers first (the watcher then waits for
+    it too, closing only afterwards) or the gate closes first (the queued
+    flush is refused and reports a tracer failure). Either way, no
+    force_flush may ever run after the close began."""
+    order: list[str] = []
+    release_a = threading.Event()
+    calls: list[int] = []
+
+    class _OrderRecordingTracer(_FakeTracerWithShutdown):
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            calls.append(timeout_millis)
+            if len(calls) == 1:
+                release_a.wait()  # worker A: stalls until the race begins
+            order.append("flush")
+            return True
+
+        def shutdown(self) -> None:
+            order.append("close")
+            super().shutdown()
+
+    tracer = _OrderRecordingTracer()
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+    try:
+        first = await asyncio.wait_for(flush_observability(ctx, timeout_millis=100), timeout=5.0)
+        assert "tracer" in first.failures
+        # Shutdown on a small budget: waits for A, gives up, skips the close
+        # and arms the deferred watcher on A.
+        report = await asyncio.wait_for(shutdown(ctx, timeout=0.3), timeout=10.0)
+        assert "tracer_provider" in report.failures
+        # Queued flush B enters its wait-for-prior poll, then A completes —
+        # B's registration and the watcher's close-gate now race.
+        b_task = asyncio.create_task(flush_observability(ctx, timeout_millis=5_000))
+        await asyncio.sleep(0.05)
+    finally:
+        release_a.set()
+    b_report = await asyncio.wait_for(b_task, timeout=10.0)
+
+    for _ in range(500):  # the deferred close must still eventually land
+        if tracer.shutdown_called:
+            break
+        await asyncio.sleep(0.01)
+    assert tracer.shutdown_called is True
+    # THE invariant: no flush ever ran after the close began.
+    close_idx = order.index("close")
+    assert "flush" not in order[close_idx + 1 :]
+    # B either flushed successfully before the close, or was refused.
+    assert b_report.tracer_flushed is True or "tracer" in b_report.failures
 
 
 def test_stale_inflight_entry_from_dead_context_does_not_veto_close() -> None:
