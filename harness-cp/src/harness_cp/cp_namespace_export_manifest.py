@@ -9,12 +9,13 @@ The manifest is **descriptive, not declarative** (acceptance #9): the namespace
 declarations themselves live at the source units (U-CP-01/07/11/21/31/46/47);
 this manifest exports references only. 11 namespaces — 6 specialization-layer
 (§24.1.A), 4 F3-lifecycle-event (§24.1.B), 1 inheritance-composition (§24.1.C)
-— 65 CP-axis attributes total (34 + 27 + 4; was stated as 63 until `B-126`
-recomputed it — `harness.breaker.*` grew 7 -> 9 at CP spec v1.32).
+— 68 CP-axis attributes total (35 + 29 + 4; was 63, then 65 after `B-126`
+recomputed the `harness.breaker.*` 7 -> 9 growth from OD spec v1.32, then 68
+at the CP v1.117 `B-144` venue-A re-table: retry.* 4 -> 6 + engine.* 3 -> 4).
 
-Authority: Implementation_Plan_Control_Plane_v2_1.md §2.9 U-CP-54 (preserved
-verbatim through v2.9); Spec_Control_Plane_v1_2.md §24 C-CP-24
-§24.1.A/§24.1.B/§24.1.C.
+Authority: Implementation_Plan_Control_Plane_v2_1.md §2.9 U-CP-54 as re-pinned
+at Implementation_Plan_Control_Plane_v2_50.md; Spec_Control_Plane_v1_2.md §24
+C-CP-24 §24.1.A/§24.1.B/§24.1.C as re-tabled at Spec_Control_Plane_v1_117.md.
 """
 
 from __future__ import annotations

@@ -7849,7 +7849,9 @@ items:
   title: C-CP-24 24.1.B's Attribute count column was never re-tabled after C-CP-03 3.5's two amendments, and the
     code manifest resolves the divergence inconsistently per row
   status: closed
-  pr: '#1311 (venue-A re-table, CP v1.117; hitl third case split out as B-153)'
+  pr: '#1311 (RESOLVED venue A: 24.1.B re-tabled + 24.1.A engine 3->4 at CP v1.117, declared sum 65->68,
+    plan re-pin v2.50; breaker growth venue corrected to OD v1.32; hitl third case split out as B-153;
+    the summary/close_out above are the ORIGINAL FILING, preserved per closed-row convention)'
   summary: 'WHAT IT IS. 24.1.B (the four F3-capability-floor lifecycle-event-attribute export rows) is declared
     at exactly ONE place in the whole CP spec chain -- Spec_Control_Plane_v1_2.md:2152-2159 -- verified by scanning
     all 115 Spec_Control_Plane_v1_*.md files on disk for the string ''24.1.B'', which matches only that file (:2152
