@@ -361,11 +361,21 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
     # for daemon threads — it would close the provider concurrently with the
     # still-live force_flush and recreate exactly the race this deferral
     # exists to prevent (codex round-6 P1). The runtime owns the close from
-    # here; unregister the SDK backstop (private attr, guarded — absent on
-    # fakes / non-OTel providers).
-    atexit_handler = getattr(provider, "_atexit_handler", None)
-    if atexit_handler is not None:
-        atexit.unregister(atexit_handler)
+    # here — but never remove the LAST cleanup mechanism before its
+    # replacement is known good (codex round-7 P2): an ORDERED backstop is
+    # registered first (at exit it closes only when no flush worker remains
+    # live — spans are lost either way in that case, but never raced), the
+    # SDK backstop is unregistered second, and the ordered backstop is
+    # removed only after the watcher's close succeeds. A watcher that never
+    # launches (Thread.start failure under thread exhaustion) or whose close
+    # raises leaves the ordered backstop registered for one exit-time retry.
+
+    def _ordered_backstop() -> None:
+        if all(evt.is_set() for evt in events):
+            try:
+                shutdown_fn()
+            except Exception:
+                pass
 
     def _watcher() -> None:
         for evt in events:
@@ -373,9 +383,18 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
         try:
             shutdown_fn()
         except Exception:
-            pass
+            return  # ordered backstop stays registered; retries at exit
+        atexit.unregister(_ordered_backstop)
 
-    threading.Thread(target=_watcher, daemon=True, name="harness-deferred-tracer-close").start()
+    atexit.register(_ordered_backstop)
+    atexit_handler = getattr(provider, "_atexit_handler", None)
+    if atexit_handler is not None:
+        atexit.unregister(atexit_handler)
+    try:
+        threading.Thread(target=_watcher, daemon=True, name="harness-deferred-tracer-close").start()
+    except Exception:
+        # Watcher never launched — the ordered backstop remains the closer.
+        pass
 
 
 def _tracer_flush_in_flight(ctx: object) -> bool:

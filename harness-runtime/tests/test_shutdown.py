@@ -1364,7 +1364,14 @@ async def test_deferred_close_unregisters_otel_atexit_backstop(
     import atexit as _atexit
 
     unregistered: list[object] = []
+    registered: list[Any] = []
     monkeypatch.setattr(_atexit, "unregister", unregistered.append)
+
+    def _spy_register(fn: Any) -> Any:
+        registered.append(fn)
+        return fn
+
+    monkeypatch.setattr(_atexit, "register", _spy_register)
 
     tracer = _FakeTracerWithShutdown()
     sentinel_handler = tracer.shutdown
@@ -1392,6 +1399,18 @@ async def test_deferred_close_unregisters_otel_atexit_backstop(
     assert "tracer_provider" in report.failures
     assert unregistered == [sentinel_handler]
     assert tracer.shutdown_called is False  # only the ordered watcher may close
+
+    # Round-7 P2: the SDK backstop was replaced, not merely removed — an
+    # ORDERED backstop is registered, and at (simulated) process exit it
+    # refuses to close while the flush is still live, then closes once the
+    # flush has completed.
+    assert len(registered) == 1
+    ordered_backstop = registered[0]
+    ordered_backstop()  # flush still live → no close, no race
+    assert tracer.shutdown_called is False
+    lingering.set()  # flush completes
+    ordered_backstop()  # exit-time retry now closes, strictly after flush
+    assert tracer.shutdown_called is True
 
 
 def test_stale_inflight_entry_from_dead_context_does_not_veto_close() -> None:
