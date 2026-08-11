@@ -518,10 +518,25 @@ async def flush_observability(
         # reported timed out without a duplicate worker; step 3b's
         # flush-before-close skip still holds via the surviving
         # registration.
+        waited_for_prior = False
         while _tracer_flush_in_flight(ctx):
+            waited_for_prior = True
             if time.monotonic() >= deadline:
                 raise TimeoutError("prior tracer force_flush still in flight")
             await asyncio.sleep(0.01)
+        # Round-9 P2: a prior worker clearing AT the deadline must not spawn
+        # a fresh worker that then runs on the ORIGINAL full internal
+        # timeout with a ~zero outer bound (it would linger and defer the
+        # provider close for no observable benefit). Recheck the remaining
+        # budget and shrink the internal bound to it. The no-wait path keeps
+        # the full `timeout_millis` (first surface — the full value IS the
+        # remaining budget there, and callers observe the exact value).
+        surface_timeout_millis = timeout_millis
+        if waited_for_prior:
+            remaining_after_wait = max(0.0, deadline - time.monotonic())
+            if remaining_after_wait <= 0.0:
+                raise TimeoutError("prior tracer force_flush consumed the budget")
+            surface_timeout_millis = min(timeout_millis, max(1, int(remaining_after_wait * 1000)))
 
         flush_done = threading.Event()
         ctx_key = id(ctx)
@@ -529,7 +544,7 @@ async def flush_observability(
 
         def _tracked_force_flush() -> bool:
             try:
-                return force_flush(timeout_millis)
+                return force_flush(surface_timeout_millis)
             finally:
                 flush_done.set()
                 _discard_inflight_tracer_flush(ctx_key, flush_done)
