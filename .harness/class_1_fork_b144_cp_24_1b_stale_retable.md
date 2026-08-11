@@ -61,6 +61,16 @@ authority, and force the manifest's breaker row to regress or carry a declared
 divergence — institutionalizing the exact export-claim ↔ ingest-reality conflation
 §24.1's composition-path summary says the table exists to prevent.
 
+## The OD leg (rounds 4-5)
+
+The engine.* carry ripples into OD's ingestion surface: `namespace_map.py`'s
+`engine.` row pinned 3 while citing C-CP-09 §9.1 as its own `source_contract_ref`
+(round-4 catch), and C-OD-05 §5.1 row 9 commits the same stale 3 in contract text
+under an `Ingest verbatim` posture (`Spec_Operational_Discipline_v1_2.md:337`,
+round-5 catch — falsifying the interim "no OD spec pin" claim). Both carried in
+this PR: OD delta `Spec_Operational_Discipline_v1_40.md` (clearance
+`spec-operational-discipline-v1-40-cleared-2026-08-11.md`) + map row/test cascade.
+
 ## Residuals
 
 - **B-153 (minted this PR):** the hitl.* / Attribute-count column-semantics question

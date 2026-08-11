@@ -129,8 +129,12 @@ row only (9 == 9) and is unaffected. No other consumer of the sum exists in any
 OD-side per-namespace ingestion: `harness-od/src/harness_od/namespace_map.py`'s
 `engine.` row (which cites C-CP-09 §9.1 as its own source authority and had been
 stale against it since CP v1.3) moves 3 → 4 with its test in the same cascade
-(out-of-family round-4 catch); no OD design-substrate artifact declares an engine
-count, so no OD spec delta is owed.
+(out-of-family round-4 catch). OD's contract text DOES pin the count — C-OD-05 §5.1
+row 9 commits "3 (…)" under an `Ingest verbatim` posture
+(`Spec_Operational_Discipline_v1_2.md:337`; round-5 catch falsifying this
+paragraph's earlier no-OD-pin claim) — so the same-PR companion OD delta
+`Spec_Operational_Discipline_v1_40.md` carries that cell 3 → 4 with its own
+clearance marker.
 
 ### §0.5 Explicitly OUT OF SCOPE — the `hitl.*` column-semantics question (→ `B-153`)
 

@@ -8223,8 +8223,11 @@ items:
     and audit the audit.* qualifier row under the same definition or record why it already conforms.
     (3) Any resulting count edit is a contract-count change feeding acceptance #6 and its test -- same
     discipline as B-144: spec delta first (X-AL-3 back-flow pairing), manifest + test cascade same-PR.
-    (4) WHAT WOULD FALSIFY IT: a CP delta defining the column semantics, or one declaring hitl.* exports
-    at span-event granularity deliberately.'
+    (4) GROUNDING LEAD (added at the B-144 OD leg): OD already interprets the count as ATTRIBUTES --
+    C-OD-05 §5.1 row 6 (Spec_Operational_Discipline_v1_2.md:334) commits hitl.* at ''11 attributes across
+    4 span names'' and the OD map/test ingest 11 -- a live cross-axis counterexample to the CP manifest''s
+    span-names-as-attributes 4. (5) WHAT WOULD FALSIFY IT: a CP delta defining the column semantics, or
+    one declaring hitl.* exports at span-event granularity deliberately.'
   council: 'No. Single-axis column-semantics decision with the B-144 venue-A precedent on file; the
     U-HK-13 decorrelated resolver suffices at the decision point.'
   pr: '#1311 (minted at the B-144 close)'

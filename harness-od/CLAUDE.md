@@ -16,7 +16,7 @@ OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1 (baseline) + `Cro
 
 | Artifact | Version | Role |
 |---|---|---|
-| `Spec_Operational_Discipline_v1_39.md` | **v1.39 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/od.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Contract authority — 34 contracts C-OD-01 through C-OD-34 *(C-OD-25..33 added at v1.8; C-OD-34 added at v1.29; C-OD-15 §15.1 4th rollup axis added at v1.30; C-OD-07 §7.1 amended at v1.32 — see the canonical spec for the full enumeration)* |
+| `Spec_Operational_Discipline_v1_40.md` | **v1.40 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/od.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Contract authority — 34 contracts C-OD-01 through C-OD-34 *(C-OD-25..33 added at v1.8; C-OD-34 added at v1.29; C-OD-15 §15.1 4th rollup axis added at v1.30; C-OD-07 §7.1 amended at v1.32 — see the canonical spec for the full enumeration)* |
 | `Implementation_Plan_Operational_Discipline_v2_34.md` | **v2.34 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/od.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Execution authority — 35 atomic units across 8 clusters (+ U-OD-00 pre-cluster) and 10 topological levels (L0–L9) *(authoring-era figures; see the canonical plan)* |
 
 ### 1.3 Scope inclusion

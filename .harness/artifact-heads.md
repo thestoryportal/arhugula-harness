@@ -42,7 +42,7 @@ is the one that resolved the head.
 | `spec-harness-runtime` | `v1.117` | 2026-08-11 | `design-substrate/Spec_Harness_Runtime_v1.md` | 80 | `spec-harness-runtime-v1-117-cleared-2026-08-11.md` |
 | `spec-information-substrate` | `v1.13` | 2026-08-07 | `design-substrate/Spec_Information_Substrate_v1.md` | 11 | `spec-information-substrate-v1-13-cleared-2026-08-07.md` |
 | `spec-memory-substrate` | `v1.3` | 2026-08-06 | `design-substrate/Spec_Memory_Substrate_v1.md` | 4 | `spec-memory-substrate-v1-3-cleared-2026-08-06.md` |
-| `spec-operational-discipline` | `v1.39` | 2026-08-09 | `design-substrate/Spec_Operational_Discipline_v1_39.md` | 13 | `spec-operational-discipline-v1-39-cleared-2026-08-09.md` |
+| `spec-operational-discipline` | `v1.40` | 2026-08-11 | `design-substrate/Spec_Operational_Discipline_v1_40.md` | 14 | `spec-operational-discipline-v1-40-cleared-2026-08-11.md` |
 
 ## Non-`design-substrate/` families
 
