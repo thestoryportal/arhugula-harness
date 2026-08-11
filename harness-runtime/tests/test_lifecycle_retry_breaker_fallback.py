@@ -4739,13 +4739,14 @@ async def test_b145_terminal_escalate_branch_contract() -> None:
     :4229) and abandons the candidate on the FIRST attempt.
 
     The transition is injected via a registry double because it is
-    unreachable through the real classifier + staircase today:
+    unreachable through the real classifier + staircase:
     `_classify_provider_exception` returns only TRANSIENT_RETRY or None, and
-    `(STAGE_1, TRANSIENT_RETRY)` maps unconditionally to STAGE_2 — the same
-    control-flow/spec discrepancy as the tool path's GAP-2a, routed at
-    `.harness/b145-grounding-split-2026-08-11.md`. If that leg later makes
-    escalation genuinely reachable, this witness should be superseded by a
-    real-path one."""
+    `(STAGE_1, TRANSIENT_RETRY)` maps unconditionally to STAGE_2 — RATIFIED
+    as a defensive branch contract at the Runtime v1.116 GAP-2a carve-out
+    (`.harness/class_1_fork_b145_gap2a_escalate_clause_phantom_api.md`).
+    Stage-threading is a future design arc; if it ever makes escalation
+    genuinely reachable, this witness should be superseded by a real-path
+    one."""
     breaker = _EscalatingRetryBreaker(
         retry_policies={
             RESERVED_LLM_DISPATCH_KEY: RetryPolicy(
