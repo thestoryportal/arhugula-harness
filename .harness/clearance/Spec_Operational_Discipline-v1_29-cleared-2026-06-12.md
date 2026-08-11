@@ -4,14 +4,14 @@ version: v1.29
 cleared_at: 2026-06-12T00:00:00-06:00
 clearance_type: spec-writer-apply-pass
 back_reference:
-  - .harness/r-pm-1-prompts-management-design-v1.md §4.4 / §6 row #4 (the per-tier governance layer of the prompts-management cascade)
+  - ".harness/r-pm-1-prompts-management-design-v1.md §4.4 / §6 row #4 (the per-tier governance layer of the prompts-management cascade)"
   - Project_Roadmap_v1.md §5.17 R-CC-1 / §5.16 R-PM-1 (capability-completion program; prompts-management forward arc)
   - design-substrate/Spec_Control_Plane_v1_31.md §29 (the selection layer this governs); design-substrate/Spec_Information_Substrate_v1_7.md §5.3 (the versioned store); design-substrate/Spec_Harness_Runtime_v1.md §14.5.2 (the injection layer; delta-only file, internal title v1.44)
   - PR (pending — this arc)
 merge_commit: (pending)
 reviewer_chain:
   - advisor() pre-substantive decision-fork (caught the redaction-second-source-of-truth block → derive-from-gradient; resolved the approval wire-vs-defer fork via the reconciler-site discriminator). NOTE pre-done advisor() unavailable (overloaded this turn) — substituted the two decorrelated reviews below, both of which ran the tests + pyright themselves.
-  - harness-adversarial-reviewer (dedicated agent, 32 tool-uses, pre-merge) — APPROVE-WITH-CLASS-3; 0 Class-1/2; verified all 3 load-bearing design claims by execution incl. a positive-control non-breaking run; 2 doc-nits (F1-01 clearance cite-path → FIXED; F1-02 §3.2 plan-coverage count = pre-existing scoped-correct, left). Report: `.harness/r-pm-1-pr4-adversarial-review.md`.
+  - "harness-adversarial-reviewer (dedicated agent, 32 tool-uses, pre-merge) — APPROVE-WITH-CLASS-3; 0 Class-1/2; verified all 3 load-bearing design claims by execution incl. a positive-control non-breaking run; 2 doc-nits (F1-01 clearance cite-path → FIXED; F1-02 §3.2 plan-coverage count = pre-existing scoped-correct, left). Report: `.harness/r-pm-1-pr4-adversarial-review.md`."
   - just codex-review (out-of-family, decorrelated) — ran targeted pytest + pyright; "no discrete correctness issues that should block the patch".
   - empirical impl-grounding pass (gen_ai.system_instructions ∈ DEFAULT_OFF; no span-producer / no change-event producer at HEAD; persona_tier in scope at stage-0 reconciler)
   - mode-agnostic / Phase-7 bundled-absorption posture (workspace CLAUDE.md §11.4)

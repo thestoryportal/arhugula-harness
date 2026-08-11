@@ -6,11 +6,11 @@ clearance_type: Phase-7-absorbed-via-retirement-event
 back_reference:
   - .harness/forward-register.yaml (B-32, B-39)
   - .harness/post-phase-8-forward-register.md (B-32, B-39)
-  - PR #1015
+  - "PR #1015"
 merge_commit: <filled at merge>
 reviewer_chain:
   - out-of-family Codex (just codex-review-uncommitted), 3 rounds
-  - merge-gate 3-lens review (concurrency: APPROVE; spec-conformance: BLOCK -> this delta; test-witness: BLOCK -> second-site tests added)
+  - "merge-gate 3-lens review (concurrency: APPROVE; spec-conformance: BLOCK -> this delta; test-witness: BLOCK -> second-site tests added)"
   - advisor() at the false-affordance decision fork
   - impl-time grounding pass (direct grep confirming pause_reason has exactly one non-telemetry reader and the composer never branches on it)
 supersedes:

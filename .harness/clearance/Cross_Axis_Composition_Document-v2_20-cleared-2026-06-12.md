@@ -4,7 +4,7 @@ version: v2.20
 cleared_at: 2026-06-12T01:30:00-06:00
 clearance_type: cxa-additive-forward-capability-registration
 back_reference:
-  - .harness/r-pm-1-prompts-management-design-v1.md §6 row #5 (the CXA-registration layer of the prompts-management cascade — "after the producers exist")
+  - ".harness/r-pm-1-prompts-management-design-v1.md §6 row #5 (the CXA-registration layer of the prompts-management cascade — \"after the producers exist\")"
   - Project_Roadmap_v1.md §5.16 R-PM-1 / §5.17 R-CC-1 (capability-completion program; prompts-management forward arc — this PR closes the cascade)
   - design-substrate/Cross_Axis_Composition_Document_v2_19.md (predecessor — §2.1 matrix + §2.2 + §2.3.1–§2.3.7 + §2.4 + §3 preserved verbatim; v2.20 is purely additive)
   - design-substrate/Spec_Control_Plane_v1_31.md §29 (C-CP-29 prompt-selection, edge-1 consumer / edge-2 producer); design-substrate/Spec_Information_Substrate_v1.md §5.3 (C-IS-05 versioned store, edge-1 producer; delta-only file, internal version v1.7); design-substrate/Spec_Operational_Discipline_v1_29.md C-OD-34 (governance, edge-2 consumer); design-substrate/Spec_Harness_Runtime_v1.md §14.5.2 (injection seam; delta-only file, internal title v1.44)
@@ -14,7 +14,7 @@ reviewer_chain:
   - pre-substantive empirical grounding (direct read at HEAD) — confirmed each axis is pure (CP imports no IS; OD imports no CP/IS) and runtime is the sole composition site; derived the 2-edge enumeration + 2 deliberate non-edges
   - advisor pass 2026-06-12 (pre-authoring) — confirmed the 2-edge set (CP→IS + OD→CP, both R-class, directions respect acyclicity), the redaction/injection non-edges, and the frozen-baseline Option B structure; flagged the "materialized-live not Phase-2-deferred" labelling + the all-citation-sites-in-one-PR discipline + leave-per-axis-CLAUDE.md-alone
   - harness-adversarial-reviewer (dedicated general-purpose agent adopting the SKILL.md, 17 tool-uses, pre-merge) — APPROVE-WITH-CLASS-1; verified by direct read all import-purity claims (CP imports no IS; OD imports no CP/IS; the OD approval gate takes no prompt_manifest param → the OD→IS-for-approval non-edge holds at function-body level → no missed third edge) + the 107+2=109 arithmetic at every citation site + the frozen 37/48/22 sub-split matches v2.19 verbatim; F1-01 (clearance back_reference IS-spec filename token Spec_Information_Substrate_v1_7.md → _v1.md, delta-only convention) → FIXED pre-merge
-  - just codex-review (out-of-family, decorrelated) — caught P2: §0.7(c) over-claimed "✅ this PR" for the roadmap-surface refresh (those files are NOT in this diff; the refresh is a post-merge §12.2 step) → FIXED pre-merge (§0.7(c) honestly defers; (b-bis) claude-artifact-pointers entry added)
+  - "just codex-review (out-of-family, decorrelated) — caught P2: §0.7(c) over-claimed \"✅ this PR\" for the roadmap-surface refresh (those files are NOT in this diff; the refresh is a post-merge §12.2 step) → FIXED pre-merge (§0.7(c) honestly defers; (b-bis) claude-artifact-pointers entry added)"
   - advisor pass (pre-done — pending final call this arc)
   - design-phase posture session 2026-06-12 (operator directed the closure / R-CC-1 track)
 supersedes: (none — additive; does not supersede the v2.19 plan-canonical baseline, which is frozen verbatim)

@@ -4,13 +4,13 @@ version: v1 (Proposed, 2026-07-01)
 cleared_at: 2026-07-09T22:50:00+00:00
 clearance_type: Phase-7-absorbed-via-impl-arc
 back_reference:
-  - Memory substrate build U-MEM-01..U-MEM-25 (PRs #855–#912, merged)
+  - "Memory substrate build U-MEM-01..U-MEM-25 (PRs #855–#912, merged)"
   - .harness/u-mem-25-memory-closeout-evidence.md
   - .harness/external-cli-routing-port-review-findings.md
 merge_commit: (governance PR — chore/external-cli-routing-governance-ws2)
 reviewer_chain:
-  - Phase-7 in-flight absorption arc — the full U-MEM-01..25 build consumed this artifact and landed green (codex-check + overlay + memory-closeout gates) across PRs #855–#912
-  - operator-approved full-spec memory build (no-MVP directive, PR #853 design packet)
+  - "Phase-7 in-flight absorption arc — the full U-MEM-01..25 build consumed this artifact and landed green (codex-check + overlay + memory-closeout gates) across PRs #855–#912"
+  - "operator-approved full-spec memory build (no-MVP directive, PR #853 design packet)"
 ---
 
 # Clearance — ADR-D7 provider-neutral memory substrate + CLI profiles + provider adapters

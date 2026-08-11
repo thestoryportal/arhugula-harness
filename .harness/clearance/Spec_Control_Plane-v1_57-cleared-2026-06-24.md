@@ -9,7 +9,7 @@ back_reference:
   - design-substrate/Spec_Control_Plane_v1_55.md §2 (the PR1-scoped fail-closed this supersedes)
 merge_commit: <filled at merge>
 reviewer_chain:
-  - advisor — the BLOCKING capture-before-cancel verification (the failing branch is captured `completed`-no-output before the `raise` that triggers the cancel; the dichotomy is total), the "not-yet-dispatched ≠ effect-free" correction (cancelled siblings must not re-dispatch), the orchestrator false-negative catch (verified: orchestrator failure is a separate direct-FAILED path, not a cascade trigger), the PAUSE probe-resolution (naive reconstruct spec-foreclosed → fail-closed + sub-arc)
+  - "advisor — the BLOCKING capture-before-cancel verification (the failing branch is captured `completed`-no-output before the `raise` that triggers the cancel; the dichotomy is total), the \"not-yet-dispatched ≠ effect-free\" correction (cancelled siblings must not re-dispatch), the orchestrator false-negative catch (verified: orchestrator failure is a separate direct-FAILED path, not a cascade trigger), the PAUSE probe-resolution (naive reconstruct spec-foreclosed → fail-closed + sub-arc)"
   - the §25.15 probe (obligation 7 + §25.15.1 dictate the semantics → impl-to-cleared-spec, no council)
   - out-of-family Codex — diff review (pending convergence)
 supersedes: <none>

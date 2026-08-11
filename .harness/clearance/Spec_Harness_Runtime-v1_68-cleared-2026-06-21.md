@@ -2,7 +2,7 @@
 artifact: design-substrate/Spec_Harness_Runtime_v1.md
 version: v1.68
 cleared_at: 2026-06-21T00:00:00+00:00
-clearance_type: Phase-7-absorbed-via-spine-ledger (NO operator gate — change-note-level amendment marking B-HITL-WRAP-FAIL-CLASS-SURFACING BUILT + refreshing the §14.8 RT-FAIL-HITL-GATE-EDIT-DECODE row's surfacing clause: the wrap-time HITL terminal exceptions now surface their canonical RT-FAIL-HITL-* code via an rt_fail_class marker the CP driver reads, closing a prose-vs-code drift; additive, no new code/contract/hash)
+clearance_type: "Phase-7-absorbed-via-spine-ledger (NO operator gate — change-note-level amendment marking B-HITL-WRAP-FAIL-CLASS-SURFACING BUILT + refreshing the §14.8 RT-FAIL-HITL-GATE-EDIT-DECODE row's surfacing clause: the wrap-time HITL terminal exceptions now surface their canonical RT-FAIL-HITL-* code via an rt_fail_class marker the CP driver reads, closing a prose-vs-code drift; additive, no new code/contract/hash)"
 back_reference:
   - .harness/beyond-mvp-capability-boundary-ledger.md (B-HITL-WRAP-FAIL-CLASS-SURFACING spine BUILT note)
   - design-substrate/Spec_Harness_Runtime_v1.md (v1.62 — the §14.8 RT-FAIL-HITL-GATE-EDIT-DECODE row whose "generic {type}" surfacing clause this arc refreshes to the precise marker surfacing; the §14.8 taxonomy codes PRESERVED VERBATIM)

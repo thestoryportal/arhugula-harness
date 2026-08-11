@@ -462,3 +462,47 @@ jobs:
 
       - name: Codex context guard tests
         run: uv run python -m pytest tools/test_codex_context_guard.py -q
+
+  clearance-corpus:
+    # R-CTX-1 / U-CTX-10 — the clearance-marker frontmatter gate. `.harness/clearance/*.md`
+    # markers are the version-binding half of the X-AL-3 enforcement triad (root CLAUDE.md
+    # §4.5), and 70 of them were unparseable YAML at the arc's grounding sweep (an unquoted
+    # `: ` inside a prose scalar) while a further ~100 carried a whitespace-`#` value that
+    # parses and then SILENTLY truncates. This job is fail-closed: every marker must parse
+    # to a mapping with `artifact` + `version` and carry no lossy scalar, and the ONLY
+    # exemptions are the rows explicitly enumerated in
+    # `.harness/clearance/parse-manifest.md` — an unlisted unparseable file is an ERROR,
+    # never a skip. pyyaml comes from harness-runtime via the all-packages sync; the
+    # tools/ test module lives outside the 7 testpaths packages, so the blocking `test` job
+    # does not collect it and this job is its home.
+    runs-on: ubuntu-latest
+    name: clearance corpus (frontmatter gate) — blocking
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members; provides pyyaml via harness-runtime)
+        run: uv sync --all-packages
+
+      - name: Clearance frontmatter parse gate (unparseable + unlisted = failure)
+        run: uv run python tools/clearance_frontmatter.py --check
+
+      - name: Clearance frontmatter tests (fail-closed + quote-only repair contract)
+        working-directory: tools
+        run: uv run python -m pytest test_clearance_frontmatter.py -q
+
+      - name: Artifact heads — generated table equals the committed one
+        run: uv run python tools/artifact_heads.py --check
+
+      - name: Artifact heads — marker completeness (every family resolves a head)
+        run: uv run python tools/artifact_heads.py --check-completeness
+
+      - name: Artifact heads tests (fail-closed + family normalization + version sort)
+        working-directory: tools
+        run: uv run python -m pytest test_artifact_heads.py -q

@@ -10,7 +10,7 @@ back_reference:
 merge_commit: a7704abe
 reviewer_chain:
   - advisor full-transcript (BEFORE substantive work — the GO + five pre-build checks; reconcile on the seed-gating correction)
-  - out-of-family Codex on the diff (caught a real [P1]: child run_id seed collision across fan-out siblings + the sequential-loop hazard)
+  - "out-of-family Codex on the diff (caught a real [P1]: child run_id seed collision across fan-out siblings + the sequential-loop hazard)"
   - by-execution witnesses (E1-live full-chain reconstruction + recoverability-predicate negative controls + classifier [P1-b] dual-gate + fan-out sibling distinctness)
   - empirical loop-suppression confirmation at workflow_driver.py:2040
 supersedes:

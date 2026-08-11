@@ -6,7 +6,7 @@ clearance_type: Phase-7-absorbed-via-fork-doc (bundled-absorption — spec + imp
 back_reference:
   - .harness/class_2_fork_engine_durable_resume_no_production_producer.md (Class-2 scoping fork → operator Option 1)
   - .harness/r-cc-1-arc-3-workflow-durable-resume-design-v1.md (design doc, advisor-reviewed; §7a grounded impl plan)
-  - PR #512 (R-CC-1 arc #3 re-aim — design-fork-first)
+  - "PR #512 (R-CC-1 arc #3 re-aim — design-fork-first)"
   - PR (cascade step 1 — this arc) — TBD at PR creation
 merge_commit: TBD-at-PR-merge
 reviewer_chain:
@@ -15,7 +15,7 @@ reviewer_chain:
   - advisor (design review) — caught (i) the resume-admission gate (resolved by grounding — MVP constant-sentinel pause_context_reader admits across a fresh bootstrap) + (ii) the state-vs-position assumption (resolved — data-stateless execution model, design §1.1)
   - empirical grounding passes — execute_workflow MCP-tool indirection; PAUSED-surfacing gap (_CP_TO_RT_STATUS had no PAUSED entry); attempt_resume admission gate; the full_execution_path pause/resume substrate
   - impl-time green — 3 new api.resume tests pass (incl. restart-proof round-trip e2e); pyright strict 0/0/0; 14 regression tests (api.run smoke + both pause/resume e2e) pass
-  - out-of-family Codex (pre-merge, decorrelated; 2 rounds to convergence) — caught 3 genuine correctness gaps in the new public resume path → ALL FIXED before merge (detect-then-refuse pre-bootstrap): [P1] `resume()` without the pause/resume opt-in silently re-ran from step 0 (duplicate prefix side effects) → `ResumeProtocolNotBoundError`; [P2] a cross-workflow snapshot validated its own hash and applied the wrong run_id/step_index → `ResumeWorkflowMismatchError`; [P3, round 2] a snapshot with `step_index >= len(workflow.steps)` (changed workflow) sliced `steps[resume_at:]` empty → silent SUCCESS-that-ran-nothing → `ResumeStepIndexOutOfRangeError`. Each fix has a dedicated test.
+  - "out-of-family Codex (pre-merge, decorrelated; 2 rounds to convergence) — caught 3 genuine correctness gaps in the new public resume path → ALL FIXED before merge (detect-then-refuse pre-bootstrap): [P1] `resume()` without the pause/resume opt-in silently re-ran from step 0 (duplicate prefix side effects) → `ResumeProtocolNotBoundError`; [P2] a cross-workflow snapshot validated its own hash and applied the wrong run_id/step_index → `ResumeWorkflowMismatchError`; [P3, round 2] a snapshot with `step_index >= len(workflow.steps)` (changed workflow) sliced `steps[resume_at:]` empty → silent SUCCESS-that-ran-nothing → `ResumeStepIndexOutOfRangeError`. Each fix has a dedicated test."
 ---
 
 # Clearance — `Spec_Harness_Runtime_v1.md v1.45`

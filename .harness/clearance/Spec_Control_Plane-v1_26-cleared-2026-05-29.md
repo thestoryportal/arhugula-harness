@@ -6,13 +6,13 @@ clearance_type: Phase-7-absorbed-via-architect-recommendation
 back_reference:
   - .harness/class_1_tension_u_cp_74_entrypayload_field_set_drift.md
   - .harness/architect_recommendation_u_rt_35_gap_b_within_path_a.md
-  - PR #37
+  - "PR #37"
 merge_commit: ec4a2f7
 reviewer_chain:
   - operator AskUserQuestion ratification 2026-05-29 Q-set (A + β.i + Q-β.i-1(a) + Q-β.i-3(b))
   - architect recommendation (systems-architect skill) at `.harness/architect_recommendation_u_rt_35_gap_b_within_path_a.md`
   - spec-writer apply pass authoring v1.25 → v1.26 §16.5 amendments
-  - impl-time grounding pass at force-push pre-merge revision (PR #37) — verified type field-set against IS HEAD
+  - "impl-time grounding pass at force-push pre-merge revision (PR #37) — verified type field-set against IS HEAD"
 ---
 
 # Clearance — `Spec_Control_Plane v1.26`

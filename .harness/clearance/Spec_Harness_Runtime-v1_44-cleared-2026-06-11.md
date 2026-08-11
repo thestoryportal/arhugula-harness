@@ -4,17 +4,17 @@ version: v1.44
 cleared_at: 2026-06-11T18:30:00-06:00
 clearance_type: Phase-7-absorbed-via-fork-doc (bundled-absorption — design-substrate + harness-runtime/src + harness-is/src + tests)
 back_reference:
-  - .harness/r-pm-1-prompts-management-design-v1.md §4.1 (R-PM-1 4-layer design — cascade PR #1 INJECTION layer, the load-bearing piece)
-  - .harness/class_1_fork_prompts_management_surface_active_prompt_version.md DP-5 (the prompts-management fork, re-opened at PR #1 injection scope)
-  - Project_Roadmap_v1.md §5.16 R-PM-1 + §5.17 R-CC-1 (capability-completion arc #2 — the active frontier)
+  - ".harness/r-pm-1-prompts-management-design-v1.md §4.1 (R-PM-1 4-layer design — cascade PR #1 INJECTION layer, the load-bearing piece)"
+  - ".harness/class_1_fork_prompts_management_surface_active_prompt_version.md DP-5 (the prompts-management fork, re-opened at PR #1 injection scope)"
+  - "Project_Roadmap_v1.md §5.16 R-PM-1 + §5.17 R-CC-1 (capability-completion arc #2 — the active frontier)"
   - design-substrate/Spec_Information_Substrate_v1.md v1.6 §5.2 (the IS-carrier side — inline content + derive-invariant; co-published this arc)
   - PR (pending — this arc)
 merge_commit: (pending)
 reviewer_chain:
-  - advisor() pre-substantive decision-fork (approved the cleared design's impl approach; required TWO reachability proofs — dispatch-composition through real dispatch(...) + the stage-5 bootstrap seam, the exact seam #496 left inert — and symmetric coverage across all 5 dispatch helpers; minor notes on step-level (not bootstrap-abort) conflict error + the frozen-payload ADR-F1 affirmation, both applied)
-  - out-of-family Codex review (2 rounds to convergence — caught 2 real decorrelated P2 bugs: OpenAI/Ollama injection must happen AFTER the params merge so a `params["messages"]` escape-hatch override can't silently clobber it / hide a competing system source; both fixed + regression-tested. Final round: "no discrete correctness issues")
-  - harness-adversarial-reviewer Phase-7 pre-merge review (APPROVE — no Class 1 halt; the X-AL-3 "no new ADR" call independently verified by direct ADR-F1 §Decision/§Rationale(b)/§Consequences(a) read; F3-01 memory-variant injection test added to close the "all 5 helpers" invariant; F3-02 model_copy-bypass noted latent for PR #2; F3-03 live-e2e exercised)
-  - empirical code-grounding (3 translate fns + 5 dispatch helpers threaded; ProviderAgnosticPayload stays frozen → cost-attribution + §14.2 anthropic.* attrs untouched; verify-by-execution: harness-runtime 1584 + harness-is 140 green incl. proof-a (4 dispatch paths) + proof-b (bootstrap stage-5 seam) + 2 conflict tests; pyright 0, ruff clean, overlay 31/31)
+  - "advisor() pre-substantive decision-fork (approved the cleared design's impl approach; required TWO reachability proofs — dispatch-composition through real dispatch(...) + the stage-5 bootstrap seam, the exact seam #496 left inert — and symmetric coverage across all 5 dispatch helpers; minor notes on step-level (not bootstrap-abort) conflict error + the frozen-payload ADR-F1 affirmation, both applied)"
+  - "out-of-family Codex review (2 rounds to convergence — caught 2 real decorrelated P2 bugs: OpenAI/Ollama injection must happen AFTER the params merge so a `params[\"messages\"]` escape-hatch override can't silently clobber it / hide a competing system source; both fixed + regression-tested. Final round: \"no discrete correctness issues\")"
+  - "harness-adversarial-reviewer Phase-7 pre-merge review (APPROVE — no Class 1 halt; the X-AL-3 \"no new ADR\" call independently verified by direct ADR-F1 §Decision/§Rationale(b)/§Consequences(a) read; F3-01 memory-variant injection test added to close the \"all 5 helpers\" invariant; F3-02 model_copy-bypass noted latent for PR #2; F3-03 live-e2e exercised)"
+  - "empirical code-grounding (3 translate fns + 5 dispatch helpers threaded; ProviderAgnosticPayload stays frozen → cost-attribution + §14.2 anthropic.* attrs untouched; verify-by-execution: harness-runtime 1584 + harness-is 140 green incl. proof-a (4 dispatch paths) + proof-b (bootstrap stage-5 seam) + 2 conflict tests; pyright 0, ruff clean, overlay 31/31)"
   - primary-source grounding (claude-api reference — Anthropic system= top-level kwarg vs OpenAI/Ollama role:"system" message; the provider-asymmetry linchpin for the translate-time seam)
   - design-phase bundled-absorption posture (workspace CLAUDE.md §11.4; X-AL-3 guard satisfied by the paired fork doc + this design artifact)
 supersedes: design-substrate/Spec_Harness_Runtime_v1.md v1.43

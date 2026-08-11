@@ -8,7 +8,7 @@ back_reference:
   - .harness/arc-open-b-child-crash-resume-final-state-reconstruct-save-point.md
 merge_commit: (pending — co-landed in this arc's PR)
 reviewer_chain:
-  - advisor full-transcript (BEFORE substantive work — GO on the decompose [close SAVE_POINT / register RECONCILER] + five sharpenings: the EFFECT-level crux witness [confirm resume_at>0, mind the no-cached-output-replay difference], carrier-segregation grep before touching _FANOUT_REPLAY_ENGINE_CLASSES, the RECONCILER→False contrasting baseline + agreement-test extension, the §25.15-body fail-closed-default confirmation, don't-over-excavate-RECONCILER)
+  - "advisor full-transcript (BEFORE substantive work — GO on the decompose [close SAVE_POINT / register RECONCILER] + five sharpenings: the EFFECT-level crux witness [confirm resume_at>0, mind the no-cached-output-replay difference], carrier-segregation grep before touching _FANOUT_REPLAY_ENGINE_CLASSES, the RECONCILER→False contrasting baseline + agreement-test extension, the §25.15-body fail-closed-default confirmation, don't-over-excavate-RECONCILER)"
   - by-execution witnesses (the predicate verdict flip SAVE_POINT→True [RED-without-fix, confirmed by source-stash] + the new RECONCILER→False control; the extended CP↔runtime agreement witness [SAVE_POINT True / RECONCILER False, predicates agree]; the EFFECT-level recursive-child SAVE_POINT crash-resume reconstruct [full final_state + only step-2 re-dispatched → committed prefix not re-fired]; the CP full-chain orchestrator SAVE_POINT-child RECOVERS [RED-without-fix] + the repurposed RECONCILER negative-control fail-closed)
   - out-of-family Codex on the diff (pending pre-merge — `just codex-review`)
 supersedes:

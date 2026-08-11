@@ -8,7 +8,7 @@ back_reference:
   - .harness/arc-open-b-child-crash-resume-final-state-reconstruct-save-point.md
 merge_commit: (pending — co-landed in this arc's PR)
 reviewer_chain:
-  - advisor full-transcript (BEFORE substantive work — option-(a) GO + the two SAVE_POINT-didn't-need verifications: the vacuity / engine_recovery_loop-binding check + the parent-disposition full-chain witness per `[[recovery-effect-fidelity-vs-result-fidelity]]`)
+  - "advisor full-transcript (BEFORE substantive work — option-(a) GO + the two SAVE_POINT-didn't-need verifications: the vacuity / engine_recovery_loop-binding check + the parent-disposition full-chain witness per `[[recovery-effect-fidelity-vs-result-fidelity]]`)"
   - by-execution witnesses (the runtime predicate verdict flip RECONCILER→True [RED-without-fix] + the new PURE_PATTERN→False control; the extended CP↔runtime agreement witness [all four durable True / PURE_PATTERN False]; the integration NON-VACUOUS clean-CAS auto-resume + the F-1 ABORT case-3 + the FULL-CHAIN F-1 parent-disposition witness; the CP full-chain orchestrator RECONCILER-recovers / PURE_PATTERN-fail-closed pair)
   - out-of-family Codex on the diff (pending pre-merge — `just codex-review`)
 supersedes:

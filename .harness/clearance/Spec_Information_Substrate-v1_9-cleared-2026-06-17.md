@@ -11,7 +11,7 @@ merge_commit: <pending — pinned at PR merge>
 reviewer_chain:
   - advisor() pre-substantive (full-transcript) — caught the §5.2 hash-coherence gap the arc-open grounding's "impl-no-fork" read missed; named the discriminating snapshot-inputs check; confirmed impl → impl+fork
   - routing_manifest_sha precedent (the asymmetry deciding Route C)
-  - Codex out-of-family review at PR (high-blast-radius: §5.2 recipe + dispatch path)
+  - "Codex out-of-family review at PR (high-blast-radius: §5.2 recipe + dispatch path)"
 supersedes: Spec_Information_Substrate-v1_8-cleared-2026-06-13.md
 ---
 

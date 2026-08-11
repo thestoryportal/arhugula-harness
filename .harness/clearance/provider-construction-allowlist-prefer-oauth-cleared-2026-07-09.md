@@ -6,7 +6,7 @@ clearance_type: Phase-7-absorbed-via-fork-doc
 back_reference:
   - .harness/class_1_fork_provider_construction_allowlist_semantic.md §10
   - .harness/external-cli-routing-port-review-findings.md
-  - PR #914
+  - "PR #914"
 merge_commit: (pending — feat/external-cli-oauth-routing-port)
 reviewer_chain:
   - operator AskUserQuestion ratification 2026-07-09 (deployed-parity / prefer-OAuth default posture)

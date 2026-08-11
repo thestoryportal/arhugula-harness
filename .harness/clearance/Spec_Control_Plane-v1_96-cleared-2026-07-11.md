@@ -12,17 +12,9 @@ back_reference:
 merge_commit: pending (pre-merge at filing time)
 reviewer_chain:
   - ADR-D4 v1.1 §1.8 authority ("orchestrator-workers" named at line 242)
-  - Fable-5 pre-build adversarial DESIGN review (AMEND-THEN-BUILD; 0 blocking + 4 concern —
-    C1 rarity-leg inversion (cohort_key hashes binding.agent_role, which non-overridden
-    bindings omit → orchestrator/worker key equality is the COMMON case), C2 phantom
-    "§1.8(f)" label (the (f) item lives under ADR-D4 Consequences), C3 v1.89 supersession
-    owed, C4 fence×partition witness gap — + 2 cosmetic, ALL folded pre-build; advisor +
-    Codex down — double-outage fallback per the validated reviewer ladder)
-  - Reviewer empirical probes P1-P4 on the project interpreter (the task.result() resurface
-    TRANSFERS to _cancel_worker's record-then-reraise handler; outer-watchdog cut resurfaces
-    the NAKED CancelledError — the nested-HD vehicle)
-  - Fail-on-main verification BY EXECUTION (10/13 witnesses fail against main's driver at a
-    throwaway main worktree; OWP3/OWP4/OWP10 controls pass)
+  - "Fable-5 pre-build adversarial DESIGN review (AMEND-THEN-BUILD; 0 blocking + 4 concern — C1 rarity-leg inversion (cohort_key hashes binding.agent_role, which non-overridden bindings omit → orchestrator/worker key equality is the COMMON case), C2 phantom \"§1.8(f)\" label (the (f) item lives under ADR-D4 Consequences), C3 v1.89 supersession owed, C4 fence×partition witness gap — + 2 cosmetic, ALL folded pre-build; advisor + Codex down — double-outage fallback per the validated reviewer ladder)"
+  - "Reviewer empirical probes P1-P4 on the project interpreter (the task.result() resurface TRANSFERS to _cancel_worker's record-then-reraise handler; outer-watchdog cut resurfaces the NAKED CancelledError — the nested-HD vehicle)"
+  - "Fail-on-main verification BY EXECUTION (10/13 witnesses fail against main's driver at a throwaway main worktree; OWP3/OWP4/OWP10 controls pass)"
   - Post-build decorrelated diff review per the arc PR
 ---
 

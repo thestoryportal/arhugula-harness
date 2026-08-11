@@ -7,7 +7,7 @@ back_reference:
   - .harness/arc-ledger.yaml
 merge_commit: (pending — co-landed in this arc's PR)
 reviewer_chain:
-  - advisor full-transcript (BEFORE substantive work — the DECOMPOSE discriminator [SAVE_POINT as the #779 fan-out analogue; RECONCILER grounded separately]; the CAN-vs-DOES capture-producer requirement [by-execution RED-without-fix, not a predicate unit test]; the #788 swap-fold check; the RECONCILER representability tie-breaker)
+  - "advisor full-transcript (BEFORE substantive work — the DECOMPOSE discriminator [SAVE_POINT as the #779 fan-out analogue; RECONCILER grounded separately]; the CAN-vs-DOES capture-producer requirement [by-execution RED-without-fix, not a predicate unit test]; the #788 swap-fold check; the RECONCILER representability tie-breaker)"
   - by-execution witnesses (the typed predicate verdict flip [fan-out {ESR,WAL,SAVE_POINT}→True + fan-out RECONCILER→False carrier-segregation control + LINEAR scope unaffected]; the CP↔runtime agreement [fanout-child-save-point True / fanout-child-reconciler False / nested-fanout-save-point-grandchild True / nested-fanout-reconciler-grandchild False]; the RED-without-fix SAVE_POINT fan-out child crash-resume reconstruction + committed effect-bearing branch non-re-fire; the cross-topology signature fold for the new engine)
   - out-of-family Codex on the diff (`just codex-review` --base)
 supersedes:

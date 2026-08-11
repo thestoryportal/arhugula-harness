@@ -5,7 +5,7 @@ cleared_at: 2026-06-24T09:00:00-06:00
 clearance_type: Phase-7-absorbed-via-operator-ratified-amendment
 back_reference:
   - .harness/r-fs-1-b-fanout-output-replay-impl-design.md (the materializable impl design; ✅ GATE RESOLVED)
-  - PR #721 (operator RATIFIED A — the synthesis record-local self-hash, in-scope of the ratified mechanism; PR2 sequenced per v1.76)
+  - "PR #721 (operator RATIFIED A — the synthesis record-local self-hash, in-scope of the ratified mechanism; PR2 sequenced per v1.76)"
   - design-substrate/Spec_Control_Plane_v1_56.md (the paired primary contract — C-CP-25 §25.12 v1.55 → v1.56)
 merge_commit: <filled at merge>
 reviewer_chain:

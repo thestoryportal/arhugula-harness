@@ -11,7 +11,7 @@ merge_commit: pending (pre-merge at filing time)
 reviewer_chain:
   - ADR-D4 §1.8(f) authority (foundational; no re-litigation required)
   - B-18-3C-PREWARM-COHORTKEY (v1.88) prerequisite verification — CohortKeyCapable oracle live
-  - Safety argument: non-CohortKeyCapable dispatchers → predicate False → byte-identical baseline
+  - "Safety argument: non-CohortKeyCapable dispatchers → predicate False → byte-identical baseline"
   - Phase 7 impl grounding pass (workflow_manifest_entry.py + workflow_manifest_loader.py default flip)
   - just codex-review pre-merge (§13.1 out-of-family review)
 supersedes: spec-control-plane-v1-88-cleared-2026-07-10.md

@@ -9,8 +9,8 @@ back_reference:
 merge_commit: pending (pre-merge at filing time; B-33-A spec-leg apply PR)
 reviewer_chain:
   - operator ratification (2026-07-21) — option A as recommended
-  - just codex-review round 1 (2026-07-22, PR #1082) — 1 P1 (empty-window vacuous-pass gap) + 2 P2 (UUID validation completeness; sibling-marker placeholder staleness) findings against this plan file, all fixed same round — see the sibling spec clearance's fuller round-1 changelog
-  - just codex-review round 2 (2026-07-22, PR #1082) — 2 P2 findings against this plan file: tightened AC #4 from bare `uuid.UUID`-parseability to the canonical-round-trip check (rejects parseable-but-noncanonical spellings) + added the matching witness; this marker's own reviewer_chain updated from placeholder to this entry
+  - "just codex-review round 1 (2026-07-22, PR #1082) — 1 P1 (empty-window vacuous-pass gap) + 2 P2 (UUID validation completeness; sibling-marker placeholder staleness) findings against this plan file, all fixed same round — see the sibling spec clearance's fuller round-1 changelog"
+  - "just codex-review round 2 (2026-07-22, PR #1082) — 2 P2 findings against this plan file: tightened AC #4 from bare `uuid.UUID`-parseability to the canonical-round-trip check (rejects parseable-but-noncanonical spellings) + added the matching witness; this marker's own reviewer_chain updated from placeholder to this entry"
 ---
 
 # Clearance — Implementation_Plan_Information_Substrate v2.8 (B-33-A spec leg)

@@ -10,7 +10,7 @@ back_reference:
 merge_commit: pending
 reviewer_chain:
   - implementation-planner revision-pass (absorbing Runtime spec v1.109 into ONE existing unit amendment)
-  - empirical grounding pass at this leg (U-RT-148's AC #15(b) / #16(a) read against the widened rule to establish that the criteria would ACTIVELY REFUSE the two new shapes if left unamended)
+  - "empirical grounding pass at this leg (U-RT-148's AC #15(b) / #16(a) read against the widened rule to establish that the criteria would ACTIVELY REFUSE the two new shapes if left unamended)"
   - out-of-family Codex review (`just codex-review-uncommitted`) to convergence
 supersedes: implementation-plan-harness-runtime-v2-56-cleared-2026-07-31.md
 ---

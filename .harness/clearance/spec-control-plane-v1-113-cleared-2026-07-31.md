@@ -5,18 +5,11 @@ cleared_at: 2026-07-31T00:00:00-06:00
 clearance_type: spec-writer-apply-pass
 back_reference:
   - .harness/forward-register.yaml row `B-100` (the filed finding; `close_out` pre-selects disposition (a))
-  - PR #1166 (the `B-69` impl leg, where `B-100` was surfaced and REPORTED not absorbed)
+  - "PR #1166 (the `B-69` impl leg, where `B-100` was surfaced and REPORTED not absorbed)"
   - PR '#pending' (this arc)
 merge_commit: pending
 reviewer_chain:
-  - spec-writer apply pass — applies the PRE-SELECTED disposition (a) and EXTENDS NOTHING beyond it. It is
-    NOT decision-free, and the two determinations it did make are recorded at contract altitude rather than
-    buried, so a reviewer can overturn them: (1) the orchestrator KEY-ABSENT shape is retained on a NEW
-    TYPE-TOTALITY ground after the authorizing row's premise was empirically falsified; (2) a pre-existing
-    §2.1 table/count gap is refreshed here rather than filed separately. Neither reverses a committed surface,
-    neither is irreversible, and no fresh operator gate was owed — the authorizing row's own `council` field
-    routes this to a spec-writer apply pass, and the underlying rule was ratified at the `B-69` arc
-    (2026-07-30, OPTION A′) and is PRESERVED VERBATIM. Rationale at `Spec_Control_Plane_v1_113.md` §0.4a.
+  - "spec-writer apply pass — applies the PRE-SELECTED disposition (a) and EXTENDS NOTHING beyond it. It is NOT decision-free, and the two determinations it did make are recorded at contract altitude rather than buried, so a reviewer can overturn them: (1) the orchestrator KEY-ABSENT shape is retained on a NEW TYPE-TOTALITY ground after the authorizing row's premise was empirically falsified; (2) a pre-existing §2.1 table/count gap is refreshed here rather than filed separately. Neither reverses a committed surface, neither is irreversible, and no fresh operator gate was owed — the authorizing row's own `council` field routes this to a spec-writer apply pass, and the underlying rule was ratified at the `B-69` arc (2026-07-30, OPTION A′) and is PRESERVED VERBATIM. Rationale at `Spec_Control_Plane_v1_113.md` §0.4a."
   - empirical grounding pass at this leg (all three effect-fence carriers, their capture sites, both resume consult sites, the runtime dispatcher key-match, and the shipped projection read directly at HEAD)
   - out-of-family Codex review (`just codex-review-uncommitted`) to convergence
 supersedes: spec-control-plane-v1-112-cleared-2026-07-30.md

@@ -196,3 +196,47 @@ def test_row_count_drift_is_caught(data):
     bad["substitutions"] = bad["substitutions"][:-1]  # drop a canonical row
     violations = sl.validate(bad)
     assert any("canonical row count" in v or "snapshot" in v for v in violations), violations
+
+
+# ── R-CTX-1 / U-CTX-12: root CLAUDE.md §4.1 must not re-hardcode a LIVE tally ───────────
+# §4.1 carried two tables that read as live counts but were the FROZEN design-phase
+# `Phase_7_Meta_Architecture_v1.md` §5 declaration; its per-axis line said `AS=6` against a
+# live ledger the batch-24 decomposition had already moved past. The repair labels both
+# tables as design-phase history and routes the live tally to this tool. These pins keep
+# that split intact — no literal is asserted, the live figure is derived here.
+
+
+def _root_claude_md() -> str:
+    return (sl.DEFAULT_LEDGER.parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
+
+
+def test_root_claude_section_4_1_routes_live_counts_to_the_derivation(data) -> None:
+    text = _root_claude_md()
+    section = text.split("### 4.1 ")[1].split("### 4.2 ")[0]
+    assert "tools/substitution_ledger.py --summary" in section
+    assert "FROZEN design-phase" in section
+    # The design-phase figures are retained, but explicitly as history.
+    assert "IS=9 / AS=6 / CP=21 / OD=8 / CXA=5" in section
+    assert "The live per-axis split is different and is derived, not written here" in section
+
+
+def test_root_claude_section_4_1_does_not_assert_the_live_per_axis_split(data) -> None:
+    """The live split must never be pasted in — that is exactly how `AS=6` went stale."""
+    section = _root_claude_md().split("### 4.1 ")[1].split("### 4.2 ")[0]
+    derived = sl.derive(data)["axis_rowcount"]
+    live_line = " / ".join(f"{axis}={derived[axis]}" for axis in ("IS", "AS", "CP", "OD", "CXA"))
+    assert live_line not in section, (
+        f"root CLAUDE.md §4.1 hardcodes the live per-axis split ({live_line}); "
+        "§4.2 requires it be derived from tools/substitution_ledger.py instead"
+    )
+
+
+def test_artifact_pointer_index_carries_no_inline_substitution_cardinality() -> None:
+    """`.harness/artifact-pointers/plans.md` §2.5 rows carried stale `(N entries)` counts."""
+    path = sl.DEFAULT_LEDGER.parents[1] / ".harness" / "artifact-pointers" / "plans.md"
+    text = path.read_text(encoding="utf-8")
+    for axis in ("IS", "AS", "CP", "OD"):
+        assert f"{axis} substitution surface (" not in text, (
+            f"{path.name} re-introduced an inline {axis} substitution cardinality"
+        )
+    assert "tools/substitution_ledger.py --summary" in text

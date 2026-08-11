@@ -4,8 +4,8 @@ version: v1.3
 cleared_at: 2026-05-30T23:00:00-06:00
 clearance_type: Phase-7-absorbed-via-architect-recommendation
 back_reference:
-  - .harness/architect_recommendation_h_t_is_2_artifact_tier_registry_wiring.md (PR #89; §10 + §11 addenda)
-  - PR #89 (apply-pass arc carrying this clearance)
+  - ".harness/architect_recommendation_h_t_is_2_artifact_tier_registry_wiring.md (PR #89; §10 + §11 addenda)"
+  - "PR #89 (apply-pass arc carrying this clearance)"
 merge_commit: <pending — fills at apply-pass PR merge>
 reviewer_chain:
   - systems-architect Mode 3 tension-resolution arc (architect rec body)

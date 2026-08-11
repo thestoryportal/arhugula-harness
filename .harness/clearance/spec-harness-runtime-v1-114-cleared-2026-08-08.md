@@ -11,7 +11,7 @@ back_reference:
 merge_commit: <pending — same PR as this marker>
 reviewer_chain:
   - B-118 grounding + leg-design pass (read-only, at HEAD fb3dda44 — all six close-out steps re-verified, cites re-located from pre-B-115 numbering)
-  - operator AskUserQuestion ratification 2026-08-08 (the ONE genuine gate: §14.6.4 cell 3 cooldown disposition)
+  - "operator AskUserQuestion ratification 2026-08-08 (the ONE genuine gate: §14.6.4 cell 3 cooldown disposition)"
   - spec-writer apply pass (this leg)
   - impl-time grounding pass (spec + plan + impl land together; every contract term witnessed by execution)
 supersedes: spec-harness-runtime-v1-113-cleared-2026-08-08.md

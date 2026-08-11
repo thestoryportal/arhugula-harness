@@ -4,7 +4,7 @@ version: v1.103
 cleared_at: 2026-07-22T00:00:00-06:00
 clearance_type: Phase-7-absorbed-via-Class-2-fork-ratification (B-65 apply arc; spec-writer apply pass per CLAUDE.md §4.3 + §4.5)
 back_reference:
-  - .harness/class_2_fork_b65_post_effect_signing_carrier_cascade_disposition.md (RATIFIED 2026-07-21 — option A AS RECOMMENDED: §3 terminal-with-result rider + §3b protected result store)
+  - ".harness/class_2_fork_b65_post_effect_signing_carrier_cascade_disposition.md (RATIFIED 2026-07-21 — option A AS RECOMMENDED: §3 terminal-with-result rider + §3b protected result store)"
 merge_commit: pending (pre-merge at filing time; B-65-A apply PR)
 reviewer_chain:
   - operator ratification (2026-07-21) — option A as recommended

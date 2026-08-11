@@ -6,7 +6,7 @@ clearance_type: Phase-7-absorbed-via-architect-recommendation
 back_reference:
   - .harness/architect_recommendation_h_t_is_2_artifact_tier_registry_wiring.md §11.4.1 Q-γ AUQ + §11.8 closure entry
   - design-substrate/Implementation_Plan_Harness_Runtime_v2_42.md (sibling NEW U-RT-112)
-  - design-substrate/Implementation_Plan_Information_Substrate_v2_4.md (v2.4 docs-half PR #89)
+  - "design-substrate/Implementation_Plan_Information_Substrate_v2_4.md (v2.4 docs-half PR #89)"
 merge_commit: pending
 reviewer_chain:
   - operator AskUserQuestion ratification 2026-05-30 Q-γ=(γ-2) (residence-ownership transfer ratification)

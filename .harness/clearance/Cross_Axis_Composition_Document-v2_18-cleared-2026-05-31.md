@@ -10,8 +10,8 @@ back_reference:
   - operator AskUserQuestion 2026-05-31 Option (A) CXA-conforms-to-plan ratification
 merge_commit: (pending)
 reviewer_chain:
-  - probe-first empirical orientation at v2.18 arc (PR #94 standing-posture amendment 5)
-  - council deliberation discriminated-out at nameable-tension check (PR #94 amendment 1) — no real voice-tension; C3-15 ratification already operator-decided
+  - "probe-first empirical orientation at v2.18 arc (PR #94 standing-posture amendment 5)"
+  - "council deliberation discriminated-out at nameable-tension check (PR #94 amendment 1) — no real voice-tension; C3-15 ratification already operator-decided"
   - operator AskUserQuestion 2026-05-31 (Option A CXA-conforms-to-plan + Option B item-12 carve-out sibling)
   - design-phase posture session 2026-05-31 (operator-declared per workspace CLAUDE.md §11.3)
 ---

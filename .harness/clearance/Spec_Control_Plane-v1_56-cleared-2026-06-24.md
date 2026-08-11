@@ -5,7 +5,7 @@ cleared_at: 2026-06-24T09:00:00-06:00
 clearance_type: Phase-7-absorbed-via-operator-ratified-amendment
 back_reference:
   - .harness/r-fs-1-b-fanout-output-replay-impl-design.md (the materializable impl design; ✅ GATE RESOLVED + the "B-POSTJOIN-LLM-SYNTHESIS riding the above" section)
-  - PR #721 (operator RATIFIED A — "the synthesis output gets a record-local capture-time self-hash either way"; PR2 sequenced per v1.55 §5)
+  - "PR #721 (operator RATIFIED A — \"the synthesis output gets a record-local capture-time self-hash either way\"; PR2 sequenced per v1.55 §5)"
   - Spec_Control_Plane_v1_55.md §3/§5 (named PR2 as the registered follow-on slice)
 merge_commit: <filled at merge>
 reviewer_chain:

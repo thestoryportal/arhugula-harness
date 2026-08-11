@@ -13,13 +13,9 @@ back_reference:
 merge_commit: pending (pre-merge at filing time)
 reviewer_chain:
   - ADR-D4 v1.1 §1.8 authority (steps 2-4 committed; "all cells where fan-out cap > 1" scope)
-  - Fable-5 pre-build adversarial DESIGN review (AMEND-THEN-BUILD; B1 §25.18-shadow + B2
-    TaskGroup-swallow + C1-C5 + 4 cosmetic ALL folded pre-build; advisor + Codex down —
-    double-outage fallback per the validated reviewer ladder)
-  - Session-independent empirical probe (TaskGroup child-CancelledError semantics on system
-    3.14.5 + project uv 3.12.13) — CONVERGENT with the reviewer's independent probe
-  - Fail-on-main verification BY EXECUTION (8/8 claimed witnesses fail against main's driver
-    at the designed assertions; EP3 control passes)
+  - "Fable-5 pre-build adversarial DESIGN review (AMEND-THEN-BUILD; B1 §25.18-shadow + B2 TaskGroup-swallow + C1-C5 + 4 cosmetic ALL folded pre-build; advisor + Codex down — double-outage fallback per the validated reviewer ladder)"
+  - "Session-independent empirical probe (TaskGroup child-CancelledError semantics on system 3.14.5 + project uv 3.12.13) — CONVERGENT with the reviewer's independent probe"
+  - "Fail-on-main verification BY EXECUTION (8/8 claimed witnesses fail against main's driver at the designed assertions; EP3 control passes)"
   - Post-build decorrelated diff review per the arc PR
 ---
 

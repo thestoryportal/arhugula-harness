@@ -2,14 +2,14 @@
 artifact: design-substrate/Spec_Harness_Runtime_v1.md
 version: v1.70
 cleared_at: 2026-06-21T00:00:00+00:00
-clearance_type: Phase-7-absorbed-via-spine-ledger (NO operator gate — marks the registered §14.22.7 follow-on B-EFFECT-FENCE-PER-TOOL BUILT: the §14.22 C-RT-31 effect fence now exempts a declared-idempotent tool from the per-(run, step, tool) reserve [gate gains `AND NOT contract.idempotent`], so only declared-non-idempotent tools are fenced. Conservative-impl refinement to the at-most-once-for-non-idempotent intent, NOT a committed-invariant relaxation; the §14.22 C-RT-31 carrier is PRESERVED VERBATIM. Co-amends AS spec C-AS-03 §3.1 v1.11 → v1.12.)
+clearance_type: "Phase-7-absorbed-via-spine-ledger (NO operator gate — marks the registered §14.22.7 follow-on B-EFFECT-FENCE-PER-TOOL BUILT: the §14.22 C-RT-31 effect fence now exempts a declared-idempotent tool from the per-(run, step, tool) reserve [gate gains `AND NOT contract.idempotent`], so only declared-non-idempotent tools are fenced. Conservative-impl refinement to the at-most-once-for-non-idempotent intent, NOT a committed-invariant relaxation; the §14.22 C-RT-31 carrier is PRESERVED VERBATIM. Co-amends AS spec C-AS-03 §3.1 v1.11 → v1.12.)"
 back_reference:
   - .harness/beyond-mvp-capability-boundary-ledger.md (B-EFFECT-FENCE-PER-TOOL spine BUILT note)
   - design-substrate/Spec_Action_Surface_v1.md (the AS-side ToolContract.idempotent field, co-amended v1.11 → v1.12)
   - design-substrate/Spec_Harness_Runtime_v1.md (v1.60 §14.22 — the C-RT-31 fence + the §14.22.7 registration of B-EFFECT-FENCE-PER-TOOL; v1.67 §14.22.7 B-EFFECT-FENCE-DURABLE-AUTO, the named-follow-on-is-BUILD precedent; PRESERVED VERBATIM)
 merge_commit: <pending — co-published bundled-absorption PR>
 reviewer_chain:
-  - advisor (full-transcript) — BUILD-vs-gate discriminator: fence-all-when-active is the conservative IMPL of the §14.22 line-142 at-most-once-for-NON-idempotent intent (NOT a committed invariant; §14.22.7 NAMES this follow-on, the DURABLE-AUTO precedent); the tool-intrinsic-vs-invocation-dependent strict-semantic catch (a per-tool flag is sound only as a strict all-invocations property; default fence-by-default)
+  - "advisor (full-transcript) — BUILD-vs-gate discriminator: fence-all-when-active is the conservative IMPL of the §14.22 line-142 at-most-once-for-NON-idempotent intent (NOT a committed invariant; §14.22.7 NAMES this follow-on, the DURABLE-AUTO precedent); the tool-intrinsic-vs-invocation-dependent strict-semantic catch (a per-tool flag is sound only as a strict all-invocations property; default fence-by-default)"
   - standing FULL-SPEC operator directive 2026-06-12 (design back-flow pre-authorized; no operator gate)
   - out-of-family Codex review at the impl-diff PR (decorrelated; <pending>)
 supersedes:

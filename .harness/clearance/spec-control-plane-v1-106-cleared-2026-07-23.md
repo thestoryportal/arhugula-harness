@@ -16,7 +16,7 @@ reviewer_chain:
   - advisor() (2026-07-23, round 1) — recommended pulling §1 back to CONTRACT altitude rather than a 4th mechanism attempt
   - just codex-review-uncommitted (2026-07-23, round 2) — out-of-family, found the round-1-corrected hitl_responses key shape (branch_path) collides on repeated same-child_workflow_id dispatch
   - advisor() (2026-07-23, round 2) — verified via grep that run_id (not branch_path) is genuinely recursion-stable before endorsing the re-key
-  - just codex-review (2026-07-23, round 3, branch-vs-main against open PR #1092) — out-of-family, found 3 P1s of an addressability/safety class distinct from rounds 1-2's wiring-correctness class
+  - "just codex-review (2026-07-23, round 3, branch-vs-main against open PR #1092) — out-of-family, found 3 P1s of an addressability/safety class distinct from rounds 1-2's wiring-correctness class"
   - advisor() (2026-07-23, round 3) — diagnosed the 3 findings as one recurring sub-problem (addressability of a specific paused child) plus a sequencing gap; recommended narrow-scope-plus-register over a 4th mechanism-invention attempt
   - just codex-review (2026-07-23, round 4, branch-vs-main against the round-3 fix commit) — out-of-family, found round 3's own new §1.2 property 4 was itself defective (strands transitively-paused container branches; unassignable to U-CP-64)
   - advisor() (2026-07-23, round 4) — applied the non-convergent-adversarial-hardening-arms-race discriminator ("did my fix cause this finding?" = yes); recommended converting property 4 from a mechanism to a black-box invariant and moving it to the deferred bucket, rather than a 5th mechanism attempt

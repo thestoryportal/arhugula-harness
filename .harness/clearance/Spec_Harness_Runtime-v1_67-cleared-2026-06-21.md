@@ -2,7 +2,7 @@
 artifact: design-substrate/Spec_Harness_Runtime_v1.md
 version: v1.67
 cleared_at: 2026-06-21T00:00:00+00:00
-clearance_type: Phase-7-absorbed-via-spine-ledger (NO operator gate — change-note-level amendment marking §14.22.7's registered follow-on B-EFFECT-FENCE-DURABLE-AUTO BUILT + one hash-inert StepExecutionContext.run_engine_class field: the §14.22 C-RT-31 effect fence now auto-activates per-run for durable-execution engine classes via a per-dispatch gate on the RUN engine class (step_context.run_engine_class), no operator effect_fencing opt-in needed; additive, non-durable runs stay fence-free)
+clearance_type: "Phase-7-absorbed-via-spine-ledger (NO operator gate — change-note-level amendment marking §14.22.7's registered follow-on B-EFFECT-FENCE-DURABLE-AUTO BUILT + one hash-inert StepExecutionContext.run_engine_class field: the §14.22 C-RT-31 effect fence now auto-activates per-run for durable-execution engine classes via a per-dispatch gate on the RUN engine class (step_context.run_engine_class), no operator effect_fencing opt-in needed; additive, non-durable runs stay fence-free)"
 back_reference:
   - .harness/beyond-mvp-capability-boundary-ledger.md (B-EFFECT-FENCE-DURABLE-AUTO spine BUILT note)
   - design-substrate/Spec_Harness_Runtime_v1.md (v1.60 — the §14.22 C-RT-31 RuntimeEffectFence contract this arc auto-activates; v1.60 §14.22.7 explicitly registered this follow-on + named the mechanism; PRESERVED VERBATIM)

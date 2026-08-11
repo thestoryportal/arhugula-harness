@@ -5,8 +5,8 @@ cleared_at: 2026-05-29T15:00:00-06:00
 clearance_type: Phase-7-absorbed-via-fork-doc
 back_reference:
   - .harness/class_1_fork_topology_admissibility_check_load_time_vs_runtime_asymmetry.md
-  - PR #80 (filing)
-  - PR #80-apply (apply arc)
+  - "PR #80 (filing)"
+  - "PR #80-apply (apply arc)"
 merge_commit: TBD-at-PR-merge
 reviewer_chain:
   - use-the-product probe (post-PR-#78 session, 2026-05-29)

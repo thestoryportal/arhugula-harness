@@ -5,14 +5,14 @@ cleared_at: 2026-08-06T00:00:00-06:00
 clearance_type: Phase-7-absorbed-via-Class-2-fork-ratification (B-88 spec leg; plan delta paired with Spec_Memory_Substrate_v1 v1.3)
 back_reference:
   - .harness/class_2_fork_b88_memory_failure_input_validation_class.md (RATIFIED Class 2 fork — §4 reading A's plan rider, §9 the leg sequencing, §11.1 the A-ii RE-TYPE ratification with its six/two site split, its coverage narrowing, its mandatory C-MEM-19 preservation clause and its retry-exit-class consequence, §11.5 the sequencing from ratification)
-  - PR #1233 — the 2026-08-05 operator ratification record
+  - "PR #1233 — the 2026-08-05 operator ratification record"
   - .harness/clearance/spec-memory-substrate-v1-3-cleared-2026-08-06.md (the paired spec-leg marker)
   - .harness/forward-register.yaml — row B-88 (design_substrate_gated at the ratification, historical-at-ratification; transits to open at this same PR — see the register for live status)
   - .harness/clearance/implementation-plan-memory-substrate-v1-2-cleared-2026-07-29.md (the predecessor marker)
 merge_commit: pending (pre-merge at filing time; B-88 spec-leg apply PR)
 reviewer_chain:
-  - Class 2 fork B-88 (filed 2026-08-05) — eight out-of-family `just codex-review` rounds; SOUNDNESS EXIT at R8. The R4 finding is the one this plan delta depends on most directly: reading A had treated all repo-wide raise sites of the memory-tool input-error type as one population, while several `lifecycle/llm_dispatch.py` sites raise it for INTERNAL faults that contradict the boundary invariant — which created sub-decision A-ii and, with it, the impl-leg work this delta decomposes
-  - operator ratification (2026-08-05, PR #1233) — reading A with A-ii = RE-TYPE, scoped to SIX sites; the two model-supplied-`scope_ref` sites explicitly retained; leg ownership stated explicitly (the spec leg records the decision and the reachability, the impl leg performs the source re-typing and carries the witnesses, including an end-to-end dispatch/retry witness)
+  - "Class 2 fork B-88 (filed 2026-08-05) — eight out-of-family `just codex-review` rounds; SOUNDNESS EXIT at R8. The R4 finding is the one this plan delta depends on most directly: reading A had treated all repo-wide raise sites of the memory-tool input-error type as one population, while several `lifecycle/llm_dispatch.py` sites raise it for INTERNAL faults that contradict the boundary invariant — which created sub-decision A-ii and, with it, the impl-leg work this delta decomposes"
+  - "operator ratification (2026-08-05, PR #1233) — reading A with A-ii = RE-TYPE, scoped to SIX sites; the two model-supplied-`scope_ref` sites explicitly retained; leg ownership stated explicitly (the spec leg records the decision and the reachability, the impl leg performs the source re-typing and carries the witnesses, including an end-to-end dispatch/retry witness)"
   - spec-writer apply pass (2026-08-06) — plan delta authored alongside the spec delta in the same PR. Every `file:line` cite in U-MEM-28 was verified by direct read at HEAD `3a1300eb`, and the unit instructs re-resolution BY CONTENT at the impl leg's own HEAD because the ratification's own offsets had already drifted before this leg opened
 supersedes: implementation-plan-memory-substrate-v1-2-cleared-2026-07-29.md
 ---

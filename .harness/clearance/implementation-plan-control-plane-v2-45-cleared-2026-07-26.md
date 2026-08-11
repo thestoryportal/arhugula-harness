@@ -5,12 +5,12 @@ cleared_at: 2026-07-26T00:00:00-07:00
 clearance_type: Phase-7-absorbed-via-merge-gate-finding
 back_reference:
   - .harness/forward-register.yaml (B-78 row, closed; B-79 row, scope broadened)
-  - PR #1117
+  - "PR #1117"
   - .harness/clearance/spec-control-plane-v1-109-cleared-2026-07-26.md (sibling spec-side correction, same trigger)
 merge_commit: <filled at merge>
 reviewer_chain:
   - out-of-family just codex-review main, 5 rounds to convergence
-  - merge-gate 3-lens review (concurrency: APPROVE; test-witness: APPROVE; spec-conformance: BLOCK -> this delta)
+  - "merge-gate 3-lens review (concurrency: APPROVE; test-witness: APPROVE; spec-conformance: BLOCK -> this delta)"
 supersedes: design-substrate/Implementation_Plan_Control_Plane_v2_44.md
 superseded_by:
 ---

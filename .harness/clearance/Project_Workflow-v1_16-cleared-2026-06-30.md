@@ -10,7 +10,7 @@ back_reference:
   - design-substrate/Project_Workflow_v1_15.md PD-5 predecessor
 merge_commit: <pending — set at v1.16 PR merge>
 reviewer_chain:
-  - Operator directive: roadmap-continue all remaining arcs, 2026-06-30
+  - "Operator directive: roadmap-continue all remaining arcs, 2026-06-30"
   - Pre-substantive empirical cadence-4 memory-store enumeration
   - Codex grounding pass against v1.15 PD-5, PD-3 adjacency, and §7.5.1 inclusion gate
 supersedes: Project_Workflow-v1_15-cleared-2026-06-10.md

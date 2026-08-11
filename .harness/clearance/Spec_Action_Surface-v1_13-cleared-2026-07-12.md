@@ -6,12 +6,12 @@ clearance_type: Phase-7-absorbed-via-fork-doc
 back_reference:
   - .harness/arc-ledger.yaml (B-TOOL-SEARCH-RUNTIME entry)
   - .harness/r-fs-2-final-closure-implementation-plan-v1.md (B-TOOL-SEARCH-RUNTIME grounding-first branch)
-  - ADR-D3 v1.2 §1.1 (primitive #2 MCP-as-code — tool_search lazy-loading facet)
+  - "ADR-D3 v1.2 §1.1 (primitive #2 MCP-as-code — tool_search lazy-loading facet)"
   - ADR-D3 v1.2 §1.5 (cache-prefix integrity discipline — "per-MCP capability discovery via tool_search rather than tools[] mutation")
 merge_commit: pending (pre-merge at filing time)
 reviewer_chain:
   - Grounding pass — AS spec §13.2 adoption-depth matrix read live (r/o/R/r, no cell X — the literal "close if deferred/not-adopted" branch does not fire)
-  - advisor() — two rounds; first round mis-read the frozen superset as already satisfying the tool_search facet, second round corrected: the plan names a concrete build shape and §13.6's discretion clauses do not cover tool_search
+  - "advisor() — two rounds; first round mis-read the frozen superset as already satisfying the tool_search facet, second round corrected: the plan names a concrete build shape and §13.6's discretion clauses do not cover tool_search"
   - Phase 7 impl grounding — confirmed no existing search/query surface on ToolRegistry or MCPClientHost; confirmed SkillActivationMode.TOOL_SEARCH is a distinct, already-built, unrelated mechanism (Skill activation, not MCP capability discovery)
   - just codex-review pre-merge (§13.1 out-of-family review)
 ---

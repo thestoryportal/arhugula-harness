@@ -9,14 +9,14 @@ back_reference:
 merge_commit: pending (pre-merge at filing time; B-39 spec-leg PR)
 reviewer_chain:
   - operator ratification (2026-07-23) — Q1=(A)
-  - just codex-review-uncommitted (2026-07-23, round 1) — out-of-family, found 4 P1 wiring defects in a first draft (2 land on this file's AC #7/#8)
+  - "just codex-review-uncommitted (2026-07-23, round 1) — out-of-family, found 4 P1 wiring defects in a first draft (2 land on this file's AC #7/#8)"
   - Explore grounding pass (2026-07-23, round 1) — confirmed the retry-replay defect against the real `RetryBreakerFallbackDispatcher`/composer wiring
   - advisor() (2026-07-23, round 1) — recommended the CONTRACT-altitude correction
-  - just codex-review-uncommitted (2026-07-23, round 2) — out-of-family, found the CP-owned hitl_responses key shape collides on repeated same-child_workflow_id dispatch (CP-owned; this file's own AC #7/#8 unaffected, Depends-on note updated)
-  - just codex-review (2026-07-23, round 3, branch-vs-main against open PR #1092) — out-of-family, found §2's "AC #3 confirmed" claim empirically false against the actual U-RT-95 test file (resume-consume-cycle deferred per FM-2, not exercised)
+  - "just codex-review-uncommitted (2026-07-23, round 2) — out-of-family, found the CP-owned hitl_responses key shape collides on repeated same-child_workflow_id dispatch (CP-owned; this file's own AC #7/#8 unaffected, Depends-on note updated)"
+  - "just codex-review (2026-07-23, round 3, branch-vs-main against open PR #1092) — out-of-family, found §2's \"AC #3 confirmed\" claim empirically false against the actual U-RT-95 test file (resume-consume-cycle deferred per FM-2, not exercised)"
   - Direct file read (2026-07-23, round 3) — read test_u_rt_95_hitl_pause_trigger_durable_async_full_execution_path.py lines 1-56 to verify the finding before editing (per subagent-landscape-reports-need-regrounding discipline, applied to a self-authored claim this time)
   - just codex-review (2026-07-23, round 4, branch-vs-main against the round-3 fix commit) — out-of-family, found this file's own filing footer still said "one confirmation note (U-RT-95)" after round 3 made it a genuine amendment; the other 2 round-4 findings are entirely CP-owned
-  - just codex-review (2026-07-23, round 5, branch-vs-main against the round-4 fix commit) — out-of-family, found AC #9 implicitly overclaimed coverage of the production-shape repeated-child_workflow_id routing proof, which no unit actually owns
+  - "just codex-review (2026-07-23, round 5, branch-vs-main against the round-4 fix commit) — out-of-family, found AC #9 implicitly overclaimed coverage of the production-shape repeated-child_workflow_id routing proof, which no unit actually owns"
   - just codex-review (2026-07-23, round 6, branch-vs-main against the round-5 fix commit) — out-of-family, found this file's own U-RT-94 Files row still asserted HarnessContext.resume_context_holder removal as unconditional/standalone; the other round-6 finding (HITLEscalationBrief correlation gap) is entirely CP-owned
 ---
 

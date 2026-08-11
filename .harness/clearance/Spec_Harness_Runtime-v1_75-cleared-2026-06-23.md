@@ -11,7 +11,7 @@ back_reference:
   - PR for the arc-a bundle (this branch arc-a-postjoin-llm-synthesis)
 merge_commit: <filled at merge>
 reviewer_chain:
-  - C1⊥C9 dyadic council (PR #711) + advisor (two-layer hollow-trap surfacing + coherent-A scope)
+  - "C1⊥C9 dyadic council (PR #711) + advisor (two-layer hollow-trap surfacing + coherent-A scope)"
   - Operator AskUserQuestion 2026-06-23 — chose A (synthesis + loud disclosure now)
   - spec-writer apply pass (this arc; the runtime half paired with CP v1.54)
 supersedes: <none>
