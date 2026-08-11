@@ -1246,7 +1246,7 @@ async def test_shutdown_skips_tracer_close_while_flush_worker_lingers(
         ctx_arg: Any, *, timeout_millis: int = 30_000
     ) -> FlushReport:
         _ = timeout_millis
-        shutdown_mod._inflight_tracer_flush[id(ctx_arg)] = lingering  # type: ignore[attr-defined]
+        shutdown_mod._register_inflight_tracer_flush(id(ctx_arg), lingering)  # type: ignore[attr-defined]
         return FlushReport(
             tracer_flushed=False,
             ledger_fsynced=True,
@@ -1265,6 +1265,69 @@ async def test_shutdown_skips_tracer_close_while_flush_worker_lingers(
     # The load-bearing half: with budget REMAINING, the provider close was
     # still skipped rather than overlapped with the in-flight flush.
     assert tracer.shutdown_called is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_skips_tracer_close_when_earlier_flush_worker_still_lingers(
+    tmp_path: Path,
+) -> None:
+    """B-147 codex round-3 P1 — the registry tracks EVERY in-flight worker,
+    not a single slot: a standalone `flush_observability()` timeout leaves
+    worker A exporting; `shutdown()`'s own step-2 re-flush then runs worker
+    B to completion. B's completion must not erase the evidence of A, so
+    step 3b still skips the provider close."""
+    first_call_release = threading.Event()
+    calls: list[int] = []
+
+    class _FirstCallStallsTracer(_FakeTracerWithShutdown):
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            calls.append(timeout_millis)
+            if len(calls) == 1:
+                first_call_release.wait()  # worker A: outlives everything
+            return True
+
+    tracer = _FirstCallStallsTracer()
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+    try:
+        # Standalone flush: worker A times out and lingers, registered.
+        first = await asyncio.wait_for(flush_observability(ctx, timeout_millis=100), timeout=5.0)
+        assert "tracer" in first.failures
+        # Full shutdown: its step-2 re-flush (worker B) completes promptly,
+        # discarding only ITS OWN registry entry — A's must survive.
+        report = await asyncio.wait_for(shutdown(ctx, timeout=5.0), timeout=10.0)
+    finally:
+        first_call_release.set()
+
+    assert len(calls) == 2  # A (stalled) + B (completed)
+    assert "tracer_provider" in report.failures
+    assert tracer.shutdown_called is False  # close never overlapped worker A
+
+
+@pytest.mark.asyncio
+async def test_flush_worker_startup_failure_leaves_no_stale_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-147 codex round-3 P2 — a tracer worker that never launches (e.g.
+    `Thread.start()` under thread-resource exhaustion) must not strand a
+    registry entry: nothing would ever clear it, and every later shutdown
+    of the same ctx would wrongly skip the provider close forever."""
+    real_run_bounded = shutdown_mod._run_blocking_bounded  # type: ignore[attr-defined]
+
+    async def _tracer_start_fails(fn: Any, timeout_seconds: float, *, thread_name: str) -> Any:
+        if thread_name == "harness-flush-tracer":
+            raise RuntimeError("can't start new thread")
+        return await real_run_bounded(fn, timeout_seconds, thread_name=thread_name)
+
+    monkeypatch.setattr(shutdown_mod, "_run_blocking_bounded", _tracer_start_fails)
+    tracer = _FakeTracerProvider(returns=True)
+    ctx = _ctx_with(tmp_path, tracer=tracer)
+
+    report = await flush_observability(ctx, timeout_millis=500)
+
+    assert "tracer" in report.failures
+    assert report.tracer_flushed is False
+    assert shutdown_mod._inflight_tracer_flush == {}  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
