@@ -22,9 +22,25 @@ the table (§11.3); ambiguous intent → ask, never infer (§11.6).
 is a bundled-absorption arc carrying back-flow — fork doc, architect recommendation, retirement
 filing, or clearance marker (§11.4, §4.5). Phase-7 never edits `design-substrate/**` (§4.4, X-AL-3).
 
+## Governance packs (§N bodies relocated out of root; load on demand, never preload)
+
+Load matrix + roster: `docs/governance/README.md`. Root keeps every §N.M heading with a
+resolving pointer; the safety kernel (§1.3, §3.1/§3.2, §4.3/§4.4, §5, §8, §11, §12.2.1,
+§12.4.1, §13.1, §14) never leaves root.
+
+| Pack | Root sections | Load when |
+|---|---|---|
+| `docs/governance/project-framing.md` | §1.1, §7, §9, §9.1 | axis scope table / sub-phase enumeration / bootstrap footer |
+| `docs/governance/stack-and-layout.md` | §3.3 | adding a workspace member; repo tree |
+| `docs/governance/substitution-and-clearance.md` | §4.1, §4.2, §4.5 | retirement event; clearance marker |
+| `docs/governance/skills-and-subphases.md` | §6, §7 | choosing a Phase 7 skill / routing a sub-phase |
+| `docs/governance/design-phase-principles.md` | §10, §10.1–§10.9 | **design-phase posture only** |
+| `docs/governance/roadmap-protocol.md` | §12, §12.1–§12.3, §12.5.x | hand-running the audit / post-merge refresh / drift reconcile |
+| `docs/governance/orchestration.md` | §13.2–§13.5 | choosing solo / advisor / codex-review / council / fan-out |
+
 ## Pointers
 
 - Next action + drift audit — `.harness/roadmap_status.md` (§12)
-- Artifact heads §2.1–§2.4; their lineage — `.harness/claude-artifact-pointers.md` (§2)
+- Artifact heads §2.1–§2.4; their lineage — `.harness/artifact-pointers/` (§2), query never read wholesale
 - Sub-agent boundary (H_E ≠ H_T topology) — `Sub_Agent_Boundary_Specification_v1.md` (§5)
 - Fork detection + back-flow routing (§4.3) · review + orchestration disciplines (§13, §14)

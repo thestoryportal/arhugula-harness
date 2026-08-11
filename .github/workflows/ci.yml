@@ -301,9 +301,14 @@ jobs:
       - name: Resolve every tracked CLAUDE.md citation (unresolvable cite = CI failure)
         run: uv run python tools/claude_md_citation_resolver.py --check
 
-      - name: Citation-resolver tests (shape coverage + attribution + negative tests)
+      - name: Citation-resolver + governance-router tests
+        # test_governance_router.py (U-CTX-15) pins the docs/governance/ pack roster by SET
+        # EQUALITY across four venues — the filesystem, the load matrix, CONTEXT.md and
+        # AGENTS.md — and asserts the U-CTX-13 safety kernel never leaves root CLAUDE.md.
         working-directory: tools
-        run: uv run python -m pytest test_claude_md_citation_resolver.py -q
+        run: >
+          uv run python -m pytest
+          test_claude_md_citation_resolver.py test_governance_router.py -q
 
   arc-ledger:
     # R-FS-1 roadmap overhaul — the arc-ledger tally-validation gate (byte-parallel to the

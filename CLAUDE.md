@@ -10,17 +10,7 @@
 
 ### 1.1 What this workspace builds
 
-This workspace implements **H_T** (the target harness aka Arhugula v2) — a multi-LLM agent harness — under the **H_E** execution surface (Claude Code CLI). H_T is specified by the design-phase artifact corpus enumerated at §2. H_T implementation traverses the per-axis atomic-unit plans at §2.4 in topological-sort order per per-axis-plan dependency graphs. H_E provides the development environment, IDE substrate, and bounded substitutions for not-yet-built H_T primitives (see §4).
-
-The harness has four design axes plus a cross-axis composition surface:
-
-| Axis | Scope |
-|---|---|
-| **IS** — Information Substrate | State ledger (6-field hash-chained entries per C-IS-05 §5), content-addressed index, semantic cache, filesystem-path classification |
-| **AS** — Action Surface | Tool contracts (typed I/O schemas), MCP integration (FastMCP host + client), sandbox (4-tier blast radius), skills filesystem |
-| **CP** — Control Plane | Routing (capability-aware multi-LLM), retry / breaker / idempotency, workflow lifecycle, topology (6-class enum), HITL placement |
-| **OD** — Operational Discipline | HITL primitives (4-response palette), audit ledger schema, cost attribution (5-step chain), observability (15-namespace OTel schema per C-OD-05 §5.1) |
-| **CXA** — Cross-Axis Composition | **107 plan-canonical cross-axis relationships** across 7 composition buckets per `Cross_Axis_Composition_Document_v2_23.md` §2.3 — **37 genuine typed seams + 48 convention-level + 22 phase-2-runtime** (this plan-derived 7c baseline is FROZEN), **+2 R-PM-1 prompts-management forward-capability seams at §2.3.8 (CP→IS + OD→CP, runtime-mediated `R-live`) +1 B-54 audit-verification seam at §2.3.9 (CP→OD, runtime-mediated `R-live` since 2026-07-20/PR #1067; registered `R-planned` at v2.21, 2026-07-18) +1 B-33 rotation-pair-evidence seam at §2.3.10 (CP→OD, runtime-mediated; registered `R-planned` at v2.22, 2026-07-23 — flips `R-live` at the impl arc) = 111 total**.|
+The four design axes plus the CXA composition surface, and the per-axis scope table, are carried at `docs/governance/project-framing.md` §1.1. H_T is specified by the design-phase corpus at §2 and traversed per the per-axis plans at §2.4.
 
 ### 1.2 What this workspace is NOT
 
@@ -57,11 +47,11 @@ Foundational authority remains ADR-F1..F5 plus ADR-D1..D6, then `Architectural_D
 
 ### 2.3 Per-Axis Specs (Phase 5 Contract Authority)
 
-Canonical spec heads are IS `Spec_Information_Substrate_v1.md` (**v1.13**, cleared 2026-08-07 — the ratified `B-57` **Reading A** spec leg: **ONE authorizing site**, NEW **C-IS-07 §7.6.1**, authorizing **PER-CALL-SITE** election of writer-owned timestamp sampling on DIRECT append surfaces via the EXISTING `WRITER_OWNED_TIMESTAMP` sentinel — **never a default, never a mode on the writer**; every non-electing direct producer keeps caller-supplied semantics **BYTE-VERBATIM**, and a site MAY elect only where its timestamp means *when the entry was appended*. Plus ONE residual-status paragraph recording §7.6's registered residual as **DISCHARGED** (the `"Surfaces that do NOT change"` and `Registered residual` paragraphs themselves PRESERVED VERBATIM) and ONE **cross-reference-only** clause at the §7.1 row-7 cell. **ZERO contract numbers, ZERO hash/canonicalization/migration impact, ZERO CXA rows, ZERO new plan units, ZERO code** — the per-site ELECT/RETAIN/DEFER roster is carried at the PLAN, not the contract. `B-57` stays OPEN; the conversions + the two-process witness are the separate impl leg. Predecessor v1.12, cleared 2026-07-22), AS `Spec_Action_Surface_v1.md` (**v1.14**, cleared 2026-07-15 — the spec-layer absorption of the ADR-D2 v1.3 `B-25` resolution (Reading A): C-AS-02 §2.3 row 7's condition text corrected to *"Read-only, any"*, the row→argument-keying paragraph stating explicitly that `is_deterministic_inhouse` keys NO row — reserved, not removed — plus the §3.1 field-docstring and discriminator-prose corrections. **ZERO `sandbox_tier_floor` signature change, ZERO field added or removed, ZERO `max()` composition change.** Clearance `spec-action-surface-v1-14-cleared-2026-07-15.md`, whose Notes recorded this pointer bump as owed; discharged at the R-CTX-1 U-CTX-12 reconciliation. Predecessor v1.13), CP `Spec_Control_Plane_v1_116.md` (**v1.116**, cleared 2026-08-09 — the operator-ratified `B-138` **disposition (a)** spec leg: **THREE amendment sites, all within C-CP-21 §21** — §21.5 row-1's value-set gloss corrected to the C-CP-25→C-CP-28 §25.2 **`ValidatorFailClass`** domain (the wire attribute `validator.fail.class` carries `schema_violation`…`external_rejection` — grounded on BOTH live producers, OD's C-OD-29.1 ingestion shape, an all-agnostic downstream reader inventory, and the register row's own falsifier FIRING at the cleared C-CP-28 §25.5 declaration); ONE binding declaration demoting the §21.1 retry-exit taxonomy (`ValidatorRetryExitClass`) from the wire name — §21's routing/staircase/palette semantics PRESERVED VERBATIM in substance, the taxonomy demoted never deleted, and NO wire attribute minted for it; §21.5 row-3's `validator.fail.permanence` derivation clause DEMOTED with the taxonomy — the outcome projection is LOSSY (`ESCALATE` conflates `permanent-fail-exit` with `HITL-recoverable`), so the wire derivation is deliberately NOT re-declared and the sub-decision routes to `B-124`, which is UNBLOCKED on the taxonomy question; §1.1's emission condition corrected to conditional-on-populated-`fail_class` (the composer's `unspecified` sentinel declared a non-member). **BUNDLED with ADR-D5 v1.5 → v1.6 at §1.10.1** — the upstream canonical declaration site, because the authority chain forbids a spec-only override of an accepted ADR (a codex P1 catch). The CP-3/OD-4 attribute-set divergence dispositioned in the same pass as two contracts declaring disjoint-except-`class` subsets of one namespace — **§21.5's declared count stays THREE, so the `namespace_map`/export-manifest count gates are untouched**. **ZERO contract numbers, ZERO code, ZERO Runtime/OD/CXA delta, ZERO hash impact.** `B-138` **CLOSES**; **`B-139` + `B-140` + `B-141` MINTED** (`B-139`: `cause_attribution` declared-always-emitted at both canonical surfaces, zero producers; `B-140`: no production path opens the declared `validator.fail` span — attributes ride `validator.evaluate`/`validator.escalation` while OD sampling keys on span names production never emits — plus the composer's out-of-domain `unspecified` sentinel; both codex catches, recorded not absorbed; `B-141`: the C-OD-14 §14.5.3/ADR-D6 v1.2 replay-divergence surfaces still fix the retry-exit `terminal-fail-exit` on the wire name — zero production emission sites — cascade owed at the OD/D6 venue). Clearances `spec-control-plane-v1-116-cleared-2026-08-09.md` + `ADR-D5-v1-6-cleared-2026-08-09.md`. Predecessor v1.115, cleared 2026-08-03 — the ratified `B-107` **Reading A-hybrid** spec leg: THREE contract amendment sites — v1.107 §1.1 membership (the uniform-fallback unaddressed/eligible set holds only NON-EMPTY captured keys, so the scalar fallback cannot nominate `""`), `ResumeContext.effect_fence_resolutions` (ordinary construction REFUSES empty keys; the field is a validated immutable **copy**, inherited by every subclass), and the resolver boundary (an empty `idempotency_key` is unresolvable BEFORE map-hit or eligibility, making validation-bypassed content inert and unable to affect a keyed sibling) — plus ONE publication reconciliation at v1.112 §2.1. The b80 `False → True` consequence is ratified; **`B-101`(a) NOT jointly discharged** (same compatibility-cost category, no variant discriminator; B-101 stays separately closed under (b)-PLUS, promotion trigger unchanged). **Union UNCHANGED at 4 variants / 10 source shapes / 7 carriers; ZERO contract numbers, ZERO Runtime §30 delta, ZERO CXA §2.3 rows, ZERO hash impact; U-CP-64 implementation separately owed.** Predecessor v1.114, cleared 2026-08-01 — the `B-101` spec leg, disposition **(b)-PLUS**: ONE amendment site, §1.2 constraint 3's stated residual **APPENDED TO** with one paragraph declaring the ordinary-serialization boundary formally OUT of the staleness fence's scope, NAMING `StepExecutionContext.resume_context` (`workflow_driver_types.py:460`) as the ONE live base-typed carrier, recording the grounded no-`model_dump`/shallow-`model_copy`/unset-`revalidate_instances` facts, and stating a normative **PROMOTION TRIGGER** to disposition (a), keyed on MECHANISM rather than the named carrier — any arc introducing ANY base-schema serialization boundary over a `ResumeContext` value on a resume path. **NO text retracted or reworded — but §1.3(c)'s reach is made EXPLICIT where v1.112 left it implicit, which under the broadest reading IS a narrowing, recorded at the delta's §0.5 finding (vi) with a one-step escalation route to disposition (a); `ResumeContext`'s field set PRESERVED VERBATIM; ZERO contract numbers, ZERO hash impact, ZERO impl units owed.** Predecessor v1.113, cleared 2026-07-31 — the `B-100` spec leg: ONE amendment site, §2.1's empty-`idempotency_key` key-ABSENT treatment generalized from a PROVENANCE scope to a **STATE** scope — *any effect-fence source shape whose captured key is EMPTY* — adding a KEY-ABSENT sibling SOURCE SHAPE for the LINEAR and orchestrator carriers. **VARIANT set UNCHANGED at FOUR; source shapes 8 → 10; source CARRIERS unchanged at SEVEN. ZERO contract numbers, ZERO carriers retyped, ZERO hash impact — read-side only**; the authorizing row's orchestrator premise was found FALSIFIED and the disposition re-grounded on type totality), OD `Spec_Operational_Discipline_v1_39.md` (**v1.39**, cleared 2026-08-09 — the **`B-123` §10.2 conformance leg**: **ONE amendment site**, **§C-OD-09 §9.2.1 term 3 REPLACED IN FULL** — its explicit decline to widen the §10.2 classification-trigger predicate to span events is RETRACTED, and the predicate MUST now resolve `sandbox.violation` / `breaker.tripped` against the span **name** and, when the name does not match, against the names of the span's **events**. **This is a CONFORMANCE REPAIR, not a spec direction** — C-OD-10 §10.2's two event-shaped rows have read *"any `sandbox.violation` **event**"* / *"any `breaker.tripped` **event**"* since the contract was written (`Spec_Operational_Discipline_v1_2.md:583-584`, read verbatim) while the realization matched by span NAME, so the code was non-conformant to cleared contract text and there is no fork to route. **§10.2 is therefore NOT amended and its non-amendment is the point.** The term additionally makes NORMATIVE that the two-member §10.2 trigger set and the nineteen-member §9.2 roster are DISJOINT and MUST NOT be collapsed (`fallback.exhausted` is the live discriminator — a §9.2 member that is not a §10.2 trigger), that both name sets derive from a SINGLE declaration of each trigger name so span arm and event arm cannot drift, and that the predicate stays TOTAL and side-effect-free. **v1.38's mirror is unchanged and was VACUOUS at that revision** — it conditioned the keep flag on the span being a trigger while the predicate matched by name and the carrier is named `harness.runtime.retry_breaker_fallback`; this delta supplies the live case. **Scope narrowed by an exhaustive sweep, not assumed:** `sandbox.violation` is emitted as a REAL SPAN (`runtime_tool_dispatcher.py:725`) and an exhaustive `add_event(` scan over all seven `harness-*/src` trees returns SIX sites, none so named — the sibling arm is already conformant, and the amendment covers both names on contract-conformance grounds anyway. **§10.2 row 1 is outside this family** (an attribute carrier; its inertness stays `B-124`'s). **ADMISSION-BOUNDED, stated not glossed:** §9.2.1 term 4 is inherited UNAMENDED, so per `B-137` the sibling tree is preserved only for head-ADMITTED carriers (~10% at base-rate 0.1, ~20% at 0.2) — **no full-floor claim is made**. **A Class-3 rider the register queued for this leg was RE-GROUNDED and FALSIFIED** (ADR-D2 §1.8's table DOES carry `permanent-fail` in its C5-fail-class column at `ADR-D2.md:305/306/309`, so the §10.2 row-1 cite RESOLVES); the rider is DROPPED and the register corrected, recorded at §0.6. **ZERO contract numbers, ZERO §10.2 edit, ZERO roster change (§9.2 stays 19), ZERO namespace delta (C-OD-05 §5.1 roster 15), ZERO emission-site change, ZERO head-sampler edit, ZERO CP/Runtime delta, ZERO CXA rows (111), ZERO hash impact**; terms 1/2/4/5 + §9.1 + §9.3 PRESERVED VERBATIM. Plan leg v2.34 U-OD-60. **`B-123` CLOSES at the impl leg.** Clearance `spec-operational-discipline-v1-39-cleared-2026-08-09.md`. Predecessor v1.38, cleared 2026-08-08 — the `B-133` realization spec leg: **ONE amendment site**, NEW **§C-OD-09 §9.2.1** *"Realization of the §9.2 floor at the SDK boundary"* carrying FIVE normative terms. **The positive control ran FIRST and its RESULT grounds every term** — a REAL exhausted dispatch through the REAL `HarnessCompositeSampler` + the REAL `TailKeepSpanProcessor`, seven configurations, all three event-shaped members: **ZERO spans exported at BOTH consumers for ALL THREE**, with the discriminator arm showing a span NAMED `fallback.exhausted` surviving `base_rate=0.0` while a span carrying it as an EVENT is dropped. Terms: (1) the TAIL resolves span **name** AND **event** names through the SAME `is_always_sampled` SSOT, event attributes passed so conservative-absent is preserved; (2) a match forwards the CARRIER span immediately, the coarseness stated (OTel has no sub-span export unit); (3) the §10.2 keep flag is MIRRORED but the trigger predicate is **NOT** widened to events — that half stays **`B-123`**'s, whose step-(1) probe this leg ANSWERS as a cross-reference without closing it; (4) the HEAD consumer is a **DECLARED BOUND**, non-vacuous because `team-binding × local-development` is `HEAD_BASED_DEV` at §10.3 default **0.5** with no tail consumer — which **FALSIFIES** `B-133` close-out step (2)'s "samples at 1.0 anyway" hypothesis, corrected rather than inherited; (5) an event-matching ROOT close must still materialize its trace decision. **ZERO contract numbers, ZERO roster change (§9.2 stays at NINETEEN — this governs how the roster is RESOLVED, never what is in it), ZERO namespace delta (C-OD-05 §5.1 roster 15), ZERO emission-site change, ZERO head-sampler edit, ZERO CP/Runtime delta, ZERO CXA rows (111), ZERO hash impact**; §9.1 / §9.2's nineteen rows / §9.3 PRESERVED VERBATIM. Plan leg v2.33 U-OD-59. **`B-133` CLOSES** (steps 1+2 executed; step 3 — the F-08 per-tenant keep-volume measurement — carried as a named **OPEN** residual on the closed row per the `B-104` precedent); **`B-136` + `B-137` newly registered** — `B-136` the pre-existing name-arm root-close buffer leak; **`B-137`** the architecture-level finding out-of-family Codex round 1 raised against this arc's own commit and this leg **adjudicated by measurement and CONFIRMED**: the shipped head sampler applies the §10.3 ratio in BOTH §9.1 modes, so a `TAIL_BASED_PROD` cell at base-rate 0.1 admits only ~10% of event carriers before the tail can classify them. **Term 4's coverage claim was RETRACTED** and replaced with the per-cell admission table + the five-of-eight statement; the arm is real but PARTIAL (100% of what it sees). The starvation is **NOT uniform** — root-name-shaped members are admitted at 100% at the same cell, so the floor's realization is **shape**-dependent. `B-137` carries a **YES** council disposition (C7 ⊥ C11) and **merges** with the F-08 residual. Clearance `spec-operational-discipline-v1-38-cleared-2026-08-08.md`. Predecessor v1.37, cleared 2026-08-08 — the `B-116-t3` spec leg, the NAMED closure gate Runtime v1.112 §14.6.3 term **t3′** registered: **ONE amendment site**, the **C-OD-09 §9.2 always-sampled exception set 18 → 19**, adding `fallback.exhausted` (source declaration `C-CP-03 §3.5`) on the **CP-declares/OD-ingests** chain — CP `Spec_Control_Plane_v1_2.md:410` declares it always-sampled while OD dropped the row at original ingestion even as its two CP-table siblings at `:409`/`:411` were absorbed at OD `:521`/`:522`. A **spec-vs-spec ingestion gap, NOT code drift** — the shipped roster was byte-exact conformant to its owning contract. **§9.3's "inviolable" reconciled, not treated as a bar**: it governs OPERATOR TUNABILITY at the deployment-binding layer, not contract revision at the venue where the set is defined (C7's F-03 ruling) — and it is precisely why MEMBERSHIP is the only repair that survives operator tuning. **Rider (a) EXECUTED at this leg and PASSES** — the C-OD-11 §11.1 per-cell budget enforces at COLLECTOR_BOUNDARY / BACKEND_INGESTION, downstream of and independent of the sampling decision, while the event stays terminal once-per-exhausted-chain with ONE emission site and no per-attempt multiplier (the F-08 population question stays explicitly UNMEASURED per C7's own FM-K refusal); riders (b)/(c)/(d) cross-referenced to `B-123`/`B-124`/`B-125`, **NOT re-minted**. **HONEST SCOPE (new §, added at out-of-family review): §9.2 membership is the CONTRACT; its realization is bounded at HEAD** — both consumers classify span NAMES (`composite_sampler.py:110`; `tail_keep_span_processor.py:259`, zero `.events` inspection) while THREE members are span EVENTS (`fallback.triggered`, `breaker.tripped`, `fallback.exhausted`), **PRE-EXISTING for the two siblings since original ingestion**, so the membership contract and the ingestion-chain direction are unaffected; debt REGISTERED at NEW row **`B-133`** (same family as `B-123`/`B-124`), the redesign remedies REJECTED here as an unpriced X-AL-3 extension / an over-sampling of every dispatch wrapper. **§9.1/§9.3 and §9.2's other eighteen rows PRESERVED VERBATIM; ZERO contract numbers, ZERO new namespace (C-OD-05 §5.1 roster unchanged at 15), ZERO CP delta, ZERO Runtime text moved, ZERO CXA rows, ZERO emission-site change, ZERO hash impact.** Plan leg: v2.32 U-OD-58, bundled in the SAME PR. **`B-116` CLOSES at this leg** (impl leg U-RT-152 merged #1271). Predecessor v1.36, cleared 2026-07-30 — NEW §C-OD-30.5, the `B-69` read + staleness-refusal emission home within the EXISTING C-OD-30 namespace family), Runtime `Spec_Harness_Runtime_v1.md` (**v1.114**, cleared 2026-08-08 — the `B-118` spec leg, which **WIRES THE HALF-OPEN LATCH** and thereby **DISCHARGES** the dead-half-open-latch residual v1.112 registered and v1.113 restated unchanged: **FOUR amendment sites, all within §14.6** — (1) step 4's breaker pre-check becomes **THREE-WAY** (`closed` proceeds / `open` invokes a **CONJUNCTIVELY**-gated `attempt_half_open(now)` — state is `open` AND `opened_at` recorded AND cooldown elapsed — and on admission proceeds as the SINGLE trial **capped at ONE attempt** / `half_open` means a sibling holds the permit and is skipped with the new `half-open-trial-in-flight` reason), plus a **release-on-every-exit MUST**; (2) the §14.6.3 residual paragraph **DISCHARGED IN PLACE**, with that section's seven dispositions explicitly UNCHANGED by the discharge; (3) NEW **§14.6.4** carrying the **nine-cell trial-outcome × waiver matrix** as contract; (4) a §14.6 invariants strict append pinning the clock as composer-injected, monotonic and **IN-MEMORY** — §14.6.3 **t4**'s boundary held POSITIVELY. **This closes a CONTRACT-versus-CODE gap, not a design extension**: step 4 already read *"state is OPEN and cooldown unexpired"* — which the clock-free `should_attempt()` cannot express — and C-OD-07 §7.1 already contracts BOTH recovery transitions by name, so the latch was specified at two venues and built at neither; `B-118`'s registered falsifier (*"a decision that absorbing-OPEN is intentional"*) is NOT taken. **THE ONE OPERATOR GATE.** §14.6.4 cell 3 — what a WAIVED fault does to a breaker MID-TRIAL — is **NOT answered by the ratified Reading (II)**, which governs whether a fault CHARGES and is silent on the half-open path that was unreachable when it was ratified. Left unhandled, a waived fault **STRANDS the machine in `half_open`** (where `should_attempt()` refuses everyone and `attempt_half_open` returns `None`) — **a NEW absorbing state strictly worse than the absorbing `OPEN` this row removes**, and one the wiring would itself have introduced; four further cells (audit-signing hard failure, terminal HITL control flow, `DispatchFenceTrippedSignal`, `CancelledError`) strand identically. INCONCLUSIVE → re-arm is derivable from the attributability clause; the FRESH-vs-PRESERVED cooldown choice is not. **Operator-ratified 2026-08-08 (AskUserQuestion): FRESH cooldown**, `trigger_count = 0` (the zero-schema-cost wire discriminator against a genuine re-trip), `fail_count` UNCHANGED. **The clock is SPLIT** — the composer holds the SOURCE (an injectable `monotonic`, the `sleep_fn` posture; NOT a `RuntimeConfig` scalar), the state machine holds only the caller-recorded `opened_at` DEADLINE (per-`(scope, identifier)`, so a composer-side map would be a SECOND authority) and still never reads a clock; the in-tree shape template is `BreakerGuardedSigningBackend`. **ZERO new `C-RT-*`, ZERO OD delta of ANY kind** (C-OD-07 §7.1 already contracts both recovery transitions; §7.2's four non-optional attributes are satisfied; `is_trip` already gates `cause`/`cooldown_ms`; `emit_breaker_transition_event` needed no change), **ZERO CP §3.5 delta, ZERO CXA rows (111), ZERO hash impact, ZERO Protocol widening, ZERO persisted state** — which is why `B-118`'s registered council condition (*"conditionally yes only if step (2) proposes a durable cooldown clock"*) did **NOT** fire and no council was convened. Plan leg: v2.62 U-RT-154. `B-118` → `closed`; `B-119` cross-noted (its C11 irreversibility clause no longer holds). Clearance `spec-harness-runtime-v1-114-cleared-2026-08-08.md`. Predecessor v1.113, cleared 2026-08-08 — the `B-115` **(b′)** spec leg, which DISCHARGES the one CONDITIONAL row v1.112 left open: **THREE amendment sites, ALL inside §14.6.3** — (A) **row 6** flips *(prospective)* / **WAIVED — CONDITIONAL** to **WAIVED (condition DISCHARGED)** and names the realized type `MemoryToolExecutionLedgerConflictError` (table stays SEVEN rows; split **2 count / 4 waived / 1 prospective → 2 count / 5 waived / 0 prospective**); (B) the guard paragraph goes **four-type → five-type** and gains the **sibling-not-subclass** constraint (a subclass of the store subtype would carry `io_failure` back by MRO and void the C-MEM-19 half of the split) — the BY-NAME rule, the classifier-consistency requirement and the *"changes the CHARGE, never the control flow"* clause PRESERVED VERBATIM; (C) the declared-residual paragraph gains ONE appended clause: **`B-132` is NARROWED, NOT closed** (the deterministic ledger-refusal population left the store subtype; the store subtype's own disposition — `io_failure`, `TRANSIENT_RETRY`, still charging — is UNCHANGED). **Spec + plan + impl land TOGETHER, and the bundling is FORCED not chosen**: row 6 conditions the contract text on a fact only the build can establish and C9's binding form is *"never speculatively"*, so a spec-first leg would assert the confirmed disposition before the confirming evidence existed (the `REVIEW-e2.md` F-05 circularity) — the `B-116-t3`/#1272 precedent, not the split-leg one. **"Confirms determinism" was UNDEFINED by both §14.6.3 and the council DELIVERABLE; this leg supplies a four-part conjunctive definition** (repeat-invariance, candidate-independence, state-driven-not-stochastic, structural clock-exclusion) at contract altitude and discharges it at the LEDGER, so the evidence survives future re-typing of the executor surface. The **trip-threshold revisit-trigger does NOT fire** (harness-internal member, not provider-attested); the **dead half-open latch is inherited unchanged** (`B-118`). **ZERO new `C-RT-*` / `C-MEM-*`, ZERO Memory-spec leg** (the new type declares no class and inherits the base residual — the U-MEM-28 precedent; a dedicated `ledger_conflict` class is an operator-gated Class 2 decision, registered as **`B-134`**), **ZERO CXA rows (111), ZERO OD delta, ZERO CP §3.5 delta, ZERO hash impact**. The duplicate-RECORD half stays OPEN (W-5 cell (3)'s `== 2` assertion PRESERVED VERBATIM); only the RETRY amplification closes. Plan leg: v2.61 U-RT-153. `B-115` → `closed`. Clearance `spec-harness-runtime-v1-113-cleared-2026-08-08.md`. Predecessor v1.112, cleared 2026-08-08 — the RATIFIED `B-116` **Reading (II)** spec leg: THREE amendment sites, all inside §14.6: a NEW **§14.6.3** carrying the ratified recovery-model normative test (*a fault charges the provider-model breaker only if a half-open trial could return a different result than the trip did, attributably to the `{provider, model}` the breaker is keyed to*), the 7-row per-member disposition table (2 count / 4 waived / 1 prospective-conditional — 401/403 and the 25 response-parsing payload-shape sites STILL CHARGE; the four harness-internal types are WAIVED BY NAME, the 3 pre-flight payload-shape sites via re-type to NEW `LLMDispatchPayloadShapeInternalError`), binding terms **t1–t5** (waived-charge span-attribute pair on the INNER attempt span; the in-venue floor record with the **`B-116-t3`** OD leg registered as a NAMED closure gate; the durable-persistence pin; no HITL), C9's trip-threshold revisit-trigger and the dead-half-open-latch residual declared (zero `attempt_half_open` production call sites; forward row `B-118` owns the debt) — plus TWO strict appends (step 4's fail-fast bullet; the `retry.*` invariant bullet admitting t1+t2 outside the CP-canonical six). **ZERO new `C-RT-*`, ZERO CXA rows (111), ZERO OD roster delta at this leg** (OD §9.2 18 → 19 is the separate t3 leg). Plan leg: v2.60 U-RT-152. `B-116` `operator_gated` → `open`; closes only when BOTH the impl leg AND the t3 leg merge. Clearance `spec-harness-runtime-v1-112-cleared-2026-08-08.md`. Predecessor v1.111, cleared 2026-08-05 — the RATIFIED `B-96` **Reading C, ceiling form C-2** spec leg: THREE amendment sites, all inside §14.8.11 — a NEW **§14.8.11.1** carrying the `.harness/council-b96-grace-ceiling-2026-08-01.md` §7.1 **TWELVE** conditions as contract terms 1–12 (the reclaim rule becomes CONJUNCTIVE and publication-bounded: past-TTL filesystem age **AND** past-TTL elapsed time since a DURABLY RECORDED first observation, **no third path**, **NO absolute `k × ttl_seconds` ceiling**), plus **two strict APPENDS** (the bounded-retention bullet's cross-reference; the deferred-to-discretion list gaining the observation record's file name + serialization format + the emissions' field keys / message shapes). **Reading A NOT selected and NOT partially adopted; Reading B RETIRED EXPLICITLY at term 10.** Retention becomes typically `2×TTL` + up to two sweep-trigger intervals and is **CONDITIONAL, never an unconditional bound** — no `N × TTL` claim is encoded anywhere. **ZERO new `C-RT-*` numbers, ZERO CXA rows (aggregate frozen at 111), ZERO OD delta (`C-OD-05` §5.1 roster 15 → 15), ZERO `harness-*/src|tests` edit; §14.8.11's other seven bullets and every other section PRESERVED VERBATIM.** FIVE of the twelve conditions (#5/#6/#8/#11/#12) are **EXPANSIONS** beyond the fork's §8 ask, flagged in the clearance marker with a Class 2 route named. **`B-96`, the `B-77` residual and `B-74` flip to `closed` only at the IMPL leg** (U-RT-150). Predecessor v1.110, cleared 2026-08-01 — the RATIFIED `B-104` **Reading D** leg, **Component 1** only: TWO amendment sites, both pure DECLARATIONS of an EXISTING limit — a new closing paragraph at §14.14.9.1 and a NEW §30 invariant bullet after `Durable-handle read (v1.46)` — each stating, symmetrically with §13.7 term 3-bis, that the store writes NO pause-resolved marker so a resolved journal is byte-indistinguishable from an outstanding one and **the read reports the LATEST DURABLE RECORD, not a liveness claim**, in steady state and not merely for the legacy set. **The limit is DECLARED, not FIXED — no shipped behaviour changes**; the discriminator is capture-side and DEFERRED under register row `B-104`'s falsifiable four-disjunct demand test D-0…D-3 (D-0, a retention/pruning-policy arc, dominant). **ZERO contract numbers minted, ZERO carriers retyped, ZERO fields added, ZERO `snapshot_hash` impact, the five-member `PauseJournalReadCause` vocabulary stays CLOSED at five, ZERO plan units owed, ZERO CXA rows; §13.7/§13.7.1, §14.14.8, §14.14.9.2–§14.14.9.6 and §30's cause table + failure-mode taxonomy PRESERVED VERBATIM.** Predecessor v1.109, cleared 2026-07-31 — the `B-100` Runtime leg: ONE amendment site inside §14.14.9.2, the key-ABSENT treatment generalized PROVENANCE → **STATE**, adding the LINEAR + orchestrator KEY-ABSENT sibling source shapes; `EffectFenceAddressable` 4 → 6 shapes, union 8 → 10, carriers unchanged at SEVEN, **VARIANT set UNCHANGED at FOUR**; §14.14.9.1/§14.14.9.3–§14.14.9.6/§30/§14.14.8/§13.7 PRESERVED VERBATIM. Predecessor-of-predecessor v1.108, cleared 2026-07-31 — the RATIFIED `B-97` half (a) Runtime leg: §14.14.8 keying AMENDED to a tenant-composite key realized as per-tenant **path segregation** under a TOTAL injective constant encoding, with the (3a)-abandon migration contract + mandatory cutover + orphan statement; §14.14.9.1 parallel keying amendment; §30's `absent` row tenant-scoped in meaning AND repair + the `B-102` reachability qualification folded into `absent`/`corrupt-latest`; NEW §13.7 `harness-inspect` pause-journal enumeration surface. **Record shape UNCHANGED; the five-member cause vocabulary stays CLOSED at five**), and **Memory `Spec_Memory_Substrate_v1.md` (the `C-MEM-*` contract family; head **v1.3**, cleared 2026-08-06 - the `B-88` spec leg: C-MEM-19 gains `input_validation_failure` as a SEVENTH failure class plus the NEW `### Input validation failure` subsection carrying the ratified A-ii type boundary, the coverage statement scoping the class to the classify-routed population, and the re-typed sites' fail-fast retry disposition; two invariants appended. **ZERO contract numbers, ZERO hash impact, ZERO CXA rows.** Predecessor v1.2, cleared 2026-07-29)**. Full per-spec lineage is indexed at `claude-artifact-pointers.md` §2.3 in `.harness`.
+Canonical spec heads: IS `Spec_Information_Substrate_v1.md` **v1.13** (cleared 2026-08-07) · AS `Spec_Action_Surface_v1.md` **v1.14** (2026-07-15) · CP `Spec_Control_Plane_v1_116.md` **v1.116** (2026-08-09) · OD `Spec_Operational_Discipline_v1_39.md` **v1.39** (2026-08-09) · Runtime `Spec_Harness_Runtime_v1.md` **v1.114** (2026-08-08) · Memory `Spec_Memory_Substrate_v1.md` **v1.3** (2026-08-06). Full per-version change-note lineage lives at `.harness/artifact-pointers/spec-heads.md` and, per family, at `.harness/artifact-pointers/{is,as,cp,od,runtime,memory}.md` — **query, do not read wholesale** (`rg <term> .harness/artifact-pointers/*.md`).
 
 ### 2.4 Per-Axis Plans + CXA (Phase 6 Execution Authority)
 
-Canonical plan heads are core `Implementation_Plan_Harness_Core_v1_3.md`, IS `Implementation_Plan_Information_Substrate_v2_9.md` (2026-08-07 — the ratified `B-57` plan leg: **U-IS-11 amended with ACs #14–#20 (plus #14-bis)** — the per-call-site election with NO writer-side mode permitted, the **negatively-demonstrable** default-preservation property, the eligibility rule, per-site table conformance, the two injection-caveat resolutions, the `audit_writer` retry-loop disposition and the `shadow_git_rollback` `restored_at` decoupling pin — plus the **per-site classification table** IS spec v1.13 §7.6.1 routes to the plan (**14 rows = 10 ELECT + 2 injection-caveat + 1 RETAIN + 1 DEFER**, re-grounded by direct read). **ACs #1–#13 PRESERVED VERBATIM; ZERO new units / nodes / edges / auxiliary types / CXA rows.** Predecessor v2.8), AS `Implementation_Plan_Action_Surface_v1_6.md` (v1.6, cleared 2026-07-15 — the plan-layer half of the same `B-25` resolution, caught by out-of-family `just codex-review` on PR #1030: U-AS-06's Inputs line, Signatures comment and AC #7 still named `is_deterministic_inhouse` as a §2.3 row-1/2/7 discriminator, so the plan — the canonical execution authority for the unit — carried the superseded reading after the spec had moved. All four sites corrected to reserved-and-non-gating. **ZERO code change, ZERO test change, ZERO AC-count change.** Clearance `implementation-plan-action-surface-v1-6-cleared-2026-07-15.md`. Predecessors v1.5, v1.4), CP `Implementation_Plan_Control_Plane_v2_49.md` (2026-08-03 — the ratified `B-107` A-hybrid plan leg: **U-CP-64 amended with ONE ADDED AC #A12** — the eight-cell witness grid (map + scalar channels × LINEAR / PARALLELIZATION branch / ORCHESTRATOR_WORKERS worker / ORCHESTRATOR-own; keyed siblings in BOTH carrier orders; orchestrator-own cells constructed snapshots), the scalar-removal witnesses (b80 assertion flips to `True` + the direct caller-supplied `effect_fence_uniform_fallback_eligible_key=""` no-directive case), the PD-8 validate-copy-mutation probes, `model_construct` forged-context inertness, and the binding-rule reader inventory (seven resolver call sites + two non-test terminal key-match consumers at this revision); **#A1–#A11 PRESERVED VERBATIM; zero new units/clusters/DAG edges/CXA rows**; predecessor v2.48, 2026-07-31 — the `B-100` plan leg: U-CP-64 amended with ONE ADDED AC #A11 for the KEY-ABSENT sibling source shapes across all three effect-fence carriers, witnessed detect-then-refuse in BOTH directions; #A1–#A10 PRESERVED VERBATIM; zero new units/clusters/DAG edges), OD `Implementation_Plan_Operational_Discipline_v2_34.md` (2026-08-09 — the `B-123` repair leg's OD plan delta: **ONE new unit, ZERO amended units** — **U-OD-60**, the §10.2 event-name trigger widening (~4 functional src lines: a DERIVED two-member event-name constant composed from the existing `SANDBOX_VIOLATION_SPAN_NAME` / `BREAKER_TRIPPED_SPAN_NAME` rather than re-literalled, plus an event-scan arm appended AFTER the existing name/attribute checks so a name-matching span never pays for it), plus a **minimal** single-read change at `tail_keep_span_processor.py` — `on_end` reads `span.events` ONCE and threads that snapshot into both helpers (each gaining an optional `events` parameter defaulting to `None`, so every existing caller stays byte-identical); control flow, arms and ordering UNCHANGED. Its THREE call sites (recounted programmatically after the draft claimed two; the all-OD-internal disposition is unaffected) receive a wider answer. **That bullet was filed COMMENT-ONLY and is CORRECTED**: out-of-family Codex round 1 raised a [P2] showing the widened predicate re-read `span.events` a second time per ordinary buffered span — a regression this arc introduced, since the predicate previously never touched `.events`; adjudicated CORRECT and taken under v1.39 §1.3's once-only-read discretion, with **NEW AC #11** witnessing it structurally via a counting double asserting `== 1` (deliberately not `<= 2`, which would pass against the code being fixed) and a paired `== 0` re-confirmation of AC7. **TWELVE ACs by execution.** The load-bearing witness is an **INVERSION, by prior design**: U-OD-59 authored `test_w7_event_carried_breaker_tripped_does_not_set_the_keep_flag` precisely to PIN the pre-repair boundary so widening it later would be test-visible rather than silent drift — AC #3 inverts it IN PLACE (rename + docstring + module witness-table row + section comment moving together, assertion flipped to an ORDER-asserting equality per U-OD-59 §0.7, no stale duplicate). AC #4 is a REAL charging-fault dispatch driving a REAL breaker trip with a buffered **sibling** span — not merely the trip's own carrier — proven to export **WITHOUT `force_flush`**, with the trace arrangement asserted (`carrier.parent is not None`) so it cannot pass by accident. AC #5 keeps the rosters apart (`fallback.exhausted` forwards its carrier but must NOT flag its trace, killing the collapse-into-`ALWAYS_SAMPLED_EVENT_CLASSES` mutation); AC #7 proves the cheapest-first short-circuit **structurally** via a span double whose `.events` raises if touched, never by timing; AC #9 states the `B-137` head-admission bound rather than claiming a floor. SIX PD-8 probes recorded as mutation→required-RED correspondence with an explicit preamble on why no figures are asserted at authoring time (the impl landed concurrently in the same PR — predictions are NOT presented as results); probe (iii) predicted GREEN by analogy with U-OD-59 §0.8. §0.5 records a brief-supplied premise **independently FALSIFIED** at this leg and at the spec leg by separate direct reads (the ADR-D2 §1.8 rider). Depends on U-OD-11 + U-OD-59; **TWO** new intra-axis edges; **ZERO** cross-axis edges and **ZERO** CXA rows, determined by grep rather than assumed. Clearance `implementation-plan-operational-discipline-v2-34-cleared-2026-08-09.md`. Predecessor v2.33, 2026-08-08 — the `B-133` realization plan leg: **ONE new unit, ZERO amended units** — **U-OD-59**, the §9.2.1 event-aware arm at `TailKeepSpanProcessor.on_end` (~14 functional src lines) with **TEN ACs by execution** and **SIXTEEN witnesses W1–W16** (40 cases) (homed across the axis boundary — real-dispatch half at `harness-runtime/tests`, processor-contract half OD-local and `harness_runtime`-free, per plan §0.10) — the counterfactual; all three members surviving through the REAL processor chain **without `force_flush`**; the HEAD bound asserted and NAMED as a bound; the trigger-flag mirror; the `B-123` boundary pinned; conservative-absent three ways; buffering/eviction bookkeeping unchanged; SSOT completeness parametrized over `ALWAYS_SAMPLED_EVENT_CLASSES` **itself**, closing the parametrize-literal drift gap by construction — plus **SEVEN PD-8 probes, three of which changed the deliverable** (probe (ii) caught a witness PASSING under the mutation it existed to catch and it was sharpened from membership to export ORDER; probe (iii) returned GREEN as the **correct** result, ordering being a cost property, so no assertion was written). §0.5 records a FALSIFIED close-out hypothesis; §0.6 registers the pre-existing name-arm buffer leak as **`B-136`**; §0.7/§0.8 record the two probe findings against the plan's own witness set. Depends on U-OD-11 + U-OD-58; **TWO** new intra-axis edges; **ZERO** cross-axis edges and **ZERO** CXA rows, determined by import + constructor-signature inspection rather than assumed. Predecessor v2.32, 2026-08-08 — the `B-116-t3` plan leg: **ONE new unit, ZERO amended units** — **U-OD-58**, the §9.2 row-19 `fallback.exhausted` roster addition (~1 functional src line + the five fixture edit points), with EIGHT ACs: byte-exact roster conformance in both directions; the member witness **at the discriminating multi-tenant cell** (`base_rate=0.2`, the only cell where membership changes the answer); the base-rate disjointness witness verified UNMOVED **by running it unmodified**; the literal/prefix decomposition at **17 + 2**; PD-8 in three arms. **U-OD-11 NOT amended** per the `B-97`(a)→U-RT-149 / `B-96`→U-RT-150 precedent. Two re-grounding findings recorded rather than absorbed: §0.5 — the council's five-edit-point pricing is off by one *in kind* (the set-equality **assertion** is byte-unchanged; only its docstring count moves); §0.6 — TWO shipped `src/` count claims the pricing never covered (`alignment_floor_drift_detection.py`, `substrate_seam_exports_aggregate_manifest.py:203`). §0.7 records a PD-8 probe that came back **GREEN** — `_LITERAL_ALWAYS_SAMPLED` had **no completeness assertion**, a hand-maintained `parametrize` argument any future §9.2 amendment could leave silently short — **closed in-unit** with one assertion. ONE new intra-axis DAG edge (U-OD-11 → U-OD-58); ZERO cross-axis edges; ZERO CXA rows. Predecessor v2.31, 2026-07-31 — the `B-69` **impl** leg's OD plan delta, the one piece OD spec v1.36 §30.5.2 deliberately held for this leg: NEW U-OD-57 carrying the §C-OD-30.5 pre-bootstrap pause-state audit carrier; the impl leg selected the SIBLING-payload option (b)), Runtime `Implementation_Plan_Harness_Runtime_v2_62.md` (2026-08-08 — the `B-118` plan leg: **ONE new unit, ZERO amended units**: **U-RT-154** — the half-open latch wiring, in **FIFTEEN ACs / SEVENTEEN PD-8 probes** (ten and ten at first filing; AC #11 — epoch-guarded trial ownership — plus P11–P14 at review round 1, and AC #12 — the TRIAL PROTECTION BOUNDARY, since the admission's own transition emission sat outside the round-1 guard and a raising exporter recreated the absorbing latch — plus P15 at round 3; and AC #13 — a failing release emitter must never REPLACE the propagating exception — plus P16 at round 4; and AC #14 — the exclusivity SCOPE pinned by witness, after round 6 found the §14.6.4 text overclaimed against pre-existing per-candidate pre-check semantics — at round 6; and AC #5's cell-5 charge-vs-re-arm discrimination requirement + AC #15 + P17 at the MERGE GATE, whose lens 3 measured a token-drop mutation surviving the entire suite because `state is OPEN` + a fresh `opened_at` are equally true of an inconclusive re-arm): the conjunctive cooldown admission with `now` **REQUIRED and undefaulted** on `record_failure`/`attempt_half_open` (an `open` breaker with no open-instant can never recover, so a `None` default would make that unrecoverable state the SILENT fallback); the **one-line-but-load-bearing** `should_attempt()` narrowing to `state is closed`, which **IS** the single-trial permit (`half_open` exists only while a trial is in flight, so the prior `state is not open` admitted every concurrent branch into a call contracted to be single) plus the NEW `re_arm_half_open_trial(now)`; the ONE-attempt trial cap (uncapped, the transient path — which charges only at escalation/exhaustion — would burn up to `max_attempts` **PAID** calls against a provider believed down); **BOTH directions witnessed end-to-end through the REAL composer** with an injected clock, since *a green state-machine unit test is NOT the witness — the state machine was already green and the gap was REACHABILITY*; a three-branch concurrency witness whose interleaving is **GUARANTEED** by an `asyncio.Event` rather than hoped for; one witness per inconclusive cell (3/6/7/8/9) proving no `half_open` stranding, with cell 8 load-bearing on the release sitting on a `BaseException` arm and cell 9 asserting the **ABSENCE** of an emission; the trial-spacing witness that discriminates the ratified FRESH cooldown from the unratified alternative; and **AC #8, the deliberate `B-116` witness-strengthening roster** C9's A1 rec 2 had forbidden while the path was unreachable — seven rows strengthened (incl. the Probe-C **clock-advance** form discriminating *never-opened* from *opened-and-reset*, and the 401 / response-parsing **recovery-completion positive controls**), three named UNCHANGED, `B-115`'s IS-side W-D witnesses UNTOUCHED. **SIXTEEN PD-8 mutation probes**, each naming the witness that must be seen RED. **No lock, and the absence is a DECISION** (all mutators run on one event loop — the hazard is interleaving at the `await`, not a data race; contrast the signing breaker, which DOES lock because span-end worker threads sign), carried in a source comment so it cannot be mistaken for an oversight. **U-RT-152 and U-RT-153 are LANDED/CLOSED and NOT amended** — a NEW unit per the `B-97`(a)→U-RT-149 / `B-111`→U-RT-151 / `B-115`→U-RT-153 precedent. ONE new DAG edge (U-RT-153 → U-RT-154); ZERO cross-axis edges; ZERO CXA rows; ZERO clusters; ZERO contract numbers. Predecessor v2.61, 2026-08-08 — the `B-115` **(b′)** plan leg: **ONE new unit, ZERO amended units**: **U-RT-153** — the deterministic ledger-conflict split, in four implement items: the NEW memory-family **SIBLING** type with its three shape constraints (not a subclass of the store subtype; not the family base; declares NO C-MEM-19 class, inheriting the residual); the **capture-boundary VALUE discriminator** that makes the refusal distinguishable at all (a closed `MemoryCaptureFailureKind` enum + an optional `failure_kind` field; the closed two-value `MemoryCaptureStatus` enum is NOT widened — **propagating was tried and FALSIFIED at the build**, since `FAILED`-on-conflict is a CONTRACTED outcome for two of `_capture`'s six entry points per U-MEM-26 / Codex R6+R8, so every existing caller's control flow stays byte-unchanged); **THREE** executor re-type surfaces routed through ONE shared helper (the register row named ONE — grounding found three, and the two it missed escaped RAW onto the staircase; **both proven reachable BY EXECUTION** before scope was fixed, per the row's own no-code-read-inference requirement); and the paired classifier-admission (arms 6 → 7) / waiver-tuple (**4 → 5**) move, which MUST happen together because §14.6.3's classifier-consistency rule makes a one-sided change silently wrong. **TEN ACs**, incl. the four-part determinism set at the LEDGER, the FOURTEEN-row (status × kind × cause × reason) legality table with a full JSON round trip for every legal shape, a **structural** single-direct-append assertion (a fourth append site would leak the raw ledger type silently — a shape no behavioural sweep can cover), the type-level partition witness in **FOUR** directions, and the `B-84` W-5 `== 2` assertion PRESERVED VERBATIM. **U-RT-152 is LANDED/CLOSED and NOT amended** — a NEW unit per the `B-97`(a)→U-RT-149 / `B-111`→U-RT-151 precedent. ONE new DAG edge (U-RT-152 → U-RT-153); ZERO cross-axis edges; ZERO CXA rows; ZERO Memory-plan delta. Predecessor v2.60, 2026-08-08 — the `B-116` plan leg: **ONE new unit, ZERO amended units**: **U-RT-152** — the §14.6.3 breaker-waiver guard (≈30–35 src lines across `retry_breaker_fallback.py` + `llm_dispatch.py`, incl. the row-2a re-type to NEW `LLMDispatchPayloadShapeInternalError`), the t1+t2 waived-charge emission, and the witness set — Probes B/C as ASSERTIONS (chain-length amplifier foreclosed; null-topology foreclosed), positive controls incl. the store-subtype BY-NAME control, the **3/25 raise-site partition witness** (type drift fails a test), PD-8 throughout; exhaustion-identity witnessed (waiver changes the CHARGE, never control flow); t4/t5 carried as declared obligations (no durable-persistence path at HEAD). ONE new DAG edge (U-RT-58 → U-RT-152); ZERO cross-axis edges; ZERO CXA rows. Also discharges the standing v2.60 probe-text rider at its §2 (the `B-111` closure-bullet trio + the #1263 ENOENT-narrowing note; ONE item carried forward by name — its detail was never durably recorded, the #1256/#1263 gate-log rows having never been committed). Predecessor v2.59, 2026-08-07 — the `B-111` plan leg, operator-ratified **disposition (a)**: **ONE amendment site + ONE new unit**. **U-RT-150 AC #15** gains an **APPENDED narrow qualifier** scoping its no-removal clause to the **SWEEP's PAYLOAD-orphan accounting path** — the sweep half is **PRESERVED UNQUALIFIED**, **no glob widens** and the **`.tmp-*` payload-orphan semantics are BYTE-UNCHANGED**, while the record's **OWN publication path MAY** remove stale leftovers of its **OWN** publication-temp prefix, prefix-scoped by construction and under the locks the publication already holds. **The Runtime SPEC is UNTOUCHED — v1.111 stands and NO spec delta is owed**: §14.8.11.1's carrier paragraph explicitly acknowledges the orphan and states no disposition for it, so the prohibition existed **only in the plan**. **The qualifier is a PERMISSION, not an obligation** — U-RT-150 is LANDED and CLOSED, so a MUST there would falsify its closure criterion retroactively; the MUST lives at **NEW unit U-RT-151** (FOUR ACs — the ~15-line cleanup across two functional sites plus a threaded collected-list parameter, whose **enumeration MUST run OFF the cross-process lock**, since `_publish_observation_record` sits inside it and a root scan there would reopen `B-75`; ONE **declared** witness re-pin plus an **added sweep-isolating** witness; the `.tmp-*`-unchanged assertion; the success-path no-new-surface absences with the failure-path unlink `OSError` reported on the EXISTING report-log carrier) per the `B-97`(a) → U-RT-149 precedent. **ZERO contract numbers, ZERO carriers retyped, ZERO hash impact, ZERO CXA rows**; `B-111` closes only at U-RT-151. Predecessor v2.58, 2026-08-05 — the `B-96` **Reading C / form C-2** plan leg: **ONE NEW unit U-RT-150** with **FIFTEEN** ACs carrying the whole grace — the conjunctive reclaim rule, the durable candidate-filename+timestamp observation record over BOTH sweep classes, the two falsifiability surfaces (report-line field + a read-only `harness-inspect` row extension reporting the record's state THREE-WAY), the one-shot multi-invocation witness that discriminates the ratified form from the retired Reading B, and the re-grounding pass over every inverted grace-dependent witness including the `B-74` pin. **A NEW unit deliberately, NOT an amendment of the landed U-RT-145** — its AC #7 remains true and unchanged under v1.111 (the `B-97`(a) → U-RT-149 precedent). **ZERO existing units amended; ZERO new cluster; ONE new DAG edge (U-RT-145 → U-RT-150); ZERO cross-axis edge.** Predecessor v2.57, 2026-07-31 — the `B-100` plan leg: U-RT-148 amended at three sites — the §1 source-shape enumeration + **AC #15(b)** + **AC #16(a)**, widened from the single crash-reconstruction shape to all three effect-fence carriers' key-absent shapes; **SIXTEEN ACs stay SIXTEEN**; load-bearing because #15(b)'s symmetric clause would otherwise ACTIVELY REFUSE the two new shapes. Predecessor v2.56, 2026-07-31 — the `B-97` half (a) plan leg: NEW U-RT-149 carrying the keying change, the migration machinery and the §13.7 surface under one conjunctive closure criterion, because the enumeration surface is a **PRECONDITION** of the ratified (3a) disposition; **zero new cross-axis edges**), CXA `Cross_Axis_Composition_Document_v2_23.md` (2026-07-30 — CLASSIFICATION-ONLY for `B-69`: NO new row, aggregate FROZEN at 111, payload widening recorded; **UNCHANGED at the 2026-07-31 `B-97`(a) leg — determined, not assumed: that arc introduces no cross-package consumption at all, so there is nothing to classify and no delta is owed**), and **Memory `Implementation_Plan_Memory_Substrate_v1.md` (U-MEM-01..28; head **v1.3** cleared 2026-08-06 - the `B-88` spec leg: U-MEM-22's failure-class acceptance extended to seven values in place, plus NEW U-MEM-28 at G8 decomposing the impl leg (enum member, declaration flip, the A-ii six-site re-typing with its receiving-type constraints, fail-fast preservation, and the witnesses). Predecessor v1.2 cleared 2026-07-29)**. Full per-plan and CXA lineage is indexed at `claude-artifact-pointers.md` §2.4 in `.harness`.
+Canonical plan heads: core `Implementation_Plan_Harness_Core_v1_3.md` · IS `Implementation_Plan_Information_Substrate_v2_9.md` · AS `Implementation_Plan_Action_Surface_v1_6.md` (v1.6, cleared 2026-07-15) · CP `Implementation_Plan_Control_Plane_v2_49.md` · OD `Implementation_Plan_Operational_Discipline_v2_34.md` · Runtime `Implementation_Plan_Harness_Runtime_v2_62.md` · CXA `Cross_Axis_Composition_Document_v2_23.md` · Memory `Implementation_Plan_Memory_Substrate_v1.md` v1.3. Full per-version change-note lineage lives at `.harness/artifact-pointers/plan-heads.md` and, per family, at `.harness/artifact-pointers/`. **Query, do not read wholesale.**
 
 ### 2.5 Per-Axis Subdirectory `CLAUDE.md` Pointers
 
@@ -115,82 +105,17 @@ Per `Plan_Executability_Audit_v1.md`:
 
 ### 3.3 Repo layout
 
-```
-<workspace_root>/
-├── CLAUDE.md                                # This file
-├── Sub_Agent_Boundary_Specification_v1.md   # §5 sub-agent boundary
-├── .claude/
-│   └── skills/                              # Phase 7-specific skills (§6)
-│       ├── phase-7-implementation/SKILL.md
-│       ├── phase-7-cross-axis-composition/SKILL.md
-│       ├── phase-7-substitution-retirement/SKILL.md
-│       └── phase-7-back-flow-routing/SKILL.md
-├── pyproject.toml                           # uv workspace root
-├── uv.lock
-├── harness-core/                            # Shared types + cross-axis utilities
-│   ├── pyproject.toml
-│   └── ...
-├── harness-is/
-│   ├── CLAUDE.md
-│   ├── pyproject.toml
-│   └── ...
-├── harness-as/
-│   ├── CLAUDE.md
-│   ├── pyproject.toml
-│   └── ...
-├── harness-cp/
-│   ├── CLAUDE.md
-│   ├── pyproject.toml
-│   └── ...
-├── harness-od/
-│   ├── CLAUDE.md
-│   ├── pyproject.toml
-│   └── ...
-└── harness-cxa/                             # CXA seam instantiation
-    ├── pyproject.toml
-    └── ...
-```
-
----
+The workspace tree (uv workspace root + `harness-{core,is,as,cp,od,cxa}/` members + `.claude/skills/`) is at `docs/governance/stack-and-layout.md` §3.3.
 
 ## 4. Substitution + back-flow discipline
 
 ### 4.1 H_T ↔ H_E substitution discipline
 
-Per `Phase_7_Meta_Architecture_v1.md` §5 (49-row substitution mapping table) + §6 (self-hosting milestone gradient) + §7 (18 axis + 3 cross-cutting anti-leakage rules):
-
-H_E provides bounded substitutions for not-yet-built H_T primitives across 6 substitution-mechanism categories.
-
-**Both tables below are the FROZEN design-phase §5 declaration, not the live tally** — a distinction the pre-R-CTX-1 text elided, which is how the per-axis row went stale. `Phase_7_Meta_Architecture_v1.md` is design-substrate and immutable here (X-AL-3, §4.4); its §5 declares 49 rows and its §5.7 breaks them down by mechanism. The **live** ledger has since decomposed rows (batch-24 split the monolithic `H_T-AS-8` into six sub-rows), so the live cardinality and the live per-axis split both exceed these figures. Per §4.2, live counts are **never** hand-maintained inline — derive them:
-
-```
-uv run python tools/substitution_ledger.py --summary   # or --json
-```
-
-Design-phase mechanism breakdown, per `Phase_7_Meta_Architecture_v1.md` §5.7 (totals 49):
-
-| Mechanism      | Count | Examples |
-|---|---|---|
-| H_E-direct     | 11    | H_E filesystem ops; `Edit` / `Read` / `Write` tools |
-| MCP-server     | 12    | Substitution routed through MCP server boundary |
-| Convention     | 9     | Operator-authored `CLAUDE.md` / prompts |
-| Shell-out      | 8     | `Bash` invocations of `git`, `sha256sum`, `python -c` |
-| Manual         | 5     | Operator-driven gates (review, approval) |
-| Authoring-only | 4     | Substitutions retired at authoring close |
-
-Mechanism is a design-phase attribute only: `.harness/substitutions.yaml` carries no `mechanism` field, so this breakdown has **no** live counterpart and cannot be re-derived. Treat it as history.
-
-Design-phase per-axis counts, per the `Phase_7_Meta_Architecture_v1.md` §5.2–§5.6 section headers: IS=9 / AS=6 / CP=21 / OD=8 / CXA=5 (totals 49). **The live per-axis split is different and is derived, not written here** — `tools/substitution_ledger.py --summary` prints the `axis row-count` line.
+H_E provides bounded substitutions for not-yet-built H_T primitives across 6 mechanism categories (H_E-direct / MCP-server / convention / shell-out / manual / authoring-only). **The §4.1 mechanism + per-axis tables are the FROZEN design-phase declaration (totals 49), never the live counts** — derive live figures with `uv run python tools/substitution_ledger.py --summary` (or `--json`) over the `.harness/substitutions.yaml` SSOT; mechanism is a design-phase attribute with no live counterpart and cannot be re-derived. Both frozen tables, the `H_T-AS-8` cardinality note and the X-AL-3 rationale are at `docs/governance/substitution-and-clearance.md` §4.1.
 
 ### 4.2 Substitution retirement discipline
 
-Per X-AL-2 (Meta-Architecture §7.7):
-
-> Retirement = (cited unit IDs landed) ∧ (substituted H_E surface no longer invoked at substitution site). Both conditions required.
-
-Partial retirement is non-retirement. The `phase-7-substitution-retirement` skill at `.claude/skills/` governs retirement event discipline. Substitution retirement triggers throughout 7b–7d sub-phases, not only at 7d.
-
-**Canonical accounting (R-600).** `.harness/phase-8-graduation.md` records the **frozen Phase-8 close snapshot**: **46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)**. That snapshot is a historical milestone, not the live tally. The live per-row dispositions and live counts are the **single source of truth at `.harness/substitutions.yaml`**, DERIVED by `tools/substitution_ledger.py` and surfaced by the status-refresh flow (the CI tally gate `--check` fails on an impossible tally — the count-drift defect class that produced the original `48/54` cannot recur). Cite the derived live number from the tool when needed; do not hand-maintain live counts inline in guidance.
+Per X-AL-2: **retirement = (cited unit IDs landed) ∧ (substituted H_E surface no longer invoked at substitution site)** — both conditions required; partial retirement is non-retirement. Live per-row dispositions and counts are the single source of truth at `.harness/substitutions.yaml`, derived by `tools/substitution_ledger.py` (the CI `--check` tally gate). Detail at `docs/governance/substitution-and-clearance.md` §4.2.
 
 ### 4.3 Back-flow routing
 
@@ -214,17 +139,7 @@ Local pre-commit advisory at `.githooks/pre-commit` gives early warning of the s
 
 ### 4.5 Clearance markers (P5-CK / P6-CK / Phase 7 absorption)
 
-When a design-substrate artifact version is operationally accepted for Phase 7 consumption — whether via original P5-CK / P6-CK adversarial review, Phase 7 in-flight absorption arc, retirement-event doc-hygiene refresh, or architect-recommendation-driven amendment — a **clearance marker** is filed at `.harness/clearance/`.
-
-Marker filename: `.harness/clearance/{artifact-slug}-v{version}-cleared-{YYYY-MM-DD}.md`. Frontmatter pins the artifact path + version + clearance event type + reviewer chain + merge commit. Body narrates what changed and what was reviewed. See `.harness/clearance/README.md` for full convention and `.harness/clearance/TEMPLATE.md` for the shape.
-
-The X-AL-3 guard (§4.4) recognizes clearance markers as back-flow documentation — a PR that lands a design-substrate edit alongside a new clearance marker passes the guard automatically.
-
-Phase 7 sessions consuming a design-substrate artifact SHOULD verify a matching clearance marker exists before treating the artifact's version as canonical. Missing marker → halt + route to operator (the convention is currently advisory at v1; future skill-side enforcement will tighten this).
-
-Retroactive scope: markers are NOT retroactive for back-catalog (pre-2026-05-29). Implicit clearance applies for pre-existing artifacts merged to main and not subsequently invalidated by a fork doc. Forward from 2026-05-29, every design-substrate amendment SHOULD include a clearance marker in the same PR.
-
----
+A design-substrate version accepted for Phase 7 consumption gets a clearance marker at `.harness/clearance/{artifact-slug}-v{version}-cleared-{YYYY-MM-DD}.md`. The X-AL-3 guard (§4.4) recognises markers as back-flow documentation. Phase 7 sessions SHOULD verify a matching marker before treating an artifact version as canonical; missing marker → halt + route to operator. Convention detail at `docs/governance/substitution-and-clearance.md` §4.5 and `.harness/clearance/README.md`.
 
 ## 5. Sub-agent boundary
 
@@ -252,29 +167,11 @@ See `Sub_Agent_Boundary_Specification_v1.md` at workspace root for sub-agent cou
 
 ## 6. Skill activation
 
-This workspace ships with 4 Phase 7-specific skills at `<workspace_root>/.claude/skills/`. Skills activate per `tool_search`-driven trigger evaluation against YAML frontmatter description. Project-level skills (this workspace) take priority over user-level skills (`~/.claude/skills/`) on name collision per Anthropic Claude Code skill-directory precedence.
-
-| Skill | Path | Activation surface |
-|---|---|---|
-| `phase-7-implementation` | `.claude/skills/phase-7-implementation/SKILL.md` | Per-axis-stream unit consumption (7b sub-phase); acceptance-criteria-driven implementation; cross-unit dependency-graph traversal |
-| `phase-7-cross-axis-composition` | `.claude/skills/phase-7-cross-axis-composition/SKILL.md` | Cross-axis composition seam instantiation (7c sub-phase); CXA v2.1 §2.3 byte-exact alignment verification |
-| `phase-7-substitution-retirement` | `.claude/skills/phase-7-substitution-retirement/SKILL.md` | Substitution retirement events (all sub-phases); per-primitive retirement criterion verification per Meta-Architecture §6 |
-| `phase-7-back-flow-routing` | `.claude/skills/phase-7-back-flow-routing/SKILL.md` | Fork detection (all sub-phases); design-phase routing per §4.3 |
-
----
+Four Phase 7 skills ship at `.claude/skills/`: `phase-7-implementation`, `phase-7-cross-axis-composition`, `phase-7-substitution-retirement`, `phase-7-back-flow-routing`. Project-level skills take priority over user-level on name collision. Activation surfaces at `docs/governance/skills-and-subphases.md` §6.
 
 ## 7. Phase 7 sub-phase enumeration
 
-Per `Phase_7_Meta_Architecture_v1.md` § Phase 7 internal workflow + `Project_Workflow_v1_8.md` §2.7:
-
-| Sub-phase | Scope | Primary skill | Event-driven skills |
-|---|---|---|---|
-| 7a | Bootstrap — Claude Code workspace initialization; first H_T primitive landings; substitution scaffolding under single-LLM-during-7a runtime substitution | None specific (consult Meta-Architecture §5 + §6) | `phase-7-back-flow-routing` |
-| 7b | Per-axis-stream implementation — IS / AS / CP / OD axis-stream parallel execution per atomic-unit plans | `phase-7-implementation` | `phase-7-substitution-retirement`; `phase-7-back-flow-routing` |
-| 7c | Cross-axis composition — CXA v2.1 seam instantiation; cross-axis edge wiring across 6 composition buckets | `phase-7-cross-axis-composition` | `phase-7-substitution-retirement`; `phase-7-back-flow-routing` |
-| 7d | Substitution retirement — H_E substitution gradient retirement per self-hosting milestone gradient; closure when all H_E substitutions retired OR bounded-residual carried with documented rationale per X-AL-2 | `phase-7-substitution-retirement` | `phase-7-back-flow-routing` |
-
----
+7a bootstrap · 7b per-axis-stream implementation · 7c cross-axis composition · 7d substitution retirement. Per-sub-phase scope and skill routing at `docs/governance/skills-and-subphases.md` §7.
 
 ## 8. Execution invariants
 
@@ -294,149 +191,51 @@ The following invariants hold across all Phase 7 sessions. Violation surfaces to
 
 ## 9. Workspace bootstrap state
 
-This workspace was bootstrapped at Phase 6.5 Session 6 (ε) per `Phase_6_5_Session_6_Kickoff.md`. Bootstrap substrate authored at design-phase workspace; pushed to this workspace at Session 6 close (operator action).
+Bootstrapped at Phase 6.5 Session 6 (ε), 2026-05-15. Detail at `docs/governance/project-framing.md` §9.
 
 ### 9.1 Filing footer
 
-| Field | Value |
-|---|---|
-| Artifact | `CLAUDE.md` (workspace root) |
-| Authored at | Phase 6.5 Session 6 (ε), 2026-05-15 |
-| Authoring authority | `Phase_6_5_Session_6_Kickoff.md` §2.1.1 |
-| Predecessor authoring | Design-phase context (historical: separate Claude.ai project through 2026-05-28; forward: Claude Code CLI per operator decision 2026-05-29) |
-| Successor consumption | Phase 7 Session 1 onward (this workspace) |
-| Revision policy | This file is canonical for this workspace; revisions route to design-phase back-flow (§4.3) prior to in-workspace edit |
-
----
+This file is canonical for this workspace; revisions route to design-phase back-flow (§4.3) prior to in-workspace edit. Full filing footer at `docs/governance/project-framing.md` §9.1.
 
 ## 10. Design-phase operating principles
 
-*Applies to sessions doing design-phase work in this workspace (authoring/revising `design-substrate/*.md`). Phase 7 sessions consume design-substrate as canonical and operate under §§1–9 above; they do not author it. This section absorbs the framing originally encoded at the Drive `v3-system-prompt.md` (2026-05-09), updated for the post-Phase-6 committed state of H_T.*
+*Applies to sessions authoring/revising `design-substrate/*.md`. Phase 7 sessions consume design-substrate as canonical and operate under §§1–9. The full §10 body — scope, the committed/not-committed tables, source-grounding + confidence-tagging discipline, failure modes, response shape, the eleven-voice council roster, continuity, and the 2026-05-31 standing posture — is at `docs/governance/design-phase-principles.md`.*
 
 ### 10.1 Scope
 
-These principles apply when a session is **authoring or revising** any of: ADRs, ADD, PRD, per-axis specs, per-axis plans, CXA, Workflow doc, Phase 7 Meta-Architecture, Sub-Agent Boundary Spec, fork docs, architect recommendations.
-
-Phase 7 implementation sessions (touching `harness-*/src/`, etc.) are **out of scope** for §10 — they operate under §§1–9 and treat design-substrate as canonical.
-
-The X-AL-3 silent-absorption rule (§4.4) is the hard boundary: Phase 7 sessions MUST NOT edit `design-substrate/*.md`. Mixed-scope sessions halt and route per §4.3.
+Which artifacts §10 governs, and what is out of scope for it. Body at `docs/governance/design-phase-principles.md` §10.1.
 
 ### 10.2 What is committed at this stage
 
-| Surface | Committed state | Source |
-|---|---|---|
-| Persona | Bridging-arc — `solo-developer` (design-time default) → `team-binding` → `multi-tenant-compliance`; `PersonaTier` is first-class (tier-distinct HITL-gate / redaction / sampler posture, exercised at R-CL-P3) | `Persona_Document_v1.md` §1/§2.1 (bridging-arc); Phase 2 persona surfacing |
-| Stack | Python 3.12+ / Pydantic v2 / asyncio / uv / pyright strict / ruff / pytest | `Target_Stack_Commitment_v1.md` §5.1 (§3 of this doc) |
-| Deployment surfaces | 3-tier: local-development / self-hosted-server / managed-cloud | ADR-D2 v1.2; ADR-F4 v1.1 |
-| Multi-LLM | Anthropic + OpenAI + Ollama per-provider SDKs under capability-aware abstraction | ADR-F1 v1.2 |
-| Foundational ADRs | F1–F5 + D1–D6 cleared at P3-CK | §2.2 |
-| Architectural Design Document | v1.3 | §2.2 |
-| PRD | v1.1 | §2.2 |
-| Per-axis specs | All P5-CK cleared at v1+ | §2.3 |
-| Per-axis plans | All P6-CK cleared at v2+ | §2.4 |
-| Workflow doc | v1.19 (active discipline including §7.4 fidelity-grammar + §7.5 process-discipline catalogue; PD-9 adversarial-review-loop non-convergence discriminators — pointer verified current at v1.18 before this bump, no staleness this cadence) | §2.1 |
-| Six topology patterns | 6-class enum locked at ADR-D4 v1.1 | §1.1 row CP |
-| Permanent tensions | T-perm-1 (C4↔C10), T-perm-2 (C2↔C3), T-perm-3 (C1↔C9) resolved at canonical artifacts | §10.7 council voice-roster |
-
-**Revisiting any committed surface above requires Class 1 fork → ADR back-flow per §4.3.** Not in-session re-litigation, not silent absorption at session-time.
+The committed surfaces (persona, stack, deployment tiers, multi-LLM, ADRs, ADD, PRD, specs, plans, workflow doc, 6 topology patterns, permanent tensions). **Revisiting any committed surface requires a Class 1 fork → ADR back-flow per §4.3.** Body at `docs/governance/design-phase-principles.md` §10.2.
 
 ### 10.3 What is NOT committed (and therefore live design surface)
 
-| Surface | Status | Resolution path |
-|---|---|---|
-| In-flight per-axis spec revisions | Open per filed fork docs at `.harness/class_*_fork_*.md` | Operator ratification → spec-writer apply pass per §4.3 |
-| In-flight per-axis plan revisions | Open per filed fork docs | implementation-planner revision absorption per §4.3 |
-| CXA forward-tracking | Per `Cross_Axis_Composition_Document_v2_17.md` §0.4 marker CLOSED 2026-05-31 (6 PENDING → 6 ABSORBED at v2.17 §2.3.2 rows 38-43); future-PENDING marker now EMPTY | Per-CP-unit landing + CXA narrow-scope revision arcs (closed at v2.17 for the U-CP-74..U-CP-79 cohort) |
-| Operating-principles refinements | Workflow v1.15 §7.4 + §7.5 lineage actively extends | Workflow doc revision per §7 of Workflow doc |
-
-Anything not committed at §10.2 and not in §10.3 may require fresh design-phase work — surface to operator before authoring against absence.
+The live (uncommitted) design surface and its resolution paths. Body at `docs/governance/design-phase-principles.md` §10.3.
 
 ### 10.4 Operating discipline for design-phase sessions
 
-**Source-grounding.** Every non-trivial claim cites a specific resolvable source. Acceptable: byte-exact `§NN.M` cite to a design-substrate artifact at its current version; URL+date to vendor docs accessed this session; arXiv ID with title/authors. Not acceptable: "per Anthropic engineering posts," "the OTel spec says," or any reference that does not resolve to a single retrievable source.
-
-**Confidence tagging.** Substantive claims carry `[HIGH]` / `[MODERATE]` / `[SPECULATIVE]` tags. A response with no `[SPECULATIVE]` tags anywhere is suspicious — most non-trivial design discussions carry at least one uncertain step.
-
-**No fabrication.** Citations, version numbers, function signatures, file paths, line numbers — all of these must be empirically verified at session-time against the current state of the workspace. The `[[advisor-before-substantive-work-for-cross-axis-blockers]]` pattern (catalogued across 36+ applications in the workspace) is the active discipline: before authoring substantive changes, verify the cited surface exists at the version cited.
-
-**Deterministic-vs-probabilistic.** Production reliability lives in the deterministic outer harness. Surface this boundary when it materially changes a recommendation — not as a default in every answer.
-
-**Citation byte-exact.** Per Workflow §7.4.2 — when this `CLAUDE.md` cites a canonical artifact at version `v1.26`, the cite must resolve byte-exact to the version named.
+Source-grounding, confidence tagging, no-fabrication, byte-exact citation. Body at `docs/governance/design-phase-principles.md` §10.4.
 
 ### 10.5 Failure modes to actively prevent
 
-These are inherited from the original v3 framing and remain operative. The five most-relevant for the post-Phase-6 committed state:
-
-| Failure mode | Description | Mitigation |
-|---|---|---|
-| **Silent H_T design extension** | Phase 7 execution-time absorbs a not-yet-committed design surface as if it were canonical | X-AL-3 hard rule (§4.4); X-AL-3 guard (pre-commit + CI per follow-on PR) |
-| **Fabricated citations** | Claims with cites that resolve to nothing, or that paraphrase memory of titles/sections/versions | Always verify empirically at session-time; prefer byte-exact grep over recall |
-| **Silent scope narrowing** | When budget is tight, covering fewer surfaces than requested rather than segmenting delivery | Segment + announce continuation contract; do not omit silently |
-| **Stale-carry-text disposition** | A finding flagged at v_N gets resolved at production/spec downstream, but the carry-text at v_{N+1}, v_{N+2}, ... is not refreshed; the carry becomes stale-as-described | Per Workflow §7.4.7 — pre-substantive empirical-verification audit at every amendment arc |
-| **Cross-context bleed at venue boundary** | Design-phase session pulling Phase 7 implementation-detail framing into ADR/spec authoring, or vice versa | Posture declaration at session start (per follow-on PR); audit edit scope before committing |
+The five failure modes to actively prevent. Body at `docs/governance/design-phase-principles.md` §10.5.
 
 ### 10.6 Response shape
 
-**Deliverable mode** — when authoring an artifact (ADR draft, spec amendment, plan revision, fork doc), the full apparatus applies: pre-condition gate, confidence tagging, citation specificity, segmentation if response exceeds budget, end with open questions + contested claims + recommended next probes.
-
-**Conversational mode** — clarifications, scope checks, decisions between options. Confidence tags + citation specificity still required for non-trivial factual claims; the segmented-delivery / bibliography / pre-condition-gate apparatus does NOT apply.
-
-Default to conversational mode when structure is unspecified.
+Deliverable mode vs conversational mode. Body at `docs/governance/design-phase-principles.md` §10.6.
 
 ### 10.7 Design-phase council
 
-The eleven-voice council (Slate E11 — C1 through C11) lives at `.claude/skills/council/`:
-
-- `.claude/skills/council/council-orchestrator/` — multi-voice deliberation router; emits Convening Block + CCR + voice contributions + TENSION block per `references/output-templates.md`.
-- `.claude/skills/council/c1-orchestration/` through `c11-operator-loop-local-deployment/` — eleven subject-matter voices, each owning a domain across the four H_T axes (CP: C1/C5/C6/C9; AS: C4/C10; IS: C2/C3; OD: C7/C8/C11).
-
-Council activates on multi-domain design questions, cross-cutting concerns by name (security / observability / cost / reliability / eval-ability / HITL-local-first), or explicit operator convocation. Single-domain questions route directly to the named voice. See orchestrator `SKILL.md` for full activation discipline.
-
-The council composes with the existing role-discipline skills:
-
-- `systems-architect` — ADD consolidation, Phase 7 architectural-tension resolution. Convenes council voices as sources of domain depth.
-- `spec-writer` — applies operator-decided fixes to specs. Consumes council deliberations as authority anchor.
-- `implementation-planner` — decomposes specs to atomic units. Operates after spec-writer.
-- `harness-adversarial-reviewer` — red-teams completed artifacts. Consumes council deliberations.
+The eleven-voice council (Slate E11) at `.claude/skills/council/`. Body at `docs/governance/design-phase-principles.md` §10.7.
 
 ### 10.8 Continuity discipline
 
-Multi-session work carries forward decisions, terminology, and scope established in earlier sessions. The canonical record is the design-substrate corpus + fork doc ledger at `.harness/` + workspace `CLAUDE.md` row updates + memory entries at `/Users/robertrhu/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/`.
-
-When a new request contradicts a prior decision, surface the contradiction explicitly and ask before overwriting. Do not silently override a committed surface.
-
-This workspace operates in strict isolation from any other project. Within-workspace, the design-phase venue and the Phase 7 execution venue are **logically separate** even though physically co-resident in the same git repo — the X-AL-3 rule (§4.4) is the boundary.
+Multi-session continuity; surface contradictions before overwriting. Body at `docs/governance/design-phase-principles.md` §10.8.
 
 ### 10.9 Standing posture — council + adversarial reviewer + research corpus (2026-05-31 bake-in)
 
-Standing posture amendments from the H_T-IS-2 cascade-scope council pilot (2026-05-31) — encoded here so they auto-apply at every session without HITL invocation.
-
-**Council orchestrator (`.claude/skills/council/council-orchestrator/`):**
-
-1. **Nameable-tension discriminator at activation.** Before convening, ask: can I name in advance a tension I expect between two voices? If no, route to single voice + advisor(). The pilot's lesson — councils that converge to single-voice + cosmetic consultants are primary-collapse failures. Tension-surfacing is the load-bearing value.
-2. **Dyadic mode default.** Default convening size is 2 voices (primary + 1 consultant), not 3. Expand to 3 only when you can name a distinct third axis-specific concern AND Layer C scoring places a 3rd voice meaningfully above threshold. Hard cap at 5 unchanged.
-3. **Slim CCR.** Enumerate Touched concerns only with one-sentence pre-check notes; collapse Not-Touched concerns into a single `n/a` line listing unaddressed concerns by name. CCR ritualization (6 verbose rows every time) is the failure mode being corrected.
-4. **Pre-bind to current spec versions.** Each convened voice's first cite MUST be from the canonical spec at the current version recorded in workspace `CLAUDE.md` §2 at session-start (not freelance from SKILL.md memory). External authority citations from `.harness/01-planning/` are encouraged when intra-spec authority is insufficient.
-5. **Probe-first discipline at tension resolution.** Before emitting any TENSION block, run a 1-5 minute empirical probe at the most specific primary source relevant to the dispute. The pilot's lesson — council surfaces, primary sources decide. If probe resolves the tension, surface as `surfaced + probe-resolved` with the probe finding as resolution rationale. If probe is silent, emit Layer 1 surfaced-unresolved.
-
-**Adversarial reviewer (`.claude/skills/harness-adversarial-reviewer/`):**
-
-1. **Pre-merge gate posture.** Fire at PR-open / PR-ready-for-review for any `design-substrate/**` amendment or Phase 7 impl arc against previously-cleared spec/plan — not post-merge. X-AL-3 guard is file-presence; adversarial review is substantive complement.
-2. **Pattern-catalogue-aware standing checklist.** Every review audits against the 9-item workspace pattern checklist (stale-carry-text disposition; sibling-spec staleness; forward-looking cite phantom; checkpoint-listed-as-open-but-already-applied; plan-revision-against-not-yet-built-substrate; spec-prose-vs-plan-body drift; verification-shape grep-vs-e2e; X-AL-3 anti-extension; halt-route-split-AC). Findings against checklist items follow standard Class 1/2/3 discriminator.
-3. **Cross-spec drift probes.** For any per-axis spec/plan review, MUST grep across sibling specs/plans for stale cite-shapes against the artifact under review. The workspace's biggest defect class is cross-spec coordination drift; intra-artifact review misses it structurally.
-4. **External-canon mode (NEW Class 2 finding category).** Review the artifact's contracts/patterns against canonical industry patterns at `.harness/01-planning/Pattern_Reference_Catalog_v1.0.md` + cluster deep-dives. Flag divergences as either (a) intentional + needs ADR/spec rationale, or (b) accidental + needs correction. Voice → cluster mapping at `.claude/skills/council/council-orchestrator/references/research-citations.md`.
-
-**Research corpus (`.harness/01-planning/`):**
-
-The Phase 1 substrate at `.harness/01-planning/` (11 files, ~8,500 lines) was consumed and crystallized into ADRs + ADD + PRD + specs at the design phase. For settled design decisions, the corpus is derivative-redundant. For ongoing work, it serves three roles:
-
-1. **Council external-authority citations.** Voices cite cluster deep-dives or Pattern Reference Catalog when their position needs grounding beyond intra-spec authority. Voice → cluster mapping at `.claude/skills/council/council-orchestrator/references/research-citations.md`.
-2. **Phase 7 implementation grounding.** Before authoring any cluster impl arc, grep the relevant cluster deep-dive for production failure modes from real systems (LangGraph, Temporal, OpenAI Agents SDK).
-3. **Adversarial reviewer external-canon mode.** Per posture amendment 4 above.
-
-**`agentic-engineeriing-sdlc.md`** at `.harness/01-planning/` is NEW (not in the Phase 1 council context). It applies the 8-phase canonical SDLC to agent-native development as a delta against an `sdlc-research.md` baseline. Currently mapped to **workflow doc v1.14+ revision arcs** rather than a council voice's primary domain. When workflow v1.14 revision opens, this file SHOULD be consulted for: Phase 7 → Phase 8 retirement criteria; cross-cutting concern application (PM/Risk/CM/QA/Security/Compliance/Documentation/Measurement); canonical SDLC checkpoint vs. workspace's P3a-CK/P3-CK/P5-CK/P6-CK convention gap analysis.
-
----
+Standing posture — council + adversarial reviewer + research corpus (2026-05-31). Body at `docs/governance/design-phase-principles.md` §10.9.
 
 ## 11. Posture declaration
 
@@ -518,47 +317,15 @@ Don't infer silently. Posture confusion at session start contaminates downstream
 
 ## 12. Roadmap + drift-detection protocol
 
-*Operationalizes `Project_Roadmap_v1.md` (workspace root) + `.harness/roadmap_status.md`. Closes the gap between "roadmap exists" and "roadmap drives execution." Per operator directive 2026-05-31: future sessions derive their next action from the roadmap without operator AUQ.*
-
-*(2026-07-14: the prior operator-facing HTML dashboard — `tools/dashboard/generate.py` + the committed `tools/dashboard/roadmap.html` snapshot, published via GitHub Pages — was eliminated per operator direction. `.harness/roadmap_status.md` is the sole surviving mechanism this section governs; it was never rendered by the HTML dashboard, so nothing here changes in substance — only the vocabulary drops "dashboard" as a synonym for it.)*
+*Operationalises `Project_Roadmap_v1.md` + `.harness/roadmap_status.md`. Future sessions derive their next action from the roadmap without operator AUQ. The audit, refresh, halt-and-reconcile and memory/checkpoint bodies are at `docs/governance/roadmap-protocol.md`; §12.2.1 and §12.4.1 stay here in force.*
 
 ### 12.1 Mandatory session-start audit
 
-**Automation:** the audit fires automatically via the `SessionStart` hook at `.claude/settings.json` → `tools/roadmap-audit/session-start.sh`. Hook output (a compact `[ROADMAP]` / `[ROADMAP DRIFT]` block) is injected into the session preamble before Claude processes the operator's first message. Claude SHOULD honor the hook output; if the hook fails to fire (CI environment, custom Claude Code config), apply the procedure manually per the steps below.
-
-Before the first substantive edit in any session, Claude MUST:
-
-1. Read `.harness/roadmap_status.md` (the live head only — when a historical `## Next action` round is needed, grep/query `.harness/roadmap-next-action-archive.md` by PR/`B-`/`R-`-id/round rather than reading it wholesale).
-2. Compute `workspace_state_hash` per the recipe at `Project_Roadmap_v1.md` §7.1 step 2:
-   - `git rev-parse HEAD` (first 8 chars)
-   - sorted open-PR list from `gh pr list --state open --json number,headRefName`
-   - count of `.harness/class_1_fork_*.md` + `.harness/class_2_fork_*.md` (open fork docs)
-   - latest retirement-batch path from `ls .harness/phase-7d-retirement-events-batch-*.md | sort -V | tail -1`
-   - `sha256(concat).hexdigest()[:12]`
-3. Compare with `roadmap_status.md`'s recorded `workspace_state_hash`.
-4. **Mismatch → HALT.** Do not proceed to substantive work. Surface to operator with reconciliation options:
-   - (a) refresh `roadmap_status.md` from current state, proceed
-   - (b) revert workspace to the recorded state (only if drift is uncommitted)
-   - (c) operator manually resolves
-5. **Match → proceed** to next-action derivation per `Project_Roadmap_v1.md` §4.
-6. **Fixed-point carve-out** (per §12.2.1). If `roadmap_status.md`'s recorded `workspace_state_hash` does NOT match current state, but the most recent merge commit on main is a terminating refresh PR (title **begins with** `ops: roadmap status refresh ` — suffix format-agnostic per §12.2.1), AND the recorded hash matches `compute(state at merge_commit~1)` (the state immediately before that refresh-merge), the drift is the expected lag-by-one-commit per §12.2.1. Treat as MATCH; silently recompute and update the stored hash against current HEAD; proceed. Do NOT spawn a new refresh PR.
-
-This audit is the load-bearing discipline. Skipping it = silent drift = the failure mode the roadmap was authored to prevent.
+Fires automatically via the `SessionStart` hook (`tools/roadmap-audit/session-start.sh`). Read `.harness/roadmap_status.md` (live head only — **query** `.harness/roadmap-next-action-archive.md`, do not read it wholesale), recompute `workspace_state_hash` per `Project_Roadmap_v1.md` §7.1 step 2, compare. **Mismatch → HALT** and surface reconciliation options; match → derive next action per `Project_Roadmap_v1.md` §4. The step-6 fixed-point carve-out is at §12.2.1. Full procedure at `docs/governance/roadmap-protocol.md` §12.1. **This audit is the load-bearing discipline — skipping it is the silent drift the roadmap exists to prevent.**
 
 ### 12.2 Mandatory post-PR-merge audit
 
-After any PR merges to main (whether merged by Claude or operator):
-
-1. Recompute `workspace_state_hash` per §12.1 step 2.
-2. Update `.harness/roadmap_status.md`:
-   - `workspace_state_hash` → new value
-   - `last_refreshed` → ISO 8601 now
-   - `recently_completed` → prepend the merged PR (drop oldest if >5 entries)
-   - `in_flight` → remove merged PR, add any newly-opened PRs
-   - `next_action` → re-derive per `Project_Roadmap_v1.md` §4 (the superseded paragraph is REPLACED in the live head, never left accumulating inline — U-CTX-03's head-byte-budget `--check` gate enforces this; its text — taken verbatim from the live head's git history, label rewritten `Current` → `Prior next action (post-#N)` — is appended to the PRIOR-ONLY `.harness/roadmap-next-action-archive.md` by the NEXT content PR, never by the terminating refresh commit itself, whose changed-set stays exactly `.harness/roadmap_status.md` per §12.2.1)
-   - **arc-ledger** — if an R-FS-1 arc transited (an arc closed/resolved, or a new arc/unit surfaced), edit the `.harness/arc-ledger.yaml` row **AND** bump its `snapshot:` block in the **same commit** (forward-only; the blocking CI `arc-ledger` job + `tools/arc_ledger.py --check` fail on an impossible/stale tally). There is no parseable markdown copy to drift (the old `.harness/r-fs-1-arc-and-unit-map.md` is a retired pointer stub).
-3. If any R-NNN entry at `Project_Roadmap_v1.md` §5 closed at this PR, mark it `RESOLVED` and refresh `next_pointer` propagation.
-4. Commit with a title beginning `ops: roadmap status refresh ` (e.g. `…post-PR-NN` or `…post-#NN`; the §12.2.1 carve-out keys on the prefix, suffix format-free). Push.
+After any PR merges to main: recompute `workspace_state_hash`, update `.harness/roadmap_status.md` (hash, `last_refreshed`, `recently_completed`, `in_flight`, re-derived `next_action` with the superseded paragraph moved to `.harness/roadmap-next-action-archive.md`), edit `.harness/arc-ledger.yaml` **and** bump its `snapshot:` in the same commit if an R-FS-1 arc transited, mark any closed R-NNN `RESOLVED`, then commit with a title beginning `ops: roadmap status refresh `. Full checklist at `docs/governance/roadmap-protocol.md` §12.2.
 
 #### 12.2.1 Refresh PR termination clause (recursion-stopping fixed point)
 
@@ -581,13 +348,7 @@ The §12.2 protocol applied naively recurses: a refresh PR (step 4) is itself a 
 
 ### 12.3 Halt-and-reconcile protocol
 
-When drift is detected at session-start audit OR when an R-NNN entry's `depends_on` resolution is empirically false at workspace state OR when an unexpected file appears under `design-substrate/**` / `harness-*/src/**` not accounted in any open PR:
-
-1. State `DRIFT DETECTED` in session output.
-2. Enumerate the divergence: what `roadmap_status.md` claims vs. what the workspace shows.
-3. Present the 3 reconciliation options (§12.1 step 4) via AskUserQuestion.
-4. Do NOT make any substantive edits until operator response.
-5. After response: update `.harness/roadmap_status.md`, then resume execution per the resolved direction.
+On drift: state `DRIFT DETECTED`, enumerate the divergence, present the three reconciliation options via AskUserQuestion, make **no** substantive edits until the operator responds. Detail at `docs/governance/roadmap-protocol.md` §12.3.
 
 ### 12.4 What the roadmap is, and is not
 
@@ -612,69 +373,23 @@ A session must **NOT** conclude `NO_ACTIVE_CANDIDATES → idle/done` and stop wh
 
 ### 12.5 Memory hygiene + checkpointing integration
 
-The roadmap is one of three durable persistence mechanisms; this section names how all three compose. Without this integration, memory + checkpoints drift away from roadmap state and the audit protocol catches roadmap_status.md drift but misses memory/checkpoint drift.
-
-**Three persistence mechanisms.**
-
-| Mechanism | Surface | Scope | Authority |
-|---|---|---|---|
-| **Roadmap + status** | `Project_Roadmap_v1.md` + `.harness/roadmap_status.md` | Cross-session next-action + workspace state | This §12 |
-| **Auto-memory** | `~/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` | Patterns, feedback, project context, references, learnings | Global `~/.claude/CLAUDE.md` auto-memory section |
-| **Checkpoints** | `~/.gstack/projects/thestoryportal-arhugula-harness/checkpoints/` | Mid-arc transient state for cross-session resume | gstack `/context-save` + `/context-restore` skills |
-
-**Distinction by scope.**
-
-- **Roadmap = "what's next, durably."** Survives across all sessions; refreshed at every PR merge.
-- **Memory = "non-obvious patterns + user preferences."** Survives across all sessions; refreshed event-driven (cardinality ≥2, user feedback, etc.).
-- **Checkpoint = "where I was in this specific arc."** Transient; advisory at resume per `[[feedback-checkpoint-remaining-work-is-advisory-not-authoritative]]`.
+Three durable persistence mechanisms — roadmap+status (cross-session next action), auto-memory (non-obvious patterns + preferences), checkpoints (mid-arc transient state). `roadmap_status.md` supersedes checkpoints for next-action derivation. Composition table at `docs/governance/roadmap-protocol.md` §12.5.
 
 #### 12.5.1 Memory hygiene disciplines (always-on)
 
-| Discipline | When |
-|---|---|
-| **Save patterns at cardinality ≥2** | Second instance of a `[[pattern]]` surfaces → write `memory/<slug>.md` + index line in `MEMORY.md`. Cardinality 1 = candidate noted in change-note; ≥2 = save. |
-| **Save feedback symmetrically** | Corrections AND confirmations both save. Asymmetric saving drifts behavior toward over-cautious. |
-| **Update existing entries, do not duplicate** | Check `MEMORY.md` index before authoring new; refresh existing entry if topic matches. |
-| **Verify cited memory before acting** | Memory can be stale. If memory names a file/function/flag, grep first; halt + refresh if false (per Workflow v1.13 §7.4.7.3). |
-| **Mind the 24,400-byte MEMORY.md cap** | Before saving context to MEMORY, first precisely measure the exact byte size before writing any memory context and proactively trim the file in a single pass based on the measurement rather than iterative edits. When trimming, change existing status lines in place instead of appending redundant fields. . Compaction = shorten descriptions, drop superseded entries (full text preserved at `memory/<slug>.md`). |
-| **Delete superseded entries** | Wrong / outdated → remove from index, not just append. Provenance lives in git history at the global memory store. |
-| **No code-derivable saves** | Don't save what `git log` / source code shows. Memory is for non-obvious surprises, not architecture. |
-| **Periodic audit** | Cadence ~every 20 entries or operator-discretion (current cadence: round-3 audits via R-IF-NNN PRs). |
+Save patterns at cardinality ≥2; save feedback symmetrically; update rather than duplicate; verify cited memory before acting; **mind the 24,400-byte MEMORY.md cap** (measure exact bytes first, trim in a single pass); delete superseded entries; no code-derivable saves; periodic audit. Body at `docs/governance/roadmap-protocol.md` §12.5.1.
 
 #### 12.5.2 Checkpoint disciplines (event-driven)
 
-`/context-save` fires when:
-
-- Session approaches compaction or substantive multi-step arc is mid-flight.
-- Session ends with uncommitted state operator may want to resume.
-- Before risky operations (force-push, large refactor, design-phase amendment) — save first so resume is possible.
-
-`/context-restore` fires at session start when prior work was in-flight (cross-branch default; Conductor workspace handoff use case).
-
-**Checkpoint × roadmap interaction.** `roadmap_status.md` supersedes checkpoints for cross-session next-action derivation. Checkpoints retain value for mid-arc state (Decisions Made, Remaining Work within a single arc not yet PR'd). When resuming from a checkpoint, always:
-
-1. Read the checkpoint for context.
-2. Run the §12.1 session-start audit against current workspace state.
-3. If checkpoint's "Remaining Work" diverges from `roadmap_status.md`'s next_action → trust `roadmap_status.md`, treat the checkpoint as advisory orientation.
+`/context-save` fires near compaction, mid-arc, or before risky operations; `/context-restore` at session start when prior work was in flight. Body at `docs/governance/roadmap-protocol.md` §12.5.2.
 
 #### 12.5.3 R-NNN closure cascade (post-close audit)
 
-After any R-NNN closes (PR merge), the post-merge audit at §12.2 MUST also:
-
-1. **Memory check** — if the R-NNN's close surfaced a new pattern at cardinality ≥2, write memory entry + MEMORY.md line in the same PR (or follow-on PR if scope tightness requires).
-2. **Memory refresh** — if the close superseded an existing memory entry (e.g., a pattern's status changed, a finding closed), update the entry in the same PR.
-3. **Checkpoint clean** — a checkpoint is **"resolved"** when its `branch:` is in the merged set (the squash-merge-safe `gh pr list --state merged` head-ref cross-ref, per `[[squash-merge-branch-prune-recipe]]`) — a machine-checkable test, not a free-text "Remaining Work fully addressed" judgment. As-built (U-HK-26..29 reconciliation, review-doc §10 R-2): the **PreCompact snapshots** at `.harness/.checkpoints/` are *thin temporal* records — `session-end-cleanup.sh`'s keep-10 prune is their correct lifecycle (archival adds no value). The richer **gstack `/context-save`** checkpoints at `~/.gstack/.../checkpoints/` are append-only history by default; archiving resolved ones to a `checkpoints/archive/` subdir is *optional* low-value hygiene — not a standing requirement, and deliberately **not** automated (no two-system resolved-detection machinery was built).
+After an R-NNN closes: memory check, memory refresh, checkpoint-resolved check. Body at `docs/governance/roadmap-protocol.md` §12.5.3.
 
 #### 12.5.4 Pre-substantive memory + checkpoint discipline
 
-Before authoring against a memory or checkpoint claim:
-
-| Source | Pre-substantive check |
-|---|---|
-| Memory entry says "X exists at file Y line Z" | Grep / read to verify. Memory is frozen at write-time. |
-| Memory entry summarizes "recent activity" | Prefer `git log` / source code over recalling the snapshot. |
-| Checkpoint says "Remaining Work item 3" | Empirically verify against HEAD before acting (per `[[feedback-checkpoint-remaining-work-is-advisory-not-authoritative]]`). |
-| Memory cites a `[[pattern]]` that drives decision | Verify the pattern still has cardinality ≥2 at current memory state (patterns can be retired). |
+Verify any memory or checkpoint claim empirically against HEAD before authoring against it. Body at `docs/governance/roadmap-protocol.md` §12.5.4.
 
 ### 12.6 Cross-references
 
@@ -705,34 +420,19 @@ Before authoring against a memory or checkpoint claim:
 
 ### 13.2 The orchestration decision matrix
 
-| Mechanism | Use when | NOT for | Cost |
-|---|---|---|---|
-| **Solo** (just Claude) | Mechanical / linear work (spec authoring, impl edits, test writing, back-flow docs); single-fact lookups; follow-ups dictated by tool output | High-stakes design forks; broad audits | cheapest |
-| **`advisor()`** | Decision-forks; stuck; change-of-approach; pre-done sanity (§13.1). The **transcript-aware** reviewer | Mechanical steps; repeat calls on a settled path | cheap (one call) |
-| **`just codex-review`** (out-of-family Codex; §13.1) | **Default reviewer for a concrete diff/artifact** pre-merge — high-blast-radius changes (hooks, guards, governance docs). Decorrelated from advisor; pairs with it, does not replace it. Subscription auth, $0 | Pure design/strategy forks with no diff yet (use advisor/council); anything needing transcript context | cheap ($0 subscription; ~1 call/round) |
-| **Council** (design-phase; §10.7 + §10.9) | A **design** decision (authoring/revising ADR/spec/plan) with a **nameable multi-domain tension** between 2+ voices (security / blast-radius / observability / cost / reliability / eval-ability / HITL-local-first). Convene **dyadic (2 voices)** by default | Phase 7 impl; single-axis decisions; tensions you can't name in advance (→ single voice + `advisor()`) | moderate (one model call) |
-| **Adversarial reviewer** (skill; §10.9) | Pre-merge red-team of a *completed* design-substrate amendment or impl arc | In-flight authoring | moderate |
-| **Workflow** (multi-agent fan-out; **opt-in** per the Workflow tool rule) | Broad parallelizable audits/sweeps; exhaustive discovery; independent verification of a high-stakes finding; large migrations | Linear/interdependent impl; mechanical edits; anything one context can hold | highest (latency + tokens) — **flag + get a green-light before deploying** |
+Solo (mechanical/linear) · `advisor()` (decision-forks, transcript-aware) · `just codex-review` (default out-of-family reviewer for a concrete diff) · council (design decision with a nameable multi-domain tension; dyadic by default) · adversarial reviewer (pre-merge red-team) · Workflow fan-out (**opt-in**, flag before deploying). Full matrix at `docs/governance/orchestration.md` §13.2.
 
 ### 13.3 Effort-level guidance for harness work
 
-- **Normal / High is home base.** High suits the comprehensive nature of harness arcs (spec + impl + tests + clearance + roadmap). The effort knob governs the *thoroughness of the solo pass*; it does NOT change which §13.2 mechanism is appropriate.
-- **Ultracode is NOT a standing default.** Most harness work is careful-but-linear, where correctness comes from §13.1 verification (cheap), not from xhigh reasoning or mandatory fan-out. Reserve ultracode for a deliberate exhaustive push the operator explicitly wants. (2026-06-01 retrospective: ultracode's *one* successful investigation workflow found 2 real gaps, but the §13.1 disciplines + `advisor()` caught the rest at a fraction of the latency; token cost was ~2-3% of plan limits — **latency + over-engineering are the real cost, not tokens**.)
+Normal/High is home base; the effort knob governs solo-pass thoroughness, not which §13.2 mechanism applies. **Ultracode is not a standing default.** Detail at `docs/governance/orchestration.md` §13.3.
 
 ### 13.4 Worked example — the council that was missed (2026-06-01)
 
-The resolver Reading A-vs-B decision (identity resolver / *vacuous* floor **vs** per-server fields / *meaningful* floor) carried a nameable **C10 ⊥ C11** tension (action-safety/blast-radius wanting a real sandbox floor vs operator-loop/local-deployment wanting minimal per-server config burden) → **council-eligible** by the §10.9 nameable-tension discriminator. It was routed to `advisor()` + operator `AskUserQuestion` instead. Both reach a decision; the council surfaces the tension *structurally* before the operator chooses. **Rule of thumb: design decision + nameable cross-domain tension → offer a dyadic council convening (or at minimum name the voices' positions) before the operator `AskUserQuestion`.**
+The 2026-06-01 resolver decision carried a nameable C10 ⊥ C11 tension and was council-eligible. **Rule of thumb: design decision + nameable cross-domain tension → offer a dyadic council convening before the operator AskUserQuestion.** Worked example at `docs/governance/orchestration.md` §13.4.
 
 ### 13.5 Cross-references
 
-- Council activation + standing posture: §10.7 + §10.9. Voices at `.claude/skills/council/c1..c11` + `council-orchestrator`. Optional out-of-family **Codex decorator** on a convened tension (U-HK-19).
-- Out-of-family review: `just codex-review` / `just codex-review-uncommitted` (justfile); pilot record `R-600-codex-out-of-family-review`; division-of-labor-with-advisor ratified 2026-06-03 (U-HK-18); `[[hooks-codex-pilots-decorrelation-validated]]`.
-- Cite-grounding + code-side/cross-axis-seam drift instrument: the spec ↔ code ↔ CXA-seam ↔ substitution overlay at `tools/semantic_overlay/` (R-IF-112) + the `overlay-query` skill — the agent-facing `just overlay-query`/`overlay-check` surface for §13.1 (it resolves cites to code carriers + catches code↔cite/seam decay; it does NOT scan `design-substrate/**` sibling specs, so it complements — not replaces — the cross-spec `rg`). `--seam` is the cross-axis layer Understand-Anything's per-package code graph can't show (`[[overlay-query-agent-workflow]]`).
-- `advisor()` / memory / checkpoint composition: §12.5.
-- Posture (design-phase / Phase 7 / mode-agnostic): §11.
-- Workflow tool opt-in rule + quality patterns: the Workflow tool description.
-
----
+Council activation, out-of-family review, the overlay cite-grounding instrument, advisor/memory/checkpoint composition, posture. Links at `docs/governance/orchestration.md` §13.5.
 
 ## 14. Execution + interaction conventions
 
