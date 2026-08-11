@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `e70575e8912b` |
+| `workspace_state_hash` | `3ffe412dd4f7` |
 | `last_refreshed` | 2026-08-10T00:00:00Z |
-| `git_head` | `50771f16` — ops(r-ctx-1): Arc 2 — truncation + witnesses + pointers split |
+| `git_head` | `b89c54d9` — ops(r-ctx-1): Arc 3 — hook signature/cap hygiene + dead matcher removal |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 112 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1295).** The next implementable unit is `R-CTX-1` (context-optimization program, register row B-148). Arc 2 merged (`50771f16`, merge-gate ALL-APPROVE; codex loop closed at 12 rounds with the residual class recorded): roadmap_status truncated 316,894→25KB-class with the PRIOR-only archive + consumer witness suite + query-not-Read prose + artifact-pointers split. OPERATOR DIRECTIVE 2026-08-10: #1292 is PARKED unmerged (needs debugging; excessive time/token cost) — Gate G1 re-scoped, Arcs 3–7 build from CURRENT main (errata E8 rides PR-3). Wave 2 building in parallel worktrees: Agent B Arc 3 (hooks PR-3: U-CTX-07/08/09; operator `/hooks` re-trust owed after its merge) + Agent C Arc 4 (heads table PR-4: U-CTX-10/11/12). Then Wave 3 (Arc 5 root→Floor B + Arc 7 skills), Wave 4 (Arc 6 axis files), Wave 5 acceptance (CARRIED: E4 selector TEST before U-CTX-21/B-148 close). `B-124` HIL stays the harness-code gate (then `B-147`→`B-145`→`B-144`). `held=2` honored.
+**Current next action (post-#1296).** The next implementable unit is `R-CTX-1` (context-optimization program, register row B-148). Arc 3 merged (`b89c54d9`, THE program's single hook PR — merge-gate ALL-APPROVE; codex loop closed at the 10-round cap with residuals recorded in-file): failure-signature + total 2-emission cap (structure-only secret-safe identity), loop-gc top-3 caps + the SessionStart lock reaper, dead `Bash(git commit*)` matcher removed with computed parity counts; errata E8 recorded (#1292 PARKED per operator — Arcs 3–7 from current main). **OPERATOR ACTION OWED: Codex `/hooks` re-trust ceremony (fail-open until done).** Serial queue: #1297 (E4 selector tests, discharges the B-148 TESTED-selector obligation) → PR-4 (Arc 4 heads table, rebased+green) → PR-6 (Arc 7 skills) → Arc 5 (U-CTX-14 resolver built — 2,567-cite corpus, 0 broken; U-CTX-13/15 after PR-4) → PR-7 (Arc 6 axis slimming, built: −73.5KB) → Wave 5 acceptance vs the ≤76k gate. `B-124` HIL stays the harness-code gate (then `B-147`→`B-145`→`B-144`). `held=2` honored.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,6 +43,7 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
+| #1297 | `r-ctx-1-e4-test` | — | — |
 
 ---
 
@@ -50,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1296 | 2026-08-10 | R-CTX-1 Arc 3 (U-CTX-07/08/09): failure-signature+cap, loop-gc caps+reaper, dead matcher removal (codex 10R cap-closed; merge-gate all-approve) |
 | PR #1295 | 2026-08-10 | R-CTX-1 Arc 2 (U-CTX-03..06): roadmap_status truncation + consumer witnesses + query-not-Read + artifact-pointers split (merge-gate all-approve; codex 12R closed) |
 | PR #1294 | 2026-08-10 | R-CTX-1 U-CTX-02: RB-SUB-03 MCP cleanup + context-budget instrument (merge-gate all-approve; codex R8 converged) |
 | PR #1293 | 2026-08-10 | R-CTX-1 Wave 0: B-148/B-149 registered + config-hygiene baseline snapshot (U-CTX-00/01) |
 | PR #1290 | 2026-08-09 | B-143 closed test-only: structural shutdown, cold-child, reviewer, hook, and classifier timing witnesses; 294 affected tests; three-lens gate and Gemini 3.1 Pro High approved; PR and content-merge CI 16/16; B-147 registered separately for the saturated-default-executor force_flush queue-delay defect. |
-| 1289 | 2026-08-09 | B-126 CLOSED, and the row's own premise was FALSIFIED at grounding: only retry.skipped.candidate rides the discretion lane — the other four keys beyond C-CP-03 3.5 are MANDATED BY NAME at Runtime 14.6/14.9, so retry.* is declared at TWO contract venues while the C-CP-24 24.1 manifest counts one. Shipped RETRY_WIRE_REGISTER (7 rows: authorizing clause + binding + emitted) + RETRY_SPAN_AND_EVENT_NAMES (3), count-language corrections (a claimed 63-attribute sum against a derived 65, misattributed to the wrong sub-table; plus the cross-axis-facing live invariant OD consumes), and 17 drift-catching tests / 29 assertions with 11 load-bearing mutation probes. The drift resolver was wrong TWICE — too narrow (a regex crediting schema declarations) then too wide (an alias arm crediting any call argument, which RE-OPENED the same hole from the opposite side) — and my own 'over-counting fails loudly' defence was falsified by measurement: loud only for the two emitted=False rows, SILENT for the ten keys the sweep protects. Nine codex rounds to convergence + two merge-gate BLOCK cycles, every block a defect in this arc's own work. THE CHASE WAS STOPPED DELIBERATELY at the non-convergent arms-race signature: two written claims RETRACTED IN PLACE ('an undeclared key cannot hide'; 'any composition is reported'), both falsified by execution, and the boundary REGISTERED as B-146. NEW: B-144 (24.1.B's count column never re-tabled after 3.5's two amendments, and the code resolves the divergence INCONSISTENTLY per row; plus a third case where the manifest counts SPAN NAMES as attributes), B-145 (retry.backoff_ms + retry.cause_class mandated at four step bullets with ZERO producers; retry.terminal = escalate never emitted, collapsed into max-attempts by a branch whose own comment admits it covers both), B-146 (the static catcher's six enumerated escape shapes, with the 12-vs-0 measurement fixing where the net sits). Also a MEASURED sibling recorded on B-143 (child ready 5.4/33.9/7.7s vs a 10.0s deadline — its close-out step (5) sweep's first hit, and its prescribed scripted-clock remedy explicitly does NOT transfer). Register 146 items / 115 closed / 30 registered_finding / 1 held. |
 ---
 
 ---
