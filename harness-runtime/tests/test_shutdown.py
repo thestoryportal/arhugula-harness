@@ -1351,6 +1351,49 @@ async def test_cancelled_flush_keeps_registration_for_flush_before_close(
     assert "tracer_provider" in report.failures
 
 
+@pytest.mark.asyncio
+async def test_deferred_close_unregisters_otel_atexit_backstop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-147 codex round-6 P1 — when the runtime takes ownership of the
+    close via the deferred watcher, OTel's own `shutdown_on_exit` atexit
+    backstop must be unregistered: Python runs atexit handlers without
+    waiting for daemon threads, so the backstop would close the provider
+    concurrently with the still-live force_flush at process exit."""
+    import atexit as _atexit
+
+    unregistered: list[object] = []
+    monkeypatch.setattr(_atexit, "unregister", unregistered.append)
+
+    tracer = _FakeTracerWithShutdown()
+    sentinel_handler = tracer.shutdown
+    tracer._atexit_handler = sentinel_handler  # type: ignore[attr-defined]
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+    lingering = threading.Event()  # never set during the test
+
+    async def _flush_leaving_lingering_worker(
+        ctx_arg: Any, *, timeout_millis: int = 30_000
+    ) -> FlushReport:
+        _ = timeout_millis
+        shutdown_mod._register_inflight_tracer_flush(ctx_arg, lingering)  # type: ignore[attr-defined]
+        return FlushReport(
+            tracer_flushed=False,
+            ledger_fsynced=True,
+            cost_chain_noop=True,
+            timed_out=True,
+            failures=("tracer",),
+        )
+
+    monkeypatch.setattr(shutdown_mod, "flush_observability", _flush_leaving_lingering_worker)
+
+    report = await asyncio.wait_for(shutdown(ctx, timeout=5.0), timeout=5.0)
+
+    assert "tracer_provider" in report.failures
+    assert unregistered == [sentinel_handler]
+    assert tracer.shutdown_called is False  # only the ordered watcher may close
+
+
 def test_stale_inflight_entry_from_dead_context_does_not_veto_close() -> None:
     """B-147 codex round-4 P2 — weak ctx identity: after a context dies with
     a stalled worker still registered, a NEW context whose `id()` collides

@@ -71,6 +71,7 @@ pattern.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import functools
 import os
 import stat
@@ -351,9 +352,20 @@ def _spawn_deferred_tracer_close(ctx: object) -> None:
         events: tuple[threading.Event, ...] = (
             tuple(entry[1]) if entry is not None and not _entry_is_stale(entry, ctx) else ()
         )
-    shutdown_fn = getattr(getattr(ctx, "tracer_provider", None), "shutdown", None)
+    provider = getattr(ctx, "tracer_provider", None)
+    shutdown_fn = getattr(provider, "shutdown", None)
     if shutdown_fn is None:
         return
+    # OTel's own atexit backstop (`shutdown_on_exit=True` at construction,
+    # `lifecycle/tracer_provider.py`) fires at process exit WITHOUT waiting
+    # for daemon threads — it would close the provider concurrently with the
+    # still-live force_flush and recreate exactly the race this deferral
+    # exists to prevent (codex round-6 P1). The runtime owns the close from
+    # here; unregister the SDK backstop (private attr, guarded — absent on
+    # fakes / non-OTel providers).
+    atexit_handler = getattr(provider, "_atexit_handler", None)
+    if atexit_handler is not None:
+        atexit.unregister(atexit_handler)
 
     def _watcher() -> None:
         for evt in events:
