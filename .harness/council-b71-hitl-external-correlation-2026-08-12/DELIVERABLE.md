@@ -264,6 +264,41 @@ Three consequences, in order of how load-bearing they are:
    uniform reply resolves it **only if it is the sole unaddressed gate-owning branch
    at resume**. It must not claim to report whether that is currently so.
 
+### 4-ter.2b Does a channel-only field still disarm D-2? — YES, with the scope stated
+
+Out-of-family Codex round 8 raised the sharpest objection of this arc: §3 binds palette
+display to `resolvability` as the disarm for **D-2** (*the palette advertises
+actionability the resolver discards*), and §6 lists that binding as ABSORBED. But a
+channel-only field is **invariant** — a pre-dispatch request carries
+`UNIFORM_FALLBACK_ONLY` both when 2+ owners are unaddressed and when it is the sole
+owner. So, the objection runs, consumers must either show an invalid reply affordance in
+the first state or hide a valid one in the second.
+
+**The dichotomy dissolves on what the palette actually affords, and the answer is in the
+variant's own definition.** `PreDispatchUniformFallbackOnlyLocation`
+(`pause_state_projection.py:335-342`): *"Gate-owning and counted, but **NEVER
+keyable**: its resolver identity is a `run_id`-shaped string, so an operator who keyed
+it would hit the resolver's collision defence and have the response silently DROPPED."*
+
+Never-keyable is **unconditional** — true in the 2+ state and in the sole-owner state
+alike. D-2's harm is specifically the **keyed** affordance: `proposed_response_palette`
+projected on the webhook (`webhook_brief_adapter.py:81-83`) reads as *"reply to THIS
+request"*, and such a reply is dropped in **both** states. Suppressing it on the channel
+is therefore correct in both, and hides nothing valid. What differs between the states
+is whether a **run-level uniform** response would currently be applied — a *different
+channel*, and precisely the time-varying outcome §4-ter.1 shows must not be asserted.
+
+**One nuance the binding must preserve.** The uniform response is itself drawn from
+`HITLResponse`, so the palette's *values* stay meaningful as the admissible set. The
+correct suppression is therefore "do not present it as a **per-request addressable
+reply**", not "delete the field": the disarm removes a false addressing affordance, it
+does not remove the operator's knowledge of which responses are admissible.
+
+**Disposition: D-2's absorption stands, with its scope stated** — refined by this
+challenge rather than reopened. `resolvability_note` carries the routing (uniform,
+run-level, sole-member-conditional); the channel carries the never-keyable fact; neither
+asserts current actionability.
+
 ### 4-ter.3 NEW SUB-FORK — v1's own recommendation over-promised
 
 v1 §5 precondition 3 recommended the field "routes the operator to the pause view for
