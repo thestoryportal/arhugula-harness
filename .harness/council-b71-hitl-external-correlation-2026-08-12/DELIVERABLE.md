@@ -264,6 +264,41 @@ Three consequences, in order of how load-bearing they are:
    uniform reply resolves it **only if it is the sole unaddressed gate-owning branch
    at resume**. It must not claim to report whether that is currently so.
 
+### 4-ter.1b An unverified premise, de-coupled rather than relied on
+
+v1's precondition-3 text argued the static stamp is especially harmful because
+*"posture-change redelivery is a registered follow-on that would never correct it."*
+Out-of-family Codex round 11 showed that premise is **not safe to lean on**:
+`test_hitl_resume_without_resolved_response_repauses`
+(`harness-runtime/tests/integration/test_u_rt_95_hitl_resume_consume_cycle_e2e.py:649`)
+executes a resume with an empty `ResumeContext`, and the composer falls through to Step
+4-bis and **re-escalates via the webhook** — the test asserts two POSTs. Webhook
+redelivery on re-pause is shipped behaviour, not absent.
+
+**What that does and does not establish.** The cited test is a **linear, depth-0** HITL
+gate. The population this record is about is the **fan-out pre-dispatch branch**, whose
+gate fires inside the parent's dispatch of a `SUB_AGENT_DISPATCH` step. Whether the
+fan-out path re-enters the composer and re-escalates on resume is **not** shown by that
+test, and this arc has not run it either. So the honest status of the redelivery premise
+is **UNVERIFIED for its own population** — and the linear behaviour is evidence against,
+not for, the "never corrects it" framing.
+
+**Consequences, taken rather than deferred:**
+
+1. **Precondition 3's closure does not depend on it.** The disposition rests on the
+   witnessed eligibility flip and on channel-vs-outcome. v1's redelivery line was a
+   supporting argument for *how bad* a false-negative stamp is, not the ground for
+   rejecting it. It is struck from the reasoning rather than repaired here.
+2. **`B-155`'s premise needs re-grounding at open.** That row is titled *"No webhook
+   re-fires when a parked pre-dispatch branch becomes sole-addressable."* Given the
+   linear-shape behaviour, the literal "no webhook re-fires" may be false for its
+   population too; what plausibly survives is the weaker and still-real claim that any
+   re-fired request is **byte-identical and carries no posture signal** — which is
+   B-71's original defect, not a separate absence. Recorded on the row.
+3. **The owed witness is a fan-out driver/composer round-trip.** Named as owed; it
+   belongs to `B-155`'s arc, where the answer changes that row's disposition, rather
+   than being bolted onto a precondition it does not gate.
+
 ### 4-ter.2b Does a channel-only field still disarm D-2? — YES, with the scope stated
 
 Out-of-family Codex round 8 raised the sharpest objection of this arc: §3 binds palette
