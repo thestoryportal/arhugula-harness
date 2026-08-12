@@ -324,27 +324,39 @@ webhook transport are faked). Its core assertion,
 `:576-590`): when the operator supplies the response, the branch's own gate **CONSUMES**
 it — **1 POST, no re-escalation**.
 
-Trace the two paths a stamp reader can take:
+Three paths a stamp reader can take — the third one was missed by this section's first
+draft and supplied by out-of-family Codex round 17:
 
-- **Operator obeys the stamp** ("held for sole resolution — do not reply"): they supply
-  no response. Nothing resumes, nothing re-escalates, and no corrected stamp is ever
-  minted. The run stays parked **because** of the stamp.
-- **Operator ignores the stamp** and supplies the uniform response while sole: the gate
-  consumes it and the branch proceeds — witnessed above. No fresh escalation occurs,
-  because there is nothing left to escalate.
+- **Obeys the stamp, answers nothing.** Nothing resumes, nothing re-escalates, no
+  corrected stamp is ever minted. The run stays parked **because** of the stamp.
+- **Ignores the stamp**, supplies the uniform response while sole: the gate consumes it
+  and the branch proceeds — witnessed above. No fresh escalation, nothing left to
+  escalate.
+- **Obeys the stamp but answers the addressable PEER** via `hitl_responses` — the stamp
+  says nothing about the peer, so this is not disobedience. A resume DOES occur: the
+  child consumes its keyed response while the now-eligible pre-dispatch branch receives
+  `HITLDeliveryCell(None)` and may fall through to the composer's re-escalation path.
+  **This is the one path where a corrective re-mint could occur, and it is UNRUN.**
 
-So the corrective re-mint the rebuttal depends on exists on **neither** path. A fresh
-escalation could only follow a resume that *fails* to resolve — which requires the
-operator to have disregarded the stamp already. **A signal cannot be justified by a
-correction that only arrives when the signal is ignored.** The stamp is self-fulfilling:
-it suppresses precisely the action that would end the parking.
+**What that costs the argument, stated honestly.** The first draft claimed the
+corrective re-mint exists on *no* path; that was wrong. It may exist on the third. So
+the stamp is not provably a *permanent* false negative.
 
-That is why the witnessed eligibility flip is sufficient to retire it, and why
-precondition 3 closes without the fan-out *no-response* round-trip. **Scope, stated:**
-this settles the CONSUMING path for the fan-out population (witnessed). Whether a
-fan-out branch re-escalates on a resume that supplies nothing remains unrun (§4-ter.1b)
-— but that path is reachable only by an operator who already disbelieved the stamp, so
-it cannot rescue minting one.
+**What survives, and why it still retires the stamp.** The stamp is a false negative **at
+the moment the operator reads it** — that much is witnessed: eligibility flips, and a
+value minted before any answer exists cannot track it. A later corrective re-escalation,
+if it happens, *mitigates* that harm; it does not remove it, and it arrives only after
+the operator has already been told not to act. A design that ships a knowingly-wrong
+signal and relies on a subsequent message to correct it is not the same as one that
+never asserts the wrong thing — and precondition 3's ask is precisely that the field
+**cannot assert a false negative**. A static stamp asserts one; the channel does not.
+
+**Scope, restated.** Witnessed for the fan-out population: the CONSUMING path
+(`test_fanout_branch_gate_resume_with_resolved_answer_is_consumed`). **Unrun and named
+as owed:** the mixed keyed-peer / no-uniform-response resume — whether the pre-dispatch
+branch re-escalates there, and with what content. It is owed on the spec leg, and it is
+the same fan-out driver/composer round-trip `B-155` already carries; it would tell us
+how *bad* the stamp is, not whether the channel is the right shape.
 
 ### 4-ter.2b Can a channel-only field disarm D-2? — NO. The v1 binding is WITHDRAWN
 
