@@ -224,7 +224,7 @@ grounds, the second the stronger:
   operator ... as an outstanding-pause assertion."* **The witness does not invoke the
   accessor or the journal** — it constructs snapshots and compares CP projections. So a
   change that made Runtime record resolution, or filter resolved records, would leave
-  all five tests green while this ground silently expired. It is carried as a **cited
+  all six tests green while this ground silently expired. It is carried as a **cited
   contract**, not an executed behaviour, and a Runtime round-trip is named as owed
   below (out-of-family Codex).
 
