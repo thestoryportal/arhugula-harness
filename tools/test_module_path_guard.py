@@ -191,3 +191,15 @@ def test_invalid_identifier_dir_anchors_below_it(tmp_path: Path) -> None:
     _mk(tmp_path, "harness-aa/tests/group-aa/integration/test_same.py")
     _mk(tmp_path, "harness-bb/tests/group-bb/integration/test_same.py")
     assert "integration.test_same" in mpg.find_duplicate_test_module_paths(tmp_path)
+
+
+def test_marker_detected_env_roots_are_pruned(tmp_path: Path) -> None:
+    """pytest skips virtualenv/conda roots by MARKER (pyvenv.cfg /
+    conda-meta/history) even under non-pattern names like `env` — a
+    colliding pair inside one must not block the session (codex r10)."""
+    _mk(tmp_path, "harness-aa/tests/env/test_e.py")
+    _mk(tmp_path, "harness-bb/tests/env/test_e.py")
+    (tmp_path / "harness-aa/tests/env/pyvenv.cfg").write_text("home = /x\n")
+    (tmp_path / "harness-bb/tests/env/conda-meta").mkdir()
+    (tmp_path / "harness-bb/tests/env/conda-meta/history").write_text("")
+    assert mpg.find_duplicate_test_module_paths(tmp_path) == {}

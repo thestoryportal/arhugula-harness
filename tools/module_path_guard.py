@@ -72,8 +72,14 @@ def _iter_test_files(tests_dir: Path):
     import os
 
     for dirpath, dirnames, filenames in os.walk(tests_dir):
+        base = Path(dirpath)
         dirnames[:] = sorted(
-            d for d in dirnames if not any(fnmatch(d, pat) for pat in _NORECURSE_PATTERNS)
+            d
+            for d in dirnames
+            if not any(fnmatch(d, pat) for pat in _NORECURSE_PATTERNS)
+            # pytest also skips environment roots by MARKER, not name (r10):
+            and not (base / d / "pyvenv.cfg").is_file()
+            and not (base / d / "conda-meta" / "history").is_file()
         )
         for name in sorted(filenames):
             if any(fnmatch(name, pat) for pat in _TEST_FILE_PATTERNS):
