@@ -64,12 +64,20 @@ _NORECURSE_PATTERNS = (
 )
 
 
-def _pytest_would_recurse(member: Path, test_file: Path) -> bool:
-    return not any(
-        fnmatch(part, pat)
-        for part in test_file.relative_to(member / "tests").parts[:-1]
-        for pat in _NORECURSE_PATTERNS
-    )
+def _iter_test_files(tests_dir: Path):
+    """Yield test files under ``tests_dir``, PRUNING norecursedirs during
+    traversal exactly as pytest does (codex r9: post-filtering after a full
+    ``rglob`` still walks a generated venv/build subtree on every session
+    start; pruning skips the descent entirely)."""
+    import os
+
+    for dirpath, dirnames, filenames in os.walk(tests_dir):
+        dirnames[:] = sorted(
+            d for d in dirnames if not any(fnmatch(d, pat) for pat in _NORECURSE_PATTERNS)
+        )
+        for name in sorted(filenames):
+            if any(fnmatch(name, pat) for pat in _TEST_FILE_PATTERNS):
+                yield Path(dirpath) / name
 
 
 def _package_anchored_module(member: Path, test_file: Path) -> str | None:
@@ -113,16 +121,11 @@ def find_duplicate_test_module_paths(root: Path) -> dict[str, list[str]]:
         tests_dir = member / "tests"
         if not tests_dir.is_dir():
             continue
-        seen: set[Path] = set()
-        for pattern in _TEST_FILE_PATTERNS:
-            for test_file in sorted(tests_dir.rglob(pattern)):
-                if test_file in seen or not _pytest_would_recurse(member, test_file):
-                    continue
-                seen.add(test_file)
-                module = _package_anchored_module(member, test_file)
-                if module is None:
-                    continue
-                claims[module].append(test_file.relative_to(root).as_posix())
+        for test_file in _iter_test_files(tests_dir):
+            module = _package_anchored_module(member, test_file)
+            if module is None:
+                continue
+            claims[module].append(test_file.relative_to(root).as_posix())
     return {mod: sorted(files) for mod, files in claims.items() if len(files) > 1}
 
 
