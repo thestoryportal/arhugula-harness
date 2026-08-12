@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `836fcc014060` |
-| `last_refreshed` | 2026-08-12T01:05:00Z |
-| `git_head` | `fe7ef29b` —  |
+| `workspace_state_hash` | `61c26318310a` |
+| `last_refreshed` | 2026-08-12T02:20:00Z |
+| `git_head` | `64db9029` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
-| `open_fork_doc_count` | 115 |
+| `open_fork_doc_count` | 116 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1316).** *Loop run 2026-08-11/12: five closes this run — B-151/#1312, B-152/#1313, B-153/#1314, B-117/#1315, B-122/#1316.* Queue per §12.4.1: 25 `registered_finding` rows remain (all previously grounded dormant-awaiting-trigger); next buildable candidates from the sweep: **B-121** (the misleading LLMDispatchProviderUnreachableError NAME — sibling of the B-122 close, raise-sites enumerated there) or the next file-order grounding pass. **OPERATOR ACTIONS OWED (unchanged): (1) the E7 move — command at `.harness/r-ctx-1-e7-machine-local-orchestrator-step.md`, then `just context-budget --sessions 1` → flip B-148 if ≤76k; (2) Codex `/hooks` re-trust; (3) `B-124` Class-2 ratification (fork doc at #1283, rec D on file).** R-CTX-1 (B-148) stays Wave-5 PENDING-REMEASURE. `held=2` honored.
+**Current next action (post-#1317).** *Loop run 2026-08-11/12: SIX closes this run — B-151/#1312, B-152/#1313, B-153/#1314, B-117/#1315, B-122/#1316, B-121/#1317.* Queue per §12.4.1: 24 `registered_finding` rows remain (all previously grounded dormant-awaiting-trigger); derive the next buildable candidate by a fresh file-order grounding pass at arc-open. **OPERATOR ACTIONS OWED (unchanged): (1) the E7 move — command at `.harness/r-ctx-1-e7-machine-local-orchestrator-step.md`, then `just context-budget --sessions 1` → flip B-148 if ≤76k; (2) Codex `/hooks` re-trust; (3) `B-124` Class-2 ratification (fork doc at #1283, rec D on file).** R-CTX-1 (B-148) stays Wave-5 PENDING-REMEASURE. `held=2` honored.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1317 | 2026-08-12 | B-121 CLOSED — Runtime v1.119→v1.120 C-RT-14 SPLIT: new RT-FAIL-PROVIDER-UNREGISTERED (per-dispatch registry class); stage-3a network UNREACHABLE row byte-preserved; four C-RT-15 mentions re-mapped; :7052 conformance re-stated; Python rename LLMDispatchProviderUnregisteredError + honest detail= at the two defensive sites (codex r1). Class-2 fork FIRST; scope b′ via U-HK-13 resolver (AGREEMENT; codex pick salvaged from its timed-out run); impl salvaged from the codex worktree, re-verified hunk-by-hunk, two fabricated attributions corrected. Gate: L1+L2 APPROVE, L3 BLOCK→fixed→re-gate APPROVE; codex 2r converged. Register: B-121 closed (153/24/126 + digest). CI 19/19. Detail: merge-gate-log #1317 row + fork doc + clearance v1-120. |
 | 1316 | 2026-08-12 | B-122 CLOSED — stage-3b fallback-chain unregistered-provider startup DIAGNOSTIC (deliberately not a gate: Ollama-degraded skipped registration is a supported shape per the exception's own docstring; C-RT-14 prescribes the typed failure per-dispatch only, Spec:4188). logging.warning once on harness.runtime.fallback_chain (stage-5 prewarm venue precedent); skipped for tool-only bootstraps (codex r1 — dispatch unreachable); partial-coverage limit stated (role-augmented per-dispatch chains). 4 witnesses through REAL run_bootstrap incl. partial-registration + multi-candidate enumeration (lens-3 residual closed in-PR); deletion mutation RED. Gate: 3-lens ALL-APPROVE; codex 2r converged. Register: B-122 closed (153/25/125 + digest); B-121 sibling stays open. CI 18/18. Detail: merge-gate-log #1316 row. |
 | 1315 | 2026-08-11 | B-117 CLOSED — duplicate-test-module-path session gate: tools/module_path_guard.py + root conftest.py (pytest.UsageError at sessionstart, every local run + CI axis job). Pytest-faithful collision unit hardened across the ladder: dual discovery patterns, outermost-contiguous-package anchoring, non-identifier boundary stops, norecursedirs + marker-based env-root pruning. Gate: lean L3 BLOCK (vacuous norecursedirs witness) -> fixture -> re-gate APPROVE (both mutations RED); codex 10r AT CAP (9 absorbed, 3 probe-backed; r8 HELD vs its own r4). 15 witnesses incl. real-entry-point subprocess probe; live e2e duplicate probe. Register: B-117 closed (153/26/124 + digest). CI 18/18. Detail: merge-gate-log #1315 row. |
 | 1314 | 2026-08-11 | B-153 CLOSED — CP v1.118 §24.1 Attribute-count column ratified (distinct declared keys per the row's source contract; declared-elsewhere wire keys excluded per B-126): hitl.* 4→11 per C-CP-20 §20.6, matching OD row 6's standing 11; audit.* CONFORMING; §24.1.A 35→42, sum 68→75. Companions: plan v2.51 + Runtime v1.119 + Meta-Arch §10.3.3 frozen-snapshot annotation. NEW cross-package map↔manifest witness closes the #1311 residual. Gate: 3-lens ALL-APPROVE + scoped L2 re-gate; codex 7r converged (6 absorbed; register-prose HELD as the #1311 standing disagreement). Register 153/27/123. CI 19/19. Detail: merge-gate-log #1314 row + 3 clearances. |
 | 1313 | 2026-08-11 | B-152 CLOSED — Runtime v1.117→v1.118 spec leg: both deferral-unavailable residuals declared BOUNDARIES (four qualification clauses at C-RT-07 + C-RT-10; zero code change). Residual 1 grounded vacuous in-repo (all shutdown()-hosting loops asyncio.run-managed, cli/app.py:299/:342/:615); discharges the owed #1310 lens-2 C-RT-07 :3390 qualification. Residual 2: step-6 watcher-launch-failure carve-out; on-loop fallback REJECTED with grounds (B-147 unbounded-wait class). Codex r2 catch absorbed: across-runs boundary covers BOTH embedder paths (launch failure + stopped-open-loop skip). Gate: lean single-lens APPROVE; codex 4r converged (5 findings absorbed r1-r3). Register: B-152 closed (153/28/122 + digest). CI 19/19. Detail: merge-gate-log #1313 row + clearance spec-harness-runtime-v1-118. |
-| 1312 | 2026-08-11 | B-151 CLOSED — both atexit-backstop residual shapes fixed impl-only in shutdown.py: shape 1 (re-arm after deferred takeover) via per-ctx _deferred_owned tombstone committed pre-disarm + checked by the arm; shape 2 (dead-probe gate overwrite) via dead-weakref guard on BOTH _deferred_closing commit sites, same commit per close-out. 3 deterministic witnesses, each mutation-probed RED. Gate: 3-lens ALL-APPROVE first pass; codex clean r1; 7778 passed; CI 18/18 (19th = X-AL-3 guard, no design-substrate diff). Register: B-151 closed (153/29/121 + digest). 2 benign residuals recorded in gate-log, not minted. Detail: merge-gate-log #1312 row. |
 ---
 
 ---
