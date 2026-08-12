@@ -11,9 +11,11 @@ as ratifying the span-names-as-attributes interpretation"). No new attribute, na
 sampling rule, or contract number is minted — the 11 figure is the C-CP-20 §20.6
 distinct-declared-key enumeration that OD has committed to since C-OD-05 §5.1 row 6
 ("11 attributes across 4 span names") and that `harness_od/namespace_map.py` already
-ingests. One same-PR companion delta carries the owed plan half —
-`Implementation_Plan_Control_Plane_v2_51.md` (the U-CP-54 acceptance re-pin 68 → 75).
-No OD, Runtime, or CXA artifact is amended: the OD side was already correct.*
+ingests. Two same-PR companion deltas carry the owed sibling halves —
+`Implementation_Plan_Control_Plane_v2_51.md` (the U-CP-54 acceptance re-pin 68 → 75)
+and `Spec_Harness_Runtime_v1.md` v1.119 (two live hitl.* count mentions aligned; the
+B-145 GAP-1 class, surfaced at this PR's codex round 4). No OD or CXA artifact is
+amended: the OD side was already correct.*
 
 **Filed:** 2026-08-11
 **Authority:** Register row `B-153` close_out steps (1)–(3); the `B-144` venue-A
@@ -105,7 +107,9 @@ comparing every OD CP-source `namespace_map` row count against its CP manifest r
 the #1311-recorded "no cross-package map↔manifest count comparison" residual was
 ill-defined until this column ratification and is closed by it. The companion plan
 delta v2.51 re-pins U-CP-54's inherited acceptance figures. The Runtime bootstrap
-inversion check (breaker row only, 9 == 9) is unaffected. OD-side: NO delta —
+inversion check (breaker row only, 9 == 9) is unaffected. Runtime spec: companion
+delta v1.119 aligns the two live hitl.* count mentions (C-RT-18 `:4676`; U-RT-60
+`:7013`). OD-side: NO delta —
 C-OD-05 §5.1 row 6 and `namespace_map.py` already carry 11.
 
 *End of v1.118 delta. All other content of the C-CP chain preserved verbatim.*
