@@ -271,10 +271,12 @@ bare-ordinal carrier's collapse are all witnessed.
 **Cited, not witnessed** — three, each load-bearing somewhere in §4-bis:
 
 1. **The resume reuses the paused child's `run_id`** rather than re-deriving it
-   (`child_workflow_runner.py:230-234`). This is what makes (B) stable and (C) rotate
-   *on the ordinary path*; the witness proves only the half that is its own — that (B)
-   takes no `entry_version` input, so a stable `run_id` cannot rotate it. A live
-   resume is not exercised.
+   (`child_workflow_runner.py:230-234`). This is what supplies the recovered `run_id`
+   **inside the mint→persist recompute window** — the only place the B/C distinction
+   applies at all, since on the ordinary resume path the persisted echo is read and
+   nothing is recomputed (§4-bis.2). The witness proves only the half that is its own:
+   that (B) takes no `entry_version` input, so a recovered `run_id` reproduces its
+   token where (C)'s rotates. A live resume is not exercised.
 2. **The fan-out parent context's field population.** The witness mirrors
    `workflow_driver.py:8185-8200` as a struct literal rather than reaching it through
    `execute_workflow`. Every *derived* field is production-composed — so a change to
