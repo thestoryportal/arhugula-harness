@@ -43,20 +43,25 @@ _TEST_FILE_PATTERNS = ("test_*.py", "*_test.py")
 
 def _package_anchored_module(member: Path, test_file: Path) -> str | None:
     """The dotted module path pytest derives for ``test_file``, or ``None``
-    when the file is not package-anchored at the member's ``tests`` root.
+    when the file's own directory is not a package.
 
-    Walks the directory chain from ``tests`` down to the file's parent; every
-    directory must carry an ``__init__.py`` for the shared-package collision
-    to exist. A break anywhere means pytest assigns a path-derived unique
-    module name instead (no collision possible — verified by probe).
+    pytest anchors the module name at the OUTERMOST CONTIGUOUS package: walk
+    UP from the file's parent while ``__init__.py`` exists (stopping at the
+    member root, which is never a package in this src-layout workspace). A
+    ``tests/`` root without ``__init__.py`` whose ``tests/integration/`` IS a
+    package still collides across members as ``integration.test_x``
+    (out-of-family round-2 probe: 2 of 3 functions collected). A file whose
+    own parent is not a package gets a pytest-disambiguated unique module
+    name — no collision possible (round-1 probe).
     """
-    rel = test_file.relative_to(member)
-    chain = [member / rel.parts[0]]
-    for part in rel.parts[1:-1]:
-        chain.append(chain[-1] / part)
-    if any(not (d / "__init__.py").is_file() for d in chain):
+    d = test_file.parent
+    parts = [test_file.stem]
+    while d != member and (d / "__init__.py").is_file():
+        parts.append(d.name)
+        d = d.parent
+    if len(parts) == 1:
         return None
-    return ".".join((*rel.parts[:-1], test_file.stem))
+    return ".".join(reversed(parts))
 
 
 def find_duplicate_test_module_paths(root: Path) -> dict[str, list[str]]:

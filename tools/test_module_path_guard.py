@@ -56,6 +56,19 @@ def test_package_subdir_duplicate_is_reported(tmp_path: Path) -> None:
     assert "tests.integration.test_y" in mpg.find_duplicate_test_module_paths(tmp_path)
 
 
+def test_broken_chain_still_collides_at_inner_package(tmp_path: Path) -> None:
+    """tests/ WITHOUT __init__.py but tests/integration/ WITH it anchors the
+    module at the inner package — two members' integration/test_w.py resolve
+    to the SAME `integration.test_w` and pytest drops one (round-2 probe:
+    2 of 3 functions collected). The guard must anchor at the outermost
+    CONTIGUOUS package, not require the chain to reach tests/."""
+    _mk(tmp_path, "harness-aa/tests/integration/test_w.py", packages=False)
+    _mk(tmp_path, "harness-bb/tests/integration/test_w.py", packages=False)
+    (tmp_path / "harness-aa/tests/integration/__init__.py").touch()
+    (tmp_path / "harness-bb/tests/integration/__init__.py").touch()
+    assert "integration.test_w" in mpg.find_duplicate_test_module_paths(tmp_path)
+
+
 def test_non_package_subdir_is_legal(tmp_path: Path) -> None:
     """Same relpath under NON-package subdirs (no __init__.py) collects fine
     under importlib mode (live probe: both b117probe/test_p1.py PASSED) —
