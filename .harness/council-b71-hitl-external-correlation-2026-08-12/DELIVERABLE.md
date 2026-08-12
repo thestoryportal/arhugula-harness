@@ -301,40 +301,52 @@ not for, the "never corrects it" framing.
    belongs to `B-155`'s arc, where the answer changes that row's disposition, rather
    than being bolted onto a precondition it does not gate.
 
-### 4-ter.2b Does a channel-only field still disarm D-2? — YES, with the scope stated
+### 4-ter.2b Can a channel-only field disarm D-2? — NO. The v1 binding is WITHDRAWN
 
-Out-of-family Codex round 8 raised the sharpest objection of this arc: §3 binds palette
-display to `resolvability` as the disarm for **D-2** (*the palette advertises
-actionability the resolver discards*), and §6 lists that binding as ABSORBED. But a
-channel-only field is **invariant** — a pre-dispatch request carries
-`UNIFORM_FALLBACK_ONLY` both when 2+ owners are unaddressed and when it is the sole
-owner. So, the objection runs, consumers must either show an invalid reply affordance in
-the first state or hide a valid one in the second.
+This section reversed twice under out-of-family review; the second reversal is the
+correct one and the reasoning is recorded so it is not re-litigated a third time.
 
-**The dichotomy dissolves on what the palette actually affords, and the answer is in the
-variant's own definition.** `PreDispatchUniformFallbackOnlyLocation`
-(`pause_state_projection.py:335-342`): *"Gate-owning and counted, but **NEVER
-keyable**: its resolver identity is a `run_id`-shaped string, so an operator who keyed
-it would hit the resolver's collision defence and have the response silently DROPPED."*
+**The challenge (round 8).** §3 binds palette display to `resolvability` as the disarm
+for **D-2** (*the palette advertises actionability the resolver discards*), and §6 listed
+that binding as ABSORBED. But a channel-only field is invariant — a pre-dispatch request
+carries `UNIFORM_FALLBACK_ONLY` both when 2+ owners are unaddressed and when it is the
+sole owner — so consumers must either show an invalid affordance in the first state or
+hide a valid one in the second.
 
-Never-keyable is **unconditional** — true in the 2+ state and in the sole-owner state
-alike. D-2's harm is specifically the **keyed** affordance: `proposed_response_palette`
-projected on the webhook (`webhook_brief_adapter.py:81-83`) reads as *"reply to THIS
-request"*, and such a reply is dropped in **both** states. Suppressing it on the channel
-is therefore correct in both, and hides nothing valid. What differs between the states
-is whether a **run-level uniform** response would currently be applied — a *different
-channel*, and precisely the time-varying outcome §4-ter.1 shows must not be asserted.
+**The answer that failed (round 8's).** It argued D-2's harm is the *keyed* affordance,
+that never-keyable is unconditional, and that suppression is therefore safe in both
+states because the uniform channel is a different channel.
 
-**One nuance the binding must preserve.** The uniform response is itself drawn from
-`HITLResponse`, so the palette's *values* stay meaningful as the admissible set. The
-correct suppression is therefore "do not present it as a **per-request addressable
-reply**", not "delete the field": the disarm removes a false addressing affordance, it
-does not remove the operator's knowledge of which responses are admissible.
+**Why that fails (round 11 evidence, round 14).** There is no keyed affordance on the
+webhook to suppress: **the webhook carries no ingress keys at all** (§3 — no `run_id`,
+nothing `hitl_responses`-shaped). So the palette there is not "reply keyed to this
+request"; it is *"these are the responses you may give"* — and for this population the
+legal carrier is the **uniform** response, which a sole pre-dispatch owner genuinely
+**consumes**: `workflow_driver.py:8346-8350` injects `resume_context.hitl_response` into
+the branch's delivery cell when its identity matches the eligible one, and
+`test_b72_fanout_sub_agent_dispatch_hitl_gate_resume.py:576-590` executes that path and
+asserts the gate consumes the answer (1 POST, no re-escalation). Suppressing the palette
+in both states would therefore **hide a valid action in the sole-owner state** — the
+same liveness failure precondition 3 exists to close, one level down.
 
-**Disposition: D-2's absorption stands, with its scope stated** — refined by this
-challenge rather than reopened. `resolvability_note` carries the routing (uniform,
-run-level, sole-member-conditional); the channel carries the never-keyable fact; neither
-asserts current actionability.
+**The general lesson, applied to D-2 itself.** D-2's harm is **time-varying**: the
+palette over-promises only in the 2+ state, and is honest in the sole-owner state.
+A **time-invariant** field cannot express a time-varying fact — which is precisely what
+§4-ter.1 establishes and why `resolvability` carries the channel. It follows that
+`resolvability` **cannot** disarm D-2, and no amount of wording makes it.
+
+**Disposition — the binding is WITHDRAWN and D-2 is NOT fully absorbed.**
+
+- **Keep the palette.** Its values are the admissible response set, true in both states.
+- **The disarm becomes informational, not suppressive.** `resolvability_note` carries
+  the uniform-channel routing and the sole-member condition, so the operator learns
+  *how* a response reaches this branch and *what* it depends on.
+- **A residual remains, and is recorded rather than papered over:** in the 2+ state the
+  palette still implies an action the resolver will refuse. A note mitigates it; it does
+  not remove it. Closing it needs a time-varying signal, which this design forbids —
+  the same dependency `B-155` now carries.
+- **§6 is corrected accordingly:** what is absorbed is the note, not a
+  `resolvability`-driven suppression.
 
 ### 4-ter.3 NEW SUB-FORK — v1's own recommendation over-promised
 
@@ -648,8 +660,10 @@ to surface), and the **`branch_context` leak bar**.
 ## 6. Absorbed in-arc vs registered
 
 **Absorbed** (same mechanism; splitting ships the widening half-applied): the D-1
-audit-loss fix, mint-authority ignore-and-diagnose, the palette/`resolvability`
-binding, the projection amendment, the persist-once reverse-thread field.
+audit-loss fix, mint-authority ignore-and-diagnose, ~~the palette/`resolvability`
+binding~~ **the palette `resolvability_note` (CORRECTED at v3 — the suppression binding
+is WITHDRAWN per §4-ter.2b; only the informational note is absorbed, and D-2 keeps a
+recorded residual)**, the projection amendment, the persist-once reverse-thread field.
 
 **Registered as follow-on `B-*` rows** (each an observable contract change to a
 cleared mechanism → its own spec leg per X-AL-3): (1) uniform-response target
