@@ -76,11 +76,15 @@ def _package_anchored_module(member: Path, test_file: Path) -> str | None:
     package still collides across members as ``integration.test_x``
     (out-of-family round-2 probe: 2 of 3 functions collected). A file whose
     own parent is not a package gets a pytest-disambiguated unique module
-    name — no collision possible (round-1 probe).
+    name — no collision possible (round-1 probe). The walk also stops at a
+    directory whose name is not a valid Python identifier — pytest cannot
+    treat it as a package segment, so the module anchors BELOW it and two
+    members' ``tests/group-*/integration/test_x.py`` still collide as
+    ``integration.test_x`` (out-of-family round-6 probe on pytest 9.0.3).
     """
     d = test_file.parent
     parts = [test_file.stem]
-    while d != member and (d / "__init__.py").is_file():
+    while d != member and (d / "__init__.py").is_file() and d.name.isidentifier():
         parts.append(d.name)
         d = d.parent
     if len(parts) == 1:

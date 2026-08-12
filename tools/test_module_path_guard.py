@@ -168,3 +168,12 @@ def test_norecursedirs_are_excluded(tmp_path: Path) -> None:
     _mk(tmp_path, "harness-bb/tests/venv/test_v.py", packages=False)
     (tmp_path / "harness-bb/tests/venv/__init__.py").touch()
     assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
+
+
+def test_invalid_identifier_dir_anchors_below_it(tmp_path: Path) -> None:
+    """A package chain broken by a non-identifier dir name (group-aa) anchors
+    the module BELOW it — two members' group-*/integration/test_same.py still
+    collide as integration.test_same (codex r6 probe, pytest 9.0.3)."""
+    _mk(tmp_path, "harness-aa/tests/group-aa/integration/test_same.py")
+    _mk(tmp_path, "harness-bb/tests/group-bb/integration/test_same.py")
+    assert "integration.test_same" in mpg.find_duplicate_test_module_paths(tmp_path)
