@@ -69,7 +69,7 @@ from harness_runtime.lifecycle.cross_family_cost_tag import (
     provider_family_for_scope_check,
 )
 from harness_runtime.lifecycle.llm_dispatch import (
-    LLMDispatchProviderUnreachableError,
+    LLMDispatchProviderUnregisteredError,
     _attribute_cost_best_effort,
 )
 from harness_runtime.lifecycle.retry_breaker import (
@@ -379,7 +379,7 @@ class _CostAttributingInner:
         provider = binding.model_binding.provider
         self.dispatched.append(provider)
         if provider in self.fail_providers:
-            raise LLMDispatchProviderUnreachableError(f"{provider} unreachable")
+            raise LLMDispatchProviderUnregisteredError(f"{provider} unregistered")
         _attribute_real(provider, binding.model_binding.model, self.sink)
         return {"ok": provider}
 

@@ -73,7 +73,7 @@ from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchPayloadShapeError,
     LLMDispatchPayloadShapeInternalError,
-    LLMDispatchProviderUnreachableError,
+    LLMDispatchProviderUnregisteredError,
     RoutedPrimaryResolution,
     RuntimeLLMDispatcher,
 )
@@ -620,8 +620,8 @@ async def test_fallback_exhausted_emits_and_raises_typed() -> None:
     breaker = _retry_breaker_with_llm_policy(max_attempts=2)
     inner = _MockInnerDispatcher(
         outcomes=[
-            LLMDispatchProviderUnreachableError("anthropic"),
-            LLMDispatchProviderUnreachableError("anthropic"),
+            LLMDispatchProviderUnregisteredError("anthropic"),
+            LLMDispatchProviderUnregisteredError("anthropic"),
         ]
     )
     tp, exporter = _tracer_provider_with_exporter()
@@ -829,8 +829,8 @@ async def test_b127_ordinary_retry_exhaustion_still_reports_default_cause() -> N
     breaker = _retry_breaker_with_llm_policy(max_attempts=2)
     inner = _MockInnerDispatcher(
         outcomes=[
-            LLMDispatchProviderUnreachableError("anthropic"),
-            LLMDispatchProviderUnreachableError("anthropic"),
+            LLMDispatchProviderUnregisteredError("anthropic"),
+            LLMDispatchProviderUnregisteredError("anthropic"),
         ]
     )
     tp, exporter = _tracer_provider_with_exporter()
@@ -1147,7 +1147,7 @@ async def test_breaker_transition_emitted_via_registry() -> None:
     The fixture is a 401 SDK exception — a fail-fast member that STILL
     charges after `B-116` (§14.6.3 row 3: key rotation genuinely changes
     the half-open answer). It replaces the original
-    `LLMDispatchProviderUnreachableError`, which the ratified waiver tuple
+    `LLMDispatchProviderUnregisteredError`, which the ratified waiver tuple
     now exempts from the charge (row 1), and which would therefore emit no
     transition at all."""
     # Use a per-test registry with fail_threshold=1 → first failure trips.
@@ -1850,7 +1850,7 @@ async def test_single_candidate_chain_fail_fast_exhausts() -> None:
     primary = _candidate("anthropic", "claude-test-1")
     chain = _chain(primary)
     breaker = _retry_breaker_with_llm_policy(max_attempts=1)
-    inner = _MockInnerDispatcher(outcomes=[LLMDispatchProviderUnreachableError("anthropic")])
+    inner = _MockInnerDispatcher(outcomes=[LLMDispatchProviderUnregisteredError("anthropic")])
     tp, _ = _tracer_provider_with_exporter()
     wrapper = RetryBreakerFallbackDispatcher(
         inner=inner,
@@ -2931,8 +2931,8 @@ def _waived_fixtures() -> list[tuple[str, BaseException]]:
     `harness-is/tests/test_b115_ledger_conflict_determinism.py`."""
     return [
         (
-            "LLMDispatchProviderUnreachableError",
-            LLMDispatchProviderUnreachableError("anthropic"),
+            "LLMDispatchProviderUnregisteredError",
+            LLMDispatchProviderUnregisteredError("anthropic"),
         ),
         (
             "LLMDispatchPayloadShapeInternalError",
@@ -3363,7 +3363,7 @@ def test_waiver_predicate_refuses_the_memory_family_by_name() -> None:
 
     # The tuple is exactly the five members, by name — not a family base.
     assert _BREAKER_CHARGE_WAIVED_TYPES == (
-        LLMDispatchProviderUnreachableError,
+        LLMDispatchProviderUnregisteredError,
         LLMDispatchPayloadShapeInternalError,
         MemoryToolExecutionInternalError,
         MemoryToolExecutionInputError,
@@ -3510,7 +3510,7 @@ async def test_waived_exhaustion_is_identical_except_for_the_charge() -> None:
     chain = _chain(primary, same_family=same_family)
     breaker = _retry_breaker_with_llm_policy(max_attempts=3)
     inner = _MockInnerDispatcher(
-        outcomes=[LLMDispatchProviderUnreachableError("anthropic") for _ in range(2)]
+        outcomes=[LLMDispatchProviderUnregisteredError("anthropic") for _ in range(2)]
     )
     tp, exporter = _tracer_provider_with_exporter()
     wrapper = RetryBreakerFallbackDispatcher(
@@ -3524,7 +3524,7 @@ async def test_waived_exhaustion_is_identical_except_for_the_charge() -> None:
     with pytest.raises(RetryBreakerFallbackExhaustedError) as exc_info:
         await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
 
-    assert exc_info.value.last_failure_class == "LLMDispatchProviderUnreachableError"
+    assert exc_info.value.last_failure_class == "LLMDispatchProviderUnregisteredError"
     # Both candidates attempted exactly once each — fail-fast, then advance.
     assert len(inner.calls) == 2
 
@@ -3533,7 +3533,7 @@ async def test_waived_exhaustion_is_identical_except_for_the_charge() -> None:
     assert exhausted.attributes is not None
     assert exhausted.attributes["fallback.chain_length"] == 2
     assert exhausted.attributes["fallback.last_failure_class"] == (
-        "LLMDispatchProviderUnreachableError"
+        "LLMDispatchProviderUnregisteredError"
     )
     assert exhausted.attributes["fallback.exhaustion_cause"] == "per-candidate-retry-exhaustion"
 
@@ -4513,7 +4513,7 @@ def test_b118_the_staircase_escalation_arm_is_unreachable_from_this_composer() -
     ):
         assert _classify_provider_exception(exc) is ValidatorRetryExitClass.TRANSIENT_RETRY
     for exc in (
-        LLMDispatchProviderUnreachableError("anthropic"),
+        LLMDispatchProviderUnregisteredError("anthropic"),
         LLMDispatchPayloadShapeInternalError("pre-flight"),
         MemoryToolExecutionInternalError("wiring"),
         _FakeProviderStatusError(401),
@@ -4658,7 +4658,7 @@ async def test_b145_terminal_fail_fast_stamped() -> None:
     the GAP-1 stale alias — its canonical form `retry.cause_attribution` is
     asserted instead; aligning the bullet text is the GAP-1 spec leg."""
     breaker = _retry_breaker_with_llm_policy(max_attempts=3)
-    inner = _MockInnerDispatcher(outcomes=[LLMDispatchProviderUnreachableError("anthropic")])
+    inner = _MockInnerDispatcher(outcomes=[LLMDispatchProviderUnregisteredError("anthropic")])
     tp, exporter = _tracer_provider_with_exporter()
     wrapper = RetryBreakerFallbackDispatcher(
         inner=inner,
@@ -4675,7 +4675,7 @@ async def test_b145_terminal_fail_fast_stamped() -> None:
     assert attempts[0].attributes is not None
     assert attempts[0].attributes["retry.terminal"] == "fail-fast"
     assert attempts[0].attributes["retry.cause_attribution"] == (
-        "LLMDispatchProviderUnreachableError"
+        "LLMDispatchProviderUnregisteredError"
     )
 
 

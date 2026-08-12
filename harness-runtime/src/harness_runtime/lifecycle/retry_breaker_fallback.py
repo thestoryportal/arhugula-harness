@@ -103,7 +103,7 @@ from harness_runtime.lifecycle.llm_dispatch import (
     ROUTED_PRIMARY_SPAN_TRACE,
     LLMDispatchPayloadShapeError,
     LLMDispatchPayloadShapeInternalError,
-    LLMDispatchProviderUnreachableError,
+    LLMDispatchProviderUnregisteredError,
     RoutedPrimaryResolution,
 )
 from harness_runtime.lifecycle.retry_breaker import BreakerStateMachine
@@ -286,13 +286,13 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
     network / rate-limit / 5xx are transient (run the staircase). The C-RT-15
     fail-class table (§14.5) is explicit that ``RT-FAIL-PROVIDER-AUTH`` (a raw
     SDK auth error, 401/403, *not* a harness wrapper type) is "Raise
-    unmodified" — i.e. fail-fast, same as ``RT-FAIL-PROVIDER-UNREACHABLE`` /
+    unmodified" — i.e. fail-fast, same as ``RT-FAIL-PROVIDER-UNREGISTERED`` /
     ``RT-FAIL-PAYLOAD-SHAPE``.
 
     MVP discrimination (conservative — extends naturally to provider-specific
     exception classes at a follow-on arc):
 
-    - ``LLMDispatchProviderUnreachableError`` → ``None`` (fail-fast, abandons
+    - ``LLMDispatchProviderUnregisteredError`` → ``None`` (fail-fast, abandons
       this candidate; the outer loop advances).
     - ``LLMDispatchPayloadShapeError`` → ``None`` (fail-fast, abandons this
       candidate; the outer loop advances).
@@ -403,7 +403,7 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
     if isinstance(
         exc,
         (
-            LLMDispatchProviderUnreachableError,
+            LLMDispatchProviderUnregisteredError,
             LLMDispatchPayloadShapeError,
             LLMDispatchPayloadShapeInternalError,
             MemoryToolExecutionInputError,
@@ -419,7 +419,7 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
 
 
 _BREAKER_CHARGE_WAIVED_TYPES: tuple[type[BaseException], ...] = (
-    LLMDispatchProviderUnreachableError,
+    LLMDispatchProviderUnregisteredError,
     LLMDispatchPayloadShapeInternalError,
     MemoryToolExecutionInternalError,
     MemoryToolExecutionInputError,

@@ -61,11 +61,11 @@ snapshot:
   total: 153
   open: 1
   design_substrate_gated: 0
-  registered_finding: 25
+  registered_finding: 24
   operator_gated: 0
   held: 2
-  closed: 125
-  identity_digest: '114f7a9e84feaf64'
+  closed: 126
+  identity_digest: '6f2f6635073cc1fc'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -6026,7 +6026,7 @@ items:
 - id: B-121
   title: 'LLMDispatchProviderUnreachableError means UNREGISTERED at all three raise sites, and the misleading
     name is a demonstrated defect vector'
-  status: registered_finding
+  status: closed
   summary: 'WHAT IT IS. The type is named Unreachable; all three of its raise sites are harness-side registry
     lookups that never contact a provider. Counted at HEAD: exactly 3 raise
     LLMDispatchProviderUnreachableError sites in
@@ -6066,6 +6066,7 @@ items:
   council: 'No. The substantive question — does it count toward the breaker — was settled at B-116 on evidence.
     What remains is a naming/taxonomy call inside a contract with a named owner, plus a routing decision
     this row already names.'
+  pr: '#pending'
   heading: '### B-121 · `LLMDispatchProviderUnreachableError` means **unregistered** at all three raise sites,
     and the misleading name is a demonstrated defect vector *(surfaced at the B-116 council deliberation
     (C9 E2b reconcile, on adversarial finding F-01), 2026-08-07)*'

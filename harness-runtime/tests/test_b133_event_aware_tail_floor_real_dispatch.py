@@ -82,7 +82,7 @@ from harness_od.tail_keep_classification import is_classification_trigger
 from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchPayloadShapeError,
-    LLMDispatchProviderUnreachableError,
+    LLMDispatchProviderUnregisteredError,
 )
 from harness_runtime.lifecycle.retry_breaker import (
     DEFAULT_COOLDOWN_SECONDS,
@@ -283,7 +283,7 @@ async def test_w1_carrier_span_fails_both_name_shaped_predicates() -> None:
     plain_provider = TracerProvider(sampler=build_default_sampler(base_rate=1.0))
     plain_provider.add_span_processor(SimpleSpanProcessor(plain_exporter))
     await _dispatch_exhausted(
-        plain_provider, fault=LLMDispatchProviderUnreachableError("anthropic"), step=_step()
+        plain_provider, fault=LLMDispatchProviderUnregisteredError("anthropic"), step=_step()
     )
     plain_provider.force_flush()
     carrier = next(s for s in plain_exporter.get_finished_spans() if s.name == CARRIER_SPAN_NAME)
@@ -309,7 +309,7 @@ async def test_w2_fallback_exhausted_survives_the_tail() -> None:
     """A REAL exhausted dispatch's `fallback.exhausted` reaches the exporter."""
     provider, exporter, tail = _tail_provider(base_rate=1.0)
     await _dispatch_exhausted(
-        provider, fault=LLMDispatchProviderUnreachableError("anthropic"), step=_step()
+        provider, fault=LLMDispatchProviderUnregisteredError("anthropic"), step=_step()
     )
     # No `force_flush` — survival must come from the arm, not the drain path.
     assert "fallback.exhausted" in _exported_event_names(exporter)
@@ -367,7 +367,7 @@ async def test_w5_head_sampler_still_drops_the_event_carrier_declared_bound() ->
     provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     await _dispatch_exhausted(
-        provider, fault=LLMDispatchProviderUnreachableError("anthropic"), step=_step()
+        provider, fault=LLMDispatchProviderUnregisteredError("anthropic"), step=_step()
     )
     provider.force_flush()
     assert exporter.get_finished_spans() == ()

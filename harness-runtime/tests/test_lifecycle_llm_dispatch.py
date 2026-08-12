@@ -6,7 +6,7 @@ Covers per the U-RT-52 plan body acceptance criteria:
   AC #2  — Per-provider dispatch (anthropic / openai / ollama).
   AC #3  — GenAI semconv 1.41.0 span attribute emission.
   AC #4  — `anthropic.*` cache attributes — conditional on provider==anthropic.
-  AC #5  — `RT-FAIL-PROVIDER-UNREACHABLE` wiring for absent provider.
+  AC #5  — `RT-FAIL-PROVIDER-UNREGISTERED` wiring for absent provider.
   AC #6  — Async-only invariant (composer is async).
   AC #7  — Bootstrap stage 5 binding via `materialize_llm_dispatcher_stage`.
 
@@ -134,7 +134,7 @@ from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
     LLMDispatchPayloadShapeError,
     LLMDispatchPayloadShapeInternalError,
-    LLMDispatchProviderUnreachableError,
+    LLMDispatchProviderUnregisteredError,
     PromptInjectionConflictError,
     RuntimeLLMDispatcher,
     materialize_llm_dispatcher_stage,
@@ -3562,7 +3562,7 @@ async def test_b86_unregistered_provider_key_fails_closed_against_local_scope() 
     now reads the fail-closed sibling and withholds on its `None`.
 
     An external-CLI adapter under an unregistered key is the reachable shape:
-    it is a real arm (no `LLMDispatchProviderUnreachableError`) and it never
+    it is a real arm (no `LLMDispatchProviderUnregisteredError`) and it never
     injects the C-MEM-14 tools, so the serve-check runs and the packet would
     otherwise be repairable — the other two conjuncts (identity, prompt-packet
     authorization) both PASS here, isolating the family conjunct.
@@ -6040,22 +6040,22 @@ async def test_b18_no_breakpoint_leaves_cache_ttl_attrs_absent() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC #5 — RT-FAIL-PROVIDER-UNREACHABLE.
+# AC #5 — RT-FAIL-PROVIDER-UNREGISTERED.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_unknown_provider_raises_unreachable_error() -> None:
-    """Provider not in `ctx.providers` → `LLMDispatchProviderUnreachableError`."""
+async def test_unknown_provider_raises_unregistered_error() -> None:
+    """Provider not in `ctx.providers` → `LLMDispatchProviderUnregisteredError`."""
     tp, _ = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
         providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
         tracer_provider=tp,
     )
-    with pytest.raises(LLMDispatchProviderUnreachableError) as excinfo:
+    with pytest.raises(LLMDispatchProviderUnregisteredError) as excinfo:
         await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
     assert excinfo.value.provider_name == "openai"
-    assert "RT-FAIL-PROVIDER-UNREACHABLE" in str(excinfo.value)
+    assert "RT-FAIL-PROVIDER-UNREGISTERED" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
