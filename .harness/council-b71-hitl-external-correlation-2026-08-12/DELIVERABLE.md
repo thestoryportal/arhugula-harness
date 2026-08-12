@@ -16,8 +16,10 @@ change.** Precondition 5 remains open, so the spec leg is still not authorizable
 
 The arc also surfaced a **new sub-fork inside the v1 recommendation itself**: v1's §5
 precondition 3 recommended the field "routes the operator to the pause view for live
-status". The pause view **cannot provide live status** — witnessed, not argued. That
-is registered, with a recommended disposition, at §4-ter.3.
+status". The pause view **cannot provide live status** — on two grounds, of which the
+projection half is witnessed and the cross-record half is a **cited** ratified contract
+(`B-104`), not an executed behaviour; the owed Runtime round-trip is named at §4-ter.4.
+The sub-fork is registered to `B-155`, with a recommended disposition, at §4-ter.3.
 
 ## Change-note (v1 → v2)
 
@@ -517,8 +519,9 @@ discharge is auditable against what was actually asked.
    closed `PauseLocationVariant`; never the outcome.** The `held-for-sole-resolution`
    stamp is retired on a witnessed flip, not on argument. **The v1 recommendation's own
    second half is falsified in passing** — the pause view cannot report live status
-   (`project_pause_locations` takes the snapshot alone), so `resolvability_note` states
-   the sole-member RULE and promises no readout. Full derivation, the surfaced sub-fork
+   (`project_pause_locations` takes the snapshot alone — witnessed; plus the cited
+   `B-104` liveness limit, §4-ter.4), so `resolvability_note` states the sole-member
+   RULE and promises no readout. Full derivation, the surfaced sub-fork
    and its recommended disposition at §4-ter.
 4. **Close or explicitly scope the entry_version crash window** — crash after delivery
    but before persist, then resume after an `entry_version` bump, recomputes a
