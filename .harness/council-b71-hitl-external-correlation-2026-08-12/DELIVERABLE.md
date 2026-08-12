@@ -154,7 +154,11 @@ boundary that the ingress will not honor. Live today, independent of B-71.
   carrying `snapshot_run_id`, the internal identity, run_id-shaped strings, or raw
   basis material) + a structured `resolvability` + `resolvability_note`; all
   `payload_body`-only (additive keys on the contractually-opaque Mapping, C-CP-21
-  §21.8). Palette display bound to the posture — the disarm for D-2.
+  §21.8). ~~Palette display bound to the posture — the disarm for D-2.~~ **WITHDRAWN at
+  v3 (§4-ter.2b):** `resolvability` is time-invariant and D-2's harm is time-varying, so
+  the binding cannot disarm it, and suppressing the palette would hide the valid uniform
+  action in the sole-owner state. The palette STAYS; the disarm is informational, carried
+  by `resolvability_note`; D-2 keeps a recorded residual.
 - **Public projection:** `PreDispatchUniformFallbackOnlyLocation` gains the EXTERNAL
   token, with v1.112 §2.2 constraint 2 restated alongside — internal identity still
   never. Without this the correlation loop terminates in a struct no operator reads.
@@ -363,7 +367,8 @@ produce. Three dispositions:
   X-AL-3, and per Fact 2 it would ALSO
   have to answer the `B-104` staleness limit before a per-location eligibility flag
   could be presented to an operator at all. **It belongs to register row `B-155`** —
-  *"No webhook re-fires when a parked pre-dispatch branch becomes sole-addressable"* —
+  (originally titled *"No webhook re-fires when a parked pre-dispatch branch becomes
+  sole-addressable"*, RE-SCOPED at v3 — that premise is UNVERIFIED per §4-ter.1b) —
   which already owns exactly this population and this live-posture question. (A v3
   first draft filed it under follow-on (4) / `B-157`; that row is the *already-
   dispatched children* addressing half — a different population and a different
