@@ -20,8 +20,9 @@ C-RT-07 + §10 C-RT-10), no new machinery. The two lead clauses below, plus two
 stale-carry companions absorbed at out-of-family round 1 (the carve-out would
 otherwise contradict two remaining absolute promises): the §10 deferred-close
 paragraph's "executed by ONE watcher" now reads when-the-watcher-LAUNCHES, and
-C-RT-07's "no collector persists across runs" carries the same
-watcher-launch-failure boundary (embedder-only; unreachable in-repo):
+C-RT-07's "no collector persists across runs" carries BOTH embedder-only
+boundaries — launch failure AND the stopped-but-open-loop skip on a later-
+resumed loop (round-2 catch; embedder-only; unreachable in-repo):
 
 1. C-RT-07 §7 lifecycle invariant *"No collector survives harness shutdown"*
    qualified deferred-path-only: the stop may land after the `shutdown()` CALL
