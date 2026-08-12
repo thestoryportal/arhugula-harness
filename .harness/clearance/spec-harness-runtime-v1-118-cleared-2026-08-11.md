@@ -4,18 +4,24 @@ version: v1.118
 cleared_at: 2026-08-11T19:45:00-07:00
 clearance_type: Phase-7-absorbed-via-register-row
 back_reference:
-  - .harness/forward-register.yaml B-152 row (registered at PR #1310; codex round-2 findings, lens-1 adjudication)
+  - ".harness/forward-register.yaml B-152 row (registered at PR #1310; codex round-2 findings, lens-1 adjudication)"
   - "PR #1310 (registration + the lens-2 C-RT-07 recorded residual this leg discharges)"
 merge_commit: pending (this leg's PR merge; recorded at the PR)
 reviewer_chain:
   - out-of-family `just codex-review` at this leg's PR (to convergence)
-  - merge-gate spec-conformance lens (lean protocol — doc-only spec delta, #1308 precedent)
+  - "merge-gate spec-conformance lens (lean protocol — doc-only spec delta, #1308 precedent)"
 supersedes: spec-harness-runtime-v1-117-cleared-2026-08-11.md
 ---
 
 # Clearance — Spec_Harness_Runtime v1.118 (B-152 deferral-unavailable boundary declarations)
 
-**What v1.118 changes.** Two one-clause qualifications, no new machinery:
+**What v1.118 changes.** FOUR qualification clauses at TWO contracts (§7
+C-RT-07 + §10 C-RT-10), no new machinery. The two lead clauses below, plus two
+stale-carry companions absorbed at out-of-family round 1 (the carve-out would
+otherwise contradict two remaining absolute promises): the §10 deferred-close
+paragraph's "executed by ONE watcher" now reads when-the-watcher-LAUNCHES, and
+C-RT-07's "no collector persists across runs" carries the same
+watcher-launch-failure boundary (embedder-only; unreachable in-repo):
 
 1. C-RT-07 §7 lifecycle invariant *"No collector survives harness shutdown"*
    qualified deferred-path-only: the stop may land after the `shutdown()` CALL
