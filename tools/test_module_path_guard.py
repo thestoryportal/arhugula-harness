@@ -1,10 +1,12 @@
 """B-117 duplicate-test-module-path guard witnesses.
 
 The positive-control collision probe the register close-out prescribes: a
-synthetic duplicate must be REPORTED (deleting the guard's collision logic
-fails these), the real tree must pass clean, and the collision unit must be
-the relative module path — not the bare basename (same basename at different
-depths is legal and must NOT be flagged).
+synthetic package-anchored duplicate must be REPORTED (deleting the guard's
+collision logic fails these), the real tree must pass clean, and the
+collision unit must be the pytest-faithful PACKAGE-ANCHORED module path —
+non-package nested files and cross-depth same-basenames are legal and must
+NOT be flagged (both verified against live pytest behavior at the #1315
+build probes).
 """
 
 from __future__ import annotations
@@ -14,10 +16,16 @@ from pathlib import Path
 import module_path_guard as mpg
 
 
-def _mk(root: Path, rel: str) -> None:
+def _mk(root: Path, rel: str, *, packages: bool = True) -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("def test_placeholder() -> None: ...\n")
+    if packages:
+        member = root / Path(rel).parts[0]
+        d = p.parent
+        while d != member:
+            (d / "__init__.py").touch()
+            d = d.parent
 
 
 def test_synthetic_duplicate_is_reported(tmp_path: Path) -> None:
@@ -26,23 +34,41 @@ def test_synthetic_duplicate_is_reported(tmp_path: Path) -> None:
     _mk(tmp_path, "harness-bb/tests/test_x.py")
     duplicates = mpg.find_duplicate_test_module_paths(tmp_path)
     assert duplicates == {
-        "tests/test_x.py": [
+        "tests.test_x": [
             "harness-aa/tests/test_x.py",
             "harness-bb/tests/test_x.py",
         ]
     }
 
 
-def test_subdir_duplicate_is_reported(tmp_path: Path) -> None:
-    """Same relative path inside a tests SUBPACKAGE collides too."""
+def test_suffix_pattern_duplicate_is_reported(tmp_path: Path) -> None:
+    """pytest also discovers *_test.py — the probe showed the same silent
+    drop for tests/collision_test.py; the guard must scan both patterns."""
+    _mk(tmp_path, "harness-aa/tests/collision_test.py")
+    _mk(tmp_path, "harness-bb/tests/collision_test.py")
+    assert "tests.collision_test" in mpg.find_duplicate_test_module_paths(tmp_path)
+
+
+def test_package_subdir_duplicate_is_reported(tmp_path: Path) -> None:
+    """Same path inside a tests SUBPACKAGE (with __init__.py chain) collides."""
     _mk(tmp_path, "harness-aa/tests/integration/test_y.py")
     _mk(tmp_path, "harness-bb/tests/integration/test_y.py")
-    assert "tests/integration/test_y.py" in mpg.find_duplicate_test_module_paths(tmp_path)
+    assert "tests.integration.test_y" in mpg.find_duplicate_test_module_paths(tmp_path)
+
+
+def test_non_package_subdir_is_legal(tmp_path: Path) -> None:
+    """Same relpath under NON-package subdirs (no __init__.py) collects fine
+    under importlib mode (live probe: both b117probe/test_p1.py PASSED) —
+    flagging it would be a false positive."""
+    _mk(tmp_path, "harness-aa/tests/unit/test_y.py", packages=False)
+    _mk(tmp_path, "harness-bb/tests/unit/test_y.py", packages=False)
+    (tmp_path / "harness-aa/tests/__init__.py").touch()
+    (tmp_path / "harness-bb/tests/__init__.py").touch()
+    assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
 
 
 def test_same_basename_different_depth_is_legal(tmp_path: Path) -> None:
-    """tests/test_z.py vs tests/integration/test_z.py are DISTINCT modules —
-    flagging them would be a false positive the relpath unit avoids."""
+    """tests/test_z.py vs tests/integration/test_z.py are DISTINCT modules."""
     _mk(tmp_path, "harness-aa/tests/test_z.py")
     _mk(tmp_path, "harness-bb/tests/integration/test_z.py")
     assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
@@ -57,8 +83,14 @@ def test_unique_tree_is_clean(tmp_path: Path) -> None:
 def test_non_harness_dirs_out_of_scope(tmp_path: Path) -> None:
     """Only harness-*/tests trees participate (tools/ is single-directory
     top-level modules — the collision cannot arise there by construction)."""
-    _mk(tmp_path, "tools/test_t.py")
+    _mk(tmp_path, "tools/test_t.py", packages=False)
     _mk(tmp_path, "harness-aa/tests/test_t.py")
+    assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
+
+
+def test_double_pattern_match_counts_once(tmp_path: Path) -> None:
+    """A file matching BOTH patterns (test_foo_test.py) must not self-collide."""
+    _mk(tmp_path, "harness-aa/tests/test_foo_test.py")
     assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
 
 
@@ -72,9 +104,9 @@ def test_live_tree_is_clean() -> None:
 
 def test_report_names_every_file() -> None:
     report = mpg.render_report(
-        {"tests/test_x.py": ["harness-aa/tests/test_x.py", "harness-bb/tests/test_x.py"]}
+        {"tests.test_x": ["harness-aa/tests/test_x.py", "harness-bb/tests/test_x.py"]}
     )
-    assert "tests/test_x.py" in report
+    assert "tests.test_x" in report
     assert "harness-aa/tests/test_x.py" in report
     assert "harness-bb/tests/test_x.py" in report
     assert "SILENTLY DROP" in report
