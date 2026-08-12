@@ -2095,3 +2095,136 @@ async def test_bootstrap_protected_result_store_sweep_does_not_block_event_loop(
     assert max_gap < 0.15, (
         f"heartbeat stalled for {max_gap:.3f}s during the sweep — the loop was blocked"
     )
+
+
+# ---------------------------------------------------------------------------
+# B-122 — fallback-chain unregistered-provider startup diagnostic (stage 3b).
+# A DIAGNOSTIC, deliberately not a gate: skipped registration is a supported
+# deployment shape (the Ollama-degraded path named by
+# LLMDispatchProviderUnreachableError's docstring), so bootstrap must
+# complete; the warning surfaces the per-dispatch failure once, at startup.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_b122_unregistered_chain_provider_warns_at_bootstrap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """PARTIAL registration (the degraded shape the exception docstring names
+    as supported): openai registers, the chain's anthropic candidate does not
+    — the stage-3b warning names the provider AND the dispatch-time
+    consequence, and the inference-bearing bootstrap still completes
+    (deleting the diagnostic, or hardening it into a raise, fails this)."""
+    fakes = {"openai": _FakeProvider("openai")}
+
+    async def _partial(*_args: object, **_kwargs: object) -> ProviderClientsStage:
+        return ProviderClientsStage(providers=dict(fakes))
+
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.stage_3a_cp_clients.materialize_provider_clients_stage",
+        _partial,
+    )
+    _patch_collector(monkeypatch)
+    with caplog.at_level("WARNING", logger="harness.runtime.fallback_chain"):
+        ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+    assert isinstance(ctx, HarnessContext)  # bootstrap completed — not a gate
+    matching = [r for r in caplog.records if r.name == "harness.runtime.fallback_chain"]
+    assert len(matching) == 1
+    message = matching[0].getMessage()
+    assert "anthropic" in message
+    assert "LLMDispatchProviderUnreachableError" in message
+    assert "bootstrap continues" in message
+
+
+@pytest.mark.asyncio
+async def test_b122_registered_chain_providers_no_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every chain candidate registered → silent (an unconditional or inverted
+    warning fails this)."""
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+    with caplog.at_level("WARNING", logger="harness.runtime.fallback_chain"):
+        ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+    assert isinstance(ctx, HarnessContext)
+    assert [r for r in caplog.records if r.name == "harness.runtime.fallback_chain"] == []
+
+
+@pytest.mark.asyncio
+async def test_b122_tool_only_bootstrap_no_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A tool-only bootstrap (requires_inference=False) intentionally runs
+    provider-free and stage 5 omits the inference dispatcher rows — the
+    chain's candidates can never dispatch, so the diagnostic must stay
+    SILENT (codex r1 at #1316: an unconditional warning is noise on every
+    valid tool-only run)."""
+    _patch_collector(monkeypatch)
+    with caplog.at_level("WARNING", logger="harness.runtime.fallback_chain"):
+        ctx = await run_bootstrap(
+            _config(tmp_path), workload_class=_WORKLOAD, requires_inference=False
+        )
+    assert isinstance(ctx, HarnessContext)
+    assert ctx.providers == {}
+    assert [r for r in caplog.records if r.name == "harness.runtime.fallback_chain"] == []
+
+
+@pytest.mark.asyncio
+async def test_b122_all_chain_positions_enumerated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every chain position feeds the diagnostic — primary, same_family,
+    cross_family AND terminal (lens-3 residual closed: on the single-candidate
+    `_CHAIN` fixture, dropping any non-primary position from the enumeration
+    survived all witnesses)."""
+    fakes = {"openai": _FakeProvider("openai")}
+
+    async def _partial(*_args: object, **_kwargs: object) -> ProviderClientsStage:
+        return ProviderClientsStage(providers=dict(fakes))
+
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.stage_3a_cp_clients.materialize_provider_clients_stage",
+        _partial,
+    )
+    _patch_collector(monkeypatch)
+    config = _config(tmp_path)
+    multi_chain = FallbackChain(
+        primary=ProviderCandidate(
+            provider="anthropic", model="claude-haiku-4-5", family=ProviderFamily.ANTHROPIC
+        ),
+        same_family=(
+            ProviderCandidate(
+                provider="anthropic-alt", model="claude-haiku-4-5", family=ProviderFamily.ANTHROPIC
+            ),
+        ),
+        cross_family=(
+            ProviderCandidate(provider="openai", model="gpt-5.6", family=ProviderFamily.OPENAI),
+        ),
+        terminal=ProviderCandidate(
+            provider="ollama-local", model="llama3", family=ProviderFamily.LOCAL_OPEN_WEIGHT
+        ),
+    )
+    config = config.model_copy(
+        update={
+            "routing_manifest": config.routing_manifest.model_copy(
+                update={"fallback_chains": (multi_chain,)}
+            )
+        }
+    )
+    with caplog.at_level("WARNING", logger="harness.runtime.fallback_chain"):
+        ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
+    assert isinstance(ctx, HarnessContext)
+    matching = [r for r in caplog.records if r.name == "harness.runtime.fallback_chain"]
+    assert len(matching) == 1
+    message = matching[0].getMessage()
+    # All three unregistered positions named; the registered cross_family
+    # candidate (openai) is NOT in the unregistered list.
+    assert "'anthropic', 'anthropic-alt', 'ollama-local'" in message

@@ -61,11 +61,11 @@ snapshot:
   total: 153
   open: 1
   design_substrate_gated: 0
-  registered_finding: 26
+  registered_finding: 25
   operator_gated: 0
   held: 2
-  closed: 124
-  identity_digest: '196f730b5f84ed3c'
+  closed: 125
+  identity_digest: '114f7a9e84feaf64'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -6071,7 +6071,7 @@ items:
     (C9 E2b reconcile, on adversarial finding F-01), 2026-08-07)*'
 - id: B-122
   title: 'Nothing validates at bootstrap that every fallback-chain candidate names a registered provider'
-  status: registered_finding
+  status: closed
   summary: 'WHAT IT IS. The same three raise sites that ground B-121 establish the shape: a fallback-chain
     candidate naming a provider absent from ctx.providers is discovered at dispatch time, per dispatch,
     as a runtime exception (llm_dispatch.py:1525) — and, after B-116, as one that charges no health
@@ -6103,6 +6103,7 @@ items:
     (2), and only if step (1) finds the check can be made total: a bootstrap hard-fail trades fail-early
     configuration hygiene (C1/C9) against the degraded-provider local-deployment shape the docstring
     already sanctions (C11). Do not convene on the current thin state.'
+  pr: '#1316'
   heading: '### B-122 · Nothing validates at bootstrap that every fallback-chain candidate names a
     **registered** provider *(surfaced at the B-116 council deliberation (C9 E2b reconcile, on
     adversarial finding F-01), 2026-08-07)*'
