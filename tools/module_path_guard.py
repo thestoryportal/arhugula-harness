@@ -42,7 +42,14 @@ from pathlib import Path
 _TEST_FILE_PATTERNS = ("test_*.py", "*_test.py")
 
 #: pytest's default ``norecursedirs`` (no override in pyproject.toml at HEAD):
-#: files below these are never collected, so they must not trip the gate.
+#: files below these are never collected by RECURSIVE discovery, so they must
+#: not trip the gate (r4 — a venv/build dir inside tests/ would otherwise
+#: block every run). A collision below them IS still reachable by passing the
+#: files as EXPLICIT pytest args (r8) — deliberately out of the guarded set:
+#: the guard protects recursive suite runs (CI + just check), the r4
+#: false-positive direction is the realistic hazard, and the two directions
+#: are mutually exclusive at a session gate that cannot see invocation args.
+#: Recorded, not silently dropped.
 _NORECURSE_PATTERNS = (
     "*.egg",
     ".*",
