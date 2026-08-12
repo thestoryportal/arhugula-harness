@@ -177,10 +177,14 @@ def test_delivery_needs_a_uniform_response_too_which_is_also_unknowable_at_mint(
     (`workflow_driver.py:8350`, `:12674`), so a context carrying only `hitl_responses`
     and no uniform `hitl_response` delivers `None` and the branch re-pauses.
 
-    That is a SECOND input unknowable at escalation time, not a hole in the argument:
-    a mint-time stamp would have to predict both which peers get answered AND whether
-    the operator supplies a uniform response. Both are witnessed here to vary
-    independently of anything the minter can see.
+    **The re-pause half is CITED, not executed here** (out-of-family Codex): these
+    assertions inspect the `ResumeContext` and call the eligibility resolver, which
+    ignores `hitl_response` entirely. They never run the driver/composer path, so a
+    change that made keyed-only responses attach would leave this test green. What IS
+    witnessed is the decision-relevant part — the uniform response varies independently
+    of the keyed ones, so a mint-time stamp would have to predict BOTH which peers get
+    answered AND whether a uniform response is supplied. Two mint-time-unknowable
+    inputs, not one. A driver round-trip is named as owed at DELIVERABLE §4-ter.4.
     """
     tree = _mixed_tree()
     identity = _pre_dispatch_gate_owning_branch_identity("run-root", 0)

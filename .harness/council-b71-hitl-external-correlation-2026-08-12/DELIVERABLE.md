@@ -187,10 +187,15 @@ answer exists — would have had to guess which of these is true.
 narrowing strengthens it). The resolver NOMINATES the target; the driver then builds
 `HITLDeliveryCell(resume_context.hitl_response)` (`workflow_driver.py:8350`, `:12674`),
 so a context carrying only `hitl_responses` and no uniform response delivers `None` and
-the branch re-pauses. That is a **second** input unknowable at escalation time, not a
-hole in the argument: a mint-time stamp would have to predict both which peers get
-answered *and* whether the operator supplies a uniform response. Both are witnessed to
-vary independently of anything the minter can see. **This retires the
+the branch re-pauses. **That last sentence is a CITED code read, not an executed
+behaviour** — the witness inspects the `ResumeContext` and calls the eligibility
+resolver; it never runs the driver/composer path, so a change that made keyed-only
+responses attach would not redden it (out-of-family Codex; see §4-ter.4).
+
+What IS witnessed is the decision-relevant part: the uniform response varies
+independently of the keyed ones, so a mint-time stamp would have to predict **both**
+which peers get answered *and* whether a uniform response is supplied. Two
+mint-time-unknowable inputs, not one. **This retires the
 `held-for-sole-resolution` stamp on evidence, not on argument:** it is a false
 negative in exactly the situation the operator most needs the truth, and, as v1 noted,
 posture-change redelivery is a registered follow-on that would never correct it.
@@ -270,7 +275,8 @@ produce. Three dispositions:
 - **(a) Widen the view.** Give `project_pause_locations` a `ResumeContext` and report
   eligibility per location. Genuinely useful and the only option that makes the v1
   wording true — but it amends a **cleared public projection contract** (CP spec
-  v1.112 §2.1), so it is its own spec leg under X-AL-3, and per Fact 2 it would ALSO
+  v1.112 §2.1 — a spec READING, not an executed fact), so it is its own spec leg under
+  X-AL-3, and per Fact 2 it would ALSO
   have to answer the `B-104` staleness limit before a per-location eligibility flag
   could be presented to an operator at all. **It belongs to register row `B-155`** —
   *"No webhook re-fires when a parked pre-dispatch branch becomes sole-addressable"* —
@@ -301,16 +307,21 @@ delivery — see above); that the
 projection's sole input is the snapshot; that a snapshot with a genuinely TERMINAL peer
 projects one gate-owning location; that the channel value is invariant across the flip.
 
-**Cited, not witnessed** — two, both named as owed on the spec leg:
+**Cited, not witnessed** — three, each named as owed on the spec leg:
 
-1. **The `B-104` liveness limit.** The witness never invokes
+1. **The keyed-only delivery behaviour.** That a context with `hitl_responses` but no
+   uniform `hitl_response` delivers `None` and re-pauses is read off
+   `workflow_driver.py:8350`/`:12674`, not executed here. A driver/composer round-trip
+   would convert it. It is not load-bearing for the disposition — the eligibility flip
+   alone retires the stamp — but the record must not present it as witnessed.
+2. **The `B-104` liveness limit.** The witness never invokes
    `read_paused_workflow_state` or the journal, so the "a resolved pause is
    byte-indistinguishable from an outstanding one" ground is a **ratified contract
    read**, not an executed behaviour. A Runtime round-trip — pause, resolve, read, and
    assert the read still reports the resolved pause — would convert it. Until then, a
    Runtime change that began recording resolution would silently invalidate this half
    without reddening anything here.
-2. **Shape coverage.** The witness covers the **HITL** uniform-fallback resolver. The
+3. **Shape coverage.** The witness covers the **HITL** uniform-fallback resolver. The
    effect-fence sibling (`compute_effect_fence_uniform_fallback_eligible_key`) has the
    same sole-member shape and is unexamined; out of B-71's scope (this row is HITL
    escalations), named so a later arc does not read this section as covering it.
