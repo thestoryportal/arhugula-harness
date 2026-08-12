@@ -191,10 +191,11 @@ class LLMDispatchProviderUnregisteredError(Exception):
     Carries the offending provider name for operator-facing attribution.
     """
 
-    def __init__(self, provider_name: str) -> None:
+    def __init__(self, provider_name: str, *, detail: str | None = None) -> None:
         self.provider_name = provider_name
         super().__init__(
-            f"RT-FAIL-PROVIDER-UNREGISTERED: provider {provider_name!r} not in ctx.providers"
+            f"RT-FAIL-PROVIDER-UNREGISTERED: "
+            + (detail or f"provider {provider_name!r} not in ctx.providers")
         )
 
 
@@ -1581,9 +1582,17 @@ class RuntimeLLMDispatcher:
             operation = GenAiOperation.CHAT
         if operation is None:
             # Defensive — every key in self.providers is one of the
-            # three constructed at stage 3a per C-RT-05. Surfacing any
-            # other key as UNREGISTERED preserves the C-RT-14 taxonomy.
-            raise LLMDispatchProviderUnregisteredError(provider_name)
+            # three constructed at stage 3a per C-RT-05. Any other key maps
+            # to the same C-RT-14 class, but the MESSAGE must not claim the
+            # key is absent when the guard above proved it registered
+            # (out-of-family r1 at #1317).
+            raise LLMDispatchProviderUnregisteredError(
+                provider_name,
+                detail=(
+                    f"provider {provider_name!r} is registered but has no supported "
+                    "dispatch operation (not a stage-3a-constructed provider)"
+                ),
+            )
         span_name = f"{operation.value} {model}"
 
         # OTel tracer CM is synchronous (returns ``ContextManager``, not
@@ -1899,7 +1908,13 @@ class RuntimeLLMDispatcher:
                     cache_attrs = None
                     request_attrs = None
                 else:
-                    raise LLMDispatchProviderUnregisteredError(provider_name)
+                    raise LLMDispatchProviderUnregisteredError(
+                        provider_name,
+                        detail=(
+                            f"provider {provider_name!r} is registered but its adapter "
+                            "matches no dispatch arm (not a stage-3a-constructed provider)"
+                        ),
+                    )
             except asyncio.CancelledError:
                 # Cancellation is not a provider fault; label it honestly. It
                 # still passes through `finally`, so the span is still emitted.
