@@ -545,7 +545,10 @@ identity — not bare `branch_index`** (three-way convergent finding).
 ## 5. Hard preconditions on the spec leg
 
 **Status at v3: 1 CLOSED · 2 CLOSED · 3 CLOSED · 4 BOUNDED · 5 OPEN.** The spec leg
-remains NOT authorizable — **5 is unaddressed** and 4 is bounded rather than closed.
+remains NOT authorizable, on **two** counts — 5 is unaddressed, **and 4 is bounded
+rather than closed**. Closing 5 alone does not authorize the leg: 4 still owes an
+explicit scope statement and a live-resume witness for the cited `snapshot.run_id`
+reuse.
 Discharged preconditions are struck through; their original text is kept so each
 discharge is auditable against what was actually asked.
 
