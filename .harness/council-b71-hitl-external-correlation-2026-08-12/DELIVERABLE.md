@@ -190,13 +190,32 @@ cannot show the flip — a pre-dispatch identity is `never_keyable`
 of them are never resolvable. The live question is "I answered the other one; am I now
 the sole owner?"
 
-**Fact 2 — the pause view cannot answer it either.** `project_pause_locations` takes
-`root_snapshot` **alone** (`pause_state_projection.py:816`, pinned against the
-signature so a future widening must revisit this disposition), and
-`PausedWorkflowState` (`:403-435`) carries `workflow_id` / `created_at` /
-`staleness_token` / `locations` and no resume context at all. The projection is
-byte-identical across the two contexts that just flipped eligibility. The blindness is
-**structural**, not an omission at one call site.
+**Fact 2 — the operator-facing read cannot answer it either.** Two independent
+grounds, the second the stronger:
+
+- *Within one journaled record:* `project_pause_locations` takes `root_snapshot`
+  **alone** (`pause_state_projection.py:816`, pinned against the signature so a future
+  widening must revisit this disposition), and `PausedWorkflowState` (`:403-435`)
+  carries `workflow_id` / `created_at` / `staleness_token` / `locations` and no resume
+  context. So responses staged in a `ResumeContext` cannot reach the projection.
+- *Across records — the ratified one:* `read_paused_workflow_state`
+  (`harness_runtime/api.py:925`) declares, per Runtime spec v1.110 §14.14.9.1 (the
+  RATIFIED `B-104` Reading D, Component 1), that the journal is append-only and writes
+  **no pause-resolved marker**, so a resolved pause is **byte-indistinguishable** from
+  an outstanding one. The read is explicitly *"NOT authority for the workflow is paused
+  right now, and must not be presented to an operator ... as an outstanding-pause
+  assertion."*
+
+**A counter-hypothesis was raised and evaluated, not waved off.** Out-of-family Codex
+argued Fact 2 fails in production, because a partial resume journals a NEWER snapshot
+excluding the resolved peer — so reading *that* record would show the pre-dispatch
+branch as the lone gate-owner. The structural half is real and is now pinned by the
+witness: a snapshot carrying only the pre-dispatch branch does project exactly one
+gate-owning location. What defeats the inference is the accessor's own ratified
+contract above — an operator seeing one gate-owning location cannot conclude they are
+*currently* sole, because the record may be stale and nothing in it says which. The
+counter makes Fact 2 rest on a **spec-ratified** limit rather than on the projection
+signature alone, which is a firmer footing than the v3 first draft had.
 
 ### 4-ter.2 The derived shape
 
@@ -234,9 +253,14 @@ produce. Three dispositions:
 - **(a) Widen the view.** Give `project_pause_locations` a `ResumeContext` and report
   eligibility per location. Genuinely useful and the only option that makes the v1
   wording true — but it amends a **cleared public projection contract** (CP spec
-  v1.112 §2.1), so it is its own spec leg under X-AL-3, and it belongs with the
-  already-registered follow-on (4) *the addressing half — the pause-view-side
-  capability question*, not smuggled into this one.
+  v1.112 §2.1), so it is its own spec leg under X-AL-3, and per Fact 2 it would ALSO
+  have to answer the `B-104` staleness limit before a per-location eligibility flag
+  could be presented to an operator at all. **It belongs to register row `B-155`** —
+  *"No webhook re-fires when a parked pre-dispatch branch becomes sole-addressable"* —
+  which already owns exactly this population and this live-posture question. (A v3
+  first draft filed it under follow-on (4) / `B-157`; that row is the *already-
+  dispatched children* addressing half — a different population and a different
+  contract. Corrected on out-of-family review.)
 - **(b) State the rule, promise no readout.** `resolvability_note` carries the
   channel plus the sole-member condition in prose; the operator is routed to the view
   for the location set, not for a verdict. Honest, needs no contract change, and

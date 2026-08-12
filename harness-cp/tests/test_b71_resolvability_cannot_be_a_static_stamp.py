@@ -158,24 +158,81 @@ def test_the_same_branch_flips_from_not_resolvable_to_resolvable() -> None:
     )
 
 
-def test_the_public_projection_is_blind_to_what_has_been_addressed() -> None:
-    """**Fact 2 — the pause view cannot answer it either.**
+def test_eligibility_varies_on_an_input_the_projection_has_no_parameter_for() -> None:
+    """**Fact 2 — for one journaled record, the view cannot see staged responses.**
 
-    The projection is byte-identical across the two resume contexts that just flipped
-    eligibility, because `project_pause_locations` never receives one. So routing the
-    operator to the pause view tells them the CHANNEL but not whether their single
-    reply resolves the run.
+    Stated as two independent facts rather than an `x == x` comparison (an earlier
+    draft asserted `project_pause_locations(tree) == project_pause_locations(tree)`,
+    which is tautological and witnessed nothing — out-of-family Codex [P1]):
+
+    1. eligibility genuinely differs between the two resume contexts, and
+    2. the projection's ENTIRE input is the snapshot, which is the same object in
+       both — so nothing that changed can reach it.
+
+    Together: no reading of the projection for a given journaled record can
+    distinguish "your peer has been answered" from "it has not".
     """
-    tree = _mixed_tree()
-    before = project_pause_locations(tree)
-    after = project_pause_locations(tree)
-    assert before == after
+    import inspect
 
-    # The eligibility that DID change is computed elsewhere, from an input the
-    # projection has no parameter for.
-    assert compute_hitl_uniform_fallback_eligible_run_id(
-        tree, ResumeContext()
-    ) != compute_hitl_uniform_fallback_eligible_run_id(tree, _answered(_ADDRESSABLE_CHILD_RUN_ID))
+    tree = _mixed_tree()
+    without = compute_hitl_uniform_fallback_eligible_run_id(tree, ResumeContext())
+    with_peer_answered = compute_hitl_uniform_fallback_eligible_run_id(
+        tree, _answered(_ADDRESSABLE_CHILD_RUN_ID)
+    )
+    assert without != with_peer_answered, "the two scenarios must actually differ"
+    assert list(inspect.signature(project_pause_locations).parameters) == ["root_snapshot"], (
+        "the projection's sole input is the snapshot — the ResumeContext that "
+        "distinguishes the two scenarios above cannot reach it"
+    )
+
+
+def test_a_later_snapshot_would_show_sole_but_is_not_a_liveness_claim() -> None:
+    """The counter-hypothesis, evaluated rather than waved off.
+
+    Out-of-family Codex [P1] proposed that Fact 2 fails in production because a
+    partial resume journals a NEWER snapshot excluding the resolved peer, so reading
+    *that* record would show the pre-dispatch branch as the lone gate-owner. The
+    STRUCTURAL half of that is real and is pinned here: a snapshot carrying only the
+    pre-dispatch branch projects exactly one gate-owning location.
+
+    What defeats it is the accessor's own ratified contract, not the projection.
+    `read_paused_workflow_state` (`harness_runtime/api.py:925`) declares — Runtime
+    spec v1.110 §14.14.9.1, the RATIFIED `B-104` Reading D Component 1 — that the
+    journal is append-only, writes NO pause-resolved marker, and so returns a record
+    that is BYTE-INDISTINGUISHABLE whether or not it has already been resolved. It is
+    explicitly "NOT authority for *the workflow is paused right now*, and must not be
+    presented to an operator ... as an outstanding-pause assertion". An operator
+    reading one gate-owning location therefore cannot conclude they are *currently*
+    sole — the record may be stale, and nothing in it says which.
+    """
+    resolved_peer_tree = _snapshot(
+        run_id="run-root",
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=2,
+            pre_dispatch_gate_owning_branches=(
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=0,
+                    step_id="branch-0",
+                    step_kind="sub-agent-dispatch",
+                    hitl_gate_config_hash="test-hitl-gate-config-hash",
+                ),
+            ),
+            paused_child_branches=(),  # the peer resolved and is no longer paused
+        ),
+    )
+    gate_owning = [
+        loc
+        for loc in project_pause_locations(resolved_peer_tree)
+        if isinstance(loc, PreDispatchUniformFallbackOnlyLocation)
+    ]
+    assert len(gate_owning) == 1
+
+    # ...and the ORIGINAL record still projects the peer, so the two records are
+    # distinguishable from each other — the gap is that the reader cannot know which
+    # of them is current.
+    assert project_pause_locations(resolved_peer_tree) != project_pause_locations(_mixed_tree())
 
 
 def test_the_projection_signature_admits_no_resume_context() -> None:
