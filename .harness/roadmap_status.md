@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `714f4bce651a` |
+| `workspace_state_hash` | `2f29ad1e517d` |
 | `last_refreshed` | 2026-08-11T22:05:00Z |
-| `git_head` | `07aba605` —  |
+| `git_head` | `c9c9cb9a` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 115 |
 
