@@ -61,11 +61,11 @@ snapshot:
   total: 153
   open: 1
   design_substrate_gated: 0
-  registered_finding: 28
+  registered_finding: 27
   operator_gated: 0
   held: 2
-  closed: 122
-  identity_digest: 'aef16de7b23a6703'
+  closed: 123
+  identity_digest: 'a2b1a01aed9c3125'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -8204,7 +8204,7 @@ items:
 - id: B-153
   title: C-CP-24 24.1 Attribute-count column semantics undefined at the hitl.* row -- code counts span
     names as attributes
-  status: registered_finding
+  status: closed
   summary: 'THE THIRD SAME-CLASS CASE split out of B-144 at its venue-A close (PR #1311): the hitl.* row
     of 24.1.A (Spec_Control_Plane_v1_2.md:2148) carries NO attribute count at all -- it reads ''per-event
     attributes across 4 span names'' -- while cp_namespace_export_manifest.py pins attribute_count=4,
@@ -8230,7 +8230,7 @@ items:
     one declaring hitl.* exports at span-event granularity deliberately.'
   council: 'No. Single-axis column-semantics decision with the B-144 venue-A precedent on file; the
     U-HK-13 decorrelated resolver suffices at the decision point.'
-  pr: '#1311 (minted at the B-144 close)'
+  pr: '#1314 (close; minted at #1311)'
   heading: '### B-153 · C-CP-24 §24.1 Attribute-count column semantics undefined at hitl.* — span names
     counted as attributes *(split from B-144 at the CP v1.117 re-table, 2026-08-11)*'
 - id: B-151
