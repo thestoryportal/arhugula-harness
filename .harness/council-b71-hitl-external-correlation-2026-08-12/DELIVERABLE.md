@@ -10,7 +10,8 @@ authorizable; preconditions **1 + 2 + 3 CLOSED on executed evidence**, **4 BOUND
 Discharges §5 **precondition 3** — re-derive `resolvability` so it cannot assert a
 false negative. Witness:
 `harness-cp/tests/test_b71_resolvability_cannot_be_a_static_stamp.py` (6 tests,
-green, mutation-probed — making the resolver ignore `hitl_responses` turns 2 RED).
+green, mutation-probed — making the resolver ignore `hitl_responses` turns **3** RED,
+re-run against the final six-test set: `test_the_same_branch_flips_from_not_resolvable_to_resolvable`, `test_delivery_needs_a_uniform_response_too_which_is_also_unknowable_at_mint`, and `test_eligibility_varies_on_an_input_the_projection_has_no_parameter_for`).
 Resolution at **§4-ter** below. **No spec text, no plan delta, no production-code
 change.** Precondition 5 remains open, so the spec leg is still not authorizable.
 
@@ -294,7 +295,8 @@ report eligibility, the note narrows rather than being rewritten.
 Same split §4-bis.5 applies to the basis decision, applied here.
 
 **Witnessed** (executed, mutation-probed — neutering the resolver's consultation of
-`hitl_responses` turns 2 of the 6 RED): the eligibility flip itself (ELIGIBILITY, not
+`hitl_responses` turns **3** of the 6 RED — recounted against the final set, an
+earlier draft recorded 2 from a smaller one): the eligibility flip itself (ELIGIBILITY, not
 delivery — see above); that the
 projection's sole input is the snapshot; that a snapshot with a genuinely TERMINAL peer
 projects one gate-owning location; that the channel value is invariant across the flip.
