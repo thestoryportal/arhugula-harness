@@ -101,7 +101,10 @@ def _mixed_tree() -> PauseSnapshot:
     """
     return _snapshot(
         run_id="run-root",
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        # Production forces HITL_PENDING whenever a pre-dispatch gate-owning
+        # disposition exists (`workflow_driver.py:10419-10432`); EXPLICIT_OPERATOR
+        # is not reachable for this shape — out-of-family Codex.
+        pause_reason=WorkflowPauseReason.HITL_PENDING,
         peer_fan_out_resume=PeerFanOutResumeState(
             branches=(),
             branch_count=2,
@@ -153,6 +156,10 @@ def test_the_same_branch_flips_from_not_resolvable_to_resolvable() -> None:
     would have had to guess which of these is true.
     """
     tree = _mixed_tree()
+    assert tree.pause_reason is WorkflowPauseReason.HITL_PENDING, (
+        "the tree must carry the label production emits for a pre-dispatch "
+        "gate-owning pause (`workflow_driver.py:10419-10432`)"
+    )
     pre_dispatch_identity = _pre_dispatch_gate_owning_branch_identity("run-root", 0)
 
     nothing_answered = compute_hitl_uniform_fallback_eligible_run_id(tree, ResumeContext())
@@ -253,7 +260,10 @@ def test_a_later_snapshot_would_show_sole_but_is_not_a_liveness_claim() -> None:
     """
     resolved_peer_tree = _snapshot(
         run_id="run-root",
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        # Production forces HITL_PENDING whenever a pre-dispatch gate-owning
+        # disposition exists (`workflow_driver.py:10419-10432`); EXPLICIT_OPERATOR
+        # is not reachable for this shape — out-of-family Codex.
+        pause_reason=WorkflowPauseReason.HITL_PENDING,
         peer_fan_out_resume=PeerFanOutResumeState(
             branch_count=2,
             pre_dispatch_gate_owning_branches=(

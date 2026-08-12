@@ -8342,9 +8342,17 @@ items:
   heading: '### B-154 · Uniform-response target selector keyed by the external correlation token
     *(registered at the B-71 council arc, 2026-08-12)*'
 - id: B-155
-  title: No webhook re-fires when a parked pre-dispatch branch becomes sole-addressable
+  title: Nothing signals the operator when a parked pre-dispatch branch becomes
+    sole-addressable (the original "no webhook re-fires" premise is UNVERIFIED -- see summary)
   status: registered_finding
-  summary: 'When N-1 peers resolve and the last pre-dispatch gate owner becomes the sole
+  summary: 'PREMISE RE-SCOPED 2026-08-12 (B-71 v3 s4-ter.1b): this row was registered as an
+    ABSENCE of redelivery, and that premise is UNVERIFIED and may be false -- a LINEAR depth-0
+    gate DOES re-escalate via the webhook on re-pause
+    (test_hitl_resume_without_resolved_response_repauses, 2 POSTs asserted); whether the FAN-OUT
+    pre-dispatch path does the same is UNRUN. What is certainly real is that no POSTURE SIGNAL
+    reaches the operator: any re-fired request is byte-identical and cannot say the branch became
+    sole. Re-ground with a fan-out driver/composer round-trip at open; re-scope or merge into
+    B-71 if the re-fire happens. ORIGINAL REGISTRATION TEXT FOLLOWS. When N-1 peers resolve and the last pre-dispatch gate owner becomes the sole
     unaddressed member, the uniform fallback may deliver on the next resume
     (workflow_driver.py:2851-2898, esp. :2891-2897) -- but NO webhook re-fires to tell the
     operator that the request they were told to wait on is now actionable. Surfaced by C11 at the
@@ -8357,8 +8365,9 @@ items:
   council: 'no at registration -- C9 owns the redelivery knob and C11 the operator surface; both
     already deliberated at the B-71 arc. Convene only if a posture-transition webhook is proposed
     (a NEW outward event class, which is C10 territory).'
-  heading: '### B-155 · No webhook re-fires when a parked pre-dispatch branch becomes
-    sole-addressable *(registered at the B-71 council arc, 2026-08-12)*'
+  heading: '### B-155 · Nothing signals the operator when a parked pre-dispatch branch becomes sole-addressable *(registered
+  at the B-71 council arc, 2026-08-12; the original "no webhook re-fires" premise was RE-SCOPED 2026-08-12
+  as UNVERIFIED — see the PREMISE FLAGGED bullet)*'
 - id: B-156
   title: Uniform-treatment extension of the correlation token to depth-0 root and already-dispatched-child escalations
   status: registered_finding

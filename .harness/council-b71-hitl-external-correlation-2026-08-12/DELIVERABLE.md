@@ -678,4 +678,4 @@ falsifications in this row's history were of claims *made by the falsifier*. The
 operative discipline is not "distrust the council" but "no uniqueness claim enters
 this row's record without an executed witness" — which is why preconditions 1 and 2
 were written as *execute* and *resolve on that evidence*, and why 3 and 5, which are
-argument-work rather than evidence-work, are still open.
+argument-work rather than evidence-work, were still open **as of v2**. *(Historical: precondition 3 closed at v3 — on a witness, not an argument, which is the point. The current gate status is at §5; do not read this paragraph as a status line.)*
