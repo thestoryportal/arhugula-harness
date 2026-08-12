@@ -321,6 +321,19 @@ _deferred_closing: dict[int, weakref.ref[Any] | None] = {}
 # `id(ctx)` with the same weak-identity staleness guard as the registries
 # above; all access under `_inflight_lock`.
 _standalone_backstops: dict[int, tuple[weakref.ref[Any] | None, Callable[[], None]]] = {}
+# Per-ctx "deferred takeover owns the close forever" tombstone (B-151 shape
+# 1): `_spawn_deferred_tracer_close` disarms the standalone backstop when it
+# takes over, but its closing gate is only committed once the registry
+# empties — leaving an ownership gap in which a LATER standalone flush
+# timeout could re-arm a fresh backstop alongside the live watcher (an
+# unserialized shutdown-vs-shutdown pair at exit). The tombstone is committed
+# at takeover, before the disarm, and checked by the arm; unlike the closing
+# gate it does NOT refuse new flush workers — those stay legal until the
+# registry empties. Never cleared for a live ctx (ownership never returns to
+# the standalone path); same weak-identity staleness guard and same bounded
+# one-entry-per-deferred-close cost as `_deferred_closing`. All access under
+# `_inflight_lock`.
+_deferred_owned: dict[int, weakref.ref[Any] | None] = {}
 # Sentinel distinguishing "no `_deferred_closing` gate at all" from a stored
 # `None` gate (the non-weakref-able duck-typed ctx case stores None).
 _GATE_ABSENT: object = object()
@@ -399,6 +412,19 @@ def _arm_standalone_atexit_backstop(ctx: object) -> None:
             return  # no live worker — no race to guard
         if ctx_key in _deferred_closing:
             return  # deferred-close machinery already owns this ctx
+        if ctx_key in _deferred_owned:
+            owned_ref = _deferred_owned[ctx_key]
+            owned_is_stale = owned_ref is not None and owned_ref() is not ctx
+            if not owned_is_stale:
+                # B-151 shape 1: a deferred takeover is in progress (or done)
+                # for this ctx — its watcher + ordered backstop own the close
+                # forever. The closing-gate check above cannot carry this
+                # alone: the gate commits only when the registry empties, and
+                # a worker registered after the takeover (legal) that then
+                # times out would land here in that gap and re-arm a second,
+                # unserialized closer.
+                return
+            _deferred_owned.pop(ctx_key, None)  # dead ctx's tombstone; id reused
         armed = _standalone_backstops.get(ctx_key)
         if armed is not None:
             armed_ref = armed[0]
@@ -431,7 +457,16 @@ def _arm_standalone_atexit_backstop(ctx: object) -> None:
                 # running. The gate makes `_register_inflight_tracer_flush`
                 # refuse it instead (and stays set forever — a closed
                 # provider must not be flushed again).
-                _deferred_closing[ctx_key] = ctx_ref
+                # B-151 shape 2: LIVE ctx only. A dead ctx needs no flush
+                # fence (registration is keyed on a live object), and
+                # committing this dead ref under a reused id would clobber a
+                # live ctx's gate — whose stale-pop in
+                # `_register_inflight_tracer_flush` would then re-open the
+                # registration door for the NEW provider mid-close. The
+                # non-weakref-able fallback (ref is None) keeps the commit:
+                # id-only identity has no liveness probe.
+                if ctx_ref is None or ctx_ref() is not None:
+                    _deferred_closing[ctx_key] = ctx_ref
             try:
                 shutdown_fn()
             except Exception:
@@ -527,6 +562,14 @@ def _spawn_deferred_tracer_close(ctx: object, *, defer_collector: bool = False) 
     shutdown_fn = getattr(provider, "shutdown", None)
     if shutdown_fn is None:
         return
+    with _inflight_lock:
+        # B-151 shape 1: record the takeover BEFORE the standalone backstop
+        # is disarmed below, so `_arm_standalone_atexit_backstop` refuses
+        # from here on — new flush workers stay legal (the closing gate is
+        # untouched until the registry empties), but close ownership never
+        # returns to the standalone path. Unconditional overwrite: a reused
+        # id means the prior tombstone's ctx is dead.
+        _deferred_owned[ctx_key] = ctx_ref
 
     # Captured ON the loop (we are inside `shutdown()` here): the watcher
     # thread cannot call `asyncio.get_running_loop()` itself.
@@ -578,7 +621,13 @@ def _spawn_deferred_tracer_close(ctx: object, *, defer_collector: bool = False) 
                 tuple(live_entry[1]) if live_entry is not None else ()
             )
             if not live:
-                _deferred_closing[ctx_key] = ctx_ref
+                # B-151 shape 2 (same guard as the standalone backstop's
+                # commit): a dead ctx needs no flush fence, and a dead ref
+                # under a reused id would clobber a live ctx's gate. Closing
+                # still proceeds — no live registration can exist for a dead
+                # object.
+                if ctx_ref is None or ctx_ref() is not None:
+                    _deferred_closing[ctx_key] = ctx_ref
             return live
 
     # OTel's own atexit backstop (`shutdown_on_exit=True` at construction,

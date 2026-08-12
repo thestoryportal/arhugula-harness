@@ -20,10 +20,12 @@ Test surfaces:
 from __future__ import annotations
 
 import asyncio
+import gc
 import os
 import sys
 import threading
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -769,12 +771,14 @@ def _isolate_shutdown_registry() -> Any:  # pyright: ignore[reportUnusedFunction
     shutdown_mod._inflight_tracer_flush.clear()  # type: ignore[attr-defined]
     shutdown_mod._deferred_closing.clear()  # type: ignore[attr-defined]
     shutdown_mod._standalone_backstops.clear()  # type: ignore[attr-defined]
+    shutdown_mod._deferred_owned.clear()  # type: ignore[attr-defined]
     yield
     shutdown_mod._shutdown_registry.clear()  # type: ignore[attr-defined]
     shutdown_mod._cached_reports.clear()  # type: ignore[attr-defined]
     shutdown_mod._inflight_tracer_flush.clear()  # type: ignore[attr-defined]
     shutdown_mod._deferred_closing.clear()  # type: ignore[attr-defined]
     shutdown_mod._standalone_backstops.clear()  # type: ignore[attr-defined]
+    shutdown_mod._deferred_owned.clear()  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -1771,8 +1775,6 @@ async def test_shutdown_idempotent_second_call_returns_cached(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_shutdown_cached_report_freed_on_ctx_gc(tmp_path: Path) -> None:
     """weakref.finalize discards the cached report when ctx is gc'd."""
-    import gc
-
     ctx = _shutdown_ctx(
         tmp_path,
         tracer=_FakeTracerWithShutdown(),
@@ -2725,6 +2727,177 @@ async def test_b150_backstop_close_decision_gates_new_flushes(
     late_report = await flush_observability(ctx, timeout_millis=100)
     assert "tracer" in late_report.failures
     assert len(tracer.calls) == calls_before_close  # no new force_flush ran
+
+
+# ---------------------------------------------------------------------------
+# B-151 — standalone atexit backstop residual concurrency shapes (merge-gate
+# lens 1 residuals of PR #1307, registered then closed here). Shape 1: the
+# arm must refuse while a deferred takeover owns the close (the closing gate
+# alone leaves a gap — it commits only when the registry empties). Shape 2:
+# a dead ctx's closer must not commit the closing gate under a reused id —
+# the dead ref would clobber a live ctx's gate and re-open the registration
+# door mid-close.
+# ---------------------------------------------------------------------------
+
+
+class _WeakrefableCtx:
+    """Weakref-able flush-context stand-in (SimpleNamespace is not) — the
+    dead-probe witnesses need `_try_weakref(ctx)` to return a real ref whose
+    death is observable."""
+
+    def __init__(self, tracer: object, ledger_path: Path) -> None:
+        self.tracer_provider = tracer
+        self.ledger_writer = SimpleNamespace(handle=SimpleNamespace(canonical_path=ledger_path))
+
+
+async def _wait_for_ctx_death(probe: weakref.ref[Any]) -> None:
+    """A just-finished flush worker's dying frame may briefly pin the ctx —
+    poll gc until the weakref clears (bounded)."""
+    for _ in range(500):
+        gc.collect()
+        if probe() is None:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("ctx did not die — a strong reference is pinning it")
+
+
+@pytest.mark.asyncio
+async def test_b151_arm_refused_during_deferred_takeover_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-151 shape 1 — after `shutdown(ctx)` spawns the deferred takeover
+    (standalone backstop disarmed) but BEFORE the closing gate commits (the
+    wedged worker keeps the registry non-empty), a later standalone flush
+    timeout's arm must REFUSE: a second armed backstop would be an
+    unserialized shutdown-vs-shutdown pair with the live watcher at exit.
+    Deleting the tombstone check re-arms in the gap and fails this test."""
+    registered, _unregistered, _events = _spy_atexit(monkeypatch)
+    tracer = _BlockingFlushTracer()
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+
+    report = await flush_observability(ctx, timeout_millis=100)
+    assert report.timed_out is True
+    assert len(_standalone_backstops_registered(registered)) == 1
+
+    shutdown_report = await asyncio.wait_for(shutdown(ctx, timeout=1.0), timeout=10.0)
+    assert "tracer_provider" in shutdown_report.failures
+    # Takeover in progress: standalone disarmed, tombstone committed, gate
+    # NOT yet committed (the wedged worker keeps the registry non-empty) —
+    # this is exactly the ownership gap.
+    assert not shutdown_mod._standalone_backstops  # type: ignore[attr-defined]
+    assert id(ctx) in shutdown_mod._deferred_owned  # type: ignore[attr-defined]
+    assert id(ctx) not in shutdown_mod._deferred_closing  # type: ignore[attr-defined]
+
+    # A LATER standalone flush registers a new worker (legal in the gap:
+    # the closing gate is untouched)...
+    late_evt = threading.Event()
+    assert shutdown_mod._register_inflight_tracer_flush(ctx, late_evt) is True  # type: ignore[attr-defined]
+    # ...and its timeout path calls the arm — which must refuse.
+    shutdown_mod._arm_standalone_atexit_backstop(ctx)  # type: ignore[attr-defined]
+    assert len(_standalone_backstops_registered(registered)) == 1  # no second arm
+    assert not shutdown_mod._standalone_backstops  # type: ignore[attr-defined]
+
+    # Cleanup: complete both workers; the watcher closes the provider.
+    late_evt.set()
+    shutdown_mod._discard_inflight_tracer_flush(id(ctx), late_evt)  # type: ignore[attr-defined]
+    tracer.release.set()
+    for _ in range(500):
+        if tracer.shutdown_called:
+            break
+        await asyncio.sleep(0.01)
+    assert tracer.shutdown_called is True
+
+
+@pytest.mark.asyncio
+async def test_b151_dead_ctx_backstop_does_not_clobber_reused_id_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-151 shape 2 — the armed ctx dies, its id is reused by a live ctx
+    whose own closing gate is already committed; the dead ctx's exit-time
+    backstop must close its own provider WITHOUT committing its dead ref
+    over the live gate. (A dead-ref overwrite would be stale-popped by
+    `_register_inflight_tracer_flush`, re-opening the registration door for
+    the live provider mid-close — refusal-on-live-gate is pinned by
+    `test_b150_backstop_close_decision_gates_new_flushes`; gate survival
+    here composes with it. True id() reuse cannot be forced
+    deterministically, so the reused-id gate is planted under the dead
+    ctx's key.)"""
+    registered, _unregistered, _events = _spy_atexit(monkeypatch)
+    tracer = _BlockingFlushTracer()
+    path = tmp_path / "state.jsonl"
+    path.write_text("")
+    ctx = _WeakrefableCtx(tracer, path)
+    ctx_key = id(ctx)
+
+    report = await flush_observability(ctx, timeout_millis=100)
+    assert report.timed_out is True
+    backstop = _standalone_backstops_registered(registered)[0]
+
+    # Worker completes; the registry self-clears — the backstop's close
+    # would now proceed.
+    tracer.release.set()
+    for _ in range(500):
+        if not shutdown_mod._tracer_flush_in_flight(ctx):  # type: ignore[attr-defined]
+            break
+        await asyncio.sleep(0.01)
+
+    # The armed ctx dies; a live ctx re-uses its id — simulated by planting
+    # that ctx's committed closing gate under the same key (the exact state
+    # the dead-ref overwrite would clobber).
+    probe = weakref.ref(ctx)
+    del ctx
+    await _wait_for_ctx_death(probe)
+    live_reused = _WeakrefableCtx(_FakeTracerWithShutdown(), path)
+    live_gate = weakref.ref(live_reused)
+    shutdown_mod._deferred_closing[ctx_key] = live_gate  # type: ignore[attr-defined]
+
+    backstop()  # simulated process exit
+    # The dead ctx's own provider still closes (idempotent; no fence needed
+    # for a dead ctx) — but the live ctx's gate survives untouched...
+    assert tracer.shutdown_called is True
+    assert shutdown_mod._deferred_closing[ctx_key] is live_gate  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_b151_dead_ctx_watcher_does_not_clobber_reused_id_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-151 shape 2, `_live_workers_or_gate` sibling — the deferred
+    watcher's ctx dies while it waits on the wedged worker; when the worker
+    completes, the watcher must close WITHOUT committing its dead ref over a
+    live id-reused ctx's gate (the identical overwrite shape the standalone
+    backstop carried)."""
+    registered, _unregistered, _events = _spy_atexit(monkeypatch)
+    tracer = _BlockingFlushTracer()
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
+    ctx_key = id(ctx)
+
+    report = await flush_observability(ctx, timeout_millis=100)
+    assert report.timed_out is True
+    assert len(_standalone_backstops_registered(registered)) == 1
+
+    shutdown_report = await asyncio.wait_for(shutdown(ctx, timeout=1.0), timeout=10.0)
+    assert "tracer_provider" in shutdown_report.failures
+    assert ctx_key not in shutdown_mod._deferred_closing  # type: ignore[attr-defined]
+
+    # The watcher's ctx dies while the worker is still wedged; a live ctx
+    # re-uses its id and commits its own closing gate.
+    probe = weakref.ref(ctx)
+    del ctx
+    await _wait_for_ctx_death(probe)
+    live_reused = _WeakrefableCtx(_FakeTracerWithShutdown(), tmp_path / "other.jsonl")
+    live_gate = weakref.ref(live_reused)
+    shutdown_mod._deferred_closing[ctx_key] = live_gate  # type: ignore[attr-defined]
+
+    # Worker completes → watcher wakes, closes the dead ctx's provider —
+    # and leaves the live gate untouched.
+    tracer.release.set()
+    for _ in range(500):
+        if tracer.shutdown_called:
+            break
+        await asyncio.sleep(0.01)
+    assert tracer.shutdown_called is True
+    assert shutdown_mod._deferred_closing[ctx_key] is live_gate  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
