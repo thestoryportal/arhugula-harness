@@ -7,7 +7,7 @@ Acceptance-criterion coverage:
   #4 persona-tier-binding 5-step   -> test_persona_tier_binding_selection
   #5 VerifierResult 3 fields       -> test_verifier_result_three_fields_cp_18_4
                                       test_verifier_verdict_cardinality_two
-                                      test_verifier_fail_class_in_cp_21_5_set
+                                      test_verifier_fail_class_in_validator_fail_class_domain
   #6 OverlayResolution 3 fields    -> test_overlay_resolution_three_fields_cp_18_3
                                       test_overlay_outcome_cardinality_three
 """
@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import pytest
 from harness_as.sandbox_tier import BlastRadiusTier
 from harness_core import DeploymentSurface, PersonaTier, WorkloadClass
 from harness_cp.both_by_tier_overlay import (
@@ -36,10 +37,12 @@ from harness_cp.both_by_tier_overlay import (
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import ActionKind, ProposedAction
 from harness_cp.persona_engine_hitl_matrix import matrix_cell_for
-from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
+from harness_cp.validator_framework_types import ValidatorFailClass
+from pydantic import ValidationError
 
-# The C-CP-21 §21.5 5-value validator.fail.class set.
-_CP_21_5_FAIL_CLASSES = {c.value for c in ValidatorRetryExitClass}
+# The validator.fail.class wire domain — ValidatorFailClass per CP spec v1.116
+# (B-138 disposition (a); plan v2.52 §0.2 as-domain supersession of U-CP-41 #5).
+_VALIDATOR_FAIL_CLASS_DOMAIN = {c.value for c in ValidatorFailClass}
 
 
 def _action() -> ProposedAction:
@@ -118,12 +121,43 @@ def test_verifier_verdict_cardinality_two() -> None:
     assert {v.value for v in VerifierVerdict} == {"agree", "disagree"}
 
 
-def test_verifier_fail_class_in_cp_21_5_set() -> None:
-    """#5 — a verifier fail class, when present, is in the §21.5 5-value set."""
+def test_verifier_fail_class_in_validator_fail_class_domain() -> None:
+    """#5 (as superseded at plan v2.52 §0.2) — a verifier fail class, when
+    present, is in the `ValidatorFailClass` wire domain per CP spec v1.116.
+
+    The dispatch path currently emits no fail class (`None`), so the live-path
+    conditional below cannot carry the domain witness alone (codex r1 at the
+    B-141 PR: a vacuous probe — restoring the obsolete retry-exit set would
+    not fail it). The explicit constructions pin the domain in BOTH
+    directions: the B-141 carried value is a member, and the superseded
+    retry-exit value `terminal-fail-exit` is NOT — either regression flips
+    one of them RED. The field is enum-typed (`ValidatorFailClass | None`,
+    plan v2.52 §0.2; codex r2), so an out-of-domain value is a construction
+    error, not a silent wire value.
+    """
+    # Non-null construction: the enum-typed field coerces the in-domain value.
+    populated = VerifierResult(
+        verifier_verdict=VerifierVerdict.DISAGREE,
+        validator_fail_class=ValidatorFailClass.SEMANTIC_INCONSISTENCY,
+        verifier_span_id="subagent.span[verifier]",
+    )
+    assert populated.validator_fail_class is not None
+    assert populated.validator_fail_class.value in _VALIDATOR_FAIL_CLASS_DOMAIN
+    # The superseded retry-exit value is out-of-domain (B-138 disposition (a)):
+    # construction with it must FAIL, not serialize the obsolete wire value.
+    with pytest.raises(ValidationError):
+        VerifierResult(
+            verifier_verdict=VerifierVerdict.DISAGREE,
+            validator_fail_class="terminal-fail-exit",  # type: ignore[arg-type]
+            verifier_span_id="subagent.span[verifier]",
+        )
+    assert "terminal-fail-exit" not in _VALIDATOR_FAIL_CLASS_DOMAIN
+    # Live dispatch path: no fail class is emitted today; when a producer
+    # populates it, the same membership check binds.
     tier3 = dispatch_two_agent_observer(_action(), BlastRadiusTier.EXTERNAL_REVERSIBLE)
     assert tier3.verifier_span_id == "subagent.span[verifier]"
     if tier3.validator_fail_class is not None:
-        assert tier3.validator_fail_class in _CP_21_5_FAIL_CLASSES
+        assert tier3.validator_fail_class in _VALIDATOR_FAIL_CLASS_DOMAIN
     # Sub-Tier-3 actions admit no verification.
     sub = dispatch_two_agent_observer(_action(), BlastRadiusTier.READ_ONLY)
     assert sub.verifier_span_id == ""

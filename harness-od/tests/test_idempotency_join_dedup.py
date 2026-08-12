@@ -27,6 +27,7 @@ from harness_od.idempotency_join_dedup import (
 )
 from harness_od.otel_genai_base import SpanRef
 from opentelemetry.sdk.trace import TracerProvider
+from pydantic import ValidationError
 
 
 def _span() -> SpanRef:
@@ -300,14 +301,23 @@ def test_invariance_check_not_applicable_for_non_deterministic_replay(
 
 
 def test_replay_semantic_divergence_event_attributes() -> None:
-    """Acceptance #13 — the ESCALATE event carries the fixed §14.5.3 validator-fail attrs."""
+    """Acceptance #13 — the ESCALATE event carries the fixed §14.5.3 validator-fail attrs.
+
+    `validator.fail.class` is `semantic_inconsistency` per OD spec v1.41
+    (`ValidatorFailClass` domain per CP spec v1.116 / B-138 disposition (a)).
+    """
     from harness_od.idempotency_join_dedup import ReplaySemanticDivergenceError
 
     event = ReplaySemanticDivergenceError()
-    assert event.validator_fail_class == "terminal-fail-exit"
+    assert event.validator_fail_class == "semantic_inconsistency"
     assert event.validator_fail_cause_attribution == "replay_semantic_divergence"
     assert event.validator_fail_permanence == "permanent"
     assert event.always_sampled is True
+    # §14.5.3 declares the attributes FIXED — the fields are Literal-pinned
+    # (codex r2 at the B-141 cascade PR), so overriding with the superseded
+    # retry-exit value is a construction ERROR, not a silent wire value.
+    with pytest.raises(ValidationError):
+        ReplaySemanticDivergenceError(validator_fail_class="terminal-fail-exit")  # type: ignore[arg-type]
 
 
 # --- §14.5.4 per-attempt cost-attribution discipline ------------------------

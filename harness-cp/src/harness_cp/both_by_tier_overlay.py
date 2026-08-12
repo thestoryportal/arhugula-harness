@@ -37,6 +37,7 @@ from pydantic import BaseModel, ConfigDict
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import ProposedAction
 from harness_cp.persona_engine_hitl_matrix import HITLMatrixCell, matrix_cell_for
+from harness_cp.validator_framework_types import ValidatorFailClass
 
 
 class ToolTier(StrEnum):
@@ -79,16 +80,21 @@ class VerifierResult(BaseModel):
     """The two-agent-observer verifier output (C-CP-18 §18.4).
 
     Faithful factor-out per plan v2.9 §0.3: the verifier verdict, the optional
-    `validator.fail.*` class (drawn from the C-CP-21 §21.5 5-value
-    `validator.fail.class` set when the verifier emits a fail), and the
+    `validator.fail.*` class (drawn from the C-CP-25→C-CP-28 §25.2
+    `ValidatorFailClass` domain when the verifier emits a fail — the wire
+    attribute's domain per CP spec v1.116 / B-138 disposition (a); plan v2.52
+    §0.2 supersedes the v2.9 "§21.5 5-value set" framing as-domain), and the
     `subagent.span[verifier]` span id per C-CP-14 §14.1.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     verifier_verdict: VerifierVerdict
-    validator_fail_class: str | None
-    """∈ the C-CP-21 §21.5 `validator.fail.class` 5-value set, when present."""
+    validator_fail_class: ValidatorFailClass | None
+    """∈ the `ValidatorFailClass` domain (CP spec v1.116), when present —
+    enum-typed so construction itself enforces the wire domain (plan v2.52
+    §0.2 supersedes the v2.9 `Optional<str>` declaration as-domain; codex r2
+    at the B-141 cascade PR)."""
 
     verifier_span_id: str
     """`subagent.span[verifier]` id per C-CP-14 §14.1."""

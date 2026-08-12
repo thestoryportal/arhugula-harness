@@ -61,11 +61,11 @@ snapshot:
   total: 153
   open: 1
   design_substrate_gated: 0
-  registered_finding: 24
+  registered_finding: 23
   operator_gated: 0
   held: 2
-  closed: 126
-  identity_digest: '6f2f6635073cc1fc'
+  closed: 127
+  identity_digest: '6e77ae2ab36de286'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7617,7 +7617,9 @@ items:
   title: 'The replay-semantic-divergence surfaces (C-OD-14 §14.5.3 + ADR-D6 v1.2) fix
     validator.fail.class = terminal-fail-exit -- a retry-exit value now out-of-domain under the B-138
     disposition (a) -- and owe a cascade at the OD/D6 venue'
-  status: registered_finding
+  status: closed
+  pr: "#pending (the B-141 cascade leg: OD spec v1.41 + ADR-D6 v1.3 + CP plan v2.52 + OD plan
+    v2.35 + carrier/witness updates)"
   summary: 'WHAT IT IS. B-138 settled the wire attribute validator.fail.class on the C-CP-25->C-CP-28
     ValidatorFailClass domain (CP v1.116, operator-ratified (a), 2026-08-09). ONE DECLARED surface
     family still binds the OLD retry-exit domain to the wire name: C-OD-14 §14.5.3''s
@@ -7640,7 +7642,29 @@ items:
     :604/:624, the U-CP-47-era criteria) also carries the five-value wire framing -- HISTORY, not retroactively
     edited, recorded here so no future reader mistakes it for current authority. SURFACED at the
     B-138 spec-leg codex round 3 (P1), 2026-08-09.'
-  close_out: '(1) RE-GROUND at HEAD: the carrier defaults + test; the ADR-D6 rows; confirm production
+  close_out: 'CLOSED 2026-08-12 (PR #pending) -- ALL THREE STEPS DISCHARGED; the operative
+    record is .harness/b-141-validator-fail-class-cascade-2026-08-12.md. (1) re-grounded at HEAD
+    (carrier at idempotency_join_dedup.py:347 drifted from :345; witness at
+    test_idempotency_join_dedup.py:307; ADR-D6 rows :120/:298; production emission sites ZERO by
+    rg over harness-*/src+tests). (2) cascade landed at all FIVE venues (the fifth, the OD plan, surfaced by this arc''s
+    own cross-spec drift grep -- not named at registration) under carried value
+    validator.fail.class = semantic_inconsistency (the row''s own natural candidate -- a
+    ValidatorFailClass member; the replay contradicts the F2 ledger''s prior recorded state; NO new
+    wire attribute minted so the council clause never fired): ADR-D6 v1.2 -> v1.3 IN PLACE
+    (§1.5.2 table row + §1.2.2.1 retry.fail_class cross-ref clause reworded -- retry.fail_class
+    KEEPS the retry-exit domain); OD spec v1.40 -> v1.41 (C-OD-14 §14.5.3 escalation-table row;
+    permanence=permanent + its C-OD-09 §9.2 always-sampled arm PRESERVED VERBATIM so the intent
+    survives structurally); CP plan v2.51 -> v2.52 (U-CP-41 acc #5 + U-CP-47-era
+    VALIDATOR_FAIL_NAMESPACE_SCHEMA superseded AS-DOMAIN as NOTES, landed units NOT amended per the
+    B-97(a)/B-118 precedent; test-roster supersession test_verifier_fail_class_in_cp_21_5_set ->
+    test_verifier_fail_class_in_validator_fail_class_domain); OD plan v2.34 -> v2.35 (U-OD-20-era
+    ESCALATION-to-terminal-fail-exit criteria superseded AS VALUE as a NOTE -- v2_2.md:55/:66/:167/:368
+    were the standing authority at head v2.34 and would have contradicted OD spec v1.41 in-axis); carrier default + docstrings + both
+    witness files updated (59+9 pass). (3) honored -- declared-shape-only; NO emission wiring. B-124
+    derivation sub-decision, B-139 cause_attribution producers (incl. the NEVER-DISCHARGED D6-v1.2
+    forward flag that ADR-D5 would absorb replay_semantic_divergence -- recorded at the back-flow
+    doc §4, not chased), and B-140 span-site/keying family all UNTOUCHED per the coordination notes.
+    --- Registration record below --- (1) RE-GROUND at HEAD: the carrier defaults + test; the ADR-D6 rows; confirm production
     emission sites are still ZERO. (2) CASCADE at the owning venues, per the B-138 disposition: an
     ADR-D6 amendment (in-place revision, the ADR-D5 v1.6 mechanics) + an OD spec leg for C-OD-14
     §14.5.3 + the carrier-default/test updates + a CP PLAN-NOTE DELTA superseding the landed

@@ -17,7 +17,7 @@ CP posture per `Cross_Axis_Composition_Document_v2_19.md` §2.4: **largest cross
 | Artifact | Version | Role |
 |---|---|---|
 | `Spec_Control_Plane_v1_118.md` | **v1.118 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/cp.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Contract authority — 29 contracts C-CP-01 through C-CP-29 *(authoring-era count was 24; deltas grew the enumeration — per v1.13 Reading A: C-CP-25 WorkflowDriver / C-CP-26 PauseResumeProtocol / C-CP-27 PerServerTrust / C-CP-28 ValidatorFramework (incl. §28.x v1.24 validator post-evaluate hook) / C-CP-29 PromptSelectionManifest — see the canonical spec)* |
-| `Implementation_Plan_Control_Plane_v2_51.md` | **v2.51 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/cp.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Execution authority — 58 atomic units across 9 clusters and 9 topological levels (L0–L8) *(authoring-era figures; see the canonical plan)* |
+| `Implementation_Plan_Control_Plane_v2_52.md` | **v2.52 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/cp.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Execution authority — 58 atomic units across 9 clusters and 9 topological levels (L0–L8) *(authoring-era figures; see the canonical plan)* |
 
 ### 1.3 Scope inclusion — 9 clusters
 
@@ -67,7 +67,7 @@ Per `Phase_7_Meta_Architecture_v1.md` §2.3 CP-axis primitives:
 | ADR-D3 | v1.2 | Filesystem residence (files primitive consumption) |
 | ADR-D4 | v1.1 | Workload classes |
 | ADR-D5 | v1.6 | Cross-deployment monotonicity + HITL palette (v1.6 -- B-138 disposition-(a) §1.10.1 wire-domain reconciliation per CP spec v1.116, 2026-08-09; prior v1.5 B-36/ADR-D8 cross-reference at §1.4 row 3, 2026-07-16) |
-| ADR-D6 | v1.2 | Observability + cost-attribution |
+| ADR-D6 | v1.3 (in place at `ADR-D6_v1_2.md`) | Observability + cost-attribution |
 | ADR-D8 | v1 (Accepted, 2026-07-16) | Concrete F5 audit-signing backend (AWS KMS, Ed25519) — closes `B-36`; new `harness_cp.aws_kms_signing_backend.AwsKmsSigningBackend` implements `C-CP-20 §20.2.1`'s `SigningBackend` Protocol; clearance at `.harness/clearance/ADR-D8_audit_signing_backend-cleared-2026-07-16.md` |
 
 ADD attestation: `Architectural_Design_Document_v1_3.md` v1.3.
