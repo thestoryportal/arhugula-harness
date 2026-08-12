@@ -6066,7 +6066,7 @@ items:
   council: 'No. The substantive question — does it count toward the breaker — was settled at B-116 on evidence.
     What remains is a naming/taxonomy call inside a contract with a named owner, plus a routing decision
     this row already names.'
-  pr: '#pending'
+  pr: '#1317'
   heading: '### B-121 · `LLMDispatchProviderUnreachableError` means **unregistered** at all three raise sites,
     and the misleading name is a demonstrated defect vector *(surfaced at the B-116 council deliberation
     (C9 E2b reconcile, on adversarial finding F-01), 2026-08-07)*'
