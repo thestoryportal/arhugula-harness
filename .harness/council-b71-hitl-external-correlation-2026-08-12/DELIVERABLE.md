@@ -15,9 +15,11 @@ Resolution at **§4-quater**. **No spec text, no plan delta, no production-code 
 
 **The charter's premise is FALSE in effect.** `00-CHARTER.md:32` declined to convene C7
 because *"the identity is not a span attribute"*. §3 puts the widening inside
-`compose_hitl_action_id` — and that function's output is exactly what both named tracing
-carriers already export, one of them **default-ON**. The token becomes a span attribute
-whether or not anyone adds a dedicated one.
+`compose_hitl_action_id` — and that function's output is what the ONE reachable tracing
+carrier (`webhook.idempotency_key`, OD-canonical at C-OD-32) already exports. The token
+becomes a span attribute whether or not anyone adds a dedicated one. (The default-ON
+`hitl.invocation.audit_ledger_entry_id` is NOT a carrier here — unreachable on the
+escalation path; see §4-quater.1.)
 
 **Precondition 4 is now the sole remaining gate.**
 
@@ -197,16 +199,27 @@ boundary that the ingress will not honor. Live today, independent of B-71.
 attribute (C7's adjacent interest is noted for the deliverable's observability
 paragraph)"*. That was a reasonable reading of a token that had not yet been designed. It
 does not survive §3's own decision to land **the widening once, inside
-`compose_hitl_action_id`**, because that function's output is what both named tracing
-carriers export:
+`compose_hitl_action_id`**, because that function's output is what the reachable
+tracing carrier exports — the two attributes precondition 5 named, and their
+reachability:
 
-| Carrier | How it gets the token | Export status |
+| Carrier | How it gets the token | Reachable on the escalation path? |
 |---|---|---|
-| `hitl.invocation.audit_ledger_entry_id` | set to `str(compose_hitl_action_id(parent_action_id, placement.position))` verbatim (`hitl_gate_composer.py:2238-2242`) | **DEFAULT-ON** in OD's exported structure set (`content_structure_discipline.py:81+`, C-OD-12 §12.2) — witnessed |
-| `webhook.idempotency_key` | the same composed value threaded via `deliver_webhook_for_brief` onto the outer delivery span (`:1302` → `webhook_delivery_composer.py:270`) | OD-canonical at **C-OD-32** on `hitl.webhook.deliver`; runtime emitter name matches the OD schema byte-exactly — witnessed |
+| `webhook.idempotency_key` | the composed value threaded via `deliver_webhook_for_brief` onto the outer delivery span (`:1302` → `webhook_delivery_composer.py:270`); OD-canonical at **C-OD-32** on `hitl.webhook.deliver`, runtime emitter name matching the OD schema byte-exactly | **YES** — the escalation IS the webhook delivery |
+| `hitl.invocation.audit_ledger_entry_id` | would be `str(compose_hitl_action_id(...))` verbatim (`hitl_gate_composer.py:2238-2242`); is **DEFAULT-ON** in OD's exported structure set (C-OD-12 §12.2) | **NO** — see below |
 
-So C7's interest is **not adjacent — it is on the critical path**, and the observability
-disposition is not a paragraph to append but a constraint on the token's own shape.
+**Correction (out-of-family Codex): ONE carrier, not two.** A first draft of this section
+claimed both. The audit attribute is unreachable on this path:
+`_escalate_to_secondary_channel` is declared `NoReturn` and always raises
+`HITLPauseRequestedSignal`, while the `hitl.invocation.opened` span carrying that
+attribute is opened only on the **fall-through** to step 4f
+(`hitl_gate_composer.py:2033-2044` — the call, then the span). The timeout-secondary
+branch exits the same way before `:2238`. Witnessed by pinning the helper's `NoReturn`
+annotation, so a later change that makes it return must re-derive this analysis.
+
+**The conclusion is unchanged, because one reachable carrier is enough.** C7's interest
+is **not adjacent — it is on the critical path**, and the observability disposition is
+not a paragraph to append but a constraint on the token's own shape.
 
 ### 4-quater.2 The leak bar extends to tracing, and it binds the token's form
 
@@ -218,9 +231,9 @@ description of what ships today.
 What that costs the raw identity is concrete. Basis (B)'s raw form is
 `f"{snapshot_run_id}:pre-dispatch-gate:{branch_index}"`, which contains the run_id
 **verbatim** (witnessed). Folded un-hashed into `compose_hitl_action_id`, it would place
-a run_id on a **default-on exported** span attribute — internal identity across an egress
-boundary, precisely what CP spec v1.112 §2.2 constraint 2 and §3's leak bar forbid on the
-operator-facing surfaces.
+a run_id on an **exported span attribute** (`webhook.idempotency_key`, OD-canonical at
+C-OD-32) — internal identity across an egress boundary, precisely what CP spec v1.112
+§2.2 constraint 2 and §3's leak bar forbid on the operator-facing surfaces.
 
 **Disposition:** the design's existing *"opaque, deterministic, one-way, ≥128 bits, never
 truncated"* rule (§3) is **load-bearing for the tracing channel**, not only the webhook,
@@ -231,9 +244,13 @@ default-on leak path.
 
 ### 4-quater.3 C1's `hitl.escalation.instance_id` — DECLINED
 
-- **It adds no information.** The value is already exported by two declared attributes.
-- **It would be a third authority over one concept** — the drift shape this record has
+- **It adds no information.** The value is already exported by the one reachable
+  carrier.
+- **It would be a second authority over one concept** — the drift shape this record has
   paid for twice (§4-bis.2's "do not mint a new vocabulary", §4-ter.2's same rule).
+- **It is homeless.** The escalation path opens **no** `hitl.invocation.*` span at all
+  (the reachability finding above), so the attribute would need either a new span site
+  or a C-OD-32 amendment to ride the webhook span.
 - **It is not free.** Becoming default-on requires its own C-OD-32 / §12.2 amendment —
   a cleared-contract change under X-AL-3, for zero gain.
 - **Declining is cheap to reverse.** Nothing named `hitl.escalation.*` exists in either
@@ -247,6 +264,9 @@ webhook attribute is set from the threaded `idempotency_key`, are code reads at 
 sites — this arc does not stand up an exporter and assert on emitted spans. A real
 **span-export round-trip** (emit, export, assert the attribute's value) is named as owed
 on the spec leg; it would convert the last cited link in this chain.
+
+**Also owed:** if a later arc wants the token on an audit span, it must first make one
+reachable from the escalation path — the wiring does not exist today.
 
 **Not examined:** whether any OD *redaction* surface already filters these attributes
 (`redact_span` exists as an MCP tool). If it does, the leak bar's practical scope
@@ -798,8 +818,9 @@ discharge is auditable against what was actually asked.
    (`hitl.invocation.audit_ledger_entry_id`) **default-ON** in OD's exported structure
    set. The leak bar therefore extends to tracing as a description of what ships, and it
    binds the token's form: hashing must occur **before** the value enters the composer.
-   C1's dedicated attribute is **DECLINED** (a third carrier of one value). Full
-   derivation at §4-quater.
+   C1's dedicated attribute is **DECLINED** (a second carrier of one value, and
+   homeless — the escalation path opens no `hitl.invocation.*` span). Full derivation
+   at §4-quater.
 
 Plus the three conditions carried from the council: **sequencing** (the resume-outcome
 diagnostics leg ships with the spec leg or C11's wording softens in the same commit),

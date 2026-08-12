@@ -43,6 +43,8 @@ span-export round-trip is named as owed at DELIVERABLE §4-quater.
 
 from __future__ import annotations
 
+from typing import NoReturn
+
 from harness_cp.hitl_placement import HITLPlacementKind
 from harness_cp.pause_state_projection import pre_dispatch_gate_owning_branch_identity
 from harness_od.content_structure_discipline import DEFAULT_ON_STRUCTURE_ATTRIBUTES
@@ -58,14 +60,31 @@ from harness_runtime.lifecycle.webhook_delivery_composer import (
 _AUDIT_ATTR = "hitl.invocation.audit_ledger_entry_id"
 
 
-def test_the_audit_attribute_is_exported_by_default() -> None:
-    """`hitl.invocation.audit_ledger_entry_id` ships to the exporter by default.
+def test_the_audit_attribute_is_default_on_but_not_on_the_escalation_path() -> None:
+    """The audit attribute is exported by default — and is NOT a carrier here.
 
-    Not opt-in, not behind a content flag — a member of the DEFAULT-ON structure set
-    (C-OD-12 §12.2, "observability semantics, never raw content"). Whatever
-    `compose_hitl_action_id` returns therefore leaves the process on the ordinary path.
+    Both halves matter, and an earlier draft asserted only the first and drew the wrong
+    conclusion from it (out-of-family Codex).
+
+    It IS a member of the DEFAULT-ON structure set (C-OD-12 §12.2). But the B-71
+    escalation never reaches it: `_escalate_to_secondary_channel` is declared `NoReturn`
+    and always raises `HITLPauseRequestedSignal`, while the `hitl.invocation.opened`
+    span that carries this attribute is opened only on the FALL-THROUGH path
+    (`hitl_gate_composer.py:2033-2044` — the call, then the span). The timeout-secondary
+    branch exits the same way before `:2238`.
+
+    So for this population the token has exactly ONE tracing carrier, not two.
     """
     assert _AUDIT_ATTR in DEFAULT_ON_STRUCTURE_ATTRIBUTES
+
+    import harness_runtime.lifecycle.hitl_gate_composer as _hgc
+
+    fn = _hgc.RuntimeHITLGateComposer._escalate_to_secondary_channel
+    assert fn.__annotations__.get("return") in ("NoReturn", NoReturn), (
+        "the escalation helper is what makes the audit span unreachable on this path; "
+        "if it stopped being NoReturn the carrier analysis in DELIVERABLE §4-quater "
+        "must be re-derived"
+    )
 
 
 def test_the_webhook_idempotency_key_is_an_od_canonical_span_attribute() -> None:
@@ -83,14 +102,13 @@ def test_the_webhook_idempotency_key_is_an_od_canonical_span_attribute() -> None
     )
 
 
-def test_both_carriers_derive_from_the_one_composer_the_widening_lands_in() -> None:
-    """One function feeds both exported carriers — so widening it widens both.
+def test_the_reachable_carrier_derives_from_the_composer_the_widening_lands_in() -> None:
+    """The ONE reachable carrier is fed by the function §3 widens.
 
-    §3 puts the widening inside `compose_hitl_action_id`. The audit attribute is that
-    call's result verbatim (`hitl_gate_composer.py:2238-2242`); the webhook attribute is
-    the same value threaded as `idempotency_key` (`:1302` → `deliver_webhook_for_brief`
-    → `webhook_delivery_composer.py:270`). Executed here: the composer is a pure,
-    deterministic function of the pair, so the two carriers cannot disagree.
+    `compose_hitl_action_id` produces the value (`:1302`), which is threaded to
+    `deliver_webhook_for_brief` and set on the outer delivery span as
+    `webhook.idempotency_key` (`webhook_delivery_composer.py:270`). Executed here: the
+    composer is pure and deterministic, so widening it widens what that span exports.
     """
     parent = "workflow:wf-x:fanout"
     composed = compose_hitl_action_id(parent, HITLPlacementKind.SUB_AGENT_BOUNDARY)
@@ -118,14 +136,15 @@ def test_the_raw_internal_identity_carries_the_run_id_verbatim() -> None:
     assert raw == "run-abc123:pre-dispatch-gate:0"
 
 
-def test_a_dedicated_escalation_attribute_would_be_a_third_carrier() -> None:
-    """Why C1's `hitl.escalation.instance_id` is declined.
+def test_a_dedicated_escalation_attribute_has_no_span_to_hang_on() -> None:
+    """Why C1's `hitl.escalation.instance_id` is declined — reachability, not just redundancy.
 
-    The value is already exported by two declared attributes. A third would add no
-    information, would need its own C-OD-32 / §12.2 amendment to become default-on, and
-    would give one concept a second (then third) authority — the drift shape this record
-    has already paid for. Pinned as absence: nothing named `hitl.escalation.*` exists in
-    the default-on set today, so declining costs nothing to undo later.
+    The value is already exported by the one reachable carrier, so a dedicated attribute
+    is a SECOND carrier of one value. It is also homeless: the escalation path opens no
+    `hitl.invocation.*` span at all (see the reachability test above), so the attribute
+    would need either a new span site or a C-OD-32 amendment to ride the webhook span —
+    a cleared-contract change for zero information. Pinned as absence, so declining stays
+    cheap to reverse.
     """
     assert not [a for a in DEFAULT_ON_STRUCTURE_ATTRIBUTES if a.startswith("hitl.escalation")]
     assert not [k for k in HITL_WEBHOOK_SPAN_NAMESPACE_SCHEMA if k.startswith("hitl.escalation")]
