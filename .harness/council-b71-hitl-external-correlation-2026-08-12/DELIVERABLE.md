@@ -283,9 +283,11 @@ redelivery on re-pause is shipped behaviour, not absent.
 
 **What that does and does not establish.** The cited test is a **linear, depth-0** HITL
 gate. The population this record is about is the **fan-out pre-dispatch branch**, whose
-gate fires inside the parent's dispatch of a `SUB_AGENT_DISPATCH` step. Whether the
-fan-out path re-enters the composer and re-escalates on resume is **not** shown by that
-test, and this arc has not run it either. So the honest status of the redelivery premise
+gate fires inside the parent's dispatch of a `SUB_AGENT_DISPATCH` step. For that
+population the **consuming** path IS witnessed on the real stack
+(`test_fanout_branch_gate_resume_with_resolved_answer_is_consumed` — see §4-ter.1c);
+what remains unrun is the **no-response** path: whether a fan-out branch re-escalates on
+a resume that supplies nothing. So the honest status of the redelivery premise
 is **UNVERIFIED for its own population** — and the linear behaviour is evidence against,
 not for, the "never corrects it" framing.
 
@@ -304,6 +306,45 @@ not for, the "never corrects it" framing.
 3. **The owed witness is a fan-out driver/composer round-trip.** Named as owed; it
    belongs to `B-155`'s arc, where the answer changes that row's disposition, rather
    than being bolted onto a precondition it does not gate.
+
+### 4-ter.1c Why a fresh escalation does NOT rescue the stamp — the stamp is self-fulfilling
+
+Out-of-family Codex round 16 pressed the closure directly: if the pre-dispatch branch
+re-enters the composer on a partial resume, a **freshly minted** escalation would
+describe the new sole-owner state, so the original stamp's error is transient and the
+eligibility flip alone does not justify retiring it.
+
+**The rebuttal fails, and the decisive case is already witnessed on the real fan-out
+stack.** `test_b72_fanout_sub_agent_dispatch_hitl_gate_resume.py` is exactly this
+population — a `PARALLELIZATION` fan-out branch whose step is `SUB_AGENT_DISPATCH`
+carrying its own `SUB_AGENT_BOUNDARY` gate — and it runs against the real dispatcher
+registry and the real `RuntimeHITLGateComposer` (only the Anthropic leaf client and the
+webhook transport are faked). Its core assertion,
+`test_fanout_branch_gate_resume_with_resolved_answer_is_consumed` (`:482`, asserted at
+`:576-590`): when the operator supplies the response, the branch's own gate **CONSUMES**
+it — **1 POST, no re-escalation**.
+
+Trace the two paths a stamp reader can take:
+
+- **Operator obeys the stamp** ("held for sole resolution — do not reply"): they supply
+  no response. Nothing resumes, nothing re-escalates, and no corrected stamp is ever
+  minted. The run stays parked **because** of the stamp.
+- **Operator ignores the stamp** and supplies the uniform response while sole: the gate
+  consumes it and the branch proceeds — witnessed above. No fresh escalation occurs,
+  because there is nothing left to escalate.
+
+So the corrective re-mint the rebuttal depends on exists on **neither** path. A fresh
+escalation could only follow a resume that *fails* to resolve — which requires the
+operator to have disregarded the stamp already. **A signal cannot be justified by a
+correction that only arrives when the signal is ignored.** The stamp is self-fulfilling:
+it suppresses precisely the action that would end the parking.
+
+That is why the witnessed eligibility flip is sufficient to retire it, and why
+precondition 3 closes without the fan-out *no-response* round-trip. **Scope, stated:**
+this settles the CONSUMING path for the fan-out population (witnessed). Whether a
+fan-out branch re-escalates on a resume that supplies nothing remains unrun (§4-ter.1b)
+— but that path is reachable only by an operator who already disbelieved the stamp, so
+it cannot rescue minting one.
 
 ### 4-ter.2b Can a channel-only field disarm D-2? — NO. The v1 binding is WITHDRAWN
 
