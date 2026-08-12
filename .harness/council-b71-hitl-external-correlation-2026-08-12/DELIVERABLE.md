@@ -9,7 +9,7 @@ authorizable; preconditions **1 + 2 + 3 CLOSED on executed evidence**, **4 BOUND
 
 Discharges §5 **precondition 3** — re-derive `resolvability` so it cannot assert a
 false negative. Witness:
-`harness-cp/tests/test_b71_resolvability_cannot_be_a_static_stamp.py` (4 tests,
+`harness-cp/tests/test_b71_resolvability_cannot_be_a_static_stamp.py` (5 tests,
 green, mutation-probed — making the resolver ignore `hitl_responses` turns 2 RED).
 Resolution at **§4-ter** below. **No spec text, no plan delta, no production-code
 change.** Precondition 5 remains open, so the spec leg is still not authorizable.
@@ -198,13 +198,18 @@ grounds, the second the stronger:
   widening must revisit this disposition), and `PausedWorkflowState` (`:403-435`)
   carries `workflow_id` / `created_at` / `staleness_token` / `locations` and no resume
   context. So responses staged in a `ResumeContext` cannot reach the projection.
-- *Across records — the ratified one:* `read_paused_workflow_state`
-  (`harness_runtime/api.py:925`) declares, per Runtime spec v1.110 §14.14.9.1 (the
-  RATIFIED `B-104` Reading D, Component 1), that the journal is append-only and writes
-  **no pause-resolved marker**, so a resolved pause is **byte-indistinguishable** from
-  an outstanding one. The read is explicitly *"NOT authority for the workflow is paused
-  right now, and must not be presented to an operator ... as an outstanding-pause
-  assertion."*
+- *Across records — the ratified one, **CITED not executed**:*
+  `read_paused_workflow_state` (`harness_runtime/api.py:925`) declares, per Runtime spec
+  v1.110 §14.14.9.1 (the RATIFIED `B-104` Reading D, Component 1), that the journal is
+  append-only and writes **no pause-resolved marker**, so a resolved pause is
+  **byte-indistinguishable** from an outstanding one. The read is explicitly *"NOT
+  authority for the workflow is paused right now, and must not be presented to an
+  operator ... as an outstanding-pause assertion."* **The witness does not invoke the
+  accessor or the journal** — it constructs snapshots and compares CP projections. So a
+  change that made Runtime record resolution, or filter resolved records, would leave
+  all five tests green while this ground silently expired. It is carried as a **cited
+  contract**, not an executed behaviour, and a Runtime round-trip is named as owed
+  below (out-of-family Codex).
 
 **A counter-hypothesis was raised and evaluated, not waved off.** Out-of-family Codex
 argued Fact 2 fails in production, because a partial resume journals a NEWER snapshot
@@ -273,12 +278,33 @@ produce. Three dispositions:
 only one that is true at HEAD, and it does not foreclose (a) — when the view can
 report eligibility, the note narrows rather than being rewritten.
 
-### 4-ter.4 What precondition 3 does NOT close
+### 4-ter.4 What precondition 3 does NOT close — witnessed vs cited
 
-The witness covers the **HITL** uniform-fallback resolver. The effect-fence sibling
-(`compute_effect_fence_uniform_fallback_eligible_key`) has the same sole-member shape
-and is unexamined here; it is out of B-71's scope (this row is HITL escalations) but
-is named so a later arc does not read this section as covering it.
+Same split §4-bis.5 applies to the basis decision, applied here.
+
+**Witnessed** (executed, mutation-probed — neutering the resolver's consultation of
+`hitl_responses` turns 2 of the 5 RED): the eligibility flip itself; that the
+projection's sole input is the snapshot; that a snapshot with a genuinely TERMINAL peer
+projects one gate-owning location; that the channel value is invariant across the flip.
+
+**Cited, not witnessed** — two, both named as owed on the spec leg:
+
+1. **The `B-104` liveness limit.** The witness never invokes
+   `read_paused_workflow_state` or the journal, so the "a resolved pause is
+   byte-indistinguishable from an outstanding one" ground is a **ratified contract
+   read**, not an executed behaviour. A Runtime round-trip — pause, resolve, read, and
+   assert the read still reports the resolved pause — would convert it. Until then, a
+   Runtime change that began recording resolution would silently invalidate this half
+   without reddening anything here.
+2. **Shape coverage.** The witness covers the **HITL** uniform-fallback resolver. The
+   effect-fence sibling (`compute_effect_fence_uniform_fallback_eligible_key`) has the
+   same sole-member shape and is unexamined; out of B-71's scope (this row is HITL
+   escalations), named so a later arc does not read this section as covering it.
+
+Neither weakens the precondition-3 disposition: the `held-for-sole-resolution` stamp is
+retired by the **witnessed** flip alone, and the channel-not-outcome shape follows from
+that flip. The cited half bounds only how firmly the *pause-view routing* wording can
+be stated.
 
 ---
 

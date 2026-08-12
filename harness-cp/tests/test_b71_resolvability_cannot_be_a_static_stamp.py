@@ -197,6 +197,10 @@ def test_a_later_snapshot_would_show_sole_but_is_not_a_liveness_claim() -> None:
     pre-dispatch branch projects exactly one gate-owning location.
 
     What defeats it is the accessor's own ratified contract, not the projection.
+    **That contract is CITED here, not executed** (out-of-family Codex): this module
+    never invokes `read_paused_workflow_state` or the journal, so a Runtime change that
+    began recording resolution would leave these tests green while the ground expired.
+    A Runtime round-trip is named as owed at DELIVERABLE §4-ter.4.
     `read_paused_workflow_state` (`harness_runtime/api.py:925`) declares — Runtime
     spec v1.110 §14.14.9.1, the RATIFIED `B-104` Reading D Component 1 — that the
     journal is append-only, writes NO pause-resolved marker, and so returns a record
