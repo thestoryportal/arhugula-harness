@@ -11,9 +11,23 @@ build probes).
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
-import module_path_guard as mpg
+
+def _load_guard():
+    """Load the sibling library by file path — cwd-independent, so the file
+    runs identically from the repo root (`uv run pytest tools/...`) and from
+    the CI step's `working-directory: tools` (codex r7)."""
+    path = Path(__file__).resolve().parent / "module_path_guard.py"
+    spec = importlib.util.spec_from_file_location("module_path_guard", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+mpg = _load_guard()
 
 
 def _mk(root: Path, rel: str, *, packages: bool = True) -> None:
