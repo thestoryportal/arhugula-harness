@@ -209,13 +209,22 @@ reachability:
 | `hitl.invocation.audit_ledger_entry_id` | would be `str(compose_hitl_action_id(...))` verbatim (`hitl_gate_composer.py:2238-2242`); is **DEFAULT-ON** in OD's exported structure set (C-OD-12 §12.2) | **NO** — see below |
 
 **Correction (out-of-family Codex): ONE carrier, not two.** A first draft of this section
-claimed both. The audit attribute is unreachable on this path:
-`_escalate_to_secondary_channel` is declared `NoReturn` and always raises
-`HITLPauseRequestedSignal`, while the `hitl.invocation.opened` span carrying that
-attribute is opened only on the **fall-through** to step 4f
-(`hitl_gate_composer.py:2033-2044` — the call, then the span). The timeout-secondary
-branch exits the same way before `:2238`. Witnessed by pinning the helper's `NoReturn`
-annotation, so a later change that makes it return must re-derive this analysis.
+claimed both. `_escalate_to_secondary_channel` is declared `NoReturn` and always raises
+`HITLPauseRequestedSignal`, so nothing after its call site runs — and the
+`hitl.invocation.audit_ledger_entry_id` assignment is at `:2238`, past every escalation
+exit. **The audit attribute is unreachable in BOTH escalation venues:**
+
+- **durable-async** (`:2033-2040`): the helper is called *before* the
+  `hitl.invocation.opened` span opens at `:2044`, so **no `hitl.invocation.*` span opens
+  at all** on this venue.
+- **timeout / escalate-secondary-channel** (`:2165`): this one sits *inside* step 4f, so
+  `hitl.invocation.opened` and `hitl.invocation.timed_out` **do** open — but the helper
+  still raises before `:2238`, so the attribute is still never set. (A first draft said
+  the escalation path opens no invocation span at all; that is true only of the
+  durable-async venue — corrected on out-of-family review.)
+
+Witnessed by pinning the helper's `NoReturn` annotation, so a later change that makes it
+return must re-derive this analysis.
 
 **The conclusion is unchanged, because one reachable carrier is enough.** C7's interest
 is **not adjacent — it is on the critical path**, and the observability disposition is
@@ -248,9 +257,11 @@ default-on leak path.
   carrier.
 - **It would be a second authority over one concept** — the drift shape this record has
   paid for twice (§4-bis.2's "do not mint a new vocabulary", §4-ter.2's same rule).
-- **It is homeless.** The escalation path opens **no** `hitl.invocation.*` span at all
-  (the reachability finding above), so the attribute would need either a new span site
-  or a C-OD-32 amendment to ride the webhook span.
+- **It is homeless on the durable-async venue.** That path opens **no**
+  `hitl.invocation.*` span at all, so the attribute would need a new span site or a
+  C-OD-32 amendment to ride the webhook span. (On the *timeout* venue the invocation
+  spans do open, so a home exists there — which is why this is a supporting reason,
+  scoped, and not the argument.)
 - **It is not free.** Becoming default-on requires its own C-OD-32 / §12.2 amendment —
   a cleared-contract change under X-AL-3, for zero gain.
 - **Declining is cheap to reverse.** Nothing named `hitl.escalation.*` exists in either
@@ -259,11 +270,12 @@ default-on leak path.
 
 ### 4-quater.4 What precondition 5 does NOT close
 
-**Cited, not executed:** that the audit attribute's *value* is that call, and that the
-webhook attribute is set from the threaded `idempotency_key`, are code reads at the two
-sites — this arc does not stand up an exporter and assert on emitted spans. A real
-**span-export round-trip** (emit, export, assert the attribute's value) is named as owed
-on the spec leg; it would convert the last cited link in this chain.
+**Now executed (was cited):** the span-export round-trip. The witness runs the real
+`WebhookDeliveryComposer.deliver_webhook` against an `InMemorySpanExporter` and asserts
+that the value `compose_hitl_action_id` produced is what `webhook.idempotency_key`
+carries on the exported `hitl.webhook.deliver` span. Deleting the production `_set` call
+turns it RED — the exact mutant out-of-family review used to show the earlier
+constants-only witness was insufficient.
 
 **Also owed:** if a later arc wants the token on an audit span, it must first make one
 reachable from the escalation path — the wiring does not exist today.
@@ -814,12 +826,14 @@ discharge is auditable against what was actually asked.
    (`webhook.idempotency_key` at `webhook_delivery_composer.py:58,270`;
    `hitl.invocation.audit_ledger_entry_id` at `hitl_gate_composer.py:2238-2242`).~~
    **CLOSED at v4.** The charter's premise is FALSE in effect: §3's widening lands inside
-   `compose_hitl_action_id`, whose output IS both named carriers — one of them
-   (`hitl.invocation.audit_ledger_entry_id`) **default-ON** in OD's exported structure
-   set. The leak bar therefore extends to tracing as a description of what ships, and it
-   binds the token's form: hashing must occur **before** the value enters the composer.
-   C1's dedicated attribute is **DECLINED** (a second carrier of one value, and
-   homeless — the escalation path opens no `hitl.invocation.*` span). Full derivation
+   `compose_hitl_action_id`, whose output is exported as `webhook.idempotency_key` on the
+   `hitl.webhook.deliver` span (OD-canonical, C-OD-32) — **witnessed end-to-end** through
+   the real composer against an in-memory exporter. `hitl.invocation.audit_ledger_entry_id`
+   is default-ON but is **NOT** a carrier: it is unreachable in both escalation venues.
+   The leak bar therefore extends to tracing as a description of what ships, and it binds
+   the token's form: hashing must occur **before** the value enters the composer. C1's
+   dedicated attribute is **DECLINED** — a second carrier of one value, and in the
+   durable-async venue homeless besides. Full derivation
    at §4-quater.
 
 Plus the three conditions carried from the council: **sequencing** (the resume-outcome

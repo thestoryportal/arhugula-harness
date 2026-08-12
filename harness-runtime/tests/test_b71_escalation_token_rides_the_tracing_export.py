@@ -43,9 +43,11 @@ span-export round-trip is named as owed at DELIVERABLE §4-quater.
 
 from __future__ import annotations
 
-from typing import NoReturn
+from typing import Any, NoReturn
 
+import pytest
 from harness_cp.hitl_placement import HITLPlacementKind
+from harness_cp.hitl_timeout_degradation import WebhookConfig, WebhookPayload
 from harness_cp.pause_state_projection import pre_dispatch_gate_owning_branch_identity
 from harness_od.content_structure_discipline import DEFAULT_ON_STRUCTURE_ATTRIBUTES
 from harness_od.hitl_webhook_namespace import (
@@ -55,9 +57,34 @@ from harness_od.hitl_webhook_namespace import (
 from harness_runtime.lifecycle.hitl_gate_composer import compose_hitl_action_id
 from harness_runtime.lifecycle.webhook_delivery_composer import (
     ATTR_WEBHOOK_IDEMPOTENCY_KEY,
+    WebhookDeliveryComposer,
 )
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _AUDIT_ATTR = "hitl.invocation.audit_ledger_entry_id"
+
+
+class _OkResponse:
+    status_code = 200
+    text = ""
+
+    def json(self) -> dict[str, Any]:
+        return {}
+
+
+class _OkClient:
+    """Minimal httpx.AsyncClient double — one 200, no retries needed."""
+
+    async def __aenter__(self) -> _OkClient:
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        return None
+
+    async def post(self, *_: Any, **__: Any) -> _OkResponse:
+        return _OkResponse()
 
 
 def test_the_audit_attribute_is_default_on_but_not_on_the_escalation_path() -> None:
@@ -72,6 +99,11 @@ def test_the_audit_attribute_is_default_on_but_not_on_the_escalation_path() -> N
     span that carries this attribute is opened only on the FALL-THROUGH path
     (`hitl_gate_composer.py:2033-2044` — the call, then the span). The timeout-secondary
     branch exits the same way before `:2238`.
+
+    Unreachable in BOTH venues: the durable-async call at `:2033-2040` precedes the span
+    entirely (no `hitl.invocation.*` span opens there at all), and the timeout venue at
+    `:2165` sits inside step 4f — so those spans DO open — but still raises before
+    `:2238`. Either way the attribute is never set.
 
     So for this population the token has exactly ONE tracing carrier, not two.
     """
@@ -148,3 +180,66 @@ def test_a_dedicated_escalation_attribute_has_no_span_to_hang_on() -> None:
     """
     assert not [a for a in DEFAULT_ON_STRUCTURE_ATTRIBUTES if a.startswith("hitl.escalation")]
     assert not [k for k in HITL_WEBHOOK_SPAN_NAMESPACE_SCHEMA if k.startswith("hitl.escalation")]
+
+
+# --- the export round-trip: emit, export, assert the emitted value ------------------
+#
+# Out-of-family Codex round 2 [P1] demonstrated the gap: it removed the production
+# `_set(outer_span, ATTR_WEBHOOK_IDEMPOTENCY_KEY, ...)` call and all five tests above
+# stayed green, because they only read constants and the pure composer. This test runs
+# the real `WebhookDeliveryComposer.deliver_webhook` against an `InMemorySpanExporter`
+# and asserts the value that actually leaves the process.
+
+
+@pytest.mark.asyncio
+async def test_the_composed_action_id_is_emitted_on_the_exported_span() -> None:
+    """END-TO-END for the export half: the value `compose_hitl_action_id` produces is
+    what `webhook.idempotency_key` carries on the exported `hitl.webhook.deliver` span.
+
+    This is the link §4-quater.4 recorded as CITED; it is now executed. Deleting the
+    production `_set` call turns this RED.
+    """
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    # The value the escalation would thread — composed by the real function the
+    # widening lands in (§3), so a widened token flows through this same argument.
+    idempotency_key = str(
+        compose_hitl_action_id("workflow:wf-export:fanout", HITLPlacementKind.SUB_AGENT_BOUNDARY)
+    )
+
+    composer = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        http_client_factory=lambda: _OkClient(),
+        tracer_provider=provider,
+    )
+    result = await composer.deliver_webhook(
+        WebhookConfig(
+            webhook_id="wh-b71",
+            endpoint_url="https://example.test/hook",
+            timeout=5,
+            degradation_mode="fail-closed",
+        ),
+        WebhookPayload(
+            approval_id="approve-b71",
+            idempotency_key=idempotency_key,
+            gate_evaluation_ref="entry-b71",
+            payload_body={"escalation_reason": "durable_async_cell_synchrony"},
+        ),
+        idempotency_key,
+    )
+    assert result.delivered is True
+
+    spans = exporter.get_finished_spans()
+    deliver = [s for s in spans if s.name == SPAN_SITE_HITL_WEBHOOK_DELIVER]
+    assert deliver, (
+        f"no {SPAN_SITE_HITL_WEBHOOK_DELIVER} span was exported; got {[s.name for s in spans]}"
+    )
+    emitted = deliver[0].attributes or {}
+    assert emitted.get(ATTR_WEBHOOK_IDEMPOTENCY_KEY) == idempotency_key, (
+        "the composed hitl action_id did not reach the exported span attribute — the "
+        "tracing-export leak path DELIVERABLE §4-quater rests on is not live"
+    )
+    # And it really is the composer's output that left the process, not a coincidence.
+    assert str(emitted[ATTR_WEBHOOK_IDEMPOTENCY_KEY]).startswith("hitl:")
