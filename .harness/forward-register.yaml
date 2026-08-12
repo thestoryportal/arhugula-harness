@@ -2366,11 +2366,16 @@ items:
     parent_action_id, so two peer branches sharing a child_workflow_id remain byte-identical on
     every observable field. Disposition FORK-SHAPED -- do NOT attempt a build before the convening
     co-designed with B-72 CP spec v1.108 property 6. DESIGN RECORD v2 2026-08-12 (same DELIVERABLE.md, amended): preconditions 1+2 CLOSED on executed evidence, 4 BOUNDED, 3+5 still OPEN. The witness harness-runtime/tests/test_b71_escalation_identity_basis_collision_witness.py (13 green, mutation-probed four ways) composes every candidate basis from the real production composers over the realizable collision tree (two peer workers dispatching the SAME child_workflow_id, the shape compose_child_run_id_seed''s own docstring names as live). RESULT: candidate (A) is FALSIFIED -- _parallelization_fanout_action_id takes workflow_id and nothing else, so two sibling child runs compose the identical triple and the collision propagates through the real compose_hitl_action_id into the webhook Idempotency-Key, the CP audit action_id and the F2 ledger key at once (orchestrator_action_id is run-blind the same way, so it is not PARALLELIZATION-local). The v1 ORCHESTRATOR ESCALATION is CORRECTED: verbatim inheritance of parent_idempotency_key is within-run, where branch_index still separates the peers, and nested fan-out is cross-run -- the council''s (parent_idempotency_key, branch_index, placement) triple survives uniqueness but ROTATES under an entry_version bump on the ORDINARY resume path, which is why it loses. BASIS RESOLVED = (B), the run-scoped internal identity + placement; its in-scope objection is answered by one additive StepExecutionContext field (the driver already composes this identity at workflow_driver.py:8346/:12670). Spec leg still NOT authorizable.'
-  council: 'OPEN -- needs a real convening (C1 orchestration + C9/C10 blast-radius/action-safety)
-    co-designed with B-72 property 6''s internal-identity mechanism before the next build
-    attempt. The prior "narrow field-add, no council needed" framing was wrong -- this is an
-    operator-facing/webhook-external payload carrying a NEW branch-distinct identity, not an
-    additive dict-key expansion.'
+  council: 'CONVENED + CLOSED 2026-08-12 -- the demanded convening happened (five voices;
+    C1 orchestration + C10 action-safety primaries, C9/C5/C11 consultants), reconciled to
+    internal zero, then was falsified on its load-bearing uniqueness claim by three
+    decorrelated reviewers. Design record:
+    .harness/council-b71-hitl-external-correlation-2026-08-12/DELIVERABLE.md -- identity basis
+    RESOLVED to (B) at v2 on an executed collision witness. NO further council is owed and no
+    build is blocked on one. What remains is not a convening but two named preconditions on the
+    spec leg: 3 (re-derive resolvability so it cannot assert a false negative) and 5 (carry the
+    observability disposition), plus precondition 4 BOUNDED-not-closed. Read the DELIVERABLE and
+    discharge 3 + 5; do not re-run the council.'
   heading: '### B-71 · Operator-facing HITL escalation requests carry no run-instance-distinct
     correlation identifier, making `hitl_responses` addressing impossible for peer branches
     sharing a `child_workflow_id` *(registered at the B-39 spec-leg PR #1092, out-of-family

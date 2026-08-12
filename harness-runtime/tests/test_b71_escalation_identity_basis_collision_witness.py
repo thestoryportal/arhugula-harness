@@ -285,16 +285,20 @@ def test_the_bare_ordinal_carrier_collapses_what_the_run_component_separates() -
     assert _basis_c(left_branch) != _basis_c(right_branch)
 
 
-def test_entry_version_bump_rotates_basis_c_for_a_fixed_run() -> None:
-    """**Candidate (C) is falsified on DELIVERABLE §5 precondition 4.**
+def test_entry_version_bump_rotates_basis_c_inside_the_recompute_window() -> None:
+    """**(C) rotates where (B) does not — inside the RECOMPUTE path.**
 
-    ``entry_version`` is folded into ``run_idempotency_key``
-    (`workflow_driver.py:3312-3316`), so for one and the same child run a bump
-    recomputes a different (C) token. Combined with the cited fact that the ordinary
-    resume path reuses the paused child's ``run_id`` verbatim
-    (`child_workflow_runner.py:230-234`), that means (C) rotates on *every* resumed
-    escalation after a bump — not merely inside the narrow mint→persist crash window
-    precondition 4 scopes.
+    Scope, stated precisely (out-of-family Codex round 3 [P1] corrected an earlier
+    overreach here): under the design's persist-once rule (DELIVERABLE §3) the
+    ordinary resume path reads the persisted echo and recomputes **nothing**, so on
+    that path no basis rotates. The `entry_version` question therefore only bites in
+    the *recompute* path — the mint→persist crash window — and this test is scoped to
+    it. What it shows is that **inside that window (C) rotates even when the child's
+    `run_id` has been recovered**: `entry_version` is folded into
+    ``run_idempotency_key`` (`workflow_driver.py:3312-3316`), so a bump changes (C)
+    for one and the same run. The paired (B) test shows (B) does not. That is the
+    whole of the precondition-4 discriminator between them — a narrower margin than
+    "every resumed escalation", which was wrong.
     """
     left, _ = _child_run_ids()
     assert _basis_c(_escalating_branch(left, entry_version=1)) != _basis_c(
@@ -303,14 +307,19 @@ def test_entry_version_bump_rotates_basis_c_for_a_fixed_run() -> None:
 
 
 def test_entry_version_bump_leaves_basis_b_untouched_for_a_fixed_run() -> None:
-    """**Candidate (B) has no ``entry_version`` input, so a stable run cannot rotate it.**
+    """**(B) has no ``entry_version`` input, so a recovered run cannot rotate it.**
 
-    The contrast with the test above is the content: both call sites compose branch
-    contexts that genuinely differ (their ``parent_idempotency_key`` differs, asserted
-    here), yet (B) is identical across them because its inputs are ``run_id`` and
-    ``branch_index`` alone. Given the cited resume behaviour
-    (`child_workflow_runner.py:230-234`, reuse of ``snapshot.run_id``), (B)'s token
-    survives an ``entry_version`` bump on the ordinary resume path.
+    The paired half of the test above, at the same scope: the recompute path, with the
+    child's ``run_id`` recovered. The contrast is the content — both call sites compose
+    branch contexts that genuinely differ (their ``parent_idempotency_key`` differs,
+    asserted here), yet (B) is identical across them, because its inputs are ``run_id``
+    and ``branch_index`` alone.
+
+    Note what this does and does not license. It does NOT show (B) is stable where (C)
+    is not on the ordinary resume path — persist-once means neither is recomputed
+    there. It shows that when a recompute DOES happen and the ``run_id`` is recovered,
+    (B) reproduces the original token and (C) does not, which is the difference that
+    matters in precisely the window precondition 4 names.
     """
     left, _ = _child_run_ids()
     at_v1 = _escalating_branch(left, entry_version=1)

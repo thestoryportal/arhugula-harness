@@ -170,11 +170,19 @@ this first, so the collision assertions are not vacuous).
 
 ### 4-bis.2 The evidence
 
-| Basis | Tree-wide distinct? | Stable across an `entry_version` bump, snapshot recovered | Stable with no snapshot (crash before persist) |
+Both stability columns are scoped to the **recompute** path. On the ordinary resume
+path the persisted echo is read and nothing is recomputed, so no basis rotates there
+and the columns do not apply — see the (C) paragraph below.
+
+| Basis | Tree-wide distinct? | Recompute w/ `entry_version` bump, `run_id` recovered | Recompute w/ no `run_id` to recover |
 |---|---|---|---|
-| **(A)** `(parent_action_id, branch_index, placement)` | **NO — COLLIDES** | yes | yes |
-| **(C)** `(parent_idempotency_key, branch_index, placement)` — the council's pick | yes | **NO — ROTATES** | no |
-| **(B)** run-scoped internal identity + `placement` | **yes** | **yes** | no |
+| **(A)** `(parent_action_id, branch_index, placement)` | **NO — COLLIDES** | reproduces | reproduces |
+| **(C)** `(parent_idempotency_key, branch_index, placement)` — the council's pick | yes | **NO — rotates** | no |
+| **(B)** run-scoped internal identity + `placement` | **yes** | **yes — reproduces** | no |
+
+(A)'s two "reproduces" cells are not a virtue: a basis that is constant because it
+carries no run identity at all reproduces trivially, which is the same property that
+collides.
 
 **(A) is falsified.** A PARALLELIZATION branch's `parent_action_id` is
 `_parallelization_fanout_action_id(workflow_id)` (`workflow_driver.py:8187` →
@@ -188,15 +196,25 @@ different shape than the one it predicted it on. The orchestrator-workers siblin
 the same run-blindness (`orchestrator_action_id = f"workflow:{workflow_id}:step:0"`,
 `workflow_driver.py:12137`), so the defect is not PARALLELIZATION-local.
 
-**(C) is falsified on precondition 4, not on uniqueness.** `entry_version` is folded
-into `run_idempotency_key` (`workflow_driver.py:3312-3316`), so a resume after an
-`entry_version` bump recomputes a different token — on the **ordinary** resume path,
-where the paused child's original `run_id` is reused verbatim
-(`child_workflow_runner.py:230-234`). That is not the narrow mint→persist crash
-window §5 precondition 4 scopes; it is *every resumed escalation*. Choosing (C) would
-make the unguarded-`entry_version` defect (registered separately as a follow-on)
-load-bearing for the correlation token rather than adjacent to it — the design's
-"stability across resume cycles" commitment (§3) would be false as written.
+**(C) loses to (B) on precondition 4, not on uniqueness — and by a narrower margin
+than this section first claimed.** The v2 first draft asserted (C) rotates on the
+*ordinary* resume path, i.e. on every resumed escalation. **That was wrong, and
+out-of-family Codex round 3 [P1] caught it.** Under the persist-once rule (§3) the
+ordinary path reads the persisted echo and recomputes **nothing** — so on that path
+neither basis rotates, and `entry_version` is irrelevant to both. The question only
+bites in the **recompute** path, which is the mint→persist crash window for (B) and
+(C) alike.
+
+The discriminator survives inside that window, which is where precondition 4 lives:
+`entry_version` is folded into `run_idempotency_key`
+(`workflow_driver.py:3312-3316`), so **when a recompute happens with the child's
+`run_id` recovered, (C) produces a different token and (B) reproduces the original**
+(both witnessed). Choosing (C) would therefore make the unguarded-`entry_version`
+defect (registered separately as a follow-on) load-bearing for token recovery in
+exactly the window the token most needs to be recoverable in; (B) is insensitive to
+it. Real, but a thinner margin than "every resumed escalation" — and the fork's
+resolution does not rest on it, because **(A) is falsified outright on uniqueness**,
+which is a stronger and independent ground.
 
 **(B) survives both.** Its run component is the child's `run_id`, which a resume
 reuses from the snapshot rather than re-deriving, so the token does not rotate on an
