@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 153
+  total: 159
   open: 1
   design_substrate_gated: 0
-  registered_finding: 23
+  registered_finding: 29
   operator_gated: 0
   held: 2
   closed: 127
-  identity_digest: '6e77ae2ab36de286'
+  identity_digest: '3a3452ed5cb1742d'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -2310,7 +2310,32 @@ items:
     workflow_id-scoped action_id (compose_hitl_action_id), not run_id -- two peer branches sharing
     a child_workflow_id produce byte-identical escalation requests, making B-39's hitl_responses
     run_id-keyed addressing impossible to use in that exact scenario.
-  close_out: 'DOC-ONLY GROUNDING PASS 2026-07-27 (no spec/plan change landed -- a drafted fix
+  close_out: 'DESIGN RECORD v1 LANDED 2026-08-12 (council arc; .harness/council-b71-hitl-external-correlation-2026-08-12/DELIVERABLE.md) --
+    the row''s standing instruction (ground the branch-distinct-identity design BEFORE drafting
+    spec text) is DISCHARGED, and the spec leg is NOT yet authorizable. Five voices (C1+C10
+    primaries; C9/C5/C11 consultants) reconciled to internal zero; three decorrelated reviewers
+    (in-family adversarial, transcript-aware advisor, out-of-family codex) then produced a docket
+    the council had not: (a) THREE-WAY CONVERGENT -- the reverse-thread carrier keyed by bare
+    branch_index is not tree-wide unique; (b) ORCHESTRATOR ESCALATION -- the DIGEST BASIS itself
+    has the same defect, since compose_branch_child_context inherits parent_idempotency_key AND
+    step_index verbatim (workflow_driver_types.py:586-650), so nested branch 0 and root branch 0
+    at one placement compose the SAME triple, recreating B-71''s defect inside the fix -- the
+    council''s [HIGH] uniqueness rating is WITHDRAWN and the basis is an OPEN FORK (candidate A
+    (parent_action_id, branch_index, placement) vs candidate B the hashed tree-wide internal
+    identity; each with a stated empirical question); (c) CODEX-ONLY -- a static
+    held-for-sole-resolution stamp is a LIVENESS FAILURE, because a SOLE pre-dispatch owner IS
+    answerable (workflow_driver.py:2895-2897 `if len(unaddressed) == 1: return unaddressed[0]`),
+    so the design would tell the operator not to reply to the one request whose reply resolves the
+    run; (d) the entry_version crash window is NOT closed by registering the wider defect; (e) the
+    C7 observability disposition two voices produced was dropped in reconciliation. SETTLED and
+    unchanged: the opaque one-field token, mint authority, persist-once, one-family widening at
+    compose_hitl_action_id, no-ingress-keys-on-the-webhook, the operator surface, and the 2+-
+    concurrent N-distinct shape. FIVE HARD PRECONDITIONS on the spec leg are enumerated at the
+    design record section 5 -- the first is to EXECUTE the nested-fan-out collision witness (the
+    witness file already exists at
+    harness-cp/tests/test_workflow_driver_hitl_uniform_fallback_property4.py). Row stays
+    registered_finding: the design is grounded, the basis is not yet chosen. --- Registration
+    record below --- DOC-ONLY GROUNDING PASS 2026-07-27 (no spec/plan change landed -- a drafted fix
     was reverted pre-merge). A run_id-threading fix was authored across both CP and Runtime
     axes (StepExecutionContext + HITLEscalationBrief gain run_id; webhook idempotency-key +
     payload incorporate it) and taken through 5 rounds of out-of-family just codex-review-uncommitted,
@@ -8295,3 +8320,115 @@ items:
     file; no cross-domain tension.
   pr: '#1312'
   heading: '### B-151 · standalone atexit backstop residual concurrency shapes *(surfaced by merge-gate lens 1 at PR #1307, 2026-08-11)*'
+- id: B-154
+  title: Uniform-response target selector keyed by the external correlation token
+  status: registered_finding
+  summary: 'A properly-specified CP property-6 extension letting an operator target ONE of N
+    parked pre-dispatch gate-owning branches, keyed by the B-71 external token on a NEW
+    resume-context field -- NEVER hitl_responses (v1.108 section 1.1(b) forbids keying the
+    pre-dispatch identity there, and B-71 deliberately makes the external token non-keyable).
+    Surfaced at the B-71 council: a stable external identity is exactly the handle such an
+    extension would key by, which is why B-71 registers it rather than designing it.'
+  close_out: 'Gated on the B-71 spec leg landing (the token must exist and be stable before
+    anything can target by it). Then: an observable contract change to a cleared mechanism ->
+    its own Class-2 fork + CP spec leg per X-AL-3. Do NOT widen property 1''s key shape.'
+  council: 'yes at open -- it re-opens the property-4/6 sole-membership safety invariant that
+    B-72 established, so C1 (orchestration) + C10 (action-safety) at minimum.'
+  heading: '### B-154 · Uniform-response target selector keyed by the external correlation token
+    *(registered at the B-71 council arc, 2026-08-12)*'
+- id: B-155
+  title: No webhook re-fires when a parked pre-dispatch branch becomes sole-addressable
+  status: registered_finding
+  summary: 'When N-1 peers resolve and the last pre-dispatch gate owner becomes the sole
+    unaddressed member, the uniform fallback may deliver on the next resume
+    (workflow_driver.py:2851-2898, esp. :2891-2897) -- but NO webhook re-fires to tell the
+    operator that the request they were told to wait on is now actionable. Surfaced by C11 at the
+    B-71 council (T4) and sharpened by out-of-family codex, which showed the same gap makes a
+    STATIC held-for-sole-resolution stamp a liveness failure.'
+  close_out: 'Coupled to the B-71 spec leg''s resolvability re-derivation (precondition 3): if
+    that precondition is met by routing the operator to the live pause view rather than asserting
+    non-actionability, this row stays a UX-latency item; if it is met by a live posture field,
+    this row becomes the mechanism that keeps the field honest. Re-ground both before opening.'
+  council: 'no at registration -- C9 owns the redelivery knob and C11 the operator surface; both
+    already deliberated at the B-71 arc. Convene only if a posture-transition webhook is proposed
+    (a NEW outward event class, which is C10 territory).'
+  heading: '### B-155 · No webhook re-fires when a parked pre-dispatch branch becomes
+    sole-addressable *(registered at the B-71 council arc, 2026-08-12)*'
+- id: B-156
+  title: Uniform-treatment extension of the correlation token to depth-0 root and already-dispatched-child escalations
+  status: registered_finding
+  summary: 'B-71 populates the external correlation token for fan-out branch escalations ONLY
+    (presence/absence is the population discriminator). The depth-0 root escalation and an
+    already-dispatched child''s own internal-gate escalation carry no token. Additive and
+    non-breaking under B-71''s placement-inclusive basis, but an observable population change.'
+  close_out: 'Gated on the B-71 spec leg. The negative rule B-71 makes uniform NOW -- the webhook
+    never carries ingress keys -- already holds for these populations, so this is a
+    population-widening question, not a safety question.'
+  council: 'no -- a scoped population widening under an already-adjudicated rule.'
+  heading: '### B-156 · Uniform-treatment extension of the correlation token to depth-0 root and
+    already-dispatched-child escalations *(registered at the B-71 council arc, 2026-08-12)*'
+- id: B-157
+  title: The addressing half of B-71 -- pause-view-side capability for already-dispatched children
+  status: registered_finding
+  summary: 'B-71''s original narrower half: exposing an already-dispatched child''s real run_id so
+    the operator can build a hitl_responses key. The B-71 council answered NO for the WEBHOOK
+    channel (a keyable run_id is an addressing CAPABILITY, not advisory context; putting it in
+    third-party-visible transit is a spoof/misattribution primitive). What survives is the
+    pause-view-side question: the operator-held local surface is where addressable run_ids already
+    legitimately live, so the question is whether the projection should surface them more usably.'
+  close_out: 'Re-ground against the public projection''s current field set
+    (pause_state_projection.py) before opening -- the capability may already be present and the
+    row may reduce to a usability item. The webhook answer is SETTLED NO and must not be re-opened
+    without a new fork.'
+  council: 'conditional -- only if a proposal would move a capability handle onto an outward
+    channel, which re-opens the settled C10 answer.'
+  heading: '### B-157 · The addressing half of B-71 -- pause-view-side capability for
+    already-dispatched children *(registered at the B-71 council arc, 2026-08-12)*'
+- id: B-158
+  title: entry_version is folded into every step idempotency key but is unguarded across the pause boundary
+  status: registered_finding
+  summary: 'WHAT IT IS, and it is strictly wider than B-71. run_idempotency_key folds
+    entry_version (workflow_driver.py:3312-3316 -> :646-665) and parent_idempotency_key inherits
+    it (:668-694), so EVERY step idempotency key in a run depends on the manifest entry_version.
+    But entry_version occurs ZERO times in harness-cp/src/harness_cp/pause_resume_protocol_types.py
+    (verified, 1515 lines); snapshot_hash covers only (workflow_id + run_id + step_index +
+    state_summary) at :929-930, and the resume material-diff guards cover step_id / step_kind /
+    child_workflow_id / gate-config, not entry_version. A manifest version bump across a pause
+    therefore SILENTLY ROTATES every step idempotency key on resume, with no guard firing.
+    Surfaced at the B-71 council (C9 raised the sensitivity, C1 ground it to the zero-occurrence
+    fact); out-of-family codex independently showed it leaves a B-71-specific crash window open.'
+  close_out: '(1) RE-GROUND at HEAD: re-verify the zero-occurrence claim and the snapshot_hash
+    field set. (2) DECIDE whether the correct posture is to GUARD (reject a resume whose
+    entry_version differs -- fail-closed, consistent with the other material-diff guards) or to
+    EXCLUDE entry_version from the key derivation (changes every key, a migration question), or to
+    DECLARE the rotation intentional (it may be: a manifest edit arguably SHOULD invalidate
+    idempotency). This is a real fork, not a wiring bug -- do not pick by preference. (3) Note the
+    B-71 interaction: whichever way this resolves may dissolve B-71 precondition 4 for free.'
+  council: 'conditional -- if the disposition trends toward EXCLUDE (which changes every step key
+    in every run) that is a C3 (state/ledger integrity) vs C9 (recovery semantics) tension worth a
+    dyad. GUARD or DECLARE are single-domain calls.'
+  heading: '### B-158 · entry_version is folded into every step idempotency key but is unguarded
+    across the pause boundary *(surfaced at the B-71 council arc, 2026-08-12 -- pre-existing,
+    strictly wider than B-71)*'
+- id: B-159
+  title: Typed ResumeKeyDisposition + a resume-outcome diagnostics carrier for non-honored hitl_responses keys
+  status: registered_finding
+  summary: 'Today a hitl_responses key that matches nothing addressable is SILENTLY excluded
+    (workflow_driver.py:2824-2848, :2885-2894; pause_state_projection.py:338-341) and the operator
+    observes only that the run paused again with no explanation. B-71 makes this materially worse
+    if unmitigated, because it HANDS the operator an identity they may reasonably try to key with.
+    C5 specified the shape: a typed per-key disposition (ADDRESSED / UNKNOWN_KEY /
+    NEVER_KEYABLE_INTERNAL_MATCH / CORRELATION_TOKEN_MATCH), with the last two distinct because the
+    operator errors differ (a probe/leak vs an invited mistake). C11 ranked the landing sites: the
+    resume OUTCOME (primary, mandatory), the pause projection (secondary, mandatory), a report-log
+    line (tertiary, never sufficient alone -- solo operators do not tail logs).'
+  close_out: 'NAMED COMPANION LEG of the B-71 spec leg, NOT a deferral -- the B-71 design record
+    commits to it, and C1 holds the sequencing condition: it ships WITH the B-71 spec leg, or
+    C11''s resolvability_note promise that the resume outcome reports a non-attaching response
+    must be softened in the same commit. Impl-grounded open item: the exact resume-outcome result
+    shape (marked [MEDIUM] by C11 -- not read at the council).'
+  council: 'no -- the shape was specified by C5 and the landing sites ranked by C11 at the B-71
+    arc; what remains is carrier grounding.'
+  heading: '### B-159 · Typed ResumeKeyDisposition + a resume-outcome diagnostics carrier for
+    non-honored hitl_responses keys *(registered as a named companion leg at the B-71 council arc,
+    2026-08-12)*'
