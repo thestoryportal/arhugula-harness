@@ -49,7 +49,7 @@ def _warn_unregistered_chain_providers(ctx: _MutableHarnessContext, chain: Fallb
     """B-122 — startup DIAGNOSTIC (deliberately NOT a gate): every chain
     candidate naming a provider absent from ``ctx.providers`` (fixed at stage
     3a per C-RT-05) will fail per-dispatch with
-    ``LLMDispatchProviderUnreachableError``; say so ONCE at bootstrap instead
+    ``LLMDispatchProviderUnregisteredError``; say so ONCE at bootstrap instead
     of per dispatch. A hard refusal is wrong here — skipped registration is a
     supported deployment shape (the Ollama-degraded path named by that
     exception's own docstring, ``llm_dispatch.py``), and per-dispatch
@@ -76,7 +76,7 @@ def _warn_unregistered_chain_providers(ctx: _MutableHarnessContext, chain: Fallb
         logging.getLogger("harness.runtime.fallback_chain").warning(
             "fallback-chain candidates name unregistered provider(s) %s "
             "(registered: %s) — those candidates will fail at dispatch time "
-            "with LLMDispatchProviderUnreachableError (supported deployment "
+            "with LLMDispatchProviderUnregisteredError (supported deployment "
             "shape, e.g. degraded registration; bootstrap continues)",
             unregistered,
             sorted(registered) or "none",

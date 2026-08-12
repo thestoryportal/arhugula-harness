@@ -2101,7 +2101,7 @@ async def test_bootstrap_protected_result_store_sweep_does_not_block_event_loop(
 # B-122 — fallback-chain unregistered-provider startup diagnostic (stage 3b).
 # A DIAGNOSTIC, deliberately not a gate: skipped registration is a supported
 # deployment shape (the Ollama-degraded path named by
-# LLMDispatchProviderUnreachableError's docstring), so bootstrap must
+# LLMDispatchProviderUnregisteredError's docstring), so bootstrap must
 # complete; the warning surfaces the per-dispatch failure once, at startup.
 # ---------------------------------------------------------------------------
 
@@ -2134,7 +2134,7 @@ async def test_b122_unregistered_chain_provider_warns_at_bootstrap(
     assert len(matching) == 1
     message = matching[0].getMessage()
     assert "anthropic" in message
-    assert "LLMDispatchProviderUnreachableError" in message
+    assert "LLMDispatchProviderUnregisteredError" in message
     assert "bootstrap continues" in message
 
 

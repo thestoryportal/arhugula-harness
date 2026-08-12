@@ -181,20 +181,21 @@ class LLMDispatchBindError(Exception):
     """Raised when LLM-dispatch composer stage materialization fails."""
 
 
-class LLMDispatchProviderUnreachableError(Exception):
+class LLMDispatchProviderUnregisteredError(Exception):
     """Raised when ``binding.model_binding.provider`` resolves to a
     provider absent from ``ctx.providers`` (e.g., Ollama-degraded path
     skipped registration).
 
-    Maps to ``RT-FAIL-PROVIDER-UNREACHABLE`` per
-    `Spec_Harness_Runtime_v1.md` v1.2 §C-RT-14 failure-mode taxonomy.
+    Maps to ``RT-FAIL-PROVIDER-UNREGISTERED`` per
+    `Spec_Harness_Runtime_v1.md` v1.120 §C-RT-14 failure-mode taxonomy.
     Carries the offending provider name for operator-facing attribution.
     """
 
-    def __init__(self, provider_name: str) -> None:
+    def __init__(self, provider_name: str, *, detail: str | None = None) -> None:
         self.provider_name = provider_name
         super().__init__(
-            f"RT-FAIL-PROVIDER-UNREACHABLE: provider {provider_name!r} not in ctx.providers"
+            "RT-FAIL-PROVIDER-UNREGISTERED: "
+            + (detail or f"provider {provider_name!r} not in ctx.providers")
         )
 
 
@@ -265,7 +266,7 @@ class PromptInjectionConflictError(Exception):
 
     Maps to ``RT-FAIL-PROMPT-INJECTION-CONFLICT`` per
     `Spec_Harness_Runtime_v1.md` §C-RT-15 (v1.44 amendment). Step-level (per
-    dispatch), like ``RT-FAIL-PROVIDER-UNREACHABLE``: propagates through the
+    dispatch), like ``RT-FAIL-PROVIDER-UNREGISTERED``: propagates through the
     driver ``except`` boundary at `workflow_driver.py` as a step-failure; does
     NOT abort bootstrap.
 
@@ -1235,9 +1236,9 @@ class RuntimeLLMDispatcher:
 
         Raises
         ------
-        LLMDispatchProviderUnreachableError
+        LLMDispatchProviderUnregisteredError
             ``binding.model_binding.provider`` not in ``self.providers``.
-            Maps to ``RT-FAIL-PROVIDER-UNREACHABLE`` per C-RT-14.
+            Maps to ``RT-FAIL-PROVIDER-UNREGISTERED`` per C-RT-14.
         LLMDispatchPayloadShapeError
             ``step.step_payload`` not coercible to `ProviderAgnosticPayload`.
         Exception
@@ -1553,13 +1554,13 @@ class RuntimeLLMDispatcher:
 
         Raises
         ------
-        LLMDispatchProviderUnreachableError
+        LLMDispatchProviderUnregisteredError
             ``provider_name`` not in ``self.providers``.
-            Maps to ``RT-FAIL-PROVIDER-UNREACHABLE`` per C-RT-14.
+            Maps to ``RT-FAIL-PROVIDER-UNREGISTERED`` per C-RT-14.
         """
         # --- Step 1: provider resolution --------------------------------
         if provider_name not in self.providers:
-            raise LLMDispatchProviderUnreachableError(provider_name)
+            raise LLMDispatchProviderUnregisteredError(provider_name)
 
         adapter = self.providers[provider_name]
 
@@ -1581,9 +1582,17 @@ class RuntimeLLMDispatcher:
             operation = GenAiOperation.CHAT
         if operation is None:
             # Defensive — every key in self.providers is one of the
-            # three constructed at stage 3a per C-RT-05. Surfacing any
-            # other key as UNREACHABLE preserves the C-RT-14 taxonomy.
-            raise LLMDispatchProviderUnreachableError(provider_name)
+            # three constructed at stage 3a per C-RT-05. Any other key maps
+            # to the same C-RT-14 class, but the MESSAGE must not claim the
+            # key is absent when the guard above proved it registered
+            # (out-of-family r1 at #1317).
+            raise LLMDispatchProviderUnregisteredError(
+                provider_name,
+                detail=(
+                    f"provider {provider_name!r} is registered but has no supported "
+                    "dispatch operation (not a stage-3a-constructed provider)"
+                ),
+            )
         span_name = f"{operation.value} {model}"
 
         # OTel tracer CM is synchronous (returns ``ContextManager``, not
@@ -1899,7 +1908,13 @@ class RuntimeLLMDispatcher:
                     cache_attrs = None
                     request_attrs = None
                 else:
-                    raise LLMDispatchProviderUnreachableError(provider_name)
+                    raise LLMDispatchProviderUnregisteredError(
+                        provider_name,
+                        detail=(
+                            f"provider {provider_name!r} is registered but its adapter "
+                            "matches no dispatch arm (not a stage-3a-constructed provider)"
+                        ),
+                    )
             except asyncio.CancelledError:
                 # Cancellation is not a provider fault; label it honestly. It
                 # still passes through `finally`, so the span is still emitted.
@@ -3977,7 +3992,7 @@ class _PreparedMemoryToolCall:
     the dispatch after an *earlier* (possibly write-like) call already committed
     durable memory state. That matters because the abort can be retryable —
     ``_classify_provider_exception`` (`retry_breaker_fallback.py`) maps every
-    exception other than ``LLMDispatchProviderUnreachableError`` /
+    exception other than ``LLMDispatchProviderUnregisteredError`` /
     ``LLMDispatchPayloadShapeError`` / ``MemoryToolExecutionInputError``
     (fail-fast since B-84) / ``MemoryToolExecutionInternalError`` (fail-fast
     since U-MEM-28, which re-typed the harness-internal dispatch faults off the
@@ -5461,7 +5476,7 @@ __all__ = [
     "LLMDispatchBindError",
     "LLMDispatchPayloadShapeError",
     "LLMDispatchPayloadShapeInternalError",
-    "LLMDispatchProviderUnreachableError",
+    "LLMDispatchProviderUnregisteredError",
     "PrewarmOutcome",
     "PromptInjectionConflictError",
     "RuntimeLLMDispatcher",
