@@ -155,3 +155,16 @@ def test_conftest_gate_aborts_real_session(tmp_path: Path) -> None:
     combined = proc.stdout + proc.stderr
     assert "B-117 duplicate test module path(s) detected" in combined
     assert "harness-aa/tests/test_x.py" in combined
+
+
+def test_norecursedirs_are_excluded(tmp_path: Path) -> None:
+    """Files below pytest's default norecursedirs (hidden dirs, venv, build,
+    __pycache__…) are never collected — a duplicate hiding there must NOT
+    block the session (codex r4: false-positive-only, but a blocked suite)."""
+    _mk(tmp_path, "harness-aa/tests/test_v.py")
+    _mk(tmp_path, "harness-bb/tests/.hidden/test_v.py", packages=False)
+    (tmp_path / "harness-bb/tests/__init__.py").touch()
+    (tmp_path / "harness-bb/tests/.hidden/__init__.py").touch()
+    _mk(tmp_path, "harness-bb/tests/venv/test_v.py", packages=False)
+    (tmp_path / "harness-bb/tests/venv/__init__.py").touch()
+    assert mpg.find_duplicate_test_module_paths(tmp_path) == {}

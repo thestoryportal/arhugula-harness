@@ -36,9 +36,33 @@ scope by construction (noted, not silently skipped).
 from __future__ import annotations
 
 from collections import defaultdict
+from fnmatch import fnmatch
 from pathlib import Path
 
 _TEST_FILE_PATTERNS = ("test_*.py", "*_test.py")
+
+#: pytest's default ``norecursedirs`` (no override in pyproject.toml at HEAD):
+#: files below these are never collected, so they must not trip the gate.
+_NORECURSE_PATTERNS = (
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    "{arch}",
+    "__pycache__",
+)
+
+
+def _pytest_would_recurse(member: Path, test_file: Path) -> bool:
+    return not any(
+        fnmatch(part, pat)
+        for part in test_file.relative_to(member / "tests").parts[:-1]
+        for pat in _NORECURSE_PATTERNS
+    )
 
 
 def _package_anchored_module(member: Path, test_file: Path) -> str | None:
@@ -81,7 +105,7 @@ def find_duplicate_test_module_paths(root: Path) -> dict[str, list[str]]:
         seen: set[Path] = set()
         for pattern in _TEST_FILE_PATTERNS:
             for test_file in sorted(tests_dir.rglob(pattern)):
-                if test_file in seen:
+                if test_file in seen or not _pytest_would_recurse(member, test_file):
                     continue
                 seen.add(test_file)
                 module = _package_anchored_module(member, test_file)
