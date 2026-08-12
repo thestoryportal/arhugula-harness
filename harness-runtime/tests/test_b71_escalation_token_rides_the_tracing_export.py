@@ -10,13 +10,14 @@ is not a span attribute (C7's adjacent interest is noted…)"*. **That premise i
 effect**, and this module runs the parts of that which can be run.
 
 **The mechanism, in one line:** §3 of the design puts the widening *inside*
-`compose_hitl_action_id` — and that function's output is what BOTH named tracing
-carriers already export.
+`compose_hitl_action_id` — and that function's output is what the ONE reachable tracing
+carrier already exports.
 
-- `hitl.invocation.audit_ledger_entry_id` is set to
+- `hitl.invocation.audit_ledger_entry_id` *would* be
   ``str(compose_hitl_action_id(parent_action_id, placement.position))``
-  (`hitl_gate_composer.py:2238-2242`) — and is a member of OD's **DEFAULT-ON** exported
-  structure set (`content_structure_discipline.py:81+`, C-OD-12 §12.2). Asserted below.
+  (`hitl_gate_composer.py:2238-2242`) and IS a member of OD's **DEFAULT-ON** exported
+  structure set — but it is **NOT a carrier here**: unreachable in both escalation
+  venues, since `_escalate_to_secondary_channel` raises before `:2238`. Asserted below.
 - `webhook.idempotency_key` is the same composed value threaded through
   `deliver_webhook_for_brief` onto the outer delivery span
   (`webhook_delivery_composer.py:270`), and is OD-canonical at C-OD-32
@@ -34,12 +35,19 @@ thing §3's leak bar and CP spec v1.112 §2.2 constraint 2 forbid elsewhere. The
 existing "opaque, one-way, ≥128 bits" rule is therefore **load-bearing for the tracing
 channel too**, not only the webhook.
 
-**Scope — emission, not survival.** These tests use a plain `SimpleSpanProcessor`, so
-they prove the token is *emitted* onto the exported span. In production a
-`TailKeepSpanProcessor` is bound (any `deployment_surface != LOCAL_DEVELOPMENT`) and
-`hitl.webhook.deliver` is not always-sampled, so the span survives only when a §10.2
-trigger keeps the trace — see the last test. The egress is conditional; the token's shape
-requirement is not.
+**Scope — emission, not survival; and one helper, not both dispatch venues.** These
+tests use a plain `SimpleSpanProcessor`, so they prove the token is *emitted*, not that
+the span survives the production processor chain. They also drive
+`_escalate_to_secondary_channel` **directly**, which is the shared body of both venues
+but not either `dispatch` call site — so a regression that set the audit attribute
+immediately *before* a helper call would not redden them. Both gaps are named as owed at
+DELIVERABLE §4-quater.4.
+
+On whether the egress is conditional: a draft of this module concluded it was, from the
+implementation side. The canonical contract (§C-OD-32.3) says webhook spans are head=1.0
+always-sampled, and the drift between the two is registered as `B-160` — see the last
+test. The contract governs, so the record reads the egress as **unconditional**; the
+token's shape requirement holds under either resolution.
 
 **Executed here, end to end:** the last two tests drive the real
 `_escalate_to_secondary_channel` and the real `WebhookDeliveryComposer` against an

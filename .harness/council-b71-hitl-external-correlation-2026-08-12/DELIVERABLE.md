@@ -284,10 +284,18 @@ is not B-71's to fix: it is an OD sampling-floor conformance question touching a
 contract (§C-OD-32.3) and the §9.2 member set, and resolving it either way changes an
 inviolable §9.3 floor. Registering rather than folding it in is the X-AL-3-correct move.
 
-**Scope of the witness, restated:** the round-trip tests use a plain
-`SimpleSpanProcessor` and prove **emission**, not **survival** through the production
-processor chain. Exercising `materialize_span_processor_stage` end-to-end remains owed on
-the spec leg — and it is also the experiment that would settle `B-160` empirically.
+**Scope of the witness, restated — two named limits, both owed on the spec leg:**
+
+1. **Emission, not survival.** The round-trip tests use a plain `SimpleSpanProcessor`.
+   Exercising `materialize_span_processor_stage` end-to-end remains owed — and is also
+   the experiment that would settle `B-160` empirically.
+2. **The shared helper, not both `dispatch` venues.** The tests drive
+   `_escalate_to_secondary_channel` directly. That is the body both venues share, but it
+   is neither call site — so a regression that set the audit attribute immediately
+   *before* a helper call would not redden them (out-of-family Codex round 7). Driving
+   both real `dispatch` routes and inspecting their exported spans is owed; the
+   fan-out venue already has a real-stack harness at
+   `test_b72_fanout_sub_agent_dispatch_hitl_gate_resume.py` to build on.
 
 ### 4-quater.3 C1's `hitl.escalation.instance_id` — DECLINED
 

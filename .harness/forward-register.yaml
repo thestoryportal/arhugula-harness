@@ -8464,7 +8464,12 @@ items:
   close_out: 'Not started. Decide which side is canonical and make the other conform: either
     (a) add hitl.webhook.deliver to the §9.2 member set (19 -> 20) so the implementation meets
     the §C-OD-32.3 floor -- note the §9.2 count is cited in several places and a count-contract
-    sweep is owed with it; or (b) amend §C-OD-32.3 if webhook spans are genuinely NOT intended
+    sweep is owed with it. MEMBERSHIP ALONE IS NOT SUFFICIENT (codex round 7 sibling-overlap
+    check): hitl.webhook.deliver is a CHILD span, and ParentBased(root=HarnessCompositeSampler)
+    never consults a non-root child''s name -- it inherits the parent workflow span''s drop
+    decision. B-137 already registers exactly this non-root starvation, so (a) DEPENDS ON or
+    MERGES WITH B-137; closing it standalone would claim a floor the sampler still cannot
+    deliver; or (b) amend §C-OD-32.3 if webhook spans are genuinely NOT intended
     to be always-sampled, which would be a cleared-contract change under X-AL-3 and would need
     to explain how HITL delivery stays audit-critical without a sampling floor. Grounding first:
     check whether any OTHER C-OD-3x namespace declares head=1.0 without §9.2 membership -- if so
