@@ -269,7 +269,7 @@ produce. Three dispositions:
   resolver surface to route to, so this trades a half-true promise for a fully empty
   one.
 
-**Recommended: (b) for this spec leg, with (a) folded into follow-on (4).** (b) is the
+**Recommended: (b) for this spec leg, with (a) filed to `B-155`.** (b) is the
 only one that is true at HEAD, and it does not foreclose (a) — when the view can
 report eligibility, the note narrows rather than being rewritten.
 

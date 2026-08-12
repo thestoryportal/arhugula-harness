@@ -35,6 +35,7 @@ from harness_cp.handoff_context import StateSummary
 from harness_cp.hitl_placement import HITLResult
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.pause_resume_protocol_types import (
+    FanOutBranchResumeState,
     PausedChildBranchResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
@@ -209,7 +210,6 @@ def test_a_later_snapshot_would_show_sole_but_is_not_a_liveness_claim() -> None:
         run_id="run-root",
         pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
         peer_fan_out_resume=PeerFanOutResumeState(
-            branches=(),
             branch_count=2,
             pre_dispatch_gate_owning_branches=(
                 PreDispatchGateOwningBranchResumeState(
@@ -219,7 +219,16 @@ def test_a_later_snapshot_would_show_sole_but_is_not_a_liveness_claim() -> None:
                     hitl_gate_config_hash="test-hitl-gate-config-hash",
                 ),
             ),
-            paused_child_branches=(),  # the peer resolved and is no longer paused
+            # The peer is encoded TERMINAL, not merely absent: an ordinal absent
+            # from `branches` is left RE-DISPATCHABLE (`pause_resume_protocol_types
+            # .py:592-600`), which would model "branch 1 will run again", not
+            # "branch 1 resolved" — out-of-family Codex [P2].
+            branches=(
+                FanOutBranchResumeState(
+                    branch_index=1, step_id="worker-1", terminal_status="completed"
+                ),
+            ),
+            paused_child_branches=(),
         ),
     )
     gate_owning = [
