@@ -29,6 +29,7 @@ from harness_cp.cp_namespace_export_manifest import (
 )
 from harness_cp.topology_pattern import TopologyPattern
 from harness_od.harness_breaker_schema import HARNESS_BREAKER_ATTRIBUTES
+from harness_od.namespace_map import NAMESPACE_MAP, NamespaceSourceAxis
 from harness_od.substrate_seam_exports_aggregate_manifest import (
     OD_SUBSTRATE_SEAM_EXPORTS_MANIFEST,
     ConsumerAxis,
@@ -153,6 +154,34 @@ def test_harness_breaker_attribute_count_equals_od_tuple_len() -> None:
     """OD canonical attribute count IS the length of HARNESS_BREAKER_ATTRIBUTES."""
     result = verify_harness_breaker_namespace_inversion()
     assert result.od_canonical_attribute_count == len(HARNESS_BREAKER_ATTRIBUTES)
+
+
+def test_od_cp_source_rows_match_cp_manifest_counts() -> None:
+    """Every OD CP-source `namespace_map` row count equals its CP manifest row.
+
+    The cross-package map<->manifest comparison recorded as a residual at
+    PR #1311 (ill-defined until B-153 settled the Attribute-count column
+    semantics) — CP v1.118 ratifies the column as distinct declared keys,
+    making the comparison well-defined, and hitl.* 4 -> 11 aligned the last
+    divergent pair. OD's `topology.fanout.` row ingests the C-CP-14 §14.2
+    `topology.*` set (the C-OD-05 §5.1 row-7 sub-tree naming), hence the one
+    non-identity mapping.
+    """
+    od_to_cp = {
+        "hitl.": "hitl.*",
+        "topology.fanout.": "topology.*",
+        "subagent.": "subagent.*",
+        "engine.": "engine.*",
+        "audit.": "audit.*",
+        "validator.fail.": "validator.fail.*",
+    }
+    cp_by_name = {e.namespace_name: e.attribute_count for e in CP_NAMESPACE_EXPORT_MANIFEST}
+    od_cp_rows = [r for r in NAMESPACE_MAP if r.source_axis is NamespaceSourceAxis.CP_SOURCE]
+    assert sorted(r.namespace_prefix for r in od_cp_rows) == sorted(od_to_cp)
+    for row in od_cp_rows:
+        assert row.attribute_count == cp_by_name[od_to_cp[row.namespace_prefix]], (
+            row.namespace_prefix
+        )
 
 
 def test_composer_runs_inversion_verification(tmp_path: Path) -> None:
