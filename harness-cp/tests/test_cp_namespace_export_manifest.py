@@ -6,7 +6,7 @@ Acceptance-criterion coverage:
   #3 §24.1.B 4 entries           -> test_section_24_1_b_four_entries
   #4 §24.1.C 1 entry             -> test_section_24_1_c_one_entry
   #5 per-namespace attr count    -> test_per_namespace_attribute_count_match_spec
-  #6 total 68 attributes (v1.117) -> test_total_attribute_count_sixty_eight
+  #6 total 75 attributes (v1.118) -> test_total_attribute_count_seventy_five
   #8 harness.breaker posture     -> test_harness_breaker_substrate_anchored_outside_cp
 """
 
@@ -80,7 +80,7 @@ def test_per_namespace_attribute_count_match_spec() -> None:
         "engine.*": 4,
         "topology.*": 10,
         "subagent.*": 7,
-        "hitl.*": 4,
+        "hitl.*": 11,
         "audit.*": 7,
         "validator.fail.*": 3,
         "fallback.*": 9,
@@ -93,17 +93,18 @@ def test_per_namespace_attribute_count_match_spec() -> None:
         assert _by_name(name).attribute_count == count
 
 
-def test_total_attribute_count_sixty_eight() -> None:
-    """#6 — total exported attribute count is 68 (35 + 29 + 4).
+def test_total_attribute_count_seventy_five() -> None:
+    """#6 — total exported attribute count is 75 (42 + 29 + 4).
 
     OD v1.32 (B-19-BREAKER-AMBIENT-ATTRS): harness.breaker.* grew 7 -> 9
     (+cause +cooldown_ms), 63 -> 65. CP v1.117 (B-144 venue-A re-table):
     retry.* 4 -> 6 per C-CP-03 §3.5 v1.3 and engine.* 3 -> 4 per C-CP-09
-    §9.1 v1.3 (out-of-family round-2 catch at PR #1311), 65 -> 68. §24.1.B
-    moves 25 -> 29 declared and §24.1.A 34 -> 35; the hitl.* row's 4 rides
-    unadjudicated pending the B-153 column-semantics question.
+    §9.1 v1.3, 65 -> 68. CP v1.118 (B-153 column ratification): the
+    Attribute-count column means distinct declared keys, so hitl.* moves
+    4 -> 11 per the C-CP-20 §20.6 enumeration (matching OD C-OD-05 §5.1
+    row 6), 68 -> 75; §24.1.A moves 35 -> 42.
     """
-    assert CP_EXPORTED_ATTRIBUTE_COUNT == 68
+    assert CP_EXPORTED_ATTRIBUTE_COUNT == 75
 
 
 def test_harness_breaker_substrate_anchored_outside_cp() -> None:

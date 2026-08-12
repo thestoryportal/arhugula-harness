@@ -1244,6 +1244,8 @@ harness.breaker.* (7)  OD U-OD-09 (C-OD-07 §7.1)           CP U-CP-54 §24.1.C
 
 Gate: 15/15 byte-exact match against producer + consumer landed implementations. Single attribute-name divergence triggers Class 1 fork.
 
+**Frozen 7c-era snapshot — NOT a live count authority (annotated 2026-08-11, B-153 cascade; same convention as root `CLAUDE.md` §4.1's frozen design-phase tables).** The table above records the Pattern-P1 gate as it ran at sub-phase 7c with the then-declared counts. Several parenthetical figures have since been superseded at their canonical venues and are deliberately NOT re-tabled here: `hitl.*` 4 → **11** (CP v1.118, B-153 — the 4 counted span names, not attributes), `engine.*` 3 → **4** (C-CP-09 §9.1 v1.3, carried to §24.1 at CP v1.117), `harness.breaker.*` 7 → **9** (OD C-OD-07 §7.1 at OD v1.32 — also the §10.3.2 H_T-CXA-5 row's "7-attribute byte-exact" phrase). Any re-run of this gate (e.g. the RC re-validation recipe) MUST take counts from the live C-CP-24 §24.1 head and the code manifests (`cp_namespace_export_manifest.py`, `harness_od/namespace_map.py`), never from this snapshot.
+
 #### §10.3.4 Bridging-arc verification gate
 
 40-cell verification per CXA v2.1 §4.3.3: 8 transitions × 5 axes = 40 cells. Gate: 40/40 PASS at runtime verification. Three T-perm-1 5-axis multiplicative tunable invariants:
