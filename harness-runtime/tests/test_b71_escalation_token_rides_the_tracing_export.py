@@ -34,6 +34,13 @@ thing §3's leak bar and CP spec v1.112 §2.2 constraint 2 forbid elsewhere. The
 existing "opaque, one-way, ≥128 bits" rule is therefore **load-bearing for the tracing
 channel too**, not only the webhook.
 
+**Scope — emission, not survival.** These tests use a plain `SimpleSpanProcessor`, so
+they prove the token is *emitted* onto the exported span. In production a
+`TailKeepSpanProcessor` is bound (any `deployment_surface != LOCAL_DEVELOPMENT`) and
+`hitl.webhook.deliver` is not always-sampled, so the span survives only when a §10.2
+trigger keeps the trace — see the last test. The egress is conditional; the token's shape
+requirement is not.
+
 **Executed here, end to end:** the last two tests drive the real
 `_escalate_to_secondary_channel` and the real `WebhookDeliveryComposer` against an
 `InMemorySpanExporter`, and read the emitted `webhook.idempotency_key` back off the
@@ -58,6 +65,7 @@ from harness_od.hitl_webhook_namespace import (
     HITL_WEBHOOK_SPAN_NAMESPACE_SCHEMA,
     SPAN_SITE_HITL_WEBHOOK_DELIVER,
 )
+from harness_od.sampling_mode import ALWAYS_SAMPLED_EVENT_CLASSES
 from harness_runtime.lifecycle.hitl_gate_composer import (
     HITLPauseRequestedSignal,
     RuntimeHITLGateComposer,
@@ -323,3 +331,28 @@ async def test_the_real_escalation_helper_puts_its_own_composed_id_on_the_span()
         "the escalation's own composed action_id is not what reached the exported span "
         "— the producer→exporter chain DELIVERABLE §4-quater rests on is broken"
     )
+
+
+def test_the_carrying_span_is_not_always_sampled_so_the_egress_is_conditional() -> None:
+    """The leak is REAL but CONDITIONAL — and the asymmetry is exact.
+
+    Out-of-family Codex round 5: `TailKeepSpanProcessor` is bound whenever
+    `deployment_surface != LOCAL_DEVELOPMENT` (§9.1 production tail-based sampling), and
+    `hitl.webhook.deliver` is **not** in the 19-entry `ALWAYS_SAMPLED_EVENT_CLASSES`. So
+    in production the token-carrying span survives only when the trace is kept by a
+    §10.2 trigger; the tests above use a plain `SimpleSpanProcessor` and therefore prove
+    emission, not survival.
+
+    The asymmetry is worth stating precisely, because it cuts both ways: the `hitl.*`
+    spans that ARE always-sampled (`hitl.invocation.opened` / `.timed_out`) are exactly
+    the ones that never carry the token (the attribute is unreachable), and the span that
+    does carry it is not always-sampled.
+
+    This narrows the leak's blast radius; it does **not** relax the token's shape
+    requirement. A conditionally-exported secret is still exported, and no design may
+    assume traces are dropped.
+    """
+    assert "hitl.webhook.deliver" not in ALWAYS_SAMPLED_EVENT_CLASSES
+    # ...while the invocation spans that cannot carry the token are always-sampled.
+    assert "hitl.invocation.opened" in ALWAYS_SAMPLED_EVENT_CLASSES
+    assert "hitl.invocation.timed_out" in ALWAYS_SAMPLED_EVENT_CLASSES

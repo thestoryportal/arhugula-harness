@@ -8,7 +8,7 @@ the sole remaining gate** · **Arc:** council (CP layer) per
 ## Change-note (v3 → v4)
 
 Discharges §5 **precondition 5** — the observability disposition. Witness:
-`harness-runtime/tests/test_b71_escalation_token_rides_the_tracing_export.py` (7 tests,
+`harness-runtime/tests/test_b71_escalation_token_rides_the_tracing_export.py` (8 tests,
 green, mutation-probed — dropping the audit attribute from OD's default-on set, or
 diverging the runtime emitter's constant from the OD schema, each turns one RED).
 Resolution at **§4-quater**. **No spec text, no plan delta, no production-code change.**
@@ -250,6 +250,36 @@ and the hashing must occur **before** the value enters `compose_hitl_action_id` 
 after that point it is already on the exported carrier. This is a sharpening of an
 existing rule, not a new one; what v4 adds is that violating it now has a *second*,
 default-on leak path.
+
+### 4-quater.2b The egress is CONDITIONAL — and the sampling asymmetry is exact
+
+Out-of-family Codex round 5 supplied the refinement this section needed. In production a
+`TailKeepSpanProcessor` is bound — whenever `deployment_surface != LOCAL_DEVELOPMENT`
+(§9.1 production tail-based sampling) — and **`hitl.webhook.deliver` is NOT among the
+19 `ALWAYS_SAMPLED_EVENT_CLASSES`** (witnessed). So the token-carrying span survives to
+the exporter only when a §10.2 trigger keeps the trace.
+
+The asymmetry is exact, and cuts both ways:
+
+- the `hitl.*` spans that **are** always-sampled — `hitl.invocation.opened` and
+  `hitl.invocation.timed_out` — are precisely the ones that **never carry the token**
+  (§4-quater.1's unreachability finding);
+- the span that **does** carry it is **not** always-sampled.
+
+**What this changes:** the leak's blast radius. Unconditional egress on every escalation
+would be a much stronger claim than the evidence supports; the honest statement is that
+the token reaches the exporter *when the trace is kept*, plus unconditionally at
+local-development where head-based sampling applies.
+
+**What it does not change:** the token's shape requirement. A conditionally-exported
+value is still exported, and no design may rest on the assumption that traces are
+dropped — the tail-keep policy is an operational setting, not a contract the token can
+rely on. Hashing before `compose_hitl_action_id` stands.
+
+**Scope of the witness, restated:** the round-trip tests use a plain
+`SimpleSpanProcessor` and therefore prove **emission**, not **survival** through the
+production processor chain. Exercising `materialize_span_processor_stage` end-to-end is
+named as owed on the spec leg.
 
 ### 4-quater.3 C1's `hitl.escalation.instance_id` — DECLINED
 
