@@ -35,12 +35,45 @@ from harness_runtime.lifecycle.routing_manifest import materialize_routing_manif
 from harness_runtime.types import RuntimeConfig
 
 if TYPE_CHECKING:
+    from harness_cp.cross_family_fallback_chain import FallbackChain
+
     from harness_runtime.lifecycle.engine_selector import RuntimeEngineSelector
     from harness_runtime.types import HarnessContext
 
 __all__ = ["execute"]
 
 _ENGINE_SELECTOR_WORKFLOW_ID = "bootstrap-engine-selector"
+
+
+def _warn_unregistered_chain_providers(ctx: _MutableHarnessContext, chain: FallbackChain) -> None:
+    """B-122 — startup DIAGNOSTIC (deliberately NOT a gate): every chain
+    candidate naming a provider absent from ``ctx.providers`` (fixed at stage
+    3a per C-RT-05) will fail per-dispatch with
+    ``LLMDispatchProviderUnreachableError``; say so ONCE at bootstrap instead
+    of per dispatch. A hard refusal is wrong here — skipped registration is a
+    supported deployment shape (the Ollama-degraded path named by that
+    exception's own docstring, ``llm_dispatch.py``), and per-dispatch
+    effective chains may be role-augmented beyond this stage-bound chain
+    (``retry_breaker_fallback.py`` — so a bootstrap check is inherently
+    partial coverage). Best-effort venue mirrors the stage-5 prewarm
+    precedent: ``logging.warning``, bootstrap continues.
+    """
+    registered = frozenset(ctx.providers or {})
+    candidates = [chain.primary, *chain.same_family, *chain.cross_family]
+    if chain.terminal is not None:
+        candidates.append(chain.terminal)
+    unregistered = sorted({c.provider for c in candidates} - registered)
+    if unregistered:
+        import logging
+
+        logging.getLogger("harness.runtime.fallback_chain").warning(
+            "fallback-chain candidates name unregistered provider(s) %s "
+            "(registered: %s) — those candidates will fail at dispatch time "
+            "with LLMDispatchProviderUnreachableError (supported deployment "
+            "shape, e.g. degraded registration; bootstrap continues)",
+            unregistered,
+            sorted(registered) or "none",
+        )
 
 
 async def execute(
@@ -73,6 +106,7 @@ async def execute(
     # 4. Cross-family fallback chain.
     fallback = materialize_fallback_chain_stage(config)
     ctx.fallback_chain = fallback.chain
+    _warn_unregistered_chain_providers(ctx, fallback.chain)
 
     # 5. Retry/breaker registry.
     # The concrete registries narrow the Protocol's deliberately `object`-typed
