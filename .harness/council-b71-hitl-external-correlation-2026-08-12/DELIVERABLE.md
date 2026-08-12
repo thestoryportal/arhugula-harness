@@ -247,7 +247,7 @@ C-OD-32) — internal identity across an egress boundary, precisely what CP spec
 **Disposition:** the design's existing *"opaque, deterministic, one-way, ≥128 bits, never
 truncated"* rule (§3) is **load-bearing for the tracing channel**, not only the webhook,
 and the hashing must occur **before** the value enters `compose_hitl_action_id` — because
-after that point it is already on two exported carriers. This is a sharpening of an
+after that point it is already on the exported carrier. This is a sharpening of an
 existing rule, not a new one; what v4 adds is that violating it now has a *second*,
 default-on leak path.
 
@@ -779,8 +779,8 @@ remains NOT authorizable, now on **one** count: **precondition 4 is bounded rath
 closed** — it still owes an explicit scope statement and a live-resume witness for the
 cited `snapshot.run_id` reuse. It is the sole remaining gate. Named residuals sit on top
 of it (owed, not gates): the Runtime `B-104` round-trip, the driver keyed-only re-pause
-round-trip, the mixed keyed-peer fan-out path, and the span-export round-trip
-(§4-quater.4).
+round-trip, and the mixed keyed-peer fan-out path. *(The span-export round-trip that
+appeared here at the v4 first draft is DONE — executed at §4-quater.4.)*
 Discharged preconditions are struck through; their original text is kept so each
 discharge is auditable against what was actually asked.
 

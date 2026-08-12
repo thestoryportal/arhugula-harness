@@ -34,11 +34,12 @@ thing §3's leak bar and CP spec v1.112 §2.2 constraint 2 forbid elsewhere. The
 existing "opaque, one-way, ≥128 bits" rule is therefore **load-bearing for the tracing
 channel too**, not only the webhook.
 
-**Cited, not executed here:** that the audit attribute's *value* is that call, and that
-the webhook attribute is set from the threaded `idempotency_key`, are code reads at the
-two sites above — this module does not stand up an exporter and read emitted spans. What
-it does execute is the membership and shape facts those reads depend on. A real
-span-export round-trip is named as owed at DELIVERABLE §4-quater.
+**Executed here, end to end:** the last two tests drive the real
+`_escalate_to_secondary_channel` and the real `WebhookDeliveryComposer` against an
+`InMemorySpanExporter`, and read the emitted `webhook.idempotency_key` back off the
+exported span — the producer composes the value, nothing in the test supplies it. Both
+links are individually mutation-pinned. (Earlier drafts asserted only constants and the
+pure composer; out-of-family review showed that was insufficient, twice.)
 """
 
 from __future__ import annotations
