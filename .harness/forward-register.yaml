@@ -61,11 +61,11 @@ snapshot:
   total: 153
   open: 1
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 29
   operator_gated: 0
   held: 2
-  closed: 120
-  identity_digest: 'b5fcdf7a1676862e'
+  closed: 121
+  identity_digest: 'e14bafa3cfc9aa81'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -8236,7 +8236,7 @@ items:
 - id: B-151
   title: standalone atexit backstop residual concurrency shapes -- re-arm after deferred takeover creates one
     unserialized shutdown-vs-shutdown pair; dead-probe gate overwrite under id reuse
-  status: registered_finding
+  status: closed
   summary: 'TWO NARROW RESIDUALS of the B-150 atexit half (PR #1307), surfaced by merge-gate lens 1 at that PR
     and deliberately REGISTERED rather than absorbed (the #1290/#1303 precedent; lens verdict was APPROVE with
     register-do-not-block). (1) RE-ARM AFTER DEFERRED TAKEOVER: flush timeout arms the standalone backstop ->
@@ -8266,4 +8266,5 @@ items:
     legitimate disposition if re-grounding confirms consequence-free.'
   council: No. Bounded intra-file concurrency repairs with a named owner and the lens''s own candidate fixes on
     file; no cross-domain tension.
+  pr: '#1312'
   heading: '### B-151 · standalone atexit backstop residual concurrency shapes *(surfaced by merge-gate lens 1 at PR #1307, 2026-08-11)*'
