@@ -175,8 +175,8 @@ def test_norecursedirs_are_excluded(tmp_path: Path) -> None:
     """A COLLIDING pair buried under a norecursedirs dir (fully
     package-chained, so only the exclusion saves it) must NOT block the
     session — recursive discovery never collects those files (codex r4:
-    false-positive-only, but a blocked suite). Deleting
-    `_pytest_would_recurse` flags `tests.venv.test_v` and fails this
+    false-positive-only, but a blocked suite). Deleting the name-pattern
+    pruning in `_iter_test_files` flags `tests.venv.test_v` and fails this
     (merge-gate lens-3 catch: the prior fixture had no pair the exclusion
     ever adjudicated)."""
     _mk(tmp_path, "harness-aa/tests/venv/test_v.py")
