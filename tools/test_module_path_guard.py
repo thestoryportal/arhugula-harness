@@ -172,15 +172,15 @@ def test_conftest_gate_aborts_real_session(tmp_path: Path) -> None:
 
 
 def test_norecursedirs_are_excluded(tmp_path: Path) -> None:
-    """Files below pytest's default norecursedirs (hidden dirs, venv, build,
-    __pycache__…) are never collected — a duplicate hiding there must NOT
-    block the session (codex r4: false-positive-only, but a blocked suite)."""
-    _mk(tmp_path, "harness-aa/tests/test_v.py")
-    _mk(tmp_path, "harness-bb/tests/.hidden/test_v.py", packages=False)
-    (tmp_path / "harness-bb/tests/__init__.py").touch()
-    (tmp_path / "harness-bb/tests/.hidden/__init__.py").touch()
-    _mk(tmp_path, "harness-bb/tests/venv/test_v.py", packages=False)
-    (tmp_path / "harness-bb/tests/venv/__init__.py").touch()
+    """A COLLIDING pair buried under a norecursedirs dir (fully
+    package-chained, so only the exclusion saves it) must NOT block the
+    session — recursive discovery never collects those files (codex r4:
+    false-positive-only, but a blocked suite). Deleting
+    `_pytest_would_recurse` flags `tests.venv.test_v` and fails this
+    (merge-gate lens-3 catch: the prior fixture had no pair the exclusion
+    ever adjudicated)."""
+    _mk(tmp_path, "harness-aa/tests/venv/test_v.py")
+    _mk(tmp_path, "harness-bb/tests/venv/test_v.py")
     assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
 
 
