@@ -7618,7 +7618,7 @@ items:
     validator.fail.class = terminal-fail-exit -- a retry-exit value now out-of-domain under the B-138
     disposition (a) -- and owe a cascade at the OD/D6 venue'
   status: closed
-  pr: "#pending (the B-141 cascade leg: OD spec v1.41 + ADR-D6 v1.3 + CP plan v2.52 + OD plan
+  pr: "#1318 (the B-141 cascade leg: OD spec v1.41 + ADR-D6 v1.3 + CP plan v2.52 + OD plan
     v2.35 + carrier/witness updates)"
   summary: 'WHAT IT IS. B-138 settled the wire attribute validator.fail.class on the C-CP-25->C-CP-28
     ValidatorFailClass domain (CP v1.116, operator-ratified (a), 2026-08-09). ONE DECLARED surface
@@ -7642,7 +7642,7 @@ items:
     :604/:624, the U-CP-47-era criteria) also carries the five-value wire framing -- HISTORY, not retroactively
     edited, recorded here so no future reader mistakes it for current authority. SURFACED at the
     B-138 spec-leg codex round 3 (P1), 2026-08-09.'
-  close_out: 'CLOSED 2026-08-12 (PR #pending) -- ALL THREE STEPS DISCHARGED; the operative
+  close_out: 'CLOSED 2026-08-12 (PR #1318) -- ALL THREE STEPS DISCHARGED; the operative
     record is .harness/b-141-validator-fail-class-cascade-2026-08-12.md. (1) re-grounded at HEAD
     (carrier at idempotency_join_dedup.py:347 drifted from :345; witness at
     test_idempotency_join_dedup.py:307; ADR-D6 rows :120/:298; production emission sites ZERO by
