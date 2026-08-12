@@ -2152,3 +2152,24 @@ async def test_b122_registered_chain_providers_no_warning(
         ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
     assert isinstance(ctx, HarnessContext)
     assert [r for r in caplog.records if r.name == "harness.runtime.fallback_chain"] == []
+
+
+@pytest.mark.asyncio
+async def test_b122_tool_only_bootstrap_no_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A tool-only bootstrap (requires_inference=False) intentionally runs
+    provider-free and stage 5 omits the inference dispatcher rows — the
+    chain's candidates can never dispatch, so the diagnostic must stay
+    SILENT (codex r1 at #1316: an unconditional warning is noise on every
+    valid tool-only run)."""
+    _patch_collector(monkeypatch)
+    with caplog.at_level("WARNING", logger="harness.runtime.fallback_chain"):
+        ctx = await run_bootstrap(
+            _config(tmp_path), workload_class=_WORKLOAD, requires_inference=False
+        )
+    assert isinstance(ctx, HarnessContext)
+    assert ctx.providers == {}
+    assert [r for r in caplog.records if r.name == "harness.runtime.fallback_chain"] == []

@@ -56,8 +56,15 @@ def _warn_unregistered_chain_providers(ctx: _MutableHarnessContext, chain: Fallb
     effective chains may be role-augmented beyond this stage-bound chain
     (``retry_breaker_fallback.py`` — so a bootstrap check is inherently
     partial coverage). Best-effort venue mirrors the stage-5 prewarm
-    precedent: ``logging.warning``, bootstrap continues.
+    precedent: ``logging.warning``, bootstrap continues. Skipped entirely for
+    a tool-only bootstrap (``requires_inference=False``, v1.47 §2.1):
+    providers are INTENTIONALLY absent there and stage 5 omits the inference
+    dispatcher rows, so the dispatch this warns about is unreachable — the
+    warning would be pure noise on every valid tool-only run (out-of-family
+    round-1 catch at #1316).
     """
+    if not ctx.requires_inference:
+        return
     registered = frozenset(ctx.providers or {})
     candidates = [chain.primary, *chain.same_family, *chain.cross_family]
     if chain.terminal is not None:
