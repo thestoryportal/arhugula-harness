@@ -11,7 +11,8 @@ The dedup algorithm is replay-aware: cost-per-span accrues exactly once per
 attempt for re-emitting `engine.replay_disposition` values and zero additional
 accrual for `deterministic_replay`. `dedupe_on_replay` discriminates per the CP
 `ReplayDisposition` 5-value enum; `cause_attribution_invariance_check`
-ESCALATEs to a `terminal-fail-exit` validator-fail on a replay
+ESCALATEs to a `semantic_inconsistency` validator-fail (OD spec v1.41;
+`ValidatorFailClass` wire domain per CP spec v1.116) on a replay
 cause_attribution mismatch; `per_attempt_cost_attribution_roll_up` sums
 per-attempt costs with `deterministic_replay` re-reads excluded.
 
@@ -36,6 +37,7 @@ dedup discriminator) + §1.1.2.2 (F2 ledger entry shape extension with
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from harness_cp.engine_namespace import ReplayDisposition
 from pydantic import BaseModel, ConfigDict
@@ -347,25 +349,37 @@ class InvarianceCheckResult(StrEnum):
 class ReplaySemanticDivergenceError(BaseModel):
     """The ESCALATE event emitted on a §14.5.3 cause_attribution mismatch.
 
-    Per §14.5.3 the escalation carries fixed validator-fail attributes:
-    `validator.fail.class = terminal-fail-exit`, `validator.fail.cause_attribution
-    = replay_semantic_divergence` (the new C5 catalog value added at OD spec
-    v1.3), `validator.fail.permanence = permanent`. The event is always-sampled
-    per C-OD-09 §9.2 (`validator.fail.permanence=permanent` always-sampled).
+    Per §14.5.3 (as amended at OD spec v1.41 under the B-138 disposition (a),
+    CP spec v1.116) the escalation carries fixed validator-fail attributes:
+    `validator.fail.class = semantic_inconsistency` (a `ValidatorFailClass`
+    domain member — the replay contradicts the F2 ledger's prior recorded
+    state; the C5 retry-exit ROUTING classification remains `terminal-fail-exit`
+    per ADR-D5 v1.6 §1.10, carried by routing, not by this wire attribute),
+    `validator.fail.cause_attribution = replay_semantic_divergence` (the new C5
+    catalog value added at OD spec v1.3), `validator.fail.permanence =
+    permanent`. The event is always-sampled per C-OD-09 §9.2
+    (`validator.fail.permanence=permanent` always-sampled).
     Frozen → `Eq`; a structured record, NOT a raised exception — the escalation
     is an emitted observability event, not control flow.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    #: `validator.fail.class` — fixed `terminal-fail-exit` per §14.5.3.
-    validator_fail_class: str = "terminal-fail-exit"
+    # §14.5.3 declares these attributes FIXED — Literal-pinned so an
+    # out-of-domain override is a ValidationError, not a silent wire value
+    # (codex r2 at the B-141 cascade PR).
+
+    #: `validator.fail.class` — fixed `semantic_inconsistency` per §14.5.3
+    #: (OD spec v1.41; `ValidatorFailClass` domain per CP spec v1.116).
+    validator_fail_class: Literal["semantic_inconsistency"] = "semantic_inconsistency"
     #: `validator.fail.cause_attribution` — fixed per §14.5.3.
-    validator_fail_cause_attribution: str = "replay_semantic_divergence"
+    validator_fail_cause_attribution: Literal["replay_semantic_divergence"] = (
+        "replay_semantic_divergence"
+    )
     #: `validator.fail.permanence` — fixed `permanent` per §14.5.3.
-    validator_fail_permanence: str = "permanent"
+    validator_fail_permanence: Literal["permanent"] = "permanent"
     #: always-sampled per C-OD-09 §9.2 — fixed `True`.
-    always_sampled: bool = True
+    always_sampled: Literal[True] = True
 
 
 def cause_attribution_invariance_check(

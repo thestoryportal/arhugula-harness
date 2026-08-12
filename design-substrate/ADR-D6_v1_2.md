@@ -12,6 +12,8 @@ Revision date: 2026-05-11
 Promotion: P3c-CK final clearance — 2026-05-11
 **Revision: v1.1 → v1.2 (F2-12 cascade Step 2b per `F2-12_Closure_Path_Execution_Kickoff.md` §3.2 + `F2-12_Council_Deliberation_Output.md` §8.2; sub-scopes (ii) `retry.attempt` sibling-span discipline + (iii) trace-ingestion dedup composition with F2 `idempotency_key`: §1.2 engine.* row updated to 4-attribute schema citing D1 v1.2 §1.1.1; §1.2 lifecycle event set retry.attempt entry corrected to child-per-attempt terminology; new §1.2.2 retry.* namespace declaration with 6-attribute retry-attempt span schema + 3-field parent event schema; new §1.2.3 sub-agent boundary under retry composition; §1.5 cost-attribution-per-span amended with dedup algorithm specification + new §1.5.1 replay-aware dedup with retry orthogonality + new §1.5.2 cause_attribution invariance check + new §1.5.3 per-attempt cost-attribution discipline)**
 **Revision date: 2026-05-14**
+**Revision: v1.2 → v1.3 (`B-141` disposition — §1.5.2 escalation-table `validator.fail.class` wire-value correction to the C-CP-25→C-CP-28 `ValidatorFailClass` domain member `semantic_inconsistency` per CP spec v1.116 / B-138 operator-ratified disposition (a), 2026-08-09; §1.2.2.1 `retry.fail_class` Definition clause reworded to name the retry-exit value as the C5 ROUTING classification per ADR-D5 v1.6 §1.10, distinct from the wire attribute's domain; file name retained per in-place-revision mechanics — see change-note)**
+**Revision date: 2026-08-12 (v1.3 — Phase-7 in-CLI per workspace `CLAUDE.md` §4.3; back-flow record `.harness/b-141-validator-fail-class-cascade-2026-08-12.md`)**
 
 ## Change-note (v1.1 → v1.2)
 
@@ -33,6 +35,51 @@ Workflow v1.7 §7 fidelity-grammar discipline applied across all amendment sites
 **Changes inline.** Status block (Revision: v1.1 → v1.2 + Revision date lines appended). This Change-note (v1.1 → v1.2) section. §1.2 engine.* namespace row updated from 3-attribute to 4-attribute citation; canonical source citation revised from D1 v1.1 §1.1.1 → D1 v1.2 §1.1.1. §1.2 lifecycle event set retry.attempt entry: "new sibling retry span" terminology corrected to "new child span per attempt" with forward-reference to §1.2.2 retry.* namespace declaration. New §1.2.2 sub-section inserted between §1.2.1 and §1.3 declaring the 6-attribute retry-attempt span schema + 3-field parent-span retry.attempt event schema. New §1.2.3 sub-section declaring sub-agent boundary composition under retry. §1.5 cost-attribution-per-span preamble amended with dedup-algorithm specification. New §1.5.1 sub-section declaring replay-aware dedup with retry orthogonality. New §1.5.2 sub-section declaring cause_attribution invariance check at `deterministic_replay`. New §1.5.3 sub-section declaring per-attempt cost-attribution discipline. References "Workflow and skill discipline references" extended with v1.2 entries (Workflow v1.7 §3.1, §4.1.2, §7; F2-12 cascade kickoff; F2-12 council deliberation output; ADR-D1 v1.2 substrate inheritance). Convening artifact citations extended with F2-12 cascade Step 1 council deliberation reference. Closing footer revised to note v1.2 filing.
 
 **Cross-cascade-step coordination.** ADR-D1 v1.2 (cascade Step 2a) is filed; D6 v1.2 inherits D1 v1.2 §1.1.1 (4-attribute engine.* namespace) + §1.1.2 (per-engine-class replay-emission discipline) + §1.1.2.2 (F2 state-ledger entry shape extension with `original_trace_id` + `original_span_id`) as substrate inputs without re-declaration. Substrate flow: D1 v1.2 declares attribute names + replay-emission semantics + ledger shape; D6 v1.2 declares ingestion contract + dedup algorithm + per-attempt cost-attribution. Pattern P1 prevention discipline enforced at §1.2 engine.* row Source column citation.
+
+## Change-note (v1.2 → v1.3)
+
+**Scope of revision.** Single-disposition reconciliation pass landing register row
+`B-141`'s owed cascade (surfaced at the `B-138` spec-leg out-of-family review round 3,
+2026-08-09; back-flow record `.harness/b-141-validator-fail-class-cascade-2026-08-12.md`).
+`B-138` settled the wire attribute `validator.fail.class` on the C-CP-25→C-CP-28 §25.2
+`ValidatorFailClass` domain (CP spec v1.116, operator-ratified disposition (a);
+ADR-D5 v1.6 §1.10.1 amended at the same arc). This revision carries that settlement into
+the two D6 sites that still bound the old C5 retry-exit domain to the wire name:
+
+1. **§1.5.2 escalation table** — the `validator.fail.class` row's value on a
+   cause_attribution-invariance mismatch is corrected `terminal-fail-exit` →
+   `semantic_inconsistency` (a `ValidatorFailClass` member: the replay contradicts the
+   F2 ledger's prior recorded state). The terminal/permanent + HITL-escalation intent is
+   UNCHANGED and remains carried by `validator.fail.permanence = permanent` (which the
+   always-sampled rule keys on) and the §1.5.2 escalation prose; the retry-exit value
+   `terminal-fail-exit` remains the C5 ROUTING classification of this failure per
+   ADR-D5 v1.6 §1.10 — demoted from the wire name, not deleted.
+2. **§1.2.2.1 `retry.fail_class` row** — the Definition clause "carries the
+   validator-fail event's classification if validator-fail triggered the retry" is
+   reworded: `retry.fail_class` KEEPS the five-value retry-exit domain (it is a
+   retry-site routing classification), and the clause now names its source as the C5
+   retry-exit ROUTING classification assigned per ADR-D5 v1.6 §1.10, explicitly distinct
+   from the wire attribute `validator.fail.class` (which carries the `ValidatorFailClass`
+   domain per CP spec v1.116 and is no longer domain-compatible with this row).
+
+**Sections preserved verbatim from v1.2.** Everything except the two amendment sites
+above and this file's Status block: §1.1; §1.2 (all rows incl. `validator.fail.*`);
+§1.2.1; §1.2.2 (both schemas — only the §1.2.2.1 `retry.fail_class` Definition cell
+reworded); §1.2.3; §1.3; §1.4; §1.5 + §1.5.1 + §1.5.3 (and §1.5.2's invariance check,
+prose, catalog-extension paragraph, and the `cause_attribution` / `permanence` /
+always-sampled table rows); §1.6–§1.9; §Context; §Rationale; §Consequences;
+§Alternatives considered; §References. The §1.5.2 "Cross-ADR coordination" paragraph's
+v1.2-era forward flag (ADR-D5 absorbing `replay_semantic_divergence` "at the next D5
+revision") is preserved as historical text; its non-discharge through D5 v1.6 is
+recorded at the back-flow record §4 as register row `B-139`'s family, not chased here.
+
+**Changes inline.** Status block (Revision: v1.2 → v1.3 + Revision date lines
+appended). This Change-note (v1.2 → v1.3) section. §1.5.2 escalation-table
+`validator.fail.class` row value + domain citation. §1.2.2.1 `retry.fail_class`
+Definition cell rewording. File name `ADR-D6_v1_2.md` deliberately retained
+(in-place-revision mechanics per the ADR-D5 v1.6 precedent; 14 in-repo path references
+would churn on a rename) — the Revision line above and the clearance marker
+`adr-d6-v1-3-cleared-2026-08-12.md` carry the v1.3 identity.
 
 ## Context
 
@@ -117,7 +164,7 @@ The retry-attempt child span carries six attributes plus the OTel-standard `pare
 | `retry.original_span_id` | string (16-hex; OTel W3C Trace Context format) | F2 state-ledger entry per attempt 1 | Link to the first attempt's span_id; recovered from F2 state-ledger entry filtered by `idempotency_key` |
 | `retry.delay_ms` | integer | `c9-reliability-recovery` SKILL.md (council §6.2) | Jittered delay applied before this attempt (C9 full-jitter backoff computation per `c9-reliability-recovery` SKILL §4.1.1) |
 | `retry.cause_attribution` | string (open-set enum) | `c5-validation-contract` SKILL.md s14 §7.5(a) cause_attribution catalog | Reason for retry; values from C5 cause_attribution catalog (`network_timeout`, `provider_outage`, `model_misfire`, `contract_violation`, `capability_shortfall`, etc.); medium cardinality bounded at ~15 values |
-| `retry.fail_class` | enum: `{transient-retry, Reflexion-recoverable, HITL-recoverable, permanent-fail-exit, terminal-fail-exit}` | `c5-validation-contract` SKILL.md s14 §7.5(d) | C5 5-class fail-class taxonomy classification of the failure that triggered this retry; carries the validator-fail event's classification if validator-fail triggered the retry, or derives from cause_attribution mapping if mechanical failure triggered the retry |
+| `retry.fail_class` | enum: `{transient-retry, Reflexion-recoverable, HITL-recoverable, permanent-fail-exit, terminal-fail-exit}` | `c5-validation-contract` SKILL.md s14 §7.5(d) | C5 5-class fail-class taxonomy classification of the failure that triggered this retry; carries the C5 retry-exit ROUTING classification assigned to the triggering validator-fail per ADR-D5 v1.6 §1.10 if validator-fail triggered the retry (v1.3 — distinct from the wire attribute `validator.fail.class`, which carries the `ValidatorFailClass` domain per CP spec v1.116 and is not domain-compatible with this row), or derives from cause_attribution mapping if mechanical failure triggered the retry |
 | `engine.replay_disposition` | enum (5 values per ADR-D1 v1.2 §1.1.1) | ADR-D1 v1.2 §1.1.1 | Composition with sub-scope (i); discriminates orthogonally with `retry.attempt_number` at §1.5.1 dedup; the retry-attempt span inherits the parent operation's `engine.replay_disposition` value |
 
 **Closed-mapping composition with parent.** The retry-attempt span's `parent_span_id` field (OTel-standard) links to the parent operation span. The `retry.original_span_id` is recovered from F2 state-ledger filtered by `idempotency_key`; on attempt 1, `retry.original_span_id == span_id` (self-reference); on attempts 2..N, `retry.original_span_id == attempt 1 span_id`.
@@ -295,7 +342,7 @@ if span.engine.replay_disposition == "deterministic_replay":
 
 | Field | Value on mismatch |
 |---|---|
-| `validator.fail.class` | `terminal-fail-exit` (C5 5-class taxonomy) |
+| `validator.fail.class` | `semantic_inconsistency` (v1.3 — `ValidatorFailClass` domain member per CP spec v1.116 / B-138 disposition (a); the replay contradicts the F2 ledger's prior recorded state. The C5 retry-exit ROUTING classification of this failure remains `terminal-fail-exit` per ADR-D5 v1.6 §1.10, carried by routing, not by this wire attribute) |
 | `validator.fail.cause_attribution` | `replay_semantic_divergence` (new value added to C5 cause_attribution catalog at this revision) |
 | `validator.fail.permanence` | `permanent` |
 | Always-sampled per §1.3 | Yes (validator.fail.permanence=permanent always-sampled) |
