@@ -51,8 +51,10 @@ pure composer; out-of-family review showed that was insufficient, twice.)
 
 from __future__ import annotations
 
+import pathlib
 from typing import Any, NoReturn, cast
 
+import harness_od.hitl_webhook_namespace
 import pytest
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
@@ -313,18 +315,25 @@ async def test_the_real_escalation_helper_puts_its_own_composed_id_on_the_span()
     parent_action_id = "workflow:wf-producer:fanout"
     placement = HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY)
 
-    # The helper is NoReturn — it always raises the typed pause signal.
-    with pytest.raises(HITLPauseRequestedSignal):
-        await composer._escalate_to_secondary_channel(
-            parent_action_id=cast(Any, parent_action_id),
-            step=cast(Any, _Step()),
-            placement=placement,
-            palette=frozenset({HITLResponse.APPROVE}),
-            escalation_reason="durable_async_cell_synchrony",
-            tenant_id=None,
-        )
+    # An AMBIENT RECORDING SPAN must be active, or the audit-absence assertion below is
+    # vacuous: `set_attribute` on a non-recording span is a silent no-op, so a mutation
+    # that DID attach the attribute would still export nothing. (Found by probing this
+    # test's own mutation and getting green — the failure mode this arc keeps meeting.)
+    tracer = provider.get_tracer("b71-escalation-witness")
+    with tracer.start_as_current_span("b71.ambient"):
+        # The helper is NoReturn — it always raises the typed pause signal.
+        with pytest.raises(HITLPauseRequestedSignal):
+            await composer._escalate_to_secondary_channel(
+                parent_action_id=cast(Any, parent_action_id),
+                step=cast(Any, _Step()),
+                placement=placement,
+                palette=frozenset({HITLResponse.APPROVE}),
+                escalation_reason="durable_async_cell_synchrony",
+                tenant_id=None,
+            )
 
-    deliver = [s for s in exporter.get_finished_spans() if s.name == SPAN_SITE_HITL_WEBHOOK_DELIVER]
+    finished = exporter.get_finished_spans()
+    deliver = [s for s in finished if s.name == SPAN_SITE_HITL_WEBHOOK_DELIVER]
     assert deliver, "the escalation did not reach the webhook delivery span at all"
     emitted = (deliver[0].attributes or {}).get(ATTR_WEBHOOK_IDEMPOTENCY_KEY)
     assert emitted == str(compose_hitl_action_id(parent_action_id, placement.position)), (
@@ -332,27 +341,49 @@ async def test_the_real_escalation_helper_puts_its_own_composed_id_on_the_span()
         "— the producer→exporter chain DELIVERABLE §4-quater rests on is broken"
     )
 
+    # ONE carrier, asserted by OBSERVATION rather than by the helper's annotation
+    # (out-of-family Codex round 6): no exported span from this real escalation carries
+    # the audit attribute. Moving the assignment before the escalation call, or into the
+    # still-raising helper, would redden this — which the annotation check could not.
+    carrying_audit = [s for s in finished if _AUDIT_ATTR in (s.attributes or {})]
+    assert not carrying_audit, (
+        f"{_AUDIT_ATTR} appeared on an exported span from the escalation path "
+        f"({[s.name for s in carrying_audit]}) — the exact-one-carrier conclusion in "
+        f"DELIVERABLE §4-quater.1, and the C1 disposition resting on it, must be "
+        f"re-derived"
+    )
 
-def test_the_carrying_span_is_not_always_sampled_so_the_egress_is_conditional() -> None:
-    """The leak is REAL but CONDITIONAL — and the asymmetry is exact.
 
-    Out-of-family Codex round 5: `TailKeepSpanProcessor` is bound whenever
-    `deployment_surface != LOCAL_DEVELOPMENT` (§9.1 production tail-based sampling), and
-    `hitl.webhook.deliver` is **not** in the 19-entry `ALWAYS_SAMPLED_EVENT_CLASSES`. So
-    in production the token-carrying span survives only when the trace is kept by a
-    §10.2 trigger; the tests above use a plain `SimpleSpanProcessor` and therefore prove
-    emission, not survival.
+def test_the_carrying_span_is_declared_always_sampled_but_omitted_from_the_set() -> None:
+    """A CONTRACT-vs-IMPLEMENTATION DRIFT, surfaced by this leak analysis.
 
-    The asymmetry is worth stating precisely, because it cuts both ways: the `hitl.*`
-    spans that ARE always-sampled (`hitl.invocation.opened` / `.timed_out`) are exactly
-    the ones that never carry the token (the attribute is unreachable), and the span that
-    does carry it is not always-sampled.
+    A round-5 draft of this test asserted the implementation side as if it were the
+    truth and concluded the egress is *conditional*. Out-of-family Codex round 6 caught
+    that: the canonical OD contract says the opposite.
 
-    This narrows the leak's blast radius; it does **not** relax the token's shape
-    requirement. A conditionally-exported secret is still exported, and no design may
-    assume traces are dropped.
+    - **Contract:** OD spec v1.8 §C-OD-32.3 — *"Webhook spans head=1.0 (always-sampled —
+      HITL delivery audit-critical)"* — restated verbatim in `hitl_webhook_namespace.py`.
+    - **Implementation:** `hitl.webhook.deliver` is **absent** from the 19-entry
+      `ALWAYS_SAMPLED_EVENT_CLASSES`, which §9.2 defines as exactly the head=1.0 set.
+
+    Both halves asserted below, so the drift cannot be silently resolved in either
+    direction without reddening this test.
+
+    **For the leak analysis the contract governs** (authority chain, workspace CLAUDE.md
+    §1.3): the carrying span is declared always-sampled, so the token's egress is
+    **unconditional** — the stronger reading, and the one a leak bar must assume. The
+    hashing requirement follows from that and does not depend on which side is fixed.
+
+    The drift itself is a separate defect and is registered rather than absorbed here.
     """
+    # Contract side — the canonical text, carried verbatim in the OD namespace module.
+    namespace_doc = pathlib.Path(harness_od.hitl_webhook_namespace.__file__).read_text()
+    assert "head=1.0 (always-sampled" in namespace_doc, (
+        "the C-OD-32.3 sampling declaration moved — re-ground the drift before trusting "
+        "DELIVERABLE §4-quater.2b"
+    )
+    # Implementation side — the §9.2 head=1.0 set does NOT contain it.
     assert "hitl.webhook.deliver" not in ALWAYS_SAMPLED_EVENT_CLASSES
-    # ...while the invocation spans that cannot carry the token are always-sampled.
+    # The spans that ARE in the set are precisely the ones that cannot carry the token.
     assert "hitl.invocation.opened" in ALWAYS_SAMPLED_EVENT_CLASSES
     assert "hitl.invocation.timed_out" in ALWAYS_SAMPLED_EVENT_CLASSES

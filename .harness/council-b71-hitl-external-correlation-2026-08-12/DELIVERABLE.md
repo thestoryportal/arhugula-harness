@@ -251,35 +251,43 @@ after that point it is already on the exported carrier. This is a sharpening of 
 existing rule, not a new one; what v4 adds is that violating it now has a *second*,
 default-on leak path.
 
-### 4-quater.2b The egress is CONDITIONAL — and the sampling asymmetry is exact
+### 4-quater.2b Is the egress conditional? — a CONTRACT-vs-IMPLEMENTATION DRIFT (new `B-160`)
 
-Out-of-family Codex round 5 supplied the refinement this section needed. In production a
-`TailKeepSpanProcessor` is bound — whenever `deployment_surface != LOCAL_DEVELOPMENT`
-(§9.1 production tail-based sampling) — and **`hitl.webhook.deliver` is NOT among the
-19 `ALWAYS_SAMPLED_EVENT_CLASSES`** (witnessed). So the token-carrying span survives to
-the exporter only when a §10.2 trigger keeps the trace.
+This section reversed once and the reversal is instructive, so both readings are kept.
 
-The asymmetry is exact, and cuts both ways:
+**Round-5 reading (WRONG as stated).** `TailKeepSpanProcessor` binds whenever
+`deployment_surface != LOCAL_DEVELOPMENT`, and `hitl.webhook.deliver` is absent from the
+19-entry `ALWAYS_SAMPLED_EVENT_CLASSES` — so, it concluded, the token-carrying span
+survives only when a §10.2 trigger keeps the trace, and the egress is *conditional*.
 
-- the `hitl.*` spans that **are** always-sampled — `hitl.invocation.opened` and
-  `hitl.invocation.timed_out` — are precisely the ones that **never carry the token**
-  (§4-quater.1's unreachability finding);
-- the span that **does** carry it is **not** always-sampled.
+**Round-6 correction.** That derived a design conclusion from the **implementation** and
+against the **canonical contract**. OD spec v1.8 **§C-OD-32.3** states plainly: *"Webhook
+spans head=1.0 (always-sampled — HITL delivery audit-critical)."* The same sentence is
+carried verbatim in `hitl_webhook_namespace.py`. And §9.2 defines
+`ALWAYS_SAMPLED_EVENT_CLASSES` as exactly the head=1.0 set. **The contract says the
+carrying span is always-sampled; the head=1.0 set omits it.** Both halves are now
+asserted by the witness, so the drift cannot be silently closed in either direction.
 
-**What this changes:** the leak's blast radius. Unconditional egress on every escalation
-would be a much stronger claim than the evidence supports; the honest statement is that
-the token reaches the exporter *when the trace is kept*, plus unconditionally at
-local-development where head-based sampling applies.
+**For this record, the contract governs** (authority chain, workspace `CLAUDE.md` §1.3):
+the carrying span is **declared always-sampled**, so the token's tracing egress is
+**UNCONDITIONAL** — the stronger reading, and the one a leak bar must assume. The hashing
+requirement follows from that and is unaffected by which side of the drift is eventually
+fixed.
 
-**What it does not change:** the token's shape requirement. A conditionally-exported
-value is still exported, and no design may rest on the assumption that traces are
-dropped — the tail-keep policy is an operational setting, not a contract the token can
-rely on. Hashing before `compose_hitl_action_id` stands.
+**The asymmetry that survives either resolution** is still worth recording: the `hitl.*`
+spans that *are* in the head=1.0 set — `hitl.invocation.opened` / `.timed_out` — are
+precisely the ones that **never carry the token** (§4-quater.1), and the span that does
+carry it is the one missing from that set.
+
+**The drift is a defect in its own right and is REGISTERED, not absorbed** — `B-160`. It
+is not B-71's to fix: it is an OD sampling-floor conformance question touching a cleared
+contract (§C-OD-32.3) and the §9.2 member set, and resolving it either way changes an
+inviolable §9.3 floor. Registering rather than folding it in is the X-AL-3-correct move.
 
 **Scope of the witness, restated:** the round-trip tests use a plain
-`SimpleSpanProcessor` and therefore prove **emission**, not **survival** through the
-production processor chain. Exercising `materialize_span_processor_stage` end-to-end is
-named as owed on the spec leg.
+`SimpleSpanProcessor` and prove **emission**, not **survival** through the production
+processor chain. Exercising `materialize_span_processor_stage` end-to-end remains owed on
+the spec leg — and it is also the experiment that would settle `B-160` empirically.
 
 ### 4-quater.3 C1's `hitl.escalation.instance_id` — DECLINED
 
