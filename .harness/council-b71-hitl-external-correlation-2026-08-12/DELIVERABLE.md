@@ -9,7 +9,7 @@ authorizable; preconditions **1 + 2 + 3 CLOSED on executed evidence**, **4 BOUND
 
 Discharges §5 **precondition 3** — re-derive `resolvability` so it cannot assert a
 false negative. Witness:
-`harness-cp/tests/test_b71_resolvability_cannot_be_a_static_stamp.py` (5 tests,
+`harness-cp/tests/test_b71_resolvability_cannot_be_a_static_stamp.py` (6 tests,
 green, mutation-probed — making the resolver ignore `hitl_responses` turns 2 RED).
 Resolution at **§4-ter** below. **No spec text, no plan delta, no production-code
 change.** Precondition 5 remains open, so the spec leg is still not authorizable.
@@ -180,7 +180,16 @@ varies only the `ResumeContext`: with its peer unanswered there are two unaddres
 gate-owners and nobody is eligible; **answer the peer and the same branch becomes the
 sole unaddressed owner and IS resolvable** by the uniform fallback
 (`workflow_driver.py:2895-2897`). A stamp minted at escalation time — before any
-answer exists — would have had to guess which of these is true. **This retires the
+answer exists — would have had to guess which of these is true.
+
+**The claim is ELIGIBILITY, not delivery** (narrowed on out-of-family review, and the
+narrowing strengthens it). The resolver NOMINATES the target; the driver then builds
+`HITLDeliveryCell(resume_context.hitl_response)` (`workflow_driver.py:8350`, `:12674`),
+so a context carrying only `hitl_responses` and no uniform response delivers `None` and
+the branch re-pauses. That is a **second** input unknowable at escalation time, not a
+hole in the argument: a mint-time stamp would have to predict both which peers get
+answered *and* whether the operator supplies a uniform response. Both are witnessed to
+vary independently of anything the minter can see. **This retires the
 `held-for-sole-resolution` stamp on evidence, not on argument:** it is a false
 negative in exactly the situation the operator most needs the truth, and, as v1 noted,
 posture-change redelivery is a registered follow-on that would never correct it.
@@ -285,7 +294,8 @@ report eligibility, the note narrows rather than being rewritten.
 Same split §4-bis.5 applies to the basis decision, applied here.
 
 **Witnessed** (executed, mutation-probed — neutering the resolver's consultation of
-`hitl_responses` turns 2 of the 5 RED): the eligibility flip itself; that the
+`hitl_responses` turns 2 of the 6 RED): the eligibility flip itself (ELIGIBILITY, not
+delivery — see above); that the
 projection's sole input is the snapshot; that a snapshot with a genuinely TERMINAL peer
 projects one gate-owning location; that the channel value is invariant across the flip.
 

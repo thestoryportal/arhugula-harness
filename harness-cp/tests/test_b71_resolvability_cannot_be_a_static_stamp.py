@@ -124,6 +124,15 @@ def _mixed_tree() -> PauseSnapshot:
     )
 
 
+def _result() -> HITLResult:
+    return HITLResult(
+        response=HITLResponse.APPROVE,
+        timestamp="2026-08-12T00:00:00Z",
+        audit_ledger_entry_id=EntryID("entry-b71-precondition-3"),
+        response_summary_hash="a" * 64,
+    )
+
+
 def _answered(*run_ids: str) -> ResumeContext:
     result = HITLResult(
         response=HITLResponse.APPROVE,
@@ -154,9 +163,37 @@ def test_the_same_branch_flips_from_not_resolvable_to_resolvable() -> None:
     )
     assert peer_answered == pre_dispatch_identity, (
         "with its only peer addressed, the pre-dispatch branch IS the sole unaddressed "
-        "gate-owner and the uniform fallback resolves it — a static "
+        "gate-owner and is NOMINATED as the uniform fallback's target — a static "
         "'held-for-sole-resolution' stamp would be a FALSE NEGATIVE here"
     )
+
+
+def test_delivery_needs_a_uniform_response_too_which_is_also_unknowable_at_mint() -> None:
+    """The claim is ELIGIBILITY, not delivery — and the gap makes the case stronger.
+
+    Out-of-family Codex [P2] was right that an earlier draft overstated this:
+    `compute_hitl_uniform_fallback_eligible_run_id` NOMINATES the target, but the
+    driver then builds `HITLDeliveryCell(resume_context.hitl_response)`
+    (`workflow_driver.py:8350`, `:12674`), so a context carrying only `hitl_responses`
+    and no uniform `hitl_response` delivers `None` and the branch re-pauses.
+
+    That is a SECOND input unknowable at escalation time, not a hole in the argument:
+    a mint-time stamp would have to predict both which peers get answered AND whether
+    the operator supplies a uniform response. Both are witnessed here to vary
+    independently of anything the minter can see.
+    """
+    tree = _mixed_tree()
+    identity = _pre_dispatch_gate_owning_branch_identity("run-root", 0)
+
+    keyed_only = _answered(_ADDRESSABLE_CHILD_RUN_ID)
+    assert keyed_only.hitl_response is None, (
+        "nominated but not deliverable — this context resolves nothing"
+    )
+    assert compute_hitl_uniform_fallback_eligible_run_id(tree, keyed_only) == identity
+
+    with_uniform = ResumeContext(hitl_responses=keyed_only.hitl_responses, hitl_response=_result())
+    assert with_uniform.hitl_response is not None
+    assert compute_hitl_uniform_fallback_eligible_run_id(tree, with_uniform) == identity
 
 
 def test_eligibility_varies_on_an_input_the_projection_has_no_parameter_for() -> None:
