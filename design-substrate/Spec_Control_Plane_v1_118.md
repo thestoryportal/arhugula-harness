@@ -56,6 +56,19 @@ Consequences, stated so each is a decision:
 4. **Parent-span reads are not row exports.** Identities §20.6 reads from canonical
    parent-span attributes (`gen_ai.tool.name`, `mcp.server.name`) belong to their own
    namespaces and never count toward `hitl.*`.
+5. **Declared-elsewhere wire keys are not row exports (the B-126 discipline,
+   unchanged).** A key declared at ANOTHER contract venue that lands in the namespace
+   on the wire is NOT counted by this column — the column is the ROW'S SOURCE
+   CONTRACT's declaration (`hitl.*` → C-CP-20 §20.6), not a wire-cardinality
+   guarantee. Two live cases, stated so neither is an omission: the `retry.*` wire
+   keys (10 distinct on the wire vs 6 declared — the register row `B-126` case the
+   manifest docstring records) and the CP v1.53 §4 `SUB_AGENT_BOUNDARY`-removal
+   observability pair (`hitl.gate.sub_agent_boundary_removal_requested` /
+   `_effective`, declared at the v1.53 delta against C-CP-06/§14.8.2 semantics and
+   emitted on the gate span) — the wire therefore carries 13 distinct `hitl.*` keys
+   while the §20.6-declared set is 11. Folding such keys into a row requires amending
+   the row's source contract's own declaration (a §20.6 delta), not this column; no
+   such amendment is made or owed here.
 
 ### §0.3 The `hitl.*` cell, enumerated from C-CP-20 §20.6
 
@@ -68,7 +81,10 @@ The four span names declare, per the §20.6 table (`Spec_Control_Plane_v1_2.md:1
 | `hitl.invocation.responded` | `hitl.response.class`, `hitl.response.latency_ms`, `hitl.response.summary_hash` | 3 |
 | `hitl.invocation.timed_out` | `hitl.timeout.duration_ms`, `hitl.timeout.degradation_mode_applied` | 2 |
 
-**11 distinct keys across 4 span names.** The §24.1.A `hitl.*` `Attribute count` cell
+**11 distinct keys across 4 span names.** (The wire additionally carries the two
+v1.53 removal-observability keys per §0.2 consequence 5 — declared at their own
+venue, deliberately outside this row's §20.6 count, exactly as OD's standing 11
+already treats them.) The §24.1.A `hitl.*` `Attribute count` cell
 becomes `11 attributes across 4 span names (C-CP-20 §20.6 distinct declared keys)`;
 every other cell of the row — source contract, always-sampled discipline, D6 ingest
 row — is preserved verbatim. This RECONCILES the row with the standing OD commitment:

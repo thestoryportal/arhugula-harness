@@ -108,7 +108,10 @@ CP_NAMESPACE_EXPORT_MANIFEST: tuple[NamespaceExport, ...] = (
         # ratified at CP v1.118 (B-153) — matching OD C-OD-05 §5.1 row 6 and
         # harness_od/namespace_map.py. The prior 4 counted SPAN NAMES as
         # attributes (the span-names-as-attributes reading v1.117 §0.5
-        # explicitly declined to ratify).
+        # explicitly declined to ratify). The wire also carries the two CP
+        # v1.53 removal-observability keys (declared at their own venue, not
+        # §20.6) — outside this count per the B-126 declared-vs-wire
+        # discipline and CP v1.118 §0.2 consequence 5.
         namespace_name="hitl.*",
         attribute_count=11,
         source_unit=UnitId("U-CP-46"),
