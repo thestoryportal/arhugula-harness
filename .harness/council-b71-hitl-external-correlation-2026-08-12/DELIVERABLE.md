@@ -11,10 +11,13 @@ Discharges §5 **precondition 1** (execute the nested-fan-out collision witness)
 **precondition 2** (resolve the basis fork on that evidence, not on argument), and
 bounds **precondition 4**. The witness is
 `harness-runtime/tests/test_b71_escalation_identity_basis_collision_witness.py`
-(8 tests, green; mutation-probed — neutering
-`pre_dispatch_gate_owning_branch_identity` turns 3 of them RED). It composes every
-candidate basis from the **real production composers** and runs them over the
-realizable collision tree. §4 is rewritten from OPEN FORK to RESOLVED; §5's
+(13 tests, green). It composes every candidate basis from the **real production
+composers** and runs them over the realizable collision tree. Mutation-probed four
+ways, one per load-bearing dimension — folding a run-distinct component into
+`compose_branch_child_context` turns the (A) collision test RED; neutering
+`pre_dispatch_gate_owning_branch_identity` turns 3 of the (B) tests RED; making that
+identity ignore `branch_index` turns the same-run peer test RED; dropping `placement`
+from the (B) basis turns the two-placement test RED. §4 is rewritten from OPEN FORK to RESOLVED; §5's
 precondition list is re-stated with per-precondition status. **No spec text, no plan
 delta, no production-code change** — v2, like v1, is documentary plus its witness.
 
@@ -312,7 +315,7 @@ so the discharge is auditable against what was asked.
    the witness file exists and the shape is already covered for the internal identity.~~
    **CLOSED at v2** — executed at
    `harness-runtime/tests/test_b71_escalation_identity_basis_collision_witness.py`
-   (8 green, mutation-probed). Note the correction: the pre-existing file Codex named
+   (13 green, mutation-probed four ways). Note the correction: the pre-existing file Codex named
    (`harness-cp/tests/test_workflow_driver_hitl_uniform_fallback_property4.py:327`)
    witnesses the *internal* identity's tree-distinctness, which was already settled;
    it does **not** exercise any candidate EXTERNAL basis. The new module is the

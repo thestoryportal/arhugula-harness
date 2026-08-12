@@ -158,16 +158,20 @@ def _basis_a(branch: StepExecutionContext) -> str:
     return f"{branch.parent_action_id}|{branch.branch_index}|{_PLACEMENT.value}"
 
 
-def _basis_c(branch: StepExecutionContext) -> str:
+def _basis_c(branch: StepExecutionContext, placement: HITLPlacementKind = _PLACEMENT) -> str:
     """The council's original pick — ``(parent_idempotency_key, branch_index, placement)``.
 
     DELIVERABLE §4 records the council selecting this triple and the orchestrator then
     WITHDRAWING its [HIGH] tree-wide-uniqueness rating.
     """
-    return f"{branch.parent_idempotency_key}|{branch.branch_index}|{_PLACEMENT.value}"
+    return f"{branch.parent_idempotency_key}|{branch.branch_index}|{placement.value}"
 
 
-def _basis_b(child_run_id: str, branch: StepExecutionContext) -> str:
+def _basis_b(
+    child_run_id: str,
+    branch: StepExecutionContext,
+    placement: HITLPlacementKind = _PLACEMENT,
+) -> str:
     """Candidate (B) — the tree-wide internal identity, with ``placement`` added.
 
     ``pre_dispatch_gate_owning_branch_identity`` (`pause_state_projection.py:500`) is
@@ -176,7 +180,7 @@ def _basis_b(child_run_id: str, branch: StepExecutionContext) -> str:
     objections that defeated (B) at the council cross-read.
     """
     identity = pre_dispatch_gate_owning_branch_identity(child_run_id, branch.branch_index or 0)
-    return f"{identity}|{_PLACEMENT.value}"
+    return f"{identity}|{placement.value}"
 
 
 # --- the witness -------------------------------------------------------------------
@@ -330,4 +334,59 @@ def test_crash_before_persist_is_the_only_window_that_rotates_basis_b() -> None:
     assert left_v1 != left_v2
     assert _basis_b(left_v1, _escalating_branch(left_v1, entry_version=1)) != _basis_b(
         left_v2, _escalating_branch(left_v2, entry_version=2)
+    )
+
+
+# --- dimension isolation: each component of (B) must do work on its own -------------
+#
+# Out-of-family Codex round 2 [P2]: every inequality above varies the RUN component
+# while holding branch_index and placement fixed, so the suite proved only that one
+# dimension. Basis (B) is a TRIPLE — `(run identity, branch_index, placement)` — and a
+# triple whose other two members are never independently exercised is a triple only on
+# paper. The two cases below close that: dropping `branch_index` from the identity
+# composer, or dropping `placement` from `_basis_b`, each turns one of them RED.
+
+
+def test_basis_b_separates_peer_branches_within_one_run() -> None:
+    """The ORIGINAL B-71 shape — two peers of ONE fan-out, not two child runs.
+
+    This is the collision the row was registered for: two peer branches of a single
+    fan-out whose escalations are byte-identical on every observable field. The
+    cross-run cases above cannot witness it, because they vary the run. Here the run
+    is held FIXED and only the ordinal moves.
+    """
+    child_run, _ = _child_run_ids()
+    peer_0 = _escalating_branch(child_run, branch_index=0)
+    peer_1 = _escalating_branch(child_run, branch_index=1)
+    assert peer_0.branch_index != peer_1.branch_index
+    assert _basis_b(child_run, peer_0) != _basis_b(child_run, peer_1)
+
+
+def test_basis_b_separates_two_placements_of_one_branch() -> None:
+    """The third component: one run, one ordinal, two placements.
+
+    `HITLPlacementKind` is a closed 3-value enum (C-CP-17 §17.1) and one step can gate
+    at more than one of them, so two escalations can differ in placement alone. Without
+    this case `placement`'s presence in the basis is unwitnessed — which is exactly how
+    it went missing from candidate (B) at the council cross-read in the first place.
+    """
+    child_run, _ = _child_run_ids()
+    branch = _escalating_branch(child_run, branch_index=0)
+    assert _basis_b(child_run, branch, HITLPlacementKind.SUB_AGENT_BOUNDARY) != _basis_b(
+        child_run, branch, HITLPlacementKind.PRE_ACTION
+    )
+
+
+def test_basis_c_also_separates_on_placement() -> None:
+    """The same third-component check for the runner-up, so the §4-bis table's
+    verdict on (C) rests on the same evidence standard as its verdict on (B).
+
+    ((C)'s `branch_index` dimension is already witnessed by
+    ``test_verbatim_inheritance_is_within_run_and_does_not_itself_collide``, which
+    holds the run fixed and varies only the ordinal.)
+    """
+    child_run, _ = _child_run_ids()
+    branch = _escalating_branch(child_run, branch_index=0)
+    assert _basis_c(branch, HITLPlacementKind.SUB_AGENT_BOUNDARY) != _basis_c(
+        branch, HITLPlacementKind.PRE_ACTION
     )
