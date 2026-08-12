@@ -3,8 +3,9 @@
 ACs per Phase 2 Session 7 L7 §12.6 (OD → CP — 3 edges per C-RT-12 §12.6):
 
 Edge 1 (U-OD-09 → U-CP-54): `verify_harness_breaker_namespace_inversion`
-confirms CP's `harness.breaker.*` export advertises 7 attributes matching
-OD's canonical `HARNESS_BREAKER_ATTRIBUTES` tuple (C-OD-07 §7.1). F-CP-01
+confirms CP's `harness.breaker.*` export advertises 9 attributes matching
+OD's canonical `HARNESS_BREAKER_ATTRIBUTES` tuple (C-OD-07 §7.1 as amended
+at OD v1.32, B-19-BREAKER-AMBIENT-ATTRS). F-CP-01
 Stage 3b inversion contract.
 
 Edges 2 + 3 (U-OD-34 → U-CP-54 / U-CP-55): `resolve_od_cp_manifest_references`
