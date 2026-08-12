@@ -123,3 +123,35 @@ def test_report_names_every_file() -> None:
     assert "harness-aa/tests/test_x.py" in report
     assert "harness-bb/tests/test_x.py" in report
     assert "SILENTLY DROP" in report
+
+
+def test_conftest_gate_aborts_real_session(tmp_path: Path) -> None:
+    """REAL-ENTRY-POINT witness for the conftest half: a synthetic workspace
+    with two colliding members, the real conftest.py and the real guard
+    library — an actual pytest subprocess must ABORT with the guard report
+    (deleting the sessionstart hook or mis-rooting the scan fails this;
+    the library-level witnesses alone cannot see either mutation)."""
+    import shutil
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).resolve().parent.parent
+    (tmp_path / "tools").mkdir()
+    shutil.copy(repo_root / "conftest.py", tmp_path / "conftest.py")
+    shutil.copy(
+        repo_root / "tools" / "module_path_guard.py",
+        tmp_path / "tools" / "module_path_guard.py",
+    )
+    _mk(tmp_path, "harness-aa/tests/test_x.py")
+    _mk(tmp_path, "harness-bb/tests/test_x.py")
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", str(tmp_path), "-q", "-p", "no:cacheprovider"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode != 0
+    combined = proc.stdout + proc.stderr
+    assert "B-117 duplicate test module path(s) detected" in combined
+    assert "harness-aa/tests/test_x.py" in combined
