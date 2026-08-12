@@ -194,7 +194,7 @@ class LLMDispatchProviderUnregisteredError(Exception):
     def __init__(self, provider_name: str, *, detail: str | None = None) -> None:
         self.provider_name = provider_name
         super().__init__(
-            f"RT-FAIL-PROVIDER-UNREGISTERED: "
+            "RT-FAIL-PROVIDER-UNREGISTERED: "
             + (detail or f"provider {provider_name!r} not in ctx.providers")
         )
 
