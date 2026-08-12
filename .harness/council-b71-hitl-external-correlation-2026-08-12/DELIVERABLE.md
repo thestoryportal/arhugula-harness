@@ -8,7 +8,7 @@ the sole remaining gate** · **Arc:** council (CP layer) per
 ## Change-note (v3 → v4)
 
 Discharges §5 **precondition 5** — the observability disposition. Witness:
-`harness-runtime/tests/test_b71_escalation_token_rides_the_tracing_export.py` (5 tests,
+`harness-runtime/tests/test_b71_escalation_token_rides_the_tracing_export.py` (7 tests,
 green, mutation-probed — dropping the audit attribute from OD's default-on set, or
 diverging the runtime emitter's constant from the OD schema, each turns one RED).
 Resolution at **§4-quater**. **No spec text, no plan delta, no production-code change.**
@@ -270,12 +270,21 @@ default-on leak path.
 
 ### 4-quater.4 What precondition 5 does NOT close
 
-**Now executed (was cited):** the span-export round-trip. The witness runs the real
-`WebhookDeliveryComposer.deliver_webhook` against an `InMemorySpanExporter` and asserts
-that the value `compose_hitl_action_id` produced is what `webhook.idempotency_key`
-carries on the exported `hitl.webhook.deliver` span. Deleting the production `_set` call
-turns it RED — the exact mutant out-of-family review used to show the earlier
-constants-only witness was insufficient.
+**Now executed (was cited) — the WHOLE chain, producer to exporter.** Two rounds of
+out-of-family review each showed the previous witness stopped one link short, and each
+gap was closed rather than argued away:
+
+1. *Export half.* The witness runs the real `WebhookDeliveryComposer.deliver_webhook`
+   against an `InMemorySpanExporter` and asserts the emitted `webhook.idempotency_key`.
+   Deleting the production `_set` turns it RED (round 2's exact mutant).
+2. *Producer half.* It then drives the real `_escalate_to_secondary_channel`, which
+   composes its **own** `idempotency_key` at `:1302` and threads it to
+   `deliver_webhook_for_brief`; the value is read back off the exported span, with
+   nothing in the test supplying it. Making the helper forward something other than its
+   composed action_id turns it RED (round 3's mutant).
+
+So `compose_hitl_action_id`'s output — which §3 widens — is witnessed to leave the
+process on the tracing channel, end to end.
 
 **Also owed:** if a later arc wants the token on an audit span, it must first make one
 reachable from the escalation path — the wiring does not exist today.

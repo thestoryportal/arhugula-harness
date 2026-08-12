@@ -43,18 +43,25 @@ span-export round-trip is named as owed at DELIVERABLE §4-quater.
 
 from __future__ import annotations
 
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import pytest
-from harness_cp.hitl_placement import HITLPlacementKind
+from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
+from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import WebhookConfig, WebhookPayload
 from harness_cp.pause_state_projection import pre_dispatch_gate_owning_branch_identity
+from harness_is.state_ledger_entry_schema import Identifier
+from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_od.content_structure_discipline import DEFAULT_ON_STRUCTURE_ATTRIBUTES
 from harness_od.hitl_webhook_namespace import (
     HITL_WEBHOOK_SPAN_NAMESPACE_SCHEMA,
     SPAN_SITE_HITL_WEBHOOK_DELIVER,
 )
-from harness_runtime.lifecycle.hitl_gate_composer import compose_hitl_action_id
+from harness_runtime.lifecycle.hitl_gate_composer import (
+    HITLPauseRequestedSignal,
+    RuntimeHITLGateComposer,
+    compose_hitl_action_id,
+)
 from harness_runtime.lifecycle.webhook_delivery_composer import (
     ATTR_WEBHOOK_IDEMPOTENCY_KEY,
     WebhookDeliveryComposer,
@@ -85,6 +92,12 @@ class _OkClient:
 
     async def post(self, *_: Any, **__: Any) -> _OkResponse:
         return _OkResponse()
+
+
+class _Step:
+    """Minimal WorkflowStep stand-in — the helper reads only `step_id`."""
+
+    step_id = "branch-0"
 
 
 def test_the_audit_attribute_is_default_on_but_not_on_the_escalation_path() -> None:
@@ -243,3 +256,69 @@ async def test_the_composed_action_id_is_emitted_on_the_exported_span() -> None:
     )
     # And it really is the composer's output that left the process, not a coincidence.
     assert str(emitted[ATTR_WEBHOOK_IDEMPOTENCY_KEY]).startswith("hitl:")
+
+
+@pytest.mark.asyncio
+async def test_the_real_escalation_helper_puts_its_own_composed_id_on_the_span() -> None:
+    """PRODUCER → adapter → exporter, end to end.
+
+    The test above proves the delivery composer exports a caller-supplied key; it does
+    not prove the ESCALATION supplies that key — out-of-family Codex round 3 showed the
+    gap by replacing `_escalate_to_secondary_channel` with a mutant that never invokes
+    the webhook path, leaving every other test green.
+
+    This drives the real helper. It composes its own `idempotency_key` at
+    `hitl_gate_composer.py:1302` via `compose_hitl_action_id` and threads it to
+    `deliver_webhook_for_brief`; the value is then read back off the exported
+    `hitl.webhook.deliver` span. Nothing here supplies the key — the production code
+    does, which is the whole point.
+    """
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    webhook = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        http_client_factory=lambda: _OkClient(),
+        tracer_provider=provider,
+        webhook_config=WebhookConfig(
+            webhook_id="wh-b71-producer",
+            endpoint_url="https://example.test/hook",
+            timeout=5,
+            degradation_mode="fail-closed",
+        ),
+    )
+    composer = RuntimeHITLGateComposer(
+        inner=cast(Any, object()),
+        applicable_placements=frozenset({HITLPlacementKind.SUB_AGENT_BOUNDARY}),
+        ask_user_question_surface=cast(Any, object()),
+        ledger_writer=cast(Any, object()),
+        audit_writer=cast(Any, object()),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-b71-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: Identifier("b" * 64),
+        webhook_delivery_composer=webhook,
+    )
+
+    parent_action_id = "workflow:wf-producer:fanout"
+    placement = HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY)
+
+    # The helper is NoReturn — it always raises the typed pause signal.
+    with pytest.raises(HITLPauseRequestedSignal):
+        await composer._escalate_to_secondary_channel(
+            parent_action_id=cast(Any, parent_action_id),
+            step=cast(Any, _Step()),
+            placement=placement,
+            palette=frozenset({HITLResponse.APPROVE}),
+            escalation_reason="durable_async_cell_synchrony",
+            tenant_id=None,
+        )
+
+    deliver = [s for s in exporter.get_finished_spans() if s.name == SPAN_SITE_HITL_WEBHOOK_DELIVER]
+    assert deliver, "the escalation did not reach the webhook delivery span at all"
+    emitted = (deliver[0].attributes or {}).get(ATTR_WEBHOOK_IDEMPOTENCY_KEY)
+    assert emitted == str(compose_hitl_action_id(parent_action_id, placement.position)), (
+        "the escalation's own composed action_id is not what reached the exported span "
+        "— the producer→exporter chain DELIVERABLE §4-quater rests on is broken"
+    )
