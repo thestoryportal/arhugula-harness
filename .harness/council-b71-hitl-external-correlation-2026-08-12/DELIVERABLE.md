@@ -1,9 +1,26 @@
 # B-71 design record — branch-distinct EXTERNAL correlation identity for HITL escalations
 
-**Version:** v2 (2026-08-12) · **Status:** DESIGN RECORD — spec leg STILL NOT
-authorizable; preconditions **1 + 2 CLOSED on executed evidence**, **4 BOUNDED**,
-**3 + 5 OPEN** · **Arc:** council (CP layer) per
+**Version:** v3 (2026-08-12) · **Status:** DESIGN RECORD — spec leg STILL NOT
+authorizable; preconditions **1 + 2 + 3 CLOSED on executed evidence**, **4 BOUNDED**,
+**5 OPEN** · **Arc:** council (CP layer) per
 `.harness/council/council-workflow.harness-aware.yaml` v1
+
+## Change-note (v2 → v3)
+
+Discharges §5 **precondition 3** — re-derive `resolvability` so it cannot assert a
+false negative. Witness:
+`harness-cp/tests/test_b71_resolvability_cannot_be_a_static_stamp.py` (6 tests,
+green, mutation-probed — making the resolver ignore `hitl_responses` turns **3** RED,
+re-run against the final six-test set: `test_the_same_branch_flips_from_not_resolvable_to_resolvable`, `test_delivery_needs_a_uniform_response_too_which_is_also_unknowable_at_mint`, and `test_eligibility_varies_on_an_input_the_projection_has_no_parameter_for`).
+Resolution at **§4-ter** below. **No spec text, no plan delta, no production-code
+change.** Precondition 5 remains open, so the spec leg is still not authorizable.
+
+The arc also surfaced a **new sub-fork inside the v1 recommendation itself**: v1's §5
+precondition 3 recommended the field "routes the operator to the pause view for live
+status". The pause view **cannot provide live status** — on two grounds, of which the
+projection half is witnessed and the cross-record half is a **cited** ratified contract
+(`B-104`), not an executed behaviour; the owed Runtime round-trip is named at §4-ter.4.
+The sub-fork is registered to `B-155`, with a recommended disposition, at §4-ter.3.
 
 ## Change-note (v1 → v2)
 
@@ -137,7 +154,11 @@ boundary that the ingress will not honor. Live today, independent of B-71.
   carrying `snapshot_run_id`, the internal identity, run_id-shaped strings, or raw
   basis material) + a structured `resolvability` + `resolvability_note`; all
   `payload_body`-only (additive keys on the contractually-opaque Mapping, C-CP-21
-  §21.8). Palette display bound to the posture — the disarm for D-2.
+  §21.8). ~~Palette display bound to the posture — the disarm for D-2.~~ **WITHDRAWN at
+  v3 (§4-ter.2b):** `resolvability` is time-invariant and D-2's harm is time-varying, so
+  the binding cannot disarm it, and suppressing the palette would hide the valid uniform
+  action in the sole-owner state. The palette STAYS; the disarm is informational, carried
+  by `resolvability_note`; D-2 keeps a recorded residual.
 - **Public projection:** `PreDispatchUniformFallbackOnlyLocation` gains the EXTERNAL
   token, with v1.112 §2.2 constraint 2 restated alongside — internal identity still
   never. Without this the correlation loop terminates in a struct no operator reads.
@@ -151,6 +172,308 @@ boundary that the ingress will not honor. Live today, independent of B-71.
   precedent); the webhook wire body is byte-identical because
   `project_brief_to_payload` (`webhook_brief_adapter.py:47`) is an explicit
   field-by-field mapper, so an unset Optional adds no key.
+
+## 4-ter. PRECONDITION 3, RESOLVED (v3) — `resolvability` carries the CHANNEL, never the OUTCOME
+
+### 4-ter.1 The two witnessed facts
+
+**Fact 1 — resolvability is TIME-VARYING, so no mint-time stamp can carry it.**
+`compute_hitl_uniform_fallback_eligible_run_id(root_snapshot, resume_context)` takes
+the resume context, and its verdict for one *unchanged* branch flips with what else
+has been addressed. The witness holds a pre-dispatch branch and its tree fixed and
+varies only the `ResumeContext`: with its peer unanswered there are two unaddressed
+gate-owners and nobody is eligible; **answer the peer and the same branch becomes the
+sole unaddressed owner and IS resolvable** by the uniform fallback
+(`workflow_driver.py:2895-2897`). A stamp minted at escalation time — before any
+answer exists — would have had to guess which of these is true.
+
+**The claim is ELIGIBILITY, not delivery** (narrowed on out-of-family review, and the
+narrowing strengthens it). The resolver NOMINATES the target; the driver then builds
+`HITLDeliveryCell(resume_context.hitl_response)` (`workflow_driver.py:8350`, `:12674`),
+so a context carrying only `hitl_responses` and no uniform response delivers `None` and
+the branch re-pauses. **That last sentence is a CITED code read, not an executed
+behaviour** — the witness inspects the `ResumeContext` and calls the eligibility
+resolver; it never runs the driver/composer path, so a change that made keyed-only
+responses attach would not redden it (out-of-family Codex; see §4-ter.4).
+
+What IS witnessed is the decision-relevant part: the uniform response varies
+independently of the keyed ones, so a mint-time stamp would have to predict **both**
+which peers get answered *and* whether a uniform response is supplied. Two
+mint-time-unknowable inputs, not one. **This retires the
+`held-for-sole-resolution` stamp on evidence, not on argument:** it is a false
+negative in exactly the situation the operator most needs the truth. *(v1 added a
+second reason here — that "posture-change redelivery ... would never correct it". That
+premise is **RETRACTED** at §4-ter.1b as unverified, and is deliberately not carried in
+this derivation. The retirement stands on the witnessed flip alone.)*
+
+Note the mix the witness needs, because it is also the realistic operator scenario:
+one pre-dispatch branch **plus one HITL-addressable child**. Two pre-dispatch peers
+cannot show the flip — a pre-dispatch identity is `never_keyable`
+(`workflow_driver.py:2890-2894`), so it counts as unaddressed unconditionally and two
+of them are never resolvable. The live question is "I answered the other one; am I now
+the sole owner?"
+
+**Fact 2 — the operator-facing read cannot answer it either.** Two independent
+grounds, the second the stronger:
+
+- *Within one journaled record:* `project_pause_locations` takes `root_snapshot`
+  **alone** (`pause_state_projection.py:816`, pinned against the signature so a future
+  widening must revisit this disposition), and `PausedWorkflowState` (`:403-435`)
+  carries `workflow_id` / `created_at` / `staleness_token` / `locations` and no resume
+  context. So responses staged in a `ResumeContext` cannot reach the projection.
+- *Across records — the ratified one, **CITED not executed**:*
+  `read_paused_workflow_state` (`harness_runtime/api.py:925`) declares, per Runtime spec
+  v1.110 §14.14.9.1 (the RATIFIED `B-104` Reading D, Component 1), that the journal is
+  append-only and writes **no pause-resolved marker**, so a resolved pause is
+  **byte-indistinguishable** from an outstanding one. The read is explicitly *"NOT
+  authority for the workflow is paused right now, and must not be presented to an
+  operator ... as an outstanding-pause assertion."* **The witness does not invoke the
+  accessor or the journal** — it constructs snapshots and compares CP projections. So a
+  change that made Runtime record resolution, or filter resolved records, would leave
+  all six tests green while this ground silently expired. It is carried as a **cited
+  contract**, not an executed behaviour, and a Runtime round-trip is named as owed
+  below (out-of-family Codex).
+
+**A counter-hypothesis was raised and evaluated, not waved off.** Out-of-family Codex
+argued Fact 2 fails in production, because a partial resume journals a NEWER snapshot
+excluding the resolved peer — so reading *that* record would show the pre-dispatch
+branch as the lone gate-owner. The structural half is real and is now pinned by the
+witness: a snapshot carrying only the pre-dispatch branch does project exactly one
+gate-owning location. What defeats the inference is the accessor's own ratified
+contract above — an operator seeing one gate-owning location cannot conclude they are
+*currently* sole, because the record may be stale and nothing in it says which. The
+counter makes Fact 2 rest on a **spec-ratified** limit rather than on the projection
+signature alone, which is a firmer footing than the v3 first draft had.
+
+### 4-ter.2 The derived shape
+
+**`resolvability` carries the resolution CHANNEL, and the channel vocabulary already
+exists.** `PauseLocationVariant` (`pause_state_projection.py:98-116`, CP spec v1.112
+§2.1) is a closed four-value enum of exactly this: `HITL_ADDRESSABLE` /
+`EFFECT_FENCE_ADDRESSABLE` / `UNIFORM_FALLBACK_ONLY` / `TRANSITIVELY_PAUSED`. The
+pre-dispatch location already carries `UNIFORM_FALLBACK_ONLY`, whose own docstring
+draws precisely the line this precondition needs: *"Gate-owning, ALWAYS unaddressed,
+resolvable ONLY by the uniform fallback **when it is the sole member** of the
+unaddressed gate-owning set."* The channel is asserted; the sole-membership is not.
+
+Three consequences, in order of how load-bearing they are:
+
+1. **A channel value can never become a false negative.** It is true at mint and still
+   true at resume, in every eligibility state — witnessed invariant across the flip.
+   An outcome-bearing value has no such property and no minter can give it one.
+2. **Do not mint a new vocabulary.** A second enum meaning the same thing would be a
+   second authority over one concept, and the two would drift — the failure this
+   record has already paid for twice. `resolvability` should carry the SAME closed
+   variant the pause view assigns, so the webhook and the view cannot disagree.
+3. **`resolvability_note` states the RULE, not a status.** It may say the branch is
+   pre-dispatch, that it is never addressable by keyed response, and that a single
+   uniform reply resolves it **only if it is the sole unaddressed gate-owning branch
+   at resume**. It must not claim to report whether that is currently so.
+
+### 4-ter.1b An unverified premise, de-coupled rather than relied on
+
+v1's precondition-3 text argued the static stamp is especially harmful because
+*"posture-change redelivery is a registered follow-on that would never correct it."*
+Out-of-family Codex round 11 showed that premise is **not safe to lean on**:
+`test_hitl_resume_without_resolved_response_repauses`
+(`harness-runtime/tests/integration/test_u_rt_95_hitl_resume_consume_cycle_e2e.py:649`)
+executes a resume with an empty `ResumeContext`, and the composer falls through to Step
+4-bis and **re-escalates via the webhook** — the test asserts two POSTs. Webhook
+redelivery on re-pause is shipped behaviour, not absent.
+
+**What that does and does not establish.** The cited test is a **linear, depth-0** HITL
+gate. The population this record is about is the **fan-out pre-dispatch branch**, whose
+gate fires inside the parent's dispatch of a `SUB_AGENT_DISPATCH` step. For that
+population the **consuming** path IS witnessed on the real stack
+(`test_fanout_branch_gate_resume_with_resolved_answer_is_consumed` — see §4-ter.1c);
+what remains unrun is the **no-response** path: whether a fan-out branch re-escalates on
+a resume that supplies nothing. So the honest status of the redelivery premise
+is **UNVERIFIED for its own population** — and the linear behaviour is evidence against,
+not for, the "never corrects it" framing.
+
+**Consequences, taken rather than deferred:**
+
+1. **Precondition 3's closure does not depend on it.** The disposition rests on the
+   witnessed eligibility flip and on channel-vs-outcome. v1's redelivery line was a
+   supporting argument for *how bad* a false-negative stamp is, not the ground for
+   rejecting it. It is struck from the reasoning rather than repaired here.
+2. **`B-155`'s premise needs re-grounding at open.** That row is titled *"No webhook
+   re-fires when a parked pre-dispatch branch becomes sole-addressable."* Given the
+   linear-shape behaviour, the literal "no webhook re-fires" may be false for its
+   population too; what plausibly survives is the weaker and still-real claim that any
+   re-fired request is **byte-identical and carries no posture signal** — which is
+   B-71's original defect, not a separate absence. Recorded on the row.
+3. **The owed witness is a fan-out driver/composer round-trip.** Named as owed; it
+   belongs to `B-155`'s arc, where the answer changes that row's disposition, rather
+   than being bolted onto a precondition it does not gate.
+
+### 4-ter.1c Why a fresh escalation does NOT rescue the stamp — the stamp is self-fulfilling
+
+Out-of-family Codex round 16 pressed the closure directly: if the pre-dispatch branch
+re-enters the composer on a partial resume, a **freshly minted** escalation would
+describe the new sole-owner state, so the original stamp's error is transient and the
+eligibility flip alone does not justify retiring it.
+
+**The rebuttal fails, and the decisive case is already witnessed on the real fan-out
+stack.** `test_b72_fanout_sub_agent_dispatch_hitl_gate_resume.py` is exactly this
+population — a `PARALLELIZATION` fan-out branch whose step is `SUB_AGENT_DISPATCH`
+carrying its own `SUB_AGENT_BOUNDARY` gate — and it runs against the real dispatcher
+registry and the real `RuntimeHITLGateComposer` (only the Anthropic leaf client and the
+webhook transport are faked). Its core assertion,
+`test_fanout_branch_gate_resume_with_resolved_answer_is_consumed` (`:482`, asserted at
+`:576-590`): when the operator supplies the response, the branch's own gate **CONSUMES**
+it — **1 POST, no re-escalation**.
+
+Three paths a stamp reader can take — the third one was missed by this section's first
+draft and supplied by out-of-family Codex round 17:
+
+- **Obeys the stamp, answers nothing.** Nothing resumes, nothing re-escalates, no
+  corrected stamp is ever minted. The run stays parked **because** of the stamp.
+- **Ignores the stamp**, supplies the uniform response while sole: the gate consumes it
+  and the branch proceeds — witnessed above. No fresh escalation, nothing left to
+  escalate.
+- **Obeys the stamp but answers the addressable PEER** via `hitl_responses` — the stamp
+  says nothing about the peer, so this is not disobedience. A resume DOES occur: the
+  child consumes its keyed response while the now-eligible pre-dispatch branch receives
+  `HITLDeliveryCell(None)` and may fall through to the composer's re-escalation path.
+  **This is the one path where a corrective re-mint could occur, and it is UNRUN.**
+
+**What that costs the argument, stated honestly.** The first draft claimed the
+corrective re-mint exists on *no* path; that was wrong. It may exist on the third. So
+the stamp is not provably a *permanent* false negative.
+
+**What survives, and why it still retires the stamp.** The stamp is a false negative **at
+the moment the operator reads it** — that much is witnessed: eligibility flips, and a
+value minted before any answer exists cannot track it. A later corrective re-escalation,
+if it happens, *mitigates* that harm; it does not remove it, and it arrives only after
+the operator has already been told not to act. A design that ships a knowingly-wrong
+signal and relies on a subsequent message to correct it is not the same as one that
+never asserts the wrong thing — and precondition 3's ask is precisely that the field
+**cannot assert a false negative**. A static stamp asserts one; the channel does not.
+
+**Scope, restated.** Witnessed for the fan-out population: the CONSUMING path
+(`test_fanout_branch_gate_resume_with_resolved_answer_is_consumed`). **Unrun and named
+as owed:** the mixed keyed-peer / no-uniform-response resume — whether the pre-dispatch
+branch re-escalates there, and with what content. It is owed on the spec leg, and it is
+the same fan-out driver/composer round-trip `B-155` already carries; it would tell us
+how *bad* the stamp is, not whether the channel is the right shape.
+
+### 4-ter.2b Can a channel-only field disarm D-2? — NO. The v1 binding is WITHDRAWN
+
+This section reversed twice under out-of-family review; the second reversal is the
+correct one and the reasoning is recorded so it is not re-litigated a third time.
+
+**The challenge (round 8).** §3 binds palette display to `resolvability` as the disarm
+for **D-2** (*the palette advertises actionability the resolver discards*), and §6 listed
+that binding as ABSORBED. But a channel-only field is invariant — a pre-dispatch request
+carries `UNIFORM_FALLBACK_ONLY` both when 2+ owners are unaddressed and when it is the
+sole owner — so consumers must either show an invalid affordance in the first state or
+hide a valid one in the second.
+
+**The answer that failed (round 8's).** It argued D-2's harm is the *keyed* affordance,
+that never-keyable is unconditional, and that suppression is therefore safe in both
+states because the uniform channel is a different channel.
+
+**Why that fails (round 11 evidence, round 14).** There is no keyed affordance on the
+webhook to suppress: **the webhook carries no ingress keys at all** (§3 — no `run_id`,
+nothing `hitl_responses`-shaped). So the palette there is not "reply keyed to this
+request"; it is *"these are the responses you may give"* — and for this population the
+legal carrier is the **uniform** response, which a sole pre-dispatch owner genuinely
+**consumes**: `workflow_driver.py:8346-8350` injects `resume_context.hitl_response` into
+the branch's delivery cell when its identity matches the eligible one, and
+`test_b72_fanout_sub_agent_dispatch_hitl_gate_resume.py:576-590` executes that path and
+asserts the gate consumes the answer (1 POST, no re-escalation). Suppressing the palette
+in both states would therefore **hide a valid action in the sole-owner state** — the
+same liveness failure precondition 3 exists to close, one level down.
+
+**The general lesson, applied to D-2 itself.** D-2's harm is **time-varying**: the
+palette over-promises only in the 2+ state, and is honest in the sole-owner state.
+A **time-invariant** field cannot express a time-varying fact — which is precisely what
+§4-ter.1 establishes and why `resolvability` carries the channel. It follows that
+`resolvability` **cannot** disarm D-2, and no amount of wording makes it.
+
+**Disposition — the binding is WITHDRAWN and D-2 is NOT fully absorbed.**
+
+- **Keep the palette.** Its values are the admissible response set, true in both states.
+- **The disarm becomes informational, not suppressive.** `resolvability_note` carries
+  the uniform-channel routing and the sole-member condition, so the operator learns
+  *how* a response reaches this branch and *what* it depends on.
+- **A residual remains, and is recorded rather than papered over:** in the 2+ state the
+  palette still implies an action the resolver will refuse. A note mitigates it; it does
+  not remove it. Closing it needs a time-varying signal, which this design forbids —
+  the same dependency `B-155` now carries.
+- **§6 is corrected accordingly:** what is absorbed is the note, not a
+  `resolvability`-driven suppression.
+
+### 4-ter.3 NEW SUB-FORK — v1's own recommendation over-promised
+
+v1 §5 precondition 3 recommended the field "routes the operator to the pause view for
+live status". Fact 2 falsifies the second half: **there is no live status at that
+surface.** The routing half is fine — the view is where the operator sees the
+locations — but the record must not promise a readout the view structurally cannot
+produce. Three dispositions:
+
+- **(a) Widen the view.** Give `project_pause_locations` a `ResumeContext` and report
+  eligibility per location. Genuinely useful and the only option that makes the v1
+  wording true — but it amends a **cleared public projection contract** (CP spec
+  v1.112 §2.1 — a spec READING, not an executed fact), so it is its own spec leg under
+  X-AL-3, and per Fact 2 it would ALSO
+  have to answer the `B-104` staleness limit before a per-location eligibility flag
+  could be presented to an operator at all. **It belongs to register row `B-155`** —
+  (originally titled *"No webhook re-fires when a parked pre-dispatch branch becomes
+  sole-addressable"*, RE-SCOPED at v3 — that premise is UNVERIFIED per §4-ter.1b) —
+  which already owns exactly this population and this live-posture question. (A v3
+  first draft filed it under follow-on (4) / `B-157`; that row is the *already-
+  dispatched children* addressing half — a different population and a different
+  contract. Corrected on out-of-family review.)
+- **(b) State the rule, promise no readout.** `resolvability_note` carries the
+  channel plus the sole-member condition in prose; the operator is routed to the view
+  for the location set, not for a verdict. Honest, needs no contract change, and
+  survives (a) landing later.
+- **(c) Route to the resolver instead.** Rejected: there is no operator-facing
+  resolver surface to route to, so this trades a half-true promise for a fully empty
+  one.
+
+**Recommended: (b) for this spec leg, with (a) filed to `B-155`.** (b) is the
+only one that is true at HEAD, and it does not foreclose (a) — when the view can
+report eligibility, the note narrows rather than being rewritten.
+
+### 4-ter.4 What precondition 3 does NOT close — witnessed vs cited
+
+Same split §4-bis.5 applies to the basis decision, applied here.
+
+**Witnessed** (executed, mutation-probed — neutering the resolver's consultation of
+`hitl_responses` turns **3** of the 6 RED — recounted against the final set, an
+earlier draft recorded 2 from a smaller one): the eligibility flip itself (ELIGIBILITY, not
+delivery — see above); that the
+projection's sole input is the snapshot; that a snapshot with a genuinely TERMINAL peer
+projects one gate-owning location; that the channel value is invariant across the flip.
+
+**Cited, not witnessed** — three, each named as owed on the spec leg:
+
+1. **The keyed-only delivery behaviour.** That a context with `hitl_responses` but no
+   uniform `hitl_response` delivers `None` and re-pauses is read off
+   `workflow_driver.py:8350`/`:12674`, not executed here. A driver/composer round-trip
+   would convert it. It is not load-bearing for the disposition — the eligibility flip
+   alone retires the stamp — but the record must not present it as witnessed.
+2. **The `B-104` liveness limit.** The witness never invokes
+   `read_paused_workflow_state` or the journal, so the "a resolved pause is
+   byte-indistinguishable from an outstanding one" ground is a **ratified contract
+   read**, not an executed behaviour. A Runtime round-trip — pause, resolve, read, and
+   assert the read still reports the resolved pause — would convert it. Until then, a
+   Runtime change that began recording resolution would silently invalidate this half
+   without reddening anything here.
+3. **Shape coverage.** The witness covers the **HITL** uniform-fallback resolver. The
+   effect-fence sibling (`compute_effect_fence_uniform_fallback_eligible_key`) has the
+   same sole-member shape and is unexamined; out of B-71's scope (this row is HITL
+   escalations), named so a later arc does not read this section as covering it.
+
+Neither weakens the precondition-3 disposition: the `held-for-sole-resolution` stamp is
+retired by the **witnessed** flip alone, and the channel-not-outcome shape follows from
+that flip. The cited half bounds only how firmly the *pause-view routing* wording can
+be stated.
+
+---
 
 ## 4-bis. THE FORK, RESOLVED (v2) — basis (B), on executed evidence
 
@@ -328,10 +651,13 @@ identity — not bare `branch_index`** (three-way convergent finding).
 
 ## 5. Hard preconditions on the spec leg
 
-**Status at v2: 1 CLOSED · 2 CLOSED · 3 OPEN · 4 BOUNDED · 5 OPEN.** The spec leg
-remains NOT authorizable — 3 and 5 are unaddressed, and 4 is bounded rather than
-closed. Preconditions 1 and 2 are struck through as discharged; their v1 text is kept
-so the discharge is auditable against what was asked.
+**Status at v3: 1 CLOSED · 2 CLOSED · 3 CLOSED · 4 BOUNDED · 5 OPEN.** The spec leg
+remains NOT authorizable, on **two** counts — 5 is unaddressed, **and 4 is bounded
+rather than closed**. Closing 5 alone does not authorize the leg: 4 still owes an
+explicit scope statement and a live-resume witness for the cited `snapshot.run_id`
+reuse.
+Discharged preconditions are struck through; their original text is kept so each
+discharge is auditable against what was actually asked.
 
 1. ~~**Execute the nested-fan-out collision witness** against the chosen basis. Cheap —
    the witness file exists and the shape is already covered for the internal identity.~~
@@ -349,14 +675,22 @@ so the discharge is auditable against what was asked.
    ordinary resume path the persisted echo is read and NOTHING is recomputed, so no basis
    rotates there — see §4-bis.2.)
    Full evidence + the answer to (B)'s in-scope objection at §4-bis.
-3. **Re-derive `resolvability` so it cannot assert a false negative.** A sole
+3. ~~**Re-derive `resolvability` so it cannot assert a false negative.** A sole
    pre-dispatch owner IS answerable — `if len(unaddressed) == 1: return unaddressed[0]`
    (`workflow_driver.py:2895-2897`). A static `held-for-sole-resolution` stamp would
    tell the operator not to reply to the one request whose reply resolves the run, and
    posture-change redelivery is a registered follow-on that would never correct it.
    **Recommended:** the field states the branch is pre-dispatch and routes the operator
    to the pause view for live status, rather than asserting non-actionability.
-   `resolvability_note` re-drafts against whichever shape is chosen.
+   `resolvability_note` re-drafts against whichever shape is chosen.~~
+   **CLOSED at v3 — the field carries the resolution CHANNEL, drawn from the existing
+   closed `PauseLocationVariant`; never the outcome.** The `held-for-sole-resolution`
+   stamp is retired on a witnessed flip, not on argument. **The v1 recommendation's own
+   second half is falsified in passing** — the pause view cannot report live status
+   (`project_pause_locations` takes the snapshot alone — witnessed; plus the cited
+   `B-104` liveness limit, §4-ter.4), so `resolvability_note` states the sole-member
+   RULE and promises no readout. Full derivation, the surfaced sub-fork
+   and its recommended disposition at §4-ter.
 4. **Close or explicitly scope the entry_version crash window** — crash after delivery
    but before persist, then resume after an `entry_version` bump, recomputes a
    different token. Registering the wider defect does not close this window. ~~May
@@ -384,8 +718,10 @@ to surface), and the **`branch_context` leak bar**.
 ## 6. Absorbed in-arc vs registered
 
 **Absorbed** (same mechanism; splitting ships the widening half-applied): the D-1
-audit-loss fix, mint-authority ignore-and-diagnose, the palette/`resolvability`
-binding, the projection amendment, the persist-once reverse-thread field.
+audit-loss fix, mint-authority ignore-and-diagnose, ~~the palette/`resolvability`
+binding~~ **the palette `resolvability_note` (CORRECTED at v3 — the suppression binding
+is WITHDRAWN per §4-ter.2b; only the informational note is absorbed, and D-2 keeps a
+recorded residual)**, the projection amendment, the persist-once reverse-thread field.
 
 **Registered as follow-on `B-*` rows** (each an observable contract change to a
 cleared mechanism → its own spec leg per X-AL-3): (1) uniform-response target
@@ -416,4 +752,4 @@ falsifications in this row's history were of claims *made by the falsifier*. The
 operative discipline is not "distrust the council" but "no uniqueness claim enters
 this row's record without an executed witness" — which is why preconditions 1 and 2
 were written as *execute* and *resolve on that evidence*, and why 3 and 5, which are
-argument-work rather than evidence-work, are still open.
+argument-work rather than evidence-work, were still open **as of v2**. *(Historical: precondition 3 closed at v3 — on a witness, not an argument, which is the point. The current gate status is at §5; do not read this paragraph as a status line.)*
