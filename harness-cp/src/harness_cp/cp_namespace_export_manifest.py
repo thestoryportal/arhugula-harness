@@ -9,12 +9,13 @@ The manifest is **descriptive, not declarative** (acceptance #9): the namespace
 declarations themselves live at the source units (U-CP-01/07/11/21/31/46/47);
 this manifest exports references only. 11 namespaces — 6 specialization-layer
 (§24.1.A), 4 F3-lifecycle-event (§24.1.B), 1 inheritance-composition (§24.1.C)
-— 65 CP-axis attributes total (34 + 27 + 4; was stated as 63 until `B-126`
-recomputed it — `harness.breaker.*` grew 7 -> 9 at CP spec v1.32).
+— 68 CP-axis attributes total (35 + 29 + 4; was 63, then 65 after `B-126`
+recomputed the `harness.breaker.*` 7 -> 9 growth from OD spec v1.32, then 68
+at the CP v1.117 `B-144` venue-A re-table: retry.* 4 -> 6 + engine.* 3 -> 4).
 
-Authority: Implementation_Plan_Control_Plane_v2_1.md §2.9 U-CP-54 (preserved
-verbatim through v2.9); Spec_Control_Plane_v1_2.md §24 C-CP-24
-§24.1.A/§24.1.B/§24.1.C.
+Authority: Implementation_Plan_Control_Plane_v2_1.md §2.9 U-CP-54 as re-pinned
+at Implementation_Plan_Control_Plane_v2_50.md; Spec_Control_Plane_v1_2.md §24
+C-CP-24 §24.1.A/§24.1.B/§24.1.C as re-tabled at Spec_Control_Plane_v1_117.md.
 """
 
 from __future__ import annotations
@@ -73,8 +74,12 @@ _OWNED = SourceAuthorityPosture.OWNED_BY_CP
 CP_NAMESPACE_EXPORT_MANIFEST: tuple[NamespaceExport, ...] = (
     # --- §24.1.A — 6 specialization-layer namespaces (D6 §1.2 direct ingest) -
     NamespaceExport(
+        # 4 per C-CP-09 §9.1 as extended at CP v1.3 (+engine.replay_disposition,
+        # the ratified 4th row), carried into §24.1.A at CP v1.117 (B-144
+        # venue-A rule, out-of-family round-2 catch). See
+        # `engine_namespace.ENGINE_NAMESPACE_SCHEMA` (already 4).
         namespace_name="engine.*",
-        attribute_count=3,
+        attribute_count=4,
         source_unit=UnitId("U-CP-21"),
         ingestion_target=_D6_1_2,
         sub_section_authority="C-CP-24 §24.1.A",
@@ -130,12 +135,12 @@ CP_NAMESPACE_EXPORT_MANIFEST: tuple[NamespaceExport, ...] = (
         source_authority_posture=_OWNED,
     ),
     NamespaceExport(
-        # 4 is the §24.1.B DECLARED-SUBSET figure, not a namespace cardinality:
-        # C-CP-03 §3.5 carries 6 at v1.3 and the wire carries 10 (B-126). See
-        # `retry_fallback_namespace.RETRY_WIRE_REGISTER`. Changing this bumps
-        # the export sum — a contract-count change, deliberately NOT done here.
+        # 6 per C-CP-03 §3.5 v1.3, carried into §24.1.B at CP v1.117 (B-144
+        # venue-A re-table). Declared count, not wire cardinality: the wire
+        # carries more `retry.`-prefixed keys than the declared set (B-126).
+        # See `retry_fallback_namespace.RETRY_WIRE_REGISTER`.
         namespace_name="retry.*",
-        attribute_count=4,
+        attribute_count=6,
         source_unit=UnitId("U-CP-07"),
         ingestion_target=_D6_1_4,
         sub_section_authority="C-CP-24 §24.1.B",
@@ -151,7 +156,7 @@ CP_NAMESPACE_EXPORT_MANIFEST: tuple[NamespaceExport, ...] = (
     ),
     NamespaceExport(
         namespace_name="harness.breaker.*",
-        attribute_count=9,  # v1.32: +cause +cooldown_ms (B-19-BREAKER-AMBIENT-ATTRS)
+        attribute_count=9,  # OD v1.32: +cause +cooldown_ms (B-19-BREAKER-AMBIENT-ATTRS)
         source_unit=UnitId("U-CP-07"),
         ingestion_target=_D6_1_4,
         sub_section_authority="C-CP-24 §24.1.B",
@@ -168,19 +173,24 @@ CP_NAMESPACE_EXPORT_MANIFEST: tuple[NamespaceExport, ...] = (
     ),
 )
 """The CP-axis namespace export manifest — 11 entries (6 §24.1.A + 4 §24.1.B +
-1 §24.1.C), C-CP-24 §24.1 verbatim. 65 CP-axis attributes total.
+1 §24.1.C), C-CP-24 §24.1 verbatim (as re-tabled at CP v1.117, B-144 venue A).
+68 CP-axis attributes total.
 
 **What the per-row `attribute_count` is, and is not (register row `B-126`).** It
 reports the count DECLARED for that namespace, which is not the same as the
-count that reaches the wire. `retry.*` is the live case: this manifest reports 4,
-C-CP-03 §3.5 declares 6 at v1.3, and 10 distinct `retry.`-prefixed keys are set
-by producers. The sum below is therefore a declared-subset total, not a
+count that reaches the wire. `retry.*` is the live case: this manifest and
+C-CP-03 §3.5 v1.3 both declare 6, but 10 distinct `retry.`-prefixed keys are
+set by producers. The sum below is therefore a declared total, not a
 cardinality guarantee over the namespaces it names.
 """
 
 #: Total CP-axis attribute count exported to the OD plan Session 4 D6 — the
-#: §24.1 (34 + 27 + 4) = 65 sum (acceptance #6). The 65 is a DERIVED sum, so
-#: this arithmetic is a reader's aid: §24.1.B is 27, not the 25 its v1.2 rows
-#: total, because `harness.breaker.*` grew 7 -> 9 at CP spec v1.32
-#: (B-19-BREAKER-AMBIENT-ATTRS) while §24.1.B's own table was never re-tabled.
+#: §24.1 (35 + 29 + 4) = 68 sum (acceptance #6). All three ratified count
+#: amendments (`retry.*` 4 -> 6 at C-CP-03 §3.5 v1.3; `harness.breaker.*`
+#: 7 -> 9 at OD spec v1.32, B-19-BREAKER-AMBIENT-ATTRS; `engine.*` 3 -> 4 at
+#: C-CP-09 §9.1 v1.3) are carried in §24.1 itself since the CP v1.117
+#: re-table, so the declared table and this sum now agree. The sum counts
+#: `engine.replay_disposition` under both `engine.*` and the §3.5 retry set
+#: (a declared cross-namespace composition attribute) — it is a sum of
+#: declared row counts, not a distinct-key cardinality.
 CP_EXPORTED_ATTRIBUTE_COUNT: int = sum(e.attribute_count for e in CP_NAMESPACE_EXPORT_MANIFEST)

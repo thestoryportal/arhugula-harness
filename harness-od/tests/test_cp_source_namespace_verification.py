@@ -69,13 +69,14 @@ def test_assert_namespace_attribute_count_per_prefix() -> None:
 
     Per-prefix expected counts per the CP plan U-CP-54 manifest as ingested at
     the landed U-OD-05 namespace map (`hitl.` 11, `topology.fanout.` 10,
-    `subagent.` 7, `engine.` 3, `audit.` 7, `validator.fail.` 3).
+    `subagent.` 7, `engine.` 4 per C-CP-09 §9.1 v1.3 — aligned at the B-144
+    CP v1.117 cascade, `audit.` 7, `validator.fail.` 3).
     """
     expected = {
         "hitl.": 11,
         "topology.fanout.": 10,
         "subagent.": 7,
-        "engine.": 3,
+        "engine.": 4,
         "audit.": 7,
         "validator.fail.": 3,
     }
