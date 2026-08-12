@@ -6058,6 +6058,44 @@ async def test_unknown_provider_raises_unregistered_error() -> None:
     assert "RT-FAIL-PROVIDER-UNREGISTERED" in str(excinfo.value)
 
 
+@pytest.mark.asyncio
+async def test_registered_provider_without_operation_says_so() -> None:
+    """The defensive no-operation site (a REGISTERED non-stage-3a key) must
+    not claim the key is absent — the r1-corrected detail message names the
+    real condition (dropping the `detail=` kwarg reverts to the false
+    "not in ctx.providers" claim and fails this)."""
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"bogus": object()}, tracer_provider=tp)
+    with pytest.raises(LLMDispatchProviderUnregisteredError) as excinfo:
+        await dispatcher.dispatch(_binding("bogus"), _step(), step_context=_step_context())
+    assert excinfo.value.provider_name == "bogus"
+    message = str(excinfo.value)
+    assert "RT-FAIL-PROVIDER-UNREGISTERED" in message
+    assert "registered but has no supported dispatch operation" in message
+    assert "not in ctx.providers" not in message
+
+
+def test_detail_message_replaces_absent_key_claim() -> None:
+    """The `detail=` ctor path (shared by BOTH defensive raise sites) must
+    replace — not append to — the absent-key default. The adapter-arm else
+    itself is not e2e-reachable with a crafted fake: the pre-arm dispatch
+    path duck-probes `.client`/`.messages` before the isinstance chain, so
+    any adapter deep enough to reach the arms crashes inside an arm body
+    first (merge-gate lens-3 anticipated exactly this fixture block; the
+    ctor witness is the honest substitute, with site 1 witnessed e2e above)."""
+    err = LLMDispatchProviderUnregisteredError(
+        "anthropic",
+        detail="provider 'anthropic' is registered but its adapter matches no dispatch arm",
+    )
+    assert err.provider_name == "anthropic"
+    message = str(err)
+    assert "RT-FAIL-PROVIDER-UNREGISTERED" in message
+    assert "registered but its adapter matches no dispatch arm" in message
+    assert "not in ctx.providers" not in message
+    default = LLMDispatchProviderUnregisteredError("ghost")
+    assert "not in ctx.providers" in str(default)
+
+
 # ---------------------------------------------------------------------------
 # AC #6 — Async-only invariant.
 # ---------------------------------------------------------------------------
