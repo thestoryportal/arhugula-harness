@@ -197,8 +197,10 @@ independently of the keyed ones, so a mint-time stamp would have to predict **bo
 which peers get answered *and* whether a uniform response is supplied. Two
 mint-time-unknowable inputs, not one. **This retires the
 `held-for-sole-resolution` stamp on evidence, not on argument:** it is a false
-negative in exactly the situation the operator most needs the truth, and, as v1 noted,
-posture-change redelivery is a registered follow-on that would never correct it.
+negative in exactly the situation the operator most needs the truth. *(v1 added a
+second reason here — that "posture-change redelivery ... would never correct it". That
+premise is **RETRACTED** at §4-ter.1b as unverified, and is deliberately not carried in
+this derivation. The retirement stands on the witnessed flip alone.)*
 
 Note the mix the witness needs, because it is also the realistic operator scenario:
 one pre-dispatch branch **plus one HITL-addressable child**. Two pre-dispatch peers
