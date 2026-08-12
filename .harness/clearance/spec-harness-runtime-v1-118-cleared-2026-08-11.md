@@ -2,7 +2,7 @@
 artifact: design-substrate/Spec_Harness_Runtime_v1.md
 version: v1.118
 cleared_at: 2026-08-11T19:45:00-07:00
-clearance_type: Phase-7-absorbed-via-register-row
+clearance_type: spec-writer-apply-pass
 back_reference:
   - ".harness/forward-register.yaml B-152 row (registered at PR #1310; codex round-2 findings, lens-1 adjudication)"
   - "PR #1310 (registration + the lens-2 C-RT-07 recorded residual this leg discharges)"
