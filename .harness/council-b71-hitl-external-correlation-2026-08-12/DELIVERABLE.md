@@ -17,9 +17,11 @@ ways, one per load-bearing dimension — folding a run-distinct component into
 `compose_branch_child_context` turns the (A) collision test RED; neutering
 `pre_dispatch_gate_owning_branch_identity` turns 3 of the (B) tests RED; making that
 identity ignore `branch_index` turns the same-run peer test RED; dropping `placement`
-from the (B) basis turns the two-placement test RED. §4 is rewritten from OPEN FORK to RESOLVED; §5's
-precondition list is re-stated with per-precondition status. **No spec text, no plan
-delta, no production-code change** — v2, like v1, is documentary plus its witness.
+from the (B) basis turns the two-placement test RED.
+
+§4 is rewritten from OPEN FORK to RESOLVED; §5's precondition list is re-stated with
+per-precondition status. **No spec text, no plan delta, no production-code change** —
+v2, like v1, is documentary plus its witness.
 
 Two v1 claims are corrected by the evidence, both in the direction of *less*
 confidence in the v1 escalation, not more:
@@ -340,7 +342,10 @@ so the discharge is auditable against what was asked.
    witness this precondition actually asked for.
 2. ~~**Resolve the basis fork** (A) vs (B) on that evidence, not on argument.~~
    **CLOSED at v2 — basis (B).** (A) collides; (C), the council's original pick,
-   survives uniqueness but rotates under precondition 4 on the ordinary resume path.
+   survives uniqueness but loses on precondition 4: inside the mint→persist recompute
+   window, with the child's `run_id` recovered, (C) rotates where (B) reproduces. (On the
+   ordinary resume path the persisted echo is read and NOTHING is recomputed, so no basis
+   rotates there — see §4-bis.2.)
    Full evidence + the answer to (B)'s in-scope objection at §4-bis.
 3. **Re-derive `resolvability` so it cannot assert a false negative.** A sole
    pre-dispatch owner IS answerable — `if len(unaddressed) == 1: return unaddressed[0]`
@@ -356,10 +361,11 @@ so the discharge is auditable against what was asked.
    dissolve for free under basis (A) or (B).~~
    **BOUNDED at v2, not closed.** It does not dissolve for free. Under the chosen
    basis (B) the window is exactly as originally described — crash after delivery,
-   before persist — and no wider, *given* that the ordinary resume path reuses the
-   snapshot's `run_id` (**cited**, `child_workflow_runner.py:230-234`, not witnessed
-   — see §4-bis.5). The witnessed half is that (B) takes no `entry_version` input, so
-   a stable `run_id` cannot rotate it. The spec leg still owes an explicit scope
+   before persist — and no wider. Two things make it no wider: the ordinary resume path
+   recomputes nothing at all (persist-once, §3), and *within* the window the child's
+   `run_id` is recovered from the snapshot (**cited**, `child_workflow_runner.py:230-234`,
+   not witnessed — see §4-bis.5). The witnessed half is that (B) takes no `entry_version`
+   input, so a recovered `run_id` reproduces its token where (C)'s rotates. The spec leg still owes an explicit scope
    statement **and a live-resume witness for the cited half**; what v2 removes is the
    *unbounded* reading, which is what basis (C) would have had.
 5. **Carry the observability disposition** — resolve the charter's "not a span
