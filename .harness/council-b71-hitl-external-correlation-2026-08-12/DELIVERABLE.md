@@ -231,12 +231,41 @@ reverse-thread carrier must be keyed by a tree-wide identity, never by bare
 branches while (B) separates them, so the separation is attributable to the run
 component alone.
 
-**Scope honesty.** The witness covers the PARALLELIZATION fan-out shape. It does not
-exercise HIERARCHICAL_DELEGATION recursion or the DECENTRALIZED_HANDOFF stage chain
-(`workflow_driver.py:15375-15441`, where `parent_action_id` chains off the previous
-stage's `action_id` and `branch_index` is not a fan-out ordinal). (A) is already
-falsified, so those shapes cannot rescue it; whether they add a *further* constraint
-on (B) is unexamined and is a named residual on the spec leg.
+### 4-bis.5 Scope honesty — what is witnessed, what is cited
+
+The distinction matters on this row more than most: three of its four falsified
+premises were claims that entered the record without being run.
+
+**Witnessed** (executed, mutation-probed on both the (A) and (B) paths): every basis
+value is read off a `StepExecutionContext` that the real `compose_branch_child_context`
+produced, from a fan-out parent whose two identity fields are composed by the real
+`_parallelization_fanout_action_id` / `_compute_run_idempotency_key` /
+`_compute_step_idempotency_key`, threaded through the real `compose_branch_path` and
+`compose_child_run_id_seed`. (A)'s collision, (C)'s survival-then-`entry_version`
+rotation, (B)'s survival, verbatim inheritance's actual reach, and the
+bare-ordinal carrier's collapse are all witnessed.
+
+**Cited, not witnessed** — three, each load-bearing somewhere in §4-bis:
+
+1. **The resume reuses the paused child's `run_id`** rather than re-deriving it
+   (`child_workflow_runner.py:230-234`). This is what makes (B) stable and (C) rotate
+   *on the ordinary path*; the witness proves only the half that is its own — that (B)
+   takes no `entry_version` input, so a stable `run_id` cannot rotate it. A live
+   resume is not exercised.
+2. **The fan-out parent context's field population.** The witness mirrors
+   `workflow_driver.py:8185-8200` as a struct literal rather than reaching it through
+   `execute_workflow`. Every *derived* field is production-composed — so a change to
+   any composer is caught — but a change to how the driver *populates* the fan-out
+   parent is not.
+3. **Shape coverage.** PARALLELIZATION fan-out only. HIERARCHICAL_DELEGATION recursion
+   and the DECENTRALIZED_HANDOFF stage chain (`workflow_driver.py:15375-15441`, where
+   `parent_action_id` chains off the previous stage's `action_id` and `branch_index`
+   is not a fan-out ordinal) are unexamined. (A) is already falsified, so those shapes
+   cannot rescue it; whether they add a *further* constraint on (B) is open.
+
+All three are **named residuals on the spec leg**, not silent gaps. None of them can
+un-falsify (A) — the collision is witnessed directly — so the fork's resolution does
+not rest on any of them; they bound how far the *stability* claims reach.
 
 ---
 
@@ -306,10 +335,12 @@ so the discharge is auditable against what was asked.
    dissolve for free under basis (A) or (B).~~
    **BOUNDED at v2, not closed.** It does not dissolve for free. Under the chosen
    basis (B) the window is exactly as originally described — crash after delivery,
-   before persist — and no wider: the ordinary resume path reuses the snapshot's
-   `run_id`, so the token is stable there (witnessed both ways). The spec leg still
-   owes an explicit scope statement; what v2 removes is the *unbounded* reading (which
-   is what basis (C) would have had).
+   before persist — and no wider, *given* that the ordinary resume path reuses the
+   snapshot's `run_id` (**cited**, `child_workflow_runner.py:230-234`, not witnessed
+   — see §4-bis.5). The witnessed half is that (B) takes no `entry_version` input, so
+   a stable `run_id` cannot rotate it. The spec leg still owes an explicit scope
+   statement **and a live-resume witness for the cited half**; what v2 removes is the
+   *unbounded* reading, which is what basis (C) would have had.
 5. **Carry the observability disposition** — resolve the charter's "not a span
    attribute" premise against C1's `hitl.escalation.instance_id` proposal, and extend
    C10's leak-bar analysis from the webhook channel to the **tracing-export** channel
