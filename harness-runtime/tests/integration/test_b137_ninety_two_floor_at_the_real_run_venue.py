@@ -70,7 +70,10 @@ from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
 from harness_od.composite_sampler import HarnessCompositeSampler, build_default_sampler
 from harness_od.observability_matrix import CellID
 from harness_od.sampling_mode import is_always_sampled
-from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
+from harness_od.tail_keep_span_processor import (
+    TailKeepSpanProcessor,
+    is_classification_trigger,
+)
 from harness_runtime.lifecycle.tracer_provider import materialize_tracer_provider_stage
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -274,6 +277,24 @@ def test_a_production_cell_still_binds_the_unconditional_ratio_sampler() -> None
     )
 
 
+def _finished_span(name: str) -> Any:
+    """Record one span with an always-on provider and return the ReadableSpan."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    with provider.get_tracer("b137.probe").start_as_current_span(name):
+        pass
+    return exporter.get_finished_spans()[0]
+
+
+def _trigger_probe() -> Any:
+    return _finished_span(_SANDBOX)
+
+
+def _member_probe() -> Any:
+    return _finished_span(_MEMBER)
+
+
 def test_all_three_starved_populations_at_one_composition() -> None:
     """**Step (2)'s three populations, executed** (out-of-family Codex round 6).
 
@@ -296,13 +317,29 @@ def test_all_three_starved_populations_at_one_composition() -> None:
     # (i) root-name-matched — the ONE population that is not starved.
     with tracer.start_as_current_span(_SANDBOX):
         pass
-    # (ii) non-root — a §9.2 member under an unlisted root.
+    # (ii) non-root — a §9.2 member under an unlisted root. Two arms, because step (2)
+    # names the "non-root TRIGGER" case specifically and `hitl.gate.evaluated` is NOT a
+    # §10.2 classification trigger (out-of-family Codex round 8 — an earlier draft labelled
+    # this arm as the trigger population when it was not one).
     with tracer.start_as_current_span(_ENVELOPE):
-        with tracer.start_as_current_span(_MEMBER):
+        with tracer.start_as_current_span(_MEMBER):  # member, NOT a trigger
+            pass
+    with tracer.start_as_current_span(_ENVELOPE):
+        with tracer.start_as_current_span(_SANDBOX):  # member AND a §10.2 trigger
             pass
     # (iii) event-carried — a §9.2 name riding as an EVENT on an unlisted carrier span.
     with tracer.start_as_current_span("ordinary.carrier") as carrier:
         carrier.add_event(_SANDBOX)
+
+    # The trigger arm's own premise, asserted rather than assumed.
+    assert is_classification_trigger(_trigger_probe()), (
+        f"`{_SANDBOX}` is no longer a §10.2 classification trigger — the non-root TRIGGER "
+        "population below is not being exercised and step (2) is not discharged"
+    )
+    assert not is_classification_trigger(_member_probe()), (
+        f"`{_MEMBER}` became a §10.2 trigger — the two non-root arms above are no longer "
+        "distinct and this test must be re-derived"
+    )
 
     exported = sorted(s.name for s in exporter.get_finished_spans())
     assert exported == [_SANDBOX], (
@@ -681,25 +718,66 @@ def test_the_scope_is_inside_the_envelope_not_all_nineteen() -> None:
     )
 
 
+def _callers_of(helper: str) -> list[str]:
+    """Call sites of `helper` across `src/`, by AST — alias- and multiline-safe.
+
+    Out-of-family Codex round 8: a substring scan for `helper(` misses an aliased import
+    (`from ... import emit_pause_captured_span as _emit`) and a call whose parenthesis sits
+    on the next line, and it can invent a caller from prose. This resolves per-module import
+    aliases and matches `ast.Call` nodes, so B-162's grounding cannot go stale silently.
+    """
+    hits: list[str] = []
+    for path in _REPO.glob("harness-*/src/**/*.py"):
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:  # pragma: no cover
+            continue
+        names = {helper}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name == helper and alias.asname:
+                        names.add(alias.asname)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == helper:
+                continue  # the definition itself is not a call
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            called = (
+                func.id
+                if isinstance(func, ast.Name)
+                else func.attr
+                if isinstance(func, ast.Attribute)
+                else None
+            )
+            if called in names:
+                hits.append(f"{path.relative_to(_REPO)}:{node.lineno}")
+    return sorted(hits)
+
+
 def test_the_pause_span_emitters_have_no_caller_in_src() -> None:
-    """The second correction — and a finding in its own right.
+    """The second correction — and a finding in its own right (**B-162**).
 
     `emit_pause_captured_span` / `emit_resume_attempted_span` implement C-OD-30.3's two
     declared `head=1.0` spans, but nothing in `src/` calls them, so neither span is ever
-    emitted in production. This is why the earlier draft's "real production emitter" claim
-    was wrong, and it makes two of B-160's four unconditional names doubly inert: adding a
-    never-emitted name to the floor set changes nothing.
+    emitted in production. That is why an earlier draft's "real production emitter" claim
+    was wrong, and it makes two of B-160's four unconditional names inert for a second,
+    independent reason: adding a never-emitted name to the floor set changes nothing.
     """
+    # Positive control: the scanner must actually FIND callers, or "no callers" below is
+    # unfalsifiable. `capture_pause_snapshot` is the sibling the driver really does call.
+    control = _callers_of("capture_pause_snapshot")
+    assert control, (
+        "the caller scanner found no callers of `capture_pause_snapshot`, which the driver "
+        "demonstrably calls — the no-caller results below are unreliable"
+    )
+
     for helper in ("emit_pause_captured_span", "emit_resume_attempted_span"):
-        callers = [
-            f"{path.relative_to(_REPO)}:{lineno}"
-            for path in _REPO.glob("harness-*/src/**/*.py")
-            for lineno, line in enumerate(path.read_text().splitlines(), 1)
-            if f"{helper}(" in line and not line.lstrip().startswith(("def ", "#", "*"))
-        ]
+        callers = _callers_of(helper)
         assert callers == [], (
             f"`{helper}` now has caller(s) {callers} — C-OD-30.3's span may be live in "
-            "production; re-ground B-160's disposition, which assumes it is not"
+            "production; re-ground B-160's and B-162's dispositions, which assume it is not"
         )
 
 
