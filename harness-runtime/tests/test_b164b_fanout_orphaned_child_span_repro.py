@@ -86,6 +86,7 @@ from harness_od.tail_keep_span_processor import (
     TailKeepSpanProcessor,
 )
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
+from opentelemetry.trace import set_span_in_context
 
 #: A §10.2 classification trigger AND a §9.2 always-sampled span name.
 _TRIGGER = "sandbox.violation"
@@ -454,6 +455,53 @@ def test_b164b_the_tracking_dictionaries_stay_bounded_under_completed_traffic() 
     assert len(fx.tail._materialized) <= _LIVENESS_TRACKING_CEILING, (
         f"the materialization history exceeded its ceiling "
         f"({len(fx.tail._materialized)} > {_LIVENESS_TRACKING_CEILING})"
+    )
+
+
+def test_b164b_keep_flags_stay_bounded_when_triggers_arrive_past_the_history() -> None:
+    """**The residual must be a bounded LOSS, never an unbounded LEAK.**
+
+    Aging out of the materialization history is an accepted fidelity loss. What is not
+    acceptable is what out-of-family review found hiding behind it: past the history a
+    late `sandbox.violation` looks like an ordinary pending trace, so it writes
+    `_keep[trace_id]` that no root close will ever pop — and REPEATING that ordering grew
+    `_keep` without limit. A component whose entire design is bounded memory cannot have
+    an unbounded dictionary in it, so `_keep` carries its own ceiling.
+
+    Driven with plain span contexts rather than the fan-out fixture: the ordering under
+    test is "child ends after its root, past the history window", and reproducing that
+    thousands of times through real abandoned threads would buy no extra fidelity for a
+    great deal of wall-clock. The threaded fixture already establishes that production
+    produces this ordering; this test is about what the processor does when it recurs.
+    """
+    fx = _Fixture()
+    overshoot = _LIVENESS_TRACKING_CEILING + 64
+
+    # Root-close each trace, keeping a context so a child can still be parented to it.
+    aged_parents = []
+    for i in range(overshoot):
+        root = fx.tracer.start_span(f"aged.root.{i}")
+        aged_parents.append(set_span_in_context(root))
+        root.end()
+
+    # Push every one of those traces out of the bounded history.
+    for i in range(overshoot):
+        fx.tracer.start_span(f"churn.root.{i}").end()
+
+    # Now a late trigger on each aged-out trace — the leak ordering, repeated.
+    for parent in aged_parents:
+        fx.tracer.start_span(_TRIGGER, context=parent).end()
+
+    assert len(fx.tail._keep) <= _LIVENESS_TRACKING_CEILING, (
+        f"stale keep flags grew past the ceiling ({len(fx.tail._keep)} > "
+        f"{_LIVENESS_TRACKING_CEILING}) — the bounded loss has become an unbounded leak"
+    )
+    assert len(fx.tail._materialized) <= _LIVENESS_TRACKING_CEILING, (
+        f"the materialization history grew past its ceiling ({len(fx.tail._materialized)})"
+    )
+    assert fx.downstream.seen.count(_TRIGGER) == overshoot, (
+        f"the §10.2 failure signal was lost while bounding the leak — every trigger span "
+        f"must still be forwarded; got {fx.downstream.seen.count(_TRIGGER)} of {overshoot}"
     )
 
 

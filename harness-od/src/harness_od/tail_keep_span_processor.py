@@ -159,6 +159,14 @@ that is eviction and permanent loss, not a delay. This residual is inherent
 rather than a missing case: distinguishing "a span of an old trace is about to
 start" from "a new trace is starting" requires unbounded history.
 
+What the residual is NOT allowed to be is a LEAK. Past the history a late
+trigger looks like an ordinary pending trace and writes ``_keep[trace_id]``
+that no root close will ever pop, so repeating the ordering grew that dict
+without limit — found by review behind the accepted loss. ``_keep`` therefore
+carries the same ceiling. A bounded fidelity loss is this component's declared
+posture; unbounded memory growth inside a component whose purpose is bounded
+memory is not, and the distinction is what makes the residual acceptable.
+
 **A late TRIGGER cannot rescue its trace, and that is a decided bound, not
 an oversight.** If the late span is itself a §10.2 classification trigger,
 the trace's keep decision was already taken WITHOUT it and its siblings are
@@ -783,6 +791,22 @@ class TailKeepSpanProcessor(SpanProcessor):
             # tree-context is accepted as lost, the same tradeoff eviction already makes.
             if is_trigger and trace_id not in self._materialized:
                 self._keep[trace_id] = True
+                # `B-164(b)` round 4 (out-of-family Codex, P1) — the `_materialized` guard
+                # above suppresses the leak only while the trace is still remembered. Past
+                # the bounded history a late trigger looks like an ordinary pending trace
+                # and writes an entry no root close will ever pop, so REPEATING that
+                # ordering grew `_keep` without limit. A bounded fidelity loss is this
+                # component's accepted posture; an unbounded memory leak is not, so the
+                # dict carries its own ceiling.
+                #
+                # Evicting a keep flag degrades that trace to keep=False, dropping its
+                # buffered siblings — the same tradeoff `_evict_oldest_trace` already
+                # makes, and for the same reason. It cannot fire in normal operation:
+                # `_keep` holds one entry per trace that carried a trigger and has not yet
+                # root-closed, which is bounded by live concurrency, so the ceiling is only
+                # ever reached by the leak it exists to contain.
+                while len(self._keep) > _LIVENESS_TRACKING_CEILING:
+                    del self._keep[next(iter(self._keep))]
             if not is_root_close:
                 return []
             buffered = self._buffer.pop(trace_id, [])
