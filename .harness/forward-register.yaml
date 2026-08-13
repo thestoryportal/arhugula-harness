@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 162
+  total: 163
   open: 1
   design_substrate_gated: 0
-  registered_finding: 29
+  registered_finding: 30
   operator_gated: 0
   held: 2
   closed: 130
-  identity_digest: 'dc90bcf330c83160'
+  identity_digest: '99d262c64c83a6a9'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7396,7 +7396,13 @@ items:
     previously 0 did. So C1''s principal cost belonged to B-136, NOT to C1 -- fixing B-136 makes C1 substantially
     MORE attractive, leaving it at its 1/base_rate volume multiplier with ordinary trace semantics. B-137''s
     step-(3) council MUST be briefed on this: the deferral filed earlier today cited C1''s eviction cost
-    and that citation is now SUPERSEDED. The two B-137 C1 witnesses were re-priced in the same PR.'
+    and that citation is now SUPERSEDED. The two B-137 C1 witnesses were re-priced in the same PR. ADJACENT
+    FINDING REGISTERED (codex round 2 on this PR): the three materialization sites -- :478 (original ordinary-root
+    close), :437 (B-133 event arm) and :391 (this repair) -- all pop the per-trace bucket with NO lock,
+    while a concurrent child on_end can setdefault an empty bucket and append to it after the pop, losing
+    the span entirely. That window is PRE-EXISTING and module-wide (no threading.Lock anywhere), so it is
+    NOT introduced here; this repair widens the exposed population by making every always-sampled root materialize.
+    Registered as B-163 with the reachability question as its first close-out step.'
   council: 'No. A single-domain C7 question about the tail-keep buffering algorithm''s own bookkeeping, sitting
     squarely inside §9.3''s implementer-discretion clause, with a named two-trace probe that answers it.
     Convene nothing. The one thing that would change that is step (3) turning out to reduce exported
@@ -8805,3 +8811,35 @@ items:
     have emitters that **nothing in `src/` calls**, so neither span is ever emitted in production *(surfaced
     while re-measuring B-137 at the real venue, 2026-08-13; the overclaim it corrects was caught by out-of-family
     Codex)*'
+- id: B-163
+  title: TailKeepSpanProcessor mutates _buffer / _keep / its counters with NO lock, so a concurrent child-on_end
+    and root-on_end can lose a span entirely -- pre-existing at all three materialization sites
+  status: registered_finding
+  summary: 'OTel''s SpanProcessor.on_end is called from whichever thread ends the span, so the SDK contract
+    requires thread-safety. TailKeepSpanProcessor guards NONE of _buffer, _keep, _dropped_trace_count
+    or _dropped_span_count -- no threading.Lock anywhere in the module and no docstring claim of single-threaded
+    use. LOSING INTERLEAVING: a child on_end runs bucket = self._buffer.setdefault(trace_id, []) creating
+    an empty list and is descheduled before bucket.append(span); a root on_end on another thread runs
+    _materialize_trace_decision, whose first act is self._buffer.pop(trace_id, []) -- it pops the empty
+    list and forwards nothing; the child resumes and appends to a detached list. The span reaches NEITHER
+    downstream NOR _buffer, so even force_flush cannot recover it, and when the root is a s10.2 trigger
+    the lost span is exactly the context the keep flag was meant to preserve. PRE-EXISTING and NOT introduced
+    by B-136: the identical shape sits at all three materialization sites -- :478 (original ordinary-root
+    close), :437 (B-133 event arm), :391 (B-136 name arm). B-136 widened the exposed population but the
+    unguarded pop-vs-setdefault window is the module''s from the start.'
+  close_out: '(1) ESTABLISH REACHABILITY before sizing the fix -- the runtime is predominantly single-event-loop,
+    so the question is which real paths end spans off that thread (BatchSpanProcessor''s worker, shutdown/atexit
+    drains, any thread-pool sub-agent dispatch). A race no shipped path can reach is a latent contract
+    violation rather than a live defect, and that sets the priority. (2) THE FIX IS SMALL AND CONTAINED
+    -- one threading.Lock (or RLock, since _materialize_trace_decision is called from inside on_end) guarding
+    the buffer/keep mutations in on_end, _materialize_trace_decision, _evict_oldest_trace and force_flush.
+    Hold it only around the dict work, NEVER across downstream.on_end, or a slow exporter serialises every
+    span. (3) WITNESS WITH A COORDINATED INTERLEAVING, not a stress loop: drive the exact setdefault-pause-pop-append
+    order via an event or a monkeypatched setdefault so the test is deterministic and actually fails without
+    the lock. FALSIFIER: a demonstration that on_end is only ever invoked from one thread in every shipped
+    composition (latent, not live), or a lock landing that makes the coordinated witness pass.'
+  council: no -- a single-domain C7 thread-safety repair against an explicit OTel SDK contract, with no
+    cross-axis surface and no committed envelope to renegotiate.
+  heading: '### B-163 · `TailKeepSpanProcessor` mutates `_buffer` / `_keep` / its counters with **no lock**,
+    so a concurrent child-`on_end` and root-`on_end` can lose a span entirely — pre-existing at all three
+    materialization sites *(surfaced by out-of-family Codex at the B-136 arc, 2026-08-13)*'
