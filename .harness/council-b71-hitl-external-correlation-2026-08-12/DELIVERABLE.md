@@ -44,7 +44,7 @@ becomes a span attribute whether or not anyone adds a dedicated one. (The defaul
 `hitl.invocation.audit_ledger_entry_id` is NOT a carrier here — unreachable on the
 escalation path; see §4-quater.1.)
 
-**Precondition 4 was then the sole remaining gate** — closed at v5 (§4-quinquies).
+**Precondition 4 remains the sole remaining gate** — SHARPENED at v5 but NOT closed (§4-quinquies.4).
 
 ## Change-note (v2 → v3)
 
@@ -214,7 +214,7 @@ boundary that the ingress will not honor. Live today, independent of B-71.
   `project_brief_to_payload` (`webhook_brief_adapter.py:47`) is an explicit
   field-by-field mapper, so an unset Optional adds no key.
 
-## 4-quinquies. PRECONDITION 4, RESOLVED (v5) — the window, scoped exactly
+## 4-quinquies. PRECONDITION 4, SHARPENED — NOT RESOLVED (v5) — the window, corrected
 
 ### 4-quinquies.1 The link the scope rested on, now executed
 
