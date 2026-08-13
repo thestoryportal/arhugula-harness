@@ -1025,10 +1025,26 @@ def test_b164_a_post_cutoff_batch_does_not_consume_the_flush_budget() -> None:
 
 
 def test_b164b_the_only_manual_lifetime_span_is_uncalled() -> None:
-    """**B-164(b) disposition** — the malformed-trace shape is unreachable, on a stated basis.
+    """**B-164(b) inventory invariant** — pins the manual-lifetime span set. Does NOT close the row.
 
     B-164(b) needs a **root to end before its own child**. Step (3) asked whether that is
     worth defending against.
+
+    **Read this first: this test does NOT establish that B-164(b) is unreachable.** It was
+    written to, and that closure was WITHDRAWN at review. The assertions below are true and
+    worth keeping — they pin the manual-lifetime span inventory and reopen loudly if it
+    changes — but the *closure* they were used to justify rested on an additional, unstated
+    universal: *"the interleaving needs a span whose end() can be called out of order, or one
+    handed to another thread; production has neither."* Production **has** the second, by
+    deliberate design: `harness_cp.workflow_driver._run_fanout_to_completion` abandons its
+    executor on any exception via `shutdown(wait=False)` ("the orphaned thread runs to
+    completion in the background"), branch dispatch runs under `asyncio.to_thread` — which
+    copies the `contextvars` context, so the OTel parent propagates into that thread and
+    `llm_dispatch` opens a real child span there — and the §25.11 barrier deadline then
+    unwinds the `workflow.envelope` root while that child is still open. So a root CAN end
+    before its own child with zero manual `start_span` calls, and B-164(b) stays OPEN until
+    someone either builds a repro through that path or argues positively that an orphaned
+    child span cannot reach the processor after its root materializes.
 
     **A first version of this test asserted the wrong thing and passed vacuously.** It
     claimed production held *zero* manual-lifetime spans, but filtered on `ast.Assign` only —
@@ -1044,11 +1060,13 @@ def test_b164b_the_only_manual_lifetime_span_is_uncalled() -> None:
        own docstring says *"never invoked"*. It is the same landed-but-uncalled shape as
        `B-162`.
 
-    So the shape is unreachable **because nothing calls the only code that could produce
-    it**, not because no such code exists. That is a weaker claim than the first draft made,
-    and it is the true one. If either part changes — a second manual-lifetime span appears,
-    or something calls this one — B-164(b) becomes live again and must be re-adjudicated on
-    its merits, which is what the failure messages below say.
+    So *this particular* route to the shape — a manual-lifetime span ended out of order — is
+    closed off **because nothing calls the only code that could produce it**. That is a
+    strictly weaker claim than the first draft made, and it is the true one. It is also not
+    sufficient to close B-164(b), per the paragraph above: the fan-out orphaned-thread route
+    reaches the same ordering without any manual-lifetime span at all. If either part below
+    changes — a second manual-lifetime span appears, or something calls this one — a second
+    independent route opens too, which is what the failure messages below say.
     """
     manual_sites: list[str] = []
     for path in _REPO.glob("harness-*/src/**/*.py"):
