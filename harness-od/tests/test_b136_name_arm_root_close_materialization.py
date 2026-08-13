@@ -839,3 +839,50 @@ def test_b164_force_flush_redrains_a_span_that_buffers_after_the_first_pass() ->
     )
     assert tail.buffered_trace_count == 0, "the buffer was not fully drained"
     assert result == [True], f"force_flush reported {result} despite draining everything"
+
+
+def test_b164_a_callback_queued_on_the_state_lock_is_already_counted() -> None:
+    """**B-164 round 7** — entrants are counted BEFORE they contend on `_state_lock`.
+
+    The entry counter used to be guarded by `_state_lock` itself (via the shared condition).
+    That reintroduced the same class of hole one level down: a callback reaching `on_end`
+    while `force_flush` held the state lock would block **before** being counted, so the
+    flusher could release, immediately reacquire for its zero check, observe nothing, and
+    return — after which the queued callback buffered an already-ended span.
+
+    The counter now has its own `_entry_lock`, held only for two integer operations. This
+    asserts the ordering directly: with `_state_lock` held by the test, a span ending on
+    another thread is **already counted** even though it cannot yet proceed.
+    """
+    downstream = _Downstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b164.queued")
+
+    root_span = tracer.start_span(_QUIET_ROOT)
+    child = tracer.start_span("ordinary.child", context=otel_trace.set_span_in_context(root_span))
+
+    # Hold the state lock so the ending callback is stuck contending for it.
+    with tail._state_lock:
+        producer = threading.Thread(target=child.end, name="b164-queued-producer")
+        producer.start()
+
+        # Give the producer time to reach the contention point. The ASSERTION does not
+        # depend on this window being long enough — if the producer has not entered yet the
+        # counter reads 0 and the test fails loudly rather than passing vacuously.
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not tail._entrants_pending():
+            time.sleep(0.01)
+
+        assert tail._entrants_pending(), (
+            "a callback queued on `_state_lock` is NOT counted as an entrant — a flusher "
+            "holding that lock could release, re-check, see zero and return, and this span "
+            "would then be buffered after the flush completed"
+        )
+        # It genuinely cannot have proceeded: nothing is buffered while we hold the lock.
+        assert tail.buffered_trace_count == 0
+
+    producer.join(timeout=5.0)
+    assert not producer.is_alive(), "the producer hung"
+    assert not tail._entrants_pending(), "the entry counter did not settle back to zero"

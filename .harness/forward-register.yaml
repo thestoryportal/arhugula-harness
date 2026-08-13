@@ -8991,7 +8991,16 @@ items:
     now named together in the code comment ((i) detached-not-forwarded, (ii) entered-not-registered, (iii)
     buffered-after-the-pass) so the next reader sees why a single pass cannot work. Witness suspends the
     producer inside on_end so the first drain sees an EMPTY buffer, releases it only once the flusher is
-    parked, and asserts delivery; mutation-probed 3/3 RED with the loop reduced to one pass.'
+    parked, and asserts delivery; mutation-probed 3/3 RED with the loop reduced to one pass. ROUND-7 (codex
+    on PR #1332) -- THE ENTRY COUNTER NEEDED ITS OWN LOCK. Guarding it with _state_lock (which _inflight_cv
+    shares) reintroduced the same hole one level down: a callback reaching on_end while force_flush held
+    that lock blocked BEFORE being counted, so the flusher could release, immediately reacquire for its
+    zero check, observe nothing and return -- after which the queued callback buffered an already-ended
+    span. _active_on_end now lives under a dedicated _entry_lock held for two integer operations only, read
+    via _entrants_pending(); the state lock and the entry lock are never nested in a way that could deadlock,
+    since _entrants_pending takes only the entry lock. Witness holds _state_lock in the test and asserts
+    a span ending on another thread is ALREADY counted while provably unable to proceed (buffer still empty).
+    Mutation-probed 3/3 RED with the entry counted under _state_lock again.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before
