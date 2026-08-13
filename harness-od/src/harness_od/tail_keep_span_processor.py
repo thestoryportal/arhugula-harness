@@ -275,9 +275,10 @@ __all__ = [
 #:
 #: It is NOT the retention rule for a child that is ALREADY OPEN at root close — that one
 #: is live-pinned and exempt from eviction here, so this ceiling can never age out the case
-#: the first revision's fixed window got wrong. It also caps `_open_spans`, whose only
-#: unbounded case is a span that starts and never ends ("still open" being
-#: indistinguishable from "gone").
+#: the first revision's fixed window got wrong. It is also the threshold at which `_keep`
+#: is swept for provably-stale flags. It does NOT cap `_open_spans` — see
+#: `_retain_open_span` for why capping that one produced a wrong answer rather than a
+#: smaller dict.
 #:
 #: **What is lost past it, stated exactly.** An aged-out trace reverts to the pre-fix
 #: behaviour, and that is NOT merely a delay: with `max_buffered_traces` set — which
@@ -438,6 +439,11 @@ class TailKeepSpanProcessor(SpanProcessor):
         # evicted it outright and a late trigger recreated the `_keep` leak. Liveness is not
         # a bigger window; it is the exact condition, so there is no boundary to cross.
         self._open_spans: dict[int, int] = {}
+        # `B-164(b)` round 5 — when `_keep` passes this, it is swept for entries no root
+        # close can pop. Doubles when a sweep frees nothing, so a workload with genuinely
+        # more than `_LIVENESS_TRACKING_CEILING` pending trigger-bearing traces neither
+        # loses a valid decision nor pays a full rescan per trigger.
+        self._keep_sweep_threshold: int = _LIVENESS_TRACKING_CEILING
         # OD spec v1.28 §9.3 operator-tunable bounded-buffer ceilings. None =
         # unbounded (v1.27 MVP behavior); the production materializer passes
         # the `CollectorConfig` ceilings so production is bounded by default.
@@ -796,17 +802,9 @@ class TailKeepSpanProcessor(SpanProcessor):
                 # the bounded history a late trigger looks like an ordinary pending trace
                 # and writes an entry no root close will ever pop, so REPEATING that
                 # ordering grew `_keep` without limit. A bounded fidelity loss is this
-                # component's accepted posture; an unbounded memory leak is not, so the
-                # dict carries its own ceiling.
-                #
-                # Evicting a keep flag degrades that trace to keep=False, dropping its
-                # buffered siblings — the same tradeoff `_evict_oldest_trace` already
-                # makes, and for the same reason. It cannot fire in normal operation:
-                # `_keep` holds one entry per trace that carried a trigger and has not yet
-                # root-closed, which is bounded by live concurrency, so the ceiling is only
-                # ever reached by the leak it exists to contain.
-                while len(self._keep) > _LIVENESS_TRACKING_CEILING:
-                    del self._keep[next(iter(self._keep))]
+                # component's accepted posture; unbounded memory growth is not.
+                if len(self._keep) > self._keep_sweep_threshold:
+                    self._sweep_stale_keep_flags()
             if not is_root_close:
                 return []
             buffered = self._buffer.pop(trace_id, [])
@@ -862,17 +860,55 @@ class TailKeepSpanProcessor(SpanProcessor):
                 # dictionary grow without limit — boundedness is the harder guarantee.
                 del self._materialized[next(iter(self._materialized))]
 
+    def _sweep_stale_keep_flags(self) -> None:
+        """Drop keep flags that no root close can ever pop (`B-164(b)` round 5).
+
+        Called under `_state_lock`. Round 4 bounded `_keep` with a blind FIFO ceiling, and
+        out-of-family review showed that discards LEGITIMATE decisions: with more than
+        `_LIVENESS_TRACKING_CEILING` trigger-bearing traces genuinely pending root close —
+        possible whenever `max_buffered_traces` is larger or unbounded — the oldest valid
+        entry was evicted, its trace then materialized `keep=False`, and its root and
+        siblings were dropped SILENTLY, with `dropped_trace_count` still reading zero.
+
+        Staleness is decidable rather than guessed: an entry is stale exactly when its
+        trace is neither buffered nor live, since either would mean a root close is still
+        coming for it. Only those are removed, so a valid pending decision is never lost.
+        `_buffer` and `_open_spans` are both consulted because either alone is
+        insufficient — a trace whose only spans so far were always-sampled has a keep flag
+        and no bucket, and a trace older than the `_open_spans` ceiling has a bucket and no
+        liveness entry.
+
+        If a sweep frees nothing, every entry is backed by a real in-flight trace and the
+        dict is bounded by actual concurrency, so the threshold doubles instead of evicting
+        something valid. That also keeps the sweep amortized O(1) per write rather than
+        rescanning the whole dict on every trigger once the ceiling is passed.
+        """
+        for trace_id in [
+            candidate
+            for candidate in self._keep
+            if candidate not in self._buffer and candidate not in self._open_spans
+        ]:
+            del self._keep[trace_id]
+        self._keep_sweep_threshold = max(_LIVENESS_TRACKING_CEILING, len(self._keep) * 2)
+
     def _retain_open_span(self, trace_id: int) -> None:
         """Count one more started-and-not-yet-ended span for `trace_id` (`B-164(b)`).
 
-        Called under `_state_lock` from `on_start`. Bounded by the same abandoned-span
-        backstop: shedding the oldest count only costs the trace its liveness-keyed
-        retention, after which it falls back to the FIFO ceiling — it can never make a
-        count go negative, because `_release_open_span` ignores an absent entry.
+        Called under `_state_lock` from `on_start`.
+
+        **Deliberately NOT capped** (`B-164(b)` round 5). An earlier revision shed the
+        oldest entries past a ceiling, and that turned an accurate liveness signal into a
+        misleading one: `_sweep_stale_keep_flags` reads "absent from `_open_spans`" as
+        "no root close is coming", so a shed entry made a genuinely live trace look
+        finished and cost it its valid keep flag — silently. A wrong answer is worse here
+        than a larger dict.
+
+        Its size is not unbounded in any meaningful sense: it holds one small entry per
+        trace with a span that has started and not ended, so it tracks the application's
+        real live-span count. The only way it grows without limit is an application that
+        leaks spans, which already leaks strictly more than the two integers held here.
         """
         self._open_spans[trace_id] = self._open_spans.get(trace_id, 0) + 1
-        while len(self._open_spans) > _LIVENESS_TRACKING_CEILING:
-            del self._open_spans[next(iter(self._open_spans))]
 
     def _release_open_span(self, span: ReadableSpan) -> None:
         """Drop one live span for its trace (`B-164(b)`).

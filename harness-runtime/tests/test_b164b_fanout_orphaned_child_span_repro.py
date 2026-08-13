@@ -505,6 +505,47 @@ def test_b164b_keep_flags_stay_bounded_when_triggers_arrive_past_the_history() -
     )
 
 
+def test_b164b_bounding_keep_flags_never_discards_a_live_keep_decision() -> None:
+    """**Bounding the leak must not silently drop VALID keep decisions.**
+
+    The first attempt at the bound was a blind FIFO ceiling on `_keep`, and out-of-family
+    review showed it discards legitimate state: with more than `_LIVENESS_TRACKING_CEILING`
+    trigger-bearing traces genuinely pending root close, the oldest valid entry was
+    evicted, its trace then materialized `keep=False`, and its root was dropped — silently,
+    with `dropped_trace_count` still zero, so nothing in the metrics would show it.
+
+    Every trace here is legitimately in flight (root still open, trigger already seen), so
+    NOTHING is evictable and all of them must survive. `max_buffered_traces` is left
+    unbounded on purpose: that isolates the failure to the keep-flag ceiling rather than
+    to buffer pressure, which is exactly the case review raised.
+    """
+    fx = _Fixture()
+    pending = _LIVENESS_TRACKING_CEILING + 64
+
+    roots = []
+    for i in range(pending):
+        root = fx.tracer.start_span(f"pending.root.{i}")
+        # An always-sampled §10.2 trigger inside the still-open root: it forwards
+        # immediately and sets the trace's keep flag without ever entering the buffer.
+        fx.tracer.start_span(_TRIGGER, context=set_span_in_context(root)).end()
+        roots.append(root)
+
+    for root in roots:
+        root.end()
+
+    forwarded_roots = {name for name in fx.downstream.seen if name.startswith("pending.root.")}
+    assert len(forwarded_roots) == pending, (
+        f"only {len(forwarded_roots)} of {pending} keep-flagged roots were forwarded — a "
+        f"valid keep decision was discarded by the bound "
+        f"(dropped_trace_count={fx.tail.dropped_trace_count}, which stays 0 precisely "
+        f"because this loss does not go through buffer eviction)"
+    )
+    assert fx.tail._keep == {}, (
+        f"keep flags survived their own root closes ({len(fx.tail._keep)} left) — every "
+        f"one of these traces root-closed, so every flag should have been popped"
+    )
+
+
 def test_b164b_a_late_trigger_leaks_no_keep_entry_and_is_itself_preserved() -> None:
     """**Repaired.** The late trigger neither leaks nor vanishes.
 
