@@ -546,6 +546,69 @@ def test_b164b_bounding_keep_flags_never_discards_a_live_keep_decision() -> None
     )
 
 
+def test_b164b_history_pressure_never_evicts_a_provably_live_trace() -> None:
+    """**A ceiling may shed history; it may never shed a proven-live pin.**
+
+    An earlier revision, when every `_materialized` entry was live-pinned, shed the oldest
+    one anyway on the reasoning that boundedness was the harder guarantee. Out-of-family
+    review pointed out what that costs: `_open_spans` PROVES that trace still has an open
+    descendant, and deleting its entry puts that descendant back on the stranding path —
+    the `B-164(b)` loss, restored by the bound meant to make the fix safe.
+
+    Every trace here has root-closed with a child still open, so nothing is evictable and
+    the ceiling must give way instead of the guarantee. Growth is safe in exactly this
+    case, because each retained entry is backed by a live span and is therefore bounded by
+    real concurrency rather than by traffic.
+    """
+    fx = _Fixture(max_buffered_traces=1)
+    live = _LIVENESS_TRACKING_CEILING + 64
+
+    children = []
+    for i in range(live):
+        root = fx.tracer.start_span(f"live.root.{i}")
+        children.append(fx.tracer.start_span(f"{_CHILD}.{i}", context=set_span_in_context(root)))
+        root.end()
+
+    for child in children:
+        child.end()
+
+    forwarded = {name for name in fx.downstream.seen if name.startswith(_CHILD)}
+    assert len(forwarded) == live, (
+        f"only {len(forwarded)} of {live} live-pinned children were forwarded — a trace "
+        f"proven live by _open_spans was evicted from the materialization memory and its "
+        f"child stranded (dropped_trace_count={fx.tail.dropped_trace_count})"
+    )
+
+
+def test_b164b_a_failing_downstream_on_start_does_not_leak_liveness() -> None:
+    """**A rolled-back span must not leave a permanent liveness pin.**
+
+    `on_start` increments before forwarding, so if the downstream processor raises, the
+    SDK propagates before `Tracer.start_span` returns and the span never exists — no
+    `on_end` will ever come to undo the increment. Repeated failures would leak one entry
+    per trace and could wrongly pin materialization state for traces that never ran.
+
+    The exception must still reach the caller: swallowing it would hide a downstream fault
+    behind a tracing component, so that is asserted too.
+    """
+
+    class _FailingOnStart(_Downstream):
+        def on_start(self, span: Any, parent_context: Any = None) -> None:
+            raise RuntimeError("downstream refused the span")
+
+    fx = _Fixture()
+    fx.tail._downstream = _FailingOnStart()  # type: ignore[assignment]
+
+    for _ in range(64):
+        with pytest.raises(RuntimeError, match="downstream refused the span"):
+            fx.tracer.start_span("rejected.root")
+
+    assert fx.tail._open_spans == {}, (
+        f"spans that never came into existence left {len(fx.tail._open_spans)} liveness "
+        f"entries behind — each one is permanent, since no on_end can ever release it"
+    )
+
+
 def test_b164b_a_late_trigger_leaks_no_keep_entry_and_is_itself_preserved() -> None:
     """**Repaired.** The late trigger neither leaks nor vanishes.
 

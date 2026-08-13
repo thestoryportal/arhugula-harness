@@ -444,6 +444,10 @@ class TailKeepSpanProcessor(SpanProcessor):
         # more than `_LIVENESS_TRACKING_CEILING` pending trigger-bearing traces neither
         # loses a valid decision nor pays a full rescan per trigger.
         self._keep_sweep_threshold: int = _LIVENESS_TRACKING_CEILING
+        # `B-164(b)` round 6 — the effective ceiling on `_materialized`. Doubles when every
+        # entry is live-pinned (evicting one would strand a span whose trace is provably
+        # still open) and returns to the base once the burst drains.
+        self._materialized_ceiling: int = _LIVENESS_TRACKING_CEILING
         # OD spec v1.28 §9.3 operator-tunable bounded-buffer ceilings. None =
         # unbounded (v1.27 MVP behavior); the production materializer passes
         # the `CollectorConfig` ceilings so production is bounded by default.
@@ -484,12 +488,23 @@ class TailKeepSpanProcessor(SpanProcessor):
         still receive a late arrival. Tracking is done HERE, before forwarding, because
         this is the only point at which the processor learns a span exists before it ends;
         the whole defect was about a span the processor could not otherwise anticipate.
+
+        `B-164(b)` round 6 (out-of-family Codex, P2) — if the downstream processor raises
+        from `on_start`, the SDK propagates before `Tracer.start_span` returns, so the span
+        never exists and no `on_end` will ever undo the increment. Repeated start failures
+        would leak one entry per trace and could wrongly pin materialization state, so the
+        increment is rolled back before the exception continues on its way.
         """
         # `Span.get_span_context()` is non-optional (unlike `ReadableSpan`'s, which is why
-        # `_release_open_span` still guards), so this needs no None check.
+        # the `on_end` caller still guards), so this needs no None check.
+        trace_id = span.get_span_context().trace_id
         with self._state_lock:
-            self._retain_open_span(span.get_span_context().trace_id)
-        self._downstream.on_start(span, parent_context)
+            self._retain_open_span(trace_id)
+        try:
+            self._downstream.on_start(span, parent_context)
+        except BaseException:
+            self._release_open_span(trace_id)
+            raise
 
     def on_end(self, span: ReadableSpan) -> None:
         with self._entry_lock:
@@ -504,7 +519,9 @@ class TailKeepSpanProcessor(SpanProcessor):
             # test inside it reads `_materialized`, and this span is precisely one of the
             # live spans keeping that entry alive. Releasing first could discard the entry
             # a concurrent sibling is about to consult.
-            self._release_open_span(span)
+            ended_ctx = span.get_span_context()
+            if ended_ctx is not None:
+                self._release_open_span(ended_ctx.trace_id)
             with self._entry_lock:
                 self._active_entries.discard(entry_id)
             # Wake any flusher parked on the batch condition; the entry count it also
@@ -847,18 +864,34 @@ class TailKeepSpanProcessor(SpanProcessor):
 
         Eviction is FIFO but SKIPS live-pinned entries, so the bounded half can never
         expire the exact half. Entries older than the ceiling are almost never live, so
-        the scan below breaks on its first candidate in practice.
+        the scan below finds its victim on the first candidate in practice.
+
+        `B-164(b)` round 6 (out-of-family Codex, P2) — when NOTHING is evictable the
+        ceiling gives way instead of the guarantee. An earlier revision shed the oldest
+        entry anyway "because boundedness is the harder guarantee", but that deletes a
+        trace `_open_spans` PROVES is live, and its descendant is then stranded on the
+        very path this arm exists to close. Growing is safe here in a way it is not for
+        pure history: every retained entry is backed by a live span, so the size is bounded
+        by real concurrency rather than by traffic. Same resolution as
+        `_sweep_stale_keep_flags`, for the same reason.
         """
         self._materialized[trace_id] = None
-        while len(self._materialized) > _LIVENESS_TRACKING_CEILING:
-            for candidate in self._materialized:
-                if candidate not in self._open_spans:
-                    del self._materialized[candidate]
-                    break
-            else:
-                # Every entry is live-pinned. Shed the oldest anyway rather than let the
-                # dictionary grow without limit — boundedness is the harder guarantee.
-                del self._materialized[next(iter(self._materialized))]
+        while len(self._materialized) > self._materialized_ceiling:
+            victim = next(
+                (
+                    candidate
+                    for candidate in self._materialized
+                    if candidate not in self._open_spans
+                ),
+                None,
+            )
+            if victim is None:
+                self._materialized_ceiling = len(self._materialized) * 2
+                return
+            del self._materialized[victim]
+        # Once the live burst drains, the history returns to its ordinary ceiling.
+        if len(self._materialized) <= _LIVENESS_TRACKING_CEILING:
+            self._materialized_ceiling = _LIVENESS_TRACKING_CEILING
 
     def _sweep_stale_keep_flags(self) -> None:
         """Drop keep flags that no root close can ever pop (`B-164(b)` round 5).
@@ -910,7 +943,7 @@ class TailKeepSpanProcessor(SpanProcessor):
         """
         self._open_spans[trace_id] = self._open_spans.get(trace_id, 0) + 1
 
-    def _release_open_span(self, span: ReadableSpan) -> None:
+    def _release_open_span(self, trace_id: int) -> None:
         """Drop one live span for its trace (`B-164(b)`).
 
         At zero the trace stops being live-PINNED in `_materialized`, but its entry is NOT
@@ -920,20 +953,20 @@ class TailKeepSpanProcessor(SpanProcessor):
         onto the stranding path. The entry now ages out of the bounded history instead.
 
         An absent count is ignored rather than treated as zero, so a span whose `on_start`
-        this processor never saw (registered on the provider mid-flight, or shed by the
-        backstop) can never drive the count negative.
+        this processor never saw (a processor registered on the provider mid-flight) can
+        never drive the count negative.
+
+        Takes a `trace_id` rather than a span because `on_start`'s failure path also has to
+        undo an increment, and at that point there is no ended span to read it from.
         """
-        ctx = span.get_span_context()
-        if ctx is None:  # pragma: no cover - a span reaching on_end always has a context
-            return
         with self._state_lock:
-            remaining = self._open_spans.get(ctx.trace_id)
+            remaining = self._open_spans.get(trace_id)
             if remaining is None:
                 return
             if remaining > 1:
-                self._open_spans[ctx.trace_id] = remaining - 1
+                self._open_spans[trace_id] = remaining - 1
                 return
-            del self._open_spans[ctx.trace_id]
+            del self._open_spans[trace_id]
 
     def _evict_oldest_trace(self) -> None:
         """Drop the oldest buffered trace (FIFO) under the max-traces ceiling.
