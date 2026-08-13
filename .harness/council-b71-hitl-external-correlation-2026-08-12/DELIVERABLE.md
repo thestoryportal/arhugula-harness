@@ -961,9 +961,7 @@ to the tracing channel.
    is exactly *[webhook delivery succeeds → driver captures the pause snapshot]*; outside
    it the token reproduces, on the now-WITNESSED reuse of `snapshot.run_id`. The residual
    inside the window cannot be closed by the token's shape and needs a durability change
-   against §3's ordering — its own arc. Full derivation at §4-quinquies. The spec leg still owes an explicit scope
-   statement **and a live-resume witness for the cited half**; what v2 removes is the
-   *unbounded* reading, which is what basis (C) would have had.
+   against §3's ordering — its own arc. Full derivation at §4-quinquies.
 5. ~~**Carry the observability disposition** — resolve the charter's "not a span
    attribute" premise against C1's `hitl.escalation.instance_id` proposal, and extend
    C10's leak-bar analysis from the webhook channel to the **tracing-export** channel
