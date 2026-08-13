@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 162
+  total: 164
   open: 1
   design_substrate_gated: 0
   registered_finding: 30
   operator_gated: 0
   held: 2
-  closed: 129
-  identity_digest: 'a04504f65414b512'
+  closed: 131
+  identity_digest: '2e76e32e5e004568'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7320,7 +7320,8 @@ items:
 - id: B-136
   title: 'The tail-keep name-matching always-sampled arm returns before the root-close materialization, so an
     always-sampled ROOT leaves its trace buffered until force_flush'
-  status: registered_finding
+  status: closed
+  pr: 1331
   summary: 'WHAT IT IS, MEASURED RATHER THAN REASONED. TailKeepSpanProcessor.on_end''s §9.2 name-matching arm
     (harness-od/src/harness_od/tail_keep_span_processor.py, the is_always_sampled(span.name,
     span.attributes) branch) forwards the span to the downstream processor, optionally sets the §10.2
@@ -7345,30 +7346,65 @@ items:
     oversight: repairing the name arm changes shipped behaviour for every name-shaped always-sampled
     root, which the B-133 arc had no authority to do. SURFACED AT THE B-133 LEG BY DIRECT PROBE,
     2026-08-08.'
-  close_out: '(1) RE-GROUND, because the arm may have moved. Re-run the two-trace probe at the then-current HEAD
-    (always-sampled ROOT + one ordinary child, versus an ordinary root + one ordinary child) and confirm
-    buffered_trace_count is still 1 versus 0. Grep proves the return statement; only the run proves the
-    trace is still stranded. (2) DECIDE WHETHER IT IS A DEFECT AT ALL, and this is a real question rather
-    than a formality. force_flush drains keep-all, so nothing is LOST -- what is affected is WHEN the
-    siblings are exported (at drain rather than at root close) and how much max_buffered_traces headroom
-    a long-running process retains. A deployment whose always-sampled roots are rare pays nothing. Ground
-    the answer against C-OD-09 §9.3''s implementer-discretion clause, which is where the buffering
-    algorithm''s shape lives, before pricing anything. (3) IF IT IS A DEFECT, THE REPAIR IS SMALL BUT
-    NOT FREE: mirror OD spec v1.38 §9.2.1 term 5 onto the name arm (materialize the trace decision when
-    the forwarded span is the root close). It is ~2 lines. What is NOT free is the behaviour change --
-    every existing witness that asserts on export ORDER or on buffered_trace_count around an
-    always-sampled root must be re-grounded, and a trace whose siblings previously survived to
-    force_flush keep-all would, after the repair, be DROPPED at root close if no §10.2 trigger fired.
-    That is a real reduction in exported spans for a real population, and it is the reason this was
-    registered rather than folded into the B-133 arm. (4) WITNESS BOTH DIRECTIONS if built: the root-close
-    resolution (buffered_trace_count -> 0) AND the drop-when-no-trigger consequence, so the repair is not
-    mistaken for a pure bookkeeping fix. (5) DECIDE THE VENUE. If the answer to (2) is that force_flush
-    keep-all is the CONTRACTED behaviour, this closes as WORKING-AS-DESIGNED and the module docstring''s
-    "Drop semantics (false-but-bounded)" paragraph should be extended to say so explicitly, since it
-    currently describes only the never-root-closing case and not this one. WHAT WOULD FALSIFY IT. A
-    re-run showing buffered_trace_count == 0 for the always-sampled-root trace (the arm having been
-    changed since), or a ratified reading that deferring always-sampled-root traces to force_flush is
-    intended.'
+  close_out: 'SUPERSEDED-NOTICE: this row is CLOSED at PR #1331. Everything below the CLOSED paragraph is
+    PRE-REPAIR HISTORY -- the ''returns unconditionally'' description and the (1)-(5) close-out steps are
+    all DISCHARGED and must not be re-run. (1) RE-GROUND, because the arm may have moved. Re-run the two-trace
+    probe at the then-current HEAD (always-sampled ROOT + one ordinary child, versus an ordinary root +
+    one ordinary child) and confirm buffered_trace_count is still 1 versus 0. Grep proves the return statement;
+    only the run proves the trace is still stranded. (2) DECIDE WHETHER IT IS A DEFECT AT ALL, and this
+    is a real question rather than a formality. force_flush drains keep-all, so nothing is LOST -- what
+    is affected is WHEN the siblings are exported (at drain rather than at root close) and how much max_buffered_traces
+    headroom a long-running process retains. A deployment whose always-sampled roots are rare pays nothing.
+    Ground the answer against C-OD-09 §9.3''s implementer-discretion clause, which is where the buffering
+    algorithm''s shape lives, before pricing anything. (3) IF IT IS A DEFECT, THE REPAIR IS SMALL BUT NOT
+    FREE: mirror OD spec v1.38 §9.2.1 term 5 onto the name arm (materialize the trace decision when the
+    forwarded span is the root close). It is ~2 lines. What is NOT free is the behaviour change -- every
+    existing witness that asserts on export ORDER or on buffered_trace_count around an always-sampled root
+    must be re-grounded, and a trace whose siblings previously survived to force_flush keep-all would, after
+    the repair, be DROPPED at root close if no §10.2 trigger fired. That is a real reduction in exported
+    spans for a real population, and it is the reason this was registered rather than folded into the B-133
+    arm. (4) WITNESS BOTH DIRECTIONS if built: the root-close resolution (buffered_trace_count -> 0) AND
+    the drop-when-no-trigger consequence, so the repair is not mistaken for a pure bookkeeping fix. (5)
+    DECIDE THE VENUE. If the answer to (2) is that force_flush keep-all is the CONTRACTED behaviour, this
+    closes as WORKING-AS-DESIGNED and the module docstring''s "Drop semantics (false-but-bounded)" paragraph
+    should be extended to say so explicitly, since it currently describes only the never-root-closing case
+    and not this one. WHAT WOULD FALSIFY IT. A re-run showing buffered_trace_count == 0 for the always-sampled-root
+    trace (the arm having been changed since), or a ratified reading that deferring always-sampled-root
+    traces to force_flush is intended. CLOSED 2026-08-13 (PR #1331) -- REPAIRED, and it turns out to matter
+    more than the row priced. (1) RE-GROUND at HEAD: the two-trace probe still read 1 vs 0, so the arm had
+    not moved. (2) IS IT A DEFECT -- YES, and the row''s own ''nothing is lost, force_flush drains keep-all''
+    premise is FALSE UNDER PRESSURE: measured at max_buffered_traces=3 over 100 always-sampled-root traces,
+    97 are EVICTED and their children never export at all. More decisively it contradicts v1.28 s1.1''s
+    OWN containment model, which reasons that a trace whose first observed span is already its root-close
+    materializes and frees its slot so it does NOT evict -- an always-sampled-root trace root-closed yet
+    behaved like a never-closing one, displacing live traces. (3) REPAIR: mirror OD spec v1.38 s9.2.1 term
+    5 onto the name arm -- the same two lines the B-133 EVENT arm already carries, whose in-line comment
+    names B-136 as the case it must not extend. Consistency with the spec-normative arm is the justification,
+    not novelty. (4) BOTH DIRECTIONS WITNESSED: slot freed at root close for every root shape; a TRIGGERED
+    trace now exports its siblings EARLIER (at root close rather than at drain, same spans); a QUIET always-sampled
+    root (always-sampled but not a s10.2 trigger, e.g. hitl.gate.evaluated) now DROPS its siblings -- a
+    real reduction, and exactly what an ORDINARY root already did. (5) VENUE: not WORKING-AS-DESIGNED. s9.3
+    grants implementer discretion over the buffering algorithm, and this exercises it toward the model v1.28
+    already documents. NO existing witness asserted the stranding (all 1178 OD tests passed unchanged),
+    so the row''s re-grounding concern was precautionary. WITNESS: harness-od/tests/test_b136_name_arm_root_close_materialization.py
+    -- 6 tests, mutation-probed (4 of 6 RED against the pre-repair processor; the other 2 are premise/invariant
+    checks that correctly hold either way). COUPLING TO B-137 STEP (3) -- THE MOST CONSEQUENTIAL PART OF
+    THIS CLOSURE. B-137''s candidate C1 (add workflow.envelope to s9.2) was priced ONE DAY EARLIER as costing
+    DATA LOSS rather than delay, because under C1 every workflow trace has an always-sampled root and therefore
+    hit exactly this arm: measured 3 buffered / 97 evicted at a cap of 3. POST-REPAIR the same C1 counterfactual
+    reads 0 buffered / 0 evicted, and with a s10.2 trigger present 100/100 ordinary children export where
+    previously 0 did. So C1''s principal cost belonged to B-136, NOT to C1 -- fixing B-136 makes C1 substantially
+    MORE attractive, leaving it at its 1/base_rate volume multiplier with ordinary trace semantics. B-137''s
+    step-(3) council MUST be briefed on this: the deferral filed earlier today cited C1''s eviction cost
+    and that citation is now SUPERSEDED. The two B-137 C1 witnesses were re-priced in the same PR. ADJACENT
+    FINDING REGISTERED (codex round 2 on this PR): the three materialization sites -- :478 (original ordinary-root
+    close), :437 (B-133 event arm) and :391 (this repair) -- all pop the per-trace bucket with NO lock,
+    while a concurrent child on_end can setdefault an empty bucket and append to it after the pop, losing
+    the span entirely. That window is PRE-EXISTING and module-wide (no threading.Lock anywhere), so it is
+    NOT introduced here; this repair widens the exposed population by making every always-sampled root materialize.
+    Registered AND FIXED as B-163 in this same PR (codex escalated to P1 on the widening ground, correctly):
+    one threading.RLock guards every buffer/keep/counter mutation, never held across downstream.on_end,
+    with a coordinated deterministic interleaving witness that loses the span when the lock is neutered.'
   council: 'No. A single-domain C7 question about the tail-keep buffering algorithm''s own bookkeeping, sitting
     squarely inside §9.3''s implementer-discretion clause, with a named two-trace probe that answers it.
     Convene nothing. The one thing that would change that is step (3) turning out to reduce exported
@@ -7539,7 +7575,16 @@ items:
     at span creation the head still sees only the carrier''s name and applies the base-rate draw. Measured
     at base_rate=0.0: A-prime exports hitl.gate.evaluated and NOT the event-carrying ordinary.carrier. So
     A-prime must NOT be selected at step (3) as a complete repair -- it would leave the event-carried floor
-    starved. Pinned by test_candidate_a_prime_is_a_name_only_remedy.'
+    starved. Pinned by test_candidate_a_prime_is_a_name_only_remedy. C1 RE-PRICED 2026-08-13 (PR #1331)
+    -- SUPERSEDES this row''s C1 cost statement and the same-day deferral note. C1''s ''data loss, not delay''
+    cost was a consequence of B-136''s name-arm early return, NOT of C1 itself: under C1 every workflow
+    trace has an always-sampled root and so hit that arm. With B-136 REPAIRED the identical C1 counterfactual
+    reads 0 buffered / 0 evicted (was 3 / 97 at a cap of 3), and with a s10.2 trigger present 100/100 ordinary
+    children export where 0 did before. C1 therefore now costs its 1/base_rate volume multiplier with ORDINARY
+    trace semantics -- no stranding, no eviction, no never-resolving population, and the B-136 interaction
+    this row''s step (5) predicted is DISCHARGED rather than aggravated. The step-(3) council must weigh
+    C1 at this corrected price; A-prime''s partial name-only limitation is UNCHANGED, so the A-prime-vs-C1
+    comparison has moved materially toward C1.'
   council: 'YES, and this is the row in the family that genuinely earns one -- unlike B-133, whose repair was
     single-domain. Candidate A trades a real observability floor (C7: a preserved class that is dropped
     before any preservation rule can act on it is not preserved) against a 5x-to-10x in-process span
@@ -8768,3 +8813,115 @@ items:
     have emitters that **nothing in `src/` calls**, so neither span is ever emitted in production *(surfaced
     while re-measuring B-137 at the real venue, 2026-08-13; the overclaim it corrects was caught by out-of-family
     Codex)*'
+- id: B-163
+  title: TailKeepSpanProcessor mutates _buffer / _keep / its counters with NO lock, so a concurrent child-on_end
+    and root-on_end can lose a span entirely -- pre-existing at all three materialization sites
+  status: closed
+  pr: 1331
+  summary: 'OTel''s SpanProcessor.on_end is called from whichever thread ends the span, so the SDK contract
+    requires thread-safety. TailKeepSpanProcessor guards NONE of _buffer, _keep, _dropped_trace_count
+    or _dropped_span_count -- no threading.Lock anywhere in the module and no docstring claim of single-threaded
+    use. LOSING INTERLEAVING: a child on_end runs bucket = self._buffer.setdefault(trace_id, []) creating
+    an empty list and is descheduled before bucket.append(span); a root on_end on another thread runs
+    _materialize_trace_decision, whose first act is self._buffer.pop(trace_id, []) -- it pops the empty
+    list and forwards nothing; the child resumes and appends to a detached list. The span reaches NEITHER
+    downstream NOR _buffer, so even force_flush cannot recover it, and when the root is a s10.2 trigger
+    the lost span is exactly the context the keep flag was meant to preserve. PRE-EXISTING and NOT introduced
+    by B-136: the identical shape sits at all three materialization sites -- :478 (original ordinary-root
+    close), :437 (B-133 event arm), :391 (B-136 name arm). B-136 widened the exposed population but the
+    unguarded pop-vs-setdefault window is the module''s from the start.'
+  close_out: '(1) ESTABLISH REACHABILITY before sizing the fix -- the runtime is predominantly single-event-loop,
+    so the question is which real paths end spans off that thread (BatchSpanProcessor''s worker, shutdown/atexit
+    drains, any thread-pool sub-agent dispatch). A race no shipped path can reach is a latent contract violation
+    rather than a live defect, and that sets the priority. (2) THE FIX IS SMALL AND CONTAINED -- one threading.Lock
+    (or RLock, since _materialize_trace_decision is called from inside on_end) guarding the buffer/keep
+    mutations in on_end, _materialize_trace_decision, _evict_oldest_trace and force_flush. Hold it only
+    around the dict work, NEVER across downstream.on_end, or a slow exporter serialises every span. (3)
+    WITNESS WITH A COORDINATED INTERLEAVING, not a stress loop: drive the exact setdefault-pause-pop-append
+    order via an event or a monkeypatched setdefault so the test is deterministic and actually fails without
+    the lock. FALSIFIER: a demonstration that on_end is only ever invoked from one thread in every shipped
+    composition (latent, not live), or a lock landing that makes the coordinated witness pass. CLOSED 2026-08-13
+    (PR #1331) -- FIXED in the same PR that surfaced it, because that PR WIDENED the reachable surface.
+    Out-of-family Codex escalated to P1 on exactly that ground: the race pre-exists at :478 and :437, but
+    before B-136 the name arm never materialized, so B-136 made it newly reachable for name-matched roots
+    -- widening a known data-loss path without guarding it is not acceptable scoping. THE FIX: one threading.RLock
+    (RLock because _materialize_trace_decision and _evict_oldest_trace are called from inside on_end) guarding
+    every mutation of _buffer / _keep / the counters. SCOPE DISCIPLINE HELD: the lock is NEVER held across
+    downstream.on_end -- _materialize_trace_decision detaches the bucket under the lock and forwards outside
+    it, and force_flush drains atomically then forwards outside, so a slow exporter cannot serialize every
+    span in the process. The eviction test, the setdefault and the append are now ONE critical section,
+    which is precisely the interleaving that was losing spans. WITNESS: harness-od/tests/test_b136_name_arm_root_close_materialization.py::test_b163_a_concurrent_child_and_root_close_cannot_lose_a_span
+    -- a COORDINATED interleaving, not a stress loop: a hooked setdefault blocks the child thread at the
+    exact pause point while the root thread attempts its pop, so the test is deterministic. Mutation-probed
+    by replacing the RLock with contextlib.nullcontext(): the child span is LOST every run (reaches neither
+    downstream nor the buffer), and with the lock it survives. Close-out step (1) -- reachability -- was
+    therefore ANSWERED by construction rather than deferred: the losing order is reproducible on demand,
+    so this was a live defect, not a latent one. ROUND-2 HARDENING + THE RESIDUAL, STATED (codex round 4,
+    P1): the first lock pass guarded each mutation separately, which was NOT enough -- the keep write and
+    the root materialization sat in DIFFERENT critical sections, so a thread could leave TORN state (a _keep
+    entry written against a trace whose buffer another thread had already popped, which nothing would ever
+    pop). All three arms now go through ONE indivisible transition, _publish_keep_and_maybe_detach, which
+    publishes the keep flag and detaches the trace under a single lock acquisition and returns the spans
+    for the caller to forward OUTSIDE the lock. The now-orphaned _materialize_trace_decision was removed.
+    RESIDUAL, NOT CLOSED AND NOT CLAIMED: mutual exclusion fixes TORN STATE, it cannot fix ORDERING. If
+    a root''s on_end runs to completion before a child''s on_end begins, the trace materializes before that
+    child is accounted for, and no lock discipline inside on_end can change that. Reaching it requires a
+    ROOT TO END BEFORE ITS OWN CHILD, which violates the span-nesting contract that OTel and this processor''s
+    entire root-close design assume -- so it is a malformed-trace shape, not a concurrency bug, and is recorded
+    here rather than papered over. An earlier draft of the witness asserted the ordering case and failed,
+    which is what surfaced the distinction; the committed witness asserts the property that IS guaranteed
+    -- for a well-formed trace, a trigger published concurrently with sibling buffering always preserves
+    the siblings and no _keep entry survives materialization. ROUND-3 HARDENING (codex round 5, P1): the
+    state transition now runs BEFORE downstream.on_end(span) in both always-sampled arms, not after. Forwarding
+    never depended on the keep flag, and a SLOW downstream otherwise widened the publication window arbitrarily
+    -- long enough for a concurrent root close to detach the trace with keep=False, dropping the buffered
+    siblings and leaving a stale _keep entry. CRUCIALLY this window opened for a WELL-FORMED trace (trigger
+    child ends before its root, as the nesting contract requires), so unlike the ordering residual above
+    it is CLOSED rather than documented. Witness drives the exact shape: a buffered ordinary child, a sandbox.violation
+    trigger BLOCKED INSIDE downstream, and a quiet always-sampled root closing concurrently. Mutation-probed
+    by moving the forward back ahead of the transition: the sibling is dropped every run. SCOPE OF THIS
+    CLOSURE, FINAL: B-163 is closed for the three windows a lock CAN close, each with a deterministic mutation-probed
+    witness. Codex rounds 4-6 then surfaced two further items that are NOT lock-shaped -- force_flush returning
+    before an in-flight detached batch reaches downstream, and a child paused before it registers -- and
+    those are registered as B-164 rather than patched reactively here. That is arc-sizing, not deferral:
+    the first needs in-flight batch accounting that changes shutdown semantics, and the second cannot be
+    closed by any lock.'
+  council: no -- a single-domain C7 thread-safety repair against an explicit OTel SDK contract, with no
+    cross-axis surface and no committed envelope to renegotiate.
+  heading: '### B-163 · `TailKeepSpanProcessor` mutates `_buffer` / `_keep` / its counters with **no lock**,
+    so a concurrent child-`on_end` and root-`on_end` can lose a span entirely — pre-existing at all three
+    materialization sites *(surfaced by out-of-family Codex at the B-136 arc, 2026-08-13)*'
+- id: B-164
+  title: TailKeepSpanProcessor concurrency residual -- force_flush can return before an in-flight detached
+    batch reaches downstream, and a child paused before registering cannot be registered by any lock
+  status: registered_finding
+  summary: 'B-163 closed the windows a lock CAN close, each with a deterministic witness: the pop-vs-setdefault
+    interleaving, the torn keep-write-vs-materialize transition, and the slow-downstream publication window.
+    What remains is a DESIGN question about batch accounting and shutdown ordering, not another missing
+    with-statement. (a) FORCE_FLUSH DOES NOT WAIT FOR IN-FLIGHT DETACHED BATCHES: _publish_keep_and_maybe_detach
+    detaches under the lock and returns the spans so the caller forwards OUTSIDE it (deliberate -- holding
+    the lock across downstream.on_end would serialize a slow exporter behind every span), but a concurrent
+    force_flush() then sees an EMPTY buffer, delegates downstream and returns True while those already-ended
+    spans are still being forwarded; shutdown can close the downstream first and lose them. PRE-EXISTING:
+    the superseded _materialize_trace_decision had the same pop-then-forward shape. (b) A CHILD PAUSED
+    BEFORE REGISTERING CANNOT BE REGISTERED: if a child''s on_end is descheduled before reaching the buffering
+    critical section, a concurrent always-sampled root can materialize first; the child re-creates the
+    bucket after root close and is stranded or evicted. Moving the lock earlier NARROWS but cannot close
+    it -- a span that has not entered the processor cannot be accounted for. This is the ordering half
+    already recorded on B-163, restated with its eviction consequence, and it requires a root to end before
+    its own child (a malformed trace under the nesting contract).'
+  close_out: '(1) DECIDE WHETHER (a) IS IN SCOPE for a best-effort tail processor at all -- the module''s
+    own ''Drop semantics (false-but-bounded)'' posture and s9.3''s implementer-discretion clause may already
+    contemplate it; ground there first, exactly as B-136''s step (5) did. (2) IF IT IS, implement in-flight
+    accounting (a batch counter plus a condition variable force_flush waits on, or an explicit hand-off
+    queue -- both change shutdown semantics) and witness the shutdown race directly: a slow downstream
+    plus a concurrent force_flush, asserting delivery before return. (3) FOR (b), decide whether a malformed
+    trace shape is worth defending against at all -- if yes, the honest mechanism is a post-materialization
+    late-arrival path, NOT a wider lock. FALSIFIER: a demonstration that force_flush is only ever called
+    after all span-producing threads have quiesced (making (a) unreachable), or a ratified reading that
+    best-effort delivery at shutdown is contracted.'
+  council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
+    with no cross-axis surface.
+  heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before
+    an in-flight detached batch reaches downstream, and a child paused before registering cannot be registered
+    by any lock *(surfaced by out-of-family Codex rounds 4–6 at the B-136/B-163 arc, 2026-08-13)*'

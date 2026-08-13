@@ -1,0 +1,415 @@
+"""B-136 — the §9.2 name arm now materializes the trace decision at root close.
+
+**What B-136 was.** `TailKeepSpanProcessor.on_end`'s §9.2 **name-matching** arm forwarded the
+span downstream, optionally set the §10.2 keep flag, and **returned unconditionally** —
+before the `is_root_close → _materialize_trace_decision(trace_id)` step further down the
+method. When the always-sampled span was itself the trace's root close, the trace's buffered
+siblings were never resolved: they sat in `self._buffer` holding a `max_buffered_traces`
+slot until `force_flush` drained them keep-all.
+
+The `B-133` **event** arm deliberately does *not* share that shape — OD spec v1.38 §9.2.1
+**term 5** makes root-close materialization normative for it, and its in-line comment names
+`B-136` explicitly as the case it must not extend. This module repairs the asymmetry by
+mirroring term 5 onto the name arm.
+
+**Why it is a defect and not merely bookkeeping.** The row's own step (2) asked exactly
+that, on the premise that *"`force_flush` drains keep-all, so nothing is lost."* Measured,
+that premise holds **only below the buffer ceiling**: with `max_buffered_traces=3` over 100
+always-sampled-root traces, **97 are evicted** and their children never export at all
+(`test_the_keep_all_at_drain_benefit_was_never_a_guarantee`). More decisively, the shape
+contradicts **v1.28 §1.1's own containment model**, which reasons that *"a new trace whose
+first observed span is already its root-close materializes + frees its slot in the same
+`on_end` (no steady-state pressure), so it does NOT evict"* — an always-sampled-root trace
+root-closed yet behaved like a never-closing one for eviction purposes, displacing live
+traces.
+
+**The consequence, stated rather than buried** (the row's step (4) requires witnessing BOTH
+directions). Siblings of an always-sampled root are now resolved at root close instead of
+at drain. Where the root — or any span in the trace — is a §10.2 classification trigger,
+they are **kept**, and now export *earlier*. Where nothing in the trace triggered, they are
+**dropped**, which is a real reduction against the previous accidental keep-all — and is
+exactly what an **ordinary** root already did. The always-sampled span itself is forwarded
+before the buffer is consulted, so the §9.2 floor and the §10.2 failure signal are
+untouched either way.
+"""
+
+from __future__ import annotations
+
+import threading
+from typing import Any
+
+from harness_od.sampling_mode import is_always_sampled
+from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
+from opentelemetry import trace as otel_trace
+from opentelemetry.sdk.trace import TracerProvider
+
+#: Always-sampled AND a §10.2 classification trigger.
+_TRIGGER_ROOT = "sandbox.violation"
+#: Always-sampled but NOT a §10.2 trigger — the population that loses its siblings.
+_QUIET_ROOT = "hitl.gate.evaluated"
+
+
+class _Downstream:
+    """Records what the processor forwards."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    def on_start(self, span: Any, parent_context: Any = None) -> None:
+        return None
+
+    def on_end(self, span: Any) -> None:
+        self.seen.append(span.name)
+
+    def shutdown(self) -> None:
+        return None
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return True
+
+
+def _one_trace(
+    root: str, *, child: str = "ordinary.child", **bounds: int
+) -> tuple[TailKeepSpanProcessor, _Downstream]:
+    """Emit one `root` trace with a single `child`, through the REAL processor."""
+    downstream = _Downstream()
+    tail = TailKeepSpanProcessor(downstream=downstream, **bounds)
+    provider = TracerProvider()  # always-on head: isolate the TAIL behaviour
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b136")
+    with tracer.start_as_current_span(root):
+        with tracer.start_as_current_span(child):
+            pass
+    return tail, downstream
+
+
+def test_the_premise_both_roots_are_always_sampled() -> None:
+    """Ground the two fixtures before drawing any conclusion from them."""
+    assert is_always_sampled(_TRIGGER_ROOT) is True
+    assert is_always_sampled(_QUIET_ROOT) is True
+    assert is_always_sampled("ordinary.root") is False, (
+        "`ordinary.root` entered the §9.2 set — the control below is no longer a control"
+    )
+
+
+def test_an_always_sampled_root_now_frees_its_buffer_slot() -> None:
+    """**Direction 1 — the repair.** The slot is released at root close, not at drain.
+
+    Before B-136 this returned `1` for both always-sampled roots and `0` only for the
+    ordinary control. Reverting the two-line materialization in the name arm turns this RED.
+    """
+    for root in (_TRIGGER_ROOT, _QUIET_ROOT, "ordinary.root"):
+        tail, _ = _one_trace(root)
+        assert tail.buffered_trace_count == 0, (
+            f"trace rooted at `{root}` still holds a buffer slot after root close "
+            f"({tail.buffered_trace_count}) — B-136 has regressed, and v1.28 §1.1's "
+            "containment model (root-closes free their slot) does not hold"
+        )
+
+
+def test_a_triggered_trace_keeps_its_siblings_and_now_exports_them_earlier() -> None:
+    """**Direction 2a** — where a §10.2 trigger fired, nothing is lost; it arrives sooner.
+
+    `sandbox.violation` is both a §9.2 member and a §10.2 trigger, so the root sets the keep
+    flag itself. Materializing at root close therefore FLUSHES the buffered child — the same
+    spans as before the repair, at root close rather than at `force_flush`.
+    """
+    tail, downstream = _one_trace(_TRIGGER_ROOT)
+    assert downstream.seen == [_TRIGGER_ROOT, "ordinary.child"], (
+        f"expected the trigger root and its kept child; got {downstream.seen}"
+    )
+    assert tail.buffered_trace_count == 0
+
+
+def test_a_quiet_always_sampled_root_now_drops_its_siblings() -> None:
+    """**Direction 2b — the cost, witnessed rather than buried.**
+
+    `hitl.gate.evaluated` is always-sampled but is NOT a §10.2 trigger, so nothing sets the
+    keep flag. Its buffered child is now dropped at root close, where previously it survived
+    to `force_flush` keep-all. This is a real reduction in exported spans for a real
+    population, and the row registered B-136 rather than folding it into `B-133` precisely
+    because of it.
+
+    The comparison that justifies it: an ORDINARY root already drops its child under exactly
+    the same no-trigger condition. The repair removes an inconsistency, it does not invent a
+    new drop rule.
+    """
+    tail, downstream = _one_trace(_QUIET_ROOT)
+    assert downstream.seen == [_QUIET_ROOT], (
+        f"expected ONLY the always-sampled root to be forwarded; got {downstream.seen}"
+    )
+    tail.force_flush()
+    assert "ordinary.child" not in downstream.seen, (
+        "the quiet root's child survived to force_flush — the repair did not take effect"
+    )
+
+    # The ordinary-root control drops identically, which is the consistency argument.
+    control_tail, control_downstream = _one_trace("ordinary.root")
+    control_tail.force_flush()
+    assert control_downstream.seen == [], (
+        f"the ordinary-root control changed behaviour; got {control_downstream.seen}"
+    )
+
+
+def test_the_always_sampled_span_itself_is_never_at_risk() -> None:
+    """The §9.2 floor and the §10.2 signal are untouched by the repair.
+
+    The arm forwards the span *before* the buffer is consulted, so whatever happens to its
+    siblings, the always-sampled span itself always leaves. If this ever failed, the repair
+    would have moved a floor member into the buffered population — a far worse defect than
+    the one B-136 describes.
+    """
+    for root in (_TRIGGER_ROOT, _QUIET_ROOT):
+        _, downstream = _one_trace(root)
+        assert downstream.seen[0] == root, (
+            f"`{root}` was not forwarded first; got {downstream.seen} — a §9.2 member may "
+            "now be buffered rather than always-sampled"
+        )
+
+
+def test_the_keep_all_at_drain_benefit_was_never_a_guarantee() -> None:
+    """**Why step (2) resolves to "defect"** — the pre-repair benefit failed under pressure.
+
+    The row's step (2) asked whether this is a defect at all, since *"`force_flush` drains
+    keep-all, so nothing is lost."* That holds only while the buffer stays below its ceiling.
+    `CollectorConfig` ships finite bounds (4096 each) and the buffer evicts **drop-oldest**,
+    so a population of never-resolving always-sampled-root traces sheds its own oldest
+    members — they never reach `force_flush` at all.
+
+    This drives the REAL processor at a small ceiling to make the shape visible. After the
+    repair no trace lingers, so nothing is evicted and the counter stays at zero — which is
+    itself the point: the repair removes the population that was being shed.
+    """
+    tail, downstream = _one_trace(_QUIET_ROOT, max_buffered_traces=3, max_spans_per_trace=4096)
+    assert tail.dropped_trace_count == 0, (
+        "a single trace evicted something — the ceiling arithmetic changed"
+    )
+
+    # Post-repair steady state: 100 always-sampled-root traces at a ceiling of 3 leave
+    # nothing buffered and evict nothing, because each resolves at its own root close.
+    downstream = _Downstream()
+    tail = TailKeepSpanProcessor(
+        downstream=downstream, max_buffered_traces=3, max_spans_per_trace=4096
+    )
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b136.pressure")
+    for _ in range(100):
+        with tracer.start_as_current_span(_QUIET_ROOT):
+            with tracer.start_as_current_span("ordinary.child"):
+                pass
+
+    assert tail.buffered_trace_count == 0, (
+        f"{tail.buffered_trace_count} trace(s) still buffered after 100 root closes — the "
+        "never-resolving population B-136 describes is back"
+    )
+    assert tail.dropped_trace_count == 0, (
+        f"{tail.dropped_trace_count} trace(s) evicted under a ceiling of 3 — before the "
+        "repair this population displaced live traces; it should now be empty"
+    )
+
+
+# ---------------------------------------------------------------------------
+# B-163 — the per-trace state transition is atomic
+# ---------------------------------------------------------------------------
+
+
+def test_b163_a_concurrent_child_and_root_close_cannot_lose_a_span() -> None:
+    """**B-163** — drive the exact losing interleaving, deterministically.
+
+    OTel calls `SpanProcessor.on_end` from whichever thread ends the span, so the buffer
+    mutations must be serialized. The losing order out-of-family Codex named:
+
+    1. a child `on_end` runs `self._buffer.setdefault(trace_id, [])`, creating an empty
+       bucket, and is descheduled **before** `bucket.append(span)`;
+    2. a root `on_end` on another thread runs `_materialize_trace_decision`, whose first act
+       is `self._buffer.pop(trace_id, [])` — it pops the **empty** bucket and forwards
+       nothing;
+    3. the child resumes and appends to a now-detached list.
+
+    The span then reaches **neither** `downstream` **nor** `_buffer`, so not even
+    `force_flush` can recover it — and when the root is a §10.2 trigger, the lost span is
+    exactly the context the keep flag was meant to preserve.
+
+    This is a **coordinated** witness, not a stress loop: the child thread is blocked inside
+    the processor at the precise point above via a `setdefault` hook, so the test is
+    deterministic. Removing the `RLock` makes it fail every run rather than occasionally.
+    """
+    downstream = _Downstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b163")
+
+    child_is_inside = threading.Event()
+    root_may_proceed = threading.Event()
+
+    class _HookedBuffer(dict[int, list[Any]]):
+        """Pauses the child between `setdefault` and its `append`."""
+
+        def setdefault(self, key: Any, default: Any = None) -> Any:  # type: ignore[override]
+            bucket = super().setdefault(key, default)
+            if threading.current_thread().name == "b163-child":
+                child_is_inside.set()
+                root_may_proceed.wait(timeout=5.0)
+            return bucket
+
+    tail._buffer = _HookedBuffer(tail._buffer)
+
+    # Both spans must be in ONE trace: create the root first, then the child under the
+    # root's context explicitly (OTel context does NOT propagate across threads), so the
+    # child really is a non-root span of the same trace_id.
+    root_span = tracer.start_span(_TRIGGER_ROOT)
+    child_span = tracer.start_span(
+        "ordinary.child", context=otel_trace.set_span_in_context(root_span)
+    )
+    assert child_span.get_span_context().trace_id == root_span.get_span_context().trace_id, (
+        "the fixture failed to place both spans in one trace — the race cannot occur"
+    )
+
+    child_thread = threading.Thread(target=child_span.end, name="b163-child")
+    child_thread.start()
+    assert child_is_inside.wait(timeout=5.0), "the child never reached the buffer insert"
+
+    # With the lock the root BLOCKS here until the child's critical section completes;
+    # without it the root pops the empty bucket and the child's append is lost.
+    root_thread = threading.Thread(target=root_span.end, name="b163-root")
+    root_thread.start()
+    root_may_proceed.set()
+    child_thread.join(timeout=5.0)
+    root_thread.join(timeout=5.0)
+    assert not child_thread.is_alive() and not root_thread.is_alive(), "a thread hung"
+
+    assert "ordinary.child" in downstream.seen, (
+        f"the concurrently-ended child was LOST — it reached neither downstream nor the "
+        f"buffer. downstream={downstream.seen}, still buffered="
+        f"{sum(len(v) for v in tail._buffer.values())}. B-163's lock has regressed."
+    )
+
+
+def test_b163_the_publish_and_detach_transition_is_indivisible() -> None:
+    """**B-163 round 2** — keep-publication and root materialization are ONE transition.
+
+    Guarding each mutation separately was not enough (out-of-family Codex, round 4): with
+    the keep write and the root materialization in *different* critical sections, a thread
+    could observe a **torn** state — `_keep` written against a trace whose buffer another
+    thread had already popped, leaving a stale entry nothing would pop. They are now a
+    single critical section in `_publish_keep_and_maybe_detach`.
+
+    **What this does and does not close, stated precisely.** Mutual exclusion fixes *torn
+    state*. It cannot fix *ordering*: if a root's `on_end` runs to completion before a
+    child's `on_end` begins, the trace materializes before that child is accounted for, and
+    no lock discipline inside `on_end` can change that. That ordering requires a **root to
+    end before its own child**, which violates the span-nesting contract OTel and this
+    processor's entire root-close design assume. The residual is recorded on B-163 rather
+    than papered over.
+
+    This asserts the part that IS guaranteed: for a well-formed trace, a trigger published
+    concurrently with sibling buffering always preserves the siblings, and no `_keep` entry
+    survives materialization.
+    """
+    downstream = _Downstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b163.trigger")
+
+    # A well-formed trace: quiet root, one ordinary sibling, one §10.2 trigger child — the
+    # root ends LAST, as the nesting contract requires.
+    root_span = tracer.start_span(_QUIET_ROOT)
+    parent_ctx = otel_trace.set_span_in_context(root_span)
+
+    barrier = threading.Barrier(2, timeout=5.0)
+
+    def _end_sibling() -> None:
+        span = tracer.start_span("ordinary.child", context=parent_ctx)
+        barrier.wait()
+        span.end()
+
+    def _end_trigger() -> None:
+        span = tracer.start_span(_TRIGGER_ROOT, context=parent_ctx)
+        barrier.wait()
+        span.end()
+
+    threads = [
+        threading.Thread(target=_end_sibling, name="b163-sibling"),
+        threading.Thread(target=_end_trigger, name="b163-trigger"),
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=5.0)
+    assert all(not th.is_alive() for th in threads), "a thread hung"
+
+    root_span.end()
+
+    assert "ordinary.child" in downstream.seen, (
+        f"the buffered sibling was dropped despite a §10.2 trigger in the same trace; "
+        f"downstream={downstream.seen} — the publish/detach transition is not indivisible"
+    )
+    assert not tail._keep, (
+        f"a `_keep` entry survived materialization: {dict(tail._keep)} — nothing will pop "
+        "it, so the map grows without bound across traces"
+    )
+    assert tail.buffered_trace_count == 0, "the trace did not resolve at root close"
+
+
+def test_b163_a_slow_downstream_cannot_widen_the_keep_publication_window() -> None:
+    """**B-163 round 3** — the state transition runs BEFORE the downstream forward.
+
+    Out-of-family Codex round 5: publishing the keep flag *after* `downstream.on_end(span)`
+    let a **slow exporter** widen the publication window arbitrarily. A non-root
+    always-sampled trigger would sit inside the exporter while its root acquired the lock,
+    detached the trace with `keep=False`, dropped the buffered siblings, and left the
+    trigger to write a stale `_keep` entry afterwards.
+
+    Unlike the ordering residual recorded on B-163 — which needs a root to end *before* its
+    own child, a malformed trace — this window opens for a **well-formed** trace and is
+    entirely an artifact of where the forward sat. Forwarding never depended on the keep
+    flag, so the transition simply moved ahead of it.
+
+    Driven deterministically with the exact shape Codex named: a buffered ordinary child, a
+    `sandbox.violation` trigger **blocked inside downstream**, and a quiet always-sampled
+    root closing concurrently.
+    """
+    trigger_in_downstream = threading.Event()
+    root_done = threading.Event()
+
+    class _SlowDownstream(_Downstream):
+        def on_end(self, span: Any) -> None:
+            if span.name == _TRIGGER_ROOT and threading.current_thread().name == "b163-slow":
+                trigger_in_downstream.set()
+                root_done.wait(timeout=5.0)  # the exporter is "slow"
+            super().on_end(span)
+
+    downstream = _SlowDownstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b163.slow")
+
+    root_span = tracer.start_span(_QUIET_ROOT)
+    parent_ctx = otel_trace.set_span_in_context(root_span)
+    with tracer.start_as_current_span("ordinary.child", context=parent_ctx):
+        pass  # buffered sibling
+    trigger_span = tracer.start_span(_TRIGGER_ROOT, context=parent_ctx)
+
+    slow_thread = threading.Thread(target=trigger_span.end, name="b163-slow")
+    slow_thread.start()
+    assert trigger_in_downstream.wait(timeout=5.0), "the trigger never reached downstream"
+
+    # The root closes while the trigger is still stuck in the exporter. Because the keep
+    # was published BEFORE that forward, the root must observe it.
+    root_span.end()
+    root_done.set()
+    slow_thread.join(timeout=5.0)
+    assert not slow_thread.is_alive(), "the slow thread hung"
+
+    assert "ordinary.child" in downstream.seen, (
+        f"the buffered sibling was dropped while the trigger sat in a slow downstream; "
+        f"downstream={downstream.seen} — the keep publication is still behind the forward"
+    )
+    assert not tail._keep, (
+        f"a stale `_keep` entry leaked: {dict(tail._keep)} — the trigger published after "
+        "its trace had already materialized"
+    )

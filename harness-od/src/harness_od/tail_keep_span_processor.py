@@ -166,6 +166,7 @@ set + `is_always_sampled` decomposed-prefix lookup.
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 from opentelemetry.context import Context
@@ -261,6 +262,16 @@ class TailKeepSpanProcessor(SpanProcessor):
         max_spans_per_trace: int | None = None,
     ) -> None:
         self._downstream: SpanProcessor = downstream
+        # `B-163` — OTel calls `SpanProcessor.on_end` from whichever thread ends the span,
+        # so every mutation of `_buffer` / `_keep` / the counters must be serialized. An
+        # RLock (not a Lock) because `_evict_oldest_trace` is called from inside the
+        # `_publish_keep_and_maybe_detach` / buffering critical sections, which already hold it.
+        #
+        # SCOPE DISCIPLINE: the lock guards the per-trace dict work ONLY. It is NEVER held
+        # across `self._downstream.on_end(...)` — a slow exporter would otherwise serialize
+        # every span in the process. `_publish_keep_and_maybe_detach` therefore detaches the
+        # bucket under the lock and RETURNS it, so the caller forwards outside.
+        self._state_lock = threading.RLock()
         # Per-trace_id buffer of non-always-sampled spans pending root-close
         # keep decision. Keyed by the int form of OTel trace_id. Python dict
         # insertion order makes `next(iter(...))` the oldest trace (FIFO
@@ -359,15 +370,45 @@ class TailKeepSpanProcessor(SpanProcessor):
             span.name == SUBAGENT_SPAN_NAME and span.parent is not None and not _failed_subagent
         )
         if not _buffer_nonroot_subagent and is_always_sampled(span.name, span.attributes):
-            self._downstream.on_end(span)
-            # Still mark the trace keep-flag if the always-sampled span is
-            # a classification trigger (sandbox.violation + breaker.tripped
-            # are both in §9.2 AND in §10.2) so tree-siblings buffered
-            # under the same trace get preserved at root close.
+            # Mark the trace keep-flag if the always-sampled span is a classification
+            # trigger (sandbox.violation + breaker.tripped are both in §9.2 AND in §10.2)
+            # so tree-siblings buffered under the same trace get preserved at root close.
+            #
+            # `B-163` round 3: the state transition runs BEFORE `downstream.on_end(span)`,
+            # not after. Forwarding does not depend on the keep flag, and a SLOW downstream
+            # otherwise widens the publication window arbitrarily — long enough for a
+            # concurrent root close to detach the trace with `keep=False`, dropping the
+            # buffered siblings and leaving a stale `_keep` entry. Unlike the ordering
+            # residual recorded on B-163, this window opens for a WELL-FORMED trace, so it
+            # is closed here rather than documented.
             ctx = span.get_span_context()
             assert ctx is not None  # a span reaching on_end always has a context
-            if is_classification_trigger(span):
-                self._keep[ctx.trace_id] = True
+            _trigger = is_classification_trigger(span)
+            # `B-136` REPAIR — mirror OD spec v1.38 §9.2.1 term 5 (already normative for
+            # the event arm below) onto this name arm. Before this, the arm returned
+            # UNCONDITIONALLY, so an always-sampled ROOT forwarded itself and left its
+            # buffered siblings pending until `force_flush`, holding a
+            # `max_buffered_traces` slot for the process lifetime.
+            #
+            # That broke v1.28 §1.1's own containment model, which reasons that "a new
+            # trace whose first observed span is already its root-close materializes +
+            # frees its slot in the same `on_end` (no steady-state pressure), so it does
+            # NOT evict" — an always-sampled-root trace root-closed but behaved like a
+            # never-closing one for eviction purposes, displacing live traces.
+            #
+            # CONSEQUENCE, stated rather than buried: siblings of an always-sampled root
+            # that carried no §10.2 trigger are now DROPPED at root close instead of
+            # surviving to `force_flush` keep-all. That keep-all was never a guarantee —
+            # measured, it degrades to eviction under buffer pressure (97 of 100 traces
+            # shed at a cap of 3) — and dropping here is exactly what an ORDINARY root
+            # already does. The forwarded always-sampled span itself is NOT in the buffer,
+            # so the §9.2 floor and the §10.2 failure signal are both unaffected.
+            _pending = self._publish_keep_and_maybe_detach(
+                ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
+            )
+            self._downstream.on_end(span)
+            for _sibling in _pending:
+                self._downstream.on_end(_sibling)
             return
 
         # `B-133` EVENT-AWARE ARM (OD spec v1.38 §9.2.1, U-OD-59). Three §9.2
@@ -390,7 +431,6 @@ class TailKeepSpanProcessor(SpanProcessor):
         # including zero-event ones.
         events = span.events
         if _carries_always_sampled_event(span, events=events):
-            self._downstream.on_end(span)
             ctx = span.get_span_context()
             assert ctx is not None  # a span reaching on_end always has a context
             # Mirror of the name arm's trigger-flag step: an event-carrying span
@@ -402,8 +442,7 @@ class TailKeepSpanProcessor(SpanProcessor):
             # the trip's sibling tree at root close subject to the §9.2/§10.2
             # head-admission bound `B-137` measured (the arm delivers only for
             # carriers the head sampler admitted).
-            if is_classification_trigger(span, events=events):
-                self._keep[ctx.trace_id] = True
+            _trigger = is_classification_trigger(span, events=events)
             # The name arm returns unconditionally, so an always-sampled ROOT
             # leaves its trace's buffered siblings pending until `force_flush`
             # (pre-existing; observed at the `B-133` probe and registered as
@@ -412,8 +451,14 @@ class TailKeepSpanProcessor(SpanProcessor):
             # the trace decision so the siblings resolve and the trace frees its
             # `max_buffered_traces` slot. The forwarded span is NOT in the
             # buffer, so the decision below concerns only its siblings.
-            if span.parent is None:
-                self._materialize_trace_decision(ctx.trace_id)
+            # `B-163` round 3 — same reordering as the name arm: transition first, then
+            # forward, so a slow downstream cannot widen the publication window.
+            _pending = self._publish_keep_and_maybe_detach(
+                ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
+            )
+            self._downstream.on_end(span)
+            for _sibling in _pending:
+                self._downstream.on_end(_sibling)
             return
 
         ctx = span.get_span_context()
@@ -426,35 +471,66 @@ class TailKeepSpanProcessor(SpanProcessor):
         # Gate on `not is_root_close`: a root-close-first trace materializes +
         # frees its slot in this same on_end (no steady-state buffer pressure),
         # so it must NOT shed an existing pending trace's context.
-        if (
-            not is_root_close
-            and trace_id not in self._buffer
-            and self._max_buffered_traces is not None
-            and len(self._buffer) >= self._max_buffered_traces
-        ):
-            self._evict_oldest_trace()
+        # `B-163` — the eviction test, the bucket insert and the append below are ONE
+        # critical section. Splitting them is precisely the losing interleaving: a child
+        # could `setdefault` an empty bucket here and append to it after a concurrent
+        # root-close `pop` had already detached it, losing the span entirely.
+        with self._state_lock:
+            if (
+                not is_root_close
+                and trace_id not in self._buffer
+                and self._max_buffered_traces is not None
+                and len(self._buffer) >= self._max_buffered_traces
+            ):
+                self._evict_oldest_trace()
 
-        bucket = self._buffer.setdefault(trace_id, [])
-        # OD spec v1.28 §9.3 max-spans-per-trace ceiling: drop overflow
-        # non-root spans (the root-close span always processes below so the
-        # trace materializes and frees its slot rather than leaking).
-        if (
-            not is_root_close
-            and self._max_spans_per_trace is not None
-            and len(bucket) >= self._max_spans_per_trace
-        ):
-            self._dropped_span_count += 1
-        else:
-            bucket.append(span)
+            bucket = self._buffer.setdefault(trace_id, [])
+            # OD spec v1.28 §9.3 max-spans-per-trace ceiling: drop overflow
+            # non-root spans (the root-close span always processes below so the
+            # trace materializes and frees its slot rather than leaking).
+            if (
+                not is_root_close
+                and self._max_spans_per_trace is not None
+                and len(bucket) >= self._max_spans_per_trace
+            ):
+                self._dropped_span_count += 1
+            else:
+                bucket.append(span)
 
-        if is_classification_trigger(span, events=events):
-            self._keep[trace_id] = True
+        _trigger = is_classification_trigger(span, events=events)
 
         # Root close detection: parent SpanContext is None means this span
         # has no parent in the recorded trace (it is the local-root). At
         # span-end, OTel `ReadableSpan.parent` is `None` for the root.
-        if is_root_close:
-            self._materialize_trace_decision(trace_id)
+        for _pending in self._publish_keep_and_maybe_detach(
+            trace_id, is_trigger=_trigger, is_root_close=is_root_close
+        ):
+            self._downstream.on_end(_pending)
+
+    def _publish_keep_and_maybe_detach(
+        self, trace_id: int, *, is_trigger: bool, is_root_close: bool
+    ) -> list[ReadableSpan]:
+        """Publish the keep flag and, at root close, detach the trace — ATOMICALLY.
+
+        `B-163` round 2: guarding each mutation separately was not enough. With the keep
+        write and the root materialization in DIFFERENT critical sections, a §10.2 child
+        trigger could evaluate as a trigger, lose the lock to its root's `on_end` (which
+        popped `_buffer`/`_keep` and dropped the siblings with `keep=False`), and only then
+        write `_keep[trace_id] = True` — leaving a stale entry nothing would ever pop.
+        Publishing and detaching in ONE critical section removes both the dropped-context
+        window and the stale-keep leak.
+
+        Returns the spans the caller must forward. Forwarding happens OUTSIDE the lock —
+        holding it across `downstream.on_end` would serialize a slow exporter.
+        """
+        with self._state_lock:
+            if is_trigger:
+                self._keep[trace_id] = True
+            if not is_root_close:
+                return []
+            buffered = self._buffer.pop(trace_id, [])
+            keep = self._keep.pop(trace_id, False)
+        return buffered if keep else []
 
     def _evict_oldest_trace(self) -> None:
         """Drop the oldest buffered trace (FIFO) under the max-traces ceiling.
@@ -471,15 +547,6 @@ class TailKeepSpanProcessor(SpanProcessor):
         self._keep.pop(oldest_trace_id, None)
         self._dropped_trace_count += 1
 
-    def _materialize_trace_decision(self, trace_id: int) -> None:
-        """Flush or drop the buffered spans for `trace_id` per the keep flag."""
-        buffered = self._buffer.pop(trace_id, [])
-        keep = self._keep.pop(trace_id, False)
-        if not keep:
-            return
-        for span in buffered:
-            self._downstream.on_end(span)
-
     def force_flush(self, timeout_millis: int = 30_000) -> bool:
         """Flush any still-buffered traces (keep-all) + delegate to downstream.
 
@@ -489,11 +556,13 @@ class TailKeepSpanProcessor(SpanProcessor):
         `downstream.force_flush(timeout_millis)`.
         """
         # Drain the buffer — keep-all on shutdown to avoid silent loss.
-        for trace_id in list(self._buffer.keys()):
-            for span in self._buffer[trace_id]:
-                self._downstream.on_end(span)
-            self._buffer.pop(trace_id, None)
-            self._keep.pop(trace_id, None)
+        # `B-163`: detach the whole buffer atomically, then forward outside the lock.
+        with self._state_lock:
+            drained = [span for spans in self._buffer.values() for span in spans]
+            self._buffer.clear()
+            self._keep.clear()
+        for span in drained:
+            self._downstream.on_end(span)
         return self._downstream.force_flush(timeout_millis=timeout_millis)
 
     def shutdown(self) -> None:
