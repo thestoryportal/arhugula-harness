@@ -61,11 +61,11 @@ snapshot:
   total: 161
   open: 1
   design_substrate_gated: 0
-  registered_finding: 31
+  registered_finding: 30
   operator_gated: 0
   held: 2
-  closed: 127
-  identity_digest: '1833f90c7554e765'
+  closed: 128
+  identity_digest: '704ce0c7ea685857'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -8524,7 +8524,8 @@ items:
 - id: B-161
   title: test_shutdown.py::test_force_flush_returning_false_surfaces_timed_out is ORDER-DEPENDENT
     -- it reports a spurious ('ledger',) failure under full-suite ordering
-  status: registered_finding
+  status: closed
+  pr: 1327
   summary: 'Surfaced 2026-08-12 on PR #1324 CI (run 31659849345) and once in a local `just check`.
     The test asserts report.failures == () for a pure-timeout shutdown and instead observed
     (''ledger'',). EVIDENCE IT IS A FLAKE, NOT A REGRESSION: the same commit passed on CI re-run
@@ -8534,14 +8535,22 @@ items:
     into the shutdown report rather than a defect in the shutdown logic itself. NOT introduced by
     #1324 -- that PR added one integration test and doc/register edits, and the pair
     (b72 integration module + test_shutdown.py) passes together 90/90.'
-  close_out: 'Not started. Reproduce deterministically FIRST -- the value here is the repro, not a
-    retry. Suggested: run the all-axis suite with a fixed seed and bisect the module order to find
-    which earlier test leaves a ledger-flush failure visible to the shutdown report; `-p
-    no:randomly` did NOT reproduce it locally, so the ordering that matters may be CI-specific
-    (worker count / package interleave). Then either isolate the shutdown report per-test or reset
-    whatever global the leaking module mutates. Do NOT paper over it with a retry marker: a
-    shutdown-report assertion that intermittently sees a foreign failure is exactly the signal a
-    real drain regression would produce, so weakening it would blind a genuine defect.'
+  close_out: 'CLOSED 2026-08-12 -- ROOT-CAUSED and FIXED, with the repro the close-out demanded.
+    NOT state leakage, as first hypothesised: a TIMING race on the SHARED flush budget.
+    flush_observability gives the ledger fsync only what is LEFT of the budget
+    (deadline - time.monotonic(), shutdown.py:943-947); with the test''s tight 100ms total, a
+    loaded runner''s real fsync overran the remainder, raised TimeoutError, and appended
+    "ledger" -- turning `failures == ()` red for a reason unrelated to the tracer behaviour
+    under test. DETERMINISTIC REPRO: fast False tracer + a 500ms fsync reproduces the EXACT
+    CI shape (failures == (''ledger'',), timed_out True) every time; slowing the TRACER instead
+    does not, because the tracer flush is bounded too and tags itself. FIX: widen that test''s
+    budget to 5000ms -- the assertion stays EXACT (failures == ()), so a genuine tracer-path
+    regression still fails; only the timing dependence is removed. NOT a retry marker, per
+    this row''s own warning. Plus a NEW mechanism witness,
+    test_slow_ledger_fsync_is_tagged_and_times_out, pinning that an overrunning fsync IS
+    tagged -- mutation-probed (removing the tag reds it, along with 4 pre-existing tests that
+    already covered the tag). No production change: the shared-budget behaviour is correct by
+    design and already covered by test_flush_surfaces_share_one_timeout_budget. PR #1327.'
   council: 'no -- a test-isolation defect, not a design fork.'
   heading: '### B-161 · `test_shutdown.py::test_force_flush_returning_false_surfaces_timed_out` is
     order-dependent — a spurious `(''ledger'',)` failure under full-suite ordering *(surfaced on the
