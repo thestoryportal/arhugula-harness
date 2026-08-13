@@ -167,6 +167,7 @@ set + `is_always_sampled` decomposed-prefix lookup.
 from __future__ import annotations
 
 import threading
+import time
 from typing import TYPE_CHECKING
 
 from opentelemetry.context import Context
@@ -272,6 +273,14 @@ class TailKeepSpanProcessor(SpanProcessor):
         # every span in the process. `_publish_keep_and_maybe_detach` therefore detaches the
         # bucket under the lock and RETURNS it, so the caller forwards outside.
         self._state_lock = threading.RLock()
+        # `B-164` — batches detached under `_state_lock` are forwarded OUTSIDE it (so a slow
+        # exporter cannot serialize every span). That leaves a window where spans have left
+        # `_buffer` but have not yet reached `downstream`, and a concurrent `force_flush()`
+        # would see an empty buffer and return — defeating its own documented purpose,
+        # "flush any still-buffered traces … to avoid silent loss on shutdown". These two
+        # track batches in that window so `force_flush` can wait for them.
+        self._inflight_batches = 0
+        self._inflight_cv = threading.Condition()
         # Per-trace_id buffer of non-always-sampled spans pending root-close
         # keep decision. Keyed by the int form of OTel trace_id. Python dict
         # insertion order makes `next(iter(...))` the oldest trace (FIFO
@@ -407,8 +416,7 @@ class TailKeepSpanProcessor(SpanProcessor):
                 ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
             )
             self._downstream.on_end(span)
-            for _sibling in _pending:
-                self._downstream.on_end(_sibling)
+            self._forward_detached(_pending)
             return
 
         # `B-133` EVENT-AWARE ARM (OD spec v1.38 §9.2.1, U-OD-59). Three §9.2
@@ -457,8 +465,7 @@ class TailKeepSpanProcessor(SpanProcessor):
                 ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
             )
             self._downstream.on_end(span)
-            for _sibling in _pending:
-                self._downstream.on_end(_sibling)
+            self._forward_detached(_pending)
             return
 
         ctx = span.get_span_context()
@@ -502,10 +509,31 @@ class TailKeepSpanProcessor(SpanProcessor):
         # Root close detection: parent SpanContext is None means this span
         # has no parent in the recorded trace (it is the local-root). At
         # span-end, OTel `ReadableSpan.parent` is `None` for the root.
-        for _pending in self._publish_keep_and_maybe_detach(
-            trace_id, is_trigger=_trigger, is_root_close=is_root_close
-        ):
-            self._downstream.on_end(_pending)
+        self._forward_detached(
+            self._publish_keep_and_maybe_detach(
+                trace_id, is_trigger=_trigger, is_root_close=is_root_close
+            )
+        )
+
+    def _forward_detached(self, spans: list[ReadableSpan]) -> None:
+        """Forward a detached batch downstream, counted as in-flight (`B-164`).
+
+        The batch has already left `_buffer`, so `force_flush` can no longer see it there.
+        Registering it here — and only clearing in a `finally` — means a concurrent
+        `force_flush` waits for delivery instead of returning while spans are in the air.
+        `downstream.on_end` is still called with NO processor lock held.
+        """
+        if not spans:
+            return
+        with self._inflight_cv:
+            self._inflight_batches += 1
+        try:
+            for span in spans:
+                self._downstream.on_end(span)
+        finally:
+            with self._inflight_cv:
+                self._inflight_batches -= 1
+                self._inflight_cv.notify_all()
 
     def _publish_keep_and_maybe_detach(
         self, trace_id: int, *, is_trigger: bool, is_root_close: bool
@@ -557,13 +585,27 @@ class TailKeepSpanProcessor(SpanProcessor):
         """
         # Drain the buffer — keep-all on shutdown to avoid silent loss.
         # `B-163`: detach the whole buffer atomically, then forward outside the lock.
+        deadline = time.monotonic() + (timeout_millis / 1000.0)
         with self._state_lock:
             drained = [span for spans in self._buffer.values() for span in spans]
             self._buffer.clear()
             self._keep.clear()
-        for span in drained:
-            self._downstream.on_end(span)
-        return self._downstream.force_flush(timeout_millis=timeout_millis)
+        self._forward_detached(drained)
+
+        # `B-164` — wait for batches detached by CONCURRENT `on_end` calls that have left
+        # `_buffer` but not yet reached `downstream`. Without this the drain above sees an
+        # empty buffer and returns while those spans are still in the air, and shutdown can
+        # close the exporter first — the exact "silent loss on shutdown" this method exists
+        # to prevent. Bounded by the caller's own budget: on expiry we still delegate, so a
+        # wedged exporter cannot make `force_flush` hang forever.
+        with self._inflight_cv:
+            while self._inflight_batches > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not self._inflight_cv.wait(timeout=remaining):
+                    break
+
+        remaining_millis = max(0.0, deadline - time.monotonic()) * 1000.0
+        return self._downstream.force_flush(timeout_millis=int(remaining_millis))
 
     def shutdown(self) -> None:
         """Flush + delegate to downstream.shutdown()."""

@@ -36,6 +36,7 @@ untouched either way.
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any
 
 from harness_od.sampling_mode import is_always_sampled
@@ -413,3 +414,129 @@ def test_b163_a_slow_downstream_cannot_widen_the_keep_publication_window() -> No
         f"a stale `_keep` entry leaked: {dict(tail._keep)} — the trigger published after "
         "its trace had already materialized"
     )
+
+
+# ---------------------------------------------------------------------------
+# B-164 — force_flush waits for in-flight detached batches
+# ---------------------------------------------------------------------------
+
+
+def test_b164_force_flush_waits_for_an_inflight_detached_batch() -> None:
+    """**B-164 (a)** — `force_flush` must not return while spans are still in the air.
+
+    Batches detached under `_state_lock` are forwarded **outside** it, deliberately: holding
+    the lock across `downstream.on_end` would serialize a slow exporter behind every span.
+    That leaves a window where spans have left `_buffer` but have not reached `downstream` —
+    and a concurrent `force_flush()` would see an **empty buffer**, delegate, and return
+    `True` while they were still being delivered. Shutdown then closes the exporter first.
+
+    **Grounding for why this is a defect and not contemplated best-effort** (B-164's step
+    (1)): the module's own contract says `force_flush` exists to *"flush any still-buffered
+    traces (treat them as keep-all to avoid silent loss on shutdown)"*. Returning before
+    delivery defeats exactly that stated purpose, so it is in scope rather than covered by
+    the *"Drop semantics (false-but-bounded)"* posture — which is about traces that never
+    root-close, not about spans already handed to the forwarder.
+
+    Driven deterministically: a trigger root detaches a buffered sibling and blocks inside a
+    slow downstream, while another thread calls `force_flush`.
+    """
+    sibling_in_downstream = threading.Event()
+    release_downstream = threading.Event()
+
+    class _SlowDownstream(_Downstream):
+        def on_end(self, span: Any) -> None:
+            if span.name == "ordinary.child":
+                sibling_in_downstream.set()
+                release_downstream.wait(timeout=5.0)
+            super().on_end(span)
+
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            return True
+
+    downstream = _SlowDownstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b164")
+
+    # A trigger root with one buffered sibling: closing the root detaches the sibling and
+    # forwards it — which is where the forwarder blocks.
+    root_span = tracer.start_span(_TRIGGER_ROOT)
+    with tracer.start_as_current_span(
+        "ordinary.child", context=otel_trace.set_span_in_context(root_span)
+    ):
+        pass
+
+    producer = threading.Thread(target=root_span.end, name="b164-producer")
+    producer.start()
+    assert sibling_in_downstream.wait(timeout=5.0), "the sibling never reached downstream"
+    assert tail.buffered_trace_count == 0, (
+        "the trace should already be detached — that is what makes the window observable"
+    )
+
+    flush_returned = threading.Event()
+
+    def _flush() -> None:
+        tail.force_flush(timeout_millis=5_000)
+        flush_returned.set()
+
+    flusher = threading.Thread(target=_flush, name="b164-flusher")
+    flusher.start()
+
+    # The in-flight batch is not yet delivered, so force_flush must still be waiting.
+    assert not flush_returned.wait(timeout=0.5), (
+        "force_flush RETURNED while a detached batch was still in flight — shutdown could "
+        "close the downstream before those spans are delivered, which is the silent loss "
+        "force_flush exists to prevent"
+    )
+
+    release_downstream.set()
+    producer.join(timeout=5.0)
+    flusher.join(timeout=5.0)
+    assert not producer.is_alive() and not flusher.is_alive(), "a thread hung"
+    assert flush_returned.is_set(), "force_flush never returned after delivery completed"
+    assert "ordinary.child" in downstream.seen
+
+
+def test_b164_force_flush_still_returns_when_a_wedged_exporter_exceeds_the_budget() -> None:
+    """The wait is BOUNDED — a wedged exporter must not hang shutdown forever.
+
+    `force_flush` waits only within the caller's own `timeout_millis`; on expiry it stops
+    waiting and delegates anyway. Without this bound, adding the B-164 wait would trade a
+    silent-loss bug for a shutdown hang, which is strictly worse.
+    """
+    wedged = threading.Event()
+
+    class _WedgedDownstream(_Downstream):
+        def on_end(self, span: Any) -> None:
+            if span.name == "ordinary.child":
+                wedged.wait(timeout=10.0)  # never released within the test's budget
+            super().on_end(span)
+
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            return True
+
+    downstream = _WedgedDownstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b164.wedged")
+
+    root_span = tracer.start_span(_TRIGGER_ROOT)
+    with tracer.start_as_current_span(
+        "ordinary.child", context=otel_trace.set_span_in_context(root_span)
+    ):
+        pass
+    producer = threading.Thread(target=root_span.end, name="b164-wedged-producer", daemon=True)
+    producer.start()
+    time.sleep(0.1)  # let the producer reach the wedged exporter
+
+    started = time.monotonic()
+    assert tail.force_flush(timeout_millis=300) is True
+    elapsed = time.monotonic() - started
+    assert elapsed < 3.0, (
+        f"force_flush waited {elapsed:.1f}s on a wedged exporter with a 300ms budget — the "
+        "B-164 wait is not bounded and shutdown can hang"
+    )
+    wedged.set()
+    producer.join(timeout=5.0)

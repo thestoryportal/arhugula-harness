@@ -8914,12 +8914,32 @@ items:
     own ''Drop semantics (false-but-bounded)'' posture and s9.3''s implementer-discretion clause may already
     contemplate it; ground there first, exactly as B-136''s step (5) did. (2) IF IT IS, implement in-flight
     accounting (a batch counter plus a condition variable force_flush waits on, or an explicit hand-off
-    queue -- both change shutdown semantics) and witness the shutdown race directly: a slow downstream
-    plus a concurrent force_flush, asserting delivery before return. (3) FOR (b), decide whether a malformed
+    queue -- both change shutdown semantics) and witness the shutdown race directly: a slow downstream plus
+    a concurrent force_flush, asserting delivery before return. (3) FOR (b), decide whether a malformed
     trace shape is worth defending against at all -- if yes, the honest mechanism is a post-materialization
     late-arrival path, NOT a wider lock. FALSIFIER: a demonstration that force_flush is only ever called
     after all span-producing threads have quiesced (making (a) unreachable), or a ratified reading that
-    best-effort delivery at shutdown is contracted.'
+    best-effort delivery at shutdown is contracted. (a) CLOSED 2026-08-13 (PR #1332); (b) REMAINS OPEN AS
+    THE WHOLE OF THIS ROW. STEP (1) GROUNDED AND ANSWERED: (a) IS in scope, and the module''s own contract
+    settles it -- force_flush is documented as existing to ''flush any still-buffered traces (treat them
+    as keep-all to avoid silent loss on shutdown)'', so returning before delivery defeats its stated purpose.
+    The ''Drop semantics (false-but-bounded)'' posture does NOT cover it: that paragraph is about traces
+    which never root-close, not about spans already handed to the forwarder. STEP (2) BUILT: batches detached
+    under _state_lock are now forwarded through _forward_detached, which registers them as in-flight (increment
+    before, decrement in a finally, notify) so a concurrent force_flush waits for delivery instead of seeing
+    an empty buffer and returning. downstream.on_end is still called with NO processor lock held, preserving
+    the reason the forward was outside the lock in the first place. THE WAIT IS BOUNDED by the caller''s
+    own timeout_millis, and the remaining budget is passed to the downstream flush -- without that bound
+    this would trade a silent-loss bug for a shutdown hang, which is strictly worse. WITNESSES (2, both
+    deterministic): a trigger root detaches a sibling and blocks inside a slow downstream while another
+    thread calls force_flush (asserting it does NOT return), and a wedged exporter with a 300ms budget (asserting
+    it DOES return). Mutation-probed: removing the wait reddens the first every run. REMAINING SCOPE OF
+    THIS ROW = (b) ONLY: a child descheduled BEFORE it reaches the buffering critical section cannot be
+    registered by any lock, so a concurrent always-sampled root can materialize first and the child is stranded
+    or evicted. Moving the lock ahead of classification NARROWS but cannot close it. Reaching it requires
+    a root to end before its own child, which violates the span-nesting contract the root-close design assumes
+    -- so step (3)''s question stands: decide whether a malformed trace shape is worth defending against
+    at all, and if so the honest mechanism is a post-materialization late-arrival path, NOT a wider lock.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before
