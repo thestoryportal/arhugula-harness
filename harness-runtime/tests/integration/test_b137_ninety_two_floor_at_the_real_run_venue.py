@@ -23,6 +23,9 @@ root-only**, so a member emitted inside the envelope does not receive it.
    emitted from `workflow_driver.py:3206`, which precedes the envelope's open at `:3305`.
    The starvation is therefore **scoped to the members emitted inside the envelope**, not
    universal. `test_the_scope_is_inside_the_envelope_not_all_nineteen` pins both facts.
+   **Qualified (round 14):** that root status holds for a **top-level** run only — under a
+   nested, recursive `execute_workflow` the dispatcher invokes the child runner inside an
+   active `subagent.span`, so the same pre-envelope emit is a child and is starved too.
 
 2. An earlier draft called `emit_pause_captured_span` a *"real production emitter."* It is
    a real function with **no caller anywhere in `src/`** — so `pause.captured` and
@@ -887,6 +890,30 @@ def test_the_scope_is_inside_the_envelope_not_all_nineteen() -> None:
         f"the skill-activation emit ({emit_line}) no longer precedes the envelope open "
         f"({envelope_line}) — the counterexample to the 'all members are children' "
         "overclaim is gone and the scope must be re-derived"
+    )
+
+    # QUALIFIED, exactly as `resume.attempted` is (out-of-family Codex round 14 — the same
+    # defect class as round 7, which this arc fixed for resume and not here). Preceding the
+    # envelope makes `skill.activation` a ROOT only for a TOP-LEVEL run. Under a nested,
+    # recursive `execute_workflow` the dispatcher invokes the child runner inside an active
+    # `subagent.span`, so the same pre-envelope emit is a CHILD and is starved like the
+    # rest. The counterexample therefore SCOPES the starved population rather than
+    # exempting `skill.activation` outright — pinned by the containment witness below,
+    # which is the same structure the nested-resume case relies on.
+    # The load-bearing structural fact behind that qualification: the emit lives inside
+    # `execute_workflow`, which is precisely the function the child runner re-enters under
+    # `subagent.span`. So the same line is a root on a top-level call and a child on a
+    # nested one.
+    tree_fns = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.lineno < emit_line <= (node.end_lineno or node.lineno)
+    ]
+    assert any(fn.name == "execute_workflow" for fn in tree_fns), (
+        f"the skill-activation emit at :{emit_line} is no longer inside `execute_workflow` "
+        f"(enclosing: {[fn.name for fn in tree_fns]}) — the top-level-vs-nested "
+        "qualification on B-137's root counterexample must be re-derived"
     )
 
 

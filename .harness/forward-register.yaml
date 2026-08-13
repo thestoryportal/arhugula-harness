@@ -7523,7 +7523,15 @@ items:
     NOT that the OTel context is still current at the child driver''s resume detection nor that the snapshot
     value is non-None. The conclusion (resume.attempted is a non-root child for nested resumes) therefore
     rests on containment plus the ordinary OTel context-propagation semantics, and an executed nested-resume
-    parentage witness is OWED before B-162 acts on it.'
+    parentage witness is OWED before B-162 acts on it. QUALIFIED 2026-08-13 (codex round 14, the SAME defect
+    class as round 7 which this arc fixed for resume.attempted and initially missed here): skill.activation''s
+    ROOT status holds for a TOP-LEVEL run only. The emit sits inside execute_workflow, which is exactly
+    the function the child runner re-enters under an active subagent.span, so under a nested recursive run
+    the same pre-envelope emit is a CHILD and is starved like the rest. The counterexample therefore SCOPES
+    the starved population (it is not universal) rather than exempting skill.activation outright. GENERAL
+    LESSON now applied to every root/child claim on this row: source-line ordering relative to the local
+    envelope proves ORDERING, never TRACE-ROOT STATUS -- root status depends on the call venue, and this
+    workspace has at least two venues (top-level api.run and nested sub-agent dispatch) for the same code.'
   council: 'YES, and this is the row in the family that genuinely earns one -- unlike B-133, whose repair was
     single-domain. Candidate A trades a real observability floor (C7: a preserved class that is dropped
     before any preservation rule can act on it is not preserved) against a 5x-to-10x in-process span
