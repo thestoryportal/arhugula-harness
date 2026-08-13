@@ -8973,7 +8973,15 @@ items:
     commit message said otherwise. Codex caught it by RE-READING THE COMMITTED FILE rather than trusting
     the message. Now applied for real and verified present by grep, with the edit assertion-guarded; mutation-probed
     3/3 RED with the wait removed. DISCIPLINE: never report an edit from a script''s own success print --
-    assert the anchor matched, then grep the committed file.'
+    assert the anchor matched, then grep the committed file. ROUND-5 (codex on PR #1332): the batch counter
+    alone cannot cover a span whose on_end has STARTED but not yet taken _state_lock -- at that moment no
+    batch exists to register, so force_flush could observe zero, enter the downstream flush, and only then
+    have the child buffer and its root detach a batch, with registration landing AFTER the only wait and
+    the flush returning True with a batch undelivered. on_end now counts its own entry and exit (_active_on_end,
+    incremented at the top, decremented in a finally, notified), and force_flush waits for BOTH counters.
+    The body moved to _on_end_inner so the accounting wraps every path including early returns. Witness
+    suspends the producer INSIDE on_end before any buffering and asserts force_flush parks; mutation-probed
+    3/3 RED with the entry counter dropped from the wait condition.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before

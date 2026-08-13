@@ -690,3 +690,79 @@ def test_b164_a_raising_downstream_does_not_leak_the_in_flight_registration() ->
     started = time.monotonic()
     assert tail.force_flush(timeout_millis=500) is True
     assert time.monotonic() - started < 0.4, "force_flush waited on a leaked registration"
+
+
+def test_b164_force_flush_waits_for_an_on_end_that_has_not_registered_yet() -> None:
+    """**B-164 round 5** — work already inside `on_end` counts, not just registered batches.
+
+    The in-flight *batch* counter cannot cover a span whose `on_end` has **started** but has
+    not yet taken `_state_lock`: at that moment no batch exists to register. So a
+    `force_flush` could observe zero, enter the downstream flush, and only then have the
+    child buffer and its root detach a batch — registration landing after the only wait, and
+    the flush returning `True` with a batch undelivered.
+
+    `on_end` now counts its own entry and exit, so `force_flush` waits for work already in
+    progress. Driven deterministically: the producer is suspended *inside* `on_end` before it
+    reaches any buffering, then a flusher runs.
+    """
+    inside_on_end = threading.Event()
+    release_producer = threading.Event()
+
+    downstream = _Downstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    original_inner = tail._on_end_inner
+
+    def _hooked_inner(span: Any) -> None:
+        if threading.current_thread().name == "b164-entry-producer":
+            inside_on_end.set()
+            release_producer.wait(timeout=5.0)
+        original_inner(span)
+
+    tail._on_end_inner = _hooked_inner  # type: ignore[method-assign]
+
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b164.entry")
+
+    root_span = tracer.start_span(_TRIGGER_ROOT)
+    child = tracer.start_span("ordinary.child", context=otel_trace.set_span_in_context(root_span))
+
+    producer = threading.Thread(target=child.end, name="b164-entry-producer")
+    producer.start()
+    assert inside_on_end.wait(timeout=5.0), "the producer never entered on_end"
+
+    # Nothing is buffered and no batch is in flight — only an on_end in progress.
+    assert tail.buffered_trace_count == 0
+    assert tail._inflight_batches == 0
+    assert tail._active_on_end == 1, (
+        f"in-progress on_end work is not counted ({tail._active_on_end}) — force_flush would "
+        "see nothing pending and return before this span is even buffered"
+    )
+
+    in_the_wait = threading.Event()
+    real_cv_wait = tail._inflight_cv.wait
+
+    def _hooked_wait(timeout: float | None = None) -> bool:
+        in_the_wait.set()
+        return real_cv_wait(timeout)
+
+    tail._inflight_cv.wait = _hooked_wait  # type: ignore[method-assign]
+
+    result: list[bool] = []
+    flusher = threading.Thread(
+        target=lambda: result.append(tail.force_flush(timeout_millis=5_000)),
+        name="b164-entry-flusher",
+    )
+    flusher.start()
+    assert in_the_wait.wait(timeout=5.0), (
+        "force_flush did not wait for the in-progress on_end — it would return while a span "
+        "that has entered the processor is still unaccounted for"
+    )
+
+    release_producer.set()
+    producer.join(timeout=5.0)
+    root_span.end()
+    flusher.join(timeout=5.0)
+    assert not producer.is_alive() and not flusher.is_alive(), "a thread hung"
+    assert result == [True], f"force_flush reported {result}"
+    assert tail._active_on_end == 0, "the on_end counter did not settle back to zero"

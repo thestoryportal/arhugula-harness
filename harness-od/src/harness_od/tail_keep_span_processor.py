@@ -285,6 +285,12 @@ class TailKeepSpanProcessor(SpanProcessor):
         # forwarder increment — a `force_flush` landing in between saw an empty buffer AND
         # zero in-flight, and returned while the spans were in the air (out-of-family Codex).
         self._inflight_batches = 0
+        # `B-164` round 5 — a span whose `on_end` has STARTED but has not yet taken
+        # `_state_lock` is work `force_flush` must also wait for: it can register a batch
+        # AFTER the in-flight wait has already observed zero, landing during the downstream
+        # flush. Counting entry/exit of `on_end` covers that window; the batch counter alone
+        # cannot, because the batch does not exist yet.
+        self._active_on_end = 0
         self._inflight_cv = threading.Condition(self._state_lock)
         # Per-trace_id buffer of non-always-sampled spans pending root-close
         # keep decision. Keyed by the int form of OTel trace_id. Python dict
@@ -332,6 +338,16 @@ class TailKeepSpanProcessor(SpanProcessor):
         self._downstream.on_start(span, parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
+        with self._inflight_cv:
+            self._active_on_end += 1
+        try:
+            self._on_end_inner(span)
+        finally:
+            with self._inflight_cv:
+                self._active_on_end -= 1
+                self._inflight_cv.notify_all()
+
+    def _on_end_inner(self, span: ReadableSpan) -> None:
         """Buffer non-always-sampled spans by trace_id; flush-or-drop on root close.
 
         Always-sampled spans (per §9.2) forward immediately to `downstream`.
@@ -626,14 +642,14 @@ class TailKeepSpanProcessor(SpanProcessor):
         # wedged exporter cannot make `force_flush` hang forever.
         drained_in_time = True
         with self._inflight_cv:
-            while self._inflight_batches > 0:
+            while self._inflight_batches > 0 or self._active_on_end > 0:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or not self._inflight_cv.wait(timeout=remaining):
                     # Budget exhausted with batches still undelivered. Still delegate (a
                     # wedged forwarder must not stop the downstream from flushing what it
                     # has), but report FAILURE — returning True here would tell the runtime
                     # that shutdown may proceed when spans are demonstrably outstanding.
-                    drained_in_time = self._inflight_batches == 0
+                    drained_in_time = self._inflight_batches == 0 and self._active_on_end == 0
                     break
 
         remaining_millis = max(0.0, deadline - time.monotonic()) * 1000.0
