@@ -8920,7 +8920,18 @@ items:
     WITHOUT it -- the root and its siblings DROP -- and a _keep entry is left that no root close will ever
     pop. The span most likely to be lost is the wedged branch dispatch, i.e. exactly the one an operator
     wants when a branch hung badly enough to trip the barrier. (b) is now a CONFIRMED defect, not a
-    hypothesis.'
+    hypothesis. PRECISION CORRECTION + RESIDUAL (out-of-family witness-adequacy lens on PR #1335,
+    P2): the repro opens the child span DIRECTLY in the abandoned worker, which is the minimal faithful
+    shape, but for every currently-wired dispatcher the span opens one hop further out -- SyncDispatcherFacade
+    (which opens no span itself) bridges back to a captured persistent OUTER loop via
+    asyncio.run_coroutine_threadsafe, so RuntimeLLMDispatcher.dispatch runs its span on the outer loop
+    thread, NOT on the to_thread worker that gets abandoned. The lens wired a REAL SyncDispatcherFacade and
+    confirmed the SAME root-before-child ordering reproduces through that path, so reachability is
+    unaffected -- but the late-arrival window is gated by the outer loop coroutine lifetime rather than
+    literally by the abandoned executor, which any fix must account for. A facade-level witness is the
+    natural next strengthening. The lens also ran the load-bearing COUNTERFACTUAL: swapping the abandon for
+    joining semantics makes the ordering DISAPPEAR (child before root), proving shutdown(wait=False) -- not
+    the fixture -- produces it.'
   close_out: '(1) DECIDE WHETHER (a) IS IN SCOPE for a best-effort tail processor at all -- the module''s
     own ''Drop semantics (false-but-bounded)'' posture and s9.3''s implementer-discretion clause may already
     contemplate it; ground there first, exactly as B-136''s step (5) did. (2) IF IT IS, implement in-flight

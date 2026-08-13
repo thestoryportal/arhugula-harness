@@ -15,10 +15,30 @@ re-implementation of it). On ANY exception — the §25.11 barrier deadline or a
 ordinary branch failure — it abandons its `ThreadPoolExecutor` with
 `shutdown(wait=False)`; its own docstring says *"the orphaned thread runs to
 completion in the background"*. Branch dispatch runs under `asyncio.to_thread`,
-which copies the `contextvars` context, so the OTel parent propagates into that
-thread and a real child span opens there. The exception then unwinds the
-enclosing `with tracer.start_as_current_span(...)` root **while that child is
-still open**.
+which copies the `contextvars` context, so the OTel parent propagates across the
+bridge and a real child span opens **on a thread the fan-out no longer waits
+for**. The exception then unwinds the enclosing
+`with tracer.start_as_current_span(...)` root **while that child is still open**.
+
+**The abandon is load-bearing, and that is checked rather than assumed.** An
+out-of-family reviewer built the counterfactual: replace the abandoning
+`_run_fanout_to_completion` with joining semantics (`asyncio.run`, which joins its
+default executor at shutdown) and keep everything else identical — the ordering
+*disappears*, `['gen_ai.dispatch', 'ordinary.root']`, child before root. So the
+ordering under test is produced by `shutdown(wait=False)`, not by the fixture.
+
+**Precision about WHERE the span opens** (out-of-family lens, P2 — recorded on the
+`B-164(b)` row). This file opens the child span *directly* in the abandoned worker,
+which is the minimal faithful shape. For every currently-wired dispatcher the span
+opens one hop further out: `SyncDispatcherFacade` — which opens no span itself —
+bridges back to a captured, persistent outer loop via
+`asyncio.run_coroutine_threadsafe`, so `RuntimeLLMDispatcher.dispatch`'s span runs
+on the OUTER LOOP's thread, not on the `to_thread` worker that gets abandoned. The
+reviewer verified independently, wiring a real `SyncDispatcherFacade`, that the same
+root-before-child ordering reproduces through that path — so reachability is
+unaffected. It does change the shape of a fix: the late-arrival window is gated by
+the outer loop's coroutine lifetime, not literally by the abandoned executor. A
+facade-level witness is the natural next strengthening of this file.
 
 **Determinism.** Nothing here races on a sleep. The failing branch does not raise
 until the wedged branch has signalled that its child span is OPEN, and the child
