@@ -610,3 +610,63 @@ async def test_fanout_branch_gate_resume_with_resolved_answer_is_consumed(
         f"(HITL_PENDING), which would mean the B-72 fix regressed; got "
         f"pause_reason={resumed.pause_snapshot.pause_reason!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_b71_resume_preserves_the_run_id_the_pre_dispatch_identity_is_composed_from(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _captured_webhook_requests: list[httpx.Request],
+) -> None:
+    """B-71 precondition-4 LIVE-RESUME WITNESS — run_id continuity across a real resume.
+
+    Homed here because this module already stands up the exact population B-71 is about:
+    a `PARALLELIZATION` fan-out whose branch owns a pre-dispatch `SUB_AGENT_BOUNDARY`
+    gate, on the real dispatcher registry and the real `RuntimeHITLGateComposer`.
+
+    **What it pins, and why it is the right run.** Basis (B)'s token is composed from
+    `pre_dispatch_gate_owning_branch_identity(run_id, branch_index)` at
+    `workflow_driver.py:8346` — where `run_id` is **the run executing the fan-out**, not
+    a child's. Its continuity across resume is therefore owned by the top-level resume
+    path: `mcp_server.py:371-372` (C-RT-35) selects
+    ``run_id = _resume_snapshot.run_id if _resume_snapshot is not None else uuid4().hex``
+    — *"reuse the snapshot's run_id for audit/ledger coherence"*.
+
+    A `.harness/council-b71-.../DELIVERABLE.md` draft cited
+    `child_workflow_runner.py:230-234` for this. That governs a **child** run and is the
+    right citation only when the fan-out is nested inside one; for the ordinary top-level
+    fan-out it is the wrong path. Corrected at §4-quinquies.
+
+    Resumed with an EMPTY `ResumeContext` so the gate re-fires and the run re-pauses,
+    giving a second snapshot to compare against the first — the run_id must be identical.
+    """
+    _install_fake_providers(monkeypatch, _SucceedingAnthropicClient())
+    _install_fake_od_stage4(monkeypatch)
+    _install_fake_webhook_composer_factory(monkeypatch, _captured_webhook_requests)
+
+    config = _config(tmp_path)
+    workflow = _FanOutSubAgentDispatchWorkflow()
+
+    paused = await api_run(workflow, config=config)
+    assert isinstance(paused, RunResult)
+    assert paused.status == "paused"
+    assert paused.pause_snapshot is not None
+    original_run_id = paused.pause_snapshot.run_id
+    assert original_run_id, "the first pause must carry a run_id to compare against"
+
+    resumed = await resume(
+        workflow,
+        pause_snapshot=paused.pause_snapshot,
+        resume_context=ResumeContext(),  # nothing supplied → the gate re-fires
+        config=config,
+    )
+    assert isinstance(resumed, RunResult)
+    assert resumed.pause_snapshot is not None, (
+        "expected the gate to re-fire and re-pause on an empty ResumeContext"
+    )
+    assert resumed.pause_snapshot.run_id == original_run_id, (
+        f"the resumed run did NOT continue under the paused run's run_id "
+        f"({resumed.pause_snapshot.run_id!r} != {original_run_id!r}) — basis (B)'s token "
+        f"is composed from this run_id, so without continuity it would rotate on every "
+        f"resume and B-71 precondition 4's window would be unbounded"
+    )
