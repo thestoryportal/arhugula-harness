@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 161
+  total: 162
   open: 1
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 31
   operator_gated: 0
   held: 2
   closed: 128
-  identity_digest: '704ce0c7ea685857'
+  identity_digest: '80bde1613155b44b'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7419,35 +7419,127 @@ items:
     CODEX ROUND 1 AGAINST THE B-133 LEG''S COMMIT ff63c725, 2026-08-08 -- the reviewer''s premise was
     ADJUDICATED EMPIRICALLY AND CONFIRMED at the real production wiring rather than accepted or declined
     on argument, and the leg''s own contract TEXT was corrected where it had overclaimed coverage.'
-  close_out: '(1) RE-GROUND THE WIRING FIRST, because it is explicitly marked as provisional. Re-read
-    tracer_provider.py''s sampler resolution at the then-current HEAD and confirm it still binds the
-    per-cell ratio in both modes and still carries the "current default sampler ignores the mode ...
-    Future units may wire mode-conditional samplers" note. If a mode-conditional sampler has since
-    landed, this row may already be closed by that work and should be re-measured rather than re-argued.
-    (2) RE-MEASURE, do not re-reason. The probe is four lines of composition (build_default_sampler at the
-    cell rate + the real TailKeepSpanProcessor, counting arrivals at on_end) across the three populations
-    the summary names -- root-name-matched, event-carried, and non-root trigger -- so the non-uniformity
-    is re-established rather than assumed. (3) DECIDE THE POSTURE, and this is a genuine architectural
-    fork rather than a bug with a fix. Candidate A: mode-conditional head -- ALWAYS_ON (or
-    ParentBased(ALWAYS_ON)) in TAIL_BASED_PROD mode, with the section 10.3 ratio applied inside the tail
-    consumer at the root-close decision. This is what section 9.1 actually says and what
+  close_out: '(1) RE-GROUND THE WIRING FIRST, because it is explicitly marked as provisional. Re-read tracer_provider.py''s
+    sampler resolution at the then-current HEAD and confirm it still binds the per-cell ratio in both modes
+    and still carries the "current default sampler ignores the mode ... Future units may wire mode-conditional
+    samplers" note. If a mode-conditional sampler has since landed, this row may already be closed by that
+    work and should be re-measured rather than re-argued. (2) RE-MEASURE, do not re-reason. The probe is
+    four lines of composition (build_default_sampler at the cell rate + the real TailKeepSpanProcessor,
+    counting arrivals at on_end) across the three populations the summary names -- root-name-matched, event-carried,
+    and non-root trigger -- so the non-uniformity is re-established rather than assumed. (3) DECIDE THE
+    POSTURE, and this is a genuine architectural fork rather than a bug with a fix. Candidate A: mode-conditional
+    head -- ALWAYS_ON (or ParentBased(ALWAYS_ON)) in TAIL_BASED_PROD mode, with the section 10.3 ratio applied
+    inside the tail consumer at the root-close decision. This is what section 9.1 actually says and what
     tracer_provider.py already names as an unbuilt surface, but it multiplies in-process span volume by
-    1/base_rate and moves the ratio decision to a component that currently has no ratio logic at all.
-    Candidate B: rejected-carrier recording -- leave the head as is, but have the sampler record a
-    counter or a minimal marker for dropped spans that WOULD have carried a preserved class, so the loss
-    is observable rather than silent. Cheaper and honest, but it does not deliver the floor. Candidate C:
-    accept and document -- ratify that the section 9.2 floor is a floor over the ADMITTED stream, which
-    would require amending section 9.2/section 9.3''s "head=1.0 across all cells" language, since that
-    language is what makes A the literal reading. (4) PRICE THE VOLUME CONSEQUENCE BEFORE CHOOSING A --
-    and note that this MERGES with B-133''s still-open F-08 residual rather than sitting beside it.
-    Today''s ~20% multi-tenant admission is the ceiling on the B-133 arm''s added keep-volume; candidate A
-    removes that ceiling, so F-08 measured against today''s admission would not survive this repair. The
-    two MUST be measured together. (5) NOTE THE B-136 INTERACTION -- candidate A increases the population
-    of buffered traces by 1/base_rate, which makes B-136''s never-resolving always-sampled-root traces a
-    proportionally larger share of max_buffered_traces pressure. WHAT WOULD FALSIFY IT. A re-measurement
-    showing event-carried and non-root-trigger admission at parity with root-name-matched admission
-    (which would mean the head composition changed), or a ratified reading under candidate C that the
-    floor was always scoped to the admitted stream.'
+    1/base_rate and moves the ratio decision to a component that currently has no ratio logic at all. Candidate
+    B: rejected-carrier recording -- leave the head as is, but have the sampler record a counter or a minimal
+    marker for dropped spans that WOULD have carried a preserved class, so the loss is observable rather
+    than silent. Cheaper and honest, but it does not deliver the floor. Candidate C: accept and document
+    -- ratify that the section 9.2 floor is a floor over the ADMITTED stream, which would require amending
+    section 9.2/section 9.3''s "head=1.0 across all cells" language, since that language is what makes A
+    the literal reading. (4) PRICE THE VOLUME CONSEQUENCE BEFORE CHOOSING A -- and note that this MERGES
+    with B-133''s still-open F-08 residual rather than sitting beside it. Today''s ~20% multi-tenant admission
+    is the ceiling on the B-133 arm''s added keep-volume; candidate A removes that ceiling, so F-08 measured
+    against today''s admission would not survive this repair. The two MUST be measured together. (5) NOTE
+    THE B-136 INTERACTION -- candidate A increases the population of buffered traces by 1/base_rate, which
+    makes B-136''s never-resolving always-sampled-root traces a proportionally larger share of max_buffered_traces
+    pressure. WHAT WOULD FALSIFY IT. A re-measurement showing event-carried and non-root-trigger admission
+    at parity with root-name-matched admission (which would mean the head composition changed), or a ratified
+    reading under candidate C that the floor was always scoped to the admitted stream. RE-MEASURED AT THE
+    REAL VENUE 2026-08-13 -- STEPS (1) AND (2) ARE DONE; STEP (3) IS THE ONLY LIVE STEP. (1) tracer_provider.py:236-240
+    still binds the per-cell ratio unconditionally, still discards the mode, and still carries the note
+    that future units may wire mode-conditional samplers -- NO mode-conditional sampler has landed, so this
+    row is NOT closed by other work. (2) EXECUTED THROUGH api.run, not a manufactured composition (an earlier
+    draft of this arc was correctly rejected by out-of-family Codex for driving an uncalled helper): running
+    the B-72 fan-out workflow end to end with a real TracerProvider and the production sampler at base_rate=0.0,
+    NOTHING is exported at all -- including hitl.gate.evaluated, which IS a s9.2 member with a declared
+    head=1.0 floor. With an always-on provider the same run records exactly workflow.envelope (ROOT) and
+    hitl.gate.evaluated nested under it, so the loss is structural: workflow_driver.py:3305 opens workflow.envelope
+    as the trace root, workflow.envelope is NOT a s9.2 member, and ParentBased consults the composite sampler
+    ONLY for roots -- the root loses its draw and the child inherits the drop with its own name never consulted.
+    THE s9.2 FLOOR IS ROOT-ONLY. TAIL HALF EXECUTED TOO (the row''s step (2) names TailKeepSpanProcessor
+    explicitly): driving the REAL processor through the REAL run at base_rate=0.0, on_end receives ZERO
+    arrivals -- a head-dropped span is never recorded, so the processor''s own s9.2 bypass-the-buffer arm
+    can never act on it. SCOPE, STATED HONESTLY (an earlier draft of this arc claimed all 19 members are
+    children of the envelope; that was FALSE and is WITHDRAWN): only 11 of the 19 members have a span-open
+    site in src/ at all -- the other 8 are event-carried or unimplemented, i.e. population (i) -- and at
+    least one span-backed member is a ROOT, since skill.activation is emitted from workflow_driver.py:3206
+    which PRECEDES the envelope open at :3305. The starvation is therefore SCOPED to members emitted inside
+    the envelope, and any repricing of step (3) must be against that set, not all 19. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py
+    -- 18 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
+    by replacing ParentBased(root=X) with the bare X (both load-bearing tests go RED). STEP (3) REPRICED
+    BY TWO MEASURED COUNTERFACTUALS AT THE SAME VENUE. (a) CANDIDATE A-PRIME -- NOT the row''s candidate
+    A, which is mode-conditional ALWAYS_ON with the s10.3 ratio moved INTO the tail consumer and was NOT
+    measured here; A-prime is dropping ParentBased so the composite sampler is consulted for EVERY span.
+    A-prime admits hitl.gate.evaluated but STILL DROPS workflow.envelope, so it yields ORPHANED floor spans
+    whose parent trace was discarded -- and its volume cost is 1/base_rate applied to FLOOR-MEMBER spans
+    only, NOT to all spans, which is cheaper than the row''s original x10-on-everything framing but buys
+    broken traces. (b) NEW candidate C1 -- add workflow.envelope itself to s9.2 -- delivers the floor to
+    every in-workflow member by inheritance, in a one-line change. CORRECTED 2026-08-13 (codex round 3):
+    C1 does NOT keep traces whole, and its real cost is worse than a volume multiplier. Measured through
+    the SHIPPED TailKeepSpanProcessor, C1 forwards the envelope and every s9.2 member (both take the always-sampled
+    bypass arm at tail_keep_span_processor.py:361), but an ordinary non-member child stays BUFFERED at root
+    close -- and a s10.2 classification trigger does NOT rescue it, because making the ROOT always-sampled
+    means the root takes the bypass arm and returns BEFORE the root-close flush-or-drop decision runs. So
+    under C1 a workflow trace THAT CONTAINS AT LEAST ONE ORDINARY NON-MEMBER CHILD becomes a never-resolving
+    buffered trace drained only by force_flush -- and WORSE THAN THAT under production bounds (measured
+    2026-08-13, codex round 12): span_processor.py:373-374 always supplies max_buffered_traces / max_spans_per_trace
+    from CollectorConfig (defaults 4096 each, types.py:741,752) and the buffer evicts DROP-OLDEST, so beyond
+    the ceiling the ordinary children are EVICTED AND LOST rather than held -- force_flush never sees them.
+    Measured at a cap of 3 over 100 traces: 3 buffered, 97 evicted. Under sustained load that IS the steady
+    state, since under C1 every trace with an ordinary child occupies a slot and none is released at root
+    close. So C1''s cost is DATA LOSS, not delay. SCOPED 2026-08-13 (codex round 4): an earlier wording
+    said EVERY trace, which is wrong -- this arc''s own B-72 venue emits only workflow.envelope + hitl.gate.evaluated,
+    both of which bypass the buffer under C1, leaving its buffer at ZERO; the measured stranding used a
+    manufactured validator.evaluate child. HOW OFTEN that child population occurs in real workflows is UNMEASURED
+    and is owed before step (3) chooses C1 (the driver does open ordinary spans -- validator.evaluate at
+    workflow_driver.py:5600, plus tool.dispatch / sandbox.* / secret.fetch in the tool dispatcher -- so
+    the population is non-empty, but its frequency is not established here) -- exactly the B-136 pressure
+    this row''s own step (5) predicts, which C1 MAXIMISES rather than avoids. So the fork is no longer A-vs-B-vs-C
+    but a sharper trade, and note the labels are FIVE distinct options not three: ORPHANED FLOOR SPANS AT
+    LOWER VOLUME (A-PRIME, measured; the ORIGINAL candidate A -- mode-conditional ALWAYS_ON with the ratio
+    moved into the tail consumer -- REMAINS IN THE OPTION SET, unmeasured, at its stated x10-on-everything
+    cost) vs (C1) FULL TRACE ADMITTED AT THE HEAD BUT ORDINARY CHILDREN STRANDED IN THE TAIL BUFFER, at
+    full volume -- NOT ''whole traces'' (corrected 2026-08-13, codex round 5): C1 admits the envelope and
+    every s9.2 member at the head, but an ordinary non-member child is still buffered at root close and
+    a s10.2 trigger does not rescue it vs RATIFYING A ROOT-ONLY FLOOR (C, which must amend s9.2/s9.3''s
+    head=1.0-across-all-cells language). Candidate B remains a reporting option, not a repair. The dyadic
+    C7+C11 council''s stated precondition (step (2) re-measurement first) is now MET. ALL THREE OF STEP
+    (2)''s POPULATIONS ARE NOW EXECUTED (codex round 6): the api.run witness covers the non-root population
+    only; test_all_three_starved_populations_at_one_composition covers root-name-matched (survives), non-root
+    (dropped) and event-carried (dropped) at one composition, which is the probe shape step (2) actually
+    prescribes. AND A TRIPWIRE FOR THE FIX THIS ROW AWAITS: every other measurement supplies a deterministic
+    sampler override, so a future mode-conditional sampler repairing only TAIL_BASED_PROD would leave them
+    all green -- test_a_production_cell_still_binds_the_unconditional_ratio_sampler composes a real production
+    cell (team-binding x self-hosted-server, rate 0.1) through the shipped stage with NO override, so it
+    reddens the moment that sampler lands. STEP (2)''s TAIL ARMS ARE NOW ALL EXECUTED (codex round 13 closed
+    the contradiction the round-12 note conceded): test_all_three_populations_through_the_real_tail_processor
+    runs root-name-matched, non-root member, non-root TRIGGER and event-carried through the REAL TailKeepSpanProcessor
+    at production buffer bounds, spying on the processor''s own on_end. Only the root-name-matched span
+    arrives; the starved populations never reach the tail at all, because the head drops them before recording.
+    Step (2) is therefore discharged at the shape the row prescribes (build_default_sampler + the real tail
+    processor across all three populations), not merely at the head. SEPARATELY, the nested-resume witness
+    is STRUCTURAL, not executed: it proves the child dispatch is lexically inside the subagent.span block,
+    NOT that the OTel context is still current at the child driver''s resume detection nor that the snapshot
+    value is non-None. The conclusion (resume.attempted is a non-root child for nested resumes) therefore
+    rests on containment plus the ordinary OTel context-propagation semantics, and an executed nested-resume
+    parentage witness is OWED before B-162 acts on it. QUALIFIED 2026-08-13 (codex round 14, the SAME defect
+    class as round 7 which this arc fixed for resume.attempted and initially missed here): skill.activation''s
+    ROOT status holds for a TOP-LEVEL run only. The emit sits inside execute_workflow, which is exactly
+    the function the child runner re-enters under an active subagent.span, so under a nested recursive run
+    the same pre-envelope emit is a CHILD and is starved like the rest. The counterexample therefore SCOPES
+    the starved population (it is not universal) rather than exempting skill.activation outright. GENERAL
+    LESSON now applied to every root/child claim on this row: source-line ordering relative to the local
+    envelope proves ORDERING, never TRACE-ROOT STATUS -- root status depends on the call venue, and this
+    workspace has at least two venues (top-level api.run and nested sub-agent dispatch) for the same code.
+    A-PRIME IS A PARTIAL, NAME-ONLY REMEDY (measured 2026-08-13, codex round 15): it addresses only ONE
+    of the two starved populations. Removing ParentBased exposes every span''s NAME to HarnessCompositeSampler,
+    repairing the non-root NAME-BACKED members; it does NOTHING for the EVENT-CARRIED members (the B-133
+    family, which B-137 explicitly includes), because those ride as span EVENTS on an ordinary carrier and
+    at span creation the head still sees only the carrier''s name and applies the base-rate draw. Measured
+    at base_rate=0.0: A-prime exports hitl.gate.evaluated and NOT the event-carrying ordinary.carrier. So
+    A-prime must NOT be selected at step (3) as a complete repair -- it would leave the event-carried floor
+    starved. Pinned by test_candidate_a_prime_is_a_name_only_remedy.'
   council: 'YES, and this is the row in the family that genuinely earns one -- unlike B-133, whose repair was
     single-domain. Candidate A trades a real observability floor (C7: a preserved class that is dropped
     before any preservation rule can act on it is not preserved) against a 5x-to-10x in-process span
@@ -8501,42 +8593,71 @@ items:
     cannot be silently closed in either direction. WHY IT MATTERS BEYOND B-71: §9.3 calls the
     always-sampled set inviolable, so this is a floor-conformance question, not a preference --
     and HITL delivery is the audit-critical case the floor exists for.'
-  close_out: 'GROUNDED 2026-08-12 (PR #1328) -- the close-out''s own first step is DONE and it
-    RESCOPES the row: this is a CLASS, not an instance -- SIX span families across FOUR contracts, in two
-    shapes. FOUR unconditional head=1.0 span-name declarations across TWO contracts are absent from
-    the s9.2 floor set --
-    hitl.webhook.deliver + hitl.webhook.attempt (C-OD-32.3) and pause.captured +
-    resume.attempted (C-OD-30.3). Witness:
-    harness-od/tests/test_b160_head_one_declarations_vs_always_sampled_set.py (3 tests,
-    mutation-probed -- adding the webhook names alone reds it, which is the point: a one-sided
-    edit must force re-grounding). NOT the B-153 category mistake: the set''s own members are
-    span/event names of the same shape (hitl.gate.evaluated, hitl.invocation.opened,
-    topology.fanout.opened, mcp.tool.call) and NO wildcard covers the absentees -- the
-    hitl.invocation.* members are enumerated individually and there is no hitl.* or pause.*
-    wildcard, unlike audit.* / validator.fail.*. CONDITIONAL declarations are deliberately
-    EXCLUDED from the class (mcp.trust.evaluate at audit_required; operator-burden at
-    degrade=true) -- s9.2 handles those through its four conditional rows. NOTE: pause.captured
-    is arguably the worse case of the four, since operator-explicit pause is exactly the
-    audit-critical event a sampling floor exists for. THE B-137 DEPENDENCY APPLIES TO ALL FOUR:
-    ParentBased(root=...) never consults a non-root child''s name, so membership alone cannot
-    deliver the floor for any of these child spans. REMAINING: decide which side is canonical and
-    make the other conform: either
-    (a) add ALL FOUR unconditional names to the §9.2 member set (19 -> 23) -- hitl.webhook.deliver,
-    hitl.webhook.attempt, pause.captured, resume.attempted -- AND add the TWO conditional ones
-    (mcp.trust.evaluate at audit_required; the operator-burden span at degrade) to the conditional
-    resolver, which today covers only files.operation / memory.operation / validator.fail.* /
-    subagent.span. A one-name edit does NOT close this row and would leave the witness red, so the implementation meets
-    the §C-OD-32.3 floor -- note the §9.2 count is cited in several places and a count-contract
-    sweep is owed with it. MEMBERSHIP ALONE IS NOT SUFFICIENT (codex round 7 sibling-overlap
-    check): hitl.webhook.deliver is a CHILD span, and ParentBased(root=HarnessCompositeSampler)
-    never consults a non-root child''s name -- it inherits the parent workflow span''s drop
-    decision. B-137 already registers exactly this non-root starvation, so (a) DEPENDS ON or
-    MERGES WITH B-137; closing it standalone would claim a floor the sampler still cannot
-    deliver; or (b) amend §C-OD-32.3 if webhook spans are genuinely NOT intended
-    to be always-sampled, which would be a cleared-contract change under X-AL-3 and would need
-    to explain how HITL delivery stays audit-critical without a sampling floor. Grounding: DONE 2026-08-12 -- it IS a class (four unconditional +
-    two conditional, across four contracts). Do not repeat it. The materialize_span_processor_stage end-to-end run owed
-    on the B-71 spec leg is also the experiment that settles this empirically.'
+  close_out: 'GROUNDED 2026-08-12 (PR #1328) -- the close-out''s own first step is DONE and it RESCOPES
+    the row: this is a CLASS, not an instance -- SIX span families across FOUR contracts, in two shapes.
+    FOUR unconditional head=1.0 span-name declarations across TWO contracts are absent from the s9.2 floor
+    set -- hitl.webhook.deliver + hitl.webhook.attempt (C-OD-32.3) and pause.captured + resume.attempted
+    (C-OD-30.3). Witness: harness-od/tests/test_b160_head_one_declarations_vs_always_sampled_set.py (3 tests,
+    mutation-probed -- adding the webhook names alone reds it, which is the point: a one-sided edit must
+    force re-grounding). NOT the B-153 category mistake: the set''s own members are span/event names of
+    the same shape (hitl.gate.evaluated, hitl.invocation.opened, topology.fanout.opened, mcp.tool.call)
+    and NO wildcard covers the absentees -- the hitl.invocation.* members are enumerated individually and
+    there is no hitl.* or pause.* wildcard, unlike audit.* / validator.fail.*. CONDITIONAL declarations
+    are ALSO part of the class (this sentence previously read that they were deliberately EXCLUDED because
+    s9.2''s conditional rows covered them -- STRUCK 2026-08-12, that premise is FALSE): s9.2''s four conditional
+    rows are files.operation, memory.operation, validator.fail.* and subagent.span (sampling_mode.py:176-190),
+    and neither mcp.trust.evaluate nor the operator-burden span is among them. The class is SIX, in two
+    shapes. NOTE: pause.captured is arguably the worse case of the four, since operator-explicit pause is
+    exactly the audit-critical event a sampling floor exists for. THE B-137 DEPENDENCY APPLIES TO ALL FOUR
+    FOR COMPLETE CONFORMANCE (this line briefly read ''THREE OF THE FOUR'' on 2026-08-13; RESTORED the same
+    day at codex round 9). resume.attempted escapes the dependency ONLY for a TOP-LEVEL resume, where its
+    entry-point call precedes the envelope and it is a trace root. For a NESTED CHILD resume it is emitted
+    while subagent.span is current, so it is a non-root child and ParentBased never consults its name. Reducing
+    the dependency to three would let B-160 close while nested resumes still miss the floor, so the CONFORMANCE-level
+    dependency is FOUR; the top-level-only carve-out is a partial-credit note, not an exemption: ParentBased(root=...)
+    never consults a non-root child''s name, so membership alone cannot deliver the floor for any of these
+    child spans. REMAINING: decide which side is canonical and make the other conform: either (a) add ALL
+    FOUR unconditional names to the §9.2 member set (19 -> 23) -- hitl.webhook.deliver, hitl.webhook.attempt,
+    pause.captured, resume.attempted -- AND add the TWO conditional ones (mcp.trust.evaluate at audit_required;
+    the operator-burden span at degrade) to the conditional resolver, which today covers only files.operation
+    / memory.operation / validator.fail.* / subagent.span. A one-name edit does NOT close this row and would
+    leave the witness red, so the implementation meets the §C-OD-32.3 floor -- note the §9.2 count is cited
+    in several places and a count-contract sweep is owed with it. MEMBERSHIP ALONE IS NOT SUFFICIENT (codex
+    round 7 sibling-overlap check): hitl.webhook.deliver is a CHILD span, and ParentBased(root=HarnessCompositeSampler)
+    never consults a non-root child''s name -- it inherits the parent workflow span''s drop decision. B-137
+    already registers exactly this non-root starvation, so (a) DEPENDS ON or MERGES WITH B-137; closing
+    it standalone would claim a floor the sampler still cannot deliver; or (b) amend §C-OD-32.3 if webhook
+    spans are genuinely NOT intended to be always-sampled, which would be a cleared-contract change under
+    X-AL-3 and would need to explain how HITL delivery stays audit-critical without a sampling floor. Grounding:
+    DONE 2026-08-12 -- it IS a class (four unconditional + two conditional, across four contracts). Do not
+    repeat it. The materialize_span_processor_stage end-to-end run owed on the B-71 spec leg is also the
+    experiment that settles this empirically. B-137 DEPENDENCY MEASURED 2026-08-13, AND TWO OF THE FOUR
+    NAMES ARE DOUBLY INERT. The row carried the B-137 dependency as a reasoned claim (codex round 7); it
+    is now executed at the real api.run venue. At base_rate=0.0 through the shipped path, hitl.gate.evaluated
+    -- an EXISTING s9.2 member with a declared floor -- is not exported at all, because ParentBased consults
+    the sampler only for the workflow.envelope root and the child inherits the drop. So ADDING A NAME TO
+    THE SET DOES NOT DELIVER ITS FLOOR for any member emitted inside the envelope, which is what disposition
+    (a) assumes. SEQUENCING: land B-137 step (3)''s disposition FIRST; B-160''s conformance sweep is then
+    mechanical. SEPARATELY -- emit_pause_captured_span and emit_resume_attempted_span have NO CALLER ANYWHERE
+    IN src/ (registered as B-162), so pause.captured and resume.attempted are never emitted in production
+    at all. Adding a never-emitted name to the floor set changes nothing, so two of this row''s four unconditional
+    names are inert for a SECOND, independent reason, and B-160''s disposition (a) should not be written
+    as though all four are symmetric. Executed at harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py.
+    AND THE TWO UNCALLED NAMES ARE THEMSELVES ASYMMETRIC (2026-08-13, codex round 2): resume.attempted would
+    be emitted BEFORE workflow.envelope opens (workflow_driver.py:3213-3225 vs :3305), so once B-162 wires
+    it, membership ALONE delivers its floor -- it is the single name of the four for which disposition (a)
+    is sufficient on its own. pause.captured would be an envelope child and is gated on B-137 as well as
+    on B-162. SCOPED TO TOP-LEVEL RESUMES 2026-08-13 (codex round 7): the root claim above generalized LOCAL
+    LINE ORDERING inside one driver function into TRACE-ROOT status, and that is valid only for a TOP-LEVEL
+    resume. For a NESTED CHILD resume it is FALSE -- sub_agent_dispatch.py opens subagent.span and invokes
+    child_workflow_runner(..., pause_snapshot_input=...) INSIDE that block, and the child runner forwards
+    the snapshot to execute_workflow, so the child driver''s entry-point resume detection runs while subagent.span
+    is current. resume.attempted would then be a NON-ROOT child, ParentBased would never consult its membership,
+    and it stays gated on B-137 exactly like pause.captured. So ''membership alone is sufficient'' holds
+    for TOP-LEVEL resumes ONLY. Pinned by test_a_nested_child_resume_runs_under_subagent_span. NOTE 2026-08-13
+    (codex round 12): the nested-resume witness is STRUCTURAL (lexical containment of the child dispatch
+    inside the subagent.span block), not an executed parentage observation -- an executed nested-resume
+    witness is OWED before acting on the top-level-vs-nested split.'
   council: 'no at registration -- this is a conformance reconciliation between two OD surfaces,
     not a design fork. It becomes council-eligible only under disposition (b), which would
     relax an inviolable §9.3 floor.'
@@ -8577,3 +8698,55 @@ items:
   heading: '### B-161 · `test_shutdown.py::test_force_flush_returning_false_surfaces_timed_out` is
     order-dependent — a spurious `(''ledger'',)` failure under full-suite ordering *(surfaced on the
     B-71 precondition-4 PR #1324, 2026-08-12)*'
+- id: B-162
+  title: C-OD-30.3's two declared head=1.0 spans (pause.captured / resume.attempted) have emitters that
+    NOTHING in src/ calls, so neither span is ever emitted in production
+  status: registered_finding
+  summary: 'harness-cp/src/harness_cp/pause_resume_protocol.py:904 and :925 define emit_pause_captured_span
+    / emit_resume_attempted_span, each opening the span its C-OD-30.3 contract declares at head=1.0. NO
+    call site exists anywhere under harness-*/src/ -- the only matches are the definitions themselves
+    and a docstring cross-reference at per_server_trust_evaluator.py:294. Both docstrings describe a caller-side
+    invocation per the U-CP-61 pattern in which the workflow driver invokes protocol.capture_pause_snapshot(...)
+    then this helper with the returned snapshot and driver-held tracer; the driver performs the first
+    half and NOT the second. WHY IT MATTERS: two of the four unconditional names in B-160''s disposition
+    (a) are these, and adding a never-emitted name to the s9.2 floor set changes nothing -- so B-160''s
+    four names are NOT symmetric. It is also a plain contract-vs-implementation gap on its own terms.
+    FOUND WHILE re-measuring B-137 at the real venue: an earlier draft used emit_pause_captured_span as
+    its real production emitter and drove it directly; the function is real, the PATH is not, and out-of-family
+    Codex rejected the witness on exactly that ground.'
+  close_out: '(1) Decide whether C-OD-30.3 intends these spans to be live. If yes, wire the driver''s pause
+    and resume branches to call them with the driver-held tracer per the pattern both docstrings already
+    specify, and add emission witnesses. If no, the contract''s head=1.0 declaration is what to amend, via
+    design-phase back-flow. (2) Either way, re-word B-160''s disposition (a) so its four names are no longer
+    presented as one symmetric sweep. (3) SUPERSEDED 2026-08-13 -- true for pause.captured ONLY. pause.captured
+    would be an envelope child and so lands in B-137''s root-only starvation; resume.attempted would be
+    emitted BEFORE the envelope opens and so would be a ROOT, receiving its s9.2 floor directly once added
+    to the set. Do not block the top-level resume slice on B-137; the NESTED child resume still needs it
+    (the child driver''s resume detection runs while subagent.span is current), so B-162''s own wiring can
+    land independently but COMPLETE conformance for resume.attempted still depends on B-137. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py::test_the_pause_span_emitters_have_no_caller_in_src
+    -- enumerates src/ for callers of both helpers and fails if either acquires one. TOPOLOGY SPLIT 2026-08-13
+    (out-of-family Codex round 2) -- THE TWO SPANS ARE NOT SYMMETRIC. A first draft of this row gated both
+    on B-137. That holds for pause.captured (an envelope child) and FAILS for resume.attempted: the driver
+    runs entry-point resume detection at workflow_driver.py:3213-3225, BEFORE workflow.envelope opens at
+    :3305, and says so in-line (the resume detection runs BEFORE the workflow.envelope opens -- a failed
+    resume returns FAILED without opening a new envelope). So a resume.attempted span at its prescribed
+    call site would be a ROOT, would consult the composite sampler directly, and WOULD receive its s9.2
+    floor once added to the set. resume.attempted is therefore THE ONE NAME among B-160''s four for which
+    membership alone is sufficient -- after wiring. So close-out step (3) above applies to pause.captured
+    ONLY, and B-160''s disposition (a) must treat the two separately. SCOPED TO TOP-LEVEL RESUMES 2026-08-13
+    (codex round 7): the root claim above generalized LOCAL LINE ORDERING inside one driver function into
+    TRACE-ROOT status, and that is valid only for a TOP-LEVEL resume. For a NESTED CHILD resume it is FALSE
+    -- sub_agent_dispatch.py opens subagent.span and invokes child_workflow_runner(..., pause_snapshot_input=...)
+    INSIDE that block, and the child runner forwards the snapshot to execute_workflow, so the child driver''s
+    entry-point resume detection runs while subagent.span is current. resume.attempted would then be a NON-ROOT
+    child, ParentBased would never consult its membership, and it stays gated on B-137 exactly like pause.captured.
+    So ''membership alone is sufficient'' holds for TOP-LEVEL resumes ONLY. Pinned by test_a_nested_child_resume_runs_under_subagent_span.
+    NOTE 2026-08-13 (codex round 12): the nested-resume witness is STRUCTURAL (lexical containment of the
+    child dispatch inside the subagent.span block), not an executed parentage observation -- an executed
+    nested-resume witness is OWED before acting on the top-level-vs-nested split.'
+  council: no -- a wiring gap plus a contract-intent question, single-domain; it becomes design-phase
+    back-flow only if the answer to step (1) is that the contract should be amended.
+  heading: '### B-162 · `C-OD-30.3`''s two declared `head=1.0` spans (`pause.captured` / `resume.attempted`)
+    have emitters that **nothing in `src/` calls**, so neither span is ever emitted in production *(surfaced
+    while re-measuring B-137 at the real venue, 2026-08-13; the overclaim it corrects was caught by out-of-family
+    Codex)*'
