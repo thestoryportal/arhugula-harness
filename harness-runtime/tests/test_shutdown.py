@@ -422,11 +422,17 @@ async def test_slow_ledger_fsync_is_tagged_and_times_out(
     # exported from the package, so a plain `import ... as` binds the function.
     _sd = importlib.import_module("harness_runtime.shutdown")
 
-    monkeypatch.setattr(_sd, "_fsync_ledger_sync", lambda _p: time.sleep(0.5))
+    # Both sides are deliberately GENEROUS so this witness cannot itself become the
+    # flake it documents (out-of-family Codex): with a tight 100ms deadline a loaded
+    # runner's tracer phase could eat the budget first, yielding ('tracer','ledger') and
+    # failing the exact assertion below. A 1s deadline is far more than the fake tracer's
+    # immediate return can consume, and a 5s fsync overruns whatever remains by orders of
+    # magnitude — so the ONLY tag that can appear is the ledger's.
+    monkeypatch.setattr(_sd, "_fsync_ledger_sync", lambda _p: time.sleep(5.0))
 
     report = await flush_observability(
         _ctx_with(tmp_path, tracer=_FakeTracerProvider(returns=False)),
-        timeout_millis=100,
+        timeout_millis=1_000,
     )
 
     assert report.failures == ("ledger",), (
