@@ -627,8 +627,8 @@ def test_b164_a_batch_is_registered_in_flight_the_moment_it_is_detached() -> Non
     # The batch is detached (buffer empty) but not yet forwarded. If registration were
     # post-hoc, in-flight would read 0 here and force_flush would return immediately.
     assert tail.buffered_trace_count == 0, "the batch should already be detached"
-    assert tail._inflight_batches == 1, (
-        f"the detached batch is not registered in flight ({tail._inflight_batches}) — a "
+    assert len(tail._inflight_batch_seqs) == 1, (
+        f"the detached batch is not registered in flight ({tail._inflight_batch_seqs}) — a "
         "concurrent force_flush would see an empty buffer and nothing pending, and return "
         "while these spans are still undelivered"
     )
@@ -637,7 +637,7 @@ def test_b164_a_batch_is_registered_in_flight_the_moment_it_is_detached() -> Non
     producer.join(timeout=5.0)
     assert not producer.is_alive(), "the producer hung"
     assert "ordinary.child" in downstream.seen
-    assert tail._inflight_batches == 0, "the in-flight count did not settle back to zero"
+    assert not tail._inflight_batch_seqs, "the in-flight registry did not settle back to empty"
 
 
 def test_b164_a_raising_downstream_does_not_leak_the_in_flight_registration() -> None:
@@ -646,7 +646,7 @@ def test_b164_a_raising_downstream_does_not_leak_the_in_flight_registration() ->
     `_publish_keep_and_maybe_detach` registers the detached batch while it still holds the
     lock, so the release must be unconditional. If `downstream.on_end(span)` — the
     always-sampled span itself, forwarded *before* the batch — raises and the release is
-    skipped, `_inflight_batches` stays positive **forever**: every later `force_flush` then
+    skipped, the in-flight registry stays non-empty **forever**: every later `force_flush` then
     burns its entire timeout waiting for a batch that will never be delivered, and now also
     reports failure. A `finally` around the current-span forward covers it (out-of-family
     Codex).
@@ -679,8 +679,8 @@ def test_b164_a_raising_downstream_does_not_leak_the_in_flight_registration() ->
         raised = True
     assert raised, "the raising downstream did not propagate — the scenario is not exercised"
 
-    assert tail._inflight_batches == 0, (
-        f"the in-flight registration leaked ({tail._inflight_batches}) after the current-span "
+    assert not tail._inflight_batch_seqs, (
+        f"the in-flight registration leaked ({tail._inflight_batch_seqs}) after the current-span "
         "forward raised — every later force_flush would burn its whole budget and report "
         "failure for a batch that will never arrive"
     )
@@ -733,7 +733,7 @@ def test_b164_force_flush_waits_for_an_on_end_that_has_not_registered_yet() -> N
 
     # Nothing is buffered and no batch is in flight — only an on_end in progress.
     assert tail.buffered_trace_count == 0
-    assert tail._inflight_batches == 0
+    assert not tail._inflight_batch_seqs
     assert tail._entrants_pending(tail._entry_cutoff()), (
         "in-progress on_end work is not registered — force_flush would see nothing pending "
         "and return before this span is even buffered"
@@ -941,3 +941,80 @@ def test_b164_force_flush_does_not_wait_on_traffic_that_arrives_after_its_cutoff
     release.set()
     late_thread.join(timeout=5.0)
     assert not late_thread.is_alive(), "the late thread hung"
+
+
+def test_b164_a_post_cutoff_batch_does_not_consume_the_flush_budget() -> None:
+    """**B-164 round 9** — batches carry generations too, exercised THROUGH `force_flush()`.
+
+    Round 8 gave *entrants* a cutoff but left the batch count global, so a batch detached by
+    a **post-cutoff** callback still made the flush wait — the same spurious `False` the
+    cutoff exists to prevent, one level down. Batches now carry the generation of the
+    `on_end` that produced them.
+
+    **Getting the scenario right mattered.** A first draft started the late trace *before*
+    calling `force_flush`, which makes it legitimately **pre**-cutoff work that the flush
+    *should* wait for — the test failed for the right reason and the code was fine. To model
+    post-cutoff traffic the batch must be produced **after** the cutoff is taken, so this
+    hooks `_entry_cutoff` and starts the late producer from inside it.
+    """
+    release_late = threading.Event()
+    late_started = threading.Event()
+
+    class _LateBlockingDownstream(_Downstream):
+        def on_end(self, span: Any) -> None:
+            if span.name == "late.child" and threading.current_thread().name == "b164-late-batch":
+                release_late.wait(timeout=5.0)
+            super().on_end(span)
+
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            return True
+
+    downstream = _LateBlockingDownstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b164.late-batch")
+
+    late_thread: list[threading.Thread] = []
+    real_cutoff = tail._entry_cutoff
+
+    def _hooked_cutoff() -> int:
+        cutoff = real_cutoff()
+        if not late_started.is_set():
+            late_started.set()
+            # Everything below is created AFTER the cutoff was taken.
+            late_root = tracer.start_span(_TRIGGER_ROOT)
+            with tracer.start_as_current_span(
+                "late.child", context=otel_trace.set_span_in_context(late_root)
+            ):
+                pass
+            th = threading.Thread(target=late_root.end, name="b164-late-batch")
+            late_thread.append(th)
+            th.start()
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not tail._inflight_batch_seqs:
+                time.sleep(0.01)
+        return cutoff
+
+    tail._entry_cutoff = _hooked_cutoff  # type: ignore[method-assign]
+
+    started = time.monotonic()
+    result = tail.force_flush(timeout_millis=400)
+    elapsed = time.monotonic() - started
+
+    assert tail._inflight_batch_seqs, (
+        "the late batch was already delivered — the scenario did not reproduce"
+    )
+    assert elapsed < 0.35, (
+        f"force_flush waited {elapsed:.2f}s on a batch produced AFTER its cutoff — sustained "
+        "post-cutoff traffic would exhaust every flush budget"
+    )
+    assert result is True, (
+        "force_flush reported failure because of a batch that is not its concern — the "
+        "spurious-failure shape the generation cutoff exists to prevent"
+    )
+
+    release_late.set()
+    for th in late_thread:
+        th.join(timeout=5.0)
+        assert not th.is_alive(), "the late producer hung"

@@ -284,7 +284,6 @@ class TailKeepSpanProcessor(SpanProcessor):
         # `_publish_keep_and_maybe_detach` popped the batch, released, and only then did the
         # forwarder increment — a `force_flush` landing in between saw an empty buffer AND
         # zero in-flight, and returned while the spans were in the air (out-of-family Codex).
-        self._inflight_batches = 0
         # `B-164` round 5 — a span whose `on_end` has STARTED but has not yet taken
         # `_state_lock` is work `force_flush` must also wait for: it can register a batch
         # AFTER the in-flight wait has already observed zero, landing during the downstream
@@ -304,6 +303,16 @@ class TailKeepSpanProcessor(SpanProcessor):
         # budget and reports failure even though everything present at invocation drained.
         self._entry_seq = 0
         self._active_entries: set[int] = set()
+        # Detached batches carry the generation of the `on_end` that produced them, so a
+        # flush waits only for batches from entrants at or below its own cutoff. A bare
+        # count would let post-cutoff traffic consume the budget — the same spurious-failure
+        # shape the entrant cutoff fixed, one level down (`B-164` round 9).
+        self._inflight_batch_seqs: list[int] = []
+        # The generation of the `on_end` running on THIS thread, so the detach path can tag
+        # its batch without threading the id through every call site. `force_flush`'s own
+        # drained batch is tagged 0, which is at or below every cutoff and so is always
+        # waited for by the flush that produced it.
+        self._current_entry = threading.local()
         self._inflight_cv = threading.Condition(self._state_lock)
         # Per-trace_id buffer of non-always-sampled spans pending root-close
         # keep decision. Keyed by the int form of OTel trace_id. Python dict
@@ -355,6 +364,7 @@ class TailKeepSpanProcessor(SpanProcessor):
             self._entry_seq += 1
             entry_id = self._entry_seq
             self._active_entries.add(entry_id)
+        self._current_entry.value = entry_id
         try:
             self._on_end_inner(span)
         finally:
@@ -566,6 +576,10 @@ class TailKeepSpanProcessor(SpanProcessor):
             )
         )
 
+    def _batches_pending(self, cutoff: int) -> bool:
+        """True while a detached batch produced at or before `cutoff` is still forwarding."""
+        return any(seq <= cutoff for seq in self._inflight_batch_seqs)
+
     def _entry_cutoff(self) -> int:
         """Snapshot the entry sequence — a flush waits only for entrants at or below it."""
         with self._entry_lock:
@@ -596,7 +610,11 @@ class TailKeepSpanProcessor(SpanProcessor):
                 self._downstream.on_end(span)
         finally:
             with self._inflight_cv:
-                self._inflight_batches -= 1
+                seq = getattr(self._current_entry, "value", 0)
+                if seq in self._inflight_batch_seqs:
+                    self._inflight_batch_seqs.remove(seq)
+                elif self._inflight_batch_seqs:  # pragma: no cover - defensive
+                    self._inflight_batch_seqs.pop()
                 self._inflight_cv.notify_all()
 
     def _publish_keep_and_maybe_detach(
@@ -626,8 +644,10 @@ class TailKeepSpanProcessor(SpanProcessor):
             if released:
                 # Register the batch as in-flight WHILE still holding the lock that guards
                 # `_buffer`, so no `force_flush` can observe "buffer empty AND nothing in
-                # flight" for a batch that has been detached but not yet forwarded.
-                self._inflight_batches += 1
+                # flight" for a batch that has been detached but not yet forwarded. Tagged
+                # with this thread's entrant generation so a flush can tell whether the
+                # batch predates its cutoff.
+                self._inflight_batch_seqs.append(getattr(self._current_entry, "value", 0))
         return released
 
     def _evict_oldest_trace(self) -> None:
@@ -657,7 +677,7 @@ class TailKeepSpanProcessor(SpanProcessor):
         #
         # `B-164` — this is a DRAIN-UNTIL-STABLE loop, not a single pass. Three distinct
         # windows made the single pass unsound, each found by out-of-family review:
-        #   (i)   a batch detached but not yet forwarded (`_inflight_batches`),
+        #   (i)   a batch detached but not yet forwarded (`_inflight_batch_seqs`),
         #   (ii)  an `on_end` that has started but not yet taken the lock (tracked by
         #         `_active_entries`)
         #         — at that moment no batch exists to register, and
@@ -677,10 +697,10 @@ class TailKeepSpanProcessor(SpanProcessor):
                 self._buffer.clear()
                 self._keep.clear()
                 if drained:
-                    # Same registration rule as `_publish_keep_and_maybe_detach`: count the
-                    # batch while still holding the lock, since `_forward_detached` only
-                    # decrements.
-                    self._inflight_batches += 1
+                    # Same registration rule as `_publish_keep_and_maybe_detach`. Tagged 0 —
+                    # at or below every cutoff — so the flush always waits for its own batch.
+                    self._current_entry.value = 0
+                    self._inflight_batch_seqs.append(0)
             self._forward_detached(drained)
 
             # Let in-progress work settle: batches in the air, and `on_end` calls that have
@@ -688,12 +708,12 @@ class TailKeepSpanProcessor(SpanProcessor):
             # on expiry we still delegate, so a wedged exporter cannot make `force_flush`
             # hang forever, but we report failure rather than a false success.
             with self._inflight_cv:
-                while self._inflight_batches > 0 or self._entrants_pending(entry_cutoff):
+                while self._batches_pending(entry_cutoff) or self._entrants_pending(entry_cutoff):
                     remaining = deadline - time.monotonic()
                     if remaining <= 0 or not self._inflight_cv.wait(timeout=remaining):
-                        drained_in_time = (
-                            self._inflight_batches == 0 and not self._entrants_pending(entry_cutoff)
-                        )
+                        drained_in_time = not self._batches_pending(
+                            entry_cutoff
+                        ) and not self._entrants_pending(entry_cutoff)
                         break
                 # Anything that arrived in `_buffer` while we waited needs another pass.
                 more_pending = bool(self._buffer)

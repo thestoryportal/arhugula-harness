@@ -9009,7 +9009,17 @@ items:
     was replaced by an _active_entries set; the now-dead _active_on_end field and its stale comment reference
     were removed. Witness takes a cutoff while idle, starts a LATE span inside on_end, and asserts the late
     entrant IS registered globally but is NOT waited for by the earlier cutoff; mutation-probed 3/3 RED
-    with the cutoff ignored.'
+    with the cutoff ignored. ROUND-9 (codex on PR #1332, P2) -- THE SYMMETRIC HALF OF ROUND 8. The cutoff
+    filtered entrants but the batch count stayed global, so a batch detached by a POST-CUTOFF callback still
+    made the flush wait: the same spurious-False shape one level down. Batches now carry the generation
+    of the on_end that produced them (via a thread-local current-entry id, so no signature threading), and
+    the flush waits only for batches at or below its own cutoff; force_flush''s own drained batch is tagged
+    0, at or below every cutoff, so a flush always waits for itself. WITNESS CONSTRUCTION MATTERED: a first
+    draft started the late trace BEFORE calling force_flush, which makes it legitimately PRE-cutoff work
+    the flush SHOULD wait for -- the test failed for the right reason and the code was fine. It now hooks
+    _entry_cutoff and creates the late trace from inside it, so the batch is genuinely post-cutoff, and
+    it exercises force_flush() end-to-end as the reviewer asked rather than only the predicate. Mutation-probed
+    3/3 RED with the batch cutoff ignored.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before
