@@ -8909,8 +8909,18 @@ items:
     which copies the contextvars context so the OTel parent propagates into that thread, where llm_dispatch
     opens a REAL child span. The deadline then unwinds the workflow.envelope root while that child is still
     open. That is a root ending before its own child with ZERO manual start_span calls -- exactly (b)''s
-    precondition. Whether TailKeepSpanProcessor actually mishandles that ordering is UNPROVEN (no live
-    repro exists yet), but the row cannot close on a universal that is false.'
+    precondition. CONFIRMED 2026-08-13 BY REPRO at harness-runtime/tests/test_b164b_fanout_orphaned_child_span_repro.py,
+    which drives the REAL _run_fanout_to_completion (not a re-implementation) and is deterministic (10/10
+    identical runs; the failing branch waits on a child-span-open event rather than a sleep). MEASURED
+    COST, three distinct harms: (1) the orphaned child is stranded in _buffer and never detaches, so it
+    MISSES the root-close materialization that exports its trace; (2) with no max_buffered_traces ceiling
+    it is merely DELAYED to force_flush, but under buffer pressure it is EVICTED (dropped_trace_count=1)
+    and force_flush never recovers it -- a permanent loss, and the stranded bucket is the OLDEST entry so
+    it is the FIRST shed; (3) if the orphan is itself the s10.2 trigger, the keep decision is taken
+    WITHOUT it -- the root and its siblings DROP -- and a _keep entry is left that no root close will ever
+    pop. The span most likely to be lost is the wedged branch dispatch, i.e. exactly the one an operator
+    wants when a branch hung badly enough to trip the barrier. (b) is now a CONFIRMED defect, not a
+    hypothesis.'
   close_out: '(1) DECIDE WHETHER (a) IS IN SCOPE for a best-effort tail processor at all -- the module''s
     own ''Drop semantics (false-but-bounded)'' posture and s9.3''s implementer-discretion clause may already
     contemplate it; ground there first, exactly as B-136''s step (5) did. (2) IF IT IS, implement in-flight
@@ -9042,10 +9052,16 @@ items:
     opens a real child span there. The §25.11 barrier deadline then unwinds the `with tracer.start_as_current_span("workflow.envelope")`
     root while that child is still open, ending the ROOT FIRST. A sibling comment at the to_thread call
     site already records the orphaned-thread-outlives-cancellation shape as a prior codex P1 + concurrency-lens
-    finding, so the mechanism is independently attested in-tree. NEXT STEP for (b): either build a live
-    repro driving that fan-out path through TailKeepSpanProcessor and adjudicate on the result, or produce
-    a positive argument that an orphaned child span cannot reach the processor after its root materializes.
-    Neither exists today. UNTIL ONE DOES, (b) STAYS OPEN. (a) remains CLOSED at #1332 and is unaffected.'
+    finding, so the mechanism is independently attested in-tree. REPRO BUILT 2026-08-13 (see summary): the ordering is
+    reachable through the shipped fan-out and the processor DOES mishandle it, so the adjudication asked
+    for here is DONE and answered against the closure. NEXT STEP for (b) is now the FIX, and the shape the
+    row already predicted stands: a post-materialization LATE-ARRIVAL path, NOT a wider lock -- a span that
+    has not entered the processor cannot be accounted for by any lock, so the processor must handle a span
+    whose trace has already materialized (forward it immediately on the prior keep decision, or re-open the
+    trace). Any fix must also decide what a LATE TRIGGER means: the keep decision is already published, so
+    either it is honoured late or the late trigger is accepted as lost -- and the stale _keep entry must
+    stop leaking either way. The repro test flips from xfail to XPASS under strict mode when the fix lands,
+    which is the signal to close this row. (a) remains CLOSED at #1332 and is unaffected.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency — **(a) `force_flush` returning before an
