@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import importlib
 import os
 import sys
 import threading
@@ -382,15 +383,58 @@ async def test_both_surfaces_fail_both_recorded(
 
 @pytest.mark.asyncio
 async def test_force_flush_returning_false_surfaces_timed_out(tmp_path: Path) -> None:
-    """OTel BSP returns False on internal timeout — propagate to FlushReport."""
+    """OTel BSP returns False on internal timeout — propagate to FlushReport.
+
+    B-161: the budget is deliberately GENEROUS. `flush_observability` gives the ledger
+    fsync only the *remaining* shared budget (`deadline - time.monotonic()`), so with a
+    tight 100ms total this assertion was timing-dependent: on a loaded runner the real
+    fsync exceeded what was left, raised `TimeoutError`, and appended `"ledger"` —
+    turning `failures == ()` red for a reason that has nothing to do with the tracer
+    behaviour under test. Widening the budget removes the race WITHOUT weakening the
+    assertion: `failures == ()` stays exact, so a genuine tracer-path regression still
+    fails. The timeout mechanism itself is pinned separately, below.
+    """
     tracer = _FakeTracerProvider(returns=False)
     ctx = _ctx_with(tmp_path, tracer=tracer)
 
-    report = await flush_observability(ctx, timeout_millis=100)
+    report = await flush_observability(ctx, timeout_millis=5_000)
 
     assert report.tracer_flushed is False
     assert report.timed_out is True
     assert report.failures == ()  # not a failure — it's a timeout result
+
+
+@pytest.mark.asyncio
+async def test_slow_ledger_fsync_is_tagged_and_times_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-161 mechanism witness — the flake's root cause, pinned so it cannot drift.
+
+    The ledger fsync runs on whatever is LEFT of the shared flush budget. When it does
+    not fit, the report tags `"ledger"` and sets `timed_out` — which is correct
+    behaviour, and exactly what a loaded CI runner produced against the tight budget the
+    test above used to carry.
+
+    Deterministic where the original was not: the slowness is injected rather than
+    induced by machine load.
+    """
+    # NB: `harness_runtime.shutdown` the MODULE is shadowed by a `shutdown` function
+    # exported from the package, so a plain `import ... as` binds the function.
+    _sd = importlib.import_module("harness_runtime.shutdown")
+
+    monkeypatch.setattr(_sd, "_fsync_ledger_sync", lambda _p: time.sleep(0.5))
+
+    report = await flush_observability(
+        _ctx_with(tmp_path, tracer=_FakeTracerProvider(returns=False)),
+        timeout_millis=100,
+    )
+
+    assert report.failures == ("ledger",), (
+        "a ledger fsync that overruns the remaining budget must be tagged — if this "
+        "stops holding, re-read B-161 before widening any flush timeout"
+    )
+    assert report.timed_out is True
+    assert report.ledger_fsynced is False
 
 
 @pytest.mark.asyncio
