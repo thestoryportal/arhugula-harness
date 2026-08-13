@@ -998,20 +998,20 @@ def test_b164_a_post_cutoff_batch_does_not_consume_the_flush_budget() -> None:
 
     tail._entry_cutoff = _hooked_cutoff  # type: ignore[method-assign]
 
-    started = time.monotonic()
     result = tail.force_flush(timeout_millis=400)
-    elapsed = time.monotonic() - started
 
     assert tail._inflight_batch_seqs, (
         "the late batch was already delivered — the scenario did not reproduce"
     )
-    assert elapsed < 0.35, (
-        f"force_flush waited {elapsed:.2f}s on a batch produced AFTER its cutoff — sustained "
-        "post-cutoff traffic would exhaust every flush budget"
-    )
+    # NOT a wall-clock assertion (out-of-family Codex): a loaded worker can deschedule this
+    # process for longer than any threshold and fail a correct implementation. The two
+    # assertions below distinguish the paths without timing — a flush that HAD waited on the
+    # late batch would have exhausted its budget and returned False, since that batch is
+    # still undelivered at this point (asserted directly above).
     assert result is True, (
-        "force_flush reported failure because of a batch that is not its concern — the "
-        "spurious-failure shape the generation cutoff exists to prevent"
+        "force_flush reported failure because of a batch that is not its concern — it waited "
+        "for a batch produced AFTER its cutoff and timed out, which is the spurious-failure "
+        "shape the generation cutoff exists to prevent"
     )
 
     release_late.set()
