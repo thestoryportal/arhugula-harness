@@ -19,7 +19,8 @@ operator-facing escalations, and the shared composed key drops the second peer's
 audit entry under C-IS-07 §7.5 dedup), but **every site that must change is
 Runtime-owned**: the escalation brief is constructed at §14.8.8.1 step 1, the idempotency
 key is composed at step 2, and the wire body is built by the `project_brief_to_payload`
-adapter reached from step 3. An earlier draft of the CP leg carried no Runtime
+adapter reached from step 3. The composed key itself is produced at THREE live invocations
+(`hitl_gate_composer.py:1302` / `:1543` / `:2238`), all of which the fold must reach. An earlier draft of the CP leg carried no Runtime
 delta at all, which out-of-family review identified as a zero-change claim by omission —
 the CP carriers would have shipped with nothing writing to them.
 
@@ -44,11 +45,16 @@ the CP carriers would have shipped with nothing writing to them.
 2. **No echo-vs-recompute comparison** (CP §0.4.3 arm 1): a resume whose recompute would
    differ from the persisted echo does NOT fail the run. Witnessed directly, because the
    natural defensive implementation is exactly the one the contract forbids.
-3. **The fold is at the single existing site** (spec v1.121 site 2): the token is folded
-   inside `compose_hitl_action_id`, not composed into a second key beside it. Witnessed by
-   asserting the webhook `Idempotency-Key`, the CP audit `action_id` and the F2 ledger key
-   are the SAME value for one escalation — the one-identity-family promise of CP §0.2, and
-   the property whose violation reintroduces the §0.1 aliasing.
+3. **The fold reaches ALL THREE `compose_hitl_action_id` invocations** (spec v1.121 site 2),
+   not only the webhook one: `hitl_gate_composer.py:1302` (step-2 webhook key), `:1543`
+   (`_compose_and_persist_audit` — the CP audit `action_id` and the F2 ledger key) and
+   `:2238` (the `hitl.invocation.audit_ledger_entry_id` span correlation). The token is
+   folded inside the composer, never composed into a second key beside it. Witnessed by
+   asserting the webhook `Idempotency-Key`, the CP audit `action_id`, the F2 ledger key and
+   the span attribute are the SAME value for one escalation — the one-identity-family
+   promise of CP §0.2. **Widening only the webhook call would make that promise FALSE in
+   the shipped system** and would leave criterion 5's defect witness operating on the
+   unwidened audit key, so it could never close.
 4. **Byte-identity when the token is absent** (spec v1.121 site 2; CP §0.12): with
    `escalation_instance_id` `None`, the composed key equals the pre-arc two-argument key
    exactly. Witnessed against a pre-arc fixture value, not by asserting a shape.
@@ -69,9 +75,12 @@ the CP carriers would have shipped with nothing writing to them.
    implementation that prefixed or re-hashed reddens. Criterion 4 pins the absent case; this
    pins the present case, and without it two compliant implementations could disagree and a
    deployment change during an unresolved gate would emit a different key for one escalation.
-9. **The three `payload_body` keys are projected** (spec v1.121 site 3; CP §0.6):
-   `project_brief_to_payload` emits `branch_context`, `resolvability` and
-   `resolvability_note` when their source values are present. Witnessed on a real fan-out
+9. **The four `payload_body` keys are projected** (spec v1.121 site 3; CP §0.6):
+   `project_brief_to_payload` emits `escalation_instance_id` (the BARE token),
+   `branch_context`, `resolvability` and `resolvability_note` when their source values are
+   present. The bare token is the one that closes the correlation loop — an operator cannot
+   equality-match the composed `Idempotency-Key` against the pause-view projection, because
+   §0.4(1) forbids parsing it. Witnessed on a real fan-out
    escalation through the adapter, **not** by asserting the brief carries them — the adapter
    is an explicit field-by-field mapper, so a field present on the brief and absent from the
    mapper silently never reaches the wire, which is precisely the gap out-of-family review
@@ -85,7 +94,7 @@ the CP carriers would have shipped with nothing writing to them.
 **Mutation-probe obligations (Workflow v1.19 PD-9).** Criteria 3, 4, 5, 8, 9 and 11 each
 carry a `# mutation-probe:` annotation: compose the token as a second key beside the
 existing one; emit the token on the linear path; blind the fold to the token; prefix rather
-than suffix the token; drop one of the three payload keys from the adapter; and emit the
+than suffix the token; drop one of the four payload keys from the adapter; and emit the
 ordinal as a typed field — each must redden its own witness and no other.
 
 ### §0.3 Sites NOT touched, named so the scope is auditable

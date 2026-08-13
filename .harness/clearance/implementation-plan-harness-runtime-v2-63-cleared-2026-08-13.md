@@ -17,10 +17,13 @@ supersedes: implementation-plan-harness-runtime-v2-62-cleared-2026-08-12.md
 
 # Clearance — Implementation_Plan_Harness_Runtime v2.63 (B-71 Runtime-side execution authority)
 
-**What v2.63 adds.** ONE new unit, **U-RT-155**, owning the two Runtime sites Runtime spec
-v1.121 names: the §14.8.8.1 step-1 escalation-brief minter and the step-2
-`compose_hitl_action_id` fold. Seven acceptance criteria and three mutation-probe
-obligations.
+**What v2.63 adds.** ONE new unit, **U-RT-155**, owning the THREE Runtime sites Runtime
+spec v1.121 names: the §14.8.8.1 step-1 escalation-brief minter; the
+`compose_hitl_action_id` fold at ALL THREE of its live invocations
+(`hitl_gate_composer.py:1302` webhook, `:1543` audit/F2, `:2238` span — widening only the
+first would make §0.2's one-identity-family promise false in the shipped system); and the
+step-3 `project_brief_to_payload` webhook projection. **Eleven** acceptance criteria and
+**six** mutation-probe obligations.
 
 **The defect witness is a criterion, not a side effect.** Criterion 5 requires that two
 peer branches sharing a `child_workflow_id` produce DISTINCT keys and that both HITL audit

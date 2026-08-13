@@ -1,8 +1,8 @@
 # Implementation Plan: Control Plane — v2.53 (delta over v2.52)
 
 *v2.53 absorbs the `B-71` spec leg (CP spec v1.119, Runtime spec v1.121) into the plan's
-execution authority by adding **ONE new unit, U-CP-102**, carrying the four additive
-carrier amendments and the persist/read wiring the spec's persist-once contract requires.
+execution authority by adding **ONE new unit, U-CP-102**, carrying the five additive
+carrier amendments and the persist/read/write wiring the spec's persist-once contract requires.
 NO landed unit's body is amended — the B-97(a)/B-118 new-unit precedent, the same shape
 v2.52 used for its supersession notes: new obligations ride a new unit, landed criteria
 stand as HISTORY. Every existing unit body, signature block, rollback boundary, cluster
@@ -15,19 +15,19 @@ minted (the spec leg mints none); no existing field changes type.*
 
 ### §0.1 Why a new unit rather than criteria on the landed carriers
 
-The four amendment sites live on carriers whose units are long landed (`HITLEscalationBrief`
-at the C-CP-28 §25.2 lineage; `StepExecutionContext` at C-CP-25; the per-branch
-pre-dispatch gate-owning resume state at C-CP-26). Amending those units' acceptance
+The five amendment sites live on carriers whose units are long landed (`HITLEscalationBrief`
+at the C-CP-28 §25.2 lineage; `StepExecutionContext` at C-CP-25, twice; the per-branch
+pre-dispatch gate-owning resume state at C-CP-26; the pause-location projection at C-CP-21). Amending those units' acceptance
 criteria in place would rewrite history that was verified against a different contract —
 the precise failure v2.52 §0.2 avoided by riding supersession as a note. It would also
-scatter one mechanism across three units whose landings cannot be sequenced relative to
+scatter one mechanism across four units whose landings cannot be sequenced relative to
 each other.
 
 `B-71` is **one mechanism**: a token that is minted once, folded once, persisted once and
-read back before recompute. Its four carriers are jointly meaningless — a basis field with
-no minter, an echo with no reader, or a reader with no persisted value each satisfy
-nothing. U-CP-102 therefore owns the whole CP-side surface, and the seam to the Runtime
-minter is a declared dependency rather than a shared unit.
+read back before recompute, and projected so an operator can match it. Its five carriers are
+jointly meaningless — a basis field with no minter, an echo with no writer or no reader, or
+a projection with no token each satisfy nothing. U-CP-102 therefore owns the whole CP-side
+surface, and the seam to the Runtime minter is a co-land pin rather than a shared unit.
 
 ### §0.2 U-CP-102 (NEW) — `B-71` branch-distinct escalation correlation carriers
 
@@ -40,7 +40,7 @@ minter is a declared dependency rather than a shared unit.
 | **Co-land pin** | **U-RT-155** (Runtime plan v2.63). A PIN, not a DAG edge — see §0.4 |
 | **Level** | terminal within its cluster; introduces no new DAG node upstream of any landed unit |
 
-**Files (CP-owned surface only).** The four carrier declarations plus the webhook
+**Files (CP-owned surface only).** The five carrier declarations plus the webhook
 projection keys. The Runtime-owned minter and `compose_hitl_action_id` fold are **NOT**
 this unit's files — they are U-RT-155's, per Runtime spec v1.121.
 
@@ -76,8 +76,9 @@ this unit's files — they are U-RT-155's, per Runtime spec v1.121.
    including `branch_context`, whose scoped carve-out covers the branch **ordinal in prose**
    and nothing else. A negative witness asserts the ordinal is absent as any typed/parseable
    field and absent from every exported span attribute.
-8. The three additive `payload_body` keys (`branch_context`, `resolvability`,
-   `resolvability_note`) project per spec §0.6, with `resolvability` drawn from the closed
+8. The FOUR additive `payload_body` keys (`escalation_instance_id` — the BARE token,
+   which is what makes the webhook equality-matchable against criterion 13's projection —
+   plus `branch_context`, `resolvability`, `resolvability_note`) project per spec §0.6, with `resolvability` drawn from the closed
    `PauseLocationVariant` vocabulary (`Spec_Control_Plane_v1_112.md` §2.1) and no new
    vocabulary minted. `proposed_response_palette` is **preserved and still projected**
    (spec §0.6.1 — the earlier suppression binding is WITHDRAWN and MUST NOT be implemented).
@@ -87,7 +88,7 @@ this unit's files — they are U-RT-155's, per Runtime spec v1.121.
    disposition — `ResumeResult` / `RunResult` are closed schemas and requiring one here
    would make the unit unimplementable.
 10. **Byte-identity on the untouched population** (spec §0.12): on the linear/validator
-    path the field is `None`, the three keys are absent, and the wire body, ledger key and
+    path the field is `None`, the four keys are absent, and the wire body, ledger key and
     audit `action_id` are byte-identical to pre-arc. Witnessed by comparison against a
     pre-arc fixture, not by asserting the absence of a key.
 11. **The minted token is WRITTEN to the echo** (spec §0.4.2 WRITER row): the

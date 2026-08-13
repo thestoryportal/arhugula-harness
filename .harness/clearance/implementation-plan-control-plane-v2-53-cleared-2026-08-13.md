@@ -17,11 +17,12 @@ supersedes: implementation-plan-control-plane-v2-52-cleared-2026-08-12.md
 
 # Clearance — Implementation_Plan_Control_Plane v2.53 (B-71 CP-side execution authority)
 
-**What v2.53 adds.** ONE new unit, **U-CP-102**, owning the four additive carrier
+**What v2.53 adds.** ONE new unit, **U-CP-102**, owning the FIVE additive carrier
 amendments CP spec v1.119 declares (`HITLEscalationBrief.escalation_instance_id`;
 `StepExecutionContext.pre_dispatch_escalation_basis` and
-`.pre_dispatch_escalation_instance_id`; the per-branch resume-state echo) plus the three
-advisory `payload_body` keys, with ten acceptance criteria and four mutation-probe
+`.pre_dispatch_escalation_instance_id`; the per-branch resume-state echo; the
+`PreDispatchUniformFallbackOnlyLocation` correlation projection) plus the FOUR
+`payload_body` keys, with **fourteen** acceptance criteria and **seven** mutation-probe
 obligations.
 
 **Why a new unit rather than criteria on the landed carriers.** The four sites belong to

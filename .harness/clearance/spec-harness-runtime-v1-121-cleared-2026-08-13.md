@@ -38,12 +38,12 @@ nothing writing to them.
    is pinned by CP §0.4(2-bis) as a `":"`-separated suffix, never truncated or re-hashed;
    the OUTPUT is pinned, the call shape is not.
 3. **The webhook payload projection**, `project_brief_to_payload` (reached from step 3 via
-   `deliver_webhook_for_brief`). CP §0.6 requires three additive `payload_body` keys on a
+   `deliver_webhook_for_brief`). CP §0.6 requires four additive `payload_body` keys on a
    fan-out escalation, and this adapter is an explicit field-by-field mapper that maps a
    fixed field set and receives no branch context — so a delta restricted to steps 1 and 2
    left NO unit owning their emission, and the CP requirement was unimplementable at the
    only site that builds the wire body. Found by out-of-family review of this delta's
-   first draft. Canonically read as also projecting the three keys when their sources are
+   first draft. Canonically read as also projecting the four keys when their sources are
    present, byte-identical when absent, with `branch_context` carrying the branch ordinal
    as PROSE only under CP §0.5's single scoped carve-out.
 

@@ -4,7 +4,7 @@
 except at the **five** carrier amendment sites named below — all additive,
 `None`-defaulted, and byte-identical when absent: (1) C-CP-28 §25.2's
 `HITLEscalationBrief` gains `escalation_instance_id` (§0.3, §25.2.Z) and the
-operator-facing webhook `payload_body` gains three additive advisory keys (§0.6);
+operator-facing webhook `payload_body` gains four additive keys (§0.6);
 (2) C-CP-25 §25's `StepExecutionContext` gains the internal basis carrier (§0.4.1,
 §25.17); (3) C-CP-26 §26's per-branch pre-dispatch gate-owning resume state gains the
 persisted echo (§0.4.2, §26.9); (4) C-CP-25 §25's `StepExecutionContext` gains the
@@ -121,6 +121,24 @@ linear path byte-identical.
 
    The pre-hash material contains a `run_id` **verbatim** and MUST NOT reach any exported
    carrier — see §0.5.
+
+   **The guarantee is per (branch × placement POSITION), not per placement DECLARATION —
+   stated as a bound, because it is narrower than §0.2's headline.** A workflow may declare
+   two placements at the same position, and both are valid and executed (witnessed today by
+   `test_two_pre_action_placements_emit_per_placement_canonical_4_spans`). The basis hashes
+   the position's string VALUE, so those two escalation instances receive the **same** token
+   and the same composed key, and the C-IS-07 §7.5 key-only dedup drops the second audit
+   entry exactly as it did before this delta — for that shape only.
+
+   **This is a declared residual, NOT a silent one, and it is deliberately not repaired
+   here.** The identity basis is (B), resolved by the design record §4-bis on an executed
+   collision witness, and it names the placement POSITION. Widening the digest with a
+   placement-declaration discriminator would change a ratified basis at spec-application
+   time — the silent design extension X-AL-3 forbids — so the honest action is to narrow
+   the claim and register the remainder. §0.2's "distinct per escalation instance" is
+   therefore read against the (branch × position) instance, and the duplicate-declaration
+   shape is registered as forward work at §0.9. A leg that needs it must revisit the basis
+   through the design record, not through an implementation choice.
 
 2-bis. **The token-PRESENT composed key is PINNED too, for the same reason the digest is.**
    §0.12 pins only the token-ABSENT result (byte-identical to the pre-arc two-argument
@@ -346,16 +364,33 @@ qualification, including from `branch_context` itself.
 attributes is unexamined; the bar above does not depend on it, since a redactor is a
 mitigation rather than a contract.
 
-### §0.6 The operator surface — three additive `payload_body` keys
+### §0.6 The operator surface — four additive `payload_body` keys
 
-All three are additive keys on the contractually-opaque `payload_body` Mapping (C-CP-21
+All four are additive keys on the contractually-opaque `payload_body` Mapping (C-CP-21
 §21.8); the wire body is byte-identical when they are absent.
 
 | Key | Shape | Contract |
 |---|---|---|
+| `escalation_instance_id` | the **bare** post-hash token | The correlation value itself, emitted verbatim so it can be **equality-matched** against §0.4.4's projection field. See the note below — without this key the correlation loop does not close. |
 | `branch_context` | display-only prose | The branch's ordinal **in prose**, under an explicit no-format commitment. Barred by §0.5 from carrying identity material. Never parsed. |
 | `resolvability` | the closed `PauseLocationVariant` vocabulary (`Spec_Control_Plane_v1_112.md` §2.1, the public projection surface) | The **resolution CHANNEL**, never the outcome. For this population, `uniform-fallback-only`. |
 | `resolvability_note` | prose | States the sole-member RULE and routes the operator; promises no live status. |
+
+**Why the BARE token is a key and not merely implied by the `Idempotency-Key`.** The
+webhook's `Idempotency-Key` carries the *composed* value —
+`hitl:{parent_action_id}:{position}:{token}` per §0.4(2-bis) — while §0.4.4's projection
+carries the *bare* token. §0.4(1) permits **equality and nothing else**: no consumer may
+parse, split, or derive. An operator holding the composed key therefore cannot legitimately
+extract the token to match it against the pause-view row, and one holding the bare token
+cannot reconstruct the composed key without knowing the fold — which §0.4(1) also forbids
+them from assuming. Without this key the two surfaces carry values that are *related but
+not comparable*, and the correlation loop this delta exists to close stays open. Emitting
+the bare token is what makes §0.4.4's projection matchable, and it is the design record's
+own `payload_body` requirement. Out-of-family review found the omission.
+
+Restating the direction, because a bare token on the wire invites the wrong reading: this
+is **correlation, not addressing**. §0.7 is unchanged and unconditional — no ingress
+surface accepts the token, and its presence in `payload_body` does not make it a key.
 
 **`resolvability` carries the channel, never the outcome — and this is a correctness
 requirement, not a style choice.** Resolvability is **time-varying**: a branch that is
@@ -444,8 +479,13 @@ field (§0.4(5)).
 **NOT absorbed, and registered** — each an observable contract change to a cleared
 mechanism, so each owes its own leg: the uniform-response target selector; redelivery on
 posture change; uniform-treatment extension to depth-0 root and already-dispatched
-children; the pause-view addressing half; the unguarded `entry_version` carrier across the
-pause boundary; and the typed resume-outcome diagnostics carrier.
+children; the pause-view **addressing** half (the **correlation** half IS absorbed, at
+§0.4.4 — see that section for why the two separate cleanly); the unguarded `entry_version`
+carrier across the pause boundary; the typed resume-outcome diagnostics carrier; and
+**the duplicate same-position placement shape** (§0.4(2)) — two placements declared at one
+position collide on the token, because the ratified basis (B) hashes the position and not
+the declaration. Repairing it means revisiting the basis at the design record, which is
+back-flow, not spec application.
 
 ### §0.10 The sequencing condition, discharged
 
