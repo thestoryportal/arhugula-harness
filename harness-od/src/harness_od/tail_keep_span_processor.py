@@ -290,7 +290,6 @@ class TailKeepSpanProcessor(SpanProcessor):
         # AFTER the in-flight wait has already observed zero, landing during the downstream
         # flush. Counting entry/exit of `on_end` covers that window; the batch counter alone
         # cannot, because the batch does not exist yet.
-        self._active_on_end = 0
         # `B-164` round 7 — the entry counter needs its OWN lock. If it were guarded by
         # `_state_lock` (which `_inflight_cv` shares), a callback reaching `on_end` while
         # `force_flush` holds that lock would block BEFORE being counted; the flusher could
@@ -298,6 +297,13 @@ class TailKeepSpanProcessor(SpanProcessor):
         # which the queued callback buffers an already-ended span. This lock is only ever
         # held for two integer operations, so it is never contended for long.
         self._entry_lock = threading.Lock()
+        # `B-164` round 8 — entrants carry a monotonic sequence number so a flush waits only
+        # for callbacks that were ALREADY IN FLIGHT at its own cutoff. Waiting on a bare
+        # count would also include callbacks that started after the flush began, so under
+        # sustained tracing the count never reaches zero and `force_flush` burns its whole
+        # budget and reports failure even though everything present at invocation drained.
+        self._entry_seq = 0
+        self._active_entries: set[int] = set()
         self._inflight_cv = threading.Condition(self._state_lock)
         # Per-trace_id buffer of non-always-sampled spans pending root-close
         # keep decision. Keyed by the int form of OTel trace_id. Python dict
@@ -346,12 +352,14 @@ class TailKeepSpanProcessor(SpanProcessor):
 
     def on_end(self, span: ReadableSpan) -> None:
         with self._entry_lock:
-            self._active_on_end += 1
+            self._entry_seq += 1
+            entry_id = self._entry_seq
+            self._active_entries.add(entry_id)
         try:
             self._on_end_inner(span)
         finally:
             with self._entry_lock:
-                self._active_on_end -= 1
+                self._active_entries.discard(entry_id)
             # Wake any flusher parked on the batch condition; the entry count it also
             # consults is read under `_entry_lock`, never this one.
             with self._inflight_cv:
@@ -558,14 +566,20 @@ class TailKeepSpanProcessor(SpanProcessor):
             )
         )
 
-    def _entrants_pending(self) -> bool:
-        """True while any `on_end` call has entered but not yet finished (`B-164`).
+    def _entry_cutoff(self) -> int:
+        """Snapshot the entry sequence — a flush waits only for entrants at or below it."""
+        with self._entry_lock:
+            return self._entry_seq
+
+    def _entrants_pending(self, cutoff: int) -> bool:
+        """True while an `on_end` that entered at or before `cutoff` is still running.
 
         Read under `_entry_lock` — deliberately NOT `_state_lock`, so a callback queued on
-        the state lock is already counted here before a flusher can observe zero.
+        the state lock is already registered here before a flusher can observe zero. The
+        cutoff is what keeps a flush from waiting on traffic that arrived after it began.
         """
         with self._entry_lock:
-            return self._active_on_end > 0
+            return any(entry_id <= cutoff for entry_id in self._active_entries)
 
     def _forward_detached(self, spans: list[ReadableSpan]) -> None:
         """Forward a detached batch downstream, counted as in-flight (`B-164`).
@@ -644,7 +658,8 @@ class TailKeepSpanProcessor(SpanProcessor):
         # `B-164` — this is a DRAIN-UNTIL-STABLE loop, not a single pass. Three distinct
         # windows made the single pass unsound, each found by out-of-family review:
         #   (i)   a batch detached but not yet forwarded (`_inflight_batches`),
-        #   (ii)  an `on_end` that has started but not yet taken the lock (`_active_on_end`)
+        #   (ii)  an `on_end` that has started but not yet taken the lock (tracked by
+        #         `_active_entries`)
         #         — at that moment no batch exists to register, and
         #   (iii) such a call BUFFERING after the drain has already run, which leaves the
         #         span in `_buffer` with both counters back at zero.
@@ -652,6 +667,9 @@ class TailKeepSpanProcessor(SpanProcessor):
         # they settle, and repeating until a drain finds nothing new, covers all three.
         deadline = time.monotonic() + (timeout_millis / 1000.0)
         drained_in_time = True
+        # Everything that had entered `on_end` by now must be waited for; later arrivals
+        # must not be, or sustained tracing would make every flush time out.
+        entry_cutoff = self._entry_cutoff()
 
         while True:
             with self._state_lock:
@@ -670,11 +688,11 @@ class TailKeepSpanProcessor(SpanProcessor):
             # on expiry we still delegate, so a wedged exporter cannot make `force_flush`
             # hang forever, but we report failure rather than a false success.
             with self._inflight_cv:
-                while self._inflight_batches > 0 or self._entrants_pending():
+                while self._inflight_batches > 0 or self._entrants_pending(entry_cutoff):
                     remaining = deadline - time.monotonic()
                     if remaining <= 0 or not self._inflight_cv.wait(timeout=remaining):
                         drained_in_time = (
-                            self._inflight_batches == 0 and not self._entrants_pending()
+                            self._inflight_batches == 0 and not self._entrants_pending(entry_cutoff)
                         )
                         break
                 # Anything that arrived in `_buffer` while we waited needs another pass.

@@ -9000,7 +9000,16 @@ items:
     via _entrants_pending(); the state lock and the entry lock are never nested in a way that could deadlock,
     since _entrants_pending takes only the entry lock. Witness holds _state_lock in the test and asserts
     a span ending on another thread is ALREADY counted while provably unable to proceed (buffer still empty).
-    Mutation-probed 3/3 RED with the entry counted under _state_lock again.'
+    Mutation-probed 3/3 RED with the entry counted under _state_lock again. ROUND-8 (codex on PR #1332,
+    P2 -- severity dropping): waiting on a bare any-entrant-active predicate is OVER-CONSERVATIVE. It includes
+    callbacks that started AFTER the flush began, so under sustained tracing the count never reaches zero,
+    force_flush burns its whole budget and reports FAILURE even though everything present at invocation
+    drained -- a spurious shutdown error rather than a loss. Entrants now carry a monotonic sequence number
+    and each flush snapshots an _entry_cutoff(), waiting only for entrants at or below it. The bare counter
+    was replaced by an _active_entries set; the now-dead _active_on_end field and its stale comment reference
+    were removed. Witness takes a cutoff while idle, starts a LATE span inside on_end, and asserts the late
+    entrant IS registered globally but is NOT waited for by the earlier cutoff; mutation-probed 3/3 RED
+    with the cutoff ignored.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before

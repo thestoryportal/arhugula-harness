@@ -734,9 +734,9 @@ def test_b164_force_flush_waits_for_an_on_end_that_has_not_registered_yet() -> N
     # Nothing is buffered and no batch is in flight — only an on_end in progress.
     assert tail.buffered_trace_count == 0
     assert tail._inflight_batches == 0
-    assert tail._active_on_end == 1, (
-        f"in-progress on_end work is not counted ({tail._active_on_end}) — force_flush would "
-        "see nothing pending and return before this span is even buffered"
+    assert tail._entrants_pending(tail._entry_cutoff()), (
+        "in-progress on_end work is not registered — force_flush would see nothing pending "
+        "and return before this span is even buffered"
     )
 
     in_the_wait = threading.Event()
@@ -765,7 +765,7 @@ def test_b164_force_flush_waits_for_an_on_end_that_has_not_registered_yet() -> N
     flusher.join(timeout=5.0)
     assert not producer.is_alive() and not flusher.is_alive(), "a thread hung"
     assert result == [True], f"force_flush reported {result}"
-    assert tail._active_on_end == 0, "the on_end counter did not settle back to zero"
+    assert not tail._active_entries, "the entrant registry did not settle back to empty"
 
 
 def test_b164_force_flush_redrains_a_span_that_buffers_after_the_first_pass() -> None:
@@ -773,7 +773,7 @@ def test_b164_force_flush_redrains_a_span_that_buffers_after_the_first_pass() ->
 
     The counters fix two windows but not this third one: a non-root span that entered
     `on_end` **before** the drain, and buffers **after** it. The drain has already run, then
-    the span appends to `_buffer` and decrements `_active_on_end` — so the wait loop exits
+    the span appends to `_buffer` and deregisters its entrant — so the wait loop exits
     with both counters at zero and `force_flush` returns `True` **with the span still
     buffered and never delivered**.
 
@@ -872,10 +872,10 @@ def test_b164_a_callback_queued_on_the_state_lock_is_already_counted() -> None:
         # depend on this window being long enough — if the producer has not entered yet the
         # counter reads 0 and the test fails loudly rather than passing vacuously.
         deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and not tail._entrants_pending():
+        while time.monotonic() < deadline and not tail._entrants_pending(tail._entry_cutoff()):
             time.sleep(0.01)
 
-        assert tail._entrants_pending(), (
+        assert tail._entrants_pending(tail._entry_cutoff()), (
             "a callback queued on `_state_lock` is NOT counted as an entrant — a flusher "
             "holding that lock could release, re-check, see zero and return, and this span "
             "would then be buffered after the flush completed"
@@ -885,4 +885,59 @@ def test_b164_a_callback_queued_on_the_state_lock_is_already_counted() -> None:
 
     producer.join(timeout=5.0)
     assert not producer.is_alive(), "the producer hung"
-    assert not tail._entrants_pending(), "the entry counter did not settle back to zero"
+    assert not tail._entrants_pending(tail._entry_cutoff()), (
+        "the entry counter did not settle back to zero"
+    )
+
+
+def test_b164_force_flush_does_not_wait_on_traffic_that_arrives_after_its_cutoff() -> None:
+    """**B-164 round 8** — the flush waits for work at ITS cutoff, not for all later traffic.
+
+    Waiting on a bare "any entrant active" predicate is over-conservative: under sustained
+    tracing the count never reaches zero, so `force_flush` burns its whole budget and
+    reports **failure** even though everything present at invocation was drained. That is a
+    spurious shutdown error, not a loss.
+
+    Entrants now carry a monotonic sequence number and the flush snapshots a cutoff, waiting
+    only for entrants at or below it. This asserts the semantics directly: a span that
+    enters `on_end` **after** the cutoff is taken is not something that cutoff waits for.
+    """
+    downstream = _Downstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b164.cutoff")
+
+    inside = threading.Event()
+    release = threading.Event()
+    original_inner = tail._on_end_inner
+
+    def _hooked_inner(span: Any) -> None:
+        if threading.current_thread().name == "b164-late":
+            inside.set()
+            release.wait(timeout=5.0)
+        original_inner(span)
+
+    tail._on_end_inner = _hooked_inner  # type: ignore[method-assign]
+
+    # Cutoff taken FIRST, while nothing is in flight.
+    cutoff = tail._entry_cutoff()
+    assert not tail._entrants_pending(cutoff), "nothing should be pending at the cutoff yet"
+
+    # Now a LATE span enters on_end — after the cutoff.
+    late_root = tracer.start_span(_QUIET_ROOT)
+    late_thread = threading.Thread(target=late_root.end, name="b164-late")
+    late_thread.start()
+    assert inside.wait(timeout=5.0), "the late span never entered on_end"
+
+    assert tail._entrants_pending(tail._entry_cutoff()), (
+        "a currently-running on_end is not registered at all — the entrant registry is broken"
+    )
+    assert not tail._entrants_pending(cutoff), (
+        "a span that entered AFTER the cutoff is being waited for by that cutoff — under "
+        "sustained tracing force_flush would never settle and would report spurious failure"
+    )
+
+    release.set()
+    late_thread.join(timeout=5.0)
+    assert not late_thread.is_alive(), "the late thread hung"
