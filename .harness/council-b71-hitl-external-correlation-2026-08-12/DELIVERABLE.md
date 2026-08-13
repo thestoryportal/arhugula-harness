@@ -27,7 +27,7 @@ population: `test_b72_fanout_sub_agent_dispatch_hitl_gate_resume.py` gains
 the run_id is identical across both snapshots. Mutation-probed: dropping C-RT-35's
 continuity turns it RED (and the module's own core test with it).
 
-**The `durable=False` decision** v5 owed is at §4-quinquies.5. **No spec text, no plan
+**The `durable=False` decision** v5 owed is at §4-quinquies.5 — the window is two-mode, not vacuous at the default (a v6 draft said vacuous; corrected on review). **No spec text, no plan
 delta, no production-code change.**
 
 ## Change-note (v4 → v5)
@@ -321,31 +321,36 @@ applies where.
 
 **(2) The `durable=False` decision — see §4-quinquies.5.**
 
-### 4-quinquies.5 The `durable=False` default — the window is vacuous there
+### 4-quinquies.5 The `durable=False` default — NOT vacuous; the boundary is CALLER persistence
 
-The honest resolution is neither "restrict as a narrowing" nor "extend through caller
-persistence". It is that **at the default there is no crash-recovery path at all**, so
-there is nothing for a rotated token to be recomputed *for*.
+A v6 first draft claimed the window is *vacuous* at the default, reasoning that
+`resume_handle` requires `durable=True` so a crash loses the pause outright.
+**Out-of-family Codex falsified that**, and the correction restores what v5 had right.
 
-`api.resume`'s `resume_handle` mode — the only mode that reads a snapshot back after a
-process restart — **requires** `pause_resume_protocol_config.durable=True`
-(`api.py:187-196`: *"additionally requires the durable opt-in … without it no
-harness-owned"* store exists; `RT-FAIL-RESUME-HANDLE-UNKNOWN` otherwise). At the default
-the only resume is handing the in-memory `RunResult.pause_snapshot` back **in-process**.
-A crash therefore loses the pause outright — no resume happens, and the entry_version
-question never arises.
+`resume_handle` does require durable — but it is **not the only post-restart path**.
+A caller may serialize `RunResult.pause_snapshot`, restart, rehydrate it, and call
+`resume(..., pause_snapshot=...)`. That is not hypothetical: **it is a shipped, tested
+capability at the default config** —
+`test_r_cc_1_api_resume.py::test_api_resume_restart_proof_round_trip` JSON round-trips a
+real captured snapshot *"simulating the caller persisting it across a process restart"*
+and resumes to SUCCESS on a fresh bootstrap, under
+`PauseResumeProtocolConfig.default()`, whose `durable` is `False` (verified).
 
-So the window is a **durable-mode** property, because pause *recovery* is:
+So both modes have a real window; they differ in **who closes it**:
 
-| Mode | Is there a crash-recovery path? | The window |
+| Mode | The window closes when | Who does it |
 |---|---|---|
-| `durable=True` | yes — the snapshot is journaled | *[webhook delivery succeeds → snapshot journaled]* |
-| `durable=False` (default) | **no** | vacuous — a crash loses the pause entirely |
+| `durable=True` | the snapshot is **journaled** | the harness |
+| `durable=False` (default) | the **caller** persists `RunResult.pause_snapshot` | the caller — the harness does not do it for them |
 
-**Precondition 4 is CLOSED by explicit scoping**, which is the option its own text
-offers. Outside the window the token reproduces, now witnessed at both the top-level
-(`mcp_server.py:371-372`) and child-runner (`child_workflow_runner.py:230-234`)
-continuities.
+**Precondition 4 is CLOSED by explicit scoping** — the option its own text offers — on
+that two-mode boundary, with both sides grounded: the token's reproduction outside the
+window is witnessed at both continuities (§4-quinquies.4), and the caller-persistence
+path is witnessed by the existing restart-proof round trip.
+
+**The one thing a spec leg must carry forward:** at the default, the guarantee is
+*conditional on caller behaviour the harness cannot enforce*. A leg that needs the
+stronger property should require `durable=True` rather than assume it.
 
 ### 4-quinquies.6 The residual inside the window, and what is still cited
 
@@ -1060,14 +1065,13 @@ leak bar**, which §4-quater.2 extends to the tracing channel.
    `run_id` is recovered from the snapshot (**cited**, `child_workflow_runner.py:230-234`,
    not witnessed — see §4-bis.5). The witnessed half is that (B) takes no `entry_version`
    input, so a recovered `run_id` reproduces its token where (C)'s rotates.~~
-   **CLOSED at v6 by EXPLICIT SCOPING.** (A v5 draft claimed this and was retracted; v6
-   earns it.) The window is a **durable-mode** property, because pause RECOVERY is:
-   `resume_handle` requires `durable=True`, so at the shipped default a crash loses the
-   pause outright and the window is vacuous. In durable mode it is *[webhook delivery
-   succeeds → snapshot journaled]*. Outside it the token reproduces — witnessed at BOTH
-   continuities, and the record's long-standing citation is corrected: the load-bearing
-   one for a top-level fan-out is `mcp_server.py:371-372` (C-RT-35), not the child
-   runner. §4-quinquies.4-.6.
+   **CLOSED at v6 by EXPLICIT SCOPING.** The window is **two-mode**, differing in WHO
+   closes it: at `durable=True` the harness journals the snapshot; at the shipped
+   `durable=False` default the **caller** persists `RunResult.pause_snapshot` — a
+   shipped, tested capability, not a gap. Outside the window the token reproduces —
+   witnessed at BOTH continuities, and the record's long-standing citation is corrected:
+   the load-bearing one for a top-level fan-out is `mcp_server.py:371-372` (C-RT-35), not
+   the child runner. §4-quinquies.4-.6.
 5. ~~**Carry the observability disposition** — resolve the charter's "not a span
    attribute" premise against C1's `hitl.escalation.instance_id` proposal, and extend
    C10's leak-bar analysis from the webhook channel to the **tracing-export** channel

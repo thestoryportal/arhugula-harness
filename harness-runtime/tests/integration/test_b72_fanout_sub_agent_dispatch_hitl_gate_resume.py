@@ -664,6 +664,20 @@ async def test_b71_resume_preserves_the_run_id_the_pre_dispatch_identity_is_comp
     assert resumed.pause_snapshot is not None, (
         "expected the gate to re-fire and re-pause on an empty ResumeContext"
     )
+    # Discriminate the re-pause: this workflow ALSO has a child-dispatch path that
+    # re-pauses with EXPLICIT_OPERATOR, and that path would satisfy a bare
+    # "snapshot is not None + same run_id" check without traversing the escalation
+    # this witness is cited to prove (out-of-family Codex).
+    assert resumed.pause_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING, (
+        f"the second pause must be the pre-dispatch GATE re-firing, not the "
+        f"child-dispatch branch-failure path; got "
+        f"pause_reason={resumed.pause_snapshot.pause_reason!r}"
+    )
+    assert len(_captured_webhook_requests) == 2, (
+        f"the re-fired gate must have escalated a SECOND time — that POST is the "
+        f"delivery whose token a recompute would have to reproduce; got "
+        f"{len(_captured_webhook_requests)} POST(s)"
+    )
     assert resumed.pause_snapshot.run_id == original_run_id, (
         f"the resumed run did NOT continue under the paused run's run_id "
         f"({resumed.pause_snapshot.run_id!r} != {original_run_id!r}) — basis (B)'s token "
