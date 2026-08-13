@@ -540,6 +540,56 @@ def test_candidate_c1_strands_ordinary_children_in_the_tail_buffer() -> None:
     )
 
 
+def test_candidate_c1_evicts_rather_than_holds_under_production_bounds() -> None:
+    """**C1's cost is DATA LOSS, not delay** (out-of-family Codex round 12).
+
+    The trial above builds an *unbounded* `TailKeepSpanProcessor`. Production never does:
+    `span_processor.py:373-374` always supplies `max_buffered_traces` /
+    `max_spans_per_trace` from `CollectorConfig`, whose defaults are **4096** each
+    (`types.py:741,752`), and the buffer evicts **drop-oldest** under that ceiling.
+
+    So the earlier pricing — *"never-resolving buffered traces, drained only by
+    `force_flush`"* — was too kind. Once more than `max_buffered_traces` traces accumulate,
+    the oldest are **evicted and lost**: the ordinary children of every trace beyond the cap
+    are silently dropped, and `force_flush` never sees them. Under sustained load that is
+    exactly the steady state, since under C1 *every* trace with an ordinary child occupies
+    a buffer slot and none is ever released at root close.
+    """
+    downstream = _Counting()
+    cap = 3
+    tail = TailKeepSpanProcessor(
+        downstream=downstream, max_buffered_traces=cap, max_spans_per_trace=4096
+    )
+    provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b137.c1.bounded")
+
+    traces = 100
+    with _member_set(add=frozenset({_ENVELOPE})):
+        for _ in range(traces):
+            with tracer.start_as_current_span(_ENVELOPE):
+                with tracer.start_as_current_span("validator.evaluate"):
+                    pass
+
+    assert tail.buffered_trace_count == cap, (
+        f"expected the buffer to sit at its ceiling ({cap}), got "
+        f"{tail.buffered_trace_count} — re-derive C1's bounded pricing"
+    )
+    assert tail.dropped_trace_count == traces - cap, (
+        f"expected {traces - cap} traces to be EVICTED under the ceiling, got "
+        f"{tail.dropped_trace_count} — if eviction stopped, C1's cost is delay rather than "
+        "loss and step (3)'s pricing must be re-derived"
+    )
+    # The floor members still forwarded — the loss is confined to ordinary children.
+    assert downstream.seen.count(_ENVELOPE) == traces, (
+        "C1 stopped forwarding the always-sampled root; the whole counterfactual is stale"
+    )
+    assert "validator.evaluate" not in downstream.seen, (
+        "an ordinary child reached the downstream — C1 would then not be losing them, and "
+        "the eviction cost recorded on B-137 must be re-derived"
+    )
+
+
 @pytest.mark.asyncio
 async def test_the_tail_processor_never_sees_what_the_head_dropped() -> None:
     """Executed rather than asserted — the row's step (2) names this processor.
@@ -1004,6 +1054,14 @@ def test_a_nested_child_resume_runs_under_subagent_span() -> None:
     So B-162's *"membership alone is sufficient"* holds for top-level resumes ONLY. This
     asserts the containment structurally, so a refactor that moves the dispatch out of the
     span reddens rather than silently invalidating the scoping.
+
+    **Scope — STRUCTURAL, not executed** (out-of-family Codex round 12). This proves lexical
+    containment of the child dispatch inside the `subagent.span` block. It does NOT observe
+    the child driver's resume detection at runtime, so it does not by itself prove the OTel
+    context is still current there, nor that the forwarded snapshot is non-`None` on the
+    path taken. The conclusion rests on containment plus ordinary OTel context-propagation
+    semantics; **an executed nested-resume parentage witness is owed** and is recorded as
+    such on B-160 and B-162 before either acts on the top-level-vs-nested split.
     """
     module = _REPO / "harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py"
     tree = ast.parse(module.read_text())

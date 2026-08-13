@@ -7466,7 +7466,7 @@ items:
     least one span-backed member is a ROOT, since skill.activation is emitted from workflow_driver.py:3206
     which PRECEDES the envelope open at :3305. The starvation is therefore SCOPED to members emitted inside
     the envelope, and any repricing of step (3) must be against that set, not all 19. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py
-    -- 15 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
+    -- 16 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
     by replacing ParentBased(root=X) with the bare X (both load-bearing tests go RED). STEP (3) REPRICED
     BY TWO MEASURED COUNTERFACTUALS AT THE SAME VENUE. (a) CANDIDATE A-PRIME -- NOT the row''s candidate
     A, which is mode-conditional ALWAYS_ON with the s10.3 ratio moved INTO the tail consumer and was NOT
@@ -7482,8 +7482,14 @@ items:
     close -- and a s10.2 classification trigger does NOT rescue it, because making the ROOT always-sampled
     means the root takes the bypass arm and returns BEFORE the root-close flush-or-drop decision runs. So
     under C1 a workflow trace THAT CONTAINS AT LEAST ONE ORDINARY NON-MEMBER CHILD becomes a never-resolving
-    buffered trace drained only by force_flush. SCOPED 2026-08-13 (codex round 4): an earlier wording said
-    EVERY trace, which is wrong -- this arc''s own B-72 venue emits only workflow.envelope + hitl.gate.evaluated,
+    buffered trace drained only by force_flush -- and WORSE THAN THAT under production bounds (measured
+    2026-08-13, codex round 12): span_processor.py:373-374 always supplies max_buffered_traces / max_spans_per_trace
+    from CollectorConfig (defaults 4096 each, types.py:741,752) and the buffer evicts DROP-OLDEST, so beyond
+    the ceiling the ordinary children are EVICTED AND LOST rather than held -- force_flush never sees them.
+    Measured at a cap of 3 over 100 traces: 3 buffered, 97 evicted. Under sustained load that IS the steady
+    state, since under C1 every trace with an ordinary child occupies a slot and none is released at root
+    close. So C1''s cost is DATA LOSS, not delay. SCOPED 2026-08-13 (codex round 4): an earlier wording
+    said EVERY trace, which is wrong -- this arc''s own B-72 venue emits only workflow.envelope + hitl.gate.evaluated,
     both of which bypass the buffer under C1, leaving its buffer at ZERO; the measured stranding used a
     manufactured validator.evaluate child. HOW OFTEN that child population occurs in real workflows is UNMEASURED
     and is owed before step (3) chooses C1 (the driver does open ordinary spans -- validator.evaluate at
@@ -7506,7 +7512,17 @@ items:
     sampler override, so a future mode-conditional sampler repairing only TAIL_BASED_PROD would leave them
     all green -- test_a_production_cell_still_binds_the_unconditional_ratio_sampler composes a real production
     cell (team-binding x self-hosted-server, rate 0.1) through the shipped stage with NO override, so it
-    reddens the moment that sampler lands.'
+    reddens the moment that sampler lands. SCOPE OF THE STEP-(2) EVIDENCE, STATED (codex round 12): the
+    three-population test measures HEAD ADMISSION (which populations the head admits) through SimpleSpanProcessor;
+    only the non-root member population is additionally routed through the real TailKeepSpanProcessor. A
+    tail-HANDLING regression specific to the root-name-matched or event-carried populations would therefore
+    not be caught here -- that is owed, and step (2)''s completion is claimed for the HEAD half plus the
+    single tail arm actually executed. SEPARATELY, the nested-resume witness is STRUCTURAL, not executed:
+    it proves the child dispatch is lexically inside the subagent.span block, NOT that the OTel context
+    is still current at the child driver''s resume detection nor that the snapshot value is non-None. The
+    conclusion (resume.attempted is a non-root child for nested resumes) therefore rests on containment
+    plus the ordinary OTel context-propagation semantics, and an executed nested-resume parentage witness
+    is OWED before B-162 acts on it.'
   council: 'YES, and this is the row in the family that genuinely earns one -- unlike B-133, whose repair was
     single-domain. Candidate A trades a real observability floor (C7: a preserved class that is dropped
     before any preservation rule can act on it is not preserved) against a 5x-to-10x in-process span
@@ -8621,7 +8637,10 @@ items:
     the snapshot to execute_workflow, so the child driver''s entry-point resume detection runs while subagent.span
     is current. resume.attempted would then be a NON-ROOT child, ParentBased would never consult its membership,
     and it stays gated on B-137 exactly like pause.captured. So ''membership alone is sufficient'' holds
-    for TOP-LEVEL resumes ONLY. Pinned by test_a_nested_child_resume_runs_under_subagent_span.'
+    for TOP-LEVEL resumes ONLY. Pinned by test_a_nested_child_resume_runs_under_subagent_span. NOTE 2026-08-13
+    (codex round 12): the nested-resume witness is STRUCTURAL (lexical containment of the child dispatch
+    inside the subagent.span block), not an executed parentage observation -- an executed nested-resume
+    witness is OWED before acting on the top-level-vs-nested split.'
   council: 'no at registration -- this is a conformance reconciliation between two OD surfaces,
     not a design fork. It becomes council-eligible only under disposition (b), which would
     relax an inviolable §9.3 floor.'
@@ -8704,7 +8723,10 @@ items:
     INSIDE that block, and the child runner forwards the snapshot to execute_workflow, so the child driver''s
     entry-point resume detection runs while subagent.span is current. resume.attempted would then be a NON-ROOT
     child, ParentBased would never consult its membership, and it stays gated on B-137 exactly like pause.captured.
-    So ''membership alone is sufficient'' holds for TOP-LEVEL resumes ONLY. Pinned by test_a_nested_child_resume_runs_under_subagent_span.'
+    So ''membership alone is sufficient'' holds for TOP-LEVEL resumes ONLY. Pinned by test_a_nested_child_resume_runs_under_subagent_span.
+    NOTE 2026-08-13 (codex round 12): the nested-resume witness is STRUCTURAL (lexical containment of the
+    child dispatch inside the subagent.span block), not an executed parentage observation -- an executed
+    nested-resume witness is OWED before acting on the top-level-vs-nested split.'
   council: no -- a wiring gap plus a contract-intent question, single-domain; it becomes design-phase
     back-flow only if the answer to step (1) is that the contract should be amended.
   heading: '### B-162 · `C-OD-30.3`''s two declared `head=1.0` spans (`pause.captured` / `resume.attempted`)
