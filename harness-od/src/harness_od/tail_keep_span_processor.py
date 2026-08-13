@@ -368,6 +368,27 @@ class TailKeepSpanProcessor(SpanProcessor):
             assert ctx is not None  # a span reaching on_end always has a context
             if is_classification_trigger(span):
                 self._keep[ctx.trace_id] = True
+            # `B-136` REPAIR — mirror OD spec v1.38 §9.2.1 term 5 (already normative for
+            # the event arm below) onto this name arm. Before this, the arm returned
+            # UNCONDITIONALLY, so an always-sampled ROOT forwarded itself and left its
+            # buffered siblings pending until `force_flush`, holding a
+            # `max_buffered_traces` slot for the process lifetime.
+            #
+            # That broke v1.28 §1.1's own containment model, which reasons that "a new
+            # trace whose first observed span is already its root-close materializes +
+            # frees its slot in the same `on_end` (no steady-state pressure), so it does
+            # NOT evict" — an always-sampled-root trace root-closed but behaved like a
+            # never-closing one for eviction purposes, displacing live traces.
+            #
+            # CONSEQUENCE, stated rather than buried: siblings of an always-sampled root
+            # that carried no §10.2 trigger are now DROPPED at root close instead of
+            # surviving to `force_flush` keep-all. That keep-all was never a guarantee —
+            # measured, it degrades to eviction under buffer pressure (97 of 100 traces
+            # shed at a cap of 3) — and dropping here is exactly what an ORDINARY root
+            # already does. The forwarded always-sampled span itself is NOT in the buffer,
+            # so the §9.2 floor and the §10.2 failure signal are both unaffected.
+            if span.parent is None:
+                self._materialize_trace_decision(ctx.trace_id)
             return
 
         # `B-133` EVENT-AWARE ARM (OD spec v1.38 §9.2.1, U-OD-59). Three §9.2

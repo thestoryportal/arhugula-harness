@@ -527,7 +527,7 @@ class _Counting:
 
 
 def test_candidate_c1_strands_ordinary_children_in_the_tail_buffer() -> None:
-    """**C1's unpriced cost, measured through the SHIPPED tail chain.**
+    """**C1 no longer strands — the cost was B-136's, not C1's** (updated at the B-136 arc).
 
     An earlier draft of this arc priced C1 as *"delivers the floor and keeps traces whole,
     one line"* on the strength of a `SimpleSpanProcessor` run. Out-of-family Codex round 3
@@ -578,24 +578,25 @@ def test_candidate_c1_strands_ordinary_children_in_the_tail_buffer() -> None:
         f"buffered={buffered}) — re-measure B-137"
     )
 
-    # C1: members forwarded, ordinary child STRANDED.
+    # C1 POST-B-136: members forwarded and the buffer RESOLVES at root close.
     forwarded, buffered = trial(envelope_in_set=True, with_trigger=False)
     assert sorted(forwarded) == sorted([_MEMBER, _ENVELOPE]), (
         f"C1 no longer forwards the floor members; got {forwarded}"
     )
-    assert buffered == 1, (
-        f"expected the ordinary child to remain buffered under C1, got {buffered} — if C1 "
-        "now drains at root close, its B-136 cost is gone and step (3) must be re-priced"
+    assert buffered == 0, (
+        f"C1 stranded {buffered} trace(s) again — B-136's root-close materialization has "
+        "regressed, and step (3)'s C1 pricing reverts to data-loss-under-pressure"
     )
 
-    # ...and a §10.2 trigger does NOT rescue it, because the always-sampled root returns
-    # before the root-close flush-or-drop decision.
+    # ...and a §10.2 trigger now RESCUES the ordinary child, because the always-sampled root
+    # materializes the trace decision instead of returning early.
     forwarded, buffered = trial(envelope_in_set=True, with_trigger=True)
     assert "sandbox.violation" in forwarded, "the trigger itself should still forward"
-    assert buffered == 1, (
-        "a §10.2 classification trigger flushed the buffer under C1 — that would remove "
-        "C1's never-resolving-trace cost, so step (3)'s pricing must be re-derived"
+    assert "validator.evaluate" in forwarded, (
+        f"a §10.2 trigger did not preserve the ordinary child under C1; got {forwarded} — "
+        "B-136's repair is what makes this work, so re-ground it before re-pricing C1"
     )
+    assert buffered == 0, f"the trace did not resolve at root close; {buffered} buffered"
 
 
 def test_candidate_c1_evicts_rather_than_holds_under_production_bounds() -> None:
@@ -629,14 +630,17 @@ def test_candidate_c1_evicts_rather_than_holds_under_production_bounds() -> None
                 with tracer.start_as_current_span("validator.evaluate"):
                     pass
 
-    assert tail.buffered_trace_count == cap, (
-        f"expected the buffer to sit at its ceiling ({cap}), got "
-        f"{tail.buffered_trace_count} — re-derive C1's bounded pricing"
+    # POST-B-136 these are both ZERO: every trace resolves at its own root close, so no
+    # population accumulates to be evicted. Before B-136 this read `cap` buffered and
+    # `traces - cap` (97 of 100) evicted — the "data loss, not delay" cost C1 was priced
+    # with. That cost belonged to B-136's early return, NOT to C1.
+    assert tail.buffered_trace_count == 0, (
+        f"{tail.buffered_trace_count} trace(s) buffered under C1 — B-136's root-close "
+        "materialization has regressed and C1's eviction cost is back"
     )
-    assert tail.dropped_trace_count == traces - cap, (
-        f"expected {traces - cap} traces to be EVICTED under the ceiling, got "
-        f"{tail.dropped_trace_count} — if eviction stopped, C1's cost is delay rather than "
-        "loss and step (3)'s pricing must be re-derived"
+    assert tail.dropped_trace_count == 0, (
+        f"{tail.dropped_trace_count} trace(s) EVICTED under C1 — B-136 has regressed; C1's "
+        "step-(3) pricing reverts to data loss under sustained load"
     )
     # The floor members still forwarded — the loss is confined to ordinary children.
     assert downstream.seen.count(_ENVELOPE) == traces, (
