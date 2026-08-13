@@ -8893,8 +8893,8 @@ items:
     materialization sites *(surfaced by out-of-family Codex at the B-136 arc, 2026-08-13)*'
 - id: B-164
   title: 'TailKeepSpanProcessor concurrency: (a) force_flush returning before an in-flight detached batch
-    reaches downstream -- CLOSED at PR #1332; (b) a child paused before it registers -- OPEN; the PR #1334
-    unreachability basis was FALSIFIED at review (fan-out orphaned-thread spans outlive the root)'
+    reaches downstream -- CLOSED at PR #1332; (b) a span arriving after its trace materialized -- CLOSED
+    by the late-arrival path; TWO RESIDUAL P2s remain registered (bounded-history edges, not the defect)'
   status: registered_finding
   summary: '(a) CLOSED at PR #1332 -- force_flush now waits for work that entered the processor but has
     not reached downstream (bounded drain-until-stable loop; see close_out for the nine windows it took
@@ -9072,7 +9072,44 @@ items:
     trace). Any fix must also decide what a LATE TRIGGER means: the keep decision is already published, so
     either it is honoured late or the late trigger is accepted as lost -- and the stale _keep entry must
     stop leaking either way. The repro test flips from xfail to XPASS under strict mode when the fix lands,
-    which is the signal to close this row. (a) remains CLOSED at #1332 and is unaffected.'
+    which is the signal to close this row. (a) remains CLOSED at #1332 and is unaffected.
+    ROUND-8 CLOSURE OF (b). The late-arrival path is BUILT and the three xfail witnesses flipped to XPASS,
+    which is the signal this row named. Root close now records the trace in a materialization memory, and
+    a span whose trace is in that memory is FORWARDED IMMEDIATELY and never buffered -- keep-all, the
+    posture already used wherever a tail decision is unavailable. The late-arrival test sits INSIDE the
+    existing buffering critical section, so a root close cannot land between the test and the append.
+    Retention composes two rules because the orphan arrives in TWO orderings, each found by out-of-family
+    review in turn: LIVE-PINNED (the child was already open at root close -- exact, tracked by per-trace
+    open-span counts at on_start/on_end) and HISTORY-RETAINED (the worker held a copied context and had not
+    yet opened its span -- only a bounded memory of the past decision catches that one). FIFO eviction
+    skips live-pinned entries so the bounded rule can never expire the exact one.
+    THE LATE-TRIGGER QUESTION THIS ROW ASKED IS ANSWERED: accepted as lost, not honoured late. A trigger
+    arriving after materialization cannot rescue siblings already dropped; retaining dropped spans against
+    the chance of a later trigger reintroduces the unbounded memory the drop exists to avoid. The trigger
+    span itself is still forwarded, so the s10.2 failure SIGNAL survives and only the buffered tree-context
+    is shed -- the same tradeoff eviction already documents. Pinned as a strict xfail so the bound cannot
+    be silently widened. The stale _keep leak IS closed: the write is suppressed for an already-materialized
+    trace, and _keep additionally carries a sweep that removes only PROVABLY stale flags (neither buffered
+    nor live), so bounding the leak can never discard a valid pending decision.
+    EIGHT ROUNDS OF OUT-OF-FAMILY REVIEW, severity P1/P1/P1 then P2 x5: each of the first three falsified a
+    real reachability or bound claim by execution (a fixed 1024-entry window aged out a still-open orphan
+    at exactly 1024; deleting the entry when liveness hit zero stranded the starts-late child; past the
+    history the _keep leak returned unbounded). Rounds 4-7 were bookkeeping in the fix itself: a blind FIFO
+    on _keep discarded valid decisions silently; an _open_spans cap made live traces read as finished; the
+    all-live fallback evicted a proven-live pin; and both threshold expansions were one-way, leaking a
+    high-water mark across time. All fixed and each mutation-probed to redden only its own witness.
+    RESIDUALS REGISTERED, NOT ABSORBED (round 8, both P2, both from the same reviewer): (i) at EXACTLY the
+    ceiling with every entry live-pinned, a newly materialized trace can be the only unpinned candidate and
+    be evicted by the compaction that fires on the closing root''s own release -- equality should stay
+    capacity pressure, or history needs capacity separate from the liveness pins; (ii) when a recognised
+    late span drains, its trace keeps its ORIGINAL FIFO age instead of moving to the history tail, so the
+    next unrelated root can evict it immediately even though its post-liveness window has just begun.
+    Both need >=4096 CONCURRENT abandoned orphan threads to reach, which this harness does not produce, and
+    both are edges in round-7 bookkeeping rather than in the defect this row exists for. Stopped here per
+    the standing B-164 process note (merge at first convergence; do not extend a best-effort component into
+    an open-ended hardening programme) and the arms-race discipline -- four consecutive flat-P2 rounds each
+    finding a new edge in the previous round''s bookkeeping is the signal to register and hold, not to keep
+    absorbing. Fix (ii) is ~2 lines and is the better first move for whoever picks this up.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency — **(a) `force_flush` returning before an
