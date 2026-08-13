@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `637e006a9390` |
+| `workspace_state_hash` | `8256c49b4f40` |
 | `last_refreshed` | 2026-08-13T00:00:00Z |
-| `git_head` | `4504e086` —  |
+| `git_head` | `c3d5627e` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 116 |
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1332 | 2026-08-13 | B-164(a) CLOSED: force_flush now waits for work that has entered the processor but not yet reached downstream. Grounded first — the module documents force_flush as existing to avoid silent loss on shutdown, so returning early defeats its stated purpose and the Drop-semantics best-effort posture does not cover it. Implementation converged over 9 out-of-family rounds, each closing a real window: detach-vs-register gap, exception leak, wrong return on expiry, entrants not counted, single-drain-pass unsound, entry counter under the wrong lock, and two generation cutoffs so a flush waits only for work present at its own invocation. force_flush is now a bounded drain-until-stable loop reporting failure rather than false success. 18 witnesses, all mutation-probed. (b) — a child paused before it registers — remains OPEN as the whole of B-164. SCOPE LESSON RECORDED: the arc should have merged after round 3 and registered the generation refinements as follow-on; a ledger-grade standard was applied to an explicitly best-effort buffer. |
 | 1331 | 2026-08-13 | **B-136 + B-163 CLOSED; B-164 NEW.** The tail-keep name arm stranded an always-sampled root's siblings until `force_flush`; step (2) resolved to **defect** (the *nothing is lost* premise fails under pressure — 97/100 evicted at cap 3 — and it contradicts v1.28 §1.1's containment model). **This RE-PRICES B-137's C1:** that *data-loss* cost was **B-136's**, not C1's — now 0 buffered / 0 evicted, 100/100 children export with a trigger, so **A′-vs-C1 moves toward C1** and today's deferral note is superseded. B-163 locked in the same PR (B-136 widened its surface); B-164 registers what a lock **cannot** close. |
 | 1330 | 2026-08-13 | **B-162 CLOSED by WIRING.** `C-OD-30.3`'s `pause.captured` + `resume.attempted` were declared `head=1.0` with **no caller in `src/`** — an incomplete U-CP-65 landing (ACs #1/#2/#5), not a contract ambiguity, so no back-flow. Driver now emits at **11** capture sites (all 6 topology executors) + the entry-point resume, honouring the corruption carve-out. 6-test witness on the shipped `api.run`+`resume()` paths, exact 4-attribute sets, mutation-probed all-red. Still inside `workflow.envelope`, so **B-137**'s root-only starvation applies — AC conformance, not a sampling fix. |
 | 1329 | 2026-08-13 | **B-137 steps (1)+(2) DONE; step (3) is the open fork** (detail in Next action above). The §9.2 floor is **root-only**, proven at the real `api.run` venue by an 18-test witness; tail half executed. Scope corrected: 11/19 members span-backed; `skill.activation`/`resume.attempted` are roots for **top-level runs only**. **NEW B-162:** `C-OD-30.3`'s `pause.captured`/`resume.attempted` emitters have **no caller in `src/`**. 16 out-of-family codex rounds to convergence. |
 | 1328 | 2026-08-13 | **B-160 GROUNDED — it is a CLASS, not an instance**, which was its close-out's own required first step and it rescopes the row. **SIX span families across FOUR contracts**, in two shapes: **four unconditional** head=1.0 declarations absent from the §9.2 floor set (`hitl.webhook.deliver` + `hitl.webhook.attempt` at C-OD-32.3; `pause.captured` + `resume.attempted` at C-OD-30.3) and **two conditional** ones also untracked (`mcp.trust.evaluate` at `audit_required`, C-OD-31; the operator-burden span at `degrade`, C-OD-33). (detail on the B-160 register row.) |
-| 1327 | 2026-08-12 | B-161 CLOSED — the shutdown flake root-caused as a TIMING RACE on the shared flush budget (not state leakage): the ledger fsync gets only what is LEFT, so a tight 100ms total made `failures == ()` load-dependent. Deterministic repro via injected fsync slowness; fix widens the budget with the assertion left EXACT (not a retry marker). New mechanism witness, mutation-probed. No production change. CI 18/18. |
 
 ---
 
