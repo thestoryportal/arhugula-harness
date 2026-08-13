@@ -8965,7 +8965,15 @@ items:
     the release fire first and the test passed even with the wait deleted. It now hooks the condition''s
     wait() and synchronizes on a point reached INSIDE it -- mutation-probed 3/3 red with the wait removed,
     where the previous version passed. Incidental: the SDK PROPAGATES processor exceptions rather than swallowing
-    them (an earlier draft assumed otherwise and the RuntimeError escaped the test).'
+    them (an earlier draft assumed otherwise and the RuntimeError escaped the test). ROUND-4 (codex on PR
+    #1332) -- A REPORTING FAILURE OF MINE, worth recording as the lesson. Round 3 claimed the flush witness
+    had been switched to synchronize INSIDE the condition wait. It had not: the edit script used a str.replace
+    with no assertion on the anchor, the anchor did not match, the replace silently no-op''d, and the script
+    still printed success -- so the committed file kept the old set-event-then-sleep(0.2) shape while the
+    commit message said otherwise. Codex caught it by RE-READING THE COMMITTED FILE rather than trusting
+    the message. Now applied for real and verified present by grep, with the edit assertion-guarded; mutation-probed
+    3/3 RED with the wait removed. DISCIPLINE: never report an edit from a script''s own success print --
+    assert the anchor matched, then grep the committed file.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before

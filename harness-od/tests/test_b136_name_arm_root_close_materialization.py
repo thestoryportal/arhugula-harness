@@ -481,23 +481,32 @@ def test_b164_force_flush_waits_for_an_inflight_detached_batch() -> None:
     )
 
     # ORDER-based, not timing-based (out-of-family Codex): a `wait(0.5)` on the flusher can
-    # pass simply because the scheduler never ran it. Instead record the ORDER of two events
-    # — the sibling's delivery and force_flush's return — and assert delivery came first.
-    # That assertion is independent of how long any thread takes to start.
-    flush_entered = threading.Event()
+    # pass simply because the scheduler never ran it. Nor is an event set just BEFORE the
+    # call enough — the flusher can be descheduled there, the release fires first, and the
+    # test passes with the wait deleted. Synchronize on a point reached INSIDE the wait by
+    # hooking the condition, so the flusher is provably parked on the in-flight count before
+    # anything is released. (An earlier attempt to apply this edit silently no-op'd and was
+    # caught by out-of-family Codex re-reading the committed file.)
+    in_the_wait = threading.Event()
+    real_cv_wait = tail._inflight_cv.wait
+
+    def _hooked_wait(timeout: float | None = None) -> bool:
+        in_the_wait.set()
+        return real_cv_wait(timeout)
+
+    tail._inflight_cv.wait = _hooked_wait  # type: ignore[method-assign]
 
     def _flush() -> None:
-        flush_entered.set()
         tail.force_flush(timeout_millis=5_000)
         order.append("flush-returned")
 
     flusher = threading.Thread(target=_flush, name="b164-flusher")
     flusher.start()
-    assert flush_entered.wait(timeout=5.0), "the flusher thread never started"
+    assert in_the_wait.wait(timeout=5.0), (
+        "force_flush never entered the in-flight wait — either the batch was not registered "
+        "as in flight, or the wait itself is gone"
+    )
 
-    # Give the flusher a moment to reach the in-flight wait, then release the exporter. The
-    # ASSERTION below does not depend on this sleep — it only makes the interleaving likely.
-    time.sleep(0.2)
     release_downstream.set()
     producer.join(timeout=5.0)
     flusher.join(timeout=5.0)
