@@ -64,6 +64,8 @@ from typing import Any
 
 import harness_od.sampling_mode as _sm
 import pytest
+from harness_core.deployment_surface import DeploymentSurface
+from harness_core.persona_tier import PersonaTier
 from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
 from harness_od.composite_sampler import HarnessCompositeSampler, build_default_sampler
 from harness_od.observability_matrix import CellID
@@ -77,6 +79,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 _ENVELOPE = "workflow.envelope"
 #: A §9.2 member the B-72 fan-out workflow really emits, inside the envelope.
 _MEMBER = "hitl.gate.evaluated"
+#: A §9.2 member that is ALSO a §10.2 classification trigger — used for the
+#: root-name-matched and event-carried populations.
+_SANDBOX = "sandbox.violation"
 _REPO = pathlib.Path(__file__).resolve().parents[3]
 
 #: The §9.2 members that have a `start_as_current_span` site in `src/` — 11 of the 19.
@@ -222,6 +227,88 @@ def test_the_sampler_override_is_faithful_to_the_shipped_binding() -> None:
     overridden = _production_provider(config, base_rate=0.0)
     assert type(overridden.sampler) is type(composed.provider.sampler), (
         "the override produced a different sampler TYPE than the shipped binding"
+    )
+
+
+def test_a_production_cell_still_binds_the_unconditional_ratio_sampler() -> None:
+    """**The tripwire for the fix B-137 is waiting on** (out-of-family Codex round 6).
+
+    Every other measurement in this module supplies a deterministic `sampler` override, and
+    the B-72 harness config is a `solo-developer x local-development` cell whose base rate
+    is 1.0 with `sampling_mode=None`. A future mode-conditional sampler that repairs only
+    `TAIL_BASED_PROD` — precisely B-137's candidate A — would therefore leave every one of
+    those runs green, and this witness would not notice the row had been closed by other
+    work.
+
+    So compose a real PRODUCTION cell (`team-binding x self-hosted-server`, base rate 0.1)
+    through the shipped stage with **no override at all**, and assert the composer still
+    binds the plain per-cell `ParentBased(HarnessCompositeSampler)`. When a mode-conditional
+    sampler lands, this reddens and forces the re-measurement step (2) requires.
+    """
+    harness = _b72()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = harness._config(pathlib.Path(tmp))
+    production = base.model_copy(
+        update={
+            "persona_tier": PersonaTier.TEAM_BINDING,
+            "deployment_surface": DeploymentSurface.SELF_HOSTED_SERVER,
+        }
+    )
+
+    cell = CellID(
+        persona_tier=production.persona_tier,
+        deployment_surface=production.deployment_surface,
+    )
+    assert PER_CELL_BASE_RATE_ENVELOPE[cell].default_rate == 0.1, (
+        "the team-binding x self-hosted-server base rate moved — B-137's measured figures "
+        "are quoted against 0.1 and must be re-derived"
+    )
+
+    composed = materialize_tracer_provider_stage(production, register_globally=False)
+    assert composed.provider.sampler.get_description() == (
+        build_default_sampler(base_rate=0.1).get_description()
+    ), (
+        "a production cell no longer binds the unconditional per-cell ratio sampler — a "
+        "mode-conditional sampler may have landed, which would CLOSE B-137's head half; "
+        "re-measure the row rather than trusting this module's other assertions"
+    )
+
+
+def test_all_three_starved_populations_at_one_composition() -> None:
+    """**Step (2)'s three populations, executed** (out-of-family Codex round 6).
+
+    The row's step (2) names three populations to re-measure: root-name-matched,
+    event-carried, and non-root. The `api.run` venue above exercises only the non-root one
+    (`hitl.gate.evaluated` under the envelope), so on its own it does not discharge step
+    (2). This covers all three at one composition, deterministically at `base_rate=0.0` —
+    which is the probe shape step (2) actually prescribes (*"four lines of composition"*);
+    the `api.run` venue is this arc's addition on top, not a replacement.
+
+    Measured equivalents at the production rate 0.1 (N=2000), recorded on the row:
+    root-name-matched **100%**, non-root **9.3%**, event-carried **9.1%**, against a
+    **10.8%** control.
+    """
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("b137.populations")
+
+    # (i) root-name-matched — the ONE population that is not starved.
+    with tracer.start_as_current_span(_SANDBOX):
+        pass
+    # (ii) non-root — a §9.2 member under an unlisted root.
+    with tracer.start_as_current_span(_ENVELOPE):
+        with tracer.start_as_current_span(_MEMBER):
+            pass
+    # (iii) event-carried — a §9.2 name riding as an EVENT on an unlisted carrier span.
+    with tracer.start_as_current_span("ordinary.carrier") as carrier:
+        carrier.add_event(_SANDBOX)
+
+    exported = sorted(s.name for s in exporter.get_finished_spans())
+    assert exported == [_SANDBOX], (
+        f"expected ONLY the root-name-matched population to survive; got {exported}. "
+        "If a starved population now survives, the head composition changed and B-137 must "
+        "be re-measured; if the root-matched one stopped surviving, §9.2 itself changed."
     )
 
 
