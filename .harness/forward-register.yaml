@@ -2310,7 +2310,30 @@ items:
     workflow_id-scoped action_id (compose_hitl_action_id), not run_id -- two peer branches sharing
     a child_workflow_id produce byte-identical escalation requests, making B-39's hitl_responses
     run_id-keyed addressing impossible to use in that exact scenario.
-  close_out: 'CURRENT STATE (v6, 2026-08-12) -- READ THIS FIRST; everything after the VERSION
+  close_out: 'SPEC LEG SCOPED, NOT LANDED (2026-08-12) -- READ THIS FIRST. A full spec-leg draft
+    was authored and taken through FOUR out-of-family review rounds (14 findings, all absorbed) on
+    branch `b71-spec-leg-v1-119` / DRAFT PR #1325. It is NOT merged, deliberately: each round kept
+    opening new STRUCTURAL surface rather than converging, and round 3 caught a REGRESSION the
+    draft would have landed (it composed over v1.18 while v1.19 had already widened
+    fail_detail_hash, plus a §25.2.Y label collision and the wrong carrier shape). Landing an
+    under-specified canonical contract is worse than landing nothing.
+    THE LEG''S TRUE SHAPE, now known and the durable output of that arc -- SIX artifacts, not one:
+    (1) CP spec delta with FOUR carrier amendments, not one -- HITLEscalationBrief.escalation_instance_id;
+    the pre-hash basis carrier on StepExecutionContext (the mint site has NO run identity without it);
+    the persisted echo on the per-branch pre-dispatch resume state; AND a read path carrying the
+    POST-hash echo back to the composer (without it §0.4.2''s persisted-value-wins rule is
+    unsatisfiable). (2) RUNTIME spec delta -- Spec_Harness_Runtime_v1.md §14.8.8.1 step 2 still
+    specifies the TWO-argument compose_hitl_action_id and says the driver does not extract pause
+    state from the signal; both contradict the design. (3) CP implementation-plan delta (units,
+    files, deps, acceptance). (4) Runtime implementation-plan delta. (5) Clearance markers per
+    amended spec. (6) THEN the impl leg.
+    ALSO SETTLED BY THE DRAFT (carry forward, do not re-derive): the digest must be PINNED (an
+    idempotency-key formula is a contract surface, not discretion) -- sha256 over a
+    domain-separated canonical string, lowercase hex, placement''s enum VALUE; the leak bar needs
+    ONE scoped carve-out for the ordinal in prose on branch_context (else it contradicts the
+    branch_context requirement outright); the ingress DIAGNOSIS must be ADVISORY until its typed
+    carrier lands, since ResumeResult/RunResult are closed schemas; and the palette-suppression
+    binding stays WITHDRAWN. FORMER CURRENT STATE (v6, 2026-08-12) -- READ THIS FIRST; everything after the VERSION
     HISTORY marker below is an append-log kept for audit, NOT instructions. ALL FIVE
     preconditions are CLOSED and THE SPEC LEG IS AUTHORIZABLE. No council is owed, no gate
     remains, nothing is blocked. Design record:
