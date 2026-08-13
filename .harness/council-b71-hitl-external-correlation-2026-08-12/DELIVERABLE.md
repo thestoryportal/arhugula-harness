@@ -1,9 +1,23 @@
 # B-71 design record — branch-distinct EXTERNAL correlation identity for HITL escalations
 
-**Version:** v4 (2026-08-12) · **Status:** DESIGN RECORD — spec leg NOT YET
-authorizable; preconditions **1 + 2 + 3 + 5 CLOSED on executed evidence**, **4 BOUNDED —
-the sole remaining gate** · **Arc:** council (CP layer) per
+**Version:** v5 (2026-08-12) · **Status:** DESIGN RECORD — **ALL FIVE PRECONDITIONS
+CLOSED on executed evidence.** The spec leg is **AUTHORIZABLE**, subject to the named
+residuals and sequencing conditions at §5. · **Arc:** council (CP layer) per
 `.harness/council/council-workflow.harness-aware.yaml` v1
+
+## Change-note (v4 → v5)
+
+Discharges §5 **precondition 4** — *close or explicitly scope the `entry_version` crash
+window* — by doing the second: **scoping it exactly**, on a witness that converts the
+last cited link the scope depended on. Witness:
+`harness-runtime/tests/test_b71_child_resume_reuses_the_snapshot_run_id.py` (4 tests,
+green, mutation-probed — making the resume mint a fresh id instead of reusing the
+snapshot's turns it RED). Resolution at **§4-quinquies**. **No spec text, no plan delta,
+no production-code change.**
+
+**With that, all five preconditions are closed and the spec leg is authorizable.** What
+remains are *residuals and sequencing conditions*, not gates — enumerated at §5 so the
+leg opens with them in hand rather than discovering them.
 
 ## Change-note (v3 → v4)
 
@@ -21,7 +35,7 @@ becomes a span attribute whether or not anyone adds a dedicated one. (The defaul
 `hitl.invocation.audit_ledger_entry_id` is NOT a carrier here — unreachable on the
 escalation path; see §4-quater.1.)
 
-**Precondition 4 is now the sole remaining gate.**
+**Precondition 4 was then the sole remaining gate** — closed at v5 (§4-quinquies).
 
 ## Change-note (v2 → v3)
 
@@ -190,6 +204,61 @@ boundary that the ingress will not honor. Live today, independent of B-71.
   precedent); the webhook wire body is byte-identical because
   `project_brief_to_payload` (`webhook_brief_adapter.py:47`) is an explicit
   field-by-field mapper, so an unset Optional adds no key.
+
+## 4-quinquies. PRECONDITION 4, RESOLVED (v5) — the window, scoped exactly
+
+### 4-quinquies.1 The link the scope rested on, now executed
+
+Since v2 this record has carried one fact as **CITED**: that a resume reuses the paused
+child's ORIGINAL `run_id` rather than re-deriving it
+(`child_workflow_runner.py:230-234`). The whole reach of the window follows from it —
+reuse means basis (B) reproduces its token on the ordinary resume path; re-derivation
+would mean the token rotates on *every* resume and the window is unbounded, which is
+what the record says candidate (C) would have suffered.
+
+**No test covered it.** Every existing child-resume witness passes
+`pause_snapshot_input=None` — the CRASH-resume shape, which takes the *other* branch of
+the very selection at issue. The new witness runs the pause-resume branch through the
+real `compose_child_workflow_runner`, capturing the `child_run_id` the runner hands to
+`execute_workflow`, and exercises all three arms of the production expression: snapshot →
+`snapshot.run_id`; no snapshot + seed → the deterministic seed; neither → a fresh uuid.
+It also pins the **ordering** — the seed is supplied alongside the snapshot and must
+lose, because the reverse ordering would silently re-key a resumed child onto the
+first-dispatch identity.
+
+### 4-quinquies.2 The window, stated exactly
+
+`compose_hitl_action_id`'s token is delivered to the webhook at
+`hitl_gate_composer.py:1328`, **before** the pause signal is raised at `:1336` — so the
+external world can legitimately hold a token before any snapshot exists (§3's
+persist-once rule says exactly this). The window is therefore:
+
+> **From the moment the webhook delivery succeeds, until the driver captures the pause
+> snapshot.** A crash inside it leaves the external world holding a token that the
+> resumed run cannot reproduce, because there is no snapshot to recover the child
+> `run_id` from and the re-derived id carries the bumped `entry_version`.
+
+**Outside that window the token reproduces**, on the now-witnessed reuse: with a
+snapshot, the resumed child runs under the original `run_id`, so basis (B) — whose
+inputs are `run_id` and `branch_index` — recomputes the same value regardless of any
+`entry_version` bump. This is the "explicit scope" precondition 4 asked for, and it is
+now bounded by evidence at both ends rather than by argument.
+
+### 4-quinquies.3 What remains inside the window, and why it is not a gate
+
+The residual is real and narrow: an operator holding a token for an escalation whose
+snapshot never landed. It cannot be closed by the token's *shape* — no deterministic
+function reproduces an id that was never persisted and whose basis material has rotated.
+Closing it needs a **durability** change (persist the token, or the snapshot, before the
+webhook fires), which inverts §3's deliberate ordering and is a design decision of its
+own rather than a precondition on this one.
+
+Precondition 4 asked to *"close **or** explicitly scope"*. This scopes it, at a boundary
+both ends of which are now witnessed. A spec leg that wants the stronger property should
+open it as its own arc against the §3 ordering — recorded here so that arc starts from a
+stated boundary rather than rediscovering one.
+
+---
 
 ## 4-quater. PRECONDITION 5, RESOLVED (v4) — the token already rides the tracing export
 
@@ -820,15 +889,30 @@ identity — not bare `branch_index`** (three-way convergent finding).
 
 ## 5. Hard preconditions on the spec leg
 
-**Status at v4: 1 CLOSED · 2 CLOSED · 3 CLOSED · 4 BOUNDED · 5 CLOSED.** The spec leg
-remains NOT authorizable, now on **one** count: **precondition 4 is bounded rather than
-closed** — it still owes an explicit scope statement and a live-resume witness for the
-cited `snapshot.run_id` reuse. It is the sole remaining gate. Named residuals sit on top
-of it (owed, not gates): the Runtime `B-104` round-trip, the driver keyed-only re-pause
-round-trip, and the mixed keyed-peer fan-out path. *(The span-export round-trip that
-appeared here at the v4 first draft is DONE — executed at §4-quater.4.)*
-Discharged preconditions are struck through; their original text is kept so each
-discharge is auditable against what was actually asked.
+**Status at v5: 1 · 2 · 3 · 4 · 5 — ALL CLOSED.** The spec leg is **AUTHORIZABLE**.
+Precondition 4 closed by *explicit scoping* — the option its own text offers — at
+§4-quinquies, with both ends of the window now witnessed. Discharged preconditions are
+struck through; their original text is kept so each discharge is auditable against what
+was actually asked.
+
+**What the leg opens with — residuals and conditions, none of them gates:**
+
+| Owed | Where |
+|---|---|
+| Runtime round-trip for the `B-104` liveness limit | §4-ter.4 |
+| Driver round-trip for the keyed-only re-pause | §4-ter.4 |
+| Mixed keyed-peer fan-out path (shared with `B-155`) | §4-ter.1b |
+| Dispatch-level round-trip for both escalation venues | §4-quater.4 |
+| `materialize_span_processor_stage` end-to-end (also settles `B-160`) | §4-quater.4 |
+| OD `redact_span` filtering — unexamined | §4-quater.4 |
+| HIERARCHICAL_DELEGATION / DECENTRALIZED_HANDOFF shapes | §4-bis.5 |
+| The in-window durability residual (its own arc, against §3's ordering) | §4-quinquies.3 |
+
+Plus the three conditions carried from the council, unchanged and still binding:
+**sequencing** (the resume-outcome diagnostics leg ships with the spec leg or C11's
+wording softens in the same commit), **scope** (the `entry_version` guard defect stays
+registered — `B-158`), and the **`branch_context` leak bar**, which §4-quater.2 extends
+to the tracing channel.
 
 1. ~~**Execute the nested-fan-out collision witness** against the chosen basis. Cheap —
    the witness file exists and the shape is already covered for the internal identity.~~
@@ -862,7 +946,7 @@ discharge is auditable against what was actually asked.
    `B-104` liveness limit, §4-ter.4), so `resolvability_note` states the sole-member
    RULE and promises no readout. Full derivation, the surfaced sub-fork
    and its recommended disposition at §4-ter.
-4. **Close or explicitly scope the entry_version crash window** — crash after delivery
+4. ~~**Close or explicitly scope the entry_version crash window** — crash after delivery
    but before persist, then resume after an `entry_version` bump, recomputes a
    different token. Registering the wider defect does not close this window. ~~May
    dissolve for free under basis (A) or (B).~~
@@ -872,7 +956,12 @@ discharge is auditable against what was actually asked.
    recomputes nothing at all (persist-once, §3), and *within* the window the child's
    `run_id` is recovered from the snapshot (**cited**, `child_workflow_runner.py:230-234`,
    not witnessed — see §4-bis.5). The witnessed half is that (B) takes no `entry_version`
-   input, so a recovered `run_id` reproduces its token where (C)'s rotates. The spec leg still owes an explicit scope
+   input, so a recovered `run_id` reproduces its token where (C)'s rotates.~~
+   **CLOSED at v5 by EXPLICIT SCOPING** (the option this text itself offers). The window
+   is exactly *[webhook delivery succeeds → driver captures the pause snapshot]*; outside
+   it the token reproduces, on the now-WITNESSED reuse of `snapshot.run_id`. The residual
+   inside the window cannot be closed by the token's shape and needs a durability change
+   against §3's ordering — its own arc. Full derivation at §4-quinquies. The spec leg still owes an explicit scope
    statement **and a live-resume witness for the cited half**; what v2 removes is the
    *unbounded* reading, which is what basis (C) would have had.
 5. ~~**Carry the observability disposition** — resolve the charter's "not a span
