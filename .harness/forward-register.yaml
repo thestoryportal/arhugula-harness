@@ -61,11 +61,11 @@ snapshot:
   total: 163
   open: 1
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 29
   operator_gated: 0
   held: 2
-  closed: 130
-  identity_digest: '99d262c64c83a6a9'
+  closed: 131
+  identity_digest: '8cc36f7653de6129'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7402,7 +7402,9 @@ items:
     while a concurrent child on_end can setdefault an empty bucket and append to it after the pop, losing
     the span entirely. That window is PRE-EXISTING and module-wide (no threading.Lock anywhere), so it is
     NOT introduced here; this repair widens the exposed population by making every always-sampled root materialize.
-    Registered as B-163 with the reachability question as its first close-out step.'
+    Registered AND FIXED as B-163 in this same PR (codex escalated to P1 on the widening ground, correctly):
+    one threading.RLock guards every buffer/keep/counter mutation, never held across downstream.on_end,
+    with a coordinated deterministic interleaving witness that loses the span when the lock is neutered.'
   council: 'No. A single-domain C7 question about the tail-keep buffering algorithm''s own bookkeeping, sitting
     squarely inside §9.3''s implementer-discretion clause, with a named two-trace probe that answers it.
     Convene nothing. The one thing that would change that is step (3) turning out to reduce exported
@@ -8814,7 +8816,8 @@ items:
 - id: B-163
   title: TailKeepSpanProcessor mutates _buffer / _keep / its counters with NO lock, so a concurrent child-on_end
     and root-on_end can lose a span entirely -- pre-existing at all three materialization sites
-  status: registered_finding
+  status: closed
+  pr: 1331
   summary: 'OTel''s SpanProcessor.on_end is called from whichever thread ends the span, so the SDK contract
     requires thread-safety. TailKeepSpanProcessor guards NONE of _buffer, _keep, _dropped_trace_count
     or _dropped_span_count -- no threading.Lock anywhere in the module and no docstring claim of single-threaded
@@ -8829,15 +8832,31 @@ items:
     unguarded pop-vs-setdefault window is the module''s from the start.'
   close_out: '(1) ESTABLISH REACHABILITY before sizing the fix -- the runtime is predominantly single-event-loop,
     so the question is which real paths end spans off that thread (BatchSpanProcessor''s worker, shutdown/atexit
-    drains, any thread-pool sub-agent dispatch). A race no shipped path can reach is a latent contract
-    violation rather than a live defect, and that sets the priority. (2) THE FIX IS SMALL AND CONTAINED
-    -- one threading.Lock (or RLock, since _materialize_trace_decision is called from inside on_end) guarding
-    the buffer/keep mutations in on_end, _materialize_trace_decision, _evict_oldest_trace and force_flush.
-    Hold it only around the dict work, NEVER across downstream.on_end, or a slow exporter serialises every
-    span. (3) WITNESS WITH A COORDINATED INTERLEAVING, not a stress loop: drive the exact setdefault-pause-pop-append
+    drains, any thread-pool sub-agent dispatch). A race no shipped path can reach is a latent contract violation
+    rather than a live defect, and that sets the priority. (2) THE FIX IS SMALL AND CONTAINED -- one threading.Lock
+    (or RLock, since _materialize_trace_decision is called from inside on_end) guarding the buffer/keep
+    mutations in on_end, _materialize_trace_decision, _evict_oldest_trace and force_flush. Hold it only
+    around the dict work, NEVER across downstream.on_end, or a slow exporter serialises every span. (3)
+    WITNESS WITH A COORDINATED INTERLEAVING, not a stress loop: drive the exact setdefault-pause-pop-append
     order via an event or a monkeypatched setdefault so the test is deterministic and actually fails without
     the lock. FALSIFIER: a demonstration that on_end is only ever invoked from one thread in every shipped
-    composition (latent, not live), or a lock landing that makes the coordinated witness pass.'
+    composition (latent, not live), or a lock landing that makes the coordinated witness pass. CLOSED 2026-08-13
+    (PR #1331) -- FIXED in the same PR that surfaced it, because that PR WIDENED the reachable surface.
+    Out-of-family Codex escalated to P1 on exactly that ground: the race pre-exists at :478 and :437, but
+    before B-136 the name arm never materialized, so B-136 made it newly reachable for name-matched roots
+    -- widening a known data-loss path without guarding it is not acceptable scoping. THE FIX: one threading.RLock
+    (RLock because _materialize_trace_decision and _evict_oldest_trace are called from inside on_end) guarding
+    every mutation of _buffer / _keep / the counters. SCOPE DISCIPLINE HELD: the lock is NEVER held across
+    downstream.on_end -- _materialize_trace_decision detaches the bucket under the lock and forwards outside
+    it, and force_flush drains atomically then forwards outside, so a slow exporter cannot serialize every
+    span in the process. The eviction test, the setdefault and the append are now ONE critical section,
+    which is precisely the interleaving that was losing spans. WITNESS: harness-od/tests/test_b136_name_arm_root_close_materialization.py::test_b163_a_concurrent_child_and_root_close_cannot_lose_a_span
+    -- a COORDINATED interleaving, not a stress loop: a hooked setdefault blocks the child thread at the
+    exact pause point while the root thread attempts its pop, so the test is deterministic. Mutation-probed
+    by replacing the RLock with contextlib.nullcontext(): the child span is LOST every run (reaches neither
+    downstream nor the buffer), and with the lock it survives. Close-out step (1) -- reachability -- was
+    therefore ANSWERED by construction rather than deferred: the losing order is reproducible on demand,
+    so this was a live defect, not a latent one.'
   council: no -- a single-domain C7 thread-safety repair against an explicit OTel SDK contract, with no
     cross-axis surface and no committed envelope to renegotiate.
   heading: '### B-163 · `TailKeepSpanProcessor` mutates `_buffer` / `_keep` / its counters with **no lock**,

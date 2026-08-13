@@ -35,10 +35,12 @@ untouched either way.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from harness_od.sampling_mode import is_always_sampled
 from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
+from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import TracerProvider
 
 #: Always-sampled AND a §10.2 classification trigger.
@@ -204,4 +206,82 @@ def test_the_keep_all_at_drain_benefit_was_never_a_guarantee() -> None:
     assert tail.dropped_trace_count == 0, (
         f"{tail.dropped_trace_count} trace(s) evicted under a ceiling of 3 — before the "
         "repair this population displaced live traces; it should now be empty"
+    )
+
+
+# ---------------------------------------------------------------------------
+# B-163 — the per-trace state transition is atomic
+# ---------------------------------------------------------------------------
+
+
+def test_b163_a_concurrent_child_and_root_close_cannot_lose_a_span() -> None:
+    """**B-163** — drive the exact losing interleaving, deterministically.
+
+    OTel calls `SpanProcessor.on_end` from whichever thread ends the span, so the buffer
+    mutations must be serialized. The losing order out-of-family Codex named:
+
+    1. a child `on_end` runs `self._buffer.setdefault(trace_id, [])`, creating an empty
+       bucket, and is descheduled **before** `bucket.append(span)`;
+    2. a root `on_end` on another thread runs `_materialize_trace_decision`, whose first act
+       is `self._buffer.pop(trace_id, [])` — it pops the **empty** bucket and forwards
+       nothing;
+    3. the child resumes and appends to a now-detached list.
+
+    The span then reaches **neither** `downstream` **nor** `_buffer`, so not even
+    `force_flush` can recover it — and when the root is a §10.2 trigger, the lost span is
+    exactly the context the keep flag was meant to preserve.
+
+    This is a **coordinated** witness, not a stress loop: the child thread is blocked inside
+    the processor at the precise point above via a `setdefault` hook, so the test is
+    deterministic. Removing the `RLock` makes it fail every run rather than occasionally.
+    """
+    downstream = _Downstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b163")
+
+    child_is_inside = threading.Event()
+    root_may_proceed = threading.Event()
+
+    class _HookedBuffer(dict[int, list[Any]]):
+        """Pauses the child between `setdefault` and its `append`."""
+
+        def setdefault(self, key: Any, default: Any = None) -> Any:  # type: ignore[override]
+            bucket = super().setdefault(key, default)
+            if threading.current_thread().name == "b163-child":
+                child_is_inside.set()
+                root_may_proceed.wait(timeout=5.0)
+            return bucket
+
+    tail._buffer = _HookedBuffer(tail._buffer)
+
+    # Both spans must be in ONE trace: create the root first, then the child under the
+    # root's context explicitly (OTel context does NOT propagate across threads), so the
+    # child really is a non-root span of the same trace_id.
+    root_span = tracer.start_span(_TRIGGER_ROOT)
+    child_span = tracer.start_span(
+        "ordinary.child", context=otel_trace.set_span_in_context(root_span)
+    )
+    assert child_span.get_span_context().trace_id == root_span.get_span_context().trace_id, (
+        "the fixture failed to place both spans in one trace — the race cannot occur"
+    )
+
+    child_thread = threading.Thread(target=child_span.end, name="b163-child")
+    child_thread.start()
+    assert child_is_inside.wait(timeout=5.0), "the child never reached the buffer insert"
+
+    # With the lock the root BLOCKS here until the child's critical section completes;
+    # without it the root pops the empty bucket and the child's append is lost.
+    root_thread = threading.Thread(target=root_span.end, name="b163-root")
+    root_thread.start()
+    root_may_proceed.set()
+    child_thread.join(timeout=5.0)
+    root_thread.join(timeout=5.0)
+    assert not child_thread.is_alive() and not root_thread.is_alive(), "a thread hung"
+
+    assert "ordinary.child" in downstream.seen, (
+        f"the concurrently-ended child was LOST — it reached neither downstream nor the "
+        f"buffer. downstream={downstream.seen}, still buffered="
+        f"{sum(len(v) for v in tail._buffer.values())}. B-163's lock has regressed."
     )
