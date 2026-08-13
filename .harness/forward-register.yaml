@@ -8892,136 +8892,134 @@ items:
     so a concurrent child-`on_end` and root-`on_end` can lose a span entirely — pre-existing at all three
     materialization sites *(surfaced by out-of-family Codex at the B-136 arc, 2026-08-13)*'
 - id: B-164
-  title: TailKeepSpanProcessor concurrency residual -- force_flush can return before an in-flight detached
-    batch reaches downstream, and a child paused before registering cannot be registered by any lock
+  title: 'TailKeepSpanProcessor concurrency: (a) force_flush returning before an in-flight detached batch
+    reaches downstream -- CLOSED at PR #1332; (b) a child paused before it registers cannot be registered
+    by any lock -- OPEN'
   status: registered_finding
-  summary: 'B-163 closed the windows a lock CAN close, each with a deterministic witness: the pop-vs-setdefault
-    interleaving, the torn keep-write-vs-materialize transition, and the slow-downstream publication window.
-    What remains is a DESIGN question about batch accounting and shutdown ordering, not another missing
-    with-statement. (a) FORCE_FLUSH DOES NOT WAIT FOR IN-FLIGHT DETACHED BATCHES: _publish_keep_and_maybe_detach
-    detaches under the lock and returns the spans so the caller forwards OUTSIDE it (deliberate -- holding
-    the lock across downstream.on_end would serialize a slow exporter behind every span), but a concurrent
-    force_flush() then sees an EMPTY buffer, delegates downstream and returns True while those already-ended
-    spans are still being forwarded; shutdown can close the downstream first and lose them. PRE-EXISTING:
-    the superseded _materialize_trace_decision had the same pop-then-forward shape. (b) A CHILD PAUSED
-    BEFORE REGISTERING CANNOT BE REGISTERED: if a child''s on_end is descheduled before reaching the buffering
-    critical section, a concurrent always-sampled root can materialize first; the child re-creates the
-    bucket after root close and is stranded or evicted. Moving the lock earlier NARROWS but cannot close
-    it -- a span that has not entered the processor cannot be accounted for. This is the ordering half
-    already recorded on B-163, restated with its eviction consequence, and it requires a root to end before
-    its own child (a malformed trace under the nesting contract).'
+  summary: '(a) CLOSED at PR #1332 -- see close_out. (b) OPEN and is the whole of this row now. ORIGINAL
+    STATEMENT, retained as history: (a) force_flush did not wait for in-flight detached batches -- _publish_keep_and_maybe_detach
+    detaches under the lock and returns the spans so the caller forwards OUTSIDE it (deliberate: holding
+    the lock across downstream.on_end would serialize a slow exporter), but a concurrent force_flush then
+    saw an EMPTY buffer, delegated and returned True while those spans were still being forwarded. (b)
+    A CHILD PAUSED BEFORE REGISTERING CANNOT BE REGISTERED: if a child''s on_end is descheduled before
+    reaching the buffering critical section, a concurrent always-sampled root can materialize first; the
+    child re-creates the bucket after root close and is stranded or evicted. Moving the lock earlier NARROWS
+    but cannot close it. Reaching it requires a root to end before its own child (a malformed trace under
+    the nesting contract).'
   close_out: '(1) DECIDE WHETHER (a) IS IN SCOPE for a best-effort tail processor at all -- the module''s
     own ''Drop semantics (false-but-bounded)'' posture and s9.3''s implementer-discretion clause may already
     contemplate it; ground there first, exactly as B-136''s step (5) did. (2) IF IT IS, implement in-flight
     accounting (a batch counter plus a condition variable force_flush waits on, or an explicit hand-off
-    queue -- both change shutdown semantics) and witness the shutdown race directly: a slow downstream plus
-    a concurrent force_flush, asserting delivery before return. (3) FOR (b), decide whether a malformed
+    queue -- both change shutdown semantics) and witness the shutdown race directly: a slow downstream
+    plus a concurrent force_flush, asserting delivery before return. (3) FOR (b), decide whether a malformed
     trace shape is worth defending against at all -- if yes, the honest mechanism is a post-materialization
     late-arrival path, NOT a wider lock. FALSIFIER: a demonstration that force_flush is only ever called
     after all span-producing threads have quiesced (making (a) unreachable), or a ratified reading that
-    best-effort delivery at shutdown is contracted. (a) CLOSED 2026-08-13 (PR #1332); (b) REMAINS OPEN AS
-    THE WHOLE OF THIS ROW. STEP (1) GROUNDED AND ANSWERED: (a) IS in scope, and the module''s own contract
+    best-effort delivery at shutdown is contracted. (a) CLOSED 2026-08-13 (PR #1332); (b) REMAINS OPEN
+    AS THE WHOLE OF THIS ROW. STEP (1) GROUNDED AND ANSWERED: (a) IS in scope, and the module''s own contract
     settles it -- force_flush is documented as existing to ''flush any still-buffered traces (treat them
     as keep-all to avoid silent loss on shutdown)'', so returning before delivery defeats its stated purpose.
     The ''Drop semantics (false-but-bounded)'' posture does NOT cover it: that paragraph is about traces
     which never root-close, not about spans already handed to the forwarder. STEP (2) BUILT: batches detached
     under _state_lock are now forwarded through _forward_detached, which registers them as in-flight (increment
-    before, decrement in a finally, notify) so a concurrent force_flush waits for delivery instead of seeing
-    an empty buffer and returning. downstream.on_end is still called with NO processor lock held, preserving
-    the reason the forward was outside the lock in the first place. THE WAIT IS BOUNDED by the caller''s
-    own timeout_millis, and the remaining budget is passed to the downstream flush -- without that bound
-    this would trade a silent-loss bug for a shutdown hang, which is strictly worse. WITNESSES (2, both
-    deterministic): a trigger root detaches a sibling and blocks inside a slow downstream while another
-    thread calls force_flush (asserting it does NOT return), and a wedged exporter with a 300ms budget (asserting
-    it DOES return). Mutation-probed: removing the wait reddens the first every run. REMAINING SCOPE OF
-    THIS ROW = (b) ONLY: a child descheduled BEFORE it reaches the buffering critical section cannot be
-    registered by any lock, so a concurrent always-sampled root can materialize first and the child is stranded
-    or evicted. Moving the lock ahead of classification NARROWS but cannot close it. Reaching it requires
-    a root to end before its own child, which violates the span-nesting contract the root-close design assumes
-    -- so step (3)''s question stands: decide whether a malformed trace shape is worth defending against
-    at all, and if so the honest mechanism is a post-materialization late-arrival path, NOT a wider lock.
-    ROUND-2 (codex on PR #1332): the FIRST version of this fix registered the batch inside _forward_detached
-    -- i.e. AFTER _publish_keep_and_maybe_detach had popped it and released the lock. A force_flush landing
-    in that gap saw an EMPTY BUFFER AND ZERO IN-FLIGHT, delegated and returned, reproducing the exact loss
-    the fix was meant to close. Registration now happens INSIDE the detaching critical section (the condition
-    shares _state_lock), and force_flush registers its own drained batch the same way. NOTE ON WITNESS QUALITY:
-    the original force_flush-waits witness could NOT tell the two versions apart -- mutation-probing it
-    against the gap PASSED, because it starts its flusher long before the window and so only proves that
-    a REGISTERED batch is waited for. A second witness discriminates by construction: it suspends the producer
-    at the entry to _forward_detached (exactly after detachment, before any post-hoc increment) and asserts
-    the batch is ALREADY counted there; that one reddens deterministically against the gap. Both timing-based
-    test assumptions were also removed -- the flush witness is now ORDER-based (delivery recorded before
-    force_flush''s return) rather than a wait(0.5) that could pass merely because the scheduler had not
-    run the flusher, and the wedged-exporter witness waits on a producer ENTRY EVENT instead of a 100ms
-    sleep. ROUND-3 (codex on PR #1332): three more, all in code this arc introduced. (i) force_flush returned
-    True on timeout expiry -- telling the runtime shutdown may proceed while batches are demonstrably outstanding,
-    a quieter form of the very bug this row is about; it now returns downstream_ok AND drained_in_time,
-    still delegating so a wedged forwarder cannot stop the downstream flushing what it has. (ii) The registration
-    LEAKED if the current-span forward raised: _publish_keep_and_maybe_detach had already counted the batch,
+    before, decrement in a finally, notify) so a concurrent force_flush waits for delivery instead of
+    seeing an empty buffer and returning. downstream.on_end is still called with NO processor lock held,
+    preserving the reason the forward was outside the lock in the first place. THE WAIT IS BOUNDED by
+    the caller''s own timeout_millis, and the remaining budget is passed to the downstream flush -- without
+    that bound this would trade a silent-loss bug for a shutdown hang, which is strictly worse. WITNESSES
+    (2, both deterministic): a trigger root detaches a sibling and blocks inside a slow downstream while
+    another thread calls force_flush (asserting it does NOT return), and a wedged exporter with a 300ms
+    budget (asserting it DOES return). Mutation-probed: removing the wait reddens the first every run.
+    REMAINING SCOPE OF THIS ROW = (b) ONLY: a child descheduled BEFORE it reaches the buffering critical
+    section cannot be registered by any lock, so a concurrent always-sampled root can materialize first
+    and the child is stranded or evicted. Moving the lock ahead of classification NARROWS but cannot close
+    it. Reaching it requires a root to end before its own child, which violates the span-nesting contract
+    the root-close design assumes -- so step (3)''s question stands: decide whether a malformed trace
+    shape is worth defending against at all, and if so the honest mechanism is a post-materialization
+    late-arrival path, NOT a wider lock. ROUND-2 (codex on PR #1332): the FIRST version of this fix registered
+    the batch inside _forward_detached -- i.e. AFTER _publish_keep_and_maybe_detach had popped it and
+    released the lock. A force_flush landing in that gap saw an EMPTY BUFFER AND ZERO IN-FLIGHT, delegated
+    and returned, reproducing the exact loss the fix was meant to close. Registration now happens INSIDE
+    the detaching critical section (the condition shares _state_lock), and force_flush registers its own
+    drained batch the same way. NOTE ON WITNESS QUALITY: the original force_flush-waits witness could
+    NOT tell the two versions apart -- mutation-probing it against the gap PASSED, because it starts its
+    flusher long before the window and so only proves that a REGISTERED batch is waited for. A second
+    witness discriminates by construction: it suspends the producer at the entry to _forward_detached
+    (exactly after detachment, before any post-hoc increment) and asserts the batch is ALREADY counted
+    there; that one reddens deterministically against the gap. Both timing-based test assumptions were
+    also removed -- the flush witness is now ORDER-based (delivery recorded before force_flush''s return)
+    rather than a wait(0.5) that could pass merely because the scheduler had not run the flusher, and
+    the wedged-exporter witness waits on a producer ENTRY EVENT instead of a 100ms sleep. ROUND-3 (codex
+    on PR #1332): three more, all in code this arc introduced. (i) force_flush returned True on timeout
+    expiry -- telling the runtime shutdown may proceed while batches are demonstrably outstanding, a quieter
+    form of the very bug this row is about; it now returns downstream_ok AND drained_in_time, still delegating
+    so a wedged forwarder cannot stop the downstream flushing what it has. (ii) The registration LEAKED
+    if the current-span forward raised: _publish_keep_and_maybe_detach had already counted the batch,
     so an exception from downstream.on_end(span) skipped the release and left the count positive FOREVER
     -- every later force_flush would burn its whole budget and now also report failure. Both always-sampled
     arms now release in a finally. (iii) The flush witness was STILL scheduler-dependent: setting an event
-    just before calling force_flush does not prove the flusher reached the wait, so a deschedule there let
-    the release fire first and the test passed even with the wait deleted. It now hooks the condition''s
+    just before calling force_flush does not prove the flusher reached the wait, so a deschedule there
+    let the release fire first and the test passed even with the wait deleted. It now hooks the condition''s
     wait() and synchronizes on a point reached INSIDE it -- mutation-probed 3/3 red with the wait removed,
-    where the previous version passed. Incidental: the SDK PROPAGATES processor exceptions rather than swallowing
-    them (an earlier draft assumed otherwise and the RuntimeError escaped the test). ROUND-4 (codex on PR
-    #1332) -- A REPORTING FAILURE OF MINE, worth recording as the lesson. Round 3 claimed the flush witness
-    had been switched to synchronize INSIDE the condition wait. It had not: the edit script used a str.replace
-    with no assertion on the anchor, the anchor did not match, the replace silently no-op''d, and the script
-    still printed success -- so the committed file kept the old set-event-then-sleep(0.2) shape while the
-    commit message said otherwise. Codex caught it by RE-READING THE COMMITTED FILE rather than trusting
-    the message. Now applied for real and verified present by grep, with the edit assertion-guarded; mutation-probed
-    3/3 RED with the wait removed. DISCIPLINE: never report an edit from a script''s own success print --
-    assert the anchor matched, then grep the committed file. ROUND-5 (codex on PR #1332): the batch counter
-    alone cannot cover a span whose on_end has STARTED but not yet taken _state_lock -- at that moment no
-    batch exists to register, so force_flush could observe zero, enter the downstream flush, and only then
-    have the child buffer and its root detach a batch, with registration landing AFTER the only wait and
-    the flush returning True with a batch undelivered. on_end now counts its own entry and exit (_active_on_end,
-    incremented at the top, decremented in a finally, notified), and force_flush waits for BOTH counters.
-    The body moved to _on_end_inner so the accounting wraps every path including early returns. Witness
-    suspends the producer INSIDE on_end before any buffering and asserts force_flush parks; mutation-probed
-    3/3 RED with the entry counter dropped from the wait condition. ROUND-6 (codex on PR #1332) -- THE SINGLE
-    DRAIN PASS WAS ITSELF UNSOUND, and this is the structural end of (a). Counters fix two windows but not
-    a third: a non-root span that entered on_end BEFORE the drain and buffers AFTER it leaves the span in
-    _buffer with BOTH counters back at zero, so the wait exits and force_flush returns True with the span
-    buffered and never delivered. force_flush is now a DRAIN-UNTIL-STABLE loop: drain, forward, wait for
-    the counters to settle, re-check the buffer, and repeat until a pass finds nothing new -- still bounded
-    by the caller''s deadline, reporting failure if it exits with work outstanding. The three windows are
-    now named together in the code comment ((i) detached-not-forwarded, (ii) entered-not-registered, (iii)
-    buffered-after-the-pass) so the next reader sees why a single pass cannot work. Witness suspends the
-    producer inside on_end so the first drain sees an EMPTY buffer, releases it only once the flusher is
-    parked, and asserts delivery; mutation-probed 3/3 RED with the loop reduced to one pass. ROUND-7 (codex
-    on PR #1332) -- THE ENTRY COUNTER NEEDED ITS OWN LOCK. Guarding it with _state_lock (which _inflight_cv
-    shares) reintroduced the same hole one level down: a callback reaching on_end while force_flush held
-    that lock blocked BEFORE being counted, so the flusher could release, immediately reacquire for its
-    zero check, observe nothing and return -- after which the queued callback buffered an already-ended
-    span. _active_on_end now lives under a dedicated _entry_lock held for two integer operations only, read
-    via _entrants_pending(); the state lock and the entry lock are never nested in a way that could deadlock,
-    since _entrants_pending takes only the entry lock. Witness holds _state_lock in the test and asserts
-    a span ending on another thread is ALREADY counted while provably unable to proceed (buffer still empty).
-    Mutation-probed 3/3 RED with the entry counted under _state_lock again. ROUND-8 (codex on PR #1332,
-    P2 -- severity dropping): waiting on a bare any-entrant-active predicate is OVER-CONSERVATIVE. It includes
-    callbacks that started AFTER the flush began, so under sustained tracing the count never reaches zero,
-    force_flush burns its whole budget and reports FAILURE even though everything present at invocation
-    drained -- a spurious shutdown error rather than a loss. Entrants now carry a monotonic sequence number
-    and each flush snapshots an _entry_cutoff(), waiting only for entrants at or below it. The bare counter
-    was replaced by an _active_entries set; the now-dead _active_on_end field and its stale comment reference
-    were removed. Witness takes a cutoff while idle, starts a LATE span inside on_end, and asserts the late
-    entrant IS registered globally but is NOT waited for by the earlier cutoff; mutation-probed 3/3 RED
-    with the cutoff ignored. ROUND-9 (codex on PR #1332, P2) -- THE SYMMETRIC HALF OF ROUND 8. The cutoff
-    filtered entrants but the batch count stayed global, so a batch detached by a POST-CUTOFF callback still
-    made the flush wait: the same spurious-False shape one level down. Batches now carry the generation
-    of the on_end that produced them (via a thread-local current-entry id, so no signature threading), and
-    the flush waits only for batches at or below its own cutoff; force_flush''s own drained batch is tagged
-    0, at or below every cutoff, so a flush always waits for itself. WITNESS CONSTRUCTION MATTERED: a first
-    draft started the late trace BEFORE calling force_flush, which makes it legitimately PRE-cutoff work
-    the flush SHOULD wait for -- the test failed for the right reason and the code was fine. It now hooks
-    _entry_cutoff and creates the late trace from inside it, so the batch is genuinely post-cutoff, and
-    it exercises force_flush() end-to-end as the reviewer asked rather than only the predicate. Mutation-probed
-    3/3 RED with the batch cutoff ignored.'
+    where the previous version passed. Incidental: the SDK PROPAGATES processor exceptions rather than
+    swallowing them (an earlier draft assumed otherwise and the RuntimeError escaped the test). ROUND-4
+    (codex on PR #1332) -- A REPORTING FAILURE OF MINE, worth recording as the lesson. Round 3 claimed
+    the flush witness had been switched to synchronize INSIDE the condition wait. It had not: the edit
+    script used a str.replace with no assertion on the anchor, the anchor did not match, the replace silently
+    no-op''d, and the script still printed success -- so the committed file kept the old set-event-then-sleep(0.2)
+    shape while the commit message said otherwise. Codex caught it by RE-READING THE COMMITTED FILE rather
+    than trusting the message. Now applied for real and verified present by grep, with the edit assertion-guarded;
+    mutation-probed 3/3 RED with the wait removed. DISCIPLINE: never report an edit from a script''s own
+    success print -- assert the anchor matched, then grep the committed file. ROUND-5 (codex on PR #1332):
+    the batch counter alone cannot cover a span whose on_end has STARTED but not yet taken _state_lock
+    -- at that moment no batch exists to register, so force_flush could observe zero, enter the downstream
+    flush, and only then have the child buffer and its root detach a batch, with registration landing
+    AFTER the only wait and the flush returning True with a batch undelivered. on_end now counts its own
+    entry and exit (_active_on_end, incremented at the top, decremented in a finally, notified), and force_flush
+    waits for BOTH counters. The body moved to _on_end_inner so the accounting wraps every path including
+    early returns. Witness suspends the producer INSIDE on_end before any buffering and asserts force_flush
+    parks; mutation-probed 3/3 RED with the entry counter dropped from the wait condition. ROUND-6 (codex
+    on PR #1332) -- THE SINGLE DRAIN PASS WAS ITSELF UNSOUND, and this is the structural end of (a). Counters
+    fix two windows but not a third: a non-root span that entered on_end BEFORE the drain and buffers
+    AFTER it leaves the span in _buffer with BOTH counters back at zero, so the wait exits and force_flush
+    returns True with the span buffered and never delivered. force_flush is now a DRAIN-UNTIL-STABLE loop:
+    drain, forward, wait for the counters to settle, re-check the buffer, and repeat until a pass finds
+    nothing new -- still bounded by the caller''s deadline, reporting failure if it exits with work outstanding.
+    The three windows are now named together in the code comment ((i) detached-not-forwarded, (ii) entered-not-registered,
+    (iii) buffered-after-the-pass) so the next reader sees why a single pass cannot work. Witness suspends
+    the producer inside on_end so the first drain sees an EMPTY buffer, releases it only once the flusher
+    is parked, and asserts delivery; mutation-probed 3/3 RED with the loop reduced to one pass. ROUND-7
+    (codex on PR #1332) -- THE ENTRY COUNTER NEEDED ITS OWN LOCK. Guarding it with _state_lock (which
+    _inflight_cv shares) reintroduced the same hole one level down: a callback reaching on_end while force_flush
+    held that lock blocked BEFORE being counted, so the flusher could release, immediately reacquire for
+    its zero check, observe nothing and return -- after which the queued callback buffered an already-ended
+    span. _active_on_end now lives under a dedicated _entry_lock held for two integer operations only,
+    read via _entrants_pending(); the state lock and the entry lock are never nested in a way that could
+    deadlock, since _entrants_pending takes only the entry lock. Witness holds _state_lock in the test
+    and asserts a span ending on another thread is ALREADY counted while provably unable to proceed (buffer
+    still empty). Mutation-probed 3/3 RED with the entry counted under _state_lock again. ROUND-8 (codex
+    on PR #1332, P2 -- severity dropping): waiting on a bare any-entrant-active predicate is OVER-CONSERVATIVE.
+    It includes callbacks that started AFTER the flush began, so under sustained tracing the count never
+    reaches zero, force_flush burns its whole budget and reports FAILURE even though everything present
+    at invocation drained -- a spurious shutdown error rather than a loss. Entrants now carry a monotonic
+    sequence number and each flush snapshots an _entry_cutoff(), waiting only for entrants at or below
+    it. The bare counter was replaced by an _active_entries set; the now-dead _active_on_end field and
+    its stale comment reference were removed. Witness takes a cutoff while idle, starts a LATE span inside
+    on_end, and asserts the late entrant IS registered globally but is NOT waited for by the earlier cutoff;
+    mutation-probed 3/3 RED with the cutoff ignored. ROUND-9 (codex on PR #1332, P2) -- THE SYMMETRIC
+    HALF OF ROUND 8. The cutoff filtered entrants but the batch count stayed global, so a batch detached
+    by a POST-CUTOFF callback still made the flush wait: the same spurious-False shape one level down.
+    Batches now carry the generation of the on_end that produced them (via a thread-local current-entry
+    id, so no signature threading), and the flush waits only for batches at or below its own cutoff; force_flush''s
+    own drained batch is tagged 0, at or below every cutoff, so a flush always waits for itself. WITNESS
+    CONSTRUCTION MATTERED: a first draft started the late trace BEFORE calling force_flush, which makes
+    it legitimately PRE-cutoff work the flush SHOULD wait for -- the test failed for the right reason
+    and the code was fine. It now hooks _entry_cutoff and creates the late trace from inside it, so the
+    batch is genuinely post-cutoff, and it exercises force_flush() end-to-end as the reviewer asked rather
+    than only the predicate. Mutation-probed 3/3 RED with the batch cutoff ignored.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
-  heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before
-    an in-flight detached batch reaches downstream, and a child paused before registering cannot be registered
-    by any lock *(surfaced by out-of-family Codex rounds 4–6 at the B-136/B-163 arc, 2026-08-13)*'
+  heading: '### B-164 · `TailKeepSpanProcessor` concurrency — **(a) `force_flush` returning before an
+    in-flight detached batch reaches downstream: CLOSED at PR #1332**; **(b) a child paused before it
+    registers cannot be registered by any lock: OPEN** *(surfaced by out-of-family Codex rounds 4–6 at
+    the B-136/B-163 arc, 2026-08-13)*'
