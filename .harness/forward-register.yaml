@@ -8893,19 +8893,24 @@ items:
     materialization sites *(surfaced by out-of-family Codex at the B-136 arc, 2026-08-13)*'
 - id: B-164
   title: 'TailKeepSpanProcessor concurrency: (a) force_flush returning before an in-flight detached batch
-    reaches downstream -- CLOSED at PR #1332; (b) a child paused before it registers cannot be registered
-    by any lock -- OPEN'
+    reaches downstream -- CLOSED at PR #1332; (b) a child paused before it registers -- OPEN; the PR #1334
+    unreachability basis was FALSIFIED at review (fan-out orphaned-thread spans outlive the root)'
   status: registered_finding
-  summary: '(a) CLOSED at PR #1332 -- see close_out. (b) OPEN and is the whole of this row now. ORIGINAL
-    STATEMENT, retained as history: (a) force_flush did not wait for in-flight detached batches -- _publish_keep_and_maybe_detach
-    detaches under the lock and returns the spans so the caller forwards OUTSIDE it (deliberate: holding
-    the lock across downstream.on_end would serialize a slow exporter), but a concurrent force_flush then
-    saw an EMPTY buffer, delegated and returned True while those spans were still being forwarded. (b)
-    A CHILD PAUSED BEFORE REGISTERING CANNOT BE REGISTERED: if a child''s on_end is descheduled before
-    reaching the buffering critical section, a concurrent always-sampled root can materialize first; the
-    child re-creates the bucket after root close and is stranded or evicted. Moving the lock earlier NARROWS
-    but cannot close it. Reaching it requires a root to end before its own child (a malformed trace under
-    the nesting contract).'
+  summary: '(a) CLOSED at PR #1332 -- force_flush now waits for work that entered the processor but has
+    not reached downstream (bounded drain-until-stable loop; see close_out for the nine windows it took
+    to converge). (b) STILL OPEN. A first closure at PR #1334 argued (b) was UNREACHABLE because production
+    holds exactly ONE manual-lifetime span (operator_burden_eval_primitives.py:252) and it has NO CALLER.
+    The AST inventory is TRUE and is now pinned by a witness, but the CLOSURE it was used to justify is
+    NOT: that basis rested on the universal "the interleaving needs a span whose end() can be called out
+    of order, or one handed to another thread; production has neither", and production HAS the second.
+    harness-cp workflow_driver._run_fanout_to_completion abandons its executor on ANY exception (the §25.11
+    barrier deadline OR a branch failure) via shutdown(wait=False) -- its own docstring says the orphaned
+    thread runs to completion in the background -- while branch dispatch runs under asyncio.to_thread,
+    which copies the contextvars context so the OTel parent propagates into that thread, where llm_dispatch
+    opens a REAL child span. The deadline then unwinds the workflow.envelope root while that child is still
+    open. That is a root ending before its own child with ZERO manual start_span calls -- exactly (b)''s
+    precondition. Whether TailKeepSpanProcessor actually mishandles that ordering is UNPROVEN (no live
+    repro exists yet), but the row cannot close on a universal that is false.'
   close_out: '(1) DECIDE WHETHER (a) IS IN SCOPE for a best-effort tail processor at all -- the module''s
     own ''Drop semantics (false-but-bounded)'' posture and s9.3''s implementer-discretion clause may already
     contemplate it; ground there first, exactly as B-136''s step (5) did. (2) IF IT IS, implement in-flight
@@ -9016,10 +9021,34 @@ items:
     it legitimately PRE-cutoff work the flush SHOULD wait for -- the test failed for the right reason
     and the code was fine. It now hooks _entry_cutoff and creates the late trace from inside it, so the
     batch is genuinely post-cutoff, and it exercises force_flush() end-to-end as the reviewer asked rather
-    than only the predicate. Mutation-probed 3/3 RED with the batch cutoff ignored.'
+    than only the predicate. Mutation-probed 3/3 RED with the batch cutoff ignored. (b) ATTEMPTED CLOSURE
+    2026-08-13 (PR #1334) -- WITHDRAWN AT REVIEW; (b) REMAINS OPEN. Two successive bases were advanced
+    and BOTH were falsified; they are recorded here as SUPERSEDED history, NOT as findings. BASIS 1 (superseded,
+    do not cite): production holds ZERO manual-lifetime spans, grounded by an AST scan over harness-*/src/.
+    FALSE WHEN WRITTEN and its test VACUOUS -- caught by out-of-family codex as a P1 -- because the scan
+    filtered on ast.Assign and so skipped `child: ChildSpanRef = tracer.start_span(...)`, an ANNOTATED
+    assignment at operator_burden_eval_primitives.py:252. BASIS 2 (superseded, do not cite): EXACTLY ONE
+    start_span site exists in src/ and it has NO CALLER (emit_eval_as_child_span, docstring ''never invoked''
+    -- the landed-but-uncalled shape of B-162), every other site using `with tracer.start_as_current_span(...)`
+    whose lexical nesting forecloses a parent-ends-first ordering. The INVENTORY half of basis 2 is true
+    and is retained as a maintained invariant (test_b164b_the_only_manual_lifetime_span_is_uncalled, which
+    matches at the CALL level -- an ast.Assign filter misses annotated assignments, walrus bindings and
+    bare expressions -- and pins BOTH parts). What FALSIFIES basis 2 as a CLOSURE is its unstated universal
+    "the interleaving needs a span whose end() can be called out of order, OR ONE HANDED TO ANOTHER THREAD;
+    production has neither": production has the second, by deliberate design. workflow_driver._run_fanout_to_completion
+    abandons its ThreadPoolExecutor on ANY exception via shutdown(wait=False) -- its docstring states the
+    orphaned thread RUNS TO COMPLETION IN THE BACKGROUND -- and branch dispatch runs under asyncio.to_thread,
+    which copies the contextvars context, so the OTel parent propagates into that thread and llm_dispatch
+    opens a real child span there. The §25.11 barrier deadline then unwinds the `with tracer.start_as_current_span("workflow.envelope")`
+    root while that child is still open, ending the ROOT FIRST. A sibling comment at the to_thread call
+    site already records the orphaned-thread-outlives-cancellation shape as a prior codex P1 + concurrency-lens
+    finding, so the mechanism is independently attested in-tree. NEXT STEP for (b): either build a live
+    repro driving that fan-out path through TailKeepSpanProcessor and adjudicate on the result, or produce
+    a positive argument that an orphaned child span cannot reach the processor after its root materializes.
+    Neither exists today. UNTIL ONE DOES, (b) STAYS OPEN. (a) remains CLOSED at #1332 and is unaffected.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency — **(a) `force_flush` returning before an
     in-flight detached batch reaches downstream: CLOSED at PR #1332**; **(b) a child paused before it
-    registers cannot be registered by any lock: OPEN** *(surfaced by out-of-family Codex rounds 4–6 at
-    the B-136/B-163 arc, 2026-08-13)*'
+    registers: OPEN — the PR #1334 unreachability basis was falsified at review** *(surfaced by out-of-family
+    Codex rounds 4–6 at the B-136/B-163 arc, 2026-08-13)*'

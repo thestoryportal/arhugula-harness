@@ -35,6 +35,8 @@ untouched either way.
 
 from __future__ import annotations
 
+import ast
+import pathlib
 import threading
 import time
 from typing import Any
@@ -48,6 +50,8 @@ from opentelemetry.sdk.trace import TracerProvider
 _TRIGGER_ROOT = "sandbox.violation"
 #: Always-sampled but NOT a §10.2 trigger — the population that loses its siblings.
 _QUIET_ROOT = "hitl.gate.evaluated"
+#: Repo root, for the src/-scoped invariant below.
+_REPO = pathlib.Path(__file__).resolve().parents[2]
 
 
 class _Downstream:
@@ -1018,3 +1022,90 @@ def test_b164_a_post_cutoff_batch_does_not_consume_the_flush_budget() -> None:
     for th in late_thread:
         th.join(timeout=5.0)
         assert not th.is_alive(), "the late producer hung"
+
+
+def test_b164b_the_only_manual_lifetime_span_is_uncalled() -> None:
+    """**B-164(b) inventory invariant** — pins the manual-lifetime span set. Does NOT close the row.
+
+    B-164(b) needs a **root to end before its own child**. Step (3) asked whether that is
+    worth defending against.
+
+    **Read this first: this test does NOT establish that B-164(b) is unreachable.** It was
+    written to, and that closure was WITHDRAWN at review. The assertions below are true and
+    worth keeping — they pin the manual-lifetime span inventory and reopen loudly if it
+    changes — but the *closure* they were used to justify rested on an additional, unstated
+    universal: *"the interleaving needs a span whose end() can be called out of order, or one
+    handed to another thread; production has neither."* Production **has** the second, by
+    deliberate design: `harness_cp.workflow_driver._run_fanout_to_completion` abandons its
+    executor on any exception via `shutdown(wait=False)` ("the orphaned thread runs to
+    completion in the background"), branch dispatch runs under `asyncio.to_thread` — which
+    copies the `contextvars` context, so the OTel parent propagates into that thread and
+    `llm_dispatch` opens a real child span there — and the §25.11 barrier deadline then
+    unwinds the `workflow.envelope` root while that child is still open. So a root CAN end
+    before its own child with zero manual `start_span` calls, and B-164(b) stays OPEN until
+    someone either builds a repro through that path or argues positively that an orphaned
+    child span cannot reach the processor after its root materializes.
+
+    **A first version of this test asserted the wrong thing and passed vacuously.** It
+    claimed production held *zero* manual-lifetime spans, but filtered on `ast.Assign` only —
+    so it skipped `child: ChildSpanRef = tracer.start_span(...)`, an **annotated** assignment
+    at `operator_burden_eval_primitives.py:252`. The invariant was already false when
+    written, and out-of-family Codex caught it. The corrected basis is narrower and is
+    asserted here in two parts:
+
+    1. **Exactly one** `start_span` site exists in `src/` — every other span-opening site
+       uses `with tracer.start_as_current_span(...)`, whose lexical nesting makes a
+       parent-ends-first ordering impossible; and
+    2. that one site, `emit_eval_as_child_span`, has **no caller anywhere in `src/`** — its
+       own docstring says *"never invoked"*. It is the same landed-but-uncalled shape as
+       `B-162`.
+
+    So *this particular* route to the shape — a manual-lifetime span ended out of order — is
+    closed off **because nothing calls the only code that could produce it**. That is a
+    strictly weaker claim than the first draft made, and it is the true one. It is also not
+    sufficient to close B-164(b), per the paragraph above: the fan-out orphaned-thread route
+    reaches the same ordering without any manual-lifetime span at all. If either part below
+    changes — a second manual-lifetime span appears, or something calls this one — a second
+    independent route opens too, which is what the failure messages below say.
+    """
+    manual_sites: list[str] = []
+    for path in _REPO.glob("harness-*/src/**/*.py"):
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:  # pragma: no cover - a syntax error fails the suite anyway
+            continue
+        for node in ast.walk(tree):
+            # Match at the CALL level: an `ast.Assign` filter misses annotated assignments,
+            # walrus bindings and bare expressions. That mistake is what made the first
+            # version of this test vacuous.
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "start_span"
+            ):
+                manual_sites.append(f"{path.relative_to(_REPO)}:{node.lineno}")
+
+    assert manual_sites == ["harness-od/src/harness_od/operator_burden_eval_primitives.py:252"], (
+        f"the manual-lifetime span inventory changed: {manual_sites}. A span whose `end()` "
+        "can be called out of order — or which can be handed to another thread — makes "
+        "B-164(b)'s root-ends-before-its-child interleaving REACHABLE, so that row must be "
+        "re-adjudicated rather than left closed."
+    )
+
+    # ...and the one site that exists is dead code, which is what actually closes B-164(b).
+    callers = [
+        f"{path.relative_to(_REPO)}:{node.lineno}"
+        for path in _REPO.glob("harness-*/src/**/*.py")
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "emit_eval_as_child_span")
+            or (
+                isinstance(node.func, ast.Attribute) and node.func.attr == "emit_eval_as_child_span"
+            )
+        )
+    ]
+    assert callers == [], (
+        f"`emit_eval_as_child_span` now has caller(s) {callers} — the only manual-lifetime "
+        "span in production has become live, so B-164(b) is REACHABLE and must be reopened."
+    )
