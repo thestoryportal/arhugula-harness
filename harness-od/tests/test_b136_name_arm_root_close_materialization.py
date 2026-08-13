@@ -766,3 +766,76 @@ def test_b164_force_flush_waits_for_an_on_end_that_has_not_registered_yet() -> N
     assert not producer.is_alive() and not flusher.is_alive(), "a thread hung"
     assert result == [True], f"force_flush reported {result}"
     assert tail._active_on_end == 0, "the on_end counter did not settle back to zero"
+
+
+def test_b164_force_flush_redrains_a_span_that_buffers_after_the_first_pass() -> None:
+    """**B-164 round 6** — a single drain pass is unsound; `force_flush` drains until stable.
+
+    The counters fix two windows but not this third one: a non-root span that entered
+    `on_end` **before** the drain, and buffers **after** it. The drain has already run, then
+    the span appends to `_buffer` and decrements `_active_on_end` — so the wait loop exits
+    with both counters at zero and `force_flush` returns `True` **with the span still
+    buffered and never delivered**.
+
+    `force_flush` now re-drains after the counters settle and repeats until a pass finds
+    nothing new. Driven deterministically: the producer is suspended inside `on_end` (so the
+    first drain sees an empty buffer) and released only once the flusher is parked in its
+    wait.
+    """
+    inside_on_end = threading.Event()
+    release_producer = threading.Event()
+
+    downstream = _Downstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    original_inner = tail._on_end_inner
+
+    def _hooked_inner(span: Any) -> None:
+        if threading.current_thread().name == "b164-redrain-producer":
+            inside_on_end.set()
+            release_producer.wait(timeout=5.0)
+        original_inner(span)
+
+    tail._on_end_inner = _hooked_inner  # type: ignore[method-assign]
+
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b164.redrain")
+
+    root_span = tracer.start_span(_QUIET_ROOT)
+    child = tracer.start_span("ordinary.child", context=otel_trace.set_span_in_context(root_span))
+
+    producer = threading.Thread(target=child.end, name="b164-redrain-producer")
+    producer.start()
+    assert inside_on_end.wait(timeout=5.0), "the producer never entered on_end"
+    assert tail.buffered_trace_count == 0, "nothing should be buffered yet — that is the point"
+
+    in_the_wait = threading.Event()
+    real_cv_wait = tail._inflight_cv.wait
+
+    def _hooked_wait(timeout: float | None = None) -> bool:
+        in_the_wait.set()
+        return real_cv_wait(timeout)
+
+    tail._inflight_cv.wait = _hooked_wait  # type: ignore[method-assign]
+
+    result: list[bool] = []
+    flusher = threading.Thread(
+        target=lambda: result.append(tail.force_flush(timeout_millis=5_000)),
+        name="b164-redrain-flusher",
+    )
+    flusher.start()
+    assert in_the_wait.wait(timeout=5.0), "force_flush never parked — it drained and returned"
+
+    # Now let the span buffer: this happens AFTER force_flush's first drain pass.
+    release_producer.set()
+    producer.join(timeout=5.0)
+    flusher.join(timeout=5.0)
+    assert not producer.is_alive() and not flusher.is_alive(), "a thread hung"
+
+    assert "ordinary.child" in downstream.seen, (
+        f"the span buffered after the first drain pass was never delivered; "
+        f"downstream={downstream.seen}, still buffered={tail.buffered_trace_count} — "
+        "force_flush must re-drain until a pass finds nothing new"
+    )
+    assert tail.buffered_trace_count == 0, "the buffer was not fully drained"
+    assert result == [True], f"force_flush reported {result} despite draining everything"

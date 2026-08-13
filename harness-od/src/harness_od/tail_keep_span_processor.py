@@ -621,36 +621,48 @@ class TailKeepSpanProcessor(SpanProcessor):
         `downstream.force_flush(timeout_millis)`.
         """
         # Drain the buffer — keep-all on shutdown to avoid silent loss.
-        # `B-163`: detach the whole buffer atomically, then forward outside the lock.
+        #
+        # `B-164` — this is a DRAIN-UNTIL-STABLE loop, not a single pass. Three distinct
+        # windows made the single pass unsound, each found by out-of-family review:
+        #   (i)   a batch detached but not yet forwarded (`_inflight_batches`),
+        #   (ii)  an `on_end` that has started but not yet taken the lock (`_active_on_end`)
+        #         — at that moment no batch exists to register, and
+        #   (iii) such a call BUFFERING after the drain has already run, which leaves the
+        #         span in `_buffer` with both counters back at zero.
+        # Waiting on the counters alone fixes (i) and (ii) but not (iii); re-draining after
+        # they settle, and repeating until a drain finds nothing new, covers all three.
         deadline = time.monotonic() + (timeout_millis / 1000.0)
-        with self._state_lock:
-            drained = [span for spans in self._buffer.values() for span in spans]
-            self._buffer.clear()
-            self._keep.clear()
-            if drained:
-                # Same registration rule as `_publish_keep_and_maybe_detach`: count the
-                # batch while still holding the lock, since `_forward_detached` only
-                # decrements.
-                self._inflight_batches += 1
-        self._forward_detached(drained)
-
-        # `B-164` — wait for batches detached by CONCURRENT `on_end` calls that have left
-        # `_buffer` but not yet reached `downstream`. Without this the drain above sees an
-        # empty buffer and returns while those spans are still in the air, and shutdown can
-        # close the exporter first — the exact "silent loss on shutdown" this method exists
-        # to prevent. Bounded by the caller's own budget: on expiry we still delegate, so a
-        # wedged exporter cannot make `force_flush` hang forever.
         drained_in_time = True
-        with self._inflight_cv:
-            while self._inflight_batches > 0 or self._active_on_end > 0:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not self._inflight_cv.wait(timeout=remaining):
-                    # Budget exhausted with batches still undelivered. Still delegate (a
-                    # wedged forwarder must not stop the downstream from flushing what it
-                    # has), but report FAILURE — returning True here would tell the runtime
-                    # that shutdown may proceed when spans are demonstrably outstanding.
-                    drained_in_time = self._inflight_batches == 0 and self._active_on_end == 0
-                    break
+
+        while True:
+            with self._state_lock:
+                drained = [span for spans in self._buffer.values() for span in spans]
+                self._buffer.clear()
+                self._keep.clear()
+                if drained:
+                    # Same registration rule as `_publish_keep_and_maybe_detach`: count the
+                    # batch while still holding the lock, since `_forward_detached` only
+                    # decrements.
+                    self._inflight_batches += 1
+            self._forward_detached(drained)
+
+            # Let in-progress work settle: batches in the air, and `on_end` calls that have
+            # entered but not yet reached the buffer. Bounded by the caller's own budget —
+            # on expiry we still delegate, so a wedged exporter cannot make `force_flush`
+            # hang forever, but we report failure rather than a false success.
+            with self._inflight_cv:
+                while self._inflight_batches > 0 or self._active_on_end > 0:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not self._inflight_cv.wait(timeout=remaining):
+                        drained_in_time = self._inflight_batches == 0 and self._active_on_end == 0
+                        break
+                # Anything that arrived in `_buffer` while we waited needs another pass.
+                more_pending = bool(self._buffer)
+
+            if not more_pending or not drained_in_time or time.monotonic() >= deadline:
+                if more_pending:
+                    drained_in_time = False
+                break
 
         remaining_millis = max(0.0, deadline - time.monotonic()) * 1000.0
         downstream_ok = self._downstream.force_flush(timeout_millis=int(remaining_millis))

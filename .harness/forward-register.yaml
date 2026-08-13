@@ -8981,7 +8981,17 @@ items:
     incremented at the top, decremented in a finally, notified), and force_flush waits for BOTH counters.
     The body moved to _on_end_inner so the accounting wraps every path including early returns. Witness
     suspends the producer INSIDE on_end before any buffering and asserts force_flush parks; mutation-probed
-    3/3 RED with the entry counter dropped from the wait condition.'
+    3/3 RED with the entry counter dropped from the wait condition. ROUND-6 (codex on PR #1332) -- THE SINGLE
+    DRAIN PASS WAS ITSELF UNSOUND, and this is the structural end of (a). Counters fix two windows but not
+    a third: a non-root span that entered on_end BEFORE the drain and buffers AFTER it leaves the span in
+    _buffer with BOTH counters back at zero, so the wait exits and force_flush returns True with the span
+    buffered and never delivered. force_flush is now a DRAIN-UNTIL-STABLE loop: drain, forward, wait for
+    the counters to settle, re-check the buffer, and repeat until a pass finds nothing new -- still bounded
+    by the caller''s deadline, reporting failure if it exits with work outstanding. The three windows are
+    now named together in the code comment ((i) detached-not-forwarded, (ii) entered-not-registered, (iii)
+    buffered-after-the-pass) so the next reader sees why a single pass cannot work. Witness suspends the
+    producer inside on_end so the first drain sees an EMPTY buffer, releases it only once the flusher is
+    parked, and asserts delivery; mutation-probed 3/3 RED with the loop reduced to one pass.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before
