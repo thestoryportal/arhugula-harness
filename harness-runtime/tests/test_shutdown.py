@@ -427,8 +427,12 @@ async def test_slow_ledger_fsync_is_tagged_and_times_out(
     # runner's tracer phase could eat the budget first, yielding ('tracer','ledger') and
     # failing the exact assertion below. A 1s deadline is far more than the fake tracer's
     # immediate return can consume, and a 5s fsync overruns whatever remains by orders of
-    # magnitude — so the ONLY tag that can appear is the ledger's.
-    monkeypatch.setattr(_sd, "_fsync_ledger_sync", lambda _p: time.sleep(5.0))
+    # magnitude — so the ONLY tag that can appear is the ledger's. The injected sleep is
+    # kept just OVER the deadline rather than far over it: the bounded runner ABANDONS the
+    # fsync thread on timeout, so an oversized sleep lingers as a live daemon thread well
+    # after this test returns, and this suite has neighbours whose assertions are
+    # filesystem-timing sensitive. 1.2s vs a 1.0s deadline is decisive without loitering.
+    monkeypatch.setattr(_sd, "_fsync_ledger_sync", lambda _p: time.sleep(1.2))
 
     report = await flush_observability(
         _ctx_with(tmp_path, tracer=_FakeTracerProvider(returns=False)),
