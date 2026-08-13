@@ -2310,7 +2310,21 @@ items:
     workflow_id-scoped action_id (compose_hitl_action_id), not run_id -- two peer branches sharing
     a child_workflow_id produce byte-identical escalation requests, making B-39's hitl_responses
     run_id-keyed addressing impossible to use in that exact scenario.
-  close_out: 'DESIGN RECORD v1 LANDED 2026-08-12 (council arc; .harness/council-b71-hitl-external-correlation-2026-08-12/DELIVERABLE.md) --
+  close_out: 'CURRENT STATE (v6, 2026-08-12) -- READ THIS FIRST; everything after the VERSION
+    HISTORY marker below is an append-log kept for audit, NOT instructions. ALL FIVE
+    preconditions are CLOSED and THE SPEC LEG IS AUTHORIZABLE. No council is owed, no gate
+    remains, nothing is blocked. Design record:
+    .harness/council-b71-hitl-external-correlation-2026-08-12/DELIVERABLE.md -- read s5 for the
+    residual table (8 items, none of them gates) and the three council conditions (sequencing,
+    scope/B-158, and the branch_context leak bar now extended to the tracing channel). Identity
+    basis = (B), the run-scoped internal identity + placement; resolvability carries the resolution
+    CHANNEL, never the outcome; the D-2 palette-suppression binding is WITHDRAWN (D-2 keeps a
+    recorded residual); the entry_version window is scoped TWO-MODE (durable=True: the harness
+    journals; durable=False default: the CALLER persists RunResult.pause_snapshot -- a shipped,
+    tested capability, so the guarantee there is conditional on caller behaviour the harness
+    cannot enforce). NEXT STEP: open the spec leg. Do NOT re-open preconditions 1-5 and do NOT
+    re-run the council. ===== VERSION HISTORY (audit only, superseded by the block above) =====
+    DESIGN RECORD v1 LANDED 2026-08-12 (council arc; .harness/council-b71-hitl-external-correlation-2026-08-12/DELIVERABLE.md) --
     the row''s standing instruction (ground the branch-distinct-identity design BEFORE drafting
     spec text) is DISCHARGED, and the spec leg is NOT yet authorizable. Five voices (C1+C10
     primaries; C9/C5/C11 consultants) reconciled to internal zero; three decorrelated reviewers
