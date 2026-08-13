@@ -203,6 +203,55 @@ class _Fixture:
         release_child.set()
         assert child_done.wait(timeout=_TIMEOUT), "the orphaned thread never completed"
 
+    def orphan_a_child_that_starts_late(
+        self, child_name: str = _CHILD, *, root_name: str = _ROOT
+    ) -> None:
+        """Run the real fan-out so `child_name` STARTS after `root_name` has closed.
+
+        The other ordering, and a strictly harder one. In `orphan_a_child` the child span
+        is already open when the root closes, so the processor has seen its `on_start` and
+        can pin the trace as live. Here the abandoned worker is running with the root's
+        copied context but has NOT opened its span yet, so at root close the trace looks
+        completely finished — nothing is live, and only a memory of the materialization can
+        recognise the child when it finally arrives.
+
+        This is not a contrived shape: the §25.11 barrier deadline fires on a clock, with
+        no regard for whether a branch has reached its dispatch call yet.
+        """
+        worker_ready = threading.Event()
+        start_child = threading.Event()
+        child_done = threading.Event()
+
+        def _wedged_branch() -> None:
+            # Deliberately does NOT open the span yet — the context is copied and live,
+            # but the span does not exist until the test says so.
+            worker_ready.set()
+            start_child.wait(timeout=_TIMEOUT)
+            with self.tracer.start_as_current_span(child_name):
+                pass
+            child_done.set()
+
+        async def _fanout() -> None:
+            async def wedged() -> None:
+                await asyncio.to_thread(_wedged_branch)
+
+            async def failing() -> None:
+                # Raise once the worker is RUNNING but before it opens anything.
+                while not worker_ready.is_set():
+                    await asyncio.sleep(0.005)
+                raise RuntimeError("branch failed before the child span opened")
+
+            await asyncio.gather(wedged(), failing())
+
+        with self.tracer.start_as_current_span(root_name):
+            with pytest.raises(RuntimeError):
+                _run_fanout_to_completion(_fanout(), max_workers=2)
+        assert worker_ready.is_set(), "the orphaned worker never ran — fixture mis-built"
+        assert not child_done.is_set(), "the child ran to completion before the root closed"
+
+        start_child.set()
+        assert child_done.wait(timeout=_TIMEOUT), "the orphaned thread never completed"
+
 
 def test_the_fanout_really_orphans_a_thread_that_outlives_the_root() -> None:
     """**Premise.** The mechanism exists: a child span ends after its own root.
@@ -349,14 +398,48 @@ def test_b164b_the_orphan_survives_unrelated_traffic_while_it_is_still_open() ->
     )
 
 
-def test_b164b_the_liveness_memory_does_not_grow_with_completed_traces() -> None:
-    """**The memory is proportional to LIVE traces, not to traffic.**
+def test_b164b_the_orphan_survives_when_it_starts_after_its_root_closed() -> None:
+    """**The other ordering — the child had not STARTED when the root closed.**
 
-    Liveness-keyed retention would be a poor trade if it turned into its own leak. Every
-    trace here completes, so both dictionaries must return to empty — the entry is
-    discarded at the moment the trace's last span ends, not deferred to a ceiling. This
-    is what makes `_LIVENESS_TRACKING_CEILING` a backstop that is never approached in
-    normal operation rather than a working limit.
+    Liveness cannot help here: at root close the trace has no open spans at all, because
+    the abandoned worker is holding a copied context and has not yet reached its
+    `start_as_current_span`. A revision that forgot the trace as soon as liveness hit zero
+    sent this child straight back onto the stranding path — reproduced by out-of-family
+    review as `buffered_trace_count == 1` with the child never forwarded.
+
+    `max_buffered_traces=1` again makes a regression a LOSS rather than a delay, so the
+    assertion cannot be satisfied by a `force_flush` that has not happened.
+    """
+    fx = _Fixture(max_buffered_traces=1)
+    fx.orphan_a_child_that_starts_late()
+
+    assert fx.order.names() == [_ROOT, _CHILD], (
+        f"the child did not end after the root — this fixture is not exercising the "
+        f"starts-late ordering; got {fx.order.names()}"
+    )
+    _root_entry, (_child_name, child_is_root, child_tid) = fx.order.ended
+    assert child_is_root is False and child_tid == _root_entry[2], (
+        "the late-started child did not inherit the root's trace via the copied context, "
+        "so it cannot be a late arrival at all — the premise has changed"
+    )
+    assert _CHILD in fx.downstream.seen, (
+        f"a child that STARTED after root close was stranded and lost; "
+        f"got {fx.downstream.seen} (dropped_trace_count={fx.tail.dropped_trace_count})"
+    )
+    assert fx.tail.buffered_trace_count == 0, (
+        f"the late-started child re-created a bucket nothing will ever pop "
+        f"({fx.tail.buffered_trace_count} trace(s) buffered)"
+    )
+
+
+def test_b164b_the_tracking_dictionaries_stay_bounded_under_completed_traffic() -> None:
+    """**Neither tracking structure may become a leak of its own.**
+
+    `_open_spans` must return to EMPTY — every trace here completes, so every `on_start`
+    is matched by an `on_end`; a non-empty result means the pairing this design rests on
+    is broken. `_materialized` is deliberately different: it retains history for the
+    starts-late ordering above, so it is asserted BOUNDED by the ceiling rather than
+    empty. Asserting it empty would be asserting the second P1 back into existence.
     """
     fx = _Fixture()
     for i in range(256):
@@ -364,13 +447,13 @@ def test_b164b_the_liveness_memory_does_not_grow_with_completed_traces() -> None
             with fx.tracer.start_as_current_span(f"complete.child.{i}"):
                 pass
 
-    assert fx.tail._materialized == {}, (
-        f"completed traces were retained in the materialization memory "
-        f"({len(fx.tail._materialized)} entries) — this is a leak, not a bound"
-    )
     assert fx.tail._open_spans == {}, (
         f"completed traces were retained in the liveness counter "
         f"({len(fx.tail._open_spans)} entries) — on_start/on_end are not pairing"
+    )
+    assert len(fx.tail._materialized) <= _LIVENESS_TRACKING_CEILING, (
+        f"the materialization history exceeded its ceiling "
+        f"({len(fx.tail._materialized)} > {_LIVENESS_TRACKING_CEILING})"
     )
 
 

@@ -126,22 +126,38 @@ a late arrival is exactly that case, one span at a time.
 
 Recognising a late arrival needs a memory of which traces have materialized,
 and that memory must be bounded — an unbounded set would be a worse leak than
-the one being closed. It is bounded by **liveness, not by a window**: a
-root-closed trace is remembered exactly while it still has spans that started
-and have not ended (tracked at ``on_start`` / ``on_end``), which is exactly
-the condition under which a late arrival is still possible, and is forgotten
-the instant the last one ends. Normally that is the root's own ``on_end``, so
-the memory holds one entry per concurrently-live trace — tens, not thousands.
+the one being closed. The orphan can arrive in TWO orderings, and out-of-family
+review produced a reproduction for each in turn, so the retention rule is the
+composition of two:
 
-An earlier revision expired the memory on a fixed FIFO window of unrelated
-root closes instead, and out-of-family review reproduced the boundary that
-made it unsound: with the orphaned child still open, 1,023 intervening roots
-forwarded it but 1,024 pushed it back onto the buffer path, where the ceiling
-evicted it outright — reinstating both the loss and the ``_keep`` leak this
-arm exists to close. Liveness has no such boundary. A FIFO ceiling
-(``_LIVENESS_TRACKING_CEILING``) survives only as the backstop for spans that
-start and never end, and what is lost past it is stated exactly at that
-constant rather than described as a mere delay.
+1. **Live-pinned — the child was already OPEN when its root closed.** Spans are
+   counted per trace at ``on_start`` and released at ``on_end``; while that
+   count is non-zero the trace is retained unconditionally. Exact, with no
+   window to age out of. The first revision instead used a fixed FIFO window of
+   1,024 root closes, and review reproduced its boundary exactly: 1,023
+   intervening roots forwarded the still-open child, 1,024 aged it out onto the
+   buffer path where the ceiling evicted it — the repair reinstating its own
+   defect.
+2. **History-retained — the child had not STARTED yet when its root closed.**
+   The abandoned worker holds a copied context, so it can open its span after
+   the root has gone. At that instant the trace has no live spans at all, so
+   rule 1 has nothing to pin and only a memory of the past decision can catch
+   it. The second revision deleted the entry the moment liveness hit zero, and
+   review reproduced that too (``buffered_trace_count == 1``, child never
+   forwarded).
+
+So the entry is kept while live AND for a bounded history afterwards
+(``_LIVENESS_TRACKING_CEILING`` materializations), and FIFO eviction SKIPS
+live-pinned entries so the bounded rule can never expire the exact one.
+
+**The residual, stated exactly rather than optimistically** (the first revision
+claimed "a delay, not a loss" and that was false): a child that has not yet
+started when more than ``_LIVENESS_TRACKING_CEILING`` unrelated traces
+materialize after its root is no longer recognised, and reverts to the pre-fix
+behaviour — with ``max_buffered_traces`` set, which production always sets,
+that is eviction and permanent loss, not a delay. This residual is inherent
+rather than a missing case: distinguishing "a span of an old trace is about to
+start" from "a new trace is starting" requires unbounded history.
 
 **A late TRIGGER cannot rescue its trace, and that is a decided bound, not
 an oversight.** If the late span is itself a §10.2 classification trigger,
@@ -243,27 +259,24 @@ __all__ = [
     "TailKeepSpanProcessor",
 ]
 
-#: `B-164(b)` LEAK BACKSTOP — a hard ceiling on the two liveness dictionaries, NOT the
-#: mechanism that decides how long a materialized trace is remembered. That decision is
-#: exact and event-driven (`_release_open_span`): a root-closed trace is remembered exactly
-#: while it still has spans that started and have not ended, i.e. exactly while a late
-#: arrival is still possible, and is discarded the instant the last one ends. So in normal
-#: operation these dictionaries hold one entry per CONCURRENTLY-LIVE trace — tens, not
-#: thousands — and this ceiling is never approached.
+#: `B-164(b)` — how many materialized traces are remembered as HISTORY, for the ordering
+#: liveness cannot cover: an orphaned worker holding a copied context that has not yet
+#: opened its span when the root closes. At that instant the trace has no live spans, so
+#: only a memory of the past decision can recognise the child when it finally arrives, and
+#: a memory of the past is exactly the thing that has to be bounded.
 #:
-#: It exists for the one case liveness cannot resolve: a span that starts and NEVER ends
-#: (an abandoned span leaks its entry, because "still open" is indistinguishable from
-#: "gone"). Without a ceiling that would be an unbounded leak — a worse one than
-#: `B-164(b)` itself. Eviction is FIFO, so the oldest (most likely genuinely abandoned)
-#: entry is shed first.
+#: It is NOT the retention rule for a child that is ALREADY OPEN at root close — that one
+#: is live-pinned and exempt from eviction here, so this ceiling can never age out the case
+#: the first revision's fixed window got wrong. It also caps `_open_spans`, whose only
+#: unbounded case is a span that starts and never ends ("still open" being
+#: indistinguishable from "gone").
 #:
-#: **What is lost past the backstop, stated exactly rather than optimistically.** An
-#: evicted trace reverts to the pre-`B-164(b)` behaviour, and that is NOT merely a delay:
-#: with `max_buffered_traces` set — which production always sets — the re-buffered late
-#: span becomes the oldest bucket and is evicted outright, and a late trigger recreates
-#: the stale `_keep` entry. Reaching that state requires >4096 traces each leaking a span,
-#: which is already a producer defect; the ceiling bounds its blast radius rather than
-#: pretending it is harmless.
+#: **What is lost past it, stated exactly.** An aged-out trace reverts to the pre-fix
+#: behaviour, and that is NOT merely a delay: with `max_buffered_traces` set — which
+#: production always sets — the re-buffered span becomes the oldest bucket and is evicted
+#: outright, and a late trigger recreates the stale `_keep` entry. 4096 is chosen to put
+#: that far beyond the window it guards: an orphaned worker opens its span within one
+#: branch dispatch of being abandoned, not after four thousand unrelated traces complete.
 _LIVENESS_TRACKING_CEILING = 4096
 
 
@@ -799,15 +812,31 @@ class TailKeepSpanProcessor(SpanProcessor):
     def _remember_materialized(self, trace_id: int) -> None:
         """Record that `trace_id` has published its keep decision (`B-164(b)`).
 
-        Called under `_state_lock` from the root-close materialization. The entry lives
-        until the trace's last open span ends (`_release_open_span`) — normally within
-        microseconds, since the root itself is usually the last one. The FIFO ceiling is
-        only the abandoned-span backstop; dict insertion order makes `next(iter(...))` the
-        oldest, the same idiom `_evict_oldest_trace` uses on `_buffer`.
+        Called under `_state_lock` from the root-close materialization. The entry is
+        retained by TWO composed rules, because neither alone covers both orderings a
+        late arrival can take (out-of-family Codex, two successive P1 findings):
+
+        - **while the trace has live spans** — the orphaned child was ALREADY OPEN when
+          its root closed. Exact, unbounded in time, no window to age out of.
+        - **for a bounded history afterwards** — the orphaned worker had the root's
+          context copied but had NOT YET opened its span when the root closed, so there
+          was no liveness to pin anything. Only a memory of the past decision can catch
+          that one, and a memory of the past must be bounded.
+
+        Eviction is FIFO but SKIPS live-pinned entries, so the bounded half can never
+        expire the exact half. Entries older than the ceiling are almost never live, so
+        the scan below breaks on its first candidate in practice.
         """
         self._materialized[trace_id] = None
         while len(self._materialized) > _LIVENESS_TRACKING_CEILING:
-            del self._materialized[next(iter(self._materialized))]
+            for candidate in self._materialized:
+                if candidate not in self._open_spans:
+                    del self._materialized[candidate]
+                    break
+            else:
+                # Every entry is live-pinned. Shed the oldest anyway rather than let the
+                # dictionary grow without limit — boundedness is the harder guarantee.
+                del self._materialized[next(iter(self._materialized))]
 
     def _retain_open_span(self, trace_id: int) -> None:
         """Count one more started-and-not-yet-ended span for `trace_id` (`B-164(b)`).
@@ -822,18 +851,17 @@ class TailKeepSpanProcessor(SpanProcessor):
             del self._open_spans[next(iter(self._open_spans))]
 
     def _release_open_span(self, span: ReadableSpan) -> None:
-        """Drop one live span for its trace; at zero, forget the trace (`B-164(b)`).
+        """Drop one live span for its trace (`B-164(b)`).
 
-        Zero live spans means no further span of this trace can arrive, so the
-        `_materialized` entry has no remaining purpose and is discarded immediately. This
-        is what keeps the memory proportional to CONCURRENT traces instead of to a window
-        of unrelated ones.
+        At zero the trace stops being live-PINNED in `_materialized`, but its entry is NOT
+        deleted — deleting it was the second `B-164(b)` P1: a worker holding a copied
+        context can open its span AFTER the root closed, at which point the trace has no
+        live spans at all and an eagerly-deleted entry would send that child straight back
+        onto the stranding path. The entry now ages out of the bounded history instead.
 
-        An absent entry is ignored rather than treated as zero. That is the case where the
-        processor never saw the span's `on_start` — it was registered on the provider after
-        the span began, or the count was shed by the backstop — and in that case the
-        liveness signal is simply unavailable, so `_materialized` is left to the FIFO
-        ceiling rather than being discarded on incomplete information.
+        An absent count is ignored rather than treated as zero, so a span whose `on_start`
+        this processor never saw (registered on the provider mid-flight, or shed by the
+        backstop) can never drive the count negative.
         """
         ctx = span.get_span_context()
         if ctx is None:  # pragma: no cover - a span reaching on_end always has a context
@@ -846,7 +874,6 @@ class TailKeepSpanProcessor(SpanProcessor):
                 self._open_spans[ctx.trace_id] = remaining - 1
                 return
             del self._open_spans[ctx.trace_id]
-            self._materialized.pop(ctx.trace_id, None)
 
     def _evict_oldest_trace(self) -> None:
         """Drop the oldest buffered trace (FIFO) under the max-traces ceiling.
