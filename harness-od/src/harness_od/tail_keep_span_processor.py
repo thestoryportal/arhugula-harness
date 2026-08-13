@@ -40,6 +40,8 @@ LOCAL_DEVELOPMENT`); when wrapped, this processor honors the
      materialize the keep decision for the trace: forward buffered spans
      to `downstream` iff the keep flag is True; otherwise drop them.
      Clear the buffer + keep flag entries for this trace_id.
+   - If the span's trace has **already materialized** (a late arrival — see
+     below) → forward it immediately and buffer nothing.
 
 2. `force_flush(timeout_millis)` — flush any still-buffered traces (treat
    them as keep-all to avoid silent loss on shutdown) + delegate to
@@ -101,6 +103,81 @@ eviction and because the failure signal is already preserved. Alternative
 considered: drop-NEW (reject the incoming trace) — rejected because it
 lets stale never-closing traces hog the buffer indefinitely, the opposite
 of the pathology the bound exists to contain.
+
+**Late arrivals — spans that end after their own root (`B-164(b)`).** Root
+close is the materialization point: the keep decision is published, the
+bucket and the keep flag are popped, and nothing will ever pop them again.
+A span of that trace can still arrive afterwards, and production really does
+produce them — ``harness_cp.workflow_driver._run_fanout_to_completion``
+abandons its ``ThreadPoolExecutor`` with ``shutdown(wait=False)`` on the
+§25.11 barrier deadline (or any branch failure), so an orphaned thread keeps
+running with the root's context copied by ``asyncio.to_thread`` and closes
+its child span after the root's ``with`` block has unwound. Witnessed by
+execution at ``harness-runtime/tests/test_b164b_fanout_orphaned_child_span_repro.py``.
+
+Buffering such a span was the defect: ``setdefault`` re-created a bucket that
+no root close would ever detach, so the span was stranded until
+``force_flush`` — and, being the OLDEST entry, it was the FIRST evicted under
+the ``max_buffered_traces`` ceiling, i.e. a permanent loss rather than a
+delay. It is now **forwarded immediately and never buffered**. Keep-all is
+the posture this processor already takes everywhere a tail decision is
+unavailable to it (``force_flush`` drains keep-all "to avoid silent loss");
+a late arrival is exactly that case, one span at a time.
+
+Recognising a late arrival needs a memory of which traces have materialized,
+and that memory must be bounded — an unbounded set would be a worse leak than
+the one being closed. The orphan can arrive in TWO orderings, and out-of-family
+review produced a reproduction for each in turn, so the retention rule is the
+composition of two:
+
+1. **Live-pinned — the child was already OPEN when its root closed.** Spans are
+   counted per trace at ``on_start`` and released at ``on_end``; while that
+   count is non-zero the trace is retained unconditionally. Exact, with no
+   window to age out of. The first revision instead used a fixed FIFO window of
+   1,024 root closes, and review reproduced its boundary exactly: 1,023
+   intervening roots forwarded the still-open child, 1,024 aged it out onto the
+   buffer path where the ceiling evicted it — the repair reinstating its own
+   defect.
+2. **History-retained — the child had not STARTED yet when its root closed.**
+   The abandoned worker holds a copied context, so it can open its span after
+   the root has gone. At that instant the trace has no live spans at all, so
+   rule 1 has nothing to pin and only a memory of the past decision can catch
+   it. The second revision deleted the entry the moment liveness hit zero, and
+   review reproduced that too (``buffered_trace_count == 1``, child never
+   forwarded).
+
+So the entry is kept while live AND for a bounded history afterwards
+(``_LIVENESS_TRACKING_CEILING`` materializations), and FIFO eviction SKIPS
+live-pinned entries so the bounded rule can never expire the exact one.
+
+**The residual, stated exactly rather than optimistically** (the first revision
+claimed "a delay, not a loss" and that was false): a child that has not yet
+started when more than ``_LIVENESS_TRACKING_CEILING`` unrelated traces
+materialize after its root is no longer recognised, and reverts to the pre-fix
+behaviour — with ``max_buffered_traces`` set, which production always sets,
+that is eviction and permanent loss, not a delay. This residual is inherent
+rather than a missing case: distinguishing "a span of an old trace is about to
+start" from "a new trace is starting" requires unbounded history.
+
+What the residual is NOT allowed to be is a LEAK. Past the history a late
+trigger looks like an ordinary pending trace and writes ``_keep[trace_id]``
+that no root close will ever pop, so repeating the ordering grew that dict
+without limit — found by review behind the accepted loss. ``_keep`` therefore
+carries the same ceiling. A bounded fidelity loss is this component's declared
+posture; unbounded memory growth inside a component whose purpose is bounded
+memory is not, and the distinction is what makes the residual acceptable.
+
+**A late TRIGGER cannot rescue its trace, and that is a decided bound, not
+an oversight.** If the late span is itself a §10.2 classification trigger,
+the trace's keep decision was already taken WITHOUT it and its siblings are
+already gone; retaining dropped spans on the chance a trigger arrives later
+would reintroduce exactly the unbounded memory the drop exists to avoid. So
+the trigger span itself is preserved (it is forwarded, immediately) and the
+buffered tree-*context* is accepted as lost — the SAME tradeoff already
+documented above for eviction, where "the failure *signal* survives …; only
+the buffered tree-*context* … is shed". What is NOT accepted is the leak:
+publishing ``_keep[trace_id]`` for an already-materialized trace left an
+entry nothing would ever pop, and that write is now suppressed.
 
 **Event-shaped §9.2 members (OD spec v1.38 §9.2.1 — `B-133`).** Three §9.2
 members are emitted as span **EVENTS** on a wrapper span rather than as
@@ -189,6 +266,27 @@ if TYPE_CHECKING:
 __all__ = [
     "TailKeepSpanProcessor",
 ]
+
+#: `B-164(b)` — how many materialized traces are remembered as HISTORY, for the ordering
+#: liveness cannot cover: an orphaned worker holding a copied context that has not yet
+#: opened its span when the root closes. At that instant the trace has no live spans, so
+#: only a memory of the past decision can recognise the child when it finally arrives, and
+#: a memory of the past is exactly the thing that has to be bounded.
+#:
+#: It is NOT the retention rule for a child that is ALREADY OPEN at root close — that one
+#: is live-pinned and exempt from eviction here, so this ceiling can never age out the case
+#: the first revision's fixed window got wrong. It is also the threshold at which `_keep`
+#: is swept for provably-stale flags. It does NOT cap `_open_spans` — see
+#: `_retain_open_span` for why capping that one produced a wrong answer rather than a
+#: smaller dict.
+#:
+#: **What is lost past it, stated exactly.** An aged-out trace reverts to the pre-fix
+#: behaviour, and that is NOT merely a delay: with `max_buffered_traces` set — which
+#: production always sets — the re-buffered span becomes the oldest bucket and is evicted
+#: outright, and a late trigger recreates the stale `_keep` entry. 4096 is chosen to put
+#: that far beyond the window it guards: an orphaned worker opens its span within one
+#: branch dispatch of being abandoned, not after four thousand unrelated traces complete.
+_LIVENESS_TRACKING_CEILING = 4096
 
 
 def _carries_always_sampled_event(
@@ -322,6 +420,34 @@ class TailKeepSpanProcessor(SpanProcessor):
         # Per-trace_id keep flag — True iff any span in the trace carried a
         # §10.2 classification trigger. OR-merged at on_end.
         self._keep: dict[int, bool] = {}
+        # `B-164(b)` — trace_ids whose keep decision has already been PUBLISHED at root
+        # close. Used as an ordered set (dict insertion order = FIFO, same idiom as
+        # `_buffer`). Read and written only under `_state_lock`, and — critically — tested
+        # in the SAME critical section that would otherwise buffer the span, so a concurrent
+        # root close cannot land between the test and the append.
+        self._materialized: dict[int, None] = {}
+        # `B-164(b)` round 2 (out-of-family Codex, P1) — per-trace count of spans that have
+        # STARTED and not yet ended. An entry is retained in `_materialized` exactly while
+        # this count is non-zero, because that is exactly the condition under which a late
+        # arrival is still possible: a span the processor has not yet seen at `on_end` has
+        # already been seen at `on_start`.
+        #
+        # The first attempt expired `_materialized` on a fixed FIFO window of unrelated
+        # root closes instead. Codex reproduced the boundary that makes that unsound — with
+        # the orphaned child still open, 1,023 intervening roots forwarded it but 1,024
+        # pushed it back onto the buffer path, where the `max_buffered_traces` ceiling
+        # evicted it outright and a late trigger recreated the `_keep` leak. Liveness is not
+        # a bigger window; it is the exact condition, so there is no boundary to cross.
+        self._open_spans: dict[int, int] = {}
+        # `B-164(b)` round 5 — when `_keep` passes this, it is swept for entries no root
+        # close can pop. Doubles when a sweep frees nothing, so a workload with genuinely
+        # more than `_LIVENESS_TRACKING_CEILING` pending trigger-bearing traces neither
+        # loses a valid decision nor pays a full rescan per trigger.
+        self._keep_sweep_threshold: int = _LIVENESS_TRACKING_CEILING
+        # `B-164(b)` round 6 — the effective ceiling on `_materialized`. Doubles when every
+        # entry is live-pinned (evicting one would strand a span whose trace is provably
+        # still open) and returns to the base once the burst drains.
+        self._materialized_ceiling: int = _LIVENESS_TRACKING_CEILING
         # OD spec v1.28 §9.3 operator-tunable bounded-buffer ceilings. None =
         # unbounded (v1.27 MVP behavior); the production materializer passes
         # the `CollectorConfig` ceilings so production is bounded by default.
@@ -356,8 +482,29 @@ class TailKeepSpanProcessor(SpanProcessor):
         span: Span,
         parent_context: Context | None = None,
     ) -> None:
-        """Forward to downstream; no buffering at start (decisions are at end)."""
-        self._downstream.on_start(span, parent_context)
+        """Count the span as live, then forward downstream (no buffering at start).
+
+        `B-164(b)` — the count is what lets `on_end` know whether a root-closed trace may
+        still receive a late arrival. Tracking is done HERE, before forwarding, because
+        this is the only point at which the processor learns a span exists before it ends;
+        the whole defect was about a span the processor could not otherwise anticipate.
+
+        `B-164(b)` round 6 (out-of-family Codex, P2) — if the downstream processor raises
+        from `on_start`, the SDK propagates before `Tracer.start_span` returns, so the span
+        never exists and no `on_end` will ever undo the increment. Repeated start failures
+        would leak one entry per trace and could wrongly pin materialization state, so the
+        increment is rolled back before the exception continues on its way.
+        """
+        # `Span.get_span_context()` is non-optional (unlike `ReadableSpan`'s, which is why
+        # the `on_end` caller still guards), so this needs no None check.
+        trace_id = span.get_span_context().trace_id
+        with self._state_lock:
+            self._retain_open_span(trace_id)
+        try:
+            self._downstream.on_start(span, parent_context)
+        except BaseException:
+            self._release_open_span(trace_id)
+            raise
 
     def on_end(self, span: ReadableSpan) -> None:
         with self._entry_lock:
@@ -368,6 +515,13 @@ class TailKeepSpanProcessor(SpanProcessor):
         try:
             self._on_end_inner(span)
         finally:
+            # `B-164(b)` — released AFTER `_on_end_inner`, never before: the late-arrival
+            # test inside it reads `_materialized`, and this span is precisely one of the
+            # live spans keeping that entry alive. Releasing first could discard the entry
+            # a concurrent sibling is about to consult.
+            ended_ctx = span.get_span_context()
+            if ended_ctx is not None:
+                self._release_open_span(ended_ctx.trace_id)
             with self._entry_lock:
                 self._active_entries.discard(entry_id)
             # Wake any flusher parked on the batch condition; the entry count it also
@@ -543,27 +697,45 @@ class TailKeepSpanProcessor(SpanProcessor):
         # critical section. Splitting them is precisely the losing interleaving: a child
         # could `setdefault` an empty bucket here and append to it after a concurrent
         # root-close `pop` had already detached it, losing the span entirely.
+        #
+        # `B-164(b)` — the late-arrival test lives INSIDE this critical section rather than
+        # ahead of it. Ahead of it, a root close landing between the test and the append
+        # would put the span back in the stranded state the test exists to prevent — the
+        # same interleaving `B-163` closed for the eviction/insert pair one line down.
         with self._state_lock:
-            if (
-                not is_root_close
-                and trace_id not in self._buffer
-                and self._max_buffered_traces is not None
-                and len(self._buffer) >= self._max_buffered_traces
-            ):
-                self._evict_oldest_trace()
-
-            bucket = self._buffer.setdefault(trace_id, [])
-            # OD spec v1.28 §9.3 max-spans-per-trace ceiling: drop overflow
-            # non-root spans (the root-close span always processes below so the
-            # trace materializes and frees its slot rather than leaking).
-            if (
-                not is_root_close
-                and self._max_spans_per_trace is not None
-                and len(bucket) >= self._max_spans_per_trace
-            ):
-                self._dropped_span_count += 1
+            late_arrival = trace_id in self._materialized
+            if late_arrival:
+                # The keep decision for this trace is already published and unrepeatable, so
+                # this span can neither join it nor be released by a future one. Forward it
+                # (keep-all — the posture used wherever a tail decision is unavailable)
+                # instead of re-creating a bucket nothing will ever pop. Registered in
+                # flight here, under the lock, for the same reason a detached batch is.
+                self._register_inflight()
             else:
-                bucket.append(span)
+                if (
+                    not is_root_close
+                    and trace_id not in self._buffer
+                    and self._max_buffered_traces is not None
+                    and len(self._buffer) >= self._max_buffered_traces
+                ):
+                    self._evict_oldest_trace()
+
+                bucket = self._buffer.setdefault(trace_id, [])
+                # OD spec v1.28 §9.3 max-spans-per-trace ceiling: drop overflow
+                # non-root spans (the root-close span always processes below so the
+                # trace materializes and frees its slot rather than leaking).
+                if (
+                    not is_root_close
+                    and self._max_spans_per_trace is not None
+                    and len(bucket) >= self._max_spans_per_trace
+                ):
+                    self._dropped_span_count += 1
+                else:
+                    bucket.append(span)
+
+        if late_arrival:
+            self._forward_detached([span])
+            return
 
         _trigger = is_classification_trigger(span, events=events)
 
@@ -634,12 +806,27 @@ class TailKeepSpanProcessor(SpanProcessor):
         holding it across `downstream.on_end` would serialize a slow exporter.
         """
         with self._state_lock:
-            if is_trigger:
+            # `B-164(b)` — do NOT publish a keep flag for a trace that has already
+            # materialized. The decision was taken without this trigger and cannot be
+            # retaken, so the entry would be one nothing ever pops. The trigger span itself
+            # is still preserved — it is forwarded by the always-sampled arm, or by the
+            # late-arrival path — so the §10.2 failure SIGNAL survives; only the buffered
+            # tree-context is accepted as lost, the same tradeoff eviction already makes.
+            if is_trigger and trace_id not in self._materialized:
                 self._keep[trace_id] = True
+                # `B-164(b)` round 4 (out-of-family Codex, P1) — the `_materialized` guard
+                # above suppresses the leak only while the trace is still remembered. Past
+                # the bounded history a late trigger looks like an ordinary pending trace
+                # and writes an entry no root close will ever pop, so REPEATING that
+                # ordering grew `_keep` without limit. A bounded fidelity loss is this
+                # component's accepted posture; unbounded memory growth is not.
+                if len(self._keep) > self._keep_sweep_threshold:
+                    self._sweep_stale_keep_flags()
             if not is_root_close:
                 return []
             buffered = self._buffer.pop(trace_id, [])
             keep = self._keep.pop(trace_id, False)
+            self._remember_materialized(trace_id)
             released = buffered if keep else []
             if released:
                 # Register the batch as in-flight WHILE still holding the lock that guards
@@ -647,8 +834,180 @@ class TailKeepSpanProcessor(SpanProcessor):
                 # flight" for a batch that has been detached but not yet forwarded. Tagged
                 # with this thread's entrant generation so a flush can tell whether the
                 # batch predates its cutoff.
-                self._inflight_batch_seqs.append(getattr(self._current_entry, "value", 0))
+                self._register_inflight()
         return released
+
+    def _register_inflight(self) -> None:
+        """Tag a batch about to be forwarded with this thread's entrant generation.
+
+        MUST be called holding `_state_lock` — that is what makes the registration and the
+        removal-from-`_buffer` (or, for a `B-164(b)` late arrival, the decision not to enter
+        it at all) a single critical section, so no `force_flush` can observe "buffer empty
+        AND nothing in flight" for a span that is on its way to `downstream`. Every
+        registration is paired with exactly one `_forward_detached` call, which clears it.
+        """
+        self._inflight_batch_seqs.append(getattr(self._current_entry, "value", 0))
+
+    def _remember_materialized(self, trace_id: int) -> None:
+        """Record that `trace_id` has published its keep decision (`B-164(b)`).
+
+        Called under `_state_lock` from the root-close materialization. The entry is
+        retained by TWO composed rules, because neither alone covers both orderings a
+        late arrival can take (out-of-family Codex, two successive P1 findings):
+
+        - **while the trace has live spans** — the orphaned child was ALREADY OPEN when
+          its root closed. Exact, unbounded in time, no window to age out of.
+        - **for a bounded history afterwards** — the orphaned worker had the root's
+          context copied but had NOT YET opened its span when the root closed, so there
+          was no liveness to pin anything. Only a memory of the past decision can catch
+          that one, and a memory of the past must be bounded.
+
+        Eviction is FIFO but SKIPS live-pinned entries, so the bounded half can never
+        expire the exact half. Entries older than the ceiling are almost never live, so
+        the scan below finds its victim on the first candidate in practice.
+
+        `B-164(b)` round 6 (out-of-family Codex, P2) — when NOTHING is evictable the
+        ceiling gives way instead of the guarantee. An earlier revision shed the oldest
+        entry anyway "because boundedness is the harder guarantee", but that deletes a
+        trace `_open_spans` PROVES is live, and its descendant is then stranded on the
+        very path this arm exists to close. Growing is safe here in a way it is not for
+        pure history: every retained entry is backed by a live span, so the size is bounded
+        by real concurrency rather than by traffic. Same resolution as
+        `_sweep_stale_keep_flags`, for the same reason.
+        """
+        self._materialized[trace_id] = None
+        self._prune_materialized_history()
+
+    def _prune_materialized_history(self) -> None:
+        """Trim `_materialized` to its ceiling without touching a live-pinned entry.
+
+        Called under `_state_lock`. Split out from `_remember_materialized` at round 7 so
+        `_compact_expanded_thresholds` can re-run it once a burst drains: raising the
+        ceiling is easy, and giving the headroom back is the part that has to be driven
+        from somewhere.
+        """
+        while len(self._materialized) > self._materialized_ceiling:
+            victim = next(
+                (
+                    candidate
+                    for candidate in self._materialized
+                    if candidate not in self._open_spans
+                ),
+                None,
+            )
+            if victim is None:
+                self._materialized_ceiling = len(self._materialized) * 2
+                return
+            del self._materialized[victim]
+        if len(self._materialized) <= _LIVENESS_TRACKING_CEILING:
+            self._materialized_ceiling = _LIVENESS_TRACKING_CEILING
+
+    def _compact_expanded_thresholds(self) -> None:
+        """Give back the headroom a live-pin burst borrowed (`B-164(b)` round 7).
+
+        Called under `_state_lock` from `_release_open_span`, and only while a threshold is
+        actually raised. Out-of-family review found that both expansions were one-way: a
+        transient spike of more than `_LIVENESS_TRACKING_CEILING` live pins doubled a
+        threshold, and once those spans ended nothing ever drove the structures back down —
+        `_remember_materialized` only trimmed to the EXPANDED ceiling, so its reset branch
+        was unreachable, and stale keep flags sat below the raised sweep threshold
+        indefinitely. The bound was real at every instant and still leaked across time.
+
+        Waiting for full quiescence would be too weak a trigger for a busy process, so the
+        test is that live pins have fallen back below the base ceiling — the burst is over,
+        even if traffic is not.
+        """
+        if len(self._open_spans) > _LIVENESS_TRACKING_CEILING:
+            return
+        if self._materialized_ceiling > _LIVENESS_TRACKING_CEILING:
+            self._materialized_ceiling = _LIVENESS_TRACKING_CEILING
+            self._prune_materialized_history()
+        if self._keep_sweep_threshold > _LIVENESS_TRACKING_CEILING:
+            # Recomputes the threshold itself, re-raising only if entries are still pinned.
+            self._sweep_stale_keep_flags()
+
+    def _sweep_stale_keep_flags(self) -> None:
+        """Drop keep flags that no root close can ever pop (`B-164(b)` round 5).
+
+        Called under `_state_lock`. Round 4 bounded `_keep` with a blind FIFO ceiling, and
+        out-of-family review showed that discards LEGITIMATE decisions: with more than
+        `_LIVENESS_TRACKING_CEILING` trigger-bearing traces genuinely pending root close —
+        possible whenever `max_buffered_traces` is larger or unbounded — the oldest valid
+        entry was evicted, its trace then materialized `keep=False`, and its root and
+        siblings were dropped SILENTLY, with `dropped_trace_count` still reading zero.
+
+        Staleness is decidable rather than guessed: an entry is stale exactly when its
+        trace is neither buffered nor live, since either would mean a root close is still
+        coming for it. Only those are removed, so a valid pending decision is never lost.
+        `_buffer` and `_open_spans` are both consulted because either alone is
+        insufficient — a trace whose only spans so far were always-sampled has a keep flag
+        and no bucket, and a trace older than the `_open_spans` ceiling has a bucket and no
+        liveness entry.
+
+        If a sweep frees nothing, every entry is backed by a real in-flight trace and the
+        dict is bounded by actual concurrency, so the threshold doubles instead of evicting
+        something valid. That also keeps the sweep amortized O(1) per write rather than
+        rescanning the whole dict on every trigger once the ceiling is passed.
+        """
+        for trace_id in [
+            candidate
+            for candidate in self._keep
+            if candidate not in self._buffer and candidate not in self._open_spans
+        ]:
+            del self._keep[trace_id]
+        self._keep_sweep_threshold = max(_LIVENESS_TRACKING_CEILING, len(self._keep) * 2)
+
+    def _retain_open_span(self, trace_id: int) -> None:
+        """Count one more started-and-not-yet-ended span for `trace_id` (`B-164(b)`).
+
+        Called under `_state_lock` from `on_start`.
+
+        **Deliberately NOT capped** (`B-164(b)` round 5). An earlier revision shed the
+        oldest entries past a ceiling, and that turned an accurate liveness signal into a
+        misleading one: `_sweep_stale_keep_flags` reads "absent from `_open_spans`" as
+        "no root close is coming", so a shed entry made a genuinely live trace look
+        finished and cost it its valid keep flag — silently. A wrong answer is worse here
+        than a larger dict.
+
+        Its size is not unbounded in any meaningful sense: it holds one small entry per
+        trace with a span that has started and not ended, so it tracks the application's
+        real live-span count. The only way it grows without limit is an application that
+        leaks spans, which already leaks strictly more than the two integers held here.
+        """
+        self._open_spans[trace_id] = self._open_spans.get(trace_id, 0) + 1
+
+    def _release_open_span(self, trace_id: int) -> None:
+        """Drop one live span for its trace (`B-164(b)`).
+
+        At zero the trace stops being live-PINNED in `_materialized`, but its entry is NOT
+        deleted — deleting it was the second `B-164(b)` P1: a worker holding a copied
+        context can open its span AFTER the root closed, at which point the trace has no
+        live spans at all and an eagerly-deleted entry would send that child straight back
+        onto the stranding path. The entry now ages out of the bounded history instead.
+
+        An absent count is ignored rather than treated as zero, so a span whose `on_start`
+        this processor never saw (a processor registered on the provider mid-flight) can
+        never drive the count negative.
+
+        Takes a `trace_id` rather than a span because `on_start`'s failure path also has to
+        undo an increment, and at that point there is no ended span to read it from.
+        """
+        with self._state_lock:
+            remaining = self._open_spans.get(trace_id)
+            if remaining is None:
+                return
+            if remaining > 1:
+                self._open_spans[trace_id] = remaining - 1
+                return
+            del self._open_spans[trace_id]
+            # `B-164(b)` round 7 — a burst that borrowed headroom has to give it back, and
+            # the last release of a live pin is the moment that becomes possible. Guarded
+            # so the ordinary path stays two integer comparisons.
+            if (
+                self._materialized_ceiling > _LIVENESS_TRACKING_CEILING
+                or self._keep_sweep_threshold > _LIVENESS_TRACKING_CEILING
+            ):
+                self._compact_expanded_thresholds()
 
     def _evict_oldest_trace(self) -> None:
         """Drop the oldest buffered trace (FIFO) under the max-traces ceiling.
