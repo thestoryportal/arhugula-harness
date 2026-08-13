@@ -64,9 +64,12 @@ from typing import Any
 
 import harness_od.sampling_mode as _sm
 import pytest
+from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
 from harness_od.composite_sampler import build_default_sampler
+from harness_od.observability_matrix import CellID
 from harness_od.sampling_mode import is_always_sampled
 from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
+from harness_runtime.lifecycle.tracer_provider import materialize_tracer_provider_stage
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -124,11 +127,31 @@ def _member_set(*, add: frozenset[str] = frozenset()) -> Generator[None]:
         _sm._ALWAYS_SAMPLED_LITERALS = original
 
 
+def _production_provider(config: Any, *, base_rate: float) -> TracerProvider:
+    """Compose the provider through the SHIPPED stage-4 composer.
+
+    Out-of-family Codex round 4: constructing `TracerProvider(...)` directly bypasses
+    `materialize_tracer_provider_stage`, so the result could not honestly be called a
+    real-production composition. This routes through the real composer — resource
+    attributes, mode resolution, provider construction — and uses only the `sampler`
+    override the composer itself documents as being *"for tests that need a deterministic
+    sampler"*. `test_the_sampler_override_is_faithful_to_the_shipped_binding` pins that the
+    override matches what the composer resolves on its own.
+    """
+    stage = materialize_tracer_provider_stage(
+        config,
+        register_globally=False,  # the runtime forbids a second global registration
+        sampler=build_default_sampler(base_rate=base_rate),
+    )
+    return stage.provider
+
+
 async def _run_the_real_workflow(*, base_rate: float) -> list[str]:
     """Drive the shipped `api.run` path; return the span names that were EXPORTED."""
     harness = _b72()
     exporter = InMemorySpanExporter()
-    provider = TracerProvider(sampler=build_default_sampler(base_rate=base_rate))
+    with tempfile.TemporaryDirectory() as cfg_tmp:
+        provider = _production_provider(harness._config(pathlib.Path(cfg_tmp)), base_rate=base_rate)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
     with pytest.MonkeyPatch.context() as mp:
@@ -164,6 +187,41 @@ def test_the_member_carries_a_floor_and_the_root_does_not() -> None:
     assert is_always_sampled(_ENVELOPE) is False, (
         f"`{_ENVELOPE}` entered the §9.2 set — that would deliver the floor to every "
         "in-workflow member by inheritance and close the production half of B-137"
+    )
+
+
+def test_the_sampler_override_is_faithful_to_the_shipped_binding() -> None:
+    """The bridge P1a's claim rests on — the override is not a different composition.
+
+    Every measurement here routes through the real `materialize_tracer_provider_stage` but
+    passes a deterministic `sampler`. That is only honest if the composer, left to itself,
+    binds a sampler of the *same shape*. It does: `tracer_provider.py:228-236` resolves the
+    per-cell rate from `PER_CELL_BASE_RATE_ENVELOPE` and calls the same
+    `build_default_sampler`. Asserted by comparing the composer's own sampler description
+    against a directly-built one at the cell's rate.
+
+    Note the cell: the B-72 harness config is `solo-developer x local-development`, whose
+    base rate is **1.0** — no starvation there. The starving cells are the production ones
+    (0.1 at team-binding, 0.2 at multi-tenant), and `base_rate=0.0` stands in for them
+    deterministically.
+    """
+    harness = _b72()
+    with tempfile.TemporaryDirectory() as tmp:
+        config = harness._config(pathlib.Path(tmp))
+
+    composed = materialize_tracer_provider_stage(config, register_globally=False)
+    cell = CellID(persona_tier=config.persona_tier, deployment_surface=config.deployment_surface)
+    expected = build_default_sampler(base_rate=PER_CELL_BASE_RATE_ENVELOPE[cell].default_rate)
+
+    assert composed.provider.sampler.get_description() == expected.get_description(), (
+        "the shipped composer no longer binds `build_default_sampler` at the per-cell rate "
+        "— the deterministic override used throughout this module would no longer be "
+        "faithful to production, and B-137 must be re-measured"
+    )
+
+    overridden = _production_provider(config, base_rate=0.0)
+    assert type(overridden.sampler) is type(composed.provider.sampler), (
+        "the override produced a different sampler TYPE than the shipped binding"
     )
 
 
@@ -300,10 +358,18 @@ def test_candidate_c1_strands_ordinary_children_in_the_tail_buffer() -> None:
       because making the ROOT always-sampled means the root itself takes the bypass arm and
       `return`s **before** the root-close flush-or-drop decision ever runs.
 
-    So under C1 every workflow trace becomes a never-resolving buffered trace, drained only
-    by `force_flush`. That is precisely the **B-136** pressure B-137's own close-out step
-    (5) predicts, and C1 maximises it rather than avoiding it — the opposite of the
-    "cheap one-liner" the earlier draft claimed. Step (3) must price this.
+    So under C1 a trace **that contains at least one ordinary non-member child** becomes a
+    never-resolving buffered trace, drained only by `force_flush` — the **B-136** pressure
+    B-137's own close-out step (5) predicts, which C1 aggravates rather than avoids.
+
+    **Scope, stated (out-of-family Codex round 4).** This is NOT "every workflow trace". The
+    B-72 venue used elsewhere in this module emits only `workflow.envelope` +
+    `hitl.gate.evaluated`, both of which bypass the buffer under C1 — its buffer stays at
+    zero. The ordinary child below is manufactured. The driver does open ordinary spans in
+    production (`validator.evaluate` at `workflow_driver.py:5600`, plus `tool.dispatch` /
+    `sandbox.*` / `secret.fetch` in the tool dispatcher), so the population is non-empty,
+    but **how often such a child occurs is unmeasured and is owed before step (3) picks
+    C1**.
     """
 
     def trial(*, envelope_in_set: bool, with_trigger: bool) -> tuple[list[str], int]:
