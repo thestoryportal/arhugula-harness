@@ -1,9 +1,13 @@
 # Spec: Control Plane — v1.119 (delta over v1.118)
 
 *Delta-only file. v1.118 and every earlier C-CP-01 … C-CP-29 body are preserved verbatim
-except at the single amendment site named below: C-CP-28 §25.2's `HITLEscalationBrief`
-gains a sixth-plus-one field, `escalation_instance_id: str | None = None`, and the
-operator-facing webhook `payload_body` gains three additive advisory keys. This is the
+except at the **three** carrier amendment sites named below — all additive,
+`None`-defaulted, and byte-identical when absent: (1) C-CP-28 §25.2's
+`HITLEscalationBrief` gains `escalation_instance_id` (§0.3, §25.2.Z) and the
+operator-facing webhook `payload_body` gains three additive advisory keys (§0.6);
+(2) C-CP-25 §25's `StepExecutionContext` gains the internal basis carrier (§0.4.1,
+§25.17); (3) C-CP-26 §26's per-branch pre-dispatch gate-owning resume state gains the
+persisted echo (§0.4.2, §26.9). This is the
 register row `B-71` spec leg, authorized by the design record at
 `.harness/council-b71-hitl-external-correlation-2026-08-12/DELIVERABLE.md` **v6**, whose
 five hard preconditions are all closed on executed, mutation-probed witnesses. No new
@@ -46,25 +50,33 @@ distinct per escalation instance; the token is folded **once**, inside
 `compose_hitl_action_id`, so the webhook `Idempotency-Key`, the CP audit `action_id` and
 the F2 ledger key remain **one identity family**.
 
-### §0.3 §25.2.Y (NEW) — canonical-reading amendment
+### §0.3 §25.2.Z (NEW) — canonical-reading amendment
 
-The v1.10 §25.2 `HITLEscalationBrief` dataclass body, as canonically supplemented at
-v1.18 §25.2.X, is canonically read at v1.119 as:
+**Base version.** This amendment composes over **v1.19 §25.2.Y.1**, the most recent
+canonical-reading amendment to this carrier — NOT v1.18. A first draft of this delta
+composed over v1.18 and thereby (a) re-declared `fail_detail_hash` as a required `str`,
+silently REGRESSING v1.19's widening, and (b) reused the already-occupied `§25.2.Y`
+label. Both are corrected here; the label is fresh (`§25.2.Z`) and the body below carries
+v1.19's field types forward verbatim. The carrier is a Pydantic `BaseModel`, per v1.19's
+own note.
+
+The v1.10 §25.2 `HITLEscalationBrief` body, as canonically supplemented at v1.18 §25.2.X.1
+and v1.19 §25.2.Y.1, is canonically read at v1.119 as:
 
 ```python
-@dataclass(frozen=True)
-class HITLEscalationBrief:
+class HITLEscalationBrief(BaseModel):
     parent_step_id: str
     parent_action_id: str
-    fail_class: ValidatorFailClass | None = None         # preserved verbatim from v1.18 §25.2.X
-    fail_detail_hash: str                                # preserved verbatim
+    fail_class: ValidatorFailClass | None = None         # preserved verbatim from v1.18 §25.2.X.1
+    fail_detail_hash: str | None = None                  # preserved verbatim from v1.19 §25.2.Y.1
     escalation_reason: str                               # preserved verbatim
     proposed_response_palette: frozenset[HITLResponse]   # preserved verbatim — see §0.6 (NOT suppressed)
-    escalation_instance_id: str | None = None            # NEW at v1.119 — see §0.4
+    escalation_instance_id: str | None = None            # NEW at v1.119 §25.2.Z — see §0.4
 ```
 
 The v1.10 file body is NOT edited — delta-only spec-chain preservation discipline per
-v1.13 §1.3 + v1.17 §6.5.5 + v1.18 §25.2.X verbatim-layer-integrity precedent.
+v1.13 §1.3 + v1.17 §6.5.5 + v1.18 §25.2.X + v1.19 §25.2.Y verbatim-layer-integrity
+precedent.
 
 **Why Optional-with-`None`-default and not a model split.** The two real populations are
 fan-out escalations (which have a branch-distinct instance) and linear/validator
@@ -79,11 +91,30 @@ linear path byte-identical.
 1. **Opaque, deterministic, one-way, ≥128 bits**, never truncated in the key or in any
    equality-bearing field. **Equality is the sole promised operation.** No consumer may
    parse, order, or derive anything from it.
-2. **Basis (B), hashed before composition.** The token derives from the run-scoped
-   internal identity of the gate-owning branch plus its `placement`, passed through a
-   one-way hash **before** it enters `compose_hitl_action_id`. The pre-hash material
-   (`{snapshot_run_id}:pre-dispatch-gate:{branch_index}`) contains a `run_id` **verbatim**
-   and MUST NOT reach any exported carrier — see §0.5.
+2. **Basis (B), hashed before composition — the digest is PINNED.** The token derives
+   from the run-scoped internal identity of the gate-owning branch plus its placement
+   POSITION, through this exact formula:
+
+   ```
+   escalation_instance_id =
+       sha256(
+           "hitl-escalation-instance:"          # domain separator, ASCII, literal
+           + pre_dispatch_gate_owning_identity  # f"{snapshot_run_id}:pre-dispatch-gate:{branch_index}"
+           + ":"
+           + placement.position.value           # the enum's string VALUE, not the member name
+       ).hexdigest()                            # lowercase hex, 64 chars, never truncated
+   ```
+
+   All inputs are UTF-8. **The formula is a contract surface, not implementation
+   discretion** — this is an idempotency-key family, and two otherwise-compliant
+   implementations that disagreed on algorithm, encoding, domain separator, or whether
+   `placement` means the position or the whole object would produce different tokens for
+   one unresolved run, breaking webhook dedup and the audit join. The domain separator
+   follows the workspace's existing seed convention (`compose_child_run_id_seed`'s
+   `"child-run:"` prefix). sha256/hex satisfies §0.4(1)'s ≥128 bits with margin.
+
+   The pre-hash material contains a `run_id` **verbatim** and MUST NOT reach any exported
+   carrier — see §0.5.
 3. **Mint authority is singular.** One authoritative *minter* (the runtime composer at
    the §14.8.8.1 step 1 construction site) and one authoritative *read* (a persisted
    value wins over any recompute). `ValidatorResult.escalation_brief` is a second
@@ -104,7 +135,9 @@ linear path byte-identical.
    harness-side suppression would convert unresolved-gate visibility from at-least-once
    to at-most-once — the liveness failure for an escalation channel.
 
-### §0.4.1 The basis-carrying context field (NEW — required, not left to discretion)
+### §0.4.1 §25.17 (NEW) — the basis-carrying context field on `StepExecutionContext`
+
+**Owning contract: C-CP-25** (`StepExecutionContext` is the WorkflowDriver carrier). This is a canonical-reading amendment in the same sense as §0.3: additive, `None`-defaulted, and the prior file bodies are not edited.
 
 The minter at the §14.8.8.1 step 1 construction site holds a `StepExecutionContext` and
 nothing run-identifying: `StepExecutionContext` declares **no** run identity. The basis at
@@ -126,7 +159,9 @@ carriage only*, MUST NOT be projected to any operator-facing key, and MUST be ha
 §0.4(2) before it reaches `compose_hitl_action_id`. Naming it here is what makes the
 one-way hash enforceable rather than aspirational.
 
-### §0.4.2 The persisted echo carrier (NEW — required by §0.4(5))
+### §0.4.2 §26.9 (NEW) — the persisted echo on the pre-dispatch gate-owning resume state
+
+**Owning contract: C-CP-26** (PauseResumeProtocol carriers). Canonical-reading amendment, additive and `None`-defaulted; the prior file bodies are not edited.
 
 §0.4(5) promises that a persisted value wins over recompute. That promise needs a
 carrier, and the driver currently records only per-branch metadata with no token field —
