@@ -1024,28 +1024,31 @@ def test_b164_a_post_cutoff_batch_does_not_consume_the_flush_budget() -> None:
         assert not th.is_alive(), "the late producer hung"
 
 
-def test_b164b_no_production_span_has_a_manually_managed_lifetime() -> None:
-    """**B-164(b) disposition** — the malformed-trace shape is structurally unreachable.
+def test_b164b_the_only_manual_lifetime_span_is_uncalled() -> None:
+    """**B-164(b) disposition** — the malformed-trace shape is unreachable, on a stated basis.
 
-    B-164(b) is the residual a lock cannot close: a child descheduled before it registers,
-    while a concurrent root materializes the trace. Reaching it requires a **root to end
-    before its own child**, and its close-out step (3) asked whether that is worth defending
-    against at all.
+    B-164(b) needs a **root to end before its own child**. Step (3) asked whether that is
+    worth defending against.
 
-    It is not, because it **cannot happen in this codebase** — and this test is what makes
-    that a maintained invariant rather than a one-time observation.
+    **A first version of this test asserted the wrong thing and passed vacuously.** It
+    claimed production held *zero* manual-lifetime spans, but filtered on `ast.Assign` only —
+    so it skipped `child: ChildSpanRef = tracer.start_span(...)`, an **annotated** assignment
+    at `operator_burden_eval_primitives.py:252`. The invariant was already false when
+    written, and out-of-family Codex caught it. The corrected basis is narrower and is
+    asserted here in two parts:
 
-    Every span-opening site under `harness-*/src/` uses `with tracer.start_as_current_span(...)`.
-    There is not a single manual-lifetime span (`span = tracer.start_span(...)` held across a
-    scope and ended later). With `with`-blocks, a child's block is lexically nested inside
-    its parent's, so the parent's `__exit__` — and therefore its `on_end` — cannot run first.
-    The interleaving needs a manually-managed span whose `end()` can be called out of order,
-    or one handed to another thread, and production has neither.
+    1. **Exactly one** `start_span` site exists in `src/` — every other span-opening site
+       uses `with tracer.start_as_current_span(...)`, whose lexical nesting makes a
+       parent-ends-first ordering impossible; and
+    2. that one site, `emit_eval_as_child_span`, has **no caller anywhere in `src/`** — its
+       own docstring says *"never invoked"*. It is the same landed-but-uncalled shape as
+       `B-162`.
 
-    If a manual-lifetime span is ever introduced, this reddens and B-164(b) must be
-    re-adjudicated on its merits rather than dismissed by an assumption that has quietly
-    expired. (The tests in this module DO use manual lifetimes — deliberately, to construct
-    the interleavings — which is exactly why the invariant is scoped to `src/`.)
+    So the shape is unreachable **because nothing calls the only code that could produce
+    it**, not because no such code exists. That is a weaker claim than the first draft made,
+    and it is the true one. If either part changes — a second manual-lifetime span appears,
+    or something calls this one — B-164(b) becomes live again and must be re-adjudicated on
+    its merits, which is what the failure messages below say.
     """
     manual_sites: list[str] = []
     for path in _REPO.glob("harness-*/src/**/*.py"):
@@ -1054,19 +1057,37 @@ def test_b164b_no_production_span_has_a_manually_managed_lifetime() -> None:
         except SyntaxError:  # pragma: no cover - a syntax error fails the suite anyway
             continue
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Assign):
-                continue
-            for sub in ast.walk(node.value):
-                if (
-                    isinstance(sub, ast.Call)
-                    and isinstance(sub.func, ast.Attribute)
-                    and sub.func.attr == "start_span"
-                ):
-                    manual_sites.append(f"{path.relative_to(_REPO)}:{node.lineno}")
+            # Match at the CALL level: an `ast.Assign` filter misses annotated assignments,
+            # walrus bindings and bare expressions. That mistake is what made the first
+            # version of this test vacuous.
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "start_span"
+            ):
+                manual_sites.append(f"{path.relative_to(_REPO)}:{node.lineno}")
 
-    assert manual_sites == [], (
-        f"production now holds span(s) with a manually managed lifetime: {manual_sites}. A "
-        "span that can be ended out of order — or handed to another thread — makes B-164(b)'s "
-        "root-ends-before-its-child interleaving REACHABLE, so that row can no longer be "
-        "dismissed as a malformed-trace shape and must be re-adjudicated."
+    assert manual_sites == ["harness-od/src/harness_od/operator_burden_eval_primitives.py:252"], (
+        f"the manual-lifetime span inventory changed: {manual_sites}. A span whose `end()` "
+        "can be called out of order — or which can be handed to another thread — makes "
+        "B-164(b)'s root-ends-before-its-child interleaving REACHABLE, so that row must be "
+        "re-adjudicated rather than left closed."
+    )
+
+    # ...and the one site that exists is dead code, which is what actually closes B-164(b).
+    callers = [
+        f"{path.relative_to(_REPO)}:{node.lineno}"
+        for path in _REPO.glob("harness-*/src/**/*.py")
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "emit_eval_as_child_span")
+            or (
+                isinstance(node.func, ast.Attribute) and node.func.attr == "emit_eval_as_child_span"
+            )
+        )
+    ]
+    assert callers == [], (
+        f"`emit_eval_as_child_span` now has caller(s) {callers} — the only manual-lifetime "
+        "span in production has become live, so B-164(b) is REACHABLE and must be reopened."
     )

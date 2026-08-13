@@ -8896,16 +8896,14 @@ items:
     reaches downstream -- CLOSED at PR #1332; (b) a child paused before it registers -- CLOSED at PR #1334
     as UNREACHABLE (production holds no manual-lifetime spans)'
   status: closed
-  summary: '(a) CLOSED at PR #1332 -- see close_out. (b) OPEN and is the whole of this row now. ORIGINAL
-    STATEMENT, retained as history: (a) force_flush did not wait for in-flight detached batches -- _publish_keep_and_maybe_detach
-    detaches under the lock and returns the spans so the caller forwards OUTSIDE it (deliberate: holding
-    the lock across downstream.on_end would serialize a slow exporter), but a concurrent force_flush then
-    saw an EMPTY buffer, delegated and returned True while those spans were still being forwarded. (b)
-    A CHILD PAUSED BEFORE REGISTERING CANNOT BE REGISTERED: if a child''s on_end is descheduled before
-    reaching the buffering critical section, a concurrent always-sampled root can materialize first; the
-    child re-creates the bucket after root close and is stranded or evicted. Moving the lock earlier NARROWS
-    but cannot close it. Reaching it requires a root to end before its own child (a malformed trace under
-    the nesting contract).'
+  summary: 'FULLY CLOSED. (a) CLOSED at PR #1332 -- force_flush now waits for work that entered the processor
+    but has not reached downstream (bounded drain-until-stable loop; see close_out for the nine windows
+    it took to converge). (b) CLOSED at PR #1334 as UNREACHABLE, on this basis: exactly ONE manual-lifetime
+    span exists in src/ (operator_burden_eval_primitives.py:252, an annotated assignment an earlier ast.Assign-only
+    scan missed) and it has NO CALLER -- the same landed-but-uncalled shape as B-162. Every other span-opening
+    site uses `with tracer.start_as_current_span(...)`, whose lexical nesting makes a parent-ends-first
+    ordering impossible. So the malformed shape is unreachable because nothing calls the only code that
+    could produce it. The witness pins BOTH parts and reopens the row automatically if either changes.'
   close_out: '(1) DECIDE WHETHER (a) IS IN SCOPE for a best-effort tail processor at all -- the module''s
     own ''Drop semantics (false-but-bounded)'' posture and s9.3''s implementer-discretion clause may already
     contemplate it; ground there first, exactly as B-136''s step (5) did. (2) IF IT IS, implement in-flight
@@ -9029,7 +9027,19 @@ items:
     on its merits rather than dismissed by an assumption that has quietly expired. Mutation-probed by
     introducing one such span -- the invariant fires. Scoped to src/ deliberately: the tests in that module
     DO use manual lifetimes, which is how the interleavings are constructed at all. WITH (a) CLOSED AT
-    #1332, B-164 IS NOW FULLY CLOSED.'
+    #1332, B-164 IS NOW FULLY CLOSED. CORRECTION 2026-08-13 (codex on PR #1334, P1) -- THE FIRST CLOSURE
+    BASIS WAS WRONG AND ITS TEST WAS VACUOUS. It claimed production held ZERO manual-lifetime spans, but
+    the scan filtered on ast.Assign and therefore skipped `child: ChildSpanRef = tracer.start_span(...)`,
+    an ANNOTATED assignment at operator_burden_eval_primitives.py:252. The asserted invariant was already
+    false when written. THE TRUE BASIS, now asserted in two parts: (1) EXACTLY ONE start_span site exists
+    in src/ -- every other span-opening site uses `with tracer.start_as_current_span(...)`, whose lexical
+    nesting makes a parent-ends-first ordering impossible; and (2) that one site, emit_eval_as_child_span,
+    has NO CALLER anywhere in src/ (its own docstring says ''never invoked'') -- the same landed-but-uncalled
+    shape as B-162. So the malformed ordering is unreachable BECAUSE NOTHING CALLS THE ONLY CODE THAT
+    COULD PRODUCE IT, not because no such code exists. That is a weaker claim than the first draft made
+    and it is the true one. The witness now matches at the CALL level (an ast.Assign filter misses annotated
+    assignments, walrus bindings and bare expressions) and pins BOTH parts, so B-164(b) reopens automatically
+    if a second manual-lifetime span appears or if anything calls this one.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency — **(a) `force_flush` returning before an
