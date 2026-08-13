@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `3dbcb2aa795f` |
+| `workspace_state_hash` | `22d60796d9e2` |
 | `last_refreshed` | 2026-08-13T00:00:00Z |
-| `git_head` | `fe5d8e0d` —  |
+| `git_head` | `a982d95f` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 116 |
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| 1328 | 2026-08-13 | **B-160 GROUNDED — it is a CLASS, not an instance**, which was its close-out's own required first step and it rescopes the row. **SIX span families across FOUR contracts**, in two shapes: **four unconditional** head=1.0 declarations absent from the §9.2 floor set (`hitl.webhook.deliver` + `hitl.webhook.attempt` at C-OD-32.3; `pause.captured` + `resume.attempted` at C-OD-30.3) and **two conditional** ones also untracked (`mcp.trust.evaluate` at `audit_required`, C-OD-31; the operator-burden span at `degrade`, C-OD-33). A first draft excluded the conditional pair claiming §9.2's conditional rows covered them — **codex falsified that**: those rows are `files.operation`, `memory.operation`, `validator.fail.*`, `subagent.span`, so the pair can still be DROPPED at base rate. **Not the B-153 category mistake** — the set's own members are span names of the same shape and no wildcard covers the absentees. `pause.captured` is arguably the worst case: operator-explicit pause is exactly what a floor exists for. **The B-137 dependency applies to all six** (ParentBased never consults a non-root child's name), so the repair is a conformance sweep gated on B-137, not a one-name edit — the close-out is expanded accordingly (19 → 23 in the set PLUS two conditional-resolver entries) and the completed grounding step marked DONE. Witness (4 tests) derives names from each namespace's `SPAN_SITE_*` constants so a renamed span site cannot leave it silently green, and is mutation-probed: adding the webhook names ALONE reds it, forcing re-grounding rather than a partial close. No production change — this arc grounds, it does not repair. Register 161: 30 registered / 128 closed. CI 18/18; main green. |
+| 1329 | 2026-08-13 | **B-137 steps (1)+(2) DONE; step (3) is the open architectural fork.** Re-grounded (`tracer_provider.py:236-240` still binds the per-cell ratio unconditionally, discards the mode — no mode-conditional sampler landed) and re-measured at the **real `api.run` venue**: the §9.2 floor is **ROOT-ONLY** — `workflow.envelope` is every trace's root, is not a §9.2 member, and `ParentBased` consults the composite sampler only for roots, so an in-envelope member is dropped despite `head=1.0`. Tail half executed (a head-dropped span never reaches `TailKeepSpanProcessor.on_end`). Step (3) priced by measured counterfactuals: **A′ is a PARTIAL name-only remedy** (leaves the event-carried B-133 population starved, orphans floor spans); **C1 evicts ordinary children under production bounds** (97/100 at cap 3) — data loss, not delay. Scope: 11/19 members span-backed; `skill.activation` + `resume.attempted` are roots for **top-level runs only** (nested sub-agent dispatch → children, starved). **NEW B-162:** C-OD-30.3's `pause.captured`/`resume.attempted` emitters have **no caller in `src/`**. 18-test witness; 16 codex rounds to convergence. |
+| 1328 | 2026-08-13 | **B-160 GROUNDED — it is a CLASS, not an instance**, which was its close-out's own required first step and it rescopes the row. **SIX span families across FOUR contracts**, in two shapes: **four unconditional** head=1.0 declarations absent from the §9.2 floor set (`hitl.webhook.deliver` + `hitl.webhook.attempt` at C-OD-32.3; `pause.captured` + `resume.attempted` at C-OD-30.3) and **two conditional** ones also untracked (`mcp.trust.evaluate` at `audit_required`, C-OD-31; the operator-burden span at `degrade`, C-OD-33). (detail on the B-160 register row.) |
 | 1327 | 2026-08-12 | B-161 CLOSED — the shutdown flake root-caused as a TIMING RACE on the shared flush budget (not state leakage): the ledger fsync gets only what is LEFT, so a tight 100ms total made `failures == ()` load-dependent. Deterministic repro via injected fsync slowness; fix widens the budget with the assertion left EXACT (not a retry marker). New mechanism witness, mutation-probed. No production change. CI 18/18. |
 | 1326 | 2026-08-12 | B-71 spec leg SCOPED, NOT LANDED — the non-landing IS the result. 4 out-of-family rounds at **draft PR #1325**; r3 caught a **regression it would have landed** (composed over v1.18 while v1.19 had widened `fail_detail_hash`). TRUE SHAPE: SIX artifacts incl. a Runtime spec delta. CI 18/18. |
 | 1324 | 2026-08-12 | B-71 precondition 4 CLOSED — ALL FIVE closed. Corrected a citation wrong since v2 (the run component is the run EXECUTING the fan-out → C-RT-35, not the child runner). Live-resume witness on the real stack. NEW **B-161**. CI 18/18. |
-| 1323 | 2026-08-12 | B-71 precondition 4 SHARPENED (not closed) — v5 closure claim RETRACTED on review. Codex 3r. CI 18/18. |
 
 ---
 
