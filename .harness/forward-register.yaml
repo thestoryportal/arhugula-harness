@@ -7466,7 +7466,7 @@ items:
     least one span-backed member is a ROOT, since skill.activation is emitted from workflow_driver.py:3206
     which PRECEDES the envelope open at :3305. The starvation is therefore SCOPED to members emitted inside
     the envelope, and any repricing of step (3) must be against that set, not all 19. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py
-    -- 14 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
+    -- 15 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
     by replacing ParentBased(root=X) with the bare X (both load-bearing tests go RED). STEP (3) REPRICED
     BY TWO MEASURED COUNTERFACTUALS AT THE SAME VENUE. (a) CANDIDATE A-PRIME -- NOT the row''s candidate
     A, which is mode-conditional ALWAYS_ON with the s10.3 ratio moved INTO the tail consumer and was NOT
@@ -8610,7 +8610,14 @@ items:
     be emitted BEFORE workflow.envelope opens (workflow_driver.py:3213-3225 vs :3305), so once B-162 wires
     it, membership ALONE delivers its floor -- it is the single name of the four for which disposition (a)
     is sufficient on its own. pause.captured would be an envelope child and is gated on B-137 as well as
-    on B-162.'
+    on B-162. SCOPED TO TOP-LEVEL RESUMES 2026-08-13 (codex round 7): the root claim above generalized LOCAL
+    LINE ORDERING inside one driver function into TRACE-ROOT status, and that is valid only for a TOP-LEVEL
+    resume. For a NESTED CHILD resume it is FALSE -- sub_agent_dispatch.py opens subagent.span and invokes
+    child_workflow_runner(..., pause_snapshot_input=...) INSIDE that block, and the child runner forwards
+    the snapshot to execute_workflow, so the child driver''s entry-point resume detection runs while subagent.span
+    is current. resume.attempted would then be a NON-ROOT child, ParentBased would never consult its membership,
+    and it stays gated on B-137 exactly like pause.captured. So ''membership alone is sufficient'' holds
+    for TOP-LEVEL resumes ONLY. Pinned by test_a_nested_child_resume_runs_under_subagent_span.'
   council: 'no at registration -- this is a conformance reconciliation between two OD surfaces,
     not a design fork. It becomes council-eligible only under disposition (b), which would
     relax an inviolable §9.3 floor.'
@@ -8684,7 +8691,14 @@ items:
     call site would be a ROOT, would consult the composite sampler directly, and WOULD receive its s9.2
     floor once added to the set. resume.attempted is therefore THE ONE NAME among B-160''s four for which
     membership alone is sufficient -- after wiring. So close-out step (3) above applies to pause.captured
-    ONLY, and B-160''s disposition (a) must treat the two separately.'
+    ONLY, and B-160''s disposition (a) must treat the two separately. SCOPED TO TOP-LEVEL RESUMES 2026-08-13
+    (codex round 7): the root claim above generalized LOCAL LINE ORDERING inside one driver function into
+    TRACE-ROOT status, and that is valid only for a TOP-LEVEL resume. For a NESTED CHILD resume it is FALSE
+    -- sub_agent_dispatch.py opens subagent.span and invokes child_workflow_runner(..., pause_snapshot_input=...)
+    INSIDE that block, and the child runner forwards the snapshot to execute_workflow, so the child driver''s
+    entry-point resume detection runs while subagent.span is current. resume.attempted would then be a NON-ROOT
+    child, ParentBased would never consult its membership, and it stays gated on B-137 exactly like pause.captured.
+    So ''membership alone is sufficient'' holds for TOP-LEVEL resumes ONLY. Pinned by test_a_nested_child_resume_runs_under_subagent_span.'
   council: no -- a wiring gap plus a contract-intent question, single-domain; it becomes design-phase
     back-flow only if the answer to step (1) is that the contract should be amended.
   heading: '### B-162 · `C-OD-30.3`''s two declared `head=1.0` spans (`pause.captured` / `resume.attempted`)

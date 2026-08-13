@@ -766,6 +766,11 @@ def test_the_two_uncalled_spans_land_on_opposite_sides_of_the_envelope() -> None
         f"open ({envelope_line}) — `resume.attempted` would become an envelope CHILD and "
         "B-162's topology split must be re-derived"
     )
+    # NOTE the scope this buys, and the scope it does NOT (out-of-family Codex round 7):
+    # preceding the envelope makes `resume.attempted` a root only for a TOP-LEVEL resume.
+    # A nested child resume runs under `subagent.span`, so it is a non-root child and stays
+    # gated on B-137 — pinned by
+    # `test_a_nested_child_resume_runs_under_subagent_span`.
 
     capture_calls = _driver_call_lines("capture_pause_snapshot", receiver="protocol")
     assert capture_calls, "no `protocol.capture_pause_snapshot` call found in the driver"
@@ -829,4 +834,69 @@ async def test_candidate_a_prime_admits_the_member_but_orphans_it() -> None:
     assert orphan_parent not in {s.context.span_id for s in exported.values()}, (
         "the member's parent WAS exported, so it is not orphaned — A′'s trace-integrity "
         "cost, which step (3) weighs against C1, no longer holds"
+    )
+
+
+def test_a_nested_child_resume_runs_under_subagent_span() -> None:
+    """**The scope limit on B-162's root claim** (out-of-family Codex round 7).
+
+    A prior round concluded that `resume.attempted` would be a **root** because the
+    entry-point `protocol.attempt_resume` call precedes the envelope's open. That reasoning
+    generalized *local line ordering inside one function* into *trace-root status*, and it
+    is only valid for a **top-level** resume.
+
+    For a **nested child** resume it is false: `sub_agent_dispatch.py` opens
+    `subagent.span` and invokes `child_workflow_runner(..., pause_snapshot_input=...)`
+    **inside** that block, and the child runner forwards the snapshot to `execute_workflow`
+    — so the child driver's entry-point resume detection runs while `subagent.span` is
+    current. `resume.attempted` would then be a **non-root child**, `ParentBased` would
+    never consult its membership, and it stays gated on **B-137** exactly like
+    `pause.captured`.
+
+    So B-162's *"membership alone is sufficient"* holds for top-level resumes ONLY. This
+    asserts the containment structurally, so a refactor that moves the dispatch out of the
+    span reddens rather than silently invalidating the scoping.
+    """
+    module = _REPO / "harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py"
+    tree = ast.parse(module.read_text())
+
+    subagent_with: ast.With | None = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.With):
+            continue
+        for item in node.items:
+            call = item.context_expr
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "start_as_current_span"
+                and call.args
+                and isinstance(call.args[0], ast.Constant)
+                and call.args[0].value == "subagent.span"
+            ):
+                subagent_with = node
+    assert subagent_with is not None, (
+        "`sub_agent_dispatch.py` no longer opens a `subagent.span` `with` block — "
+        "B-162's nested-resume scoping must be re-derived"
+    )
+
+    body_start = subagent_with.body[0].lineno
+    body_end = subagent_with.end_lineno or body_start
+    dispatch_calls = [
+        node.lineno
+        for node in ast.walk(subagent_with)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "child_workflow_runner"
+        and any(kw.arg == "pause_snapshot_input" for kw in node.keywords)
+    ]
+    assert dispatch_calls, (
+        "no `child_workflow_runner(..., pause_snapshot_input=...)` call was found inside "
+        "the `subagent.span` block — if the nested resume moved out of the span, "
+        "`resume.attempted` may now be a root there too and B-162 must be re-scoped"
+    )
+    assert all(body_start <= line <= body_end for line in dispatch_calls), (
+        f"the nested-resume dispatch ({dispatch_calls}) is no longer lexically inside the "
+        f"`subagent.span` block (lines {body_start}-{body_end}) — re-derive B-162's "
+        "top-level-only scoping"
     )
