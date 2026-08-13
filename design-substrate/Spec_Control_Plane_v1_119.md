@@ -1,7 +1,7 @@
 # Spec: Control Plane — v1.119 (delta over v1.118)
 
 *Delta-only file. v1.118 and every earlier C-CP-01 … C-CP-29 body are preserved verbatim
-except at the **four** carrier amendment sites named below — all additive,
+except at the **five** carrier amendment sites named below — all additive,
 `None`-defaulted, and byte-identical when absent: (1) C-CP-28 §25.2's
 `HITLEscalationBrief` gains `escalation_instance_id` (§0.3, §25.2.Z) and the
 operator-facing webhook `payload_body` gains three additive advisory keys (§0.6);
@@ -10,7 +10,10 @@ operator-facing webhook `payload_body` gains three additive advisory keys (§0.6
 persisted echo (§0.4.2, §26.9); (4) C-CP-25 §25's `StepExecutionContext` gains the
 **echo read carrier** (§0.4.3, §25.18) — without it the §0.4.2 read order names a value no
 consumer can reach, and the persist-once contract is unsatisfiable rather than merely
-unimplemented. A Runtime-side delta is owed and is NOT zero (§0.13). This is the
+unimplemented; (5) C-CP-21's `PreDispatchUniformFallbackOnlyLocation` gains the **public
+correlation projection** (§0.4.4, §2.2.A) — the design record's own precondition, without
+which the correlation loop terminates in a struct no operator reads. A Runtime-side delta
+is owed and is NOT zero (§0.13). This is the
 register row `B-71` spec leg, authorized by the design record at
 `.harness/council-b71-hitl-external-correlation-2026-08-12/DELIVERABLE.md` **v6**, whose
 five hard preconditions are all closed on executed, mutation-probed witnesses. No new
@@ -118,11 +121,45 @@ linear path byte-identical.
 
    The pre-hash material contains a `run_id` **verbatim** and MUST NOT reach any exported
    carrier — see §0.5.
+
+2-bis. **The token-PRESENT composed key is PINNED too, for the same reason the digest is.**
+   §0.12 pins only the token-ABSENT result (byte-identical to the pre-arc two-argument
+   key). Leaving the present-case format open would let two otherwise-compliant
+   implementations append, prefix, or re-hash the same token and both pass every
+   distinctness test — and then a deployment change **while a gate is unresolved** would
+   emit a different webhook `Idempotency-Key` and F2 ledger key for the same escalation,
+   duplicating the effect the dedup exists to prevent. That is the identical argument
+   §0.4(2) makes for the digest, and it applies with equal force one layer out:
+
+   ```
+   compose_hitl_action_id(parent_action_id, placement_position, escalation_instance_id)
+     = f"hitl:{parent_action_id}:{placement_position.value}"                 # token absent
+     = f"hitl:{parent_action_id}:{placement_position.value}:{escalation_instance_id}"
+                                                                            # token present
+   ```
+
+   Appended as a **suffix**, separated by the same `":"` the existing shape uses, never
+   truncated, never re-hashed. The absent form is character-for-character the pre-arc key.
+   **This pins the OUTPUT, not the call shape** — the parameter list above is illustrative
+   of the inputs, and whether the token arrives as a third argument, a widened context, or
+   otherwise stays Runtime-owned implementation discretion per §0.13.
 3. **Mint authority is singular.** One authoritative *minter* (the runtime composer at
    the §14.8.8.1 step 1 construction site) and one authoritative *read* (a persisted
    value wins over any recompute). `ValidatorResult.escalation_brief` is a second
    constructor of the TYPE but never a minter of the FIELD; a non-`None` value arriving
    from it is **ignored-and-diagnosed** at the trust seam, never honoured.
+
+   **The trust seam has an address, and it is named here** because a normative rule with
+   no owning site is unimplementable by inspection. The seam is the point where a
+   validator-supplied `ValidatorResult.escalation_brief` is accepted into the escalation
+   path — today that brief is forwarded to the composer directly, so an operator-authored
+   validator could set the field and have it delivered. The rule is enforced by
+   **overwriting the field with the harness-minted value (or `None`) at that acceptance
+   point**, before the brief reaches any composer, key, or exported carrier. Ignoring
+   without overwriting is not sufficient: the value would still ride the payload. The
+   diagnosis half is subject to §0.7's advisory softening — the condition MUST be
+   surfaced through whatever diagnostic channel exists, and becomes a typed requirement
+   when that carrier's own leg lands.
 4. **Pre-dispatch availability by construction.** The basis fields are *inputs* to child
    run-id seeding, not outputs of dispatch, so the token exists before any child run —
    including under `PURE_PATTERN_NO_ENGINE`, where a child uuid is minted only at
@@ -178,6 +215,25 @@ unsatisfiable as written:
 | **Keying** | per branch entry; the existing `branch_index` within its containing snapshot is the key. No tree-wide index is introduced: the containing snapshot's own identity supplies tree-scoping, which is the same property the pre-dispatch internal identity already relies on |
 | **Serialization** | an opaque string; consumers may compare it for equality and nothing else (§0.4(1)) |
 | **Absence** | `None` means *not yet persisted* — the mint→persist window of §0.8 — and licenses the deterministic recompute, never a fresh mint |
+| **WRITER** | the **pause-signal / snapshot producer**, which copies the minted token from the brief into this field as it composes the per-branch entry. Naming the writer is not optional: without it the field is declared, never populated, and the echo is `None` forever — which is the §0.4.3 defect in mirror image, on the write side |
+
+**The write is what closes the loop, and it is stated because declaring a field is not
+the same as filling it.** The minter at §14.8.8.1 step 1 places the token on the
+`HITLEscalationBrief`; nothing in that step reaches the snapshot. If the producer does not
+copy it across, every resume finds `None`, takes the recompute arm, and the persist-once
+contract is again satisfied only by accident. Out-of-family review caught this as the
+write-side twin of the §0.4.3 read-side gap.
+
+**Backward compatibility with already-durable snapshots is a CONTRACT, not an
+implementation nicety.** This field lands on a row that already ships, and the per-branch
+entry participates in the snapshot hash. A naive addition makes `model_dump` emit
+`escalation_instance_id: null` for every pre-existing durable pre-dispatch pause, changing
+the recomputed hash and causing a legitimate snapshot to be **rejected as corrupt** on
+resume after upgrade. The field is therefore **dropped from the serialized form when
+`None`**, exactly as `_strip_default_fanout_resume_fields` already drops
+`hitl_gate_config_hash=None` from this same row for this same reason. That precedent is
+cited rather than re-derived: the workspace has already decided how this class of
+compatibility is handled, and a second mechanism would be a second authority.
 
 **Read order is normative:** a consumer that finds a non-`None` echo MUST use it and MUST
 NOT recompute; recompute is reachable only from `None`. §0.4.3 is what makes that order
@@ -229,6 +285,37 @@ token, which the delta exists to project. Conflating the two would either leak t
 were read as applying to §25.18). The bar applies in full to `pre_dispatch_escalation_basis`
 and does not apply to `pre_dispatch_escalation_instance_id`, whose value is by construction
 the output of §0.4(2)'s one-way hash.
+
+### §0.4.4 §2.2.A (NEW) — the token on the public pause-location projection
+
+**Owning contract: C-CP-21** (the pause-view projection surface, published at
+`Spec_Control_Plane_v1_112.md` §2.1/§2.2). Additive, `None`-defaulted, prior file bodies
+not edited.
+
+`PreDispatchUniformFallbackOnlyLocation` gains the **external token** as a read-only field.
+The design record makes this a settled requirement rather than a nicety, in one sentence:
+*"Without this the correlation loop terminates in a struct no operator reads."* An operator
+holding a webhook request whose `Idempotency-Key` is branch-distinct has, without this
+field, **no row in the pause view carrying the same value** — so the whole mechanism
+delivers distinguishable requests that cannot be matched to anything the operator can act
+on. An earlier draft of this leg deferred the entire pause-view half and thereby shipped
+exactly that dead end.
+
+| | |
+|---|---|
+| **Field** | `escalation_instance_id: str \| None = None`, on `PreDispatchUniformFallbackOnlyLocation` |
+| **Value** | the **post-hash** token, identical to the one delivered on the webhook and persisted at §26.9 — one value, three surfaces, never recomputed per-surface |
+| **Direction** | **read-only correlation, not addressing.** §0.7's one-way rule is unchanged and unqualified: no ingress surface accepts this token, and its presence on the projection does NOT make it a key |
+| **Constraint restated** | `Spec_Control_Plane_v1_112.md` §2.2 constraint 2 applies verbatim — the **internal** identity still never appears on this surface. Only the hashed token does |
+| **Absence** | `None` on every location that has no pre-dispatch gate-owning escalation; the projection is byte-identical to pre-arc there |
+
+**Why this is correlation and not the deferred addressing half.** §0.9 registers "the
+pause-view addressing half" as NOT absorbed, and that stays true: addressing means the
+operator can *resolve* a specific branch through the view, which requires the
+uniform-response target selector this delta does not build. Publishing a value the
+operator can **match** is strictly weaker and is the half the design record made a
+precondition. Keeping the two apart is what lets this leg close the correlation loop
+without opening the resolver arc.
 
 ### §0.5 The leak bar — extended to the tracing-export channel
 
@@ -409,12 +496,13 @@ composition is likewise byte-identical when the discriminator is absent, per the
 ### §0.13 The Runtime-side delta, owed and named
 
 This delta is **not** self-contained at the CP axis, and the accompanying Runtime spec
-delta is a hard co-requisite rather than a courtesy cross-reference. The two sites:
+delta is a hard co-requisite rather than a courtesy cross-reference. The three sites:
 
 | Runtime site | Today | Owed |
 |---|---|---|
 | §14.8.8.1 **step 1** — the `HITLEscalationBrief` construction site | constructs the brief without `escalation_instance_id`; it is the **minter** named at §0.4(3) | must populate the field per §0.4.3's three-arm read order, from the two `StepExecutionContext` carriers |
-| §14.8.8.1 **step 2** — `idempotency_key = compose_hitl_action_id(step_context.parent_action_id, placement.position)` | a **two-argument** call, workflow-scoped and branch-blind | must fold the token, so the webhook `Idempotency-Key`, the CP audit `action_id` and the F2 ledger key stay **one identity family** per §0.2 |
+| §14.8.8.1 **step 2** — `idempotency_key = compose_hitl_action_id(step_context.parent_action_id, placement.position)` | a **two-argument** call, workflow-scoped and branch-blind | must fold the token per §0.4(2-bis)'s pinned output, so the webhook `Idempotency-Key`, the CP audit `action_id` and the F2 ledger key stay **one identity family** per §0.2 |
+| `project_brief_to_payload` — the brief→wire adapter reached from **step 3** | an explicit field-by-field mapper over a fixed field set, receiving no branch context | must project §0.6's three `payload_body` keys; without this site nothing emits them and §0.6 is unimplementable at the only place the wire body is built |
 
 **Why the widening has to land inside `compose_hitl_action_id` and not beside it.** §0.2's
 one-identity-family promise is what makes the audit join work; composing a separate

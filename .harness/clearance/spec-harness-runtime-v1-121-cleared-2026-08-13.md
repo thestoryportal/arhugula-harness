@@ -9,16 +9,16 @@ back_reference:
   - ".harness/clearance/spec-harness-runtime-v1-120-cleared-2026-08-12.md (predecessor)"
   - "PR #1326 (the leg's TRUE shape recorded on main — this Runtime delta is item 2 of the six it enumerates)"
 co_requisite:
-  - ".harness/clearance/spec-control-plane-v1-119-cleared-2026-08-13.md (the token contract; this file owns only the two call sites)"
+  - ".harness/clearance/spec-control-plane-v1-119-cleared-2026-08-13.md (the token contract; this file owns only the call sites)"
 merge_commit: pending (this leg's PR merge; recorded at the PR)
 reviewer_chain:
   - out-of-family `just codex-review` at this leg's PR (to convergence)
 supersedes: spec-harness-runtime-v1-120-cleared-2026-08-12.md
 ---
 
-# Clearance — Spec_Harness_Runtime v1.121 (B-71 co-requisite: the escalation-token minter and the idempotency-key fold)
+# Clearance — Spec_Harness_Runtime v1.121 (B-71 co-requisite: the escalation-token minter, the idempotency-key fold, and the webhook payload projection)
 
-**Why this delta exists at all.** `B-71`'s defect is CP-observable but its two repair
+**Why this delta exists at all.** `B-71`'s defect is CP-observable but its repair
 sites are Runtime-owned. The CP leg's fourth out-of-family review round established that
 `Spec_Harness_Runtime_v1.md` §14.8.8.1 step 2 specifies the **two-argument**
 `compose_hitl_action_id(step_context.parent_action_id, placement.position)` — re-verified
@@ -26,7 +26,7 @@ against HEAD at this leg's grounding pass — so a CP delta that claimed no Runt
 was claiming zero by omission. Without this file, CP v1.119's carriers would ship with
 nothing writing to them.
 
-**What v1.121 changes — two canonical-reading amendments, no body edits.**
+**What v1.121 changes — THREE canonical-reading amendments, no body edits.**
 
 1. **§14.8.8.1 step 1** is the token's singular MINTER (CP v1.119 §0.4(3)). Canonically
    read as additionally populating `HITLEscalationBrief.escalation_instance_id` per CP
@@ -34,7 +34,18 @@ nothing writing to them.
 2. **§14.8.8.1 step 2** folds the token inside `compose_hitl_action_id` — at that one site,
    because CP §0.2 promises the webhook `Idempotency-Key`, the CP audit `action_id` and the
    F2 ledger key remain one identity family. A second key composed alongside would
-   reintroduce the §0.1 aliasing on whichever the F2 writer used.
+   reintroduce the §0.1 aliasing on whichever the F2 writer used. The token-PRESENT output
+   is pinned by CP §0.4(2-bis) as a `":"`-separated suffix, never truncated or re-hashed;
+   the OUTPUT is pinned, the call shape is not.
+3. **The webhook payload projection**, `project_brief_to_payload` (reached from step 3 via
+   `deliver_webhook_for_brief`). CP §0.6 requires three additive `payload_body` keys on a
+   fan-out escalation, and this adapter is an explicit field-by-field mapper that maps a
+   fixed field set and receives no branch context — so a delta restricted to steps 1 and 2
+   left NO unit owning their emission, and the CP requirement was unimplementable at the
+   only site that builds the wire body. Found by out-of-family review of this delta's
+   first draft. Canonically read as also projecting the three keys when their sources are
+   present, byte-identical when absent, with `branch_context` carrying the branch ordinal
+   as PROSE only under CP §0.5's single scoped carve-out.
 
 Both bodies are **PRESERVED VERBATIM**; the canonical reading rides in the change-note.
 That is this file's established shape for a consumer-cite amendment (the v1.34 §14.8.8.1
@@ -47,16 +58,18 @@ step-3 `deliver_webhook` → `deliver_webhook_for_brief` precedent).
   This is the file's own §14.8.8.10 CONTRACT-not-mechanism precedent, set at v1.106 after a
   draft prescribed a call shape that grounding falsified against the real call graph — and
   it is precisely the discipline `B-71`'s earlier attempts violated.
-- **No token contract.** Shape, digest formula, leak bar and read order are CP v1.119's;
+- **No token contract.** Shape, digest formula, composed-key output, leak bar and read
+  order are CP v1.119's;
   this file restates none of them and cannot drift from them by construction.
 
 **Not a design extension (X-AL-3).** ZERO new contract number, fail class, enum extension,
 configuration field, `HarnessContext` field, plan unit beyond the filed delta, CXA row or
 cross-axis edge. ZERO change to `HITLEscalationBrief`'s other six fields, to the 4-value
-HITL response palette, or to any §14.8.8.1 step other than 1 and 2. The two other live
+HITL response palette, or to any §14.8.8.1 step other than 1, 2 and the step-3 payload
+projection. The two other live
 `compose_hitl_action_id` mentions (the §14.8.2 step 4h substep 8b-HITL cite and the
 §14.8.8 helper construction-shape note) are narrative/suggestion surfaces, not call sites,
-and are preserved verbatim — named here so "two sites, not four" is checkable rather than
+and are preserved verbatim — named here so the call-site count is checkable rather than
 assumed.
 
 **Byte-identity is the seam's acceptance criterion.** With `escalation_instance_id` absent

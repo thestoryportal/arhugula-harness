@@ -36,12 +36,16 @@ attempts violated by prescribing wiring they had not executed.
 
 **Scope is auditable by construction.** §0.3 names the two live `compose_hitl_action_id`
 mentions that are NOT call sites (the §14.8.2 step 4h substep 8b-HITL cite and the §14.8.8
-helper construction-shape note), so "two sites, not four" can be checked rather than
-assumed.
+helper construction-shape note), so the call-site count can be checked rather than assumed:
+THREE sites are touched (step 1, step 2, the step-3 payload adapter) and these two are not
+among them.
 
-**The CP co-requisite is bidirectional.** U-CP-102 declares the carriers; U-RT-155 writes
-and folds. Neither is independently observable, so they land in one arc — recorded in both
-plan deltas so the fact survives whichever a future session reads first.
+**The CP relationship is ONE DAG edge plus a CO-LAND PIN.** U-CP-102 declares the carriers;
+U-RT-155 writes, folds and projects. A first draft declared the dependency in both
+directions — a two-node cycle with no valid topological level; out-of-family review caught
+it. The edge is U-RT-155 → U-CP-102, one way; the mutual need is a co-land pin outside the
+topological sort. Neither is independently observable, so they land in one arc — recorded in
+both plan deltas so the fact survives whichever a future session reads first.
 
 **Not a design extension (X-AL-3).** ZERO contract number, fail class, configuration field,
 `HarnessContext` field, CXA row or cross-axis edge minted; no landed unit body amended; no

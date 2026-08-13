@@ -38,9 +38,13 @@ reach is how a plan acquires a hidden coupling edge. It adds **no new dependency
 any landed unit** — every amendment is additive and `None`-defaulted, so no landed unit's
 acceptance is invalidated and none must re-run to remain true.
 
-**The Runtime co-requisite is bidirectional and is a plan-level fact.** U-CP-102 declares
-carriers; U-RT-155 writes and folds. Carriers with no minter stay `None` forever; a minter
-with no carriers has nothing to write. They land in one arc — recorded so a future session
+**The Runtime relationship is ONE DAG edge plus a CO-LAND PIN, not two edges.** A first
+draft declared the dependency in both directions — a two-node cycle with no valid
+topological level, contradicting the axis plans' acyclic scheduling invariant; out-of-family
+review caught it. The edge is U-RT-155 → U-CP-102 (the writer depends on the carriers); the
+mutual need is a co-land pin outside the topological sort, per the CP v2.40 → Runtime v2.51
+U-RT-145 precedent. Carriers with no minter stay `None` forever; a minter with no carriers
+has nothing to write. They land in one arc — recorded so a future session
 cannot schedule one alone and read a green suite as evidence the mechanism works.
 
 **Not a design extension (X-AL-3).** No contract number is minted (the spec leg mints

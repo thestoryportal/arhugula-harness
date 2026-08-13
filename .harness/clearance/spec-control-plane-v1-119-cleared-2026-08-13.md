@@ -29,8 +29,28 @@ operation. The widening lands **once**, inside `compose_hitl_action_id`, so the 
 family — which also closes the per-peer HITL audit-entry loss under the IS writer's
 key-only dedup (C-IS-07 §7.5) as an absorbed half.
 
-**What changed between PR #1325 and this clearance — the two gaps that made the earlier
-draft unlandable.** PR #1325 carried this text with three carrier amendments and was
+**What changed between PR #1325 and this clearance — the gaps that made the earlier
+draft unlandable.** Two were found by PR #1325's own round 4; five more by out-of-family
+review of THIS leg's first push. All seven are closed below.
+
+**Found by review of this leg (round 1), all absorbed:** the minted token had no declared
+WRITER, so the §26.9 echo would have stayed `None` forever and every resume would still
+have recomputed — the §0.4.3 read-side gap in mirror image; the new resume-state field
+would have broken **already-durable** snapshots by changing their recomputed hash on
+upgrade (closed by the drop-when-`None` contract, mirroring
+`_strip_default_fanout_resume_fields`'s existing treatment of `hitl_gate_config_hash`);
+the token-PRESENT composed-key format was unpinned while the digest was pinned, so two
+compliant implementations could disagree and a deployment change during an unresolved gate
+would emit a different key for one escalation (§0.4(2-bis) pins the output, not the call
+shape); the design record's own precondition — `PreDispatchUniformFallbackOnlyLocation`
+gains the external token, *"without this the correlation loop terminates in a struct no
+operator reads"* — had been deferred with the whole pause-view half (§0.4.4 restores it as
+read-only CORRELATION, keeping the deferred ADDRESSING half deferred); and §0.4(3)'s
+mint-authority rule named no owning site, so it is now enforced by **overwriting** the
+validator-supplied value at the acceptance point rather than merely ignoring it, since
+ignoring alone still ships the operator's value on the wire.
+
+**Found by PR #1325's round 4:** PR #1325 carried this text with three carrier amendments and was
 deliberately closed rather than merged, because its fourth review round found two defects
 that are structural rather than editorial. Both are closed here, and neither was closable
 by rewording:
@@ -41,8 +61,8 @@ by rewording:
    `StepExecutionContext` that knew only the pre-hash basis. The echo was written to a
    carrier the reader never consults, so **every** resume would have reached the recompute
    arm that §0.4(5) designates as the crash-fallback. §0.4.3 / `§25.18` adds the echo READ
-   carrier and states the read order as one three-arm rule over both fields; the amendment
-   count moves 3 → 4.
+   carrier and states the read order as one three-arm rule over both fields.
+   With §0.4.4 the amendment count moves 3 → **5**.
 2. **The Runtime spec was a zero-change claim by omission.** §0.11 listed OD / CXA / ADR /
    ADD / PRD as unchanged and simply did not mention Runtime, which reads as zero. It is
    not zero: `Spec_Harness_Runtime_v1.md` §14.8.8.1 step 2 specifies the **two-argument**

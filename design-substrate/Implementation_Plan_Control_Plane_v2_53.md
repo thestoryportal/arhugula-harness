@@ -35,8 +35,9 @@ minter is a declared dependency rather than a shared unit.
 |---|---|
 | **Unit** | U-CP-102 |
 | **Cluster** | C-CP-28 escalation-carrier cluster (the `HITLEscalationBrief` owner), with declared reach into C-CP-25 and C-CP-26 carriers per §0.3 |
-| **Spec authority** | `Spec_Control_Plane_v1_119.md` §0.3 / §0.4 / §0.4.1 / §0.4.2 / §0.4.3 / §0.5 / §0.6 / §0.7 / §0.12 |
-| **Depends on** | the landed C-CP-25 / C-CP-26 / C-CP-28 carriers; **U-RT-155** for the minter + fold (bidirectional co-requisite — see §0.4) |
+| **Spec authority** | `Spec_Control_Plane_v1_119.md` §0.3 / §0.4 / §0.4.1 / §0.4.2 / §0.4.3 / §0.4.4 / §0.5 / §0.6 / §0.7 / §0.12 |
+| **Depends on** | the landed C-CP-21 / C-CP-25 / C-CP-26 / C-CP-28 carriers. **NO dependency on U-RT-155** — see the co-land pin at §0.4 |
+| **Co-land pin** | **U-RT-155** (Runtime plan v2.63). A PIN, not a DAG edge — see §0.4 |
 | **Level** | terminal within its cluster; introduces no new DAG node upstream of any landed unit |
 
 **Files (CP-owned surface only).** The four carrier declarations plus the webhook
@@ -89,11 +90,38 @@ this unit's files — they are U-RT-155's, per Runtime spec v1.121.
     path the field is `None`, the three keys are absent, and the wire body, ledger key and
     audit `action_id` are byte-identical to pre-arc. Witnessed by comparison against a
     pre-arc fixture, not by asserting the absence of a key.
+11. **The minted token is WRITTEN to the echo** (spec §0.4.2 WRITER row): the
+    pause-signal / snapshot producer copies the token from the brief into the per-branch
+    entry. Witnessed end-to-end — escalate, then read the snapshot and assert the echo
+    equals the delivered token. **Without this criterion the field is declared and never
+    populated**, every resume takes the recompute arm, and criterion 4's echo arm is
+    unreachable in production even though its unit test passes.
+12. **Legacy durable snapshots still resume after upgrade** (spec §0.4.2 compatibility
+    clause): the field is DROPPED from the serialized form when `None`, mirroring
+    `_strip_default_fanout_resume_fields`'s existing treatment of `hitl_gate_config_hash`.
+    Witnessed against a snapshot captured **before** the field existed: it must resume, and
+    its recomputed hash must be unchanged. Asserting only that new snapshots round-trip
+    would miss this entirely — the failure is that a legitimate pre-upgrade snapshot is
+    rejected as corrupt.
+13. **The public projection carries the token** (spec §0.4.4 / `§2.2.A`):
+    `PreDispatchUniformFallbackOnlyLocation` exposes `escalation_instance_id` read-only,
+    equal to the value delivered on the webhook and persisted at §26.9 — one value, three
+    surfaces. Witnessed by asserting all three agree for one escalation, which is the
+    property that makes the correlation loop closeable at all. `v1.112` §2.2 constraint 2
+    still holds: the internal identity never appears here.
+14. **The validator trust seam overwrites, not merely ignores** (spec §0.4(3)): a
+    validator-supplied `ValidatorResult.escalation_brief` carrying a non-`None`
+    `escalation_instance_id` has that value replaced with the harness-minted value (or
+    `None`) at the acceptance point, before the brief reaches any composer, key or exported
+    carrier. Witnessed with a hostile value: it must appear in **no** payload, key or span.
+    Ignoring without overwriting still ships the operator's value on the wire.
 
-**Mutation-probe obligations (Workflow v1.19 PD-9).** Criteria 4, 6, 7 and 10 each carry a
-`# mutation-probe:` annotation: invert the read order, perturb the digest formula by one
-byte of the domain separator, project the un-hashed identity onto `branch_context`, and
-emit the field on the linear path — each must redden its own witness and no other.
+**Mutation-probe obligations (Workflow v1.19 PD-9).** Criteria 4, 6, 7, 10, 11, 12 and 14
+each carry a `# mutation-probe:` annotation: invert the read order; perturb the digest
+formula by one byte of the domain separator; project the un-hashed identity onto
+`branch_context`; emit the field on the linear path; drop the minter→snapshot write; emit
+the field when `None` instead of dropping it; and honour the validator-supplied value —
+each must redden its own witness and no other.
 
 ### §0.3 Cross-carrier reach, declared rather than implied
 
@@ -103,14 +131,30 @@ one is how a plan acquires a hidden coupling edge. It introduces **no new depend
 into any landed unit** — the amendments are additive and `None`-defaulted, so no landed
 unit's acceptance is invalidated and no landed unit must re-run to remain true.
 
-### §0.4 The Runtime co-requisite is bidirectional
+### §0.4 The Runtime relationship — a CO-LAND PIN, not a mutual dependency
 
-U-CP-102 declares the carriers; **U-RT-155** mints into them and folds the token into
-`compose_hitl_action_id`. Neither is independently observable: carriers with no minter are
-`None` forever, and a minter with no carriers has nothing to write. They are **co-requisite
-in both directions** and must land in one arc. This is recorded as a plan-level fact so a
-future session does not schedule one without the other and conclude from a green suite
-that the mechanism works.
+U-CP-102 declares the carriers; **U-RT-155** mints into them, folds the token into
+`compose_hitl_action_id`, and projects the webhook keys. Neither is independently
+observable: carriers with no minter are `None` forever, and a minter with no carriers has
+nothing to write.
+
+**That mutual need is expressed as a co-land PIN, and deliberately not as a pair of DAG
+dependencies.** A first draft of this delta declared U-CP-102 → U-RT-155 *and*
+U-RT-155 → U-CP-102, which is a two-node **cycle** with no valid topological level and
+contradicts the acyclic scheduling invariant the axis plans hold (`harness-cp/CLAUDE.md`
+§1.1). Out-of-family review caught it. The correct shape is the one the workspace already
+uses for same-arc requirements — a **one-way carrier dependency plus a co-land pin**, the
+precedent CP plan v2.40 set with its "witness (d) co-land pin at Runtime plan v2.51
+U-RT-145":
+
+- **DAG edge:** U-RT-155 depends on U-CP-102 (the writer depends on the carriers). One
+  direction only, so the graph stays acyclic and U-CP-102 keeps a valid level.
+- **Co-land pin:** U-CP-102 MUST NOT be closed in an arc that does not also land
+  U-RT-155. This is a *scheduling* constraint, not a dependency — it does not participate
+  in the topological sort.
+
+Recorded as a plan-level fact so a future session cannot land one alone and read a green
+carrier suite as evidence the mechanism works.
 
 ### §0.5 What this delta is NOT
 

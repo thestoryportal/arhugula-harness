@@ -16,9 +16,10 @@ edge is minted.*
 
 `B-71`'s defect is CP-observable (two peer fan-out branches produce byte-identical
 operator-facing escalations, and the shared composed key drops the second peer's HITL
-audit entry under C-IS-07 §7.5 dedup), but **both sites that must change are
-Runtime-owned**: the escalation brief is constructed at §14.8.8.1 step 1, and the
-idempotency key is composed at step 2. An earlier draft of the CP leg carried no Runtime
+audit entry under C-IS-07 §7.5 dedup), but **every site that must change is
+Runtime-owned**: the escalation brief is constructed at §14.8.8.1 step 1, the idempotency
+key is composed at step 2, and the wire body is built by the `project_brief_to_payload`
+adapter reached from step 3. An earlier draft of the CP leg carried no Runtime
 delta at all, which out-of-family review identified as a zero-change claim by omission —
 the CP carriers would have shipped with nothing writing to them.
 
@@ -28,8 +29,9 @@ the CP carriers would have shipped with nothing writing to them.
 |---|---|
 | **Unit** | U-RT-155 |
 | **Cluster** | the §14.8.8 durable-async HITL composer cluster (the §14.8.8.1 owner) |
-| **Spec authority** | `Spec_Harness_Runtime_v1.md` v1.121 change-note sites 1 and 2; token contract at `Spec_Control_Plane_v1_119.md` §0.2 / §0.4 / §0.4.3 / §0.5 / §0.12 |
-| **Depends on** | **U-CP-102** for the four carriers (bidirectional co-requisite — see §0.4) |
+| **Spec authority** | `Spec_Harness_Runtime_v1.md` v1.121 change-note sites 1, 2 and 3; token contract at `Spec_Control_Plane_v1_119.md` §0.2 / §0.4 / §0.4(2-bis) / §0.4.3 / §0.5 / §0.6 / §0.12 |
+| **Depends on** | **U-CP-102** for the five carriers — a ONE-WAY edge (the writer depends on the carriers), so the graph stays acyclic |
+| **Co-land pin** | **U-CP-102** (CP plan v2.53). A PIN, not a second DAG edge — see §0.4 |
 | **Level** | terminal within its cluster; introduces no new DAG node upstream of any landed unit |
 
 **Acceptance criteria.**
@@ -61,11 +63,30 @@ the CP carriers would have shipped with nothing writing to them.
 7. Signature shape is **implementation discretion** and is NOT asserted by any criterion —
    whether the token arrives as a third parameter, a widened context argument, or otherwise
    is settled by execution at this unit, per the §14.8.8.10 CONTRACT-not-mechanism precedent.
+8. **The token-PRESENT composed key matches the pinned output** (CP §0.4(2-bis)): the token
+   is appended as a `":"`-separated suffix to the existing two-argument shape, never
+   truncated and never re-hashed. Witnessed by a known-input → known-output vector, so an
+   implementation that prefixed or re-hashed reddens. Criterion 4 pins the absent case; this
+   pins the present case, and without it two compliant implementations could disagree and a
+   deployment change during an unresolved gate would emit a different key for one escalation.
+9. **The three `payload_body` keys are projected** (spec v1.121 site 3; CP §0.6):
+   `project_brief_to_payload` emits `branch_context`, `resolvability` and
+   `resolvability_note` when their source values are present. Witnessed on a real fan-out
+   escalation through the adapter, **not** by asserting the brief carries them — the adapter
+   is an explicit field-by-field mapper, so a field present on the brief and absent from the
+   mapper silently never reaches the wire, which is precisely the gap out-of-family review
+   found in this delta's first draft.
+10. **The adapter is byte-identical when the keys are absent** (CP §0.12): on the
+    linear/validator path the wire body matches a pre-arc fixture exactly.
+11. **`branch_context` carries the ordinal as PROSE only** (CP §0.5's single scoped
+    carve-out): a negative witness asserts the ordinal appears as no typed or parseable
+    field, on no other key, and on no exported span attribute.
 
-**Mutation-probe obligations (Workflow v1.19 PD-9).** Criteria 3, 4 and 5 each carry a
-`# mutation-probe:` annotation: compose the token as a second key beside the existing one,
-emit the token on the linear path, and blind the fold to the token — each must redden its
-own witness and no other.
+**Mutation-probe obligations (Workflow v1.19 PD-9).** Criteria 3, 4, 5, 8, 9 and 11 each
+carry a `# mutation-probe:` annotation: compose the token as a second key beside the
+existing one; emit the token on the linear path; blind the fold to the token; prefix rather
+than suffix the token; drop one of the three payload keys from the adapter; and emit the
+ordinal as a typed field — each must redden its own witness and no other.
 
 ### §0.3 Sites NOT touched, named so the scope is auditable
 
@@ -73,14 +94,28 @@ The two other live `compose_hitl_action_id` mentions — the §14.8.2 step 4h su
 cite and the §14.8.8 helper construction-shape note — are PRESERVED VERBATIM as the
 historical two-argument shape and are canonically read through the v1.121 delta. They are
 narrative/suggestion surfaces, not call sites, so no criterion asserts against them; naming
-them here is what makes "two sites, not four" checkable rather than assumed.
+them here is what makes the call-site count checkable rather than assumed: THREE sites are
+touched (step 1, step 2, and the step-3 payload adapter), and these two mentions are not
+among them.
 
-### §0.4 The CP co-requisite is bidirectional
+### §0.4 The CP relationship — one DAG edge plus a co-land pin
 
-U-CP-102 declares the carriers; U-RT-155 writes and folds. Neither is independently
-observable — carriers with no minter stay `None` forever, and a minter with no carriers has
-nothing to write — so they land in one arc. Recorded here as well as in CP plan v2.53 §0.4
-so the fact survives whichever plan a future session reads first.
+U-CP-102 declares the carriers; U-RT-155 writes, folds and projects. Neither is
+independently observable — carriers with no minter stay `None` forever, and a minter with
+no carriers has nothing to write — so they land in one arc.
+
+**Expressed as ONE edge plus a pin, not as two edges.** A first draft declared the
+dependency in both directions, which is a two-node cycle with no valid topological level
+and contradicts the axis plans' acyclic scheduling invariant; out-of-family review caught
+it. The shape used instead is the workspace's established one for same-arc requirements
+(the CP plan v2.40 → Runtime plan v2.51 U-RT-145 co-land-pin precedent):
+
+- **DAG edge:** U-RT-155 → U-CP-102, one way. The writer depends on the carriers, which is
+  the true direction; the graph stays acyclic.
+- **Co-land pin:** neither unit is closed in an arc that does not land the other. A
+  scheduling constraint, outside the topological sort.
+
+Recorded in BOTH plan deltas so the fact survives whichever a future session reads first.
 
 ### §0.5 What this delta is NOT
 
