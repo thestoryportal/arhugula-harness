@@ -1,9 +1,32 @@
 # B-71 design record — branch-distinct EXTERNAL correlation identity for HITL escalations
 
-**Version:** v4 (2026-08-12) · **Status:** DESIGN RECORD — spec leg NOT YET
-authorizable; preconditions **1 + 2 + 3 + 5 CLOSED on executed evidence**, **4 BOUNDED —
+**Version:** v5 (2026-08-12) · **Status:** DESIGN RECORD — spec leg NOT YET
+authorizable; preconditions **1 + 2 + 3 + 5 CLOSED**, **4 SHARPENED but still BOUNDED —
 the sole remaining gate** · **Arc:** council (CP layer) per
 `.harness/council/council-workflow.harness-aware.yaml` v1
+
+## Change-note (v4 → v5)
+
+**Sharpens §5 precondition 4; does NOT close it.** A first draft of this version claimed
+the closure. Out-of-family Codex falsified that on two independent grounds, both correct,
+and the claim is retracted rather than defended — the discipline this whole record exists
+to enforce, applied to itself for the fourth time.
+
+What v5 *does* deliver:
+
+1. **A real witness for the runner's selection** —
+   `harness-runtime/tests/test_b71_child_resume_reuses_the_snapshot_run_id.py` (4 tests,
+   mutation-probed). It converts part of a link carried as CITED since v2, and it covers
+   a branch **no existing test took**: every other child-resume witness passes
+   `pause_snapshot_input=None`, the CRASH shape.
+2. **A corrected, two-mode window boundary.** The v5 first draft put the boundary at
+   "the driver captures the pause snapshot". That is **wrong at the default
+   configuration**: `PauseResumeProtocolConfig.durable` defaults to `False`, where
+   capture yields an *in-memory* snapshot on `RunResult.pause_snapshot` and only the
+   caller's later persistence makes it recoverable.
+
+**What still blocks the gate** is stated at §4-quinquies.4. **No spec text, no plan
+delta, no production-code change.**
 
 ## Change-note (v3 → v4)
 
@@ -21,7 +44,7 @@ becomes a span attribute whether or not anyone adds a dedicated one. (The defaul
 `hitl.invocation.audit_ledger_entry_id` is NOT a carrier here — unreachable on the
 escalation path; see §4-quater.1.)
 
-**Precondition 4 is now the sole remaining gate.**
+**Precondition 4 remains the sole remaining gate** — SHARPENED at v5 but NOT closed (§4-quinquies.4).
 
 ## Change-note (v2 → v3)
 
@@ -190,6 +213,84 @@ boundary that the ingress will not honor. Live today, independent of B-71.
   precedent); the webhook wire body is byte-identical because
   `project_brief_to_payload` (`webhook_brief_adapter.py:47`) is an explicit
   field-by-field mapper, so an unset Optional adds no key.
+
+## 4-quinquies. PRECONDITION 4, SHARPENED — NOT RESOLVED (v5) — the window, corrected
+
+### 4-quinquies.1 The link the scope rested on, now executed
+
+Since v2 this record has carried one fact as **CITED**: that a resume reuses the paused
+child's ORIGINAL `run_id` rather than re-deriving it
+(`child_workflow_runner.py:230-234`). The whole reach of the window follows from it —
+reuse means basis (B) reproduces its token on the ordinary resume path; re-derivation
+would mean the token rotates on *every* resume and the window is unbounded, which is
+what the record says candidate (C) would have suffered.
+
+**No test covered it.** Every existing child-resume witness passes
+`pause_snapshot_input=None` — the CRASH-resume shape, which takes the *other* branch of
+the very selection at issue. The new witness runs the pause-resume branch through the
+real `compose_child_workflow_runner`, capturing the `child_run_id` the runner hands to
+`execute_workflow`, and exercises all three arms of the production expression: snapshot →
+`snapshot.run_id`; no snapshot + seed → the deterministic seed; neither → a fresh uuid.
+It also pins the **ordering** — the seed is supplied alongside the snapshot and must
+lose, because the reverse ordering would silently re-key a resumed child onto the
+first-dispatch identity.
+
+### 4-quinquies.2 The window, corrected — it is MODE-DEPENDENT
+
+The v5 first draft said the window runs *"until the driver captures the pause snapshot"*.
+That is wrong at the **default** configuration, and out-of-family Codex caught it.
+
+`PauseResumeProtocolConfig.durable` defaults to **`False`**
+(`pause_resume_protocol_types.py:37-43`). Only at `True` does the stage-5 factory wrap
+the CP protocol in a `DurablePauseResumeProtocol` backed by a
+`JournalWorkflowPauseStore`, so captured snapshots **survive a process restart** and
+`api.resume(..., resume_handle=...)` can read them back. At `False` — the shipped default
+— `capture_pause_snapshot` yields an **in-memory** snapshot returned on
+`RunResult.pause_snapshot`, and nothing is recoverable unless the *caller* persists it.
+
+So the boundary has two forms:
+
+| Mode | Window closes when | Outside it, does the token reproduce? |
+|---|---|---|
+| `durable=True` | the snapshot is **journaled** | Yes — the run_id is readable back and (B) recomputes |
+| `durable=False` (default) | the **caller** persists `RunResult.pause_snapshot` — the harness does not do this for them | Only if the caller persisted; on a process crash in-between, **no** |
+
+The token's delivery point is unchanged and is what makes a window exist at all: the
+webhook fires at `hitl_gate_composer.py:1328`, **before** the pause signal at `:1336`, so
+the external world can legitimately lead the snapshot (§3's persist-once ordering says
+exactly this).
+
+### 4-quinquies.3 What the witness does and does not establish
+
+**Establishes (executed, mutation-probed):** when a `pause_snapshot_input` IS supplied,
+the runner runs the child under `snapshot.run_id` — not a fresh id, and not the
+deterministic seed even when one is supplied alongside (the ordering is pinned, because
+the reverse would silently re-key a resumed child onto the first-dispatch identity). All
+three arms of the real selection are exercised through the real
+`compose_child_workflow_runner`.
+
+**Does NOT establish:** that the production path ever *supplies* a recovered snapshot to
+that branch. The witness invokes the runner directly and captures `execute_workflow`; it
+stops before the api/driver → `RuntimeSubAgentDispatcher` → child-runner chain. It would
+stay green if the real path never threaded the recovered snapshot at all.
+
+### 4-quinquies.4 Why precondition 4 stays BOUNDED, and exactly what would close it
+
+Two things, both named by out-of-family review:
+
+1. **A live-resume witness through the real entry point** — precondition 4's own words.
+   The runner-level witness above is a genuine step toward it and covers a branch nothing
+   else did, but it is not the thing asked for.
+2. **A decision on the `durable=False` default.** Either restrict the scope statement to
+   durable mode explicitly, or extend the boundary through caller persistence and say
+   what the default configuration's guarantee actually is. As written the "outside the
+   window it reproduces" property does not hold at the shipped default.
+
+Until both land, the honest status is **BOUNDED, sharper than v2 — not closed**. What v5
+removes is the *vagueness* of the earlier boundary and one unexamined branch; what it
+does not remove is the gate.
+
+---
 
 ## 4-quater. PRECONDITION 5, RESOLVED (v4) — the token already rides the tracing export
 
@@ -820,15 +921,33 @@ identity — not bare `branch_index`** (three-way convergent finding).
 
 ## 5. Hard preconditions on the spec leg
 
-**Status at v4: 1 CLOSED · 2 CLOSED · 3 CLOSED · 4 BOUNDED · 5 CLOSED.** The spec leg
-remains NOT authorizable, now on **one** count: **precondition 4 is bounded rather than
-closed** — it still owes an explicit scope statement and a live-resume witness for the
-cited `snapshot.run_id` reuse. It is the sole remaining gate. Named residuals sit on top
-of it (owed, not gates): the Runtime `B-104` round-trip, the driver keyed-only re-pause
-round-trip, and the mixed keyed-peer fan-out path. *(The span-export round-trip that
-appeared here at the v4 first draft is DONE — executed at §4-quater.4.)*
-Discharged preconditions are struck through; their original text is kept so each
-discharge is auditable against what was actually asked.
+**Status at v5: 1 · 2 · 3 · 5 CLOSED · 4 SHARPENED but still BOUNDED.** The spec leg is
+**NOT yet authorizable**: precondition 4 remains the sole gate. A v5 first draft claimed
+it closed; that was retracted on out-of-family review (§4-quinquies.4). Discharged
+preconditions are struck through; their original text is kept so each discharge is
+auditable against what was actually asked.
+
+**Exactly what closes the gate** (§4-quinquies.4): a live-resume witness through the real
+entry point, **and** a decision on the `durable=False` default — restrict the scope to
+durable mode, or extend the boundary through caller persistence and state the default's
+actual guarantee.
+
+**Residuals that sit on top of the gate — owed at open, none of them gates themselves:**
+
+| Owed | Where |
+|---|---|
+| Runtime round-trip for the `B-104` liveness limit | §4-ter.4 |
+| Driver round-trip for the keyed-only re-pause | §4-ter.4 |
+| Mixed keyed-peer fan-out path (shared with `B-155`) | §4-ter.1b |
+| Dispatch-level round-trip for both escalation venues | §4-quater.4 |
+| `materialize_span_processor_stage` end-to-end (also settles `B-160`) | §4-quater.4 |
+| OD `redact_span` filtering — unexamined | §4-quater.4 |
+| HIERARCHICAL_DELEGATION / DECENTRALIZED_HANDOFF shapes | §4-bis.5 |
+| The in-window durability residual (its own arc, against §3's ordering) | §4-quinquies.4 |
+
+Plus the three council conditions, unchanged and still binding: **sequencing**, **scope**
+(the `entry_version` guard defect stays registered — `B-158`), and the **`branch_context`
+leak bar**, which §4-quater.2 extends to the tracing channel.
 
 1. ~~**Execute the nested-fan-out collision witness** against the chosen basis. Cheap —
    the witness file exists and the shape is already covered for the internal identity.~~
@@ -862,7 +981,7 @@ discharge is auditable against what was actually asked.
    `B-104` liveness limit, §4-ter.4), so `resolvability_note` states the sole-member
    RULE and promises no readout. Full derivation, the surfaced sub-fork
    and its recommended disposition at §4-ter.
-4. **Close or explicitly scope the entry_version crash window** — crash after delivery
+4. ~~**Close or explicitly scope the entry_version crash window** — crash after delivery
    but before persist, then resume after an `entry_version` bump, recomputes a
    different token. Registering the wider defect does not close this window. ~~May
    dissolve for free under basis (A) or (B).~~
@@ -872,9 +991,13 @@ discharge is auditable against what was actually asked.
    recomputes nothing at all (persist-once, §3), and *within* the window the child's
    `run_id` is recovered from the snapshot (**cited**, `child_workflow_runner.py:230-234`,
    not witnessed — see §4-bis.5). The witnessed half is that (B) takes no `entry_version`
-   input, so a recovered `run_id` reproduces its token where (C)'s rotates. The spec leg still owes an explicit scope
-   statement **and a live-resume witness for the cited half**; what v2 removes is the
-   *unbounded* reading, which is what basis (C) would have had.
+   input, so a recovered `run_id` reproduces its token where (C)'s rotates.~~
+   **STILL BOUNDED at v5 — SHARPENED, not closed.** A v5 first draft stamped this CLOSED;
+   retracted on out-of-family review. What v5 adds: the runner's reuse of
+   `snapshot.run_id` is now WITNESSED (a branch no other test took), and the boundary is
+   corrected to a **two-mode** one — `durable=True` closes at journaling, `durable=False`
+   (the shipped default) only at caller persistence. What still blocks: a live-resume
+   witness through the real entry point, and a decision on the default. §4-quinquies.
 5. ~~**Carry the observability disposition** — resolve the charter's "not a span
    attribute" premise against C1's `hitl.escalation.instance_id` proposal, and extend
    C10's leak-bar analysis from the webhook channel to the **tracing-export** channel
