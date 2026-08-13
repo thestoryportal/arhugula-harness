@@ -7466,7 +7466,7 @@ items:
     least one span-backed member is a ROOT, since skill.activation is emitted from workflow_driver.py:3206
     which PRECEDES the envelope open at :3305. The starvation is therefore SCOPED to members emitted inside
     the envelope, and any repricing of step (3) must be against that set, not all 19. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py
-    -- 16 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
+    -- 17 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
     by replacing ParentBased(root=X) with the bare X (both load-bearing tests go RED). STEP (3) REPRICED
     BY TWO MEASURED COUNTERFACTUALS AT THE SAME VENUE. (a) CANDIDATE A-PRIME -- NOT the row''s candidate
     A, which is mode-conditional ALWAYS_ON with the s10.3 ratio moved INTO the tail consumer and was NOT
@@ -7512,17 +7512,18 @@ items:
     sampler override, so a future mode-conditional sampler repairing only TAIL_BASED_PROD would leave them
     all green -- test_a_production_cell_still_binds_the_unconditional_ratio_sampler composes a real production
     cell (team-binding x self-hosted-server, rate 0.1) through the shipped stage with NO override, so it
-    reddens the moment that sampler lands. SCOPE OF THE STEP-(2) EVIDENCE, STATED (codex round 12): the
-    three-population test measures HEAD ADMISSION (which populations the head admits) through SimpleSpanProcessor;
-    only the non-root member population is additionally routed through the real TailKeepSpanProcessor. A
-    tail-HANDLING regression specific to the root-name-matched or event-carried populations would therefore
-    not be caught here -- that is owed, and step (2)''s completion is claimed for the HEAD half plus the
-    single tail arm actually executed. SEPARATELY, the nested-resume witness is STRUCTURAL, not executed:
-    it proves the child dispatch is lexically inside the subagent.span block, NOT that the OTel context
-    is still current at the child driver''s resume detection nor that the snapshot value is non-None. The
-    conclusion (resume.attempted is a non-root child for nested resumes) therefore rests on containment
-    plus the ordinary OTel context-propagation semantics, and an executed nested-resume parentage witness
-    is OWED before B-162 acts on it.'
+    reddens the moment that sampler lands. STEP (2)''s TAIL ARMS ARE NOW ALL EXECUTED (codex round 13 closed
+    the contradiction the round-12 note conceded): test_all_three_populations_through_the_real_tail_processor
+    runs root-name-matched, non-root member, non-root TRIGGER and event-carried through the REAL TailKeepSpanProcessor
+    at production buffer bounds, spying on the processor''s own on_end. Only the root-name-matched span
+    arrives; the starved populations never reach the tail at all, because the head drops them before recording.
+    Step (2) is therefore discharged at the shape the row prescribes (build_default_sampler + the real tail
+    processor across all three populations), not merely at the head. SEPARATELY, the nested-resume witness
+    is STRUCTURAL, not executed: it proves the child dispatch is lexically inside the subagent.span block,
+    NOT that the OTel context is still current at the child driver''s resume detection nor that the snapshot
+    value is non-None. The conclusion (resume.attempted is a non-root child for nested resumes) therefore
+    rests on containment plus the ordinary OTel context-propagation semantics, and an executed nested-resume
+    parentage witness is OWED before B-162 acts on it.'
   council: 'YES, and this is the row in the family that genuinely earns one -- unlike B-133, whose repair was
     single-domain. Candidate A trades a real observability floor (C7: a preserved class that is dropped
     before any preservation rule can act on it is not preserved) against a 5x-to-10x in-process span

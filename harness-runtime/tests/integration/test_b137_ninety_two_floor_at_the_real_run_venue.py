@@ -277,6 +277,58 @@ def test_a_production_cell_still_binds_the_unconditional_ratio_sampler() -> None
     )
 
 
+def test_all_three_populations_through_the_real_tail_processor() -> None:
+    """**Step (2)'s probe, at the shape the row prescribes** (out-of-family Codex round 13).
+
+    The row's step (2) names `build_default_sampler` **plus the real
+    `TailKeepSpanProcessor`**, counting `on_end` arrivals across all three populations.
+    `test_all_three_starved_populations_at_one_composition` covers head admission via
+    `SimpleSpanProcessor`, and the `api.run` probe covers the tail for the non-root member
+    only — so neither alone discharges step (2), and an earlier draft claimed completion
+    while conceding the remaining tail arms were owed. That contradiction is removed here by
+    running all three through the real processor.
+
+    Result: the tail processor is **reached by nothing** for the two starved populations,
+    because the head drops them before recording; only the root-name-matched span arrives.
+    """
+    arrivals: list[str] = []
+    downstream = _Counting()
+
+    class _SpyingTailKeep(TailKeepSpanProcessor):
+        def on_end(self, span: Any) -> None:
+            arrivals.append(span.name)
+            super().on_end(span)
+
+    provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
+    provider.add_span_processor(
+        _SpyingTailKeep(downstream=downstream, max_buffered_traces=4096, max_spans_per_trace=4096)
+    )
+    tracer = provider.get_tracer("b137.populations.tail")
+
+    # (i) root-name-matched
+    with tracer.start_as_current_span(_SANDBOX):
+        pass
+    # (ii) non-root member, and (ii-b) non-root TRIGGER
+    with tracer.start_as_current_span(_ENVELOPE):
+        with tracer.start_as_current_span(_MEMBER):
+            pass
+    with tracer.start_as_current_span(_ENVELOPE):
+        with tracer.start_as_current_span(_SANDBOX):
+            pass
+    # (iii) event-carried
+    with tracer.start_as_current_span("ordinary.carrier") as carrier:
+        carrier.add_event(_SANDBOX)
+
+    assert arrivals == [_SANDBOX], (
+        f"`TailKeepSpanProcessor.on_end` arrivals were {arrivals}, expected only the "
+        f"root-name-matched `{_SANDBOX}`. A starved population reaching the tail means the "
+        "head now records-without-sampling and B-137's boundary has moved."
+    )
+    assert downstream.seen == [_SANDBOX], (
+        f"downstream received {downstream.seen} — a consequence check on the same claim"
+    )
+
+
 def _finished_span(name: str) -> Any:
     """Record one span with an always-on provider and return the ReadableSpan."""
     exporter = InMemorySpanExporter()
