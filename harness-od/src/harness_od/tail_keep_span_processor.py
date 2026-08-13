@@ -124,11 +124,24 @@ the posture this processor already takes everywhere a tail decision is
 unavailable to it (``force_flush`` drains keep-all "to avoid silent loss");
 a late arrival is exactly that case, one span at a time.
 
-Recognising a late arrival needs a memory of recently root-closed traces,
-and that memory is bounded (``_MATERIALIZED_TRACE_MEMORY``, FIFO) — an
-unbounded set would be a worse leak than the one being closed. Beyond the
-window a late arrival degrades to the previous behaviour (buffered, released
-keep-all at ``force_flush``), which is a delay and not a loss.
+Recognising a late arrival needs a memory of which traces have materialized,
+and that memory must be bounded — an unbounded set would be a worse leak than
+the one being closed. It is bounded by **liveness, not by a window**: a
+root-closed trace is remembered exactly while it still has spans that started
+and have not ended (tracked at ``on_start`` / ``on_end``), which is exactly
+the condition under which a late arrival is still possible, and is forgotten
+the instant the last one ends. Normally that is the root's own ``on_end``, so
+the memory holds one entry per concurrently-live trace — tens, not thousands.
+
+An earlier revision expired the memory on a fixed FIFO window of unrelated
+root closes instead, and out-of-family review reproduced the boundary that
+made it unsound: with the orphaned child still open, 1,023 intervening roots
+forwarded it but 1,024 pushed it back onto the buffer path, where the ceiling
+evicted it outright — reinstating both the loss and the ``_keep`` leak this
+arm exists to close. Liveness has no such boundary. A FIFO ceiling
+(``_LIVENESS_TRACKING_CEILING``) survives only as the backstop for spans that
+start and never end, and what is lost past it is stated exactly at that
+constant rather than described as a mere delay.
 
 **A late TRIGGER cannot rescue its trace, and that is a decided bound, not
 an oversight.** If the late span is itself a §10.2 classification trigger,
@@ -230,14 +243,28 @@ __all__ = [
     "TailKeepSpanProcessor",
 ]
 
-#: `B-164(b)` — how many recently root-closed trace_ids are remembered, so a span arriving
-#: after its own trace materialized is recognised as a late arrival instead of re-buffered
-#: into a bucket nothing will ever pop. FIFO-bounded on purpose: an unbounded set would be a
-#: worse leak than the one it closes. A late arrival beyond the window degrades to the
-#: pre-`B-164(b)` behaviour (buffered, released keep-all at `force_flush`) — a delay, not a
-#: loss. 1024 covers the window this exists for by orders of magnitude: an orphaned thread
-#: outlives its root by one branch-completion, not by a thousand unrelated traces.
-_MATERIALIZED_TRACE_MEMORY = 1024
+#: `B-164(b)` LEAK BACKSTOP — a hard ceiling on the two liveness dictionaries, NOT the
+#: mechanism that decides how long a materialized trace is remembered. That decision is
+#: exact and event-driven (`_release_open_span`): a root-closed trace is remembered exactly
+#: while it still has spans that started and have not ended, i.e. exactly while a late
+#: arrival is still possible, and is discarded the instant the last one ends. So in normal
+#: operation these dictionaries hold one entry per CONCURRENTLY-LIVE trace — tens, not
+#: thousands — and this ceiling is never approached.
+#:
+#: It exists for the one case liveness cannot resolve: a span that starts and NEVER ends
+#: (an abandoned span leaks its entry, because "still open" is indistinguishable from
+#: "gone"). Without a ceiling that would be an unbounded leak — a worse one than
+#: `B-164(b)` itself. Eviction is FIFO, so the oldest (most likely genuinely abandoned)
+#: entry is shed first.
+#:
+#: **What is lost past the backstop, stated exactly rather than optimistically.** An
+#: evicted trace reverts to the pre-`B-164(b)` behaviour, and that is NOT merely a delay:
+#: with `max_buffered_traces` set — which production always sets — the re-buffered late
+#: span becomes the oldest bucket and is evicted outright, and a late trigger recreates
+#: the stale `_keep` entry. Reaching that state requires >4096 traces each leaking a span,
+#: which is already a producer defect; the ceiling bounds its blast radius rather than
+#: pretending it is harmless.
+_LIVENESS_TRACKING_CEILING = 4096
 
 
 def _carries_always_sampled_event(
@@ -373,11 +400,23 @@ class TailKeepSpanProcessor(SpanProcessor):
         self._keep: dict[int, bool] = {}
         # `B-164(b)` — trace_ids whose keep decision has already been PUBLISHED at root
         # close. Used as an ordered set (dict insertion order = FIFO, same idiom as
-        # `_buffer`), bounded at `_MATERIALIZED_TRACE_MEMORY`. Read and written only under
-        # `_state_lock`, and — critically — tested in the SAME critical section that would
-        # otherwise buffer the span, so a concurrent root close cannot land between the
-        # test and the append.
+        # `_buffer`). Read and written only under `_state_lock`, and — critically — tested
+        # in the SAME critical section that would otherwise buffer the span, so a concurrent
+        # root close cannot land between the test and the append.
         self._materialized: dict[int, None] = {}
+        # `B-164(b)` round 2 (out-of-family Codex, P1) — per-trace count of spans that have
+        # STARTED and not yet ended. An entry is retained in `_materialized` exactly while
+        # this count is non-zero, because that is exactly the condition under which a late
+        # arrival is still possible: a span the processor has not yet seen at `on_end` has
+        # already been seen at `on_start`.
+        #
+        # The first attempt expired `_materialized` on a fixed FIFO window of unrelated
+        # root closes instead. Codex reproduced the boundary that makes that unsound — with
+        # the orphaned child still open, 1,023 intervening roots forwarded it but 1,024
+        # pushed it back onto the buffer path, where the `max_buffered_traces` ceiling
+        # evicted it outright and a late trigger recreated the `_keep` leak. Liveness is not
+        # a bigger window; it is the exact condition, so there is no boundary to cross.
+        self._open_spans: dict[int, int] = {}
         # OD spec v1.28 §9.3 operator-tunable bounded-buffer ceilings. None =
         # unbounded (v1.27 MVP behavior); the production materializer passes
         # the `CollectorConfig` ceilings so production is bounded by default.
@@ -412,7 +451,17 @@ class TailKeepSpanProcessor(SpanProcessor):
         span: Span,
         parent_context: Context | None = None,
     ) -> None:
-        """Forward to downstream; no buffering at start (decisions are at end)."""
+        """Count the span as live, then forward downstream (no buffering at start).
+
+        `B-164(b)` — the count is what lets `on_end` know whether a root-closed trace may
+        still receive a late arrival. Tracking is done HERE, before forwarding, because
+        this is the only point at which the processor learns a span exists before it ends;
+        the whole defect was about a span the processor could not otherwise anticipate.
+        """
+        # `Span.get_span_context()` is non-optional (unlike `ReadableSpan`'s, which is why
+        # `_release_open_span` still guards), so this needs no None check.
+        with self._state_lock:
+            self._retain_open_span(span.get_span_context().trace_id)
         self._downstream.on_start(span, parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
@@ -424,6 +473,11 @@ class TailKeepSpanProcessor(SpanProcessor):
         try:
             self._on_end_inner(span)
         finally:
+            # `B-164(b)` — released AFTER `_on_end_inner`, never before: the late-arrival
+            # test inside it reads `_materialized`, and this span is precisely one of the
+            # live spans keeping that entry alive. Releasing first could discard the entry
+            # a concurrent sibling is about to consult.
+            self._release_open_span(span)
             with self._entry_lock:
                 self._active_entries.discard(entry_id)
             # Wake any flusher parked on the batch condition; the entry count it also
@@ -745,13 +799,54 @@ class TailKeepSpanProcessor(SpanProcessor):
     def _remember_materialized(self, trace_id: int) -> None:
         """Record that `trace_id` has published its keep decision (`B-164(b)`).
 
-        Called under `_state_lock` from the root-close materialization. FIFO-bounded at
-        `_MATERIALIZED_TRACE_MEMORY`: dict insertion order makes `next(iter(...))` the
+        Called under `_state_lock` from the root-close materialization. The entry lives
+        until the trace's last open span ends (`_release_open_span`) — normally within
+        microseconds, since the root itself is usually the last one. The FIFO ceiling is
+        only the abandoned-span backstop; dict insertion order makes `next(iter(...))` the
         oldest, the same idiom `_evict_oldest_trace` uses on `_buffer`.
         """
         self._materialized[trace_id] = None
-        while len(self._materialized) > _MATERIALIZED_TRACE_MEMORY:
+        while len(self._materialized) > _LIVENESS_TRACKING_CEILING:
             del self._materialized[next(iter(self._materialized))]
+
+    def _retain_open_span(self, trace_id: int) -> None:
+        """Count one more started-and-not-yet-ended span for `trace_id` (`B-164(b)`).
+
+        Called under `_state_lock` from `on_start`. Bounded by the same abandoned-span
+        backstop: shedding the oldest count only costs the trace its liveness-keyed
+        retention, after which it falls back to the FIFO ceiling — it can never make a
+        count go negative, because `_release_open_span` ignores an absent entry.
+        """
+        self._open_spans[trace_id] = self._open_spans.get(trace_id, 0) + 1
+        while len(self._open_spans) > _LIVENESS_TRACKING_CEILING:
+            del self._open_spans[next(iter(self._open_spans))]
+
+    def _release_open_span(self, span: ReadableSpan) -> None:
+        """Drop one live span for its trace; at zero, forget the trace (`B-164(b)`).
+
+        Zero live spans means no further span of this trace can arrive, so the
+        `_materialized` entry has no remaining purpose and is discarded immediately. This
+        is what keeps the memory proportional to CONCURRENT traces instead of to a window
+        of unrelated ones.
+
+        An absent entry is ignored rather than treated as zero. That is the case where the
+        processor never saw the span's `on_start` — it was registered on the provider after
+        the span began, or the count was shed by the backstop — and in that case the
+        liveness signal is simply unavailable, so `_materialized` is left to the FIFO
+        ceiling rather than being discarded on incomplete information.
+        """
+        ctx = span.get_span_context()
+        if ctx is None:  # pragma: no cover - a span reaching on_end always has a context
+            return
+        with self._state_lock:
+            remaining = self._open_spans.get(ctx.trace_id)
+            if remaining is None:
+                return
+            if remaining > 1:
+                self._open_spans[ctx.trace_id] = remaining - 1
+                return
+            del self._open_spans[ctx.trace_id]
+            self._materialized.pop(ctx.trace_id, None)
 
     def _evict_oldest_trace(self) -> None:
         """Drop the oldest buffered trace (FIFO) under the max-traces ceiling.

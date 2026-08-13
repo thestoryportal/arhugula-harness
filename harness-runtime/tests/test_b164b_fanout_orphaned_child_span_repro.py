@@ -76,11 +76,15 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 from harness_cp.workflow_driver import _run_fanout_to_completion
-from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
+from harness_od.tail_keep_span_processor import (
+    _LIVENESS_TRACKING_CEILING,
+    TailKeepSpanProcessor,
+)
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 
 #: A §10.2 classification trigger AND a §9.2 always-sampled span name.
@@ -141,11 +145,22 @@ class _Fixture:
         provider.add_span_processor(self.tail)
         self.tracer = provider.get_tracer("b164b-repro")
 
-    def orphan_a_child(self, child_name: str = _CHILD, *, root_name: str = _ROOT) -> None:
+    def orphan_a_child(
+        self,
+        child_name: str = _CHILD,
+        *,
+        root_name: str = _ROOT,
+        while_child_open: Callable[[], None] | None = None,
+    ) -> None:
         """Run the real fan-out so `child_name` ends AFTER `root_name` has closed.
 
         Returns once the orphaned thread has finished, so the caller observes the
         settled state rather than a moving one.
+
+        `while_child_open` runs at the one moment that is hard to reach from outside: the
+        root has closed and the orphaned child is still OPEN. That is the window in which
+        unrelated traffic can age the orphan out of a size-bounded memory, so a caller
+        that wants to test that window has to drive it from in here.
         """
         child_open = threading.Event()
         release_child = threading.Event()
@@ -181,6 +196,9 @@ class _Fixture:
             "the child span never opened — fixture is not exercising B-164(b)"
         )
         assert not child_done.is_set(), "the child closed before the root — ordering not achieved"
+
+        if while_child_open is not None:
+            while_child_open()
 
         release_child.set()
         assert child_done.wait(timeout=_TIMEOUT), "the orphaned thread never completed"
@@ -289,6 +307,70 @@ def test_b164b_the_orphaned_child_survives_buffer_pressure() -> None:
         f"the orphaned span was evicted and is permanently lost "
         f"(dropped_trace_count={fx.tail.dropped_trace_count}); force_flush could not "
         f"recover it. downstream={fx.downstream.seen}"
+    )
+
+
+def test_b164b_the_orphan_survives_unrelated_traffic_while_it_is_still_open() -> None:
+    """**The boundary that killed the first fix, now absent by construction.**
+
+    The first revision remembered materialized traces in a fixed FIFO window of 1,024
+    root closes. Out-of-family review reproduced the exact edge: with the orphaned child
+    still open, 1,023 intervening roots forwarded it and 1,024 aged it out, dropping it
+    back onto the buffer path where the `max_buffered_traces` ceiling evicted it — the
+    original loss, restored by the repair's own bookkeeping.
+
+    Retention is now keyed to LIVENESS rather than to a count of unrelated traces, so
+    there is no window to exceed. The churn here deliberately runs past
+    `_LIVENESS_TRACKING_CEILING` — the abandoned-span backstop — so that passing cannot
+    be explained by the backstop merely being larger than the old window. It can only be
+    explained by the orphan's trace being retained *because the orphan is still open*.
+
+    `max_buffered_traces=1` is what makes a regression LOSS rather than delay: without a
+    ceiling an aged-out orphan would merely wait for `force_flush` and the assertion would
+    still pass, hiding the defect.
+    """
+    fx = _Fixture(max_buffered_traces=1)
+
+    def churn_unrelated_traces() -> None:
+        for i in range(_LIVENESS_TRACKING_CEILING + 64):
+            with fx.tracer.start_as_current_span(f"unrelated.root.{i}"):
+                pass
+
+    fx.orphan_a_child(while_child_open=churn_unrelated_traces)
+
+    assert _CHILD in fx.downstream.seen, (
+        f"the orphan was aged out of the materialization memory by unrelated traffic and "
+        f"then evicted from the buffer — the B-164(b) loss has returned "
+        f"(dropped_trace_count={fx.tail.dropped_trace_count})"
+    )
+    assert fx.tail.buffered_trace_count == 0, (
+        f"the orphan re-entered the buffer instead of being forwarded "
+        f"({fx.tail.buffered_trace_count} trace(s) buffered)"
+    )
+
+
+def test_b164b_the_liveness_memory_does_not_grow_with_completed_traces() -> None:
+    """**The memory is proportional to LIVE traces, not to traffic.**
+
+    Liveness-keyed retention would be a poor trade if it turned into its own leak. Every
+    trace here completes, so both dictionaries must return to empty — the entry is
+    discarded at the moment the trace's last span ends, not deferred to a ceiling. This
+    is what makes `_LIVENESS_TRACKING_CEILING` a backstop that is never approached in
+    normal operation rather than a working limit.
+    """
+    fx = _Fixture()
+    for i in range(256):
+        with fx.tracer.start_as_current_span(f"complete.root.{i}"):
+            with fx.tracer.start_as_current_span(f"complete.child.{i}"):
+                pass
+
+    assert fx.tail._materialized == {}, (
+        f"completed traces were retained in the materialization memory "
+        f"({len(fx.tail._materialized)} entries) — this is a leak, not a bound"
+    )
+    assert fx.tail._open_spans == {}, (
+        f"completed traces were retained in the liveness counter "
+        f"({len(fx.tail._open_spans)} entries) — on_start/on_end are not pairing"
     )
 
 
