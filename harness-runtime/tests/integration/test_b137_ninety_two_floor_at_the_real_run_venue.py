@@ -748,11 +748,39 @@ def test_the_scope_is_inside_the_envelope_not_all_nineteen() -> None:
     )
 
     assert "skill.activation" in span_backed
-    driver = (_REPO / "harness-cp/src/harness_cp/workflow_driver.py").read_text().splitlines()
-    emit_line = next(i for i, line in enumerate(driver, 1) if "_emitter.emit(" in line)
+    driver_path = _REPO / "harness-cp/src/harness_cp/workflow_driver.py"
+    driver = driver_path.read_text().splitlines()
     envelope_line = next(
         i for i, line in enumerate(driver, 1) if f'start_as_current_span("{_ENVELOPE}")' in line
     )
+
+    # Resolve the SKILL-ACTIVATION emitter exactly, by AST. A substring match on
+    # `_emitter.emit(` selects `ctx.lifecycle_emitter.emit(` at :2647 first — that string
+    # literally contains `_emitter.emit(` — so the assertion below would pass against a
+    # different call and stay green if skill activation moved inside the envelope
+    # (out-of-family Codex round 11; the same defect class as round 5's `attempt_resume`).
+    tree = ast.parse(driver_path.read_text())
+    emit_lines = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "emit"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "_emitter"
+    ]
+    assert emit_lines, (
+        "no `_emitter.emit(...)` call found in the driver — the skill-activation emission "
+        "may have been renamed or removed; re-ground B-137's root counterexample"
+    )
+    # `_emitter` is bound from `ctx.skill_activation_emitter`, asserted so the receiver name
+    # cannot silently come to mean something else.
+    assert any(
+        "skill_activation_emitter" in line
+        for line in driver
+        if line.strip().startswith("_emitter =")
+    ), "`_emitter` is no longer bound from `ctx.skill_activation_emitter`"
+    emit_line = min(emit_lines)
     assert emit_line < envelope_line, (
         f"the skill-activation emit ({emit_line}) no longer precedes the envelope open "
         f"({envelope_line}) — the counterexample to the 'all members are children' "
