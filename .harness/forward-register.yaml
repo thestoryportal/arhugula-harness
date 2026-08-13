@@ -8939,7 +8939,21 @@ items:
     or evicted. Moving the lock ahead of classification NARROWS but cannot close it. Reaching it requires
     a root to end before its own child, which violates the span-nesting contract the root-close design assumes
     -- so step (3)''s question stands: decide whether a malformed trace shape is worth defending against
-    at all, and if so the honest mechanism is a post-materialization late-arrival path, NOT a wider lock.'
+    at all, and if so the honest mechanism is a post-materialization late-arrival path, NOT a wider lock.
+    ROUND-2 (codex on PR #1332): the FIRST version of this fix registered the batch inside _forward_detached
+    -- i.e. AFTER _publish_keep_and_maybe_detach had popped it and released the lock. A force_flush landing
+    in that gap saw an EMPTY BUFFER AND ZERO IN-FLIGHT, delegated and returned, reproducing the exact loss
+    the fix was meant to close. Registration now happens INSIDE the detaching critical section (the condition
+    shares _state_lock), and force_flush registers its own drained batch the same way. NOTE ON WITNESS QUALITY:
+    the original force_flush-waits witness could NOT tell the two versions apart -- mutation-probing it
+    against the gap PASSED, because it starts its flusher long before the window and so only proves that
+    a REGISTERED batch is waited for. A second witness discriminates by construction: it suspends the producer
+    at the entry to _forward_detached (exactly after detachment, before any post-hoc increment) and asserts
+    the batch is ALREADY counted there; that one reddens deterministically against the gap. Both timing-based
+    test assumptions were also removed -- the flush witness is now ORDER-based (delivery recorded before
+    force_flush''s return) rather than a wait(0.5) that could pass merely because the scheduler had not
+    run the flusher, and the wedged-exporter witness waits on a producer ENTRY EVENT instead of a 100ms
+    sleep.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before

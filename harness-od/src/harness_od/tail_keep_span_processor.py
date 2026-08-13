@@ -279,8 +279,13 @@ class TailKeepSpanProcessor(SpanProcessor):
         # would see an empty buffer and return — defeating its own documented purpose,
         # "flush any still-buffered traces … to avoid silent loss on shutdown". These two
         # track batches in that window so `force_flush` can wait for them.
+        # The condition shares `_state_lock`, so a batch is registered as in-flight in the
+        # SAME critical section that detaches it. With two separate locks there was a gap:
+        # `_publish_keep_and_maybe_detach` popped the batch, released, and only then did the
+        # forwarder increment — a `force_flush` landing in between saw an empty buffer AND
+        # zero in-flight, and returned while the spans were in the air (out-of-family Codex).
         self._inflight_batches = 0
-        self._inflight_cv = threading.Condition()
+        self._inflight_cv = threading.Condition(self._state_lock)
         # Per-trace_id buffer of non-always-sampled spans pending root-close
         # keep decision. Keyed by the int form of OTel trace_id. Python dict
         # insertion order makes `next(iter(...))` the oldest trace (FIFO
@@ -525,8 +530,6 @@ class TailKeepSpanProcessor(SpanProcessor):
         """
         if not spans:
             return
-        with self._inflight_cv:
-            self._inflight_batches += 1
         try:
             for span in spans:
                 self._downstream.on_end(span)
@@ -558,7 +561,13 @@ class TailKeepSpanProcessor(SpanProcessor):
                 return []
             buffered = self._buffer.pop(trace_id, [])
             keep = self._keep.pop(trace_id, False)
-        return buffered if keep else []
+            released = buffered if keep else []
+            if released:
+                # Register the batch as in-flight WHILE still holding the lock that guards
+                # `_buffer`, so no `force_flush` can observe "buffer empty AND nothing in
+                # flight" for a batch that has been detached but not yet forwarded.
+                self._inflight_batches += 1
+        return released
 
     def _evict_oldest_trace(self) -> None:
         """Drop the oldest buffered trace (FIFO) under the max-traces ceiling.
@@ -590,6 +599,11 @@ class TailKeepSpanProcessor(SpanProcessor):
             drained = [span for spans in self._buffer.values() for span in spans]
             self._buffer.clear()
             self._keep.clear()
+            if drained:
+                # Same registration rule as `_publish_keep_and_maybe_detach`: count the
+                # batch while still holding the lock, since `_forward_detached` only
+                # decrements.
+                self._inflight_batches += 1
         self._forward_detached(drained)
 
         # `B-164` — wait for batches detached by CONCURRENT `on_end` calls that have left

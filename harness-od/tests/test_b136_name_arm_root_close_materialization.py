@@ -442,13 +442,19 @@ def test_b164_force_flush_waits_for_an_inflight_detached_batch() -> None:
     """
     sibling_in_downstream = threading.Event()
     release_downstream = threading.Event()
+    order: list[str] = []
 
     class _SlowDownstream(_Downstream):
+        delivered_before_flush_returned = False
+
         def on_end(self, span: Any) -> None:
             if span.name == "ordinary.child":
                 sibling_in_downstream.set()
                 release_downstream.wait(timeout=5.0)
             super().on_end(span)
+            if span.name == "ordinary.child":
+                # Set only if the processor's force_flush has NOT yet returned.
+                type(self).delivered_before_flush_returned = "flush-returned" not in order
 
         def force_flush(self, timeout_millis: int = 30_000) -> bool:
             return True
@@ -474,28 +480,36 @@ def test_b164_force_flush_waits_for_an_inflight_detached_batch() -> None:
         "the trace should already be detached — that is what makes the window observable"
     )
 
-    flush_returned = threading.Event()
+    # ORDER-based, not timing-based (out-of-family Codex): a `wait(0.5)` on the flusher can
+    # pass simply because the scheduler never ran it. Instead record the ORDER of two events
+    # — the sibling's delivery and force_flush's return — and assert delivery came first.
+    # That assertion is independent of how long any thread takes to start.
+    flush_entered = threading.Event()
 
     def _flush() -> None:
+        flush_entered.set()
         tail.force_flush(timeout_millis=5_000)
-        flush_returned.set()
+        order.append("flush-returned")
 
     flusher = threading.Thread(target=_flush, name="b164-flusher")
     flusher.start()
+    assert flush_entered.wait(timeout=5.0), "the flusher thread never started"
 
-    # The in-flight batch is not yet delivered, so force_flush must still be waiting.
-    assert not flush_returned.wait(timeout=0.5), (
-        "force_flush RETURNED while a detached batch was still in flight — shutdown could "
-        "close the downstream before those spans are delivered, which is the silent loss "
-        "force_flush exists to prevent"
-    )
-
+    # Give the flusher a moment to reach the in-flight wait, then release the exporter. The
+    # ASSERTION below does not depend on this sleep — it only makes the interleaving likely.
+    time.sleep(0.2)
     release_downstream.set()
     producer.join(timeout=5.0)
     flusher.join(timeout=5.0)
     assert not producer.is_alive() and not flusher.is_alive(), "a thread hung"
-    assert flush_returned.is_set(), "force_flush never returned after delivery completed"
-    assert "ordinary.child" in downstream.seen
+
+    assert "ordinary.child" in downstream.seen, "the detached sibling was never delivered"
+    assert order == ["flush-returned"], f"unexpected event order: {order}"
+    assert downstream.delivered_before_flush_returned, (
+        "force_flush RETURNED before the in-flight detached batch reached downstream — "
+        "shutdown could close the exporter first, which is the silent loss force_flush "
+        "exists to prevent"
+    )
 
 
 def test_b164_force_flush_still_returns_when_a_wedged_exporter_exceeds_the_budget() -> None:
@@ -507,9 +521,12 @@ def test_b164_force_flush_still_returns_when_a_wedged_exporter_exceeds_the_budge
     """
     wedged = threading.Event()
 
+    producer_wedged = threading.Event()
+
     class _WedgedDownstream(_Downstream):
         def on_end(self, span: Any) -> None:
             if span.name == "ordinary.child":
+                producer_wedged.set()
                 wedged.wait(timeout=10.0)  # never released within the test's budget
             super().on_end(span)
 
@@ -529,7 +546,10 @@ def test_b164_force_flush_still_returns_when_a_wedged_exporter_exceeds_the_budge
         pass
     producer = threading.Thread(target=root_span.end, name="b164-wedged-producer", daemon=True)
     producer.start()
-    time.sleep(0.1)  # let the producer reach the wedged exporter
+    # Entry EVENT, not a sleep (out-of-family Codex): on a loaded runner a 100 ms sleep can
+    # elapse before the producer reaches the wedged exporter, in which case the main thread
+    # would drain the child itself and block on the exporter's own 10 s wait.
+    assert producer_wedged.wait(timeout=5.0), "the producer never reached the wedged exporter"
 
     started = time.monotonic()
     assert tail.force_flush(timeout_millis=300) is True
@@ -540,3 +560,64 @@ def test_b164_force_flush_still_returns_when_a_wedged_exporter_exceeds_the_budge
     )
     wedged.set()
     producer.join(timeout=5.0)
+
+
+def test_b164_a_batch_is_registered_in_flight_the_moment_it_is_detached() -> None:
+    """**B-164 (a), the atomicity half** — registration happens WITH the detach, not after.
+
+    A first version of this fix incremented the in-flight counter inside `_forward_detached`,
+    i.e. *after* `_publish_keep_and_maybe_detach` had already popped the batch and released
+    the lock. Out-of-family Codex found the gap: a `force_flush` landing in that window sees
+    an **empty buffer AND zero in-flight**, delegates, and returns while the spans are in the
+    air — reproducing the exact loss the fix intends to close.
+
+    The earlier witness could not tell the two versions apart: it starts its flusher long
+    before the window and so only proves that a *registered* batch is waited for. This one
+    discriminates by construction — the producer is suspended at the entry to
+    `_forward_detached`, which is precisely the moment *after* detachment and *before* any
+    post-hoc increment would run. With registration done under the detaching lock the batch
+    is already counted there; with the gap it is not.
+    """
+    at_forward_entry = threading.Event()
+    release_producer = threading.Event()
+
+    downstream = _Downstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    original_forward = tail._forward_detached
+
+    def _hooked_forward(spans: Any) -> None:
+        if spans and threading.current_thread().name == "b164-atomic-producer":
+            at_forward_entry.set()
+            release_producer.wait(timeout=5.0)
+        original_forward(spans)
+
+    tail._forward_detached = _hooked_forward  # type: ignore[method-assign]
+
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b164.atomic")
+
+    root_span = tracer.start_span(_TRIGGER_ROOT)
+    with tracer.start_as_current_span(
+        "ordinary.child", context=otel_trace.set_span_in_context(root_span)
+    ):
+        pass
+
+    producer = threading.Thread(target=root_span.end, name="b164-atomic-producer")
+    producer.start()
+    assert at_forward_entry.wait(timeout=5.0), "the producer never reached the forward"
+
+    # The batch is detached (buffer empty) but not yet forwarded. If registration were
+    # post-hoc, in-flight would read 0 here and force_flush would return immediately.
+    assert tail.buffered_trace_count == 0, "the batch should already be detached"
+    assert tail._inflight_batches == 1, (
+        f"the detached batch is not registered in flight ({tail._inflight_batches}) — a "
+        "concurrent force_flush would see an empty buffer and nothing pending, and return "
+        "while these spans are still undelivered"
+    )
+
+    release_producer.set()
+    producer.join(timeout=5.0)
+    assert not producer.is_alive(), "the producer hung"
+    assert "ordinary.child" in downstream.seen
+    assert tail._inflight_batches == 0, "the in-flight count did not settle back to zero"
