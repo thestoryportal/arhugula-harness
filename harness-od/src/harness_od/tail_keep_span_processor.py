@@ -370,11 +370,17 @@ class TailKeepSpanProcessor(SpanProcessor):
             span.name == SUBAGENT_SPAN_NAME and span.parent is not None and not _failed_subagent
         )
         if not _buffer_nonroot_subagent and is_always_sampled(span.name, span.attributes):
-            self._downstream.on_end(span)
-            # Still mark the trace keep-flag if the always-sampled span is
-            # a classification trigger (sandbox.violation + breaker.tripped
-            # are both in §9.2 AND in §10.2) so tree-siblings buffered
-            # under the same trace get preserved at root close.
+            # Mark the trace keep-flag if the always-sampled span is a classification
+            # trigger (sandbox.violation + breaker.tripped are both in §9.2 AND in §10.2)
+            # so tree-siblings buffered under the same trace get preserved at root close.
+            #
+            # `B-163` round 3: the state transition runs BEFORE `downstream.on_end(span)`,
+            # not after. Forwarding does not depend on the keep flag, and a SLOW downstream
+            # otherwise widens the publication window arbitrarily — long enough for a
+            # concurrent root close to detach the trace with `keep=False`, dropping the
+            # buffered siblings and leaving a stale `_keep` entry. Unlike the ordering
+            # residual recorded on B-163, this window opens for a WELL-FORMED trace, so it
+            # is closed here rather than documented.
             ctx = span.get_span_context()
             assert ctx is not None  # a span reaching on_end always has a context
             _trigger = is_classification_trigger(span)
@@ -397,10 +403,12 @@ class TailKeepSpanProcessor(SpanProcessor):
             # shed at a cap of 3) — and dropping here is exactly what an ORDINARY root
             # already does. The forwarded always-sampled span itself is NOT in the buffer,
             # so the §9.2 floor and the §10.2 failure signal are both unaffected.
-            for _pending in self._publish_keep_and_maybe_detach(
+            _pending = self._publish_keep_and_maybe_detach(
                 ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
-            ):
-                self._downstream.on_end(_pending)
+            )
+            self._downstream.on_end(span)
+            for _sibling in _pending:
+                self._downstream.on_end(_sibling)
             return
 
         # `B-133` EVENT-AWARE ARM (OD spec v1.38 §9.2.1, U-OD-59). Three §9.2
@@ -423,7 +431,6 @@ class TailKeepSpanProcessor(SpanProcessor):
         # including zero-event ones.
         events = span.events
         if _carries_always_sampled_event(span, events=events):
-            self._downstream.on_end(span)
             ctx = span.get_span_context()
             assert ctx is not None  # a span reaching on_end always has a context
             # Mirror of the name arm's trigger-flag step: an event-carrying span
@@ -444,10 +451,14 @@ class TailKeepSpanProcessor(SpanProcessor):
             # the trace decision so the siblings resolve and the trace frees its
             # `max_buffered_traces` slot. The forwarded span is NOT in the
             # buffer, so the decision below concerns only its siblings.
-            for _pending in self._publish_keep_and_maybe_detach(
+            # `B-163` round 3 — same reordering as the name arm: transition first, then
+            # forward, so a slow downstream cannot widen the publication window.
+            _pending = self._publish_keep_and_maybe_detach(
                 ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
-            ):
-                self._downstream.on_end(_pending)
+            )
+            self._downstream.on_end(span)
+            for _sibling in _pending:
+                self._downstream.on_end(_sibling)
             return
 
         ctx = span.get_span_context()

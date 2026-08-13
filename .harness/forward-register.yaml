@@ -8871,7 +8871,15 @@ items:
     here rather than papered over. An earlier draft of the witness asserted the ordering case and failed,
     which is what surfaced the distinction; the committed witness asserts the property that IS guaranteed
     -- for a well-formed trace, a trigger published concurrently with sibling buffering always preserves
-    the siblings and no _keep entry survives materialization.'
+    the siblings and no _keep entry survives materialization. ROUND-3 HARDENING (codex round 5, P1): the
+    state transition now runs BEFORE downstream.on_end(span) in both always-sampled arms, not after. Forwarding
+    never depended on the keep flag, and a SLOW downstream otherwise widened the publication window arbitrarily
+    -- long enough for a concurrent root close to detach the trace with keep=False, dropping the buffered
+    siblings and leaving a stale _keep entry. CRUCIALLY this window opened for a WELL-FORMED trace (trigger
+    child ends before its root, as the nesting contract requires), so unlike the ordering residual above
+    it is CLOSED rather than documented. Witness drives the exact shape: a buffered ordinary child, a sandbox.violation
+    trigger BLOCKED INSIDE downstream, and a quiet always-sampled root closing concurrently. Mutation-probed
+    by moving the forward back ahead of the transition: the sibling is dropped every run.'
   council: no -- a single-domain C7 thread-safety repair against an explicit OTel SDK contract, with no
     cross-axis surface and no committed envelope to renegotiate.
   heading: '### B-163 · `TailKeepSpanProcessor` mutates `_buffer` / `_keep` / its counters with **no lock**,

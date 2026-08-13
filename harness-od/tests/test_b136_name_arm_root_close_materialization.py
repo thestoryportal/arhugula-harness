@@ -352,3 +352,64 @@ def test_b163_the_publish_and_detach_transition_is_indivisible() -> None:
         "it, so the map grows without bound across traces"
     )
     assert tail.buffered_trace_count == 0, "the trace did not resolve at root close"
+
+
+def test_b163_a_slow_downstream_cannot_widen_the_keep_publication_window() -> None:
+    """**B-163 round 3** — the state transition runs BEFORE the downstream forward.
+
+    Out-of-family Codex round 5: publishing the keep flag *after* `downstream.on_end(span)`
+    let a **slow exporter** widen the publication window arbitrarily. A non-root
+    always-sampled trigger would sit inside the exporter while its root acquired the lock,
+    detached the trace with `keep=False`, dropped the buffered siblings, and left the
+    trigger to write a stale `_keep` entry afterwards.
+
+    Unlike the ordering residual recorded on B-163 — which needs a root to end *before* its
+    own child, a malformed trace — this window opens for a **well-formed** trace and is
+    entirely an artifact of where the forward sat. Forwarding never depended on the keep
+    flag, so the transition simply moved ahead of it.
+
+    Driven deterministically with the exact shape Codex named: a buffered ordinary child, a
+    `sandbox.violation` trigger **blocked inside downstream**, and a quiet always-sampled
+    root closing concurrently.
+    """
+    trigger_in_downstream = threading.Event()
+    root_done = threading.Event()
+
+    class _SlowDownstream(_Downstream):
+        def on_end(self, span: Any) -> None:
+            if span.name == _TRIGGER_ROOT and threading.current_thread().name == "b163-slow":
+                trigger_in_downstream.set()
+                root_done.wait(timeout=5.0)  # the exporter is "slow"
+            super().on_end(span)
+
+    downstream = _SlowDownstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b163.slow")
+
+    root_span = tracer.start_span(_QUIET_ROOT)
+    parent_ctx = otel_trace.set_span_in_context(root_span)
+    with tracer.start_as_current_span("ordinary.child", context=parent_ctx):
+        pass  # buffered sibling
+    trigger_span = tracer.start_span(_TRIGGER_ROOT, context=parent_ctx)
+
+    slow_thread = threading.Thread(target=trigger_span.end, name="b163-slow")
+    slow_thread.start()
+    assert trigger_in_downstream.wait(timeout=5.0), "the trigger never reached downstream"
+
+    # The root closes while the trigger is still stuck in the exporter. Because the keep
+    # was published BEFORE that forward, the root must observe it.
+    root_span.end()
+    root_done.set()
+    slow_thread.join(timeout=5.0)
+    assert not slow_thread.is_alive(), "the slow thread hung"
+
+    assert "ordinary.child" in downstream.seen, (
+        f"the buffered sibling was dropped while the trigger sat in a slow downstream; "
+        f"downstream={downstream.seen} — the keep publication is still behind the forward"
+    )
+    assert not tail._keep, (
+        f"a stale `_keep` entry leaked: {dict(tail._keep)} — the trigger published after "
+        "its trace had already materialized"
+    )
