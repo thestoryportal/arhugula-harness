@@ -61,11 +61,11 @@ snapshot:
   total: 164
   open: 1
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 29
   operator_gated: 0
   held: 2
-  closed: 131
-  identity_digest: '2e76e32e5e004568'
+  closed: 132
+  identity_digest: '44dfe99d23374357'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -8893,9 +8893,9 @@ items:
     materialization sites *(surfaced by out-of-family Codex at the B-136 arc, 2026-08-13)*'
 - id: B-164
   title: 'TailKeepSpanProcessor concurrency: (a) force_flush returning before an in-flight detached batch
-    reaches downstream -- CLOSED at PR #1332; (b) a child paused before it registers cannot be registered
-    by any lock -- OPEN'
-  status: registered_finding
+    reaches downstream -- CLOSED at PR #1332; (b) a child paused before it registers -- CLOSED at PR #1334
+    as UNREACHABLE (production holds no manual-lifetime spans)'
+  status: closed
   summary: '(a) CLOSED at PR #1332 -- see close_out. (b) OPEN and is the whole of this row now. ORIGINAL
     STATEMENT, retained as history: (a) force_flush did not wait for in-flight detached batches -- _publish_keep_and_maybe_detach
     detaches under the lock and returns the spans so the caller forwards OUTSIDE it (deliberate: holding
@@ -9016,10 +9016,24 @@ items:
     it legitimately PRE-cutoff work the flush SHOULD wait for -- the test failed for the right reason
     and the code was fine. It now hooks _entry_cutoff and creates the late trace from inside it, so the
     batch is genuinely post-cutoff, and it exercises force_flush() end-to-end as the reviewer asked rather
-    than only the predicate. Mutation-probed 3/3 RED with the batch cutoff ignored.'
+    than only the predicate. Mutation-probed 3/3 RED with the batch cutoff ignored. (b) CLOSED 2026-08-13
+    (PR #1334) -- NOT WORTH DEFENDING, because it CANNOT OCCUR. Step (3) asked exactly this. Grounded
+    by AST across all 398 files under harness-*/src/: EVERY span-opening site uses `with tracer.start_as_current_span(...)`
+    and there is NOT ONE manual-lifetime span (`span = tracer.start_span(...)` held across a scope and
+    ended later). With with-blocks a child''s block is lexically nested inside its parent''s, so the parent''s
+    __exit__ -- and therefore its on_end -- cannot run first. The interleaving needs a span whose end()
+    can be called out of order, or one handed to another thread; production has neither. So this is not
+    a risk being accepted, it is a shape the code cannot produce. MADE A MAINTAINED INVARIANT rather than
+    a one-time observation: test_b164b_no_production_span_has_a_manually_managed_lifetime reddens the
+    moment a manual-lifetime span appears in src/, with a message saying B-164(b) must then be re-adjudicated
+    on its merits rather than dismissed by an assumption that has quietly expired. Mutation-probed by
+    introducing one such span -- the invariant fires. Scoped to src/ deliberately: the tests in that module
+    DO use manual lifetimes, which is how the interleavings are constructed at all. WITH (a) CLOSED AT
+    #1332, B-164 IS NOW FULLY CLOSED.'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency — **(a) `force_flush` returning before an
     in-flight detached batch reaches downstream: CLOSED at PR #1332**; **(b) a child paused before it
-    registers cannot be registered by any lock: OPEN** *(surfaced by out-of-family Codex rounds 4–6 at
-    the B-136/B-163 arc, 2026-08-13)*'
+    registers: CLOSED at PR #1334 as UNREACHABLE** *(surfaced by out-of-family Codex rounds 4–6 at the
+    B-136/B-163 arc, 2026-08-13)*'
+  pr: 1334

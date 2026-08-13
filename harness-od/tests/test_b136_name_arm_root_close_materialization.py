@@ -35,6 +35,8 @@ untouched either way.
 
 from __future__ import annotations
 
+import ast
+import pathlib
 import threading
 import time
 from typing import Any
@@ -48,6 +50,8 @@ from opentelemetry.sdk.trace import TracerProvider
 _TRIGGER_ROOT = "sandbox.violation"
 #: Always-sampled but NOT a §10.2 trigger — the population that loses its siblings.
 _QUIET_ROOT = "hitl.gate.evaluated"
+#: Repo root, for the src/-scoped invariant below.
+_REPO = pathlib.Path(__file__).resolve().parents[2]
 
 
 class _Downstream:
@@ -1018,3 +1022,51 @@ def test_b164_a_post_cutoff_batch_does_not_consume_the_flush_budget() -> None:
     for th in late_thread:
         th.join(timeout=5.0)
         assert not th.is_alive(), "the late producer hung"
+
+
+def test_b164b_no_production_span_has_a_manually_managed_lifetime() -> None:
+    """**B-164(b) disposition** — the malformed-trace shape is structurally unreachable.
+
+    B-164(b) is the residual a lock cannot close: a child descheduled before it registers,
+    while a concurrent root materializes the trace. Reaching it requires a **root to end
+    before its own child**, and its close-out step (3) asked whether that is worth defending
+    against at all.
+
+    It is not, because it **cannot happen in this codebase** — and this test is what makes
+    that a maintained invariant rather than a one-time observation.
+
+    Every span-opening site under `harness-*/src/` uses `with tracer.start_as_current_span(...)`.
+    There is not a single manual-lifetime span (`span = tracer.start_span(...)` held across a
+    scope and ended later). With `with`-blocks, a child's block is lexically nested inside
+    its parent's, so the parent's `__exit__` — and therefore its `on_end` — cannot run first.
+    The interleaving needs a manually-managed span whose `end()` can be called out of order,
+    or one handed to another thread, and production has neither.
+
+    If a manual-lifetime span is ever introduced, this reddens and B-164(b) must be
+    re-adjudicated on its merits rather than dismissed by an assumption that has quietly
+    expired. (The tests in this module DO use manual lifetimes — deliberately, to construct
+    the interleavings — which is exactly why the invariant is scoped to `src/`.)
+    """
+    manual_sites: list[str] = []
+    for path in _REPO.glob("harness-*/src/**/*.py"):
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:  # pragma: no cover - a syntax error fails the suite anyway
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            for sub in ast.walk(node.value):
+                if (
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Attribute)
+                    and sub.func.attr == "start_span"
+                ):
+                    manual_sites.append(f"{path.relative_to(_REPO)}:{node.lineno}")
+
+    assert manual_sites == [], (
+        f"production now holds span(s) with a manually managed lifetime: {manual_sites}. A "
+        "span that can be ended out of order — or handed to another thread — makes B-164(b)'s "
+        "root-ends-before-its-child interleaving REACHABLE, so that row can no longer be "
+        "dismissed as a malformed-trace shape and must be re-adjudicated."
+    )
