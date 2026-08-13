@@ -7466,7 +7466,7 @@ items:
     least one span-backed member is a ROOT, since skill.activation is emitted from workflow_driver.py:3206
     which PRECEDES the envelope open at :3305. The starvation is therefore SCOPED to members emitted inside
     the envelope, and any repricing of step (3) must be against that set, not all 19. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py
-    -- 17 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
+    -- 18 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
     by replacing ParentBased(root=X) with the bare X (both load-bearing tests go RED). STEP (3) REPRICED
     BY TWO MEASURED COUNTERFACTUALS AT THE SAME VENUE. (a) CANDIDATE A-PRIME -- NOT the row''s candidate
     A, which is mode-conditional ALWAYS_ON with the s10.3 ratio moved INTO the tail consumer and was NOT
@@ -7531,7 +7531,15 @@ items:
     the starved population (it is not universal) rather than exempting skill.activation outright. GENERAL
     LESSON now applied to every root/child claim on this row: source-line ordering relative to the local
     envelope proves ORDERING, never TRACE-ROOT STATUS -- root status depends on the call venue, and this
-    workspace has at least two venues (top-level api.run and nested sub-agent dispatch) for the same code.'
+    workspace has at least two venues (top-level api.run and nested sub-agent dispatch) for the same code.
+    A-PRIME IS A PARTIAL, NAME-ONLY REMEDY (measured 2026-08-13, codex round 15): it addresses only ONE
+    of the two starved populations. Removing ParentBased exposes every span''s NAME to HarnessCompositeSampler,
+    repairing the non-root NAME-BACKED members; it does NOTHING for the EVENT-CARRIED members (the B-133
+    family, which B-137 explicitly includes), because those ride as span EVENTS on an ordinary carrier and
+    at span creation the head still sees only the carrier''s name and applies the base-rate draw. Measured
+    at base_rate=0.0: A-prime exports hitl.gate.evaluated and NOT the event-carrying ordinary.carrier. So
+    A-prime must NOT be selected at step (3) as a complete repair -- it would leave the event-carried floor
+    starved. Pinned by test_candidate_a_prime_is_a_name_only_remedy.'
   council: 'YES, and this is the row in the family that genuinely earns one -- unlike B-133, whose repair was
     single-domain. Candidate A trades a real observability floor (C7: a preserved class that is dropped
     before any preservation rule can act on it is not preserved) against a 5x-to-10x in-process span

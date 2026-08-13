@@ -1185,3 +1185,35 @@ def test_a_nested_child_resume_runs_under_subagent_span() -> None:
         f"`subagent.span` block (lines {body_start}-{body_end}) — re-derive B-162's "
         "top-level-only scoping"
     )
+
+
+def test_candidate_a_prime_is_a_name_only_remedy() -> None:
+    """**A′ does not rescue the event-carried population** (out-of-family Codex round 15).
+
+    B-137 names two starved populations, and A′ addresses only one of them. Removing
+    `ParentBased` exposes every span's NAME to `HarnessCompositeSampler`, which repairs the
+    non-root **name-backed** members. It does nothing for the **event-carried** members —
+    the `B-133` family, which B-137 explicitly includes — because those ride as span EVENTS
+    on an ordinary carrier, and at span creation the head still sees only the carrier's
+    name and applies the base-rate draw.
+
+    So A′ is a **partial, name-only** remedy. Listing it in the step-(3) option set without
+    that qualification could lead the council to select an incomplete repair.
+    """
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(sampler=HarnessCompositeSampler(base_rate=0.0))
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("b137.a_prime.scope")
+
+    with tracer.start_as_current_span(_ENVELOPE):
+        with tracer.start_as_current_span(_MEMBER):  # name-backed §9.2 member
+            pass
+    with tracer.start_as_current_span("ordinary.carrier") as carrier:
+        carrier.add_event(_SANDBOX)  # §9.2 member riding as an EVENT
+
+    exported = sorted(s.name for s in exporter.get_finished_spans())
+    assert exported == [_MEMBER], (
+        f"expected A′ to rescue ONLY the name-backed member; got {exported}. If the "
+        "event-carried carrier now survives, A′ is no longer name-only and step (3)'s "
+        "option set must be re-priced."
+    )
