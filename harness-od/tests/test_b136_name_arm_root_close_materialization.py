@@ -1042,9 +1042,11 @@ def test_b164b_the_only_manual_lifetime_span_is_uncalled() -> None:
     copies the `contextvars` context, so the OTel parent propagates into that thread and
     `llm_dispatch` opens a real child span there — and the §25.11 barrier deadline then
     unwinds the `workflow.envelope` root while that child is still open. So a root CAN end
-    before its own child with zero manual `start_span` calls, and B-164(b) stays OPEN until
-    someone either builds a repro through that path or argues positively that an orphaned
-    child span cannot reach the processor after its root materializes.
+    before its own child with zero manual `start_span` calls. That is no longer a hypothesis:
+    the repro at `harness-runtime/tests/test_b164b_fanout_orphaned_child_span_repro.py` drives
+    the real fan-out and shows the orphaned child is stranded, and — under buffer pressure —
+    evicted and permanently lost. B-164(b) stays OPEN until that defect is FIXED (the shape is
+    a post-materialization late-arrival path, not a wider lock).
 
     **A first version of this test asserted the wrong thing and passed vacuously.** It
     claimed production held *zero* manual-lifetime spans, but filtered on `ast.Assign` only —
