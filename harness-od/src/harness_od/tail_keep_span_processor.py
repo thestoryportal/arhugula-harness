@@ -167,6 +167,7 @@ set + `is_always_sampled` decomposed-prefix lookup.
 from __future__ import annotations
 
 import threading
+import time
 from typing import TYPE_CHECKING
 
 from opentelemetry.context import Context
@@ -272,6 +273,47 @@ class TailKeepSpanProcessor(SpanProcessor):
         # every span in the process. `_publish_keep_and_maybe_detach` therefore detaches the
         # bucket under the lock and RETURNS it, so the caller forwards outside.
         self._state_lock = threading.RLock()
+        # `B-164` — batches detached under `_state_lock` are forwarded OUTSIDE it (so a slow
+        # exporter cannot serialize every span). That leaves a window where spans have left
+        # `_buffer` but have not yet reached `downstream`, and a concurrent `force_flush()`
+        # would see an empty buffer and return — defeating its own documented purpose,
+        # "flush any still-buffered traces … to avoid silent loss on shutdown". These two
+        # track batches in that window so `force_flush` can wait for them.
+        # The condition shares `_state_lock`, so a batch is registered as in-flight in the
+        # SAME critical section that detaches it. With two separate locks there was a gap:
+        # `_publish_keep_and_maybe_detach` popped the batch, released, and only then did the
+        # forwarder increment — a `force_flush` landing in between saw an empty buffer AND
+        # zero in-flight, and returned while the spans were in the air (out-of-family Codex).
+        # `B-164` round 5 — a span whose `on_end` has STARTED but has not yet taken
+        # `_state_lock` is work `force_flush` must also wait for: it can register a batch
+        # AFTER the in-flight wait has already observed zero, landing during the downstream
+        # flush. Counting entry/exit of `on_end` covers that window; the batch counter alone
+        # cannot, because the batch does not exist yet.
+        # `B-164` round 7 — the entry counter needs its OWN lock. If it were guarded by
+        # `_state_lock` (which `_inflight_cv` shares), a callback reaching `on_end` while
+        # `force_flush` holds that lock would block BEFORE being counted; the flusher could
+        # release, immediately reacquire for its zero check, see nothing and return — after
+        # which the queued callback buffers an already-ended span. This lock is only ever
+        # held for two integer operations, so it is never contended for long.
+        self._entry_lock = threading.Lock()
+        # `B-164` round 8 — entrants carry a monotonic sequence number so a flush waits only
+        # for callbacks that were ALREADY IN FLIGHT at its own cutoff. Waiting on a bare
+        # count would also include callbacks that started after the flush began, so under
+        # sustained tracing the count never reaches zero and `force_flush` burns its whole
+        # budget and reports failure even though everything present at invocation drained.
+        self._entry_seq = 0
+        self._active_entries: set[int] = set()
+        # Detached batches carry the generation of the `on_end` that produced them, so a
+        # flush waits only for batches from entrants at or below its own cutoff. A bare
+        # count would let post-cutoff traffic consume the budget — the same spurious-failure
+        # shape the entrant cutoff fixed, one level down (`B-164` round 9).
+        self._inflight_batch_seqs: list[int] = []
+        # The generation of the `on_end` running on THIS thread, so the detach path can tag
+        # its batch without threading the id through every call site. `force_flush`'s own
+        # drained batch is tagged 0, which is at or below every cutoff and so is always
+        # waited for by the flush that produced it.
+        self._current_entry = threading.local()
+        self._inflight_cv = threading.Condition(self._state_lock)
         # Per-trace_id buffer of non-always-sampled spans pending root-close
         # keep decision. Keyed by the int form of OTel trace_id. Python dict
         # insertion order makes `next(iter(...))` the oldest trace (FIFO
@@ -318,6 +360,22 @@ class TailKeepSpanProcessor(SpanProcessor):
         self._downstream.on_start(span, parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
+        with self._entry_lock:
+            self._entry_seq += 1
+            entry_id = self._entry_seq
+            self._active_entries.add(entry_id)
+        self._current_entry.value = entry_id
+        try:
+            self._on_end_inner(span)
+        finally:
+            with self._entry_lock:
+                self._active_entries.discard(entry_id)
+            # Wake any flusher parked on the batch condition; the entry count it also
+            # consults is read under `_entry_lock`, never this one.
+            with self._inflight_cv:
+                self._inflight_cv.notify_all()
+
+    def _on_end_inner(self, span: ReadableSpan) -> None:
         """Buffer non-always-sampled spans by trace_id; flush-or-drop on root close.
 
         Always-sampled spans (per §9.2) forward immediately to `downstream`.
@@ -406,9 +464,14 @@ class TailKeepSpanProcessor(SpanProcessor):
             _pending = self._publish_keep_and_maybe_detach(
                 ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
             )
-            self._downstream.on_end(span)
-            for _sibling in _pending:
-                self._downstream.on_end(_sibling)
+            # `_pending` is ALREADY registered in flight by the detach above, so the
+            # forwarding of `span` must not be able to skip the release. If
+            # `downstream.on_end(span)` raises, the count would otherwise stay positive
+            # forever and every later `force_flush` would burn its whole budget.
+            try:
+                self._downstream.on_end(span)
+            finally:
+                self._forward_detached(_pending)
             return
 
         # `B-133` EVENT-AWARE ARM (OD spec v1.38 §9.2.1, U-OD-59). Three §9.2
@@ -456,9 +519,14 @@ class TailKeepSpanProcessor(SpanProcessor):
             _pending = self._publish_keep_and_maybe_detach(
                 ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
             )
-            self._downstream.on_end(span)
-            for _sibling in _pending:
-                self._downstream.on_end(_sibling)
+            # `_pending` is ALREADY registered in flight by the detach above, so the
+            # forwarding of `span` must not be able to skip the release. If
+            # `downstream.on_end(span)` raises, the count would otherwise stay positive
+            # forever and every later `force_flush` would burn its whole budget.
+            try:
+                self._downstream.on_end(span)
+            finally:
+                self._forward_detached(_pending)
             return
 
         ctx = span.get_span_context()
@@ -502,10 +570,52 @@ class TailKeepSpanProcessor(SpanProcessor):
         # Root close detection: parent SpanContext is None means this span
         # has no parent in the recorded trace (it is the local-root). At
         # span-end, OTel `ReadableSpan.parent` is `None` for the root.
-        for _pending in self._publish_keep_and_maybe_detach(
-            trace_id, is_trigger=_trigger, is_root_close=is_root_close
-        ):
-            self._downstream.on_end(_pending)
+        self._forward_detached(
+            self._publish_keep_and_maybe_detach(
+                trace_id, is_trigger=_trigger, is_root_close=is_root_close
+            )
+        )
+
+    def _batches_pending(self, cutoff: int) -> bool:
+        """True while a detached batch produced at or before `cutoff` is still forwarding."""
+        return any(seq <= cutoff for seq in self._inflight_batch_seqs)
+
+    def _entry_cutoff(self) -> int:
+        """Snapshot the entry sequence — a flush waits only for entrants at or below it."""
+        with self._entry_lock:
+            return self._entry_seq
+
+    def _entrants_pending(self, cutoff: int) -> bool:
+        """True while an `on_end` that entered at or before `cutoff` is still running.
+
+        Read under `_entry_lock` — deliberately NOT `_state_lock`, so a callback queued on
+        the state lock is already registered here before a flusher can observe zero. The
+        cutoff is what keeps a flush from waiting on traffic that arrived after it began.
+        """
+        with self._entry_lock:
+            return any(entry_id <= cutoff for entry_id in self._active_entries)
+
+    def _forward_detached(self, spans: list[ReadableSpan]) -> None:
+        """Forward a detached batch downstream, counted as in-flight (`B-164`).
+
+        The batch has already left `_buffer`, so `force_flush` can no longer see it there.
+        Registering it here — and only clearing in a `finally` — means a concurrent
+        `force_flush` waits for delivery instead of returning while spans are in the air.
+        `downstream.on_end` is still called with NO processor lock held.
+        """
+        if not spans:
+            return
+        try:
+            for span in spans:
+                self._downstream.on_end(span)
+        finally:
+            with self._inflight_cv:
+                seq = getattr(self._current_entry, "value", 0)
+                if seq in self._inflight_batch_seqs:
+                    self._inflight_batch_seqs.remove(seq)
+                elif self._inflight_batch_seqs:  # pragma: no cover - defensive
+                    self._inflight_batch_seqs.pop()
+                self._inflight_cv.notify_all()
 
     def _publish_keep_and_maybe_detach(
         self, trace_id: int, *, is_trigger: bool, is_root_close: bool
@@ -530,7 +640,15 @@ class TailKeepSpanProcessor(SpanProcessor):
                 return []
             buffered = self._buffer.pop(trace_id, [])
             keep = self._keep.pop(trace_id, False)
-        return buffered if keep else []
+            released = buffered if keep else []
+            if released:
+                # Register the batch as in-flight WHILE still holding the lock that guards
+                # `_buffer`, so no `force_flush` can observe "buffer empty AND nothing in
+                # flight" for a batch that has been detached but not yet forwarded. Tagged
+                # with this thread's entrant generation so a flush can tell whether the
+                # batch predates its cutoff.
+                self._inflight_batch_seqs.append(getattr(self._current_entry, "value", 0))
+        return released
 
     def _evict_oldest_trace(self) -> None:
         """Drop the oldest buffered trace (FIFO) under the max-traces ceiling.
@@ -556,14 +674,58 @@ class TailKeepSpanProcessor(SpanProcessor):
         `downstream.force_flush(timeout_millis)`.
         """
         # Drain the buffer — keep-all on shutdown to avoid silent loss.
-        # `B-163`: detach the whole buffer atomically, then forward outside the lock.
-        with self._state_lock:
-            drained = [span for spans in self._buffer.values() for span in spans]
-            self._buffer.clear()
-            self._keep.clear()
-        for span in drained:
-            self._downstream.on_end(span)
-        return self._downstream.force_flush(timeout_millis=timeout_millis)
+        #
+        # `B-164` — this is a DRAIN-UNTIL-STABLE loop, not a single pass. Three distinct
+        # windows made the single pass unsound, each found by out-of-family review:
+        #   (i)   a batch detached but not yet forwarded (`_inflight_batch_seqs`),
+        #   (ii)  an `on_end` that has started but not yet taken the lock (tracked by
+        #         `_active_entries`)
+        #         — at that moment no batch exists to register, and
+        #   (iii) such a call BUFFERING after the drain has already run, which leaves the
+        #         span in `_buffer` with both counters back at zero.
+        # Waiting on the counters alone fixes (i) and (ii) but not (iii); re-draining after
+        # they settle, and repeating until a drain finds nothing new, covers all three.
+        deadline = time.monotonic() + (timeout_millis / 1000.0)
+        drained_in_time = True
+        # Everything that had entered `on_end` by now must be waited for; later arrivals
+        # must not be, or sustained tracing would make every flush time out.
+        entry_cutoff = self._entry_cutoff()
+
+        while True:
+            with self._state_lock:
+                drained = [span for spans in self._buffer.values() for span in spans]
+                self._buffer.clear()
+                self._keep.clear()
+                if drained:
+                    # Same registration rule as `_publish_keep_and_maybe_detach`. Tagged 0 —
+                    # at or below every cutoff — so the flush always waits for its own batch.
+                    self._current_entry.value = 0
+                    self._inflight_batch_seqs.append(0)
+            self._forward_detached(drained)
+
+            # Let in-progress work settle: batches in the air, and `on_end` calls that have
+            # entered but not yet reached the buffer. Bounded by the caller's own budget —
+            # on expiry we still delegate, so a wedged exporter cannot make `force_flush`
+            # hang forever, but we report failure rather than a false success.
+            with self._inflight_cv:
+                while self._batches_pending(entry_cutoff) or self._entrants_pending(entry_cutoff):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not self._inflight_cv.wait(timeout=remaining):
+                        drained_in_time = not self._batches_pending(
+                            entry_cutoff
+                        ) and not self._entrants_pending(entry_cutoff)
+                        break
+                # Anything that arrived in `_buffer` while we waited needs another pass.
+                more_pending = bool(self._buffer)
+
+            if not more_pending or not drained_in_time or time.monotonic() >= deadline:
+                if more_pending:
+                    drained_in_time = False
+                break
+
+        remaining_millis = max(0.0, deadline - time.monotonic()) * 1000.0
+        downstream_ok = self._downstream.force_flush(timeout_millis=int(remaining_millis))
+        return downstream_ok and drained_in_time
 
     def shutdown(self) -> None:
         """Flush + delegate to downstream.shutdown()."""
