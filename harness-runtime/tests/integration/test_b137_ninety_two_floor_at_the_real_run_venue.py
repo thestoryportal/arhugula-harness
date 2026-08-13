@@ -246,10 +246,14 @@ async def test_admitting_the_root_delivers_the_floor_candidate_c1() -> None:
     """The counterfactual, at the same venue — and it prices step (3).
 
     Adding `workflow.envelope` itself to §9.2 makes the identical run export both spans.
-    So the loss is the ROOT's decision, not an emission failure, and **candidate C1
-    demonstrably delivers the floor** — in one line, at the same `1/base_rate` volume cost
-    as candidate A. Without this arm the finding above could be read as "the member is
-    never emitted", which it is not.
+    So the loss is the ROOT's decision, not an emission failure. Without this arm the
+    finding above could be read as "the member is never emitted", which it is not.
+
+    **Scope — this arm uses `SimpleSpanProcessor`, so it prices the HEAD only.** What C1
+    costs through the shipped tail chain is a separate question, measured by
+    `test_candidate_c1_strands_ordinary_children_in_the_tail_buffer` below; an earlier
+    draft of this arc called C1 "whole traces" on the strength of this test alone, which
+    out-of-family Codex round 3 correctly rejected.
     """
     with _member_set(add=frozenset({_ENVELOPE})):
         exported = await _run_the_real_workflow(base_rate=0.0)
@@ -261,6 +265,89 @@ async def test_admitting_the_root_delivers_the_floor_candidate_c1() -> None:
 # ---------------------------------------------------------------------------
 # The tail half — the row's step (2) names `TailKeepSpanProcessor` explicitly
 # ---------------------------------------------------------------------------
+
+
+class _Counting:
+    """Minimal downstream that records what the tail processor forwards."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    def on_start(self, span: Any, parent_context: Any = None) -> None:
+        return None
+
+    def on_end(self, span: Any) -> None:
+        self.seen.append(span.name)
+
+    def shutdown(self) -> None:
+        return None
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return True
+
+
+def test_candidate_c1_strands_ordinary_children_in_the_tail_buffer() -> None:
+    """**C1's unpriced cost, measured through the SHIPPED tail chain.**
+
+    An earlier draft of this arc priced C1 as *"delivers the floor and keeps traces whole,
+    one line"* on the strength of a `SimpleSpanProcessor` run. Out-of-family Codex round 3
+    rejected that, correctly. Driving the REAL `TailKeepSpanProcessor`:
+
+    * C1 **does** deliver every §9.2 member plus the envelope — those take the
+      always-sampled arm (`tail_keep_span_processor.py:361`) and bypass the buffer;
+    * it does **not** keep traces whole. An ordinary, non-member child stays **buffered**
+      at root close — and stays buffered even when a §10.2 classification trigger fires,
+      because making the ROOT always-sampled means the root itself takes the bypass arm and
+      `return`s **before** the root-close flush-or-drop decision ever runs.
+
+    So under C1 every workflow trace becomes a never-resolving buffered trace, drained only
+    by `force_flush`. That is precisely the **B-136** pressure B-137's own close-out step
+    (5) predicts, and C1 maximises it rather than avoiding it — the opposite of the
+    "cheap one-liner" the earlier draft claimed. Step (3) must price this.
+    """
+
+    def trial(*, envelope_in_set: bool, with_trigger: bool) -> tuple[list[str], int]:
+        downstream = _Counting()
+        tail = TailKeepSpanProcessor(downstream=downstream)
+        provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
+        provider.add_span_processor(tail)
+        tracer = provider.get_tracer("b137.c1")
+        with _member_set(add=frozenset({_ENVELOPE}) if envelope_in_set else frozenset()):
+            with tracer.start_as_current_span(_ENVELOPE):
+                with tracer.start_as_current_span("validator.evaluate"):  # ORDINARY child
+                    pass
+                with tracer.start_as_current_span(_MEMBER):  # §9.2 member child
+                    pass
+                if with_trigger:
+                    with tracer.start_as_current_span("sandbox.violation"):
+                        pass
+        return downstream.seen, sum(len(v) for v in tail._buffer.values())
+
+    # Baseline: today the head drops everything, so nothing is forwarded OR buffered.
+    forwarded, buffered = trial(envelope_in_set=False, with_trigger=False)
+    assert forwarded == [] and buffered == 0, (
+        f"the head no longer drops the whole trace (forwarded={forwarded}, "
+        f"buffered={buffered}) — re-measure B-137"
+    )
+
+    # C1: members forwarded, ordinary child STRANDED.
+    forwarded, buffered = trial(envelope_in_set=True, with_trigger=False)
+    assert sorted(forwarded) == sorted([_MEMBER, _ENVELOPE]), (
+        f"C1 no longer forwards the floor members; got {forwarded}"
+    )
+    assert buffered == 1, (
+        f"expected the ordinary child to remain buffered under C1, got {buffered} — if C1 "
+        "now drains at root close, its B-136 cost is gone and step (3) must be re-priced"
+    )
+
+    # ...and a §10.2 trigger does NOT rescue it, because the always-sampled root returns
+    # before the root-close flush-or-drop decision.
+    forwarded, buffered = trial(envelope_in_set=True, with_trigger=True)
+    assert "sandbox.violation" in forwarded, "the trigger itself should still forward"
+    assert buffered == 1, (
+        "a §10.2 classification trigger flushed the buffer under C1 — that would remove "
+        "C1's never-resolving-trace cost, so step (3)'s pricing must be re-derived"
+    )
 
 
 @pytest.mark.asyncio

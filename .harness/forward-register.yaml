@@ -7466,7 +7466,7 @@ items:
     least one span-backed member is a ROOT, since skill.activation is emitted from workflow_driver.py:3206
     which PRECEDES the envelope open at :3305. The starvation is therefore SCOPED to members emitted inside
     the envelope, and any repricing of step (3) must be against that set, not all 19. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py
-    -- 8 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
+    -- 10 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
     by replacing ParentBased(root=X) with the bare X (both load-bearing tests go RED). STEP (3) REPRICED
     BY TWO MEASURED COUNTERFACTUALS AT THE SAME VENUE. (a) CANDIDATE A-PRIME -- NOT the row''s candidate
     A, which is mode-conditional ALWAYS_ON with the s10.3 ratio moved INTO the tail consumer and was NOT
@@ -7475,12 +7475,18 @@ items:
     whose parent trace was discarded -- and its volume cost is 1/base_rate applied to FLOOR-MEMBER spans
     only, NOT to all spans, which is cheaper than the row''s original x10-on-everything framing but buys
     broken traces. (b) NEW candidate C1 -- add workflow.envelope itself to s9.2 -- delivers the floor to
-    every in-workflow member by inheritance and keeps traces WHOLE, in a one-line change, at the cost of
-    admitting every workflow trace entire (the true 1/base_rate multiplier). So the fork is no longer A-vs-B-vs-C
-    but a sharper trade: ORPHANED FLOOR SPANS AT LOWER VOLUME (A) vs WHOLE TRACES AT FULL VOLUME (C1) vs
-    RATIFYING A ROOT-ONLY FLOOR (C, which must amend s9.2/s9.3''s head=1.0-across-all-cells language). Candidate
-    B remains a reporting option, not a repair. The dyadic C7+C11 council''s stated precondition (step (2)
-    re-measurement first) is now MET.'
+    every in-workflow member by inheritance, in a one-line change. CORRECTED 2026-08-13 (codex round 3):
+    C1 does NOT keep traces whole, and its real cost is worse than a volume multiplier. Measured through
+    the SHIPPED TailKeepSpanProcessor, C1 forwards the envelope and every s9.2 member (both take the always-sampled
+    bypass arm at tail_keep_span_processor.py:361), but an ordinary non-member child stays BUFFERED at root
+    close -- and a s10.2 classification trigger does NOT rescue it, because making the ROOT always-sampled
+    means the root takes the bypass arm and returns BEFORE the root-close flush-or-drop decision runs. So
+    under C1 EVERY workflow trace becomes a never-resolving buffered trace drained only by force_flush --
+    exactly the B-136 pressure this row''s own step (5) predicts, which C1 MAXIMISES rather than avoids.
+    So the fork is no longer A-vs-B-vs-C but a sharper trade: ORPHANED FLOOR SPANS AT LOWER VOLUME (A) vs
+    WHOLE TRACES AT FULL VOLUME (C1) vs RATIFYING A ROOT-ONLY FLOOR (C, which must amend s9.2/s9.3''s head=1.0-across-all-cells
+    language). Candidate B remains a reporting option, not a repair. The dyadic C7+C11 council''s stated
+    precondition (step (2) re-measurement first) is now MET.'
   council: 'YES, and this is the row in the family that genuinely earns one -- unlike B-133, whose repair was
     single-domain. Candidate A trades a real observability floor (C7: a preserved class that is dropped
     before any preservation rule can act on it is not preserved) against a 5x-to-10x in-process span
@@ -8549,35 +8555,37 @@ items:
     rows are files.operation, memory.operation, validator.fail.* and subagent.span (sampling_mode.py:176-190),
     and neither mcp.trust.evaluate nor the operator-burden span is among them. The class is SIX, in two
     shapes. NOTE: pause.captured is arguably the worse case of the four, since operator-explicit pause is
-    exactly the audit-critical event a sampling floor exists for. THE B-137 DEPENDENCY APPLIES TO ALL FOUR:
-    ParentBased(root=...) never consults a non-root child''s name, so membership alone cannot deliver the
-    floor for any of these child spans. REMAINING: decide which side is canonical and make the other conform:
-    either (a) add ALL FOUR unconditional names to the §9.2 member set (19 -> 23) -- hitl.webhook.deliver,
-    hitl.webhook.attempt, pause.captured, resume.attempted -- AND add the TWO conditional ones (mcp.trust.evaluate
-    at audit_required; the operator-burden span at degrade) to the conditional resolver, which today covers
-    only files.operation / memory.operation / validator.fail.* / subagent.span. A one-name edit does NOT
-    close this row and would leave the witness red, so the implementation meets the §C-OD-32.3 floor --
-    note the §9.2 count is cited in several places and a count-contract sweep is owed with it. MEMBERSHIP
-    ALONE IS NOT SUFFICIENT (codex round 7 sibling-overlap check): hitl.webhook.deliver is a CHILD span,
-    and ParentBased(root=HarnessCompositeSampler) never consults a non-root child''s name -- it inherits
-    the parent workflow span''s drop decision. B-137 already registers exactly this non-root starvation,
-    so (a) DEPENDS ON or MERGES WITH B-137; closing it standalone would claim a floor the sampler still
-    cannot deliver; or (b) amend §C-OD-32.3 if webhook spans are genuinely NOT intended to be always-sampled,
-    which would be a cleared-contract change under X-AL-3 and would need to explain how HITL delivery stays
-    audit-critical without a sampling floor. Grounding: DONE 2026-08-12 -- it IS a class (four unconditional
-    + two conditional, across four contracts). Do not repeat it. The materialize_span_processor_stage end-to-end
-    run owed on the B-71 spec leg is also the experiment that settles this empirically. B-137 DEPENDENCY
-    MEASURED 2026-08-13, AND TWO OF THE FOUR NAMES ARE DOUBLY INERT. The row carried the B-137 dependency
-    as a reasoned claim (codex round 7); it is now executed at the real api.run venue. At base_rate=0.0
-    through the shipped path, hitl.gate.evaluated -- an EXISTING s9.2 member with a declared floor -- is
-    not exported at all, because ParentBased consults the sampler only for the workflow.envelope root and
-    the child inherits the drop. So ADDING A NAME TO THE SET DOES NOT DELIVER ITS FLOOR for any member emitted
-    inside the envelope, which is what disposition (a) assumes. SEQUENCING: land B-137 step (3)''s disposition
-    FIRST; B-160''s conformance sweep is then mechanical. SEPARATELY -- emit_pause_captured_span and emit_resume_attempted_span
-    have NO CALLER ANYWHERE IN src/ (registered as B-162), so pause.captured and resume.attempted are never
-    emitted in production at all. Adding a never-emitted name to the floor set changes nothing, so two of
-    this row''s four unconditional names are inert for a SECOND, independent reason, and B-160''s disposition
-    (a) should not be written as though all four are symmetric. Executed at harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py.
+    exactly the audit-critical event a sampling floor exists for. THE B-137 DEPENDENCY APPLIES TO THREE
+    OF THE FOUR (SUPERSEDED 2026-08-13 from ''ALL FOUR'' -- resume.attempted is emitted before the envelope
+    opens and would be a ROOT, so membership alone delivers its floor once B-162 wires it): ParentBased(root=...)
+    never consults a non-root child''s name, so membership alone cannot deliver the floor for any of these
+    child spans. REMAINING: decide which side is canonical and make the other conform: either (a) add ALL
+    FOUR unconditional names to the §9.2 member set (19 -> 23) -- hitl.webhook.deliver, hitl.webhook.attempt,
+    pause.captured, resume.attempted -- AND add the TWO conditional ones (mcp.trust.evaluate at audit_required;
+    the operator-burden span at degrade) to the conditional resolver, which today covers only files.operation
+    / memory.operation / validator.fail.* / subagent.span. A one-name edit does NOT close this row and would
+    leave the witness red, so the implementation meets the §C-OD-32.3 floor -- note the §9.2 count is cited
+    in several places and a count-contract sweep is owed with it. MEMBERSHIP ALONE IS NOT SUFFICIENT (codex
+    round 7 sibling-overlap check): hitl.webhook.deliver is a CHILD span, and ParentBased(root=HarnessCompositeSampler)
+    never consults a non-root child''s name -- it inherits the parent workflow span''s drop decision. B-137
+    already registers exactly this non-root starvation, so (a) DEPENDS ON or MERGES WITH B-137; closing
+    it standalone would claim a floor the sampler still cannot deliver; or (b) amend §C-OD-32.3 if webhook
+    spans are genuinely NOT intended to be always-sampled, which would be a cleared-contract change under
+    X-AL-3 and would need to explain how HITL delivery stays audit-critical without a sampling floor. Grounding:
+    DONE 2026-08-12 -- it IS a class (four unconditional + two conditional, across four contracts). Do not
+    repeat it. The materialize_span_processor_stage end-to-end run owed on the B-71 spec leg is also the
+    experiment that settles this empirically. B-137 DEPENDENCY MEASURED 2026-08-13, AND TWO OF THE FOUR
+    NAMES ARE DOUBLY INERT. The row carried the B-137 dependency as a reasoned claim (codex round 7); it
+    is now executed at the real api.run venue. At base_rate=0.0 through the shipped path, hitl.gate.evaluated
+    -- an EXISTING s9.2 member with a declared floor -- is not exported at all, because ParentBased consults
+    the sampler only for the workflow.envelope root and the child inherits the drop. So ADDING A NAME TO
+    THE SET DOES NOT DELIVER ITS FLOOR for any member emitted inside the envelope, which is what disposition
+    (a) assumes. SEQUENCING: land B-137 step (3)''s disposition FIRST; B-160''s conformance sweep is then
+    mechanical. SEPARATELY -- emit_pause_captured_span and emit_resume_attempted_span have NO CALLER ANYWHERE
+    IN src/ (registered as B-162), so pause.captured and resume.attempted are never emitted in production
+    at all. Adding a never-emitted name to the floor set changes nothing, so two of this row''s four unconditional
+    names are inert for a SECOND, independent reason, and B-160''s disposition (a) should not be written
+    as though all four are symmetric. Executed at harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py.
     AND THE TWO UNCALLED NAMES ARE THEMSELVES ASYMMETRIC (2026-08-13, codex round 2): resume.attempted would
     be emitted BEFORE workflow.envelope opens (workflow_driver.py:3213-3225 vs :3305), so once B-162 wires
     it, membership ALONE delivers its floor -- it is the single name of the four for which disposition (a)
@@ -8643,9 +8651,10 @@ items:
     and resume branches to call them with the driver-held tracer per the pattern both docstrings already
     specify, and add emission witnesses. If no, the contract''s head=1.0 declaration is what to amend, via
     design-phase back-flow. (2) Either way, re-word B-160''s disposition (a) so its four names are no longer
-    presented as one symmetric sweep. (3) Note that wiring them does NOT by itself deliver their floor --
-    they would be emitted inside workflow.envelope and so land in B-137''s root-only starvation. WITNESS:
-    harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py::test_the_pause_span_emitters_have_no_caller_in_src
+    presented as one symmetric sweep. (3) SUPERSEDED 2026-08-13 -- true for pause.captured ONLY. pause.captured
+    would be an envelope child and so lands in B-137''s root-only starvation; resume.attempted would be
+    emitted BEFORE the envelope opens and so would be a ROOT, receiving its s9.2 floor directly once added
+    to the set. DO NOT BLOCK RESUME WIRING ON B-137. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py::test_the_pause_span_emitters_have_no_caller_in_src
     -- enumerates src/ for callers of both helpers and fails if either acquires one. TOPOLOGY SPLIT 2026-08-13
     (out-of-family Codex round 2) -- THE TWO SPANS ARE NOT SYMMETRIC. A first draft of this row gated both
     on B-137. That holds for pause.captured (an envelope child) and FAILS for resume.attempted: the driver
