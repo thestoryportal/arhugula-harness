@@ -96,7 +96,12 @@ this unit's files — they are U-RT-155's, per Runtime spec v1.121.
     entry. Witnessed end-to-end — escalate, then read the snapshot and assert the echo
     equals the delivered token. **Without this criterion the field is declared and never
     populated**, every resume takes the recompute arm, and criterion 4's echo arm is
-    unreachable in production even though its unit test passes.
+    unreachable in production even though its unit test passes. **The witness also covers
+    the CARRIED-FORWARD path at BOTH snapshot builders** (`workflow_driver.py:10442-10461`
+    and `:14810-14829`): a warm-up-withheld gate-owning branch is reconstructed with no new
+    brief, and its row MUST carry the prior token forward rather than default to `None` —
+    otherwise a resume recomputes and can rotate the key of an escalation the operator is
+    still holding. Witnessing only mint-to-first-snapshot would miss this entirely.
 12. **Legacy durable snapshots still resume after upgrade** (spec §0.4.2 compatibility
     clause): the field is DROPPED from the serialized form when `None`, mirroring
     `_strip_default_fanout_resume_fields`'s existing treatment of `hitl_gate_config_hash`.

@@ -235,6 +235,16 @@ unsatisfiable as written:
 | **Absence** | `None` means *not yet persisted* — the mint→persist window of §0.8 — and licenses the deterministic recompute, never a fresh mint |
 | **WRITER** | the **pause-signal / snapshot producer**, which copies the minted token from the brief into this field as it composes the per-branch entry. Naming the writer is not optional: without it the field is declared, never populated, and the echo is `None` forever — which is the §0.4.3 defect in mirror image, on the write side |
 
+**A CARRIED-FORWARD row preserves its echo; it is never rebuilt as `None`.** When a
+recovered gate-owning branch is withheld by warm-up scheduling, the snapshot builders
+reconstruct its row from the carried-forward set **without a new brief in hand**
+(`workflow_driver.py:10442-10461` and `:14810-14829`). A reconstruction that defaulted the
+field would silently reset a persisted token to `None`, and the next resume would recompute
+in defiance of §0.4(5) — **rotating the key of an escalation the operator is still holding**
+if the basis has since changed. The prior row's value is therefore copied forward verbatim;
+"no new brief" licenses preservation, never a reset. Found by out-of-family review, which
+traced the real re-pause path rather than the mint path.
+
 **The write is what closes the loop, and it is stated because declaring a field is not
 the same as filling it.** The minter at §14.8.8.1 step 1 places the token on the
 `HITLEscalationBrief`; nothing in that step reaches the snapshot. If the producer does not
