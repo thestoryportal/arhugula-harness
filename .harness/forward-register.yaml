@@ -59,13 +59,13 @@
 
 snapshot:
   total: 161
-  open: 1
+  open: 2
   design_substrate_gated: 0
-  registered_finding: 31
+  registered_finding: 30
   operator_gated: 0
   held: 2
   closed: 127
-  identity_digest: '1833f90c7554e765'
+  identity_digest: '5a8f67c21463d5c0'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -2305,7 +2305,7 @@ items:
 - id: B-71
   title: Operator-facing HITL escalation requests carry no run-instance-distinct correlation
     identifier
-  status: registered_finding
+  status: open
   summary: HITLEscalationBrief and the HITL webhook payload derive their identifiers from a
     workflow_id-scoped action_id (compose_hitl_action_id), not run_id -- two peer branches sharing
     a child_workflow_id produce byte-identical escalation requests, making B-39's hitl_responses

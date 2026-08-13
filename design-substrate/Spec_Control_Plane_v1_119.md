@@ -116,9 +116,18 @@ value enters the composer — after that point it is already on an exported carr
 
 The following are **contractually barred** from any operator-facing or exported field of
 this brief: `snapshot_run_id`; the internal pre-dispatch identity in un-hashed form; any
-`run_id`-shaped string; and raw basis material of any kind. This is a **structural**
-restriction in the contract, not operator discipline — the C-CP-21 §21.3
-palette-restriction precedent.
+`run_id`-shaped string; and raw basis material. This is a **structural** restriction in
+the contract, not operator discipline — the C-CP-21 §21.3 palette-restriction precedent.
+
+**ONE scoped exception, and its limit.** The branch **ordinal** is part of the pre-hash
+basis, and `branch_context` (§0.6) exists to state it. The bar therefore does NOT cover
+the ordinal rendered **as prose on `branch_context`** — without that carve-out the two
+sections would contradict each other and no implementation could satisfy both. The
+exception is exactly as narrow as the council scoped it: it is **not** precedent for
+structured ordinal export. The ordinal MUST NOT appear as a typed/parseable field, on
+any other key, or on any exported span attribute; and the carve-out extends to **nothing
+else** in the basis — `snapshot_run_id` and the un-hashed identity stay barred without
+qualification, including from `branch_context` itself.
 
 **Cited, not settled here:** whether an OD redaction surface additionally filters these
 attributes is unexamined; the bar above does not depend on it, since a redactor is a
@@ -132,7 +141,7 @@ All three are additive keys on the contractually-opaque `payload_body` Mapping (
 | Key | Shape | Contract |
 |---|---|---|
 | `branch_context` | display-only prose | The branch's ordinal **in prose**, under an explicit no-format commitment. Barred by §0.5 from carrying identity material. Never parsed. |
-| `resolvability` | the closed `PauseLocationVariant` vocabulary (C-CP-21 §2.1 of the projection surface) | The **resolution CHANNEL**, never the outcome. For this population, `uniform-fallback-only`. |
+| `resolvability` | the closed `PauseLocationVariant` vocabulary (`Spec_Control_Plane_v1_112.md` §2.1, the public projection surface) | The **resolution CHANNEL**, never the outcome. For this population, `uniform-fallback-only`. |
 | `resolvability_note` | prose | States the sole-member RULE and routes the operator; promises no live status. |
 
 **`resolvability` carries the channel, never the outcome — and this is a correctness
@@ -146,7 +155,8 @@ the action that would end the parking. The channel is time-**invariant** and so 
 assert one.
 
 **No new vocabulary is minted.** `resolvability` reuses the closed `PauseLocationVariant`
-enumeration the pause-view projection already assigns, so the webhook and the pause view
+enumeration published at `Spec_Control_Plane_v1_112.md` §2.1, which the pause-view
+projection already assigns, so the webhook and the pause view
 cannot become two authorities over one concept.
 
 **`resolvability_note` promises no live status.** The pause view cannot report live
