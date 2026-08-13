@@ -27,12 +27,13 @@ root-only**, so a member emitted inside the envelope does not receive it.
    nested, recursive `execute_workflow` the dispatcher invokes the child runner inside an
    active `subagent.span`, so the same pre-envelope emit is a child and is starved too.
 
-2. An earlier draft called `emit_pause_captured_span` a *"real production emitter."* It is
-   a real function with **no caller anywhere in `src/`** — so `pause.captured` and
-   `resume.attempted` are never emitted in production, and the earlier witness drove a
-   manufactured composition rather than a shipped path. That is why this module measures
-   `hitl.gate.evaluated` through `api.run` instead. The uncalled-emitter fact is registered
-   as **B-162** and pinned by `test_the_pause_span_emitters_have_no_caller_in_src`.
+2. An earlier draft called `emit_pause_captured_span` a *"real production emitter."* At
+   the time it was a real function with **no caller anywhere in `src/`** — so
+   `pause.captured` and `resume.attempted` were never emitted in production, and that draft
+   drove a manufactured composition rather than a shipped path. That is why this module
+   measures `hitl.gate.evaluated` through `api.run`. The uncalled-emitter fact was
+   registered as **B-162** and has since been **CLOSED** by wiring the driver; the
+   assertion is now inverted at `test_the_pause_span_emitters_are_now_wired_b162_closed`.
 
 **And a third correction, from round 2 — the two uncalled spans are NOT symmetric.** A
 first draft of B-162 gated both on B-137. Wrong for one of them: the driver runs
@@ -494,8 +495,10 @@ async def test_admitting_the_root_delivers_the_floor_candidate_c1() -> None:
     """
     with _member_set(add=frozenset({_ENVELOPE})):
         exported = await _run_the_real_workflow(base_rate=0.0)
-    assert exported == [_MEMBER, _ENVELOPE], (
-        f"admitting the root did not deliver the floor to its child; got {exported}"
+    # `pause.captured` joined this set when B-162 wired the driver-side emission — the
+    # B-72 venue really does pause, so the span is now live on this path.
+    assert exported == sorted([_MEMBER, "pause.captured", _ENVELOPE]), (
+        f"admitting the root did not deliver the floor to its children; got {exported}"
     )
 
 
@@ -955,28 +958,39 @@ def _callers_of(helper: str) -> list[str]:
     return sorted(hits)
 
 
-def test_the_pause_span_emitters_have_no_caller_in_src() -> None:
-    """The second correction — and a finding in its own right (**B-162**).
+def test_the_pause_span_emitters_are_now_wired_b162_closed() -> None:
+    """**B-162 CLOSED** — the emitters that had no caller in `src/` are now invoked.
 
-    `emit_pause_captured_span` / `emit_resume_attempted_span` implement C-OD-30.3's two
-    declared `head=1.0` spans, but nothing in `src/` calls them, so neither span is ever
-    emitted in production. That is why an earlier draft's "real production emitter" claim
-    was wrong, and it makes two of B-160's four unconditional names inert for a second,
-    independent reason: adding a never-emitted name to the floor set changes nothing.
+    When this arc first measured B-137 at the real venue, `emit_pause_captured_span` and
+    `emit_resume_attempted_span` implemented `C-OD-30.3`'s two declared `head=1.0` spans and
+    **nothing in `src/` called either**, so neither span was ever emitted in production —
+    `U-CP-65`'s AC #1, #2 and #5 were unmet even though the helpers themselves were landed
+    and unit-tested. That was registered as **B-162** and this test asserted the absence,
+    with the message *"re-ground B-160's and B-162's dispositions"* so closing it could not
+    happen silently.
+
+    It has now been closed: `workflow_driver.py` calls `_emit_pause_captured` after every
+    `protocol.capture_pause_snapshot(...)` (11 sites across the 6 topology executors) and
+    `_emit_resume_attempted` after the entry-point `protocol.attempt_resume(...)`. The
+    assertion is therefore INVERTED — it now guards against the wiring being lost again.
     """
-    # Positive control: the scanner must actually FIND callers, or "no callers" below is
-    # unfalsifiable. `capture_pause_snapshot` is the sibling the driver really does call.
-    control = _callers_of("capture_pause_snapshot")
-    assert control, (
-        "the caller scanner found no callers of `capture_pause_snapshot`, which the driver "
-        "demonstrably calls — the no-caller results below are unreliable"
-    )
+    pause_callers = _callers_of("emit_pause_captured_span")
+    resume_callers = _callers_of("emit_resume_attempted_span")
 
-    for helper in ("emit_pause_captured_span", "emit_resume_attempted_span"):
-        callers = _callers_of(helper)
-        assert callers == [], (
-            f"`{helper}` now has caller(s) {callers} — C-OD-30.3's span may be live in "
-            "production; re-ground B-160's and B-162's dispositions, which assume it is not"
+    assert pause_callers, (
+        "`emit_pause_captured_span` has no caller in `src/` again — C-OD-30.3's "
+        "`pause.captured` span is not emitted in production and B-162 has REGRESSED"
+    )
+    assert resume_callers, (
+        "`emit_resume_attempted_span` has no caller in `src/` again — C-OD-30.3's "
+        "`resume.attempted` span is not emitted in production and B-162 has REGRESSED"
+    )
+    # Both are called from the workflow driver, which is the venue U-CP-65 prescribes
+    # ("workflow driver invokes capture_pause_snapshot, then this helper").
+    for caller in pause_callers + resume_callers:
+        assert "workflow_driver.py" in caller, (
+            f"an emitter is invoked from {caller}, not the workflow driver — U-CP-65's "
+            "caller-side convention names the driver as the emission venue"
         )
 
 

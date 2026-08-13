@@ -61,11 +61,11 @@ snapshot:
   total: 162
   open: 1
   design_substrate_gated: 0
-  registered_finding: 31
+  registered_finding: 30
   operator_gated: 0
   held: 2
-  closed: 128
-  identity_digest: '80bde1613155b44b'
+  closed: 129
+  identity_digest: 'a04504f65414b512'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -8657,7 +8657,10 @@ items:
     for TOP-LEVEL resumes ONLY. Pinned by test_a_nested_child_resume_runs_under_subagent_span. NOTE 2026-08-13
     (codex round 12): the nested-resume witness is STRUCTURAL (lexical containment of the child dispatch
     inside the subagent.span block), not an executed parentage observation -- an executed nested-resume
-    witness is OWED before acting on the top-level-vs-nested split.'
+    witness is OWED before acting on the top-level-vs-nested split. UPDATE 2026-08-13 (PR #1330): B-162
+    is CLOSED by WIRING -- pause.captured and resume.attempted are now genuinely emitted in production,
+    so the ''doubly inert'' qualifier on those two names is RETIRED. They are now ordinary members of this
+    row''s conformance sweep, still gated on B-137 for the floor to actually reach them.'
   council: 'no at registration -- this is a conformance reconciliation between two OD surfaces,
     not a design fork. It becomes council-eligible only under disposition (b), which would
     relax an inviolable §9.3 floor.'
@@ -8701,7 +8704,8 @@ items:
 - id: B-162
   title: C-OD-30.3's two declared head=1.0 spans (pause.captured / resume.attempted) have emitters that
     NOTHING in src/ calls, so neither span is ever emitted in production
-  status: registered_finding
+  status: closed
+  pr: 1330
   summary: 'harness-cp/src/harness_cp/pause_resume_protocol.py:904 and :925 define emit_pause_captured_span
     / emit_resume_attempted_span, each opening the span its C-OD-30.3 contract declares at head=1.0. NO
     call site exists anywhere under harness-*/src/ -- the only matches are the definitions themselves
@@ -8743,7 +8747,21 @@ items:
     So ''membership alone is sufficient'' holds for TOP-LEVEL resumes ONLY. Pinned by test_a_nested_child_resume_runs_under_subagent_span.
     NOTE 2026-08-13 (codex round 12): the nested-resume witness is STRUCTURAL (lexical containment of the
     child dispatch inside the subagent.span block), not an executed parentage observation -- an executed
-    nested-resume witness is OWED before acting on the top-level-vs-nested split.'
+    nested-resume witness is OWED before acting on the top-level-vs-nested split. CLOSED 2026-08-13 (PR
+    #1330) -- WIRED, not amended. Grounding settled the live-vs-amend question decisively: U-CP-65''s ACs
+    require the spans to EMIT (AC #1, AC #2) and require an INTEGRATION TEST verifying emission via an OTel
+    collector (AC #5), so this was an incomplete unit landing rather than a contract ambiguity -- no back-flow
+    needed. workflow_driver.py now calls _emit_pause_captured after every protocol.capture_pause_snapshot
+    (11 sites across the 6 topology executors) and _emit_resume_attempted after the entry-point protocol.attempt_resume
+    (1 site; the 3 _engine_recovery_loop.attempt_resume calls are a different, engine-layer function and
+    are OUT of scope). The resume wrapper honours the corruption carve-out the emitter''s own docstring
+    prescribes (s C-OD-30.1''s resume.outcome enum has no value for corruption). WITNESS: harness-runtime/tests/integration/test_b162_pause_resume_span_emission_is_wired.py
+    -- 6 tests driving the shipped api.run AND resume() entry points, asserting the EXACT 4-attribute canonical
+    sets (not mere presence) plus the per-site AST coverage so a partial wiring cannot pass. Mutation-probed
+    against the pre-wiring driver: all 6 go RED. The B-137 witness''s own no-caller tripwire fired on this
+    change exactly as designed and is now INVERTED to guard the wiring. SCOPE: these spans are emitted INSIDE
+    workflow.envelope on the pause path, so their s9.2 floor remains subject to B-137''s root-only starvation
+    -- this is AC conformance, NOT a sampling fix, and B-160''s disposition still depends on B-137.'
   council: no -- a wiring gap plus a contract-intent question, single-domain; it becomes design-phase
     back-flow only if the answer to step (1) is that the contract should be amended.
   heading: '### B-162 · `C-OD-30.3`''s two declared `head=1.0` spans (`pause.captured` / `resume.attempted`)

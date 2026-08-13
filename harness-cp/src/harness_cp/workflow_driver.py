@@ -84,6 +84,8 @@ from harness_cp.pause_resume_protocol import (
     PauseResumeProtocol,
     PauseResumeProtocolEventKind,
     ResumeOutcomeKind,
+    emit_pause_captured_span,
+    emit_resume_attempted_span,
 )
 from harness_cp.pause_resume_protocol_types import (
     EffectFencePausedBranchResumeState,
@@ -104,6 +106,7 @@ from harness_cp.pause_resume_protocol_types import (
     PeerFanOutResumeState,
     PreDispatchGateOwningBranchResumeState,
     ResumeContext,
+    ResumeResult,
     WorkflowPauseReason,
 )
 from harness_cp.pause_state_projection import (
@@ -3098,6 +3101,54 @@ def compute_effect_fence_tree_wide_abort_present(
     )
 
 
+# ---------------------------------------------------------------------------
+# U-CP-65 — `pause.captured` / `resume.attempted` caller-side span emission
+# ---------------------------------------------------------------------------
+#
+# `B-162`: the two emitters below implement C-OD-30.3's declared `head=1.0` spans and
+# had NO caller anywhere in `src/`, so neither span was ever emitted in production —
+# U-CP-65 AC #1, #2 and #5 were unmet even though the helpers themselves were landed
+# and tested. These thin wrappers are the driver-side half the helpers' own docstrings
+# prescribe ("workflow driver invokes `protocol.capture_pause_snapshot(...)`, then this
+# helper with the returned snapshot + driver-held tracer").
+#
+# The tracer is acquired exactly as the `workflow.envelope` site does
+# (`ctx.tracer_provider.get_tracer("harness.cp.workflow_driver")`), so emission shares
+# the driver's tracer identity. NOTE these spans are opened INSIDE `workflow.envelope`
+# for the pause path, so their §9.2 floor is subject to `B-137`'s root-only starvation;
+# wiring them is AC conformance, not a sampling fix.
+
+
+def _emit_pause_captured(snapshot: PauseSnapshot | None, *, ctx: DriverContext) -> None:
+    """U-CP-65 AC #1 — emit `pause.captured` for a freshly captured snapshot."""
+    if snapshot is None:
+        return
+    tracer = cast(TracerProvider, ctx.tracer_provider).get_tracer("harness.cp.workflow_driver")
+    emit_pause_captured_span(snapshot, tracer=tracer)
+
+
+def _emit_resume_attempted(
+    snapshot: PauseSnapshot | None,
+    result: ResumeResult | None,
+    *,
+    ctx: DriverContext,
+    diff_policy: MaterialDiffPolicy,
+) -> None:
+    """U-CP-65 AC #2 — emit `resume.attempted`, honouring the corruption carve-out.
+
+    `emit_resume_attempted_span`'s docstring states the caller convention explicitly:
+    do NOT invoke on the corruption path, because §C-OD-30.1's `resume.outcome` enum
+    (`resumed` / `diff_aborted` / `arbitration_owed`) has no value for it — corruption is
+    a pre-resume validation failure, not a resume outcome.
+    """
+    if snapshot is None or result is None:
+        return
+    if result.fail_class == CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION:
+        return
+    tracer = cast(TracerProvider, ctx.tracer_provider).get_tracer("harness.cp.workflow_driver")
+    emit_resume_attempted_span(snapshot, result, tracer=tracer, diff_policy=diff_policy)
+
+
 def execute_workflow(
     manifest_entry: WorkflowManifestEntry,
     steps: Sequence[WorkflowStep],
@@ -3231,6 +3282,15 @@ def execute_workflow(
                 pause_snapshot_input,
                 material_diff_policy=MaterialDiffPolicy.STRICT,
             )
+        )
+        # U-CP-65 AC #2 — `resume.attempted` caller-side emission per OD spec §C-OD-30.3.
+        # NOT emitted on the corruption path: §C-OD-30.1's `resume.outcome` enum has no
+        # matching value, per `emit_resume_attempted_span`'s stated caller convention (B-162).
+        _emit_resume_attempted(
+            pause_snapshot_input,
+            resume_result,
+            ctx=ctx,
+            diff_policy=MaterialDiffPolicy.STRICT,
         )
         # U-RT-111 v2.38 AC #3 — RESUME_ATTEMPTED CP→IS state-ledger emission.
         # Defensive operator-opt-in: when cp_is_wiring is None, silent-skip.
@@ -5220,6 +5280,9 @@ def _execute_workflow_body(
                     pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
                 )
             )
+            # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
+            # The helper is emission-only; the driver owns the tracer (B-162).
+            _emit_pause_captured(pause_snapshot, ctx=ctx)
             # U-RT-111 v2.38 AC #3 — PAUSE_CAPTURED drain-flag CP→IS emission.
             # event_kind_index=1 reserves the low bit for drain-flag path.
             _cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
@@ -5432,6 +5495,9 @@ def _execute_workflow_body(
                             ),
                         )
                     )
+                    # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
+                    # The helper is emission-only; the driver owns the tracer (B-162).
+                    _emit_pause_captured(pause_snapshot, ctx=ctx)
                     # U-RT-111 v2.38 AC #3 — PAUSE_CAPTURED HITL-signal CP→IS
                     # emission. event_kind_index=2 disambiguates HITL-signal
                     # path from drain-flag path (=1) at same step_index.
@@ -5499,6 +5565,9 @@ def _execute_workflow_body(
                         ),
                     )
                 )
+                # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
+                # The helper is emission-only; the driver owns the tracer (B-162).
+                _emit_pause_captured(pause_snapshot, ctx=ctx)
                 # PAUSE_CAPTURED effect-fence CP→IS emission. event_kind_index=3
                 # disambiguates the effect-fence pause path from the drain-flag
                 # path (=1) and the HITL-signal path (=2) at the same step_index.
@@ -10440,6 +10509,9 @@ def _execute_parallelization(
                 peer_fan_out_resume=peer_fan_out_resume,
             )
         )
+        # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
+        # The helper is emission-only; the driver owns the tracer (B-162).
+        _emit_pause_captured(snapshot, ctx=ctx)
         return _finish(RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot)
     # No branch failed THIS round. But a RECOVERED terminal branch may have failed in
     # the original run (a resume tail) — a terminal branch with no collected output is
@@ -11268,6 +11340,9 @@ def _execute_evaluator_optimizer(
                 ),
             )
         )
+        # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
+        # The helper is emission-only; the driver owns the tracer (B-162).
+        _emit_pause_captured(snapshot, ctx=ctx)
         # codex out-of-family review [P2] (2026-07-26): mirror the LINEAR HITL
         # branch's own PAUSE_CAPTURED CP->IS emission (`workflow_driver.py:5199-
         # 5215`) so this pause path's protocol audit history is not silently
@@ -11427,6 +11502,9 @@ def _execute_evaluator_optimizer(
                     evaluator_optimizer_resume=eo_resume,
                 )
             )
+            # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
+            # The helper is emission-only; the driver owns the tracer (B-162).
+            _emit_pause_captured(snapshot, ctx=ctx)
             return RunResult(
                 workflow_id=workflow_id,
                 run_id=run_id,
@@ -12462,6 +12540,9 @@ def _execute_orchestrator_workers(
                         ),
                     )
                 )
+                # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
+                # The helper is emission-only; the driver owns the tracer (B-162).
+                _emit_pause_captured(_orch_pause_snapshot, ctx=ctx)
                 _finalize_reconciler_cas_if_attempted()
                 return RunResult(
                     workflow_id=workflow_id,
@@ -13284,6 +13365,9 @@ def _execute_orchestrator_workers(
                     fan_out_resume=_reestablish_fan_out_resume,
                 )
             )
+            # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
+            # The helper is emission-only; the driver owns the tracer (B-162).
+            _emit_pause_captured(_reestablish_snapshot, ctx=ctx)
             result = RunResult(
                 workflow_id=workflow_id,
                 run_id=run_id,
@@ -14781,6 +14865,9 @@ def _execute_orchestrator_workers(
                 fan_out_resume=fan_out_resume,
             )
         )
+        # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
+        # The helper is emission-only; the driver owns the tracer (B-162).
+        _emit_pause_captured(snapshot, ctx=ctx)
         return _finish(RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot)
     # No worker failed THIS round. But a RECOVERED terminal branch may have failed
     # in the original run (a resume tail) — a terminal branch with no collected
@@ -15632,6 +15719,9 @@ def _execute_decentralized_handoff(
                         handoff_resume=handoff_resume,
                     )
                 )
+                # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
+                # The helper is emission-only; the driver owns the tracer (B-162).
+                _emit_pause_captured(snapshot, ctx=ctx)
                 return _finish(
                     RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot
                 )
@@ -15702,6 +15792,9 @@ def _execute_decentralized_handoff(
                     ),
                 )
             )
+            # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
+            # The helper is emission-only; the driver owns the tracer (B-162).
+            _emit_pause_captured(snapshot, ctx=ctx)
             # codex out-of-family review [P2] (2026-07-26): mirror the LINEAR HITL
             # branch's own PAUSE_CAPTURED CP->IS emission (`workflow_driver.py:5199-
             # 5215`) so this pause path's protocol audit history is not silently
