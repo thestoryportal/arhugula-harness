@@ -53,9 +53,9 @@ mechanics only, and a positive control fails loudly if the patch stops reaching 
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import pathlib
-import re
 import sys
 import tempfile
 from collections.abc import Generator
@@ -65,7 +65,7 @@ from typing import Any
 import harness_od.sampling_mode as _sm
 import pytest
 from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
-from harness_od.composite_sampler import build_default_sampler
+from harness_od.composite_sampler import HarnessCompositeSampler, build_default_sampler
 from harness_od.observability_matrix import CellID
 from harness_od.sampling_mode import is_always_sampled
 from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
@@ -471,14 +471,68 @@ async def test_the_tail_processor_never_sees_what_the_head_dropped() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _span_open_sites() -> dict[str, list[str]]:
-    pattern = re.compile(r'start_as_current_span\(\s*"([^"]+)"')
-    sites: dict[str, list[str]] = {}
+def _span_open_sites() -> tuple[dict[str, list[str]], list[str]]:
+    """Inventory span-open call sites by AST, not by line regex.
+
+    Out-of-family Codex round 5: a per-line regex counts occurrences inside comments and
+    docstrings, misses multiline calls, and cannot see `start_span` or constant-named spans.
+    Both errors were real here — `child_workflow_runner.py:16` was a docstring reference
+    counted as a site, and `hitl.invocation.timed_out`'s `hitl_gate_composer.py:2101` call
+    was missed for being multiline.
+
+    Returns `(literal_sites, dynamic_sites)`. Module-level `Final[str]` constants are
+    resolved, so a constant-named span is found; genuinely dynamic names (f-strings,
+    parameters) cannot be resolved statically and are returned separately so the residual
+    is stated rather than silently treated as absent.
+    """
+    literal: dict[str, list[str]] = {}
+    dynamic: list[str] = []
+
     for path in _REPO.glob("harness-*/src/**/*.py"):
-        for lineno, line in enumerate(path.read_text().splitlines(), 1):
-            for match in pattern.finditer(line):
-                sites.setdefault(match.group(1), []).append(f"{path.relative_to(_REPO)}:{lineno}")
-    return sites
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:  # pragma: no cover - a syntax error would fail the suite anyway
+            continue
+        rel = path.relative_to(_REPO)
+
+        # Module-level string constants, so `start_as_current_span(SOME_SPAN_NAME)` resolves.
+        constants: dict[str, str] = {}
+        for node in tree.body:
+            targets = (
+                [node.target]
+                if isinstance(node, ast.AnnAssign)
+                else list(node.targets)
+                if isinstance(node, ast.Assign)
+                else []
+            )
+            value = getattr(node, "value", None)
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        constants[target.id] = value.value
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            func = node.func
+            name = (
+                func.attr
+                if isinstance(func, ast.Attribute)
+                else func.id
+                if isinstance(func, ast.Name)
+                else None
+            )
+            if name not in {"start_as_current_span", "start_span"}:
+                continue
+            arg = node.args[0]
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                literal.setdefault(arg.value, []).append(f"{rel}:{node.lineno}")
+            elif isinstance(arg, ast.Name) and arg.id in constants:
+                literal.setdefault(constants[arg.id], []).append(f"{rel}:{node.lineno}")
+            else:
+                dynamic.append(f"{rel}:{node.lineno}")
+
+    return literal, dynamic
 
 
 def test_the_scope_is_inside_the_envelope_not_all_nineteen() -> None:
@@ -490,8 +544,23 @@ def test_the_scope_is_inside_the_envelope_not_all_nineteen() -> None:
     is a root and does receive its floor. Any repricing of step (3) must be against the
     members actually emitted inside the envelope.
     """
-    sites = _span_open_sites()
+    sites, dynamic = _span_open_sites()
     members = set(_sm.ALWAYS_SAMPLED_EVENT_CLASSES)
+
+    # State the residual rather than letting it read as 'absent': these span names are
+    # built at runtime (f-strings / parameters) and cannot be inventoried statically, so
+    # the 11-member result is '11 among statically-resolvable sites'.
+    assert len(dynamic) == 4, (
+        f"the dynamically-named span population changed ({len(dynamic)} sites: {dynamic}) "
+        "— one of them may now emit a §9.2 member, which the static inventory below "
+        "cannot see; re-derive B-137's scope by execution before trusting it"
+    )
+    # The four are an f-string (`router_resolution.py`, `f"chat {model}"`) and three
+    # parameter/variable names (`memory_observability.py`, two in `llm_dispatch.py`). A
+    # fifth site, `per_server_trust_evaluator.py:323`, is NOT in this residual: it names the
+    # module constant `MCP_TRUST_EVALUATE_SPAN_NAME`, which the resolver above resolves to
+    # `mcp.trust.evaluate` — B-160's conditional case, not a §9.2 member, so it does not
+    # move the count of 11.
 
     span_backed = {
         m
@@ -547,40 +616,130 @@ def test_the_pause_span_emitters_have_no_caller_in_src() -> None:
         )
 
 
-def test_the_two_uncalled_spans_land_on_opposite_sides_of_the_envelope() -> None:
-    """**The topology split** (out-of-family Codex round 2) — B-162's two spans differ.
+def _driver_call_lines(method: str, *, receiver: str) -> list[int]:
+    """Line numbers of `<receiver>.<method>(...)` calls in the workflow driver, by AST."""
+    tree = ast.parse((_REPO / "harness-cp/src/harness_cp/workflow_driver.py").read_text())
+    found: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != method:
+            continue
+        base = func.value
+        # `protocol.attempt_resume(...)` and `cast(X, protocol).capture_pause_snapshot(...)`
+        owner = (
+            base.id
+            if isinstance(base, ast.Name)
+            else base.args[1].id
+            if isinstance(base, ast.Call)
+            and len(base.args) > 1
+            and isinstance(base.args[1], ast.Name)
+            else None
+        )
+        if owner == receiver:
+            found.append(node.lineno)
+    return sorted(found)
 
-    A first draft of B-162 gated both spans on B-137, reasoning that wiring them would
-    place both inside the envelope. That is right for `pause.captured` and **wrong for
+
+def test_the_two_uncalled_spans_land_on_opposite_sides_of_the_envelope() -> None:
+    """**The topology split** — B-162's two spans are not symmetric.
+
+    A first draft of B-162 gated both spans on B-137, reasoning that wiring them would put
+    both inside the envelope. That is right for `pause.captured` and **wrong for
     `resume.attempted`**: the driver runs entry-point resume detection BEFORE the envelope
     opens, and says so in-line — *"The resume detection runs BEFORE the workflow.envelope
     opens — a failed resume (corruption or diff-aborted) returns FAILED without opening a
-    new envelope."* So a `resume.attempted` span emitted at its prescribed call site would
-    be a **root**, would consult the composite sampler directly, and **would** receive its
-    §9.2 floor once added to the set.
+    new envelope."* So a `resume.attempted` span at its prescribed call site would be a
+    **root**, would consult the composite sampler directly, and **would** receive its §9.2
+    floor once added to the set. `resume.attempted` is therefore the one name among B-160's
+    four unconditional names for which membership alone is sufficient — after wiring.
 
-    That makes `resume.attempted` the one name among B-160's four unconditional names for
-    which membership alone is sufficient — the others are either envelope children or, in
-    `pause.captured`'s case, both a child and never emitted.
+    **Anchored on the exact production calls (out-of-family Codex round 5).** An earlier
+    draft matched the first line containing `attempt_resume`, which selected
+    `_engine_recovery_loop.attempt_resume` at `:2632` — a *different* call that merely
+    happens to also precede the envelope, so the assertion passed for the wrong reason. It
+    now resolves `protocol.attempt_resume` and `protocol.capture_pause_snapshot` by AST,
+    which are the two calls B-162's close-out actually names.
     """
-    driver_path = _REPO / "harness-cp/src/harness_cp/workflow_driver.py"
-    driver = driver_path.read_text()
-    lines = driver.splitlines()
-
+    driver = (_REPO / "harness-cp/src/harness_cp/workflow_driver.py").read_text()
     envelope_line = next(
-        i for i, line in enumerate(lines, 1) if f'start_as_current_span("{_ENVELOPE}")' in line
+        i
+        for i, line in enumerate(driver.splitlines(), 1)
+        if f'start_as_current_span("{_ENVELOPE}")' in line
     )
-    resume_line = next(
-        i for i, line in enumerate(lines, 1) if "_engine_recovery_loop.attempt_resume(" in line
+
+    resume_calls = _driver_call_lines("attempt_resume", receiver="protocol")
+    assert len(resume_calls) == 1, (
+        f"expected exactly one entry-point `protocol.attempt_resume` call, got {resume_calls} "
+        "— B-162's prescribed instrumentation point is ambiguous and must be re-grounded"
     )
-    assert resume_line < envelope_line, (
-        f"the resume-detection call ({resume_line}) no longer precedes the envelope open "
-        f"({envelope_line}) — `resume.attempted` would become an envelope CHILD and "
+    assert resume_calls[0] < envelope_line, (
+        f"the entry-point resume call ({resume_calls[0]}) no longer precedes the envelope "
+        f"open ({envelope_line}) — `resume.attempted` would become an envelope CHILD and "
         "B-162's topology split must be re-derived"
+    )
+
+    capture_calls = _driver_call_lines("capture_pause_snapshot", receiver="protocol")
+    assert capture_calls, "no `protocol.capture_pause_snapshot` call found in the driver"
+    assert min(capture_calls) > envelope_line, (
+        f"a pause-capture call ({min(capture_calls)}) now precedes the envelope open "
+        f"({envelope_line}) — `pause.captured` would become a ROOT and would no longer be "
+        "gated on B-137"
     )
 
     prose = " ".join(driver.replace("#", " ").split())
     assert "The resume detection runs BEFORE the workflow.envelope opens" in prose, (
         "the driver's own ordering declaration changed — re-read it before trusting the "
         "root-vs-child split B-162 records"
+    )
+
+
+@pytest.mark.asyncio
+async def test_candidate_a_prime_admits_the_member_but_orphans_it() -> None:
+    """**A′'s durable witness** (out-of-family Codex round 5) — it was an unpinned claim.
+
+    The register calls A′ *measured*, but no committed test constructed the bare
+    `HarnessCompositeSampler`; the measurement lived only in a throwaway probe, so the
+    orphaned-span claim could drift silently. This pins it at the same `api.run` venue.
+
+    A′ = drop `ParentBased` so the composite sampler is consulted for **every** span. At
+    `base_rate=0.0` it admits `hitl.gate.evaluated` (a §9.2 member, matched by name) and
+    **still drops `workflow.envelope`** (not a member) — so the floor span survives with
+    its parent discarded. That is the orphaning the register prices, and it is also why A′
+    is cheaper than C1: only floor members are admitted, not whole traces.
+    """
+    harness = _b72()
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(sampler=HarnessCompositeSampler(base_rate=0.0))
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            harness._FakeTracerProvider,
+            "get_tracer",
+            lambda self, name, /: provider.get_tracer(name),
+        )
+        harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
+        harness._install_fake_od_stage4(mp)
+        harness._install_fake_webhook_composer_factory(mp, [])
+        with tempfile.TemporaryDirectory() as tmp:
+            await harness.api_run(
+                harness._FanOutSubAgentDispatchWorkflow(),
+                config=harness._config(pathlib.Path(tmp)),
+            )
+
+    exported = {s.name: s for s in exporter.get_finished_spans()}
+    assert _MEMBER in exported, (
+        f"A′ did not admit the §9.2 member; exported {sorted(exported)} — the register's "
+        "A′ pricing must be re-derived"
+    )
+    assert _ENVELOPE not in exported, (
+        "A′ admitted the envelope too — the orphaning claim the register prices is gone"
+    )
+    assert exported[_MEMBER].parent is not None, "the member should still record a parent id"
+    orphan_parent = exported[_MEMBER].parent.span_id
+    assert orphan_parent not in {s.context.span_id for s in exported.values()}, (
+        "the member's parent WAS exported, so it is not orphaned — A′'s trace-integrity "
+        "cost, which step (3) weighs against C1, no longer holds"
     )

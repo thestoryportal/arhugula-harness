@@ -7466,7 +7466,7 @@ items:
     least one span-backed member is a ROOT, since skill.activation is emitted from workflow_driver.py:3206
     which PRECEDES the envelope open at :3305. The starvation is therefore SCOPED to members emitted inside
     the envelope, and any repricing of step (3) must be against that set, not all 19. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py
-    -- 11 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
+    -- 12 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
     by replacing ParentBased(root=X) with the bare X (both load-bearing tests go RED). STEP (3) REPRICED
     BY TWO MEASURED COUNTERFACTUALS AT THE SAME VENUE. (a) CANDIDATE A-PRIME -- NOT the row''s candidate
     A, which is mode-conditional ALWAYS_ON with the s10.3 ratio moved INTO the tail consumer and was NOT
@@ -7493,7 +7493,10 @@ items:
     but a sharper trade, and note the labels are FIVE distinct options not three: ORPHANED FLOOR SPANS AT
     LOWER VOLUME (A-PRIME, measured; the ORIGINAL candidate A -- mode-conditional ALWAYS_ON with the ratio
     moved into the tail consumer -- REMAINS IN THE OPTION SET, unmeasured, at its stated x10-on-everything
-    cost) vs WHOLE TRACES AT FULL VOLUME (C1) vs RATIFYING A ROOT-ONLY FLOOR (C, which must amend s9.2/s9.3''s
+    cost) vs (C1) FULL TRACE ADMITTED AT THE HEAD BUT ORDINARY CHILDREN STRANDED IN THE TAIL BUFFER, at
+    full volume -- NOT ''whole traces'' (corrected 2026-08-13, codex round 5): C1 admits the envelope and
+    every s9.2 member at the head, but an ordinary non-member child is still buffered at root close and
+    a s10.2 trigger does not rescue it vs RATIFYING A ROOT-ONLY FLOOR (C, which must amend s9.2/s9.3''s
     head=1.0-across-all-cells language). Candidate B remains a reporting option, not a repair. The dyadic
     C7+C11 council''s stated precondition (step (2) re-measurement first) is now MET.'
   council: 'YES, and this is the row in the family that genuinely earns one -- unlike B-133, whose repair was
