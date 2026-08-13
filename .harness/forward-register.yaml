@@ -7468,17 +7468,19 @@ items:
     the envelope, and any repricing of step (3) must be against that set, not all 19. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py
     -- 8 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
     by replacing ParentBased(root=X) with the bare X (both load-bearing tests go RED). STEP (3) REPRICED
-    BY TWO MEASURED COUNTERFACTUALS AT THE SAME VENUE. (a) Candidate A (head consults every span name) admits
-    hitl.gate.evaluated but STILL DROPS workflow.envelope, so it yields ORPHANED floor spans whose parent
-    trace was discarded -- and its volume cost is 1/base_rate applied to FLOOR-MEMBER spans only, NOT to
-    all spans, which is cheaper than the row''s original x10-on-everything framing but buys broken traces.
-    (b) NEW candidate C1 -- add workflow.envelope itself to s9.2 -- delivers the floor to every in-workflow
-    member by inheritance and keeps traces WHOLE, in a one-line change, at the cost of admitting every workflow
-    trace entire (the true 1/base_rate multiplier). So the fork is no longer A-vs-B-vs-C but a sharper trade:
-    ORPHANED FLOOR SPANS AT LOWER VOLUME (A) vs WHOLE TRACES AT FULL VOLUME (C1) vs RATIFYING A ROOT-ONLY
-    FLOOR (C, which must amend s9.2/s9.3''s head=1.0-across-all-cells language). Candidate B remains a reporting
-    option, not a repair. The dyadic C7+C11 council''s stated precondition (step (2) re-measurement first)
-    is now MET.'
+    BY TWO MEASURED COUNTERFACTUALS AT THE SAME VENUE. (a) CANDIDATE A-PRIME -- NOT the row''s candidate
+    A, which is mode-conditional ALWAYS_ON with the s10.3 ratio moved INTO the tail consumer and was NOT
+    measured here; A-prime is dropping ParentBased so the composite sampler is consulted for EVERY span.
+    A-prime admits hitl.gate.evaluated but STILL DROPS workflow.envelope, so it yields ORPHANED floor spans
+    whose parent trace was discarded -- and its volume cost is 1/base_rate applied to FLOOR-MEMBER spans
+    only, NOT to all spans, which is cheaper than the row''s original x10-on-everything framing but buys
+    broken traces. (b) NEW candidate C1 -- add workflow.envelope itself to s9.2 -- delivers the floor to
+    every in-workflow member by inheritance and keeps traces WHOLE, in a one-line change, at the cost of
+    admitting every workflow trace entire (the true 1/base_rate multiplier). So the fork is no longer A-vs-B-vs-C
+    but a sharper trade: ORPHANED FLOOR SPANS AT LOWER VOLUME (A) vs WHOLE TRACES AT FULL VOLUME (C1) vs
+    RATIFYING A ROOT-ONLY FLOOR (C, which must amend s9.2/s9.3''s head=1.0-across-all-cells language). Candidate
+    B remains a reporting option, not a repair. The dyadic C7+C11 council''s stated precondition (step (2)
+    re-measurement first) is now MET.'
   council: 'YES, and this is the row in the family that genuinely earns one -- unlike B-133, whose repair was
     single-domain. Candidate A trades a real observability floor (C7: a preserved class that is dropped
     before any preservation rule can act on it is not preserved) against a 5x-to-10x in-process span
@@ -8575,7 +8577,12 @@ items:
     have NO CALLER ANYWHERE IN src/ (registered as B-162), so pause.captured and resume.attempted are never
     emitted in production at all. Adding a never-emitted name to the floor set changes nothing, so two of
     this row''s four unconditional names are inert for a SECOND, independent reason, and B-160''s disposition
-    (a) should not be written as though all four are symmetric. Executed at harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py.'
+    (a) should not be written as though all four are symmetric. Executed at harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py.
+    AND THE TWO UNCALLED NAMES ARE THEMSELVES ASYMMETRIC (2026-08-13, codex round 2): resume.attempted would
+    be emitted BEFORE workflow.envelope opens (workflow_driver.py:3213-3225 vs :3305), so once B-162 wires
+    it, membership ALONE delivers its floor -- it is the single name of the four for which disposition (a)
+    is sufficient on its own. pause.captured would be an envelope child and is gated on B-137 as well as
+    on B-162.'
   council: 'no at registration -- this is a conformance reconciliation between two OD surfaces,
     not a design fork. It becomes council-eligible only under disposition (b), which would
     relax an inviolable §9.3 floor.'
@@ -8632,14 +8639,23 @@ items:
     FOUND WHILE re-measuring B-137 at the real venue: an earlier draft used emit_pause_captured_span as
     its real production emitter and drove it directly; the function is real, the PATH is not, and out-of-family
     Codex rejected the witness on exactly that ground.'
-  close_out: '(1) Decide whether C-OD-30.3 intends these spans to be live. If yes, wire the driver''s
-    pause and resume branches to call them with the driver-held tracer per the pattern both docstrings
-    already specify, and add emission witnesses. If no, the contract''s head=1.0 declaration is what to
-    amend, via design-phase back-flow. (2) Either way, re-word B-160''s disposition (a) so its four names
-    are no longer presented as one symmetric sweep. (3) Note that wiring them does NOT by itself deliver
-    their floor -- they would be emitted inside workflow.envelope and so land in B-137''s root-only starvation.
-    WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py::test_the_pause_span_emitters_have_no_caller_in_src
-    -- enumerates src/ for callers of both helpers and fails if either acquires one.'
+  close_out: '(1) Decide whether C-OD-30.3 intends these spans to be live. If yes, wire the driver''s pause
+    and resume branches to call them with the driver-held tracer per the pattern both docstrings already
+    specify, and add emission witnesses. If no, the contract''s head=1.0 declaration is what to amend, via
+    design-phase back-flow. (2) Either way, re-word B-160''s disposition (a) so its four names are no longer
+    presented as one symmetric sweep. (3) Note that wiring them does NOT by itself deliver their floor --
+    they would be emitted inside workflow.envelope and so land in B-137''s root-only starvation. WITNESS:
+    harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py::test_the_pause_span_emitters_have_no_caller_in_src
+    -- enumerates src/ for callers of both helpers and fails if either acquires one. TOPOLOGY SPLIT 2026-08-13
+    (out-of-family Codex round 2) -- THE TWO SPANS ARE NOT SYMMETRIC. A first draft of this row gated both
+    on B-137. That holds for pause.captured (an envelope child) and FAILS for resume.attempted: the driver
+    runs entry-point resume detection at workflow_driver.py:3213-3225, BEFORE workflow.envelope opens at
+    :3305, and says so in-line (the resume detection runs BEFORE the workflow.envelope opens -- a failed
+    resume returns FAILED without opening a new envelope). So a resume.attempted span at its prescribed
+    call site would be a ROOT, would consult the composite sampler directly, and WOULD receive its s9.2
+    floor once added to the set. resume.attempted is therefore THE ONE NAME among B-160''s four for which
+    membership alone is sufficient -- after wiring. So close-out step (3) above applies to pause.captured
+    ONLY, and B-160''s disposition (a) must treat the two separately.'
   council: no -- a wiring gap plus a contract-intent question, single-domain; it becomes design-phase
     back-flow only if the answer to step (1) is that the contract should be amended.
   heading: '### B-162 · `C-OD-30.3`''s two declared `head=1.0` spans (`pause.captured` / `resume.attempted`)

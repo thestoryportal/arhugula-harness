@@ -28,9 +28,16 @@ root-only**, so a member emitted inside the envelope does not receive it.
    a real function with **no caller anywhere in `src/`** — so `pause.captured` and
    `resume.attempted` are never emitted in production, and the earlier witness drove a
    manufactured composition rather than a shipped path. That is why this module measures
-   `hitl.gate.evaluated` through `api.run` instead. The uncalled-emitter fact is itself
-   registered (it makes two of B-160's four unconditional names doubly inert) and is
-   pinned by `test_the_pause_span_emitters_have_no_caller_in_src`.
+   `hitl.gate.evaluated` through `api.run` instead. The uncalled-emitter fact is registered
+   as **B-162** and pinned by `test_the_pause_span_emitters_have_no_caller_in_src`.
+
+**And a third correction, from round 2 — the two uncalled spans are NOT symmetric.** A
+first draft of B-162 gated both on B-137. Wrong for one of them: the driver runs
+entry-point resume detection **before** the envelope opens (`workflow_driver.py:3213-3225`,
+and it says so in-line), so a `resume.attempted` span at its prescribed call site would be
+a **root** and **would** receive its §9.2 floor once added to the set, while
+`pause.captured` would be an envelope child and would not.
+`test_the_two_uncalled_spans_land_on_opposite_sides_of_the_envelope` pins the split.
 
 **Determinism.** `base_rate=0.0` makes the ratio arm admit nothing and the always-sampled
 arm admit everything, so each assertion is a decision rather than a sample. The mechanism
@@ -68,6 +75,27 @@ _ENVELOPE = "workflow.envelope"
 #: A §9.2 member the B-72 fan-out workflow really emits, inside the envelope.
 _MEMBER = "hitl.gate.evaluated"
 _REPO = pathlib.Path(__file__).resolve().parents[3]
+
+#: The §9.2 members that have a `start_as_current_span` site in `src/` — 11 of the 19.
+#: The register cites this exact count to scope and price B-137's step (3), so the
+#: identity set is pinned rather than its cardinality alone (out-of-family Codex round 2:
+#: a "some but not all" check would let an emission site appear or vanish silently and
+#: leave the authoritative result stale).
+_SPAN_BACKED_MEMBERS = frozenset(
+    {
+        "files.operation",
+        "hitl.gate.evaluated",
+        "hitl.invocation.opened",
+        "hitl.invocation.responded",
+        "hitl.invocation.timed_out",
+        "managed_agents.runtime",
+        "mcp.tool.call",
+        "memory.operation",
+        "sandbox.violation",
+        "skill.activation",
+        "subagent.span",
+    }
+)
 
 
 def _b72() -> Any:
@@ -317,10 +345,18 @@ def test_the_scope_is_inside_the_envelope_not_all_nineteen() -> None:
         for m in members
         if (any(n.startswith(m[:-1]) for n in sites) if m.endswith("*") else m in sites)
     }
-    assert 0 < len(span_backed) < len(members), (
-        f"expected SOME but not all §9.2 members to be span-backed; got "
-        f"{len(span_backed)}/{len(members)} — the 'all 19 are children' overclaim would be "
-        "live again if this ever became total"
+    # Pin the EXACT identity set, not merely "some but not all" (out-of-family Codex
+    # round 2): the register cites 11-of-19 to scope and price B-137's step (3), so an
+    # emission site appearing or disappearing must redden this rather than pass silently.
+    assert span_backed == _SPAN_BACKED_MEMBERS, (
+        "the span-backed §9.2 population changed — B-137's scope and step-(3) pricing "
+        "cite this exact set, so re-derive both before acting on the row. "
+        f"added={sorted(span_backed - _SPAN_BACKED_MEMBERS)} "
+        f"removed={sorted(_SPAN_BACKED_MEMBERS - span_backed)}"
+    )
+    assert len(span_backed) < len(members), (
+        "every §9.2 member became span-backed — the withdrawn 'all 19 are children' "
+        "overclaim would need re-deriving from scratch"
     )
 
     assert "skill.activation" in span_backed
@@ -356,3 +392,42 @@ def test_the_pause_span_emitters_have_no_caller_in_src() -> None:
             f"`{helper}` now has caller(s) {callers} — C-OD-30.3's span may be live in "
             "production; re-ground B-160's disposition, which assumes it is not"
         )
+
+
+def test_the_two_uncalled_spans_land_on_opposite_sides_of_the_envelope() -> None:
+    """**The topology split** (out-of-family Codex round 2) — B-162's two spans differ.
+
+    A first draft of B-162 gated both spans on B-137, reasoning that wiring them would
+    place both inside the envelope. That is right for `pause.captured` and **wrong for
+    `resume.attempted`**: the driver runs entry-point resume detection BEFORE the envelope
+    opens, and says so in-line — *"The resume detection runs BEFORE the workflow.envelope
+    opens — a failed resume (corruption or diff-aborted) returns FAILED without opening a
+    new envelope."* So a `resume.attempted` span emitted at its prescribed call site would
+    be a **root**, would consult the composite sampler directly, and **would** receive its
+    §9.2 floor once added to the set.
+
+    That makes `resume.attempted` the one name among B-160's four unconditional names for
+    which membership alone is sufficient — the others are either envelope children or, in
+    `pause.captured`'s case, both a child and never emitted.
+    """
+    driver_path = _REPO / "harness-cp/src/harness_cp/workflow_driver.py"
+    driver = driver_path.read_text()
+    lines = driver.splitlines()
+
+    envelope_line = next(
+        i for i, line in enumerate(lines, 1) if f'start_as_current_span("{_ENVELOPE}")' in line
+    )
+    resume_line = next(
+        i for i, line in enumerate(lines, 1) if "_engine_recovery_loop.attempt_resume(" in line
+    )
+    assert resume_line < envelope_line, (
+        f"the resume-detection call ({resume_line}) no longer precedes the envelope open "
+        f"({envelope_line}) — `resume.attempted` would become an envelope CHILD and "
+        "B-162's topology split must be re-derived"
+    )
+
+    prose = " ".join(driver.replace("#", " ").split())
+    assert "The resume detection runs BEFORE the workflow.envelope opens" in prose, (
+        "the driver's own ordering declaration changed — re-read it before trusting the "
+        "root-vs-child split B-162 records"
+    )
