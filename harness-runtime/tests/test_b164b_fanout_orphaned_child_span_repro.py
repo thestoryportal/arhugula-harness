@@ -580,6 +580,63 @@ def test_b164b_history_pressure_never_evicts_a_provably_live_trace() -> None:
     )
 
 
+def test_b164b_a_concurrency_burst_gives_back_its_headroom_once_it_drains() -> None:
+    """**A bound that holds at every instant can still leak across time.**
+
+    Both structures expand rather than evict a proven-live entry, which is correct. What
+    review found is that the expansions were ONE-WAY: after a burst of more than
+    `_LIVENESS_TRACKING_CEILING` live pins doubled a threshold, nothing drove the
+    structures back down once those spans ended — the history was only ever trimmed to the
+    EXPANDED ceiling, so its reset branch was unreachable, and stale keep flags sat below
+    the raised sweep threshold indefinitely. A transient spike therefore cost the process
+    an arbitrarily large retained history for its whole lifetime.
+
+    Drives both spikes at once, drains them, and asserts the headroom is returned — the
+    thresholds back at base and the structures trimmed to it.
+    """
+    fx = _Fixture()
+    burst = _LIVENESS_TRACKING_CEILING + 64
+
+    # Spike 1 — root-closed traces with children still open, pinning `_materialized`.
+    children = []
+    for i in range(burst):
+        root = fx.tracer.start_span(f"burst.root.{i}")
+        children.append(fx.tracer.start_span(f"{_CHILD}.{i}", context=set_span_in_context(root)))
+        root.end()
+    # Spike 2 — open roots each carrying a trigger, pinning `_keep`.
+    pending = []
+    for i in range(burst):
+        root = fx.tracer.start_span(f"burst.pending.{i}")
+        fx.tracer.start_span(_TRIGGER, context=set_span_in_context(root)).end()
+        pending.append(root)
+
+    assert fx.tail._materialized_ceiling > _LIVENESS_TRACKING_CEILING, (
+        "the materialization ceiling never expanded, so this test is not exercising the "
+        "one-way-expansion path it exists for"
+    )
+    assert fx.tail._keep_sweep_threshold > _LIVENESS_TRACKING_CEILING, (
+        "the keep sweep threshold never expanded, so the second spike is not being built"
+    )
+
+    for child in children:
+        child.end()
+    for root in pending:
+        root.end()
+
+    assert fx.tail._materialized_ceiling == _LIVENESS_TRACKING_CEILING, (
+        f"the materialization ceiling stayed expanded at {fx.tail._materialized_ceiling} "
+        f"after the burst drained — the headroom is never given back"
+    )
+    assert len(fx.tail._materialized) <= _LIVENESS_TRACKING_CEILING, (
+        f"the history stayed at {len(fx.tail._materialized)} entries after draining, above "
+        f"its base ceiling of {_LIVENESS_TRACKING_CEILING}"
+    )
+    assert fx.tail._keep_sweep_threshold == _LIVENESS_TRACKING_CEILING, (
+        f"the keep sweep threshold stayed expanded at {fx.tail._keep_sweep_threshold}"
+    )
+    assert fx.tail._open_spans == {}, "every span in this test ended; none should be live"
+
+
 def test_b164b_a_failing_downstream_on_start_does_not_leak_liveness() -> None:
     """**A rolled-back span must not leave a permanent liveness pin.**
 

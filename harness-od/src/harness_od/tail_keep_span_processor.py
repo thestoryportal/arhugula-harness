@@ -876,6 +876,16 @@ class TailKeepSpanProcessor(SpanProcessor):
         `_sweep_stale_keep_flags`, for the same reason.
         """
         self._materialized[trace_id] = None
+        self._prune_materialized_history()
+
+    def _prune_materialized_history(self) -> None:
+        """Trim `_materialized` to its ceiling without touching a live-pinned entry.
+
+        Called under `_state_lock`. Split out from `_remember_materialized` at round 7 so
+        `_compact_expanded_thresholds` can re-run it once a burst drains: raising the
+        ceiling is easy, and giving the headroom back is the part that has to be driven
+        from somewhere.
+        """
         while len(self._materialized) > self._materialized_ceiling:
             victim = next(
                 (
@@ -889,9 +899,32 @@ class TailKeepSpanProcessor(SpanProcessor):
                 self._materialized_ceiling = len(self._materialized) * 2
                 return
             del self._materialized[victim]
-        # Once the live burst drains, the history returns to its ordinary ceiling.
         if len(self._materialized) <= _LIVENESS_TRACKING_CEILING:
             self._materialized_ceiling = _LIVENESS_TRACKING_CEILING
+
+    def _compact_expanded_thresholds(self) -> None:
+        """Give back the headroom a live-pin burst borrowed (`B-164(b)` round 7).
+
+        Called under `_state_lock` from `_release_open_span`, and only while a threshold is
+        actually raised. Out-of-family review found that both expansions were one-way: a
+        transient spike of more than `_LIVENESS_TRACKING_CEILING` live pins doubled a
+        threshold, and once those spans ended nothing ever drove the structures back down —
+        `_remember_materialized` only trimmed to the EXPANDED ceiling, so its reset branch
+        was unreachable, and stale keep flags sat below the raised sweep threshold
+        indefinitely. The bound was real at every instant and still leaked across time.
+
+        Waiting for full quiescence would be too weak a trigger for a busy process, so the
+        test is that live pins have fallen back below the base ceiling — the burst is over,
+        even if traffic is not.
+        """
+        if len(self._open_spans) > _LIVENESS_TRACKING_CEILING:
+            return
+        if self._materialized_ceiling > _LIVENESS_TRACKING_CEILING:
+            self._materialized_ceiling = _LIVENESS_TRACKING_CEILING
+            self._prune_materialized_history()
+        if self._keep_sweep_threshold > _LIVENESS_TRACKING_CEILING:
+            # Recomputes the threshold itself, re-raising only if entries are still pinned.
+            self._sweep_stale_keep_flags()
 
     def _sweep_stale_keep_flags(self) -> None:
         """Drop keep flags that no root close can ever pop (`B-164(b)` round 5).
@@ -967,6 +1000,14 @@ class TailKeepSpanProcessor(SpanProcessor):
                 self._open_spans[trace_id] = remaining - 1
                 return
             del self._open_spans[trace_id]
+            # `B-164(b)` round 7 — a burst that borrowed headroom has to give it back, and
+            # the last release of a live pin is the moment that becomes possible. Guarded
+            # so the ordinary path stays two integer comparisons.
+            if (
+                self._materialized_ceiling > _LIVENESS_TRACKING_CEILING
+                or self._keep_sweep_threshold > _LIVENESS_TRACKING_CEILING
+            ):
+                self._compact_expanded_thresholds()
 
     def _evict_oldest_trace(self) -> None:
         """Drop the oldest buffered trace (FIFO) under the max-traces ceiling.
