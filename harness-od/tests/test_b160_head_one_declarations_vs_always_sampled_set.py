@@ -16,10 +16,13 @@ covers the absentees: the `hitl.invocation.*` members are enumerated individuall
 there is no `hitl.*` or `pause.*` wildcard (unlike `audit.*` / `validator.fail.*`). So the
 four names belong to the set by shape and are simply not in it.
 
-**Conditional declarations are deliberately excluded** from the class. `mcp.trust.evaluate`
-(head=1.0 only when `audit_required`) and the operator-burden spans (head=1.0 only on
-`degrade=true`) are conditional rows, which §9.2 handles through its four conditional
-entries; they are not evidence of the same divergence and are not asserted here.
+**Two more, as a CONDITIONAL subtype.** A first draft excluded `mcp.trust.evaluate`
+(head=1.0 iff `audit_required`) and the operator-burden span (head=1.0 iff `degrade`) on
+the premise that §9.2's conditional rows covered them. **That premise is false** — those
+four rows are `files.operation`, `memory.operation`, `validator.fail.*` and
+`subagent.span` (`sampling_mode.py:176-190`), none of which is either name. So the class
+is **six** span families in two shapes: four unconditional, two conditional, none of them
+reachable by the floor the contracts declare.
 
 **What this witness does NOT claim.** It does not say which side is wrong. Repairing the
 implementation side is *not* sufficient on its own — `ParentBased(root=…)` never consults
@@ -32,16 +35,32 @@ from __future__ import annotations
 
 import pathlib
 
+import harness_od.hitl_operator_burden_namespace as _burden_ns
 import harness_od.hitl_webhook_namespace as _webhook_ns
+import harness_od.mcp_trust_namespace as _trust_ns
 import harness_od.pause_resume_namespace as _pause_ns
 from harness_od.sampling_mode import ALWAYS_SAMPLED_EVENT_CLASSES
 
 #: Span names whose owning C-OD-3x contract declares an UNCONDITIONAL head=1.0.
+#: DERIVED from each namespace's own `SPAN_SITE_*` constant rather than re-typed as
+#: literals (out-of-family Codex): a literal table would keep checking the OLD names if a
+#: contract added or renamed a span site while keeping its generic sampling sentence, and
+#: since the old names stay absent the assertion would stay green over a changed contract.
 _DECLARED_HEAD_ONE: dict[str, str] = {
-    "hitl.webhook.deliver": "C-OD-32.3",
-    "hitl.webhook.attempt": "C-OD-32.3",
-    "pause.captured": "C-OD-30.3",
-    "resume.attempted": "C-OD-30.3",
+    _webhook_ns.SPAN_SITE_HITL_WEBHOOK_DELIVER: "C-OD-32.3",
+    _webhook_ns.SPAN_SITE_HITL_WEBHOOK_ATTEMPT: "C-OD-32.3",
+    _pause_ns.SPAN_SITE_PAUSE_CAPTURED: "C-OD-30.3",
+    _pause_ns.SPAN_SITE_RESUME_ATTEMPTED: "C-OD-30.3",
+}
+
+#: The CONDITIONAL subtype of the same class — a floor that applies only under a stated
+#: attribute. A first draft excluded these on the false premise that §9.2's conditional
+#: rows covered them. They do not: those four rows are `files.operation`,
+#: `memory.operation`, `validator.fail.*` and `subagent.span`
+#: (`sampling_mode.py:176-190`). So these two are ALSO untracked floor cases.
+_DECLARED_HEAD_ONE_CONDITIONAL: dict[str, str] = {
+    _trust_ns.SPAN_SITE_MCP_TRUST_EVALUATE: "C-OD-31 (head=1.0 iff audit_required)",
+    _burden_ns.SPAN_SITE_HITL_OPERATOR_BURDEN_EVALUATED: "C-OD-33 (head=1.0 iff degrade)",
 }
 
 
@@ -100,3 +119,27 @@ def test_the_set_is_span_name_shaped_so_these_names_belong_in_it() -> None:
         assert not any(missing_name.startswith(p) for p in prefixes), (
             f"{missing_name} IS wildcard-covered — B-160's premise needs re-grounding"
         )
+
+
+def test_the_conditional_subtype_is_untracked_too() -> None:
+    """The CONDITIONAL half of the class — two more untracked floor cases.
+
+    A first draft of this module excluded these, claiming §9.2's conditional rows handled
+    them. They do not: those rows are `files.operation`, `memory.operation`,
+    `validator.fail.*` and `subagent.span`. Neither `mcp.trust.evaluate` nor the
+    operator-burden span appears in the set OR in that conditional resolver, so when their
+    stated condition holds the sampler still takes the base-rate path and can DROP them.
+    """
+    for name in _DECLARED_HEAD_ONE_CONDITIONAL:
+        assert name not in ALWAYS_SAMPLED_EVENT_CLASSES, (
+            f"{name} entered the floor set — re-ground B-160's conditional subtype"
+        )
+
+    conditional_rows = {"files.operation", "memory.operation", "validator.fail.*", "subagent.span"}
+    assert conditional_rows <= set(ALWAYS_SAMPLED_EVENT_CLASSES), (
+        "the §9.2 conditional rows moved — the exclusion reasoning above must be re-read"
+    )
+    assert not (set(_DECLARED_HEAD_ONE_CONDITIONAL) & conditional_rows), (
+        "a conditional declaration became a §9.2 conditional row — that would CLOSE half "
+        "of B-160's conditional subtype and must be recorded, not absorbed silently"
+    )

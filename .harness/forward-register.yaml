@@ -8502,8 +8502,9 @@ items:
     always-sampled set inviolable, so this is a floor-conformance question, not a preference --
     and HITL delivery is the audit-critical case the floor exists for.'
   close_out: 'GROUNDED 2026-08-12 (PR #1328) -- the close-out''s own first step is DONE and it
-    RESCOPES the row: this is a CLASS, not an instance. FOUR unconditional head=1.0 span-name
-    declarations across TWO contracts are absent from the s9.2 floor set --
+    RESCOPES the row: this is a CLASS, not an instance -- SIX span families across FOUR contracts, in two
+    shapes. FOUR unconditional head=1.0 span-name declarations across TWO contracts are absent from
+    the s9.2 floor set --
     hitl.webhook.deliver + hitl.webhook.attempt (C-OD-32.3) and pause.captured +
     resume.attempted (C-OD-30.3). Witness:
     harness-od/tests/test_b160_head_one_declarations_vs_always_sampled_set.py (3 tests,
@@ -8520,7 +8521,11 @@ items:
     ParentBased(root=...) never consults a non-root child''s name, so membership alone cannot
     deliver the floor for any of these child spans. REMAINING: decide which side is canonical and
     make the other conform: either
-    (a) add hitl.webhook.deliver to the §9.2 member set (19 -> 20) so the implementation meets
+    (a) add ALL FOUR unconditional names to the §9.2 member set (19 -> 23) -- hitl.webhook.deliver,
+    hitl.webhook.attempt, pause.captured, resume.attempted -- AND add the TWO conditional ones
+    (mcp.trust.evaluate at audit_required; the operator-burden span at degrade) to the conditional
+    resolver, which today covers only files.operation / memory.operation / validator.fail.* /
+    subagent.span. A one-name edit does NOT close this row and would leave the witness red, so the implementation meets
     the §C-OD-32.3 floor -- note the §9.2 count is cited in several places and a count-contract
     sweep is owed with it. MEMBERSHIP ALONE IS NOT SUFFICIENT (codex round 7 sibling-overlap
     check): hitl.webhook.deliver is a CHILD span, and ParentBased(root=HarnessCompositeSampler)
@@ -8529,9 +8534,8 @@ items:
     MERGES WITH B-137; closing it standalone would claim a floor the sampler still cannot
     deliver; or (b) amend §C-OD-32.3 if webhook spans are genuinely NOT intended
     to be always-sampled, which would be a cleared-contract change under X-AL-3 and would need
-    to explain how HITL delivery stays audit-critical without a sampling floor. Grounding first:
-    check whether any OTHER C-OD-3x namespace declares head=1.0 without §9.2 membership -- if so
-    this is a class, not an instance. The materialize_span_processor_stage end-to-end run owed
+    to explain how HITL delivery stays audit-critical without a sampling floor. Grounding: DONE 2026-08-12 -- it IS a class (four unconditional +
+    two conditional, across four contracts). Do not repeat it. The materialize_span_processor_stage end-to-end run owed
     on the B-71 spec leg is also the experiment that settles this empirically.'
   council: 'no at registration -- this is a conformance reconciliation between two OD surfaces,
     not a design fork. It becomes council-eligible only under disposition (b), which would
