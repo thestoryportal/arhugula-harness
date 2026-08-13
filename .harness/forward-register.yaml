@@ -8856,7 +8856,22 @@ items:
     by replacing the RLock with contextlib.nullcontext(): the child span is LOST every run (reaches neither
     downstream nor the buffer), and with the lock it survives. Close-out step (1) -- reachability -- was
     therefore ANSWERED by construction rather than deferred: the losing order is reproducible on demand,
-    so this was a live defect, not a latent one.'
+    so this was a live defect, not a latent one. ROUND-2 HARDENING + THE RESIDUAL, STATED (codex round 4,
+    P1): the first lock pass guarded each mutation separately, which was NOT enough -- the keep write and
+    the root materialization sat in DIFFERENT critical sections, so a thread could leave TORN state (a _keep
+    entry written against a trace whose buffer another thread had already popped, which nothing would ever
+    pop). All three arms now go through ONE indivisible transition, _publish_keep_and_maybe_detach, which
+    publishes the keep flag and detaches the trace under a single lock acquisition and returns the spans
+    for the caller to forward OUTSIDE the lock. The now-orphaned _materialize_trace_decision was removed.
+    RESIDUAL, NOT CLOSED AND NOT CLAIMED: mutual exclusion fixes TORN STATE, it cannot fix ORDERING. If
+    a root''s on_end runs to completion before a child''s on_end begins, the trace materializes before that
+    child is accounted for, and no lock discipline inside on_end can change that. Reaching it requires a
+    ROOT TO END BEFORE ITS OWN CHILD, which violates the span-nesting contract that OTel and this processor''s
+    entire root-close design assume -- so it is a malformed-trace shape, not a concurrency bug, and is recorded
+    here rather than papered over. An earlier draft of the witness asserted the ordering case and failed,
+    which is what surfaced the distinction; the committed witness asserts the property that IS guaranteed
+    -- for a well-formed trace, a trigger published concurrently with sibling buffering always preserves
+    the siblings and no _keep entry survives materialization.'
   council: no -- a single-domain C7 thread-safety repair against an explicit OTel SDK contract, with no
     cross-axis surface and no committed envelope to renegotiate.
   heading: '### B-163 · `TailKeepSpanProcessor` mutates `_buffer` / `_keep` / its counters with **no lock**,

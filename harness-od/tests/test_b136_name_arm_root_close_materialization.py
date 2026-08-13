@@ -285,3 +285,70 @@ def test_b163_a_concurrent_child_and_root_close_cannot_lose_a_span() -> None:
         f"buffer. downstream={downstream.seen}, still buffered="
         f"{sum(len(v) for v in tail._buffer.values())}. B-163's lock has regressed."
     )
+
+
+def test_b163_the_publish_and_detach_transition_is_indivisible() -> None:
+    """**B-163 round 2** — keep-publication and root materialization are ONE transition.
+
+    Guarding each mutation separately was not enough (out-of-family Codex, round 4): with
+    the keep write and the root materialization in *different* critical sections, a thread
+    could observe a **torn** state — `_keep` written against a trace whose buffer another
+    thread had already popped, leaving a stale entry nothing would pop. They are now a
+    single critical section in `_publish_keep_and_maybe_detach`.
+
+    **What this does and does not close, stated precisely.** Mutual exclusion fixes *torn
+    state*. It cannot fix *ordering*: if a root's `on_end` runs to completion before a
+    child's `on_end` begins, the trace materializes before that child is accounted for, and
+    no lock discipline inside `on_end` can change that. That ordering requires a **root to
+    end before its own child**, which violates the span-nesting contract OTel and this
+    processor's entire root-close design assume. The residual is recorded on B-163 rather
+    than papered over.
+
+    This asserts the part that IS guaranteed: for a well-formed trace, a trigger published
+    concurrently with sibling buffering always preserves the siblings, and no `_keep` entry
+    survives materialization.
+    """
+    downstream = _Downstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b163.trigger")
+
+    # A well-formed trace: quiet root, one ordinary sibling, one §10.2 trigger child — the
+    # root ends LAST, as the nesting contract requires.
+    root_span = tracer.start_span(_QUIET_ROOT)
+    parent_ctx = otel_trace.set_span_in_context(root_span)
+
+    barrier = threading.Barrier(2, timeout=5.0)
+
+    def _end_sibling() -> None:
+        span = tracer.start_span("ordinary.child", context=parent_ctx)
+        barrier.wait()
+        span.end()
+
+    def _end_trigger() -> None:
+        span = tracer.start_span(_TRIGGER_ROOT, context=parent_ctx)
+        barrier.wait()
+        span.end()
+
+    threads = [
+        threading.Thread(target=_end_sibling, name="b163-sibling"),
+        threading.Thread(target=_end_trigger, name="b163-trigger"),
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=5.0)
+    assert all(not th.is_alive() for th in threads), "a thread hung"
+
+    root_span.end()
+
+    assert "ordinary.child" in downstream.seen, (
+        f"the buffered sibling was dropped despite a §10.2 trigger in the same trace; "
+        f"downstream={downstream.seen} — the publish/detach transition is not indivisible"
+    )
+    assert not tail._keep, (
+        f"a `_keep` entry survived materialization: {dict(tail._keep)} — nothing will pop "
+        "it, so the map grows without bound across traces"
+    )
+    assert tail.buffered_trace_count == 0, "the trace did not resolve at root close"

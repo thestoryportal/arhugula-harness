@@ -264,13 +264,13 @@ class TailKeepSpanProcessor(SpanProcessor):
         self._downstream: SpanProcessor = downstream
         # `B-163` — OTel calls `SpanProcessor.on_end` from whichever thread ends the span,
         # so every mutation of `_buffer` / `_keep` / the counters must be serialized. An
-        # RLock (not a Lock) because `_materialize_trace_decision` and `_evict_oldest_trace`
-        # are called from inside `on_end`, which already holds it.
+        # RLock (not a Lock) because `_evict_oldest_trace` is called from inside the
+        # `_publish_keep_and_maybe_detach` / buffering critical sections, which already hold it.
         #
         # SCOPE DISCIPLINE: the lock guards the per-trace dict work ONLY. It is NEVER held
         # across `self._downstream.on_end(...)` — a slow exporter would otherwise serialize
-        # every span in the process. `_materialize_trace_decision` therefore detaches the
-        # bucket under the lock and forwards outside it.
+        # every span in the process. `_publish_keep_and_maybe_detach` therefore detaches the
+        # bucket under the lock and RETURNS it, so the caller forwards outside.
         self._state_lock = threading.RLock()
         # Per-trace_id buffer of non-always-sampled spans pending root-close
         # keep decision. Keyed by the int form of OTel trace_id. Python dict
@@ -377,9 +377,7 @@ class TailKeepSpanProcessor(SpanProcessor):
             # under the same trace get preserved at root close.
             ctx = span.get_span_context()
             assert ctx is not None  # a span reaching on_end always has a context
-            if is_classification_trigger(span):
-                with self._state_lock:
-                    self._keep[ctx.trace_id] = True
+            _trigger = is_classification_trigger(span)
             # `B-136` REPAIR — mirror OD spec v1.38 §9.2.1 term 5 (already normative for
             # the event arm below) onto this name arm. Before this, the arm returned
             # UNCONDITIONALLY, so an always-sampled ROOT forwarded itself and left its
@@ -399,8 +397,10 @@ class TailKeepSpanProcessor(SpanProcessor):
             # shed at a cap of 3) — and dropping here is exactly what an ORDINARY root
             # already does. The forwarded always-sampled span itself is NOT in the buffer,
             # so the §9.2 floor and the §10.2 failure signal are both unaffected.
-            if span.parent is None:
-                self._materialize_trace_decision(ctx.trace_id)
+            for _pending in self._publish_keep_and_maybe_detach(
+                ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
+            ):
+                self._downstream.on_end(_pending)
             return
 
         # `B-133` EVENT-AWARE ARM (OD spec v1.38 §9.2.1, U-OD-59). Three §9.2
@@ -435,9 +435,7 @@ class TailKeepSpanProcessor(SpanProcessor):
             # the trip's sibling tree at root close subject to the §9.2/§10.2
             # head-admission bound `B-137` measured (the arm delivers only for
             # carriers the head sampler admitted).
-            if is_classification_trigger(span, events=events):
-                with self._state_lock:
-                    self._keep[ctx.trace_id] = True
+            _trigger = is_classification_trigger(span, events=events)
             # The name arm returns unconditionally, so an always-sampled ROOT
             # leaves its trace's buffered siblings pending until `force_flush`
             # (pre-existing; observed at the `B-133` probe and registered as
@@ -446,8 +444,10 @@ class TailKeepSpanProcessor(SpanProcessor):
             # the trace decision so the siblings resolve and the trace frees its
             # `max_buffered_traces` slot. The forwarded span is NOT in the
             # buffer, so the decision below concerns only its siblings.
-            if span.parent is None:
-                self._materialize_trace_decision(ctx.trace_id)
+            for _pending in self._publish_keep_and_maybe_detach(
+                ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
+            ):
+                self._downstream.on_end(_pending)
             return
 
         ctx = span.get_span_context()
@@ -486,15 +486,40 @@ class TailKeepSpanProcessor(SpanProcessor):
             else:
                 bucket.append(span)
 
-        if is_classification_trigger(span, events=events):
-            with self._state_lock:
-                self._keep[trace_id] = True
+        _trigger = is_classification_trigger(span, events=events)
 
         # Root close detection: parent SpanContext is None means this span
         # has no parent in the recorded trace (it is the local-root). At
         # span-end, OTel `ReadableSpan.parent` is `None` for the root.
-        if is_root_close:
-            self._materialize_trace_decision(trace_id)
+        for _pending in self._publish_keep_and_maybe_detach(
+            trace_id, is_trigger=_trigger, is_root_close=is_root_close
+        ):
+            self._downstream.on_end(_pending)
+
+    def _publish_keep_and_maybe_detach(
+        self, trace_id: int, *, is_trigger: bool, is_root_close: bool
+    ) -> list[ReadableSpan]:
+        """Publish the keep flag and, at root close, detach the trace — ATOMICALLY.
+
+        `B-163` round 2: guarding each mutation separately was not enough. With the keep
+        write and the root materialization in DIFFERENT critical sections, a §10.2 child
+        trigger could evaluate as a trigger, lose the lock to its root's `on_end` (which
+        popped `_buffer`/`_keep` and dropped the siblings with `keep=False`), and only then
+        write `_keep[trace_id] = True` — leaving a stale entry nothing would ever pop.
+        Publishing and detaching in ONE critical section removes both the dropped-context
+        window and the stale-keep leak.
+
+        Returns the spans the caller must forward. Forwarding happens OUTSIDE the lock —
+        holding it across `downstream.on_end` would serialize a slow exporter.
+        """
+        with self._state_lock:
+            if is_trigger:
+                self._keep[trace_id] = True
+            if not is_root_close:
+                return []
+            buffered = self._buffer.pop(trace_id, [])
+            keep = self._keep.pop(trace_id, False)
+        return buffered if keep else []
 
     def _evict_oldest_trace(self) -> None:
         """Drop the oldest buffered trace (FIFO) under the max-traces ceiling.
@@ -510,22 +535,6 @@ class TailKeepSpanProcessor(SpanProcessor):
         self._buffer.pop(oldest_trace_id, None)
         self._keep.pop(oldest_trace_id, None)
         self._dropped_trace_count += 1
-
-    def _materialize_trace_decision(self, trace_id: int) -> None:
-        """Flush or drop the buffered spans for `trace_id` per the keep flag.
-
-        `B-163`: the pop is atomic with every other buffer mutation, so a child `on_end`
-        cannot `setdefault` an empty bucket, lose it to this pop, and then append to a
-        detached list. Forwarding happens AFTER the lock is released — holding it across
-        `downstream.on_end` would serialize the exporter.
-        """
-        with self._state_lock:
-            buffered = self._buffer.pop(trace_id, [])
-            keep = self._keep.pop(trace_id, False)
-        if not keep:
-            return
-        for span in buffered:
-            self._downstream.on_end(span)
 
     def force_flush(self, timeout_millis: int = 30_000) -> bool:
         """Flush any still-buffered traces (keep-all) + delegate to downstream.
