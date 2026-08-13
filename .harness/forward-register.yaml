@@ -8953,7 +8953,19 @@ items:
     test assumptions were also removed -- the flush witness is now ORDER-based (delivery recorded before
     force_flush''s return) rather than a wait(0.5) that could pass merely because the scheduler had not
     run the flusher, and the wedged-exporter witness waits on a producer ENTRY EVENT instead of a 100ms
-    sleep.'
+    sleep. ROUND-3 (codex on PR #1332): three more, all in code this arc introduced. (i) force_flush returned
+    True on timeout expiry -- telling the runtime shutdown may proceed while batches are demonstrably outstanding,
+    a quieter form of the very bug this row is about; it now returns downstream_ok AND drained_in_time,
+    still delegating so a wedged forwarder cannot stop the downstream flushing what it has. (ii) The registration
+    LEAKED if the current-span forward raised: _publish_keep_and_maybe_detach had already counted the batch,
+    so an exception from downstream.on_end(span) skipped the release and left the count positive FOREVER
+    -- every later force_flush would burn its whole budget and now also report failure. Both always-sampled
+    arms now release in a finally. (iii) The flush witness was STILL scheduler-dependent: setting an event
+    just before calling force_flush does not prove the flusher reached the wait, so a deschedule there let
+    the release fire first and the test passed even with the wait deleted. It now hooks the condition''s
+    wait() and synchronizes on a point reached INSIDE it -- mutation-probed 3/3 red with the wait removed,
+    where the previous version passed. Incidental: the SDK PROPAGATES processor exceptions rather than swallowing
+    them (an earlier draft assumed otherwise and the RuntimeError escaped the test).'
   council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
     with no cross-axis surface.
   heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before

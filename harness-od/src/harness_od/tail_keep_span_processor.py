@@ -420,8 +420,14 @@ class TailKeepSpanProcessor(SpanProcessor):
             _pending = self._publish_keep_and_maybe_detach(
                 ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
             )
-            self._downstream.on_end(span)
-            self._forward_detached(_pending)
+            # `_pending` is ALREADY registered in flight by the detach above, so the
+            # forwarding of `span` must not be able to skip the release. If
+            # `downstream.on_end(span)` raises, the count would otherwise stay positive
+            # forever and every later `force_flush` would burn its whole budget.
+            try:
+                self._downstream.on_end(span)
+            finally:
+                self._forward_detached(_pending)
             return
 
         # `B-133` EVENT-AWARE ARM (OD spec v1.38 §9.2.1, U-OD-59). Three §9.2
@@ -469,8 +475,14 @@ class TailKeepSpanProcessor(SpanProcessor):
             _pending = self._publish_keep_and_maybe_detach(
                 ctx.trace_id, is_trigger=_trigger, is_root_close=span.parent is None
             )
-            self._downstream.on_end(span)
-            self._forward_detached(_pending)
+            # `_pending` is ALREADY registered in flight by the detach above, so the
+            # forwarding of `span` must not be able to skip the release. If
+            # `downstream.on_end(span)` raises, the count would otherwise stay positive
+            # forever and every later `force_flush` would burn its whole budget.
+            try:
+                self._downstream.on_end(span)
+            finally:
+                self._forward_detached(_pending)
             return
 
         ctx = span.get_span_context()
@@ -612,14 +624,21 @@ class TailKeepSpanProcessor(SpanProcessor):
         # close the exporter first — the exact "silent loss on shutdown" this method exists
         # to prevent. Bounded by the caller's own budget: on expiry we still delegate, so a
         # wedged exporter cannot make `force_flush` hang forever.
+        drained_in_time = True
         with self._inflight_cv:
             while self._inflight_batches > 0:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or not self._inflight_cv.wait(timeout=remaining):
+                    # Budget exhausted with batches still undelivered. Still delegate (a
+                    # wedged forwarder must not stop the downstream from flushing what it
+                    # has), but report FAILURE — returning True here would tell the runtime
+                    # that shutdown may proceed when spans are demonstrably outstanding.
+                    drained_in_time = self._inflight_batches == 0
                     break
 
         remaining_millis = max(0.0, deadline - time.monotonic()) * 1000.0
-        return self._downstream.force_flush(timeout_millis=int(remaining_millis))
+        downstream_ok = self._downstream.force_flush(timeout_millis=int(remaining_millis))
+        return downstream_ok and drained_in_time
 
     def shutdown(self) -> None:
         """Flush + delegate to downstream.shutdown()."""

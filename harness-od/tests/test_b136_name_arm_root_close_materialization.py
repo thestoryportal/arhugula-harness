@@ -513,11 +513,15 @@ def test_b164_force_flush_waits_for_an_inflight_detached_batch() -> None:
 
 
 def test_b164_force_flush_still_returns_when_a_wedged_exporter_exceeds_the_budget() -> None:
-    """The wait is BOUNDED — a wedged exporter must not hang shutdown forever.
+    """The wait is BOUNDED, and expiry is REPORTED — no hang, no false success.
 
     `force_flush` waits only within the caller's own `timeout_millis`; on expiry it stops
-    waiting and delegates anyway. Without this bound, adding the B-164 wait would trade a
+    waiting and delegates anyway. Without that bound, adding the B-164 wait would trade a
     silent-loss bug for a shutdown hang, which is strictly worse.
+
+    It must also return **False** in that case (out-of-family Codex): returning True with
+    batches still undelivered tells the runtime that shutdown may proceed when spans are
+    demonstrably outstanding — a quieter version of the very bug this row is about.
     """
     wedged = threading.Event()
 
@@ -552,8 +556,12 @@ def test_b164_force_flush_still_returns_when_a_wedged_exporter_exceeds_the_budge
     assert producer_wedged.wait(timeout=5.0), "the producer never reached the wedged exporter"
 
     started = time.monotonic()
-    assert tail.force_flush(timeout_millis=300) is True
+    result = tail.force_flush(timeout_millis=300)
     elapsed = time.monotonic() - started
+    assert result is False, (
+        "force_flush reported SUCCESS while a batch was still undelivered — that tells the "
+        "runtime shutdown may proceed when spans are demonstrably outstanding"
+    )
     assert elapsed < 3.0, (
         f"force_flush waited {elapsed:.1f}s on a wedged exporter with a 300ms budget — the "
         "B-164 wait is not bounded and shutdown can hang"
@@ -621,3 +629,55 @@ def test_b164_a_batch_is_registered_in_flight_the_moment_it_is_detached() -> Non
     assert not producer.is_alive(), "the producer hung"
     assert "ordinary.child" in downstream.seen
     assert tail._inflight_batches == 0, "the in-flight count did not settle back to zero"
+
+
+def test_b164_a_raising_downstream_does_not_leak_the_in_flight_registration() -> None:
+    """The registration is released even if forwarding the current span RAISES.
+
+    `_publish_keep_and_maybe_detach` registers the detached batch while it still holds the
+    lock, so the release must be unconditional. If `downstream.on_end(span)` — the
+    always-sampled span itself, forwarded *before* the batch — raises and the release is
+    skipped, `_inflight_batches` stays positive **forever**: every later `force_flush` then
+    burns its entire timeout waiting for a batch that will never be delivered, and now also
+    reports failure. A `finally` around the current-span forward covers it (out-of-family
+    Codex).
+    """
+
+    class _RaisingDownstream(_Downstream):
+        def on_end(self, span: Any) -> None:
+            if span.name == _TRIGGER_ROOT:
+                raise RuntimeError("exporter blew up")
+            super().on_end(span)
+
+    downstream = _RaisingDownstream()
+    tail = TailKeepSpanProcessor(downstream=downstream)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("b164.raise")
+
+    root_span = tracer.start_span(_TRIGGER_ROOT)
+    with tracer.start_as_current_span(
+        "ordinary.child", context=otel_trace.set_span_in_context(root_span)
+    ):
+        pass
+
+    # The SDK propagates processor exceptions rather than swallowing them (verified — an
+    # earlier draft assumed otherwise and the RuntimeError escaped the test).
+    raised = False
+    try:
+        root_span.end()
+    except RuntimeError:
+        raised = True
+    assert raised, "the raising downstream did not propagate — the scenario is not exercised"
+
+    assert tail._inflight_batches == 0, (
+        f"the in-flight registration leaked ({tail._inflight_batches}) after the current-span "
+        "forward raised — every later force_flush would burn its whole budget and report "
+        "failure for a batch that will never arrive"
+    )
+    # And the siblings still went out, since their forwarding is in the `finally`.
+    assert "ordinary.child" in downstream.seen
+
+    started = time.monotonic()
+    assert tail.force_flush(timeout_millis=500) is True
+    assert time.monotonic() - started < 0.4, "force_flush waited on a leaked registration"
