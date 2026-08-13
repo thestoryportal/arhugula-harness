@@ -2310,7 +2310,21 @@ items:
     workflow_id-scoped action_id (compose_hitl_action_id), not run_id -- two peer branches sharing
     a child_workflow_id produce byte-identical escalation requests, making B-39's hitl_responses
     run_id-keyed addressing impossible to use in that exact scenario.
-  close_out: 'CURRENT STATE (v6, 2026-08-12) -- READ THIS FIRST; everything after the VERSION
+  close_out: 'SPEC LEG LANDED 2026-08-12 -- Spec_Control_Plane_v1_119.md (delta over v1.118),
+    clearance at .harness/clearance/spec-control-plane-v1-119-cleared-2026-08-12.md.
+    HITLEscalationBrief gains escalation_instance_id: str | None = None (opaque, deterministic,
+    one-way, >=128 bits; equality the sole promised operation) + three additive advisory
+    payload_body keys (branch_context, resolvability = the EXISTING closed PauseLocationVariant
+    CHANNEL never the outcome, resolvability_note). Widening lands ONCE inside
+    compose_hitl_action_id so the webhook Idempotency-Key + CP audit action_id + F2 ledger key
+    stay one identity family -- which also closes the per-peer HITL audit-entry loss (C-IS-07
+    s7.5) as an absorbed half. Leak bar EXTENDED to the tracing-export channel, so the hashing
+    MUST precede the composer. Two explicit NON-ratifications recorded in the delta: the
+    palette-suppression binding is WITHDRAWN (s0.6.1) and the typed resume-outcome diagnostics
+    carrier does NOT exist (s0.10 discharges the council sequencing condition by softening the
+    wording, not by claiming a shipped type). NEXT: the IMPL leg (harness-cp + harness-runtime)
+    against v1.119, carrying the s5 residual list from the design record. This row closes when
+    the impl leg lands. FORMER CURRENT STATE (v6, 2026-08-12) -- READ THIS FIRST; everything after the VERSION
     HISTORY marker below is an append-log kept for audit, NOT instructions. ALL FIVE
     preconditions are CLOSED and THE SPEC LEG IS AUTHORIZABLE. No council is owed, no gate
     remains, nothing is blocked. Design record:
