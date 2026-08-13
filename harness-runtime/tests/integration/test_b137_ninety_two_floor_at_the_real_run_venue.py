@@ -547,17 +547,25 @@ async def test_the_tail_processor_never_sees_what_the_head_dropped() -> None:
     `TailKeepSpanProcessor` honours §9.2 too (always-sampled spans bypass its buffer), so
     one might expect it to rescue the floor. It cannot: a span the head drops is never
     recorded, so `on_end` never runs and no tail-side rule can act on it. This drives the
-    REAL processor through the REAL run and counts its `on_end` arrivals.
+    REAL processor through the REAL run.
+
+    **Observed at the right layer** (out-of-family Codex round 10). An earlier draft counted
+    arrivals at the processor's DOWNSTREAM, which is the wrong observation layer for the
+    claim: if the head ever moved from `DROP` to `RECORD_ONLY`, `TailKeepSpanProcessor.on_end`
+    WOULD run but might buffer the span without forwarding it, leaving a downstream counter
+    empty and this test green over exactly the boundary change it is meant to catch. It now
+    spies on the tail processor's own `on_end`, which is what the register's claim is about.
     """
     harness = _b72()
     arrivals: list[str] = []
+    forwarded: list[str] = []
 
     class _Counting:
         def on_start(self, span: Any, parent_context: Any = None) -> None:
             return None
 
         def on_end(self, span: Any) -> None:
-            arrivals.append(span.name)
+            forwarded.append(span.name)
 
         def shutdown(self) -> None:
             return None
@@ -565,8 +573,15 @@ async def test_the_tail_processor_never_sees_what_the_head_dropped() -> None:
         def force_flush(self, timeout_millis: int = 30_000) -> bool:
             return True
 
+    class _SpyingTailKeep(TailKeepSpanProcessor):
+        """The REAL processor, with its own `on_end` observed before delegating."""
+
+        def on_end(self, span: Any) -> None:
+            arrivals.append(span.name)
+            super().on_end(span)
+
     provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
-    provider.add_span_processor(TailKeepSpanProcessor(downstream=_Counting()))
+    provider.add_span_processor(_SpyingTailKeep(downstream=_Counting()))
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
@@ -584,9 +599,36 @@ async def test_the_tail_processor_never_sees_what_the_head_dropped() -> None:
             )
 
     assert arrivals == [], (
-        f"the tail processor received {arrivals} from a head-dropped trace — if the head "
-        "now records-without-sampling, B-137's starvation boundary has moved and the row "
-        "must be re-measured"
+        f"`TailKeepSpanProcessor.on_end` was REACHED with {arrivals} from a head-dropped "
+        "trace — if the head now records-without-sampling, B-137's starvation boundary has "
+        "moved and the row must be re-measured"
+    )
+    # Downstream is necessarily empty too, but that is a consequence, not the claim.
+    assert forwarded == [], f"spans reached the downstream processor: {forwarded}"
+
+    # POSITIVE CONTROL — the spy must FIRE when the head admits, or "zero arrivals" above
+    # is unfalsifiable and would stay green if the processor were never installed at all.
+    arrivals.clear()
+    forwarded.clear()
+    admitting = TracerProvider(sampler=build_default_sampler(base_rate=1.0))
+    admitting.add_span_processor(_SpyingTailKeep(downstream=_Counting()))
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            harness._FakeTracerProvider,
+            "get_tracer",
+            lambda self, name, /: admitting.get_tracer(name),
+        )
+        harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
+        harness._install_fake_od_stage4(mp)
+        harness._install_fake_webhook_composer_factory(mp, [])
+        with tempfile.TemporaryDirectory() as tmp:
+            await harness.api_run(
+                harness._FanOutSubAgentDispatchWorkflow(),
+                config=harness._config(pathlib.Path(tmp)),
+            )
+    assert _MEMBER in arrivals, (
+        f"the tail-processor spy did not fire even at base_rate=1.0 (arrivals={arrivals}) — "
+        "the zero-arrivals assertion above proves nothing"
     )
 
 
