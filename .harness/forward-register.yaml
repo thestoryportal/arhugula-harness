@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 163
+  total: 164
   open: 1
   design_substrate_gated: 0
-  registered_finding: 29
+  registered_finding: 30
   operator_gated: 0
   held: 2
   closed: 131
-  identity_digest: '8cc36f7653de6129'
+  identity_digest: '2e76e32e5e004568'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -8879,9 +8879,49 @@ items:
     child ends before its root, as the nesting contract requires), so unlike the ordering residual above
     it is CLOSED rather than documented. Witness drives the exact shape: a buffered ordinary child, a sandbox.violation
     trigger BLOCKED INSIDE downstream, and a quiet always-sampled root closing concurrently. Mutation-probed
-    by moving the forward back ahead of the transition: the sibling is dropped every run.'
+    by moving the forward back ahead of the transition: the sibling is dropped every run. SCOPE OF THIS
+    CLOSURE, FINAL: B-163 is closed for the three windows a lock CAN close, each with a deterministic mutation-probed
+    witness. Codex rounds 4-6 then surfaced two further items that are NOT lock-shaped -- force_flush returning
+    before an in-flight detached batch reaches downstream, and a child paused before it registers -- and
+    those are registered as B-164 rather than patched reactively here. That is arc-sizing, not deferral:
+    the first needs in-flight batch accounting that changes shutdown semantics, and the second cannot be
+    closed by any lock.'
   council: no -- a single-domain C7 thread-safety repair against an explicit OTel SDK contract, with no
     cross-axis surface and no committed envelope to renegotiate.
   heading: '### B-163 · `TailKeepSpanProcessor` mutates `_buffer` / `_keep` / its counters with **no lock**,
     so a concurrent child-`on_end` and root-`on_end` can lose a span entirely — pre-existing at all three
     materialization sites *(surfaced by out-of-family Codex at the B-136 arc, 2026-08-13)*'
+- id: B-164
+  title: TailKeepSpanProcessor concurrency residual -- force_flush can return before an in-flight detached
+    batch reaches downstream, and a child paused before registering cannot be registered by any lock
+  status: registered_finding
+  summary: 'B-163 closed the windows a lock CAN close, each with a deterministic witness: the pop-vs-setdefault
+    interleaving, the torn keep-write-vs-materialize transition, and the slow-downstream publication window.
+    What remains is a DESIGN question about batch accounting and shutdown ordering, not another missing
+    with-statement. (a) FORCE_FLUSH DOES NOT WAIT FOR IN-FLIGHT DETACHED BATCHES: _publish_keep_and_maybe_detach
+    detaches under the lock and returns the spans so the caller forwards OUTSIDE it (deliberate -- holding
+    the lock across downstream.on_end would serialize a slow exporter behind every span), but a concurrent
+    force_flush() then sees an EMPTY buffer, delegates downstream and returns True while those already-ended
+    spans are still being forwarded; shutdown can close the downstream first and lose them. PRE-EXISTING:
+    the superseded _materialize_trace_decision had the same pop-then-forward shape. (b) A CHILD PAUSED
+    BEFORE REGISTERING CANNOT BE REGISTERED: if a child''s on_end is descheduled before reaching the buffering
+    critical section, a concurrent always-sampled root can materialize first; the child re-creates the
+    bucket after root close and is stranded or evicted. Moving the lock earlier NARROWS but cannot close
+    it -- a span that has not entered the processor cannot be accounted for. This is the ordering half
+    already recorded on B-163, restated with its eviction consequence, and it requires a root to end before
+    its own child (a malformed trace under the nesting contract).'
+  close_out: '(1) DECIDE WHETHER (a) IS IN SCOPE for a best-effort tail processor at all -- the module''s
+    own ''Drop semantics (false-but-bounded)'' posture and s9.3''s implementer-discretion clause may already
+    contemplate it; ground there first, exactly as B-136''s step (5) did. (2) IF IT IS, implement in-flight
+    accounting (a batch counter plus a condition variable force_flush waits on, or an explicit hand-off
+    queue -- both change shutdown semantics) and witness the shutdown race directly: a slow downstream
+    plus a concurrent force_flush, asserting delivery before return. (3) FOR (b), decide whether a malformed
+    trace shape is worth defending against at all -- if yes, the honest mechanism is a post-materialization
+    late-arrival path, NOT a wider lock. FALSIFIER: a demonstration that force_flush is only ever called
+    after all span-producing threads have quiesced (making (a) unreachable), or a ratified reading that
+    best-effort delivery at shutdown is contracted.'
+  council: no -- single-domain C7 concurrency-correctness work inside s9.3's implementer-discretion clause,
+    with no cross-axis surface.
+  heading: '### B-164 · `TailKeepSpanProcessor` concurrency residual — `force_flush` can return before
+    an in-flight detached batch reaches downstream, and a child paused before registering cannot be registered
+    by any lock *(surfaced by out-of-family Codex rounds 4–6 at the B-136/B-163 arc, 2026-08-13)*'
