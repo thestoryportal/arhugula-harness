@@ -46,20 +46,30 @@ span does not close until the test releases it — which it does only after the
 root's `with` block has already exited. The ordering under test is therefore
 forced, not observed by luck.
 
-**Status of each test.** The first two PASS today: they pin the mechanism and the
-ordering, which are facts about production and stay true whether or not
-`B-164(b)` is ever fixed. The remaining three are `xfail(strict=True)` — they
-assert the behaviour a FIXED processor would have. When `B-164(b)` is fixed they
-flip to XPASS and strict mode reddens the suite, which is the intended signal to
-close the register row rather than let a stale repro rot.
+**Status of each test — `B-164(b)` is now FIXED, and this file records what the
+fix does and does not deliver.** The mechanism test still PASSES and still pins
+production's ability to end a child after its root, which stays true whether or
+not the processor handles it. The three `xfail(strict=True)` witnesses that
+asserted the FIXED behaviour reddened as XPASS when the fix landed — the
+intended signal — and are now plain passing assertions, except for the one half
+of the last witness that is a DECIDED BOUND rather than a defect.
 
-Measured cost (see the individual tests): with no `max_buffered_traces` ceiling
-the orphaned span is DELAYED to `force_flush` (i.e. missing from its trace at
-root-close, when the trace is actually exported); under buffer pressure it is
-DROPPED outright and `force_flush` never recovers it. If the orphan is itself the
-§10.2 classification trigger, the trace's keep decision is taken WITHOUT it — the
-root and its siblings drop — and a `_keep` entry is left that nothing will ever
-pop.
+**What the fix does** (`tail_keep_span_processor.py`, "Late arrivals"): a span
+whose trace has already published its keep decision at root close is recognised
+against a bounded FIFO memory of recently materialized trace_ids and forwarded
+IMMEDIATELY — never buffered. That kills both measured costs at once: with no
+ceiling the span is no longer DELAYED to `force_flush`, and under buffer
+pressure it is no longer the oldest bucket and so no longer DROPPED. It also
+suppresses the `_keep` write for an already-materialized trace, closing the
+stale-entry leak.
+
+**What the fix deliberately does NOT do** (`test_b164b_bound_*`): a late span
+that is itself the §10.2 trigger cannot rescue its trace. The keep decision was
+taken without it and its siblings were already dropped; retaining dropped spans
+against the chance of a later trigger would reintroduce the unbounded memory the
+drop exists to avoid. The trigger span itself IS preserved — this is the same
+tradeoff the processor already documents for eviction, where the failure signal
+survives and only the buffered tree-context is shed.
 """
 
 from __future__ import annotations
@@ -203,38 +213,47 @@ def test_the_fanout_really_orphans_a_thread_that_outlives_the_root() -> None:
     )
 
 
-def test_the_orphaned_child_is_stranded_in_the_buffer_after_root_close() -> None:
-    """**The defect, pinned as it behaves today.** The trace slot is never freed.
+def test_the_orphaned_child_is_not_stranded_in_the_buffer_after_root_close() -> None:
+    """**The repaired behaviour, at the exact site the defect lived.** No slot leaks.
 
-    The root already popped `_buffer[trace_id]`; the late child hits `setdefault`,
-    re-creates the bucket, and — being a non-root close — detaches nothing. This is
-    the same never-freed-slot pathology `B-136` repaired for always-sampled roots.
+    Before the fix the root had already popped `_buffer[trace_id]`, the late child hit
+    `setdefault`, re-created the bucket, and — being a non-root close — detached nothing:
+    the same never-freed-slot pathology `B-136` repaired for always-sampled roots. The
+    late-arrival path forwards the child instead of buffering it, so no bucket is
+    re-created and the trace holds no `max_buffered_traces` slot.
+
+    Asserted on the buffer AND on downstream, because either alone is satisfiable the
+    wrong way: an empty buffer with nothing forwarded would mean the span was dropped.
     """
     fx = _Fixture()
     fx.orphan_a_child()
 
-    assert fx.tail.buffered_trace_count == 1, (
-        "the orphaned child is no longer stranded — if B-164(b) has been fixed, delete "
-        "this test and close the register row (the xfail witnesses below will already "
-        "have reddened)"
+    assert fx.tail.buffered_trace_count == 0, (
+        f"the orphaned child re-created a bucket nothing will ever pop "
+        f"({fx.tail.buffered_trace_count} trace(s) buffered) — B-164(b) has regressed"
     )
-    assert _CHILD not in fx.downstream.seen, (
-        "the orphaned child reached downstream after all — B-164(b) may be fixed"
+    assert _CHILD in fx.downstream.seen, (
+        f"the orphaned child left the buffer without reaching downstream, i.e. it was "
+        f"dropped rather than forwarded; got {fx.downstream.seen}"
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="B-164(b) OPEN: a child arriving after root close is never detached, so it "
-    "misses the root-close materialization that exports its trace.",
-)
-def test_b164b_desired_the_orphaned_child_reaches_downstream_with_its_trace() -> None:
-    """**Desired behaviour.** The dispatch span should export with its trace.
+def test_b164b_the_orphaned_child_reaches_downstream_under_live_traffic() -> None:
+    """**Repaired.** The dispatch span exports instead of missing its own trace.
 
-    The trace is keep-flagged by a sibling `sandbox.violation`, so every buffered
-    span in it SHOULD reach downstream at root close. The orphaned dispatch does
-    not — and it is precisely the span an operator most wants when a branch wedged
-    badly enough to trip the barrier.
+    Before the fix it never reached downstream at all — and it is precisely the span
+    an operator most wants when a branch wedged badly enough to trip the barrier.
+
+    **Why it exports is worth stating precisely, because the obvious reading is
+    wrong.** The `sandbox.violation` opened here is NOT a sibling of the orphan: it
+    has no active parent, so it roots its OWN trace (verified — the two spans carry
+    different trace_ids), and it therefore keep-flags nothing in the orphan's trace.
+    The orphan's trace in fact materializes with `keep=False`. The child reaches
+    downstream because the late-arrival path forwards it directly — keep-all, the
+    posture used wherever a tail decision is unavailable — not because any keep flag
+    rescued it. The unrelated trace is retained as live traffic around the orphan:
+    it proves the late-arrival memory is keyed by trace_id and is not perturbed by
+    other traces materializing before or between.
     """
     fx = _Fixture()
     with fx.tracer.start_as_current_span(_TRIGGER):
@@ -246,16 +265,15 @@ def test_b164b_desired_the_orphaned_child_reaches_downstream_with_its_trace() ->
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="B-164(b) OPEN: the stranded bucket is the OLDEST entry, so it is the first "
-    "evicted under the max_buffered_traces ceiling — a permanent loss, not a delay.",
-)
-def test_b164b_desired_the_orphaned_child_survives_buffer_pressure() -> None:
-    """**Desired behaviour.** The orphan should not be silently dropped.
+def test_b164b_the_orphaned_child_survives_buffer_pressure() -> None:
+    """**Repaired.** The orphan is no longer silently dropped under a ceiling.
 
-    Measured: with no ceiling the span is merely DELAYED to `force_flush`; with a
-    ceiling and live traffic it is DROPPED and `force_flush` never recovers it.
+    This is the half of `B-164(b)` that was a permanent LOSS rather than a delay.
+    Measured before the fix: with no ceiling the span was merely DELAYED to
+    `force_flush`; with a ceiling and live traffic the stranded bucket was the OLDEST
+    entry, so it was the first evicted and `force_flush` never recovered it. Because
+    the span is now forwarded at its own `on_end` it never occupies a bucket, so no
+    amount of subsequent pressure can evict it.
     """
     fx = _Fixture(max_buffered_traces=1)
     fx.orphan_a_child()
@@ -274,24 +292,59 @@ def test_b164b_desired_the_orphaned_child_survives_buffer_pressure() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="B-164(b) OPEN: a trigger arriving after root close writes _keep[trace_id] "
-    "that nothing will ever pop, and the keep decision was already taken without it.",
-)
-def test_b164b_desired_a_late_trigger_still_preserves_its_trace() -> None:
-    """**Desired behaviour.** A late trigger should not be decided against, then leak.
+def test_b164b_a_late_trigger_leaks_no_keep_entry_and_is_itself_preserved() -> None:
+    """**Repaired.** The late trigger neither leaks nor vanishes.
 
-    Here the orphaned span IS the `sandbox.violation` trigger. Because it arrives
-    after root close, the trace was already materialized with `keep=False` — so the
-    root and its siblings were DROPPED — and the trigger then writes a `_keep` entry
-    that no root close will ever pop.
+    Here the orphaned span IS the `sandbox.violation` trigger. It arrives after root
+    close, so the trace has already materialized. Before the fix it wrote
+    `_keep[trace_id] = True` — an entry no root close would ever pop, i.e. an
+    unbounded per-trace leak driven by ordinary production behaviour. That write is
+    now suppressed for an already-materialized trace.
+
+    The trigger span itself still reaches downstream, which is the property that makes
+    the accepted loss below tolerable: the §10.2 failure SIGNAL survives.
     """
     fx = _Fixture()
     fx.orphan_a_child(child_name=_TRIGGER)
 
     stale_keep = len(fx.tail._keep)
     assert stale_keep == 0, f"a stale _keep entry was left behind ({stale_keep})"
+    assert fx.tail.buffered_trace_count == 0, (
+        f"the late trigger left a buffered trace behind ({fx.tail.buffered_trace_count})"
+    )
+    assert _TRIGGER in fx.downstream.seen, (
+        f"the late trigger span itself never reached downstream, so the §10.2 failure "
+        f"signal was lost — this is the assumption the accepted bound below rests on; "
+        f"got {fx.downstream.seen}"
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="B-164(b) DECIDED BOUND (not a defect): a trigger arriving after root close "
+    "cannot retroactively rescue siblings that were already dropped. Retaining dropped "
+    "spans against the chance of a later trigger would reintroduce the unbounded memory "
+    "the drop exists to avoid. Strict, so the bound cannot be silently widened.",
+)
+def test_b164b_bound_a_late_trigger_cannot_rescue_its_already_dropped_root() -> None:
+    """**The accepted loss, pinned so it stays a decision rather than a surprise.**
+
+    The trace materialized with `keep=False` before the trigger existed, so the root
+    was dropped at that moment. Nothing observed later can bring it back without the
+    processor retaining spans it has decided to drop — which is the unbounded memory
+    the `max_buffered_traces` ceiling exists to prevent, so the loss is accepted.
+
+    This is the SAME tradeoff the processor already documents for eviction ("the
+    failure *signal* survives eviction; only the buffered tree-*context* is shed"),
+    and the signal's survival is asserted in the test above rather than assumed here.
+
+    Kept as a strict xfail rather than deleted: if a later change ever does preserve
+    the root, this reddens and forces the bound to be re-decided in the open instead
+    of drifting.
+    """
+    fx = _Fixture()
+    fx.orphan_a_child(child_name=_TRIGGER)
+
     assert _ROOT in fx.downstream.seen, (
-        f"the root was dropped despite its trace carrying a trigger; got {fx.downstream.seen}"
+        f"the root was dropped despite its trace later carrying a trigger; got {fx.downstream.seen}"
     )

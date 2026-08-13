@@ -40,6 +40,8 @@ LOCAL_DEVELOPMENT`); when wrapped, this processor honors the
      materialize the keep decision for the trace: forward buffered spans
      to `downstream` iff the keep flag is True; otherwise drop them.
      Clear the buffer + keep flag entries for this trace_id.
+   - If the span's trace has **already materialized** (a late arrival — see
+     below) → forward it immediately and buffer nothing.
 
 2. `force_flush(timeout_millis)` — flush any still-buffered traces (treat
    them as keep-all to avoid silent loss on shutdown) + delegate to
@@ -101,6 +103,44 @@ eviction and because the failure signal is already preserved. Alternative
 considered: drop-NEW (reject the incoming trace) — rejected because it
 lets stale never-closing traces hog the buffer indefinitely, the opposite
 of the pathology the bound exists to contain.
+
+**Late arrivals — spans that end after their own root (`B-164(b)`).** Root
+close is the materialization point: the keep decision is published, the
+bucket and the keep flag are popped, and nothing will ever pop them again.
+A span of that trace can still arrive afterwards, and production really does
+produce them — ``harness_cp.workflow_driver._run_fanout_to_completion``
+abandons its ``ThreadPoolExecutor`` with ``shutdown(wait=False)`` on the
+§25.11 barrier deadline (or any branch failure), so an orphaned thread keeps
+running with the root's context copied by ``asyncio.to_thread`` and closes
+its child span after the root's ``with`` block has unwound. Witnessed by
+execution at ``harness-runtime/tests/test_b164b_fanout_orphaned_child_span_repro.py``.
+
+Buffering such a span was the defect: ``setdefault`` re-created a bucket that
+no root close would ever detach, so the span was stranded until
+``force_flush`` — and, being the OLDEST entry, it was the FIRST evicted under
+the ``max_buffered_traces`` ceiling, i.e. a permanent loss rather than a
+delay. It is now **forwarded immediately and never buffered**. Keep-all is
+the posture this processor already takes everywhere a tail decision is
+unavailable to it (``force_flush`` drains keep-all "to avoid silent loss");
+a late arrival is exactly that case, one span at a time.
+
+Recognising a late arrival needs a memory of recently root-closed traces,
+and that memory is bounded (``_MATERIALIZED_TRACE_MEMORY``, FIFO) — an
+unbounded set would be a worse leak than the one being closed. Beyond the
+window a late arrival degrades to the previous behaviour (buffered, released
+keep-all at ``force_flush``), which is a delay and not a loss.
+
+**A late TRIGGER cannot rescue its trace, and that is a decided bound, not
+an oversight.** If the late span is itself a §10.2 classification trigger,
+the trace's keep decision was already taken WITHOUT it and its siblings are
+already gone; retaining dropped spans on the chance a trigger arrives later
+would reintroduce exactly the unbounded memory the drop exists to avoid. So
+the trigger span itself is preserved (it is forwarded, immediately) and the
+buffered tree-*context* is accepted as lost — the SAME tradeoff already
+documented above for eviction, where "the failure *signal* survives …; only
+the buffered tree-*context* … is shed". What is NOT accepted is the leak:
+publishing ``_keep[trace_id]`` for an already-materialized trace left an
+entry nothing would ever pop, and that write is now suppressed.
 
 **Event-shaped §9.2 members (OD spec v1.38 §9.2.1 — `B-133`).** Three §9.2
 members are emitted as span **EVENTS** on a wrapper span rather than as
@@ -189,6 +229,15 @@ if TYPE_CHECKING:
 __all__ = [
     "TailKeepSpanProcessor",
 ]
+
+#: `B-164(b)` — how many recently root-closed trace_ids are remembered, so a span arriving
+#: after its own trace materialized is recognised as a late arrival instead of re-buffered
+#: into a bucket nothing will ever pop. FIFO-bounded on purpose: an unbounded set would be a
+#: worse leak than the one it closes. A late arrival beyond the window degrades to the
+#: pre-`B-164(b)` behaviour (buffered, released keep-all at `force_flush`) — a delay, not a
+#: loss. 1024 covers the window this exists for by orders of magnitude: an orphaned thread
+#: outlives its root by one branch-completion, not by a thousand unrelated traces.
+_MATERIALIZED_TRACE_MEMORY = 1024
 
 
 def _carries_always_sampled_event(
@@ -322,6 +371,13 @@ class TailKeepSpanProcessor(SpanProcessor):
         # Per-trace_id keep flag — True iff any span in the trace carried a
         # §10.2 classification trigger. OR-merged at on_end.
         self._keep: dict[int, bool] = {}
+        # `B-164(b)` — trace_ids whose keep decision has already been PUBLISHED at root
+        # close. Used as an ordered set (dict insertion order = FIFO, same idiom as
+        # `_buffer`), bounded at `_MATERIALIZED_TRACE_MEMORY`. Read and written only under
+        # `_state_lock`, and — critically — tested in the SAME critical section that would
+        # otherwise buffer the span, so a concurrent root close cannot land between the
+        # test and the append.
+        self._materialized: dict[int, None] = {}
         # OD spec v1.28 §9.3 operator-tunable bounded-buffer ceilings. None =
         # unbounded (v1.27 MVP behavior); the production materializer passes
         # the `CollectorConfig` ceilings so production is bounded by default.
@@ -543,27 +599,45 @@ class TailKeepSpanProcessor(SpanProcessor):
         # critical section. Splitting them is precisely the losing interleaving: a child
         # could `setdefault` an empty bucket here and append to it after a concurrent
         # root-close `pop` had already detached it, losing the span entirely.
+        #
+        # `B-164(b)` — the late-arrival test lives INSIDE this critical section rather than
+        # ahead of it. Ahead of it, a root close landing between the test and the append
+        # would put the span back in the stranded state the test exists to prevent — the
+        # same interleaving `B-163` closed for the eviction/insert pair one line down.
         with self._state_lock:
-            if (
-                not is_root_close
-                and trace_id not in self._buffer
-                and self._max_buffered_traces is not None
-                and len(self._buffer) >= self._max_buffered_traces
-            ):
-                self._evict_oldest_trace()
-
-            bucket = self._buffer.setdefault(trace_id, [])
-            # OD spec v1.28 §9.3 max-spans-per-trace ceiling: drop overflow
-            # non-root spans (the root-close span always processes below so the
-            # trace materializes and frees its slot rather than leaking).
-            if (
-                not is_root_close
-                and self._max_spans_per_trace is not None
-                and len(bucket) >= self._max_spans_per_trace
-            ):
-                self._dropped_span_count += 1
+            late_arrival = trace_id in self._materialized
+            if late_arrival:
+                # The keep decision for this trace is already published and unrepeatable, so
+                # this span can neither join it nor be released by a future one. Forward it
+                # (keep-all — the posture used wherever a tail decision is unavailable)
+                # instead of re-creating a bucket nothing will ever pop. Registered in
+                # flight here, under the lock, for the same reason a detached batch is.
+                self._register_inflight()
             else:
-                bucket.append(span)
+                if (
+                    not is_root_close
+                    and trace_id not in self._buffer
+                    and self._max_buffered_traces is not None
+                    and len(self._buffer) >= self._max_buffered_traces
+                ):
+                    self._evict_oldest_trace()
+
+                bucket = self._buffer.setdefault(trace_id, [])
+                # OD spec v1.28 §9.3 max-spans-per-trace ceiling: drop overflow
+                # non-root spans (the root-close span always processes below so the
+                # trace materializes and frees its slot rather than leaking).
+                if (
+                    not is_root_close
+                    and self._max_spans_per_trace is not None
+                    and len(bucket) >= self._max_spans_per_trace
+                ):
+                    self._dropped_span_count += 1
+                else:
+                    bucket.append(span)
+
+        if late_arrival:
+            self._forward_detached([span])
+            return
 
         _trigger = is_classification_trigger(span, events=events)
 
@@ -634,12 +708,19 @@ class TailKeepSpanProcessor(SpanProcessor):
         holding it across `downstream.on_end` would serialize a slow exporter.
         """
         with self._state_lock:
-            if is_trigger:
+            # `B-164(b)` — do NOT publish a keep flag for a trace that has already
+            # materialized. The decision was taken without this trigger and cannot be
+            # retaken, so the entry would be one nothing ever pops. The trigger span itself
+            # is still preserved — it is forwarded by the always-sampled arm, or by the
+            # late-arrival path — so the §10.2 failure SIGNAL survives; only the buffered
+            # tree-context is accepted as lost, the same tradeoff eviction already makes.
+            if is_trigger and trace_id not in self._materialized:
                 self._keep[trace_id] = True
             if not is_root_close:
                 return []
             buffered = self._buffer.pop(trace_id, [])
             keep = self._keep.pop(trace_id, False)
+            self._remember_materialized(trace_id)
             released = buffered if keep else []
             if released:
                 # Register the batch as in-flight WHILE still holding the lock that guards
@@ -647,8 +728,30 @@ class TailKeepSpanProcessor(SpanProcessor):
                 # flight" for a batch that has been detached but not yet forwarded. Tagged
                 # with this thread's entrant generation so a flush can tell whether the
                 # batch predates its cutoff.
-                self._inflight_batch_seqs.append(getattr(self._current_entry, "value", 0))
+                self._register_inflight()
         return released
+
+    def _register_inflight(self) -> None:
+        """Tag a batch about to be forwarded with this thread's entrant generation.
+
+        MUST be called holding `_state_lock` — that is what makes the registration and the
+        removal-from-`_buffer` (or, for a `B-164(b)` late arrival, the decision not to enter
+        it at all) a single critical section, so no `force_flush` can observe "buffer empty
+        AND nothing in flight" for a span that is on its way to `downstream`. Every
+        registration is paired with exactly one `_forward_detached` call, which clears it.
+        """
+        self._inflight_batch_seqs.append(getattr(self._current_entry, "value", 0))
+
+    def _remember_materialized(self, trace_id: int) -> None:
+        """Record that `trace_id` has published its keep decision (`B-164(b)`).
+
+        Called under `_state_lock` from the root-close materialization. FIFO-bounded at
+        `_MATERIALIZED_TRACE_MEMORY`: dict insertion order makes `next(iter(...))` the
+        oldest, the same idiom `_evict_oldest_trace` uses on `_buffer`.
+        """
+        self._materialized[trace_id] = None
+        while len(self._materialized) > _MATERIALIZED_TRACE_MEMORY:
+            del self._materialized[next(iter(self._materialized))]
 
     def _evict_oldest_trace(self) -> None:
         """Drop the oldest buffered trace (FIFO) under the max-traces ceiling.
