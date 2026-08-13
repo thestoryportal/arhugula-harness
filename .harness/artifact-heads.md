@@ -29,9 +29,9 @@ is the one that resolved the head.
 | `adr-d8-audit-signing-backend` | `v1 (Accepted, 2026-07-16)` | 2026-07-16 | `design-substrate/ADR-D8_audit_signing_backend.md` | 1 | `ADR-D8_audit_signing_backend-cleared-2026-07-16.md` |
 | `cross-axis-composition-document` | `v2.23` | 2026-07-30 | `design-substrate/Cross_Axis_Composition_Document_v2_23.md` | 8 | `cross-axis-composition-v2-23-cleared-2026-07-30.md` |
 | `implementation-plan-action-surface` | `v1.6` | 2026-07-15 | `design-substrate/Implementation_Plan_Action_Surface_v1_6.md` | 2 | `implementation-plan-action-surface-v1-6-cleared-2026-07-15.md` |
-| `implementation-plan-control-plane` | `v2.52` | 2026-08-12 | `design-substrate/Implementation_Plan_Control_Plane_v2_52.md` | 22 | `implementation-plan-control-plane-v2-52-cleared-2026-08-12.md` |
+| `implementation-plan-control-plane` | `v2.53` | 2026-08-13 | `design-substrate/Implementation_Plan_Control_Plane_v2_53.md` | 23 | `implementation-plan-control-plane-v2-53-cleared-2026-08-13.md` |
 | `implementation-plan-harness-core` | `v1.3` | 2026-07-19 | `design-substrate/Implementation_Plan_Harness_Core_v1_3.md` | 1 | `implementation-plan-harness-core-v1-3-cleared-2026-07-19.md` |
-| `implementation-plan-harness-runtime` | `v2.62` | 2026-08-08 | `design-substrate/Implementation_Plan_Harness_Runtime_v2_62.md` | 21 | `implementation-plan-harness-runtime-v2-62-cleared-2026-08-08.md` |
+| `implementation-plan-harness-runtime` | `v2.63` | 2026-08-13 | `design-substrate/Implementation_Plan_Harness_Runtime_v2_63.md` | 22 | `implementation-plan-harness-runtime-v2-63-cleared-2026-08-13.md` |
 | `implementation-plan-information-substrate` | `v2.9` | 2026-08-07 | `design-substrate/Implementation_Plan_Information_Substrate_v2_9.md` | 5 | `implementation-plan-information-substrate-v2-9-cleared-2026-08-07.md` |
 | `implementation-plan-memory-substrate` | `v1.3` | 2026-08-06 | `design-substrate/Implementation_Plan_Memory_Substrate_v1.md` | 4 | `implementation-plan-memory-substrate-v1-3-cleared-2026-08-06.md` |
 | `implementation-plan-operational-discipline` | `v2.35` | 2026-08-12 | `design-substrate/Implementation_Plan_Operational_Discipline_v2_35.md` | 9 | `implementation-plan-operational-discipline-v2-35-cleared-2026-08-12.md` |
@@ -39,8 +39,8 @@ is the one that resolved the head.
 | `prd` | `v1.2 (Proposed, 2026-07-01)` | 2026-07-09 | `design-substrate/PRD_v1_2.md` | 1 | `PRD_v1_2-cleared-2026-07-09.md` |
 | `project-workflow` | `v1.19` | 2026-07-24 | `design-substrate/Project_Workflow_v1_19.md` | 7 | `Project_Workflow-v1_19-cleared-2026-07-24.md` |
 | `spec-action-surface` | `v1.14` | 2026-07-15 | `design-substrate/Spec_Action_Surface_v1.md` | 6 | `spec-action-surface-v1-14-cleared-2026-07-15.md` |
-| `spec-control-plane` | `v1.118` | 2026-08-11 | `design-substrate/Spec_Control_Plane_v1_118.md` | 93 | `spec-control-plane-v1-118-cleared-2026-08-11.md` |
-| `spec-harness-runtime` | `v1.120` | 2026-08-12 | `design-substrate/Spec_Harness_Runtime_v1.md` | 83 | `spec-harness-runtime-v1-120-cleared-2026-08-12.md` |
+| `spec-control-plane` | `v1.119` | 2026-08-13 | `design-substrate/Spec_Control_Plane_v1_119.md` | 94 | `spec-control-plane-v1-119-cleared-2026-08-13.md` |
+| `spec-harness-runtime` | `v1.121` | 2026-08-13 | `design-substrate/Spec_Harness_Runtime_v1.md` | 84 | `spec-harness-runtime-v1-121-cleared-2026-08-13.md` |
 | `spec-information-substrate` | `v1.13` | 2026-08-07 | `design-substrate/Spec_Information_Substrate_v1.md` | 11 | `spec-information-substrate-v1-13-cleared-2026-08-07.md` |
 | `spec-memory-substrate` | `v1.3` | 2026-08-06 | `design-substrate/Spec_Memory_Substrate_v1.md` | 4 | `spec-memory-substrate-v1-3-cleared-2026-08-06.md` |
 | `spec-operational-discipline` | `v1.41` | 2026-08-12 | `design-substrate/Spec_Operational_Discipline_v1_41.md` | 15 | `spec-operational-discipline-v1-41-cleared-2026-08-12.md` |

@@ -16,8 +16,8 @@ CP posture per `Cross_Axis_Composition_Document_v2_19.md` §2.4: **largest cross
 
 | Artifact | Version | Role |
 |---|---|---|
-| `Spec_Control_Plane_v1_118.md` | **v1.118 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/cp.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Contract authority — 29 contracts C-CP-01 through C-CP-29 *(authoring-era count was 24; deltas grew the enumeration — per v1.13 Reading A: C-CP-25 WorkflowDriver / C-CP-26 PauseResumeProtocol / C-CP-27 PerServerTrust / C-CP-28 ValidatorFramework (incl. §28.x v1.24 validator post-evaluate hook) / C-CP-29 PromptSelectionManifest — see the canonical spec)* |
-| `Implementation_Plan_Control_Plane_v2_52.md` | **v2.52 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/cp.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Execution authority — 58 atomic units across 9 clusters and 9 topological levels (L0–L8) *(authoring-era figures; see the canonical plan)* |
+| `Spec_Control_Plane_v1_119.md` | **v1.119 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/cp.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Contract authority — 29 contracts C-CP-01 through C-CP-29 *(authoring-era count was 24; deltas grew the enumeration — per v1.13 Reading A: C-CP-25 WorkflowDriver / C-CP-26 PauseResumeProtocol / C-CP-27 PerServerTrust / C-CP-28 ValidatorFramework (incl. §28.x v1.24 validator post-evaluate hook) / C-CP-29 PromptSelectionManifest — see the canonical spec)* |
+| `Implementation_Plan_Control_Plane_v2_53.md` | **v2.53 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/cp.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Execution authority — 58 atomic units across 9 clusters and 9 topological levels (L0–L8) *(authoring-era figures; see the canonical plan)* |
 
 ### 1.3 Scope inclusion — 9 clusters
 

@@ -1,0 +1,123 @@
+# Implementation Plan: Control Plane — v2.53 (delta over v2.52)
+
+*v2.53 absorbs the `B-71` spec leg (CP spec v1.119, Runtime spec v1.121) into the plan's
+execution authority by adding **ONE new unit, U-CP-102**, carrying the four additive
+carrier amendments and the persist/read wiring the spec's persist-once contract requires.
+NO landed unit's body is amended — the B-97(a)/B-118 new-unit precedent, the same shape
+v2.52 used for its supersession notes: new obligations ride a new unit, landed criteria
+stand as HISTORY. Every existing unit body, signature block, rollback boundary, cluster
+assignment and all other plan content are PRESERVED VERBATIM. No contract number is
+minted (the spec leg mints none); no existing field changes type.*
+
+**Status:** Proposed
+
+## §0 Change-note (v2.52 → v2.53)
+
+### §0.1 Why a new unit rather than criteria on the landed carriers
+
+The four amendment sites live on carriers whose units are long landed (`HITLEscalationBrief`
+at the C-CP-28 §25.2 lineage; `StepExecutionContext` at C-CP-25; the per-branch
+pre-dispatch gate-owning resume state at C-CP-26). Amending those units' acceptance
+criteria in place would rewrite history that was verified against a different contract —
+the precise failure v2.52 §0.2 avoided by riding supersession as a note. It would also
+scatter one mechanism across three units whose landings cannot be sequenced relative to
+each other.
+
+`B-71` is **one mechanism**: a token that is minted once, folded once, persisted once and
+read back before recompute. Its four carriers are jointly meaningless — a basis field with
+no minter, an echo with no reader, or a reader with no persisted value each satisfy
+nothing. U-CP-102 therefore owns the whole CP-side surface, and the seam to the Runtime
+minter is a declared dependency rather than a shared unit.
+
+### §0.2 U-CP-102 (NEW) — `B-71` branch-distinct escalation correlation carriers
+
+| | |
+|---|---|
+| **Unit** | U-CP-102 |
+| **Cluster** | C-CP-28 escalation-carrier cluster (the `HITLEscalationBrief` owner), with declared reach into C-CP-25 and C-CP-26 carriers per §0.3 |
+| **Spec authority** | `Spec_Control_Plane_v1_119.md` §0.3 / §0.4 / §0.4.1 / §0.4.2 / §0.4.3 / §0.5 / §0.6 / §0.7 / §0.12 |
+| **Depends on** | the landed C-CP-25 / C-CP-26 / C-CP-28 carriers; **U-RT-155** for the minter + fold (bidirectional co-requisite — see §0.4) |
+| **Level** | terminal within its cluster; introduces no new DAG node upstream of any landed unit |
+
+**Files (CP-owned surface only).** The four carrier declarations plus the webhook
+projection keys. The Runtime-owned minter and `compose_hitl_action_id` fold are **NOT**
+this unit's files — they are U-RT-155's, per Runtime spec v1.121.
+
+**Acceptance criteria.**
+
+1. `HITLEscalationBrief` carries `escalation_instance_id: str | None = None` exactly as
+   canonically read at spec §0.3's `§25.2.Z` body, with v1.19's `fail_detail_hash: str | None`
+   widening carried forward — a witness pins BOTH, so the v1.18-composition regression that
+   out-of-family review caught on the draft cannot recur silently.
+2. `StepExecutionContext` carries `pre_dispatch_escalation_basis: str | None = None`
+   (spec §0.4.1 / `§25.17`, **pre-hash**) and `pre_dispatch_escalation_instance_id: str | None = None`
+   (spec §0.4.3 / `§25.18`, **post-hash**). A witness asserts both are `model_copy`-inherited
+   and that a branch child never re-derives either.
+3. The per-branch pre-dispatch gate-owning resume state carries
+   `escalation_instance_id: str | None = None` (spec §0.4.2 / `§26.9`), keyed per branch
+   entry by the existing `branch_index` within its containing snapshot. A witness asserts
+   no tree-wide index is introduced.
+4. **Read order (spec §0.4.3), witnessed as three arms, not asserted as prose.** Echo
+   non-`None` → used verbatim, recompute NOT invoked; echo `None` and basis non-`None` →
+   computed per §0.4(2); both `None` → brief field stays `None`. The recompute-not-invoked
+   arm is the one a passing test can most easily fake, so it is witnessed by observing that
+   the compute path is not entered, not merely that the output matches.
+5. **A persisted echo is never compared against a recompute** (spec §0.4.3 arm 1). A
+   witness drives a resume whose recompute would differ and asserts the run does not fail.
+6. **Digest conformance is pinned to the spec's exact formula** (§0.4(2)): domain separator
+   `"hitl-escalation-instance:"`, the pre-dispatch identity
+   `f"{snapshot_run_id}:pre-dispatch-gate:{branch_index}"`, `":"`, the enum's string VALUE,
+   sha256, lowercase hex, 64 chars, never truncated, UTF-8 throughout. A witness asserts a
+   known-input → known-digest vector, so an encoding or separator drift reddens.
+7. **The leak bar is witnessed structurally, not by inspection** (spec §0.5): no
+   `snapshot_run_id`, no un-hashed pre-dispatch identity, no `run_id`-shaped string and no
+   raw basis material appears in any operator-facing or exported field of the brief —
+   including `branch_context`, whose scoped carve-out covers the branch **ordinal in prose**
+   and nothing else. A negative witness asserts the ordinal is absent as any typed/parseable
+   field and absent from every exported span attribute.
+8. The three additive `payload_body` keys (`branch_context`, `resolvability`,
+   `resolvability_note`) project per spec §0.6, with `resolvability` drawn from the closed
+   `PauseLocationVariant` vocabulary (`Spec_Control_Plane_v1_112.md` §2.1) and no new
+   vocabulary minted. `proposed_response_palette` is **preserved and still projected**
+   (spec §0.6.1 — the earlier suppression binding is WITHDRAWN and MUST NOT be implemented).
+9. **Ingress is one-way** (spec §0.7): no resume surface is keyed by the token; a submitted
+   value that matches is counted-as-unaddressed. That half is witnessed as normative. The
+   **diagnosis** is advisory until the typed carrier lands and is NOT witnessed as a typed
+   disposition — `ResumeResult` / `RunResult` are closed schemas and requiring one here
+   would make the unit unimplementable.
+10. **Byte-identity on the untouched population** (spec §0.12): on the linear/validator
+    path the field is `None`, the three keys are absent, and the wire body, ledger key and
+    audit `action_id` are byte-identical to pre-arc. Witnessed by comparison against a
+    pre-arc fixture, not by asserting the absence of a key.
+
+**Mutation-probe obligations (Workflow v1.19 PD-9).** Criteria 4, 6, 7 and 10 each carry a
+`# mutation-probe:` annotation: invert the read order, perturb the digest formula by one
+byte of the domain separator, project the un-hashed identity onto `branch_context`, and
+emit the field on the linear path — each must redden its own witness and no other.
+
+### §0.3 Cross-carrier reach, declared rather than implied
+
+U-CP-102 declares fields on carriers owned by C-CP-25 and C-CP-26 while sitting in the
+C-CP-28 cluster. This is **declared reach**, and it is stated here because an undeclared
+one is how a plan acquires a hidden coupling edge. It introduces **no new dependency edge
+into any landed unit** — the amendments are additive and `None`-defaulted, so no landed
+unit's acceptance is invalidated and no landed unit must re-run to remain true.
+
+### §0.4 The Runtime co-requisite is bidirectional
+
+U-CP-102 declares the carriers; **U-RT-155** mints into them and folds the token into
+`compose_hitl_action_id`. Neither is independently observable: carriers with no minter are
+`None` forever, and a minter with no carriers has nothing to write. They are **co-requisite
+in both directions** and must land in one arc. This is recorded as a plan-level fact so a
+future session does not schedule one without the other and conclude from a green suite
+that the mechanism works.
+
+### §0.5 What this delta is NOT
+
+NOT the impl leg — this delta assigns the work; the code lands at U-CP-102 / U-RT-155.
+NOT a contract-number mint (the spec leg mints none). NOT an amendment to any landed unit
+body. NOT an OD / IS / AS / CXA / ADR / ADD / PRD change. NOT the registered follow-ons at
+spec §0.9 (the uniform-response target selector; redelivery on posture change;
+uniform-treatment extension to depth-0 root and already-dispatched children; the pause-view
+addressing half; the unguarded `entry_version` carrier across the pause boundary; the typed
+resume-outcome diagnostics carrier) — each owes its own leg and none is in scope here.
