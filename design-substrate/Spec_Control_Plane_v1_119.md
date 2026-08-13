@@ -104,6 +104,46 @@ linear path byte-identical.
    harness-side suppression would convert unresolved-gate visibility from at-least-once
    to at-most-once — the liveness failure for an escalation channel.
 
+### §0.4.1 The basis-carrying context field (NEW — required, not left to discretion)
+
+The minter at the §14.8.8.1 step 1 construction site holds a `StepExecutionContext` and
+nothing run-identifying: `StepExecutionContext` declares **no** run identity. The basis at
+§0.4(2) is therefore unreachable from the mint site as the carrier stands, and an
+implementation would have to either use a run-blind basis — the exact defect this row
+exists to close — or invent a field. This delta names it rather than leaving it to
+implementation discretion:
+
+| | |
+|---|---|
+| **Field** | `pre_dispatch_escalation_basis: str \| None = None`, on `StepExecutionContext` |
+| **Value** | the branch's run-scoped internal identity as defined at §0.4(2), **pre-hash**; `None` on every population that has no pre-dispatch gate-owning branch |
+| **Producer** | the fan-out branch-context composition site, which already computes this identity for the resume-side eligibility comparison — the value is read, not newly derived |
+| **Propagation** | inherited by `model_copy` like the context's other additive carriers; a branch child never re-derives it |
+| **Byte-identity** | `None`-defaulted, so every non-fan-out path is byte-identical to pre-arc |
+
+**It is basis material, so §0.5's bar applies to it in full**: this field is *internal
+carriage only*, MUST NOT be projected to any operator-facing key, and MUST be hashed per
+§0.4(2) before it reaches `compose_hitl_action_id`. Naming it here is what makes the
+one-way hash enforceable rather than aspirational.
+
+### §0.4.2 The persisted echo carrier (NEW — required by §0.4(5))
+
+§0.4(5) promises that a persisted value wins over recompute. That promise needs a
+carrier, and the driver currently records only per-branch metadata with no token field —
+so without this, every resume would recompute and the persist-once contract would be
+unsatisfiable as written:
+
+| | |
+|---|---|
+| **Field** | `escalation_instance_id: str \| None = None`, on the per-branch pre-dispatch gate-owning resume state (the carrier that already holds `branch_index`, `step_id`, `step_kind`, `hitl_gate_config_hash`) |
+| **Value** | the **post-hash** token exactly as delivered — never the pre-hash basis |
+| **Keying** | per branch entry; the existing `branch_index` within its containing snapshot is the key. No tree-wide index is introduced: the containing snapshot's own identity supplies tree-scoping, which is the same property the pre-dispatch internal identity already relies on |
+| **Serialization** | an opaque string; consumers may compare it for equality and nothing else (§0.4(1)) |
+| **Absence** | `None` means *not yet persisted* — the mint→persist window of §0.8 — and licenses the deterministic recompute, never a fresh mint |
+
+**Read order is normative:** a consumer that finds a non-`None` echo MUST use it and MUST
+NOT recompute; recompute is reachable only from `None`.
+
 ### §0.5 The leak bar — extended to the tracing-export channel
 
 The token is projected outward on the webhook. It is **also** exported over tracing,
@@ -183,9 +223,16 @@ time-varying signal this contract forbids.
 
 **No ingress surface accepts this token.** It is not a key, and no field of
 `ResumeContext` or any resume surface may be keyed by it. A submitted value that happens
-to match is **counted-as-unaddressed AND diagnosed** — a typed disposition landing on the
-resume outcome, with the pause view as the secondary surface. A log line alone is
-insufficient.
+to match is **counted-as-unaddressed** — that half is normative and unconditional.
+
+**The diagnosis is ADVISORY until its carrier lands.** The intended surface is a typed
+disposition on the resume outcome, but `ResumeResult` and `RunResult` are **closed
+schemas** with no such field, and the typed carrier is separately registered (§0.9). This
+delta therefore does **not** require a typed diagnosis: an implementation MUST surface the
+condition through whatever diagnostic channel it has, and the requirement becomes
+normative when the carrier's own leg lands. Softening it here rather than requiring a
+field that does not exist is deliberate — the alternative would make this contract
+unimplementable without bundling a separately-registered schema change.
 
 **The webhook carries no ingress keys at all.** No real `run_id` transits it; addressing
 capability lives exclusively on the operator-held pause view. This is unchanged by the
@@ -231,18 +278,19 @@ pause boundary; and the typed resume-outcome diagnostics carrier.
 
 The council bound this leg to a sequencing condition: the **resume-outcome diagnostics
 leg ships with the spec leg, or the diagnostic-strength wording softens in the same
-commit**. This delta takes the **second** option, deliberately and visibly:
+commit**. This delta takes the **second** option, and — after out-of-family review showed a first
+draft had softened the *narrative* while leaving the *requirement* intact — the softening
+is now in §0.7's normative text itself:
 
-§0.7 requires that an ingress match be *"counted-as-unaddressed AND diagnosed — a typed
-disposition landing on the resume outcome, with the pause view as the secondary
-surface"*. The **typed carrier** for that disposition does not exist yet and is registered
-as a follow-on (§0.9). Until it lands, §0.7's diagnostic requirement is a **contract
-obligation on the consumer of this spec, not a claim that the carrier exists** — an
-implementation satisfying §0.7 today must surface the disposition through whatever typed
-resume-outcome surface it has, and the follow-on leg replaces that with the canonical one.
+- the **counted-as-unaddressed** half is normative and unconditional;
+- the **diagnosis** is **advisory** until the typed carrier lands, because `ResumeResult`
+  and `RunResult` are closed schemas with no such field. Requiring a typed disposition
+  today would make this contract unimplementable without bundling a separately-registered
+  schema change.
 
-This is stated rather than left implicit precisely because the council made it a
-condition: a reader of §0.7 must not infer a shipped `ResumeKeyDisposition` type.
+A reader of §0.7 must not infer a shipped `ResumeKeyDisposition` type, and — equally —
+must not read the advisory status as permission to drop the condition: it becomes
+normative when the carrier's leg lands.
 
 ### §0.11 Zero-change statements
 
