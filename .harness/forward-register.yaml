@@ -8575,9 +8575,13 @@ items:
     rows are files.operation, memory.operation, validator.fail.* and subagent.span (sampling_mode.py:176-190),
     and neither mcp.trust.evaluate nor the operator-burden span is among them. The class is SIX, in two
     shapes. NOTE: pause.captured is arguably the worse case of the four, since operator-explicit pause is
-    exactly the audit-critical event a sampling floor exists for. THE B-137 DEPENDENCY APPLIES TO THREE
-    OF THE FOUR (SUPERSEDED 2026-08-13 from ''ALL FOUR'' -- resume.attempted is emitted before the envelope
-    opens and would be a ROOT, so membership alone delivers its floor once B-162 wires it): ParentBased(root=...)
+    exactly the audit-critical event a sampling floor exists for. THE B-137 DEPENDENCY APPLIES TO ALL FOUR
+    FOR COMPLETE CONFORMANCE (this line briefly read ''THREE OF THE FOUR'' on 2026-08-13; RESTORED the same
+    day at codex round 9). resume.attempted escapes the dependency ONLY for a TOP-LEVEL resume, where its
+    entry-point call precedes the envelope and it is a trace root. For a NESTED CHILD resume it is emitted
+    while subagent.span is current, so it is a non-root child and ParentBased never consults its name. Reducing
+    the dependency to three would let B-160 close while nested resumes still miss the floor, so the CONFORMANCE-level
+    dependency is FOUR; the top-level-only carve-out is a partial-credit note, not an exemption: ParentBased(root=...)
     never consults a non-root child''s name, so membership alone cannot deliver the floor for any of these
     child spans. REMAINING: decide which side is canonical and make the other conform: either (a) add ALL
     FOUR unconditional names to the §9.2 member set (19 -> 23) -- hitl.webhook.deliver, hitl.webhook.attempt,
@@ -8681,7 +8685,9 @@ items:
     presented as one symmetric sweep. (3) SUPERSEDED 2026-08-13 -- true for pause.captured ONLY. pause.captured
     would be an envelope child and so lands in B-137''s root-only starvation; resume.attempted would be
     emitted BEFORE the envelope opens and so would be a ROOT, receiving its s9.2 floor directly once added
-    to the set. DO NOT BLOCK RESUME WIRING ON B-137. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py::test_the_pause_span_emitters_have_no_caller_in_src
+    to the set. Do not block the top-level resume slice on B-137; the NESTED child resume still needs it
+    (the child driver''s resume detection runs while subagent.span is current), so B-162''s own wiring can
+    land independently but COMPLETE conformance for resume.attempted still depends on B-137. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py::test_the_pause_span_emitters_have_no_caller_in_src
     -- enumerates src/ for callers of both helpers and fails if either acquires one. TOPOLOGY SPLIT 2026-08-13
     (out-of-family Codex round 2) -- THE TWO SPANS ARE NOT SYMMETRIC. A first draft of this row gated both
     on B-137. That holds for pause.captured (an envelope child) and FAILS for resume.attempted: the driver
