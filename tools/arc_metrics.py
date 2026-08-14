@@ -327,6 +327,17 @@ def extract(args: argparse.Namespace) -> ArcRow:
             # createdAt->mergedAt, which misses every round run before the PR
             # opened (measured at up to 56x the PR window).
             span = round((parse_iso(row.merged_at) - first).total_seconds(), 1)
+            # Both ends, not just the first. A guard on the start alone still
+            # accepts a set whose LAST log postdates the merge -- a parallel
+            # lane's file caught by the glob, or a re-touched one -- which
+            # inflates review_rounds and folds post-merge gaps into the arc
+            # while keeping the span positive and innocent-looking.
+            if row.last_round_at and parse_iso(row.last_round_at) > parse_iso(row.merged_at):
+                raise AbortError(
+                    f"{row.arc_id}: last round log ({row.last_round_at}) postdates the "
+                    f"merge ({row.merged_at}) -- the log set reaches past this arc; "
+                    "narrow the glob rather than record post-merge rounds"
+                )
             if span < 0:
                 # A copied or re-touched log can carry an mtime after the merge.
                 # A negative span is not a short arc, it is a broken input -- and

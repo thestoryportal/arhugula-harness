@@ -153,13 +153,19 @@ for a pure terminating-refresh PR.
 
 ## Arc exit report (U-WT-03/04)
 
-Run this last within the arc — after the reflect and `context-save` step above, never
+Run this as the last REPORTING step — after the reflect and `context-save` step above, never
 before it, BEFORE the arc worktree's disposition (the report reads that worktree's
 pending-HIL ledger, which disposition deletes), and BEFORE launching the next arc. Only
 at that point do the merge SHA, the post-merge main CI conclusion, the terminating
 refresh commit, and the checkpoint just written all exist, so the report records the
 arc's real final checkpoint instead of a stale one. Skip entirely for a pure
 terminating-refresh PR (not an arc; no report owed).
+
+It is NOT the last step of the arc: the arc-metrics capture below still has to run,
+and it has to run BEFORE this worktree is disposed and BEFORE the next arc is
+launched. Disposing or moving on after the report — which an earlier reading of
+"last within the arc" permitted — drops this arc from the ledger entirely, which is
+exactly the Codex-cohort gap the capture section exists to close.
 
 ```bash
 just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-context-save-just-reported>

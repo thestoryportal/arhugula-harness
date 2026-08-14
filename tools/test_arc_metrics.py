@@ -690,6 +690,47 @@ def test_round_log_postdating_the_merge_aborts(monkeypatch):
     assert "postdates" in str(exc.value)
 
 
+# mutation-probe: delete the last_round_at-vs-merged_at check in extract()
+def test_last_round_log_postdating_the_merge_aborts(monkeypatch):
+    """Guarding only the START still accepts a set that reaches past the arc."""
+    monkeypatch.setattr(
+        am,
+        "gh_pr",
+        lambda pr: {
+            "additions": 10,
+            "deletions": 0,
+            "changedFiles": 1,
+            "commits": [{}],
+            "createdAt": "2026-08-14T09:00:00Z",
+            "mergedAt": "2026-08-14T10:00:00Z",
+            "mergeCommit": None,
+            "title": "t",
+        },
+    )
+    args = am.argparse.Namespace(
+        pr=999,
+        arc_id=None,
+        arc_type=None,
+        decisions=None,
+        round_logs=None,
+        levers=None,
+        notes="",
+        round_snapshot={
+            "review_rounds": 3,
+            "round_wall_s": [600.0, 600.0],
+            "p1_rounds": [],
+            # starts inside the arc, so the span stays positive and innocent...
+            "first_round_at": "2026-08-14T09:30:00+00:00",
+            # ...but the set reaches past the merge
+            "last_round_at": "2026-08-14T11:00:00+00:00",
+            "round_log_source": "/tmp/logs",
+        },
+    )
+    with pytest.raises(am.AbortError) as exc:
+        am.extract(args)
+    assert "last round log" in str(exc.value)
+
+
 # mutation-probe: make arc_duration() return total_arc_wall_s first
 def test_arc_duration_prefers_real_span_over_pr_window():
     """#1337 measured: 6.1 min of PR window against 269.2 min of actual arc."""
