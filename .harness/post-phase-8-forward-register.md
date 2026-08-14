@@ -1904,3 +1904,5 @@ same spec leg.
 - **Council: no.** Single-domain **C7** concurrency-correctness work inside §9.3's implementer-discretion clause, with no cross-axis surface.
 - **Cross-ref.** `B-163` (the windows a lock closed, and the ordering residual restated at (b)); `B-136` (the arc that surfaced the whole surface); OD spec v1.28 §1.1 + C-OD-09 §9.3.
 
+
+### B-165 · duplicate same-position placements collide on the `B-71` escalation token *(registered at the `B-71` spec leg PR, out-of-family review round 2, 2026-08-13; NOT repaired there because the identity basis is ratified — widening it is back-flow, not spec application)*

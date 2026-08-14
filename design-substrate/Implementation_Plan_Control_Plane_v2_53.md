@@ -34,15 +34,20 @@ surface, and the seam to the Runtime minter is a co-land pin rather than a share
 | | |
 |---|---|
 | **Unit** | U-CP-102 |
-| **Cluster** | C-CP-28 escalation-carrier cluster (the `HITLEscalationBrief` owner), with declared reach into C-CP-25 and C-CP-26 carriers per §0.3 |
+| **Cluster** | C-CP-28 escalation-carrier cluster (the `HITLEscalationBrief` owner), with declared reach into C-CP-21, C-CP-25 and C-CP-26 carriers per §0.3 |
 | **Spec authority** | `Spec_Control_Plane_v1_119.md` §0.3 / §0.4 / §0.4.1 / §0.4.2 / §0.4.3 / §0.4.4 / §0.5 / §0.6 / §0.7 / §0.12 |
 | **Depends on** | the landed C-CP-21 / C-CP-25 / C-CP-26 / C-CP-28 carriers. **NO dependency on U-RT-155** — see the co-land pin at §0.4 |
 | **Co-land pin** | **U-RT-155** (Runtime plan v2.63). A PIN, not a DAG edge — see §0.4 |
 | **Level** | terminal within its cluster; introduces no new DAG node upstream of any landed unit |
 
-**Files (CP-owned surface only).** The five carrier declarations plus the webhook
-projection keys. The Runtime-owned minter and `compose_hitl_action_id` fold are **NOT**
-this unit's files — they are U-RT-155's, per Runtime spec v1.121.
+**Files (CP-owned surface only).** The five carrier declarations, and nothing else. The
+Runtime-owned minter, the `compose_hitl_action_id` fold and **the `payload_body` emission
+itself** are NOT this unit's files — they are U-RT-155's, per Runtime spec v1.121. The
+emitter is `project_brief_to_payload`, which is Runtime-owned, so assigning the keys to
+both units would give two units overlapping ownership of one surface and make their
+completion evidence ambiguous. **U-CP-102 owns the VALUES the keys carry** (the contract
+at spec §0.6 — which vocabulary, what each key may and may not say); **U-RT-155 owns their
+EMISSION** (AC 9).
 
 **Acceptance criteria.**
 
@@ -76,9 +81,11 @@ this unit's files — they are U-RT-155's, per Runtime spec v1.121.
    including `branch_context`, whose scoped carve-out covers the branch **ordinal in prose**
    and nothing else. A negative witness asserts the ordinal is absent as any typed/parseable
    field and absent from every exported span attribute.
-8. The FOUR additive `payload_body` keys (`escalation_instance_id` — the BARE token,
-   which is what makes the webhook equality-matchable against criterion 13's projection —
-   plus `branch_context`, `resolvability`, `resolvability_note`) project per spec §0.6, with `resolvability` drawn from the closed
+8. **The CP-side CONTRACT for the four additive `payload_body` keys** (`escalation_instance_id`
+   — the BARE token, which is what makes the webhook equality-matchable against criterion 13's
+   projection — plus `branch_context`, `resolvability`, `resolvability_note`) holds per spec
+   §0.6. **Emission is U-RT-155 AC 9's, not this unit's** — this criterion witnesses that the
+   source values exist and obey their vocabularies, with `resolvability` drawn from the closed
    `PauseLocationVariant` vocabulary (`Spec_Control_Plane_v1_112.md` §2.1) and no new
    vocabulary minted. `proposed_response_palette` is **preserved and still projected**
    (spec §0.6.1 — the earlier suppression binding is WITHDRAWN and MUST NOT be implemented).
@@ -122,17 +129,26 @@ this unit's files — they are U-RT-155's, per Runtime spec v1.121.
     carrier. Witnessed with a hostile value: it must appear in **no** payload, key or span.
     Ignoring without overwriting still ships the operator's value on the wire.
 
-**Mutation-probe obligations (Workflow v1.19 PD-9).** Criteria 4, 6, 7, 10, 11, 12 and 14
+15. **The public projection OMITS the field when `None`** (spec §0.4.4 absence row): a
+    pause view derived from an already-durable snapshot serializes NO
+    `escalation_instance_id` key at all, not `null`. Witnessed against a pre-field
+    snapshot's projected bytes. Criterion 13 checks value agreement and leakage, and
+    criterion 12 covers the RESUME-STATE hash — neither covers the projection's wire
+    shape, so without this an implementation satisfies every other criterion while
+    breaking the legacy projection bytes the spec promises.
+
+**Mutation-probe obligations (Workflow v1.19 PD-9).** Criteria 4, 6, 7, 10, 11, 12, 14 and 15
 each carry a `# mutation-probe:` annotation: invert the read order; perturb the digest
 formula by one byte of the domain separator; project the un-hashed identity onto
 `branch_context`; emit the field on the linear path; drop the minter→snapshot write; emit
-the field when `None` instead of dropping it; and honour the validator-supplied value —
-each must redden its own witness and no other.
+the field when `None` instead of dropping it; honour the validator-supplied value; and
+emit the projection field as `null` instead of omitting it — each must redden its own
+witness and no other.
 
 ### §0.3 Cross-carrier reach, declared rather than implied
 
-U-CP-102 declares fields on carriers owned by C-CP-25 and C-CP-26 while sitting in the
-C-CP-28 cluster. This is **declared reach**, and it is stated here because an undeclared
+U-CP-102 declares fields on carriers owned by C-CP-21 (the pause-location projection at
+AC 13), C-CP-25 (twice) and C-CP-26 while sitting in the C-CP-28 cluster. This is **declared reach**, and it is stated here because an undeclared
 one is how a plan acquires a hidden coupling edge. It introduces **no new dependency edge
 into any landed unit** — the amendments are additive and `None`-defaulted, so no landed
 unit's acceptance is invalidated and no landed unit must re-run to remain true.

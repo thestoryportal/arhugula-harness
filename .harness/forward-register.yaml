@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 164
+  total: 165
   open: 1
   design_substrate_gated: 0
-  registered_finding: 30
+  registered_finding: 31
   operator_gated: 0
   held: 2
   closed: 131
-  identity_digest: '2e76e32e5e004568'
+  identity_digest: '12ba7639035cb846'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9116,3 +9116,37 @@ items:
     in-flight detached batch reaches downstream: CLOSED at PR #1332**; **(b) a child paused before it
     registers: OPEN — the PR #1334 unreachability basis was falsified at review** *(surfaced by out-of-family
     Codex rounds 4–6 at the B-136/B-163 arc, 2026-08-13)*'
+- id: B-165
+  title: Two placements declared at the SAME position collide on the B-71 escalation correlation token,
+    because the ratified identity basis (B) hashes the placement POSITION and not the placement DECLARATION
+  status: registered_finding
+  summary: Registered at the B-71 spec leg (CP spec v1.119 / Runtime spec v1.121), surfaced by out-of-family
+    review of that leg. B-71 gives each pre-dispatch gate-owning escalation an opaque one-way token so
+    two peer fan-out branches sharing a child_workflow_id stop producing byte-identical operator-facing
+    requests. The digest at CP v1.119 s0.4(2) hashes the run-scoped branch identity plus placement.position.value.
+    A workflow may declare TWO placements at the SAME position, and both are valid and executed -- witnessed
+    in-tree today by test_two_pre_action_placements_emit_per_placement_canonical_4_spans. Those two escalation
+    instances therefore receive the SAME token and the SAME composed key, so the C-IS-07 s7.5 key-only
+    dedup still drops the second HITL audit entry, exactly as it did before B-71 -- for that shape only.
+    Every other shape is repaired by B-71.
+  close_out: 'NOT REPAIRABLE AT SPEC-APPLICATION TIME, which is why this is a row and not a fix. The identity
+    basis is (B), resolved by the B-71 design record s4-bis on an EXECUTED collision witness, and it names
+    the placement POSITION. Widening the digest with a placement-declaration discriminator changes a ratified
+    basis, which is the silent design extension X-AL-3 forbids at Phase 7; the B-71 leg therefore narrowed
+    its guarantee in place to per (branch x position) and registered the remainder here rather than quietly
+    widening the formula. STEPS: (1) GROUND IT -- establish whether duplicate same-position placements
+    occur in any real workflow shape or only in the test that proves they are legal; the answer decides
+    whether this is a live defect or a declared bound, and B-71''s own history says three repair attempts
+    died on ungrounded premises. (2) If live, route to the DESIGN RECORD, not to the spec: the basis is
+    ratified, so revisiting it is back-flow per workspace CLAUDE.md s4.3, and the candidate discriminator
+    (a placement declaration index) must be checked for stability across resume the same way (B) was.
+    (3) Only then a spec leg amending CP v1.119 s0.4(2) plus its digest witness, and a Runtime leg if
+    the composed-key shape moves. FALSIFIER: a demonstration that two placements at one position cannot
+    both own a pre-dispatch HITL gate in the same branch, which would make the collision unreachable and
+    close this row as a declared bound.'
+  council: No. Single-domain identity-basis question inside an already-convened design record; if step
+    (1) shows it is live, the routing is a design-record revisit rather than a new convening, and the
+    B-71 council's own C1/C10 framing already covers the ground.
+  heading: '### B-165 · duplicate same-position placements collide on the `B-71` escalation token *(registered
+    at the `B-71` spec leg PR, out-of-family review round 2, 2026-08-13; NOT repaired there because the
+    identity basis is ratified — widening it is back-flow, not spec application)*'

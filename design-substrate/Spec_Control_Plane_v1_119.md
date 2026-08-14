@@ -137,7 +137,8 @@ linear path byte-identical.
    time — the silent design extension X-AL-3 forbids — so the honest action is to narrow
    the claim and register the remainder. §0.2's "distinct per escalation instance" is
    therefore read against the (branch × position) instance, and the duplicate-declaration
-   shape is registered as forward work at §0.9. A leg that needs it must revisit the basis
+   shape is registered as **its own forward-register row, `B-165`** — not merely as prose
+   here, so it can be selected and tracked independently once `B-71` closes. A leg that needs it must revisit the basis
    through the design record, not through an implementation choice.
 
 2-bis. **The token-PRESENT composed key is PINNED too, for the same reason the digest is.**
@@ -492,10 +493,10 @@ posture change; uniform-treatment extension to depth-0 root and already-dispatch
 children; the pause-view **addressing** half (the **correlation** half IS absorbed, at
 §0.4.4 — see that section for why the two separate cleanly); the unguarded `entry_version`
 carrier across the pause boundary; the typed resume-outcome diagnostics carrier; and
-**the duplicate same-position placement shape** (§0.4(2)) — two placements declared at one
-position collide on the token, because the ratified basis (B) hashes the position and not
-the declaration. Repairing it means revisiting the basis at the design record, which is
-back-flow, not spec application.
+**the duplicate same-position placement shape** (§0.4(2), register row **`B-165`**) — two
+placements declared at one position collide on the token, because the ratified basis (B)
+hashes the position and not the declaration. Repairing it means revisiting the basis at the
+design record, which is back-flow, not spec application.
 
 ### §0.10 The sequencing condition, discharged
 
