@@ -270,9 +270,10 @@ async def _escalate(
 def _snapshot_with_a_pre_dispatch_gate_owner(token: str) -> PauseSnapshot:
     """A REAL `PauseSnapshot` carrying one pre-dispatch gate-owning row.
 
-    Exists so the `resolvability` cross-check can route through `walk_pause_tree`, the
-    actual classifier, instead of hand-picking a projection subclass and reading its
-    class-level default back.
+    Exists so the `resolvability` cross-check reads its expected value off the
+    projection PRODUCTION built, rather than off a projection subclass the test picked
+    (whose `.variant` is a class-level default and proves nothing). See that check for
+    the precise bound on what the comparison establishes.
     """
     return PauseSnapshot(
         workflow_id="wf-b71",
@@ -656,20 +657,29 @@ async def test_the_four_payload_keys_are_projected_on_a_real_fanout_escalation(
         "the BARE token, verbatim — not the composed key, which §0.4(1) forbids parsing back apart"
     )
     assert isinstance(body["branch_context"], str)
-    # ONE AUTHORITY, routed through the REAL classifier.
+    # ONE AUTHORITY — and the exact strength of this check, stated rather than
+    # overclaimed.
     #
-    # Two earlier attempts were both circular, and the second only *looked* fixed:
-    # constructing `PreDispatchUniformFallbackOnlyLocation(...)` by hand and reading
-    # `.variant` returns a class-level `Literal` default, so the value is decided by
-    # WHICH CLASS THE TEST AUTHOR PICKED, not by any classification of the inputs —
-    # the same constant in a constructor. Caught twice by the pre-merge
-    # witness-adequacy gate [P2].
+    # Two earlier attempts were circular. The first compared the wire value against a
+    # bare literal; the second constructed `PreDispatchUniformFallbackOnlyLocation(...)`
+    # by hand and read `.variant` back — but that is a class-level `Literal` default on
+    # a frozen model with no validator deriving it, so it returns whatever class the
+    # TEST AUTHOR picked. Both were two agreements with one constant. Caught twice by
+    # the pre-merge witness-adequacy gate [P2].
     #
-    # `walk_pause_tree` is the authority that decides which `PauseLocationProjection`
-    # subclass — hence which variant — a row becomes. So build a REAL snapshot
-    # carrying a real pre-dispatch gate-owning row, walk it, and take the variant off
-    # whatever projection the walk actually produced. If the classifier ever assigns
-    # this population a different variant, or the wire constant drifts, this reddens.
+    # This version walks a REAL snapshot and reads the variant off the projection
+    # `_walk` actually produced. **What that does prove:** the wire constant agrees
+    # with the subclass PRODUCTION binds for a `pre_dispatch_gate_owning_branches` row,
+    # so the two surfaces can no longer drift apart independently — which is the
+    # second-authority hazard §0.6 names.
+    #
+    # **What it does NOT prove, and this is a real bound:** `_walk` binds
+    # `PreDispatchUniformFallbackOnlyLocation` for that row type UNCONDITIONALLY
+    # (`pause_state_projection.py:852-860`) — there is no data-dependent classification
+    # to witness here. The check is therefore a cross-SITE agreement between two
+    # production constants, not a test of a classification decision. If the row type
+    # ever gains a genuine variant choice, this witness must be re-grounded rather than
+    # assumed to already cover it.
     projected = [
         entry.projection
         for entry in walk_pause_tree(_snapshot_with_a_pre_dispatch_gate_owner(token))
