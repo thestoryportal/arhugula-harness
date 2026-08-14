@@ -444,6 +444,34 @@ class PreDispatchGateOwningBranchResumeState(BaseModel):
     must drop from the hash-covered dump so its recomputed `snapshot_hash`
     stays byte-identical to how it hashed under the preceding deployment."""
 
+    escalation_instance_id: str | None = None
+    """U-CP-102 / `B-71` (CP spec v1.119 §26.9) — the PERSISTED ECHO of this
+    branch's escalation correlation token, **post-hash**, exactly as delivered on
+    the webhook. Never the pre-hash basis (§0.5).
+
+    §0.4(5) promises a persisted value wins over any recompute; this row is that
+    persistence. **The WRITER is the pause-signal / snapshot producer**, which
+    copies the token off the `HITLPauseRequestedSignal`'s brief as it composes this
+    entry — naming the writer is not optional, because a declared-but-never-written
+    field leaves the echo `None` forever, sends every resume down the recompute arm,
+    and satisfies persist-once only by accident.
+
+    **A CARRIED-FORWARD row preserves its echo; it is never rebuilt as `None`.**
+    When §25.19 warm-up scheduling withholds a recovered gate-owning branch, the
+    snapshot builders reconstruct its row with NO new brief in hand; defaulting the
+    field there would silently reset a persisted token and the next resume would
+    recompute — **rotating the key of an escalation the operator is still holding**.
+
+    `None` means *not yet persisted* (the §0.8 mint→persist window) and licenses the
+    deterministic recompute, never a fresh mint.
+
+    default-`None` for byte-compat, and `_strip_default_fanout_resume_fields`
+    special-cases it exactly like `hitl_gate_config_hash` above: this field lands on
+    an ALREADY-SHIPPED row, so a real durable snapshot captured by the preceding
+    deployment carries the row with this key absent. `model_dump` would emit
+    `null` for every such legacy row, changing its recomputed `snapshot_hash` and
+    rejecting a legitimate snapshot as corrupt on resume after upgrade."""
+
 
 class FanOutResumeState(BaseModel):
     """Fan-out resume reconstruction state carried by a paused-fan-out PauseSnapshot.

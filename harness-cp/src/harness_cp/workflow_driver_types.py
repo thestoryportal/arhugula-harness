@@ -582,6 +582,50 @@ class StepExecutionContext(BaseModel):
     hash-config-not-carrier discipline); `None` default → byte-identical to
     pre-arc (only the runtime HITL gate composer's Step-0 consume reads it)."""
 
+    pre_dispatch_escalation_basis: str | None = None
+    """U-CP-102 / `B-71` (CP spec v1.119 §25.20) — the branch's run-scoped
+    internal identity, **PRE-HASH**: `f"{snapshot_run_id}:pre-dispatch-gate:
+    {branch_index}"` per §0.4(2), composed by `pre_dispatch_gate_owning_branch_
+    identity`.
+
+    **Derived UNCONDITIONALLY at BOTH fan-out branch-composition sites** — NOT
+    inside the resume-only `_recovered_pre_dispatch_gate_owning` guard those sites
+    already carry. A branch is not known to be gate-owning until its gate actually
+    fires, so a guarded derivation would leave the basis `None` on every FIRST
+    (non-resume) escalation — the minter would emit no token and the peer collision
+    would survive on exactly the path `B-71` exists to fix (§0.4.1's correction
+    note; out-of-family review caught the draft that assumed otherwise).
+
+    **This is BASIS MATERIAL, so §0.5's leak bar applies to it in full**: internal
+    carriage only, never projected to any operator-facing key or exported span
+    attribute, and hashed per §0.4(2) BEFORE it reaches `compose_hitl_action_id`.
+    Contrast `pre_dispatch_escalation_instance_id` below, which holds the
+    ALREADY-HASHED token and is the value the delta exists to project.
+
+    Inherited by `model_copy` like the context's other additive carriers; a branch
+    child never re-derives it. `None`-defaulted → every non-fan-out path is
+    byte-identical to pre-arc."""
+
+    pre_dispatch_escalation_instance_id: str | None = None
+    """U-CP-102 / `B-71` (CP spec v1.119 §25.21) — the **POST-HASH** token exactly
+    as persisted at §26.9, read back so the composer can obey §0.4(5)'s
+    persist-once rule.
+
+    Without this carrier the echo written to the resume state (§0.4.2) would live
+    on a carrier the READER never consults, and "MUST use it and MUST NOT
+    recompute" would be unsatisfiable rather than merely unimplemented: every
+    resume would take the recompute arm, which §0.4(5) declares to be the
+    crash-fallback and not the normal path.
+
+    Produced by the RESUME-side branch-composition sites, which read the §26.9
+    echo for the branch entry being reconstituted and copy it verbatim. On a first
+    (non-resume) escalation nothing is persisted yet, so the field is `None` by
+    construction and the minter takes the compute arm.
+
+    **NOT basis material** — this is the output of §0.4(2)'s one-way hash, so
+    §0.5's bar does not apply to it (the distinction is load-bearing: conflating
+    the two would either leak the basis or forbid the token's own delivery)."""
+
 
 def compose_branch_child_context(
     parent_context: StepExecutionContext,

@@ -669,16 +669,17 @@ def _strip_default_fanout_resume_fields(
             # re-hash byte-identically to how they hashed before this delta.
             if pg_dict.get("hitl_gate_config_hash") is None:
                 pg_dict.pop("hitl_gate_config_hash", None)
-            # B-79 impl leg slice 1 (CP spec v1.110 §1.2 property 7, out-of-family
-            # Codex [P1]): `hitl_gate_config_hash` is a NEW default-None field on an
-            # ALREADY-SHIPPED `PreDispatchGateOwningBranchResumeState` row (unlike
-            # `child_workflow_id`/`step_kind` above, which were introduced alongside
-            # the row type itself at B-72 — a real durable snapshot captured by the
-            # PRECEDING deployment can have this row present with the field absent).
-            # `model_dump` always emits it (as `null` for every such legacy row),
-            # which would change the recomputed hash of an already-durable
-            # pre-dispatch-gate-owning entry — drop it when None so those snapshots
-            # re-hash byte-identically to how they hashed before this delta.
+            # U-CP-102 / `B-71` (CP spec v1.119 §26.9 compatibility clause): the
+            # SAME already-shipped-row situation as `hitl_gate_config_hash` directly
+            # above, one delta later. `escalation_instance_id` is a NEW default-None
+            # field on `PreDispatchGateOwningBranchResumeState`; a durable snapshot
+            # captured by the PRECEDING deployment carries the row with this key
+            # absent, and an unstripped `null` would change its recomputed
+            # `snapshot_hash` and reject a legitimate pre-upgrade snapshot as
+            # corrupt. The spec cites this precedent rather than re-deriving it — a
+            # second compatibility mechanism would be a second authority.
+            if pg_dict.get("escalation_instance_id") is None:
+                pg_dict.pop("escalation_instance_id", None)
     paused_children = carrier.get("paused_child_branches")
     if isinstance(paused_children, list):
         for pcb in cast("list[Any]", paused_children):

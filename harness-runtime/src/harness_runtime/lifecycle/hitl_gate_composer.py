@@ -125,7 +125,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NoReturn, TypedDict, cast
 
 from harness_as import BlastRadiusTier, GateLevel
 from harness_core import PersonaTier
@@ -156,6 +156,10 @@ from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import (
     TimeoutDegradationKind,
     on_hitl_timeout,
+)
+from harness_cp.pause_state_projection import (
+    PauseLocationVariant,
+    compose_escalation_instance_id,
 )
 from harness_cp.per_step_override_evaluator import (
     CPAuditLedgerEntry,
@@ -208,6 +212,7 @@ __all__ = [
     "InnerDispatchMode",
     "RuntimeHITLGateComposer",
     "compose_hitl_action_id",
+    "resolve_escalation_instance_id",
 ]
 
 
@@ -428,6 +433,7 @@ class HITLPauseRequestedSignal(BaseException):
 def compose_hitl_action_id(
     parent_action_id: ActionID,
     placement_position: HITLPlacementKind,
+    escalation_instance_id: str | None = None,
 ) -> ActionID:
     """Compose the HITL gate action_id per spec §14.8.2 step 4h substep 8b-HITL.
 
@@ -436,8 +442,144 @@ def compose_hitl_action_id(
     list; this is the suggested shape mirroring the `dispatch:` prefix from
     §14.7.2 step 8b). The `hitl:` prefix is the HITL-source discriminator
     at OD audit-trace consumers.
+
+    **U-RT-155 / `B-71` — the token fold (CP spec v1.119 §0.4(2-bis), PINNED).**
+
+    ```
+    = f"hitl:{parent_action_id}:{placement_position.value}"                   # absent
+    = f"hitl:{parent_action_id}:{placement_position.value}:{escalation_instance_id}"
+                                                                             # present
+    ```
+
+    Appended as a **suffix**, separated by the same `":"` the existing shape uses,
+    never truncated and never re-hashed. `None` reproduces the pre-arc two-argument
+    key CHARACTER-FOR-CHARACTER, which is the seam's byte-identity acceptance
+    criterion (§0.12) for the whole linear/validator population.
+
+    **The fold lives INSIDE this function, never beside it** (§0.13). §0.2's
+    one-identity-family promise is what makes the audit join work: the webhook
+    `Idempotency-Key`, the CP audit `action_id` and the F2 state-ledger key are all
+    this one output. Composing a separate branch-distinct key alongside the existing
+    one would produce TWO keys for one escalation and reintroduce the §0.1 aliasing
+    on whichever the F2 writer happened to use. The single fold point is also what
+    makes §0.5's leak bar enforceable — there is exactly ONE place a pre-hash value
+    could enter an exported carrier, and `compose_escalation_instance_id` has
+    already hashed it before it arrives here.
+
+    **Leaving the present-case format open would be a defect, not flexibility.** Two
+    otherwise-compliant implementations could append, prefix, or re-hash the same
+    token and both pass every distinctness test — and then a deployment change WHILE
+    A GATE IS UNRESOLVED would emit a different key for the same escalation,
+    duplicating the exact effect the dedup exists to prevent.
     """
-    return ActionID(f"hitl:{parent_action_id}:{placement_position.value}")
+    base = f"hitl:{parent_action_id}:{placement_position.value}"
+    if escalation_instance_id is None:
+        return ActionID(base)
+    return ActionID(f"{base}:{escalation_instance_id}")
+
+
+def resolve_escalation_instance_id(
+    step_context: StepExecutionContext,
+    placement_position: HITLPlacementKind,
+) -> str | None:
+    """The `B-71` minter — CP spec v1.119 §0.4.3's THREE-ARM read order.
+
+    U-RT-155 AC 1. This is the single authoritative mint (§0.4(3): "mint authority
+    is singular"), sited at the §14.8.8.1 step-1 construction site's carrier:
+
+    1. `pre_dispatch_escalation_instance_id` non-`None` → **use it VERBATIM.** The
+       persisted echo wins. Do NOT recompute, and — critically — do NOT compare it
+       against a recompute. A mismatch is not an error the contract defines, and
+       the natural defensive implementation (recompute, then assert equality) is
+       exactly the one §0.4.3 arm 1 forbids: it would convert a benign basis
+       evolution into a run-ending failure on an operator's live gate.
+    2. else `pre_dispatch_escalation_basis` non-`None` → **compute** per §0.4(2).
+       This is the mint proper, reachable during the §0.8 mint→persist window.
+    3. else → this population has no pre-dispatch gate-owning branch (the
+       linear/validator path); the field stays `None` and everything downstream is
+       byte-identical to pre-arc.
+
+    Returning early on arm 1 is not an optimization — it is the observable contract.
+    """
+    persisted_echo = step_context.pre_dispatch_escalation_instance_id
+    if persisted_echo is not None:
+        return persisted_echo
+    basis = step_context.pre_dispatch_escalation_basis
+    if basis is None:
+        return None
+    return compose_escalation_instance_id(basis, placement_position)
+
+
+_RESOLVABILITY_NOTE = (
+    "This location is resolvable ONLY by the uniform fallback, and ONLY while it is "
+    "the sole unaddressed gate-owning member of its resume cycle. Consult the pause "
+    "view for the current location set; this note states the rule, not a live status."
+)
+"""CP spec v1.119 §0.6 `resolvability_note` — the RULE and the route, never a verdict.
+
+The pause view cannot report live eligibility: its projection is a function of the
+snapshot alone, and the durable-pause read is ratified as NOT a liveness claim. So
+the note names the sole-member rule and routes the operator to the view for the
+location set — never for an answer.
+
+This is also the whole disarm for §0.6.1's residual. An earlier reading bound PALETTE
+display to `resolvability`; that binding is WITHDRAWN and MUST NOT be implemented — a
+time-INVARIANT channel cannot disarm a time-VARYING harm, and suppressing the palette
+in both states would hide a VALID uniform action in the sole-owner state. The palette
+is preserved verbatim and the disarm is informational, carried here."""
+
+
+class _EscalationOperatorSurface(TypedDict, total=False):
+    """The three §0.6 operator-surface values, typed so the `**` spread stays checked.
+
+    `resolvability` is the CLOSED `PauseLocationVariant` enum rather than a bare
+    `str`: typing it `str` made an invalid wire state representable and admitted a
+    second classification authority beside the pause view (out-of-family review round
+    2, [P2]). `total=False` because the absent case is an EMPTY mapping — that is what
+    keeps the linear/validator call byte-identical to pre-arc.
+    """
+
+    branch_context: str
+    resolvability: PauseLocationVariant
+    resolvability_note: str
+
+
+def _escalation_operator_surface(
+    escalation_instance_id: str | None,
+    step_context: StepExecutionContext,
+) -> _EscalationOperatorSurface:
+    """The three prose/vocabulary values accompanying the `B-71` token on the wire.
+
+    U-RT-155 AC 9 (CP spec v1.119 §0.6). Returns an EMPTY mapping when no token was
+    minted, so the linear/validator population's call is byte-identical to pre-arc
+    and its wire body gains no key (§0.12).
+
+    `branch_context` renders the ordinal **as prose**, which is §0.5's one scoped
+    carve-out. Nothing else from the basis crosses: `snapshot_run_id` and the
+    un-hashed identity stay barred WITHOUT qualification, including from
+    `branch_context` itself, and the ordinal appears as no typed or parseable field
+    and on no exported span attribute.
+
+    `resolvability` reuses the CLOSED `PauseLocationVariant` vocabulary rather than
+    minting a new one, so the webhook and the pause view cannot become two
+    authorities over one concept. It names the resolution CHANNEL, which is
+    time-INVARIANT and therefore safe to stamp at escalation time — unlike the
+    OUTCOME, which is time-varying and would be a false negative in exactly the
+    situation the operator most needs the truth.
+    """
+    if escalation_instance_id is None:
+        return {}
+    branch_index = step_context.branch_index
+    if branch_index is None:
+        return {}
+    return {
+        "branch_context": (
+            f"Escalated from fan-out branch ordinal {branch_index} of the parent step. "
+            "Display only; no format is promised and this text is never parsed."
+        ),
+        "resolvability": PauseLocationVariant.UNIFORM_FALLBACK_ONLY,
+        "resolvability_note": _RESOLVABILITY_NOTE,
+    }
 
 
 def _policy_floor_overrides(
@@ -1265,6 +1407,7 @@ class RuntimeHITLGateComposer:
         palette: frozenset[HITLResponse],
         escalation_reason: str,
         tenant_id: str | None,
+        step_context: StepExecutionContext,
     ) -> NoReturn:
         """Deliver the gate to the secondary channel (webhook) + set the pause
         flag + raise `HITLPauseRequestedSignal` — the shared §14.8.8.1
@@ -1279,6 +1422,13 @@ class RuntimeHITLGateComposer:
         brief` so a post-effect signing failure's protected-store write
         lands under the OWNING tenant.
 
+        `step_context` (U-RT-155, `B-71`): the carrier of the two §25.20/§25.21
+        escalation-token fields. Passing the whole context rather than a pre-resolved
+        token is deliberate — CP spec v1.119 §0.13 leaves the SIGNATURE SHAPE to
+        Runtime discretion and pins only the composed key's OUTPUT, and threading
+        the context keeps the mint at the step-1 construction site where §0.4(3)
+        places the single mint authority.
+
         Factored (U-RT-119) so BOTH the §14.8.2 step-4-bis durable-async-cell
         branch AND the §14.8.9 `escalate-secondary-channel` timeout dispatch
         route through one body (no duplication, per F-B3-2 §2.5 + advisor).
@@ -1290,6 +1440,11 @@ class RuntimeHITLGateComposer:
         # §14.8.8.1 step 1: compose HITLEscalationBrief. fail_class /
         # fail_detail_hash None — not a validator failure at this site (CP spec
         # v1.18 §25.2.X + v1.19 §25.2.Y Optional widening).
+        # U-RT-155 / `B-71` — THE MINT (CP spec v1.119 §0.4(3): mint authority is
+        # singular, and this step-1 construction site is it). Three-arm read order
+        # per §0.4.3; `None` on the linear/validator population, which keeps that
+        # population byte-identical to pre-arc all the way to the wire.
+        escalation_instance_id = resolve_escalation_instance_id(step_context, placement.position)
         durable_brief = HITLEscalationBrief(
             parent_step_id=str(step.step_id),
             parent_action_id=str(parent_action_id),
@@ -1297,9 +1452,14 @@ class RuntimeHITLGateComposer:
             fail_detail_hash=None,
             escalation_reason=escalation_reason,
             proposed_response_palette=frozenset(sorted(palette)),
+            escalation_instance_id=escalation_instance_id,
         )
-        # §14.8.8.1 step 2: idempotency_key per compose_hitl_action_id shape.
-        idempotency_key = str(compose_hitl_action_id(parent_action_id, placement.position))
+        # §14.8.8.1 step 2: idempotency_key per compose_hitl_action_id shape, with the
+        # `B-71` token folded INSIDE the composer (§0.4(2-bis)) so this key, the CP
+        # audit `action_id` and the F2 ledger key stay ONE identity family.
+        idempotency_key = str(
+            compose_hitl_action_id(parent_action_id, placement.position, escalation_instance_id)
+        )
         # §14.8.8.1 step 3+4: deliver via the spec-canonical brief surface (runtime
         # spec v1.34 §14.10.1 Reading (H) — projects to WebhookPayload via the
         # brief adapter + invokes the raw 3-arg deliver_webhook). On exhausted,
@@ -1326,7 +1486,10 @@ class RuntimeHITLGateComposer:
         )
         with _webhook_fence_guard:
             delivery_result = await composer.deliver_webhook_for_brief(
-                durable_brief, idempotency_key, tenant_id=tenant_id
+                durable_brief,
+                idempotency_key,
+                tenant_id=tenant_id,
+                **_escalation_operator_surface(escalation_instance_id, step_context),
             )
         # §14.8.8.1 step 5: set the caller-signal pause flag (observed by
         # workflow_driver per-step pre-entry detection per C-RT-24 §14.14.3).
@@ -1540,7 +1703,18 @@ class RuntimeHITLGateComposer:
                 else None
             )
 
-        hitl_action_id = compose_hitl_action_id(parent_action_id, placement.position)
+        # U-RT-155 / `B-71` (Runtime spec v1.121 site 2) — the fold reaches THIS
+        # invocation too, not only the webhook one. This key IS the CP audit
+        # `action_id` AND the F2 state-ledger `idempotency_key`, so it is where
+        # C-IS-07 §7.5's key-only dedup drops the second peer's HITL audit entry.
+        # Widening only the webhook call would make CP §0.2's one-identity-family
+        # promise FALSE in the shipped system and would leave the `B-71` defect
+        # witness operating on an unwidened audit key, so it could never close.
+        hitl_action_id = compose_hitl_action_id(
+            parent_action_id,
+            placement.position,
+            resolve_escalation_instance_id(step_context, placement.position),
+        )
         # `gate_level` value: HITLMatrixCell at landed CP schema does not
         # carry a `gate_level` field (per `persona_engine_hitl_matrix.py:80`);
         # v1.11 MVP uses sentinel "auto" string-value mapped to the
@@ -2037,6 +2211,7 @@ class RuntimeHITLGateComposer:
                         palette=palette,
                         escalation_reason="durable_async_cell_synchrony",
                         tenant_id=step_context.tenant_id,
+                        step_context=step_context,
                     )
                 # End of step 4-bis. Fall through to step 4f sync-blocking.
 
@@ -2169,6 +2344,7 @@ class RuntimeHITLGateComposer:
                                 palette=palette,
                                 escalation_reason="hitl_timeout_escalate_secondary_channel",
                                 tenant_id=step_context.tenant_id,
+                                step_context=step_context,
                             )
                         # fail-closed (solo default; team configurable; multi
                         # default) AND escalate-degraded-when-unbound (the §14.8.9
@@ -2235,8 +2411,15 @@ class RuntimeHITLGateComposer:
                         )
                         # Set audit_ledger_entry_id attribute now that it's known.
                         if write_result is not None:
+                            # U-RT-155 / `B-71` (Runtime spec v1.121 site 2, third
+                            # invocation) — `hitl.invocation.audit_ledger_entry_id`
+                            # must name the SAME key the audit write just used, so
+                            # it folds identically. Recomposing it unwidened here
+                            # would publish a span attribute that joins to nothing.
                             hitl_action_id = compose_hitl_action_id(
-                                parent_action_id, placement.position
+                                parent_action_id,
+                                placement.position,
+                                resolve_escalation_instance_id(step_context, placement.position),
                             )
                             invocation_span.set_attribute(
                                 "hitl.invocation.audit_ledger_entry_id",

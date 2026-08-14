@@ -3618,6 +3618,11 @@ async def test_hitl_webhook_delivery_counts_as_inflight_effect_at_trip_time(
                 palette=frozenset({HITLResponse.APPROVE}),
                 escalation_reason="test-escalation",
                 tenant_id=None,
+                # U-RT-155 / `B-71` — the minter's carrier. This fixture carries no
+                # pre-dispatch basis and no persisted echo, so the §0.4.3 read order
+                # takes arm 3 and mints nothing; every assertion here is unchanged
+                # from pre-arc, which is the §0.12 byte-identity property.
+                step_context=_make_step_context(),
             )
     finally:
         DISPATCH_CANCEL_TOKEN_VAR.reset(reset_token)
