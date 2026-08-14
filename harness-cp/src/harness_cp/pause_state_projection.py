@@ -59,7 +59,7 @@ cross-axis by `Spec_Harness_Runtime_v1.md` v1.109 §14.14.9.2.
 from __future__ import annotations
 
 import hashlib
-import warnings
+import logging
 from collections.abc import Collection, Mapping
 from enum import StrEnum
 from typing import Annotated, Any, Literal, NamedTuple, Self
@@ -86,7 +86,6 @@ __all__ = [
     "BranchEffectFenceAddressableLocation",
     "CrashReconstructionEffectFenceAddressableLocation",
     "DepthZeroRootUniformFallbackOnlyLocation",
-    "EscalationTokenKeyedIngressWarning",
     "HitlAddressableLocation",
     "KeyAbsentLinearEffectFenceAddressableLocation",
     "KeyAbsentOrchestratorEffectFenceAddressableLocation",
@@ -488,23 +487,23 @@ class PausedWorkflowState(BaseModel):
     """The ORDERED sequence of typed location projections."""
 
 
-class EscalationTokenKeyedIngressWarning(UserWarning):
-    """A resume was keyed by a `B-71` escalation correlation token.
+_LOGGER = logging.getLogger(__name__)
+"""The §0.7 advisory diagnostic channel.
 
-    U-CP-102 (CP spec v1.119 §0.7). The token is **correlation, not addressing** —
-    §0.4(1) permits equality and nothing else, and no ingress surface accepts it.
-    A submitted key that matches one is COUNTED-AS-UNADDRESSED (the normative,
-    unconditional half), which means the operator's response is NOT delivered and
-    the location stays parked.
+**Logging, deliberately NOT `warnings.warn`** (out-of-family review round 3, [P2]).
+An application that promotes warnings to errors — `PYTHONWARNINGS=error`,
+`warnings.simplefilter("error")`, `pytest -W error` — would have turned this advisory
+into a raised exception during resume admission, so a token-keyed response would
+ABORT the resume instead of merely remaining unaddressed. That is the precise
+inversion of §0.7, whose whole content is that the submission is
+counted-as-unaddressed and the run continues; and it contradicts §0.10's reason for
+softening the diagnosis in the first place. `logging` cannot raise into the caller,
+so the channel is advisory by construction rather than by configuration.
 
-    The TYPED disposition that should carry this is registered at §0.9 and does not
-    exist yet — `ResumeResult` and `RunResult` are closed schemas, and requiring a
-    field here would make §0.7 unimplementable without bundling a separately
-    registered schema change (§0.10). So the condition rides the diagnostic channel
-    that exists, following the `providers.py` §5 precedent for a spec-mandated
-    advisory the harness must surface but must not fail on. It becomes normative on
-    the typed carrier when that leg lands.
-    """
+The TYPED disposition this condition should eventually carry is registered at §0.9 —
+`ResumeResult` and `RunResult` are closed schemas, and requiring a field here would
+make §0.7 unimplementable without bundling a separately registered schema change.
+"""
 
 
 def diagnose_token_keyed_ingress(
@@ -540,16 +539,14 @@ def diagnose_token_keyed_ingress(
     )
     if not matched:
         return
-    warnings.warn(
+    _LOGGER.warning(
         "CP spec v1.119 §0.7: `hitl_responses` was keyed by an escalation "
-        "correlation token for pre-dispatch gate-owning branch ordinal(s) "
-        f"{matched}. The token is CORRELATION-ONLY and is not an address — these "
-        "locations are counted-as-UNADDRESSED and the supplied response will NOT "
-        "be delivered to them. A `uniform-fallback-only` location is answered by "
-        "the SCALAR `hitl_response` field when it is the sole unaddressed "
-        "gate-owning member.",
-        EscalationTokenKeyedIngressWarning,
-        stacklevel=3,
+        "correlation token for pre-dispatch gate-owning branch ordinal(s) %s. The "
+        "token is CORRELATION-ONLY and is not an address — these locations are "
+        "counted-as-UNADDRESSED and the supplied response will NOT be delivered to "
+        "them. A `uniform-fallback-only` location is answered by the SCALAR "
+        "`hitl_response` field when it is the sole unaddressed gate-owning member.",
+        matched,
     )
 
 

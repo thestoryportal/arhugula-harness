@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import warnings
 from typing import Any, cast
 
@@ -66,7 +67,6 @@ from harness_cp.pause_resume_protocol_types import (
     WorkflowPauseReason,
 )
 from harness_cp.pause_state_projection import (
-    EscalationTokenKeyedIngressWarning,
     PauseLocationVariant,
     PreDispatchUniformFallbackOnlyLocation,
     compose_escalation_instance_id,
@@ -315,6 +315,16 @@ def _bare_context(branch_index: int | None = None) -> StepExecutionContext:
         tenant_id=None,
         step_index=0,
         branch_index=branch_index,
+    )
+
+
+def _approval(entry_id: str) -> HITLResult:
+    """A canned operator APPROVE, used by the §0.7 ingress witnesses."""
+    return HITLResult(
+        response=HITLResponse.APPROVE,
+        timestamp="2026-08-14T00:00:00Z",
+        audit_ledger_entry_id=EntryID(entry_id),
+        response_summary_hash="e" * 64,
     )
 
 
@@ -1097,9 +1107,11 @@ def test_the_overwrite_helper_replaces_rather_than_drops_the_whole_brief() -> No
     assert sanitized.proposed_response_palette == hostile.proposed_response_palette
 
 
-# mutation-probe: replace `diagnose_token_keyed_ingress`'s `warnings.warn(...)` call
+# mutation-probe: replace `diagnose_token_keyed_ingress`'s `_LOGGER.warning(...)` call
 # with `return` (a silent discard).
-def test_a_token_keyed_resume_is_counted_as_unaddressed_and_is_diagnosed() -> None:
+def test_a_token_keyed_resume_is_counted_as_unaddressed_and_is_diagnosed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """§0.7 — both halves, driven through the REAL `execute_workflow` resume path.
 
     The NORMATIVE half is structural: `hitl_responses` stays exclusively
@@ -1119,14 +1131,8 @@ def test_a_token_keyed_resume_is_counted_as_unaddressed_and_is_diagnosed() -> No
     """
     snap, round_one = _round_one()
     token = round_one.minted[1]
-    response = HITLResult(
-        response=HITLResponse.APPROVE,
-        timestamp="2026-08-14T00:00:00Z",
-        audit_ledger_entry_id=EntryID("e-b71-ingress"),
-        response_summary_hash="e" * 64,
-    )
-    resume_context = ResumeContext(hitl_responses={token: response})
-    with pytest.warns(EscalationTokenKeyedIngressWarning) as caught:
+    resume_context = ResumeContext(hitl_responses={token: _approval("e-b71-ingress")})
+    with caplog.at_level(logging.WARNING, logger="harness_cp.pause_state_projection"):
         resumed = execute_workflow(
             _manifest(),
             _peer_steps(),
@@ -1137,7 +1143,12 @@ def test_a_token_keyed_resume_is_counted_as_unaddressed_and_is_diagnosed() -> No
             pause_snapshot_input=snap,
             resume_context=resume_context,
         )
-    message = str(caught[0].message)
+    diagnostics = [r.getMessage() for r in caplog.records if "§0.7" in r.getMessage()]
+    assert diagnostics, (
+        "a token-keyed resume was accepted SILENTLY — §0.7's diagnosis half requires "
+        f"surfacing it; captured records were {[r.getMessage()[:60] for r in caplog.records]!r}"
+    )
+    message = diagnostics[0]
     assert "ordinal(s) [1]" in message, f"the diagnostic must name the ordinal; got {message!r}"
     assert token not in message, (
         "the token itself is a live correlation identifier on an unresolved gate and "
@@ -1159,21 +1170,49 @@ def test_a_token_keyed_resume_is_counted_as_unaddressed_and_is_diagnosed() -> No
     )
 
 
-def test_a_legitimately_keyed_resume_emits_no_diagnostic() -> None:
+# mutation-probe: change `diagnose_token_keyed_ingress`'s `_LOGGER.warning(...)` back
+# to `warnings.warn(..., EscalationTokenKeyedIngressWarning, stacklevel=3)` (re-adding
+# the class and the `warnings` import).
+def test_the_ingress_diagnostic_cannot_abort_a_resume_under_warnings_as_errors() -> None:
+    """§0.7 / §0.10 — the diagnosis is ADVISORY, and advisory means it CANNOT FAIL.
+
+    An application that promotes warnings to errors (`PYTHONWARNINGS=error`,
+    `warnings.simplefilter("error")`, `pytest -W error`) would turn a `warnings.warn`
+    diagnostic into a raised exception at resume admission, so a token-keyed response
+    would ABORT the resume instead of merely remaining unaddressed — the precise
+    inversion of the contract, and invisible to every other test in this file, all of
+    which run under the default filters. Found by out-of-family review round 3 [P2].
+    """
+    snap, round_one = _round_one()
+    token = round_one.minted[1]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        resumed = execute_workflow(
+            _manifest(),
+            _peer_steps(),
+            run_id=_RUN_ID,
+            ctx=_ctx(),
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=cast(StepDispatcherRegistry, _MintingGateDispatcher()),
+            pause_snapshot_input=snap,
+            resume_context=ResumeContext(hitl_responses={token: _approval("e-b71-strict")}),
+        )
+    assert resumed.status is RunStatus.PAUSED, (
+        "under warnings-as-errors the advisory diagnostic must still not fail the "
+        f"resume; got status={resumed.status!r} fail_class={resumed.fail_class!r}"
+    )
+
+
+def test_a_legitimately_keyed_resume_emits_no_diagnostic(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """The negative arm: an ordinary `child_run_id`-keyed resume must stay silent.
 
     A diagnostic that fired on every resume would be noise the operator learns to
     ignore, which is functionally the same failure as not emitting it at all.
     """
     snap, _ = _round_one()
-    response = HITLResult(
-        response=HITLResponse.APPROVE,
-        timestamp="2026-08-14T00:00:00Z",
-        audit_ledger_entry_id=EntryID("e-b71-ok"),
-        response_summary_hash="e" * 64,
-    )
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    with caplog.at_level(logging.WARNING, logger="harness_cp.pause_state_projection"):
         execute_workflow(
             _manifest(),
             _peer_steps(),
@@ -1182,6 +1221,6 @@ def test_a_legitimately_keyed_resume_emits_no_diagnostic() -> None:
             default_model_binding=_DEFAULT_BINDING,
             step_dispatchers=cast(StepDispatcherRegistry, _MintingGateDispatcher()),
             pause_snapshot_input=snap,
-            resume_context=ResumeContext(hitl_responses={"child-run-abc": response}),
+            resume_context=ResumeContext(hitl_responses={"child-run-abc": _approval("e-b71-ok")}),
         )
-    assert not [w for w in caught if issubclass(w.category, EscalationTokenKeyedIngressWarning)]
+    assert not [r for r in caplog.records if "§0.7" in r.getMessage()]
