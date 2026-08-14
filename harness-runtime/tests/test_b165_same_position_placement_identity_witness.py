@@ -42,6 +42,21 @@ out because the codex context guard hard-fails a PR mixing fork-doc and test sur
 **Not a `B-71` regression.** The two-argument key `hitl:{parent}:{position}` already
 collided for same-position placements before the arc; `B-71` neither introduced nor
 closed this. Test 4 is the discriminator that keeps those two facts apart.
+
+**How far the grounding reaches — stated, because the first draft over-reached.**
+Out-of-family review of this arc objected, correctly, that tests 3 and 5 synthesise
+every load-bearing precondition (placements via the test-only step fallback, a
+hand-set basis, a bare `object()` binding selecting the sentinel matrix cell), so on
+their own they show only that the composer collides *if fed* the shape — not that
+production *feeds* it. Test 2-bis was added in response and removes all three props:
+a real `WorkflowManifestEntry`, the real fold, the real `compose_branch_child_context`
+plus the same `model_copy` update the fan-out site performs, a real
+`StepEffectiveBinding` on an asserted SYNC_BLOCKING cell, and a PLAIN step so the
+gate can only fire off `step_context`. What is therefore established is that the shape
+production COMPOSES collides. What is NOT established, and is not claimed: that a full
+`_execute_parallelization` run was driven end to end, or that any shipped workflow
+declares duplicate placements today. The collision is a reachable-by-construction
+bound, not an observed production incident.
 """
 
 from __future__ import annotations
@@ -53,6 +68,7 @@ from typing import Any, cast
 import pytest
 from harness_core import PersonaTier, WorkloadClass
 from harness_core.identity import StepID
+from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
@@ -63,11 +79,14 @@ from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import WebhookConfig
 from harness_cp.pause_state_projection import pre_dispatch_gate_owning_branch_identity
+from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.persona_engine_hitl_matrix import SynchronyClass, matrix_cell_for
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
     StepKind,
     WorkflowStep,
+    compose_branch_child_context,
     fold_step_hitl_placements,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -298,6 +317,112 @@ def test_the_add_only_fold_preserves_both_same_position_placements() -> None:
 
     assert len(folded) == 2
     assert [p.position for p in folded] == [_GATE, _GATE]
+
+
+# ---------------------------------------------------------------------------
+# 2-bis — the INTEGRATION link: does PRODUCTION hand the composer this shape?
+# ---------------------------------------------------------------------------
+
+
+# mutation-probe: make the branch-child composition drop `hitl_placements` from its
+# `model_copy` update (so the colliding pair never reaches the per-step context).
+@pytest.mark.asyncio
+async def test_the_production_branch_composition_hands_the_composer_the_colliding_shape() -> None:
+    """Closes the gap between "the composer collides IF fed this" and "production
+    FEEDS it" — the load-bearing objection to tests 3/5, raised by out-of-family
+    review of this arc and correct as raised.
+
+    Tests 3 and 5 synthesise their preconditions three ways, and each is a way the
+    collision could be an artifact of the test rather than of the system:
+    placements arrive via the `_StepWithPlacements` proxy (the explicitly test-only
+    `getattr(step, ...)` fallback) instead of `step_context`; the basis is set by
+    hand; and a bare `object()` binding selects the partial-binding SENTINEL matrix
+    cell rather than a real one. This test removes all three:
+
+    * placements reach the composer ONLY through `step_context.hitl_placements` —
+      the production producer surface — and the step passed in is PLAIN, so the
+      test-only fallback would find nothing;
+    * the context is built by the REAL `compose_branch_child_context` plus the same
+      `model_copy` update the fan-out site performs at
+      `workflow_driver.py:8589-8606`, seeded from a REAL `WorkflowManifestEntry`
+      and folded by the REAL `fold_step_hitl_placements`;
+    * the binding is a REAL `StepEffectiveBinding` whose persona_tier × engine_class
+      resolves to a genuine non-excluded SYNC_BLOCKING cell.
+
+    What it does NOT claim: that a full `_execute_parallelization` run was driven.
+    It mirrors that site's composition faithfully rather than invoking the driver
+    end to end, so it proves the SHAPE production composes, not that a shipped
+    workflow declares duplicate placements today.
+    """
+    candidate = ProviderCandidate(
+        provider="anthropic", model="claude-opus-5", family=ProviderFamily.ANTHROPIC
+    )
+    manifest = WorkflowManifestEntry(
+        workflow_id="wf-b165",
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+        topology_pattern=TopologyPattern.PARALLELIZATION,
+        layer_budgets=(),
+        fallback_chain=FallbackChain(primary=candidate, same_family=(), cross_family=()),
+        hitl_placements=(HITLPlacement(position=_GATE), HITLPlacement(position=_GATE)),
+        per_step_overrides={},
+    )
+    binding = StepEffectiveBinding(
+        step_id="step-0",
+        model_binding=ModelBinding(provider="anthropic", model="claude-opus-5"),
+        engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        override_applied=False,
+        hitl_placement=None,
+    )
+    # SOLO_DEVELOPER × SAVE_POINT_CHECKPOINT must be a REAL, non-excluded,
+    # SYNC_BLOCKING cell — asserted, not assumed, so a matrix change that moved this
+    # pair to DURABLE_ASYNC would red here instead of silently re-routing the test.
+    cell = matrix_cell_for(persona_tier=binding.persona_tier, engine_class=binding.engine_class)
+    assert not cell.is_excluded
+    assert cell.synchrony_class is SynchronyClass.SYNC_BLOCKING
+
+    # The production composition, mirroring workflow_driver.py:8580-8606.
+    child = compose_branch_child_context(
+        _context(branch_index=None), branch_index=0, agent_role=cast(Any, "worker")
+    ).model_copy(
+        update={
+            "hitl_placements": fold_step_hitl_placements(
+                manifest.hitl_placements, binding.hitl_placement
+            ),
+            "pre_dispatch_escalation_basis": pre_dispatch_gate_owning_branch_identity(_RUN_ID, 0),
+        }
+    )
+    assert len(child.hitl_placements) == 2, "production carries BOTH placements"
+    assert child.pre_dispatch_escalation_basis is not None, "and the B-71 basis"
+
+    provider = TracerProvider()
+    surface = _Surface(
+        [
+            AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0),
+            AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=2.0),
+        ]
+    )
+    ledger = _LedgerWriter()
+    composer = _composer(
+        provider, surface=surface, ledger_writer=ledger, audit_writer=_AuditWriter()
+    )
+
+    # A PLAIN step — no placements attached, so the test-only `getattr(step, ...)`
+    # fallback finds nothing and the gate can only fire off `step_context`.
+    plain_step = WorkflowStep(
+        step_id=StepID("step-0"), step_kind=StepKind.INFERENCE_STEP, step_payload={}
+    )
+
+    await composer.dispatch(cast(Any, binding), plain_step, step_context=child)
+
+    assert len(surface.calls) == 2, "both placements gated off the PRODUCTION carrier"
+    keys = [str(key.idempotency_key) for _payload, key in ledger.appends]
+    assert len(keys) == 2
+    assert len(set(keys)) == 1, (
+        "production-composed context + real binding still collide onto ONE identity"
+    )
 
 
 # ---------------------------------------------------------------------------
