@@ -387,7 +387,19 @@ def find_superseded_round(status_path: Path, project_dir: Path) -> tuple[str, st
     """
     rel = str(status_path.resolve().relative_to(project_dir.resolve()))
     live = _current_round_label(status_path.read_text())
-    for rev in _sh(f"git log --format=%H -- {rel}", project_dir).split():
+    # FAIL CLOSED on unusable history. `_sh` degrades to "" on any git failure,
+    # and a shallow clone yields a truncated log — either would make this return
+    # None, the CLI report "nothing to archive", and the owed round go
+    # permanently unarchived while later runs move on to newer ones (codex round
+    # 14 [P2]). "No superseded round" and "cannot see the history" are different
+    # answers and must not share an exit path.
+    revs = _sh(f"git log --format=%H -- {rel}", project_dir).split()
+    if not revs:
+        raise RoadmapStatusError(
+            f"git log returned no history for {rel} — refusing to report 'nothing to "
+            "archive' when the history is simply unreadable"
+        )
+    for rev in revs:
         blob = _sh(f"git show {rev}:{rel}", project_dir)
         if not blob:
             continue
@@ -396,6 +408,18 @@ def find_superseded_round(status_path: Path, project_dir: Path) -> tuple[str, st
             m = _CURRENT_PARAGRAPH_RE.search(blob)
             if m:
                 return label, m.group(0)
+    # Nothing differing found. In a SHALLOW clone that is ambiguous — genuinely
+    # nothing superseded, or simply beyond the graft point — and reporting
+    # "nothing to archive" would let the owed round go permanently unarchived
+    # while later runs move on to newer ones. Shallowness only matters HERE, on
+    # the not-found path: this workspace is normally shallow, so refusing up
+    # front would break the documented workflow outright.
+    if _sh("git rev-parse --is-shallow-repository", project_dir).strip() == "true":
+        raise RoadmapStatusError(
+            f"no superseded round found within a SHALLOW clone's {len(revs)} available "
+            f"revision(s) of {rel} — cannot distinguish 'none' from 'beyond the graft "
+            "point'. Re-run with full history (git fetch --unshallow)."
+        )
     return None
 
 

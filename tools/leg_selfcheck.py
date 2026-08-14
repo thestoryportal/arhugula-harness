@@ -282,6 +282,11 @@ def context_by_file(diff: str) -> dict[str, list[str]]:
     return dict(out)
 
 
+#: Ids whose prose heading a diff DELETES. Module-level so the positional
+#: resolver and the register check agree without threading another parameter.
+_DELETED_ROW_IDS: set[str] = set()
+
+
 def changed_line_numbers(diff: str) -> dict[str, set[int]]:
     """New-file line numbers touched, per file, parsed from `@@` hunk headers.
 
@@ -310,6 +315,13 @@ def changed_line_numbers(diff: str) -> dict[str, set[int]]:
             out[current].add(lineno)
             lineno += 1
         elif ln.startswith("-") and not ln.startswith("---"):
+            # A deleted ROW HEADING names an id that no added line mentions and
+            # that rows_enclosing (which reads the post-deletion file) resolves to
+            # an ADJACENT row — so a row whose whole prose block is deleted was
+            # never re-checked and the gate exited green (codex round 14 [P2]).
+            m_del = _ROW_ID_RE.match(ln[1:])
+            if m_del:
+                _DELETED_ROW_IDS.add(m_del.group(1))
             # A DELETION advances no new-file position, so recording nothing left
             # `amended` empty for a deletion-only edit — and deleting a row's
             # final prose body is EXACTLY the heading-only regression this gate
@@ -442,8 +454,27 @@ def _target_line_count(path: Path, rel: str, base_ref: str | None) -> int | None
         return None
 
 
+def deleted_paths(diff: str) -> set[str]:
+    """Paths this diff deletes (`+++ /dev/null`)."""
+    out: set[str] = set()
+    prev: str | None = None
+    for ln in diff.splitlines():
+        m = re.match(r"^--- a/(.+)$", ln)
+        if m:
+            prev = m.group(1)
+            continue
+        if ln.startswith("+++ /dev/null") and prev:
+            out.add(prev)
+        if ln.startswith("+++ "):
+            prev = None
+    return out
+
+
 def check_cites(
-    by_file: dict[str, list[str]], report: Report, committed_ref: str | None = None
+    by_file: dict[str, list[str]],
+    report: Report,
+    committed_ref: str | None = None,
+    removed: set[str] | None = None,
 ) -> None:
     """Re-resolve every `path:NNN` the arc ADDED, at the CURRENT HEAD.
 
@@ -473,6 +504,15 @@ def check_cites(
             seen.add(key)
             path = _resolve_cited_path(rel, source)
             if path is None:
+                if rel in (removed or set()):
+                    # A path THIS DIFF deletes is unambiguously a stale repo cite,
+                    # not a possible external reference (codex round 14 [P2]).
+                    report.add(
+                        "cite",
+                        HARD,
+                        f"{rel}:{spec} — this diff DELETES {rel}, so the cite is stale",
+                    )
+                    continue
                 # Not every `word.md:12` is a repo cite (URLs, prose, other repos).
                 # Only a path that RESOLVES is a claim this tool can judge; an
                 # unresolvable one is reported advisory, never as a hard failure.
@@ -1080,7 +1120,7 @@ def run(base: str, uncommitted: bool) -> Report:
     report.stats["base"] = base
     report.stats["changed_files"] = len(paths)
     report.stats["added_lines"] = len(added)
-    check_cites(by_file, report, None if uncommitted else "HEAD")
+    check_cites(by_file, report, None if uncommitted else "HEAD", deleted_paths(diff))
     ctx_pos = context_with_positions(diff)
     all_pos = {
         path: added_with_positions(diff).get(path, []) + ctx_pos.get(path, [])
@@ -1088,10 +1128,12 @@ def run(base: str, uncommitted: bool) -> Report:
     }
     check_counts(by_file, report, context_by_file(diff), all_pos)
     check_label_collisions(by_file, report)
+    _DELETED_ROW_IDS.clear()
     amended: set[str] = set()
     for path, nums in changed_line_numbers(diff).items():
         if path.endswith(("forward-register.yaml", "post-phase-8-forward-register.md")):
             amended |= rows_enclosing(path, nums)
+    amended |= set(_DELETED_ROW_IDS)
     check_register_rows(
         added,
         paths,

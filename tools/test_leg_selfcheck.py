@@ -827,3 +827,34 @@ def test_duplicate_context_positions_are_consumed_in_order(tmp_path, monkeypatch
     ls.check_counts(added, report, None, positions)
     # both claims belong to B-900 and genuinely disagree — it must NOT be hidden
     assert _hard(report) != [], report.findings
+
+
+def test_cite_to_a_path_this_diff_deletes_is_a_hard_finding():
+    """[P2] (codex round 14): a branch that deletes a file while adding a cite to
+    its old path emitted only an advisory, so the gate exited green on an
+    unambiguously stale repository citation."""
+    report = ls.Report()
+    ls.check_cites({"spec.md": ["see tools/gone.py:12"]}, report, removed={"tools/gone.py"})
+    assert any("DELETES" in m for m in _hard(report)), report.findings
+
+
+def test_deleted_paths_parses_dev_null_targets():
+    diff = "--- a/tools/gone.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n"
+    assert ls.deleted_paths(diff) == {"tools/gone.py"}
+
+
+def test_a_fully_deleted_register_row_is_still_checked():
+    """[P2] (codex round 14): when an entire prose row is deleted, its id appears
+    in no added line and rows_enclosing (reading the post-deletion file) resolves
+    to an ADJACENT row — so the now heading-only row was never re-checked."""
+    diff = (
+        "--- a/.harness/post-phase-8-forward-register.md\n"
+        "+++ b/.harness/post-phase-8-forward-register.md\n"
+        "@@ -10,3 +10,1 @@\n"
+        " keep\n"
+        "-### B-777 · a row being removed\n"
+        "-- **What it is.** body\n"
+    )
+    ls._DELETED_ROW_IDS.clear()
+    ls.changed_line_numbers(diff)
+    assert "B-777" in ls._DELETED_ROW_IDS

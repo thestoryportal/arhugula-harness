@@ -1083,3 +1083,27 @@ def test_install_next_action_does_not_require_prior_archiving():
     encoded a DIFFERENT exit and made the refresh unrunnable when it is needed."""
     out = rsr.install_next_action(SAMPLE, "1338", "New body.")
     assert "**Current next action (post-#1338).** New body." in out
+
+
+def test_find_superseded_round_fails_closed_when_history_is_unreadable(tmp_path):
+    """[P2] (codex round 14): `_sh` degrades to "" on any git failure, so an
+    unreadable history returned None and the CLI reported 'nothing to archive'
+    — leaving the owed round permanently unarchived while later runs move on to
+    newer ones. 'None superseded' and 'cannot see the history' are different
+    answers and must not share an exit path."""
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    status.write_text(SAMPLE)
+    with pytest.raises(rsr.RoadmapStatusError, match="no history"):
+        rsr.find_superseded_round(status, tmp_path)
+
+
+def test_find_superseded_round_works_in_this_shallow_repo():
+    """Shallowness is checked only on the NOT-FOUND path: this workspace is
+    normally a shallow clone, so refusing up front would break the documented
+    workflow outright. A round that IS found is a valid answer regardless."""
+    found = rsr.find_superseded_round(rsr.DEFAULT_STATUS, rsr.ROOT)
+    assert found is not None
+    label, paragraph = found
+    assert label != rsr._current_round_label(rsr.DEFAULT_STATUS.read_text())
+    assert paragraph.startswith("**Current next action (")
