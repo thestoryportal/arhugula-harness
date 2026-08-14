@@ -60,6 +60,7 @@ from harness_cp.pause_resume_protocol import (
     _strip_default_fanout_resume_fields,
 )
 from harness_cp.pause_resume_protocol_types import (
+    PausedChildBranchResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
     PreDispatchGateOwningBranchResumeState,
@@ -70,6 +71,7 @@ from harness_cp.pause_state_projection import (
     PauseLocationVariant,
     PreDispatchUniformFallbackOnlyLocation,
     compose_escalation_instance_id,
+    diagnose_token_keyed_ingress,
     pre_dispatch_gate_owning_branch_identity,
     walk_pause_tree,
 )
@@ -1041,13 +1043,11 @@ def _run_validator_escalation(
     return framework, list(exporter.get_finished_spans())
 
 
-_OVERWRITE_ATTR = "validator.escalation.supplied_instance_id_overwritten"
-
-
-# mutation-probe: replace the `evaluate_span.set_attribute(
-# "validator.escalation.supplied_instance_id_overwritten", True)` call at the validator
-# seam in `workflow_driver.py` with `pass` (a SILENT overwrite).
-def test_the_validator_trust_seam_diagnoses_an_overwritten_token() -> None:
+# mutation-probe: replace the `_diagnose_validator_supplied_token_overwritten(...)`
+# call at the validator seam in `workflow_driver.py` with `pass` (a SILENT overwrite).
+def test_the_validator_trust_seam_diagnoses_an_overwritten_token(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """§0.4(3) + §0.7/§0.10 — the seam's DIAGNOSIS half, on the channel that exists.
 
     The overwrite ITSELF is asserted end to end in the U-RT-155 record (that assertion
@@ -1056,55 +1056,50 @@ def test_the_validator_trust_seam_diagnoses_an_overwritten_token() -> None:
     silent overwrite satisfies AC 9 and AC 14 both, so without this criterion an
     implementation can drop the condition on the floor and still pass the plan.
 
-    The attribute is a BOOLEAN, never the value — the hostile token must appear in no
-    payload, key or span.
+    **On the LOGGER, not the span** (out-of-family review round 5 [P2]):
+    `VALIDATOR_SPAN_NAMESPACE_SCHEMA` declares exactly three attributes for
+    `validator.evaluate`, and a CP-minted fourth would extend a CLOSED OD-owned
+    namespace. The hostile token must appear on no span AND in no log line — both are
+    asserted below.
     """
     hostile = "HOSTILE-OPERATOR-SUPPLIED-TOKEN"
-    framework, spans = _run_validator_escalation(hostile)
+    with caplog.at_level(logging.WARNING, logger="harness_cp.workflow_driver"):
+        framework, spans = _run_validator_escalation(hostile)
     assert framework.seen, "the validator must have run at all"
     assert framework.seen[0].escalation_instance_id == hostile, (
         "sanity: the validator really did supply a value — otherwise this is vacuous"
     )
-    flagged = [s for s in spans if (s.attributes or {}).get(_OVERWRITE_ATTR) is True]
-    assert flagged, (
+    diagnostics = [r.getMessage() for r in caplog.records if "§0.4(3)" in r.getMessage()]
+    assert diagnostics, (
         "the validator-supplied token was overwritten SILENTLY — §0.7's diagnosis half "
-        f"requires surfacing it; exported spans were {[s.name for s in spans]!r}"
+        f"requires surfacing it; captured {[r.getMessage()[:50] for r in caplog.records]!r}"
     )
+    assert hostile not in diagnostics[0], "the VALUE must never be re-emitted"
     for span in spans:
         assert hostile not in repr(dict(span.attributes or {})), (
             f"the hostile value must appear on NO span; found it on {span.name!r}"
         )
+    for span in spans:
+        assert not [
+            k for k in (span.attributes or {}) if "supplied_instance_id_overwritten" in k
+        ], (
+            f"the diagnostic must NOT ride the closed `validator.evaluate` namespace; "
+            f"found it on {span.name!r}"
+        )
 
 
-def test_an_ordinary_validator_escalation_raises_no_overwrite_diagnostic() -> None:
+def test_an_ordinary_validator_escalation_raises_no_overwrite_diagnostic(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """The negative arm: a validator that supplies nothing must not be flagged.
 
     A diagnostic that fired on every validator escalation would be noise, which is
     functionally the same failure as not emitting it at all.
     """
-    framework, spans = _run_validator_escalation(None)
+    with caplog.at_level(logging.WARNING, logger="harness_cp.workflow_driver"):
+        framework, _spans = _run_validator_escalation(None)
     assert framework.seen and framework.seen[0].escalation_instance_id is None
-    assert not [s for s in spans if _OVERWRITE_ATTR in (s.attributes or {})]
-
-
-def test_the_overwrite_helper_replaces_rather_than_drops_the_whole_brief() -> None:
-    """The overwrite's SHAPE, pinned directly: every other field survives.
-
-    A seam that discarded the whole brief would also satisfy "the hostile value does
-    not ship", while destroying the escalation the operator needs to see.
-    """
-    hostile = HITLEscalationBrief(
-        parent_step_id="s",
-        parent_action_id="a",
-        escalation_reason="operator-authored",
-        fail_detail_hash="f" * 64,
-        escalation_instance_id="HOSTILE",
-    )
-    sanitized = hostile.model_copy(update={"escalation_instance_id": None})
-    assert sanitized.escalation_instance_id is None
-    assert sanitized.escalation_reason == "operator-authored"
-    assert sanitized.fail_detail_hash == "f" * 64
-    assert sanitized.proposed_response_palette == hostile.proposed_response_palette
+    assert not [r for r in caplog.records if "§0.4(3)" in r.getMessage()]
 
 
 # mutation-probe: replace `diagnose_token_keyed_ingress`'s `_LOGGER.warning(...)` call
@@ -1167,6 +1162,60 @@ def test_a_token_keyed_resume_is_counted_as_unaddressed_and_is_diagnosed(
     assert resumed_pfr is not None
     assert 1 in {row.branch_index for row in resumed_pfr.pre_dispatch_gate_owning_branches}, (
         "branch 1 must still be recorded as an UNADDRESSED gate owner after the token-keyed resume"
+    )
+
+
+# mutation-probe: in `execute_workflow`'s ingress-diagnostic block, replace the
+# `walk_pause_tree(pause_snapshot_input)` comprehension with a shallow read of the
+# TOP-LEVEL carrier only:
+#   `{r.branch_index: r.escalation_instance_id
+#     for r in (pause_snapshot_input.peer_fan_out_resume.pre_dispatch_gate_owning_branches
+#               if pause_snapshot_input.peer_fan_out_resume else ())
+#     if r.escalation_instance_id is not None}`
+def test_a_token_nested_under_a_paused_child_is_still_diagnosed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """§0.7 applies to EVERY match, not only to this recursion level's own rows.
+
+    A gate owner can sit under `paused_child_branches`, one or more levels down. The
+    diagnostic's first two homes both read a single level: if an earlier child
+    re-pauses, a later child is never entered at all, so a token belonging to it went
+    silently undiagnosed. `walk_pause_tree` is CP's ONE published traversal and
+    already recurses, which is why the check is sited on it rather than on the
+    per-level carriers. Found by out-of-family review round 5 [P2].
+    """
+    outer, round_one = _round_one()
+    inner = outer  # a real snapshot whose rows carry real tokens
+    nested_token = round_one.minted[1]
+    nested = outer.model_copy(
+        update={
+            "peer_fan_out_resume": PeerFanOutResumeState(
+                branches=(),
+                branch_count=1,
+                paused_child_branches=(
+                    PausedChildBranchResumeState(
+                        branch_index=0,
+                        step_id="branch-0-sub",
+                        child_snapshot=inner,
+                    ),
+                ),
+            )
+        }
+    )
+    tokens = {
+        entry.projection.branch_index: entry.projection.escalation_instance_id
+        for entry in walk_pause_tree(nested)
+        if isinstance(entry.projection, PreDispatchUniformFallbackOnlyLocation)
+        and entry.projection.escalation_instance_id is not None
+    }
+    assert nested_token in tokens.values(), (
+        "sanity: the nested gate owner's token must be reachable from the ROOT walk "
+        f"at all — otherwise this witness is vacuous; got {sorted(tokens)!r}"
+    )
+    with caplog.at_level(logging.WARNING, logger="harness_cp.pause_state_projection"):
+        diagnose_token_keyed_ingress(tokens, {nested_token})
+    assert [r for r in caplog.records if "§0.7" in r.getMessage()], (
+        "a token belonging to a NESTED gate owner must still be diagnosed"
     )
 
 

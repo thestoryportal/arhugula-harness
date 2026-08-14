@@ -38,6 +38,7 @@ import contextlib
 import hashlib
 import inspect
 import json
+import logging
 from collections.abc import Awaitable, Collection, Coroutine, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
@@ -2713,6 +2714,32 @@ def _pre_dispatch_gate_owning_captured_child_workflow_id(step: WorkflowStep) -> 
         return None
 
 
+_LOGGER = logging.getLogger(__name__)
+"""The CP driver's advisory diagnostic channel (CP spec v1.119 §0.7 / §0.10)."""
+
+
+def _diagnose_validator_supplied_token_overwritten(step_id: str) -> None:
+    """Surface a validator-supplied `escalation_instance_id` that was overwritten.
+
+    U-CP-102 (CP spec v1.119 §0.4(3) + §0.7). Guarded for the same reason
+    `pause_state_projection.diagnose_token_keyed_ingress` is: §0.7 makes this channel
+    ADVISORY, and Python's `logging` does not contain a handler failure, so an
+    unguarded call would let a log-sink outage fail the very escalation it describes.
+
+    The token's VALUE is never logged — only the fact and the step.
+    """
+    try:
+        _LOGGER.warning(
+            "CP spec v1.119 §0.4(3): a validator supplied an `escalation_instance_id` "
+            "on its `HITLEscalationBrief` for step %s. Mint authority is SINGULAR — the "
+            "value was OVERWRITTEN with the harness-minted one before the brief reached "
+            "any composer, key or exported carrier, and is not on the wire.",
+            step_id,
+        )
+    except Exception:
+        return
+
+
 def _pause_signal_escalation_instance_id(pause_signal: BaseException | None) -> str | None:
     """The `B-71` token minted for this escalation, read off the pause signal's brief.
 
@@ -3238,6 +3265,36 @@ def execute_workflow(
     # engine-class validation. Per C-OD-25 §25.1 AC #1 (U-OD-35): the
     # workflow.envelope span opens AFTER this check — drain-at-entry returns
     # before any envelope opens (no observable workflow execution occurred).
+    # U-CP-102 / `B-71` (CP spec v1.119 §0.7) — THE INGRESS DIAGNOSTIC, sited ONCE at
+    # the driver's resume-ADMISSION point and scoped to the WHOLE pause tree.
+    #
+    # The token is one-way: `hitl_responses` stays exclusively `child_run_id`-keyed, so
+    # a submitted token matches no location and is counted-as-UNADDRESSED — normatively
+    # correct, and SILENT, which is the very thing §0.7's diagnosis half exists to
+    # prevent. Two earlier homes were each too narrow, and each was found by
+    # out-of-family review: `AccessorDerivedResumeContext.from_pause_state` (round 2
+    # [P2]) is bypassed entirely by the supported `api.resume(..., resume_context=
+    # ResumeContext(...))` path; the two fan-out carriers (round 5 [P2]) see only their
+    # OWN level's rows, so a token belonging to a gate owner nested under
+    # `paused_child_branches` went undiagnosed whenever an earlier child re-paused and
+    # the later one was never entered. `walk_pause_tree` is CP's ONE published
+    # traversal of the resume tree and already recurses through nested children, so
+    # reading the tokens off it here is both WIDER in coverage and NARROWER in
+    # machinery than the two call sites it replaces.
+    if (
+        pause_snapshot_input is not None
+        and resume_context is not None
+        and resume_context.hitl_responses
+    ):
+        diagnose_token_keyed_ingress(
+            {
+                entry.projection.branch_index: entry.projection.escalation_instance_id
+                for entry in walk_pause_tree(pause_snapshot_input)
+                if isinstance(entry.projection, PreDispatchUniformFallbackOnlyLocation)
+                and entry.projection.escalation_instance_id is not None
+            },
+            resume_context.hitl_responses,
+        )
     if ctx.drained_flag.is_set():
         return RunResult(
             workflow_id=manifest_entry.workflow_id,
@@ -5780,15 +5837,23 @@ def _execute_workflow_body(
                             # typed resume-outcome carrier lands (`ResumeResult` /
                             # `RunResult` are CLOSED schemas; requiring a typed
                             # `ResumeKeyDisposition` here would make the contract
-                            # unimplementable). Surfaced through the diagnostic channel
-                            # this axis HAS — the already-open `validator.evaluate`
-                            # span — because "advisory" is not permission to drop the
-                            # condition on the floor. A BOOLEAN, never the value: the
-                            # hostile token must appear in NO payload, key or span.
-                            evaluate_span.set_attribute(
-                                "validator.escalation.supplied_instance_id_overwritten",
-                                True,
-                            )
+                            # unimplementable). "Advisory" is not permission to drop
+                            # the condition on the floor, so it IS surfaced — but the
+                            # VALUE never is: the hostile token must appear in no
+                            # payload, key, span or log line.
+                            # ROUTED OFF THE SPAN (out-of-family review round 5 [P2]).
+                            # C-OD-29's `VALIDATOR_SPAN_NAMESPACE_SCHEMA` declares
+                            # exactly THREE attributes for `validator.evaluate`
+                            # (`step.id`, `validator.outcome`,
+                            # `validator.burden_count_cumulative`); a fourth would be an
+                            # undeclared attribute minted from CP onto a CLOSED OD-owned
+                            # namespace — an H_T surface extension this leg has no
+                            # authority to make. (The two `validator.escalation.*`
+                            # attributes set a few lines above are ALREADY outside that
+                            # schema; that is pre-existing, is NOT repaired here, and is
+                            # no licence to add a third.) The logger is the same
+                            # non-raising, non-schema channel §0.7's ingress half uses.
+                            _diagnose_validator_supplied_token_overwritten(str(step.step_id))
                     if ask_user_question_surface is not None and escalation_brief is not None:
                         # Lazy import to avoid cycle (runtime → cp → runtime).
                         # GateLevel is module-level imported at line 51;
@@ -8009,20 +8074,6 @@ def _execute_parallelization(
         if _peer_resume is not None
         else {}
     )
-    # U-CP-102 / `B-71` (CP spec v1.119 §0.7) — THE INGRESS DIAGNOSTIC, sited at the
-    # resume-ADMISSION point. The token is one-way: `hitl_responses` stays
-    # exclusively `child_run_id`-keyed, so a submitted token matches no location and
-    # is counted-as-UNADDRESSED — normatively correct, and SILENT, which is the very
-    # thing §0.7's diagnosis half exists to prevent. This is the point where the
-    # RECOVERED §26.9 echoes and the SUPPLIED context actually meet, so EVERY caller
-    # reaches it — including `api.resume(..., resume_context=ResumeContext(...))`,
-    # which bypasses `AccessorDerivedResumeContext.from_pause_state` entirely (that
-    # convenience constructor was this check's first home; out-of-family review round
-    # 2 [P2] showed the public path never reaches it).
-    if resume_context is not None and resume_context.hitl_responses:
-        diagnose_token_keyed_ingress(
-            _recovered_pre_dispatch_gate_owning_tokens, resume_context.hitl_responses
-        )
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
     # (NOT consume — the HITL composer one-shot intact) the operator's resume context off the
     # holder. Per paused peer below, `_resolve_effect_fence_gated(branch_key, eligible_key)`
@@ -11973,20 +12024,6 @@ def _execute_orchestrator_workers(
         if _fan_out_resume is not None
         else {}
     )
-    # U-CP-102 / `B-71` (CP spec v1.119 §0.7) — THE INGRESS DIAGNOSTIC, sited at the
-    # resume-ADMISSION point. The token is one-way: `hitl_responses` stays
-    # exclusively `child_run_id`-keyed, so a submitted token matches no location and
-    # is counted-as-UNADDRESSED — normatively correct, and SILENT, which is the very
-    # thing §0.7's diagnosis half exists to prevent. This is the point where the
-    # RECOVERED §26.9 echoes and the SUPPLIED context actually meet, so EVERY caller
-    # reaches it — including `api.resume(..., resume_context=ResumeContext(...))`,
-    # which bypasses `AccessorDerivedResumeContext.from_pause_state` entirely (that
-    # convenience constructor was this check's first home; out-of-family review round
-    # 2 [P2] showed the public path never reaches it).
-    if resume_context is not None and resume_context.hitl_responses:
-        diagnose_token_keyed_ingress(
-            _recovered_pre_dispatch_gate_owning_tokens, resume_context.hitl_responses
-        )
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
     # (NOT consume — the HITL composer's one-shot consume stays intact, mirroring the linear path)
     # the operator's resume context off the holder. Per paused worker below,
