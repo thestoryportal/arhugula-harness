@@ -922,3 +922,33 @@ def test_rotate_next_action_is_a_no_op_when_rerun_against_its_own_output():
     twice, archive_twice = rsr.rotate_next_action(once, archive_once, "1338", "Body.")
     assert twice == once
     assert archive_twice is None
+
+
+def test_rotate_next_action_cli_refuses_to_write_over_the_hard_byte_cap(tmp_path, capsys):
+    """[P2] (codex round 4): installing an oversized body wrote every file and
+    exited 0, shipping a status file this tool's OWN validate() rejects — a
+    guaranteed red on the next run."""
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    status.write_text(SAMPLE)
+    na_archive = tmp_path / ".harness" / "roadmap-next-action-archive.md"
+    na_archive.write_text(SAMPLE_ARCHIVE)
+    before = status.read_text()
+
+    rc = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(tmp_path / "drift.md"),
+            "--rotate-next-action",
+            "x" * (rsr.HEAD_BYTE_BUDGET + 100),
+            "--pr",
+            "1338",
+        ]
+    )
+    assert rc == 2
+    assert "hard cap" in capsys.readouterr().err
+    # fail CLOSED: neither file may be written by the refused run
+    assert status.read_text() == before
+    assert na_archive.read_text() == SAMPLE_ARCHIVE

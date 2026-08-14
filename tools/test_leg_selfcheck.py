@@ -394,6 +394,9 @@ def test_register_check_hard_fails_a_new_row_with_no_current_state_bullet():
         _REGISTER_PATHS,
         report,
         detail_fn=lambda rid: (0, "### B-999 · t\n\n- **What it is.** Only background.\n"),
+        register_added={
+            ".harness/post-phase-8-forward-register.md": ["### B-999 · a brand new row"]
+        },
     )
     assert any("no `- **Current state.**` bullet" in m for m in _hard(report)), _hard(report)
 
@@ -408,6 +411,9 @@ def test_register_check_accepts_a_new_row_that_states_current_state():
             0,
             "### B-999 · t\n\n- **What it is.** Background.\n\n- **Current state.** Registered.\n",
         ),
+        register_added={
+            ".harness/post-phase-8-forward-register.md": ["### B-999 · a brand new row"]
+        },
     )
     assert _hard(report) == [], _hard(report)
 
@@ -460,3 +466,36 @@ def test_run_checked_fails_closed_on_a_failing_git_invocation():
 
     with pytest.raises(ls.BaseRefError, match="failed"):
         ls._run_checked(["git", "diff", "definitely-not-a-ref...also-not-a-ref"])
+
+
+def test_new_row_rules_apply_only_to_register_prose_additions():
+    """[P2] (codex round 4): a `### B-*` heading added in ANY markdown artifact
+    (a fork doc, say) landed in new_ids from the flattened added list, imposing
+    new-row requirements on it and calling --detail for an id that may not be in
+    the register at all."""
+    report = ls.Report()
+    ls.check_register_rows(
+        ["### B-500 · a heading in a FORK DOC, not the register"],
+        _REGISTER_PATHS,
+        report,
+        detail_fn=lambda rid: (0, "### B-500 · t\n\n- **What it is.** Background only.\n"),
+        register_added={
+            ".harness/class_2_fork_something.md": [
+                "### B-500 · a heading in a FORK DOC, not the register"
+            ]
+        },
+    )
+    assert _hard(report) == [], _hard(report)
+
+
+def test_untracked_files_are_scanned_in_uncommitted_mode():
+    """[P2] (codex round 4): `git diff HEAD` omits untracked files, so a leg that
+    CREATES an artifact and runs the pre-commit mode saw zero changed files and
+    skipped every check — and a brand-new artifact is exactly where a fresh stale
+    cite or minted label lives."""
+    tracked_only = ls.untracked_added(False)
+    assert tracked_only == {}
+    listing = ls.untracked_added(True)
+    assert isinstance(listing, dict)
+    for rel, lines in listing.items():
+        assert isinstance(rel, str) and isinstance(lines, list)

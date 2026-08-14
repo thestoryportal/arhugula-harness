@@ -667,6 +667,7 @@ def check_register_rows(
     report: Report,
     detail_fn: Callable[[str], tuple[int, str]] | None = None,
     amended: set[str] | None = None,
+    register_added: dict[str, list[str]] | None = None,
 ) -> None:
     """`--detail <ID>` renders the PROSE carrier, not the YAML `summary`.
 
@@ -680,12 +681,24 @@ def check_register_rows(
         p.endswith(("forward-register.yaml", "post-phase-8-forward-register.md")) for p in paths
     ):
         return
+    scoped = {
+        line
+        for path, lines in (register_added or {}).items()
+        if path.endswith(("forward-register.yaml", "post-phase-8-forward-register.md"))
+        for line in lines
+    } or set(added)
     ids = sorted(
-        {m.group(1) for line in added if (m := _ROW_ID_RE.match(line))} | set(amended or ())
+        {m.group(1) for line in scoped if (m := _ROW_ID_RE.match(line))} | set(amended or ())
     )
     # A row is NEW when this arc adds its prose HEADING (`### B-166 · ...`);
     # merely amending an existing row's body never re-adds that line.
-    new_ids = {m.group(1) for line in added if (m := _NEW_PROSE_HEADING_RE.match(line))}
+    new_ids = {
+        m.group(1)
+        for path, lines in (register_added or {}).items()
+        if path.endswith("post-phase-8-forward-register.md")
+        for line in lines
+        if (m := _NEW_PROSE_HEADING_RE.match(line))
+    }
     report.stats["register_rows_touched"] = len(ids)
     report.stats["register_rows_new"] = len(new_ids)
     detail = detail_fn or _detail_via_cli
@@ -733,9 +746,37 @@ def check_register_rows(
 # --- driver ------------------------------------------------------------------
 
 
+def untracked_added(uncommitted: bool) -> dict[str, list[str]]:
+    """Brand-new, not-yet-added files, as all-added lines.
+
+    `git diff HEAD` omits untracked files entirely, so a leg that CREATES an
+    artifact and runs the mode advertised for pre-commit use saw zero changed
+    files and skipped every check (codex round 4 [P2]). A new artifact is
+    exactly where a fresh stale cite or a fresh minted label lives.
+    """
+    if not uncommitted:
+        return {}
+    out: dict[str, list[str]] = {}
+    listing = _run_checked(["git", "ls-files", "--others", "--exclude-standard"])
+    for rel in listing.splitlines():
+        rel = rel.strip()
+        if not rel:
+            continue
+        full = ROOT / rel
+        if not full.is_file():
+            continue
+        try:
+            out[rel] = full.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:  # pragma: no cover
+            continue
+    return out
+
+
 def run(base: str, uncommitted: bool) -> Report:
     diff = diff_text(base, uncommitted)
     by_file = added_by_file(diff)
+    for rel, lines in untracked_added(uncommitted).items():
+        by_file.setdefault(rel, []).extend(lines)
     added = added_lines(by_file)
     paths = sorted(by_file)
     report = Report()
@@ -749,7 +790,7 @@ def run(base: str, uncommitted: bool) -> Report:
     for path, nums in changed_line_numbers(diff).items():
         if path.endswith(("forward-register.yaml", "post-phase-8-forward-register.md")):
             amended |= rows_enclosing(path, nums)
-    check_register_rows(added, paths, report, amended=amended)
+    check_register_rows(added, paths, report, amended=amended, register_added=by_file)
     return report
 
 

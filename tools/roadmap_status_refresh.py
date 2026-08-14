@@ -911,6 +911,21 @@ def main(argv: list[str] | None = None) -> int:
             text, na_archive.read_text(), args.pr, args.rotate_next_action
         )
         new_text, new_drift_archive, moved = trim_drift_log(new_text, args.archive)
+        # The hard whole-file cap is a CI gate; writing past it and printing the
+        # oversized number would ship a status file this tool's own validate()
+        # rejects — a guaranteed red on the next run (codex round 4 [P2]). Judge
+        # the transformed text BEFORE any write.
+        rotated_bytes = len(new_text.encode("utf-8"))
+        if rotated_bytes > HEAD_BYTE_BUDGET:
+            print(
+                f"--rotate-next-action would leave {args.status.name} at {rotated_bytes} B, "
+                f"over the {HEAD_BYTE_BUDGET} B hard cap (by "
+                f"{rotated_bytes - HEAD_BYTE_BUDGET} B) — refusing to write a status "
+                "file --check would reject. Shorten the body, or run --trim-drift-log "
+                "first to reclaim bytes.",
+                file=sys.stderr,
+            )
+            return 2
         if args.dry_run:
             print(
                 f"would rotate next action to post-#{args.pr.lstrip('#')} "
