@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
 import re
 import shutil
 import statistics
@@ -42,11 +43,27 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 LEDGER = REPO / ".harness" / "arc-metrics.jsonl"
 
+#: Pending captures, deliberately OUTSIDE the repo. A topic worktree is
+#: disposed at loop completion, so anything queued inside one is lost with it --
+#: and a dirty tracked file there blocks that disposal outright. See
+#: ``queue_capture``.
+QUEUE = Path(
+    os.environ.get(
+        "ARC_METRICS_QUEUE",
+        Path.home() / ".gstack" / "projects" / "arhugula-v2" / "arc-metrics-queue.jsonl",
+    )
+)
+
 # The codex CLI prints every finding TWICE -- once inline in its narrative
-# turn, once in the structured "Review comment:" block. Verified byte-for-byte
-# on a real transcript during the 2026-08-14 audit. Raw grep counts are
-# therefore halved to get true finding counts.
-CODEX_DUPLICATE_FACTOR = 2
+# turn, once in the structured block below this marker. Verified byte-for-byte
+# on a real transcript during the 2026-08-14 audit. Findings are counted as
+# DISTINCT line-anchored matches rather than halved: a halving constant is
+# wrong the moment a transcript carries an odd number of contextual mentions,
+# and it cannot tell a quoted past finding from a live one.
+FINAL_REVIEW_MARKER = "Full review comments:"
+
+#: `gh run list --commit` matches on the full object name only.
+FULL_SHA_LEN = 40
 
 
 class AbortError(RuntimeError):
@@ -154,29 +171,68 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int]]
 def count_p1(text: str) -> int:
     """True P1 count, across BOTH round-log dialects.
 
-    Codex transcripts tag findings ``[P1]`` and print each finding twice (once
-    inline, once in the structured block) -- so the bracketed count is halved.
+    Counts only findings, never prose that happens to mention a severity tag.
+    A whole-transcript ``text.count("[P1]")`` is wrong twice over: the reviewed
+    diff can quote a PAST review ("R1 -- two real [P1]s advisor missed") and a
+    skill doc can carry a literal format example, both of which then classify a
+    clean round as carrying a P1. Measured on the B-40 round-1 log, where both
+    bracketed hits were exactly that.
+
+    So: findings are anchored to line start (``- [P1] ...``, codex's own
+    emission shape) and counted as DISTINCT lines. Distinctness -- not a
+    halving constant -- is what absorbs codex printing every finding twice
+    (once inline, once in the structured block): two identical emissions of one
+    finding collapse, while two genuinely different findings do not. When the
+    structured block is present, only the LAST one is read, so an earlier
+    round quoted inside the transcript cannot leak in.
+
     Absorption commit messages write a bare ``P1 <CLAIM>`` at line start and are
     NOT duplicated. Counting only one dialect silently reports zero for the
     other, which is the 'empty vs unlooked' failure this ledger exists to avoid.
     """
-    bracketed = text.count("[P1]") // CODEX_DUPLICATE_FACTOR
-    bare = len(re.findall(r"^P1\s+\S", text, flags=re.MULTILINE))
-    return bracketed + bare
+    payload = text
+    if FINAL_REVIEW_MARKER in text:
+        payload = text.rsplit(FINAL_REVIEW_MARKER, 1)[1]
+    bracketed = {
+        line.strip() for line in re.findall(r"^\s*-?\s*\[P1\].*$", payload, flags=re.MULTILINE)
+    }
+    bare = {line.strip() for line in re.findall(r"^P1\s+\S.*$", payload, flags=re.MULTILINE)}
+    return len(bracketed) + len(bare)
 
 
 def ci_metrics(sha: str) -> tuple[int, list[float]]:
+    """CI runs for THIS commit, asked for by commit.
+
+    Scanning the latest N runs and filtering client-side cannot distinguish
+    "this commit had no runs" from "this commit is older than the window", and
+    the second one silently becomes a measured zero -- the exact absent-vs-zero
+    violation this ledger exists to prevent. Measured: 12 of the 16 backfilled
+    baseline rows recorded `derived` CI fields with zero runs under the old
+    windowed query. ``--commit`` makes an empty result mean what it says -- but
+    ONLY for a full 40-char SHA. Measured 2026-08-14: ``gh run list --commit
+    <abbrev>`` returns ``[]`` for a commit whose runs plainly exist, so an
+    abbreviated SHA would reintroduce the silent zero through the very query
+    meant to remove it.
+    """
+    if len(sha) != FULL_SHA_LEN:
+        raise AbortError(
+            f"ci runs: need a full {FULL_SHA_LEN}-char SHA, got {len(sha)} chars "
+            f"({sha!r}) -- gh returns an empty set for an abbreviated commit, "
+            "which would be recorded as a measured zero"
+        )
     raw = run(
         [
             "gh",
             "run",
             "list",
+            "--commit",
+            sha,
             "--limit",
-            "40",
+            "100",
             "--json",
             "headSha,createdAt,updatedAt,conclusion,event",
         ],
-        what=f"gh run list for {sha[:8]}",
+        what=f"gh run list --commit {sha[:8]}",
     )
     runs = json.loads(raw)
     hit = [r for r in runs if str(r.get("headSha", "")).startswith(sha[:12])]
@@ -257,6 +313,17 @@ def extract(args: argparse.Namespace) -> ArcRow:
 
 
 def append(row: ArcRow) -> None:
+    # An arc is not an arc until it merged. Appending a pre-merge row would
+    # persist null merge fields AND burn the arc_id, so the duplicate guard
+    # below would then reject the correct post-merge capture -- turning a
+    # mistyped PR number into manual ledger surgery. Refuse instead; --dry-run
+    # stays available for inspecting a row before merge.
+    if not row.merged_at or not row.merge_sha:
+        raise AbortError(
+            f"{row.arc_id}: refusing to append an unmerged arc "
+            f"(merged_at={row.merged_at!r}, merge_sha={row.merge_sha!r}) -- "
+            "capture after merge, or use --dry-run to inspect"
+        )
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
     existing = read_ledger()
     if any(r.get("arc_id") == row.arc_id for r in existing):
@@ -266,6 +333,100 @@ def append(row: ArcRow) -> None:
         )
     with LEDGER.open("a") as fh:
         fh.write(json.dumps(asdict(row), sort_keys=True) + "\n")
+
+
+def queue_capture(args: argparse.Namespace) -> int:
+    """Record an arc's capture inputs OUTSIDE the repo, for a later drain.
+
+    Capture runs at arc closure, when the merge SHA finally exists -- but that
+    is the worst moment to write into the tracked ledger. In an autonomous arc
+    the closure step runs inside the topic worktree, and a dirty tracked file
+    there both strands the row when the worktree is disposed and blocks the
+    disposal itself (worktree GC skips a merged worktree carrying local state,
+    while loop completion requires that worktree to be unregistered).
+
+    Committing straight to `main` is no better: before the terminating refresh
+    the drift guard hard-fails the push, and after it the next local preflight
+    hard-fails instead, demanding yet another refresh.
+
+    So closure writes nothing to the repo. It queues the arc's inputs -- above
+    all the DECLARED judgements (arc type, decision count, active levers) that
+    only the session which ran the arc can supply -- to a durable path outside
+    any worktree. The next arc drains the queue and commits the rows inside its
+    own PR, which is an ordinary content commit with none of the above problems.
+    """
+    QUEUE.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "pr": args.pr,
+        "arc_id": args.arc_id,
+        "arc_type": args.arc_type,
+        "decisions": args.decisions,
+        "round_logs": args.round_logs or [],
+        "levers": args.levers or [],
+        "notes": args.notes or "",
+        "queued_at": datetime.now(tz=UTC).isoformat(),
+    }
+    with QUEUE.open("a") as fh:
+        fh.write(json.dumps(entry, sort_keys=True) + "\n")
+    print(f"queued arc capture for #{args.pr} -> {QUEUE}")
+    return 0
+
+
+def read_queue() -> list[dict]:
+    if not QUEUE.exists():
+        return []
+    out = []
+    for n, line in enumerate(QUEUE.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise AbortError(f"queue line {n} is not valid JSON: {exc}") from exc
+    return out
+
+
+def drain(_args: argparse.Namespace) -> int:
+    """Fold every queued arc into the tracked ledger.
+
+    Entries that are already in the ledger are dropped rather than re-appended;
+    an entry whose capture still fails is KEPT queued, so a transient gh outage
+    costs a retry rather than the row.
+    """
+    pending = read_queue()
+    if not pending:
+        print("arc-metrics queue is empty -- nothing to drain")
+        return 0
+
+    known = {r.get("arc_id") for r in read_ledger()}
+    kept: list[dict] = []
+    added = 0
+    for entry in pending:
+        arc_id = entry.get("arc_id") or f"pr-{entry['pr']}"
+        if arc_id in known:
+            print(f"  {arc_id}: already in ledger, dropping from queue")
+            continue
+        args = argparse.Namespace(
+            pr=entry["pr"],
+            arc_id=entry.get("arc_id"),
+            arc_type=entry.get("arc_type"),
+            decisions=entry.get("decisions"),
+            round_logs=entry.get("round_logs") or None,
+            levers=entry.get("levers"),
+            notes=entry.get("notes", ""),
+        )
+        try:
+            append(extract(args))
+        except AbortError as exc:
+            print(f"  {arc_id}: KEPT QUEUED -- {exc}", file=sys.stderr)
+            kept.append(entry)
+            continue
+        print(f"  {arc_id}: appended")
+        added += 1
+
+    QUEUE.write_text("".join(json.dumps(e, sort_keys=True) + "\n" for e in kept))
+    print(f"drained {added} arc(s); {len(kept)} still queued")
+    return 0
 
 
 def read_ledger() -> list[dict]:
@@ -291,6 +452,22 @@ def fmt_span(vals: list[float], unit: float = 60.0, suffix: str = "m") -> str:
     return f"{med:.1f}{suffix} (n={len(v)}, {v[0]:.1f}-{v[-1]:.1f})"
 
 
+def arc_duration(row: dict) -> float | None:
+    """The arc: first review activity -> merge, falling back to the PR window.
+
+    NOT ``createdAt -> mergedAt``. The review loop largely runs on the branch
+    BEFORE the PR opens, so the PR window can understate an arc by 44x (#1337:
+    6.1m open vs 269.2m real) or 58x (#1115: 2.8m vs 161.4m). It also runs the
+    other way when a merged PR simply sat open (#1060: 548.2m open vs 44.4m of
+    actual arc). Reporting the PR window as "arc wall clock" would have made
+    the baseline cohort -- the whole point of this ledger -- meaningless.
+
+    ``arc_span_s`` needs round data. Where none survives, the PR window stands
+    in and ``summary`` prints how many rows are on that weaker footing.
+    """
+    return row.get("arc_span_s") or row.get("total_arc_wall_s")
+
+
 def summary(_args: argparse.Namespace) -> int:
     rows = read_ledger()
     if not rows:
@@ -306,11 +483,19 @@ def summary(_args: argparse.Namespace) -> int:
         if not cohort:
             continue
         print(f"-- {label} (n={len(cohort)}) " + "-" * (46 - len(label)))
-        arcs = [r["total_arc_wall_s"] for r in cohort if r.get("total_arc_wall_s")]
+        arcs = [d for d in (arc_duration(r) for r in cohort) if d]
+        pr_window_only = sum(
+            1 for r in cohort if not r.get("arc_span_s") and r.get("total_arc_wall_s")
+        )
         rounds = [r["review_rounds"] for r in cohort if r.get("review_rounds")]
         allgaps = [g for r in cohort for g in (r.get("round_wall_s") or [])]
         adds = [r["additions"] for r in cohort if r.get("additions") is not None]
         print(f"  arc wall clock   {fmt_span(arcs)}          [stochastic]")
+        if pr_window_only:
+            print(
+                f"     ^ {pr_window_only}/{len(cohort)} of these are the PR window only "
+                "(no round data); the PR window is not the arc"
+            )
         print(f"  round wall clock {fmt_span(allgaps)}          [stochastic]")
         print(
             f"  review rounds    "
@@ -369,6 +554,19 @@ def main(argv: list[str] | None = None) -> int:
     ex.add_argument("--notes", default="")
     ex.add_argument("--dry-run", action="store_true")
     ex.set_defaults(func=cmd_extract)
+
+    q = sub.add_parser("queue", help="record capture inputs out-of-repo (arc closure)")
+    q.add_argument("--pr", type=int, required=True)
+    q.add_argument("--arc-id")
+    q.add_argument("--arc-type", choices=["inventing", "applying"])
+    q.add_argument("--decisions", type=int, help="independent decision count")
+    q.add_argument("--round-logs", nargs="*", help="glob(s) for this arc's round logs")
+    q.add_argument("--levers", nargs="*", help="levers live during this arc")
+    q.add_argument("--notes", default="")
+    q.set_defaults(func=queue_capture)
+
+    dr = sub.add_parser("drain", help="fold queued arcs into the ledger (next arc's PR)")
+    dr.set_defaults(func=drain)
 
     sm = sub.add_parser("summary", help="per-cohort medians with range")
     sm.set_defaults(func=summary)

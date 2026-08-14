@@ -313,35 +313,51 @@ null `refresh_commit`, a `main_ci.conclusion` that is not `success`, or
 
 ## Arc-metrics capture — after the exit report (B-170)
 
-One row per arc at `.harness/arc-metrics.jsonl`, appended **after** the exit report above.
-It runs last because `merged_at` and the merge SHA do not exist before merge, and a row is
-never emitted with a field guessed. Skip it on a terminating roadmap-status refresh
-(§12.2.1) — a refresh is not an arc. Run:
+Capture is two steps that deliberately sit in **different arcs**: this arc *queues* its
+inputs, the next arc *folds* them into the ledger. Skip both on a terminating
+roadmap-status refresh (§12.2.1) — a refresh is not an arc.
+
+**Step 1 — queue, at closure (writes NOTHING to the repo).** After the exit report above,
+because `merged_at` and the merge SHA do not exist before merge:
 
 ```
-just arc-metrics extract --pr <NNN> --arc-type <inventing|applying> --decisions <N> \
+just arc-metrics queue --pr <NNN> --arc-type <inventing|applying> --decisions <N> \
   --round-logs '<glob for THIS arc's round logs>' --levers <lever-ids-or-omit>
 ```
 
+This appends one line to a queue **outside** the repo. That placement is load-bearing, not
+tidiness: in an autonomous arc this step runs inside the topic worktree, and writing the
+tracked ledger there would leave a dirty file that both strands the row when the worktree is
+disposed and *blocks the disposal itself* — worktree GC skips a merged worktree carrying
+local state, while loop completion requires that worktree to be unregistered. Committing
+straight to `main` instead is no escape: before the terminating refresh the drift guard
+hard-fails the push, and after it the next local preflight hard-fails and demands another
+refresh.
+
 `--arc-type`, `--decisions` and `--levers` are **declared** judgements — the tool records
-them as such and never infers them. Omitting `--levers` records the empty baseline cohort
-`[]`, which is a claim in itself: it says no wall-clock lever was live. Do not pass it
-loosely, because every efficacy comparison B-171..B-174 makes is a cohort split on that
-field. `--round-logs` fails closed: zero matched files aborts rather than recording
-`0 rounds`, so "could not look" never becomes "looked and found nothing". Re-running is
-safe — a duplicate `arc_id` is refused rather than double-appended.
+them as such and never infers them, and this session is the only one that knows them, which
+is precisely why they are queued rather than reconstructed later. Omitting `--levers`
+records the empty baseline cohort `[]`, which is a claim in itself: it says no wall-clock
+lever was live. Do not pass it loosely — every efficacy comparison B-171..B-174 makes is a
+cohort split on that field.
 
-**Where the row gets committed.** The ledger is tracked, so the append leaves one
-uncommitted file. It **cannot** go in the terminating refresh commit: §12.2.1 verifies a
-refresh by its exact file set, and a second path there breaks that shape and hard-fails the
-next CI drift check. Stage it explicitly into the **next** arc's PR (`git add
-.harness/arc-metrics.jsonl` — never `git add -A`). If the next PR is a doc-only sweep the
-row is still fine: `.harness/*.jsonl` is not `harness-*/src|tests`, so it does not drag the
-diff through the 3-lens merge-gate.
+**Step 2 — drain, inside the NEXT arc's PR.** Early in the next arc, before opening its PR:
 
-Read the appended row before moving on. A `provenance` value beginning `unmapped:` means
-that field had no input — it is an honest null, not a measured zero, and a lever must never
-be evaluated against it.
+```
+just arc-metrics drain
+```
+
+This folds every queued arc into `.harness/arc-metrics.jsonl` as an ordinary tracked change,
+committed inside that arc's own PR (`git add .harness/arc-metrics.jsonl` — never
+`git add -A`). It is safe to re-run: an arc already in the ledger is dropped from the queue
+rather than duplicated, and an entry whose capture fails stays queued for retry rather than
+being lost. A doc-only sweep can still carry the row — `.harness/*.jsonl` is not
+`harness-*/src|tests`, so it does not drag the diff through the 3-lens merge-gate.
+
+Read the folded rows before moving on. `--round-logs` fails closed (zero matched files
+aborts rather than recording `0 rounds`), and a `provenance` value beginning `unmapped:`
+means that field had no input — an honest null, not a measured zero. A lever must never be
+evaluated against one.
 
 ## Notes
 

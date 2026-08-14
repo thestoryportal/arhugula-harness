@@ -218,7 +218,11 @@ roadmap-status-check:
 # Fields carry provenance (derived / declared / unmapped) — an absent measurement
 # is never recorded as a measured zero. Summary reports medians WITH RANGE:
 # measured round variance is ~5x, so a bare mean misleads.
-#   just arc-metrics extract --pr 1340 --arc-type applying --decisions 1
+# Capture is split across two arcs so no topic worktree is ever left dirty:
+# `queue` (at arc closure) writes only OUTSIDE the repo, `drain` (early in the
+# next arc) folds the queued rows into the tracked ledger inside that arc's PR.
+#   just arc-metrics queue --pr 1340 --arc-type applying --decisions 1
+#   just arc-metrics drain
 #   just arc-metrics summary
 arc-metrics *ARGS:
     uv run python tools/arc_metrics.py "$@"
