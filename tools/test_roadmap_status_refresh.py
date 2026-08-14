@@ -1100,3 +1100,71 @@ def test_trim_drift_log_refuses_to_write_over_the_hard_byte_cap(tmp_path, capsys
     assert rc == 2
     assert "hard cap" in capsys.readouterr().err
     assert status.read_text() == before, "must fail CLOSED"
+
+
+# --- out-of-family review round 11: the PR-compatible split ------------------
+
+
+def test_archive_current_next_action_never_touches_the_status_file(tmp_path, capsys):
+    """[P1] (codex round 11): a rotation writing BOTH files can never transit a
+    PR — bundled with the refresh, the PR's base..head diff includes the archive
+    so the §12.2.1 shape gate rejects a refresh-prefixed title; titled otherwise
+    the squash merge is non-terminating and reds main. Split, each step is
+    individually guard-clean."""
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    status.write_text(SAMPLE)
+    na = tmp_path / ".harness" / "roadmap-next-action-archive.md"
+    na.write_text(SAMPLE_ARCHIVE)
+
+    rc = rsr.main(["--status", str(status), "--archive-current-next-action"])
+    assert rc == 0, capsys.readouterr()
+    assert status.read_text() == SAMPLE, "the archive step must NOT touch roadmap_status.md"
+    assert "**Prior next action (post-#1).**" in na.read_text()
+
+    # idempotent
+    rc2 = rsr.main(["--status", str(status), "--archive-current-next-action"])
+    assert rc2 == 0
+    assert na.read_text().count("**Prior next action (post-#1).**") == 1
+
+
+def test_refresh_installs_the_next_action_in_the_same_single_file_write(tmp_path, capsys):
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    status.write_text(SAMPLE)
+    (tmp_path / ".harness" / "roadmap-next-action-archive.md").write_text(SAMPLE_ARCHIVE)
+    archive = tmp_path / "drift.md"
+
+    rc = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(archive),
+            "--refresh",
+            "--pr",
+            "PR #1338",
+            "--date",
+            "2026-08-14",
+            "--notes",
+            "shipped",
+            "--next-action",
+            "The prevention arc is landed; next is the B-71 impl leg.",
+        ]
+    )
+    assert rc == 0, capsys.readouterr()
+    written = status.read_text()
+    assert "**Current next action (post-#1338).** The prevention arc is landed;" in written
+    assert written.count("**Current next action (") == 1
+    assert not archive.exists(), "the terminating refresh must stay a ONE-FILE write"
+    hard = [v for v in rsr.validate(written, status) if not v.startswith(rsr.INFORMATIONAL_PREFIX)]
+    assert hard == [], hard
+
+
+def test_install_next_action_rejects_empty_multiparagraph_and_bad_pr():
+    with pytest.raises(rsr.RoadmapStatusError, match="non-empty body"):
+        rsr.install_next_action(SAMPLE, "1338", "  ")
+    with pytest.raises(rsr.RoadmapStatusError, match="SINGLE paragraph"):
+        rsr.install_next_action(SAMPLE, "1338", "a\n\nb")
+    with pytest.raises(rsr.RoadmapStatusError, match="not a PR number"):
+        rsr.install_next_action(SAMPLE, "nope", "body")

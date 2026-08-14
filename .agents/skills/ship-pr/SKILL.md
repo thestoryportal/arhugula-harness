@@ -113,20 +113,19 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
    `main` that touches it without being a *verified* terminating refresh satisfies
    neither guard exception (`_lag_expected` wants the refresh shape; `_owed_lag` requires
    HEAD *not* to touch the file), so main CI hard-fails `ROADMAP_STATUS_DRIFT`.
-4. Rotate the next action with the TOOL, never by hand — hand-editing it is what
-   reddened `main` on 2026-08-13 (the anchor kept a `git_head` two commits back):
-   `python3 tools/roadmap_status_refresh.py --rotate-next-action "<new pointer prose>"
-   --pr "<N>"`. It demotes the live paragraph into
-   `.harness/roadmap-next-action-archive.md` and installs the new one. It writes MORE
-   THAN ONE FILE, so it is a CONTENT commit — pair it with the terminating refresh in
-   ONE push so CI evaluates the refresh commit as HEAD.
-5. Run `python3 tools/roadmap_status_refresh.py --refresh --pr "PR #<N>" --date
-   <YYYY-MM-DD> --notes "<summary>"`, then `--check`. `--refresh` REFUSES to write a
-   second file rather than silently producing a two-file commit; if it says a drift-log
-   trim is owed, run `--trim-drift-log` as the preceding commit in that same push — and
-   if the overflow comes from a NEW drift event, pass it to that content step
-   (`--trim-drift-log --drift-source ... --drift-resolution ... --date ...`), since
-   pre-trimming cannot help with a row that does not exist yet.
+4. Archive the superseded round FIRST, as its own one-file step:
+   `python3 tools/roadmap_status_refresh.py --archive-current-next-action`.
+   It writes ONLY `.harness/roadmap-next-action-archive.md` and never touches
+   `roadmap_status.md`, so it transits a PR cleanly (`_owed_lag` covers it).
+5. Then run the terminating refresh, which installs the new pointer AND refreshes
+   the anchor in ONE single-file write:
+   `python3 tools/roadmap_status_refresh.py --refresh --pr "PR #<N>" --date
+   <YYYY-MM-DD> --notes "<summary>" --next-action "<new pointer prose>"`, then
+   `--check`. NEVER hand-edit the next action -- that is what reddened `main` on
+   2026-08-13. `--refresh` REFUSES to write a second file; if it says a drift-log
+   trim is owed, run `--trim-drift-log` as its own step, and if the overflow comes
+   from a NEW drift event pass it there
+   (`--trim-drift-log --drift-source ... --drift-resolution ... --date ...`).
 6. Land the terminating refresh as the immediate next commit/PR. Its title starts exactly
    `ops: roadmap status refresh ` and its closed changed-file set is only
    `.harness/roadmap_status.md`. Do not recurse on a terminating refresh.

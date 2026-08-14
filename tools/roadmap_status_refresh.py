@@ -363,6 +363,65 @@ def trim_drift_log(
 # --- Next-action rotation (the relief valve `--refresh` structurally cannot be) --
 
 
+def archive_current_next_action(text: str, archive_text: str) -> str | None:
+    """Append the live `**Current next action**` paragraph to the archive,
+    relabelled `Prior`, WITHOUT touching the status file. Returns the new archive
+    text, or None if it is already archived (idempotent).
+
+    This split is what makes the workflow PR-compatible (codex round 11 [P1]).
+    A rotation that wrote BOTH files could never transit a PR: bundled with the
+    refresh, the PR's base..head diff includes the archive, so the §12.2.1 shape
+    gate rejects a refresh-prefixed title; titled otherwise, the squash merge is
+    non-terminating and reds `main`. Split, both steps are individually clean —
+    this one touches only the archive (so `_owed_lag` applies), and the
+    terminating refresh touches only `roadmap_status.md` (so `_lag_expected`
+    applies).
+    """
+    m = _CURRENT_PARAGRAPH_RE.search(text)
+    if m is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_HEADING}: no `**Current next action (post-#NNN).**` paragraph to archive"
+        )
+    demoted = m.group(0).replace("**Current next action", "**Prior next action", 1)
+    if demoted.strip() in archive_text:
+        return None
+    ins = _ARCHIVE_INSERT_RE.search(archive_text)
+    if ins is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_ARCHIVE.name}: no `---` header rule found — cannot "
+            "determine the most-recent-first insertion point"
+        )
+    at = ins.end()
+    return archive_text[:at] + demoted.strip() + "\n\n" + archive_text[at:]
+
+
+def install_next_action(text: str, pr_ref: str, body: str) -> str:
+    """Replace the live pointer paragraph. STATUS FILE ONLY — safe inside the
+    single-file terminating refresh."""
+    m = _CURRENT_PARAGRAPH_RE.search(text)
+    if m is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_HEADING}: no `**Current next action (post-#NNN).**` paragraph to replace"
+        )
+    digits = re.fullmatch(r"(?:PR\s*)?#?\s*(\d+)", pr_ref.strip(), re.IGNORECASE)
+    if not digits:
+        raise RoadmapStatusError(
+            f"--pr {pr_ref!r} is not a PR number — expected `1234`, `#1234` or `PR #1234`"
+        )
+    if "\n\n" in body.strip():
+        raise RoadmapStatusError(
+            "--next-action body must be a SINGLE paragraph (no blank lines) — the "
+            "live pointer is one paragraph, and only the first would ever be archived"
+        )
+    if not body.strip():
+        raise RoadmapStatusError(
+            "--next-action requires a non-empty body — refusing to install an empty "
+            "next-action pointer (an empty frontier passes --check silently)"
+        )
+    new_paragraph = f"**Current next action (post-#{digits.group(1)}).** {body.strip()}"
+    return text[: m.start()] + new_paragraph + text[m.end() :]
+
+
 def rotate_next_action(
     text: str, archive_text: str, pr_ref: str, body: str
 ) -> tuple[str, str | None]:
@@ -794,6 +853,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--trim-drift-log", action="store_true", help="cap+archive drift log only")
     ap.add_argument(
+        "--archive-current-next-action",
+        action="store_true",
+        help="append the live Current next-action paragraph to the next-action "
+        "archive as Prior. Writes ONLY the archive, so it transits a PR cleanly "
+        "and never touches roadmap_status.md. Pair with `--refresh --next-action`",
+    )
+    ap.add_argument(
+        "--next-action",
+        metavar="BODY",
+        help="with --refresh: install BODY as the new Current next-action pointer "
+        "in the SAME single-file write (requires --pr)",
+    )
+    ap.add_argument(
         "--rotate-next-action",
         metavar="BODY",
         help="demote the live Current next-action paragraph into the next-action "
@@ -946,6 +1018,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"moved {moved} row(s) to {args.archive}")
         return 0
 
+    if args.archive_current_next_action:
+        na_archive = status_root / ".harness" / "roadmap-next-action-archive.md"
+        if not na_archive.is_file():
+            print(f"next-action archive not found: {na_archive}", file=sys.stderr)
+            return 2
+        new_archive = archive_current_next_action(text, na_archive.read_text())
+        if new_archive is None:
+            print("next-action round already archived — no change")
+            return 0
+        if args.dry_run:
+            print(f"would archive the live round to {na_archive.name}")
+            return 0
+        na_archive.write_text(new_archive)
+        print(
+            f"archived the live round to {na_archive.name} "
+            f"(ONE file; {args.status.name} untouched — now run "
+            "`--refresh --next-action ...` as the terminating refresh)"
+        )
+        return 0
+
     if args.rotate_next_action is not None:
         if not args.pr:
             ap.error("--rotate-next-action requires --pr")
@@ -1012,6 +1104,8 @@ def main(argv: list[str] | None = None) -> int:
         new_text = refresh_anchor(text, state, args.git_head_note, last_refreshed)
         new_text = refresh_in_flight(new_text, state)
         new_text = prepend_recently_completed(new_text, args.pr, args.date, args.notes)
+        if args.next_action is not None:
+            new_text = install_next_action(new_text, args.pr, args.next_action)
         if args.drift_source:
             new_text = prepend_drift_log(
                 new_text, args.date, args.drift_source, args.drift_resolution or ""

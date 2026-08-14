@@ -110,22 +110,36 @@ This is the step most often done wrong. After the PR merges:
    and installs the new one. That is why the archive relief valve was previously
    unreachable from inside a refresh and the head saturated to 64 B of headroom.
 
-   **It writes MORE THAN ONE FILE — and the commit shape matters, because getting
-   it wrong reds `main`.** A commit on `main` that touches `roadmap_status.md`
-   without being a *verified* terminating refresh satisfies NEITHER guard
-   exception (`_lag_expected` wants the refresh shape; `_owed_lag` requires HEAD
-   *not* to touch the file), so `main`'s post-merge CI hard-fails
-   `ROADMAP_STATUS_DRIFT`. So:
+   **The rotation is SPLIT into two steps, and that split is load-bearing.** A
+   single mode writing both files can never transit a PR: bundled with the
+   refresh, the PR's base..head diff includes the archive so the §12.2.1 shape
+   gate rejects a refresh-prefixed title; titled otherwise, the squash merge is
+   non-terminating and reds `main`. Each step is individually guard-clean:
 
-   - **Never** put a `roadmap_status.md` edit in a substantive content PR. Land
-     the content PR without it.
-   - After the merge, make the rotation/trim and the terminating refresh **two
-     commits in ONE push**, so CI evaluates the *refresh* commit as HEAD:
-     `git push` once, with the rotate/trim commit first and the
-     `ops: roadmap status refresh ` commit last.
-   - `--refresh` REFUSES to write a second file rather than silently producing a
-     two-file commit; if it says a drift-log trim is owed, run `--trim-drift-log`
-     as the preceding commit in that same push.
+   1. **Archive step — one file, NOT `roadmap_status.md`:**
+      ```
+      just roadmap-status --archive-current-next-action
+      ```
+      appends the live round to `.harness/roadmap-next-action-archive.md` as
+      `Prior`. Because it never touches `roadmap_status.md`, `_owed_lag` covers it.
+   2. **Terminating refresh — one file, `roadmap_status.md` only:**
+      ```
+      just roadmap-status --refresh --pr "PR #<NNN>" --date <YYYY-MM-DD> \
+        --notes "<what shipped>" --next-action "<new pointer prose, ONE paragraph>"
+      ```
+      installs the new pointer AND refreshes the anchor in the SAME single-file
+      write, so `_lag_expected` covers it.
+
+   **Never put a `roadmap_status.md` edit in a substantive content PR.** A commit
+   on `main` touching it without being a verified terminating refresh satisfies
+   neither guard exception, and `main`'s post-merge CI hard-fails
+   `ROADMAP_STATUS_DRIFT`.
+
+   `--refresh` REFUSES to write a second file rather than silently producing a
+   two-file commit; if it says a drift-log trim is owed, run `--trim-drift-log`
+   as its own step — and if the overflow comes from a NEW drift event, pass it
+   there (`--trim-drift-log --drift-source ... --drift-resolution ... --date ...`),
+   since pre-trimming cannot help with a row that does not exist yet.
 
    Both `--check` and `--refresh` print the remaining byte headroom. The
    drift-log byte budget is INFORMATIONAL (the hard cap is the whole-file

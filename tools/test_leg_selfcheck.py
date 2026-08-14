@@ -729,3 +729,47 @@ def test_minted_labels_are_queried_only_within_their_own_family(tmp_path):
     )
     sibling_msgs = [f.message for f in report.findings if "sibling" in f.message]
     assert not any("Runtime" in m for m in sibling_msgs), sibling_msgs
+
+
+# --- out-of-family review round 11 ------------------------------------------
+
+
+def test_body_only_edits_to_two_rows_resolve_to_their_own_rows(tmp_path, monkeypatch):
+    """[P2] (codex round 11): two EXISTING register rows given body-only edits
+    contribute no heading to the added set, so both rows' claims collapsed onto
+    one `(unattributed in file)` subject and HARD-blocked perfectly valid
+    per-row counts."""
+    monkeypatch.setattr(ls, "ROOT", tmp_path)
+    reg = tmp_path / ".harness"
+    reg.mkdir()
+    f = reg / "post-phase-8-forward-register.md"
+    f.write_text(
+        "### B-900 · first\n"
+        "- **What it is.** It touches 3 sites.\n"
+        "### B-901 · second\n"
+        "- **What it is.** It touches 9 sites.\n"
+    )
+    added = {
+        ".harness/post-phase-8-forward-register.md": [
+            "- **What it is.** It touches 3 sites.",
+            "- **What it is.** It touches 9 sites.",
+        ]
+    }
+    positions = {
+        ".harness/post-phase-8-forward-register.md": [
+            (2, added[".harness/post-phase-8-forward-register.md"][0]),
+            (4, added[".harness/post-phase-8-forward-register.md"][1]),
+        ]
+    }
+    report = ls.Report()
+    ls.check_counts(added, report, None, positions)
+    assert _hard(report) == [], _hard(report)
+
+
+def test_enclosing_row_at_resolves_by_position(tmp_path, monkeypatch):
+    monkeypatch.setattr(ls, "ROOT", tmp_path)
+    d = tmp_path / ".harness"
+    d.mkdir()
+    (d / "x.md").write_text("### B-900 · first\nbody\n### B-901 · second\nbody\n")
+    assert ls.enclosing_row_at(".harness/x.md", 2) == "B-900"
+    assert ls.enclosing_row_at(".harness/x.md", 4) == "B-901"

@@ -176,6 +176,53 @@ def added_by_file(diff: str) -> dict[str, list[str]]:
     return dict(out)
 
 
+def added_with_positions(diff: str) -> dict[str, list[tuple[int, str]]]:
+    """Added lines with their new-file line numbers.
+
+    Needed because two EXISTING register rows given body-only edits contribute no
+    heading to the added set, so both rows' claims collapsed onto one
+    `(unattributed in file)` subject and produced a HARD disagreement on
+    perfectly valid per-row counts (codex round 11 [P2]). Positions let each
+    added line resolve to its enclosing row in the full file.
+    """
+    out: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    current: str | None = None
+    lineno = 0
+    for ln in diff.splitlines():
+        m = re.match(r"^\+\+\+ b/(.+)$", ln)
+        if m:
+            current = m.group(1)
+            out.setdefault(current, [])
+            continue
+        h = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", ln)
+        if h:
+            lineno = int(h.group(1))
+            continue
+        if current is None:
+            continue
+        if ln.startswith("+") and not ln.startswith("+++"):
+            out[current].append((lineno, ln[1:]))
+            lineno += 1
+        elif ln.startswith(" "):
+            lineno += 1
+    return dict(out)
+
+
+def enclosing_row_at(path: str, lineno: int) -> str | None:
+    """The register/plan row whose block encloses `lineno`, read from HEAD."""
+    full = ROOT / path
+    if not full.is_file():
+        return None
+    best: str | None = None
+    for i, line in enumerate(full.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        if i > lineno:
+            break
+        m = _ROW_ID_RE.match(line) or _UNIT_HEADING_RE.match(line)
+        if m:
+            best = m.group(1)
+    return best
+
+
 def context_by_file(diff: str) -> dict[str, list[str]]:
     """Unchanged CONTEXT lines, grouped by file.
 
@@ -498,6 +545,7 @@ def check_counts(
     by_file: dict[str, list[str]],
     report: Report,
     context: dict[str, list[str]] | None = None,
+    positions: dict[str, list[tuple[int, str]]] | None = None,
 ) -> None:
     """Detect DISAGREEMENT between count claims, which is the actual defect.
 
@@ -533,14 +581,24 @@ def check_counts(
         round 10 [P2]). Track the nearest preceding row/unit heading instead.
         """
         out: list[tuple[str, str, str]] = []
+        pos_map = positions or {}
         for path, lines in source.items():
             if not _eligible(path):
                 continue
+            by_text = {text: ln for ln, text in pos_map.get(path, [])}
             enclosing = f"(unattributed in {path})"
             for line in lines:
                 m = _ROW_ID_RE.match(line) or _UNIT_HEADING_RE.match(line)
                 if m:
                     enclosing = m.group(1)
+                else:
+                    # A body-only edit contributes no heading, so resolve the
+                    # enclosing row from the file at HEAD by POSITION.
+                    at = by_text.get(line)
+                    if at is not None:
+                        resolved = enclosing_row_at(path, at)
+                        if resolved:
+                            enclosing = resolved
                 out.append((path, enclosing, line))
         return out
 
@@ -795,6 +853,7 @@ def check_register_rows(
     amended: set[str] | None = None,
     register_added: dict[str, list[str]] | None = None,
     base_ids: set[str] | None = None,
+    uncommitted: bool = False,
 ) -> None:
     """`--detail <ID>` renders the PROSE carrier, not the YAML `summary`.
 
@@ -835,6 +894,28 @@ def check_register_rows(
     report.stats["register_rows_touched"] = len(ids)
     report.stats["register_rows_new"] = len(new_ids)
     detail = detail_fn or _detail_via_cli
+    # `--detail` renders the WORKING TREE, while a normal run diffs committed
+    # HEAD. A committed YAML-only row with an uncommitted prose fix therefore
+    # reported OK, and the push still shipped the heading-only committed row
+    # (codex round 11 [P2]). Fail closed on that mismatch rather than validating
+    # content the push will not carry.
+    if ids and detail_fn is None and not uncommitted:
+        dirty = [
+            line[3:].strip()
+            for line in _run(["git", "status", "--porcelain"]).splitlines()
+            if line[3:]
+            .strip()
+            .endswith(("forward-register.yaml", "post-phase-8-forward-register.md"))
+        ]
+        if dirty:
+            report.add(
+                "register",
+                HARD,
+                f"register carrier(s) have UNCOMMITTED changes ({', '.join(dirty)}) but "
+                "this run judges committed HEAD — `--detail` would validate prose the "
+                "push will not carry. Commit them, or re-run with --uncommitted.",
+            )
+            return
     for rid in ids:
         rc, stdout = detail(rid)
         body = [ln for ln in stdout.splitlines() if ln.strip() and not ln.startswith("###")]
@@ -933,7 +1014,7 @@ def run(base: str, uncommitted: bool) -> Report:
     report.stats["changed_files"] = len(paths)
     report.stats["added_lines"] = len(added)
     check_cites(by_file, report)
-    check_counts(by_file, report, context_by_file(diff))
+    check_counts(by_file, report, context_by_file(diff), added_with_positions(diff))
     check_label_collisions(by_file, report)
     amended: set[str] = set()
     for path, nums in changed_line_numbers(diff).items():
@@ -946,6 +1027,7 @@ def run(base: str, uncommitted: bool) -> Report:
         amended=amended,
         register_added=by_file,
         base_ids=register_ids_at(base),
+        uncommitted=uncommitted,
     )
     return report
 
