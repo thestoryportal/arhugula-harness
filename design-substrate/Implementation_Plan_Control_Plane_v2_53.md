@@ -40,14 +40,22 @@ surface, and the seam to the Runtime minter is a co-land pin rather than a share
 | **Co-land pin** | **U-RT-155** (Runtime plan v2.63). A PIN, not a DAG edge — see §0.4 |
 | **Level** | terminal within its cluster; introduces no new DAG node upstream of any landed unit |
 
-**Files (CP-owned surface only).** The five carrier declarations, and nothing else. The
-Runtime-owned minter, the `compose_hitl_action_id` fold and **the `payload_body` emission
-itself** are NOT this unit's files — they are U-RT-155's, per Runtime spec v1.121. The
-emitter is `project_brief_to_payload`, which is Runtime-owned, so assigning the keys to
-both units would give two units overlapping ownership of one surface and make their
-completion evidence ambiguous. **U-CP-102 owns the VALUES the keys carry** (the contract
-at spec §0.6 — which vocabulary, what each key may and may not say); **U-RT-155 owns their
-EMISSION** (AC 9).
+**Files — the five carrier declarations AND the CP-side wiring its own criteria require.**
+A first draft of this line said "declarations, and nothing else", which out-of-family review
+showed contradicts the unit's own acceptance criteria: AC 11 changes **both**
+`workflow_driver.py` snapshot builders (the mint-to-snapshot write and the carried-forward
+preservation), AC 13 populates the pause-state projection, and AC 14 sanitizes the
+validator-supplied brief at the CP acceptance seam. Scoping the unit to declarations alone
+would permit an implementation that declares five fields and never persists, projects or
+sanitizes the token — every criterion unowned by any file. Those wiring sites are in scope.
+
+What is NOT in scope: the Runtime-owned minter, the `compose_hitl_action_id` fold, and the
+`payload_body` **emission** — they are U-RT-155's, per Runtime spec v1.121. The emitter is
+`project_brief_to_payload`, which is Runtime-owned, so assigning the keys to both units
+would give two units overlapping ownership of one surface and make their completion
+evidence ambiguous. **U-CP-102 owns the VALUES the keys carry** (the contract at spec §0.6 —
+which vocabulary, what each key may and may not say); **U-RT-155 owns their EMISSION**
+(AC 9).
 
 **Acceptance criteria.**
 
