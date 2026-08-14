@@ -71,7 +71,6 @@ from harness_cp.pause_state_projection import (
     PauseLocationVariant,
     PreDispatchUniformFallbackOnlyLocation,
     compose_escalation_instance_id,
-    diagnose_token_keyed_ingress,
     pre_dispatch_gate_owning_branch_identity,
     walk_pause_tree,
 )
@@ -1165,58 +1164,166 @@ def test_a_token_keyed_resume_is_counted_as_unaddressed_and_is_diagnosed(
     )
 
 
-# mutation-probe: in `execute_workflow`'s ingress-diagnostic block, replace the
-# `walk_pause_tree(pause_snapshot_input)` comprehension with a shallow read of the
-# TOP-LEVEL carrier only:
-#   `{r.branch_index: r.escalation_instance_id
-#     for r in (pause_snapshot_input.peer_fan_out_resume.pre_dispatch_gate_owning_branches
-#               if pause_snapshot_input.peer_fan_out_resume else ())
-#     if r.escalation_instance_id is not None}`
-def test_a_token_nested_under_a_paused_child_is_still_diagnosed(
+# mutation-probe: move the `execute_workflow` ingress-diagnostic block from its site
+# after `resume_at_step_index = pause_snapshot_input.step_index` back up to
+# immediately above `if ctx.drained_flag.is_set():` (its pre-round-6 position).
+def test_a_corrupted_snapshot_still_fails_closed_when_a_token_key_is_submitted() -> None:
+    """The diagnostic must not preempt the error handling it sits in front of.
+
+    Sited at function entry, the tree walk ran BEFORE the drain gate and BEFORE
+    `attempt_resume` verified the snapshot hash — so a corrupted snapshot raised out
+    of the walk instead of returning `CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION`, and a
+    DRAINED run could fail before returning DRAINED. An ADVISORY diagnostic silently
+    changing two established terminal outcomes is a strictly worse defect than the
+    silence it was added to fix. Out-of-family review round 6 [P2] — a defect this
+    arc's OWN round-5 fix introduced, which is why late absorption rounds get their
+    own witnesses rather than being trusted.
+    """
+    snap, round_one = _round_one()
+    token = round_one.minted[1]
+    # Tamper a HASH-COVERED field without recomputing `snapshot_hash`, so the
+    # integrity check genuinely fires. (`accumulated_state` is NOT covered — an
+    # earlier draft tampered it and the run resumed cleanly, which would have made
+    # this witness vacuous.)
+    corrupted = snap.model_copy(
+        update={"state_summary": snap.state_summary.model_copy(update={"summary_text": "tampered"})}
+    )
+    resumed = execute_workflow(
+        _manifest(),
+        _peer_steps(),
+        run_id=_RUN_ID,
+        ctx=_ctx(),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _MintingGateDispatcher()),
+        pause_snapshot_input=corrupted,
+        resume_context=ResumeContext(hitl_responses={token: _approval("e-b71-corrupt")}),
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert resumed.fail_class == "CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION", (
+        "a corrupted snapshot must fail CLOSED through the established path, not "
+        f"raise out of an advisory diagnostic; got fail_class={resumed.fail_class!r}"
+    )
+
+
+# mutation-probe: key the `execute_workflow` ingress-diagnostic comprehension by
+# ORDINAL instead of by token, i.e.
+#   `{entry.projection.branch_index: entry.projection.escalation_instance_id ...}`
+# (and swap `diagnose_token_keyed_ingress`'s loop back to `for branch_index, token`).
+def test_an_outer_and_a_nested_gate_owner_sharing_an_ordinal_are_both_diagnosed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """§0.7 applies to EVERY match, not only to this recursion level's own rows.
+    """§0.7 applies to EVERY match, and `branch_index` is NOT globally unique.
 
-    A gate owner can sit under `paused_child_branches`, one or more levels down. The
-    diagnostic's first two homes both read a single level: if an earlier child
-    re-pauses, a later child is never entered at all, so a token belonging to it went
-    silently undiagnosed. `walk_pause_tree` is CP's ONE published traversal and
-    already recurses, which is why the check is sited on it rather than on the
-    per-level carriers. Found by out-of-family review round 5 [P2].
+    Two things are pinned here, and the second is what an earlier draft got wrong.
+
+    (1) COVERAGE: a gate owner can sit under `paused_child_branches`, one or more
+    levels down. The diagnostic's first two homes each read a single level, so a
+    nested owner's token went undiagnosed whenever an earlier child re-paused and the
+    later one was never entered (round 5 [P2]).
+
+    (2) KEYING: `branch_index` is LOCAL to its containing snapshot, so the outer and
+    the inner owner below BOTH carry ordinal 1 while carrying DIFFERENT tokens (their
+    bases fold different `run_id`s). An ordinal-keyed collection silently drops one of
+    them, and a resume keyed by the dropped token emits nothing (round 6 [P2]). The
+    first draft of this witness reused ONE snapshot for both levels, so both ordinals
+    mapped to the same token and the collision was invisible — the test passed under
+    the very mutation it was written to catch.
     """
-    outer, round_one = _round_one()
-    inner = outer  # a real snapshot whose rows carry real tokens
-    nested_token = round_one.minted[1]
+    outer, outer_round = _round_one()
+    inner_run_id = "run-b71-nested-inner"
+    inner_rows = tuple(
+        row.model_copy(
+            update={
+                "escalation_instance_id": compose_escalation_instance_id(
+                    pre_dispatch_gate_owning_branch_identity(inner_run_id, row.branch_index),
+                    _PLACEMENT.position,
+                )
+            }
+        )
+        for row in (
+            outer.peer_fan_out_resume.pre_dispatch_gate_owning_branches
+            if outer.peer_fan_out_resume
+            else ()
+        )
+    )
+    inner = outer.model_copy(
+        update={
+            "run_id": inner_run_id,
+            "peer_fan_out_resume": outer.peer_fan_out_resume.model_copy(
+                update={"pre_dispatch_gate_owning_branches": inner_rows}
+            )
+            if outer.peer_fan_out_resume
+            else None,
+        }
+    )
     nested = outer.model_copy(
         update={
-            "peer_fan_out_resume": PeerFanOutResumeState(
-                branches=(),
-                branch_count=1,
-                paused_child_branches=(
-                    PausedChildBranchResumeState(
-                        branch_index=0,
-                        step_id="branch-0-sub",
-                        child_snapshot=inner,
-                    ),
-                ),
+            "peer_fan_out_resume": outer.peer_fan_out_resume.model_copy(
+                update={
+                    "paused_child_branches": (
+                        PausedChildBranchResumeState(
+                            branch_index=0,
+                            step_id="branch-0-sub",
+                            child_snapshot=inner,
+                        ),
+                    )
+                }
+            )
+            if outer.peer_fan_out_resume
+            else None,
+        }
+    )
+    outer_token = outer_round.minted[1]
+    inner_token = next(r.escalation_instance_id for r in inner_rows if r.branch_index == 1)
+    assert inner_token is not None and inner_token != outer_token, (
+        "sanity: the outer and inner owners must carry DIFFERENT tokens at the SAME "
+        "ordinal — otherwise the collision this test exists for is not present"
+    )
+
+    # Re-hash: the tree was rebuilt, and the ordering witness above proves an
+    # un-rehashed snapshot fails CLOSED before the diagnostic is ever reached.
+    nested = nested.model_copy(
+        update={
+            "snapshot_hash": _compute_snapshot_hash(
+                workflow_id=nested.workflow_id,
+                run_id=nested.run_id,
+                step_index=nested.step_index,
+                state_summary=nested.state_summary,
+                peer_fan_out_resume=nested.peer_fan_out_resume,
             )
         }
     )
-    tokens = {
-        entry.projection.branch_index: entry.projection.escalation_instance_id
+    reachable = {
+        entry.projection.escalation_instance_id
         for entry in walk_pause_tree(nested)
         if isinstance(entry.projection, PreDispatchUniformFallbackOnlyLocation)
         and entry.projection.escalation_instance_id is not None
     }
-    assert nested_token in tokens.values(), (
-        "sanity: the nested gate owner's token must be reachable from the ROOT walk "
-        f"at all — otherwise this witness is vacuous; got {sorted(tokens)!r}"
+    assert {outer_token, inner_token} <= reachable, (
+        "sanity: BOTH tokens must survive the root walk at all — otherwise this "
+        f"witness cannot distinguish keying from coverage; got {len(reachable)} token(s)"
     )
-    with caplog.at_level(logging.WARNING, logger="harness_cp.pause_state_projection"):
-        diagnose_token_keyed_ingress(tokens, {nested_token})
-    assert [r for r in caplog.records if "§0.7" in r.getMessage()], (
-        "a token belonging to a NESTED gate owner must still be diagnosed"
-    )
+
+    # Driven through the DRIVER, so the assertion exercises `execute_workflow`'s own
+    # comprehension rather than one the test builds. A first draft constructed the
+    # mapping in-test and therefore could not see an ordinal-keyed driver at all.
+    for label, token in (("outer", outer_token), ("nested", inner_token)):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="harness_cp.pause_state_projection"):
+            execute_workflow(
+                _manifest(),
+                _peer_steps(),
+                run_id=_RUN_ID,
+                ctx=_ctx(),
+                default_model_binding=_DEFAULT_BINDING,
+                step_dispatchers=cast(StepDispatcherRegistry, _MintingGateDispatcher()),
+                pause_snapshot_input=nested,
+                resume_context=ResumeContext(hitl_responses={token: _approval(f"e-b71-{label}")}),
+            )
+        assert [r for r in caplog.records if "§0.7" in r.getMessage()], (
+            f"the {label} gate owner's token must be diagnosed — an ordinal-keyed "
+            "collection drops one of the two and emits nothing for it"
+        )
 
 
 # mutation-probe: change `diagnose_token_keyed_ingress`'s `_LOGGER.warning(...)` back

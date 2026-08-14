@@ -507,7 +507,7 @@ make §0.7 unimplementable without bundling a separately registered schema chang
 
 
 def diagnose_token_keyed_ingress(
-    escalation_instance_ids_by_branch: Mapping[int, str],
+    branch_ordinals_by_token: Mapping[str, int],
     submitted_hitl_response_keys: Collection[str],
 ) -> None:
     """Warn when a submitted `hitl_responses` key equals a `B-71` escalation token.
@@ -524,17 +524,25 @@ def diagnose_token_keyed_ingress(
     Takes the tokens and the keys rather than a `PausedWorkflowState`, so one authority
     serves both the projection-derived and the raw-snapshot callers.
 
+    **Keyed BY TOKEN, not by ordinal.** `branch_index` is local to its containing
+    snapshot, so an outer and an inner gate owner can both be ordinal 0; an
+    ordinal-keyed mapping would silently drop one of their tokens and miss a match
+    (out-of-family review round 6 [P2]). The token is globally distinct by construction
+    — §0.4(2) folds the containing snapshot's own `run_id` into the basis — so it is the
+    safe key, and the ordinal is the value because the ordinal is what the message
+    reports.
+
     The token value itself is NEVER placed in the message — it is a live correlation
     identifier on an unresolved gate, and §0.5's discipline is that identity material
     does not get re-emitted onto incidental channels. The ORDINAL is named instead,
     which is the one thing §0.5's scoped carve-out already permits as prose.
     """
-    if not escalation_instance_ids_by_branch or not submitted_hitl_response_keys:
+    if not branch_ordinals_by_token or not submitted_hitl_response_keys:
         return
     submitted = set(submitted_hitl_response_keys)
     matched = sorted(
         branch_index
-        for branch_index, token in escalation_instance_ids_by_branch.items()
+        for token, branch_index in branch_ordinals_by_token.items()
         if token in submitted
     )
     if not matched:

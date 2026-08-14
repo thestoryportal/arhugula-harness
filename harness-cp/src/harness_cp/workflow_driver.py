@@ -3265,36 +3265,6 @@ def execute_workflow(
     # engine-class validation. Per C-OD-25 §25.1 AC #1 (U-OD-35): the
     # workflow.envelope span opens AFTER this check — drain-at-entry returns
     # before any envelope opens (no observable workflow execution occurred).
-    # U-CP-102 / `B-71` (CP spec v1.119 §0.7) — THE INGRESS DIAGNOSTIC, sited ONCE at
-    # the driver's resume-ADMISSION point and scoped to the WHOLE pause tree.
-    #
-    # The token is one-way: `hitl_responses` stays exclusively `child_run_id`-keyed, so
-    # a submitted token matches no location and is counted-as-UNADDRESSED — normatively
-    # correct, and SILENT, which is the very thing §0.7's diagnosis half exists to
-    # prevent. Two earlier homes were each too narrow, and each was found by
-    # out-of-family review: `AccessorDerivedResumeContext.from_pause_state` (round 2
-    # [P2]) is bypassed entirely by the supported `api.resume(..., resume_context=
-    # ResumeContext(...))` path; the two fan-out carriers (round 5 [P2]) see only their
-    # OWN level's rows, so a token belonging to a gate owner nested under
-    # `paused_child_branches` went undiagnosed whenever an earlier child re-paused and
-    # the later one was never entered. `walk_pause_tree` is CP's ONE published
-    # traversal of the resume tree and already recurses through nested children, so
-    # reading the tokens off it here is both WIDER in coverage and NARROWER in
-    # machinery than the two call sites it replaces.
-    if (
-        pause_snapshot_input is not None
-        and resume_context is not None
-        and resume_context.hitl_responses
-    ):
-        diagnose_token_keyed_ingress(
-            {
-                entry.projection.branch_index: entry.projection.escalation_instance_id
-                for entry in walk_pause_tree(pause_snapshot_input)
-                if isinstance(entry.projection, PreDispatchUniformFallbackOnlyLocation)
-                and entry.projection.escalation_instance_id is not None
-            },
-            resume_context.hitl_responses,
-        )
     if ctx.drained_flag.is_set():
         return RunResult(
             workflow_id=manifest_entry.workflow_id,
@@ -3414,6 +3384,40 @@ def execute_workflow(
                 fail_class=resume_result.fail_class,
             )
         resume_at_step_index = pause_snapshot_input.step_index
+
+        # U-CP-102 / `B-71` (CP spec v1.119 §0.7) — THE INGRESS DIAGNOSTIC, sited ONCE,
+        # scoped to the WHOLE pause tree, and placed HERE deliberately: after the drain
+        # gate, after `attempt_resume` has verified the snapshot's hash, and after the
+        # not-resumed early return. An earlier draft ran it at function entry, which
+        # made a CORRUPTED snapshot raise out of the tree walk instead of returning
+        # `CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION`, and let a DRAINED run fail before it
+        # could return DRAINED — an advisory diagnostic silently changing two
+        # established terminal outcomes (out-of-family review round 6 [P2]). A
+        # diagnostic never gets to preempt the error handling it sits in front of.
+        #
+        # The token is one-way: `hitl_responses` stays exclusively `child_run_id`-keyed,
+        # so a submitted token matches no location and is counted-as-UNADDRESSED —
+        # normatively correct, and SILENT, which is what §0.7's diagnosis half exists to
+        # prevent. `walk_pause_tree` is CP's ONE published traversal and already
+        # recurses through nested children, so a gate owner nested under
+        # `paused_child_branches` is covered too (round 5 [P2]).
+        #
+        # KEYED BY TOKEN, not by ordinal: `branch_index` is LOCAL to its containing
+        # snapshot, so an outer and an inner gate owner can both be ordinal 0 and an
+        # ordinal-keyed dict would silently drop one of their tokens (round 6 [P2]).
+        # The token is globally distinct by construction — its basis folds the
+        # containing snapshot's own `run_id` — so it is the safe key, and the ordinal
+        # rides along as the value because the ordinal is what the message reports.
+        if resume_context is not None and resume_context.hitl_responses:
+            diagnose_token_keyed_ingress(
+                {
+                    entry.projection.escalation_instance_id: entry.projection.branch_index
+                    for entry in walk_pause_tree(pause_snapshot_input)
+                    if isinstance(entry.projection, PreDispatchUniformFallbackOnlyLocation)
+                    and entry.projection.escalation_instance_id is not None
+                },
+                resume_context.hitl_responses,
+            )
 
     # § C-OD-25 §25.1 — Open the workflow.envelope outer OTel span via
     # ctx.tracer_provider.get_tracer(...).start_as_current_span(...). Every
