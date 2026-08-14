@@ -1203,6 +1203,53 @@ def test_the_ingress_diagnostic_cannot_abort_a_resume_under_warnings_as_errors()
     )
 
 
+# mutation-probe: delete the `try:` / `except Exception: return` guard around
+# `_LOGGER.warning(...)` in `diagnose_token_keyed_ingress` (leaving a bare call).
+def test_the_ingress_diagnostic_cannot_abort_a_resume_when_the_log_sink_fails() -> None:
+    """§0.7 — the OTHER way an advisory channel can turn into a run-ending failure.
+
+    Python's `logging` does not contain handler failures: `Handler.handle` invokes
+    `emit` with no guard, so a host running a network log sink propagates that sink's
+    outage straight through the diagnostic call. A resume would then ABORT because the
+    LOGGING BACKEND was down — which has nothing to do with the operator's request and
+    is exactly the advisory-becomes-fatal inversion §0.7 forbids.
+
+    Sibling of the warnings-as-errors witness above: same contract, different sink.
+    Out-of-family review round 4 [P2] raised this one round after round 3 moved the
+    channel off `warnings.warn` for the symmetric reason.
+    """
+
+    class _ExplodingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            raise RuntimeError("log sink down")
+
+    snap, round_one = _round_one()
+    token = round_one.minted[1]
+    logger = logging.getLogger("harness_cp.pause_state_projection")
+    handler = _ExplodingHandler()
+    logger.addHandler(handler)
+    previous_propagate = logger.propagate
+    logger.propagate = False
+    try:
+        resumed = execute_workflow(
+            _manifest(),
+            _peer_steps(),
+            run_id=_RUN_ID,
+            ctx=_ctx(),
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=cast(StepDispatcherRegistry, _MintingGateDispatcher()),
+            pause_snapshot_input=snap,
+            resume_context=ResumeContext(hitl_responses={token: _approval("e-b71-sink")}),
+        )
+    finally:
+        logger.removeHandler(handler)
+        logger.propagate = previous_propagate
+    assert resumed.status is RunStatus.PAUSED, (
+        "a failing diagnostic SINK must not fail the resume; got "
+        f"status={resumed.status!r} fail_class={resumed.fail_class!r}"
+    )
+
+
 def test_a_legitimately_keyed_resume_emits_no_diagnostic(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

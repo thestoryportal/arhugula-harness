@@ -539,15 +539,30 @@ def diagnose_token_keyed_ingress(
     )
     if not matched:
         return
-    _LOGGER.warning(
-        "CP spec v1.119 §0.7: `hitl_responses` was keyed by an escalation "
-        "correlation token for pre-dispatch gate-owning branch ordinal(s) %s. The "
-        "token is CORRELATION-ONLY and is not an address — these locations are "
-        "counted-as-UNADDRESSED and the supplied response will NOT be delivered to "
-        "them. A `uniform-fallback-only` location is answered by the SCALAR "
-        "`hitl_response` field when it is the sole unaddressed gate-owning member.",
-        matched,
-    )
+    # The ONE deliberate swallow in this module, and it is the contract speaking.
+    # Python's `logging` does NOT contain a handler failure: `Handler.handle` calls
+    # `emit` with no guard, so a host that installs a network log sink will propagate
+    # that sink's outage straight through this call (verified by execution, not
+    # assumed). §0.7 makes this channel ADVISORY — the submission is
+    # counted-as-unaddressed and the run CONTINUES — so a diagnostic that can fail the
+    # resume is worse than no diagnostic at all. This is not the "swallow an error and
+    # carry on with a changed meaning" anti-pattern: nothing downstream reads this
+    # call's outcome, and the functional half of §0.7 (the token addresses nothing) is
+    # structural and already discharged before we get here. Found by out-of-family
+    # review round 4 [P2], one round after the same reviewer moved this off
+    # `warnings.warn` for the symmetric `-W error` reason.
+    try:
+        _LOGGER.warning(
+            "CP spec v1.119 §0.7: `hitl_responses` was keyed by an escalation "
+            "correlation token for pre-dispatch gate-owning branch ordinal(s) %s. The "
+            "token is CORRELATION-ONLY and is not an address — these locations are "
+            "counted-as-UNADDRESSED and the supplied response will NOT be delivered to "
+            "them. A `uniform-fallback-only` location is answered by the SCALAR "
+            "`hitl_response` field when it is the sole unaddressed gate-owning member.",
+            matched,
+        )
+    except Exception:
+        return
 
 
 class AccessorDerivedResumeContext(ResumeContext):
