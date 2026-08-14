@@ -211,6 +211,18 @@ roadmap-status *ARGS:
 roadmap-status-check:
     uv run python tools/roadmap_status_refresh.py --check
 
+# ─── arc-metrics ledger — wall-clock efficacy tracking (B-170) ──────────────
+# One row per arc at .harness/arc-metrics.jsonl. The load-bearing field is
+# levers_active: each arc records which wall-clock levers were live when it ran,
+# so efficacy is a COHORT COMPARISON, never an assertion.
+# Fields carry provenance (derived / declared / unmapped) — an absent measurement
+# is never recorded as a measured zero. Summary reports medians WITH RANGE:
+# measured round variance is ~5x, so a bare mean misleads.
+#   just arc-metrics extract --pr 1340 --arc-type applying --decisions 1
+#   just arc-metrics summary
+arc-metrics *ARGS:
+    uv run python tools/arc_metrics.py "$@"
+
 # ─── arc EXIT REPORT — machine-readable arc-closure record (U-WT-03) ────────
 # Run as the FINAL ship-pr step, AFTER the reflect / context-save block: only there do
 # the merge SHA, post-merge main-CI conclusion, terminating-refresh commit and the

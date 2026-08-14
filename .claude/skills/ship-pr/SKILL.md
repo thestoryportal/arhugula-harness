@@ -282,7 +282,7 @@ ending the turn):
 Skip only when this PR was itself the terminating roadmap-status refresh (§12.2.1) — a
 refresh-only commit has no new learnings to reflect on.
 
-## Arc exit report — the LAST step (U-WT-03/04)
+## Arc exit report — the last reporting step (U-WT-03/04)
 
 **After** the reflect + `/context-save` block above, not before it. That ordering is the
 whole point: the merge SHA, the post-merge main-CI conclusion, the §12.2.1 refresh commit
@@ -310,6 +310,38 @@ missing refresh reads `refresh_commit: null` and a non-green CI reads its conclu
 verbatim, so the block is evidence, not narration. Read what it says before pasting: a
 null `refresh_commit`, a `main_ci.conclusion` that is not `success`, or
 `checkpoint.confirmed: false` each mean an obligation above is still open.
+
+## Arc-metrics capture — after the exit report (B-170)
+
+One row per arc at `.harness/arc-metrics.jsonl`, appended **after** the exit report above.
+It runs last because `merged_at` and the merge SHA do not exist before merge, and a row is
+never emitted with a field guessed. Skip it on a terminating roadmap-status refresh
+(§12.2.1) — a refresh is not an arc. Run:
+
+```
+just arc-metrics extract --pr <NNN> --arc-type <inventing|applying> --decisions <N> \
+  --round-logs '<glob for THIS arc's round logs>' --levers <lever-ids-or-omit>
+```
+
+`--arc-type`, `--decisions` and `--levers` are **declared** judgements — the tool records
+them as such and never infers them. Omitting `--levers` records the empty baseline cohort
+`[]`, which is a claim in itself: it says no wall-clock lever was live. Do not pass it
+loosely, because every efficacy comparison B-171..B-174 makes is a cohort split on that
+field. `--round-logs` fails closed: zero matched files aborts rather than recording
+`0 rounds`, so "could not look" never becomes "looked and found nothing". Re-running is
+safe — a duplicate `arc_id` is refused rather than double-appended.
+
+**Where the row gets committed.** The ledger is tracked, so the append leaves one
+uncommitted file. It **cannot** go in the terminating refresh commit: §12.2.1 verifies a
+refresh by its exact file set, and a second path there breaks that shape and hard-fails the
+next CI drift check. Stage it explicitly into the **next** arc's PR (`git add
+.harness/arc-metrics.jsonl` — never `git add -A`). If the next PR is a doc-only sweep the
+row is still fine: `.harness/*.jsonl` is not `harness-*/src|tests`, so it does not drag the
+diff through the 3-lens merge-gate.
+
+Read the appended row before moving on. A `provenance` value beginning `unmapped:` means
+that field had no input — it is an honest null, not a measured zero, and a lever must never
+be evaluated against it.
 
 ## Notes
 

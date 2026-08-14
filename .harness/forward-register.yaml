@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 169
+  total: 174
   open: 1
   design_substrate_gated: 0
-  registered_finding: 34
+  registered_finding: 39
   operator_gated: 0
   held: 2
   closed: 132
-  identity_digest: '351f67542ec688d1'
+  identity_digest: badb4155f905414d
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9312,3 +9312,38 @@ items:
   heading: '### B-169 · `test_loop_gc.sh` S16 STALE-boundary pin flakes on a loaded runner — a 29-minute
     fixture sits ONE minute from the 30-minute boundary *(observed on `main` at `be081e9d`, 2026-08-14;
     same commit passed on rerun)*'
+- id: B-170
+  title: 'Arc-metrics ledger — per-arc wall-clock capture for efficacy tracking'
+  status: registered_finding
+  summary: 'GATE UNIT — blocks B-171..B-174. One row per arc at `.harness/arc-metrics.jsonl`; the load-bearing field is levers_active, so efficacy is a cohort comparison rather than an assertion. Fields carry provenance (derived / declared / unmapped) and an absent measurement is never recorded as a measured zero. LARGELY BUILT, UNCOMMITTED in the working tree at filing time.'
+  close_out: 'STEP 1 -- land the uncommitted work: tools/arc_metrics.py, tools/test_arc_metrics.py (10 tests, each carrying a mutation-probe annotation), .harness/arc-metrics.jsonl (16 baseline rows), and the justfile arc-metrics recipe. STEP 2 -- verify the witness still holds at HEAD: the tool must reproduce 10 rounds for #1337 and 1408 additions from git/gh, NOT from any report. STEP 3 -- confirm fail-closed by mutation probe: remove the zero-logs guard in round_metrics() and the test must RED with DID NOT RAISE, then restore. STEP 4 -- wire capture into ship-pr so every future arc appends a row. FALSIFIER: if the backfilled figures cannot be reproduced from git/gh at HEAD, the tool is wrong and no lever may be evaluated against it.'
+  council: 'No. The instrument is built and its acceptance criteria are executable; nothing here changes a committed contract.'
+  heading: '### B-170 · Arc-metrics ledger — per-arc wall-clock capture, the GATE the other four units are measured against *(2026-08-14 arc-wall-clock audit; provisionally numbered `B-178` in that plan)*'
+- id: B-171
+  title: 'Round-timing instrumentation — split codex think-time from agent absorption'
+  status: registered_finding
+  summary: 'The codex CLI prints no timing or token data -- verified directly against 1.6 MB transcripts. The split between codex thinking and agent absorbing inside each round is therefore unknowable, and every claim about the review loop is an estimate. One date +%s.%N either side of the codex review invocation fixes that on the very next round. PRECONDITION for B-173''s kill condition, which compares per-reviewer round wall clock.'
+  close_out: 'STEP 1 -- wrap the codex-review recipe (justfile:564) to record {pr, round, started_at, ended_at, codex_wall_s, base_sha} to a sidecar ledger. STEP 2 -- the wrapper must NOT change the review''s exit status: a failed review still fails the recipe, and a failed write surfaces rather than being swallowed. STEP 3 -- flow codex_wall_s into B-170''s per-arc row. WITNESS: one arc where sum(codex_wall_s) < sum(round_wall_s), the residual being absorption; a residual at or below zero means the wrapper measures the wrong span.'
+  council: 'No. One recipe line, no contract surface.'
+  heading: '### B-171 · Round-timing instrumentation — the codex CLI emits NO timing data, so the loop''s 78% is currently unpriceable *(2026-08-14 arc-wall-clock audit; provisionally numbered `B-173`)*'
+- id: B-172
+  title: 'Doc-only grounding sweep — batch ~20 register items into one PR'
+  status: registered_finding
+  summary: 'Roughly 20 register items carry a close_out beginning "(1) Re-verify... (2) Decide..." -- their genuine next step is grounding, not code. Batched into ONE doc-only PR they pay the per-arc wrapper once instead of ~20 times. MEASURED saving approximately 8 h, from 19 avoided wrappers at the #1023 analogue of 25 min each; the estimate rests on n=1 well-matched analogue, which B-170 exists to improve. Five further items (B-16, B-45, B-66, B-98, B-104) carry an explicit no-work-owed disposition and close in the same sweep.'
+  close_out: 'STEP 1 -- ground each item against HEAD, never recall: grep the cited symbol, re-read the cited section, write the verdict into close_out WITH the command that produced it. STEP 2 -- one commit per item, so the sweep is reviewable item-by-item rather than as one wall of diff. STEP 3 -- every verdict is one of: still-not-buildable (stays registered), build-now (spins a scoped arc), or no-work-owed (closes). STEP 4 -- ZERO harness-*/src or harness-*/tests files in the diff; one code file drags the whole sweep through the 3-lens gate and destroys the saving. STEP 5 -- run just leg-selfcheck --uncommitted before EVERY push: doc-only buys a merge-gate skip, never a grounding skip, and this sweep touches registers dense with cites and counts. ESCAPE HATCH: split into two sweeps if review or byte load proves unwieldy, at a named cost of one extra wrapper.'
+  council: 'No. Grounding is per-item empirical work against HEAD; each verdict is individually verifiable.'
+  heading: '### B-172 · Doc-only grounding sweep — ~20 register items whose honest next step is a grounding pass, not a code arc *(2026-08-14 arc-wall-clock audit; provisionally numbered `B-170`)*'
+- id: B-173
+  title: 'Gemini AGY parallel-review trial — OPERATOR-APPROVED, kill condition pre-committed'
+  status: registered_finding
+  summary: 'OPERATOR-APPROVED 2026-08-14. Runs just gemini-review alongside just codex-review against the identical diff, concurrently, on a code arc that is happening anyway -- no dedicated arc is spent. Infrastructure verified present: agy v1.1.12 on PATH and tools/agy_review.py, a 624-line fail-closed wrapper with diff-chunking, timeout and model verification, already emitting the same P1/P2/P3 shape as codex. AUTH STATUS UNCONFIRMED at filing -- the check needs a TTY -- so confirming it is step 1, not an assumption. UPSIDE at the measured 21 min/round median across 7 remaining code arcs: 2.5 h if it removes one round per arc, 9.9 h if four, ZERO if the kill condition fires.'
+  close_out: 'STEP 1 -- confirm agy auth non-interactively before anything else. STEP 2 -- run both reviewers against the IDENTICAL diff, concurrently, for at least 3 rounds. STEP 3 -- classify findings both-raised / codex-unique / gemini-unique, and hand-verify each gemini-unique finding against the diff as real-and-fixable rather than hallucinated. STEP 4 -- record per-reviewer round wall clock via B-171. KILL CONDITION, PRE-COMMITTED: at most one gemini-unique P1 across three rounds, OR gemini''s round wall clock exceeding codex''s -- either kills the lever, because two parallel waits that do not overlap are not parallelism. ADOPTION BAR: a genuine P1 codex missed, at comparable or shorter wall clock, in at least 2 of 3 rounds. Record the false-positive rate: a second reviewer that adds fix-cycles for non-defects is net-negative and that must be visible. The verdict is declared against these thresholds, never chosen after seeing the data.'
+  council: 'No. Operator has approved the trial; the thresholds are pre-committed and the outcome is a measurement, not a judgement call.'
+  heading: '### B-173 · Gemini AGY parallel decorrelated review — the only untried lever that touches the review loop''s 78% *(operator-APPROVED 2026-08-14; provisionally numbered `B-176`)*'
+- id: B-174
+  title: 'Mechanize the finding class each arc — targeting self-inflicted bookkeeping drift'
+  status: registered_finding
+  summary: 'When a review round surfaces a finding a deterministic check could have caught, the check is written IN THE SAME ARC. Precedent is measured: the trilemma class cost approximately 32 min of review across two rounds and now costs about 1 s in tools/test_roadmap_ritual_smoke.py. Unlike a round cap this removes a class WITHOUT narrowing what any review checks. TARGETING RULE, added after grounding: classify each finding original vs SELF-INFLICTED (introduced by this arc''s own earlier rounds) and prioritise mechanising the self-inflicted ones. Reading #1337''s ten absorption commits found roughly 6 of 10 rounds carrying a self-inflicted finding pre-mitigation -- two of them naming the agent explicitly (I OVER-TIGHTENED THE FILE SCOPE; I REUSED OCCUPIED SECTION LABELS) -- and these are overwhelmingly BOOKKEEPING (stale counts, occupied section labels, self-contradicting register rows), the class a deterministic check catches by construction. leg-selfcheck already cut this from about 60% to about 29% of rounds; the residual is roughly 85 min per arc at the measured 21 min/round median.'
+  close_out: 'STEP 1 -- add a CLAUDE.md 13.1 always-on row stating the discipline. STEP 2 -- record {class, arc, rounds_consumed, test_path, runtime_s, origin} per mechanised class in B-170''s ledger, where origin is original or self-inflicted. STEP 3 -- ship ONE real instance with the discipline, not the rule alone. NON-GOAL, stated explicitly: this must never become a reason to shorten review -- it removes classes from the loop, it does not license capping it. CAVEAT ON THE NUMBERS: the 6-of-10 origin split is a prose judgement over ONE arc and the 29% figure comes from a count on #1338 that could not be independently derived (no round logs survive for it). Both are exactly the kind of claim that moved twice under measurement during the audit, so record the classification going forward rather than trusting either.'
+  council: 'No. The discipline is additive and the targeting rule is grounded in measured origin data; nothing narrows an existing gate.'
+  heading: '### B-174 · Mechanize the finding class, every arc — targeted at SELF-INFLICTED bookkeeping drift, which is ~29% of rounds post-mitigation *(2026-08-14 arc-wall-clock audit; provisionally numbered `B-177`)*'
