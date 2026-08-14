@@ -103,30 +103,30 @@ This is the step most often done wrong. After the PR merges:
    `ROADMAP_STATUS_DRIFT` in both the guard job and `test_codex_stop_gate`.
    Install it with the TOOL instead, in two guard-clean steps:
 
-   **The rotation is SPLIT into two steps, and that split is load-bearing.** A
-   single mode writing both files can never transit a PR: bundled with the
-   refresh, the PR's base..head diff includes the archive so the §12.2.1 shape
-   gate rejects a refresh-prefixed title; titled otherwise, the squash merge is
-   non-terminating and reds `main`. Each step is individually guard-clean:
-
-   1. **Archive step — one file, NOT `roadmap_status.md`:**
-      ```
-      just roadmap-status --archive-current-next-action
-      ```
-      appends the live round to `.harness/roadmap-next-action-archive.md` as
-      `Prior`. Because it never touches `roadmap_status.md`, `_owed_lag` covers it.
-   2. **Terminating refresh — one file, `roadmap_status.md` only:**
-      ```
-      just roadmap-status --refresh --pr "PR #<NNN>" --date <YYYY-MM-DD> \
-        --notes "<what shipped>" --next-action "<new pointer prose, ONE paragraph>"
-      ```
-      installs the new pointer AND refreshes the anchor in the SAME single-file
-      write, so `_lag_expected` covers it.
+   **The next-action pointer is installed BY THE TOOL, inside the terminating
+   refresh — never hand-edited:**
+   ```
+   just roadmap-status --refresh --pr "PR #<NNN>" --date <YYYY-MM-DD> \
+     --notes "<what shipped>" --next-action "<new pointer prose, ONE paragraph>"
+   ```
+   This installs the pointer AND refreshes the anchor in one single-file write,
+   so `_lag_expected` covers it. Hand-editing the paragraph is what reddened
+   `main` on 2026-08-13 (`49b00f85` left the anchor recording a `git_head` two
+   commits back, so it was not a verified refresh point).
 
    **Never put a `roadmap_status.md` edit in a substantive content PR.** A commit
    on `main` touching it without being a verified terminating refresh satisfies
-   neither guard exception, and `main`'s post-merge CI hard-fails
-   `ROADMAP_STATUS_DRIFT`.
+   neither guard exception, and `main`'s post-merge CI hard-fails.
+
+   **Archiving the superseded round is a KNOWN-OPEN choreography question — see
+   `B-168`, and do not improvise it.** Three constraints collide: (a) the archive
+   is PRIOR-rounds-only by design, since a one-file refresh can never rotate it;
+   (b) the terminating refresh may touch only `roadmap_status.md`; (c) `_owed_lag`
+   tolerates exactly ONE non-refresh commit after a verified refresh, so an
+   archive-only PR *after* the content merge hard-fails. `--archive-current-next-action`
+   exists and is correct in isolation, but WHERE it may run is unsettled. Until
+   `B-168` closes, the live head's own git history remains the lossless record of
+   any not-yet-archived round (`git log -p -- .harness/roadmap_status.md`).
 
    `--refresh` REFUSES to write a second file rather than silently producing a
    two-file commit; if it says a drift-log trim is owed, run `--trim-drift-log`

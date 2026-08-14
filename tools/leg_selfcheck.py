@@ -430,7 +430,12 @@ def _target_line_count(path: Path, rel: str, base_ref: str | None) -> int | None
             blob = _run_checked(["git", "show", f"HEAD:{rel}"])
             return len(blob.splitlines())
         except BaseRefError:
-            pass  # untracked at HEAD (a brand-new file) — fall through
+            # ABSENT AT HEAD is unresolved, not a reason to consult the working
+            # tree: a committed line citing a file that exists only as untracked
+            # WIP otherwise reported "resolved" while the push omits its target
+            # entirely (codex round 13 [P2]). Working-tree fallback belongs to
+            # --uncommitted alone.
+            return None
     try:
         return len(path.read_text(encoding="utf-8", errors="replace").splitlines())
     except OSError:  # pragma: no cover
@@ -637,7 +642,14 @@ def check_counts(
         for path, lines in source.items():
             if not _eligible(path):
                 continue
-            by_text = {text: ln for ln, text in pos_map.get(path, [])}
+            # Occurrences, in order: a {text: line} map kept only the LAST
+            # occurrence, so identical context text repeated in a later row
+            # attributed an earlier row's claim to that later row and hid a real
+            # disagreement (codex round 13 [P2]).
+            occurrences: dict[str, list[int]] = defaultdict(list)
+            for ln, text in pos_map.get(path, []):
+                occurrences[text].append(ln)
+            consumed: dict[str, int] = defaultdict(int)
             enclosing = f"(unattributed in {path})"
             for line in lines:
                 m = _ROW_ID_RE.match(line) or _UNIT_HEADING_RE.match(line)
@@ -646,8 +658,11 @@ def check_counts(
                 else:
                     # A body-only edit contributes no heading, so resolve the
                     # enclosing row from the file at HEAD by POSITION.
-                    at = by_text.get(line)
+                    slots = occurrences.get(line, [])
+                    idx = consumed[line]
+                    at = slots[idx] if idx < len(slots) else None
                     if at is not None:
+                        consumed[line] = idx + 1
                         resolved = enclosing_row_at(path, at)
                         if resolved:
                             enclosing = resolved

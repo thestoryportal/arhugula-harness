@@ -304,7 +304,9 @@ def test_the_live_forward_register_rows_this_arc_touched_render_a_prose_body():
     """Runs check 4 against the REAL register via the real CLI — the concrete
     guard that B-166 (this arc's own row) is not a YAML-only row."""
     report = ls.Report()
-    ls.check_register_rows(["- id: B-166"], _REGISTER_PATHS, report)
+    # uncommitted=True: this test deliberately renders the WORKING TREE prose, so
+    # it opts out of the committed-mode dirty-carrier fail-close (round 11 [P2]).
+    ls.check_register_rows(["- id: B-166"], _REGISTER_PATHS, report, uncommitted=True)
     assert _hard(report) == [], _hard(report)
 
 
@@ -773,3 +775,55 @@ def test_enclosing_row_at_resolves_by_position(tmp_path, monkeypatch):
     (d / "x.md").write_text("### B-900 · first\nbody\n### B-901 · second\nbody\n")
     assert ls.enclosing_row_at(".harness/x.md", 2) == "B-900"
     assert ls.enclosing_row_at(".harness/x.md", 4) == "B-901"
+
+
+# --- out-of-family review round 13 ------------------------------------------
+
+
+def test_committed_mode_does_not_resolve_a_cite_from_an_untracked_file(tmp_path, monkeypatch):
+    """[P2] (codex round 13): a committed line citing a file that exists only as
+    untracked WIP reported 'resolved' while the push omits its target entirely.
+    Working-tree fallback belongs to --uncommitted alone."""
+    monkeypatch.setattr(ls, "ROOT", tmp_path)
+    (tmp_path / "ghost.md").write_text("one\ntwo\n")
+    report = ls.Report()
+    ls.check_cites({"spec.md": ["see ghost.md:2"]}, report, committed_ref="HEAD")
+    # absent at HEAD => unresolved (advisory), never a silent pass
+    assert _hard(report) == []
+    assert any(
+        "unreadable" in f.message or "does not resolve" in f.message for f in report.findings
+    ), report.findings
+
+
+def test_duplicate_context_positions_are_consumed_in_order(tmp_path, monkeypatch):
+    """[P2] (codex round 13): a {text: line} map kept only the LAST occurrence,
+    so identical text repeated in a later row attributed an earlier row's claim
+    to that later row and HID a real disagreement."""
+    monkeypatch.setattr(ls, "ROOT", tmp_path)
+    d = tmp_path / ".harness"
+    d.mkdir()
+    f = d / "post-phase-8-forward-register.md"
+    f.write_text(
+        "### B-900 · first\n"
+        "It touches 3 sites.\n"
+        "It touches 4 sites.\n"
+        "### B-901 · second\n"
+        "It touches 3 sites.\n"
+    )
+    added = {
+        ".harness/post-phase-8-forward-register.md": [
+            "It touches 3 sites.",
+            "It touches 4 sites.",
+        ]
+    }
+    positions = {
+        ".harness/post-phase-8-forward-register.md": [
+            (2, "It touches 3 sites."),
+            (3, "It touches 4 sites."),
+            (5, "It touches 3 sites."),
+        ]
+    }
+    report = ls.Report()
+    ls.check_counts(added, report, None, positions)
+    # both claims belong to B-900 and genuinely disagree — it must NOT be hidden
+    assert _hard(report) != [], report.findings

@@ -113,10 +113,12 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
    `main` that touches it without being a *verified* terminating refresh satisfies
    neither guard exception (`_lag_expected` wants the refresh shape; `_owed_lag` requires
    HEAD *not* to touch the file), so main CI hard-fails `ROADMAP_STATUS_DRIFT`.
-4. Archive the superseded round FIRST, as its own one-file step:
-   `python3 tools/roadmap_status_refresh.py --archive-current-next-action`.
-   It writes ONLY `.harness/roadmap-next-action-archive.md` and never touches
-   `roadmap_status.md`, so it transits a PR cleanly (`_owed_lag` covers it).
+4. Archiving the superseded round is a KNOWN-OPEN choreography question (`B-168`)
+   -- do not improvise it. Three constraints collide: the archive is PRIOR-only by
+   design; the terminating refresh may touch only `roadmap_status.md`; and
+   `_owed_lag` tolerates exactly ONE non-refresh commit after a verified refresh,
+   so an archive-only PR after the content merge hard-fails. Until `B-168` closes,
+   the live head's git history is the lossless record.
 5. Then run the terminating refresh, which installs the new pointer AND refreshes
    the anchor in ONE single-file write:
    `python3 tools/roadmap_status_refresh.py --refresh --pr "PR #<N>" --date

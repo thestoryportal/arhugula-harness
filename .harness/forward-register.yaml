@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 167
+  total: 168
   open: 1
   design_substrate_gated: 0
-  registered_finding: 33
+  registered_finding: 34
   operator_gated: 0
   held: 2
   closed: 131
-  identity_digest: '28e41553dccc8d4f'
+  identity_digest: 'f5694f22f900ae3d'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9234,3 +9234,43 @@ items:
   heading: '### B-167 · `just leg-selfcheck`''s count check compares CLAIMS against each other, never
     against GROUND TRUTH, so a mirror in an untouched file is invisible *(registered at the prevention
     arc that precedes `U-CP-102`, from out-of-family review round 1 [P1], 2026-08-13)*'
+- id: B-168
+  title: 'archiving a superseded next-action round has no legal commit shape: prior-only archive, single-file
+    terminating refresh, and one-non-refresh-commit lag tolerance cannot all hold'
+  status: registered_finding
+  summary: 'THE TRILEMMA, each leg independently established and none of them new to this arc. (a) The
+    next-action archive is PRIOR-ROUNDS-ONLY by design -- its own header states the current round lives
+    only in the live head, because a one-file terminating refresh can never rotate the archive (recorded
+    as codex round-6 resolution (b) at the U-CTX-03 arc), and test_actual_next_action_archive_exists_and_is_not_referenced_as_a_read_target
+    enforces it. (b) CLAUDE.md s12.2.1 requires a terminating refresh to change EXACTLY roadmap_status.md,
+    so the archive write cannot ride it. (c) codex_context_guard._owed_lag tolerates exactly ONE non-refresh
+    commit after a verified refresh (it requires HEAD''s PARENT to be that refresh), so an archive-only
+    PR landing AFTER the substantive content merge is a SECOND non-refresh commit and hard-fails ROADMAP_STATUS_DRIFT
+    on main. Together: the archive write cannot ride the refresh (b), cannot follow the content merge
+    (c), and cannot carry a still-current round (a) -- which is what riding the content PR itself would
+    do. EACH LEG WAS VERIFIED: (c) was reproduced against the guard; (a) was reproduced by running --archive-current-next-action
+    in the content PR and watching the enforcing test go RED.'
+  close_out: 'WHAT ALREADY EXISTS AND IS CORRECT IN ISOLATION: --archive-current-next-action writes
+    ONLY the archive and never touches roadmap_status.md; --refresh --next-action installs the pointer
+    inside the single-file terminating refresh and REFUSES if the outgoing round is not already archived.
+    The unsettled part is purely WHERE the archive step may legally run. STEP 1 -- pick the leg to relax,
+    which is an operator/architecture call, not a coding one, because two of the three legs are governance:
+    (i) relax (a) by allowing the archive to hold the current round during the content-merge-to-refresh
+    window, which costs the prior-only invariant and needs that test rewritten with a stated reason;
+    (ii) relax (c) by widening _owed_lag to tolerate an archive-only commit specifically (a narrow,
+    shape-verified exception in the same style as the existing ones, NOT a general loosening); (iii)
+    archive round N-1 rather than round N, reading the superseded text from the live head''s git history
+    as the archive header already describes -- this preserves all three legs and needs a new --archive-superseded
+    --from-ref mode, but means the newest round always lags by one arc. STEP 2 -- whichever is chosen,
+    the losing constraint must be amended AT ITS SOURCE (the archive header, s12.2.1, or the guard)
+    rather than worked around at a call site. FALSIFIER: a demonstration that some fourth commit shape
+    satisfies all three legs unchanged, in which case this closes as a documentation fix. UNTIL THEN
+    THE RECORD IS NOT LOST: the live head''s own git history is lossless (git log -p -- .harness/roadmap_status.md),
+    which is why this is a choreography defect and not a data-loss one.'
+  council: Possibly. Two of the three legs are governance surfaces (the prior-only invariant and s12.2.1)
+    and the third is the drift guard, so the choice is a cross-domain trade rather than a coding preference.
+    If the operator does not simply select a leg, a dyadic convening on process-invariant vs guard-precision
+    is the right shape.
+  heading: '### B-168 · Archiving a superseded next-action round has no legal commit shape — three workspace
+    constraints collide *(surfaced by out-of-family review rounds 11–13 of the prevention arc preceding
+    `U-CP-102`, 2026-08-14)*'
