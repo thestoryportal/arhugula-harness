@@ -335,7 +335,7 @@ exactly that dead end.
 | **Value** | the **post-hash** token, identical to the one delivered on the webhook and persisted at §26.9 — one value, three surfaces, never recomputed per-surface |
 | **Direction** | **read-only correlation, not addressing.** §0.7's one-way rule is unchanged and unqualified: no ingress surface accepts this token, and its presence on the projection does NOT make it a key |
 | **Constraint restated** | `Spec_Control_Plane_v1_112.md` §2.2 constraint 2 applies verbatim — the **internal** identity still never appears on this surface. Only the hashed token does |
-| **Absence** | `None` on every location that has no pre-dispatch gate-owning escalation; the projection is byte-identical to pre-arc there |
+| **Absence** | `None` on every location that has no pre-dispatch gate-owning escalation — including every **already-durable** snapshot captured before this field existed. The field is **omitted from the serialized projection when `None`**, not emitted as `null`: a default `model_dump(mode="json")` would write `"escalation_instance_id": null` and the byte-identity promise would be false on exactly the legacy population it matters for. Same rule, same reason, as the §0.4.2 resume-state compatibility clause; a legacy-snapshot witness covers it |
 
 **Why this is correlation and not the deferred addressing half.** §0.9 registers "the
 pause-view addressing half" as NOT absorbed, and that stays true: addressing means the
@@ -537,7 +537,7 @@ this delta's to resolve; §0.5's bar is written to hold under either resolution.
 
 ### §0.12 Byte-identical-when-absent
 
-On the linear/validator path the new field is `None`, the three `payload_body` keys are
+On the linear/validator path the new field is `None`, the four `payload_body` keys are
 absent, and the wire body is byte-identical to pre-arc — the webhook adapter is an
 explicit field-by-field mapper, so an unset Optional adds no key. The ledger/audit key
 composition is likewise byte-identical when the discriminator is absent, per the
@@ -552,7 +552,7 @@ delta is a hard co-requisite rather than a courtesy cross-reference. The three s
 |---|---|---|
 | §14.8.8.1 **step 1** — the `HITLEscalationBrief` construction site | constructs the brief without `escalation_instance_id`; it is the **minter** named at §0.4(3) | must populate the field per §0.4.3's three-arm read order, from the two `StepExecutionContext` carriers |
 | §14.8.8.1 **step 2** — `idempotency_key = compose_hitl_action_id(step_context.parent_action_id, placement.position)` | a **two-argument** call, workflow-scoped and branch-blind | must fold the token per §0.4(2-bis)'s pinned output, so the webhook `Idempotency-Key`, the CP audit `action_id` and the F2 ledger key stay **one identity family** per §0.2 |
-| `project_brief_to_payload` — the brief→wire adapter reached from **step 3** | an explicit field-by-field mapper over a fixed field set, receiving no branch context | must project §0.6's three `payload_body` keys; without this site nothing emits them and §0.6 is unimplementable at the only place the wire body is built |
+| `project_brief_to_payload` — the brief→wire adapter reached from **step 3** | an explicit field-by-field mapper over a fixed field set, receiving no branch context | must project §0.6's four `payload_body` keys — including the BARE token, the one that makes the webhook equality-matchable against §0.4.4's projection; without this site nothing emits them and §0.6 is unimplementable at the only place the wire body is built |
 
 **Why the widening has to land inside `compose_hitl_action_id` and not beside it.** §0.2's
 one-identity-family promise is what makes the audit join work; composing a separate

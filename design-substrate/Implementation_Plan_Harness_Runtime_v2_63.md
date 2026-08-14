@@ -49,12 +49,23 @@ the CP carriers would have shipped with nothing writing to them.
    not only the webhook one: `hitl_gate_composer.py:1302` (step-2 webhook key), `:1543`
    (`_compose_and_persist_audit` — the CP audit `action_id` and the F2 ledger key) and
    `:2238` (the `hitl.invocation.audit_ledger_entry_id` span correlation). The token is
-   folded inside the composer, never composed into a second key beside it. Witnessed by
-   asserting the webhook `Idempotency-Key`, the CP audit `action_id`, the F2 ledger key and
-   the span attribute are the SAME value for one escalation — the one-identity-family
-   promise of CP §0.2. **Widening only the webhook call would make that promise FALSE in
-   the shipped system** and would leave criterion 5's defect witness operating on the
-   unwidened audit key, so it could never close.
+   folded inside the composer, never composed into a second key beside it. **Widening only
+   the webhook call would make CP §0.2's one-identity-family promise FALSE in the shipped
+   system** and would leave criterion 5's defect witness operating on the unwidened audit
+   key, so it could never close.
+
+   **The witness is SPLIT BY VENUE, because a four-way equality assertion on one escalation
+   is unsatisfiable.** `_escalate_to_secondary_channel` (`hitl_gate_composer.py:1268`) is
+   declared `NoReturn` and raises before the `hitl.invocation.audit_ledger_entry_id`
+   assignment at `:2238` — a fact already pinned in-tree by
+   `test_b71_escalation_token_rides_the_tracing_export.py`, which asserts that attribute is
+   unreachable on the escalation path and reddens if the helper stops being `NoReturn`. So:
+   (a) on the ESCALATION venue, assert the webhook `Idempotency-Key` equals the audit
+   `action_id` and the F2 ledger key written when the gate later resolves, and do NOT assert
+   the span attribute — it does not exist there; (b) on the venue where `:2238` IS reached,
+   assert the span attribute equals that same key. An unsplit witness would either fail
+   forever or be quietly weakened to whatever passes, which is the failure this arc has
+   already hit twice.
 4. **Byte-identity when the token is absent** (spec v1.121 site 2; CP §0.12): with
    `escalation_instance_id` `None`, the composed key equals the pre-arc two-argument key
    exactly. Witnessed against a pre-arc fixture value, not by asserting a shape.
