@@ -189,6 +189,17 @@ forward-register *ARGS:
 forward-register-check:
     uv run python tools/forward_register.py --check
 
+# ─── per-ROUND arc self-check (the pre-push global-property gate) ───────────
+# Re-resolves every file:line cite the arc ADDED, cross-checks count claims
+# against every mirror, scans newly-minted §labels for delta-chain collisions,
+# and asserts a touched register row renders a prose body under --detail.
+# Run it BEFORE EVERY PUSH, not once per arc — the B-71 leg's rounds 7-10 found
+# defects the ABSORPTION rounds introduced, which a per-arc check cannot see.
+# See tools/leg_selfcheck.py's own header for the diagnosis.
+#   just leg-selfcheck --uncommitted   # before committing
+leg-selfcheck *ARGS:
+    uv run python tools/leg_selfcheck.py "$@"
+
 # ─── roadmap_status.md — deterministic mechanical-skeleton refresh ──────────
 # Owns the anchor table / in-flight PR table / capped recently-completed +
 # drift-log tables. Does NOT touch the agent-authored Next-action prose.

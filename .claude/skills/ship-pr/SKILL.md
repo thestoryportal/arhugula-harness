@@ -19,6 +19,21 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   *current* HEAD, not an earlier one; (e) state in the PR body that this pass ran. First
   drafts historically burn 5–10 codex rounds on exactly these defect classes — this pass
   collapses them before round 1.
+- **`just leg-selfcheck` — run it BEFORE EVERY PUSH, not once per arc.** The mechanical
+  half of the grounding pass above, and the only part of it that is cheap enough to repeat
+  every round: it re-resolves every `file:line` cite the arc ADDED, reports count claims
+  that DISAGREE across mirrors, flags a newly-minted `§label` already owned elsewhere in
+  the delta chain, and asserts a touched register row renders a prose body under
+  `--detail` (a YAML-only row prints its heading and nothing else). Use `--uncommitted`
+  before committing. **Why per-round:** the `B-71` spec leg took ten codex rounds, and
+  rounds 7–10 found defects the *absorption rounds themselves* introduced — counts drifted
+  five times, `§25.17`/`§25.18` were already CP v1.32's, a code claim was true only under a
+  guard that never fires on the defect's own path. Running the global checks once per arc
+  cannot catch defects introduced per round; ~7 of that leg's ~12 findings were mechanically
+  detectable. Round count, not token count, is the wall-clock cost.
+- **The non-mechanical residue is a habit, not a script:** *when you write a sentence about
+  what the code does, open the file in the same action.* Both P1s on the `B-71` leg were
+  sentences written from a narrative instead of from a call site.
 - **Out-of-family review.** `just codex-review` (branch-vs-`main`) to convergence — fix
   real findings, hermetically regression-test each (§13.1). Use `--base` here, NOT
   `-uncommitted`: `-uncommitted` reviews untracked files too, so any untracked WIP in the
@@ -78,9 +93,58 @@ This is the step most often done wrong. After the PR merges:
    `.harness/roadmap_drift_log_archive.md`. Use `--dry-run` to preview the diff
    first on a high-stakes refresh. `just roadmap-status-check` is the CI/pre-commit
    gate (cap violations or a real hash mismatch = exit 1).
-   **Still hand-authored, by design (not machine-derivable):** the `## Next
-   action` prose block and the `--notes` text itself — write those as before,
-   the script only splices them into a structurally-guaranteed-correct skeleton.
+   **The `## Next action` pointer is now SPLICED, not hand-edited.** Its prose
+   is still agent-authored (as is `--notes`), but hand-editing the paragraph is
+   what reddened `main` on 2026-08-13: commit `49b00f85` re-pointed it by hand
+   without re-running the tool, so the anchor still recorded a `git_head` two
+   commits back, `codex_context_guard._is_terminating_refresh_commit` (which
+   requires a refresh commit's recorded `git_head` to equal its OWN parent)
+   rejected it as a verified refresh point, and CI hard-failed
+   `ROADMAP_STATUS_DRIFT` in both the guard job and `test_codex_stop_gate`.
+   Install it with the TOOL instead, in two guard-clean steps:
+
+   **The next-action pointer is installed BY THE TOOL, inside the terminating
+   refresh — never hand-edited:**
+   ```
+   just roadmap-status --refresh --pr "PR #<NNN>" --date <YYYY-MM-DD> \
+     --notes "<what shipped>" --next-action "<new pointer prose, ONE paragraph>"
+   ```
+   This installs the pointer AND refreshes the anchor in one single-file write,
+   so `_lag_expected` covers it. Hand-editing the paragraph is what reddened
+   `main` on 2026-08-13 (`49b00f85` left the anchor recording a `git_head` two
+   commits back, so it was not a verified refresh point).
+
+   **Never put a `roadmap_status.md` edit in a substantive content PR.** A commit
+   on `main` touching it without being a verified terminating refresh satisfies
+   neither guard exception, and `main`'s post-merge CI hard-fails.
+
+   **Archive the SUPERSEDED round (N−1) inside the substantive content PR:**
+   ```
+   just roadmap-status --archive-superseded
+   ```
+   It reads the most recent round that is no longer live from the head's own git
+   history and appends it to `.harness/roadmap-next-action-archive.md` as `Prior`.
+   Archive-only write, so the content merge stays the single non-refresh commit
+   `_owed_lag` tolerates.
+
+   **Why N−1 and not the live round** (`B-168`, resolved exit (iii)): three
+   constraints collide — the archive is PRIOR-rounds-only, the refresh may touch
+   only `roadmap_status.md`, and `_owed_lag` tolerates exactly one non-refresh
+   commit after a refresh. Archiving the round that is still current satisfies
+   the first two and breaks the third's premise; archiving N−1 satisfies all
+   three **unchanged**, and is exactly what the archive's own header has always
+   specified. The archive therefore lags by one arc BY DESIGN; the live head's
+   git history is the lossless record meanwhile.
+
+      `--refresh` REFUSES to write a second file rather than silently producing a
+   two-file commit; if it says a drift-log trim is owed, run `--trim-drift-log`
+   as its own step — and if the overflow comes from a NEW drift event, pass it
+   there (`--trim-drift-log --drift-source ... --drift-resolution ... --date ...`),
+   since pre-trimming cannot help with a row that does not exist yet.
+
+   Both `--check` and `--refresh` print the remaining byte headroom. The
+   drift-log byte budget is INFORMATIONAL (the hard cap is the whole-file
+   `HEAD_BYTE_BUDGET`), so it tells you where to reclaim bytes without redding CI.
    Mark any closed `R-NNN` RESOLVED + propagate `next_pointer` (still by hand — the
    R-NNN registry prose is out of the script's mechanical scope).
 2. **§12.2.1 — the recursion-stopping fixed point.** The refresh commit is itself a merge,

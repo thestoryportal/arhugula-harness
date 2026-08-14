@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 165
+  total: 168
   open: 1
   design_substrate_gated: 0
-  registered_finding: 31
+  registered_finding: 33
   operator_gated: 0
   held: 2
-  closed: 131
-  identity_digest: '12ba7639035cb846'
+  closed: 132
+  identity_digest: 'ac9f5f547652bff7'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9155,3 +9155,123 @@ items:
     escalation token on any venue *(registered at the `B-71` spec leg PR, out-of-family review round 2,
     2026-08-13; the round-9 pass then showed the cited test exercises the SYNC loop, not the token-bearing
     webhook venue — so the row leads with the uncertainty, not a defect claim)*'
+- id: B-166
+  title: Wall-clock deadline witness test_ow_proceed_deadline_stashed_child_completed_not_cancelled
+    flakes only under full-suite interference, risking a masked genuine red in the B-71 impl leg
+  status: registered_finding
+  summary: 'A wall-clock deadline witness that fails intermittently in FULL-SUITE runs and never in
+    isolation. Observed 4 of ~12 full-suite runs on 2026-08-13, on an idle machine as well as a loaded
+    one, and -- decisively -- against branch diffs containing ZERO Python files (PRs #1336 and #1337),
+    so no arc under review can have caused it. MECHANISM (grounded by code read at HEAD, NOT by reproduction):
+    the test monkeypatches _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS to 0.3 (line 1103) and scripts worker-1
+    to block for 1.2s, then asserts an exact terminal split _branch_terminals(ledger) == {0: ''completed'',
+    1: ''timed_out''} -- i.e. it asserts that worker-0''s stash lands BEFORE the 0.3s barrier deadline
+    fires. Nothing synchronizes the two: the stash-then-deadline ordering the docstring names is left
+    to the scheduler, so under full-suite interference worker-0 can be cut by the same deadline and
+    report timed_out. Same family as the closed B-143 zero-headroom wall-clock assertion. NEGATIVE CONTROL
+    RUN AT REGISTRATION: 25 consecutive isolated runs of this test, 25 passed / 0 failed -- which does
+    NOT clear the test, it CONFIRMS the flake is interference-dependent and therefore invisible to any
+    per-test or per-file re-run used to ''verify'' it.'
+  close_out: 'WHY THIS IS REGISTERED RATHER THAN WAVED OFF: the cost is not the lost minutes, it is
+    MASKING. The next arc (the B-71 impl leg, U-CP-102 + U-RT-155) is a real code arc touching the fan-out
+    driver, and a session that has learned to call this red ''the known flake'' will wave away a GENUINE
+    regression in exactly the subsystem this test guards. STEP 1 -- REPRODUCE IT AS A FULL-SUITE PHENOMENON,
+    which is the only venue it appears in: run the full suite repeatedly (the 25-run isolated probe
+    already recorded here is a NEGATIVE control and must not be mistaken for a falsifier), capture the
+    failing assertion''s actual terminal map, and confirm whether the deviation is worker-0 reporting
+    timed_out (the predicted mechanism) or something else (in which case the mechanism above is FALSIFIED
+    and this row must be rewritten, not patched). STEP 2 -- decide the fix shape only after step 1:
+    if the mechanism holds, the repair is to make the stash-then-deadline ordering STRUCTURAL (an explicit
+    synchronization point that makes worker-0''s stash a precondition of the deadline rather than a
+    race the scheduler usually wins), NOT to widen the 0.3s threshold -- widening buys silence and leaves
+    the assertion non-discriminating, the failure mode B-143''s close-out already names. STEP 3 -- whatever
+    lands must keep the witness discriminating: mutation-probe it per PD-8, since a synchronization
+    that also removes the race the test exists to pin would be a green test that witnesses nothing.
+    FALSIFIER: a full-suite reproduction showing the deviation is NOT the predicted worker-0 cut, or
+    evidence that the 4/12 observation was itself a misread of a different assertion.'
+  heading: '### B-166 · Wall-clock deadline witness `test_ow_proceed_deadline_stashed_child_completed_not_cancelled`
+    flakes ONLY in full-suite runs, so it can mask a genuine red in the `B-71` impl leg *(registered
+    by the prevention arc that precedes `U-CP-102`, 2026-08-13)*'
+  council: No. This is a test-hygiene grounding question with a named mechanism (unsynchronized 0.3s
+    barrier deadline vs worker-0's stash) and a named falsifier (a full-suite reproduction whose deviation
+    is NOT the predicted worker-0 cut). There is no cross-domain tension to convene over -- step 1 is
+    execution, not deliberation.
+- id: B-167
+  title: leg-selfcheck's count check compares claims against each other rather than against a derived
+    ground-truth count, so a mirror in an untouched file is not checked
+  status: registered_finding
+  summary: 'The count check detects DISAGREEMENT between count claims; it does not RECOUNT. Out-of-family
+    review raised this as a [P1] against the arc''s own brief, which asked for cross-checking each claim
+    against the artifact it describes AND against every mirror (spec preamble, section heading, body,
+    plan deltas, clearance markers, artifact-pointers, forward-register.yaml, the prose register). WHAT
+    LANDED: added-lines scanning plus diff CONTEXT lines, so a single edited mirror can still disagree
+    with an untouched co-located one -- the cheapest sound widening, with no extra file reads and no
+    whole-file noise. WHAT DID NOT: a mirror in a file the arc never touched, or beyond the diff''s
+    context radius, is still invisible; and no claim is ever checked against a derived ground-truth
+    count. THE REASON IS NOT COST, IT IS SOUNDNESS: deriving a ground-truth count for an arbitrary noun
+    in an arbitrary artifact is not mechanizable in general, and the obvious cheap approximation --
+    scanning the FULL TEXT of touched files -- was tried in design and rejected because aggregate carriers
+    (the 165-row prose register, the roadmap status) carry unrelated counts of the same nouns across
+    unrelated rows, which would produce constant false disagreements and get the gate muted. A gate
+    that fires on everything is worse than no gate.'
+  close_out: 'STEP 1 -- decide whether a FORMAT-SCOPED recount is worth building, which is the only
+    sound version. The brief supplied concrete recipes for two specific shapes: `grep -c "^[0-9]\\+\\.
+    "` to count acceptance criteria in a plan unit block, and `grep -o "Criteria [0-9, and]*"` for mutation
+    probes. Both presuppose the per-axis plan''s structure (a numbered list under a `U-XXX-NN` heading).
+    Establish BY EXECUTION against the current plan heads whether those recipes return the right number
+    for a unit whose count is already known -- if they do not, the recount is not buildable as specified
+    and this row closes as a declared bound. STEP 2 -- if they do, scope the recount to exactly those
+    two nouns in exactly the plan/spec artifacts, never as a general free-text facility, and make the
+    ground-truth comparison HARD only where the derivation is exact. STEP 3 -- whatever lands must be
+    measured for FALSE POSITIVES against a sample of already-merged arcs before it is wired into the
+    pre-push path; a gate is only as useful as its precision. FALSIFIER (closes this row as a declared
+    bound rather than a gap): a demonstration that the format-scoped recount cannot be made exact on
+    the real artifacts, in which case the claims-versus-claims check plus diff context IS the sound
+    ceiling and the tool''s docstring already states it correctly.'
+  council: No. This is a precision/soundness question with an executable step 1 (do the brief's own
+    recipes return the right number on a known unit?). There is no cross-domain tension to convene over
+    -- the trade-off between recall and false-positive rate is settled by measurement, not deliberation.
+  heading: '### B-167 · `just leg-selfcheck`''s count check compares CLAIMS against each other, never
+    against GROUND TRUTH, so a mirror in an untouched file is invisible *(registered at the prevention
+    arc that precedes `U-CP-102`, from out-of-family review round 1 [P1], 2026-08-13)*'
+- id: B-168
+  title: 'archiving a superseded next-action round has no legal commit shape: prior-only archive, single-file
+    terminating refresh, and one-non-refresh-commit lag tolerance cannot all hold'
+  status: closed
+  summary: 'THE TRILEMMA, each leg independently established and none of them new to this arc. (a) The
+    next-action archive is PRIOR-ROUNDS-ONLY by design -- its own header states the current round lives
+    only in the live head, because a one-file terminating refresh can never rotate the archive (recorded
+    as codex round-6 resolution (b) at the U-CTX-03 arc), and test_actual_next_action_archive_exists_and_is_not_referenced_as_a_read_target
+    enforces it. (b) CLAUDE.md s12.2.1 requires a terminating refresh to change EXACTLY roadmap_status.md,
+    so the archive write cannot ride it. (c) codex_context_guard._owed_lag tolerates exactly ONE non-refresh
+    commit after a verified refresh (it requires HEAD''s PARENT to be that refresh), so an archive-only
+    PR landing AFTER the substantive content merge is a SECOND non-refresh commit and hard-fails ROADMAP_STATUS_DRIFT
+    on main. Together: the archive write cannot ride the refresh (b), cannot follow the content merge
+    (c), and cannot carry a still-current round (a) -- which is what riding the content PR itself would
+    do. EACH LEG WAS VERIFIED: (c) was reproduced against the guard; (a) was reproduced by running --archive-current-next-action
+    in the content PR and watching the enforcing test go RED.'
+  close_out: 'RESOLVED 2026-08-14 by EXIT (iii), selected by the operator''s settle-first direction
+    and implemented at PR #1338. Archive round N-1 -- the most recent ALREADY-SUPERSEDED round, read
+    from the live head''s git history -- rather than round N. This satisfies ALL THREE constraints UNCHANGED:
+    the archive keeps its prior-only invariant (the live round is never written there), the terminating
+    refresh still touches only roadmap_status.md, and the archive write rides the substantive CONTENT
+    PR so the content merge remains the single non-refresh commit _owed_lag tolerates. NO GOVERNANCE
+    AMENDMENT WAS NEEDED, because exit (iii) is not a new convention at all: the archive''s own header
+    has always specified exactly this ("archiving happens in the NEXT content PR after a round is superseded...
+    the superseded text is taken from git history of the live head"). The defect was that the tool''s
+    first draft archived the CURRENT round instead. SHIPPED: --archive-superseded (archive-only write;
+    finds the superseded round by walking the head''s history for the most recent differing round label),
+    and the archive-before-replace precondition on --refresh --next-action was REMOVED, since it silently
+    encoded exit (i) and made the refresh unrunnable at the one moment it is needed. CONSEQUENCE, stated
+    plainly: the archive lags by exactly one arc by design, and the live head''s git history (git log
+    -p -- .harness/roadmap_status.md) is the lossless record for that interval. WITNESSED on the real
+    repository: with post-#1337 live, --archive-superseded selected post-#1336, wrote only the archive,
+    left roadmap_status.md byte-identical, and the prior-only enforcing test stayed green.'
+  council: Possibly. Two of the three legs are governance surfaces (the prior-only invariant and s12.2.1)
+    and the third is the drift guard, so the choice is a cross-domain trade rather than a coding preference.
+    If the operator does not simply select a leg, a dyadic convening on process-invariant vs guard-precision
+    is the right shape.
+  heading: '### B-168 · Archiving a superseded next-action round has no legal commit shape — three workspace
+    constraints collide *(surfaced by out-of-family review rounds 11–13 of the prevention arc preceding
+    `U-CP-102`, 2026-08-14)*'
+  pr: 'PR #1338'

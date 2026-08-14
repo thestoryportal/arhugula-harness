@@ -71,7 +71,24 @@ HEAD_BYTE_BUDGET = 25_600
 # live "## Next action" section — re-accumulating them here is exactly the
 # regression the archive split (U-CTX-03) exists to prevent.
 _ARCHIVED_PARAGRAPH_RE = re.compile(r"^\*\*(Prior next action|Round \d+)", re.MULTILINE)
+#: The live pointer paragraph `--rotate-next-action` demotes and replaces. The
+#: `(post-#NNN)` label is part of the shape `validate()` counts, so the tool
+#: composes it rather than trusting caller-supplied prose to carry it.
+_CURRENT_PARAGRAPH_RE = re.compile(
+    r"^\*\*Current next action \(post-#[^)]*\)\.\*\*.*?(?=\n\n|\Z)", re.MULTILINE | re.DOTALL
+)
+#: Insertion point in NEXT_ACTION_ARCHIVE: immediately after the header block's
+#: `---` rule, so demoted rounds stay most-recent-first (the archive's own
+#: documented ordering).
+_ARCHIVE_INSERT_RE = re.compile(r"\n---\n\n")
 DRIFT_LOG_CAP = 10
+#: Byte budget for the `## Drift detection log` table's DATA rows. The row cap
+#: above bounds the row COUNT but not row SIZE, and the rows are agent-authored
+#: multi-KB narratives — at the 2026-08-13 saturation the ten capped rows were
+#: 9,620 B, 38% of a 25,536 B file with 64 B of headroom left. Overflow moves
+#: (never deletes) into DEFAULT_ARCHIVE exactly as count overflow does; the
+#: newest row is always kept regardless of size so the table is never empty.
+DRIFT_LOG_BYTE_BUDGET = 3_000
 #: structural soft-severity marker (codex round-8): ONLY messages the validator
 #: itself prefixes with this are non-hard — substring matching on "informational"
 #: would let interpolated filenames/titles containing the word soften a real
@@ -282,19 +299,41 @@ def prepend_drift_log(text: str, date: str, source: str, resolution: str) -> str
     return _replace_table_data_rows(text, DRIFT_LOG_HEADING, rows)
 
 
+def _drift_keep_count(rows: list[str], cap: int, byte_budget: int) -> int:
+    """How many most-recent drift rows survive BOTH the row cap and the byte
+    budget. The newest row always survives (`max(1, …)`) — an empty data-row
+    block would leave the table header dangling and make the section
+    unparseable by `_table_block_span`, so a single oversized row is kept and
+    reported rather than trimmed away."""
+    kept = 0
+    used = 0
+    for row in rows[:cap]:
+        size = len(row.encode("utf-8")) + 1  # +1 for the row's newline
+        if kept and used + size > byte_budget:
+            break
+        used += size
+        kept += 1
+    return max(1, kept)
+
+
 def trim_drift_log(
-    text: str, archive_path: Path = DEFAULT_ARCHIVE, cap: int = DRIFT_LOG_CAP
+    text: str,
+    archive_path: Path = DEFAULT_ARCHIVE,
+    cap: int = DRIFT_LOG_CAP,
+    byte_budget: int = DRIFT_LOG_BYTE_BUDGET,
 ) -> tuple[str, str | None, int]:
-    """Cap the live drift log to `cap` most-recent rows; move overflow into the
-    archive file (never delete). Idempotent: a row already present in the
-    archive (by exact text) is never re-appended; if nothing exceeds the cap
-    this is a byte-identical no-op. PURE — writes nothing to disk; returns
+    """Cap the live drift log to the most-recent rows that fit BOTH `cap` rows
+    and `byte_budget` bytes; move overflow into the archive file (never
+    delete). Idempotent: a row already present in the archive (by exact text)
+    is never re-appended; if nothing exceeds either bound this is a
+    byte-identical no-op. PURE — writes nothing to disk; returns
     (new_status_text, new_archive_text_or_None, moved_count). `new_archive_text`
     is None iff nothing needed to move (callers must not write in that case)."""
     rows = _get_table_data_rows(text, DRIFT_LOG_HEADING)
-    if len(rows) <= cap:
+    keep_n = _drift_keep_count(rows, cap, byte_budget)
+    if len(rows) <= keep_n:
         return text, None, 0
-    keep, overflow = rows[:cap], rows[cap:]
+    keep, overflow = rows[:keep_n], rows[keep_n:]
 
     archive_text = (
         archive_path.read_text()
@@ -319,6 +358,234 @@ def trim_drift_log(
 
     new_text = _replace_table_data_rows(text, DRIFT_LOG_HEADING, keep)
     return new_text, new_archive_text, len(to_append)
+
+
+# --- Next-action rotation (the relief valve `--refresh` structurally cannot be) --
+
+
+def _current_round_label(text: str) -> str | None:
+    m = _CURRENT_PARAGRAPH_RE.search(text)
+    if m is None:
+        return None
+    label = re.search(r"\(post-#([^)]*)\)", m.group(0))
+    return label.group(1) if label else None
+
+
+def find_superseded_round(status_path: Path, project_dir: Path) -> tuple[str, str] | None:
+    """The most recent next-action round that is NO LONGER the live one, read
+    from the live head's own git history.
+
+    This is the archive's OWN documented convention, verbatim: *archiving happens
+    in the NEXT content PR after a round is superseded, and the superseded text is
+    taken from git history of the live head.* Archiving the round that is still
+    CURRENT (an earlier draft of this tool did exactly that) breaks the archive's
+    prior-only invariant — the trilemma recorded at `B-168`, resolved by exit
+    (iii): archive round N-1, so all three constraints hold UNCHANGED and the
+    write may ride an ordinary content PR.
+
+    Returns (label, paragraph) or None when nothing is superseded yet.
+    """
+    rel = str(status_path.resolve().relative_to(project_dir.resolve()))
+    live = _current_round_label(status_path.read_text())
+    # FAIL CLOSED on unusable history. `_sh` degrades to "" on any git failure,
+    # and a shallow clone yields a truncated log — either would make this return
+    # None, the CLI report "nothing to archive", and the owed round go
+    # permanently unarchived while later runs move on to newer ones (codex round
+    # 14 [P2]). "No superseded round" and "cannot see the history" are different
+    # answers and must not share an exit path.
+    revs = _sh(f"git log --format=%H -- {rel}", project_dir).split()
+    if not revs:
+        raise RoadmapStatusError(
+            f"git log returned no history for {rel} — refusing to report 'nothing to "
+            "archive' when the history is simply unreadable"
+        )
+    for rev in revs:
+        blob = _sh(f"git show {rev}:{rel}", project_dir)
+        if not blob:
+            continue
+        label = _current_round_label(blob)
+        if label and label != live:
+            m = _CURRENT_PARAGRAPH_RE.search(blob)
+            if m:
+                return label, m.group(0)
+    # Nothing differing found. In a SHALLOW clone that is ambiguous — genuinely
+    # nothing superseded, or simply beyond the graft point — and reporting
+    # "nothing to archive" would let the owed round go permanently unarchived
+    # while later runs move on to newer ones. Shallowness only matters HERE, on
+    # the not-found path: this workspace is normally shallow, so refusing up
+    # front would break the documented workflow outright.
+    if _sh("git rev-parse --is-shallow-repository", project_dir).strip() == "true":
+        raise RoadmapStatusError(
+            f"no superseded round found within a SHALLOW clone's {len(revs)} available "
+            f"revision(s) of {rel} — cannot distinguish 'none' from 'beyond the graft "
+            "point'. Re-run with full history (git fetch --unshallow)."
+        )
+    return None
+
+
+def archive_superseded_round(paragraph: str, archive_text: str) -> str | None:
+    """Append an already-SUPERSEDED round to the archive, relabelled `Prior`.
+    Archive-only write; idempotent. Returns None if already present."""
+    demoted = paragraph.replace("**Current next action", "**Prior next action", 1)
+    if demoted.strip() in archive_text:
+        return None
+    ins = _ARCHIVE_INSERT_RE.search(archive_text)
+    if ins is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_ARCHIVE.name}: no `---` header rule found — cannot "
+            "determine the most-recent-first insertion point"
+        )
+    at = ins.end()
+    return archive_text[:at] + demoted.strip() + "\n\n" + archive_text[at:]
+
+
+def archive_current_next_action(text: str, archive_text: str) -> str | None:
+    """Append the live `**Current next action**` paragraph to the archive,
+    relabelled `Prior`, WITHOUT touching the status file. Returns the new archive
+    text, or None if it is already archived (idempotent).
+
+    This split is what makes the workflow PR-compatible (codex round 11 [P1]).
+    A rotation that wrote BOTH files could never transit a PR: bundled with the
+    refresh, the PR's base..head diff includes the archive, so the §12.2.1 shape
+    gate rejects a refresh-prefixed title; titled otherwise, the squash merge is
+    non-terminating and reds `main`. Split, both steps are individually clean —
+    this one touches only the archive (so `_owed_lag` applies), and the
+    terminating refresh touches only `roadmap_status.md` (so `_lag_expected`
+    applies).
+    """
+    m = _CURRENT_PARAGRAPH_RE.search(text)
+    if m is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_HEADING}: no `**Current next action (post-#NNN).**` paragraph to archive"
+        )
+    demoted = m.group(0).replace("**Current next action", "**Prior next action", 1)
+    if demoted.strip() in archive_text:
+        return None
+    ins = _ARCHIVE_INSERT_RE.search(archive_text)
+    if ins is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_ARCHIVE.name}: no `---` header rule found — cannot "
+            "determine the most-recent-first insertion point"
+        )
+    at = ins.end()
+    return archive_text[:at] + demoted.strip() + "\n\n" + archive_text[at:]
+
+
+def install_next_action(text: str, pr_ref: str, body: str) -> str:
+    """Replace the live pointer paragraph. STATUS FILE ONLY — safe inside the
+    single-file terminating refresh.
+
+    Deliberately does NOT require the outgoing round to be archived first. Under
+    the `B-168` exit (iii) resolution the archive lags by exactly one arc BY
+    DESIGN — the next content PR archives this round via `--archive-superseded`,
+    and the live head's git history is the lossless record meanwhile. An earlier
+    draft enforced archive-before-replace, which silently encoded a DIFFERENT
+    exit (relaxing the archive's prior-only invariant) and made the refresh
+    unrunnable at the one moment it is needed.
+    """
+    m = _CURRENT_PARAGRAPH_RE.search(text)
+    if m is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_HEADING}: no `**Current next action (post-#NNN).**` paragraph to replace"
+        )
+    digits = re.fullmatch(r"(?:PR\s*)?#?\s*(\d+)", pr_ref.strip(), re.IGNORECASE)
+    if not digits:
+        raise RoadmapStatusError(
+            f"--pr {pr_ref!r} is not a PR number — expected `1234`, `#1234` or `PR #1234`"
+        )
+    if "\n\n" in body.strip():
+        raise RoadmapStatusError(
+            "--next-action body must be a SINGLE paragraph (no blank lines) — the "
+            "live pointer is one paragraph, and only the first would ever be archived"
+        )
+    if not body.strip():
+        raise RoadmapStatusError(
+            "--next-action requires a non-empty body — refusing to install an empty "
+            "next-action pointer (an empty frontier passes --check silently)"
+        )
+    new_paragraph = f"**Current next action (post-#{digits.group(1)}).** {body.strip()}"
+    return text[: m.start()] + new_paragraph + text[m.end() :]
+
+
+def rotate_next_action(
+    text: str, archive_text: str, pr_ref: str, body: str
+) -> tuple[str, str | None]:
+    """Demote the live `**Current next action (post-#A)**` paragraph into the
+    next-action archive (relabelled `Prior`, body verbatim) and install a new
+    Current paragraph in its place. PURE — writes nothing; returns
+    (new_status_text, new_archive_text_or_None); `new_archive_text` is None iff
+    the demoted round was already archived (idempotent re-run).
+
+    This is deliberately NOT part of `--refresh`. §12.2.1 requires a
+    terminating refresh commit to touch EXACTLY `.harness/roadmap_status.md`,
+    so a mode that also writes the archive can never be the terminating commit
+    — which is precisely why the relief valve was unreachable from inside a
+    refresh and the head saturated instead. Run this as its OWN content commit
+    (unprefixed title, per §12.2.1 "bundled changes drop the prefix") BEFORE
+    the terminating refresh."""
+    m = _CURRENT_PARAGRAPH_RE.search(text)
+    if m is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_HEADING}: no `**Current next action (post-#NNN).**` paragraph to rotate"
+        )
+    demoted = m.group(0).replace("**Current next action", "**Prior next action", 1)
+
+    # `--pr` is documented as accepting `PR #1234`; `lstrip("#")` handled only a
+    # bare `#1234` and turned the documented form into the malformed label
+    # `(post-#PR #1234)`, which validate() then accepted (codex round 2 [P2]).
+    # Extract the numeric shape, and refuse anything else rather than emit a
+    # label the rest of the machinery keys on.
+    digits = re.fullmatch(r"(?:PR\s*)?#?\s*(\d+)", pr_ref.strip(), re.IGNORECASE)
+    if not digits:
+        raise RoadmapStatusError(
+            f"--pr {pr_ref!r} is not a PR number — expected `1234`, `#1234` or `PR #1234`"
+        )
+    num = digits.group(1)
+    # An empty/whitespace BODY (an unset shell variable, typically) would archive
+    # the live pointer and install a marker with NO actionable text — and
+    # validate() only COUNTS the marker, so the empty frontier would pass --check
+    # too, leaving the next session with no next action at all (codex round 3
+    # [P2]). Refuse before either file is modified.
+    # The live pointer is ONE paragraph by construction: _CURRENT_PARAGRAPH_RE
+    # stops at the first blank line, so a multi-paragraph body writes fine but
+    # only its FIRST paragraph is archived at the next rotation — the remainder
+    # stays in the live section permanently, growing the head while validation
+    # still passes (codex round 5 [P2]). Reject rather than silently truncate
+    # the archive.
+    if "\n\n" in body.strip():
+        raise RoadmapStatusError(
+            "--rotate-next-action body must be a SINGLE paragraph (no blank lines) — "
+            "the live pointer is one paragraph, and only the first would ever be "
+            "archived, leaving the rest permanently in the live section"
+        )
+    if not body.strip():
+        raise RoadmapStatusError(
+            "--rotate-next-action requires a non-empty body — refusing to install an "
+            "empty next-action pointer (an empty frontier passes --check silently)"
+        )
+    new_paragraph = f"**Current next action (post-#{num}).** {body.strip()}"
+
+    # Re-running the SAME rotation must be a no-op. Without this the newly
+    # installed paragraph is read as the current one, demoted into the archive,
+    # and left live as Current — so the archive claims a round is Prior while the
+    # head still says it is Current (codex round 2 [P2]; the original idempotency
+    # test missed it by re-running against the ORIGINAL text, not the output).
+    if m.group(0).strip() == new_paragraph.strip():
+        return text, None
+
+    new_text = text[: m.start()] + new_paragraph + text[m.end() :]
+
+    if demoted.strip() in archive_text:
+        return new_text, None
+    ins = _ARCHIVE_INSERT_RE.search(archive_text)
+    if ins is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_ARCHIVE.name}: no `---` header rule found — cannot "
+            "determine the most-recent-first insertion point"
+        )
+    at = ins.end()
+    new_archive_text = archive_text[:at] + demoted.strip() + "\n\n" + archive_text[at:]
+    return new_text, new_archive_text
 
 
 # --- Validation (--check) -----------------------------------------------------
@@ -349,6 +616,36 @@ def validate(text: str, status_path: Path = DEFAULT_STATUS) -> list[str]:
             violations.append(
                 f"{DRIFT_LOG_HEADING}: {len(drift)} rows exceeds cap {DRIFT_LOG_CAP} "
                 f"(run --trim-drift-log)"
+            )
+        # Row COUNT alone never bounded this section: the rows are multi-KB
+        # narratives, so ten legal rows were 38% of the whole-file budget.
+        # Judge the BYTES directly, not "would a trim change the row count".
+        # Those are different questions, and conflating them fails open on the
+        # single-oversized-row case (out-of-family review, round 1): with one
+        # 5 KB row, `_drift_keep_count` returns 1 because the newest row is
+        # always retained, `len(drift) > 1` is False, and --check reported no
+        # violation against a section 67% over budget.
+        drift_bytes = sum(len(r.encode("utf-8")) + 1 for r in drift)
+        if drift_bytes > DRIFT_LOG_BYTE_BUDGET:
+            trimmable = len(drift) > _drift_keep_count(drift, DRIFT_LOG_CAP, DRIFT_LOG_BYTE_BUDGET)
+            remedy = (
+                f"run --trim-drift-log; overflow moves to {DEFAULT_ARCHIVE.name}, "
+                "nothing is deleted"
+                if trimmable
+                else "the NEWEST row alone exceeds the budget and is always retained "
+                "(trimming cannot help) — shorten that row's prose"
+            )
+            # INFORMATIONAL, not hard. The load-bearing cap is the WHOLE-FILE
+            # HEAD_BYTE_BUDGET above, which stays hard. This sub-budget's job is
+            # to say WHERE the bytes are and that a trim will reclaim them — the
+            # 2026-08-13 saturation was a file legally under the hard cap with 64
+            # B of headroom, and 38% of it sitting in this one section. Hard-
+            # blocking CI on a sub-budget while the real cap is satisfied would
+            # be over-enforcement, and would red `main` for every arc between the
+            # budget landing and the next trim.
+            violations.append(
+                f"{INFORMATIONAL_PREFIX}{DRIFT_LOG_HEADING}: {drift_bytes} B of data "
+                f"rows exceeds the {DRIFT_LOG_BYTE_BUDGET} B guidance budget ({remedy})"
             )
     except RoadmapStatusError as e:
         violations.append(str(e))
@@ -641,6 +938,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--trim-drift-log", action="store_true", help="cap+archive drift log only")
     ap.add_argument(
+        "--archive-superseded",
+        action="store_true",
+        help="append the most recent ALREADY-SUPERSEDED next-action round (read "
+        "from the live head's git history) to the next-action archive as Prior. "
+        "Writes ONLY the archive, so it rides an ordinary content PR. Archiving "
+        "the round that is still CURRENT would break the archive's prior-only "
+        "invariant — see B-168 exit (iii)",
+    )
+    ap.add_argument(
+        "--next-action",
+        metavar="BODY",
+        help="with --refresh: install BODY as the new Current next-action pointer "
+        "in the SAME single-file write (requires --pr)",
+    )
+    ap.add_argument(
         "--refresh",
         action="store_true",
         help="mechanical refresh (anchor + in-flight + recently-completed)",
@@ -732,19 +1044,81 @@ def main(argv: list[str] | None = None) -> int:
         if hard:
             print("ROADMAP STATUS CHECK FAILED:", file=sys.stderr)
             return 1
-        print("roadmap_status.md OK")
+        head_bytes = len(text.encode("utf-8"))
+        print(
+            f"roadmap_status.md OK ({head_bytes}/{HEAD_BYTE_BUDGET} B, "
+            f"headroom {HEAD_BYTE_BUDGET - head_bytes} B)"
+        )
         return 0
 
     if args.trim_drift_log:
+        # A drift event that OVERFLOWS the log deadlocked the documented
+        # `--refresh --drift-source` workflow (codex round 5 [P1]): --refresh
+        # prepends the row, the trim then needs an archive write, and --refresh
+        # refuses — while pre-running --trim-drift-log was a no-op because the
+        # row did not exist yet. So the CONTENT mode carries the new event: it
+        # prepends and archives in one content commit, after which the
+        # terminating --refresh is genuinely one-file.
+        original = text
+        if args.drift_source:
+            if not args.date:
+                ap.error("--trim-drift-log --drift-source requires --date")
+            text = prepend_drift_log(
+                text, args.date, args.drift_source, args.drift_resolution or ""
+            )
         new_text, new_archive_text, moved = trim_drift_log(text, args.archive)
+        # Same hard-cap refusal the rotation path applies (codex round 4): a
+        # large new resolution is RETAINED by _drift_keep_count (the newest row
+        # always survives), so this path could write past HEAD_BYTE_BUDGET and
+        # exit 0 — a 10 KB resolution wrote 26,172 B, which validate() then
+        # hard-rejects, guaranteeing the next CI check fails (codex round 9).
+        trimmed_bytes = len(new_text.encode("utf-8"))
+        if trimmed_bytes > HEAD_BYTE_BUDGET:
+            print(
+                f"--trim-drift-log would leave {args.status.name} at {trimmed_bytes} B, "
+                f"over the {HEAD_BYTE_BUDGET} B hard cap (by "
+                f"{trimmed_bytes - HEAD_BYTE_BUDGET} B) — refusing to write a status "
+                "file --check would reject. Shorten the drift resolution text.",
+                file=sys.stderr,
+            )
+            return 2
         if args.dry_run:
             print(f"would move {moved} row(s) to {args.archive}")
             return 0
         if new_archive_text is not None:
             args.archive.write_text(new_archive_text)
-        if new_text != text:
+        # Compare against the ORIGINAL file, not the already-prepended text: a
+        # small event that leaves the log under both limits makes trim_drift_log
+        # a no-op, so `new_text != text` was False and the event was silently
+        # DROPPED while the command printed "moved 0" and exited 0 (codex round
+        # 6 [P2] — a regression the round-5 fix introduced).
+        if new_text != original:
             args.status.write_text(new_text)
         print(f"moved {moved} row(s) to {args.archive}")
+        return 0
+
+    if args.archive_superseded:
+        na_archive = status_root / ".harness" / "roadmap-next-action-archive.md"
+        if not na_archive.is_file():
+            print(f"next-action archive not found: {na_archive}", file=sys.stderr)
+            return 2
+        found = find_superseded_round(args.status, status_root)
+        if found is None:
+            print("no superseded next-action round found in history — nothing to archive")
+            return 0
+        label, paragraph = found
+        new_archive = archive_superseded_round(paragraph, na_archive.read_text())
+        if new_archive is None:
+            print(f"superseded round post-#{label} is already archived — no change")
+            return 0
+        if args.dry_run:
+            print(f"would archive superseded round post-#{label} to {na_archive.name}")
+            return 0
+        na_archive.write_text(new_archive)
+        print(
+            f"archived superseded round post-#{label} to {na_archive.name} "
+            f"(ONE file; {args.status.name} untouched — this rides the CONTENT PR)"
+        )
         return 0
 
     if args.refresh:
@@ -755,11 +1129,46 @@ def main(argv: list[str] | None = None) -> int:
         new_text = refresh_anchor(text, state, args.git_head_note, last_refreshed)
         new_text = refresh_in_flight(new_text, state)
         new_text = prepend_recently_completed(new_text, args.pr, args.date, args.notes)
+        if args.next_action is not None:
+            new_text = install_next_action(new_text, args.pr, args.next_action)
         if args.drift_source:
             new_text = prepend_drift_log(
                 new_text, args.date, args.drift_source, args.drift_resolution or ""
             )
-        new_text, new_archive_text, moved = trim_drift_log(new_text, args.archive)
+        # §12.2.1, enforced instead of merely documented: a terminating refresh
+        # commit must change EXACTLY `.harness/roadmap_status.md`. This mode used
+        # to silently write `args.archive` too whenever the drift log overflowed,
+        # producing a two-file commit that the shape gate then rejects — the
+        # operator noticed only after the fact, and the workspace absorbed it as
+        # "commit the trim separately" folklore. Refuse instead, and name the
+        # mode that legitimately does the move.
+        trimmed_text, would_archive, would_move = trim_drift_log(new_text, args.archive)
+        if would_archive is not None:
+            print(
+                f"--refresh would move {would_move} drift-log row(s) into "
+                f"{args.archive.name}, making this a TWO-FILE commit — which "
+                "cannot be a terminating refresh (§12.2.1 requires exactly "
+                f"{DEFAULT_STATUS.name}). Run `--trim-drift-log` as its own content "
+                "commit FIRST, then re-run --refresh. If the overflow is caused by a "
+                "NEW drift event, pass it to that content step instead — "
+                "`--trim-drift-log --drift-source ... --drift-resolution ... --date ...` "
+                "— since pre-trimming cannot help with a row that does not exist yet.",
+                file=sys.stderr,
+            )
+            return 2
+        # No archive WRITE is needed — but the trim can STILL change the status
+        # text, when the overflow rows are already present in the archive (an
+        # idempotent re-run, or a --trim-drift-log whose archive write landed and
+        # whose status write did not). Discarding the trimmed text there wrote a
+        # still-over-budget status and reported success — a fail-open found by
+        # out-of-family review, round 1. Decide from the status DELTA, and keep
+        # the trimmed text; this stays a one-file write either way.
+        moved = would_move
+        if trimmed_text != new_text:
+            moved = len(_get_table_data_rows(new_text, DRIFT_LOG_HEADING)) - len(
+                _get_table_data_rows(trimmed_text, DRIFT_LOG_HEADING)
+            )
+            new_text = trimmed_text
         if args.dry_run:
             import difflib
 
@@ -771,12 +1180,25 @@ def main(argv: list[str] | None = None) -> int:
             )
             sys.stdout.writelines(diff)
             return 0
-        if new_archive_text is not None:
-            args.archive.write_text(new_archive_text)
+        head_bytes = len(new_text.encode("utf-8"))
+        # The same pre-write hard-cap refusal the rotation and trim paths carry:
+        # --next-action can push the head past the cap, and writing it would ship
+        # a status file --check rejects (codex round 12 [P2]).
+        if head_bytes > HEAD_BYTE_BUDGET:
+            print(
+                f"--refresh would leave {args.status.name} at {head_bytes} B, over the "
+                f"{HEAD_BYTE_BUDGET} B hard cap (by {head_bytes - HEAD_BYTE_BUDGET} B) — "
+                "refusing to write a status file --check would reject. Shorten "
+                "--next-action/--notes, or run --trim-drift-log first.",
+                file=sys.stderr,
+            )
+            return 2
         args.status.write_text(new_text)
         print(
             f"refreshed {args.status}: hash={state.hash12()} in_flight={state.open_pr_count} "
-            f"drift_log_moved={moved}"
+            f"drift_log_moved={moved} "
+            f"head_bytes={head_bytes}/{HEAD_BYTE_BUDGET} "
+            f"(headroom {HEAD_BYTE_BUDGET - head_bytes} B)"
         )
         return 0
 
@@ -784,5 +1206,14 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _cli() -> int:
+    """Surface a structural refusal as a clean exit 2, never a traceback."""
+    try:
+        return main()
+    except RoadmapStatusError as e:
+        print(f"roadmap_status_refresh: {e}", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_cli())
