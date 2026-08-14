@@ -478,10 +478,10 @@ def queue_capture(args: argparse.Namespace) -> int:
     }
     path = QUEUE_DIR / f"{arc_id}.json"
     try:
-        # Exclusive create: a second queue for the same arc is a mistake worth
-        # surfacing, not an overwrite of the first session's judgements.
-        with path.open("x") as fh:
-            json.dump(entry, fh, sort_keys=True, indent=2)
+        # Exclusive AND atomic: a second queue for the same arc is a mistake
+        # worth surfacing, not an overwrite of the first session's judgements --
+        # and a half-written entry would wedge the queue for every later drain.
+        publish_exclusive(path, json.dumps(entry, sort_keys=True, indent=2))
     except FileExistsError as exc:
         raise AbortError(
             f"{arc_id} is already queued at {path} -- remove it first if the "
@@ -501,6 +501,31 @@ def read_queue() -> list[tuple[Path, dict]]:
         except json.JSONDecodeError as exc:
             raise AbortError(f"queued file {path} is not valid JSON: {exc}") from exc
     return out
+
+
+def publish_exclusive(path: Path, payload: str) -> None:
+    """Create ``path`` holding ``payload`` -- atomically AND exclusively.
+
+    ``open("x")`` then ``write`` is neither. The name becomes VISIBLE the moment
+    it is created and only gains its content afterwards, so an interrupted
+    write leaves a truncated file behind. That is not a lost write, it is a
+    deadlock: a truncated queue entry makes every later ``read_queue`` abort,
+    while re-queueing the same arc is refused because the name already exists,
+    and a truncated claim reads as unverifiable ownership, which
+    ``_claim_owner_is_dead`` conservatively treats as still held -- so that arc
+    is never retried again without a human deleting the file.
+
+    Writing a temp file first and hard-linking it into place fixes both halves:
+    the destination name never exists in a partial state, and ``os.link`` still
+    fails when the name is taken, so the exclusivity both call sites depend on
+    is preserved.
+    """
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(payload)
+        os.link(tmp, path)  # atomic publish; raises FileExistsError if taken
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _process_is_alive(pid: int) -> bool:
@@ -581,8 +606,10 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
     )
     for _attempt in (1, 2):
         try:
-            with taken.open("x") as fh:
-                fh.write(payload)
+            # Atomic publish, not create-then-write: a claim interrupted
+            # mid-write is unverifiable ownership, which _claim_owner_is_dead
+            # conservatively reads as STILL HELD -- stalling that arc forever.
+            publish_exclusive(taken, payload)
         except FileExistsError:
             if _attempt == 1 and _claim_owner_is_dead(taken):
                 taken.unlink(missing_ok=True)

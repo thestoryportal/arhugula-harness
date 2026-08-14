@@ -398,6 +398,41 @@ def test_arc_spans_and_pr_windows_are_never_pooled(monkeypatch, tmp_path: Path, 
     assert "PR-open window   100.0m (n=1" in out, "the window is reported on its own line"
 
 
+# mutation-probe: make publish_exclusive open(path,"x") and write in place
+def test_an_interrupted_publish_leaves_no_wedged_file(monkeypatch, tmp_path: Path):
+    """A truncated queue entry is not a lost write -- it is a deadlock.
+
+    read_queue() aborts on malformed JSON forever, while re-queueing the same
+    arc is refused because the name exists. So a failed serialization must
+    leave the destination ABSENT, not partial.
+    """
+    dest = tmp_path / "pr-1338.json"
+
+    def die(_src, _dst, *_a, **_k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "link", die)
+    with pytest.raises(OSError):
+        am.publish_exclusive(dest, json.dumps({"pr": 1338}))
+    monkeypatch.undo()
+
+    assert not dest.exists(), "an interrupted publish must not wedge the name"
+    assert list(tmp_path.iterdir()) == [], "and must not strand its temp file"
+    # the name is still free, so the arc can simply be queued again
+    am.publish_exclusive(dest, json.dumps({"pr": 1338}))
+    assert json.loads(dest.read_text())["pr"] == 1338
+
+
+# mutation-probe: replace os.link with os.replace in publish_exclusive
+def test_publish_exclusive_still_refuses_a_taken_name(tmp_path: Path):
+    """Atomicity must not cost exclusivity -- both call sites depend on it."""
+    dest = tmp_path / "pr-1338.json"
+    am.publish_exclusive(dest, json.dumps({"first": True}))
+    with pytest.raises(FileExistsError):
+        am.publish_exclusive(dest, json.dumps({"second": True}))
+    assert json.loads(dest.read_text()) == {"first": True}, "the winner is not overwritten"
+
+
 # mutation-probe: rename a subcommand or drop a set_defaults(func=...) in main()
 def test_the_real_cli_path_is_wired(monkeypatch, tmp_path: Path, capsys):
     """Every other test bypasses argparse; `just arc-metrics` does not.
@@ -536,34 +571,27 @@ def test_a_claim_is_never_observable_without_its_owner_stamp(monkeypatch, tmp_pa
     path = _queue_entry(qdir, "pr-1338", 1338)
     entry = json.loads(path.read_text())
 
-    # Watch HOW the claim is created, not just the end state. A rename-then-stamp
-    # refactor produces an identical final file, so poststate alone cannot see
-    # the unstamped window a peer would misread as a dead owner.
-    writes: list[tuple[str, str]] = []
-    real_open = Path.open
+    # Watch the DESTINATION as it is published, not just the end state. A
+    # create-then-write (or rename-then-stamp) refactor produces an identical
+    # final file, so poststate alone cannot see the partial window a peer would
+    # misread — as "no owner" (dead, steal it) or as unverifiable (held forever).
+    seen: list[str] = []
+    real_link = os.link
 
-    def spy(self, mode="r", *a, **k):
-        handle = real_open(self, mode, *a, **k)
-        if "r" not in mode and self.suffix == ".taken":
-            real_write = handle.write
+    def spy_link(src, dst, *a, **k):
+        # at the instant the destination appears, it must already be complete
+        real_link(src, dst, *a, **k)
+        seen.append(Path(dst).read_text())
 
-            def record(data):
-                writes.append((mode, data))
-                return real_write(data)
-
-            handle.write = record
-        return handle
-
-    monkeypatch.setattr(Path, "open", spy)
+    monkeypatch.setattr(os, "link", spy_link)
     taken = am._claim_arc(path, entry)
     monkeypatch.undo()
 
     assert taken is not None and taken.exists()
     assert not path.exists(), "the source is released only after the claim exists"
-    assert len(writes) == 1, f"the claim must be one atomic create+write, saw {len(writes)}"
-    mode, payload = writes[0]
-    assert "x" in mode, "exclusive create, so only one drain can win the claim"
-    assert "_claim" in payload, "the file is never written without its owner stamp"
+    assert len(seen) == 1, f"the claim is published once, saw {len(seen)}"
+    assert "_claim" in seen[0], "the name never exists without its owner stamp"
+    assert json.loads(seen[0]), "and never exists holding truncated JSON"
 
     stamped = json.loads(taken.read_text())["_claim"]
     assert stamped["pid"] == os.getpid()
