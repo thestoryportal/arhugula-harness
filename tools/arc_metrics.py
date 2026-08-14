@@ -678,7 +678,13 @@ def drain(_args: argparse.Namespace) -> int:
         # on. Same structural fix as the queue itself -- no lock required.
         taken = _claim_arc(path, entry)
         if taken is None:
-            print(f"  {arc_id}: claimed by a concurrent drain, skipping")
+            # Outstanding, not done: a peer holds it and this drain has no idea
+            # whether that peer will succeed. `outstanding` was snapshotted
+            # before the loop, so without counting it here the run could exit 0
+            # with a live claim on disk -- contradicting the documented contract
+            # that exit 0 means nothing is left to fold.
+            print(f"  {arc_id}: claimed by a concurrent drain, still outstanding")
+            kept += 1
             continue
 
         args = argparse.Namespace(
@@ -791,24 +797,32 @@ def summary(_args: argparse.Namespace) -> int:
         # baseline quietly understates itself.
         exact = [r for r in cohort if r.get("round_completeness", "complete") == "complete"]
         partial = [r for r in cohort if r.get("round_completeness", "complete") != "complete"]
-        arcs = [d for d in (arc_duration(r) for r in exact) if d]
-        pr_window_only = sum(
-            1 for r in exact if not r.get("arc_span_s") and r.get("total_arc_wall_s")
-        )
+        # TWO different quantities, reported separately and never pooled. An
+        # arc span (first review activity -> merge) and a PR-open window measure
+        # different things -- #1337 is 269.2m against 6.1m, #1060 44.4m against
+        # 548.2m -- so a median over the mixture is a number about nothing. A
+        # footnote was not enough: a reader takes the headline figure.
+        arcs = [r["arc_span_s"] for r in exact if r.get("arc_span_s")]
+        windows = [
+            r["total_arc_wall_s"]
+            for r in exact
+            if not r.get("arc_span_s") and r.get("total_arc_wall_s")
+        ]
         rounds = [r["review_rounds"] for r in exact if r.get("review_rounds")]
         allgaps = [g for r in cohort for g in (r.get("round_wall_s") or [])]
         adds = [r["additions"] for r in cohort if r.get("additions") is not None]
-        print(f"  arc wall clock   {fmt_span(arcs)}          [stochastic, LOWER BOUND]")
+        print(f"  arc span         {fmt_span(arcs)}          [stochastic, LOWER BOUND]")
         print(
-            "     ^ round-log mtimes mark round COMPLETION, so each span starts at the end "
-            "of round 1;\n       the first round's own duration is missing (B-171 supplies "
-            "the start timestamps)"
+            "     ^ first review activity -> merge. Round-log mtimes mark round COMPLETION, "
+            "so each\n       span starts at the END of round 1 and that round's own duration "
+            "is missing\n       (B-171 supplies the start timestamps)"
         )
-        if pr_window_only:
-            print(
-                f"     ^ {pr_window_only}/{len(exact)} of these are the PR window only "
-                "(no round data); the PR window is not the arc"
-            )
+        print(f"  PR-open window   {fmt_span(windows)}          [NOT an arc duration]")
+        print(
+            "     ^ createdAt -> mergedAt for rows with no round data. Kept separate on "
+            "purpose:\n       it misses every round run before the PR opened, and includes "
+            "idle time after\n       review ended. Never pool it with the spans above."
+        )
         print(f"  round wall clock {fmt_span(allgaps)}          [stochastic]")
         print(
             # :g keeps a genuine .5 median visible -- an even cohort's median can

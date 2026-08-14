@@ -381,6 +381,23 @@ def test_partial_rows_are_excluded_from_exact_aggregates(monkeypatch, tmp_path: 
     assert "EXCLUDED" in out and "frag>=1" in out
 
 
+# mutation-probe: pool arc_span_s and total_arc_wall_s into one `arcs` list
+def test_arc_spans_and_pr_windows_are_never_pooled(monkeypatch, tmp_path: Path, capsys):
+    """They measure different things; a median over the mixture means nothing."""
+    ledger = tmp_path / "arc-metrics.jsonl"
+    rows = [
+        # a real span, and a PR window that is 10x larger
+        {"arc_id": "spanned", "arc_span_s": 600.0, "total_arc_wall_s": 99.0, "levers_active": []},
+        {"arc_id": "windowed", "total_arc_wall_s": 6000.0, "levers_active": []},
+    ]
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    am.summary(am.argparse.Namespace())
+    out = capsys.readouterr().out
+    assert "arc span         10.0m (n=1" in out, "only the spanned row is an arc span"
+    assert "PR-open window   100.0m (n=1" in out, "the window is reported on its own line"
+
+
 # mutation-probe: point QUEUE_DIR at a path inside the repo
 def test_queue_lives_outside_the_repo():
     """A topic worktree is disposed at loop completion; anything queued in it dies."""
@@ -469,8 +486,9 @@ def test_a_claimed_arc_is_skipped_by_a_concurrent_drain(monkeypatch, tmp_path: P
 
     calls = []
     monkeypatch.setattr(am, "extract", lambda a: calls.append(a) or _merged_row())
-    am.drain(am.argparse.Namespace())
+    rc = am.drain(am.argparse.Namespace())
     assert calls == [], "an arc already claimed elsewhere is not captured again"
+    assert rc == 1, "a peer's in-flight claim is outstanding work, not success"
 
 
 # mutation-probe: split _claim_arc into rename-then-stamp
