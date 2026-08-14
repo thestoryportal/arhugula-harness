@@ -697,8 +697,11 @@ def test_validate_flags_drift_log_byte_overflow_as_hard_violation():
     for n in range(1, 8):
         text = rsr.prepend_drift_log(text, *_fat_drift_row(n))
     violations = rsr.validate(text)
-    hard = [v for v in violations if not v.startswith(rsr.INFORMATIONAL_PREFIX)]
-    assert any("exceeds the" in v and "B budget" in v for v in hard), hard
+    # INFORMATIONAL, not hard: the whole-file HEAD_BYTE_BUDGET is the load-bearing
+    # cap. A sub-budget that hard-blocks CI while the real cap is satisfied would
+    # red `main` for every arc between this budget landing and the next trim.
+    soft = [v for v in violations if v.startswith(rsr.INFORMATIONAL_PREFIX)]
+    assert any("guidance budget" in v for v in soft), violations
 
 
 # --- Next-action rotation (the relief valve --refresh structurally cannot be) --
@@ -839,9 +842,9 @@ def test_validate_flags_a_single_oversized_row_that_trimming_cannot_fix():
     text = rsr._replace_table_data_rows(
         SAMPLE, rsr.DRIFT_LOG_HEADING, ["| 2026-01-09 | huge | " + "z" * 5000 + " |"]
     )
-    hard = [v for v in rsr.validate(text) if not v.startswith(rsr.INFORMATIONAL_PREFIX)]
-    budget = [v for v in hard if "B budget" in v]
-    assert budget, hard
+    soft = [v for v in rsr.validate(text) if v.startswith(rsr.INFORMATIONAL_PREFIX)]
+    budget = [v for v in soft if "guidance budget" in v]
+    assert budget, rsr.validate(text)
     assert "trimming cannot help" in budget[0]
 
 

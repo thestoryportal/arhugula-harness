@@ -94,19 +94,44 @@ def test_count_check_fires_when_mirrors_disagree():
     carriers (amendments 3->4->5, ACs 10->14->15->16)."""
     report = _report_for_counts(
         {
-            "spec.md": ["The delta carries 4 carrier amendments."],
-            "plan.md": ["The delta carries FIVE carrier amendments."],
+            "spec.md": ["U-CP-102 carries 4 carrier amendments."],
+            "plan.md": ["U-CP-102 carries FIVE carrier amendments."],
         }
     )
     msgs = _hard(report)
     assert any("carrier amendments" in m and "DIFFERENT" in m for m in msgs), msgs
 
 
+def test_count_check_does_not_compare_two_different_units_in_a_co_land():
+    """[P2] (codex round 2): merging every claim for a noun into ONE repo-wide
+    bucket made a legitimate co-land -- "U-CP-102 has 16 acceptance criteria",
+    "U-RT-155 has 11" -- a HARD disagreement. That is the exact shape of the B-71
+    leg this gate was built for, so it would have false-positived on its own
+    motivating arc."""
+    report = _report_for_counts(
+        {
+            "plan_cp.md": ["U-CP-102 = 16 acceptance criteria + 9 mutation probes."],
+            "plan_rt.md": ["U-RT-155 = 11 acceptance criteria + 6 mutation probes."],
+        }
+    )
+    assert _hard(report) == [], _hard(report)
+
+
+def test_count_check_still_compares_unattributed_claims_within_one_file():
+    """Unattributed claims are keyed per-FILE, so the preamble-vs-body drift the
+    context widening exists for is still caught, without comparing two unrelated
+    artifacts' unattributed numbers."""
+    same = _report_for_counts({"spec.md": ["It has 3 sites.", "It has 9 sites."]})
+    assert _hard(same) != []
+    across = _report_for_counts({"a.md": ["It has 3 sites."], "b.md": ["It has 9 sites."]})
+    assert _hard(across) == []
+
+
 def test_count_check_is_silent_when_every_mirror_agrees():
     report = _report_for_counts(
         {
-            "spec.md": ["The delta carries 5 carrier amendments."],
-            "plan.md": ["Confirmed: FIVE carrier amendments."],
+            "spec.md": ["U-CP-102 carries 5 carrier amendments."],
+            "plan.md": ["U-CP-102 confirmed: FIVE carrier amendments."],
         }
     )
     assert _hard(report) == []
@@ -137,7 +162,7 @@ def test_count_check_skips_archive_files_whose_added_lines_are_relocated_history
     """REGRESSION (first dogfood run): trimming the drift log re-added seven rows
     of historical prose to the archive, and every count word in that history was
     scanned as though this arc had claimed it."""
-    disagreeing = ["It has 3 sites.", "It has 9 sites."]
+    disagreeing = ["U-CP-1 has 3 sites.", "U-CP-1 has 9 sites."]
     assert _hard(_report_for_counts({"spec.md": disagreeing})) != []
     assert _hard(_report_for_counts({".harness/roadmap_drift_log_archive.md": disagreeing})) == []
 
@@ -153,35 +178,43 @@ def _substrate(tmp_path, files: dict[str, str]):
     return d
 
 
-def test_label_check_fires_when_a_minted_label_already_heads_a_section_elsewhere(tmp_path):
-    """The B-71 defect: §25.17/§25.18 were minted fresh and were already CP
-    v1.32's. Nothing local to the edited file can see that."""
+def test_label_check_reports_sibling_versions_as_advisory_not_hard(tmp_path):
+    """MEASURED DOWN from hard (codex round 2 [P1]): re-minting every artifact's
+    own headings hard-failed 241 of 265 artifacts, because the per-axis specs are
+    DELTA chains where a section number legitimately recurs. The check surfaces
+    the other users of the label and lets the author judge."""
     d = _substrate(
         tmp_path,
         {
             "Spec_A_v1_32.md": "### §25.17 Existing section\n",
-            "Spec_A_v1_119.md": "### §25.17 New\n",
+            "Spec_A_v1_119.md": "### §25.17 New meaning\n",
         },
     )
     report = ls.Report()
-    ls.check_label_collisions({"design-substrate/Spec_A_v1_119.md": ["### §25.17 New"]}, report, d)
-    msgs = _hard(report)
-    assert any("§25.17" in m and "delta chain" in m for m in msgs), msgs
-
-
-def test_label_check_is_silent_when_the_minted_label_is_free(tmp_path):
-    d = _substrate(tmp_path, {"Spec_A_v1_119.md": "### §25.99 Brand new\n"})
-    report = ls.Report()
     ls.check_label_collisions(
-        {"design-substrate/Spec_A_v1_119.md": ["### §25.99 Brand new"]}, report, d
+        {"design-substrate/Spec_A_v1_119.md": ["### §25.17 New meaning"]}, report, d
     )
-    assert _hard(report) == []
-    assert report.stats["labels_minted"] == 1
+    assert _hard(report) == [], "a delta chain recurrence must never BLOCK"
+    assert any("sibling" in f.message and "25.17" in f.message for f in report.findings)
+
+
+def test_label_check_treats_suffixed_labels_as_distinct(tmp_path):
+    """MEASURED (31 of 265 firings were this one shape): the CXA chain uses
+    `§0.5.refresh` / `§0.5.preserved` / `§0.5.new` as THREE labels; capturing only
+    `0.5` reported them as one number reused three times."""
+    lines = ["### §0.5.refresh A", "### §0.5.preserved B", "### §0.5.new C"]
+    minted = sorted({m.group(1) for line in lines if (m := ls._MINT_RE.match(line))})
+    assert minted == ["0.5.new", "0.5.preserved", "0.5.refresh"]
+
+
+def test_label_check_ignores_a_bolded_prose_reference(tmp_path):
+    """MEASURED (the residual 6 of 247): `**§2.2 substantive content preserved
+    verbatim...**` is a prose REFERENCE to a section, not a declaration of one."""
+    assert ls._MINT_RE.match("### §2.2 Action Surface axis") is not None
+    assert ls._MINT_RE.match("**§2.2 substantive content preserved verbatim.**") is None
 
 
 def test_label_check_ignores_a_bare_cite_which_is_expected_to_already_exist(tmp_path):
-    """`see §25.17` in prose is a REFERENCE, not a mint. Flagging references
-    would make every arc that cites a spec fail."""
     d = _substrate(tmp_path, {"Spec_A_v1_32.md": "### §25.17 Existing\n"})
     report = ls.Report()
     ls.check_label_collisions({"design-substrate/x.md": ["Per §25.17 the rule holds."]}, report, d)
@@ -190,13 +223,31 @@ def test_label_check_ignores_a_bare_cite_which_is_expected_to_already_exist(tmp_
 
 
 def test_label_check_does_not_read_a_python_comment_as_a_minted_heading(tmp_path):
-    """REGRESSION (first dogfood run): `# §12.2.1, enforced ...` in a .py file is
-    byte-identical to an h1 markdown heading, and was reported as a mint."""
     d = _substrate(tmp_path, {"Spec_A.md": "### §12.2.1 Owned elsewhere\n"})
     report = ls.Report()
     ls.check_label_collisions({"tools/x.py": ["    # §12.2.1, enforced not documented"]}, report, d)
     assert report.stats["labels_minted"] == 0
     assert _hard(report) == []
+
+
+def test_label_check_hard_fails_zero_artifacts_across_the_real_corpus():
+    """The precision claim, asserted rather than described: re-minting every real
+    design-substrate artifact's own headings must produce NO hard failures."""
+    sub = ls.ROOT / "design-substrate"
+    if not sub.is_dir():
+        import pytest
+
+        pytest.skip("design-substrate not present")
+    fired = []
+    for f in sorted(sub.glob("*.md")):
+        heads = [ln for ln in f.read_text(errors="replace").splitlines() if ls._MINT_RE.match(ln)]
+        if not heads:
+            continue
+        rep = ls.Report()
+        ls.check_label_collisions({f"design-substrate/{f.name}": heads}, rep, sub)
+        if rep.hard:
+            fired.append(f.name)
+    assert fired == [], fired
 
 
 # --- check 4: register row renders its current state -------------------------
@@ -262,7 +313,7 @@ def test_count_check_skips_source_files_so_it_cannot_read_its_own_fixtures():
     were scanned as real claims. Every carrier that drifted on the B-71 leg was
     a prose artifact or the register YAML — a count mirror never lives in
     source, so source is out of scope."""
-    disagreeing = ["It has 3 sites.", "It has 9 sites."]
+    disagreeing = ["U-CP-1 has 3 sites.", "U-CP-1 has 9 sites."]
     assert _hard(_report_for_counts({"design-substrate/Spec_A.md": disagreeing})) != []
     assert _hard(_report_for_counts({"tools/test_leg_selfcheck.py": disagreeing})) == []
     assert _hard(_report_for_counts({"harness-cp/src/x.py": disagreeing})) == []
@@ -316,8 +367,8 @@ def test_count_check_sees_an_unchanged_mirror_in_the_diff_context():
     mirror never disagreed with itself, so a plan newly claiming 15 ACs passed
     while an UNCHANGED mirror two lines up still said 16. Diff context is the
     unchanged text around each edit — the cheapest sound widening."""
-    added = {"design-substrate/Plan_A.md": ["The unit now has 15 acceptance criteria."]}
-    ctx = {"design-substrate/Plan_A.md": ["Preamble: 16 acceptance criteria in total."]}
+    added = {"design-substrate/Plan_A.md": ["U-CP-102 now has 15 acceptance criteria."]}
+    ctx = {"design-substrate/Plan_A.md": ["Preamble: U-CP-102 has 16 acceptance criteria."]}
 
     without = ls.Report()
     ls.check_counts(added, without)

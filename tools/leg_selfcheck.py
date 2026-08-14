@@ -333,6 +333,22 @@ _COUNT_NOUNS: list[tuple[str, str]] = [
 _NUM = r"(?<![#\w.\-])(\d+|" + "|".join(_NUMBER_WORDS) + r")"
 
 
+#: A count claim's SUBJECT. Without one, every claim for a noun lands in a single
+#: repo-wide bucket, so a legitimate co-land ("U-CP-102 has 16 acceptance criteria",
+#: "U-RT-155 has 11") reports a HARD disagreement — which is exactly the shape of the
+#: B-71 leg this gate was built for, i.e. it would have false-positived on its own
+#: motivating arc (codex round 2 [P2]). A unit id on the line is the subject when
+#: present; otherwise claims are compared only WITHIN one file, which still catches
+#: the preamble-vs-body drift the context widening exists for, without comparing two
+#: unrelated artifacts' unattributed numbers.
+_UNIT_ID_RE = re.compile(r"\bU-[A-Z]+-\d+\b")
+
+
+def _claim_subject(line: str, path: str) -> str:
+    m = _UNIT_ID_RE.search(line)
+    return m.group(0) if m else f"(unattributed in {path})"
+
+
 def check_counts(
     by_file: dict[str, list[str]],
     report: Report,
@@ -348,7 +364,7 @@ def check_counts(
     register row. Two different answers to one question is a defect regardless
     of which is right — so that is what this reports.
     """
-    claims: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+    claims: dict[tuple[str, str], dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
 
     # PROSE ARTIFACTS ONLY. Every carrier that drifted on the `B-71` leg was a
     # `.md` (spec preamble, section body, plan delta, clearance marker,
@@ -363,33 +379,32 @@ def check_counts(
             and not is_fixture_path(path)
         )
 
-    scanned = [line for path, lines in by_file.items() if _eligible(path) for line in lines]
+    scanned = [(p, line) for p, lines in by_file.items() if _eligible(p) for line in lines]
     # Unchanged text immediately around the edits, so a single edited mirror can
     # still disagree with an untouched co-located one (codex round 1 [P1]).
-    scanned += [
-        line for path, lines in (context or {}).items() if _eligible(path) for line in lines
-    ]
-    for line in scanned:
+    scanned += [(p, line) for p, lines in (context or {}).items() if _eligible(p) for line in lines]
+    for path, line in scanned:
         low = line.lower()
+        subject = _claim_subject(line, path)
         for pattern, bucket in _COUNT_NOUNS:
             for m in re.finditer(rf"{_NUM}\s+(?:\w+[- ]){{0,2}}?{pattern}", low, re.IGNORECASE):
                 raw = m.group(1).lower()
                 value = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
-                claims[bucket][value].append(line.strip()[:150])
+                claims[(subject, bucket)][value].append(line.strip()[:150])
 
-    for bucket, by_value in sorted(claims.items()):
+    for (subject, bucket), by_value in sorted(claims.items()):
         if len(by_value) > 1:
             values = ", ".join(str(v) for v in sorted(by_value))
             report.add(
                 "count",
                 HARD,
-                f"{bucket!r} is claimed with {len(by_value)} DIFFERENT values ({values}) "
-                "in this arc's added lines — mirrors disagree; recount programmatically "
-                "and fix every carrier",
+                f"{bucket!r} for {subject} is claimed with {len(by_value)} DIFFERENT "
+                f"values ({values}) — mirrors of the SAME subject disagree; recount "
+                "programmatically and fix every carrier",
             )
             for value in sorted(by_value):
                 for example in by_value[value][:2]:
-                    report.add("count", ADVISORY, f"  {bucket}={value}: {example}")
+                    report.add("count", ADVISORY, f"  {subject} {bucket}={value}: {example}")
     report.stats["count_nouns_seen"] = len(claims)
 
 
@@ -399,8 +414,35 @@ def check_counts(
 #: heading, that introduces `§X.Y`. A bare `§25.4` in prose is a reference and
 #: is expected to already exist elsewhere — flagging those would make this
 #: check pure noise.
-_MINT_RE = re.compile(r"^\s*(?:#{1,6}\s+|\*\*)\s*§(\d+(?:\.\d+)+)")
-_HEADING_USE_RE = re.compile(r"^\s*(?:#{1,6}\s+|\*\*)\s*§(\d+(?:\.\d+)+)")
+#: A section is DECLARED by a markdown heading. An earlier version also accepted a
+#: bolded run-in (`**§2.2 substantive content preserved verbatim...**`), but those
+#: are prose REFERENCES to a section, not declarations of one, and they accounted
+#: for the remaining measured false positives.
+_MINT_RE = re.compile(r"^\s*#{1,6}\s+§(\d+(?:\.[\w-]+)+)")
+#: The label token includes any non-numeric segments: the CXA chain uses
+#: `§0.5.refresh` / `§0.5.preserved` / `§0.5.new` as THREE distinct labels, and
+#: capturing only `0.5` reported them as one number reused three times (measured:
+#: 31 of 265 artifacts firing, nearly all of it this one shape).
+_HEADING_USE_RE = re.compile(r"^\s*#{1,6}\s+§(\d+(?:\.[\w-]+)+)")
+
+
+#: An artifact's version-chain FAMILY: `Spec_Control_Plane_v1_119.md` and
+#: `Spec_Control_Plane_v1_32.md` are the same family, so a label minted in one is
+#: judged against the other — while an unrelated axis's spec is not consulted at all.
+_VERSION_SUFFIX_RE = re.compile(r"_v\d+(?:_\d+)*$", re.IGNORECASE)
+
+
+def _artifact_family(name: str) -> str:
+    stem = Path(name).stem
+    return _VERSION_SUFFIX_RE.sub("", stem).lower()
+
+
+def _normalize_heading(line: str) -> str:
+    """Heading text with markup, the label itself, and case removed, so a verbatim
+    re-table in a delta compares EQUAL to its original."""
+    text = re.sub(r"^\s*#{1,6}\s+", "", line)
+    text = re.sub(r"^§\d+(?:\.[\w-]+)+\s*", "", text)
+    return re.sub(r"[^a-z0-9 ]+", "", text.lower()).strip()
 
 
 def check_label_collisions(
@@ -430,28 +472,76 @@ def check_label_collisions(
     if not minted:
         return
 
-    existing: dict[str, set[str]] = defaultdict(set)
-    for path in sorted((substrate_dir or (ROOT / "design-substrate")).glob("*.md")):
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:  # pragma: no cover
+    # WHAT IS SOUND HERE, MEASURED RATHER THAN ASSUMED — and the answer is
+    # "advisory", which is why this check reports instead of blocking.
+    #
+    # Four designs were measured against the real 247-artifact corpus by
+    # re-minting every artifact's own headings and counting hard failures:
+    #   (i)   "label heads a section in >1 artifact" — `§0.1` is used by 149
+    #         unrelated specs/plans; almost every spec arc would fail
+    #         (codex round 2 [P1]).
+    #   (ii)  "label carries >1 distinct TITLE in its version family" — 241/265
+    #         (91%). The per-axis specs are DELTA chains where
+    #         `§0.1 Revision context` legitimately differs in every version.
+    #   (iii) narrowing the label token (`§0.5.refresh` / `.preserved` / `.new`
+    #         are THREE labels, not one) and then accepting only real markdown
+    #         headings (a bolded `**§2.2 ... preserved verbatim**` is a prose
+    #         REFERENCE, not a declaration): 31/265, then 6/247.
+    #   (iv)  the surviving 6 are not all defects: a plan delta legitimately
+    #         carries `### §0.1 Net delta from v2.12` AND `### §0.1 Net delta
+    #         from v2.11` in ONE file, so a HARD rule here would block every
+    #         routine plan-delta arc.
+    #
+    # No variant reaches a precision that justifies BLOCKING, because the corpus
+    # reuses section numbers by convention both across versions and within delta
+    # files. So the check surfaces what it knows — the other places this label is
+    # used — and lets the author judge, which is the value the B-71 defect
+    # actually needed (nobody looked). Making it hard would get it muted, and a
+    # muted gate costs every check, not one. Residual registered at `B-167`.
+    for path, lines in by_file.items():
+        if not path.lower().endswith(".md") or is_fixture_path(path):
             continue
-        for line in text.splitlines():
+        seen: dict[str, list[str]] = defaultdict(list)
+        full = ROOT / path
+        source = (
+            full.read_text(encoding="utf-8", errors="replace").splitlines()
+            if full.is_file()
+            else lines
+        )
+        for line in source:
             m = _HEADING_USE_RE.match(line)
-            if m:
-                existing[m.group(1)].add(path.name)
+            if m and m.group(1) in minted:
+                seen[m.group(1)].append(_normalize_heading(line))
+        for label, titles in sorted(seen.items()):
+            if len(set(titles)) > 1:
+                report.add(
+                    "label",
+                    ADVISORY,
+                    f"§{label} numbers {len(set(titles))} DIFFERENT sections within "
+                    f"{path} — one document must not reuse a section number "
+                    f"({'; '.join(sorted(set(titles))[:3])})",
+                )
 
+    family_dir = substrate_dir or (ROOT / "design-substrate")
+    minted_families = {_artifact_family(path) for path in by_file if path.lower().endswith(".md")}
     for label in minted:
-        owners = existing.get(label, set())
-        # >1 owner means the label heads a section in more than one artifact of
-        # the chain. Exactly 1 is the normal case (this arc's own file).
-        if len(owners) > 1:
+        siblings = sorted(
+            f.name
+            for f in family_dir.glob("*.md")
+            if _artifact_family(f.name) in minted_families
+            and any(
+                (m := _HEADING_USE_RE.match(line)) and m.group(1) == label
+                for line in f.read_text(encoding="utf-8", errors="replace").splitlines()
+            )
+        )
+        if len(siblings) > 1:
             report.add(
                 "label",
-                HARD,
-                f"§{label} heads a section in {len(owners)} artifacts "
-                f"({', '.join(sorted(owners))}) — a minted label must be free "
-                "across the whole delta chain",
+                ADVISORY,
+                f"§{label} also heads a section in {len(siblings) - 1} sibling "
+                f"version(s) ({', '.join(siblings[:4])}) — CONFIRM this is a "
+                "deliberate re-table and not a reused number (the B-71 defect); "
+                "no mechanical rule can tell them apart in a delta chain",
             )
 
 
@@ -463,6 +553,12 @@ _NEW_PROSE_HEADING_RE = re.compile(r"^### \s*([BR]-[A-Z0-9]+(?:-[A-Z0-9]+)*)")
 #: the time this gate landed, so it is required of NEW rows and merely reported
 #: for legacy ones — a corpus-wide hard requirement would red 130 valid rows.
 _CURRENT_STATE_RE = re.compile(r"^\s*-\s+\*\*Current state[.:]?\*\*")
+#: The lead bullets a NEW row may open with. All three are timeless framings
+#: ("what this is", "what was true", "what is true now") — none can go stale
+#: into a misleading directive the way a leading instruction does.
+_ACCEPTED_LEAD_RE = re.compile(
+    r"^\s*-\s+\*\*(What it is|What it was|Current state)[.:]?\*\*", re.IGNORECASE
+)
 
 
 def _detail_via_cli(rid: str) -> tuple[int, str]:
@@ -511,6 +607,16 @@ def check_register_rows(
                 HARD,
                 f"{rid}: --detail renders a HEADING ONLY — the row has no prose body in "
                 ".harness/post-phase-8-forward-register.md (a YAML-only row reads as empty)",
+            )
+        elif rid in new_ids and not _ACCEPTED_LEAD_RE.match(body[0]):
+            report.add(
+                "register",
+                HARD,
+                f"{rid}: NEW row LEADS with {body[0].strip()[:80]!r} — a new row must open "
+                "with `**What it is.**`, `**What it was.**` or `**Current state.**`, never "
+                "with an instruction. `any()` was not enough: a row whose FIRST bullet is a "
+                "superseded directive and whose LATER bullet says Current state is exactly "
+                "the stale-lead defect this check exists to prevent (codex round 2 [P2]).",
             )
         elif rid in new_ids and not any(_CURRENT_STATE_RE.match(ln) for ln in body):
             report.add(

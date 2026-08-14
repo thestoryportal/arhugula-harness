@@ -386,10 +386,27 @@ def rotate_next_action(
         )
     demoted = m.group(0).replace("**Current next action", "**Prior next action", 1)
 
-    num = pr_ref.lstrip("#").strip()
-    if not num:
-        raise RoadmapStatusError("--rotate-next-action requires a non-empty --pr")
+    # `--pr` is documented as accepting `PR #1234`; `lstrip("#")` handled only a
+    # bare `#1234` and turned the documented form into the malformed label
+    # `(post-#PR #1234)`, which validate() then accepted (codex round 2 [P2]).
+    # Extract the numeric shape, and refuse anything else rather than emit a
+    # label the rest of the machinery keys on.
+    digits = re.fullmatch(r"(?:PR\s*)?#?\s*(\d+)", pr_ref.strip(), re.IGNORECASE)
+    if not digits:
+        raise RoadmapStatusError(
+            f"--pr {pr_ref!r} is not a PR number — expected `1234`, `#1234` or `PR #1234`"
+        )
+    num = digits.group(1)
     new_paragraph = f"**Current next action (post-#{num}).** {body.strip()}"
+
+    # Re-running the SAME rotation must be a no-op. Without this the newly
+    # installed paragraph is read as the current one, demoted into the archive,
+    # and left live as Current — so the archive claims a round is Prior while the
+    # head still says it is Current (codex round 2 [P2]; the original idempotency
+    # test missed it by re-running against the ORIGINAL text, not the output).
+    if m.group(0).strip() == new_paragraph.strip():
+        return text, None
+
     new_text = text[: m.start()] + new_paragraph + text[m.end() :]
 
     if demoted.strip() in archive_text:
@@ -452,9 +469,17 @@ def validate(text: str, status_path: Path = DEFAULT_STATUS) -> list[str]:
                 else "the NEWEST row alone exceeds the budget and is always retained "
                 "(trimming cannot help) — shorten that row's prose"
             )
+            # INFORMATIONAL, not hard. The load-bearing cap is the WHOLE-FILE
+            # HEAD_BYTE_BUDGET above, which stays hard. This sub-budget's job is
+            # to say WHERE the bytes are and that a trim will reclaim them — the
+            # 2026-08-13 saturation was a file legally under the hard cap with 64
+            # B of headroom, and 38% of it sitting in this one section. Hard-
+            # blocking CI on a sub-budget while the real cap is satisfied would
+            # be over-enforcement, and would red `main` for every arc between the
+            # budget landing and the next trim.
             violations.append(
-                f"{DRIFT_LOG_HEADING}: {drift_bytes} B of data rows exceeds the "
-                f"{DRIFT_LOG_BYTE_BUDGET} B budget ({remedy})"
+                f"{INFORMATIONAL_PREFIX}{DRIFT_LOG_HEADING}: {drift_bytes} B of data "
+                f"rows exceeds the {DRIFT_LOG_BYTE_BUDGET} B guidance budget ({remedy})"
             )
     except RoadmapStatusError as e:
         violations.append(str(e))
