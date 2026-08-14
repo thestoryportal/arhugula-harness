@@ -378,7 +378,7 @@ jobs:
           test_arc_ledger.py test_forward_register.py test_runtime_contract_ids.py
           test_roadmap_status_refresh.py test_roadmap_status_consumers.py
           test_memory_compact.py test_context_budget.py test_axis_claude_pins.py
-          test_module_path_guard.py -q
+          test_module_path_guard.py test_leg_selfcheck.py -q
 
   semantic-overlay:
     # R-IF-112 — the spec ↔ code ↔ CXA-seam ↔ substitution overlay drift gate.

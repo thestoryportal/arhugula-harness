@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 165
+  total: 166
   open: 1
   design_substrate_gated: 0
-  registered_finding: 31
+  registered_finding: 32
   operator_gated: 0
   held: 2
   closed: 131
-  identity_digest: '12ba7639035cb846'
+  identity_digest: '71db562343185695'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9155,3 +9155,44 @@ items:
     escalation token on any venue *(registered at the `B-71` spec leg PR, out-of-family review round 2,
     2026-08-13; the round-9 pass then showed the cited test exercises the SYNC loop, not the token-bearing
     webhook venue — so the row leads with the uncertainty, not a defect claim)*'
+- id: B-166
+  title: Wall-clock deadline witness test_ow_proceed_deadline_stashed_child_completed_not_cancelled
+    flakes only under full-suite interference, risking a masked genuine red in the B-71 impl leg
+  status: registered_finding
+  summary: 'A wall-clock deadline witness that fails intermittently in FULL-SUITE runs and never in
+    isolation. Observed 4 of ~12 full-suite runs on 2026-08-13, on an idle machine as well as a loaded
+    one, and -- decisively -- against branch diffs containing ZERO Python files (PRs #1336 and #1337),
+    so no arc under review can have caused it. MECHANISM (grounded by code read at HEAD, NOT by reproduction):
+    the test monkeypatches _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS to 0.3 (line 1103) and scripts worker-1
+    to block for 1.2s, then asserts an exact terminal split _branch_terminals(ledger) == {0: ''completed'',
+    1: ''timed_out''} -- i.e. it asserts that worker-0''s stash lands BEFORE the 0.3s barrier deadline
+    fires. Nothing synchronizes the two: the stash-then-deadline ordering the docstring names is left
+    to the scheduler, so under full-suite interference worker-0 can be cut by the same deadline and
+    report timed_out. Same family as the closed B-143 zero-headroom wall-clock assertion. NEGATIVE CONTROL
+    RUN AT REGISTRATION: 25 consecutive isolated runs of this test, 25 passed / 0 failed -- which does
+    NOT clear the test, it CONFIRMS the flake is interference-dependent and therefore invisible to any
+    per-test or per-file re-run used to ''verify'' it.'
+  close_out: 'WHY THIS IS REGISTERED RATHER THAN WAVED OFF: the cost is not the lost minutes, it is
+    MASKING. The next arc (the B-71 impl leg, U-CP-102 + U-RT-155) is a real code arc touching the fan-out
+    driver, and a session that has learned to call this red ''the known flake'' will wave away a GENUINE
+    regression in exactly the subsystem this test guards. STEP 1 -- REPRODUCE IT AS A FULL-SUITE PHENOMENON,
+    which is the only venue it appears in: run the full suite repeatedly (the 25-run isolated probe
+    already recorded here is a NEGATIVE control and must not be mistaken for a falsifier), capture the
+    failing assertion''s actual terminal map, and confirm whether the deviation is worker-0 reporting
+    timed_out (the predicted mechanism) or something else (in which case the mechanism above is FALSIFIED
+    and this row must be rewritten, not patched). STEP 2 -- decide the fix shape only after step 1:
+    if the mechanism holds, the repair is to make the stash-then-deadline ordering STRUCTURAL (an explicit
+    synchronization point that makes worker-0''s stash a precondition of the deadline rather than a
+    race the scheduler usually wins), NOT to widen the 0.3s threshold -- widening buys silence and leaves
+    the assertion non-discriminating, the failure mode B-143''s close-out already names. STEP 3 -- whatever
+    lands must keep the witness discriminating: mutation-probe it per PD-8, since a synchronization
+    that also removes the race the test exists to pin would be a green test that witnesses nothing.
+    FALSIFIER: a full-suite reproduction showing the deviation is NOT the predicted worker-0 cut, or
+    evidence that the 4/12 observation was itself a misread of a different assertion.'
+  heading: '### B-166 · Wall-clock deadline witness `test_ow_proceed_deadline_stashed_child_completed_not_cancelled`
+    flakes ONLY in full-suite runs, so it can mask a genuine red in the `B-71` impl leg *(registered
+    by the prevention arc that precedes `U-CP-102`, 2026-08-13)*'
+  council: No. This is a test-hygiene grounding question with a named mechanism (unsynchronized 0.3s
+    barrier deadline vs worker-0's stash) and a named falsifier (a full-suite reproduction whose deviation
+    is NOT the predicted worker-0 cut). There is no cross-domain tension to convene over -- step 1 is
+    execution, not deliberation.

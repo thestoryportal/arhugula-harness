@@ -638,3 +638,191 @@ def test_actual_next_action_archive_exists_and_is_not_referenced_as_a_read_targe
     m = _re.search(r"\*\*Current next action \((post-#\d+)\)", status_text)
     assert m is not None
     assert f"({m.group(1)})" not in archive_text
+
+
+# --- Drift-log BYTE budget (the cap that row-count alone never enforced) ------
+
+SAMPLE_ARCHIVE = (
+    "# Roadmap next-action round archive\n\n"
+    "Header prose describing the archive.\n\n"
+    "---\n\n"
+    "**Prior next action (post-#0).** An older round.\n"
+)
+
+
+def _fat_drift_row(n: int, size: int = 1_200) -> tuple[str, str, str]:
+    return (f"2026-03-{n:02d}", f"src{n}", "r" * size)
+
+
+def test_drift_log_byte_budget_trims_rows_the_row_cap_alone_would_keep(tmp_path):
+    """The 2026-08-13 saturation in one assertion: ten rows is a LEGAL row count,
+    yet those ten rows were 9,620 B — 38% of the whole-file budget. Row count
+    could never see it, so the head saturated while --check reported OK."""
+    archive = tmp_path / "archive.md"
+    text = SAMPLE
+    for n in range(1, 8):
+        text = rsr.prepend_drift_log(text, *_fat_drift_row(n))
+    rows_before = rsr._get_table_data_rows(text, rsr.DRIFT_LOG_HEADING)
+    assert len(rows_before) <= rsr.DRIFT_LOG_CAP, "row cap alone is NOT violated here"
+
+    trimmed, new_archive_text, moved = rsr.trim_drift_log(text, archive)
+    assert moved > 0, "byte budget must trim what the row cap accepts"
+    kept = rsr._get_table_data_rows(trimmed, rsr.DRIFT_LOG_HEADING)
+    kept_bytes = sum(len(r.encode("utf-8")) + 1 for r in kept)
+    assert kept_bytes <= rsr.DRIFT_LOG_BYTE_BUDGET
+    # lossless: every trimmed row is in the archive text, none deleted
+    assert new_archive_text is not None
+    for row in rows_before[len(kept) :]:
+        assert row in new_archive_text
+
+
+def test_drift_log_always_keeps_the_newest_row_even_when_oversized(tmp_path):
+    """max(1, ...): an empty data-row block would leave a dangling table header
+    that `_table_block_span` can no longer parse, so a single row larger than the
+    whole budget is KEPT and reported, never trimmed into unparseability."""
+    archive = tmp_path / "archive.md"
+    text = rsr.prepend_drift_log(
+        SAMPLE, "2026-04-01", "huge", "z" * (rsr.DRIFT_LOG_BYTE_BUDGET * 2)
+    )
+    trimmed, _, _ = rsr.trim_drift_log(text, archive)
+    kept = rsr._get_table_data_rows(trimmed, rsr.DRIFT_LOG_HEADING)
+    assert len(kept) == 1
+    assert "huge" in kept[0]
+    # still structurally parseable — the actual failure mode being guarded
+    assert rsr._get_table_data_rows(trimmed, rsr.DRIFT_LOG_HEADING) == kept
+
+
+def test_validate_flags_drift_log_byte_overflow_as_hard_violation():
+    text = SAMPLE
+    for n in range(1, 8):
+        text = rsr.prepend_drift_log(text, *_fat_drift_row(n))
+    violations = rsr.validate(text)
+    hard = [v for v in violations if not v.startswith(rsr.INFORMATIONAL_PREFIX)]
+    assert any("exceeds the" in v and "B budget" in v for v in hard), hard
+
+
+# --- Next-action rotation (the relief valve --refresh structurally cannot be) --
+
+
+def test_rotate_next_action_demotes_the_old_round_and_installs_the_new_one():
+    new_text, new_archive = rsr.rotate_next_action(
+        SAMPLE, SAMPLE_ARCHIVE, "1338", "The prevention arc is landed."
+    )
+    # live head carries exactly ONE Current paragraph, and it is the NEW one
+    assert new_text.count("**Current next action (") == 1
+    assert "**Current next action (post-#1338).** The prevention arc is landed." in new_text
+    assert "The next implementable unit is `R-1`." not in new_text
+    # the demoted round is in the archive, relabelled, body verbatim
+    assert new_archive is not None
+    assert "**Prior next action (post-#1).** The next implementable unit is `R-1`." in new_archive
+    # ...and never as a second Current (the two-Current defect codex round-6 caught)
+    assert new_archive.count("**Current next action (") == 0
+    # most-recent-first: the newly demoted round precedes the older one
+    assert new_archive.index("(post-#1).") < new_archive.index("(post-#0).")
+
+
+def test_rotate_next_action_output_passes_the_validate_the_ci_gate_runs():
+    """The rotation must not merely look right — it must satisfy the exact
+    single-Current / no-inline-history invariants `--check` enforces."""
+    new_text, _ = rsr.rotate_next_action(SAMPLE, SAMPLE_ARCHIVE, "1338", "Body.")
+    violations = rsr.validate(new_text)
+    structural = [
+        v
+        for v in violations
+        if not v.startswith(rsr.INFORMATIONAL_PREFIX) and rsr.NEXT_ACTION_HEADING in v
+    ]
+    assert structural == [], structural
+
+
+def test_rotate_next_action_is_idempotent_on_the_archive():
+    """Re-running must never double-append the demoted round."""
+    _once, archive_once = rsr.rotate_next_action(SAMPLE, SAMPLE_ARCHIVE, "1338", "Body.")
+    assert archive_once is not None
+    # rotating the SAME source round again against the already-updated archive
+    _, archive_twice = rsr.rotate_next_action(SAMPLE, archive_once, "1338", "Body.")
+    assert archive_twice is None, "already-archived round must not be re-appended"
+
+
+def test_rotate_next_action_refuses_when_there_is_no_current_paragraph():
+    with pytest.raises(rsr.RoadmapStatusError, match="no `\\*\\*Current next action"):
+        rsr.rotate_next_action("## Next action\n\nnothing here\n", SAMPLE_ARCHIVE, "1", "x")
+
+
+def test_rotate_next_action_refuses_an_archive_with_no_insertion_rule():
+    with pytest.raises(rsr.RoadmapStatusError, match="insertion point"):
+        rsr.rotate_next_action(SAMPLE, "# archive with no rule\n", "1338", "Body.")
+
+
+# --- §12.2.1 enforced, not merely documented ---------------------------------
+
+
+def test_refresh_refuses_the_two_file_commit_it_used_to_write_silently(tmp_path, capsys):
+    """The regression this whole arc exists for: --refresh silently wrote the
+    drift archive too whenever the log overflowed, producing a two-file commit
+    that CANNOT be a terminating refresh (§12.2.1). It must refuse and name the
+    mode that legitimately does the move — never half-write."""
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    text = SAMPLE
+    for n in range(1, 8):
+        text = rsr.prepend_drift_log(text, *_fat_drift_row(n))
+    status.write_text(text)
+    (tmp_path / ".harness" / "roadmap-next-action-archive.md").write_text(SAMPLE_ARCHIVE)
+    archive = tmp_path / "drift_archive.md"
+
+    rc = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(archive),
+            "--refresh",
+            "--pr",
+            "PR #9999",
+            "--date",
+            "2026-08-14",
+            "--notes",
+            "n",
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "TWO-FILE commit" in err
+    assert "--trim-drift-log" in err
+    # fail CLOSED: neither file may be touched by the refused run
+    assert not archive.exists()
+    assert status.read_text() == text
+
+
+def test_rotate_next_action_cli_writes_status_and_archive(tmp_path, capsys):
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    status.write_text(SAMPLE)
+    na_archive = tmp_path / ".harness" / "roadmap-next-action-archive.md"
+    na_archive.write_text(SAMPLE_ARCHIVE)
+
+    rc = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(tmp_path / "drift_archive.md"),
+            "--rotate-next-action",
+            "New body.",
+            "--pr",
+            "#1338",
+        ]
+    )
+    assert rc == 0
+    assert "**Current next action (post-#1338).** New body." in status.read_text()
+    assert "**Prior next action (post-#1).**" in na_archive.read_text()
+    # the mode must SAY it is not the terminating refresh
+    assert "CONTENT commit" in capsys.readouterr().err
+
+
+def test_rotate_next_action_cli_requires_a_pr(tmp_path):
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    status.write_text(SAMPLE)
+    with pytest.raises(SystemExit):
+        rsr.main(["--status", str(status), "--rotate-next-action", "body"])

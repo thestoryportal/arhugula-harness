@@ -19,6 +19,21 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   *current* HEAD, not an earlier one; (e) state in the PR body that this pass ran. First
   drafts historically burn 5–10 codex rounds on exactly these defect classes — this pass
   collapses them before round 1.
+- **`just leg-selfcheck` — run it BEFORE EVERY PUSH, not once per arc.** The mechanical
+  half of the grounding pass above, and the only part of it that is cheap enough to repeat
+  every round: it re-resolves every `file:line` cite the arc ADDED, reports count claims
+  that DISAGREE across mirrors, flags a newly-minted `§label` already owned elsewhere in
+  the delta chain, and asserts a touched register row renders a prose body under
+  `--detail` (a YAML-only row prints its heading and nothing else). Use `--uncommitted`
+  before committing. **Why per-round:** the `B-71` spec leg took ten codex rounds, and
+  rounds 7–10 found defects the *absorption rounds themselves* introduced — counts drifted
+  five times, `§25.17`/`§25.18` were already CP v1.32's, a code claim was true only under a
+  guard that never fires on the defect's own path. Running the global checks once per arc
+  cannot catch defects introduced per round; ~7 of that leg's ~12 findings were mechanically
+  detectable. Round count, not token count, is the wall-clock cost.
+- **The non-mechanical residue is a habit, not a script:** *when you write a sentence about
+  what the code does, open the file in the same action.* Both P1s on the `B-71` leg were
+  sentences written from a narrative instead of from a call site.
 - **Out-of-family review.** `just codex-review` (branch-vs-`main`) to convergence — fix
   real findings, hermetically regression-test each (§13.1). Use `--base` here, NOT
   `-uncommitted`: `-uncommitted` reviews untracked files too, so any untracked WIP in the
@@ -78,9 +93,27 @@ This is the step most often done wrong. After the PR merges:
    `.harness/roadmap_drift_log_archive.md`. Use `--dry-run` to preview the diff
    first on a high-stakes refresh. `just roadmap-status-check` is the CI/pre-commit
    gate (cap violations or a real hash mismatch = exit 1).
-   **Still hand-authored, by design (not machine-derivable):** the `## Next
-   action` prose block and the `--notes` text itself — write those as before,
-   the script only splices them into a structurally-guaranteed-correct skeleton.
+   **The `## Next action` pointer is now SPLICED, not hand-edited.** Its prose
+   is still agent-authored (as is `--notes`), but hand-editing the paragraph is
+   what reddened `main` on 2026-08-13: commit `49b00f85` re-pointed it by hand
+   without re-running the tool, so the anchor still recorded a `git_head` two
+   commits back, `codex_context_guard._is_terminating_refresh_commit` (which
+   requires a refresh commit's recorded `git_head` to equal its OWN parent)
+   rejected it as a verified refresh point, and CI hard-failed
+   `ROADMAP_STATUS_DRIFT` in both the guard job and `test_codex_stop_gate`.
+   Rotate it instead:
+   ```
+   just roadmap-status --rotate-next-action "<new pointer prose>" --pr "<NNN>"
+   ```
+   which demotes the live `**Current next action (post-#A)**` paragraph into
+   `.harness/roadmap-next-action-archive.md` (relabelled `Prior`, body verbatim)
+   and installs the new one. **It writes MORE THAN ONE FILE, so it is a CONTENT
+   commit that lands BEFORE the terminating refresh, never as it** — that is
+   precisely why the archive relief valve was unreachable from inside a refresh
+   and the head saturated to 64 B of headroom. `--refresh` now REFUSES to write
+   a second file rather than silently producing a two-file commit; if it tells
+   you a drift-log trim is owed, run `--trim-drift-log` as its own content commit
+   first. Both `--check` and `--refresh` print the remaining byte headroom.
    Mark any closed `R-NNN` RESOLVED + propagate `next_pointer` (still by hand — the
    R-NNN registry prose is out of the script's mechanical scope).
 2. **§12.2.1 — the recursion-stopping fixed point.** The refresh commit is itself a merge,

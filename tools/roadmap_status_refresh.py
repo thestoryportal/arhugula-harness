@@ -71,7 +71,24 @@ HEAD_BYTE_BUDGET = 25_600
 # live "## Next action" section — re-accumulating them here is exactly the
 # regression the archive split (U-CTX-03) exists to prevent.
 _ARCHIVED_PARAGRAPH_RE = re.compile(r"^\*\*(Prior next action|Round \d+)", re.MULTILINE)
+#: The live pointer paragraph `--rotate-next-action` demotes and replaces. The
+#: `(post-#NNN)` label is part of the shape `validate()` counts, so the tool
+#: composes it rather than trusting caller-supplied prose to carry it.
+_CURRENT_PARAGRAPH_RE = re.compile(
+    r"^\*\*Current next action \(post-#[^)]*\)\.\*\*.*?(?=\n\n|\Z)", re.MULTILINE | re.DOTALL
+)
+#: Insertion point in NEXT_ACTION_ARCHIVE: immediately after the header block's
+#: `---` rule, so demoted rounds stay most-recent-first (the archive's own
+#: documented ordering).
+_ARCHIVE_INSERT_RE = re.compile(r"\n---\n\n")
 DRIFT_LOG_CAP = 10
+#: Byte budget for the `## Drift detection log` table's DATA rows. The row cap
+#: above bounds the row COUNT but not row SIZE, and the rows are agent-authored
+#: multi-KB narratives — at the 2026-08-13 saturation the ten capped rows were
+#: 9,620 B, 38% of a 25,536 B file with 64 B of headroom left. Overflow moves
+#: (never deletes) into DEFAULT_ARCHIVE exactly as count overflow does; the
+#: newest row is always kept regardless of size so the table is never empty.
+DRIFT_LOG_BYTE_BUDGET = 3_000
 #: structural soft-severity marker (codex round-8): ONLY messages the validator
 #: itself prefixes with this are non-hard — substring matching on "informational"
 #: would let interpolated filenames/titles containing the word soften a real
@@ -282,19 +299,41 @@ def prepend_drift_log(text: str, date: str, source: str, resolution: str) -> str
     return _replace_table_data_rows(text, DRIFT_LOG_HEADING, rows)
 
 
+def _drift_keep_count(rows: list[str], cap: int, byte_budget: int) -> int:
+    """How many most-recent drift rows survive BOTH the row cap and the byte
+    budget. The newest row always survives (`max(1, …)`) — an empty data-row
+    block would leave the table header dangling and make the section
+    unparseable by `_table_block_span`, so a single oversized row is kept and
+    reported rather than trimmed away."""
+    kept = 0
+    used = 0
+    for row in rows[:cap]:
+        size = len(row.encode("utf-8")) + 1  # +1 for the row's newline
+        if kept and used + size > byte_budget:
+            break
+        used += size
+        kept += 1
+    return max(1, kept)
+
+
 def trim_drift_log(
-    text: str, archive_path: Path = DEFAULT_ARCHIVE, cap: int = DRIFT_LOG_CAP
+    text: str,
+    archive_path: Path = DEFAULT_ARCHIVE,
+    cap: int = DRIFT_LOG_CAP,
+    byte_budget: int = DRIFT_LOG_BYTE_BUDGET,
 ) -> tuple[str, str | None, int]:
-    """Cap the live drift log to `cap` most-recent rows; move overflow into the
-    archive file (never delete). Idempotent: a row already present in the
-    archive (by exact text) is never re-appended; if nothing exceeds the cap
-    this is a byte-identical no-op. PURE — writes nothing to disk; returns
+    """Cap the live drift log to the most-recent rows that fit BOTH `cap` rows
+    and `byte_budget` bytes; move overflow into the archive file (never
+    delete). Idempotent: a row already present in the archive (by exact text)
+    is never re-appended; if nothing exceeds either bound this is a
+    byte-identical no-op. PURE — writes nothing to disk; returns
     (new_status_text, new_archive_text_or_None, moved_count). `new_archive_text`
     is None iff nothing needed to move (callers must not write in that case)."""
     rows = _get_table_data_rows(text, DRIFT_LOG_HEADING)
-    if len(rows) <= cap:
+    keep_n = _drift_keep_count(rows, cap, byte_budget)
+    if len(rows) <= keep_n:
         return text, None, 0
-    keep, overflow = rows[:cap], rows[cap:]
+    keep, overflow = rows[:keep_n], rows[keep_n:]
 
     archive_text = (
         archive_path.read_text()
@@ -319,6 +358,51 @@ def trim_drift_log(
 
     new_text = _replace_table_data_rows(text, DRIFT_LOG_HEADING, keep)
     return new_text, new_archive_text, len(to_append)
+
+
+# --- Next-action rotation (the relief valve `--refresh` structurally cannot be) --
+
+
+def rotate_next_action(
+    text: str, archive_text: str, pr_ref: str, body: str
+) -> tuple[str, str | None]:
+    """Demote the live `**Current next action (post-#A)**` paragraph into the
+    next-action archive (relabelled `Prior`, body verbatim) and install a new
+    Current paragraph in its place. PURE — writes nothing; returns
+    (new_status_text, new_archive_text_or_None); `new_archive_text` is None iff
+    the demoted round was already archived (idempotent re-run).
+
+    This is deliberately NOT part of `--refresh`. §12.2.1 requires a
+    terminating refresh commit to touch EXACTLY `.harness/roadmap_status.md`,
+    so a mode that also writes the archive can never be the terminating commit
+    — which is precisely why the relief valve was unreachable from inside a
+    refresh and the head saturated instead. Run this as its OWN content commit
+    (unprefixed title, per §12.2.1 "bundled changes drop the prefix") BEFORE
+    the terminating refresh."""
+    m = _CURRENT_PARAGRAPH_RE.search(text)
+    if m is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_HEADING}: no `**Current next action (post-#NNN).**` paragraph to rotate"
+        )
+    demoted = m.group(0).replace("**Current next action", "**Prior next action", 1)
+
+    num = pr_ref.lstrip("#").strip()
+    if not num:
+        raise RoadmapStatusError("--rotate-next-action requires a non-empty --pr")
+    new_paragraph = f"**Current next action (post-#{num}).** {body.strip()}"
+    new_text = text[: m.start()] + new_paragraph + text[m.end() :]
+
+    if demoted.strip() in archive_text:
+        return new_text, None
+    ins = _ARCHIVE_INSERT_RE.search(archive_text)
+    if ins is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_ARCHIVE.name}: no `---` header rule found — cannot "
+            "determine the most-recent-first insertion point"
+        )
+    at = ins.end()
+    new_archive_text = archive_text[:at] + demoted.strip() + "\n\n" + archive_text[at:]
+    return new_text, new_archive_text
 
 
 # --- Validation (--check) -----------------------------------------------------
@@ -349,6 +433,15 @@ def validate(text: str, status_path: Path = DEFAULT_STATUS) -> list[str]:
             violations.append(
                 f"{DRIFT_LOG_HEADING}: {len(drift)} rows exceeds cap {DRIFT_LOG_CAP} "
                 f"(run --trim-drift-log)"
+            )
+        # Row COUNT alone never bounded this section: the rows are multi-KB
+        # narratives, so ten legal rows were 38% of the whole-file budget.
+        drift_bytes = sum(len(r.encode("utf-8")) + 1 for r in drift)
+        if len(drift) > _drift_keep_count(drift, DRIFT_LOG_CAP, DRIFT_LOG_BYTE_BUDGET):
+            violations.append(
+                f"{DRIFT_LOG_HEADING}: {drift_bytes} B of data rows exceeds the "
+                f"{DRIFT_LOG_BYTE_BUDGET} B budget (run --trim-drift-log; overflow "
+                f"moves to {DEFAULT_ARCHIVE.name}, nothing is deleted)"
             )
     except RoadmapStatusError as e:
         violations.append(str(e))
@@ -641,6 +734,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--trim-drift-log", action="store_true", help="cap+archive drift log only")
     ap.add_argument(
+        "--rotate-next-action",
+        metavar="BODY",
+        help="demote the live Current next-action paragraph into the next-action "
+        "archive and install BODY as the new one (requires --pr). Writes MORE THAN "
+        "ONE FILE, so it is a CONTENT commit that must land BEFORE the terminating "
+        "refresh, never as it (§12.2.1)",
+    )
+    ap.add_argument(
         "--refresh",
         action="store_true",
         help="mechanical refresh (anchor + in-flight + recently-completed)",
@@ -732,7 +833,11 @@ def main(argv: list[str] | None = None) -> int:
         if hard:
             print("ROADMAP STATUS CHECK FAILED:", file=sys.stderr)
             return 1
-        print("roadmap_status.md OK")
+        head_bytes = len(text.encode("utf-8"))
+        print(
+            f"roadmap_status.md OK ({head_bytes}/{HEAD_BYTE_BUDGET} B, "
+            f"headroom {HEAD_BYTE_BUDGET - head_bytes} B)"
+        )
         return 0
 
     if args.trim_drift_log:
@@ -747,6 +852,40 @@ def main(argv: list[str] | None = None) -> int:
         print(f"moved {moved} row(s) to {args.archive}")
         return 0
 
+    if args.rotate_next_action is not None:
+        if not args.pr:
+            ap.error("--rotate-next-action requires --pr")
+        na_archive = status_root / ".harness" / "roadmap-next-action-archive.md"
+        if not na_archive.is_file():
+            print(f"next-action archive not found: {na_archive}", file=sys.stderr)
+            return 2
+        new_text, new_archive_text = rotate_next_action(
+            text, na_archive.read_text(), args.pr, args.rotate_next_action
+        )
+        new_text, new_drift_archive, moved = trim_drift_log(new_text, args.archive)
+        if args.dry_run:
+            print(
+                f"would rotate next action to post-#{args.pr.lstrip('#')} "
+                f"(archived={new_archive_text is not None}, drift_rows_moved={moved})"
+            )
+            return 0
+        if new_archive_text is not None:
+            na_archive.write_text(new_archive_text)
+        if new_drift_archive is not None:
+            args.archive.write_text(new_drift_archive)
+        args.status.write_text(new_text)
+        print(
+            f"rotated next action to post-#{args.pr.lstrip('#')}: "
+            f"archived={new_archive_text is not None} drift_log_moved={moved} "
+            f"head_bytes={len(new_text.encode('utf-8'))}/{HEAD_BYTE_BUDGET}"
+        )
+        print(
+            "NOTE: this wrote more than one file — commit it as a CONTENT commit "
+            "(unprefixed title), then run --refresh as the terminating refresh.",
+            file=sys.stderr,
+        )
+        return 0
+
     if args.refresh:
         if not (args.pr and args.date and args.notes is not None):
             ap.error("--refresh requires --pr --date --notes")
@@ -759,7 +898,26 @@ def main(argv: list[str] | None = None) -> int:
             new_text = prepend_drift_log(
                 new_text, args.date, args.drift_source, args.drift_resolution or ""
             )
-        new_text, new_archive_text, moved = trim_drift_log(new_text, args.archive)
+        # §12.2.1, enforced instead of merely documented: a terminating refresh
+        # commit must change EXACTLY `.harness/roadmap_status.md`. This mode used
+        # to silently write `args.archive` too whenever the drift log overflowed,
+        # producing a two-file commit that the shape gate then rejects — the
+        # operator noticed only after the fact, and the workspace absorbed it as
+        # "commit the trim separately" folklore. Refuse instead, and name the
+        # mode that legitimately does the move.
+        _, would_archive, would_move = trim_drift_log(new_text, args.archive)
+        if would_archive is not None:
+            print(
+                f"--refresh would move {would_move} drift-log row(s) into "
+                f"{args.archive.name}, making this a TWO-FILE commit — which "
+                "cannot be a terminating refresh (§12.2.1 requires exactly "
+                f"{DEFAULT_STATUS.name}). Run `--trim-drift-log` (or "
+                "`--rotate-next-action`) as its own content commit FIRST, then "
+                "re-run --refresh.",
+                file=sys.stderr,
+            )
+            return 2
+        moved = 0
         if args.dry_run:
             import difflib
 
@@ -771,12 +929,13 @@ def main(argv: list[str] | None = None) -> int:
             )
             sys.stdout.writelines(diff)
             return 0
-        if new_archive_text is not None:
-            args.archive.write_text(new_archive_text)
         args.status.write_text(new_text)
+        head_bytes = len(new_text.encode("utf-8"))
         print(
             f"refreshed {args.status}: hash={state.hash12()} in_flight={state.open_pr_count} "
-            f"drift_log_moved={moved}"
+            f"drift_log_moved={moved} "
+            f"head_bytes={head_bytes}/{HEAD_BYTE_BUDGET} "
+            f"(headroom {HEAD_BYTE_BUDGET - head_bytes} B)"
         )
         return 0
 
