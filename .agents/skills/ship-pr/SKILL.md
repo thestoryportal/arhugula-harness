@@ -43,6 +43,19 @@ against the *current* staged/worktree fingerprint and re-record the pass if the 
 changes afterward; state in the PR body that this pass ran. First drafts historically
 burn 5–10 review rounds on exactly these defect classes.
 
+## Per-round mechanical self-check — `just leg-selfcheck`
+
+Run it BEFORE EVERY PUSH, not once per arc (`--uncommitted` before committing). It
+re-resolves every `file:line` cite the arc ADDED, reports count claims that DISAGREE
+for the same subject, surfaces a minted `§label` already used elsewhere in the artifact
+family, and asserts a touched register row renders a prose body under
+`--detail` (a YAML-only row prints its heading and nothing else; a NEW row must also
+carry a `**Current state.**` bullet and must not lead with an instruction).
+
+Why per-round: the `B-71` spec leg took ten review rounds, and rounds 7–10 found defects
+the *absorption rounds themselves* introduced. Running the global checks once per arc
+cannot catch defects introduced per round.
+
 ## Authorship-dependent out-of-family review
 
 - When Codex authored the change, run `just gemini-review`. Despite its legacy recipe
@@ -96,13 +109,28 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
    conclusion to equal `success`.
 2. Perform branch hygiene only against the exact merged PR/head OID. Recheck remote state;
    do not infer squash-merge ancestry. Preserve any branch with new or unmerged work.
-3. Run `python3 tools/roadmap_status_refresh.py --refresh --pr "PR #<N>" --date
-   <YYYY-MM-DD> --notes "<summary>"`, update the hand-authored next action, then run
-   `python3 tools/roadmap_status_refresh.py --check`.
-4. Land the terminating refresh as the immediate next commit/PR. Its title starts exactly
+3. **Never put a `roadmap_status.md` edit in a substantive content PR.** A commit on
+   `main` that touches it without being a *verified* terminating refresh satisfies
+   neither guard exception (`_lag_expected` wants the refresh shape; `_owed_lag` requires
+   HEAD *not* to touch the file), so main CI hard-fails `ROADMAP_STATUS_DRIFT`.
+4. Rotate the next action with the TOOL, never by hand — hand-editing it is what
+   reddened `main` on 2026-08-13 (the anchor kept a `git_head` two commits back):
+   `python3 tools/roadmap_status_refresh.py --rotate-next-action "<new pointer prose>"
+   --pr "<N>"`. It demotes the live paragraph into
+   `.harness/roadmap-next-action-archive.md` and installs the new one. It writes MORE
+   THAN ONE FILE, so it is a CONTENT commit — pair it with the terminating refresh in
+   ONE push so CI evaluates the refresh commit as HEAD.
+5. Run `python3 tools/roadmap_status_refresh.py --refresh --pr "PR #<N>" --date
+   <YYYY-MM-DD> --notes "<summary>"`, then `--check`. `--refresh` REFUSES to write a
+   second file rather than silently producing a two-file commit; if it says a drift-log
+   trim is owed, run `--trim-drift-log` as the preceding commit in that same push — and
+   if the overflow comes from a NEW drift event, pass it to that content step
+   (`--trim-drift-log --drift-source ... --drift-resolution ... --date ...`), since
+   pre-trimming cannot help with a row that does not exist yet.
+6. Land the terminating refresh as the immediate next commit/PR. Its title starts exactly
    `ops: roadmap status refresh ` and its closed changed-file set is only
    `.harness/roadmap_status.md`. Do not recurse on a terminating refresh.
-5. Wait for the refresh merge's own main CI to be green and fast-forward local `main`.
+7. Wait for the refresh merge's own main CI to be green and fast-forward local `main`.
    DEFER removing the arc worktree and pruning the topic branch until AFTER the arc exit
    report below — the report reads the arc worktree's `.harness/loop_status.md` for this
    arc's pending-HIL rows, and disposition deletes that ledger.

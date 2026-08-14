@@ -236,9 +236,16 @@ def changed_line_numbers(diff: str) -> dict[str, set[int]]:
             # A DELETION advances no new-file position, so recording nothing left
             # `amended` empty for a deletion-only edit — and deleting a row's
             # final prose body is EXACTLY the heading-only regression this gate
-            # exists to block (codex round 5 [P2]). Mark the position the removed
-            # content sat at, so the enclosing row still resolves.
+            # exists to block (codex round 5 [P2]).
+            #
+            # Record the position BEFORE the deletion as well (codex round 7
+            # [P2]): when the removed line was a row's LAST body line, the
+            # new-file `lineno` is already the NEXT row's heading, so attributing
+            # only that position made rows_enclosing pick the FOLLOWING row and
+            # the emptied row was never checked — the gate exited green on
+            # precisely the regression it exists to block.
             out[current].add(max(1, lineno))
+            out[current].add(max(1, lineno - 1))
         elif ln.startswith(" "):
             lineno += 1
     return dict(out)

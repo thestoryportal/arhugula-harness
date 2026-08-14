@@ -1045,3 +1045,29 @@ def test_trim_drift_log_persists_a_small_event_that_needs_no_trimming(tmp_path, 
     assert rc == 0, capsys.readouterr()
     rows = rsr._get_table_data_rows(status.read_text(), rsr.DRIFT_LOG_HEADING)
     assert "a small new event" in rows[0], "the event must actually be written"
+
+
+def test_rotate_next_action_keeps_the_drift_archive_in_the_target_checkout(tmp_path, capsys):
+    """[P2] (codex round 7): the rotation path derived the NEXT-ACTION archive
+    from the target checkout but passed the module-global DRIFT archive, so a
+    cross-checkout rotation removed rows from the TARGET status and appended them
+    to the CALLER's archive — contaminating one checkout and leaving the target
+    without its history."""
+    harness = tmp_path / ".harness"
+    harness.mkdir(parents=True)
+    status = harness / "roadmap_status.md"
+    text = SAMPLE
+    for n in range(1, 8):
+        text = rsr.prepend_drift_log(text, *_fat_drift_row(n))
+    status.write_text(text)
+    (harness / "roadmap-next-action-archive.md").write_text(SAMPLE_ARCHIVE)
+    target_archive = harness / "roadmap_drift_log_archive.md"
+    caller_archive_before = (
+        rsr.DEFAULT_ARCHIVE.read_text() if rsr.DEFAULT_ARCHIVE.is_file() else None
+    )
+
+    rc = rsr.main(["--status", str(status), "--rotate-next-action", "New body.", "--pr", "1338"])
+    assert rc == 0, capsys.readouterr()
+    assert target_archive.is_file(), "overflow must land in the TARGET checkout's archive"
+    if caller_archive_before is not None:
+        assert rsr.DEFAULT_ARCHIVE.read_text() == caller_archive_before, "caller contaminated"

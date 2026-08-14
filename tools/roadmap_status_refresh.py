@@ -941,7 +941,16 @@ def main(argv: list[str] | None = None) -> int:
         new_text, new_archive_text = rotate_next_action(
             text, na_archive.read_text(), args.pr, args.rotate_next_action
         )
-        new_text, new_drift_archive, moved = trim_drift_log(new_text, args.archive)
+        # Derive the drift archive from the TARGET checkout when --archive was
+        # not supplied: this path already derives the next-action archive from
+        # `status_root`, but passed the module-global default here, so a
+        # cross-checkout rotation removed rows from the TARGET status and
+        # appended them to the CALLER's archive — contaminating one checkout and
+        # leaving the target without its history (codex round 7 [P2]).
+        drift_archive = args.archive
+        if drift_archive == DEFAULT_ARCHIVE and status_root != ROOT:
+            drift_archive = status_root / ".harness" / "roadmap_drift_log_archive.md"
+        new_text, new_drift_archive, moved = trim_drift_log(new_text, drift_archive)
         # The hard whole-file cap is a CI gate; writing past it and printing the
         # oversized number would ship a status file this tool's own validate()
         # rejects — a guaranteed red on the next run (codex round 4 [P2]). Judge
@@ -966,7 +975,7 @@ def main(argv: list[str] | None = None) -> int:
         if new_archive_text is not None:
             na_archive.write_text(new_archive_text)
         if new_drift_archive is not None:
-            args.archive.write_text(new_drift_archive)
+            drift_archive.write_text(new_drift_archive)
         args.status.write_text(new_text)
         print(
             f"rotated next action to post-#{args.pr.lstrip('#')}: "

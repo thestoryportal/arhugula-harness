@@ -507,7 +507,9 @@ def test_changed_line_numbers_records_deletion_only_edits():
     never called — allowing the exact heading-only regression this gate blocks
     (delete a row's final prose body and nothing notices)."""
     diff = "--- a/x.md\n+++ b/x.md\n@@ -10,3 +10,2 @@\n ctx\n-removed-body-line\n ctx\n"
-    assert ls.changed_line_numbers(diff) == {"x.md": {11}}
+    # Widened at round 7 to include the position BEFORE the deletion, so a row's
+    # LAST body line still attributes to that row rather than the next heading.
+    assert ls.changed_line_numbers(diff) == {"x.md": {10, 11}}
     # ...and the added-lines view is still empty, which is why it could not see it
     assert ls.added_by_file(diff) == {"x.md": []}
 
@@ -590,3 +592,22 @@ def test_register_newness_still_flags_a_genuinely_new_row():
         base_ids={"B-100"},
     )
     assert any("Current state" in m for m in _hard(report)), _hard(report)
+
+
+def test_boundary_deletion_attributes_to_the_row_being_emptied():
+    """[P2] (codex round 7) — a fail-open in the ROUND-5 fix: when the removed
+    line was a row's LAST body line, the new-file position is already the NEXT
+    row's heading, so attributing only that position made rows_enclosing pick the
+    FOLLOWING row and the emptied row was never checked — green on precisely the
+    heading-only regression this gate exists to block."""
+    diff = (
+        "--- a/.harness/post-phase-8-forward-register.md\n"
+        "+++ b/.harness/post-phase-8-forward-register.md\n"
+        "@@ -10,3 +10,2 @@\n"
+        " last body line of row A\n"
+        "-the ONLY remaining body line\n"
+        " ### B-999 · next row heading\n"
+    )
+    nums = ls.changed_line_numbers(diff)[".harness/post-phase-8-forward-register.md"]
+    # both the boundary position AND the one before it, so the emptied row resolves
+    assert 11 in nums and 10 in nums, nums
