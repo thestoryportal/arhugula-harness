@@ -34,15 +34,22 @@ from typing import Any, cast
 import pytest
 from harness_core import EntryID
 from harness_core.identity import StepID
+from harness_cp.handoff_context import StateSummary
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind, HITLResult
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import WebhookConfig
-from harness_cp.pause_resume_protocol_types import WorkflowPauseReason
+from harness_cp.pause_resume_protocol_types import (
+    PauseSnapshot,
+    PeerFanOutResumeState,
+    PreDispatchGateOwningBranchResumeState,
+    WorkflowPauseReason,
+)
 from harness_cp.pause_state_projection import (
     PauseLocationVariant,
     PreDispatchUniformFallbackOnlyLocation,
     compose_escalation_instance_id,
     pre_dispatch_gate_owning_branch_identity,
+    walk_pause_tree,
 )
 from harness_cp.validator_framework_types import HITLEscalationBrief
 from harness_cp.workflow_driver_types import (
@@ -258,6 +265,43 @@ async def _escalate(
             step_context=ctx,
         )
     return raised.value
+
+
+def _snapshot_with_a_pre_dispatch_gate_owner(token: str) -> PauseSnapshot:
+    """A REAL `PauseSnapshot` carrying one pre-dispatch gate-owning row.
+
+    Exists so the `resolvability` cross-check can route through `walk_pause_tree`, the
+    actual classifier, instead of hand-picking a projection subclass and reading its
+    class-level default back.
+    """
+    return PauseSnapshot(
+        workflow_id="wf-b71",
+        run_id=_RUN_ID,
+        step_index=0,
+        pause_reason=WorkflowPauseReason.HITL_PENDING,
+        state_summary=StateSummary(
+            relevant_entries=(),
+            summary_text="",
+            summary_hash="0" * 64,
+            idempotency_key=_Identifier(""),
+            external_references=(),
+        ),
+        snapshot_hash="0" * 64,
+        created_at=1,
+        state_ledger_anchor="0" * 64,
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=1,
+            pre_dispatch_gate_owning_branches=(
+                PreDispatchGateOwningBranchResumeState(
+                    branch_index=2,
+                    step_id="branch-sub",
+                    step_kind=StepKind.SUB_AGENT_DISPATCH.value,
+                    escalation_instance_id=token,
+                ),
+            ),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -612,26 +656,35 @@ async def test_the_four_payload_keys_are_projected_on_a_real_fanout_escalation(
         "the BARE token, verbatim — not the composed key, which §0.4(1) forbids parsing back apart"
     )
     assert isinstance(body["branch_context"], str)
-    # ONE AUTHORITY, cross-checked rather than asserted twice against a literal.
-    # Production stamps this constant; the CP record separately asserts the pause
-    # view's own `variant` for the same location. Two independent agreements with the
-    # same literal would NOT catch a future divergence between the two surfaces, which
-    # is the "second classification authority" §0.6 forecloses (pre-merge
-    # witness-adequacy gate, [P2]). So compare the wire value against the variant the
-    # CP projection actually assigns to a pre-dispatch gate-owning location.
-    projected_variant = PreDispatchUniformFallbackOnlyLocation(
-        pause_reason=WorkflowPauseReason.HITL_PENDING,
-        step_index=0,
-        step_id="branch-sub",
-        step_kind=StepKind.SUB_AGENT_DISPATCH,
-        branch_index=2,
-        escalation_instance_id=token,
-    ).variant
-    assert body["resolvability"] == projected_variant.value, (
-        "the wire's resolution CHANNEL must be the SAME value the pause view assigns "
-        f"to this location — got {body['resolvability']!r} vs {projected_variant.value!r}"
+    # ONE AUTHORITY, routed through the REAL classifier.
+    #
+    # Two earlier attempts were both circular, and the second only *looked* fixed:
+    # constructing `PreDispatchUniformFallbackOnlyLocation(...)` by hand and reading
+    # `.variant` returns a class-level `Literal` default, so the value is decided by
+    # WHICH CLASS THE TEST AUTHOR PICKED, not by any classification of the inputs —
+    # the same constant in a constructor. Caught twice by the pre-merge
+    # witness-adequacy gate [P2].
+    #
+    # `walk_pause_tree` is the authority that decides which `PauseLocationProjection`
+    # subclass — hence which variant — a row becomes. So build a REAL snapshot
+    # carrying a real pre-dispatch gate-owning row, walk it, and take the variant off
+    # whatever projection the walk actually produced. If the classifier ever assigns
+    # this population a different variant, or the wire constant drifts, this reddens.
+    projected = [
+        entry.projection
+        for entry in walk_pause_tree(_snapshot_with_a_pre_dispatch_gate_owner(token))
+        if isinstance(entry.projection, PreDispatchUniformFallbackOnlyLocation)
+    ]
+    assert projected, (
+        "sanity: the walk must actually classify this row as a pre-dispatch "
+        "gate-owning location — otherwise the comparison below is vacuous"
     )
-    assert projected_variant in set(PauseLocationVariant), (
+    assert body["resolvability"] == projected[0].variant.value, (
+        "the wire's resolution CHANNEL must be the value the CP classifier ASSIGNS "
+        f"to this location; got {body['resolvability']!r} vs "
+        f"{projected[0].variant.value!r}"
+    )
+    assert projected[0].variant in set(PauseLocationVariant), (
         "and it must come from the CLOSED v1.112 §2.1 vocabulary — never the "
         "time-varying OUTCOME, and never a newly minted value"
     )
