@@ -891,3 +891,34 @@ def test_refresh_applies_a_trim_that_needs_no_archive_write(tmp_path, capsys):
     assert kept_bytes <= rsr.DRIFT_LOG_BYTE_BUDGET, "refresh wrote a still-over-budget status"
     # ...and it stayed a ONE-FILE write: the archive is untouched.
     assert archive.read_text() == archive_before
+
+
+def test_rotate_next_action_refuses_an_empty_body():
+    """[P2] (codex round 3): an unset shell variable would archive the live
+    pointer and install a marker with no actionable text — and validate() only
+    COUNTS the marker, so the empty frontier passed --check too."""
+    with pytest.raises(rsr.RoadmapStatusError, match="non-empty body"):
+        rsr.rotate_next_action(SAMPLE, SAMPLE_ARCHIVE, "1338", "   ")
+
+
+def test_rotate_next_action_accepts_the_documented_pr_form():
+    """[P2] (codex round 2): `--pr` is documented as accepting `PR #1234`, but
+    lstrip("#") produced the malformed label `(post-#PR #1234)`, which
+    validate() then accepted."""
+    for form in ("1234", "#1234", "PR #1234"):
+        text, _ = rsr.rotate_next_action(SAMPLE, SAMPLE_ARCHIVE, form, "Body.")
+        assert "**Current next action (post-#1234).** Body." in text, form
+    with pytest.raises(rsr.RoadmapStatusError, match="not a PR number"):
+        rsr.rotate_next_action(SAMPLE, SAMPLE_ARCHIVE, "not-a-pr", "Body.")
+
+
+def test_rotate_next_action_is_a_no_op_when_rerun_against_its_own_output():
+    """[P2] (codex round 2): re-running read the NEWLY INSTALLED paragraph as the
+    current one, demoted it into the archive, and left it live as Current — so
+    the archive claimed a live round was Prior. The original idempotency test
+    missed it by re-running against the ORIGINAL text, not the output."""
+    once, archive_once = rsr.rotate_next_action(SAMPLE, SAMPLE_ARCHIVE, "1338", "Body.")
+    assert archive_once is not None
+    twice, archive_twice = rsr.rotate_next_action(once, archive_once, "1338", "Body.")
+    assert twice == once
+    assert archive_twice is None

@@ -397,6 +397,16 @@ def rotate_next_action(
             f"--pr {pr_ref!r} is not a PR number — expected `1234`, `#1234` or `PR #1234`"
         )
     num = digits.group(1)
+    # An empty/whitespace BODY (an unset shell variable, typically) would archive
+    # the live pointer and install a marker with NO actionable text — and
+    # validate() only COUNTS the marker, so the empty frontier would pass --check
+    # too, leaving the next session with no next action at all (codex round 3
+    # [P2]). Refuse before either file is modified.
+    if not body.strip():
+        raise RoadmapStatusError(
+            "--rotate-next-action requires a non-empty body — refusing to install an "
+            "empty next-action pointer (an empty frontier passes --check silently)"
+        )
     new_paragraph = f"**Current next action (post-#{num}).** {body.strip()}"
 
     # Re-running the SAME rotation must be a no-op. Without this the newly

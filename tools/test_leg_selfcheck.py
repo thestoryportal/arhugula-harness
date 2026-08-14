@@ -425,3 +425,38 @@ def test_register_check_does_not_impose_the_bullet_on_a_legacy_row():
     )
     assert _hard(report) == []
     assert any(f.severity == ls.ADVISORY for f in report.findings)
+
+
+# --- out-of-family review round 3 -------------------------------------------
+
+
+def test_count_check_binds_each_match_to_its_nearest_unit_on_a_multi_unit_line():
+    """[P1] (codex round 3): taking the line's FIRST unit id attributed every
+    count on a multi-unit line to one subject, so a single summary sentence —
+    exactly the shape the upcoming U-CP-102 + U-RT-155 co-land uses — became two
+    conflicting claims for U-CP-102 and hard-failed the pre-push gate."""
+    line = "U-CP-102 = 16 acceptance criteria + 9 probes; U-RT-155 = 11 acceptance criteria."
+    report = _report_for_counts({"plan.md": [line]})
+    assert _hard(report) == [], _hard(report)
+    assert ls._claim_subject(line, "plan.md", line.index("16")) == "U-CP-102"
+    assert ls._claim_subject(line, "plan.md", line.index("11")) == "U-RT-155"
+
+
+def test_count_check_still_fires_for_one_unit_claimed_twice_on_one_line():
+    line = "U-CP-102 has 16 acceptance criteria, but U-CP-102 has 15 acceptance criteria."
+    assert _hard(_report_for_counts({"plan.md": [line]})) != []
+
+
+def test_changed_line_numbers_tracks_new_file_positions():
+    diff = "--- a/x.md\n+++ b/x.md\n@@ -10,3 +10,4 @@\n ctx\n+added-at-11\n ctx\n"
+    assert ls.changed_line_numbers(diff) == {"x.md": {11}}
+
+
+def test_run_checked_fails_closed_on_a_failing_git_invocation():
+    """[P2] (codex round 3): _run discarded the return code, so a base that
+    RESOLVES but whose diff still fails (two commits with no merge base) yielded
+    an empty diff and a cheerful OK. Same family as the round-1 base fail-open."""
+    import pytest
+
+    with pytest.raises(ls.BaseRefError, match="failed"):
+        ls._run_checked(["git", "diff", "definitely-not-a-ref...also-not-a-ref"])

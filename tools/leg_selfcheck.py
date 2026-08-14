@@ -83,7 +83,25 @@ class BaseRefError(ValueError):
 
 
 def _run(args: list[str]) -> str:
+    """Best-effort: used for PROBES whose failure is a legitimate answer
+    (`rev-parse --verify` on a ref that may not exist)."""
     out = subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
+    return out.stdout
+
+
+def _run_checked(args: list[str]) -> str:
+    """Used where an empty result would be indistinguishable from "nothing to
+    check". A base ref can resolve and `git diff base...HEAD` still fail — two
+    valid commits with no merge base, for instance — and swallowing the return
+    code turned that into an empty diff, zero findings and `leg-selfcheck OK`
+    (codex round 3 [P2]; same family as the unresolvable-base fail-open found in
+    round 1). Fail closed instead."""
+    out = subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
+    if out.returncode != 0:
+        raise BaseRefError(
+            f"`{' '.join(args)}` failed (exit {out.returncode}): "
+            f"{out.stderr.strip()[:200] or 'no stderr'}"
+        )
     return out.stdout
 
 
@@ -131,9 +149,9 @@ def diff_text(base: str, uncommitted: bool) -> str:
     (it over-reports, never under-reports), but it means the authoritative run
     is the committed one — which is also the one the push actually ships.
     """
-    parts = [_run(["git", "diff", f"{base}...HEAD"])]
+    parts = [_run_checked(["git", "diff", f"{base}...HEAD"])]
     if uncommitted:
-        parts.append(_run(["git", "diff", "HEAD"]))
+        parts.append(_run_checked(["git", "diff", "HEAD"]))
     return "\n".join(parts)
 
 
@@ -185,6 +203,59 @@ def context_by_file(diff: str) -> dict[str, list[str]]:
         if ln.startswith(" ") and current is not None:
             out[current].append(ln[1:])
     return dict(out)
+
+
+def changed_line_numbers(diff: str) -> dict[str, set[int]]:
+    """New-file line numbers touched, per file, parsed from `@@` hunk headers.
+
+    Needed because an AMENDED register row does not re-add its `- id:` /
+    `### B-*` declaration — only the changed field or bullet — so scanning added
+    lines for an id found nothing and check 4 silently skipped exactly the case
+    it matters most for: an implementation closing a finding by editing its
+    existing row (codex round 3 [P1]).
+    """
+    out: dict[str, set[int]] = defaultdict(set)
+    current: str | None = None
+    lineno = 0
+    for ln in diff.splitlines():
+        m = re.match(r"^\+\+\+ b/(.+)$", ln)
+        if m:
+            current = m.group(1)
+            out.setdefault(current, set())
+            continue
+        h = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", ln)
+        if h:
+            lineno = int(h.group(1))
+            continue
+        if current is None:
+            continue
+        if ln.startswith("+") and not ln.startswith("+++"):
+            out[current].add(lineno)
+            lineno += 1
+        elif ln.startswith(" "):
+            lineno += 1
+    return dict(out)
+
+
+def rows_enclosing(path: str, lines: set[int]) -> set[str]:
+    """Register row ids whose block encloses any of `lines`, read from the file
+    at HEAD — the enclosing-row resolution an added-lines scan cannot do."""
+    full = ROOT / path
+    if not full.is_file() or not lines:
+        return set()
+    boundaries: list[tuple[int, str]] = []
+    for i, line in enumerate(full.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        m = _ROW_ID_RE.match(line)
+        if m:
+            boundaries.append((i, m.group(1)))
+    if not boundaries:
+        return set()
+    found: set[str] = set()
+    for n in lines:
+        prior = [rid for start, rid in boundaries if start <= n]
+        if prior:
+            found.add(prior[-1])
+    return found
 
 
 def added_lines(by_file: dict[str, list[str]]) -> list[str]:
@@ -344,9 +415,28 @@ _NUM = r"(?<![#\w.\-])(\d+|" + "|".join(_NUMBER_WORDS) + r")"
 _UNIT_ID_RE = re.compile(r"\bU-[A-Z]+-\d+\b")
 
 
-def _claim_subject(line: str, path: str) -> str:
-    m = _UNIT_ID_RE.search(line)
-    return m.group(0) if m else f"(unattributed in {path})"
+def _claim_subject(line: str, path: str, at: int = 0) -> str:
+    """The unit a count claim at offset `at` belongs to: the NEAREST unit id at
+    or before it on the line.
+
+    Taking the line's FIRST unit id attributed every count on a multi-unit line
+    to one subject, so a single summary sentence — "U-CP-102 = 16 acceptance
+    criteria ... U-RT-155 = 11 acceptance criteria", exactly the shape the
+    upcoming co-land uses — became two conflicting claims for U-CP-102 and
+    hard-failed the pre-push gate (codex round 3 [P1]).
+    """
+    best: str | None = None
+    for m in _UNIT_ID_RE.finditer(line):
+        if m.start() <= at:
+            best = m.group(0)
+        else:
+            break
+    if best is None:
+        # A claim before ANY unit id on the line still belongs to the first one
+        # named there, if any — a leading "16 acceptance criteria for U-CP-102".
+        nxt = _UNIT_ID_RE.search(line)
+        best = nxt.group(0) if nxt else None
+    return best or f"(unattributed in {path})"
 
 
 def check_counts(
@@ -385,11 +475,11 @@ def check_counts(
     scanned += [(p, line) for p, lines in (context or {}).items() if _eligible(p) for line in lines]
     for path, line in scanned:
         low = line.lower()
-        subject = _claim_subject(line, path)
         for pattern, bucket in _COUNT_NOUNS:
             for m in re.finditer(rf"{_NUM}\s+(?:\w+[- ]){{0,2}}?{pattern}", low, re.IGNORECASE):
                 raw = m.group(1).lower()
                 value = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
+                subject = _claim_subject(line, path, m.start())
                 claims[(subject, bucket)][value].append(line.strip()[:150])
 
     for (subject, bucket), by_value in sorted(claims.items()):
@@ -576,6 +666,7 @@ def check_register_rows(
     paths: list[str],
     report: Report,
     detail_fn: Callable[[str], tuple[int, str]] | None = None,
+    amended: set[str] | None = None,
 ) -> None:
     """`--detail <ID>` renders the PROSE carrier, not the YAML `summary`.
 
@@ -589,7 +680,9 @@ def check_register_rows(
         p.endswith(("forward-register.yaml", "post-phase-8-forward-register.md")) for p in paths
     ):
         return
-    ids = sorted({m.group(1) for line in added if (m := _ROW_ID_RE.match(line))})
+    ids = sorted(
+        {m.group(1) for line in added if (m := _ROW_ID_RE.match(line))} | set(amended or ())
+    )
     # A row is NEW when this arc adds its prose HEADING (`### B-166 · ...`);
     # merely amending an existing row's body never re-adds that line.
     new_ids = {m.group(1) for line in added if (m := _NEW_PROSE_HEADING_RE.match(line))}
@@ -652,7 +745,11 @@ def run(base: str, uncommitted: bool) -> Report:
     check_cites(by_file, report)
     check_counts(by_file, report, context_by_file(diff))
     check_label_collisions(by_file, report)
-    check_register_rows(added, paths, report)
+    amended: set[str] = set()
+    for path, nums in changed_line_numbers(diff).items():
+        if path.endswith(("forward-register.yaml", "post-phase-8-forward-register.md")):
+            amended |= rows_enclosing(path, nums)
+    check_register_rows(added, paths, report, amended=amended)
     return report
 
 
