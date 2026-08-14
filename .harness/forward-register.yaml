@@ -61,11 +61,11 @@ snapshot:
   total: 174
   open: 1
   design_substrate_gated: 0
-  registered_finding: 39
+  registered_finding: 38
   operator_gated: 0
   held: 2
-  closed: 132
-  identity_digest: badb4155f905414d
+  closed: 133
+  identity_digest: 04536bce92dad334
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9314,10 +9314,11 @@ items:
     same commit passed on rerun)*'
 - id: B-170
   title: 'Arc-metrics ledger — per-arc wall-clock capture for efficacy tracking'
-  status: registered_finding
-  summary: 'GATE UNIT — blocks B-171..B-174. One row per arc at `.harness/arc-metrics.jsonl`; the load-bearing field is levers_active, so efficacy is a cohort comparison rather than an assertion. Fields carry provenance (derived / declared / unmapped) and an absent measurement is never recorded as a measured zero. LARGELY BUILT, UNCOMMITTED in the working tree at filing time.'
+  status: closed
+  summary: 'GATE UNIT — blocks B-171..B-174. One row per arc at `.harness/arc-metrics.jsonl`; the load-bearing field is levers_active, so efficacy is a cohort comparison rather than an assertion. Fields carry provenance (derived / declared / unmapped) and an absent measurement is never recorded as a measured zero. LANDED at PR #1340 with all four close-out steps discharged and the falsifier re-run at HEAD.'
   close_out: 'STEP 1 -- land the uncommitted work: tools/arc_metrics.py, tools/test_arc_metrics.py (10 tests, each carrying a mutation-probe annotation), .harness/arc-metrics.jsonl (16 baseline rows), and the justfile arc-metrics recipe. STEP 2 -- verify the witness still holds at HEAD: the tool must reproduce 10 rounds for #1337 and 1408 additions from git/gh, NOT from any report. STEP 3 -- confirm fail-closed by mutation probe: remove the zero-logs guard in round_metrics() and the test must RED with DID NOT RAISE, then restore. STEP 4 -- wire capture into ship-pr so every future arc appends a row. FALSIFIER: if the backfilled figures cannot be reproduced from git/gh at HEAD, the tool is wrong and no lever may be evaluated against it.'
   council: 'No. The instrument is built and its acceptance criteria are executable; nothing here changes a committed contract.'
+  pr: '#1340'
   heading: '### B-170 · Arc-metrics ledger — per-arc wall-clock capture, the GATE the other four units are measured against *(2026-08-14 arc-wall-clock audit; provisionally numbered `B-178` in that plan)*'
 - id: B-171
   title: 'Round-timing instrumentation — split codex think-time from agent absorption'
