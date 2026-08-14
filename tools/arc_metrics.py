@@ -74,6 +74,10 @@ FINAL_REVIEW_MARKER = "Full review comments:"
 #: `gh run list --commit` matches on the full object name only.
 FULL_SHA_LEN = 40
 
+#: Where a row counts as durable. Deliberately the merged remote branch and not
+#: `HEAD`: a topic-branch commit can still be reset or abandoned.
+MERGED_REF = os.environ.get("ARC_METRICS_MERGED_REF", "origin/main")
+
 
 class AbortError(RuntimeError):
     """A named, fail-closed abort. Never swallowed, never defaulted."""
@@ -334,6 +338,15 @@ def extract(args: argparse.Namespace) -> ArcRow:
                     "the set; fix the glob rather than record a negative arc span"
                 )
             row.arc_span_s = span
+            # A round log's mtime is when that round's output FINISHED, not when
+            # its review began, so the span starts at the END of round 1 and the
+            # whole first round is missing from it. On a one-round arc that
+            # leaves only the tail: pr-1023 reads 73.5s against an 817s PR
+            # window. The number is therefore a LOWER BOUND and is labelled as
+            # one -- B-171's round-timing instrumentation is what supplies a
+            # real start timestamp; until then, no consumer should read this as
+            # the whole arc.
+            prov["arc_span_s"] = "derived:lower-bound-excludes-first-round-duration"
         prov["round_fields"] = "derived"
     else:
         prov["round_fields"] = "unmapped:no-round-logs-supplied"
@@ -486,22 +499,28 @@ def _process_is_alive(pid: int) -> bool:
 
 
 def committed_arc_ids() -> set[str]:
-    """arc_ids present in the ledger AS COMMITTED, not merely in the worktree.
+    """arc_ids present in the ledger on MERGED history, not the topic branch.
 
-    A local append is not durability. The row lives only as an uncommitted
-    change until its PR merges, and the arc that appended it can be reset or
-    have its worktree disposed first -- taking the operator-declared fields
-    with it, since only the queued capture ever held them. So a queued file is
-    released against committed history, never against the working tree.
+    A local append is not durability, and neither is a local commit. The row
+    lives on a topic branch until its PR merges, and that branch can still be
+    reset, abandoned, or have its worktree disposed -- taking the
+    operator-declared fields with it, since only the queued capture ever held
+    them. Reading `HEAD` would see the arc the moment it was committed on the
+    topic branch and release the capture right there, which is precisely the
+    loss this queue exists to prevent, one step later.
+
+    So the release point is the merged default branch. If it cannot be read,
+    nothing is released -- holding a capture costs a queue file, dropping one
+    costs the declarations permanently.
     """
     try:
         rel = LEDGER.relative_to(REPO)
     except ValueError:
         return set()  # a ledger outside the repo has no committed history
     try:
-        raw = run(["git", "show", f"HEAD:{rel}"], what="git show ledger")
+        raw = run(["git", "show", f"{MERGED_REF}:{rel}"], what="git show merged ledger")
     except AbortError:
-        return set()  # not yet in history at all
+        return set()  # unreadable or not yet in merged history -- hold everything
     ids = set()
     for line in raw.splitlines():
         if line.strip():
@@ -768,7 +787,12 @@ def summary(_args: argparse.Namespace) -> int:
         rounds = [r["review_rounds"] for r in exact if r.get("review_rounds")]
         allgaps = [g for r in cohort for g in (r.get("round_wall_s") or [])]
         adds = [r["additions"] for r in cohort if r.get("additions") is not None]
-        print(f"  arc wall clock   {fmt_span(arcs)}          [stochastic]")
+        print(f"  arc wall clock   {fmt_span(arcs)}          [stochastic, LOWER BOUND]")
+        print(
+            "     ^ round-log mtimes mark round COMPLETION, so each span starts at the end "
+            "of round 1;\n       the first round's own duration is missing (B-171 supplies "
+            "the start timestamps)"
+        )
         if pr_window_only:
             print(
                 f"     ^ {pr_window_only}/{len(exact)} of these are the PR window only "

@@ -178,3 +178,39 @@ re-run overwrites rather than orphaning a sibling) and appends one `EXIT-REPORT`
 arc's machine-readable closure record. Every field is collected or explicitly null — a null
 `refresh_commit`, a `main_ci.conclusion` other than `success`, or `checkpoint.confirmed:
 false` each mean a closeout obligation above is still open.
+
+
+## Arc-metrics capture (B-170)
+
+Capture is two steps that sit in DIFFERENT arcs: this arc queues its inputs, the next arc
+folds them into the ledger. Skip both on a terminating roadmap-status refresh -- a refresh
+is not an arc. This is runner-parallel with the Claude carrier at
+`.claude/skills/ship-pr/SKILL.md`; an arc shipped from either runner must appear in the
+ledger, or every Codex-run arc is silently missing from the baseline.
+
+Step 1 -- queue, at closure, after the exit report above (writes NOTHING to the repo):
+
+```
+just arc-metrics queue --pr <NNN> --arc-type <inventing|applying> --decisions <N> \
+  --round-logs '<glob for THIS arc's round logs>' --levers <lever-ids-or-omit>
+```
+
+One file per arc, in a queue directory OUTSIDE the repo. That placement is load-bearing:
+writing the tracked ledger from inside a topic worktree leaves a dirty file that both
+strands the row when the worktree is disposed and blocks the disposal itself. `--arc-type`,
+`--decisions` and `--levers` are DECLARED judgements, required here because only the closing
+session knows them; omitting `--levers` records the empty baseline cohort `[]`, which is
+itself the claim that no wall-clock lever was live. The globs are resolved at closure and the
+derived metrics frozen, so later edits to those logs cannot change what this arc measured.
+
+Step 2 -- drain, early in the NEXT arc, before opening its PR:
+
+```
+just arc-metrics drain
+```
+
+Folds queued arcs into `.harness/arc-metrics.jsonl`, committed inside that arc's own PR
+(stage the path explicitly; never `git add -A`). `drain` exits NON-ZERO while anything is
+outstanding, and that is not a failure: a capture is released only once its row reaches
+MERGED history, so the normal sequence is drain (exit 1, entry held) -> commit and merge ->
+the next arc's drain releases it (exit 0). Only exit 0 means nothing is left to fold.

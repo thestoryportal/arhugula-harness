@@ -171,6 +171,63 @@ def test_a_locally_appended_row_holds_its_queue_entry(monkeypatch, tmp_path: Pat
     assert len(ledger.read_text().strip().splitlines()) == 1, "and is not duplicated"
 
 
+# mutation-probe: change MERGED_REF back to "HEAD" in committed_arc_ids()
+def test_release_is_gated_on_merged_history_not_the_topic_branch(monkeypatch):
+    """A topic-branch commit can still be reset or abandoned; merged history cannot."""
+    seen = {}
+
+    def fake_run(cmd, *, what):
+        seen["cmd"] = cmd
+        raise am.AbortError("not found")
+
+    monkeypatch.setattr(am, "run", fake_run)
+    assert am.committed_arc_ids() == set(), "unreadable merged history releases nothing"
+    ref = seen["cmd"][2].split(":")[0]
+    assert ref != "HEAD", "HEAD includes the not-yet-merged topic commit"
+    assert ref == am.MERGED_REF
+
+
+# mutation-probe: drop the arc_span_s lower-bound provenance label in extract()
+def test_arc_span_is_labelled_a_lower_bound(monkeypatch):
+    """mtime marks round COMPLETION, so round 1's own duration is missing."""
+    monkeypatch.setattr(
+        am,
+        "gh_pr",
+        lambda pr: {
+            "additions": 10,
+            "deletions": 0,
+            "changedFiles": 1,
+            "commits": [{}],
+            "createdAt": "2026-08-14T09:00:00Z",
+            "mergedAt": "2026-08-14T12:00:00Z",
+            "mergeCommit": None,
+            "title": "t",
+        },
+    )
+    args = am.argparse.Namespace(
+        pr=999,
+        arc_id=None,
+        arc_type=None,
+        decisions=None,
+        round_logs=None,
+        levers=None,
+        notes="",
+        round_snapshot={
+            "review_rounds": 1,
+            "round_wall_s": [],
+            "p1_rounds": [],
+            "first_round_at": "2026-08-14T11:00:00+00:00",
+            "last_round_at": "2026-08-14T11:00:00+00:00",
+            "round_log_source": "/tmp/logs",
+        },
+    )
+    row = am.extract(args)
+    assert row.arc_span_s == 3600.0
+    assert row.provenance["arc_span_s"].startswith("derived:lower-bound"), (
+        "an unlabelled span reads as the whole arc when it is only its tail"
+    )
+
+
 # mutation-probe: delete the `if arc_id in committed: unlink` branch in drain()
 def test_entry_is_released_once_the_row_reaches_committed_history(monkeypatch, tmp_path: Path):
     qdir = tmp_path / "queue"
