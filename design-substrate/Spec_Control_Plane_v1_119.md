@@ -123,12 +123,22 @@ linear path byte-identical.
    carrier — see §0.5.
 
    **The guarantee is per (branch × placement POSITION), not per placement DECLARATION —
-   stated as a bound, because it is narrower than §0.2's headline.** A workflow may declare
-   two placements at the same position, and both are valid and executed (witnessed today by
-   `test_two_pre_action_placements_emit_per_placement_canonical_4_spans`). The basis hashes
-   the position's string VALUE, so those two escalation instances receive the **same** token
-   and the same composed key, and the C-IS-07 §7.5 key-only dedup drops the second audit
-   entry exactly as it did before this delta — for that shape only.
+   stated as a conservative bound, because it is narrower than §0.2's headline.** A workflow
+   may declare two placements at the same position, and the basis hashes the position's
+   string VALUE, so any two escalation instances distinguished only by their placement
+   DECLARATION would receive the same token and the same composed key.
+
+   **Whether that shape is reachable at all is UNVERIFIED, and this text is careful not to
+   claim otherwise.** An earlier draft cited
+   `test_two_pre_action_placements_emit_per_placement_canonical_4_spans` as proof the shape
+   is live; out-of-family review showed that test constructs the composer without
+   `pause_resume_protocol` or `webhook_delivery_composer`, so it exercises the SYNCHRONOUS
+   loop — which mints no token at all. On the durable-async venue where tokens exist, the
+   first matching placement calls `_escalate_to_secondary_channel`, which is `NoReturn` and
+   always raises, so a second same-position mint may be unreachable within a pass. The bound
+   above is therefore stated **conservatively** — it costs nothing if the shape is
+   unreachable, and it is honest if it is not — and the reachability question is registered
+   as `B-165` rather than answered here.
 
    **This is a declared residual, NOT a silent one, and it is deliberately not repaired
    here.** The identity basis is (B), resolved by the design record §4-bis on an executed
@@ -517,10 +527,11 @@ posture change; uniform-treatment extension to depth-0 root and already-dispatch
 children; the pause-view **addressing** half (the **correlation** half IS absorbed, at
 §0.4.4 — see that section for why the two separate cleanly); the unguarded `entry_version`
 carrier across the pause boundary; the typed resume-outcome diagnostics carrier; and
-**the duplicate same-position placement shape** (§0.4(2), register row **`B-165`**) — two
-placements declared at one position collide on the token, because the ratified basis (B)
-hashes the position and not the declaration. Repairing it means revisiting the basis at the
-design record, which is back-flow, not spec application.
+**the duplicate same-position placement QUESTION** (§0.4(2), register row **`B-165`**) —
+whether two placements at one position can both mint a token is UNVERIFIED; if they can,
+they collide, because the ratified basis (B) hashes the position and not the declaration.
+Grounding it is the row's first step, and repairing it (if real) means revisiting the basis
+at the design record, which is back-flow, not spec application.
 
 ### §0.10 The sequencing condition, discharged
 
