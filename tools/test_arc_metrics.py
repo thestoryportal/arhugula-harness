@@ -155,19 +155,34 @@ def test_drain_keeps_an_entry_whose_capture_failed(monkeypatch, tmp_path: Path):
     assert not ledger.exists()
 
 
-# mutation-probe: delete the `if arc_id in known: continue` branch in drain()
-def test_drain_drops_an_entry_already_in_the_ledger(monkeypatch, tmp_path: Path):
+# mutation-probe: release the entry on `arc_id in local` instead of `in committed`
+def test_a_locally_appended_row_holds_its_queue_entry(monkeypatch, tmp_path: Path):
+    """A working-tree row is not durable; the declarations live nowhere else."""
     qdir = tmp_path / "queue"
     ledger = tmp_path / "arc-metrics.jsonl"
     monkeypatch.setattr(am, "QUEUE_DIR", qdir)
     monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
     am.append(_merged_row("pr-1338", 1338))
     _queue_entry(qdir, "pr-1338", 1338)
 
-    am.drain(am.argparse.Namespace())
-
-    assert am.read_queue() == [], "an already-folded arc leaves the queue"
+    assert am.drain(am.argparse.Namespace()) == 1, "held work is not success"
+    assert [e["arc_id"] for _p, e in am.read_queue()] == ["pr-1338"]
     assert len(ledger.read_text().strip().splitlines()) == 1, "and is not duplicated"
+
+
+# mutation-probe: delete the `if arc_id in committed: unlink` branch in drain()
+def test_entry_is_released_once_the_row_reaches_committed_history(monkeypatch, tmp_path: Path):
+    qdir = tmp_path / "queue"
+    ledger = tmp_path / "arc-metrics.jsonl"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: {"pr-1338"})
+    am.append(_merged_row("pr-1338", 1338))
+    _queue_entry(qdir, "pr-1338", 1338)
+
+    assert am.drain(am.argparse.Namespace()) == 0
+    assert am.read_queue() == [], "committed means the capture can finally go"
 
 
 # mutation-probe: make drain() rewrite the whole queue instead of unlinking per file
@@ -189,7 +204,6 @@ def test_drain_does_not_erase_an_entry_queued_while_it_runs(monkeypatch, tmp_pat
 
     still = [e["arc_id"] for _p, e in am.read_queue()]
     assert "pr-1341" in still, "the concurrently-queued arc must not be erased"
-    assert "pr-1338" not in still, "the drained arc is gone"
 
 
 # mutation-probe: unlink the queued file BEFORE append(extract(...)) succeeds
@@ -577,6 +591,46 @@ def test_only_the_final_review_block_is_counted():
         "Full review comments:\n- [P2] only a P2 this round\n"
     )
     assert am.count_p1(text) == 0, "the last block has no P1; the earlier one is stale"
+
+
+# mutation-probe: delete the `if span < 0: raise` guard in extract()
+def test_round_log_postdating_the_merge_aborts(monkeypatch):
+    """A negative span is a broken input, and negatives are truthy in medians."""
+    monkeypatch.setattr(
+        am,
+        "gh_pr",
+        lambda pr: {
+            "additions": 10,
+            "deletions": 0,
+            "changedFiles": 1,
+            "commits": [{}],
+            "createdAt": "2026-08-14T09:00:00Z",
+            "mergedAt": "2026-08-14T09:30:00Z",
+            "mergeCommit": None,
+            "title": "t",
+        },
+    )
+    args = am.argparse.Namespace(
+        pr=999,
+        arc_id=None,
+        arc_type=None,
+        decisions=None,
+        round_logs=None,
+        levers=None,
+        notes="",
+        # a copied log stamped AFTER the merge
+        round_snapshot={
+            "review_rounds": 1,
+            "round_wall_s": [],
+            "p1_rounds": [],
+            "first_round_at": "2026-08-14T11:00:00+00:00",
+            "last_round_at": "2026-08-14T11:00:00+00:00",
+            "round_log_source": "/tmp/logs",
+        },
+    )
+    with pytest.raises(am.AbortError) as exc:
+        am.extract(args)
+    assert "postdates" in str(exc.value)
 
 
 # mutation-probe: make arc_duration() return total_arc_wall_s first

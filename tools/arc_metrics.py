@@ -322,7 +322,18 @@ def extract(args: argparse.Namespace) -> ArcRow:
             # the metric the ~5h/arc claim should be measured against -- NOT
             # createdAt->mergedAt, which misses every round run before the PR
             # opened (measured at up to 56x the PR window).
-            row.arc_span_s = round((parse_iso(row.merged_at) - first).total_seconds(), 1)
+            span = round((parse_iso(row.merged_at) - first).total_seconds(), 1)
+            if span < 0:
+                # A copied or re-touched log can carry an mtime after the merge.
+                # A negative span is not a short arc, it is a broken input -- and
+                # since negatives are truthy they would sail into cohort medians
+                # and drag them down. Refuse rather than record.
+                raise AbortError(
+                    f"{row.arc_id}: first round log ({row.first_round_at}) postdates "
+                    f"the merge ({row.merged_at}) -- a copied or re-touched log is in "
+                    "the set; fix the glob rather than record a negative arc span"
+                )
+            row.arc_span_s = span
         prov["round_fields"] = "derived"
     else:
         prov["round_fields"] = "unmapped:no-round-logs-supplied"
@@ -474,6 +485,33 @@ def _process_is_alive(pid: int) -> bool:
     return True
 
 
+def committed_arc_ids() -> set[str]:
+    """arc_ids present in the ledger AS COMMITTED, not merely in the worktree.
+
+    A local append is not durability. The row lives only as an uncommitted
+    change until its PR merges, and the arc that appended it can be reset or
+    have its worktree disposed first -- taking the operator-declared fields
+    with it, since only the queued capture ever held them. So a queued file is
+    released against committed history, never against the working tree.
+    """
+    try:
+        rel = LEDGER.relative_to(REPO)
+    except ValueError:
+        return set()  # a ledger outside the repo has no committed history
+    try:
+        raw = run(["git", "show", f"HEAD:{rel}"], what="git show ledger")
+    except AbortError:
+        return set()  # not yet in history at all
+    ids = set()
+    for line in raw.splitlines():
+        if line.strip():
+            try:
+                ids.add(json.loads(line).get("arc_id"))
+            except json.JSONDecodeError:
+                continue
+    return ids
+
+
 def _claim_owner_is_dead(claim: Path) -> bool:
     """True only when the recorded owner is provably gone.
 
@@ -569,19 +607,37 @@ def drain(_args: argparse.Namespace) -> int:
     """
     _recover_dead_claims()
 
+    # Claims left behind by a live or unverifiable owner are outstanding work.
+    # Reporting "nothing to drain" while they sit there would let automation
+    # move on before a peer has finished, and would strand a foreign-host claim
+    # silently forever.
+    outstanding = sorted(QUEUE_DIR.glob("*.taken")) if QUEUE_DIR.is_dir() else []
+
     pending = read_queue()
     if not pending:
+        if outstanding:
+            names = ", ".join(p.name for p in outstanding)
+            print(f"nothing drainable; {len(outstanding)} claim(s) still held: {names}")
+            return 1
         print("arc-metrics queue is empty -- nothing to drain")
         return 0
 
-    known = {r.get("arc_id") for r in read_ledger()}
-    kept = 0
+    committed = committed_arc_ids()
+    local = {r.get("arc_id") for r in read_ledger()}
+    kept = len(outstanding)
     added = 0
     for path, entry in pending:
         arc_id = entry.get("arc_id") or f"pr-{entry['pr']}"
-        if arc_id in known:
-            print(f"  {arc_id}: already in ledger, dropping from queue")
+        if arc_id in committed:
+            print(f"  {arc_id}: in committed ledger, releasing queue entry")
             path.unlink(missing_ok=True)
+            continue
+        if arc_id in local:
+            # Appended, but only into the working tree. Hold the capture until
+            # the row actually reaches history -- this arc can still be reset or
+            # its worktree disposed, and nothing else holds the declarations.
+            print(f"  {arc_id}: row appended locally, awaiting commit -- entry held")
+            kept += 1
             continue
 
         # CLAIM this arc by renaming its queued file before capturing it. Two
@@ -614,12 +670,16 @@ def drain(_args: argparse.Namespace) -> int:
             print(f"  {arc_id}: KEPT QUEUED -- {exc}", file=sys.stderr)
             kept += 1
             continue
-        # Only now is the row durable, so only now may the claimed file go.
-        taken.unlink(missing_ok=True)
-        print(f"  {arc_id}: appended")
+        # Restore the capture to the queue rather than deleting it: the row is
+        # only in the working tree so far, and the declarations it carries exist
+        # nowhere else. It is released on a later drain, once the row is in
+        # committed history.
+        os.replace(taken, path)
+        print(f"  {arc_id}: appended (entry held until the row is committed)")
         added += 1
+        kept += 1
 
-    print(f"drained {added} arc(s); {kept} still queued")
+    print(f"drained {added} arc(s); {kept} entr(y/ies) still queued")
     # Non-zero on a retained entry, so automation cannot read a pending retry
     # as a completed fold.
     return 1 if kept else 0

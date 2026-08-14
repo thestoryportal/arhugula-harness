@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 174
+  total: 175
   open: 1
   design_substrate_gated: 0
-  registered_finding: 38
+  registered_finding: 39
   operator_gated: 0
   held: 2
   closed: 133
-  identity_digest: 04536bce92dad334
+  identity_digest: b620798185b5cb62
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9348,3 +9348,10 @@ items:
   close_out: 'STEP 1 -- add a CLAUDE.md 13.1 always-on row stating the discipline. STEP 2 -- record {class, arc, rounds_consumed, test_path, runtime_s, origin} per mechanised class in B-170''s ledger, where origin is original or self-inflicted. STEP 3 -- ship ONE real instance with the discipline, not the rule alone. NON-GOAL, stated explicitly: this must never become a reason to shorten review -- it removes classes from the loop, it does not license capping it. CAVEAT ON THE NUMBERS: the 6-of-10 origin split is a prose judgement over ONE arc and the 29% figure comes from a count on #1338 that could not be independently derived (no round logs survive for it). Both are exactly the kind of claim that moved twice under measurement during the audit, so record the classification going forward rather than trusting either.'
   council: 'No. The discipline is additive and the targeting rule is grounded in measured origin data; nothing narrows an existing gate.'
   heading: '### B-174 · Mechanize the finding class, every arc — targeted at SELF-INFLICTED bookkeeping drift, which is ~29% of rounds post-mitigation *(2026-08-14 arc-wall-clock audit; provisionally numbered `B-177`)*'
+- id: B-175
+  title: 'Arc-metrics queue/drain cross-process durability residue'
+  status: registered_finding
+  summary: 'Two residual cross-process hazards in the B-170 queue/drain protocol, both real and both requiring coordination beyond a single unit. (1) LEDGER is per-REPO while QUEUE_DIR is shared, so two parallel next-arc worktrees draining at once take disjoint arcs into disjoint local ledgers; each exits 0, and the rows land in two different PRs. Deferred acknowledgement (rows released only once present in COMMITTED history) removes the LOSS case, but not the split. (2) _claim_arc''s dead-claim takeover reads liveness then unlinks; two drains can both judge the same claim dead and one can unlink the other''s freshly created claim. Neither is reachable in the single-lane flow that ship-pr documents.'
+  close_out: 'STEP 1 -- decide whether parallel-lane drain is a supported mode at all, or whether drain is declared single-lane by contract (the cheap resolution: ship-pr already serialises merges, so serialising drain costs nothing). STEP 2 -- if supported, give the takeover a real compare-and-swap (O_EXCL sentinel or flock) instead of liveness-read-then-unlink. STEP 3 -- if supported, make the ledger append itself the serialisation point rather than per-entry claiming. FALSIFIER: a two-process probe that drains the same queue concurrently must produce exactly one row per arc in exactly one ledger, with no queue entry released before its row is committed.'
+  council: 'No. The mechanism is named and the falsifier is executable; this is a scope decision about whether parallel drain is supported, not a change to any committed contract.'
+  heading: '### B-175 · Arc-metrics queue/drain cross-process durability residue — two parallel worktrees hold DIFFERENT ledgers, and a dead-claim takeover is not atomic *(surfaced by codex round 6 on PR #1340, 2026-08-14; registered rather than fixed at the arms-race point)*'
