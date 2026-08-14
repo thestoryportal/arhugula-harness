@@ -20,12 +20,25 @@ The assertion is on what arrives at the dispatcher:
   production producer surface, not a test proxy; and
 * `pre_dispatch_escalation_basis` is non-`None` on the same context.
 
-Both fields are set by ONE `model_copy` update at the fan-out branch-composition site
-(`workflow_driver.py:8589-8606`), which is why they arrive together and why removing
-either one reds this test. That co-arrival is the whole production-feed claim: the
-`B-71` token is derived from the basis, so a context carrying the basis AND a
-duplicated placement pair is precisely the colliding input the runtime witness then
-acts on.
+That co-arrival is the whole production-feed claim: the `B-71` token is derived from
+the basis, so a context carrying the basis AND a duplicated placement pair is precisely
+the colliding input the runtime witness then acts on.
+
+**The two fields do NOT arrive by the same mechanism**, which the mutation probes below
+establish and an earlier draft of this docstring got wrong. The basis is set once, in
+the branch-child `model_copy` (`workflow_driver.py:8602`), so deleting that one line
+reds this module. The placement tuple is delivered TWICE OVER — seeded on the fan-out
+parent (`:8411`) and re-folded onto the child from `manifest_entry` (`:8593`) — so
+deleting either alone changes nothing observable and only the conjunction reds it.
+
+**Why the round-trip is split across two modules, and not a gap.** A single test that
+drove `execute_workflow` all the way through `RuntimeHITLGateComposer` would be the
+ideal witness, and it is not writable: `harness-cp` cannot import `harness-runtime`
+(the axis-isolation rule this repo's sibling driver records also observe, keeping a
+name-matched local stand-in for the runtime pause signal rather than importing it). So
+the chain is pinned in two halves — production DELIVERS the shape (here, on an asserted
+non-excluded SYNC_BLOCKING cell) and the composer COLLIDES on it (there, on the same
+cell) — and neither half is quoted as the whole.
 
 **Scope, stated so it cannot be over-read.** This proves production COMPOSES and
 DELIVERS the colliding shape when a manifest declares duplicate placements. It does
@@ -53,6 +66,7 @@ from harness_cp.handoff_context import StateSummary
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.pause_resume_protocol import PauseResumeProtocol
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.persona_engine_hitl_matrix import SynchronyClass, matrix_cell_for
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     DriverContext,
@@ -82,8 +96,15 @@ def _manifest(placements: tuple[HITLPlacement, ...]) -> Any:
     return WorkflowManifestEntry(
         workflow_id="wf-b165-feed",
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
-        persona_tier=PersonaTier.TEAM_BINDING,
-        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        # SOLO_DEVELOPER × SAVE_POINT_CHECKPOINT — a NON-EXCLUDED, SYNC_BLOCKING cell,
+        # asserted below rather than assumed. An earlier draft copied
+        # TEAM_BINDING × PURE_PATTERN_NO_ENGINE from a sibling fixture; that cell is
+        # EXCLUDED, so the run only reached a dispatcher at all because a capturing
+        # double is not the HITL composer (which enforces the exclusion). The context
+        # assertions would still have held, but on a configuration the sync gate can
+        # never legally run — a witness pinned to an unreachable cell.
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
         topology_pattern=TopologyPattern.PARALLELIZATION,
         layer_budgets=(),
         fallback_chain=_CHAIN,
@@ -167,6 +188,27 @@ class _CtxP:
         self.tenant_id = None
 
 
+def _assert_gateable_cell() -> None:
+    """The manifest's persona × engine must be a cell the sync HITL gate can LEGALLY
+    run on — non-excluded and SYNC_BLOCKING.
+
+    Asserted in both tests rather than trusted, because the failure it guards against
+    is silent: a capturing dispatcher is not `RuntimeHITLGateComposer` and does not
+    enforce `HITLCellExcludedError`, so an excluded cell would still let every context
+    assertion below pass while pinning the carrier to a configuration the gate can
+    never reach. A matrix change that moved this pair to EXCLUDED or DURABLE_ASYNC
+    reds HERE, loudly, instead of quietly hollowing out the witness.
+    """
+    cell = matrix_cell_for(
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+    )
+    assert not cell.is_excluded, "the production-feed witness needs a REACHABLE cell"
+    assert cell.synchrony_class is SynchronyClass.SYNC_BLOCKING, (
+        "B-165's collision is on the SYNC venue; pin a SYNC_BLOCKING cell"
+    )
+
+
 class _CapturingDispatcher:
     """Records the `step_context` production hands each branch, then succeeds.
 
@@ -206,6 +248,7 @@ class _CapturingDispatcher:
 # about the driver worth knowing, not merely a fact about this test.
 def test_production_delivers_both_same_position_placements_to_the_branch_context() -> None:
     """The production-feed half of `B-165`, through the REAL `execute_workflow`."""
+    _assert_gateable_cell()
     dispatcher = _CapturingDispatcher()
     manifest = _manifest((HITLPlacement(position=_GATE), HITLPlacement(position=_GATE)))
 
@@ -240,6 +283,7 @@ def test_production_delivers_the_b71_basis_on_the_same_branch_context() -> None:
     object that carries a duplicated placement pair also carries the material the
     `B-71` token is derived from, so both placements resolve the SAME token.
     """
+    _assert_gateable_cell()
     dispatcher = _CapturingDispatcher()
     manifest = _manifest((HITLPlacement(position=_GATE), HITLPlacement(position=_GATE)))
 
