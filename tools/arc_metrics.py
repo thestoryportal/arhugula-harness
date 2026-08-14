@@ -437,6 +437,16 @@ def queue_capture(args: argparse.Namespace) -> int:
     """
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     arc_id = args.arc_id or f"pr-{args.pr}"
+    # The arc_id becomes a filename. An absolute or `..`-bearing id would land
+    # OUTSIDE QUEUE_DIR, where read_queue never looks -- and `queue` would still
+    # report success, so the capture is silently never drained. Require a single
+    # safe path component rather than trusting the caller.
+    if arc_id != Path(arc_id).name or arc_id in {"", ".", ".."} or arc_id.startswith("."):
+        raise AbortError(
+            f"unsafe --arc-id {arc_id!r}: must be a single filename component "
+            "(no '/', no '..', no leading '.') or the queued file lands where "
+            "no drain will find it"
+        )
 
     # Resolve the globs HERE, at closure, and store concrete paths. A pattern
     # stored live would be re-expanded by the next arc's drain, so any file
@@ -788,7 +798,10 @@ def arc_duration(row: dict) -> float | None:
     ``arc_span_s`` needs round data. Where none survives, the PR window stands
     in and ``summary`` prints how many rows are on that weaker footing.
     """
-    return row.get("arc_span_s") or row.get("total_arc_wall_s")
+    span = row.get("arc_span_s")
+    # `or` would treat a measured 0.0 as absent and silently fall through to the
+    # PR window, which is a different quantity entirely.
+    return span if span is not None else row.get("total_arc_wall_s")
 
 
 def summary(_args: argparse.Namespace) -> int:
@@ -833,13 +846,17 @@ def summary(_args: argparse.Namespace) -> int:
         # different things -- #1337 is 269.2m against 6.1m, #1060 44.4m against
         # 548.2m -- so a median over the mixture is a number about nothing. A
         # footnote was not enough: a reader takes the headline figure.
-        arcs = [r["arc_span_s"] for r in exact if r.get("arc_span_s")]
+        # `is not None`, never truthiness. A measured 0.0 is a measurement, and
+        # dropping it -- or worse, reclassifying a zero span as a PR window --
+        # is the same absent-versus-measured-zero violation this ledger exists
+        # to prevent, just pointing the other way.
+        arcs = [r["arc_span_s"] for r in exact if r.get("arc_span_s") is not None]
         windows = [
             r["total_arc_wall_s"]
             for r in exact
-            if not r.get("arc_span_s") and r.get("total_arc_wall_s")
+            if r.get("arc_span_s") is None and r.get("total_arc_wall_s") is not None
         ]
-        rounds = [r["review_rounds"] for r in exact if r.get("review_rounds")]
+        rounds = [r["review_rounds"] for r in exact if r.get("review_rounds") is not None]
         allgaps = [g for r in cohort for g in (r.get("round_wall_s") or [])]
         adds = [r["additions"] for r in cohort if r.get("additions") is not None]
         print(f"  arc span         {fmt_span(arcs)}          [stochastic, LOWER BOUND]")

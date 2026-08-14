@@ -433,6 +433,47 @@ def test_publish_exclusive_still_refuses_a_taken_name(tmp_path: Path):
     assert json.loads(dest.read_text()) == {"first": True}, "the winner is not overwritten"
 
 
+# mutation-probe: delete the arc_id path-component guard in queue_capture()
+def test_an_arc_id_that_escapes_the_queue_dir_is_refused(monkeypatch, tmp_path: Path):
+    """An escaped file reports success and is then never drained."""
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    for bad in ("../escaped", "nested/id", "/absolute", ".."):
+        args = am.argparse.Namespace(
+            pr=1338,
+            arc_id=bad,
+            arc_type="applying",
+            decisions=1,
+            round_logs=None,
+            levers=None,
+            notes="",
+        )
+        with pytest.raises(am.AbortError) as exc:
+            am.queue_capture(args)
+        assert "unsafe --arc-id" in str(exc.value), bad
+    assert not (tmp_path / "escaped.json").exists(), "nothing lands outside the queue"
+
+
+# mutation-probe: revert the `is not None` checks in summary()/arc_duration() to truthiness
+def test_a_measured_zero_duration_is_not_treated_as_absent(monkeypatch, tmp_path: Path, capsys):
+    """0.0 is a measurement; dropping it is absent-vs-zero pointing the other way."""
+    assert am.arc_duration({"arc_span_s": 0.0, "total_arc_wall_s": 900.0}) == 0.0, (
+        "a zero span must not silently fall through to the PR window"
+    )
+    ledger = tmp_path / "arc-metrics.jsonl"
+    ledger.write_text(
+        json.dumps({"arc_id": "z", "arc_span_s": 0.0, "levers_active": []})
+        + "\n"
+        + json.dumps({"arc_id": "w", "total_arc_wall_s": 600.0, "levers_active": []})
+        + "\n"
+    )
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    am.summary(am.argparse.Namespace())
+    out = capsys.readouterr().out
+    assert "arc span         0.0m (n=1" in out, "the zero span is counted, not dropped"
+    assert "PR-open window   10.0m (n=1" in out, "and is not reclassified as a window"
+
+
 # mutation-probe: rename a subcommand or drop a set_defaults(func=...) in main()
 def test_the_real_cli_path_is_wired(monkeypatch, tmp_path: Path, capsys):
     """Every other test bypasses argparse; `just arc-metrics` does not.
