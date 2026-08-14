@@ -282,7 +282,7 @@ ending the turn):
 Skip only when this PR was itself the terminating roadmap-status refresh (§12.2.1) — a
 refresh-only commit has no new learnings to reflect on.
 
-## Arc exit report — the LAST step (U-WT-03/04)
+## Arc exit report — the last reporting step (U-WT-03/04)
 
 **After** the reflect + `/context-save` block above, not before it. That ordering is the
 whole point: the merge SHA, the post-merge main-CI conclusion, the §12.2.1 refresh commit
@@ -310,6 +310,67 @@ missing refresh reads `refresh_commit: null` and a non-green CI reads its conclu
 verbatim, so the block is evidence, not narration. Read what it says before pasting: a
 null `refresh_commit`, a `main_ci.conclusion` that is not `success`, or
 `checkpoint.confirmed: false` each mean an obligation above is still open.
+
+## Arc-metrics capture — after the exit report (B-170)
+
+Capture is two steps that deliberately sit in **different arcs**: this arc *queues* its
+inputs, the next arc *folds* them into the ledger. Skip both on a terminating
+roadmap-status refresh (§12.2.1) — a refresh is not an arc.
+
+**Step 1 — queue, at closure (writes NOTHING to the repo).** After the exit report above,
+because `merged_at` and the merge SHA do not exist before merge:
+
+```
+just arc-metrics queue --pr <NNN> --arc-type <inventing|applying> --decisions <N> \
+  --round-logs '<glob for THIS arc's round logs>' --levers <lever-ids-or-omit>
+```
+
+This writes one file per arc into a queue directory **outside** the repo. That placement is
+load-bearing, not tidiness: in an autonomous arc this step runs inside the topic worktree,
+and writing the tracked ledger there would leave a dirty file that both strands the row when
+the worktree is disposed and *blocks the disposal itself* — worktree GC skips a merged
+worktree carrying local state, while loop completion requires that worktree to be
+unregistered. Committing straight to `main` instead is no escape: before the terminating
+refresh the drift guard hard-fails the push, and after it the next local preflight
+hard-fails and demands another refresh.
+
+One file per arc rather than a shared log is also deliberate: parallel lanes queue
+concurrently, and a shared append-log makes loss structural (two writers on one inode, a
+drain rewriting from a stale snapshot). Re-queueing the same arc is refused rather than
+silently overwriting the first session's declarations.
+
+`--arc-type`, `--decisions` and `--levers` are **declared** judgements — the tool records
+them as such and never infers them, and this session is the only one that knows them, which
+is precisely why they are queued rather than reconstructed later. Omitting `--levers`
+records the empty baseline cohort `[]`, which is a claim in itself: it says no wall-clock
+lever was live. Do not pass it loosely — every efficacy comparison B-171..B-174 makes is a
+cohort split on that field.
+
+**Step 2 — drain, inside the NEXT arc's PR.** Early in the next arc, before opening its PR:
+
+```
+just arc-metrics drain
+```
+
+This folds every queued arc into `.harness/arc-metrics.jsonl` as an ordinary tracked change,
+committed inside that arc's own PR (`git add .harness/arc-metrics.jsonl` — never
+`git add -A`). A doc-only sweep can still carry the row — `.harness/*.jsonl` is not
+`harness-*/src|tests`, so it does not drag the diff through the 3-lens merge-gate.
+
+**`drain` exits non-zero while anything is still outstanding, and that is not a failure.**
+A queued capture is released only once its row appears in **merged history** (`origin/main`),
+because until then the declarations it carries exist nowhere else — a working-tree change is
+obviously not durable, but neither is a topic-branch commit: that branch can still be reset,
+abandoned, or have its worktree disposed. So the normal sequence is: `drain` (exit 1, "entry
+held until the row is committed") → commit and **merge** the row → the *next* arc's `drain`
+releases the entry (exit 0). A non-zero exit means "work is still outstanding", which also
+covers a capture that failed and a claim held by a live peer. Only treat exit 0 as "nothing
+left to fold".
+
+Read the folded rows before moving on. `--round-logs` fails closed (zero matched files
+aborts rather than recording `0 rounds`), and a `provenance` value beginning `unmapped:`
+means that field had no input — an honest null, not a measured zero. A lever must never be
+evaluated against one.
 
 ## Notes
 

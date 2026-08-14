@@ -1184,3 +1184,28 @@ def test_antigravity_review_is_read_only_and_uses_writable_operational_log() -> 
     assert "GEMINI_API_KEY" in reviewer and "GOOGLE_API_KEY" in reviewer
     assert "VERDICT: APPROVE" in reviewer and "VERDICT: BLOCK" in reviewer
     assert "standing authorization" in agents.lower()
+
+
+def test_arc_metrics_capture_is_mirrored_across_both_ship_carriers() -> None:
+    """A Codex-shipped arc must reach the ledger too, or the baseline omits it.
+
+    `.agents/skills/ship-pr` is Codex-native rather than a bridge, so wiring the
+    capture into only the Claude carrier would silently drop every Codex-run arc
+    from the B-170 cohort comparison.
+    """
+    for path in [
+        ROOT / ".agents" / "skills" / "ship-pr" / "SKILL.md",
+        ROOT / ".claude" / "skills" / "ship-pr" / "SKILL.md",
+    ]:
+        body = path.read_text(encoding="utf-8")
+        # Scope every assertion to the arc-metrics SECTION. Both files discuss
+        # merges and branches at length elsewhere, so an unscoped substring
+        # check would pass on prose that has nothing to do with this protocol.
+        marker = "arc-metrics"
+        start = body.lower().index(marker)
+        section = body[start:]
+        assert "just arc-metrics queue" in section, path
+        assert "just arc-metrics drain" in section, path
+        # the two properties a carrier must not silently drop
+        assert "outside" in section.lower(), path  # queue lives out of the repo
+        assert "merged history" in section.lower(), path  # release point, not any merge
