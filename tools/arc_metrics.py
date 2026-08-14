@@ -95,6 +95,12 @@ class ArcRow:
     first_round_at: str | None = None
     last_round_at: str | None = None
     arc_span_s: float | None = None
+    # Whether the surviving logs are the WHOLE arc. When only a suffix of an
+    # arc's rounds was archived, `review_rounds` and `arc_span_s` are lower
+    # bounds, not measurements -- pr-1060 kept round 10 alone out of >=10, and
+    # a note saying so is not enough: `summary` reads fields, not prose, and
+    # would average a 1-round 44-minute fragment in as if it were the arc.
+    round_completeness: str = "complete"  # complete | partial-suffix
     # -- derived from gh run --
     ci_runs: int | None = None
     ci_wall_s: list[float] = field(default_factory=list)
@@ -142,11 +148,17 @@ def gh_pr(pr: int) -> dict:
 
 def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int]]:
     """Derive per-round wall clock from log mtimes, and P1 arrival by round."""
-    logs: list[Path] = []
+    # Resolve before de-duplicating: two overlapping globs matching one file
+    # would otherwise count it twice, inventing an extra round, a spurious
+    # zero-second gap, and an off-by-one in every later P1 round index.
+    seen: dict[Path, None] = {}
     for g in globs:
         p = Path(g).expanduser()
         matched = sorted(p.parent.glob(p.name)) if p.name else []
-        logs.extend(m for m in matched if m.is_file())
+        for m in matched:
+            if m.is_file():
+                seen[m.resolve()] = None
+    logs: list[Path] = list(seen)
     if not logs:
         raise AbortError(
             f"round logs: zero files matched {globs} -- refusing to record "
@@ -290,12 +302,15 @@ def extract(args: argparse.Namespace) -> ArcRow:
         prov["round_fields"] = "unmapped:no-round-logs-supplied"
 
     if row.merge_sha:
-        try:
-            n, durs = ci_metrics(row.merge_sha)
-            row.ci_runs, row.ci_wall_s = n, durs
-            prov["ci_fields"] = "derived"
-        except AbortError as exc:
-            prov["ci_fields"] = f"unmapped:{exc}"
+        # Deliberately NOT wrapped in a try/except. A transient gh failure
+        # (auth, network, outage) is not an absent input: swallowing it into
+        # `unmapped` would persist a permanently CI-less row, and both the
+        # duplicate guard and the queue drain then refuse the retry that would
+        # have fixed it. Let it propagate -- drain() keeps the entry queued.
+        # `unmapped` stays reserved for inputs that genuinely do not exist.
+        n, durs = ci_metrics(row.merge_sha)
+        row.ci_runs, row.ci_wall_s = n, durs
+        prov["ci_fields"] = "derived"
     else:
         prov["ci_fields"] = "unmapped:no-merge-sha"
 
@@ -372,11 +387,12 @@ def queue_capture(args: argparse.Namespace) -> int:
     return 0
 
 
-def read_queue() -> list[dict]:
-    if not QUEUE.exists():
+def read_queue(path: Path | None = None) -> list[dict]:
+    src = path or QUEUE
+    if not src.exists():
         return []
     out = []
-    for n, line in enumerate(QUEUE.read_text().splitlines(), start=1):
+    for n, line in enumerate(src.read_text().splitlines(), start=1):
         if not line.strip():
             continue
         try:
@@ -393,8 +409,25 @@ def drain(_args: argparse.Namespace) -> int:
     an entry whose capture still fails is KEPT queued, so a transient gh outage
     costs a retry rather than the row.
     """
-    pending = read_queue()
+    # CLAIM the queue by renaming it, before reading a single entry. The
+    # workflow permits parallel arcs, so another arc can `queue` at any moment;
+    # a read-then-rewrite would replace the file from a stale snapshot and
+    # silently erase whatever landed in between. os.replace is atomic on POSIX,
+    # so a concurrent writer either appends before the claim (and is drained) or
+    # creates a fresh queue afterwards (and is drained next time). Neither is
+    # lost. A leftover claim file from a crashed drain is picked back up here.
+    claim = QUEUE.with_suffix(QUEUE.suffix + ".claim")
+    if QUEUE.exists():
+        if claim.exists():
+            with claim.open("a") as fh:
+                fh.write(QUEUE.read_text())
+            QUEUE.unlink()
+        else:
+            os.replace(QUEUE, claim)
+
+    pending = read_queue(claim)
     if not pending:
+        claim.unlink(missing_ok=True)
         print("arc-metrics queue is empty -- nothing to drain")
         return 0
 
@@ -424,9 +457,17 @@ def drain(_args: argparse.Namespace) -> int:
         print(f"  {arc_id}: appended")
         added += 1
 
-    QUEUE.write_text("".join(json.dumps(e, sort_keys=True) + "\n" for e in kept))
+    # Return the failures to the live queue by APPENDING, never by overwriting:
+    # anything a concurrent arc queued since the claim is still there.
+    claim.unlink(missing_ok=True)
+    if kept:
+        with QUEUE.open("a") as fh:
+            for e in kept:
+                fh.write(json.dumps(e, sort_keys=True) + "\n")
     print(f"drained {added} arc(s); {len(kept)} still queued")
-    return 0
+    # Non-zero on a retained entry, so automation cannot read a pending retry
+    # as a completed fold.
+    return 1 if kept else 0
 
 
 def read_ledger() -> list[dict]:
@@ -483,27 +524,43 @@ def summary(_args: argparse.Namespace) -> int:
         if not cohort:
             continue
         print(f"-- {label} (n={len(cohort)}) " + "-" * (46 - len(label)))
-        arcs = [d for d in (arc_duration(r) for r in cohort) if d]
+        # A partial row's round count and span are LOWER BOUNDS, so they are
+        # excluded from the exact aggregates and surfaced on their own line.
+        # Averaging a surviving fragment in as if it were a whole arc is how a
+        # baseline quietly understates itself.
+        exact = [r for r in cohort if r.get("round_completeness", "complete") == "complete"]
+        partial = [r for r in cohort if r.get("round_completeness", "complete") != "complete"]
+        arcs = [d for d in (arc_duration(r) for r in exact) if d]
         pr_window_only = sum(
-            1 for r in cohort if not r.get("arc_span_s") and r.get("total_arc_wall_s")
+            1 for r in exact if not r.get("arc_span_s") and r.get("total_arc_wall_s")
         )
-        rounds = [r["review_rounds"] for r in cohort if r.get("review_rounds")]
+        rounds = [r["review_rounds"] for r in exact if r.get("review_rounds")]
         allgaps = [g for r in cohort for g in (r.get("round_wall_s") or [])]
         adds = [r["additions"] for r in cohort if r.get("additions") is not None]
         print(f"  arc wall clock   {fmt_span(arcs)}          [stochastic]")
         if pr_window_only:
             print(
-                f"     ^ {pr_window_only}/{len(cohort)} of these are the PR window only "
+                f"     ^ {pr_window_only}/{len(exact)} of these are the PR window only "
                 "(no round data); the PR window is not the arc"
             )
         print(f"  round wall clock {fmt_span(allgaps)}          [stochastic]")
         print(
+            # :g keeps a genuine .5 median visible -- an even cohort's median can
+            # land between two integers, and :.0f would round 4.5 away to 4.
             f"  review rounds    "
-            f"{statistics.median(rounds):.0f} (n={len(rounds)}, "
+            f"{statistics.median(rounds):g} (n={len(rounds)}, "
             f"{min(rounds)}-{max(rounds)})"
             if rounds
             else "  review rounds    --"
         )
+        if partial:
+            bound = ", ".join(
+                f"{r['arc_id']}>={r['review_rounds']}" for r in partial if r.get("review_rounds")
+            )
+            print(
+                f"  {len(partial)} row(s) EXCLUDED from the two exact lines above -- only a "
+                f"suffix of their logs survives, so their counts are lower bounds ({bound})"
+            )
         print(f"  additions        {fmt_span(adds, 1.0, '')}")
         unmapped = sum(
             1

@@ -161,6 +161,108 @@ def test_drain_drops_an_entry_already_in_the_ledger(monkeypatch, tmp_path: Path)
     assert len(ledger.read_text().strip().splitlines()) == 1, "and is not duplicated"
 
 
+# mutation-probe: drop the os.replace claim in drain(), reading QUEUE directly
+def test_drain_does_not_erase_an_entry_queued_while_it_runs(monkeypatch, tmp_path: Path):
+    """Parallel arcs are supported, so a concurrent queue must survive a drain."""
+    queue = tmp_path / "queue.jsonl"
+    ledger = tmp_path / "arc-metrics.jsonl"
+    monkeypatch.setattr(am, "QUEUE", queue)
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    queue.write_text(json.dumps({"pr": 1338, "arc_id": "pr-1338"}) + "\n")
+
+    def extract_then_another_arc_queues(_args):
+        # a second arc appends to the live queue mid-drain
+        with queue.open("a") as fh:
+            fh.write(json.dumps({"pr": 1341, "arc_id": "pr-1341"}) + "\n")
+        return _merged_row("pr-1338", 1338)
+
+    monkeypatch.setattr(am, "extract", extract_then_another_arc_queues)
+    am.drain(am.argparse.Namespace())
+
+    still = [e["arc_id"] for e in am.read_queue()]
+    assert "pr-1341" in still, "the concurrently-queued arc must not be erased"
+
+
+# mutation-probe: make drain() return 0 unconditionally
+def test_drain_exits_nonzero_when_an_entry_is_still_queued(monkeypatch, tmp_path: Path):
+    """Exit 0 with work pending would read as a completed fold to automation."""
+    queue = tmp_path / "queue.jsonl"
+    monkeypatch.setattr(am, "QUEUE", queue)
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "arc-metrics.jsonl")
+    queue.write_text(json.dumps({"pr": 1338, "arc_id": "pr-1338"}) + "\n")
+
+    def boom(_args):
+        raise am.AbortError("gh unavailable")
+
+    monkeypatch.setattr(am, "extract", boom)
+    assert am.drain(am.argparse.Namespace()) == 1
+
+
+# mutation-probe: re-wrap the ci_metrics call in extract() with `except AbortError`
+def test_transient_ci_failure_aborts_rather_than_persisting_an_unmapped_row(monkeypatch):
+    """A gh outage is not an absent input; swallowing it makes the loss permanent."""
+    monkeypatch.setattr(
+        am,
+        "gh_pr",
+        lambda pr: {
+            "additions": 10,
+            "deletions": 0,
+            "changedFiles": 1,
+            "commits": [{}],
+            "createdAt": "2026-08-14T09:00:00Z",
+            "mergedAt": "2026-08-14T09:30:00Z",
+            "mergeCommit": {"oid": "a" * 40},
+            "title": "t",
+        },
+    )
+
+    def gh_down(*_a, **_k):
+        raise am.AbortError("gh run list: exit 1 ... network unreachable")
+
+    monkeypatch.setattr(am, "run", gh_down)
+    args = am.argparse.Namespace(
+        pr=999, arc_id=None, arc_type=None, decisions=None, round_logs=None, levers=None, notes=""
+    )
+    with pytest.raises(am.AbortError):
+        am.extract(args)
+
+
+# mutation-probe: drop the de-duplication in round_metrics()
+def test_overlapping_globs_do_not_double_count_a_round(tmp_path: Path):
+    a = tmp_path / "r1.log"
+    b = tmp_path / "r2.log"
+    a.write_text("x\n")
+    b.write_text("y\n")
+    os.utime(a, (1_000_000, 1_000_000))
+    os.utime(b, (1_000_600, 1_000_600))
+    logs, gaps, _ = am.round_metrics([str(tmp_path / "r*.log"), str(tmp_path / "r1*.log")])
+    assert len(logs) == 2, "the same file matched twice is still one round"
+    assert gaps == [600.0], "and introduces no spurious zero-second gap"
+
+
+# mutation-probe: change the review-rounds median format back to :.0f
+def test_partial_rows_are_excluded_from_exact_aggregates(monkeypatch, tmp_path: Path, capsys):
+    """A surviving fragment must not be averaged in as a whole arc."""
+    ledger = tmp_path / "arc-metrics.jsonl"
+    rows = [
+        {"arc_id": "a", "review_rounds": 4, "arc_span_s": 6000.0, "levers_active": []},
+        {"arc_id": "b", "review_rounds": 5, "arc_span_s": 6000.0, "levers_active": []},
+        {
+            "arc_id": "frag",
+            "review_rounds": 1,
+            "arc_span_s": 60.0,
+            "levers_active": [],
+            "round_completeness": "partial-suffix",
+        },
+    ]
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    am.summary(am.argparse.Namespace())
+    out = capsys.readouterr().out
+    assert "review rounds    4.5" in out, "median of [4,5] is 4.5, not 4"
+    assert "EXCLUDED" in out and "frag>=1" in out
+
+
 # mutation-probe: point QUEUE at a path inside the repo
 def test_queue_lives_outside_the_repo():
     """A topic worktree is disposed at loop completion; anything queued in it dies."""
