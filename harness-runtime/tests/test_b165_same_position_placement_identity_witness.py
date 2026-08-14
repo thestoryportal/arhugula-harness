@@ -61,14 +61,28 @@ correctly. The production-feed claim is therefore owned by a separate CP-side mo
 `harness-cp/tests/test_b165_production_feed_duplicate_placements.py`, which drives the
 REAL `execute_workflow` on a `PARALLELIZATION` topology and asserts on the
 `StepExecutionContext` production hands each branch's dispatcher: both same-position
-placements present, and the `B-71` basis non-`None` on that same context. It lives
-there rather than here because it must import the CP driver, which harness-runtime's
-test package cannot.
+placements present, and the `B-71` basis non-`None` on that same context.
+
+*(An earlier draft justified that split by claiming harness-runtime cannot import the
+CP driver. That is FALSE and review corrected it — `tests/integration/
+test_u_rt_95_hitl_pause_trigger_durable_async_full_execution_path.py:84` imports
+`harness_cp.workflow_driver.execute_workflow`. The split is by concern, not by
+capability: one module owns what production DELIVERS, the other what the composer DOES
+with it. A single driver-through-composer round-trip is writable under harness-runtime
+and is registered as the remaining strengthening, not asserted as impossible.)*
+
+Test 3-bis then answers the last objection — that omitting the Stage-5
+`blast_radius_resolver` describes a configuration the operator may not run. It wires a
+production-valid resolver across all four `BlastRadiusTier` values, and the result is
+WIDER than the earlier tests showed: on READ_ONLY the gate auto-approves and prompts
+NOBODY, yet both placements still write and still collide onto one identity. The
+colliding key does not depend on a human being asked.
 
 What is therefore established: production COMPOSES and DELIVERS the colliding shape,
-and the composer collides on it. What is NOT established, and is not claimed: that any
-shipped workflow declares duplicate placements today — none does. `B-165` is a
-reachable-by-construction bound, not an observed production incident.
+the composer collides on it, and it collides on every blast-radius tier including the
+no-prompt one. What is NOT established, and is not claimed: that any shipped workflow
+declares duplicate placements today — none does. `B-165` is a reachable-by-construction
+bound, not an observed production incident.
 """
 
 from __future__ import annotations
@@ -87,6 +101,7 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import BlastRadiusTier
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import WebhookConfig
@@ -486,6 +501,91 @@ async def test_two_same_position_placements_compose_one_identity_on_the_sync_ven
     expected = f"hitl:{_PARENT_ACTION_ID}:{_GATE.value}:{token}"
     assert keys == [expected, expected]
     assert len(set(keys)) == 1, "the two placements collide onto ONE identity"
+
+
+# ---------------------------------------------------------------------------
+# 3-bis — the collision survives the AUTO-APPROVE path, on every blast radius
+# ---------------------------------------------------------------------------
+
+
+# mutation-probe: delete the AUTO-APPROVE audit write — the
+# `_compose_and_persist_audit_off_loop(..., auto_approved=True)` call inside the
+# `if not hitl_required:` skip block (~`hitl_gate_composer.py:2091`).
+#
+# That site, NOT the 4h write, is where READ_ONLY's two colliding entries come from,
+# and instrumenting was the only way to learn it: on READ_ONLY the gate skips, so it
+# never reaches 4h at all, yet still writes twice. An annotation naming 4h looked
+# obviously right and SURVIVED the probe.
+@pytest.mark.parametrize("tier", list(BlastRadiusTier))
+@pytest.mark.asyncio
+async def test_the_collision_holds_on_every_blast_radius_including_auto_approve(
+    tier: BlastRadiusTier,
+) -> None:
+    """Wires a PRODUCTION-VALID `blast_radius_resolver` — the Stage-5 dependency the
+    other tests omit — and finds the collision is WIDER than they showed.
+
+    Out-of-family review observed that omitting the resolver is not neutral: with the
+    production READ_ONLY resolver and the default solo policy the gate produces ZERO
+    prompts, so a witness that never wires one is describing a configuration the
+    operator may not run. That observation is correct, and this test pins it — but the
+    conclusion runs the other way from "the collision may be unreachable in practice".
+
+    On READ_ONLY the gate auto-approves and prompts nobody. BOTH placements still reach
+    the 4h audit write, and the two writes still carry ONE identity. So the colliding
+    audit key does NOT depend on an operator being asked: it holds on all four tiers,
+    including the one where no human is involved at all. If anything that is worse —
+    the dropped second entry (test 6) is then invisible from the operator's side too,
+    with no prompt to remember having answered.
+    """
+    provider = TracerProvider()
+    surface = _Surface(
+        [
+            AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0),
+            AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=2.0),
+        ]
+    )
+    ledger = _LedgerWriter()
+    composer = RuntimeHITLGateComposer(
+        inner=cast(Any, _Inner()),
+        applicable_placements=frozenset({_GATE}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, _AuditWriter()),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-b165",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+        blast_radius_resolver=lambda _step: tier,
+    )
+
+    class _RealCellBinding:
+        persona_tier = PersonaTier.SOLO_DEVELOPER
+        engine_class = EngineClass.SAVE_POINT_CHECKPOINT
+
+    ctx = _gate_owning_context(0).model_copy(
+        update={
+            "hitl_placements": (
+                HITLPlacement(position=_GATE),
+                HITLPlacement(position=_GATE),
+            )
+        }
+    )
+    plain_step = WorkflowStep(
+        step_id=StepID("step-0"), step_kind=StepKind.INFERENCE_STEP, step_payload={}
+    )
+
+    await composer.dispatch(cast(Any, _RealCellBinding()), plain_step, step_context=ctx)
+
+    keys = [str(key.idempotency_key) for _payload, key in ledger.appends]
+    assert len(keys) == 2, f"both placements must write on {tier.name}"
+    assert len(set(keys)) == 1, f"and collide onto ONE identity on {tier.name}"
+
+    # The prompt count is the part that DOES vary — pinned so the auto-approve path is
+    # a stated property of this test rather than an unnoticed side effect.
+    expected_prompts = 0 if tier is BlastRadiusTier.READ_ONLY else 2
+    assert len(surface.calls) == expected_prompts, (
+        f"{tier.name}: expected {expected_prompts} prompts, got {len(surface.calls)}"
+    )
 
 
 # ---------------------------------------------------------------------------

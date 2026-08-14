@@ -31,14 +31,18 @@ reds this module. The placement tuple is delivered TWICE OVER — seeded on the 
 parent (`:8411`) and re-folded onto the child from `manifest_entry` (`:8593`) — so
 deleting either alone changes nothing observable and only the conjunction reds it.
 
-**Why the round-trip is split across two modules, and not a gap.** A single test that
-drove `execute_workflow` all the way through `RuntimeHITLGateComposer` would be the
-ideal witness, and it is not writable: `harness-cp` cannot import `harness-runtime`
-(the axis-isolation rule this repo's sibling driver records also observe, keeping a
-name-matched local stand-in for the runtime pause signal rather than importing it). So
-the chain is pinned in two halves — production DELIVERS the shape (here, on an asserted
-non-excluded SYNC_BLOCKING cell) and the composer COLLIDES on it (there, on the same
-cell) — and neither half is quoted as the whole.
+**Why the round-trip is split across two modules.** THIS module cannot drive the
+composer: `harness-cp` cannot import `harness-runtime`, which is why the sibling driver
+records keep a name-matched local stand-in for the runtime pause signal instead of
+importing it. But the converse is NOT true, and an earlier draft of this paragraph
+wrongly claimed the round-trip was therefore unwritable anywhere — review corrected it:
+`harness-runtime/tests/integration/test_u_rt_95_hitl_pause_trigger_durable_async_full_execution_path.py:84`
+imports `harness_cp.workflow_driver.execute_workflow`, so a single
+driver-through-composer test IS writable under harness-runtime. The chain is currently
+pinned in two halves — production DELIVERS the shape (here, on an asserted non-excluded
+SYNC_BLOCKING cell) and the composer COLLIDES on it (there, on the same cell) — and
+neither half is quoted as the whole. The unified round-trip is the remaining
+strengthening, recorded as owed rather than dismissed as impossible.
 
 **Scope, stated so it cannot be over-read.** This proves production COMPOSES and
 DELIVERS the colliding shape when a manifest declares duplicate placements. It does
