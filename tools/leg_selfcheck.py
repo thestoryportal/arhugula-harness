@@ -95,7 +95,15 @@ def resolve_base(explicit: str | None) -> str:
 def diff_text(base: str, uncommitted: bool) -> str:
     """The arc's own added lines. `--uncommitted` also folds in the working tree,
     so the check is runnable BEFORE the commit that would otherwise hide a defect
-    until the next review round."""
+    until the next review round.
+
+    `--uncommitted` is ADDITIVE, not a re-diff: a line introduced by a commit on
+    this branch and then deleted in the working tree still appears, because the
+    two diffs are concatenated rather than merged. So a finding you have just
+    fixed in the tree can persist until you commit. That is the safe direction
+    (it over-reports, never under-reports), but it means the authoritative run
+    is the committed one — which is also the one the push actually ships.
+    """
     parts = [_run(["git", "diff", f"{base}...HEAD"])]
     if uncommitted:
         parts.append(_run(["git", "diff", "HEAD"]))
