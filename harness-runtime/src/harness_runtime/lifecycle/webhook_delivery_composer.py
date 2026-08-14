@@ -496,6 +496,9 @@ class WebhookDeliveryComposer:
         idempotency_key: str,
         *,
         tenant_id: str | None = None,
+        branch_context: str | None = None,
+        resolvability: str | None = None,
+        resolvability_note: str | None = None,
     ) -> WebhookDeliveryResult:
         """Spec-canonical 2-arg brief surface per runtime spec v1.34 §14.10.1
         Reading (H) absorption + §14.8.8.1 step 3 consumer cite.
@@ -548,7 +551,18 @@ class WebhookDeliveryComposer:
             project_brief_to_payload,
         )
 
-        payload = project_brief_to_payload(brief, idempotency_key)
+        # U-RT-155 / `B-71` (CP spec v1.119 §0.6) — the three operator-surface values
+        # the brief itself cannot carry (§0.11 holds `HITLEscalationBrief` to ONE new
+        # field). Pass-through only: the caller at the §14.8.8.1 step-1 mint site owns
+        # their composition, this surface owns their transport. All `None` on the
+        # linear/validator path → the wire body is byte-identical to pre-arc.
+        payload = project_brief_to_payload(
+            brief,
+            idempotency_key,
+            branch_context=branch_context,
+            resolvability=resolvability,
+            resolvability_note=resolvability_note,
+        )
         return await self.deliver_webhook(
             self._webhook_config, payload, idempotency_key, tenant_id=tenant_id
         )

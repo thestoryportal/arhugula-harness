@@ -68,7 +68,8 @@ from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import WebhookConfig, WebhookPayload
 from harness_cp.pause_state_projection import pre_dispatch_gate_owning_branch_identity
-from harness_is.state_ledger_entry_schema import Identifier
+from harness_cp.workflow_driver_types import StepExecutionContext
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_od.content_structure_discipline import DEFAULT_ON_STRUCTURE_ATTRIBUTES
 from harness_od.hitl_webhook_namespace import (
@@ -148,6 +149,30 @@ def test_the_audit_attribute_is_default_on_but_not_on_the_escalation_path() -> N
         "the escalation helper is what makes the audit span unreachable on this path; "
         "if it stopped being NoReturn the carrier analysis in DELIVERABLE §4-quater "
         "must be re-derived"
+    )
+
+
+def _bare_step_context() -> StepExecutionContext:
+    """A `StepExecutionContext` with NO `B-71` basis and NO persisted echo.
+
+    Added at the U-RT-155 impl leg so this record's existing assertions keep
+    exercising the token-ABSENT arm (§0.4.3 arm 3), which is what makes its
+    `compose_hitl_action_id` equality check a live §0.12 byte-identity witness.
+    """
+    from harness_as.sandbox_tier import SandboxTier
+    from harness_core import ActionID
+    from harness_cp.gate_level_rule import GateLevel
+
+    return StepExecutionContext(
+        workflow_id="wf-producer",
+        parent_action_id=ActionID("workflow:wf-producer:fanout"),
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        parent_actor=Actor(actor_class=ActorClass.AGENT, actor_id="b71-witness"),
+        parent_entry_hash="",
+        parent_idempotency_key=Identifier("b71-witness-key"),
+        tenant_id=None,
+        step_index=0,
     )
 
 
@@ -338,6 +363,13 @@ async def test_the_real_escalation_helper_puts_its_own_composed_id_on_the_span()
                 palette=frozenset({HITLResponse.APPROVE}),
                 escalation_reason="durable_async_cell_synchrony",
                 tenant_id=None,
+                # U-RT-155 / `B-71` impl leg — the minter's carrier. This fixture
+                # declares NO pre-dispatch basis and NO persisted echo, so §0.4.3's
+                # read order takes arm 3, mints nothing, and the composed key below
+                # is byte-identical to the pre-arc two-argument form. That is the
+                # §0.12 property, asserted here as a side effect of this record's
+                # own pre-existing assertion.
+                step_context=_bare_step_context(),
             )
 
     finished = exporter.get_finished_spans()

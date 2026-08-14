@@ -2712,6 +2712,25 @@ def _pre_dispatch_gate_owning_captured_child_workflow_id(step: WorkflowStep) -> 
         return None
 
 
+def _pause_signal_escalation_instance_id(pause_signal: BaseException | None) -> str | None:
+    """The `B-71` token minted for this escalation, read off the pause signal's brief.
+
+    U-CP-102 (CP spec v1.119 §26.9 WRITER row) — the runtime's
+    `HITLPauseRequestedSignal` carries the `HITLEscalationBrief` the §14.8.8.1 step-1
+    minter just populated; this is the ONLY place the driver can see the delivered
+    token, because step 1 never reaches the snapshot on its own.
+
+    Read defensively via `getattr` for the same reason every other site in this file
+    name-matches the signal rather than importing it: `harness-cp` cannot import
+    `harness-runtime`. Returns `None` (never raises) for any signal shape without a
+    token — the linear/validator population, or a test double raising a bare
+    name-matched exception — so the absent case stays byte-identical to pre-arc.
+    """
+    brief = getattr(pause_signal, "brief", None)
+    token = getattr(brief, "escalation_instance_id", None)
+    return token if isinstance(token, str) else None
+
+
 def _hash_hitl_gate_config(
     applicable_placements: tuple[HITLPlacement, ...],
     removed_placements: frozenset[LoosenablePlacementKind],
@@ -5736,6 +5755,39 @@ def _execute_workflow_body(
                 if evaluation.next_action.value == "escalate_hitl":
                     ask_user_question_surface = getattr(ctx, "ask_user_question_surface", None)
                     escalation_brief = evaluation.result.escalation_brief
+                    # U-CP-102 / `B-71` (CP spec v1.119 §0.4(3)) — THE VALIDATOR TRUST
+                    # SEAM. `ValidatorResult.escalation_brief` is a second CONSTRUCTOR
+                    # of `HITLEscalationBrief` but never a MINTER of
+                    # `escalation_instance_id`; mint authority is singular (the runtime
+                    # composer at §14.8.8.1 step 1). This is the acceptance point — the
+                    # place an operator-authored validator's brief is taken into the
+                    # escalation path — so the field is OVERWRITTEN here, BEFORE the
+                    # brief reaches any composer, key or exported carrier.
+                    #
+                    # OVERWRITE, not merely ignore: an ignored value still rides the
+                    # payload. The harness-minted value on THIS population is `None` —
+                    # §0.12 pins the linear/validator path to an absent token and an
+                    # absent set of `payload_body` keys, so the wire body stays
+                    # byte-identical to pre-arc.
+                    if escalation_brief is not None:
+                        _validator_supplied_token = escalation_brief.escalation_instance_id
+                        if _validator_supplied_token is not None:
+                            escalation_brief = escalation_brief.model_copy(
+                                update={"escalation_instance_id": None}
+                            )
+                            # §0.7 / §0.10 — the DIAGNOSIS half, advisory until the
+                            # typed resume-outcome carrier lands (`ResumeResult` /
+                            # `RunResult` are CLOSED schemas; requiring a typed
+                            # `ResumeKeyDisposition` here would make the contract
+                            # unimplementable). Surfaced through the diagnostic channel
+                            # this axis HAS — the already-open `validator.evaluate`
+                            # span — because "advisory" is not permission to drop the
+                            # condition on the floor. A BOOLEAN, never the value: the
+                            # hostile token must appear in NO payload, key or span.
+                            evaluate_span.set_attribute(
+                                "validator.escalation.supplied_instance_id_overwritten",
+                                True,
+                            )
                     if ask_user_question_surface is not None and escalation_brief is not None:
                         # Lazy import to avoid cycle (runtime → cp → runtime).
                         # GateLevel is module-level imported at line 51;
@@ -7939,6 +7991,23 @@ def _execute_parallelization(
         if _peer_resume is not None
         else frozenset()
     )
+    # U-CP-102 / `B-71` (CP spec v1.119 §26.9 → §25.21) — the PERSISTED ECHO per
+    # recovered ordinal, keyed exactly like the set above. This is the read half of
+    # the persist-once contract at §0.4(5): the composer's three-arm read order
+    # (§0.4.3) uses a non-`None` echo VERBATIM and never recomputes, so the value
+    # has to reach the composer's carrier (`StepExecutionContext.
+    # pre_dispatch_escalation_instance_id`) from here. Rows written before this
+    # field existed carry `None`, which correctly licenses the deterministic
+    # recompute arm rather than a fresh mint.
+    _recovered_pre_dispatch_gate_owning_tokens: dict[int, str] = (
+        {
+            row.branch_index: row.escalation_instance_id
+            for row in _peer_resume.pre_dispatch_gate_owning_branches
+            if row.escalation_instance_id is not None
+        }
+        if _peer_resume is not None
+        else {}
+    )
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
     # (NOT consume — the HITL composer one-shot intact) the operator's resume context off the
     # holder. Per paused peer below, `_resolve_effect_fence_gated(branch_key, eligible_key)`
@@ -8406,17 +8475,26 @@ def _execute_parallelization(
         # branch must NOT dispatch ahead of the run failing, so no delivery cell is
         # constructed at all (it re-pauses INERT, exactly like a non-ABORT
         # effect-fence peer under the same guard).
+        # U-CP-102 / `B-71` (CP spec v1.119 §25.20) — derive the pre-dispatch
+        # escalation BASIS **UNCONDITIONALLY**, HOISTED OUT of the resume-only guard
+        # below. A branch is not known to be gate-owning until its gate actually
+        # fires, so deriving inside that guard would leave the basis `None` on every
+        # FIRST (non-resume) escalation: the minter would emit no token and two peers
+        # sharing a `child_workflow_id` would still collide — on exactly the path
+        # `B-71` exists to fix. The value is BASIS MATERIAL (§0.5): internal carriage
+        # only, hashed at `compose_escalation_instance_id` before it can reach any
+        # exported carrier.
+        _branch_pre_dispatch_identity = _pre_dispatch_gate_owning_branch_identity(
+            run_id, branch_index
+        )
         _branch_hitl_delivery_cell: HITLDeliveryCell | None = None
         if (
             not _any_fence_abort
             and branch_index in _recovered_pre_dispatch_gate_owning
             and resume_context is not None
+            and _branch_pre_dispatch_identity == hitl_uniform_fallback_eligible_run_id
         ):
-            _branch_pre_dispatch_identity = _pre_dispatch_gate_owning_branch_identity(
-                run_id, branch_index
-            )
-            if _branch_pre_dispatch_identity == hitl_uniform_fallback_eligible_run_id:
-                _branch_hitl_delivery_cell = HITLDeliveryCell(resume_context.hitl_response)
+            _branch_hitl_delivery_cell = HITLDeliveryCell(resume_context.hitl_response)
         child = compose_branch_child_context(
             fanout_parent,
             branch_index=branch_index,
@@ -8432,6 +8510,16 @@ def _execute_parallelization(
                 "hitl_delivery_holder": _branch_hitl_delivery_cell,
                 "hitl_placements": fold_step_hitl_placements(
                     manifest_entry.hitl_placements, binding.hitl_placement
+                ),
+                # U-CP-102 / `B-71` — the two §25.20/§25.21 carriers. The BASIS is
+                # set for EVERY branch (see the unconditional derivation above); the
+                # ECHO is the persisted §26.9 token for this ordinal, copied VERBATIM
+                # and `None` on a first escalation (nothing persisted yet). Both ride
+                # the branch child by explicit update rather than by inheritance, so
+                # no peer can ever observe another peer's value.
+                "pre_dispatch_escalation_basis": _branch_pre_dispatch_identity,
+                "pre_dispatch_escalation_instance_id": (
+                    _recovered_pre_dispatch_gate_owning_tokens.get(branch_index)
                 ),
             }
         )
@@ -8588,6 +8676,15 @@ def _execute_parallelization(
     # `paused_child_dispositions` (no child run — and so no child `PauseSnapshot` — ever existed).
     # Read AFTER the barrier to build `PeerFanOutResumeState.pre_dispatch_gate_owning_branches`.
     pre_dispatch_gate_owning_dispositions: set[int] = set()
+    # U-CP-102 / `B-71` (CP spec v1.119 §26.9 WRITER row) — the minted token per
+    # ordinal, read off the `HITLPauseRequestedSignal`'s own brief at the SAME catch
+    # sites that populate the set above. This is the WRITE half of persist-once:
+    # without it the §26.9 field is declared and never populated, every resume finds
+    # `None`, takes the recompute arm, and §0.4.3's echo arm is unreachable in
+    # production even though its unit test passes. Sparse by construction — a signal
+    # from the linear/validator population carries `escalation_instance_id=None` and
+    # contributes no entry, which is what keeps that population byte-identical.
+    pre_dispatch_gate_owning_tokens: dict[int, str] = {}
 
     # B-FANOUT-PAUSE-PARALLELIZATION — seed the recovered terminal branches (from the
     # resume snapshot) into `collected` + `terminal_dispositions` so (a) their outputs
@@ -9747,6 +9844,12 @@ def _execute_parallelization(
                     # `completed` branch — else the snapshot would drop it from the re-dispatchable
                     # set): stash + re-raise, no step/terminal entry recorded.
                     pre_dispatch_gate_owning_dispositions.add(branch_index)
+                    # U-CP-102 / `B-71` (§26.9 WRITER row) — persist the minted token
+                    # alongside the ordinal. `None` (linear/validator shape, or a
+                    # test double) contributes no entry.
+                    _pg_token = _pause_signal_escalation_instance_id(_inflight_exc)
+                    if _pg_token is not None:
+                        pre_dispatch_gate_owning_tokens[branch_index] = _pg_token
                     raise
                 if type(_inflight_exc).__name__ == "EffectFenceAbortedError":
                     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — an in-flight
@@ -9993,6 +10096,12 @@ def _execute_parallelization(
                 if type(_pause_signal).__name__ != "HITLPauseRequestedSignal":
                     raise
                 pre_dispatch_gate_owning_dispositions.add(branch_index)
+                # U-CP-102 / `B-71` (§26.9 WRITER row) — persist the minted token
+                # alongside the ordinal. `None` (linear/validator shape, or a test
+                # double) contributes no entry.
+                _pg_token = _pause_signal_escalation_instance_id(_pause_signal)
+                if _pg_token is not None:
+                    pre_dispatch_gate_owning_tokens[branch_index] = _pg_token
                 raise
             _record_clean(branch_index, step, child, writer, output)
         finally:
@@ -10453,6 +10562,26 @@ def _execute_parallelization(
                             manifest_entry,
                             default_model_binding=default_model_binding,
                         )
+                    ),
+                    # U-CP-102 / `B-71` (CP spec v1.119 §26.9 WRITER row + its
+                    # CARRIED-FORWARD clause). TWO populations reach this row and BOTH
+                    # must carry the token:
+                    #   (a) an ordinal that re-fired THIS round — take the freshly
+                    #       minted token off its pause signal;
+                    #   (b) a §25.19 warm-up-WITHHELD carried-forward ordinal —
+                    #       reconstructed with NO new brief in hand, so its PRIOR
+                    #       token is copied forward VERBATIM. Defaulting it to `None`
+                    #       here would silently reset a persisted token and send the
+                    #       next resume down the recompute arm in defiance of
+                    #       §0.4(5) — ROTATING the key of an escalation the operator
+                    #       is still holding. Witnessing only (a) would miss this
+                    #       entirely.
+                    # Live wins over recovered: a re-fire is the newer authority for
+                    # that ordinal, and for a stable basis the two values are equal
+                    # anyway.
+                    escalation_instance_id=(
+                        pre_dispatch_gate_owning_tokens.get(_bi)
+                        or _recovered_pre_dispatch_gate_owning_tokens.get(_bi)
                     ),
                 )
                 for _bi in sorted(
@@ -11812,6 +11941,23 @@ def _execute_orchestrator_workers(
         if _fan_out_resume is not None
         else frozenset()
     )
+    # U-CP-102 / `B-71` (CP spec v1.119 §26.9 → §25.21) — the PERSISTED ECHO per
+    # recovered ordinal, keyed exactly like the set above. This is the read half of
+    # the persist-once contract at §0.4(5): the composer's three-arm read order
+    # (§0.4.3) uses a non-`None` echo VERBATIM and never recomputes, so the value
+    # has to reach the composer's carrier (`StepExecutionContext.
+    # pre_dispatch_escalation_instance_id`) from here. Rows written before this
+    # field existed carry `None`, which correctly licenses the deterministic
+    # recompute arm rather than a fresh mint.
+    _recovered_pre_dispatch_gate_owning_tokens: dict[int, str] = (
+        {
+            row.branch_index: row.escalation_instance_id
+            for row in _fan_out_resume.pre_dispatch_gate_owning_branches
+            if row.escalation_instance_id is not None
+        }
+        if _fan_out_resume is not None
+        else {}
+    )
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
     # (NOT consume — the HITL composer's one-shot consume stays intact, mirroring the linear path)
     # the operator's resume context off the holder. Per paused worker below,
@@ -12742,17 +12888,26 @@ def _execute_orchestrator_workers(
         # ABORT, this worker must NOT dispatch ahead of the run failing, so no delivery
         # cell is constructed at all (it re-pauses INERT, exactly like a non-ABORT
         # effect-fence peer under the same guard).
+        # U-CP-102 / `B-71` (CP spec v1.119 §25.20) — derive the pre-dispatch
+        # escalation BASIS **UNCONDITIONALLY**, HOISTED OUT of the resume-only guard
+        # below. A branch is not known to be gate-owning until its gate actually
+        # fires, so deriving inside that guard would leave the basis `None` on every
+        # FIRST (non-resume) escalation: the minter would emit no token and two peers
+        # sharing a `child_workflow_id` would still collide — on exactly the path
+        # `B-71` exists to fix. The value is BASIS MATERIAL (§0.5): internal carriage
+        # only, hashed at `compose_escalation_instance_id` before it can reach any
+        # exported carrier.
+        _branch_pre_dispatch_identity = _pre_dispatch_gate_owning_branch_identity(
+            run_id, branch_index
+        )
         _branch_hitl_delivery_cell: HITLDeliveryCell | None = None
         if (
             not _any_fence_abort
             and branch_index in _recovered_pre_dispatch_gate_owning
             and resume_context is not None
+            and _branch_pre_dispatch_identity == hitl_uniform_fallback_eligible_run_id
         ):
-            _branch_pre_dispatch_identity = _pre_dispatch_gate_owning_branch_identity(
-                run_id, branch_index
-            )
-            if _branch_pre_dispatch_identity == hitl_uniform_fallback_eligible_run_id:
-                _branch_hitl_delivery_cell = HITLDeliveryCell(resume_context.hitl_response)
+            _branch_hitl_delivery_cell = HITLDeliveryCell(resume_context.hitl_response)
         child = compose_branch_child_context(
             fanout_parent, branch_index=branch_index, agent_role=role
         ).model_copy(
@@ -12767,6 +12922,16 @@ def _execute_orchestrator_workers(
                 "hitl_delivery_holder": _branch_hitl_delivery_cell,
                 "hitl_placements": fold_step_hitl_placements(
                     manifest_entry.hitl_placements, binding.hitl_placement
+                ),
+                # U-CP-102 / `B-71` — the two §25.20/§25.21 carriers. The BASIS is
+                # set for EVERY worker (see the unconditional derivation above); the
+                # ECHO is the persisted §26.9 token for this ordinal, copied VERBATIM
+                # and `None` on a first escalation (nothing persisted yet). Both ride
+                # the worker child by explicit update rather than by inheritance, so
+                # no peer can ever observe another peer's value.
+                "pre_dispatch_escalation_basis": _branch_pre_dispatch_identity,
+                "pre_dispatch_escalation_instance_id": (
+                    _recovered_pre_dispatch_gate_owning_tokens.get(branch_index)
                 ),
             }
         )
@@ -12860,6 +13025,15 @@ def _execute_orchestrator_workers(
     # and so no child `PauseSnapshot` — ever existed). Read AFTER the barrier to build
     # `FanOutResumeState.pre_dispatch_gate_owning_branches`.
     pre_dispatch_gate_owning_dispositions: set[int] = set()
+    # U-CP-102 / `B-71` (CP spec v1.119 §26.9 WRITER row) — the minted token per
+    # ordinal, read off the `HITLPauseRequestedSignal`'s own brief at the SAME catch
+    # sites that populate the set above. This is the WRITE half of persist-once:
+    # without it the §26.9 field is declared and never populated, every resume finds
+    # `None`, takes the recompute arm, and §0.4.3's echo arm is unreachable in
+    # production even though its unit test passes. Sparse by construction — a signal
+    # from the linear/validator population carries `escalation_instance_id=None` and
+    # contributes no entry, which is what keeps that population byte-identical.
+    pre_dispatch_gate_owning_tokens: dict[int, str] = {}
 
     # B-FANOUT-PAUSE — seed the recovered terminal branches (from the resume
     # snapshot) into `collected` + `terminal_dispositions` so (a) their outputs
@@ -14155,6 +14329,12 @@ def _execute_orchestrator_workers(
                     # nested-child pause). Capture as pre-dispatch gate-owning (NOT a terminal
                     # `completed` branch): stash + re-raise, no step/terminal entry recorded.
                     pre_dispatch_gate_owning_dispositions.add(branch_index)
+                    # U-CP-102 / `B-71` (§26.9 WRITER row) — persist the minted token
+                    # alongside the ordinal. `None` (linear/validator shape, or a
+                    # test double) contributes no entry.
+                    _pg_token = _pause_signal_escalation_instance_id(_inflight_exc)
+                    if _pg_token is not None:
+                        pre_dispatch_gate_owning_tokens[branch_index] = _pg_token
                     raise
                 # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this branch was cancelled because
                 # a SIBLING raised first, but its OWN in-flight dispatch raised the runtime effect
@@ -14395,6 +14575,12 @@ def _execute_orchestrator_workers(
                 if type(_pause_signal).__name__ != "HITLPauseRequestedSignal":
                     raise
                 pre_dispatch_gate_owning_dispositions.add(branch_index)
+                # U-CP-102 / `B-71` (§26.9 WRITER row) — persist the minted token
+                # alongside the ordinal. `None` (linear/validator shape, or a test
+                # double) contributes no entry.
+                _pg_token = _pause_signal_escalation_instance_id(_pause_signal)
+                if _pg_token is not None:
+                    pre_dispatch_gate_owning_tokens[branch_index] = _pg_token
                 raise
             _record_clean(branch_index, step, child, writer, output)
         finally:
@@ -14821,6 +15007,26 @@ def _execute_orchestrator_workers(
                             manifest_entry,
                             default_model_binding=default_model_binding,
                         )
+                    ),
+                    # U-CP-102 / `B-71` (CP spec v1.119 §26.9 WRITER row + its
+                    # CARRIED-FORWARD clause). TWO populations reach this row and BOTH
+                    # must carry the token:
+                    #   (a) an ordinal that re-fired THIS round — take the freshly
+                    #       minted token off its pause signal;
+                    #   (b) a §25.19 warm-up-WITHHELD carried-forward ordinal —
+                    #       reconstructed with NO new brief in hand, so its PRIOR
+                    #       token is copied forward VERBATIM. Defaulting it to `None`
+                    #       here would silently reset a persisted token and send the
+                    #       next resume down the recompute arm in defiance of
+                    #       §0.4(5) — ROTATING the key of an escalation the operator
+                    #       is still holding. Witnessing only (a) would miss this
+                    #       entirely.
+                    # Live wins over recovered: a re-fire is the newer authority for
+                    # that ordinal, and for a stable basis the two values are equal
+                    # anyway.
+                    escalation_instance_id=(
+                        pre_dispatch_gate_owning_tokens.get(_bi)
+                        or _recovered_pre_dispatch_gate_owning_tokens.get(_bi)
                     ),
                 )
                 for _bi in sorted(

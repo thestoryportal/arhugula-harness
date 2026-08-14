@@ -150,6 +150,23 @@ class HITLEscalationBrief(BaseModel):
     escalation_reason: str
     proposed_response_palette: frozenset[HITLResponse] = _DEFAULT_HITL_PALETTE
 
+    escalation_instance_id: str | None = None
+    """U-CP-102 / `B-71` (CP spec v1.119 §25.2.Z + §0.4) — the opaque, one-way,
+    per-escalation-instance correlation token.
+
+    `None` on every population that has no pre-dispatch gate-owning branch (the
+    linear/validator path), which is what keeps that population byte-identical to
+    pre-arc per §0.12. Minted by the Runtime composer at the §14.8.8.1 step 1
+    construction site (U-RT-155) per the §0.4.3 three-arm read order, folded once
+    inside `compose_hitl_action_id` so the webhook `Idempotency-Key`, the CP audit
+    `action_id` and the F2 ledger key stay ONE identity family (§0.2).
+
+    **Equality is the sole promised operation** (§0.4(1)): opaque, never parsed,
+    never ordered, never truncated. A `ValidatorResult.escalation_brief` is a
+    second CONSTRUCTOR of this type but never a MINTER of this field — a
+    validator-supplied value is OVERWRITTEN at the CP acceptance seam
+    (`workflow_driver.py`, §0.4(3)), never honoured."""
+
 
 class ValidatorResult(BaseModel):
     """Operator-supplied Validator return shape (CP spec v1.10 §25.2).

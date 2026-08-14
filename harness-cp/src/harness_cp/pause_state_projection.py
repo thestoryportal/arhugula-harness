@@ -58,12 +58,20 @@ cross-axis by `Spec_Harness_Runtime_v1.md` v1.109 §14.14.9.2.
 
 from __future__ import annotations
 
+import hashlib
+import warnings
 from enum import StrEnum
-from typing import Annotated, Literal, NamedTuple, Self
+from typing import Annotated, Any, Literal, NamedTuple, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
-from harness_cp.hitl_placement import HITLResult
+from harness_cp.hitl_placement import HITLPlacementKind, HITLResult
 from harness_cp.pause_resume_protocol_types import (
     EffectFenceResolution,
     PauseSnapshot,
@@ -77,6 +85,7 @@ __all__ = [
     "BranchEffectFenceAddressableLocation",
     "CrashReconstructionEffectFenceAddressableLocation",
     "DepthZeroRootUniformFallbackOnlyLocation",
+    "EscalationTokenKeyedIngressWarning",
     "HitlAddressableLocation",
     "KeyAbsentLinearEffectFenceAddressableLocation",
     "KeyAbsentOrchestratorEffectFenceAddressableLocation",
@@ -89,6 +98,7 @@ __all__ = [
     "PausedWorkflowState",
     "PreDispatchUniformFallbackOnlyLocation",
     "TransitivelyPausedLocation",
+    "compose_escalation_instance_id",
     "pre_dispatch_gate_owning_branch_identity",
     "project_pause_locations",
     "walk_pause_tree",
@@ -337,8 +347,10 @@ class PreDispatchUniformFallbackOnlyLocation(_LocationBase):
 
     Gate-owning and counted, but NEVER keyable: its resolver identity is a
     `run_id`-shaped string, so an operator who keyed it would hit the resolver's
-    collision defence and have the response silently DROPPED. No identity field is
-    declared here at all (CP spec v1.112 §2.2 constraint 2).
+    collision defence and have the response silently DROPPED. No INTERNAL identity
+    field is declared here at all (CP spec v1.112 §2.2 constraint 2 — which still
+    holds verbatim; the `escalation_instance_id` added at v1.119 §2.2.A is the
+    ALREADY-HASHED external token, not the internal identity).
     """
 
     variant: Literal[PauseLocationVariant.UNIFORM_FALLBACK_ONLY] = (
@@ -350,6 +362,46 @@ class PreDispatchUniformFallbackOnlyLocation(_LocationBase):
     step_id: str
     step_kind: StepKind
     branch_index: int
+
+    escalation_instance_id: str | None = None
+    """U-CP-102 / `B-71` (CP spec v1.119 §2.2.A) — the POST-HASH correlation token,
+    read-only, identical to the value delivered on the webhook (§0.6) and persisted
+    at §26.9. **One value, three surfaces**, never recomputed per-surface.
+
+    Without it the correlation loop terminates in a struct no operator reads: an
+    operator holding a webhook request with a branch-distinct `Idempotency-Key` has
+    no row in the pause view carrying the same value, so the mechanism delivers
+    distinguishable requests that cannot be matched to anything actionable.
+
+    **Correlation, NOT addressing.** §0.7's one-way rule is unchanged and
+    unqualified — no ingress surface accepts this token, and its presence here does
+    not make it a key. The `addressing` half (a uniform-response target selector) is
+    registered at §0.9 and is deliberately not built by this leg.
+
+    **OMITTED from the serialized projection when `None`, never emitted as `null`**
+    — see `_omit_absent_escalation_instance_id` below."""
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_escalation_instance_id(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """Drop `escalation_instance_id` from the dump when it is `None`.
+
+        CP spec v1.119 §2.2.A absence row. A default `model_dump(mode="json")`
+        would write `"escalation_instance_id": null` onto EVERY location projected
+        from an already-durable snapshot captured before this field existed, and the
+        byte-identity promise would be false on exactly the legacy population it
+        matters for. Same rule, same reason, as the §0.4.2 resume-state
+        compatibility clause that `_strip_default_fanout_resume_fields` implements
+        one layer down — but that helper operates on the RESUME-STATE dump and never
+        sees this projection, so the two are complements, not duplicates.
+
+        Only `None` is dropped; a present token is emitted verbatim.
+        """
+        dumped = dict(handler(self))
+        if dumped.get("escalation_instance_id") is None:
+            dumped.pop("escalation_instance_id", None)
+        return dumped
 
 
 class DepthZeroRootUniformFallbackOnlyLocation(_LocationBase):
@@ -434,6 +486,66 @@ class PausedWorkflowState(BaseModel):
     """The ORDERED sequence of typed location projections."""
 
 
+class EscalationTokenKeyedIngressWarning(UserWarning):
+    """A resume was keyed by a `B-71` escalation correlation token.
+
+    U-CP-102 (CP spec v1.119 §0.7). The token is **correlation, not addressing** —
+    §0.4(1) permits equality and nothing else, and no ingress surface accepts it.
+    A submitted key that matches one is COUNTED-AS-UNADDRESSED (the normative,
+    unconditional half), which means the operator's response is NOT delivered and
+    the location stays parked.
+
+    The TYPED disposition that should carry this is registered at §0.9 and does not
+    exist yet — `ResumeResult` and `RunResult` are closed schemas, and requiring a
+    field here would make §0.7 unimplementable without bundling a separately
+    registered schema change (§0.10). So the condition rides the diagnostic channel
+    that exists, following the `providers.py` §5 precedent for a spec-mandated
+    advisory the harness must surface but must not fail on. It becomes normative on
+    the typed carrier when that leg lands.
+    """
+
+
+def _diagnose_token_keyed_ingress(
+    pause_state: PausedWorkflowState,
+    hitl_responses: dict[str, HITLResult] | None,
+) -> None:
+    """Warn when a submitted `hitl_responses` key equals a projected `B-71` token.
+
+    Deliberately compares against the tokens THIS READ projected, not against a
+    recomputed digest: the point is to catch an operator who read the pause view,
+    saw an `escalation_instance_id`, and reasonably-but-wrongly used it as a key.
+
+    The token value itself is NEVER placed in the message — it is a live correlation
+    identifier on an unresolved gate, and §0.5's structural discipline is that
+    identity material does not get re-emitted onto incidental channels. The ORDINAL
+    is named instead, which is the one thing §0.5's scoped carve-out already permits
+    to appear as prose.
+    """
+    if not hitl_responses:
+        return
+    submitted = set(hitl_responses)
+    matched = sorted(
+        location.branch_index
+        for location in pause_state.locations
+        if isinstance(location, PreDispatchUniformFallbackOnlyLocation)
+        and location.escalation_instance_id is not None
+        and location.escalation_instance_id in submitted
+    )
+    if not matched:
+        return
+    warnings.warn(
+        "CP spec v1.119 §0.7: `hitl_responses` was keyed by an escalation "
+        "correlation token for pre-dispatch gate-owning branch ordinal(s) "
+        f"{matched}. The token is CORRELATION-ONLY and is not an address — these "
+        "locations are counted-as-UNADDRESSED and the supplied response will NOT "
+        "be delivered to them. A `uniform-fallback-only` location is answered by "
+        "the SCALAR `hitl_response` field when it is the sole unaddressed "
+        "gate-owning member.",
+        EscalationTokenKeyedIngressWarning,
+        stacklevel=3,
+    )
+
+
 class AccessorDerivedResumeContext(ResumeContext):
     """The accessor-derived `ResumeContext` variant (CP spec v1.112 §1).
 
@@ -487,7 +599,19 @@ class AccessorDerivedResumeContext(ResumeContext):
         AND the SCALAR fields alike — is bound to `pause_state`'s token by the act
         of composing here (CP spec v1.112 §1.1: a `uniform-fallback-only` location
         is answered by the SCALAR field, and that path is the arc's PRIMARY witness).
+
+        **U-CP-102 / `B-71` — the ingress diagnostic (CP spec v1.119 §0.7).** The
+        escalation correlation token is one-way: NO resume surface is keyed by it,
+        and a submitted value that happens to match is COUNTED-AS-UNADDRESSED. That
+        half is normative and structural — `hitl_responses` stays exclusively
+        `child_run_id`-keyed, so a token supplied as a key matches no location and is
+        silently ignored. **Silence is exactly what §0.7's diagnosis half exists to
+        prevent**, so a match against a projected token is SURFACED here rather than
+        dropped on the floor. The TYPED disposition is deferred (`ResumeResult` /
+        `RunResult` are closed schemas — §0.10); this emits through the channel that
+        exists.
         """
+        _diagnose_token_keyed_ingress(pause_state, hitl_responses)
         return cls(
             pause_state=pause_state,
             hitl_response=hitl_response,
@@ -519,6 +643,58 @@ def pre_dispatch_gate_owning_branch_identity(snapshot_run_id: str, branch_index:
     composition is byte-identical.
     """
     return f"{snapshot_run_id}:pre-dispatch-gate:{branch_index}"
+
+
+_ESCALATION_INSTANCE_DOMAIN_SEPARATOR = "hitl-escalation-instance:"
+"""ASCII literal domain separator pinned at CP spec v1.119 §0.4(2).
+
+Follows the workspace's existing seed convention (`compose_child_run_id_seed`'s
+`"child-run:"` prefix). Changing a single byte of it changes every token, which is
+why §0.4(2) makes the formula a CONTRACT surface rather than implementation
+discretion — this is an idempotency-key family, and two otherwise-compliant
+implementations that disagreed would break webhook dedup and the audit join."""
+
+
+def compose_escalation_instance_id(
+    pre_dispatch_escalation_basis: str,
+    placement_position: HITLPlacementKind,
+) -> str:
+    """The `B-71` escalation correlation token — CP spec v1.119 §0.4(2), PINNED.
+
+    ```
+    escalation_instance_id =
+        sha256(
+            "hitl-escalation-instance:"          # domain separator, ASCII, literal
+            + pre_dispatch_gate_owning_identity  # f"{run_id}:pre-dispatch-gate:{branch_index}"
+            + ":"
+            + placement.position.value           # the enum's string VALUE, not the member name
+        ).hexdigest()                            # lowercase hex, 64 chars, never truncated
+    ```
+
+    All inputs UTF-8. sha256/hex satisfies §0.4(1)'s ≥128-bit bar with margin, and
+    the one-way hash is what makes §0.5's leak bar enforceable rather than
+    aspirational: the basis contains a `run_id` VERBATIM, and this function is the
+    single point at which that material is converted before it can reach an
+    exported carrier (the composed key rides the OD-canonical
+    `hitl.webhook.deliver` span's `webhook.idempotency_key`, so the hashing is
+    load-bearing for the tracing channel too, not only for the webhook body).
+
+    **The guarantee is per (branch × placement POSITION), not per placement
+    DECLARATION** — a conservative bound, narrower than §0.2's headline. Two
+    escalation instances distinguished ONLY by their placement declaration would
+    receive the same token. Whether that shape is reachable at all is UNVERIFIED
+    and registered as forward row `B-165`; repairing it (if real) means revisiting
+    the ratified identity basis through the design record, which is back-flow, not
+    an implementation choice.
+    """
+    return hashlib.sha256(
+        (
+            _ESCALATION_INSTANCE_DOMAIN_SEPARATOR
+            + pre_dispatch_escalation_basis
+            + ":"
+            + placement_position.value
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 class PauseTreeWalkEntry(NamedTuple):
@@ -656,6 +832,14 @@ def _walk(
                     step_id=_row.step_id,
                     step_kind=StepKind(_row.step_kind),
                     branch_index=_row.branch_index,
+                    # U-CP-102 / `B-71` (CP spec v1.119 §2.2.A) — the PERSISTED
+                    # echo, copied verbatim. Never recomputed here: §0.4.4 promises
+                    # ONE value across the webhook, the resume state and this
+                    # projection, and a per-surface recompute would silently become
+                    # a second authority the moment the basis evolved. `None` on
+                    # every already-durable snapshot captured before §26.9 existed,
+                    # and omitted from the dump entirely in that case.
+                    escalation_instance_id=_row.escalation_instance_id,
                 ),
                 gate_owning_identity=pre_dispatch_gate_owning_branch_identity(
                     snapshot.run_id, _row.branch_index
