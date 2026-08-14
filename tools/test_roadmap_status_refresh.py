@@ -1071,3 +1071,32 @@ def test_rotate_next_action_keeps_the_drift_archive_in_the_target_checkout(tmp_p
     assert target_archive.is_file(), "overflow must land in the TARGET checkout's archive"
     if caller_archive_before is not None:
         assert rsr.DEFAULT_ARCHIVE.read_text() == caller_archive_before, "caller contaminated"
+
+
+def test_trim_drift_log_refuses_to_write_over_the_hard_byte_cap(tmp_path, capsys):
+    """[P2] (codex round 9): a large new resolution is RETAINED by
+    _drift_keep_count (the newest row always survives), so this path wrote past
+    HEAD_BYTE_BUDGET and exited 0 — producing a status file validate()
+    immediately hard-rejects, guaranteeing the next CI check fails."""
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    status.write_text(SAMPLE)
+    before = status.read_text()
+    rc = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(tmp_path / "drift.md"),
+            "--trim-drift-log",
+            "--drift-source",
+            "huge",
+            "--drift-resolution",
+            "z" * (rsr.HEAD_BYTE_BUDGET + 1000),
+            "--date",
+            "2026-08-14",
+        ]
+    )
+    assert rc == 2
+    assert "hard cap" in capsys.readouterr().err
+    assert status.read_text() == before, "must fail CLOSED"

@@ -539,8 +539,19 @@ def check_counts(
                 f"multi-unit line NOT count-checked (unattributable): {line.strip()[:120]}",
             )
             continue
+        # MOST-SPECIFIC noun wins. `_COUNT_NOUNS` is ordered specific -> generic,
+        # and the intervening-word matcher lets a generic pattern swallow a
+        # specific phrase: "3 carrier amendments" matched `amendments?` too (the
+        # matcher consumes "carrier"), so 3 landed in the generic bucket and
+        # collided with a perfectly consistent "5 amendments" total — a HARD
+        # block on valid prose (codex round 9 [P2]). Claiming spans left-to-right
+        # in specificity order makes the first (most specific) match own the text.
+        claimed: list[tuple[int, int]] = []
         for pattern, bucket in _COUNT_NOUNS:
             for m in re.finditer(rf"{_NUM}\s+(?:\w+[- ]){{0,2}}?{pattern}", low, re.IGNORECASE):
+                if any(m.start() < end and start < m.end() for start, end in claimed):
+                    continue
+                claimed.append((m.start(), m.end()))
                 raw = m.group(1).lower()
                 value = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
                 subject = _claim_subject(line, path, m.start())

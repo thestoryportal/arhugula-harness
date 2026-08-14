@@ -649,3 +649,21 @@ def test_sibling_label_index_is_built_once_per_family_set(tmp_path):
     second = ls._sibling_label_index(d, frozenset({"spec_a"}))
     assert first is second, "the index must be memoised, not rebuilt"
     assert set(first) == {"1.1", "1.2", "1.3"}
+
+
+def test_a_specific_noun_is_not_also_counted_in_its_generic_bucket():
+    """[P2] (codex round 9): the intervening-word matcher let `amendments?`
+    swallow "3 carrier amendments" (it consumes "carrier"), so 3 landed in the
+    GENERIC bucket and collided with a perfectly consistent "5 amendments"
+    total — a HARD block on valid prose."""
+    report = _report_for_counts(
+        {"spec.md": ["U-CP-1 has 3 carrier amendments out of 5 amendments total."]}
+    )
+    assert _hard(report) == [], _hard(report)
+
+
+def test_a_genuine_generic_disagreement_still_fires():
+    report = _report_for_counts(
+        {"spec.md": ["U-CP-1 has 5 amendments.", "U-CP-1 has 7 amendments."]}
+    )
+    assert _hard(report) != []

@@ -916,6 +916,21 @@ def main(argv: list[str] | None = None) -> int:
                 text, args.date, args.drift_source, args.drift_resolution or ""
             )
         new_text, new_archive_text, moved = trim_drift_log(text, args.archive)
+        # Same hard-cap refusal the rotation path applies (codex round 4): a
+        # large new resolution is RETAINED by _drift_keep_count (the newest row
+        # always survives), so this path could write past HEAD_BYTE_BUDGET and
+        # exit 0 — a 10 KB resolution wrote 26,172 B, which validate() then
+        # hard-rejects, guaranteeing the next CI check fails (codex round 9).
+        trimmed_bytes = len(new_text.encode("utf-8"))
+        if trimmed_bytes > HEAD_BYTE_BUDGET:
+            print(
+                f"--trim-drift-log would leave {args.status.name} at {trimmed_bytes} B, "
+                f"over the {HEAD_BYTE_BUDGET} B hard cap (by "
+                f"{trimmed_bytes - HEAD_BYTE_BUDGET} B) — refusing to write a status "
+                "file --check would reject. Shorten the drift resolution text.",
+                file=sys.stderr,
+            )
+            return 2
         if args.dry_run:
             print(f"would move {moved} row(s) to {args.archive}")
             return 0
