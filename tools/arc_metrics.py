@@ -332,12 +332,10 @@ def extract(args: argparse.Namespace) -> ArcRow:
             # lane's file caught by the glob, or a re-touched one -- which
             # inflates review_rounds and folds post-merge gaps into the arc
             # while keeping the span positive and innocent-looking.
-            if row.last_round_at and parse_iso(row.last_round_at) > parse_iso(row.merged_at):
-                raise AbortError(
-                    f"{row.arc_id}: last round log ({row.last_round_at}) postdates the "
-                    f"merge ({row.merged_at}) -- the log set reaches past this arc; "
-                    "narrow the glob rather than record post-merge rounds"
-                )
+            # Ordered START-then-END on purpose. Logs are mtime-sorted, so
+            # `last >= first`: checking the end first would make this branch
+            # unreachable on every input derivable from real logs, leaving a
+            # guard that looks load-bearing and never fires.
             if span < 0:
                 # A copied or re-touched log can carry an mtime after the merge.
                 # A negative span is not a short arc, it is a broken input -- and
@@ -347,6 +345,12 @@ def extract(args: argparse.Namespace) -> ArcRow:
                     f"{row.arc_id}: first round log ({row.first_round_at}) postdates "
                     f"the merge ({row.merged_at}) -- a copied or re-touched log is in "
                     "the set; fix the glob rather than record a negative arc span"
+                )
+            if row.last_round_at and parse_iso(row.last_round_at) > parse_iso(row.merged_at):
+                raise AbortError(
+                    f"{row.arc_id}: last round log ({row.last_round_at}) postdates the "
+                    f"merge ({row.merged_at}) -- the log set reaches past this arc; "
+                    "narrow the glob rather than record post-merge rounds"
                 )
             row.arc_span_s = span
             # A round log's mtime is when that round's output FINISHED, not when

@@ -358,13 +358,14 @@ committed inside that arc's own PR (`git add .harness/arc-metrics.jsonl` — nev
 `harness-*/src|tests`, so it does not drag the diff through the 3-lens merge-gate.
 
 **`drain` exits non-zero while anything is still outstanding, and that is not a failure.**
-A queued capture is released only once its row appears in *committed* history, because until
-then the row is just a working-tree change and the declarations it carries exist nowhere
-else — this arc can still be reset or its worktree disposed. So the normal sequence is:
-`drain` (exit 1, "entry held until the row is committed") → commit and merge the row → the
-*next* arc's `drain` releases the entry (exit 0). A non-zero exit means "work is still
-outstanding", which also covers a capture that failed and a claim held by a live peer. Only
-treat exit 0 as "nothing left to fold".
+A queued capture is released only once its row appears in **merged history** (`origin/main`),
+because until then the declarations it carries exist nowhere else — a working-tree change is
+obviously not durable, but neither is a topic-branch commit: that branch can still be reset,
+abandoned, or have its worktree disposed. So the normal sequence is: `drain` (exit 1, "entry
+held until the row is committed") → commit and **merge** the row → the *next* arc's `drain`
+releases the entry (exit 0). A non-zero exit means "work is still outstanding", which also
+covers a capture that failed and a claim held by a live peer. Only treat exit 0 as "nothing
+left to fold".
 
 Read the folded rows before moving on. `--round-logs` fails closed (zero matched files
 aborts rather than recording `0 rounds`), and a `provenance` value beginning `unmapped:`

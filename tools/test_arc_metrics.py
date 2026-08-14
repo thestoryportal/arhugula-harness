@@ -398,6 +398,43 @@ def test_arc_spans_and_pr_windows_are_never_pooled(monkeypatch, tmp_path: Path, 
     assert "PR-open window   100.0m (n=1" in out, "the window is reported on its own line"
 
 
+# mutation-probe: rename a subcommand or drop a set_defaults(func=...) in main()
+def test_the_real_cli_path_is_wired(monkeypatch, tmp_path: Path, capsys):
+    """Every other test bypasses argparse; `just arc-metrics` does not.
+
+    The production entry point is `justfile` -> `python tools/arc_metrics.py "$@"`
+    -> `main(argv)`. A renamed flag, a dropped `set_defaults(func=...)`, or a
+    removed exit-code wrapper would leave every direct-call test green while
+    breaking the command ship-pr actually runs.
+    """
+    qdir = tmp_path / "queue"
+    ledger = tmp_path / "arc-metrics.jsonl"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    monkeypatch.setattr(am, "LEDGER", ledger)
+
+    # queue: subparser + required declared flags + func dispatch
+    assert am.main(["queue", "--pr", "1338", "--arc-type", "applying", "--decisions", "1"]) == 0
+    assert (qdir / "pr-1338.json").exists()
+
+    # summary: reads the ledger through the same dispatch
+    ledger.write_text(json.dumps({"arc_id": "a", "arc_span_s": 600.0, "levers_active": []}) + "\n")
+    assert am.main(["summary"]) == 0
+    assert "arc span" in capsys.readouterr().out
+
+    # the AbortError -> exit 2 wrapper, through the real CLI rather than a raise
+    ledger.unlink()
+    assert am.main(["summary"]) == 2, "a failed run must exit non-zero, not raise"
+
+
+# mutation-probe: drop `required=True` from queue's --arc-type/--decisions
+def test_the_cli_refuses_a_queue_without_its_declared_judgements(monkeypatch, tmp_path: Path):
+    """argparse is where that requirement actually lives; nothing else checks it."""
+    monkeypatch.setattr(am, "QUEUE_DIR", tmp_path / "queue")
+    with pytest.raises(SystemExit) as exc:
+        am.main(["queue", "--pr", "1338"])
+    assert exc.value.code != 0
+
+
 # mutation-probe: point QUEUE_DIR at a path inside the repo
 def test_queue_lives_outside_the_repo():
     """A topic worktree is disposed at loop completion; anything queued in it dies."""
@@ -499,9 +536,35 @@ def test_a_claim_is_never_observable_without_its_owner_stamp(monkeypatch, tmp_pa
     path = _queue_entry(qdir, "pr-1338", 1338)
     entry = json.loads(path.read_text())
 
+    # Watch HOW the claim is created, not just the end state. A rename-then-stamp
+    # refactor produces an identical final file, so poststate alone cannot see
+    # the unstamped window a peer would misread as a dead owner.
+    writes: list[tuple[str, str]] = []
+    real_open = Path.open
+
+    def spy(self, mode="r", *a, **k):
+        handle = real_open(self, mode, *a, **k)
+        if "r" not in mode and self.suffix == ".taken":
+            real_write = handle.write
+
+            def record(data):
+                writes.append((mode, data))
+                return real_write(data)
+
+            handle.write = record
+        return handle
+
+    monkeypatch.setattr(Path, "open", spy)
     taken = am._claim_arc(path, entry)
+    monkeypatch.undo()
+
     assert taken is not None and taken.exists()
     assert not path.exists(), "the source is released only after the claim exists"
+    assert len(writes) == 1, f"the claim must be one atomic create+write, saw {len(writes)}"
+    mode, payload = writes[0]
+    assert "x" in mode, "exclusive create, so only one drain can win the claim"
+    assert "_claim" in payload, "the file is never written without its owner stamp"
+
     stamped = json.loads(taken.read_text())["_claim"]
     assert stamped["pid"] == os.getpid()
     assert stamped["host"] == socket.gethostname()
@@ -705,7 +768,10 @@ def test_round_log_postdating_the_merge_aborts(monkeypatch):
     )
     with pytest.raises(am.AbortError) as exc:
         am.extract(args)
-    assert "postdates" in str(exc.value)
+    # Name the FIRST-round guard specifically. Both guards say "postdates", so
+    # asserting on that word alone would pass via the sibling guard and witness
+    # nothing about the one this probe names.
+    assert "first round log" in str(exc.value)
 
 
 # mutation-probe: delete the last_round_at-vs-merged_at check in extract()
@@ -775,3 +841,7 @@ def test_p1_count_collapses_the_codex_duplicate_printing(tmp_path: Path):
     assert len(logs) == 2
     assert gaps == [600.0]
     assert p1 == [1], "round 1 carried a P1; round 2 did not"
+    # p1_rounds is built with `count_p1(...) >= 1`, a THRESHOLD -- so a raw
+    # un-deduped count of 2 would still yield [1] and leave this test green.
+    # Assert the count itself, or this stops witnessing the collapse it names.
+    assert am.count_p1(a.read_text()) == 1, "two emissions of one finding are one finding"
