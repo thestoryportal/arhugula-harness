@@ -107,13 +107,29 @@ This is the step most often done wrong. After the PR merges:
    ```
    which demotes the live `**Current next action (post-#A)**` paragraph into
    `.harness/roadmap-next-action-archive.md` (relabelled `Prior`, body verbatim)
-   and installs the new one. **It writes MORE THAN ONE FILE, so it is a CONTENT
-   commit that lands BEFORE the terminating refresh, never as it** — that is
-   precisely why the archive relief valve was unreachable from inside a refresh
-   and the head saturated to 64 B of headroom. `--refresh` now REFUSES to write
-   a second file rather than silently producing a two-file commit; if it tells
-   you a drift-log trim is owed, run `--trim-drift-log` as its own content commit
-   first. Both `--check` and `--refresh` print the remaining byte headroom.
+   and installs the new one. That is why the archive relief valve was previously
+   unreachable from inside a refresh and the head saturated to 64 B of headroom.
+
+   **It writes MORE THAN ONE FILE — and the commit shape matters, because getting
+   it wrong reds `main`.** A commit on `main` that touches `roadmap_status.md`
+   without being a *verified* terminating refresh satisfies NEITHER guard
+   exception (`_lag_expected` wants the refresh shape; `_owed_lag` requires HEAD
+   *not* to touch the file), so `main`'s post-merge CI hard-fails
+   `ROADMAP_STATUS_DRIFT`. So:
+
+   - **Never** put a `roadmap_status.md` edit in a substantive content PR. Land
+     the content PR without it.
+   - After the merge, make the rotation/trim and the terminating refresh **two
+     commits in ONE push**, so CI evaluates the *refresh* commit as HEAD:
+     `git push` once, with the rotate/trim commit first and the
+     `ops: roadmap status refresh ` commit last.
+   - `--refresh` REFUSES to write a second file rather than silently producing a
+     two-file commit; if it says a drift-log trim is owed, run `--trim-drift-log`
+     as the preceding commit in that same push.
+
+   Both `--check` and `--refresh` print the remaining byte headroom. The
+   drift-log byte budget is INFORMATIONAL (the hard cap is the whole-file
+   `HEAD_BYTE_BUDGET`), so it tells you where to reclaim bytes without redding CI.
    Mark any closed `R-NNN` RESOLVED + propagate `next_pointer` (still by hand — the
    R-NNN registry prose is out of the script's mechanical scope).
 2. **§12.2.1 — the recursion-stopping fixed point.** The refresh commit is itself a merge,
