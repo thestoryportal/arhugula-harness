@@ -6,9 +6,9 @@ except at the **five** carrier amendment sites named below — all additive,
 `HITLEscalationBrief` gains `escalation_instance_id` (§0.3, §25.2.Z) and the
 operator-facing webhook `payload_body` gains four additive keys (§0.6);
 (2) C-CP-25 §25's `StepExecutionContext` gains the internal basis carrier (§0.4.1,
-§25.17); (3) C-CP-26 §26's per-branch pre-dispatch gate-owning resume state gains the
+§25.20); (3) C-CP-26 §26's per-branch pre-dispatch gate-owning resume state gains the
 persisted echo (§0.4.2, §26.9); (4) C-CP-25 §25's `StepExecutionContext` gains the
-**echo read carrier** (§0.4.3, §25.18) — without it the §0.4.2 read order names a value no
+**echo read carrier** (§0.4.3, §25.21) — without it the §0.4.2 read order names a value no
 consumer can reach, and the persist-once contract is unsatisfiable rather than merely
 unimplemented; (5) C-CP-21's `PreDispatchUniformFallbackOnlyLocation` gains the **public
 correlation projection** (§0.4.4, §2.2.A) — the design record's own precondition, without
@@ -194,7 +194,16 @@ linear path byte-identical.
    harness-side suppression would convert unresolved-gate visibility from at-least-once
    to at-most-once — the liveness failure for an escalation channel.
 
-### §0.4.1 §25.17 (NEW) — the basis-carrying context field on `StepExecutionContext`
+### §0.4.1 §25.20 (NEW) — the basis-carrying context field on `StepExecutionContext`
+
+**Label provenance, stated because this delta already made this mistake once.** An earlier
+draft of §0.4.1/§0.4.3 used `§25.17` and `§25.18`. Both are **occupied**: CP v1.32 defines
+§25.17 as the failure-mode taxonomy extension and §25.18 as the deferred-implementation
+section, and that lineage is canonical through v1.118. Reusing them would have made every
+downstream cite ambiguous and could have sent a U-CP-102 implementer to the wrong contract —
+the identical defect class that forced this delta's `§25.2.Y` → `§25.2.Z` correction at
+PR #1325 round 3. The highest §25.x in the chain is §25.19, so §25.20 and §25.21 are fresh;
+verified by scanning every `Spec_Control_Plane_v1_*.md`, not by assumption.
 
 **Owning contract: C-CP-25** (`StepExecutionContext` is the WorkflowDriver carrier). This is a canonical-reading amendment in the same sense as §0.3: additive, `None`-defaulted, and the prior file bodies are not edited.
 
@@ -268,7 +277,7 @@ compatibility is handled, and a second mechanism would be a second authority.
 NOT recompute; recompute is reachable only from `None`. §0.4.3 is what makes that order
 *reachable*; without it the rule names a value the reading consumer cannot obtain.
 
-### §0.4.3 §25.18 (NEW) — the echo READ carrier on `StepExecutionContext`
+### §0.4.3 §25.21 (NEW) — the echo READ carrier on `StepExecutionContext`
 
 **Owning contract: C-CP-25.** Additive, `None`-defaulted, prior file bodies not edited —
 the same canonical-reading shape as §0.3, §0.4.1 and §0.4.2.
@@ -310,8 +319,8 @@ side):
 **This field is NOT basis material, and the distinction is load-bearing.** §0.5 bars the
 *pre-hash* basis from every exported carrier; this field holds the **already-hashed**
 token, which the delta exists to project. Conflating the two would either leak the basis
-(if the bar were read as not applying to §25.17) or forbid the token's own delivery (if it
-were read as applying to §25.18). The bar applies in full to `pre_dispatch_escalation_basis`
+(if the bar were read as not applying to §25.20) or forbid the token's own delivery (if it
+were read as applying to §25.21). The bar applies in full to `pre_dispatch_escalation_basis`
 and does not apply to `pre_dispatch_escalation_instance_id`, whose value is by construction
 the output of §0.4(2)'s one-way hash.
 

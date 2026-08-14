@@ -31,10 +31,13 @@ nothing writing to them.
 1. **§14.8.8.1 step 1** is the token's singular MINTER (CP v1.119 §0.4(3)). Canonically
    read as additionally populating `HITLEscalationBrief.escalation_instance_id` per CP
    §0.4.3's three-arm read order over the two `StepExecutionContext` carriers.
-2. **§14.8.8.1 step 2** folds the token inside `compose_hitl_action_id` — at that one site,
-   because CP §0.2 promises the webhook `Idempotency-Key`, the CP audit `action_id` and the
-   F2 ledger key remain one identity family. A second key composed alongside would
-   reintroduce the §0.1 aliasing on whichever the F2 writer used. The token-PRESENT output
+2. **The `compose_hitl_action_id` fold, at ALL THREE of its live invocations** —
+   `hitl_gate_composer.py:1302` (the §14.8.8.1 step-2 webhook key), `:1543`
+   (`_compose_and_persist_audit`, the CP audit `action_id` AND the F2 ledger key) and
+   `:2238` (the span correlation), verified against HEAD. CP §0.2 promises those identities
+   remain one family, so **widening only the webhook call would leave `:1543` branch-blind,
+   preserve the audit/F2 dedup collision, and make it impossible for `B-71` to close**. A
+   second key composed alongside would likewise reintroduce the §0.1 aliasing. The token-PRESENT output
    is pinned by CP §0.4(2-bis) as a `":"`-separated suffix, never truncated or re-hashed;
    the OUTPUT is pinned, the call shape is not.
 3. **The webhook payload projection**, `project_brief_to_payload` (reached from step 3 via
@@ -47,7 +50,7 @@ nothing writing to them.
    present, byte-identical when absent, with `branch_context` carrying the branch ordinal
    as PROSE only under CP §0.5's single scoped carve-out.
 
-Both bodies are **PRESERVED VERBATIM**; the canonical reading rides in the change-note.
+All edited sites keep their bodies **PRESERVED VERBATIM**; the canonical reading rides in the change-note.
 That is this file's established shape for a consumer-cite amendment (the v1.34 §14.8.8.1
 step-3 `deliver_webhook` → `deliver_webhook_for_brief` precedent).
 
@@ -76,8 +79,9 @@ assumed.
 (`None`) the fold MUST reproduce the pre-arc two-argument key exactly, leaving the
 linear/validator population's webhook key, audit `action_id` and ledger key unchanged.
 
-**Anchor convention.** This delta authors NO new in-file `:NNNN` anchors; both edited sites
-are named by `§`/step. Prior-version change-note anchors remain historical records.
+**Anchor convention.** This delta authors NO new in-file `:NNNN` anchors; the edited sites
+are named by `§`/step, and the three fold invocations by their `hitl_gate_composer.py`
+offsets, recorded as of this leg's grounding pass. Prior-version change-note anchors remain historical records.
 
 **Posture.** Design-phase (`design-substrate/**` + this `.harness/` clearance companion),
 per workspace `CLAUDE.md` §11.2. Plan delta filed at

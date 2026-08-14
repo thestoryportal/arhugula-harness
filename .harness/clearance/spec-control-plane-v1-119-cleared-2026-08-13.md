@@ -60,7 +60,7 @@ by rewording:
    recompute" order — but the reader is the composer at §14.8.8.1 step 1, which holds a
    `StepExecutionContext` that knew only the pre-hash basis. The echo was written to a
    carrier the reader never consults, so **every** resume would have reached the recompute
-   arm that §0.4(5) designates as the crash-fallback. §0.4.3 / `§25.18` adds the echo READ
+   arm that §0.4(5) designates as the crash-fallback. §0.4.3 / `§25.21` adds the echo READ
    carrier and states the read order as one three-arm rule over both fields.
    With §0.4.4 the amendment count moves 3 → **5**.
 2. **The Runtime spec was a zero-change claim by omission.** §0.11 listed OD / CXA / ADR /

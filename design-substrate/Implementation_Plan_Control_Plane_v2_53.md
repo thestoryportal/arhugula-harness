@@ -64,8 +64,8 @@ which vocabulary, what each key may and may not say); **U-RT-155 owns their EMIS
    widening carried forward — a witness pins BOTH, so the v1.18-composition regression that
    out-of-family review caught on the draft cannot recur silently.
 2. `StepExecutionContext` carries `pre_dispatch_escalation_basis: str | None = None`
-   (spec §0.4.1 / `§25.17`, **pre-hash**) and `pre_dispatch_escalation_instance_id: str | None = None`
-   (spec §0.4.3 / `§25.18`, **post-hash**). A witness asserts both are `model_copy`-inherited
+   (spec §0.4.1 / `§25.20`, **pre-hash**) and `pre_dispatch_escalation_instance_id: str | None = None`
+   (spec §0.4.3 / `§25.21`, **post-hash**). A witness asserts both are `model_copy`-inherited
    and that a branch child never re-derives either.
 3. The per-branch pre-dispatch gate-owning resume state carries
    `escalation_instance_id: str | None = None` (spec §0.4.2 / `§26.9`), keyed per branch
