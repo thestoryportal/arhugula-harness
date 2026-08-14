@@ -285,3 +285,24 @@ def test_every_content_check_skips_fixture_files():
     silent = ls.Report()
     ls.check_cites({"tools/test_leg_selfcheck.py": stale}, silent)
     assert _hard(silent) == []
+
+
+def test_resolve_base_refuses_a_ref_that_does_not_resolve():
+    """A gate that cannot find its base must NOT report success. `git diff
+    <bad-ref>...HEAD` prints nothing to stdout, so an unvalidated base produced
+    an empty diff, zero findings and a cheerful `leg-selfcheck OK` — a rubber
+    stamp produced by a typo. Found by out-of-family review probing the tool."""
+    import pytest
+
+    with pytest.raises(ls.BaseRefError, match="does not resolve"):
+        ls.resolve_base("refs/heads/definitely-not-a-ref")
+
+
+def test_resolve_base_accepts_a_ref_that_does_resolve():
+    assert ls.resolve_base("HEAD") == "HEAD"
+
+
+def test_cli_exits_2_on_an_unresolvable_base(capsys):
+    rc = ls.main(["--base", "refs/heads/definitely-not-a-ref"])
+    assert rc == 2
+    assert "does not resolve" in capsys.readouterr().err

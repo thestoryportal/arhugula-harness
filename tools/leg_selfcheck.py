@@ -78,18 +78,45 @@ class Report:
 # --- git plumbing ------------------------------------------------------------
 
 
+class BaseRefError(ValueError):
+    """The requested base ref does not resolve (fails the run; never silent)."""
+
+
 def _run(args: list[str]) -> str:
     out = subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
     return out.stdout
 
 
+def _ref_exists(ref: str) -> bool:
+    return bool(_run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]).strip())
+
+
 def resolve_base(explicit: str | None) -> str:
+    """Resolve the base ref, FAILING LOUDLY on one that does not exist.
+
+    A gate that cannot find its base must not report success. `git diff
+    <bad-ref>...HEAD` writes its error to stderr and prints nothing to stdout,
+    so an unvalidated base yielded an empty diff, zero findings, and a cheerful
+    `leg-selfcheck OK` — a rubber stamp produced by a typo. That is the
+    silent-failure mode this workspace's own discipline forbids, and it is
+    worse here than elsewhere because the whole point of the tool is to be
+    trusted before a push.
+    """
     if explicit:
+        if not _ref_exists(explicit):
+            raise BaseRefError(
+                f"base ref {explicit!r} does not resolve to a commit — refusing to "
+                "report a result against an empty diff"
+            )
         return explicit
     for cand in ("origin/main", "main"):
-        if _run(["git", "rev-parse", "--verify", "--quiet", cand]).strip():
+        if _ref_exists(cand):
             return cand
-    return "HEAD~1"
+    if _ref_exists("HEAD~1"):
+        return "HEAD~1"
+    raise BaseRefError(
+        "no usable base ref (tried origin/main, main, HEAD~1) — pass --base explicitly"
+    )
 
 
 def diff_text(base: str, uncommitted: bool) -> str:
@@ -475,7 +502,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable findings")
     args = ap.parse_args(argv)
 
-    report = run(resolve_base(args.base), args.uncommitted)
+    try:
+        report = run(resolve_base(args.base), args.uncommitted)
+    except BaseRefError as e:
+        print(f"leg-selfcheck: {e}", file=sys.stderr)
+        return 2
 
     if args.json:
         print(
