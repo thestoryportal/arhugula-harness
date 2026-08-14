@@ -3409,15 +3409,27 @@ def execute_workflow(
         # containing snapshot's own `run_id` — so it is the safe key, and the ordinal
         # rides along as the value because the ordinal is what the message reports.
         if resume_context is not None and resume_context.hitl_responses:
-            diagnose_token_keyed_ingress(
-                {
+            # GUARDED IN FULL — COLLECTION as well as emission (out-of-family review
+            # round 7 [P2]). `walk_pause_tree` converts each row's captured
+            # `step_kind` into the CLOSED `StepKind` enum, so a valid, correctly
+            # re-hashed snapshot written by a NEWER deployment raises `ValueError`
+            # here — and the caller would get an uncaught exception instead of the
+            # established `parallelization-resume-body-mismatch` fail-closed outcome,
+            # but ONLY when they happened to supply a `hitl_responses` map. Rounds 3,
+            # 4 and 6 each closed one step of this same "advisory diagnostic replaces
+            # a real outcome" class (the warning sink, the log sink, the ordering);
+            # this closes the last one, because collection and emission are the only
+            # two steps there are.
+            try:
+                _b71_ingress_tokens = {
                     entry.projection.escalation_instance_id: entry.projection.branch_index
                     for entry in walk_pause_tree(pause_snapshot_input)
                     if isinstance(entry.projection, PreDispatchUniformFallbackOnlyLocation)
                     and entry.projection.escalation_instance_id is not None
-                },
-                resume_context.hitl_responses,
-            )
+                }
+            except Exception:
+                _b71_ingress_tokens = {}
+            diagnose_token_keyed_ingress(_b71_ingress_tokens, resume_context.hitl_responses)
 
     # § C-OD-25 §25.1 — Open the workflow.envelope outer OTel span via
     # ctx.tracer_provider.get_tracer(...).start_as_current_span(...). Every

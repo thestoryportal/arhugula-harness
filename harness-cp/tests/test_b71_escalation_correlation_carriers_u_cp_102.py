@@ -1205,6 +1205,65 @@ def test_a_corrupted_snapshot_still_fails_closed_when_a_token_key_is_submitted()
     )
 
 
+# mutation-probe: delete the `try:` / `except Exception: _b71_ingress_tokens = {}`
+# guard around the token-collection comprehension in `execute_workflow` (leaving a
+# bare assignment).
+def test_a_version_skew_snapshot_still_fails_closed_when_a_token_key_is_submitted() -> None:
+    """The diagnostic's COLLECTION step must not raise either.
+
+    `walk_pause_tree` converts each captured `step_kind` into the CLOSED `StepKind`
+    enum, so a VALID, correctly re-hashed snapshot written by a NEWER deployment
+    raises `ValueError` inside the walk. Unguarded, the caller got an uncaught
+    exception instead of the established `...resume-body-mismatch` fail-closed
+    outcome — and only when they happened to supply a `hitl_responses` map, which is
+    the worst kind of conditional regression. Out-of-family review round 7 [P2].
+
+    Rounds 3, 4 and 6 each closed one step of this same class (the warning sink, the
+    log sink, the ordering); collection and emission are the only two steps, so this
+    witness and the log-sink one together bound it.
+    """
+    snap, round_one = _round_one()
+    token = round_one.minted[1]
+    pfr = snap.peer_fan_out_resume
+    assert pfr is not None
+    skewed_rows = tuple(
+        row.model_copy(update={"step_kind": "a-step-kind-from-a-newer-deployment"})
+        for row in pfr.pre_dispatch_gate_owning_branches
+    )
+    skewed_pfr = pfr.model_copy(update={"pre_dispatch_gate_owning_branches": skewed_rows})
+    # Re-hash, so this is a VALID snapshot the harness must handle as version skew —
+    # not a corrupt one, which the sibling witness above already covers.
+    skewed = snap.model_copy(
+        update={
+            "peer_fan_out_resume": skewed_pfr,
+            "snapshot_hash": _compute_snapshot_hash(
+                workflow_id=snap.workflow_id,
+                run_id=snap.run_id,
+                step_index=snap.step_index,
+                state_summary=snap.state_summary,
+                peer_fan_out_resume=skewed_pfr,
+            ),
+        }
+    )
+    resumed = execute_workflow(
+        _manifest(),
+        _peer_steps(),
+        run_id=_RUN_ID,
+        ctx=_ctx(),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _MintingGateDispatcher()),
+        pause_snapshot_input=skewed,
+        resume_context=ResumeContext(hitl_responses={token: _approval("e-b71-skew")}),
+    )
+    assert resumed.status is RunStatus.FAILED, (
+        "an unrecognised `step_kind` must reach the established typed failure, not "
+        f"raise out of an advisory diagnostic; got status={resumed.status!r}"
+    )
+    assert resumed.fail_class is not None and "mismatch" in resumed.fail_class, (
+        f"expected the resume-body-mismatch fail class; got {resumed.fail_class!r}"
+    )
+
+
 # mutation-probe: key the `execute_workflow` ingress-diagnostic comprehension by
 # ORDINAL instead of by token, i.e.
 #   `{entry.projection.branch_index: entry.projection.escalation_instance_id ...}`
