@@ -499,3 +499,14 @@ def test_untracked_files_are_scanned_in_uncommitted_mode():
     assert isinstance(listing, dict)
     for rel, lines in listing.items():
         assert isinstance(rel, str) and isinstance(lines, list)
+
+
+def test_changed_line_numbers_records_deletion_only_edits():
+    """[P2] (codex round 5): a deletion advances no new-file position, so a
+    deletion-only edit recorded nothing, `amended` stayed empty, and --detail was
+    never called — allowing the exact heading-only regression this gate blocks
+    (delete a row's final prose body and nothing notices)."""
+    diff = "--- a/x.md\n+++ b/x.md\n@@ -10,3 +10,2 @@\n ctx\n-removed-body-line\n ctx\n"
+    assert ls.changed_line_numbers(diff) == {"x.md": {11}}
+    # ...and the added-lines view is still empty, which is why it could not see it
+    assert ls.added_by_file(diff) == {"x.md": []}

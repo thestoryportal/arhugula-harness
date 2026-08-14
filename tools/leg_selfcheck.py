@@ -232,6 +232,13 @@ def changed_line_numbers(diff: str) -> dict[str, set[int]]:
         if ln.startswith("+") and not ln.startswith("+++"):
             out[current].add(lineno)
             lineno += 1
+        elif ln.startswith("-") and not ln.startswith("---"):
+            # A DELETION advances no new-file position, so recording nothing left
+            # `amended` empty for a deletion-only edit — and deleting a row's
+            # final prose body is EXACTLY the heading-only regression this gate
+            # exists to block (codex round 5 [P2]). Mark the position the removed
+            # content sat at, so the enclosing row still resolves.
+            out[current].add(max(1, lineno))
         elif ln.startswith(" "):
             lineno += 1
     return dict(out)

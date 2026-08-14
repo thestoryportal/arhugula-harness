@@ -402,6 +402,18 @@ def rotate_next_action(
     # validate() only COUNTS the marker, so the empty frontier would pass --check
     # too, leaving the next session with no next action at all (codex round 3
     # [P2]). Refuse before either file is modified.
+    # The live pointer is ONE paragraph by construction: _CURRENT_PARAGRAPH_RE
+    # stops at the first blank line, so a multi-paragraph body writes fine but
+    # only its FIRST paragraph is archived at the next rotation — the remainder
+    # stays in the live section permanently, growing the head while validation
+    # still passes (codex round 5 [P2]). Reject rather than silently truncate
+    # the archive.
+    if "\n\n" in body.strip():
+        raise RoadmapStatusError(
+            "--rotate-next-action body must be a SINGLE paragraph (no blank lines) — "
+            "the live pointer is one paragraph, and only the first would ever be "
+            "archived, leaving the rest permanently in the live section"
+        )
     if not body.strip():
         raise RoadmapStatusError(
             "--rotate-next-action requires a non-empty body — refusing to install an "
@@ -889,6 +901,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.trim_drift_log:
+        # A drift event that OVERFLOWS the log deadlocked the documented
+        # `--refresh --drift-source` workflow (codex round 5 [P1]): --refresh
+        # prepends the row, the trim then needs an archive write, and --refresh
+        # refuses — while pre-running --trim-drift-log was a no-op because the
+        # row did not exist yet. So the CONTENT mode carries the new event: it
+        # prepends and archives in one content commit, after which the
+        # terminating --refresh is genuinely one-file.
+        if args.drift_source:
+            if not args.date:
+                ap.error("--trim-drift-log --drift-source requires --date")
+            text = prepend_drift_log(
+                text, args.date, args.drift_source, args.drift_resolution or ""
+            )
         new_text, new_archive_text, moved = trim_drift_log(text, args.archive)
         if args.dry_run:
             print(f"would move {moved} row(s) to {args.archive}")
@@ -974,9 +999,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"--refresh would move {would_move} drift-log row(s) into "
                 f"{args.archive.name}, making this a TWO-FILE commit — which "
                 "cannot be a terminating refresh (§12.2.1 requires exactly "
-                f"{DEFAULT_STATUS.name}). Run `--trim-drift-log` (or "
-                "`--rotate-next-action`) as its own content commit FIRST, then "
-                "re-run --refresh.",
+                f"{DEFAULT_STATUS.name}). Run `--trim-drift-log` as its own content "
+                "commit FIRST, then re-run --refresh. If the overflow is caused by a "
+                "NEW drift event, pass it to that content step instead — "
+                "`--trim-drift-log --drift-source ... --drift-resolution ... --date ...` "
+                "— since pre-trimming cannot help with a row that does not exist yet.",
                 file=sys.stderr,
             )
             return 2

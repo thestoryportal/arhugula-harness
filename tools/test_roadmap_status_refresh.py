@@ -952,3 +952,68 @@ def test_rotate_next_action_cli_refuses_to_write_over_the_hard_byte_cap(tmp_path
     # fail CLOSED: neither file may be written by the refused run
     assert status.read_text() == before
     assert na_archive.read_text() == SAMPLE_ARCHIVE
+
+
+def test_rotate_next_action_rejects_a_multi_paragraph_body():
+    """[P2] (codex round 5): a multi-paragraph body wrote fine, but only its
+    FIRST paragraph would ever be archived — the rest stays in the live section
+    permanently, growing the head while validation still passes."""
+    with pytest.raises(rsr.RoadmapStatusError, match="SINGLE paragraph"):
+        rsr.rotate_next_action(SAMPLE, SAMPLE_ARCHIVE, "1338", "First para.\n\nSecond para.")
+
+
+def test_trim_drift_log_can_carry_the_new_drift_event(tmp_path, capsys):
+    """[P1] (codex round 5): a drift event that OVERFLOWS the log deadlocked the
+    documented `--refresh --drift-source` workflow — --refresh prepends the row,
+    the trim then needs an archive write, and --refresh refuses; while
+    pre-running --trim-drift-log was a NO-OP because the row did not exist yet.
+    The content mode now carries the event, so the refresh is genuinely one-file."""
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    text = SAMPLE
+    for n in range(1, 3):
+        text = rsr.prepend_drift_log(text, *_fat_drift_row(n))
+    status.write_text(text)
+    (tmp_path / ".harness" / "roadmap-next-action-archive.md").write_text(SAMPLE_ARCHIVE)
+    archive = tmp_path / "drift_archive.md"
+
+    rc = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(archive),
+            "--trim-drift-log",
+            "--drift-source",
+            "the new event",
+            "--drift-resolution",
+            "r" * 2500,
+            "--date",
+            "2026-08-14",
+        ]
+    )
+    assert rc == 0, capsys.readouterr()
+    rows = rsr._get_table_data_rows(status.read_text(), rsr.DRIFT_LOG_HEADING)
+    assert "the new event" in rows[0], "the new event must be live, not archived away"
+    kept = sum(len(r.encode("utf-8")) + 1 for r in rows)
+    assert kept <= rsr.DRIFT_LOG_BYTE_BUDGET
+
+    # ...and the terminating refresh is now genuinely a ONE-FILE write.
+    archive_before = archive.read_text()
+    rc2 = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(archive),
+            "--refresh",
+            "--pr",
+            "PR #9999",
+            "--date",
+            "2026-08-14",
+            "--notes",
+            "n",
+        ]
+    )
+    assert rc2 == 0, capsys.readouterr()
+    assert archive.read_text() == archive_before
