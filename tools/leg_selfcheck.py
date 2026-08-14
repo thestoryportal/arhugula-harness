@@ -465,7 +465,12 @@ _NUM = r"(?<![#\w.\-])(\d+|" + "|".join(_NUMBER_WORDS) + r")"
 _UNIT_ID_RE = re.compile(r"\bU-[A-Z]+-\d+\b")
 
 
-def _claim_subject(line: str, path: str, at: int = 0) -> str:
+#: A plan/spec unit heading, so an aggregate artifact's counts attribute to the
+#: unit they sit under rather than to the file as a whole.
+_UNIT_HEADING_RE = re.compile(r"^\s*#{1,6}\s+.*?\b(U-[A-Z]+-\d+)\b")
+
+
+def _claim_subject(line: str, enclosing: str, at: int = 0) -> str:
     """The unit a count claim at offset `at` belongs to: the NEAREST unit id at
     or before it on the line.
 
@@ -486,7 +491,7 @@ def _claim_subject(line: str, path: str, at: int = 0) -> str:
         # named there, if any — a leading "16 acceptance criteria for U-CP-102".
         nxt = _UNIT_ID_RE.search(line)
         best = nxt.group(0) if nxt else None
-    return best or f"(unattributed in {path})"
+    return best or enclosing
 
 
 def check_counts(
@@ -519,11 +524,31 @@ def check_counts(
             and not is_fixture_path(path)
         )
 
-    scanned = [(p, line) for p, lines in by_file.items() if _eligible(p) for line in lines]
+    def _with_enclosing(source: dict[str, list[str]]) -> list[tuple[str, str, str]]:
+        """(path, enclosing-row-or-file, line), preserving order.
+
+        The whole-FILE fallback collapsed unrelated rows in an aggregate carrier:
+        two register rows added in one round, each legitimately claiming a
+        different count, shared one subject and produced a HARD block (codex
+        round 10 [P2]). Track the nearest preceding row/unit heading instead.
+        """
+        out: list[tuple[str, str, str]] = []
+        for path, lines in source.items():
+            if not _eligible(path):
+                continue
+            enclosing = f"(unattributed in {path})"
+            for line in lines:
+                m = _ROW_ID_RE.match(line) or _UNIT_HEADING_RE.match(line)
+                if m:
+                    enclosing = m.group(1)
+                out.append((path, enclosing, line))
+        return out
+
+    scanned = _with_enclosing(by_file)
     # Unchanged text immediately around the edits, so a single edited mirror can
     # still disagree with an untouched co-located one (codex round 1 [P1]).
-    scanned += [(p, line) for p, lines in (context or {}).items() if _eligible(p) for line in lines]
-    for path, line in scanned:
+    scanned += _with_enclosing(context or {})
+    for _path, enclosing, line in scanned:
         low = line.lower()
         if len(set(_UNIT_ID_RE.findall(line))) > 1:
             # A line naming two or more units cannot be attributed by position:
@@ -554,7 +579,7 @@ def check_counts(
                 claimed.append((m.start(), m.end()))
                 raw = m.group(1).lower()
                 value = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
-                subject = _claim_subject(line, path, m.start())
+                subject = _claim_subject(line, enclosing, m.start())
                 claims[(subject, bucket)][value].append(line.strip()[:150])
 
     for (subject, bucket), by_value in sorted(claims.items()):
@@ -652,15 +677,20 @@ def check_label_collisions(
     # and a Python comment that happens to open `# §12.2.1` is byte-identical to
     # an h1 heading, which this tool reported as a minted label on its own first
     # run. Scoping by file type is what makes the heading shape unambiguous.
-    minted = sorted(
+    # (family, label): unioning every changed family let a label minted only in a
+    # CP artifact be queried against Runtime siblings merely because a Runtime
+    # file was also touched — cross-family false warnings that contradict the
+    # family isolation this check is built on (codex round 10 [P2]).
+    minted_pairs = sorted(
         {
-            m.group(1)
+            (_artifact_family(path), m.group(1))
             for path, lines in by_file.items()
             if path.lower().endswith(".md") and not is_fixture_path(path)
             for line in lines
             if (m := _MINT_RE.match(line))
         }
     )
+    minted = sorted({label for _, label in minted_pairs})
     report.stats["labels_minted"] = len(minted)
     report.stats["labels"] = [f"§{label}" for label in minted]
     if not minted:
@@ -717,9 +747,8 @@ def check_label_collisions(
                 )
 
     family_dir = substrate_dir or (ROOT / "design-substrate")
-    minted_families = {_artifact_family(path) for path in by_file if path.lower().endswith(".md")}
-    index = _sibling_label_index(family_dir, frozenset(minted_families))
-    for label in minted:
+    for family, label in minted_pairs:
+        index = _sibling_label_index(family_dir, frozenset({family}))
         siblings = sorted(index.get(label, ()))
         if len(siblings) > 1:
             report.add(

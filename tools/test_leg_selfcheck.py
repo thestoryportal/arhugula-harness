@@ -667,3 +667,65 @@ def test_a_genuine_generic_disagreement_still_fires():
         {"spec.md": ["U-CP-1 has 5 amendments.", "U-CP-1 has 7 amendments."]}
     )
     assert _hard(report) != []
+
+
+# --- out-of-family review round 10 ------------------------------------------
+
+
+def test_count_subjects_separate_by_enclosing_row_in_an_aggregate_file():
+    """[P2] (codex round 10): the whole-FILE fallback collapsed unrelated rows in
+    an aggregate carrier — two register rows added in one round, each
+    legitimately claiming a different count, shared one subject and HARD-blocked
+    the push."""
+    report = _report_for_counts(
+        {
+            ".harness/post-phase-8-forward-register.md": [
+                "### B-900 · first row",
+                "- **What it is.** It touches 3 sites.",
+                "### B-901 · second row",
+                "- **What it is.** It touches 4 sites.",
+            ]
+        }
+    )
+    assert _hard(report) == [], _hard(report)
+
+
+def test_count_subjects_still_disagree_within_one_enclosing_row():
+    report = _report_for_counts(
+        {
+            ".harness/post-phase-8-forward-register.md": [
+                "### B-900 · one row",
+                "- **What it is.** It touches 3 sites.",
+                "- **Current state.** It touches 4 sites.",
+            ]
+        }
+    )
+    assert _hard(report) != []
+
+
+def test_minted_labels_are_queried_only_within_their_own_family(tmp_path):
+    """[P2] (codex round 10): unioning every changed family let a label minted
+    only in a CP artifact be queried against Runtime siblings merely because a
+    Runtime file was also touched — cross-family noise contradicting the family
+    isolation this check is built on."""
+    d = _substrate(
+        tmp_path,
+        {
+            "Spec_Runtime_v1_1.md": "### §9.9 Runtime meaning\n",
+            "Spec_Runtime_v1_2.md": "### §9.9 Runtime meaning again\n",
+            "Spec_CP_v1_1.md": "### §9.9 CP meaning\n",
+        },
+    )
+    ls._SIBLING_INDEX_CACHE.clear()
+    report = ls.Report()
+    # A CP label minted while a Runtime file is ALSO in the diff.
+    ls.check_label_collisions(
+        {
+            "design-substrate/Spec_CP_v1_1.md": ["### §9.9 CP meaning"],
+            "design-substrate/Spec_Runtime_v1_2.md": ["some unrelated edit"],
+        },
+        report,
+        d,
+    )
+    sibling_msgs = [f.message for f in report.findings if "sibling" in f.message]
+    assert not any("Runtime" in m for m in sibling_msgs), sibling_msgs
