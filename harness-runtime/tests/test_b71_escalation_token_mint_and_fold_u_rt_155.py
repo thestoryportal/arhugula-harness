@@ -37,8 +37,10 @@ from harness_core.identity import StepID
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind, HITLResult
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import WebhookConfig
+from harness_cp.pause_resume_protocol_types import WorkflowPauseReason
 from harness_cp.pause_state_projection import (
     PauseLocationVariant,
+    PreDispatchUniformFallbackOnlyLocation,
     compose_escalation_instance_id,
     pre_dispatch_gate_owning_branch_identity,
 )
@@ -610,9 +612,28 @@ async def test_the_four_payload_keys_are_projected_on_a_real_fanout_escalation(
         "the BARE token, verbatim — not the composed key, which §0.4(1) forbids parsing back apart"
     )
     assert isinstance(body["branch_context"], str)
-    assert body["resolvability"] == PauseLocationVariant.UNIFORM_FALLBACK_ONLY.value, (
-        "the resolution CHANNEL, from the CLOSED v1.112 §2.1 vocabulary — never the "
-        "time-varying OUTCOME"
+    # ONE AUTHORITY, cross-checked rather than asserted twice against a literal.
+    # Production stamps this constant; the CP record separately asserts the pause
+    # view's own `variant` for the same location. Two independent agreements with the
+    # same literal would NOT catch a future divergence between the two surfaces, which
+    # is the "second classification authority" §0.6 forecloses (pre-merge
+    # witness-adequacy gate, [P2]). So compare the wire value against the variant the
+    # CP projection actually assigns to a pre-dispatch gate-owning location.
+    projected_variant = PreDispatchUniformFallbackOnlyLocation(
+        pause_reason=WorkflowPauseReason.HITL_PENDING,
+        step_index=0,
+        step_id="branch-sub",
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        branch_index=2,
+        escalation_instance_id=token,
+    ).variant
+    assert body["resolvability"] == projected_variant.value, (
+        "the wire's resolution CHANNEL must be the SAME value the pause view assigns "
+        f"to this location — got {body['resolvability']!r} vs {projected_variant.value!r}"
+    )
+    assert projected_variant in set(PauseLocationVariant), (
+        "and it must come from the CLOSED v1.112 §2.1 vocabulary — never the "
+        "time-varying OUTCOME, and never a newly minted value"
     )
     assert isinstance(body["resolvability_note"], str) and body["resolvability_note"]
     assert sorted(body["proposed_response_palette"]) == sorted(

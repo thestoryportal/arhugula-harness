@@ -1164,44 +1164,79 @@ def test_a_token_keyed_resume_is_counted_as_unaddressed_and_is_diagnosed(
     )
 
 
-# mutation-probe: move the `execute_workflow` ingress-diagnostic block from its site
-# after `resume_at_step_index = pause_snapshot_input.step_index` back up to
-# immediately above `if ctx.drained_flag.is_set():` (its pre-round-6 position).
-def test_a_corrupted_snapshot_still_fails_closed_when_a_token_key_is_submitted() -> None:
-    """The diagnostic must not preempt the error handling it sits in front of.
+# mutation-probe: move the `execute_workflow` ingress-diagnostic block (guard
+# included) from its site after `resume_at_step_index = pause_snapshot_input.step_index`
+# back up to immediately above `if ctx.drained_flag.is_set():`.
+def test_no_ingress_diagnostic_fires_for_a_run_that_never_resumes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """What the diagnostic's PLACEMENT actually buys, stated honestly.
 
-    Sited at function entry, the tree walk ran BEFORE the drain gate and BEFORE
-    `attempt_resume` verified the snapshot hash — so a corrupted snapshot raised out
-    of the walk instead of returning `CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION`, and a
-    DRAINED run could fail before returning DRAINED. An ADVISORY diagnostic silently
-    changing two established terminal outcomes is a strictly worse defect than the
-    silence it was added to fix. Out-of-family review round 6 [P2] — a defect this
-    arc's OWN round-5 fix introduced, which is why late absorption rounds get their
-    own witnesses rather than being trusted.
+    Round 6 moved this block below the drain gate and below `attempt_resume` because,
+    UNGUARDED, it raised out of the tree walk and replaced two established terminal
+    outcomes. Round 7 then guarded collection as well as emission — so position alone
+    no longer decides whether the run FAILS. A first version of this witness still
+    asserted the terminal outcome and was therefore **vacuous**: with the guard in
+    place the corrupted-snapshot run returns `CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION` from
+    either position, so the test passed under the very mutation it named. Caught by
+    the pre-merge witness-adequacy gate.
+
+    What placement still buys is this: a run that NEVER RESUMES must emit NO advisory
+    about the resume it did not perform. A DRAINED run and a corrupt-snapshot run both
+    return before any resume is admitted, and an operator reading a §0.7 warning for a
+    run that was refused would be told their token was ignored by a resume that never
+    happened. THAT is discriminating — hoisting the block above the drain gate makes
+    both arms below emit, and reddens this test.
     """
     snap, round_one = _round_one()
     token = round_one.minted[1]
-    # Tamper a HASH-COVERED field without recomputing `snapshot_hash`, so the
-    # integrity check genuinely fires. (`accumulated_state` is NOT covered — an
-    # earlier draft tampered it and the run resumed cleanly, which would have made
-    # this witness vacuous.)
+    keyed = ResumeContext(hitl_responses={token: _approval("e-b71-never-resumed")})
+
+    # Arm 1 — DRAINED at entry. The token is keyed, but no resume is admitted.
+    drained_ctx = _CtxP()
+    drained_ctx.drained_flag.set()
+    with caplog.at_level(logging.WARNING, logger="harness_cp.pause_state_projection"):
+        drained = execute_workflow(
+            _manifest(),
+            _peer_steps(),
+            run_id=_RUN_ID,
+            ctx=cast(DriverContext, drained_ctx),
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=cast(StepDispatcherRegistry, _MintingGateDispatcher()),
+            pause_snapshot_input=snap,
+            resume_context=keyed,
+        )
+    assert drained.status is RunStatus.DRAINED, (
+        f"sanity: the drain gate must still short-circuit; got {drained.status!r}"
+    )
+    assert not [r for r in caplog.records if "§0.7" in r.getMessage()], (
+        "a DRAINED run performs no resume, so it must emit no resume advisory"
+    )
+
+    # Arm 2 — a corrupted snapshot, refused before any resume is admitted.
     corrupted = snap.model_copy(
         update={"state_summary": snap.state_summary.model_copy(update={"summary_text": "tampered"})}
     )
-    resumed = execute_workflow(
-        _manifest(),
-        _peer_steps(),
-        run_id=_RUN_ID,
-        ctx=_ctx(),
-        default_model_binding=_DEFAULT_BINDING,
-        step_dispatchers=cast(StepDispatcherRegistry, _MintingGateDispatcher()),
-        pause_snapshot_input=corrupted,
-        resume_context=ResumeContext(hitl_responses={token: _approval("e-b71-corrupt")}),
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="harness_cp.pause_state_projection"):
+        refused = execute_workflow(
+            _manifest(),
+            _peer_steps(),
+            run_id=_RUN_ID,
+            ctx=_ctx(),
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=cast(StepDispatcherRegistry, _MintingGateDispatcher()),
+            pause_snapshot_input=corrupted,
+            resume_context=keyed,
+        )
+    assert refused.status is RunStatus.FAILED
+    assert refused.fail_class == "CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION", (
+        "sanity: a hash-covered tamper must still fail CLOSED through the established "
+        f"path; got fail_class={refused.fail_class!r}"
     )
-    assert resumed.status is RunStatus.FAILED
-    assert resumed.fail_class == "CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION", (
-        "a corrupted snapshot must fail CLOSED through the established path, not "
-        f"raise out of an advisory diagnostic; got fail_class={resumed.fail_class!r}"
+    assert not [r for r in caplog.records if "§0.7" in r.getMessage()], (
+        "a snapshot refused as corrupt performs no resume, so it must emit no resume "
+        "advisory about it"
     )
 
 
