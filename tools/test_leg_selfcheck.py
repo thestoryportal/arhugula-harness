@@ -510,3 +510,83 @@ def test_changed_line_numbers_records_deletion_only_edits():
     assert ls.changed_line_numbers(diff) == {"x.md": {11}}
     # ...and the added-lines view is still empty, which is why it could not see it
     assert ls.added_by_file(diff) == {"x.md": []}
+
+
+# --- out-of-family review round 6 -------------------------------------------
+
+
+def test_cite_check_validates_every_line_in_a_list_form_cite():
+    """[P2] (codex round 6): the repo writes `file.py:6,10,47,51` and
+    `file.py:119/121/122`. Capturing only the FIRST number let a stale later
+    location pass unseen."""
+    report = ls.Report()
+    ls.check_cites({"spec.md": ["tools/leg_selfcheck.py:1,2,999999 covers it"]}, report)
+    hard = _hard(report)
+    assert any("999999" in m and "past end-of-file" in m for m in hard), hard
+
+    clean = ls.Report()
+    ls.check_cites({"spec.md": ["tools/leg_selfcheck.py:1/2/3 covers it"]}, clean)
+    assert _hard(clean) == []
+
+
+def test_cite_check_resolves_a_sibling_relative_path():
+    """[P2] (codex round 6): a design-substrate file citing a SIBLING by bare
+    name resolved at the repo root only, so an existing file was downgraded to
+    'unresolvable' (advisory) and its stale line number passed."""
+    report = ls.Report()
+    ls.check_cites({"tools/spec.md": ["see leg_selfcheck.py:999999"]}, report)
+    assert any("past end-of-file" in m for m in _hard(report)), report.findings
+
+
+def test_count_check_refuses_to_guess_on_a_multi_unit_line():
+    """[P2] (codex round 6): 'U-CP-102 = 16 ... U-RT-155 = 11' wants
+    nearest-PRECEDING; '16 ... for U-CP-102; 11 ... for U-RT-155' wants
+    nearest-FOLLOWING. Two successive heuristics each produced a FALSE hard
+    disagreement on the other shape, so an ambiguous line is now SKIPPED and
+    said to be skipped. For a gate that blocks pushes, silence beats a
+    confident wrong answer."""
+    for line in (
+        "U-CP-102 = 16 acceptance criteria; U-RT-155 = 11 acceptance criteria.",
+        "16 acceptance criteria for U-CP-102; 11 acceptance criteria for U-RT-155.",
+    ):
+        report = _report_for_counts({"plan.md": [line]})
+        assert _hard(report) == [], (line, _hard(report))
+        assert any("unattributable" in f.message for f in report.findings), line
+
+
+def test_count_check_still_fires_on_a_single_unit_line():
+    line = "U-CP-102 has 16 acceptance criteria, but U-CP-102 has 15 acceptance criteria."
+    assert _hard(_report_for_counts({"plan.md": [line]})) != []
+
+
+def test_register_newness_is_judged_against_the_base_not_the_added_lines():
+    """[P2] (codex round 6): correcting an EXISTING row's title re-adds its
+    `### B-*` line, which classified a legacy row as new and hard-failed it for
+    lacking the newly required Current-state bullet."""
+    report = ls.Report()
+    ls.check_register_rows(
+        ["### B-100 · a CORRECTED title for a legacy row"],
+        _REGISTER_PATHS,
+        report,
+        detail_fn=lambda rid: (0, "### B-100 · t\n\n- **What it is.** Legacy shape.\n"),
+        register_added={
+            ".harness/post-phase-8-forward-register.md": [
+                "### B-100 · a CORRECTED title for a legacy row"
+            ]
+        },
+        base_ids={"B-100"},  # already existed at the base => NOT new
+    )
+    assert _hard(report) == [], _hard(report)
+
+
+def test_register_newness_still_flags_a_genuinely_new_row():
+    report = ls.Report()
+    ls.check_register_rows(
+        ["### B-999 · genuinely new"],
+        _REGISTER_PATHS,
+        report,
+        detail_fn=lambda rid: (0, "### B-999 · t\n\n- **What it is.** Only background.\n"),
+        register_added={".harness/post-phase-8-forward-register.md": ["### B-999 · genuinely new"]},
+        base_ids={"B-100"},
+    )
+    assert any("Current state" in m for m in _hard(report)), _hard(report)

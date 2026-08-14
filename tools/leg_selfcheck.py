@@ -305,9 +305,32 @@ def is_fixture_path(path: str) -> bool:
 
 # --- check 1: cite resolution ------------------------------------------------
 
+#: `path:N`, `path:N-M`, and the repo's common list forms `path:6,10,47,51` and
+#: `path:119/121/122`. Capturing only the FIRST number let a stale later location
+#: pass unseen (codex round 6 [P2]).
 _CITE_RE = re.compile(
-    r"(?<![\w/])((?:[\w.\-]+/)*[\w.\-]+\.(?:py|md|sh|toml|ya?ml|json)):(\d+)(?:\s*[-–]\s*(\d+))?"
+    r"(?<![\w/])((?:[\w.\-]+/)*[\w.\-]+\.(?:py|md|sh|toml|ya?ml|json))"
+    r":(\d+(?:\s*[-–/,]\s*\d+)*)"
 )
+
+
+def _cite_line_numbers(spec: str) -> list[int]:
+    return [int(n) for n in re.findall(r"\d+", spec)]
+
+
+def _resolve_cited_path(rel: str, source: str) -> Path | None:
+    """Repo-root first, then RELATIVE TO THE CITING FILE's directory — the repo's
+    common sibling shorthand (a `design-substrate` file citing
+    `Spec_Harness_Runtime_v1.md:...`) resolved at the root only, so an existing
+    sibling was downgraded to "unresolvable" and a stale line number passed
+    (codex round 6 [P2])."""
+    root_rel = ROOT / rel
+    if root_rel.is_file():
+        return root_rel
+    sibling = (ROOT / source).parent / rel
+    if sibling.is_file():
+        return sibling
+    return None
 
 
 def check_cites(by_file: dict[str, list[str]], report: Report) -> None:
@@ -318,30 +341,31 @@ def check_cites(by_file: dict[str, list[str]], report: Report) -> None:
     written from an earlier read drifts the moment the file is edited, and a
     review round is a very expensive way to discover that.
     """
-    seen: set[tuple[str, int, int | None]] = set()
+    seen: set[tuple[str, str]] = set()
     checked = 0
     scanned = [
-        line for path, lines in by_file.items() if not is_fixture_path(path) for line in lines
+        (path, line)
+        for path, lines in by_file.items()
+        if not is_fixture_path(path)
+        for line in lines
     ]
-    for line in scanned:
+    for source, line in scanned:
         for m in _CITE_RE.finditer(line):
-            rel, start_s, end_s = m.group(1), m.group(2), m.group(3)
-            start = int(start_s)
-            end = int(end_s) if end_s else None
-            key = (rel, start, end)
+            rel, spec = m.group(1), m.group(2)
+            key = (rel, spec)
             if key in seen:
                 continue
             seen.add(key)
-            path = ROOT / rel
-            if not path.is_file():
+            path = _resolve_cited_path(rel, source)
+            if path is None:
                 # Not every `word.md:12` is a repo cite (URLs, prose, other repos).
                 # Only a path that RESOLVES is a claim this tool can judge; an
                 # unresolvable one is reported advisory, never as a hard failure.
                 report.add(
                     "cite",
                     ADVISORY,
-                    f"{rel}:{start} — path does not resolve under the repo root "
-                    "(not a repo cite, or the file moved)",
+                    f"{rel}:{spec} — path does not resolve at the repo root or "
+                    f"beside {source} (not a repo cite, or the file moved)",
                 )
                 continue
             checked += 1
@@ -350,13 +374,13 @@ def check_cites(by_file: dict[str, list[str]], report: Report) -> None:
             except OSError as e:  # pragma: no cover - unreadable file
                 report.add("cite", ADVISORY, f"{rel}: unreadable ({e})")
                 continue
-            worst = max(start, end or start)
-            if worst > total:
+            stale = [n for n in _cite_line_numbers(spec) if n > total]
+            if stale:
                 report.add(
                     "cite",
                     HARD,
-                    f"{rel}:{m.group(0).split(':', 1)[1]} — file has only {total} lines "
-                    "at HEAD (stale cite)",
+                    f"{rel}:{spec} — line(s) {', '.join(map(str, stale))} are past "
+                    f"end-of-file ({total} lines at HEAD; stale cite)",
                 )
     report.stats["cites_resolved"] = checked
 
@@ -482,6 +506,20 @@ def check_counts(
     scanned += [(p, line) for p, lines in (context or {}).items() if _eligible(p) for line in lines]
     for path, line in scanned:
         low = line.lower()
+        if len(set(_UNIT_ID_RE.findall(line))) > 1:
+            # A line naming two or more units cannot be attributed by position:
+            # "U-CP-102 = 16 ... U-RT-155 = 11" wants nearest-PRECEDING, while
+            # "16 ... for U-CP-102; 11 ... for U-RT-155" wants nearest-FOLLOWING,
+            # and both shapes are ordinary prose here. Two successive heuristics
+            # each produced a FALSE hard disagreement on the other shape, so this
+            # stops guessing: an ambiguous line is skipped and said to be skipped.
+            # For a gate that BLOCKS pushes, silence beats a confident wrong answer.
+            report.add(
+                "count",
+                ADVISORY,
+                f"multi-unit line NOT count-checked (unattributable): {line.strip()[:120]}",
+            )
+            continue
         for pattern, bucket in _COUNT_NOUNS:
             for m in re.finditer(rf"{_NUM}\s+(?:\w+[- ]){{0,2}}?{pattern}", low, re.IGNORECASE):
                 raw = m.group(1).lower()
@@ -675,6 +713,7 @@ def check_register_rows(
     detail_fn: Callable[[str], tuple[int, str]] | None = None,
     amended: set[str] | None = None,
     register_added: dict[str, list[str]] | None = None,
+    base_ids: set[str] | None = None,
 ) -> None:
     """`--detail <ID>` renders the PROSE carrier, not the YAML `summary`.
 
@@ -699,13 +738,19 @@ def check_register_rows(
     )
     # A row is NEW when this arc adds its prose HEADING (`### B-166 · ...`);
     # merely amending an existing row's body never re-adds that line.
-    new_ids = {
+    candidate_new = {
         m.group(1)
         for path, lines in (register_added or {}).items()
         if path.endswith("post-phase-8-forward-register.md")
         for line in lines
         if (m := _NEW_PROSE_HEADING_RE.match(line))
     }
+    # Correcting an EXISTING row's title re-adds its `### B-*` line, which would
+    # classify a legacy row as new and hard-fail it for lacking the newly
+    # required Current-state bullet (codex round 6 [P2]). Newness is a property
+    # of the BASE: a row is new only if its id was absent there.
+    known = base_ids if base_ids is not None else set()
+    new_ids = {rid for rid in candidate_new if rid not in known}
     report.stats["register_rows_touched"] = len(ids)
     report.stats["register_rows_new"] = len(new_ids)
     detail = detail_fn or _detail_via_cli
@@ -779,6 +824,22 @@ def untracked_added(uncommitted: bool) -> dict[str, list[str]]:
     return out
 
 
+def register_ids_at(ref: str) -> set[str]:
+    """Row ids present in the register at the BASE ref — the preimage against
+    which "new" is judged."""
+    out: set[str] = set()
+    for rel in (".harness/post-phase-8-forward-register.md", ".harness/forward-register.yaml"):
+        try:
+            blob = _run_checked(["git", "show", f"{ref}:{rel}"])
+        except BaseRefError:
+            continue
+        for line in blob.splitlines():
+            m = _ROW_ID_RE.match(line)
+            if m:
+                out.add(m.group(1))
+    return out
+
+
 def run(base: str, uncommitted: bool) -> Report:
     diff = diff_text(base, uncommitted)
     by_file = added_by_file(diff)
@@ -797,7 +858,14 @@ def run(base: str, uncommitted: bool) -> Report:
     for path, nums in changed_line_numbers(diff).items():
         if path.endswith(("forward-register.yaml", "post-phase-8-forward-register.md")):
             amended |= rows_enclosing(path, nums)
-    check_register_rows(added, paths, report, amended=amended, register_added=by_file)
+    check_register_rows(
+        added,
+        paths,
+        report,
+        amended=amended,
+        register_added=by_file,
+        base_ids=register_ids_at(base),
+    )
     return report
 
 

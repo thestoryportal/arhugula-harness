@@ -1017,3 +1017,31 @@ def test_trim_drift_log_can_carry_the_new_drift_event(tmp_path, capsys):
     )
     assert rc2 == 0, capsys.readouterr()
     assert archive.read_text() == archive_before
+
+
+def test_trim_drift_log_persists_a_small_event_that_needs_no_trimming(tmp_path, capsys):
+    """[P2] (codex round 6) — a regression the round-5 fix introduced: a small
+    event leaves the log under both limits, so trim_drift_log is a no-op and the
+    `new_text != text` guard compared the already-prepended text against itself.
+    The event was silently DROPPED while the command printed 'moved 0', exit 0."""
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    status.write_text(SAMPLE)
+    rc = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(tmp_path / "drift.md"),
+            "--trim-drift-log",
+            "--drift-source",
+            "a small new event",
+            "--drift-resolution",
+            "resolved",
+            "--date",
+            "2026-08-14",
+        ]
+    )
+    assert rc == 0, capsys.readouterr()
+    rows = rsr._get_table_data_rows(status.read_text(), rsr.DRIFT_LOG_HEADING)
+    assert "a small new event" in rows[0], "the event must actually be written"

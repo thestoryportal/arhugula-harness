@@ -908,6 +908,7 @@ def main(argv: list[str] | None = None) -> int:
         # row did not exist yet. So the CONTENT mode carries the new event: it
         # prepends and archives in one content commit, after which the
         # terminating --refresh is genuinely one-file.
+        original = text
         if args.drift_source:
             if not args.date:
                 ap.error("--trim-drift-log --drift-source requires --date")
@@ -920,7 +921,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if new_archive_text is not None:
             args.archive.write_text(new_archive_text)
-        if new_text != text:
+        # Compare against the ORIGINAL file, not the already-prepended text: a
+        # small event that leaves the log under both limits makes trim_drift_log
+        # a no-op, so `new_text != text` was False and the event was silently
+        # DROPPED while the command printed "moved 0" and exited 0 (codex round
+        # 6 [P2] — a regression the round-5 fix introduced).
+        if new_text != original:
             args.status.write_text(new_text)
         print(f"moved {moved} row(s) to {args.archive}")
         return 0
