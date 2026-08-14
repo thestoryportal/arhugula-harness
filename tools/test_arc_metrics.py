@@ -64,6 +64,14 @@ def test_cancelled_ci_run_excluded_from_durations(monkeypatch):
     assert durations == [360.0], "only the successful run contributes timing"
 
 
+def _queue_entry(qdir: Path, arc_id: str, pr: int) -> Path:
+    """Write one queued-arc file, the shape `queue` emits."""
+    qdir.mkdir(parents=True, exist_ok=True)
+    path = qdir / f"{arc_id}.json"
+    path.write_text(json.dumps({"pr": pr, "arc_id": arc_id}))
+    return path
+
+
 def _merged_row(arc_id: str = "pr-1338", pr: int = 1338) -> am.ArcRow:
     """A row that satisfies the merged-arc precondition in append()."""
     return am.ArcRow(
@@ -130,11 +138,11 @@ def test_summary_reports_median_with_range_never_bare_mean():
 # mutation-probe: make drain() clear the queue unconditionally instead of keeping failures
 def test_drain_keeps_an_entry_whose_capture_failed(monkeypatch, tmp_path: Path):
     """A transient gh failure must cost a retry, never the row."""
-    queue = tmp_path / "queue.jsonl"
+    qdir = tmp_path / "queue"
     ledger = tmp_path / "arc-metrics.jsonl"
-    monkeypatch.setattr(am, "QUEUE", queue)
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
     monkeypatch.setattr(am, "LEDGER", ledger)
-    queue.write_text(json.dumps({"pr": 1338, "arc_id": "pr-1338"}) + "\n")
+    _queue_entry(qdir, "pr-1338", 1338)
 
     def boom(_args):
         raise am.AbortError("gh unavailable")
@@ -148,12 +156,12 @@ def test_drain_keeps_an_entry_whose_capture_failed(monkeypatch, tmp_path: Path):
 
 # mutation-probe: delete the `if arc_id in known: continue` branch in drain()
 def test_drain_drops_an_entry_already_in_the_ledger(monkeypatch, tmp_path: Path):
-    queue = tmp_path / "queue.jsonl"
+    qdir = tmp_path / "queue"
     ledger = tmp_path / "arc-metrics.jsonl"
-    monkeypatch.setattr(am, "QUEUE", queue)
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
     monkeypatch.setattr(am, "LEDGER", ledger)
     am.append(_merged_row("pr-1338", 1338))
-    queue.write_text(json.dumps({"pr": 1338, "arc_id": "pr-1338"}) + "\n")
+    _queue_entry(qdir, "pr-1338", 1338)
 
     am.drain(am.argparse.Namespace())
 
@@ -161,41 +169,79 @@ def test_drain_drops_an_entry_already_in_the_ledger(monkeypatch, tmp_path: Path)
     assert len(ledger.read_text().strip().splitlines()) == 1, "and is not duplicated"
 
 
-# mutation-probe: drop the os.replace claim in drain(), reading QUEUE directly
+# mutation-probe: make drain() rewrite the whole queue instead of unlinking per file
 def test_drain_does_not_erase_an_entry_queued_while_it_runs(monkeypatch, tmp_path: Path):
     """Parallel arcs are supported, so a concurrent queue must survive a drain."""
-    queue = tmp_path / "queue.jsonl"
+    qdir = tmp_path / "queue"
     ledger = tmp_path / "arc-metrics.jsonl"
-    monkeypatch.setattr(am, "QUEUE", queue)
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
     monkeypatch.setattr(am, "LEDGER", ledger)
-    queue.write_text(json.dumps({"pr": 1338, "arc_id": "pr-1338"}) + "\n")
+    _queue_entry(qdir, "pr-1338", 1338)
 
     def extract_then_another_arc_queues(_args):
-        # a second arc appends to the live queue mid-drain
-        with queue.open("a") as fh:
-            fh.write(json.dumps({"pr": 1341, "arc_id": "pr-1341"}) + "\n")
+        # a second arc queues mid-drain, as a parallel lane would
+        _queue_entry(qdir, "pr-1341", 1341)
         return _merged_row("pr-1338", 1338)
 
     monkeypatch.setattr(am, "extract", extract_then_another_arc_queues)
     am.drain(am.argparse.Namespace())
 
-    still = [e["arc_id"] for e in am.read_queue()]
+    still = [e["arc_id"] for _p, e in am.read_queue()]
     assert "pr-1341" in still, "the concurrently-queued arc must not be erased"
+    assert "pr-1338" not in still, "the drained arc is gone"
+
+
+# mutation-probe: unlink the queued file BEFORE append(extract(...)) succeeds
+def test_a_failed_capture_leaves_its_queued_file_on_disk(monkeypatch, tmp_path: Path):
+    """The retry must survive a crash between capture and cleanup."""
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "arc-metrics.jsonl")
+    path = _queue_entry(qdir, "pr-1338", 1338)
+
+    def boom(_args):
+        raise am.AbortError("gh unavailable")
+
+    monkeypatch.setattr(am, "extract", boom)
+    am.drain(am.argparse.Namespace())
+    assert path.exists(), "a queued file is unlinked only once its row is durable"
 
 
 # mutation-probe: make drain() return 0 unconditionally
 def test_drain_exits_nonzero_when_an_entry_is_still_queued(monkeypatch, tmp_path: Path):
     """Exit 0 with work pending would read as a completed fold to automation."""
-    queue = tmp_path / "queue.jsonl"
-    monkeypatch.setattr(am, "QUEUE", queue)
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
     monkeypatch.setattr(am, "LEDGER", tmp_path / "arc-metrics.jsonl")
-    queue.write_text(json.dumps({"pr": 1338, "arc_id": "pr-1338"}) + "\n")
+    _queue_entry(qdir, "pr-1338", 1338)
 
     def boom(_args):
         raise am.AbortError("gh unavailable")
 
     monkeypatch.setattr(am, "extract", boom)
     assert am.drain(am.argparse.Namespace()) == 1
+
+
+# mutation-probe: change the queued-file open mode from "x" to "w"
+def test_queueing_the_same_arc_twice_is_refused(monkeypatch, tmp_path: Path):
+    """A second queue must not silently overwrite the first session's judgements."""
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    args = am.argparse.Namespace(
+        pr=1338,
+        arc_id=None,
+        arc_type="applying",
+        decisions=1,
+        round_logs=None,
+        levers=None,
+        notes="first",
+    )
+    am.queue_capture(args)
+    args.notes = "second"
+    with pytest.raises(am.AbortError) as exc:
+        am.queue_capture(args)
+    assert "already queued" in str(exc.value)
+    assert json.loads((qdir / "pr-1338.json").read_text())["notes"] == "first"
 
 
 # mutation-probe: re-wrap the ci_metrics call in extract() with `except AbortError`
@@ -263,13 +309,21 @@ def test_partial_rows_are_excluded_from_exact_aggregates(monkeypatch, tmp_path: 
     assert "EXCLUDED" in out and "frag>=1" in out
 
 
-# mutation-probe: point QUEUE at a path inside the repo
+# mutation-probe: point QUEUE_DIR at a path inside the repo
 def test_queue_lives_outside_the_repo():
     """A topic worktree is disposed at loop completion; anything queued in it dies."""
-    assert am.REPO not in am.QUEUE.parents, (
-        f"queue {am.QUEUE} must not sit inside the repo, or arc closure "
+    assert am.REPO not in am.QUEUE_DIR.parents, (
+        f"queue {am.QUEUE_DIR} must not sit inside the repo, or arc closure "
         "both strands the row and blocks worktree disposal"
     )
+
+
+# mutation-probe: default round_wall_s/p1_rounds back to field(default_factory=list)
+def test_absent_round_data_is_null_not_an_empty_list():
+    """[] is a real measurement -- a 1-round arc has no gaps, a clean arc no P1s."""
+    row = am.ArcRow(arc_id="pr-1", pr=1)
+    assert row.round_wall_s is None, "unsupplied round data must not look measured"
+    assert row.p1_rounds is None
 
 
 def test_empty_span_is_dashes_not_zero():

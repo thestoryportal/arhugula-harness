@@ -325,14 +325,19 @@ just arc-metrics queue --pr <NNN> --arc-type <inventing|applying> --decisions <N
   --round-logs '<glob for THIS arc's round logs>' --levers <lever-ids-or-omit>
 ```
 
-This appends one line to a queue **outside** the repo. That placement is load-bearing, not
-tidiness: in an autonomous arc this step runs inside the topic worktree, and writing the
-tracked ledger there would leave a dirty file that both strands the row when the worktree is
-disposed and *blocks the disposal itself* — worktree GC skips a merged worktree carrying
-local state, while loop completion requires that worktree to be unregistered. Committing
-straight to `main` instead is no escape: before the terminating refresh the drift guard
-hard-fails the push, and after it the next local preflight hard-fails and demands another
-refresh.
+This writes one file per arc into a queue directory **outside** the repo. That placement is
+load-bearing, not tidiness: in an autonomous arc this step runs inside the topic worktree,
+and writing the tracked ledger there would leave a dirty file that both strands the row when
+the worktree is disposed and *blocks the disposal itself* — worktree GC skips a merged
+worktree carrying local state, while loop completion requires that worktree to be
+unregistered. Committing straight to `main` instead is no escape: before the terminating
+refresh the drift guard hard-fails the push, and after it the next local preflight
+hard-fails and demands another refresh.
+
+One file per arc rather than a shared log is also deliberate: parallel lanes queue
+concurrently, and a shared append-log makes loss structural (two writers on one inode, a
+drain rewriting from a stale snapshot). Re-queueing the same arc is refused rather than
+silently overwriting the first session's declarations.
 
 `--arc-type`, `--decisions` and `--levers` are **declared** judgements — the tool records
 them as such and never infers them, and this session is the only one that knows them, which

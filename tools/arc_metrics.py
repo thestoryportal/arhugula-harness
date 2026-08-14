@@ -47,10 +47,18 @@ LEDGER = REPO / ".harness" / "arc-metrics.jsonl"
 #: disposed at loop completion, so anything queued inside one is lost with it --
 #: and a dirty tracked file there blocks that disposal outright. See
 #: ``queue_capture``.
-QUEUE = Path(
+#:
+#: A DIRECTORY of one file per arc, not a shared append-log. Parallel arcs are
+#: supported, and every concurrency hazard a shared log has here is structural
+#: rather than incidental: two writers share an inode, a drain that rewrites the
+#: file from a stale snapshot erases whatever landed mid-drain, and a crash
+#: between "delete the claim" and "write the remainder" loses the retry. With
+#: one file per arc no writer touches another's file, drain never rewrites
+#: anything, and a file is unlinked only after its row is safely in the ledger.
+QUEUE_DIR = Path(
     os.environ.get(
-        "ARC_METRICS_QUEUE",
-        Path.home() / ".gstack" / "projects" / "arhugula-v2" / "arc-metrics-queue.jsonl",
+        "ARC_METRICS_QUEUE_DIR",
+        Path.home() / ".gstack" / "projects" / "arhugula-v2" / "arc-metrics-queue",
     )
 )
 
@@ -85,8 +93,12 @@ class ArcRow:
     merge_sha: str | None = None
     # -- derived from round logs --
     review_rounds: int | None = None
-    round_wall_s: list[float] = field(default_factory=list)
-    p1_rounds: list[int] = field(default_factory=list)
+    # None, not []. An empty list is a perfectly good MEASUREMENT -- a one-round
+    # arc has no gaps, a clean arc has no P1 rounds -- so defaulting to [] would
+    # make "no logs were supplied" indistinguishable from "looked, found none",
+    # which is the one distinction this ledger exists to keep.
+    round_wall_s: list[float] | None = None
+    p1_rounds: list[int] | None = None
     round_log_source: str | None = None
     # Absolute round bounds. Without these the ledger cannot reconstruct the
     # real arc window (first review activity -> merge): gap durations alone
@@ -370,7 +382,8 @@ def queue_capture(args: argparse.Namespace) -> int:
     any worktree. The next arc drains the queue and commits the rows inside its
     own PR, which is an ordinary content commit with none of the above problems.
     """
-    QUEUE.parent.mkdir(parents=True, exist_ok=True)
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    arc_id = args.arc_id or f"pr-{args.pr}"
     entry = {
         "pr": args.pr,
         "arc_id": args.arc_id,
@@ -381,63 +394,55 @@ def queue_capture(args: argparse.Namespace) -> int:
         "notes": args.notes or "",
         "queued_at": datetime.now(tz=UTC).isoformat(),
     }
-    with QUEUE.open("a") as fh:
-        fh.write(json.dumps(entry, sort_keys=True) + "\n")
-    print(f"queued arc capture for #{args.pr} -> {QUEUE}")
+    path = QUEUE_DIR / f"{arc_id}.json"
+    try:
+        # Exclusive create: a second queue for the same arc is a mistake worth
+        # surfacing, not an overwrite of the first session's judgements.
+        with path.open("x") as fh:
+            json.dump(entry, fh, sort_keys=True, indent=2)
+    except FileExistsError as exc:
+        raise AbortError(
+            f"{arc_id} is already queued at {path} -- remove it first if the "
+            "queued declarations are wrong"
+        ) from exc
+    print(f"queued arc capture for #{args.pr} -> {path}")
     return 0
 
 
-def read_queue(path: Path | None = None) -> list[dict]:
-    src = path or QUEUE
-    if not src.exists():
+def read_queue() -> list[tuple[Path, dict]]:
+    if not QUEUE_DIR.is_dir():
         return []
     out = []
-    for n, line in enumerate(src.read_text().splitlines(), start=1):
-        if not line.strip():
-            continue
+    for path in sorted(QUEUE_DIR.glob("*.json")):
         try:
-            out.append(json.loads(line))
+            out.append((path, json.loads(path.read_text())))
         except json.JSONDecodeError as exc:
-            raise AbortError(f"queue line {n} is not valid JSON: {exc}") from exc
+            raise AbortError(f"queued file {path} is not valid JSON: {exc}") from exc
     return out
 
 
 def drain(_args: argparse.Namespace) -> int:
     """Fold every queued arc into the tracked ledger.
 
-    Entries that are already in the ledger are dropped rather than re-appended;
-    an entry whose capture still fails is KEPT queued, so a transient gh outage
-    costs a retry rather than the row.
+    Each queued arc is its own file, so this never rewrites shared state: an
+    entry is unlinked only once its row is safely in the ledger, and one whose
+    capture fails is simply left where it is. A concurrent ``queue`` writes a
+    different file and is picked up by this drain or the next one -- there is no
+    window in which it can be erased, and no lock is needed to say so.
     """
-    # CLAIM the queue by renaming it, before reading a single entry. The
-    # workflow permits parallel arcs, so another arc can `queue` at any moment;
-    # a read-then-rewrite would replace the file from a stale snapshot and
-    # silently erase whatever landed in between. os.replace is atomic on POSIX,
-    # so a concurrent writer either appends before the claim (and is drained) or
-    # creates a fresh queue afterwards (and is drained next time). Neither is
-    # lost. A leftover claim file from a crashed drain is picked back up here.
-    claim = QUEUE.with_suffix(QUEUE.suffix + ".claim")
-    if QUEUE.exists():
-        if claim.exists():
-            with claim.open("a") as fh:
-                fh.write(QUEUE.read_text())
-            QUEUE.unlink()
-        else:
-            os.replace(QUEUE, claim)
-
-    pending = read_queue(claim)
+    pending = read_queue()
     if not pending:
-        claim.unlink(missing_ok=True)
         print("arc-metrics queue is empty -- nothing to drain")
         return 0
 
     known = {r.get("arc_id") for r in read_ledger()}
-    kept: list[dict] = []
+    kept = 0
     added = 0
-    for entry in pending:
+    for path, entry in pending:
         arc_id = entry.get("arc_id") or f"pr-{entry['pr']}"
         if arc_id in known:
             print(f"  {arc_id}: already in ledger, dropping from queue")
+            path.unlink(missing_ok=True)
             continue
         args = argparse.Namespace(
             pr=entry["pr"],
@@ -452,19 +457,14 @@ def drain(_args: argparse.Namespace) -> int:
             append(extract(args))
         except AbortError as exc:
             print(f"  {arc_id}: KEPT QUEUED -- {exc}", file=sys.stderr)
-            kept.append(entry)
+            kept += 1
             continue
+        # Only now is the row durable, so only now may the queued file go.
+        path.unlink(missing_ok=True)
         print(f"  {arc_id}: appended")
         added += 1
 
-    # Return the failures to the live queue by APPENDING, never by overwriting:
-    # anything a concurrent arc queued since the claim is still there.
-    claim.unlink(missing_ok=True)
-    if kept:
-        with QUEUE.open("a") as fh:
-            for e in kept:
-                fh.write(json.dumps(e, sort_keys=True) + "\n")
-    print(f"drained {added} arc(s); {len(kept)} still queued")
+    print(f"drained {added} arc(s); {kept} still queued")
     # Non-zero on a retained entry, so automation cannot read a pending retry
     # as a completed fold.
     return 1 if kept else 0
@@ -615,8 +615,12 @@ def main(argv: list[str] | None = None) -> int:
     q = sub.add_parser("queue", help="record capture inputs out-of-repo (arc closure)")
     q.add_argument("--pr", type=int, required=True)
     q.add_argument("--arc-id")
-    q.add_argument("--arc-type", choices=["inventing", "applying"])
-    q.add_argument("--decisions", type=int, help="independent decision count")
+    # Required HERE but optional on `extract`: only the closing session knows
+    # these, and once a row is drained the duplicate guard blocks a corrected
+    # capture. `extract` stays permissive for historical backfills, where the
+    # judgement genuinely is unavailable and is recorded as unmapped.
+    q.add_argument("--arc-type", choices=["inventing", "applying"], required=True)
+    q.add_argument("--decisions", type=int, required=True, help="independent decision count")
     q.add_argument("--round-logs", nargs="*", help="glob(s) for this arc's round logs")
     q.add_argument("--levers", nargs="*", help="levers live during this arc")
     q.add_argument("--notes", default="")
