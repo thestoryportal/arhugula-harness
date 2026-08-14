@@ -57,13 +57,13 @@ def test_is_history_path_recognizes_the_archive_carriers():
 
 def test_cite_check_fires_on_a_line_number_past_the_end_of_the_file():
     report = ls.Report()
-    ls.check_cites(["see tools/leg_selfcheck.py:999999 for the guard"], report)
+    ls.check_cites({"spec.md": ["see tools/leg_selfcheck.py:999999 for the guard"]}, report)
     assert any("stale cite" in m for m in _hard(report)), _hard(report)
 
 
 def test_cite_check_is_silent_on_a_line_number_that_resolves():
     report = ls.Report()
-    ls.check_cites(["see tools/leg_selfcheck.py:1 for the shebang"], report)
+    ls.check_cites({"spec.md": ["see tools/leg_selfcheck.py:1 for the shebang"]}, report)
     assert _hard(report) == []
     assert report.stats["cites_resolved"] == 1
 
@@ -72,7 +72,7 @@ def test_cite_check_resolves_a_range_by_its_end_not_its_start():
     """`file.py:10-999999` is stale even though its START resolves — the range
     end is the claim being made."""
     report = ls.Report()
-    ls.check_cites(["tools/leg_selfcheck.py:10-999999 covers the guard"], report)
+    ls.check_cites({"spec.md": ["tools/leg_selfcheck.py:10-999999 covers the guard"]}, report)
     assert any("stale cite" in m for m in _hard(report)), _hard(report)
 
 
@@ -81,7 +81,7 @@ def test_cite_check_treats_an_unresolvable_path_as_advisory_not_hard():
     path that RESOLVES is a claim this tool can judge; guessing would make the
     gate noisy enough to be muted."""
     report = ls.Report()
-    ls.check_cites(["some/other/repo/thing.md:12 is elsewhere"], report)
+    ls.check_cites({"spec.md": ["some/other/repo/thing.md:12 is elsewhere"]}, report)
     assert _hard(report) == []
     assert any(f.severity == ls.ADVISORY for f in report.findings)
 
@@ -266,3 +266,22 @@ def test_count_check_skips_source_files_so_it_cannot_read_its_own_fixtures():
     assert _hard(_report_for_counts({"design-substrate/Spec_A.md": disagreeing})) != []
     assert _hard(_report_for_counts({"tools/test_leg_selfcheck.py": disagreeing})) == []
     assert _hard(_report_for_counts({"harness-cp/src/x.py": disagreeing})) == []
+
+
+def test_every_content_check_skips_fixture_files():
+    """REGRESSION (second committed-branch dogfood run): the cite check read
+    THIS file's deliberately-stale `tools/leg_selfcheck.py:999999` fixture as a
+    real stale cite. A checker that scans the repo for invalid shapes will
+    always find them in the tests that exercise it."""
+    assert ls.is_fixture_path("tools/test_leg_selfcheck.py")
+    assert ls.is_fixture_path("harness-cp/tests/test_workflow_driver.py")
+    assert not ls.is_fixture_path("design-substrate/Spec_Control_Plane_v1_119.md")
+    assert not ls.is_fixture_path("tools/leg_selfcheck.py")
+
+    stale = ["tools/leg_selfcheck.py:999999 is stale"]
+    fired = ls.Report()
+    ls.check_cites({"design-substrate/Spec_A.md": stale}, fired)
+    assert _hard(fired) != []
+    silent = ls.Report()
+    ls.check_cites({"tools/test_leg_selfcheck.py": stale}, silent)
+    assert _hard(silent) == []

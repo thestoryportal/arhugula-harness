@@ -137,6 +137,23 @@ def is_history_path(path: str) -> bool:
     return any(tok in name for tok in _HISTORY_PATHS)
 
 
+def is_fixture_path(path: str) -> bool:
+    """Test files, which are excluded from every content check.
+
+    This is not convenience — it is the only sound answer to a self-reference
+    that bit twice on this tool's own first runs. A checker that scans the repo
+    for INVALID shapes will always find them in the tests that exercise it: this
+    file's suite deliberately contains `tools/leg_selfcheck.py:999999` (a stale
+    cite) and "It has 3 sites." / "It has 9 sites." (a count disagreement).
+    Both were reported as real defects. The cost is real and stated: a genuinely
+    stale cite inside a test docstring is not caught here. The alternative —
+    letting the gate red on its own fixtures — gets the gate muted, which costs
+    every check, not one.
+    """
+    p = path.lower()
+    return Path(p).name.startswith("test_") or "/tests/" in p
+
+
 # --- check 1: cite resolution ------------------------------------------------
 
 _CITE_RE = re.compile(
@@ -144,7 +161,7 @@ _CITE_RE = re.compile(
 )
 
 
-def check_cites(added: list[str], report: Report) -> None:
+def check_cites(by_file: dict[str, list[str]], report: Report) -> None:
     """Re-resolve every `path:NNN` the arc ADDED, at the CURRENT HEAD.
 
     This is the check that would have caught the `:1543`/`:2238` fold sites and
@@ -154,7 +171,10 @@ def check_cites(added: list[str], report: Report) -> None:
     """
     seen: set[tuple[str, int, int | None]] = set()
     checked = 0
-    for line in added:
+    scanned = [
+        line for path, lines in by_file.items() if not is_fixture_path(path) for line in lines
+    ]
+    for line in scanned:
         for m in _CITE_RE.finditer(line):
             rel, start_s, end_s = m.group(1), m.group(2), m.group(3)
             start = int(start_s)
@@ -263,7 +283,9 @@ def check_counts(by_file: dict[str, list[str]], report: Report) -> None:
     scanned = [
         line
         for path, lines in by_file.items()
-        if path.lower().endswith((".md", ".yaml", ".yml")) and not is_history_path(path)
+        if path.lower().endswith((".md", ".yaml", ".yml"))
+        and not is_history_path(path)
+        and not is_fixture_path(path)
         for line in lines
     ]
     for line in scanned:
@@ -317,7 +339,7 @@ def check_label_collisions(
         {
             m.group(1)
             for path, lines in by_file.items()
-            if path.lower().endswith(".md")
+            if path.lower().endswith(".md") and not is_fixture_path(path)
             for line in lines
             if (m := _MINT_RE.match(line))
         }
@@ -420,7 +442,7 @@ def run(base: str, uncommitted: bool) -> Report:
     report.stats["base"] = base
     report.stats["changed_files"] = len(paths)
     report.stats["added_lines"] = len(added)
-    check_cites(added, report)
+    check_cites(by_file, report)
     check_counts(by_file, report)
     check_label_collisions(by_file, report)
     check_register_rows(added, paths, report)
