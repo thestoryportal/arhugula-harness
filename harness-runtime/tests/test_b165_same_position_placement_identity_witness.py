@@ -48,15 +48,27 @@ Out-of-family review of this arc objected, correctly, that tests 3 and 5 synthes
 every load-bearing precondition (placements via the test-only step fallback, a
 hand-set basis, a bare `object()` binding selecting the sentinel matrix cell), so on
 their own they show only that the composer collides *if fed* the shape — not that
-production *feeds* it. Test 2-bis was added in response and removes all three props:
-a real `WorkflowManifestEntry`, the real fold, the real `compose_branch_child_context`
-plus the same `model_copy` update the fan-out site performs, a real
-`StepEffectiveBinding` on an asserted SYNC_BLOCKING cell, and a PLAIN step so the
-gate can only fire off `step_context`. What is therefore established is that the shape
-production COMPOSES collides. What is NOT established, and is not claimed: that a full
-`_execute_parallelization` run was driven end to end, or that any shipped workflow
-declares duplicate placements today. The collision is a reachable-by-construction
-bound, not an observed production incident.
+production *feeds* it. Two things were added in response.
+
+Test 2-bis removes all three props here: a real `WorkflowManifestEntry`, the real
+fold, the real `compose_branch_child_context` plus the same `model_copy` update the
+fan-out site performs, a real `StepEffectiveBinding` on an asserted SYNC_BLOCKING
+cell, and a PLAIN step so the gate can only fire off `step_context`.
+
+But 2-bis still composes that context *itself*, so it could not detect
+`workflow_driver` ceasing to carry either field — which review then said, also
+correctly. The production-feed claim is therefore owned by a separate CP-side module,
+`harness-cp/tests/test_b165_production_feed_duplicate_placements.py`, which drives the
+REAL `execute_workflow` on a `PARALLELIZATION` topology and asserts on the
+`StepExecutionContext` production hands each branch's dispatcher: both same-position
+placements present, and the `B-71` basis non-`None` on that same context. It lives
+there rather than here because it must import the CP driver, which harness-runtime's
+test package cannot.
+
+What is therefore established: production COMPOSES and DELIVERS the colliding shape,
+and the composer collides on it. What is NOT established, and is not claimed: that any
+shipped workflow declares duplicate placements today — none does. `B-165` is a
+reachable-by-construction bound, not an observed production incident.
 """
 
 from __future__ import annotations
