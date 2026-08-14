@@ -8,6 +8,7 @@ every future session's SessionStart hook report false `[ROADMAP DRIFT]`.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -780,14 +781,16 @@ def test_refresh_applies_a_trim_that_needs_no_archive_write(tmp_path, capsys):
     status = tmp_path / ".harness" / "roadmap_status.md"
     status.parent.mkdir(parents=True)
     text = SAMPLE
-    for n in range(1, 8):
-        text = rsr.prepend_drift_log(text, *_fat_drift_row(n))
+    # ROW overflow (the HARD cap), not byte overflow: the refresh deliberately
+    # does not enforce the SOFT byte guidance.
+    for n in range(1, 14):
+        text = rsr.prepend_drift_log(text, f"2026-05-{n:02d}", f"s{n}", f"r{n}")
     status.write_text(text)
     (tmp_path / ".harness" / "roadmap-next-action-archive.md").write_text(SAMPLE_ARCHIVE)
     archive = tmp_path / "drift_archive.md"
 
     # Pre-populate the archive with exactly the overflow, so no WRITE is owed.
-    _, archive_text, _ = rsr.trim_drift_log(text, archive)
+    _, archive_text, _ = rsr.trim_drift_log(text, archive, byte_budget=sys.maxsize)
     assert archive_text is not None
     archive.write_text(archive_text)
     archive_before = archive.read_text()
@@ -810,8 +813,7 @@ def test_refresh_applies_a_trim_that_needs_no_archive_write(tmp_path, capsys):
     assert rc == 0, capsys.readouterr()
     written = status.read_text()
     kept = rsr._get_table_data_rows(written, rsr.DRIFT_LOG_HEADING)
-    kept_bytes = sum(len(r.encode("utf-8")) + 1 for r in kept)
-    assert kept_bytes <= rsr.DRIFT_LOG_BYTE_BUDGET, "refresh wrote a still-over-budget status"
+    assert len(kept) <= rsr.DRIFT_LOG_CAP, "refresh wrote a still-over-CAP status"
     # ...and it stayed a ONE-FILE write: the archive is untouched.
     assert archive.read_text() == archive_before
 
@@ -1107,3 +1109,42 @@ def test_find_superseded_round_works_in_this_shallow_repo():
     label, paragraph = found
     assert label != rsr._current_round_label(rsr.DEFAULT_STATUS.read_text())
     assert paragraph.startswith("**Current next action (")
+
+
+def test_refresh_is_not_blocked_by_the_soft_byte_budget(tmp_path, capsys):
+    """Found by dogfooding the very refresh this arc owed: keying the two-file
+    refusal on the SOFT byte guidance as well as the HARD row cap made EVERY
+    terminating refresh refuse the moment the live drift log exceeded guidance.
+    A soft budget must never gate a hard path."""
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    text = SAMPLE
+    for n in range(1, 6):  # over the BYTE budget, under the ROW cap
+        text = rsr.prepend_drift_log(text, *_fat_drift_row(n))
+    rows = rsr._get_table_data_rows(text, rsr.DRIFT_LOG_HEADING)
+    assert len(rows) <= rsr.DRIFT_LOG_CAP, "precondition: row cap NOT exceeded"
+    assert sum(len(r.encode()) + 1 for r in rows) > rsr.DRIFT_LOG_BYTE_BUDGET
+    status.write_text(text)
+    (tmp_path / ".harness" / "roadmap-next-action-archive.md").write_text(SAMPLE_ARCHIVE)
+    archive = tmp_path / "drift.md"
+
+    rc = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(archive),
+            "--refresh",
+            "--pr",
+            "PR #1338",
+            "--date",
+            "2026-08-14",
+            "--notes",
+            "shipped",
+            "--next-action",
+            "Next is the B-71 impl leg.",
+        ]
+    )
+    assert rc == 0, capsys.readouterr()
+    assert not archive.exists(), "still a ONE-FILE write"
+    assert "**Current next action (post-#1338).** Next is the B-71 impl leg." in status.read_text()

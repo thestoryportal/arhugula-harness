@@ -1142,7 +1142,15 @@ def main(argv: list[str] | None = None) -> int:
         # operator noticed only after the fact, and the workspace absorbed it as
         # "commit the trim separately" folklore. Refuse instead, and name the
         # mode that legitimately does the move.
-        trimmed_text, would_archive, would_move = trim_drift_log(new_text, args.archive)
+        # Judge the refusal on the HARD requirement (the ROW CAP) ONLY. The byte
+        # budget is SOFT guidance for a deliberate content-commit trim; keying the
+        # refusal on it as well made EVERY terminating refresh refuse the moment
+        # the live log exceeded that guidance — found by dogfooding this very
+        # refresh, which the tool blocked outright. A soft budget must never gate
+        # a hard path.
+        trimmed_text, would_archive, would_move = trim_drift_log(
+            new_text, args.archive, byte_budget=sys.maxsize
+        )
         if would_archive is not None:
             print(
                 f"--refresh would move {would_move} drift-log row(s) into "
