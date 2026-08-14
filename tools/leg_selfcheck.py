@@ -142,13 +142,20 @@ def is_fixture_path(path: str) -> bool:
 
     This is not convenience — it is the only sound answer to a self-reference
     that bit twice on this tool's own first runs. A checker that scans the repo
-    for INVALID shapes will always find them in the tests that exercise it: this
-    file's suite deliberately contains `tools/leg_selfcheck.py:999999` (a stale
-    cite) and "It has 3 sites." / "It has 9 sites." (a count disagreement).
-    Both were reported as real defects. The cost is real and stated: a genuinely
-    stale cite inside a test docstring is not caught here. The alternative —
-    letting the gate red on its own fixtures — gets the gate muted, which costs
-    every check, not one.
+    for INVALID shapes will always find them in the tests that exercise it: the
+    suite for this module deliberately contains a cite whose line number is past
+    end-of-file, and a pair of sentences claiming different counts of the same
+    noun. Both were reported as real defects.
+
+    Note the corollary, learned the same way: this rule covers test FILES, so
+    prose ANYWHERE ELSE must not spell out a defective example literally. An
+    earlier draft of this very docstring quoted the out-of-range cite verbatim
+    and the gate — correctly — flagged its own explanation. Describe the shape;
+    do not write it.
+
+    The cost is real and stated: a genuinely stale cite inside a test docstring
+    is not caught here. The alternative — letting the gate red on its own
+    fixtures — gets the gate muted, which costs every check, not one.
     """
     p = path.lower()
     return Path(p).name.startswith("test_") or "/tests/" in p
