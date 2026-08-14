@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 168
+  total: 169
   open: 1
   design_substrate_gated: 0
-  registered_finding: 33
+  registered_finding: 34
   operator_gated: 0
   held: 2
   closed: 132
-  identity_digest: 'ac9f5f547652bff7'
+  identity_digest: '351f67542ec688d1'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9275,3 +9275,40 @@ items:
     constraints collide *(surfaced by out-of-family review rounds 11–13 of the prevention arc preceding
     `U-CP-102`, 2026-08-14)*'
   pr: 'PR #1338'
+- id: B-169
+  title: 'test_loop_gc.sh S16 STALE-boundary pin flakes under load: the quiet-side fixture is one minute
+    from the boundary and real subprocess work runs between the two assertions'
+  status: registered_finding
+  summary: 'A wall-clock boundary assertion with one minute of headroom. tools/hooks/test_loop_gc.sh
+    case S16 pins the unreconciled-subagent STALE boundary from both sides: it stamps a 29-minute fixture
+    (expected QUIET), asserts, then stamps a 31-minute fixture and asserts exactly "1 unreconciled subagent".
+    Between those two assertions it runs real subprocess work (sw_ctx invokes the hook), so on a slow
+    or loaded runner the 29-minute fixture crosses 30 minutes and the count becomes 2. OBSERVED: main
+    CI at be081e9d failed with ''FAIL: S16 31-min agent missed (STALE boundary drifted high): [hygiene]
+    2 unreconciled subagent(s) (oldest: s16stale, 31m).'' -- note the message says the 31-minute agent
+    was ''missed'', but the real deviation is that the 29-minute one was ALSO counted. EVIDENCE IS SAME-SHA
+    DIFFERENTIAL, the strongest available: a rerun of the IDENTICAL commit passed 73/73 with zero code
+    change. Same family as the closed B-143 (zero-headroom wall-clock assertion) and the open B-166
+    (fan-out deadline witness). NOT caused by the arc that observed it: PR #1338 touched ZERO files
+    under tools/hooks/ and the same job passed 18/18 on its head 6aeaeee3 minutes earlier; the test
+    last changed at #1296.'
+  close_out: 'REGISTERED RATHER THAN WAVED OFF, which is the whole point: this arc shipped B-166 specifically
+    to stop a session dismissing a red as ''the known flake'', so observing a NEW same-sha-differential
+    flake and not filing it would contradict the discipline in the same breath. STEP 1 -- confirm the
+    mechanism by execution rather than by reading: run S16 under artificial load (or with a coarse clock)
+    and capture whether the deviation is the 29-minute fixture being counted, as predicted. If it is
+    something else the mechanism above is FALSIFIED and this row must be rewritten, not patched. STEP
+    2 -- fix the HEADROOM, not the threshold. The candidate repair is to stamp the quiet-side fixture
+    further from the boundary (e.g. 20 minutes rather than 29) while keeping a separate near-boundary
+    case that does NOT straddle intervening subprocess work; widening or removing the boundary pin is
+    explicitly wrong, because S16 exists to stop the STALE constant drifting silently and its own comment
+    says so (''Without this pair any STALE in (~2s, 2h) passed the suite''). STEP 3 -- whatever lands
+    must still fail if the STALE constant moves; mutation-probe it per PD-8, since a loosened pin is
+    a green test that witnesses nothing. FALSIFIER: a demonstration that the two assertions cannot straddle
+    enough wall-clock to cross the boundary, in which case the observed red has another cause and this
+    row closes as misattributed.'
+  council: No. Mechanism is named, the falsifier is executable, and the repair is a test-hygiene change
+    with no contract surface. Same disposition as B-166.
+  heading: '### B-169 · `test_loop_gc.sh` S16 STALE-boundary pin flakes on a loaded runner — a 29-minute
+    fixture sits ONE minute from the 30-minute boundary *(observed on `main` at `be081e9d`, 2026-08-14;
+    same commit passed on rerun)*'
