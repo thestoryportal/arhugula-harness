@@ -254,8 +254,17 @@ def check_counts(by_file: dict[str, list[str]], report: Report) -> None:
     of which is right — so that is what this reports.
     """
     claims: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+    # PROSE ARTIFACTS ONLY. Every carrier that drifted on the `B-71` leg was a
+    # `.md` (spec preamble, section body, plan delta, clearance marker,
+    # artifact-pointers, the prose register) or the register `.yaml` — a count
+    # mirror does not live in source. Scanning source made this tool read its
+    # OWN test fixtures ("It has 3 sites." / "It has 9 sites.") as a real
+    # disagreement on its first committed-branch run.
     scanned = [
-        line for path, lines in by_file.items() if not is_history_path(path) for line in lines
+        line
+        for path, lines in by_file.items()
+        if path.lower().endswith((".md", ".yaml", ".yml")) and not is_history_path(path)
+        for line in lines
     ]
     for line in scanned:
         low = line.lower()

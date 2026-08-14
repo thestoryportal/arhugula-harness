@@ -254,3 +254,15 @@ def test_the_live_forward_register_rows_this_arc_touched_render_a_prose_body():
     report = ls.Report()
     ls.check_register_rows(["- id: B-166"], _REGISTER_PATHS, report)
     assert _hard(report) == [], _hard(report)
+
+
+def test_count_check_skips_source_files_so_it_cannot_read_its_own_fixtures():
+    """REGRESSION (first COMMITTED-branch dogfood run): this file's own
+    deliberate disagreement fixtures ("It has 3 sites." / "It has 9 sites.")
+    were scanned as real claims. Every carrier that drifted on the B-71 leg was
+    a prose artifact or the register YAML — a count mirror never lives in
+    source, so source is out of scope."""
+    disagreeing = ["It has 3 sites.", "It has 9 sites."]
+    assert _hard(_report_for_counts({"design-substrate/Spec_A.md": disagreeing})) != []
+    assert _hard(_report_for_counts({"tools/test_leg_selfcheck.py": disagreeing})) == []
+    assert _hard(_report_for_counts({"harness-cp/src/x.py": disagreeing})) == []
