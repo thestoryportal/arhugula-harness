@@ -436,12 +436,25 @@ def validate(text: str, status_path: Path = DEFAULT_STATUS) -> list[str]:
             )
         # Row COUNT alone never bounded this section: the rows are multi-KB
         # narratives, so ten legal rows were 38% of the whole-file budget.
+        # Judge the BYTES directly, not "would a trim change the row count".
+        # Those are different questions, and conflating them fails open on the
+        # single-oversized-row case (out-of-family review, round 1): with one
+        # 5 KB row, `_drift_keep_count` returns 1 because the newest row is
+        # always retained, `len(drift) > 1` is False, and --check reported no
+        # violation against a section 67% over budget.
         drift_bytes = sum(len(r.encode("utf-8")) + 1 for r in drift)
-        if len(drift) > _drift_keep_count(drift, DRIFT_LOG_CAP, DRIFT_LOG_BYTE_BUDGET):
+        if drift_bytes > DRIFT_LOG_BYTE_BUDGET:
+            trimmable = len(drift) > _drift_keep_count(drift, DRIFT_LOG_CAP, DRIFT_LOG_BYTE_BUDGET)
+            remedy = (
+                f"run --trim-drift-log; overflow moves to {DEFAULT_ARCHIVE.name}, "
+                "nothing is deleted"
+                if trimmable
+                else "the NEWEST row alone exceeds the budget and is always retained "
+                "(trimming cannot help) — shorten that row's prose"
+            )
             violations.append(
                 f"{DRIFT_LOG_HEADING}: {drift_bytes} B of data rows exceeds the "
-                f"{DRIFT_LOG_BYTE_BUDGET} B budget (run --trim-drift-log; overflow "
-                f"moves to {DEFAULT_ARCHIVE.name}, nothing is deleted)"
+                f"{DRIFT_LOG_BYTE_BUDGET} B budget ({remedy})"
             )
     except RoadmapStatusError as e:
         violations.append(str(e))
@@ -905,7 +918,7 @@ def main(argv: list[str] | None = None) -> int:
         # operator noticed only after the fact, and the workspace absorbed it as
         # "commit the trim separately" folklore. Refuse instead, and name the
         # mode that legitimately does the move.
-        _, would_archive, would_move = trim_drift_log(new_text, args.archive)
+        trimmed_text, would_archive, would_move = trim_drift_log(new_text, args.archive)
         if would_archive is not None:
             print(
                 f"--refresh would move {would_move} drift-log row(s) into "
@@ -917,7 +930,19 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        moved = 0
+        # No archive WRITE is needed — but the trim can STILL change the status
+        # text, when the overflow rows are already present in the archive (an
+        # idempotent re-run, or a --trim-drift-log whose archive write landed and
+        # whose status write did not). Discarding the trimmed text there wrote a
+        # still-over-budget status and reported success — a fail-open found by
+        # out-of-family review, round 1. Decide from the status DELTA, and keep
+        # the trimmed text; this stays a one-file write either way.
+        moved = would_move
+        if trimmed_text != new_text:
+            moved = len(_get_table_data_rows(new_text, DRIFT_LOG_HEADING)) - len(
+                _get_table_data_rows(trimmed_text, DRIFT_LOG_HEADING)
+            )
+            new_text = trimmed_text
         if args.dry_run:
             import difflib
 

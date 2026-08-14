@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 166
+  total: 167
   open: 1
   design_substrate_gated: 0
-  registered_finding: 32
+  registered_finding: 33
   operator_gated: 0
   held: 2
   closed: 131
-  identity_digest: '71db562343185695'
+  identity_digest: '28e41553dccc8d4f'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9196,3 +9196,41 @@ items:
     barrier deadline vs worker-0's stash) and a named falsifier (a full-suite reproduction whose deviation
     is NOT the predicted worker-0 cut). There is no cross-domain tension to convene over -- step 1 is
     execution, not deliberation.
+- id: B-167
+  title: leg-selfcheck's count check compares claims against each other rather than against a derived
+    ground-truth count, so a mirror in an untouched file is not checked
+  status: registered_finding
+  summary: 'The count check detects DISAGREEMENT between count claims; it does not RECOUNT. Out-of-family
+    review raised this as a [P1] against the arc''s own brief, which asked for cross-checking each claim
+    against the artifact it describes AND against every mirror (spec preamble, section heading, body,
+    plan deltas, clearance markers, artifact-pointers, forward-register.yaml, the prose register). WHAT
+    LANDED: added-lines scanning plus diff CONTEXT lines, so a single edited mirror can still disagree
+    with an untouched co-located one -- the cheapest sound widening, with no extra file reads and no
+    whole-file noise. WHAT DID NOT: a mirror in a file the arc never touched, or beyond the diff''s
+    context radius, is still invisible; and no claim is ever checked against a derived ground-truth
+    count. THE REASON IS NOT COST, IT IS SOUNDNESS: deriving a ground-truth count for an arbitrary noun
+    in an arbitrary artifact is not mechanizable in general, and the obvious cheap approximation --
+    scanning the FULL TEXT of touched files -- was tried in design and rejected because aggregate carriers
+    (the 165-row prose register, the roadmap status) carry unrelated counts of the same nouns across
+    unrelated rows, which would produce constant false disagreements and get the gate muted. A gate
+    that fires on everything is worse than no gate.'
+  close_out: 'STEP 1 -- decide whether a FORMAT-SCOPED recount is worth building, which is the only
+    sound version. The brief supplied concrete recipes for two specific shapes: `grep -c "^[0-9]\\+\\.
+    "` to count acceptance criteria in a plan unit block, and `grep -o "Criteria [0-9, and]*"` for mutation
+    probes. Both presuppose the per-axis plan''s structure (a numbered list under a `U-XXX-NN` heading).
+    Establish BY EXECUTION against the current plan heads whether those recipes return the right number
+    for a unit whose count is already known -- if they do not, the recount is not buildable as specified
+    and this row closes as a declared bound. STEP 2 -- if they do, scope the recount to exactly those
+    two nouns in exactly the plan/spec artifacts, never as a general free-text facility, and make the
+    ground-truth comparison HARD only where the derivation is exact. STEP 3 -- whatever lands must be
+    measured for FALSE POSITIVES against a sample of already-merged arcs before it is wired into the
+    pre-push path; a gate is only as useful as its precision. FALSIFIER (closes this row as a declared
+    bound rather than a gap): a demonstration that the format-scoped recount cannot be made exact on
+    the real artifacts, in which case the claims-versus-claims check plus diff context IS the sound
+    ceiling and the tool''s docstring already states it correctly.'
+  council: No. This is a precision/soundness question with an executable step 1 (do the brief's own
+    recipes return the right number on a known unit?). There is no cross-domain tension to convene over
+    -- the trade-off between recall and false-positive rate is settled by measurement, not deliberation.
+  heading: '### B-167 · `just leg-selfcheck`''s count check compares CLAIMS against each other, never
+    against GROUND TRUTH, so a mirror in an untouched file is invisible *(registered at the prevention
+    arc that precedes `U-CP-102`, from out-of-family review round 1 [P1], 2026-08-13)*'

@@ -826,3 +826,65 @@ def test_rotate_next_action_cli_requires_a_pr(tmp_path):
     status.write_text(SAMPLE)
     with pytest.raises(SystemExit):
         rsr.main(["--status", str(status), "--rotate-next-action", "body"])
+
+
+# --- out-of-family review round 1: two byte-budget fail-opens ----------------
+
+
+def test_validate_flags_a_single_oversized_row_that_trimming_cannot_fix():
+    """FAIL-OPEN (codex round 1): judging "would a trim change the row count"
+    instead of judging the BYTES means one 5 KB row reports clean — the newest
+    row is always retained, so `len(drift) > keep_n` is False while the section
+    sits 67% over budget. Those are different questions."""
+    text = rsr._replace_table_data_rows(
+        SAMPLE, rsr.DRIFT_LOG_HEADING, ["| 2026-01-09 | huge | " + "z" * 5000 + " |"]
+    )
+    hard = [v for v in rsr.validate(text) if not v.startswith(rsr.INFORMATIONAL_PREFIX)]
+    budget = [v for v in hard if "B budget" in v]
+    assert budget, hard
+    assert "trimming cannot help" in budget[0]
+
+
+def test_refresh_applies_a_trim_that_needs_no_archive_write(tmp_path, capsys):
+    """FAIL-OPEN (codex round 1): when the overflow rows are ALREADY in the
+    archive (idempotent re-run, or a --trim-drift-log whose archive write landed
+    and whose status write did not), trim_drift_log returns changed status text
+    with new_archive_text=None. --refresh read only the None, discarded the
+    trimmed text, wrote a still-over-budget status and reported SUCCESS."""
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    text = SAMPLE
+    for n in range(1, 8):
+        text = rsr.prepend_drift_log(text, *_fat_drift_row(n))
+    status.write_text(text)
+    (tmp_path / ".harness" / "roadmap-next-action-archive.md").write_text(SAMPLE_ARCHIVE)
+    archive = tmp_path / "drift_archive.md"
+
+    # Pre-populate the archive with exactly the overflow, so no WRITE is owed.
+    _, archive_text, _ = rsr.trim_drift_log(text, archive)
+    assert archive_text is not None
+    archive.write_text(archive_text)
+    archive_before = archive.read_text()
+
+    rc = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(archive),
+            "--refresh",
+            "--pr",
+            "PR #9999",
+            "--date",
+            "2026-08-14",
+            "--notes",
+            "n",
+        ]
+    )
+    assert rc == 0, capsys.readouterr()
+    written = status.read_text()
+    kept = rsr._get_table_data_rows(written, rsr.DRIFT_LOG_HEADING)
+    kept_bytes = sum(len(r.encode("utf-8")) + 1 for r in kept)
+    assert kept_bytes <= rsr.DRIFT_LOG_BYTE_BUDGET, "refresh wrote a still-over-budget status"
+    # ...and it stayed a ONE-FILE write: the archive is untouched.
+    assert archive.read_text() == archive_before

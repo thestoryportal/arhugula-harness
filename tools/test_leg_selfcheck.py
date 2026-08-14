@@ -306,3 +306,71 @@ def test_cli_exits_2_on_an_unresolvable_base(capsys):
     rc = ls.main(["--base", "refs/heads/definitely-not-a-ref"])
     assert rc == 2
     assert "does not resolve" in capsys.readouterr().err
+
+
+# --- out-of-family review round 1: the two [P1] scope gaps -------------------
+
+
+def test_count_check_sees_an_unchanged_mirror_in_the_diff_context():
+    """[P1] (codex round 1): scanning ADDED lines only meant a single edited
+    mirror never disagreed with itself, so a plan newly claiming 15 ACs passed
+    while an UNCHANGED mirror two lines up still said 16. Diff context is the
+    unchanged text around each edit — the cheapest sound widening."""
+    added = {"design-substrate/Plan_A.md": ["The unit now has 15 acceptance criteria."]}
+    ctx = {"design-substrate/Plan_A.md": ["Preamble: 16 acceptance criteria in total."]}
+
+    without = ls.Report()
+    ls.check_counts(added, without)
+    assert _hard(without) == [], "precondition: added-lines-only cannot see it"
+
+    with_ctx = ls.Report()
+    ls.check_counts(added, with_ctx, ctx)
+    assert any("acceptance criteria" in m for m in _hard(with_ctx)), _hard(with_ctx)
+
+
+def test_context_by_file_collects_only_unchanged_lines():
+    diff = "--- a/x.md\n+++ b/x.md\n@@\n unchanged context\n+added\n-removed\n"
+    assert ls.context_by_file(diff) == {"x.md": ["unchanged context"]}
+    assert ls.added_by_file(diff) == {"x.md": ["added"]}
+
+
+def test_register_check_hard_fails_a_new_row_with_no_current_state_bullet():
+    """[P1] (codex round 1): a body-but-superseded lead exited successfully.
+    Made structural for NEW rows, which is the half that IS mechanizable."""
+    report = ls.Report()
+    ls.check_register_rows(
+        ["### B-999 · a brand new row"],
+        _REGISTER_PATHS,
+        report,
+        detail_fn=lambda rid: (0, "### B-999 · t\n\n- **What it is.** Only background.\n"),
+    )
+    assert any("no `- **Current state.**` bullet" in m for m in _hard(report)), _hard(report)
+
+
+def test_register_check_accepts_a_new_row_that_states_current_state():
+    report = ls.Report()
+    ls.check_register_rows(
+        ["### B-999 · a brand new row"],
+        _REGISTER_PATHS,
+        report,
+        detail_fn=lambda rid: (
+            0,
+            "### B-999 · t\n\n- **What it is.** Background.\n\n- **Current state.** Registered.\n",
+        ),
+    )
+    assert _hard(report) == [], _hard(report)
+
+
+def test_register_check_does_not_impose_the_bullet_on_a_legacy_row():
+    """Only 35 of 165 existing rows carry the bullet. A corpus-wide hard
+    requirement would red 130 legitimate legacy rows and get the gate muted, so
+    an AMENDED (not newly-added) row stays advisory."""
+    report = ls.Report()
+    ls.check_register_rows(
+        ["- id: B-100"],  # a YAML-only touch: amending, not adding the prose block
+        _REGISTER_PATHS,
+        report,
+        detail_fn=lambda rid: (0, "### B-100 · t\n\n- **What it is.** Legacy shape.\n"),
+    )
+    assert _hard(report) == []
+    assert any(f.severity == ls.ADVISORY for f in report.findings)

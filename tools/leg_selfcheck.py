@@ -158,6 +158,35 @@ def added_by_file(diff: str) -> dict[str, list[str]]:
     return dict(out)
 
 
+def context_by_file(diff: str) -> dict[str, list[str]]:
+    """Unchanged CONTEXT lines, grouped by file.
+
+    Widens the count check past added-lines-only (out-of-family review, round 1,
+    [P1]): when only ONE mirror is edited, a plan newly claiming 15 acceptance
+    criteria never disagrees with itself, so the check passed while an UNCHANGED
+    mirror two lines up still said 16. Diff context is the cheapest sound
+    widening — it is the unchanged text immediately around every edit, which is
+    exactly where a co-located mirror (a section preamble above the body being
+    edited) lives, and it costs no extra file reads and adds no whole-file noise.
+
+    Its LIMIT is real and is registered, not papered over: a mirror in a file the
+    arc never touched, or further than the diff's context radius, is still
+    invisible here. Ground-truth recounting for arbitrary nouns is not soundly
+    mechanizable in general; see `B-167`.
+    """
+    out: dict[str, list[str]] = defaultdict(list)
+    current: str | None = None
+    for ln in diff.splitlines():
+        m = re.match(r"^\+\+\+ b/(.+)$", ln)
+        if m:
+            current = m.group(1)
+            out.setdefault(current, [])
+            continue
+        if ln.startswith(" ") and current is not None:
+            out[current].append(ln[1:])
+    return dict(out)
+
+
 def added_lines(by_file: dict[str, list[str]]) -> list[str]:
     return [ln for lines in by_file.values() for ln in lines]
 
@@ -304,7 +333,11 @@ _COUNT_NOUNS: list[tuple[str, str]] = [
 _NUM = r"(?<![#\w.\-])(\d+|" + "|".join(_NUMBER_WORDS) + r")"
 
 
-def check_counts(by_file: dict[str, list[str]], report: Report) -> None:
+def check_counts(
+    by_file: dict[str, list[str]],
+    report: Report,
+    context: dict[str, list[str]] | None = None,
+) -> None:
     """Detect DISAGREEMENT between count claims, which is the actual defect.
 
     Deliberately NOT a recount against ground truth: "how many ACs does this
@@ -316,19 +349,25 @@ def check_counts(by_file: dict[str, list[str]], report: Report) -> None:
     of which is right — so that is what this reports.
     """
     claims: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+
     # PROSE ARTIFACTS ONLY. Every carrier that drifted on the `B-71` leg was a
     # `.md` (spec preamble, section body, plan delta, clearance marker,
     # artifact-pointers, the prose register) or the register `.yaml` — a count
     # mirror does not live in source. Scanning source made this tool read its
     # OWN test fixtures ("It has 3 sites." / "It has 9 sites.") as a real
     # disagreement on its first committed-branch run.
-    scanned = [
-        line
-        for path, lines in by_file.items()
-        if path.lower().endswith((".md", ".yaml", ".yml"))
-        and not is_history_path(path)
-        and not is_fixture_path(path)
-        for line in lines
+    def _eligible(path: str) -> bool:
+        return (
+            path.lower().endswith((".md", ".yaml", ".yml"))
+            and not is_history_path(path)
+            and not is_fixture_path(path)
+        )
+
+    scanned = [line for path, lines in by_file.items() if _eligible(path) for line in lines]
+    # Unchanged text immediately around the edits, so a single edited mirror can
+    # still disagree with an untouched co-located one (codex round 1 [P1]).
+    scanned += [
+        line for path, lines in (context or {}).items() if _eligible(path) for line in lines
     ]
     for line in scanned:
         low = line.lower()
@@ -419,6 +458,11 @@ def check_label_collisions(
 # --- check 4: register row renders its current state -------------------------
 
 _ROW_ID_RE = re.compile(r"^(?:- id:|### )\s*([BR]-[A-Z0-9]+(?:-[A-Z0-9]+)*)")
+_NEW_PROSE_HEADING_RE = re.compile(r"^### \s*([BR]-[A-Z0-9]+(?:-[A-Z0-9]+)*)")
+#: The register's structural current-state marker. Present on 35 of 165 rows at
+#: the time this gate landed, so it is required of NEW rows and merely reported
+#: for legacy ones — a corpus-wide hard requirement would red 130 valid rows.
+_CURRENT_STATE_RE = re.compile(r"^\s*-\s+\*\*Current state[.:]?\*\*")
 
 
 def _detail_via_cli(rid: str) -> tuple[int, str]:
@@ -450,7 +494,11 @@ def check_register_rows(
     ):
         return
     ids = sorted({m.group(1) for line in added if (m := _ROW_ID_RE.match(line))})
+    # A row is NEW when this arc adds its prose HEADING (`### B-166 · ...`);
+    # merely amending an existing row's body never re-adds that line.
+    new_ids = {m.group(1) for line in added if (m := _NEW_PROSE_HEADING_RE.match(line))}
     report.stats["register_rows_touched"] = len(ids)
+    report.stats["register_rows_new"] = len(new_ids)
     detail = detail_fn or _detail_via_cli
     for rid in ids:
         rc, stdout = detail(rid)
@@ -463,6 +511,16 @@ def check_register_rows(
                 HARD,
                 f"{rid}: --detail renders a HEADING ONLY — the row has no prose body in "
                 ".harness/post-phase-8-forward-register.md (a YAML-only row reads as empty)",
+            )
+        elif rid in new_ids and not any(_CURRENT_STATE_RE.match(ln) for ln in body):
+            report.add(
+                "register",
+                HARD,
+                f"{rid}: NEW row has no `- **Current state.**` bullet — a new row must "
+                "say what is true NOW, not only what it is about (the superseded-lead "
+                "defect). Enforced for NEW rows only: just 35 of 165 existing rows carry "
+                "the bullet, so requiring it corpus-wide would red 130 legitimate legacy "
+                "rows and get this gate muted.",
             )
         else:
             report.add(
@@ -477,7 +535,8 @@ def check_register_rows(
 
 
 def run(base: str, uncommitted: bool) -> Report:
-    by_file = added_by_file(diff_text(base, uncommitted))
+    diff = diff_text(base, uncommitted)
+    by_file = added_by_file(diff)
     added = added_lines(by_file)
     paths = sorted(by_file)
     report = Report()
@@ -485,7 +544,7 @@ def run(base: str, uncommitted: bool) -> Report:
     report.stats["changed_files"] = len(paths)
     report.stats["added_lines"] = len(added)
     check_cites(by_file, report)
-    check_counts(by_file, report)
+    check_counts(by_file, report, context_by_file(diff))
     check_label_collisions(by_file, report)
     check_register_rows(added, paths, report)
     return report
