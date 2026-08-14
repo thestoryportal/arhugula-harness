@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -326,6 +327,140 @@ def test_absent_round_data_is_null_not_an_empty_list():
     assert row.p1_rounds is None
 
 
+# mutation-probe: collapse the by_levers grouping back to one TREATED cohort
+def test_treated_cohorts_stay_separated_by_lever(monkeypatch, tmp_path: Path, capsys):
+    """Averaging B-171 against B-173 would report a blend as an effect."""
+    ledger = tmp_path / "arc-metrics.jsonl"
+    rows = [
+        {"arc_id": "b", "review_rounds": 4, "arc_span_s": 6000.0, "levers_active": []},
+        {"arc_id": "t1", "review_rounds": 2, "arc_span_s": 600.0, "levers_active": ["B-171"]},
+        {"arc_id": "t2", "review_rounds": 9, "arc_span_s": 9000.0, "levers_active": ["B-173"]},
+    ]
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    am.summary(am.argparse.Namespace())
+    out = capsys.readouterr().out
+    assert "TREATED [B-171]" in out and "TREATED [B-173]" in out
+    assert "lever cohorts: 2" in out
+
+
+# mutation-probe: store args.round_logs instead of the resolved paths in queue_capture()
+def test_queue_snapshots_matched_logs_rather_than_the_live_glob(monkeypatch, tmp_path: Path):
+    """A file created after closure must not be attributed to the closed arc."""
+    qdir = tmp_path / "queue"
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "round1.log").write_text("x\n")
+    (logs / "round2.log").write_text("y\n")
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    am.queue_capture(
+        am.argparse.Namespace(
+            pr=1338,
+            arc_id=None,
+            arc_type="applying",
+            decisions=1,
+            round_logs=[str(logs / "round*.log")],
+            levers=None,
+            notes="",
+        )
+    )
+    # a later arc drops a file that the ORIGINAL pattern would also match
+    (logs / "round3.log").write_text("later\n")
+
+    entry = json.loads((qdir / "pr-1338.json").read_text())
+    assert len(entry["round_logs"]) == 2, "the snapshot is what closure matched"
+    assert not any("round3" in p for p in entry["round_logs"])
+
+
+# mutation-probe: delete the os.rename claim in drain()
+def test_a_claimed_arc_is_skipped_by_a_concurrent_drain(monkeypatch, tmp_path: Path):
+    """Two drains must not both append the same arc past the duplicate guard."""
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "arc-metrics.jsonl")
+    path = _queue_entry(qdir, "pr-1338", 1338)
+    stale_listing = am.read_queue()
+
+    # A peer drain claimed AND finished this arc after we listed it, so our
+    # rename finds nothing. Losing that race must be a skip, not a re-capture.
+    path.unlink()
+    monkeypatch.setattr(am, "read_queue", lambda: stale_listing)
+
+    calls = []
+    monkeypatch.setattr(am, "extract", lambda a: calls.append(a) or _merged_row())
+    am.drain(am.argparse.Namespace())
+    assert calls == [], "an arc already claimed elsewhere is not captured again"
+
+
+# mutation-probe: delete the _recover_dead_claims() call at the top of drain()
+def test_claim_from_a_dead_drain_is_recovered(monkeypatch, tmp_path: Path):
+    """A crashed drain must not strand the arc where read_queue never looks."""
+    qdir = tmp_path / "queue"
+    qdir.mkdir(parents=True)
+    dead_pid = 999_999_999  # not a live process
+    (qdir / "pr-1338.taken").write_text(
+        json.dumps(
+            {
+                "pr": 1338,
+                "arc_id": "pr-1338",
+                "_claim": {"pid": dead_pid, "host": socket.gethostname()},
+            }
+        )
+    )
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "arc-metrics.jsonl")
+    monkeypatch.setattr(am, "extract", lambda _a: _merged_row())
+    am.drain(am.argparse.Namespace())
+    assert not (qdir / "pr-1338.taken").exists(), "the dead owner's claim was recovered"
+
+
+# mutation-probe: drop the _process_is_alive() check in _recover_dead_claims()
+def test_claim_held_by_a_live_drain_is_not_stolen(monkeypatch, tmp_path: Path):
+    """Recovering a live peer's claim reproduces the duplicate row it prevents."""
+    qdir = tmp_path / "queue"
+    qdir.mkdir(parents=True)
+    claim = qdir / "pr-1338.taken"
+    claim.write_text(
+        json.dumps(
+            {
+                "pr": 1338,
+                "arc_id": "pr-1338",
+                # our own pid is, by construction, alive
+                "_claim": {"pid": os.getpid(), "host": socket.gethostname()},
+            }
+        )
+    )
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "arc-metrics.jsonl")
+    calls = []
+    monkeypatch.setattr(am, "extract", lambda a: calls.append(a) or _merged_row())
+    am.drain(am.argparse.Namespace())
+    assert claim.exists(), "a live owner keeps its claim"
+    assert calls == [], "and its arc is not captured a second time"
+
+
+# mutation-probe: recover a foreign-host claim instead of leaving it
+def test_claim_held_on_another_host_is_left_alone(monkeypatch, tmp_path: Path):
+    """Liveness is unknowable from here, so the safe move is to not touch it."""
+    qdir = tmp_path / "queue"
+    qdir.mkdir(parents=True)
+    claim = qdir / "pr-1338.taken"
+    claim.write_text(
+        json.dumps(
+            {
+                "pr": 1338,
+                "arc_id": "pr-1338",
+                "_claim": {"pid": 999_999_999, "host": "some-other-machine"},
+            }
+        )
+    )
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "arc-metrics.jsonl")
+    am.drain(am.argparse.Namespace())
+    assert claim.exists(), "a claim on another host is reported, never stolen"
+
+
+# mutation-probe: change fmt_span's empty-input branch to return "0"
 def test_empty_span_is_dashes_not_zero():
     assert am.fmt_span([]) == "--"
 
@@ -410,7 +545,8 @@ def test_arc_duration_prefers_real_span_over_pr_window():
     assert am.arc_duration({}) is None
 
 
-def test_p1_count_halves_the_codex_duplicate_printing(tmp_path: Path):
+# mutation-probe: count raw [P1] occurrences instead of distinct finding lines
+def test_p1_count_collapses_the_codex_duplicate_printing(tmp_path: Path):
     """The codex CLI prints each finding twice; a single [P1] pair is ONE finding."""
     a = tmp_path / "r1.log"
     b = tmp_path / "r2.log"

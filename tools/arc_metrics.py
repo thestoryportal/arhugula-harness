@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import statistics
 import subprocess
 import sys
@@ -384,12 +385,25 @@ def queue_capture(args: argparse.Namespace) -> int:
     """
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     arc_id = args.arc_id or f"pr-{args.pr}"
+
+    # Resolve the globs HERE, at closure, and store concrete paths. A pattern
+    # stored live would be re-expanded by the next arc's drain, so any file
+    # created or touched in between that also matches -- a parallel lane's
+    # `round-*.log`, a re-run -- would be silently attributed to this arc, and a
+    # match postdating the merge can even yield a negative arc_span_s. The glob
+    # must mean what it matched at closure, so it is snapshotted, not deferred.
+    resolved: list[str] = []
+    if args.round_logs:
+        logs, _gaps, _p1 = round_metrics(args.round_logs)
+        resolved = [str(p) for p in logs]
+
     entry = {
         "pr": args.pr,
         "arc_id": args.arc_id,
         "arc_type": args.arc_type,
         "decisions": args.decisions,
-        "round_logs": args.round_logs or [],
+        "round_logs": resolved,
+        "round_logs_globs": args.round_logs or [],
         "levers": args.levers or [],
         "notes": args.notes or "",
         "queued_at": datetime.now(tz=UTC).isoformat(),
@@ -421,6 +435,51 @@ def read_queue() -> list[tuple[Path, dict]]:
     return out
 
 
+def _process_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    return True
+
+
+def _recover_dead_claims() -> None:
+    """Return claims held by a DEAD drain, and only those.
+
+    A claim marks an arc as being captured right now. A crashed drain leaves
+    one behind, and without recovery that arc is stranded where ``read_queue``
+    never looks. But "orphaned by a crash" and "held by a live peer" look
+    identical on disk, so recovering blindly would hand a live peer's arc to a
+    second drain and reproduce the duplicate row the claim exists to prevent.
+
+    Liveness is therefore checked EXACTLY, by pid, rather than through an
+    age window -- a window is a guess, and a slow-but-healthy capture that
+    outlives it silently becomes a duplicate. A claim from another host cannot
+    be judged from here, so it is reported and left alone.
+    """
+    if not QUEUE_DIR.is_dir():
+        return
+    for claim in sorted(QUEUE_DIR.glob("*.taken")):
+        restored = claim.with_suffix(".json")
+        if restored.exists():
+            continue
+        try:
+            held = json.loads(claim.read_text()).get("_claim", {})
+        except json.JSONDecodeError:
+            held = {}
+        pid, host = held.get("pid"), held.get("host")
+        if host and host != socket.gethostname():
+            print(f"  claim {claim.name} is held on {host}; leaving it alone", file=sys.stderr)
+            continue
+        if isinstance(pid, int) and _process_is_alive(pid):
+            print(f"  {claim.name} is being captured by live pid {pid}; skipping")
+            continue
+        os.replace(claim, restored)
+        print(f"  recovered claim from dead pid {pid} -> {restored.name}")
+
+
 def drain(_args: argparse.Namespace) -> int:
     """Fold every queued arc into the tracked ledger.
 
@@ -430,6 +489,8 @@ def drain(_args: argparse.Namespace) -> int:
     different file and is picked up by this drain or the next one -- there is no
     window in which it can be erased, and no lock is needed to say so.
     """
+    _recover_dead_claims()
+
     pending = read_queue()
     if not pending:
         print("arc-metrics queue is empty -- nothing to drain")
@@ -444,6 +505,28 @@ def drain(_args: argparse.Namespace) -> int:
             print(f"  {arc_id}: already in ledger, dropping from queue")
             path.unlink(missing_ok=True)
             continue
+
+        # CLAIM this arc by renaming its queued file before capturing it. Two
+        # parallel next-arc sessions can otherwise both pass the ledger's
+        # read-then-check duplicate guard and append the same arc twice, which
+        # breaks one-row-per-arc and biases every cohort. os.rename is atomic:
+        # exactly one drain wins the claim, the other sees it vanish and moves
+        # on. Same structural fix as the queue itself -- no lock required.
+        taken = path.with_suffix(".taken")
+        try:
+            os.rename(path, taken)
+        except OSError:
+            print(f"  {arc_id}: claimed by a concurrent drain, skipping")
+            continue
+        # Stamp who holds the claim, so a later drain can tell a crashed owner
+        # from a live one by exact pid rather than by guessing at an age.
+        taken.write_text(
+            json.dumps(
+                {**entry, "_claim": {"pid": os.getpid(), "host": socket.gethostname()}},
+                sort_keys=True,
+            )
+        )
+
         args = argparse.Namespace(
             pr=entry["pr"],
             arc_id=entry.get("arc_id"),
@@ -456,11 +539,13 @@ def drain(_args: argparse.Namespace) -> int:
         try:
             append(extract(args))
         except AbortError as exc:
+            # Release the claim so the next drain can retry this arc.
+            os.replace(taken, path)
             print(f"  {arc_id}: KEPT QUEUED -- {exc}", file=sys.stderr)
             kept += 1
             continue
-        # Only now is the row durable, so only now may the queued file go.
-        path.unlink(missing_ok=True)
+        # Only now is the row durable, so only now may the claimed file go.
+        taken.unlink(missing_ok=True)
         print(f"  {arc_id}: appended")
         added += 1
 
@@ -515,15 +600,31 @@ def summary(_args: argparse.Namespace) -> int:
         raise AbortError(f"ledger is empty or absent: {LEDGER}")
 
     baseline = [r for r in rows if not r.get("levers_active")]
-    treated = [r for r in rows if r.get("levers_active")]
+
+    # Group treated rows by their EXACT lever set. Collapsing every non-empty
+    # levers_active into one TREATED cohort would average B-171 against B-173
+    # and report the blend as if it were an effect, which is precisely the
+    # per-lever decision this ledger is supposed to support.
+    by_levers: dict[str, list[dict]] = {}
+    for r in rows:
+        levers = r.get("levers_active")
+        if levers:
+            by_levers.setdefault(" + ".join(sorted(levers)), []).append(r)
 
     print(f"arc-metrics ledger: {len(rows)} rows  ({LEDGER})")
-    print(f"  baseline (no levers): {len(baseline)}   treated: {len(treated)}\n")
+    treated_n = sum(len(c) for c in by_levers.values())
+    print(f"  baseline (no levers): {len(baseline)}   treated: {treated_n}")
+    if by_levers:
+        print(f"  lever cohorts: {len(by_levers)} ({', '.join(sorted(by_levers))})")
+    print()
 
-    for label, cohort in (("BASELINE", baseline), ("TREATED", treated)):
+    cohorts = [("BASELINE", baseline)]
+    cohorts += [(f"TREATED [{name}]", c) for name, c in sorted(by_levers.items())]
+
+    for label, cohort in cohorts:
         if not cohort:
             continue
-        print(f"-- {label} (n={len(cohort)}) " + "-" * (46 - len(label)))
+        print(f"-- {label} (n={len(cohort)}) " + "-" * max(3, 46 - len(label)))
         # A partial row's round count and span are LOWER BOUNDS, so they are
         # excluded from the exact aggregates and surfaced on their own line.
         # Averaging a surviving fragment in as if it were a whole arc is how a
@@ -606,7 +707,7 @@ def main(argv: list[str] | None = None) -> int:
     ex.add_argument("--arc-id")
     ex.add_argument("--arc-type", choices=["inventing", "applying"])
     ex.add_argument("--decisions", type=int, help="independent decision count")
-    ex.add_argument("--round-logs", nargs="*", help="glob(s) for this arc's round logs")
+    ex.add_argument("--round-logs", nargs="+", help="glob(s) for this arc's round logs")
     ex.add_argument("--levers", nargs="*", help="levers live during this arc")
     ex.add_argument("--notes", default="")
     ex.add_argument("--dry-run", action="store_true")
@@ -621,7 +722,7 @@ def main(argv: list[str] | None = None) -> int:
     # judgement genuinely is unavailable and is recorded as unmapped.
     q.add_argument("--arc-type", choices=["inventing", "applying"], required=True)
     q.add_argument("--decisions", type=int, required=True, help="independent decision count")
-    q.add_argument("--round-logs", nargs="*", help="glob(s) for this arc's round logs")
+    q.add_argument("--round-logs", nargs="+", help="glob(s) for this arc's round logs")
     q.add_argument("--levers", nargs="*", help="levers live during this arc")
     q.add_argument("--notes", default="")
     q.set_defaults(func=queue_capture)
