@@ -238,6 +238,7 @@ def test_label_check_hard_fails_zero_artifacts_across_the_real_corpus():
         import pytest
 
         pytest.skip("design-substrate not present")
+    ls._SIBLING_INDEX_CACHE.clear()
     fired = []
     for f in sorted(sub.glob("*.md")):
         heads = [ln for ln in f.read_text(errors="replace").splitlines() if ls._MINT_RE.match(ln)]
@@ -611,3 +612,40 @@ def test_boundary_deletion_attributes_to_the_row_being_emptied():
     nums = ls.changed_line_numbers(diff)[".harness/post-phase-8-forward-register.md"]
     # both the boundary position AND the one before it, so the emptied row resolves
     assert 11 in nums and 10 in nums, nums
+
+
+# --- out-of-family review round 8 -------------------------------------------
+
+
+def test_cite_check_rejects_line_zero():
+    """[P2] (codex round 8): `n > total` alone accepted `file.py:0` as resolved.
+    Line 0 never exists, so a placeholder or zero-based cite failed open."""
+    report = ls.Report()
+    ls.check_cites({"spec.md": ["tools/leg_selfcheck.py:0 is a placeholder"]}, report)
+    assert any("not valid" in m for m in _hard(report)), report.findings
+
+
+def test_cite_dedup_key_includes_the_citing_source(tmp_path, monkeypatch):
+    """[P2] (codex round 8): resolution is source-relative, so two documents in
+    DIFFERENT directories citing the same sibling shorthand are different claims.
+    A (rel, spec) key collapsed them and skipped the second — stale, and green."""
+    monkeypatch.setattr(ls, "ROOT", tmp_path)
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    (tmp_path / "a" / "SIB.md").write_text("\n".join(f"line {i}" for i in range(1, 51)))
+    (tmp_path / "b" / "SIB.md").write_text("only one line")
+    report = ls.Report()
+    ls.check_cites({"a/doc.md": ["see SIB.md:50"], "b/doc.md": ["see SIB.md:50"]}, report)
+    assert any("b/SIB.md" in m or "SIB.md" in m for m in _hard(report)), report.findings
+
+
+def test_sibling_label_index_is_built_once_per_family_set(tmp_path):
+    """[P2] (codex round 8): the old code re-globbed the directory AND re-read
+    every artifact once per MINTED LABEL — quadratic in production, not only in
+    the corpus test that measured it at 45s."""
+    d = _substrate(tmp_path, {"Spec_A_v1.md": "### §1.1 A\n### §1.2 B\n### §1.3 C\n"})
+    ls._SIBLING_INDEX_CACHE.clear()
+    first = ls._sibling_label_index(d, frozenset({"spec_a"}))
+    second = ls._sibling_label_index(d, frozenset({"spec_a"}))
+    assert first is second, "the index must be memoised, not rebuilt"
+    assert set(first) == {"1.1", "1.2", "1.3"}

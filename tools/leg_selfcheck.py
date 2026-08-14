@@ -348,7 +348,11 @@ def check_cites(by_file: dict[str, list[str]], report: Report) -> None:
     written from an earlier read drifts the moment the file is edited, and a
     review round is a very expensive way to discover that.
     """
-    seen: set[tuple[str, str]] = set()
+    # Keyed by the CITING SOURCE too: resolution is source-relative, so two
+    # documents in different directories citing the same sibling shorthand
+    # (`DELIVERABLE.md:100`) are DIFFERENT claims. A (rel, spec) key collapsed
+    # them and skipped the second — stale, and green (codex round 8 [P2]).
+    seen: set[tuple[str, str, str]] = set()
     checked = 0
     scanned = [
         (path, line)
@@ -359,7 +363,7 @@ def check_cites(by_file: dict[str, list[str]], report: Report) -> None:
     for source, line in scanned:
         for m in _CITE_RE.finditer(line):
             rel, spec = m.group(1), m.group(2)
-            key = (rel, spec)
+            key = (source, rel, spec)
             if key in seen:
                 continue
             seen.add(key)
@@ -381,14 +385,22 @@ def check_cites(by_file: dict[str, list[str]], report: Report) -> None:
             except OSError as e:  # pragma: no cover - unreadable file
                 report.add("cite", ADVISORY, f"{rel}: unreadable ({e})")
                 continue
-            stale = [n for n in _cite_line_numbers(spec) if n > total]
-            if stale:
-                report.add(
-                    "cite",
-                    HARD,
-                    f"{rel}:{spec} — line(s) {', '.join(map(str, stale))} are past "
-                    f"end-of-file ({total} lines at HEAD; stale cite)",
-                )
+            nums = _cite_line_numbers(spec)
+            # `n > total` alone accepted `file.py:0` as resolved: line 0 never
+            # exists, so a placeholder or zero-based cite failed open (codex
+            # round 8 [P2]).
+            stale = [n for n in nums if n > total]
+            invalid = [n for n in nums if n < 1]
+            if stale or invalid:
+                parts = []
+                if invalid:
+                    parts.append(f"line(s) {', '.join(map(str, invalid))} are not valid (< 1)")
+                if stale:
+                    parts.append(
+                        f"line(s) {', '.join(map(str, stale))} are past end-of-file "
+                        f"({total} lines at HEAD)"
+                    )
+                report.add("cite", HARD, f"{rel}:{spec} — {'; '.join(parts)}; stale cite")
     report.stats["cites_resolved"] = checked
 
 
@@ -587,6 +599,35 @@ def _normalize_heading(line: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", "", text.lower()).strip()
 
 
+#: Memoised per (directory, family-set) for the process. The previous code
+#: re-globbed the directory AND re-read every artifact once per MINTED LABEL,
+#: which is quadratic in production, not only in the corpus test that measured
+#: it at 45s (codex round 8 [P2]).
+_SIBLING_INDEX_CACHE: dict[tuple[str, frozenset[str]], dict[str, set[str]]] = {}
+
+
+def _sibling_label_index(family_dir: Path, families: frozenset[str]) -> dict[str, set[str]]:
+    key = (str(family_dir.resolve()), families)
+    cached = _SIBLING_INDEX_CACHE.get(key)
+    if cached is not None:
+        return cached
+    index: dict[str, set[str]] = defaultdict(set)
+    for f in sorted(family_dir.glob("*.md")):
+        if _artifact_family(f.name) not in families:
+            continue
+        try:
+            body = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:  # pragma: no cover
+            continue
+        for line in body.splitlines():
+            m = _HEADING_USE_RE.match(line)
+            if m:
+                index[m.group(1)].add(f.name)
+    result = dict(index)
+    _SIBLING_INDEX_CACHE[key] = result
+    return result
+
+
 def check_label_collisions(
     by_file: dict[str, list[str]], report: Report, substrate_dir: Path | None = None
 ) -> None:
@@ -666,16 +707,9 @@ def check_label_collisions(
 
     family_dir = substrate_dir or (ROOT / "design-substrate")
     minted_families = {_artifact_family(path) for path in by_file if path.lower().endswith(".md")}
+    index = _sibling_label_index(family_dir, frozenset(minted_families))
     for label in minted:
-        siblings = sorted(
-            f.name
-            for f in family_dir.glob("*.md")
-            if _artifact_family(f.name) in minted_families
-            and any(
-                (m := _HEADING_USE_RE.match(line)) and m.group(1) == label
-                for line in f.read_text(encoding="utf-8", errors="replace").splitlines()
-            )
-        )
+        siblings = sorted(index.get(label, ()))
         if len(siblings) > 1:
             report.add(
                 "label",
