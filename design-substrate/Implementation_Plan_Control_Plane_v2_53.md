@@ -153,13 +153,24 @@ which vocabulary, what each key may and may not say); **U-RT-155 owns their EMIS
     shape, so without this an implementation satisfies every other criterion while
     breaking the legacy projection bytes the spec promises.
 
-**Mutation-probe obligations (Workflow v1.19 PD-9).** Criteria 4, 6, 7, 10, 11, 12, 14 and 15
+16. **The diagnostic half is witnessed on the channel that EXISTS** (spec §0.4(3) and §0.7):
+    a submitted token that matches, and a validator-supplied non-`None` token, are each
+    surfaced through whatever diagnostic channel the implementation has. Only the TYPED
+    disposition is deferred — the requirement to surface is normative today. Criteria 9 and
+    14 witness the unaddressed/overwrite behaviour and the absence of leakage, and a silent
+    discard satisfies both, so without this criterion an implementation can drop the
+    condition on the floor and still pass the plan. Witnessed as an observable emission, NOT
+    as a typed field — asserting a `ResumeKeyDisposition` here would make the unit
+    unimplementable against closed schemas, which is the trap §0.10 exists to avoid.
+
+**Mutation-probe obligations (Workflow v1.19 PD-9).** Criteria 4, 6, 7, 10, 11, 12, 14, 15 and 16
 each carry a `# mutation-probe:` annotation: invert the read order; perturb the digest
 formula by one byte of the domain separator; project the un-hashed identity onto
 `branch_context`; emit the field on the linear path; drop the minter→snapshot write; emit
 the field when `None` instead of dropping it; honour the validator-supplied value; and
-emit the projection field as `null` instead of omitting it — each must redden its own
-witness and no other.
+emit the projection field as `null` instead of omitting it; and swallow the
+ingress/validator condition without any diagnostic — each must redden its own witness and no
+other.
 
 ### §0.3 Cross-carrier reach, declared rather than implied
 

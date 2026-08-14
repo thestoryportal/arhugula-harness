@@ -22,7 +22,7 @@ amendments CP spec v1.119 declares (`HITLEscalationBrief.escalation_instance_id`
 `StepExecutionContext.pre_dispatch_escalation_basis` and
 `.pre_dispatch_escalation_instance_id`; the per-branch resume-state echo; the
 `PreDispatchUniformFallbackOnlyLocation` correlation projection) plus the FOUR
-`payload_body` keys, with **fifteen** acceptance criteria and **eight** mutation-probe
+`payload_body` keys, with **sixteen** acceptance criteria and **nine** mutation-probe
 obligations.
 
 **Why a new unit rather than criteria on the landed carriers.** The four sites belong to
