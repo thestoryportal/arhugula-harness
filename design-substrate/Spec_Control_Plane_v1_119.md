@@ -218,9 +218,24 @@ implementation discretion:
 |---|---|
 | **Field** | `pre_dispatch_escalation_basis: str \| None = None`, on `StepExecutionContext` |
 | **Value** | the branch's run-scoped internal identity as defined at §0.4(2), **pre-hash**; `None` on every population that has no pre-dispatch gate-owning branch |
-| **Producer** | the fan-out branch-context composition site, which already computes this identity for the resume-side eligibility comparison — the value is read, not newly derived |
+| **Producer** | the fan-out branch-context composition site, at BOTH live composition sites, deriving the identity **UNCONDITIONALLY** — see the correction note below |
 | **Propagation** | inherited by `model_copy` like the context's other additive carriers; a branch child never re-derives it |
 | **Byte-identity** | `None`-defaulted, so every non-fan-out path is byte-identical to pre-arc |
+
+**Derivation is UNCONDITIONAL, and an earlier draft of this row was factually wrong about
+the code.** That draft said the composition site "already computes this identity for the
+resume-side eligibility comparison — the value is read, not newly derived." It is not.
+Both live sites (`workflow_driver.py:8410-8418` and `:12746-12754`) call
+`pre_dispatch_gate_owning_branch_identity` only inside
+`not _any_fence_abort and branch_index in _recovered_pre_dispatch_gate_owning and
+resume_context is not None` — the RESUME path with a recovered gate-owner. On a **first,
+non-resume fan-out escalation the identity is never computed at all**, so the basis would
+stay `None`, the minter would emit no token, and the peer collision would survive **on
+precisely the path `B-71` exists to fix**. The contract therefore requires the derivation to
+be hoisted out of that guard at both sites and performed for every gate-owning branch,
+resume or not. Out-of-family review caught this by reading the call sites; the draft had
+asserted a code fact from the spec's own narrative, which is the grounding failure this
+row's three earlier attempts each made in a different form.
 
 **It is basis material, so §0.5's bar applies to it in full**: this field is *internal
 carriage only*, MUST NOT be projected to any operator-facing key, and MUST be hashed per

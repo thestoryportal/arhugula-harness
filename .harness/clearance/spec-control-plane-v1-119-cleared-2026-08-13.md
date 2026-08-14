@@ -21,8 +21,11 @@ supersedes: spec-control-plane-v1-118-cleared-2026-08-11.md
 
 **What v1.119 changes.** `HITLEscalationBrief` (C-CP-28 §25.2, as canonically
 supplemented at v1.18 §25.2.X) gains one optional field —
-`escalation_instance_id: str | None = None` — plus three additive advisory keys on the
-webhook `payload_body` (`branch_context`, `resolvability`, `resolvability_note`). The
+`escalation_instance_id: str | None = None` — plus **four** additive keys on the webhook
+`payload_body`: the **BARE** `escalation_instance_id` (required because the composed
+`Idempotency-Key` is deliberately non-parseable, so without the bare token the webhook cannot
+equality-match the §0.4.4 pause-view projection and the correlation loop stays open), plus
+`branch_context`, `resolvability` and `resolvability_note`. The
 token is opaque, deterministic, one-way, ≥128 bits, and equality is its sole promised
 operation. The widening lands **once**, inside `compose_hitl_action_id`, so the webhook
 `Idempotency-Key`, the CP audit `action_id` and the F2 ledger key stay one identity

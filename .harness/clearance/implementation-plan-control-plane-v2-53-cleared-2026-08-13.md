@@ -50,8 +50,10 @@ cannot schedule one alone and read a green suite as evidence the mechanism works
 
 **Not a design extension (X-AL-3).** No contract number is minted (the spec leg mints
 none); no existing field changes type; no landed unit body is amended; no OD / IS / AS /
-CXA / ADR / ADD / PRD change. The follow-ons registered at CP spec §0.9 are explicitly out
-of scope and each owes its own leg.
+CXA / ADR / ADD / PRD change. The SEVEN follow-ons registered at CP spec §0.9 — including register row `B-165`, the
+duplicate same-position placement collision, which needs a design-record revisit of the
+ratified identity basis rather than a spec leg — are explicitly out of scope and each owes
+its own leg.
 
 **Posture.** Design-phase (`design-substrate/**` + this `.harness/` clearance companion),
 per workspace `CLAUDE.md` §11.2. This delta assigns the work; the code lands at the impl

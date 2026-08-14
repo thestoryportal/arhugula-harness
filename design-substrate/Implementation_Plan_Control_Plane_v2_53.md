@@ -67,6 +67,14 @@ which vocabulary, what each key may and may not say); **U-RT-155 owns their EMIS
    (spec §0.4.1 / `§25.20`, **pre-hash**) and `pre_dispatch_escalation_instance_id: str | None = None`
    (spec §0.4.3 / `§25.21`, **post-hash**). A witness asserts both are `model_copy`-inherited
    and that a branch child never re-derives either.
+
+   **`pre_dispatch_escalation_basis` is derived UNCONDITIONALLY at BOTH composition sites**
+   (`workflow_driver.py:8410-8418` and `:12746-12754`), NOT inside the existing
+   `_recovered_pre_dispatch_gate_owning and resume_context is not None` guard. Witnessed on a
+   **first, non-resume** fan-out escalation: the basis is non-`None` and a token is minted.
+   Without this the whole mechanism is inert on exactly the path `B-71` exists to fix — the
+   guard means the identity is not computed at all on a first escalation — and every other
+   criterion could pass while two peers still collided.
 3. The per-branch pre-dispatch gate-owning resume state carries
    `escalation_instance_id: str | None = None` (spec §0.4.2 / `§26.9`), keyed per branch
    entry by the existing `branch_index` within its containing snapshot. A witness asserts
@@ -191,7 +199,10 @@ carrier suite as evidence the mechanism works.
 NOT the impl leg — this delta assigns the work; the code lands at U-CP-102 / U-RT-155.
 NOT a contract-number mint (the spec leg mints none). NOT an amendment to any landed unit
 body. NOT an OD / IS / AS / CXA / ADR / ADD / PRD change. NOT the registered follow-ons at
-spec §0.9 (the uniform-response target selector; redelivery on posture change;
+spec §0.9 — the uniform-response target selector; redelivery on posture change;
 uniform-treatment extension to depth-0 root and already-dispatched children; the pause-view
-addressing half; the unguarded `entry_version` carrier across the pause boundary; the typed
-resume-outcome diagnostics carrier) — each owes its own leg and none is in scope here.
+**addressing** half (the correlation half IS in scope, at AC 13); the unguarded
+`entry_version` carrier across the pause boundary; the typed resume-outcome diagnostics
+carrier; and **register row `B-165`**, the duplicate same-position placement collision, which
+needs a design-record revisit of the ratified identity basis rather than a spec leg. **Seven**
+items; each owes its own leg and none is in scope here.
