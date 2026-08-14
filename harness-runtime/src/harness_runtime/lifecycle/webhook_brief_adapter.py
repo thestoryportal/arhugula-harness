@@ -40,6 +40,7 @@ from typing import Any
 
 from harness_core import EntryID
 from harness_cp.hitl_timeout_degradation import WebhookPayload
+from harness_cp.pause_state_projection import PauseLocationVariant
 from harness_cp.validator_framework_types import HITLEscalationBrief
 from harness_is.state_ledger_entry_schema import Identifier
 
@@ -49,7 +50,7 @@ def project_brief_to_payload(
     idempotency_key: str,
     *,
     branch_context: str | None = None,
-    resolvability: str | None = None,
+    resolvability: PauseLocationVariant | None = None,
     resolvability_note: str | None = None,
 ) -> WebhookPayload:
     """Project a `HITLEscalationBrief` to a `WebhookPayload` for outbound HTTP
@@ -77,7 +78,7 @@ def project_brief_to_payload(
         field, on any other key, or on any exported span attribute. Not precedent
         for structured ordinal export.
     resolvability
-        The resolution **CHANNEL**, drawn from the CLOSED `PauseLocationVariant`
+        The resolution **CHANNEL**, typed as the CLOSED `PauseLocationVariant`
         vocabulary (`Spec_Control_Plane_v1_112.md` §2.1) the pause view already
         assigns — so the webhook and the pause view can never become two
         authorities over one concept. **Never the outcome**: resolvability is
@@ -128,7 +129,12 @@ def project_brief_to_payload(
     if branch_context is not None:
         payload_body["branch_context"] = branch_context
     if resolvability is not None:
-        payload_body["resolvability"] = resolvability
+        # Serialize the ENUM's value, never a caller-supplied string. Typing this
+        # parameter `str` made an invalid wire state representable and admitted a
+        # SECOND classification authority beside the pause view — the exact thing
+        # §0.6's "no new vocabulary is minted" clause forecloses (out-of-family
+        # review round 2, [P2]).
+        payload_body["resolvability"] = resolvability.value
     if resolvability_note is not None:
         payload_body["resolvability_note"] = resolvability_note
     return WebhookPayload(

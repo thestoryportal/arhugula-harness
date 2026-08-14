@@ -62,12 +62,11 @@ from harness_cp.pause_resume_protocol_types import (
     PauseSnapshot,
     PeerFanOutResumeState,
     PreDispatchGateOwningBranchResumeState,
+    ResumeContext,
     WorkflowPauseReason,
 )
 from harness_cp.pause_state_projection import (
-    AccessorDerivedResumeContext,
     EscalationTokenKeyedIngressWarning,
-    PausedWorkflowState,
     PauseLocationVariant,
     PreDispatchUniformFallbackOnlyLocation,
     compose_escalation_instance_id,
@@ -1098,10 +1097,10 @@ def test_the_overwrite_helper_replaces_rather_than_drops_the_whole_brief() -> No
     assert sanitized.proposed_response_palette == hostile.proposed_response_palette
 
 
-# mutation-probe: replace `_diagnose_token_keyed_ingress`'s `warnings.warn(...)` call
+# mutation-probe: replace `diagnose_token_keyed_ingress`'s `warnings.warn(...)` call
 # with `return` (a silent discard).
 def test_a_token_keyed_resume_is_counted_as_unaddressed_and_is_diagnosed() -> None:
-    """§0.7 — both halves.
+    """§0.7 — both halves, driven through the REAL `execute_workflow` resume path.
 
     The NORMATIVE half is structural: `hitl_responses` stays exclusively
     `child_run_id`-keyed, so a submitted token matches no location and is
@@ -1109,34 +1108,34 @@ def test_a_token_keyed_resume_is_counted_as_unaddressed_and_is_diagnosed() -> No
     SURFACED — a silent discard satisfies AC 9 and AC 14 both, so without this
     criterion an implementation can drop the condition on the floor and still pass
     the plan.
+
+    **Driven through the driver, not through `AccessorDerivedResumeContext`.** An
+    earlier draft of this leg sited the check inside that convenience constructor and
+    witnessed it there; out-of-family review round 2 [P2] showed the supported
+    `api.resume(..., resume_context=ResumeContext(...))` path never reaches that
+    classmethod, so the diagnostic was unreachable for the public caller while its
+    test stayed green — the wired-but-unreachable shape. This witness now supplies a
+    PLAIN `ResumeContext`, which is exactly what that path supplies.
     """
-    token = compose_escalation_instance_id(
-        pre_dispatch_gate_owning_branch_identity(_RUN_ID, 1), _PLACEMENT.position
-    )
-    pause_state = PausedWorkflowState(
-        workflow_id="wf-b71",
-        created_at=1,
-        staleness_token="tok-1",
-        locations=(
-            PreDispatchUniformFallbackOnlyLocation(
-                pause_reason=WorkflowPauseReason.HITL_PENDING,
-                step_index=0,
-                step_id="branch-1-sub",
-                step_kind=StepKind.SUB_AGENT_DISPATCH,
-                branch_index=1,
-                escalation_instance_id=token,
-            ),
-        ),
-    )
+    snap, round_one = _round_one()
+    token = round_one.minted[1]
     response = HITLResult(
         response=HITLResponse.APPROVE,
         timestamp="2026-08-14T00:00:00Z",
         audit_ledger_entry_id=EntryID("e-b71-ingress"),
         response_summary_hash="e" * 64,
     )
+    resume_context = ResumeContext(hitl_responses={token: response})
     with pytest.warns(EscalationTokenKeyedIngressWarning) as caught:
-        keyed = AccessorDerivedResumeContext.from_pause_state(
-            pause_state, hitl_responses={token: response}
+        resumed = execute_workflow(
+            _manifest(),
+            _peer_steps(),
+            run_id=_RUN_ID,
+            ctx=_ctx(),
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=cast(StepDispatcherRegistry, _MintingGateDispatcher()),
+            pause_snapshot_input=snap,
+            resume_context=resume_context,
         )
     message = str(caught[0].message)
     assert "ordinal(s) [1]" in message, f"the diagnostic must name the ordinal; got {message!r}"
@@ -1144,8 +1143,19 @@ def test_a_token_keyed_resume_is_counted_as_unaddressed_and_is_diagnosed() -> No
         "the token itself is a live correlation identifier on an unresolved gate and "
         "must not be re-emitted onto an incidental channel"
     )
-    assert keyed.hitl_response_for("branch-1-sub") is None, (
-        "the token is NOT an address — the location stays unaddressed"
+    # COUNTED-AS-UNADDRESSED, asserted on the OUTCOME rather than on a map lookup: a
+    # `hitl_responses` lookup BY the token trivially finds it (the operator put it
+    # there), so that would witness the dict, not the contract. What §0.7 promises is
+    # that the token addressed no LOCATION — the branch is not resolved by it and the
+    # run re-pauses still holding the same gate-owning ordinals.
+    assert resumed.status is RunStatus.PAUSED, (
+        "a token-keyed response must resolve nothing — the run must re-pause; got "
+        f"status={resumed.status!r} fail_class={resumed.fail_class!r}"
+    )
+    resumed_pfr = resumed.pause_snapshot.peer_fan_out_resume if resumed.pause_snapshot else None
+    assert resumed_pfr is not None
+    assert 1 in {row.branch_index for row in resumed_pfr.pre_dispatch_gate_owning_branches}, (
+        "branch 1 must still be recorded as an UNADDRESSED gate owner after the token-keyed resume"
     )
 
 
@@ -1155,21 +1165,7 @@ def test_a_legitimately_keyed_resume_emits_no_diagnostic() -> None:
     A diagnostic that fired on every resume would be noise the operator learns to
     ignore, which is functionally the same failure as not emitting it at all.
     """
-    pause_state = PausedWorkflowState(
-        workflow_id="wf-b71",
-        created_at=1,
-        staleness_token="tok-1",
-        locations=(
-            PreDispatchUniformFallbackOnlyLocation(
-                pause_reason=WorkflowPauseReason.HITL_PENDING,
-                step_index=0,
-                step_id="branch-1-sub",
-                step_kind=StepKind.SUB_AGENT_DISPATCH,
-                branch_index=1,
-                escalation_instance_id="f" * 64,
-            ),
-        ),
-    )
+    snap, _ = _round_one()
     response = HITLResult(
         response=HITLResponse.APPROVE,
         timestamp="2026-08-14T00:00:00Z",
@@ -1178,7 +1174,14 @@ def test_a_legitimately_keyed_resume_emits_no_diagnostic() -> None:
     )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        AccessorDerivedResumeContext.from_pause_state(
-            pause_state, hitl_responses={"child-run-abc": response}
+        execute_workflow(
+            _manifest(),
+            _peer_steps(),
+            run_id=_RUN_ID,
+            ctx=_ctx(),
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=cast(StepDispatcherRegistry, _MintingGateDispatcher()),
+            pause_snapshot_input=snap,
+            resume_context=ResumeContext(hitl_responses={"child-run-abc": response}),
         )
     assert not [w for w in caught if issubclass(w.category, EscalationTokenKeyedIngressWarning)]

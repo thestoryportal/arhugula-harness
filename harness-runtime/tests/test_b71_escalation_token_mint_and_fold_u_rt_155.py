@@ -653,6 +653,13 @@ def test_the_operator_surface_is_empty_when_no_token_was_minted() -> None:
 # ---------------------------------------------------------------------------
 
 
+# mutation-probe: replace the `escalation_brief = escalation_brief.model_copy(update={
+# "escalation_instance_id": None})` overwrite at the validator seam in
+# `harness-cp/src/harness_cp/workflow_driver.py` with `pass` — i.e. IGNORE the supplied
+# value without overwriting it, which is the failure §0.4(3) names explicitly.
+# (Added at out-of-family merge-gate review: the CP plan's §0.2 probe table obliges
+# criterion 14 to carry an annotation, and the CP record's own annotation covers the
+# DIAGNOSIS side-effect — criterion 16's territory — not the overwrite itself.)
 def test_a_validator_supplied_token_never_reaches_the_escalation_composer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

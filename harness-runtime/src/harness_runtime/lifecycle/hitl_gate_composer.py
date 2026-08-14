@@ -125,7 +125,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NoReturn, TypedDict, cast
 
 from harness_as import BlastRadiusTier, GateLevel
 from harness_core import PersonaTier
@@ -529,10 +529,25 @@ in both states would hide a VALID uniform action in the sole-owner state. The pa
 is preserved verbatim and the disarm is informational, carried here."""
 
 
+class _EscalationOperatorSurface(TypedDict, total=False):
+    """The three §0.6 operator-surface values, typed so the `**` spread stays checked.
+
+    `resolvability` is the CLOSED `PauseLocationVariant` enum rather than a bare
+    `str`: typing it `str` made an invalid wire state representable and admitted a
+    second classification authority beside the pause view (out-of-family review round
+    2, [P2]). `total=False` because the absent case is an EMPTY mapping — that is what
+    keeps the linear/validator call byte-identical to pre-arc.
+    """
+
+    branch_context: str
+    resolvability: PauseLocationVariant
+    resolvability_note: str
+
+
 def _escalation_operator_surface(
     escalation_instance_id: str | None,
     step_context: StepExecutionContext,
-) -> dict[str, str]:
+) -> _EscalationOperatorSurface:
     """The three prose/vocabulary values accompanying the `B-71` token on the wire.
 
     U-RT-155 AC 9 (CP spec v1.119 §0.6). Returns an EMPTY mapping when no token was
@@ -562,7 +577,7 @@ def _escalation_operator_surface(
             f"Escalated from fan-out branch ordinal {branch_index} of the parent step. "
             "Display only; no format is promised and this text is never parsed."
         ),
-        "resolvability": PauseLocationVariant.UNIFORM_FALLBACK_ONLY.value,
+        "resolvability": PauseLocationVariant.UNIFORM_FALLBACK_ONLY,
         "resolvability_note": _RESOLVABILITY_NOTE,
     }
 

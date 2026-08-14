@@ -111,6 +111,7 @@ from harness_cp.pause_resume_protocol_types import (
 )
 from harness_cp.pause_state_projection import (
     PreDispatchUniformFallbackOnlyLocation,
+    diagnose_token_keyed_ingress,
     pre_dispatch_gate_owning_branch_identity,
     walk_pause_tree,
 )
@@ -8008,6 +8009,20 @@ def _execute_parallelization(
         if _peer_resume is not None
         else {}
     )
+    # U-CP-102 / `B-71` (CP spec v1.119 §0.7) — THE INGRESS DIAGNOSTIC, sited at the
+    # resume-ADMISSION point. The token is one-way: `hitl_responses` stays
+    # exclusively `child_run_id`-keyed, so a submitted token matches no location and
+    # is counted-as-UNADDRESSED — normatively correct, and SILENT, which is the very
+    # thing §0.7's diagnosis half exists to prevent. This is the point where the
+    # RECOVERED §26.9 echoes and the SUPPLIED context actually meet, so EVERY caller
+    # reaches it — including `api.resume(..., resume_context=ResumeContext(...))`,
+    # which bypasses `AccessorDerivedResumeContext.from_pause_state` entirely (that
+    # convenience constructor was this check's first home; out-of-family review round
+    # 2 [P2] showed the public path never reaches it).
+    if resume_context is not None and resume_context.hitl_responses:
+        diagnose_token_keyed_ingress(
+            _recovered_pre_dispatch_gate_owning_tokens, resume_context.hitl_responses
+        )
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
     # (NOT consume — the HITL composer one-shot intact) the operator's resume context off the
     # holder. Per paused peer below, `_resolve_effect_fence_gated(branch_key, eligible_key)`
@@ -11958,6 +11973,20 @@ def _execute_orchestrator_workers(
         if _fan_out_resume is not None
         else {}
     )
+    # U-CP-102 / `B-71` (CP spec v1.119 §0.7) — THE INGRESS DIAGNOSTIC, sited at the
+    # resume-ADMISSION point. The token is one-way: `hitl_responses` stays
+    # exclusively `child_run_id`-keyed, so a submitted token matches no location and
+    # is counted-as-UNADDRESSED — normatively correct, and SILENT, which is the very
+    # thing §0.7's diagnosis half exists to prevent. This is the point where the
+    # RECOVERED §26.9 echoes and the SUPPLIED context actually meet, so EVERY caller
+    # reaches it — including `api.resume(..., resume_context=ResumeContext(...))`,
+    # which bypasses `AccessorDerivedResumeContext.from_pause_state` entirely (that
+    # convenience constructor was this check's first home; out-of-family review round
+    # 2 [P2] showed the public path never reaches it).
+    if resume_context is not None and resume_context.hitl_responses:
+        diagnose_token_keyed_ingress(
+            _recovered_pre_dispatch_gate_owning_tokens, resume_context.hitl_responses
+        )
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE / B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION — PEEK
     # (NOT consume — the HITL composer's one-shot consume stays intact, mirroring the linear path)
     # the operator's resume context off the holder. Per paused worker below,

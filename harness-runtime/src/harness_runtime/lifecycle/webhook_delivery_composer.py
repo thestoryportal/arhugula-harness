@@ -30,6 +30,7 @@ from harness_cp.hitl_timeout_degradation import (
     WebhookConfig,
     WebhookPayload,
 )
+from harness_cp.pause_state_projection import PauseLocationVariant
 from harness_cp.validator_framework_types import HITLEscalationBrief
 
 from harness_runtime.lifecycle.audit_offload import (
@@ -497,7 +498,7 @@ class WebhookDeliveryComposer:
         *,
         tenant_id: str | None = None,
         branch_context: str | None = None,
-        resolvability: str | None = None,
+        resolvability: PauseLocationVariant | None = None,
         resolvability_note: str | None = None,
     ) -> WebhookDeliveryResult:
         """Spec-canonical 2-arg brief surface per runtime spec v1.34 §14.10.1

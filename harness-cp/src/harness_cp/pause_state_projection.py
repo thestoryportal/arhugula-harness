@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import hashlib
 import warnings
+from collections.abc import Collection, Mapping
 from enum import StrEnum
 from typing import Annotated, Any, Literal, NamedTuple, Self
 
@@ -99,6 +100,7 @@ __all__ = [
     "PreDispatchUniformFallbackOnlyLocation",
     "TransitivelyPausedLocation",
     "compose_escalation_instance_id",
+    "diagnose_token_keyed_ingress",
     "pre_dispatch_gate_owning_branch_identity",
     "project_pause_locations",
     "walk_pause_tree",
@@ -505,31 +507,36 @@ class EscalationTokenKeyedIngressWarning(UserWarning):
     """
 
 
-def _diagnose_token_keyed_ingress(
-    pause_state: PausedWorkflowState,
-    hitl_responses: dict[str, HITLResult] | None,
+def diagnose_token_keyed_ingress(
+    escalation_instance_ids_by_branch: Mapping[int, str],
+    submitted_hitl_response_keys: Collection[str],
 ) -> None:
-    """Warn when a submitted `hitl_responses` key equals a projected `B-71` token.
+    """Warn when a submitted `hitl_responses` key equals a `B-71` escalation token.
 
-    Deliberately compares against the tokens THIS READ projected, not against a
-    recomputed digest: the point is to catch an operator who read the pause view,
-    saw an `escalation_instance_id`, and reasonably-but-wrongly used it as a key.
+    CP spec v1.119 §0.7. **Sited at the resume-ADMISSION point, not at a convenience
+    constructor** (out-of-family review round 2, [P2]): a first draft ran this only
+    inside `AccessorDerivedResumeContext.from_pause_state`, which the supported
+    `api.resume(..., resume_context=ResumeContext(...))` path bypasses entirely — so a
+    token-keyed response submitted through the public API was silently ignored with NO
+    diagnostic at all, which is the exact silence §0.7's diagnosis half exists to
+    prevent. The driver's fan-out resume path is where the RECOVERED §26.9 echoes and
+    the SUPPLIED context genuinely meet, and every caller reaches it.
+
+    Takes the tokens and the keys rather than a `PausedWorkflowState`, so one authority
+    serves both the projection-derived and the raw-snapshot callers.
 
     The token value itself is NEVER placed in the message — it is a live correlation
-    identifier on an unresolved gate, and §0.5's structural discipline is that
-    identity material does not get re-emitted onto incidental channels. The ORDINAL
-    is named instead, which is the one thing §0.5's scoped carve-out already permits
-    to appear as prose.
+    identifier on an unresolved gate, and §0.5's discipline is that identity material
+    does not get re-emitted onto incidental channels. The ORDINAL is named instead,
+    which is the one thing §0.5's scoped carve-out already permits as prose.
     """
-    if not hitl_responses:
+    if not escalation_instance_ids_by_branch or not submitted_hitl_response_keys:
         return
-    submitted = set(hitl_responses)
+    submitted = set(submitted_hitl_response_keys)
     matched = sorted(
-        location.branch_index
-        for location in pause_state.locations
-        if isinstance(location, PreDispatchUniformFallbackOnlyLocation)
-        and location.escalation_instance_id is not None
-        and location.escalation_instance_id in submitted
+        branch_index
+        for branch_index, token in escalation_instance_ids_by_branch.items()
+        if token in submitted
     )
     if not matched:
         return
@@ -600,18 +607,17 @@ class AccessorDerivedResumeContext(ResumeContext):
         of composing here (CP spec v1.112 §1.1: a `uniform-fallback-only` location
         is answered by the SCALAR field, and that path is the arc's PRIMARY witness).
 
-        **U-CP-102 / `B-71` — the ingress diagnostic (CP spec v1.119 §0.7).** The
-        escalation correlation token is one-way: NO resume surface is keyed by it,
-        and a submitted value that happens to match is COUNTED-AS-UNADDRESSED. That
-        half is normative and structural — `hitl_responses` stays exclusively
-        `child_run_id`-keyed, so a token supplied as a key matches no location and is
-        silently ignored. **Silence is exactly what §0.7's diagnosis half exists to
-        prevent**, so a match against a projected token is SURFACED here rather than
-        dropped on the floor. The TYPED disposition is deferred (`ResumeResult` /
-        `RunResult` are closed schemas — §0.10); this emits through the channel that
-        exists.
+        **U-CP-102 / `B-71`.** The escalation correlation token is one-way: NO resume
+        surface is keyed by it, and a submitted value that matches is
+        COUNTED-AS-UNADDRESSED (§0.7) — `hitl_responses` stays exclusively
+        `child_run_id`-keyed, so a token supplied as a key matches no location here
+        either. The DIAGNOSTIC for that condition deliberately does NOT live in this
+        constructor: it is sited at the driver's resume-ADMISSION point
+        (`diagnose_token_keyed_ingress`), because the supported
+        `api.resume(..., resume_context=ResumeContext(...))` path never reaches this
+        classmethod at all and would otherwise be silently undiagnosed — found by
+        out-of-family review round 2 [P2].
         """
-        _diagnose_token_keyed_ingress(pause_state, hitl_responses)
         return cls(
             pause_state=pause_state,
             hitl_response=hitl_response,
