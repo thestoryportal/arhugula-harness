@@ -344,14 +344,17 @@ def test_treated_cohorts_stay_separated_by_lever(monkeypatch, tmp_path: Path, ca
     assert "lever cohorts: 2" in out
 
 
-# mutation-probe: store args.round_logs instead of the resolved paths in queue_capture()
-def test_queue_snapshots_matched_logs_rather_than_the_live_glob(monkeypatch, tmp_path: Path):
-    """A file created after closure must not be attributed to the closed arc."""
+# mutation-probe: store the globs/paths instead of derived metrics in queue_capture()
+def test_queue_snapshots_derived_metrics_not_a_live_glob(monkeypatch, tmp_path: Path):
+    """Logs are mutable; only the metrics measured at closure describe the arc."""
     qdir = tmp_path / "queue"
     logs = tmp_path / "logs"
     logs.mkdir()
-    (logs / "round1.log").write_text("x\n")
-    (logs / "round2.log").write_text("y\n")
+    a, b = logs / "round1.log", logs / "round2.log"
+    a.write_text("[P1] a real finding\n")
+    b.write_text("clean\n")
+    os.utime(a, (1_000_000, 1_000_000))
+    os.utime(b, (1_000_600, 1_000_600))
     monkeypatch.setattr(am, "QUEUE_DIR", qdir)
     am.queue_capture(
         am.argparse.Namespace(
@@ -364,12 +367,19 @@ def test_queue_snapshots_matched_logs_rather_than_the_live_glob(monkeypatch, tmp
             notes="",
         )
     )
-    # a later arc drops a file that the ORIGINAL pattern would also match
-    (logs / "round3.log").write_text("later\n")
+    snap = json.loads((qdir / "pr-1338.json").read_text())["round_snapshot"]
+    assert snap["review_rounds"] == 2
+    assert snap["round_wall_s"] == [600.0]
+    assert snap["p1_rounds"] == [1]
 
-    entry = json.loads((qdir / "pr-1338.json").read_text())
-    assert len(entry["round_logs"]) == 2, "the snapshot is what closure matched"
-    assert not any("round3" in p for p in entry["round_logs"])
+    # After closure the world moves on: a later arc adds a matching file, and a
+    # re-run rewrites and re-times one of the originals.
+    (logs / "round3.log").write_text("later\n")
+    b.write_text("[P1] a finding that was NOT in this arc\n")
+    os.utime(b, (2_000_000, 2_000_000))
+
+    frozen = json.loads((qdir / "pr-1338.json").read_text())["round_snapshot"]
+    assert frozen == snap, "the queued metrics must not track later edits"
 
 
 # mutation-probe: delete the os.rename claim in drain()
@@ -390,6 +400,43 @@ def test_a_claimed_arc_is_skipped_by_a_concurrent_drain(monkeypatch, tmp_path: P
     monkeypatch.setattr(am, "extract", lambda a: calls.append(a) or _merged_row())
     am.drain(am.argparse.Namespace())
     assert calls == [], "an arc already claimed elsewhere is not captured again"
+
+
+# mutation-probe: split _claim_arc into rename-then-stamp
+def test_a_claim_is_never_observable_without_its_owner_stamp(monkeypatch, tmp_path: Path):
+    """An unstamped claim reads as 'dead owner' and gets stolen from a live one."""
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    path = _queue_entry(qdir, "pr-1338", 1338)
+    entry = json.loads(path.read_text())
+
+    taken = am._claim_arc(path, entry)
+    assert taken is not None and taken.exists()
+    assert not path.exists(), "the source is released only after the claim exists"
+    stamped = json.loads(taken.read_text())["_claim"]
+    assert stamped["pid"] == os.getpid()
+    assert stamped["host"] == socket.gethostname()
+    # and the stamp is what liveness reads, so a live owner is never 'dead'
+    assert am._claim_owner_is_dead(taken) is False
+
+
+# mutation-probe: catch OSError broadly in _claim_arc and report a lost race
+def test_a_non_race_claim_failure_aborts_rather_than_reporting_a_lost_race(
+    monkeypatch, tmp_path: Path
+):
+    """Reporting an I/O failure as a peer claim lets an incomplete drain exit 0."""
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    path = _queue_entry(qdir, "pr-1338", 1338)
+    entry = json.loads(path.read_text())
+
+    def unwritable(*_a, **_k):
+        raise PermissionError(13, "read-only file system")
+
+    monkeypatch.setattr(Path, "open", unwritable)
+    with pytest.raises(am.AbortError) as exc:
+        am._claim_arc(path, entry)
+    assert "cannot claim" in str(exc.value)
 
 
 # mutation-probe: delete the _recover_dead_claims() call at the top of drain()

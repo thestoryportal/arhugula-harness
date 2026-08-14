@@ -294,16 +294,29 @@ def extract(args: argparse.Namespace) -> ArcRow:
         prov["total_arc_wall_s"] = "unmapped:not-merged"
     prov["gh_fields"] = "derived"
 
-    if args.round_logs:
-        logs, gaps, p1 = round_metrics(args.round_logs)
-        row.review_rounds = len(logs)
-        row.round_wall_s = gaps
-        row.p1_rounds = p1
-        row.round_log_source = str(Path(args.round_logs[0]).parent)
-        first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
-        last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
-        row.first_round_at = first.isoformat()
-        row.last_round_at = last.isoformat()
+    # A snapshot taken by `queue` at closure wins over any live glob: the logs
+    # it measured are the arc's own, and re-deriving now would read whatever
+    # those files have since become.
+    snapshot = getattr(args, "round_snapshot", None)
+    if snapshot or args.round_logs:
+        if snapshot:
+            row.review_rounds = snapshot["review_rounds"]
+            row.round_wall_s = snapshot["round_wall_s"]
+            row.p1_rounds = snapshot["p1_rounds"]
+            row.round_log_source = snapshot["round_log_source"]
+            first = parse_iso(snapshot["first_round_at"])
+            row.first_round_at = snapshot["first_round_at"]
+            row.last_round_at = snapshot["last_round_at"]
+        else:
+            logs, gaps, p1 = round_metrics(args.round_logs)
+            row.review_rounds = len(logs)
+            row.round_wall_s = gaps
+            row.p1_rounds = p1
+            row.round_log_source = str(Path(args.round_logs[0]).parent)
+            first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
+            last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
+            row.first_round_at = first.isoformat()
+            row.last_round_at = last.isoformat()
         if row.merged_at:
             # The real arc window: first review activity through merge. This is
             # the metric the ~5h/arc claim should be measured against -- NOT
@@ -392,17 +405,33 @@ def queue_capture(args: argparse.Namespace) -> int:
     # `round-*.log`, a re-run -- would be silently attributed to this arc, and a
     # match postdating the merge can even yield a negative arc_span_s. The glob
     # must mean what it matched at closure, so it is snapshotted, not deferred.
-    resolved: list[str] = []
+    # Snapshot the DERIVED METRICS, not just the matched paths. Paths alone
+    # still point at mutable files: a log touched, rewritten, or deleted between
+    # closure and the next arc's drain would silently change round_wall_s,
+    # p1_rounds and arc_span_s -- or make the arc undrainable. Deriving here,
+    # while the logs are still exactly what the arc produced, means drain does
+    # no recomputation at all and cannot be affected by later edits.
+    snapshot: dict | None = None
     if args.round_logs:
-        logs, _gaps, _p1 = round_metrics(args.round_logs)
-        resolved = [str(p) for p in logs]
+        logs, gaps, p1 = round_metrics(args.round_logs)
+        first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
+        last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
+        snapshot = {
+            "review_rounds": len(logs),
+            "round_wall_s": gaps,
+            "p1_rounds": p1,
+            "first_round_at": first.isoformat(),
+            "last_round_at": last.isoformat(),
+            "round_log_source": str(logs[0].parent),
+            "matched": [str(p) for p in logs],
+        }
 
     entry = {
         "pr": args.pr,
         "arc_id": args.arc_id,
         "arc_type": args.arc_type,
         "decisions": args.decisions,
-        "round_logs": resolved,
+        "round_snapshot": snapshot,
         "round_logs_globs": args.round_logs or [],
         "levers": args.levers or [],
         "notes": args.notes or "",
@@ -445,6 +474,63 @@ def _process_is_alive(pid: int) -> bool:
     return True
 
 
+def _claim_owner_is_dead(claim: Path) -> bool:
+    """True only when the recorded owner is provably gone.
+
+    Unknown ownership is never treated as dead: an unreadable stamp or a claim
+    from another host means "cannot tell", and guessing wrong hands a live
+    peer's arc to a second drain.
+    """
+    try:
+        held = json.loads(claim.read_text()).get("_claim", {})
+    except (json.JSONDecodeError, OSError):
+        return False
+    pid, host = held.get("pid"), held.get("host")
+    if not isinstance(pid, int) or host != socket.gethostname():
+        return False
+    return not _process_is_alive(pid)
+
+
+def _claim_arc(path: Path, entry: dict) -> Path | None:
+    """Take ownership of a queued arc, stamped in ONE atomic step.
+
+    The claim and its ownership stamp have to be the same operation. A
+    rename-then-write leaves a window in which the claim file exists with NO
+    stamp, and a peer scanning exactly then reads "no owner" as "dead owner",
+    restores the arc, and captures it alongside its still-live owner -- both
+    drains reach the ledger and can emit duplicate rows. An O_EXCL create of
+    the already-stamped file closes that window: the claim never exists
+    unstamped, and only one drain can create it.
+    """
+    taken = path.with_suffix(".taken")
+    payload = json.dumps(
+        {**entry, "_claim": {"pid": os.getpid(), "host": socket.gethostname()}},
+        sort_keys=True,
+    )
+    for _attempt in (1, 2):
+        try:
+            with taken.open("x") as fh:
+                fh.write(payload)
+        except FileExistsError:
+            if _attempt == 1 and _claim_owner_is_dead(taken):
+                taken.unlink(missing_ok=True)
+                continue  # the owner is gone; retry once against the freed name
+            return None
+        except OSError as exc:
+            # A read-only queue, a permission problem, an I/O error -- none of
+            # these are a lost race, and reporting them as one would let an
+            # incomplete drain exit 0.
+            raise AbortError(f"cannot claim {path.name}: {exc}") from exc
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            # A peer finished this arc between listing and claiming it.
+            taken.unlink(missing_ok=True)
+            return None
+        return taken
+    return None
+
+
 def _recover_dead_claims() -> None:
     """Return claims held by a DEAD drain, and only those.
 
@@ -465,19 +551,11 @@ def _recover_dead_claims() -> None:
         restored = claim.with_suffix(".json")
         if restored.exists():
             continue
-        try:
-            held = json.loads(claim.read_text()).get("_claim", {})
-        except json.JSONDecodeError:
-            held = {}
-        pid, host = held.get("pid"), held.get("host")
-        if host and host != socket.gethostname():
-            print(f"  claim {claim.name} is held on {host}; leaving it alone", file=sys.stderr)
-            continue
-        if isinstance(pid, int) and _process_is_alive(pid):
-            print(f"  {claim.name} is being captured by live pid {pid}; skipping")
+        if not _claim_owner_is_dead(claim):
+            print(f"  {claim.name} is held by a live or unverifiable owner; leaving it")
             continue
         os.replace(claim, restored)
-        print(f"  recovered claim from dead pid {pid} -> {restored.name}")
+        print(f"  recovered claim from a dead owner -> {restored.name}")
 
 
 def drain(_args: argparse.Namespace) -> int:
@@ -512,27 +590,19 @@ def drain(_args: argparse.Namespace) -> int:
         # breaks one-row-per-arc and biases every cohort. os.rename is atomic:
         # exactly one drain wins the claim, the other sees it vanish and moves
         # on. Same structural fix as the queue itself -- no lock required.
-        taken = path.with_suffix(".taken")
-        try:
-            os.rename(path, taken)
-        except OSError:
+        taken = _claim_arc(path, entry)
+        if taken is None:
             print(f"  {arc_id}: claimed by a concurrent drain, skipping")
             continue
-        # Stamp who holds the claim, so a later drain can tell a crashed owner
-        # from a live one by exact pid rather than by guessing at an age.
-        taken.write_text(
-            json.dumps(
-                {**entry, "_claim": {"pid": os.getpid(), "host": socket.gethostname()}},
-                sort_keys=True,
-            )
-        )
 
         args = argparse.Namespace(
             pr=entry["pr"],
             arc_id=entry.get("arc_id"),
             arc_type=entry.get("arc_type"),
             decisions=entry.get("decisions"),
-            round_logs=entry.get("round_logs") or None,
+            # The metrics were derived at closure; drain never re-reads the logs.
+            round_snapshot=entry.get("round_snapshot"),
+            round_logs=None,
             levers=entry.get("levers"),
             notes=entry.get("notes", ""),
         )
