@@ -970,31 +970,6 @@ def test_trim_drift_log_refuses_to_write_over_the_hard_byte_cap(tmp_path, capsys
 
 
 # --- out-of-family review round 11: the PR-compatible split ------------------
-
-
-def test_archive_current_next_action_never_touches_the_status_file(tmp_path, capsys):
-    """[P1] (codex round 11): a rotation writing BOTH files can never transit a
-    PR — bundled with the refresh, the PR's base..head diff includes the archive
-    so the §12.2.1 shape gate rejects a refresh-prefixed title; titled otherwise
-    the squash merge is non-terminating and reds main. Split, each step is
-    individually guard-clean."""
-    status = tmp_path / ".harness" / "roadmap_status.md"
-    status.parent.mkdir(parents=True)
-    status.write_text(SAMPLE)
-    na = tmp_path / ".harness" / "roadmap-next-action-archive.md"
-    na.write_text(SAMPLE_ARCHIVE)
-
-    rc = rsr.main(["--status", str(status), "--archive-current-next-action"])
-    assert rc == 0, capsys.readouterr()
-    assert status.read_text() == SAMPLE, "the archive step must NOT touch roadmap_status.md"
-    assert "**Prior next action (post-#1).**" in na.read_text()
-
-    # idempotent
-    rc2 = rsr.main(["--status", str(status), "--archive-current-next-action"])
-    assert rc2 == 0
-    assert na.read_text().count("**Prior next action (post-#1).**") == 1
-
-
 def test_refresh_installs_the_next_action_in_the_same_single_file_write(tmp_path, capsys):
     status = tmp_path / ".harness" / "roadmap_status.md"
     status.parent.mkdir(parents=True)
@@ -1040,20 +1015,6 @@ def test_install_next_action_rejects_empty_multiparagraph_and_bad_pr():
         rsr.install_next_action(SAMPLE, "nope", "body")
 
 
-def test_install_next_action_refuses_when_the_old_round_is_not_archived():
-    """[P2] (codex round 12): splitting the rotation made it possible to run the
-    SECOND step without the first — or against a stale archive — silently
-    destroying the only record of the outgoing round. The split is safe only if
-    this end enforces the pairing."""
-    with pytest.raises(rsr.RoadmapStatusError, match="NOT in"):
-        rsr.install_next_action(SAMPLE, "1338", "New body.", archive_text="(empty archive)")
-
-    archived = rsr.archive_current_next_action(SAMPLE, SAMPLE_ARCHIVE)
-    assert archived is not None
-    out = rsr.install_next_action(SAMPLE, "1338", "New body.", archive_text=archived)
-    assert "**Current next action (post-#1338).** New body." in out
-
-
 def test_refresh_refuses_to_write_over_the_hard_byte_cap(tmp_path, capsys):
     """[P2] (codex round 12): --next-action can push the head past the cap, and
     writing it would ship a status file --check rejects. The rotation and trim
@@ -1084,3 +1045,41 @@ def test_refresh_refuses_to_write_over_the_hard_byte_cap(tmp_path, capsys):
     assert rc == 2
     assert "hard cap" in capsys.readouterr().err
     assert status.read_text() == before, "must fail CLOSED"
+
+
+# --- B-168 exit (iii): archive round N-1, so all three constraints hold -------
+
+
+def test_archive_superseded_never_touches_the_status_file(tmp_path, capsys, monkeypatch):
+    """`B-168` exit (iii). Archiving the round that is still CURRENT breaks the
+    archive's prior-only invariant; archiving the SUPERSEDED one preserves it,
+    and the write may then ride an ordinary content PR."""
+    na = tmp_path / "archive.md"
+    na.write_text(SAMPLE_ARCHIVE)
+    superseded = "**Current next action (post-#999).** An older round."
+    out = rsr.archive_superseded_round(superseded, na.read_text())
+    assert out is not None
+    assert "**Prior next action (post-#999).** An older round." in out
+    assert out.count("**Current next action (") == 0
+    # idempotent
+    assert rsr.archive_superseded_round(superseded, out) is None
+
+
+def test_find_superseded_round_skips_the_live_round():
+    """It must never return the round that is still live — that is the whole
+    point of exit (iii)."""
+    live = rsr.DEFAULT_STATUS.read_text()
+    live_label = rsr._current_round_label(live)
+    assert live_label is not None
+    found = rsr.find_superseded_round(rsr.DEFAULT_STATUS, rsr.ROOT)
+    if found is not None:
+        label, _ = found
+        assert label != live_label
+
+
+def test_install_next_action_does_not_require_prior_archiving():
+    """Deliberate: under exit (iii) the archive lags by exactly one arc BY
+    DESIGN. An earlier draft enforced archive-before-replace, which silently
+    encoded a DIFFERENT exit and made the refresh unrunnable when it is needed."""
+    out = rsr.install_next_action(SAMPLE, "1338", "New body.")
+    assert "**Current next action (post-#1338).** New body." in out

@@ -61,11 +61,11 @@ snapshot:
   total: 168
   open: 1
   design_substrate_gated: 0
-  registered_finding: 34
+  registered_finding: 33
   operator_gated: 0
   held: 2
-  closed: 131
-  identity_digest: 'f5694f22f900ae3d'
+  closed: 132
+  identity_digest: 'ac9f5f547652bff7'
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9237,7 +9237,7 @@ items:
 - id: B-168
   title: 'archiving a superseded next-action round has no legal commit shape: prior-only archive, single-file
     terminating refresh, and one-non-refresh-commit lag tolerance cannot all hold'
-  status: registered_finding
+  status: closed
   summary: 'THE TRILEMMA, each leg independently established and none of them new to this arc. (a) The
     next-action archive is PRIOR-ROUNDS-ONLY by design -- its own header states the current round lives
     only in the live head, because a one-file terminating refresh can never rotate the archive (recorded
@@ -9250,23 +9250,23 @@ items:
     (c), and cannot carry a still-current round (a) -- which is what riding the content PR itself would
     do. EACH LEG WAS VERIFIED: (c) was reproduced against the guard; (a) was reproduced by running --archive-current-next-action
     in the content PR and watching the enforcing test go RED.'
-  close_out: 'WHAT ALREADY EXISTS AND IS CORRECT IN ISOLATION: --archive-current-next-action writes
-    ONLY the archive and never touches roadmap_status.md; --refresh --next-action installs the pointer
-    inside the single-file terminating refresh and REFUSES if the outgoing round is not already archived.
-    The unsettled part is purely WHERE the archive step may legally run. STEP 1 -- pick the leg to relax,
-    which is an operator/architecture call, not a coding one, because two of the three legs are governance:
-    (i) relax (a) by allowing the archive to hold the current round during the content-merge-to-refresh
-    window, which costs the prior-only invariant and needs that test rewritten with a stated reason;
-    (ii) relax (c) by widening _owed_lag to tolerate an archive-only commit specifically (a narrow,
-    shape-verified exception in the same style as the existing ones, NOT a general loosening); (iii)
-    archive round N-1 rather than round N, reading the superseded text from the live head''s git history
-    as the archive header already describes -- this preserves all three legs and needs a new --archive-superseded
-    --from-ref mode, but means the newest round always lags by one arc. STEP 2 -- whichever is chosen,
-    the losing constraint must be amended AT ITS SOURCE (the archive header, s12.2.1, or the guard)
-    rather than worked around at a call site. FALSIFIER: a demonstration that some fourth commit shape
-    satisfies all three legs unchanged, in which case this closes as a documentation fix. UNTIL THEN
-    THE RECORD IS NOT LOST: the live head''s own git history is lossless (git log -p -- .harness/roadmap_status.md),
-    which is why this is a choreography defect and not a data-loss one.'
+  close_out: 'RESOLVED 2026-08-14 by EXIT (iii), selected by the operator''s settle-first direction
+    and implemented at PR #1338. Archive round N-1 -- the most recent ALREADY-SUPERSEDED round, read
+    from the live head''s git history -- rather than round N. This satisfies ALL THREE constraints UNCHANGED:
+    the archive keeps its prior-only invariant (the live round is never written there), the terminating
+    refresh still touches only roadmap_status.md, and the archive write rides the substantive CONTENT
+    PR so the content merge remains the single non-refresh commit _owed_lag tolerates. NO GOVERNANCE
+    AMENDMENT WAS NEEDED, because exit (iii) is not a new convention at all: the archive''s own header
+    has always specified exactly this ("archiving happens in the NEXT content PR after a round is superseded...
+    the superseded text is taken from git history of the live head"). The defect was that the tool''s
+    first draft archived the CURRENT round instead. SHIPPED: --archive-superseded (archive-only write;
+    finds the superseded round by walking the head''s history for the most recent differing round label),
+    and the archive-before-replace precondition on --refresh --next-action was REMOVED, since it silently
+    encoded exit (i) and made the refresh unrunnable at the one moment it is needed. CONSEQUENCE, stated
+    plainly: the archive lags by exactly one arc by design, and the live head''s git history (git log
+    -p -- .harness/roadmap_status.md) is the lossless record for that interval. WITNESSED on the real
+    repository: with post-#1337 live, --archive-superseded selected post-#1336, wrote only the archive,
+    left roadmap_status.md byte-identical, and the prior-only enforcing test stayed green.'
   council: Possibly. Two of the three legs are governance surfaces (the prior-only invariant and s12.2.1)
     and the third is the drift guard, so the choice is a cross-domain trade rather than a coding preference.
     If the operator does not simply select a leg, a dyadic convening on process-invariant vs guard-precision
@@ -9274,3 +9274,4 @@ items:
   heading: '### B-168 · Archiving a superseded next-action round has no legal commit shape — three workspace
     constraints collide *(surfaced by out-of-family review rounds 11–13 of the prevention arc preceding
     `U-CP-102`, 2026-08-14)*'
+  pr: 'PR #1338'

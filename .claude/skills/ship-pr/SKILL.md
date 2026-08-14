@@ -118,17 +118,25 @@ This is the step most often done wrong. After the PR merges:
    on `main` touching it without being a verified terminating refresh satisfies
    neither guard exception, and `main`'s post-merge CI hard-fails.
 
-   **Archiving the superseded round is a KNOWN-OPEN choreography question — see
-   `B-168`, and do not improvise it.** Three constraints collide: (a) the archive
-   is PRIOR-rounds-only by design, since a one-file refresh can never rotate it;
-   (b) the terminating refresh may touch only `roadmap_status.md`; (c) `_owed_lag`
-   tolerates exactly ONE non-refresh commit after a verified refresh, so an
-   archive-only PR *after* the content merge hard-fails. `--archive-current-next-action`
-   exists and is correct in isolation, but WHERE it may run is unsettled. Until
-   `B-168` closes, the live head's own git history remains the lossless record of
-   any not-yet-archived round (`git log -p -- .harness/roadmap_status.md`).
+   **Archive the SUPERSEDED round (N−1) inside the substantive content PR:**
+   ```
+   just roadmap-status --archive-superseded
+   ```
+   It reads the most recent round that is no longer live from the head's own git
+   history and appends it to `.harness/roadmap-next-action-archive.md` as `Prior`.
+   Archive-only write, so the content merge stays the single non-refresh commit
+   `_owed_lag` tolerates.
 
-   `--refresh` REFUSES to write a second file rather than silently producing a
+   **Why N−1 and not the live round** (`B-168`, resolved exit (iii)): three
+   constraints collide — the archive is PRIOR-rounds-only, the refresh may touch
+   only `roadmap_status.md`, and `_owed_lag` tolerates exactly one non-refresh
+   commit after a refresh. Archiving the round that is still current satisfies
+   the first two and breaks the third's premise; archiving N−1 satisfies all
+   three **unchanged**, and is exactly what the archive's own header has always
+   specified. The archive therefore lags by one arc BY DESIGN; the live head's
+   git history is the lossless record meanwhile.
+
+      `--refresh` REFUSES to write a second file rather than silently producing a
    two-file commit; if it says a drift-log trim is owed, run `--trim-drift-log`
    as its own step — and if the overflow comes from a NEW drift event, pass it
    there (`--trim-drift-log --drift-source ... --drift-resolution ... --date ...`),

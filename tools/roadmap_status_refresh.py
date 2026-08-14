@@ -363,6 +363,58 @@ def trim_drift_log(
 # --- Next-action rotation (the relief valve `--refresh` structurally cannot be) --
 
 
+def _current_round_label(text: str) -> str | None:
+    m = _CURRENT_PARAGRAPH_RE.search(text)
+    if m is None:
+        return None
+    label = re.search(r"\(post-#([^)]*)\)", m.group(0))
+    return label.group(1) if label else None
+
+
+def find_superseded_round(status_path: Path, project_dir: Path) -> tuple[str, str] | None:
+    """The most recent next-action round that is NO LONGER the live one, read
+    from the live head's own git history.
+
+    This is the archive's OWN documented convention, verbatim: *archiving happens
+    in the NEXT content PR after a round is superseded, and the superseded text is
+    taken from git history of the live head.* Archiving the round that is still
+    CURRENT (an earlier draft of this tool did exactly that) breaks the archive's
+    prior-only invariant — the trilemma recorded at `B-168`, resolved by exit
+    (iii): archive round N-1, so all three constraints hold UNCHANGED and the
+    write may ride an ordinary content PR.
+
+    Returns (label, paragraph) or None when nothing is superseded yet.
+    """
+    rel = str(status_path.resolve().relative_to(project_dir.resolve()))
+    live = _current_round_label(status_path.read_text())
+    for rev in _sh(f"git log --format=%H -- {rel}", project_dir).split():
+        blob = _sh(f"git show {rev}:{rel}", project_dir)
+        if not blob:
+            continue
+        label = _current_round_label(blob)
+        if label and label != live:
+            m = _CURRENT_PARAGRAPH_RE.search(blob)
+            if m:
+                return label, m.group(0)
+    return None
+
+
+def archive_superseded_round(paragraph: str, archive_text: str) -> str | None:
+    """Append an already-SUPERSEDED round to the archive, relabelled `Prior`.
+    Archive-only write; idempotent. Returns None if already present."""
+    demoted = paragraph.replace("**Current next action", "**Prior next action", 1)
+    if demoted.strip() in archive_text:
+        return None
+    ins = _ARCHIVE_INSERT_RE.search(archive_text)
+    if ins is None:
+        raise RoadmapStatusError(
+            f"{NEXT_ACTION_ARCHIVE.name}: no `---` header rule found — cannot "
+            "determine the most-recent-first insertion point"
+        )
+    at = ins.end()
+    return archive_text[:at] + demoted.strip() + "\n\n" + archive_text[at:]
+
+
 def archive_current_next_action(text: str, archive_text: str) -> str | None:
     """Append the live `**Current next action**` paragraph to the archive,
     relabelled `Prior`, WITHOUT touching the status file. Returns the new archive
@@ -395,15 +447,17 @@ def archive_current_next_action(text: str, archive_text: str) -> str | None:
     return archive_text[:at] + demoted.strip() + "\n\n" + archive_text[at:]
 
 
-def install_next_action(text: str, pr_ref: str, body: str, archive_text: str | None = None) -> str:
+def install_next_action(text: str, pr_ref: str, body: str) -> str:
     """Replace the live pointer paragraph. STATUS FILE ONLY — safe inside the
     single-file terminating refresh.
 
-    REFUSES unless the outgoing round is already archived (when `archive_text` is
-    supplied). Splitting the rotation into two steps made it possible to run the
-    second WITHOUT the first — or against a stale archive — silently destroying
-    that round's history, which the archive is the sole record of (codex round
-    12 [P2]). The split is only safe if this end enforces the pairing.
+    Deliberately does NOT require the outgoing round to be archived first. Under
+    the `B-168` exit (iii) resolution the archive lags by exactly one arc BY
+    DESIGN — the next content PR archives this round via `--archive-superseded`,
+    and the live head's git history is the lossless record meanwhile. An earlier
+    draft enforced archive-before-replace, which silently encoded a DIFFERENT
+    exit (relaxing the archive's prior-only invariant) and made the refresh
+    unrunnable at the one moment it is needed.
     """
     m = _CURRENT_PARAGRAPH_RE.search(text)
     if m is None:
@@ -425,14 +479,6 @@ def install_next_action(text: str, pr_ref: str, body: str, archive_text: str | N
             "--next-action requires a non-empty body — refusing to install an empty "
             "next-action pointer (an empty frontier passes --check silently)"
         )
-    if archive_text is not None:
-        demoted = m.group(0).replace("**Current next action", "**Prior next action", 1)
-        if demoted.strip() not in archive_text:
-            raise RoadmapStatusError(
-                "the outgoing next-action round is NOT in "
-                f"{NEXT_ACTION_ARCHIVE.name} — run `--archive-current-next-action` "
-                "first; replacing it now would destroy the only record of it"
-            )
     new_paragraph = f"**Current next action (post-#{digits.group(1)}).** {body.strip()}"
     return text[: m.start()] + new_paragraph + text[m.end() :]
 
@@ -868,11 +914,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--trim-drift-log", action="store_true", help="cap+archive drift log only")
     ap.add_argument(
-        "--archive-current-next-action",
+        "--archive-superseded",
         action="store_true",
-        help="append the live Current next-action paragraph to the next-action "
-        "archive as Prior. Writes ONLY the archive, so it transits a PR cleanly "
-        "and never touches roadmap_status.md. Pair with `--refresh --next-action`",
+        help="append the most recent ALREADY-SUPERSEDED next-action round (read "
+        "from the live head's git history) to the next-action archive as Prior. "
+        "Writes ONLY the archive, so it rides an ordinary content PR. Archiving "
+        "the round that is still CURRENT would break the archive's prior-only "
+        "invariant — see B-168 exit (iii)",
     )
     ap.add_argument(
         "--next-action",
@@ -1025,23 +1073,27 @@ def main(argv: list[str] | None = None) -> int:
         print(f"moved {moved} row(s) to {args.archive}")
         return 0
 
-    if args.archive_current_next_action:
+    if args.archive_superseded:
         na_archive = status_root / ".harness" / "roadmap-next-action-archive.md"
         if not na_archive.is_file():
             print(f"next-action archive not found: {na_archive}", file=sys.stderr)
             return 2
-        new_archive = archive_current_next_action(text, na_archive.read_text())
+        found = find_superseded_round(args.status, status_root)
+        if found is None:
+            print("no superseded next-action round found in history — nothing to archive")
+            return 0
+        label, paragraph = found
+        new_archive = archive_superseded_round(paragraph, na_archive.read_text())
         if new_archive is None:
-            print("next-action round already archived — no change")
+            print(f"superseded round post-#{label} is already archived — no change")
             return 0
         if args.dry_run:
-            print(f"would archive the live round to {na_archive.name}")
+            print(f"would archive superseded round post-#{label} to {na_archive.name}")
             return 0
         na_archive.write_text(new_archive)
         print(
-            f"archived the live round to {na_archive.name} "
-            f"(ONE file; {args.status.name} untouched — now run "
-            "`--refresh --next-action ...` as the terminating refresh)"
+            f"archived superseded round post-#{label} to {na_archive.name} "
+            f"(ONE file; {args.status.name} untouched — this rides the CONTENT PR)"
         )
         return 0
 
@@ -1054,13 +1106,7 @@ def main(argv: list[str] | None = None) -> int:
         new_text = refresh_in_flight(new_text, state)
         new_text = prepend_recently_completed(new_text, args.pr, args.date, args.notes)
         if args.next_action is not None:
-            na_archive = status_root / ".harness" / "roadmap-next-action-archive.md"
-            new_text = install_next_action(
-                new_text,
-                args.pr,
-                args.next_action,
-                na_archive.read_text() if na_archive.is_file() else "",
-            )
+            new_text = install_next_action(new_text, args.pr, args.next_action)
         if args.drift_source:
             new_text = prepend_drift_log(
                 new_text, args.date, args.drift_source, args.drift_resolution or ""
