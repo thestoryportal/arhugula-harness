@@ -270,7 +270,9 @@ def test_production_delivers_both_same_position_placements_to_the_branch_context
     assert branch_contexts, "no branch received a step_context"
 
     for ctx in branch_contexts:
-        placements = tuple(getattr(ctx, "hitl_placements", ()))
+        placements: tuple[HITLPlacement, ...] = tuple(
+            cast("tuple[HITLPlacement, ...]", getattr(ctx, "hitl_placements", ()))
+        )
         assert len(placements) == 2, (
             f"production must deliver BOTH declared placements; got {len(placements)}"
         )
@@ -307,7 +309,7 @@ def test_production_delivers_the_b71_basis_on_the_same_branch_context() -> None:
         c
         for c in branch_contexts
         if getattr(c, "pre_dispatch_escalation_basis", None) is not None
-        and len(tuple(getattr(c, "hitl_placements", ()))) == 2
+        and len(cast("tuple[HITLPlacement, ...]", getattr(c, "hitl_placements", ()))) == 2
     ]
     assert carrying_both, (
         "no branch context carried BOTH the B-71 basis and the duplicated placement "
