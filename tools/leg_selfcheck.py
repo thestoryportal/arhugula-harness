@@ -223,6 +223,36 @@ def enclosing_row_at(path: str, lineno: int) -> str | None:
     return best
 
 
+def context_with_positions(diff: str) -> dict[str, list[tuple[int, str]]]:
+    """Unchanged context lines WITH their new-file positions.
+
+    Discarding context positions meant two body-only hunks in an aggregate file,
+    each whose unchanged context carries its own row's count, both attributed to
+    `(unattributed in file)` and produced a false HARD disagreement (codex round
+    12 [P2])."""
+    out: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    current: str | None = None
+    lineno = 0
+    for ln in diff.splitlines():
+        m = re.match(r"^\+\+\+ b/(.+)$", ln)
+        if m:
+            current = m.group(1)
+            out.setdefault(current, [])
+            continue
+        h = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", ln)
+        if h:
+            lineno = int(h.group(1))
+            continue
+        if current is None:
+            continue
+        if ln.startswith("+") and not ln.startswith("+++"):
+            lineno += 1
+        elif ln.startswith(" "):
+            out[current].append((lineno, ln[1:]))
+            lineno += 1
+    return dict(out)
+
+
 def context_by_file(diff: str) -> dict[str, list[str]]:
     """Unchanged CONTEXT lines, grouped by file.
 
@@ -387,7 +417,29 @@ def _resolve_cited_path(rel: str, source: str) -> Path | None:
     return None
 
 
-def check_cites(by_file: dict[str, list[str]], report: Report) -> None:
+def _target_line_count(path: Path, rel: str, base_ref: str | None) -> int | None:
+    """Line count of a cited target, read from the SNAPSHOT being judged.
+
+    A committed run judges committed HEAD, but reading the working tree let local
+    WIP that adds lines make a stale committed cite pass (codex round 12 [P2]).
+    In committed mode read the blob from HEAD; fall back to the working tree only
+    when the path is untracked there.
+    """
+    if base_ref is not None:
+        try:
+            blob = _run_checked(["git", "show", f"HEAD:{rel}"])
+            return len(blob.splitlines())
+        except BaseRefError:
+            pass  # untracked at HEAD (a brand-new file) — fall through
+    try:
+        return len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+    except OSError:  # pragma: no cover
+        return None
+
+
+def check_cites(
+    by_file: dict[str, list[str]], report: Report, committed_ref: str | None = None
+) -> None:
     """Re-resolve every `path:NNN` the arc ADDED, at the CURRENT HEAD.
 
     This is the check that would have caught the `:1543`/`:2238` fold sites and
@@ -427,10 +479,10 @@ def check_cites(by_file: dict[str, list[str]], report: Report) -> None:
                 )
                 continue
             checked += 1
-            try:
-                total = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
-            except OSError as e:  # pragma: no cover - unreadable file
-                report.add("cite", ADVISORY, f"{rel}: unreadable ({e})")
+            resolved_rel = str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else rel
+            total = _target_line_count(path, resolved_rel, committed_ref)
+            if total is None:
+                report.add("cite", ADVISORY, f"{rel}: unreadable")
                 continue
             nums = _cite_line_numbers(spec)
             # `n > total` alone accepted `file.py:0` as resolved: line 0 never
@@ -1013,8 +1065,13 @@ def run(base: str, uncommitted: bool) -> Report:
     report.stats["base"] = base
     report.stats["changed_files"] = len(paths)
     report.stats["added_lines"] = len(added)
-    check_cites(by_file, report)
-    check_counts(by_file, report, context_by_file(diff), added_with_positions(diff))
+    check_cites(by_file, report, None if uncommitted else "HEAD")
+    ctx_pos = context_with_positions(diff)
+    all_pos = {
+        path: added_with_positions(diff).get(path, []) + ctx_pos.get(path, [])
+        for path in set(added_with_positions(diff)) | set(ctx_pos)
+    }
+    check_counts(by_file, report, context_by_file(diff), all_pos)
     check_label_collisions(by_file, report)
     amended: set[str] = set()
     for path, nums in changed_line_numbers(diff).items():

@@ -395,9 +395,16 @@ def archive_current_next_action(text: str, archive_text: str) -> str | None:
     return archive_text[:at] + demoted.strip() + "\n\n" + archive_text[at:]
 
 
-def install_next_action(text: str, pr_ref: str, body: str) -> str:
+def install_next_action(text: str, pr_ref: str, body: str, archive_text: str | None = None) -> str:
     """Replace the live pointer paragraph. STATUS FILE ONLY — safe inside the
-    single-file terminating refresh."""
+    single-file terminating refresh.
+
+    REFUSES unless the outgoing round is already archived (when `archive_text` is
+    supplied). Splitting the rotation into two steps made it possible to run the
+    second WITHOUT the first — or against a stale archive — silently destroying
+    that round's history, which the archive is the sole record of (codex round
+    12 [P2]). The split is only safe if this end enforces the pairing.
+    """
     m = _CURRENT_PARAGRAPH_RE.search(text)
     if m is None:
         raise RoadmapStatusError(
@@ -418,6 +425,14 @@ def install_next_action(text: str, pr_ref: str, body: str) -> str:
             "--next-action requires a non-empty body — refusing to install an empty "
             "next-action pointer (an empty frontier passes --check silently)"
         )
+    if archive_text is not None:
+        demoted = m.group(0).replace("**Current next action", "**Prior next action", 1)
+        if demoted.strip() not in archive_text:
+            raise RoadmapStatusError(
+                "the outgoing next-action round is NOT in "
+                f"{NEXT_ACTION_ARCHIVE.name} — run `--archive-current-next-action` "
+                "first; replacing it now would destroy the only record of it"
+            )
     new_paragraph = f"**Current next action (post-#{digits.group(1)}).** {body.strip()}"
     return text[: m.start()] + new_paragraph + text[m.end() :]
 
@@ -866,14 +881,6 @@ def main(argv: list[str] | None = None) -> int:
         "in the SAME single-file write (requires --pr)",
     )
     ap.add_argument(
-        "--rotate-next-action",
-        metavar="BODY",
-        help="demote the live Current next-action paragraph into the next-action "
-        "archive and install BODY as the new one (requires --pr). Writes MORE THAN "
-        "ONE FILE, so it is a CONTENT commit that must land BEFORE the terminating "
-        "refresh, never as it (§12.2.1)",
-    )
-    ap.add_argument(
         "--refresh",
         action="store_true",
         help="mechanical refresh (anchor + in-flight + recently-completed)",
@@ -1038,64 +1045,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    if args.rotate_next_action is not None:
-        if not args.pr:
-            ap.error("--rotate-next-action requires --pr")
-        na_archive = status_root / ".harness" / "roadmap-next-action-archive.md"
-        if not na_archive.is_file():
-            print(f"next-action archive not found: {na_archive}", file=sys.stderr)
-            return 2
-        new_text, new_archive_text = rotate_next_action(
-            text, na_archive.read_text(), args.pr, args.rotate_next_action
-        )
-        # Derive the drift archive from the TARGET checkout when --archive was
-        # not supplied: this path already derives the next-action archive from
-        # `status_root`, but passed the module-global default here, so a
-        # cross-checkout rotation removed rows from the TARGET status and
-        # appended them to the CALLER's archive — contaminating one checkout and
-        # leaving the target without its history (codex round 7 [P2]).
-        drift_archive = args.archive
-        if drift_archive == DEFAULT_ARCHIVE and status_root != ROOT:
-            drift_archive = status_root / ".harness" / "roadmap_drift_log_archive.md"
-        new_text, new_drift_archive, moved = trim_drift_log(new_text, drift_archive)
-        # The hard whole-file cap is a CI gate; writing past it and printing the
-        # oversized number would ship a status file this tool's own validate()
-        # rejects — a guaranteed red on the next run (codex round 4 [P2]). Judge
-        # the transformed text BEFORE any write.
-        rotated_bytes = len(new_text.encode("utf-8"))
-        if rotated_bytes > HEAD_BYTE_BUDGET:
-            print(
-                f"--rotate-next-action would leave {args.status.name} at {rotated_bytes} B, "
-                f"over the {HEAD_BYTE_BUDGET} B hard cap (by "
-                f"{rotated_bytes - HEAD_BYTE_BUDGET} B) — refusing to write a status "
-                "file --check would reject. Shorten the body, or run --trim-drift-log "
-                "first to reclaim bytes.",
-                file=sys.stderr,
-            )
-            return 2
-        if args.dry_run:
-            print(
-                f"would rotate next action to post-#{args.pr.lstrip('#')} "
-                f"(archived={new_archive_text is not None}, drift_rows_moved={moved})"
-            )
-            return 0
-        if new_archive_text is not None:
-            na_archive.write_text(new_archive_text)
-        if new_drift_archive is not None:
-            drift_archive.write_text(new_drift_archive)
-        args.status.write_text(new_text)
-        print(
-            f"rotated next action to post-#{args.pr.lstrip('#')}: "
-            f"archived={new_archive_text is not None} drift_log_moved={moved} "
-            f"head_bytes={len(new_text.encode('utf-8'))}/{HEAD_BYTE_BUDGET}"
-        )
-        print(
-            "NOTE: this wrote more than one file — commit it as a CONTENT commit "
-            "(unprefixed title), then run --refresh as the terminating refresh.",
-            file=sys.stderr,
-        )
-        return 0
-
     if args.refresh:
         if not (args.pr and args.date and args.notes is not None):
             ap.error("--refresh requires --pr --date --notes")
@@ -1105,7 +1054,13 @@ def main(argv: list[str] | None = None) -> int:
         new_text = refresh_in_flight(new_text, state)
         new_text = prepend_recently_completed(new_text, args.pr, args.date, args.notes)
         if args.next_action is not None:
-            new_text = install_next_action(new_text, args.pr, args.next_action)
+            na_archive = status_root / ".harness" / "roadmap-next-action-archive.md"
+            new_text = install_next_action(
+                new_text,
+                args.pr,
+                args.next_action,
+                na_archive.read_text() if na_archive.is_file() else "",
+            )
         if args.drift_source:
             new_text = prepend_drift_log(
                 new_text, args.date, args.drift_source, args.drift_resolution or ""
@@ -1155,8 +1110,20 @@ def main(argv: list[str] | None = None) -> int:
             )
             sys.stdout.writelines(diff)
             return 0
-        args.status.write_text(new_text)
         head_bytes = len(new_text.encode("utf-8"))
+        # The same pre-write hard-cap refusal the rotation and trim paths carry:
+        # --next-action can push the head past the cap, and writing it would ship
+        # a status file --check rejects (codex round 12 [P2]).
+        if head_bytes > HEAD_BYTE_BUDGET:
+            print(
+                f"--refresh would leave {args.status.name} at {head_bytes} B, over the "
+                f"{HEAD_BYTE_BUDGET} B hard cap (by {head_bytes - HEAD_BYTE_BUDGET} B) — "
+                "refusing to write a status file --check would reject. Shorten "
+                "--next-action/--notes, or run --trim-drift-log first.",
+                file=sys.stderr,
+            )
+            return 2
+        args.status.write_text(new_text)
         print(
             f"refreshed {args.status}: hash={state.hash12()} in_flight={state.open_pr_count} "
             f"drift_log_moved={moved} "
@@ -1169,5 +1136,14 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _cli() -> int:
+    """Surface a structural refusal as a clean exit 2, never a traceback."""
+    try:
+        return main()
+    except RoadmapStatusError as e:
+        print(f"roadmap_status_refresh: {e}", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_cli())

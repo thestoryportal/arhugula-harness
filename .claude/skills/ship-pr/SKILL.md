@@ -101,14 +101,7 @@ This is the step most often done wrong. After the PR merges:
    requires a refresh commit's recorded `git_head` to equal its OWN parent)
    rejected it as a verified refresh point, and CI hard-failed
    `ROADMAP_STATUS_DRIFT` in both the guard job and `test_codex_stop_gate`.
-   Rotate it instead:
-   ```
-   just roadmap-status --rotate-next-action "<new pointer prose>" --pr "<NNN>"
-   ```
-   which demotes the live `**Current next action (post-#A)**` paragraph into
-   `.harness/roadmap-next-action-archive.md` (relabelled `Prior`, body verbatim)
-   and installs the new one. That is why the archive relief valve was previously
-   unreachable from inside a refresh and the head saturated to 64 B of headroom.
+   Install it with the TOOL instead, in two guard-clean steps:
 
    **The rotation is SPLIT into two steps, and that split is load-bearing.** A
    single mode writing both files can never transit a PR: bundled with the

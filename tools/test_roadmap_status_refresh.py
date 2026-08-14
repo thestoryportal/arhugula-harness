@@ -757,83 +757,6 @@ def test_rotate_next_action_refuses_an_archive_with_no_insertion_rule():
 
 
 # --- §12.2.1 enforced, not merely documented ---------------------------------
-
-
-def test_refresh_refuses_the_two_file_commit_it_used_to_write_silently(tmp_path, capsys):
-    """The regression this whole arc exists for: --refresh silently wrote the
-    drift archive too whenever the log overflowed, producing a two-file commit
-    that CANNOT be a terminating refresh (§12.2.1). It must refuse and name the
-    mode that legitimately does the move — never half-write."""
-    status = tmp_path / ".harness" / "roadmap_status.md"
-    status.parent.mkdir(parents=True)
-    text = SAMPLE
-    for n in range(1, 8):
-        text = rsr.prepend_drift_log(text, *_fat_drift_row(n))
-    status.write_text(text)
-    (tmp_path / ".harness" / "roadmap-next-action-archive.md").write_text(SAMPLE_ARCHIVE)
-    archive = tmp_path / "drift_archive.md"
-
-    rc = rsr.main(
-        [
-            "--status",
-            str(status),
-            "--archive",
-            str(archive),
-            "--refresh",
-            "--pr",
-            "PR #9999",
-            "--date",
-            "2026-08-14",
-            "--notes",
-            "n",
-        ]
-    )
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "TWO-FILE commit" in err
-    assert "--trim-drift-log" in err
-    # fail CLOSED: neither file may be touched by the refused run
-    assert not archive.exists()
-    assert status.read_text() == text
-
-
-def test_rotate_next_action_cli_writes_status_and_archive(tmp_path, capsys):
-    status = tmp_path / ".harness" / "roadmap_status.md"
-    status.parent.mkdir(parents=True)
-    status.write_text(SAMPLE)
-    na_archive = tmp_path / ".harness" / "roadmap-next-action-archive.md"
-    na_archive.write_text(SAMPLE_ARCHIVE)
-
-    rc = rsr.main(
-        [
-            "--status",
-            str(status),
-            "--archive",
-            str(tmp_path / "drift_archive.md"),
-            "--rotate-next-action",
-            "New body.",
-            "--pr",
-            "#1338",
-        ]
-    )
-    assert rc == 0
-    assert "**Current next action (post-#1338).** New body." in status.read_text()
-    assert "**Prior next action (post-#1).**" in na_archive.read_text()
-    # the mode must SAY it is not the terminating refresh
-    assert "CONTENT commit" in capsys.readouterr().err
-
-
-def test_rotate_next_action_cli_requires_a_pr(tmp_path):
-    status = tmp_path / ".harness" / "roadmap_status.md"
-    status.parent.mkdir(parents=True)
-    status.write_text(SAMPLE)
-    with pytest.raises(SystemExit):
-        rsr.main(["--status", str(status), "--rotate-next-action", "body"])
-
-
-# --- out-of-family review round 1: two byte-budget fail-opens ----------------
-
-
 def test_validate_flags_a_single_oversized_row_that_trimming_cannot_fix():
     """FAIL-OPEN (codex round 1): judging "would a trim change the row count"
     instead of judging the BYTES means one 5 KB row reports clean — the newest
@@ -922,36 +845,6 @@ def test_rotate_next_action_is_a_no_op_when_rerun_against_its_own_output():
     twice, archive_twice = rsr.rotate_next_action(once, archive_once, "1338", "Body.")
     assert twice == once
     assert archive_twice is None
-
-
-def test_rotate_next_action_cli_refuses_to_write_over_the_hard_byte_cap(tmp_path, capsys):
-    """[P2] (codex round 4): installing an oversized body wrote every file and
-    exited 0, shipping a status file this tool's OWN validate() rejects — a
-    guaranteed red on the next run."""
-    status = tmp_path / ".harness" / "roadmap_status.md"
-    status.parent.mkdir(parents=True)
-    status.write_text(SAMPLE)
-    na_archive = tmp_path / ".harness" / "roadmap-next-action-archive.md"
-    na_archive.write_text(SAMPLE_ARCHIVE)
-    before = status.read_text()
-
-    rc = rsr.main(
-        [
-            "--status",
-            str(status),
-            "--archive",
-            str(tmp_path / "drift.md"),
-            "--rotate-next-action",
-            "x" * (rsr.HEAD_BYTE_BUDGET + 100),
-            "--pr",
-            "1338",
-        ]
-    )
-    assert rc == 2
-    assert "hard cap" in capsys.readouterr().err
-    # fail CLOSED: neither file may be written by the refused run
-    assert status.read_text() == before
-    assert na_archive.read_text() == SAMPLE_ARCHIVE
 
 
 def test_rotate_next_action_rejects_a_multi_paragraph_body():
@@ -1047,32 +940,6 @@ def test_trim_drift_log_persists_a_small_event_that_needs_no_trimming(tmp_path, 
     assert "a small new event" in rows[0], "the event must actually be written"
 
 
-def test_rotate_next_action_keeps_the_drift_archive_in_the_target_checkout(tmp_path, capsys):
-    """[P2] (codex round 7): the rotation path derived the NEXT-ACTION archive
-    from the target checkout but passed the module-global DRIFT archive, so a
-    cross-checkout rotation removed rows from the TARGET status and appended them
-    to the CALLER's archive — contaminating one checkout and leaving the target
-    without its history."""
-    harness = tmp_path / ".harness"
-    harness.mkdir(parents=True)
-    status = harness / "roadmap_status.md"
-    text = SAMPLE
-    for n in range(1, 8):
-        text = rsr.prepend_drift_log(text, *_fat_drift_row(n))
-    status.write_text(text)
-    (harness / "roadmap-next-action-archive.md").write_text(SAMPLE_ARCHIVE)
-    target_archive = harness / "roadmap_drift_log_archive.md"
-    caller_archive_before = (
-        rsr.DEFAULT_ARCHIVE.read_text() if rsr.DEFAULT_ARCHIVE.is_file() else None
-    )
-
-    rc = rsr.main(["--status", str(status), "--rotate-next-action", "New body.", "--pr", "1338"])
-    assert rc == 0, capsys.readouterr()
-    assert target_archive.is_file(), "overflow must land in the TARGET checkout's archive"
-    if caller_archive_before is not None:
-        assert rsr.DEFAULT_ARCHIVE.read_text() == caller_archive_before, "caller contaminated"
-
-
 def test_trim_drift_log_refuses_to_write_over_the_hard_byte_cap(tmp_path, capsys):
     """[P2] (codex round 9): a large new resolution is RETAINED by
     _drift_keep_count (the newest row always survives), so this path wrote past
@@ -1132,7 +999,10 @@ def test_refresh_installs_the_next_action_in_the_same_single_file_write(tmp_path
     status = tmp_path / ".harness" / "roadmap_status.md"
     status.parent.mkdir(parents=True)
     status.write_text(SAMPLE)
-    (tmp_path / ".harness" / "roadmap-next-action-archive.md").write_text(SAMPLE_ARCHIVE)
+    # step 1 first: the refresh REFUSES to replace an unarchived round
+    (tmp_path / ".harness" / "roadmap-next-action-archive.md").write_text(
+        rsr.archive_current_next_action(SAMPLE, SAMPLE_ARCHIVE) or SAMPLE_ARCHIVE
+    )
     archive = tmp_path / "drift.md"
 
     rc = rsr.main(
@@ -1168,3 +1038,49 @@ def test_install_next_action_rejects_empty_multiparagraph_and_bad_pr():
         rsr.install_next_action(SAMPLE, "1338", "a\n\nb")
     with pytest.raises(rsr.RoadmapStatusError, match="not a PR number"):
         rsr.install_next_action(SAMPLE, "nope", "body")
+
+
+def test_install_next_action_refuses_when_the_old_round_is_not_archived():
+    """[P2] (codex round 12): splitting the rotation made it possible to run the
+    SECOND step without the first — or against a stale archive — silently
+    destroying the only record of the outgoing round. The split is safe only if
+    this end enforces the pairing."""
+    with pytest.raises(rsr.RoadmapStatusError, match="NOT in"):
+        rsr.install_next_action(SAMPLE, "1338", "New body.", archive_text="(empty archive)")
+
+    archived = rsr.archive_current_next_action(SAMPLE, SAMPLE_ARCHIVE)
+    assert archived is not None
+    out = rsr.install_next_action(SAMPLE, "1338", "New body.", archive_text=archived)
+    assert "**Current next action (post-#1338).** New body." in out
+
+
+def test_refresh_refuses_to_write_over_the_hard_byte_cap(tmp_path, capsys):
+    """[P2] (codex round 12): --next-action can push the head past the cap, and
+    writing it would ship a status file --check rejects. The rotation and trim
+    paths already refused; this one did not."""
+    status = tmp_path / ".harness" / "roadmap_status.md"
+    status.parent.mkdir(parents=True)
+    status.write_text(SAMPLE)
+    na = tmp_path / ".harness" / "roadmap-next-action-archive.md"
+    na.write_text(rsr.archive_current_next_action(SAMPLE, SAMPLE_ARCHIVE) or SAMPLE_ARCHIVE)
+    before = status.read_text()
+    rc = rsr.main(
+        [
+            "--status",
+            str(status),
+            "--archive",
+            str(tmp_path / "drift.md"),
+            "--refresh",
+            "--pr",
+            "1338",
+            "--date",
+            "2026-08-14",
+            "--notes",
+            "n",
+            "--next-action",
+            "x" * (rsr.HEAD_BYTE_BUDGET + 100),
+        ]
+    )
+    assert rc == 2
+    assert "hard cap" in capsys.readouterr().err
+    assert status.read_text() == before, "must fail CLOSED"
