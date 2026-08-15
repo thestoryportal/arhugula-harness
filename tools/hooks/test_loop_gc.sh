@@ -1,20 +1,3 @@
-#        NO BLIND ABSENCE CHECK (B-180). The quiet side used to be asserted by
-#        `grep -q "unreconciled" && bad || ok`, which passes for ANY silence -- and
-#        loop-gc.sh:114-118 makes the sweep DELIBERATELY failure-invisible ("any python
-#        failure yields no clause on stdout ... and this hook still exits 0"), so total
-#        silence is an ENGINEERED, reachable state. An envelope/JSON check cannot fix it
-#        either: S2 pins that a fully reconciled registry legitimately prints NOTHING and
-#        exits 0, so empty is a CORRECT output.
-#        A separate positive-control invocation ALSO fails to fix it (codex round 1): a
-#        sweep that goes silent only for the quiet fixture leaves the control green while
-#        the absence check still reports ok -- mutation-tested, 75/75 still passed.
-#        So BOTH sides are pinned through ONE invocation, with PRESENCE-based assertions
-#        only: a count of exactly `1` proves the 31-min key is flagged AND the 29-min key
-#        is not counted, and `oldest: s16stale` proves it is the RIGHT key -- without it a
-#        simultaneous low+high drift (counting s16fresh, missing s16stale) also reads `1`.
-#        Silence now reds both assertions instead of passing one.
-#        The hook is deliberately untouched: its failure-invisibility is load-bearing for
-#        production (SessionStart must never be blocked by a sweep bug).
 #!/usr/bin/env bash
 # Hermetic test for loop_gc_worktrees (U-HK-26). Builds a throwaway repo with several
 # worktrees and asserts the safe-subset gate: reap ONLY merged worktrees that are
@@ -596,6 +579,23 @@ printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
 #        The hook is left untouched: its failure-invisibility is deliberate and
 #        load-bearing for production (SessionStart must never be blocked by a sweep
 #        bug); this is a test-observability fix, not a fail-loud conversion.
+#        NO BLIND ABSENCE CHECK (B-180). The quiet side used to be asserted by
+#        `grep -q "unreconciled" && bad || ok`, which passes for ANY silence -- and
+#        loop-gc.sh:114-118 makes the sweep DELIBERATELY failure-invisible ("any python
+#        failure yields no clause on stdout ... and this hook still exits 0"), so total
+#        silence is an ENGINEERED, reachable state. An envelope/JSON check cannot fix it
+#        either: S2 pins that a fully reconciled registry legitimately prints NOTHING and
+#        exits 0, so empty is a CORRECT output.
+#        A separate positive-control invocation ALSO fails to fix it (codex round 1): a
+#        sweep that goes silent only for the quiet fixture leaves the control green while
+#        the absence check still reports ok -- mutation-tested, 75/75 still passed.
+#        So BOTH sides are pinned through ONE invocation, with PRESENCE-based assertions
+#        only: a count of exactly `1` proves the 31-min key is flagged AND the 29-min key
+#        is not counted, and `oldest: s16stale` proves it is the RIGHT key -- without it a
+#        simultaneous low+high drift (counting s16fresh, missing s16stale) also reads `1`.
+#        Silence now reds both assertions instead of passing one.
+#        The hook is deliberately untouched: its failure-invisibility is load-bearing for
+#        production (SessionStart must never be blocked by a sweep bug).
 sw_reset
 T16A="$SW/t16a.jsonl"; : > "$T16A"; sw_stamp "$T16A" 1740   # 29m -- must stay quiet
 T16B="$SW/t16b.jsonl"; : > "$T16B"; sw_stamp "$T16B" 1860   # 31m -- must be flagged
