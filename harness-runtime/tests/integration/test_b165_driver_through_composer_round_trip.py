@@ -425,3 +425,15 @@ async def test_stage_5_installs_the_hitl_gate_composer_into_the_dispatcher_regis
     assert found, (
         f"stage 5 must install a RuntimeHITLGateComposer in the INFERENCE_STEP chain; walked {seen}"
     )
+
+    # TYPE ALONE IS NOT ENOUGH, and this is not hypothetical: out-of-family review RAN
+    # the mutation with a constructor shim and every B-165 node still passed when stage 5
+    # built the INFERENCE composer with `applicable_placements={SUB_AGENT_BOUNDARY}`.
+    # A composer that does not accept PRE_ACTION filters both declared placements out of
+    # `matching` and never gates them, so the shipped path would not reach the collision
+    # at all while this test still reported the wiring intact — exactly the vacuity the
+    # chain walk above was supposed to close, one level in.
+    assert HITLPlacementKind.PRE_ACTION in node.applicable_placements, (
+        "the stage-5 INFERENCE composer must ACCEPT PRE_ACTION placements; got "
+        f"{sorted(p.value for p in node.applicable_placements)}"
+    )
