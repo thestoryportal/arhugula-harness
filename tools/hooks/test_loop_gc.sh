@@ -281,11 +281,23 @@ OUT=$(sw_run); RC=$?
 { [ -z "$OUT" ] && [ "$RC" -eq 0 ]; } && ok "S2 all reconciled → hook silent, exit 0" || bad "S2 rc=$RC out=$OUT"
 
 # ── S3) AC3: fresh (<30 min) unreconciled → NOT flagged (live fan-outs must not alarm) ──
+#         LIVENESS-ANCHORED (B-180): asserting only `[ -z "$OUT" ]` would pass on ANY
+#         silence, and loop-gc.sh:114-118 makes a failed sweep emit nothing while still
+#         exiting 0. A same-invocation stale companion makes the claim PRESENCE-based:
+#         exactly `1` plus `oldest: ag-d-old` proves the sweep ran AND that the fresh
+#         key is the one not counted.
 sw_reset
 : > "$SW/t-d.jsonl"   # freshly created ⇒ mtime = now
-{ sw_row "$NOW_TS" start ag-d "$SW/t-d.jsonl"; } > "$SREG"
-OUT=$(sw_run)
-[ -z "$OUT" ] && ok "S3 fresh unreconciled not flagged (live fan-out)" || bad "S3 alarmed on a live fan-out: $OUT"
+: > "$SW/t-d-old.jsonl"; sw_stamp "$SW/t-d-old.jsonl" 7200   # 2h ⇒ unambiguously stale
+{ sw_row "$NOW_TS" start ag-d "$SW/t-d.jsonl"
+  sw_row "$(sw_ts 7200)" start ag-d-old "$SW/t-d-old.jsonl"; } > "$SREG"
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
+  && ok "S3 fresh unreconciled not flagged (live fan-out)" \
+  || bad "S3 expected exactly 1 (the 2h key alone): '$OUT'"
+printf '%s' "$OUT" | grep -qF "oldest: ag-d-old" \
+  && ok "S3 the counted key is the stale one, not the fresh fan-out" \
+  || bad "S3 counted the WRONG key: '$OUT'"
 
 # ── S4) AC4: 8-day rows pruned; JSONL stays valid; REGISTRY inode replaced but the
 #            LOCK file is never unlinked/recreated/renamed (two holders could otherwise
@@ -352,11 +364,21 @@ printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent\\(s\\)" \
 #         sweep stays QUIET rather than alarming on a possibly-live agent. (The
 #         contract keys reporting on transcript-file mtime; its stale exception is
 #         scoped to "path recorded but file gone".) Pinned so the choice is explicit.
+#         LIVENESS-ANCHORED (B-180, codex round 3): a bare `[ -z "$OUT" ]` passes when
+#         the sweep branch for an empty-transcript row RAISES, since the hook collapses
+#         that to empty stdout and still exits 0 — mutation-reproduced. A same-invocation
+#         stale companion makes it PRESENCE-based instead.
 sw_reset
-{ sw_row "$NOW_TS" start ag-notrans ""; } > "$SREG"
-OUT=$(sw_run)
-[ -z "$OUT" ] && ok "S7c key with no recorded transcript stays quiet (no liveness proxy)" \
-  || bad "S7c alarmed without a transcript: $OUT"
+: > "$SW/t7c-old.jsonl"; sw_stamp "$SW/t7c-old.jsonl" 7200   # 2h ⇒ unambiguously stale
+{ sw_row "$NOW_TS" start ag-notrans ""
+  sw_row "$(sw_ts 7200)" start ag-7c-old "$SW/t7c-old.jsonl"; } > "$SREG"
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
+  && ok "S7c key with no recorded transcript stays quiet (no liveness proxy)" \
+  || bad "S7c expected exactly 1 (the 2h key alone): '$OUT'"
+printf '%s' "$OUT" | grep -qF "oldest: ag-7c-old" \
+  && ok "S7c the counted key is the stale one, not the transcript-less key" \
+  || bad "S7c counted the WRONG key: '$OUT'"
 
 # ── S8) AC8: registry lock held elsewhere → the PRUNE is skipped this tick (registry
 #            byte-identical), the sweep clause is still produced (the read needs no
