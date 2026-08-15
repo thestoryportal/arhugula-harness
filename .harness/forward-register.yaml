@@ -9609,9 +9609,9 @@ items:
   pr: '#1357'
 - id: B-182
   title: >-
-    The C-OD-11 §11.1 per-cell cell_rate_limit has no in-process reader at the four cells whose
-    declared enforcement layer is in-process, while tenant_rate_limit is genuinely enforced, and
-    §11.1 commits no number at the team-binding cells
+    The C-OD-11 §11.1 per-cell cell_rate_limit has no consumer at all and §11.1 commits no number
+    at the team-binding cells; the in-process scope is three solo cells, one cell's placement is
+    unknown, and neither cap is reached in production
   status: registered_finding
   summary: >-
     Surfaced grounding the C11 half of B-137 step (3), whose objection is that C1's 1/base_rate
@@ -9629,8 +9629,11 @@ items:
     so the team-cell budget carries no committed figure today.
     (C) THE LOAD-BEARING HALF. per_cell_cardinality_budget.py:118 commits a flat
     cell_rate_limit=10_000.0 spans/sec at every ACTIVE cell with ZERO readers anywhere in
-    harness-*/src outside its own declaration, while tenant_rate_limit IS enforced (witnessed
-    behaviourally at multi_tenant_cross_cutting_enforcement.py). Codex round 3 sharpened the scoping:
+    harness-*/src outside its own declaration. AN EARLIER DRAFT CLAIMED ITS SIBLING
+    tenant_rate_limit IS ENFORCED; codex round 4 [P1] WITHDREW that --
+    assert_per_tenant_cardinality_isolation has no call site in harness-*/src either, so NEITHER
+    cap is reached in production. What actually differs is weaker and is all this row claims: one
+    cap has implemented, tested semantics a caller COULD reach; the other has no consumer at all. Codex round 3 sharpened the scoping:
     COLLECTOR_BOUNDARY is a LOGICAL enforcement layer, not a process placement. Only the THREE
     SOLO rows are documented as in-process ("the in-process OTLP collector against the sqlite
     ring-buffer"); multi-tenant-compliance x self-hosted-server runs "per-tenant collector
@@ -9650,10 +9653,13 @@ items:
   close_out: >-
     (1) Re-ground all three surviving facts at HEAD -- the witness module is the instrument and
     every assertion states what goes stale if it moves.
-    (2) ADJUDICATE (C) SPLIT BY ENFORCEMENT LAYER, not as one question. At the four
+    (2) ADJUDICATE (C) AS A THREE-WAY SPLIT, not one question and not two. At the four
     BACKEND_INGESTION cells, document at the carrier that the cap is out-of-process-only so the
-    next reader does not re-file this. At the four COLLECTOR_BOUNDARY cells the same explanation
-    is unavailable, so decide whether an in-process enforcement site is owed. Do NOT wire one
+    next reader does not re-file this. At the THREE SOLO cells that explanation is unavailable
+    (they are documented in-process), so decide whether an in-process enforcement site is owed.
+    At multi-tenant-compliance x self-hosted-server the placement is UNKNOWN -- "per-tenant
+    collector instances" establishes neither -- so determine placement BEFORE dispositioning it;
+    do not fold it into either group. Do NOT wire one
     before that decision -- minting an in-process cap the contract does not state would be an
     X-AL-3 design extension.
     (3) Carry (A)+(B) into B-137's council as CONTEXT. They change what C11's objection can
@@ -9667,7 +9673,7 @@ items:
     No at registration. (C) is a single-domain adjudication with a named owner (C7/OD) that
     grounding answers. (A)+(B) are inputs to B-137's already-declared C7+C11 convening rather
     than a separate one.
-  heading: '### B-182 · The §11.1 per-cell `cell_rate_limit` has no in-process reader at the FOUR cells whose declared enforcement layer IS in-process, while its `tenant_rate_limit` sibling is genuinely enforced — and §11.1 commits no number at the team-binding cells *(surfaced grounding B-137 step (3)''s C11 half, 2026-08-15; scoped after out-of-family Codex round 1)*'
+  heading: '### B-182 · The §11.1 per-cell `cell_rate_limit` has no consumer at all, and §11.1 commits no number at the team-binding cells — the in-process scope is THREE solo cells, one cell''s placement is unknown, and NEITHER cap is reached in production *(surfaced grounding B-137 step (3)''s C11 half, 2026-08-15; scoped after out-of-family Codex round 1)*'
 - id: B-183
   title: >-
     assert_per_tenant_cardinality_isolation compares a windowed observed_series count against a
@@ -9685,7 +9691,13 @@ items:
     the same 1001 over "1s" is a genuine breach. Both produce identical behaviour. The comparison
     is dimensionally incoherent, and the direction of the error is UNSAFE-PERMISSIVE in one
     direction and FALSE-POSITIVE in the other depending on the window.
-    NOT FIXED IN THE SURFACING ARC. The B-182 witness supplies a "1s" window so its own
+    SCOPE, corrected at codex round 4 [P1]: this is a defect in an UNCALLED helper.
+    assert_per_tenant_cardinality_isolation has no call site in harness-*/src -- only its
+    definition, its __all__ entry, two docstring mentions, and tests. No production path reaches
+    this comparison today, so the row is NOT a live production defect. It is registered because
+    the helper's semantics are what a future caller inherits, and because the same "spans/sec"
+    documentation governs the sibling cell_rate_limit that B-182 (C) may yet authorise a consumer
+    for. NOT FIXED IN THE SURFACING ARC. The B-182 witness supplies a "1s" window so its own
     assertion is coherent, and the mismatch is registered rather than repaired, because choosing
     the repair is a contract question -- see the close-out.
   close_out: >-
@@ -9693,13 +9705,15 @@ items:
     observation_window is still unread in the comparison, and enumerate every caller of
     assert_per_tenant_cardinality_isolation to see which windows are actually passed in
     production (the surfacing arc did not do this -- it is the first real question).
-    (2) DECIDE the repair, which is a contract question and not a mechanical fix. Either
-    (a) normalise: divide observed_series by the parsed window to get a rate before comparing,
-    which requires committing a window grammar the type does not currently constrain (it is a
-    bare str); or (b) re-declare tenant_rate_limit as a per-window COUNT rather than a rate,
-    which contradicts the two "spans/sec" docstrings and C-OD-21 §21.4's framing; or (c) make
-    the window part of the contract by typing it, so an unparseable window is a construction
-    error rather than a silently-ignored field.
+    (2) DECIDE THE QUANTITY BEFORE THE UNIT. Codex round 4 [P2]: there are TWO mismatches and
+    time is the lesser -- observed_series counts DISTINCT SERIES while tenant_rate_limit is
+    documented in SPANS/sec, so dividing by a parsed window yields series/sec, not spans/sec.
+    Decide first whether the limit measures spans, series, or a windowed count. Only then:
+    (a) normalise against MATCHING units, which needs both a window grammar (observation_window
+    is a bare str) and agreement on the quantity; or (b) re-declare tenant_rate_limit as a
+    per-window series COUNT, which contradicts the two "spans/sec" docstrings and C-OD-21 §21.4's
+    framing; or (c) type the window -- necessary for (a) but insufficient alone, since it leaves
+    the raw comparison unchanged.
     (3) Whichever is chosen, witness it BEHAVIOURALLY at both sides of the limit and at two
     different windows -- a single-window test cannot distinguish a rate gate from a count gate,
     which is precisely why this went unnoticed.

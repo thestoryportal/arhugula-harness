@@ -58,8 +58,11 @@ needs to be about — and less than the draft claimed.
 **(C) The in-process cap is declared and read by nothing, at the cells where it IS in-process.**
 `per_cell_cardinality_budget.py:118` commits a flat `cell_rate_limit=10_000.0` spans/sec at every
 ACTIVE cell, with **zero readers** anywhere in `harness-*/src` outside its own declaration. Its
-sibling `tenant_rate_limit` **is** genuinely enforced — witnessed behaviourally below, not by
-token scan. **The correction in (2) is what makes this load-bearing:** at the **three solo**
+sibling `tenant_rate_limit` has an implemented, tested comparison — but **round 4 [P1] showed
+neither cap is reached in production**: `assert_per_tenant_cardinality_isolation` has no call
+site in `harness-*/src` either. The claimed enforced-vs-unenforced asymmetry is **WITHDRAWN**;
+what remains is that one cap has semantics a caller could reach and the other has no consumer at
+all. **The correction in (2) is what makes this load-bearing:** at the **three solo**
 cells §11.1's enforcement point is documented as the harness's *own in-process* collector, so an
 absent reader there cannot be explained as "an out-of-process consumer handles it." At the four
 `BACKEND_INGESTION` cells that explanation does hold; at `multi-tenant-compliance ×
@@ -356,14 +359,40 @@ def test_half_the_cells_enforce_in_process_yet_nothing_reads_the_cell_cap() -> N
     )
 
 
-def test_the_tenant_limit_is_enforced_behaviourally_not_merely_referenced() -> None:
-    """**Correction 4 for the sibling half** — a behavioural witness, not a token scan.
+def test_neither_cap_is_reached_in_production_only_their_semantics_differ() -> None:
+    """**The asymmetry this arc claimed is FALSE — out-of-family Codex round 4 [P1].**
 
-    The draft established `tenant_rate_limit`'s enforcement by regex, which would stay green if
-    the comparison and raise were deleted while a docstring mention survived. This drives the
-    real function on both sides of the limit, so the asymmetry B-182 rests on ("the half C11
-    names is unenforced while its sibling is not") is witnessed rather than asserted.
+    Three drafts of this module claimed *"the half C11's objection names is unenforced while its
+    sibling IS enforced."* That is wrong. `assert_per_tenant_cardinality_isolation` has **no call
+    site anywhere in `harness-*/src`** — only its own definition, its `__all__` entry, two
+    docstring mentions, and tests. So **neither** cap is reached on any production path.
+
+    What actually differs is weaker, and is all `B-182` may now claim: `tenant_rate_limit` has an
+    implemented, tested comparison with defined semantics that *a caller could* reach, while
+    `cell_rate_limit` has **no consumer at all**, not even an unreached one. That is a difference
+    in how much of the mechanism exists, not a difference between enforced and unenforced.
+
+    The behavioural half is retained because it still establishes the helper's semantics (it
+    really raises), which is what makes `B-183`'s dimensional finding meaningful — but the label
+    on `B-183` is correspondingly *a defect in an uncalled helper*, not a live production defect.
     """
+    src_files = [p for d in sorted(_REPO.glob("harness-*/src")) for p in d.rglob("*.py")]
+    assert len(src_files) > 100, (
+        f"only {len(src_files)} src files found — the scan root is wrong and a 'no caller' "
+        "result would be an artifact of not looking"
+    )
+    decl = _REPO / "harness-od" / "src" / "harness_od" / "multi_tenant_cross_cutting_enforcement.py"
+    callers = sorted(
+        str(f.relative_to(_REPO))
+        for f in src_files
+        if f != decl and "assert_per_tenant_cardinality_isolation" in f.read_text()
+    )
+    assert callers == [], (
+        f"`assert_per_tenant_cardinality_isolation` acquired a production caller at {callers}. "
+        "The tenant cap is now genuinely reached, which RESTORES the enforced-vs-unenforced "
+        "asymmetry B-182 withdrew and upgrades B-183 to a live production defect — both rows "
+        "must be re-stated"
+    )
     limit = PER_CELL_CARDINALITY_BUDGET[_MTC_SELF].tenant_rate_limit
     assert limit == 1000.0, (
         f"the multi-tenant per-tenant limit moved to {limit}; this witness pins 1000.0"
