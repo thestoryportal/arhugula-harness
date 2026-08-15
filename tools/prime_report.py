@@ -134,6 +134,21 @@ def safe_title(text: str, width: int = 60) -> str:
     return brief(text, width)
 
 
+def check_outcome(check: dict) -> str | None:
+    """Terminal outcome of one statusCheckRollup entry, or None if still running.
+
+    The rollup is a UNION: a CheckRun reports `conclusion`, while a legacy commit status
+    (StatusContext) reports `state` and carries no `conclusion` at all. Reading only
+    `conclusion` scores every legacy status as forever-pending -- which both hides a
+    terminal FAILURE from the bad count and stops a green one from ever counting.
+    """
+    for field in ("conclusion", "state"):
+        value = check.get(field)
+        if value:
+            return str(value).upper()
+    return None
+
+
 def id_key(item_id: str) -> tuple[str, int]:
     match = ID_SORT.match(item_id)
     if not match:
@@ -348,9 +363,13 @@ def section_estimate(
     )
     caveats = []
     if unmapped:
+        # Do NOT claim these are all old. The bucket also holds rows that cite no PR at
+        # all (an operator ratification), which row_pr supports on purpose -- calling
+        # those "pre-history-floor" would be a false explanation.
         caveats.append(
-            f"{unmapped} older closed rows have no PR in the scanned log (pre-history-floor); "
-            "they are outside the rate window and do not move the estimate"
+            f"{unmapped} closed rows have no PR resolvable in the scanned log -- older "
+            "than the history floor, cited no PR, or beyond --limit; each is outside the "
+            "rate window and does not move the estimate"
         )
     caveats.append("span-based: counts elapsed session time, not effort")
     out.append("  caveat    " + "; ".join(caveats))
@@ -430,11 +449,21 @@ def _flag_branches(flags: list[str]) -> None:
             sha, ref = line.split("refs/heads/", 1)
             remote[ref.strip()] = sha.strip()
 
-    stale = sorted(
-        name
-        for name, sha in remote.items()
-        if name != "main" and name != current and sha != head_sha
-    )
+    # Exempt exactly ONE branch, because the rule permits exactly one: the current CI
+    # branch. Prefer the name when HEAD is attached. When detached, fall back to the ref
+    # at HEAD -- but only if it is UNAMBIGUOUS: if several refs share the SHA (a copied
+    # branch beside its stale predecessor) there is no deterministic way to tell which
+    # is current, so exempt none and let them be reported. Over-reporting is the safe
+    # direction for a hygiene flag; silently exempting a stale branch is not.
+    exempt = {"main"}
+    if current in remote:
+        exempt.add(current)
+    else:
+        at_head = [name for name, sha in remote.items() if sha == head_sha]
+        if len(at_head) == 1:
+            exempt.add(at_head[0])
+
+    stale = sorted(name for name in remote if name not in exempt)
     if stale:
         flags.append(
             f"{len(stale)} remote branch(es) beyond main + the current CI branch -- "
@@ -529,6 +558,10 @@ def _flag_prs(out: list[str], flags: list[str]) -> None:
                 "list",
                 "--state",
                 "open",
+                # gh defaults to 30 and truncates SILENTLY -- the one failure mode this
+                # report must never have.
+                "--limit",
+                "200",
                 "--json",
                 "number,title,isDraft,mergeable,statusCheckRollup",
                 timeout=90,
@@ -542,11 +575,12 @@ def _flag_prs(out: list[str], flags: list[str]) -> None:
         return
     for pr in prs:
         checks = pr.get("statusCheckRollup") or []
-        # Fail closed: SUCCESS is the ONLY green conclusion. Enumerating the bad ones
+        # Fail closed: SUCCESS is the ONLY green outcome. Enumerating the bad ones
         # instead would silently score ACTION_REQUIRED / STARTUP_FAILURE / STALE as ok
         # and render a non-green PR as green, against the repo's strict-CI rule.
-        pending = sum(1 for c in checks if not c.get("conclusion"))
-        bad = sum(1 for c in checks if c.get("conclusion") and c.get("conclusion") != "SUCCESS")
+        outcomes = [check_outcome(c) for c in checks]
+        pending = sum(1 for o in outcomes if o is None)
+        bad = sum(1 for o in outcomes if o is not None and o != "SUCCESS")
         state = f"mergeable={pr.get('mergeable')}"
         if checks:
             state += f", checks {len(checks) - bad - pending}ok/{bad}bad/{pending}pending"

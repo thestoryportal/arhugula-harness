@@ -289,6 +289,60 @@ def test_branch_flag_exempts_the_pr_branch_from_a_detached_worktree(monkeypatch)
     assert flags == []
 
 
+def test_branch_flag_exempts_none_when_several_refs_share_the_head_sha(monkeypatch) -> None:
+    """Codex r4 [P2]: the rule permits exactly ONE current branch.
+
+    With two refs at the same SHA there is no deterministic way to tell which is
+    current, so neither is exempted -- over-reporting a hygiene flag is safe, silently
+    exempting a stale branch is not.
+    """
+    listing = (
+        "sha_main\trefs/heads/main\nsha_pr\trefs/heads/feat/mine\nsha_pr\trefs/heads/feat/copy\n"
+    )
+
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        if "ls-remote" in args:
+            return listing
+        if "--abbrev-ref" in args:
+            return "HEAD\n"  # detached: no name to prefer
+        return "sha_pr\n"
+
+    monkeypatch.setattr(prime_report, "run", fake_run)
+    flags: list[str] = []
+    prime_report._flag_branches(flags)
+    assert len(flags) == 1
+    assert "2 remote branch(es)" in flags[0]
+
+
+def test_check_outcome_reads_a_legacy_status_context_state() -> None:
+    """Codex r4 [P2]: StatusContext carries `state`, not `conclusion`.
+
+    Reading only `conclusion` scored every legacy status as forever-pending, hiding a
+    terminal FAILURE from the bad count.
+    """
+    assert prime_report.check_outcome({"state": "FAILURE"}) == "FAILURE"
+    assert prime_report.check_outcome({"state": "SUCCESS"}) == "SUCCESS"
+    assert prime_report.check_outcome({"conclusion": "SUCCESS"}) == "SUCCESS"
+    assert prime_report.check_outcome({"conclusion": None}) is None
+    assert prime_report.check_outcome({}) is None
+
+
+def test_pr_checks_count_a_legacy_failure_as_bad(monkeypatch) -> None:
+    payload = [
+        {
+            "number": 7,
+            "title": "t",
+            "mergeable": "MERGEABLE",
+            "statusCheckRollup": [{"state": "SUCCESS"}, {"state": "FAILURE"}],
+        }
+    ]
+    monkeypatch.setattr(prime_report, "run", lambda *a, **k: json.dumps(payload))
+    out: list[str] = []
+    flags: list[str] = []
+    prime_report._flag_prs(out, flags)
+    assert "1ok/1bad/0pending" in flags[0]
+
+
 def test_branch_flag_still_reports_a_genuinely_stale_remote_branch(monkeypatch) -> None:
     """The exemptions must not swallow the finding they exist to narrow."""
     listing = "sha_main\trefs/heads/main\nsha_old\trefs/heads/feat/old\n"
