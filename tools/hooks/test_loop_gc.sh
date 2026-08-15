@@ -1,3 +1,20 @@
+#        NO BLIND ABSENCE CHECK (B-180). The quiet side used to be asserted by
+#        `grep -q "unreconciled" && bad || ok`, which passes for ANY silence -- and
+#        loop-gc.sh:114-118 makes the sweep DELIBERATELY failure-invisible ("any python
+#        failure yields no clause on stdout ... and this hook still exits 0"), so total
+#        silence is an ENGINEERED, reachable state. An envelope/JSON check cannot fix it
+#        either: S2 pins that a fully reconciled registry legitimately prints NOTHING and
+#        exits 0, so empty is a CORRECT output.
+#        A separate positive-control invocation ALSO fails to fix it (codex round 1): a
+#        sweep that goes silent only for the quiet fixture leaves the control green while
+#        the absence check still reports ok -- mutation-tested, 75/75 still passed.
+#        So BOTH sides are pinned through ONE invocation, with PRESENCE-based assertions
+#        only: a count of exactly `1` proves the 31-min key is flagged AND the 29-min key
+#        is not counted, and `oldest: s16stale` proves it is the RIGHT key -- without it a
+#        simultaneous low+high drift (counting s16fresh, missing s16stale) also reads `1`.
+#        Silence now reds both assertions instead of passing one.
+#        The hook is deliberately untouched: its failure-invisibility is load-bearing for
+#        production (SessionStart must never be blocked by a sweep bug).
 #!/usr/bin/env bash
 # Hermetic test for loop_gc_worktrees (U-HK-26). Builds a throwaway repo with several
 # worktrees and asserts the safe-subset gate: reap ONLY merged worktrees that are
@@ -580,27 +597,18 @@ printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
 #        load-bearing for production (SessionStart must never be blocked by a sweep
 #        bug); this is a test-observability fix, not a fail-loud conversion.
 sw_reset
-T16A="$SW/t16a.jsonl"; : > "$T16A"; sw_stamp "$T16A" 1740
+T16A="$SW/t16a.jsonl"; : > "$T16A"; sw_stamp "$T16A" 1740   # 29m -- must stay quiet
+T16B="$SW/t16b.jsonl"; : > "$T16B"; sw_stamp "$T16B" 1860   # 31m -- must be flagged
 sw_row "$(sw_ts 1740)" start s16fresh "$T16A" >> "$SREG"
-T16P="$SW/t16probe.jsonl"; : > "$T16P"; sw_stamp "$T16P" 7200   # 2h -- unambiguously stale
-sw_row "$(sw_ts 7200)" start s16probe "$T16P" >> "$SREG"
-OUT=$(sw_ctx)
-printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
-  && ok "S16 liveness: the sweep speaks, and counts the 29-min key as NOT stale" \
-  || bad "S16 liveness probe: expected exactly 1 (the 2h key alone), got: '$OUT'"
-grep -v '"agent_id":"s16probe"' "$SREG" > "$SREG.b180" && mv "$SREG.b180" "$SREG"
-sw_stamp "$T16A" 1740   # the liveness hook run re-aged it; restore before the quiet claim
-OUT=$(sw_ctx)
-printf '%s' "$OUT" | grep -q "unreconciled" \
-  && bad "S16 29-min agent flagged (STALE boundary drifted low): '$OUT'" \
-  || ok "S16 29-min unreconciled stays quiet"
-T16B="$SW/t16b.jsonl"; : > "$T16B"; sw_stamp "$T16B" 1860
 sw_row "$(sw_ts 1860)" start s16stale "$T16B" >> "$SREG"
-sw_stamp "$T16A" 1740   # the quiet side must still be 29m old at THIS assertion too
+sw_stamp "$T16A" 1740; sw_stamp "$T16B" 1860   # exact ages at THIS invocation
 OUT=$(sw_ctx)
 printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
-  && ok "S16 31-min unreconciled is flagged" \
-  || bad "S16 31-min agent missed (STALE boundary drifted high): '$OUT'"
+  && ok "S16 31-min flagged and 29-min not counted (exactly 1)" \
+  || bad "S16 boundary drifted (expected exactly 1): '$OUT'"
+printf '%s' "$OUT" | grep -qF "oldest: s16stale" \
+  && ok "S16 the counted key is the 31-min one, not the 29-min one" \
+  || bad "S16 counted the WRONG key (low+high drift reads 1 too): '$OUT'"
 
 # ── S17) KEEP near-side pin (gate lens-3): a 6-day whole-key history survives the prune.
 #        Without this, KEEP could drift down to ~2h undetected (far side pinned by S4).
