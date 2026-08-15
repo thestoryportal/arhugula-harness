@@ -38,17 +38,16 @@ precisely why the loose search is misleading and the fixed-string one is the sou
 
 ## §2 — The defect: the declaration and the producer's contract shape are irreconcilable as written
 
-**Step (2)'s probe is decisive, and it prices disposition (a) much higher than the row assumed.**
-
-`ValidatorResult` — the operator-supplied return shape, `C-CP-25` §25.2, at
-`harness-cp/src/harness_cp/validator_framework_types.py:171-188` — carries exactly five
-fields: `outcome`, `fail_class`, `revalidation_payload`, `escalation_brief`,
-`fail_detail_hash`. **There is no cause field, and no field from which a cause is derivable.**
+**Step (2)'s probe is decisive.** `ValidatorResult` — the operator-supplied return shape,
+`C-CP-25` §25.2, at `harness-cp/src/harness_cp/validator_framework_types.py:171-188` — carries
+exactly five fields: `outcome`, `fail_class`, `revalidation_payload`, `escalation_brief`,
+`fail_detail_hash`. **There is no cause field, and none from which a cause is derivable.**
 
 The producer site is no better supplied. `ValidatorFramework._build_span_attributes` is called
-at `harness-cp/src/harness_cp/validator_framework.py:237` and `:305` with `step`, `result`, `next_action`, and
-`burden_count` — **none of which carries a cause**. The runtime escalation composer
-(`validator_escalation_composer.py:143-153`) is the same story.
+at `harness-cp/src/harness_cp/validator_framework.py:237` and `:305` with `step`, `result`,
+`next_action`, and `burden_count` — **none of which carries a cause**. The runtime escalation
+composer (`harness-runtime/src/harness_runtime/lifecycle/validator_escalation_composer.py:143-153`)
+is the same story.
 
 So the contradiction is not "someone forgot a line." It is structural:
 
@@ -56,44 +55,26 @@ So the contradiction is not "someone forgot a line." It is structural:
 > unconditionally emitted on every validator-failure event, while the contract shape the
 > declared producer returns has no member that could carry its value.**
 
-**The cause values do not live anywhere — a claim this fork INHERITED from the register row
-and has now re-grounded (out-of-family review round 3).** The row said the values "live in
-§21.2's staircase branches and the retry/breaker machinery", and the first draft of this fork
-repeated it. That is FALSE at HEAD: `StaircaseTransition.on_cause` is typed
-`ValidatorRetryExitClass` (`validator_fail_transient_staircase.py:64`) and its own docstring
-says so explicitly — *"(not a fail-cause token)"* at `:66` — while
-`_classify_provider_exception` (`retry_breaker_fallback.py:281`) likewise returns
-`ValidatorRetryExitClass | None`. The staircase carries the **5-class retry-exit taxonomy**,
-not the 15-value attribution alphabet (10 base + 5 F5 `secret_*` refinements). §21.2's own
-branch labels (`capability_shortfall_transient`,
-`contract_violation_not_yet_routed_to_Reflexion`) are not §21.5 wire tokens either.
-
-**The cause-source inventory — VERIFIED PER SURFACE, and deliberately not asserted as
-complete.** This is the one claim in this fork that churned across review rounds 3, 4 and 5
-(*"they live in the staircase"* → *"no source anywhere"* → *"one typed carrier"* → *"per-surface
-carriers exist"*), so it is now stated as verified facts with cites rather than as an
-inventory, and the completeness question is handed to the apply arc rather than guessed a
-fourth time:
+### §2.1 — Where cause values DO and DO NOT exist (verified per surface; completeness NOT claimed)
 
 | Surface | Typed carrier | Live producer |
 |---|---|---|
-| 5 F5 `secret_*` refinements | **YES** — `SecretFailClass` StrEnum, `harness-as/src/harness_as/secret_fail_class.py:33-41` (C-AS-07 §7.1) | **PARTIAL — 3 of 5.** `SecretResolutionError` is constructed **11×** (AST-counted): 8× in `harness-runtime/src/harness_runtime/config/provider_secrets.py`, 3× in `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py`, **0 in `types.py`**. Those 11 constructions carry only `SECRET_UNKNOWN` and `SECRET_UNAVAILABLE`. `SECRET_LOCKED` reaches production by a **separate path** — `_emit_secret_fetch_span(..., fail_class=SecretFailClass.SECRET_LOCKED)` after catching `SecretAllowlistDeniedError`, at `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py:817-824`. **`SECRET_EXPIRED` and `SECRET_REVOKED` have NO production reference at all.** So the arm has two distinct producer paths covering 3 of 5 values. |
-| `replay_semantic_divergence` (ADR-D6's ADDITION, not one of the base set) | **YES** — `ReplaySemanticDivergenceError.validator_fail_cause_attribution`, pinned `Literal[...]`, `harness-od/src/harness_od/idempotency_join_dedup.py:375-377` | **NO** — the only occurrence in `src` is its own definition |
+| 5 F5 `secret_*` refinements | **YES** — `SecretFailClass` StrEnum, `harness-as/src/harness_as/secret_fail_class.py:33-41` (C-AS-07 §7.1) | **PARTIAL — 3 of 5, by TWO paths.** `SECRET_UNKNOWN` + `SECRET_UNAVAILABLE` via **11 AST-counted** `SecretResolutionError` constructions (8 in `harness-runtime/src/harness_runtime/config/provider_secrets.py`, 3 in `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py`, **0 in `types.py`**); `SECRET_LOCKED` via a separate `_emit_secret_fetch_span(..., fail_class=SecretFailClass.SECRET_LOCKED)` after catching `SecretAllowlistDeniedError` (`runtime_tool_dispatcher.py:817-824`). **`SECRET_EXPIRED` and `SECRET_REVOKED`: none.** |
+| `replay_semantic_divergence` (ADR-D6's ADDITION, not a base member) | **YES** — `ReplaySemanticDivergenceError.validator_fail_cause_attribution`, pinned `Literal[...]`, `harness-od/src/harness_od/idempotency_join_dedup.py:375-377` | **NO** — the only `src` occurrence is its own definition |
 | the **10 base values**, for a general validator failure | — | **NO** — nothing maps a `ValidatorResult` onto them |
-| `§21.2` staircase / retry | **NO** — `StaircaseTransition.on_cause` is `ValidatorRetryExitClass` (`harness-cp/src/harness_cp/validator_fail_transient_staircase.py:64`), and its docstring says so at `:66`: *"(not a fail-cause token)"*; `_classify_provider_exception` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:281`) returns the same class | n/a |
+| `§21.2` staircase / retry | **NO** — `StaircaseTransition.on_cause` is `ValidatorRetryExitClass` (`harness-cp/src/harness_cp/validator_fail_transient_staircase.py:64`), its docstring saying so verbatim at `:66`: *"(not a fail-cause token)"*; `_classify_provider_exception` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:281`) returns the same class | n/a |
 
-> **The precise defect is therefore narrower than "nothing exists": per-surface typed causes
-> DO exist and some are live, but there is no general mapping from a validator failure onto
-> the base alphabet — which is exactly what an always-emitted declaration on EVERY
-> validator-failure event requires.**
+> **The precise defect: per-surface typed causes DO exist and some are live, but no general
+> mapping takes an arbitrary validator failure onto the base alphabet — which is exactly what
+> an always-emitted declaration on EVERY validator-failure event requires.**
 
-**This re-prices (B) DOWN from the round-3 wording** (it is not inventing classification from
-scratch — the `secret_*` arm is already typed and live) **while leaving the gap real** for the
-base values. A complete per-value inventory is **owed at the apply arc**, and this fork does
-not assert one.
+This table is **verified per row and NOT asserted as complete** — a complete per-value
+inventory is owed at the apply arc (§8). Two earlier framings of this question were wrong and
+are recorded as contested claims in §8 so neither is quoted forward.
 
-**An UNDISCHARGED CROSS-ADR OBLIGATION constrains every disposition.** `ADR-D6` §1.5.2
-(`design-substrate/ADR-D6_v1_2.md:346-352`) extends the C5 catalog with
+### §2.2 — An undischarged cross-ADR obligation constrains every disposition
+
+`ADR-D6` §1.5.2 (`design-substrate/ADR-D6_v1_2.md:346-352`) extends the C5 catalog with
 `replay_semantic_divergence` and states that *"ADR-D5 v1.2 §1.10.1 ... absorbs the new value at
 the next D5 revision (forward-flagged; not blocking this revision)"*. `B-141` assigns that
 synchronization to this row
