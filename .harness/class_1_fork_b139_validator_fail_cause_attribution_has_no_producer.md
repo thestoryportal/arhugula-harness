@@ -56,9 +56,20 @@ So the contradiction is not "someone forgot a line." It is structural:
 > unconditionally emitted on every validator-failure event, while the contract shape the
 > declared producer returns has no member that could carry its value.**
 
-The cause values the declaration enumerates (10 base + 5 F5 `secret_*` refinements) live in
-`§21.2`'s staircase branches and in the retry/breaker machinery — **on the other side of the
-seam** from the validator that is supposed to emit them.
+**The cause values do not live anywhere — a claim this fork INHERITED from the register row
+and has now re-grounded (out-of-family review round 3).** The row said the values "live in
+§21.2's staircase branches and the retry/breaker machinery", and the first draft of this fork
+repeated it. That is FALSE at HEAD: `StaircaseTransition.on_cause` is typed
+`ValidatorRetryExitClass` (`validator_fail_transient_staircase.py:64`) and its own docstring
+says so explicitly — *"(not a fail-cause token)"* at `:66` — while
+`_classify_provider_exception` (`retry_breaker_fallback.py:281`) likewise returns
+`ValidatorRetryExitClass | None`. The staircase carries the **5-class retry-exit taxonomy**,
+not the 15-value attribution alphabet (10 base + 5 F5 `secret_*` refinements). §21.2's own
+branch labels (`capability_shortfall_transient`,
+`contract_violation_not_yet_routed_to_Reflexion`) are not §21.5 wire tokens either.
+
+**So the attribution alphabet has no source anywhere in the shipped system**, which is a
+strictly stronger statement than "the values are on the other side of a seam."
 
 ## §3 — Why this is Class 1 and not a Phase-7 absorption
 
@@ -77,11 +88,14 @@ the new field, and the §25.2 cardinality table grows a row. It also does not, b
 availability — the operator's validator would have to *know* the cause, which for the
 staircase-derived values it generally does not.
 
-**(B) Thread the cause across the seam.** Keeps `ValidatorResult` intact by having the
-framework derive the cause from the staircase/retry context at emission time. Honest cost: it
-creates a new CP-internal dependency from the validator framework onto retry/breaker state,
-and the §21.2 branches would have to expose a stable cause value. This is the reading that
-best preserves the *declaration's* intent, at the price of new coupling.
+**(B) Derive the cause and thread it to the emission site.** **Re-priced at review round 3,
+and it is materially more expensive than this fork first stated.** The original wording —
+"thread the cause across the seam" — presumed the values existed somewhere to be exposed.
+They do not (see §2). So (B) is not a wiring change: it requires **inventing a new
+cause-classification source** that maps failures onto the 15-value alphabet, then threading
+its output to the emission site. That is a new mechanism with its own correctness surface and
+its own taxonomy-drift risk against `ValidatorRetryExitClass`, on top of the CP-internal
+coupling the first draft already named.
 
 **(C) — RECOMMENDED — demote the declaration from always-emitted to conditional at BOTH
 canonical surfaces, AND synchronize the derived C5 carrier in the same arc.** **The scope was
@@ -117,5 +131,7 @@ not left to the reader.
 
 A producer writing the exact key `validator.fail.cause_attribution` anywhere in `harness-*/src`
 (the fixed-string search above is the instrument — a loose `cause_attribution` search returns
-`retry.*` and pause-state hits and must not be used), **or** a member of `ValidatorResult` /
-the `_build_span_attributes` inputs that carries a cause and was missed here.
+`retry.*` and pause-state hits and must not be used); **or** a member of `ValidatorResult` /
+the `_build_span_attributes` inputs that carries a cause and was missed here; **or** an
+existing source anywhere in `harness-*/src` that already emits the 15-value attribution
+alphabet, which would re-price (B) back down to a wiring change.
