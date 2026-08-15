@@ -61,11 +61,11 @@ snapshot:
   total: 181
   open: 1
   design_substrate_gated: 1
-  registered_finding: 36
+  registered_finding: 35
   operator_gated: 0
   held: 2
-  closed: 141
-  identity_digest: 1d42bcd860e3266e
+  closed: 142
+  identity_digest: 2ad7165f206fdd62
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9615,8 +9615,9 @@ items:
   pr: '#1355'
 - id: B-181
   title: The 2026-08-13 test_ow_proceed_deadline_stashed_child_completed_not_cancelled reds are UNATTRIBUTED after B-166 barrier-race explanation was refuted
-  status: registered_finding
+  status: closed
   summary: 'On 2026-08-13 test_ow_proceed_deadline_stashed_child_completed_not_cancelled was observed RED in 4 of ~12 full-suite runs. Those observations were real. B-166 filed them as a near-boundary barrier race; that explanation was REFUTED at #1353 by a deadline sweep showing ~600x headroom (deviation only at <= 0.0005s against a pinned 0.3s), plus 25 full-suite runs and 20 spinner-loaded isolated runs at 0 failures. So the reds have NO current explanation. Registered rather than dropped because a refuted explanation is not an absent observation: closing B-166 without this row would delete the only record that something reddened this test and --open would never surface it again. LEADING CANDIDATE: B-166 claim that the venue carried ZERO Python files is FALSE for #1336, which changed harness-od/src/harness_od/tail_keep_span_processor.py and added harness-runtime/tests/test_b164b_fanout_orphaned_child_span_repro.py.'
-  close_out: 'STEP 1 -- do not re-derive from the refuted premise: any new barrier-race hypothesis needs a reproduction whose CAPTURED TERMINAL MAP contradicts the 600x measurement recorded at B-166; absent that, the barrier is not the mechanism. STEP 2 -- re-attribute from the venue: inspect #1336 own span-processor change and its new fan-out repro test for interference with this test in a shared full-suite process. STEP 3 -- bound the effort honestly: this row exists so the observation is not lost, not to mandate an open-ended hunt; if a further full-suite campaign at the original scale reproduces nothing, close it as unreproducible-and-stale, recording the run count. FALSIFIER: evidence the 4/12 observation was itself a misread of a different assertion, in which case this row closes as over-stated.'
+  close_out: 'CLOSED AT #1357 as UNREPRODUCIBLE-AND-STALE, the disposition this row own step 3 prescribes. STEP 2 EXECUTED AND THE LEADING CANDIDATE IS REFUTED ON BOTH AXES. The candidate was #1336 own test harness-runtime/tests/test_b164b_fanout_orphaned_child_span_repro.py, strong because its docstring says it abandons its ThreadPoolExecutor with shutdown(wait=False) -- orphaned threads being exactly the mechanism that could cut a later wall-clock test in a shared process. MECHANISM AXIS: both helpers JOIN their threads (child_done.wait at :205 and :254) and measurement confirms 0 threads leaked with none alive. VENUE AXIS: the suspect run immediately before OW10 in ONE process, 15 consecutive times, was 15/15 clean with zero deviations. OBSERVATION LAYER CHECKED: CI holds no record -- #1336 and #1337 both have clean rollups and grepping --log-failed across ALL FIVE failed CI runs from 2026-08-13 returns 0 mentions of this test. RUN COUNT AS STEP 3 REQUIRES: 60 runs across three shapes, all clean -- 25 full-suite (original scale ~12, most 2-at-a-time so a LOADED venue), 20 isolated under 24 CPU spinners on 8 cores, 15 targeted co-execution. WHAT WOULD RE-OPEN IT: a fresh observation with the CAPTURED TERMINAL MAP attached, which is what distinguishes a genuine barrier cut from whatever actually happened; do NOT re-file as a barrier-race row without one. ORIGINAL FILING FOLLOWS. STEP 1 -- do not re-derive from the refuted premise: any new barrier-race hypothesis needs a reproduction whose CAPTURED TERMINAL MAP contradicts the 600x measurement recorded at B-166; absent that, the barrier is not the mechanism. STEP 2 -- re-attribute from the venue: inspect #1336 own span-processor change and its new fan-out repro test for interference with this test in a shared full-suite process. STEP 3 -- bound the effort honestly: this row exists so the observation is not lost, not to mandate an open-ended hunt; if a further full-suite campaign at the original scale reproduces nothing, close it as unreproducible-and-stale, recording the run count. FALSIFIER: evidence the 4/12 observation was itself a misread of a different assertion, in which case this row closes as over-stated.'
   council: 'No. This is an empirical attribution question with a named leading candidate and a stated stopping rule.'
-  heading: '### B-181 · The 2026-08-13 `test_ow_proceed_deadline_stashed_child_completed_not_cancelled` reds are UNATTRIBUTED — `B-166`''s barrier-race explanation was refuted, so their cause is still unknown *(split out of `B-166` when its premise was refuted, 2026-08-15)*'
+  heading: '### B-181 · The 2026-08-13 `test_ow_proceed_deadline_stashed_child_completed_not_cancelled` reds are UNREPRODUCIBLE — the leading candidate is refuted and CI holds no record *(split out of `B-166` when its premise was refuted, 2026-08-15; closed unreproducible-and-stale at #1357)*'
+  pr: '#1357'
