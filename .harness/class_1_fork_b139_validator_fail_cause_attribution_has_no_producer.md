@@ -118,14 +118,17 @@ the new field, and the §25.2 cardinality table grows a row. It also does not, b
 availability — the operator's validator would have to *know* the cause, which for the
 staircase-derived values it generally does not.
 
-**(B) Derive the cause and thread it to the emission site.** **Re-priced at review round 3,
-and it is materially more expensive than this fork first stated.** The original wording —
-"thread the cause across the seam" — presumed the values existed somewhere to be exposed.
-They do not (see §2). So (B) is not a wiring change: it requires **inventing a new
-cause-classification source** that maps failures onto the 15-value alphabet, then threading
-its output to the emission site. That is a new mechanism with its own correctness surface and
-its own taxonomy-drift risk against `ValidatorRetryExitClass`, on top of the CP-internal
-coupling the first draft already named.
+**(B) Derive the cause and thread it to the emission site.** **Re-priced TWICE; this is the
+current pricing, and it is lower than rounds 3-4 stated.** The `secret_*` arm needs no
+invention at all — `SecretFailClass` is typed and its producers are live (§2), so for that
+surface (B) is genuinely a wiring change. What is missing is a **general mapping** from an
+arbitrary validator failure onto the **10 base values**: nothing today classifies a
+`ValidatorResult` into that alphabet, and `ValidatorRetryExitClass` is a different (5-class)
+taxonomy that must not be silently conflated with it. So (B) is *part wiring, part new
+classification*, plus the CP-internal coupling from the validator framework onto
+retry/breaker state. Its honest cost sits **between** a pure wiring change and inventing a
+taxonomy from scratch — and a complete per-value inventory (owed, §8) is what would price the
+remaining share exactly.
 
 **(C) — RECOMMENDED — demote the declaration from always-emitted to conditional at BOTH
 canonical surfaces, AND synchronize the derived C5 carrier in the same arc.** **The scope was
