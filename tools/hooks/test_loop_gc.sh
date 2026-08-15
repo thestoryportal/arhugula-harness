@@ -553,11 +553,17 @@ printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
 #              fixture across an intervening hook run (~0.8s idle, more under load).
 #        Reproduced against the real hook: at phase :59 under 12 CPU spinners the 29-min
 #        fixture crossed and the suite reported `2 unreconciled subagent(s)` — the exact
-#        red seen on main at be081e9d. sw_stamp fixes (a); the split registry fixes (b),
-#        so each side now spends ONE hook invocation of its full 60s budget.
-#        Deliberately NOT fixed by moving the quiet side to ~20min: that buys headroom by
-#        un-pinning the constant, leaving any STALE in (20m, 31m) undetected — the
-#        non-discriminating-witness failure B-143's close-out already names.
+#        red seen on main at be081e9d. sw_stamp fixes (a); RE-STAMPING the quiet side
+#        immediately before the second assertion fixes (b), so each hook invocation sees
+#        a fixture that is exactly 29m old and spends its FULL 60s budget.
+#        Both fixtures deliberately stay in ONE registry: the second assertion's value is
+#        that it reads exactly `1` while a fresh sibling is also present, which pins the
+#        per-key rule (a stale entry must not drag its fresh sibling into the count).
+#        Splitting them into two registries would buy the same headroom and quietly drop
+#        that witness.
+#        Deliberately NOT fixed by moving the quiet side to ~20min either: that buys
+#        headroom by un-pinning the constant, leaving any STALE in (20m, 31m) undetected —
+#        the non-discriminating-witness failure B-143's close-out already names.
 sw_reset
 T16A="$SW/t16a.jsonl"; : > "$T16A"; sw_stamp "$T16A" 1740
 sw_row "$(sw_ts 1740)" start s16fresh "$T16A" >> "$SREG"
@@ -565,9 +571,9 @@ OUT=$(sw_ctx)
 printf '%s' "$OUT" | grep -q "unreconciled" \
   && bad "S16 29-min agent flagged (STALE boundary drifted low): '$OUT'" \
   || ok "S16 29-min unreconciled stays quiet"
-sw_reset
 T16B="$SW/t16b.jsonl"; : > "$T16B"; sw_stamp "$T16B" 1860
 sw_row "$(sw_ts 1860)" start s16stale "$T16B" >> "$SREG"
+sw_stamp "$T16A" 1740   # the quiet side must still be 29m old at THIS assertion too
 OUT=$(sw_ctx)
 printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
   && ok "S16 31-min unreconciled is flagged" \
