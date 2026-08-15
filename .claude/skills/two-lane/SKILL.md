@@ -38,7 +38,7 @@ not share shell locals — a `"$base"` setup stalls non-interactively even on an
 Both lanes branch off the **same** pinned base SHA (resolving `origin/main` twice is a TOCTOU:
 any other session's SessionStart hook fetches on every start and can advance the ref between
 the two adds). Each lane then runs its arc's BUILD
-half normally — build, test, `just check`, grounding pass, out-of-family review — entirely
+half normally — build, test, `just codex-check`, grounding pass, out-of-family review — entirely
 inside its own worktree. Nothing about the build half is serialized. **`merge-gate` and the
 final-head CI check are NOT build-half steps**: the gate runs immediately before merge, appends
 the shared `.harness/merge-gate-log.md`, and its approvals must cover the branch that will

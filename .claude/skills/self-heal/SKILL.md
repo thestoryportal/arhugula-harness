@@ -16,9 +16,13 @@ artifacts so the operator only sees genuine bugs.
    find . -path ./.git -prune -o \( -name '__pycache__' -o -name '*.pyc' \) -print0 2>/dev/null | xargs -0 rm -rf
    ```
    (The Wave-1 `precmd-clear-cache.sh` hook does this per-Bash; do it explicitly here too.)
-2. **Run the suite.** `just check` (lint + typecheck + `uv run pytest`, mechanism-α only —
-   β/γ skip without credentials, by design). For a targeted area, `just test-one <path>`.
-   The hook test suites: `for t in tools/hooks/test_*.sh; do bash "$t"; done`.
+2. **Run the suite.** `just codex-check` (lint + typecheck + docs/closure gates +
+   `uv run pytest` + the `codex-parity-check` shell lane, mechanism-α only — β/γ skip
+   without credentials, by design). For a targeted area, `just test-one <path>`. Prefer
+   `codex-check` over `check` here: the two differ only in that `check` omits
+   `codex-parity-check`, and with it BOTH shell globs (`tools/hooks/test_*.sh` *and*
+   `tools/statusline/test_*.sh`) — a self-heal pass that never executed them cannot call
+   the suite green.
 3. **Triage each failure — env-artifact vs logic:**
    - **Env-artifact** (re-run cleanly after cache-clear / is timing-flaky / needs a cred the
      suite is meant to skip / stale lockfile): NOT a logic defect. Re-run once after
