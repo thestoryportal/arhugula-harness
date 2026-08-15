@@ -4,7 +4,7 @@
 **Status:** OPEN — Class 1 (architectural defect; design-phase artifact requires revision)
 **Halt target:** any arc that consumes `validator.fail.cause_attribution` as a present attribute, or that relies on the C5 FM-J rule (*"a fail-class without `cause_attribution` is FM-J"*) as an enforced invariant.
 **Routing target (canonical):** `ADR-D5` §1.10.1 bullet 2 **and** `C-CP-21` §21.5 row 2 — the two CANONICAL surfaces, per the §1.3 authority chain (canonical design artifacts live under `design-substrate/`). Secondarily `C-CP-25` §25.2 (`ValidatorResult`), if the operator elects a wire-it reading.
-**Owed synchronization (derived, NOT a back-flow target):** `.claude/skills/council/c5-validation-contract/SKILL.md` §33-38 + §234-236 carries the same obligation and is where the FM-J rule text actually lives. It is **derived guidance downstream of the ADR**, so it does not vote on the disposition — but it MUST be synchronized once the canonical surfaces are amended, or stale skill text will keep asserting a requirement nothing produces. *(Scope corrected twice under out-of-family review: round 1 caught that the first draft omitted C5 entirely; round 2 caught that promoting it to a co-equal canonical surface inverted the authority chain.)*
+**Owed synchronization (derived, NOT a back-flow target):** `.claude/skills/council/c5-validation-contract/SKILL.md` carries the same obligation at **six sites, not two** (`:33-38` reconciliation, `:128` vocabulary rule, `:161` taxonomy, `:234-236`, `:254` self-audit, `:277` FM-J) — the apply arc must sweep every semantic occurrence, not the two first cited (round-4 correction). This is where the FM-J rule text actually lives. It is **derived guidance downstream of the ADR**, so it does not vote on the disposition — but it MUST be synchronized once the canonical surfaces are amended, or stale skill text will keep asserting a requirement nothing produces. *(Scope corrected twice under out-of-family review: round 1 caught that the first draft omitted C5 entirely; round 2 caught that promoting it to a co-equal canonical surface inverted the authority chain.)*
 **Detection mode:** exhaustive fixed-string search over all **seven** `harness-*/src` trees (`as`, `core`, `cp`, `cxa`, `is`, `od`, `runtime`) + a read of the producer's own input shapes. No new test was authored — this fork reports an ABSENCE, and the honest witness for an absence is the search that found nothing, not a test that asserts nothing.
 
 ---
@@ -68,8 +68,25 @@ not the 15-value attribution alphabet (10 base + 5 F5 `secret_*` refinements). �
 branch labels (`capability_shortfall_transient`,
 `contract_violation_not_yet_routed_to_Reflexion`) are not §21.5 wire tokens either.
 
-**So the attribution alphabet has no source anywhere in the shipped system**, which is a
-strictly stronger statement than "the values are on the other side of a seam."
+**But "no source anywhere" would ALSO be wrong — corrected at review round 4.** One typed
+carrier does exist: `ReplaySemanticDivergenceError.validator_fail_cause_attribution` is pinned
+`Literal["replay_semantic_divergence"]` at
+`harness-od/src/harness_od/idempotency_join_dedup.py:375-377` (with sibling `fail_class` and
+`permanence` pins). It has **no live constructor** — the only occurrence in `src` is its own
+definition — so it produces nothing at runtime, which is why the fixed-string producer search
+in §1 still stands. The accurate statement is therefore narrower and more useful:
+
+> **The 15-value alphabet has exactly one typed carrier, and that carrier is never
+> constructed; no path maps a general validator failure onto the alphabet at all.**
+
+**This carries an UNDISCHARGED CROSS-ADR OBLIGATION that any disposition must handle.**
+`ADR-D6` §1.5.2 (`design-substrate/ADR-D6_v1_2.md:346-352`) extends the C5 catalog with
+`replay_semantic_divergence` and states that *"ADR-D5 v1.2 §1.10.1 ... absorbs the new value at
+the next D5 revision (forward-flagged; not blocking this revision)"*. `B-141` assigns exactly
+that synchronization to this row
+(`.harness/b-141-validator-fail-class-cascade-2026-08-12.md:115-121`). So an amendment that
+demotes D5's declaration **while leaving D6's absorb-at-next-revision instruction standing**
+would mint a fresh contradiction — the next D5 revision *is* the one this fork routes.
 
 ## §3 — Why this is Class 1 and not a Phase-7 absorption
 
@@ -132,6 +149,7 @@ not left to the reader.
 A producer writing the exact key `validator.fail.cause_attribution` anywhere in `harness-*/src`
 (the fixed-string search above is the instrument — a loose `cause_attribution` search returns
 `retry.*` and pause-state hits and must not be used); **or** a member of `ValidatorResult` /
-the `_build_span_attributes` inputs that carries a cause and was missed here; **or** an
-existing source anywhere in `harness-*/src` that already emits the 15-value attribution
-alphabet, which would re-price (B) back down to a wiring change.
+the `_build_span_attributes` inputs that carries a cause and was missed here; **or** a LIVE
+constructor of `ReplaySemanticDivergenceError` (or any other producer) that actually emits a
+value from the 15-value alphabet at runtime, which would re-price (B) back down toward a
+wiring change.
