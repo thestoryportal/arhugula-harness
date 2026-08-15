@@ -166,3 +166,34 @@ the `_build_span_attributes` inputs that carries a cause and was missed here; **
 constructor of `ReplaySemanticDivergenceError` (or any other producer) that actually emits a
 value from the 15-value alphabet at runtime, which would re-price (B) back down toward a
 wiring change.
+
+---
+
+## §7 — Confidence tags on this fork's non-trivial claims
+
+| Claim | Confidence | Basis |
+|---|---|---|
+| No producer writes `validator.fail.cause_attribution` anywhere in `harness-*/src` | **HIGH** | fixed-string search over all seven trees; each of the five hits classified by reading |
+| `ValidatorResult` and the `_build_span_attributes` inputs carry no cause | **HIGH** | direct read of `validator_framework_types.py:171-188` + both call sites |
+| The staircase carries `ValidatorRetryExitClass`, not a cause token | **HIGH** | the type annotation at `:64` and its own docstring at `:66` say so verbatim |
+| The `secret_*` arm has typed **and live** producers | **HIGH** | `SecretFailClass` enum + 14 counted `SecretResolutionError` constructions |
+| `ReplaySemanticDivergenceError` has no live constructor | **MEDIUM** | a `src`-scoped count returned only its own definition; a dynamic/reflective construction would not be caught by that method |
+| The per-surface inventory above is **complete** | **LOW — explicitly not claimed** | it was wrong in rounds 3, 4 and 5; completeness is owed at the apply arc, not asserted here |
+| (C) is the right disposition | **MEDIUM** | it is the cheapest, most reversible, and precedented option — but it is an operator ratification, not a finding |
+
+## §8 — Open questions, contested claims, recommended next probes
+
+**Open questions (for the operator, at ratification).**
+1. Which disposition — (A), (B), or (C)? This fork recommends (C) but does not decide it.
+2. Is the FM-J rule **live debt** or **aspirational**? §5 routes this and deliberately does not answer it; with zero producers, every validator failure is FM-J by the rule as written.
+3. Does the D5 amendment absorb `replay_semantic_divergence` (per ADR-D6 §1.5.2's forward flag) in the *same* revision that demotes the always-emitted claim? Doing one without the other leaves the corpus inconsistent either way.
+
+**Contested / superseded claims — recorded so ratification is not misled.**
+- The register row's premise that the cause values *"live in §21.2's staircase branches and the retry/breaker machinery"* is **DISPROVEN** (§2). This fork repeated it in its first draft.
+- This fork's own round-3 wording, *"the alphabet has no source anywhere"*, is **also wrong** and was corrected at rounds 4-5. Neither statement should be quoted forward.
+
+**Recommended next probes (for the apply arc, not blocking ratification).**
+1. **Complete the per-value inventory** — for each of the 10 base values, does any typed carrier or live producer exist? This fork verified four surfaces and explicitly declines to claim completeness.
+2. **Probe for a dynamic constructor** of `ReplaySemanticDivergenceError` (the one MEDIUM-confidence claim above) before treating that carrier as inert.
+3. **Sweep C5's six sites** together (`:33-38`, `:128`, `:161`, `:234-236`, `:254`, `:277`) — a partial sync leaves the skill self-contradictory.
+
