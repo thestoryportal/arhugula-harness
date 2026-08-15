@@ -61,11 +61,11 @@ snapshot:
   total: 178
   open: 1
   design_substrate_gated: 1
-  registered_finding: 38
+  registered_finding: 37
   operator_gated: 0
   held: 2
-  closed: 136
-  identity_digest: db3bd9d8edadce20
+  closed: 137
+  identity_digest: 1a62e801339ce936
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9410,7 +9410,7 @@ items:
   title: 'AC #5''s 100 ms flush budget has ~40x slack over the ~2.5 ms of real work it measures, so it
     discriminates only catastrophic regressions -- a moderate (16x) per-row-commit regression measures
     33-57 ms and passes'
-  status: registered_finding
+  status: closed
   summary: 'SURFACED BY A MUTATION PROBE THAT FAILED TO KILL, during the B-176 arc.
     test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5 asserts a 100 ms budget against a flush that
     actually takes ~2.5 ms idle -- roughly 40x slack. MEASURED, NOT INFERRED: replacing the
@@ -9421,7 +9421,7 @@ items:
     single-sample assertion B-176 replaced had the identical blind spot, so the witness was never
     stronger than this. The test''s own mutation-probe annotation records the measured non-kill so it
     cannot overstate itself.'
-  close_out: 'REGISTERED RATHER THAN PATCHED, deliberately: tightening 100 ms toward the ~2.5 ms
+  close_out: 'CLOSED AT #1349. STEP 1 ANSWERED: AC #5 IS A TEST THRESHOLD WITH NO SPEC-LEVEL BASIS, which is a STRONGER reason not to tighten it than the one this arc first argued. CORRECTED IN REVIEW, and the correction is the finding worth keeping: the first draft claimed the spec CORROBORATED a 1000ms production cycle the 100ms bound fits inside (citing Spec_Operational_Discipline_v1_8.md §27.2). The merge-gate spec lens BLOCKED on it and was RIGHT -- Spec_Operational_Discipline_v1_25.md §1.3 is a canonical-reading amendment over that exact line, and it says cadence is ''operator-orchestrator-driven (NOT bound to flush_interval_ms at v1.8-baseline default 1000ms -- the default-cadence binding is deferred to the orchestrator composition site)''. Reading the v1.8 baseline without sweeping the delta chain for amendments to that section is exactly the staleness hazard this workspace already documents. WHAT SURVIVES, on firmer ground: the 100ms figure appears nowhere in design-substrate except U-OD-43''s own AC list (grep-verified -- two hits, the AC at v2.14:147 and its v2.24:81 coverage-matrix mirror), where it is self-framed as an ''Integration test:'' criterion rather than a production bound, and the spec states NO flush latency contract at all. So there is no cycle the 100ms must fit inside, and tightening it would INVENT a contract the spec deliberately declined to state. That the number is undetermined rather than tuned is ALSO exactly why a separate measurement-derived guard is the only thing that can detect drift. STEP 2 DISCHARGED AS THE SEPARATE ASSERTION THIS ROW ASKED FOR, additive and citing no spec -- but AS A SHAPE ASSERTION, NOT A CLOCK, AND THAT CHANGE IS THE SECOND FINDING OF THIS ARC. The first implementation asserted min-of-5 under a 15ms bound derived from a three-way measurement (healthy idle 2.29-2.57ms; healthy under 24 cpu + 8 io spinners 4.07-6.18ms; per-row-commit regression 26.58-41.26ms -- non-overlapping, 4.3x gap, bound at the geometric centre). An independent worktree-isolated witness lens corroborated it empirically at ~155 attempts with 2.7x margin under DOUBLE that load. CODEX STILL RAISED A P1 AND WAS RIGHT: a host-calibrated wall-clock bound in the BLOCKING suite can fail on unchanged code on slower storage or a contended runner, and this same file already records a 139.92ms stall on this very path -- closing B-177 by adding a TIGHTER member of the B-166/B-169/B-176/B-178 flake class would have been a poor trade, however careful the calibration. The guard now counts the sqlite calls instead: one flush is executemany=1 / execute=1 (the retention DELETE) / commit=2, and a per-row loop reads as 0 / 101 / 101. STEP 3 DISCHARGED BY EXECUTION and now DETERMINISTICALLY -- with the per-row commit applied the guard FAILS on those counts while the AC #5 ceiling PASSES in the same invocation, the gap this row was opened for, with the host removed from the assertion entirely. Bounded honestly: the shape guard does NOT catch slowdowns that preserve the call shape (an added sleep, an O(n^2) projection); those remain covered only by AC #5''s ceiling at its stated 40x slack, and the docstring says so. AC #5''s recorded NON-kill stays recorded (it is still true of THAT witness) with a pointer to the guard that now covers it. ORIGINAL FILING FOLLOWS. REGISTERED RATHER THAN PATCHED, deliberately: tightening 100 ms toward the ~2.5 ms
     measurement would re-spec a STATED performance contract (AC #5), which is design-substrate territory,
     not test hygiene -- exactly the silent-absorption failure mode X-AL-3 forecloses. STEP 1 -- decide
     whether AC #5''s 100 ms is a LATENCY CEILING (a service-level bound the flush must never exceed, in
@@ -9447,6 +9447,8 @@ items:
     only catastrophic regressions — a per-row-commit regression runs 16x slower and still PASSES
     *(measured by the `B-176` mutation probe, 2026-08-14; the annotation it falsified was retracted
     rather than kept)*'
+  pr: '#1349'
+
 - id: B-178
   title: 'test_reused_temporary_name_stays_bounded_by_its_own_filesystem_timestamp compares a synthetic
     now against a real-clock first_observed_at, so it holds only while under ~0.15 s of real time elapses

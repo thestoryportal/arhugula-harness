@@ -23,8 +23,10 @@ Plus composer plumbing + invariants:
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from harness_core import DeploymentSurface
@@ -541,6 +543,13 @@ _AC5_BUDGET_ATTEMPTS = 5
 # only discriminates catastrophic (>=40x) regressions, not moderate (~16x)
 # ones. That slack is a property of AC #5's chosen number, not of best-of-N —
 # a single-sample assertion had exactly the same blind spot.
+#
+# B-177 CLOSED that gap WITHOUT touching this number: no spec states a 100ms
+# bound at all, so tightening it would invent a contract rather than enforce
+# one. The missing coverage became a SEPARATE, tighter assertion —
+# `test_flush_to_sqlite_batch_path_regression_guard_per_b_177` below, which
+# kills exactly the per-row-commit mutation this one cannot see. The non-kill
+# above is still true of THIS witness and stays recorded as such.
 async def test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5(
     tmp_path: Path,
 ) -> None:
@@ -593,6 +602,107 @@ async def test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5(
     assert min(attempts_ns) < 100_000_000, (
         f"fastest of {_AC5_BUDGET_ATTEMPTS} flushes took {min(attempts_ns)}ns; "
         f"AC #5 budget 100ms (all attempts ns: {attempts_ns})"
+    )
+
+
+# One flush's sqlite call SHAPE, which is what "batched" actually means here:
+# `insert_spans` issues one `executemany` + one `commit`, then
+# `retention_cleanup_lazy` issues one `execute` (the retention DELETE) + one
+# `commit`. Per-row committing turns that into 100 `execute` + 101 `commit`.
+_FLUSH_EXPECTED_EXECUTEMANY = 1
+_FLUSH_EXPECTED_EXECUTE = 1
+_FLUSH_EXPECTED_COMMIT = 2
+
+
+class _SqliteCallCounter:
+    """Forwarding proxy that counts the calls distinguishing a BATCH flush from
+    a per-row one. Everything else passes straight through to the real
+    connection, so the flush under test does real work against real sqlite."""
+
+    def __init__(self, inner: sqlite3.Connection) -> None:
+        self._inner = inner
+        self.executemany_calls = 0
+        self.execute_calls = 0
+        self.commit_calls = 0
+
+    def executemany(self, *args: Any, **kwargs: Any) -> Any:
+        self.executemany_calls += 1
+        return self._inner.executemany(*args, **kwargs)
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        self.execute_calls += 1
+        return self._inner.execute(*args, **kwargs)
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+        self._inner.commit()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+# mutation-probe: at `harness_od/sqlite_span_store.py:159`, replace the
+# `conn.executemany(_INSERT_SQL, tuples)` + single `conn.commit()` with a
+# per-row `conn.execute(...)` + `conn.commit()` loop. VERIFIED KILL, and
+# deterministically: the counts become executemany=0 / execute=100 /
+# commit=101 against the expected 1 / 1 / 2. This is the SAME mutation the
+# AC #5 witness above records as a measured NON-kill at its 100ms ceiling —
+# this test exists precisely because that one cannot see it.
+async def test_flush_to_sqlite_batch_path_regression_guard_per_b_177(
+    tmp_path: Path,
+) -> None:
+    """B-177 — a REGRESSION GUARD on the batch flush path, asserting SHAPE
+    rather than elapsed time, and distinct from AC #5's ceiling.
+
+    WHY A SHAPE ASSERTION AND NOT A TIGHTER CLOCK. The first draft of this
+    guard asserted a 15ms best-of-5 bound derived from measurement. Codex
+    review rejected it, correctly: a host-calibrated wall-clock bound in the
+    BLOCKING suite can fail on unchanged code when `tmp_path` sits on slower
+    storage or the runner is contended, and this very file already records a
+    139.92ms stall on this same path. Four rows in this workspace
+    (`B-166`/`B-169`/`B-176`/`B-178`) exist because of exactly that class, so
+    closing `B-177` by adding a tighter member of it would have been a poor
+    trade. Counting the calls removes the host from the assertion entirely.
+
+    WHY AC #5's NUMBER IS STILL NOT TIGHTENED. Its 100ms has no spec-level
+    basis — the figure appears nowhere in `design-substrate/` except U-OD-43's
+    own AC list, where it is self-framed as an "Integration test:" criterion,
+    and §C-OD-27.2's current canonical reading
+    (`Spec_Operational_Discipline_v1_25.md` §1.3, superseding the v1.8 line)
+    says flush cadence is "operator-orchestrator-driven (NOT bound to
+    `flush_interval_ms`)". Tightening it would invent a contract the spec
+    declined to state; this guard adds coverage without touching it.
+
+    WHAT IT DOES NOT CLAIM. It is not a latency assertion and no spec cites
+    it. It detects the batch path ceasing to be a batch — the concrete
+    regression that clears AC #5's ceiling at ~16x slower — and NOT slowdowns
+    that preserve the call shape (an added sleep, an O(n^2) projection). Those
+    remain covered only by AC #5's ceiling, at its stated 40x slack.
+    """
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    _seed(daemon, [_span_row(f"s{i}") for i in range(100)])
+    real_conn = initialize_span_store(tmp_path / "spans_b177.db")
+    counter = _SqliteCallCounter(real_conn)
+    try:
+        inserted = await ring.flush_to_sqlite(cast(sqlite3.Connection, counter))
+    finally:
+        real_conn.close()
+
+    # The flush did the real work — without this, the counts below could be
+    # satisfied by a flush that inserted nothing.
+    assert inserted == 100, f"flush inserted {inserted} rows, not 100"
+    assert (counter.executemany_calls, counter.execute_calls, counter.commit_calls) == (
+        _FLUSH_EXPECTED_EXECUTEMANY,
+        _FLUSH_EXPECTED_EXECUTE,
+        _FLUSH_EXPECTED_COMMIT,
+    ), (
+        f"the 100-span flush issued executemany={counter.executemany_calls} "
+        f"execute={counter.execute_calls} commit={counter.commit_calls}, expected "
+        f"{_FLUSH_EXPECTED_EXECUTEMANY}/{_FLUSH_EXPECTED_EXECUTE}/{_FLUSH_EXPECTED_COMMIT}. "
+        f"The batch path looks like it stopped batching — a per-row execute+commit loop "
+        f"reads as execute=100 commit=101. This is NOT a latency check; AC #5's ceiling "
+        f"passes under that regression, which is why this guard exists"
     )
 
 
