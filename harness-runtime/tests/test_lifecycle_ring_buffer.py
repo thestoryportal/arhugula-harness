@@ -529,6 +529,34 @@ def test_ring_buffer_carries_retention_days_from_config(tmp_path: Path) -> None:
 _AC5_BUDGET_ATTEMPTS = 5
 
 
+async def _time_100_span_flushes(tmp_path: Path, *, prefix: str) -> list[int]:
+    """Time `_AC5_BUDGET_ATTEMPTS` independent 100-span flushes, in ns.
+
+    Shared by the two witnesses over this path — the AC #5 CEILING and the
+    B-177 REGRESSION GUARD — so the measurement they argue about cannot drift
+    apart between them. Each attempt is independent by construction: a fresh
+    daemon, ring, database file and connection, plus its own `inserted == 100`
+    check. That per-attempt check is what keeps `min()` honest — `insert_spans`
+    is INSERT-OR-IGNORE over a fixed `s0..s99` id set, so a shared database
+    would dedup attempts 2..N to zero inserts and time a no-op.
+    """
+    attempts_ns: list[int] = []
+    for attempt in range(_AC5_BUDGET_ATTEMPTS):
+        daemon = _daemon(tmp_path)
+        ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+        _seed(daemon, [_span_row(f"s{i}") for i in range(100)])
+        conn = initialize_span_store(tmp_path / f"spans_{prefix}_{attempt}.db")
+        try:
+            start_ns = time.perf_counter_ns()
+            inserted = await ring.flush_to_sqlite(conn)
+            elapsed_ns = time.perf_counter_ns() - start_ns
+        finally:
+            conn.close()
+        assert inserted == 100, f"attempt {attempt} inserted {inserted} rows, not 100"
+        attempts_ns.append(elapsed_ns)
+    return attempts_ns
+
+
 # mutation-probe: at `harness_od/sqlite_span_store.py:159`, replace the
 # `conn.executemany(_INSERT_SQL, tuples)` + single `conn.commit()` with a
 # durability-hardened per-row loop — `conn.execute("PRAGMA fullfsync=ON")`
@@ -541,6 +569,13 @@ _AC5_BUDGET_ATTEMPTS = 5
 # only discriminates catastrophic (>=40x) regressions, not moderate (~16x)
 # ones. That slack is a property of AC #5's chosen number, not of best-of-N —
 # a single-sample assertion had exactly the same blind spot.
+#
+# B-177 CLOSED that gap WITHOUT touching this number: the slack is intentional
+# (AC #1 sets a 1000ms flush interval, so 100ms asserts the flush fits its own
+# cycle), so the missing coverage became a SEPARATE, tighter assertion —
+# `test_flush_to_sqlite_batch_path_regression_guard_per_b_177` below, which
+# kills exactly the per-row-commit mutation this one cannot see. The non-kill
+# above is still true of THIS witness and stays recorded as such.
 async def test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5(
     tmp_path: Path,
 ) -> None:
@@ -576,23 +611,75 @@ async def test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5(
     letting a vacuous `min()` stand — and it independently catches a
     row-dropping regression, which would otherwise register as *faster*.
     """
-    attempts_ns: list[int] = []
-    for attempt in range(_AC5_BUDGET_ATTEMPTS):
-        daemon = _daemon(tmp_path)
-        ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
-        _seed(daemon, [_span_row(f"s{i}") for i in range(100)])
-        conn = initialize_span_store(tmp_path / f"spans_ac5_{attempt}.db")
-        try:
-            start_ns = time.perf_counter_ns()
-            inserted = await ring.flush_to_sqlite(conn)
-            elapsed_ns = time.perf_counter_ns() - start_ns
-        finally:
-            conn.close()
-        assert inserted == 100, f"attempt {attempt} inserted {inserted} rows, not 100"
-        attempts_ns.append(elapsed_ns)
+    attempts_ns = await _time_100_span_flushes(tmp_path, prefix="ac5")
     assert min(attempts_ns) < 100_000_000, (
         f"fastest of {_AC5_BUDGET_ATTEMPTS} flushes took {min(attempts_ns)}ns; "
         f"AC #5 budget 100ms (all attempts ns: {attempts_ns})"
+    )
+
+
+# The B-177 regression-guard bound, in nanoseconds. DERIVED FROM MEASUREMENT of
+# the exact statistic asserted below — `min` of `_AC5_BUDGET_ATTEMPTS` — never
+# from a single sample and never from intuition:
+#
+#   healthy, idle                     min-of-5 = 2.29-2.57 ms   (20 trials)
+#   healthy, 24 cpu + 8 io spinners   min-of-5 = 4.07-6.18 ms   (20 trials)
+#   per-row-commit regression         min-of-5 = 26.58-41.26 ms (12 trials)
+#
+# The healthy and regressed populations do not overlap; the gap is 4.3x. 15 ms
+# sits near its geometric centre (12.8 ms), biased toward flake-resistance:
+# 2.43x above the worst healthy min-of-5 measured under deliberate load, and
+# 1.77x below the fastest regressed one. The bias is deliberate — a flaky guard
+# costs every future arc (B-166/B-169/B-176/B-178 are that bill), while a guard
+# 1.77x clear of the regression it names still catches it.
+_FLUSH_REGRESSION_GUARD_NS = 15_000_000
+
+
+# mutation-probe: at `harness_od/sqlite_span_store.py:159`, replace the
+# `conn.executemany(_INSERT_SQL, tuples)` + single `conn.commit()` with a
+# per-row `conn.execute(...)` + `conn.commit()` loop — 100 commits instead of
+# one batch. VERIFIED KILL at min-of-5 = 26.58-41.26 ms against this 15 ms
+# bound. This is the SAME mutation the AC #5 witness above records as a
+# measured NON-kill at its 100 ms ceiling: this guard exists precisely because
+# that one cannot see it, so the two annotations are complementary, not
+# contradictory.
+async def test_flush_to_sqlite_batch_path_regression_guard_per_b_177(
+    tmp_path: Path,
+) -> None:
+    """B-177 — a REGRESSION GUARD on the batch flush path, distinct from and
+    additional to AC #5's ceiling. Nothing here re-states AC #5's number.
+
+    WHY BOTH EXIST. AC #5's 100 ms is a CEILING, and its ~40x slack over the
+    ~2.5 ms this path actually takes is intentional rather than accidental:
+    U-OD-43 AC #1 sets the flush interval at 1000 ms, so the ceiling asserts
+    the flush comfortably fits inside its own cycle. Read that way the slack is
+    the contract working as designed, which is why B-177 did NOT tighten it —
+    doing so would re-spec a stated contract to serve a different purpose.
+
+    But a ceiling cannot detect a regression that stays under it. A per-row
+    commit instead of `executemany` runs ~16x slower and still clears 100 ms,
+    so it lands silently. This guard is the second, tighter assertion that
+    B-177's close-out asked for: a measurement-derived bound whose only job is
+    to notice the batch path stopping being a batch.
+
+    WHAT IT DOES NOT CLAIM. It is not a latency contract and no spec cites it
+    — §C-OD-27.2 states only the 1000 ms flush interval, and the 100 ms figure
+    lives solely in the plan's AC #5. It is a drift detector for THIS
+    implementation on ordinary hardware. Because it asserts `min` of N, it
+    catches a CONSTANT slowdown and not an intermittent one; the bound's
+    derivation and its two margins are recorded at
+    `_FLUSH_REGRESSION_GUARD_NS`, so a future arc can re-price it against
+    fresh measurements rather than re-deriving it from scratch.
+    """
+    attempts_ns = await _time_100_span_flushes(tmp_path, prefix="b177")
+    assert min(attempts_ns) < _FLUSH_REGRESSION_GUARD_NS, (
+        f"fastest of {_AC5_BUDGET_ATTEMPTS} flushes took {min(attempts_ns)}ns, over the "
+        f"{_FLUSH_REGRESSION_GUARD_NS}ns B-177 regression guard. This is NOT the AC #5 "
+        f"ceiling (100ms) — that one still passes. The batch path looks like it stopped "
+        f"batching: check `insert_spans` still uses one `executemany` + one `commit`. "
+        f"If this is genuinely slower hardware rather than a regression, re-derive the "
+        f"bound from a fresh three-way measurement per the note at the constant "
+        f"(all attempts ns: {attempts_ns})"
     )
 
 
