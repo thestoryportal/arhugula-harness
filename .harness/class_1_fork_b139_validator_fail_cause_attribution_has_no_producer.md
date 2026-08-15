@@ -190,8 +190,19 @@ wiring change.
 
 ## §8 — Open questions, contested claims, recommended next probes
 
-**Open questions (for the operator, at ratification).**
-1. Which disposition — (A), (B), or (C)? This fork recommends (C) but does not decide it.
+**Council is CONDITIONALLY OWED before ratification — C5 ⊥ C7/C9.** The A/B/C choice moves
+the **C5** validation contract (the FM-J rule and the attribution obligation), **C9** retry
+inputs (any new cause-classification source sits beside `ValidatorRetryExitClass` and must not
+be conflated with it), and **C7** observability semantics (a medium-cardinality open-set
+attribute on *every* validator-failure event). That is a nameable multi-domain tension, so a
+dyadic **C5 + C7** (or **C5 + C9**) convening is owed BEFORE the operator ratifies. The
+registration-era *"a probe-first pass may resolve it without convening"* is superseded in its
+grounding-first half only: grounding is DONE, and it showed the tension is **live** rather
+than dissolved. *(An intermediate reading taken mid-review said council was not owed; that
+conflated the probe settling the FACTS with the cross-domain TRADE being settled. It is not.)*
+
+**Open questions (for the operator, at ratification — after the council convening above).**
+1. Which disposition — (A), (B), or (C)? This fork recommends (C), prices all three, and does **not** decide it.
 2. Is the FM-J rule **live debt** or **aspirational**? §5 routes this and deliberately does not answer it; with zero producers, every validator failure is FM-J by the rule as written.
 3. Does the D5 amendment absorb `replay_semantic_divergence` (per ADR-D6 §1.5.2's forward flag) in the *same* revision that demotes the always-emitted claim? Doing one without the other leaves the corpus inconsistent either way.
 
