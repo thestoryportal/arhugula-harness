@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 179
+  total: 180
   open: 1
   design_substrate_gated: 1
-  registered_finding: 37
+  registered_finding: 38
   operator_gated: 0
   held: 2
   closed: 138
-  identity_digest: 61edb95a220a7b81
+  identity_digest: 4ed27d8a50cd0452
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9334,12 +9334,13 @@ items:
     immaterial) and the rest are absolute year-2020 dates, so no sibling site is owed the same repair. VENUE
     GROUNDED, correcting a wrong first reading of my own: a sweep for a NAMED CI step running this suite
     found none and nearly produced a ''CI never runs this'' claim. It does -- tools/codex-parity-check.sh:20
-    loops over `tools/hooks/test_*.sh` under `set -euo pipefail`, wired at .github/workflows/ci.yml:78 as
-    a blocking step -- so this row''s ''main CI'' attribution is CORRECT, reached through a glob rather
-    than a named invocation. That hunt also surfaced B-179 (the documented local gate `just check` omits
-    this lane). VERIFICATION: suite 74 passed / 0 failed, identical to main''s own baseline of 74 measured
-    by a differential run of HEAD''s version (this row''s ''73/73'' predates #1347-#1349); all 23 shell
-    suites in the codex-parity glob rc=0; `just check` green at 7939 passed.'
+    loops over `tools/hooks/test_*.sh` under `set -euo pipefail`, wired at .github/workflows/ci.yml:79 (the
+    `run:` line; :78 is the step''s `name:`) as a blocking step -- so this row''s ''main CI'' attribution
+    is CORRECT, reached through a glob rather than a named invocation. That hunt also surfaced B-179 (the
+    documented local gate `just check` omits this lane). VERIFICATION: suite 74 passed / 0 failed, identical
+    to main''s own baseline of 74 measured by a differential run of HEAD''s version (this row''s ''73/73''
+    predates #1347-#1349); all 23 shell suites in the codex-parity glob rc=0; `just check` green at 7939
+    passed.'
   council: No. Mechanism is named, the falsifier is executable, and the repair is a test-hygiene change
     with no contract surface. Same disposition as B-166.
   heading: '### B-169 · `test_loop_gc.sh` S16 STALE-boundary pin flakes on a loaded runner — a 29-minute
@@ -9529,46 +9530,87 @@ items:
     control, 2026-08-14)*'
   pr: '#1348'
 - id: B-179
-  title: The CLAUDE-side local gate guidance prescribes `just check`, which never runs the hook shell suites,
-    while the .agents/ mirrors already prescribe `just codex-check` which does
+  title: Gate guidance across BOTH runners names `just check`, which never runs the hook shell suites; only
+    the .agents/ skill mirrors name `just codex-check`, so Codex's own guidance contradicts itself
   status: registered_finding
-  summary: 'Two runners share this repo and get DIFFERENT gate coverage for the same change, and the Claude
-    side is the exposed one. justfile:47 defines `check: ... test`, and `test` (justfile:23-24) is `uv run
-    pytest -m ''not e2e''` -- pytest ONLY. The hook and statusline SHELL suites are run exclusively by tools/codex-parity-check.sh:20
-    (`for test_script in tools/hooks/test_*.sh tools/statusline/test_*.sh`), which sits in justfile:66 `codex-check`
-    and in CI at .github/workflows/ci.yml:78 -- but NOT in `check`. CARRIERS THAT PRESCRIBE THE WEAKER GATE
-    (all Claude-side): .claude/skills/roadmap-continue/SKILL.md:31 and AGENTS.md:45 name `just check` outright;
-    .claude/skills/ship-pr/SKILL.md:14 says `just check` plus ''the relevant test suites'', a discretionary
-    hedge that never names the shell suites and so does not reliably close the hole. CARRIERS ALREADY CORRECT
-    (the .agents/ mirrors): .agents/skills/roadmap-continue/SKILL.md:37 and .agents/skills/ship-pr/SKILL.md:17
-    both prescribe `just codex-check`. SCOPE CORRECTED BY OUT-OF-FAMILY REVIEW: the first filing claimed
-    the exposure applied to ''the roadmap-continue skill'' without naming a tree; codex round 1 raised a
-    [P2] showing the .agents/ mirrors are already right, which is half-correct -- the exposure is real but
-    Claude-side-ONLY, and re-grounding also surfaced AGENTS.md:45 as a carrier the first filing had missed.
-    GROUNDED, NOT HYPOTHETICAL: in the B-169 arc `just check` went green (7939 passed) on a branch whose
-    ONLY change was tools/hooks/test_loop_gc.sh; that file was exercised only because the arc separately
-    ran the shell-suite glob by hand. Same family as the ''a gate cannot tell empty from unlooked'' discipline.
-    Exposure is LOCAL-ONLY -- CI does run the glob -- so this delays discovery to CI rather than losing
-    it.'
+  summary: 'The gate that the workflow docs name does not execute the tests it is trusted to cover, and
+    the exposure spans BOTH runners rather than one. justfile:47 defines `check: ... test`, and `test` (justfile:23-24)
+    is `uv run pytest -m ''not e2e''` -- pytest ONLY. The hook and statusline SHELL suites are run exclusively
+    by tools/codex-parity-check.sh:20 (`for test_script in tools/hooks/test_*.sh tools/statusline/test_*.sh`),
+    which sits in justfile:66 `codex-check` and in CI at .github/workflows/ci.yml:79 -- but NOT in `check`.
+    WEAK CARRIERS (name `just check`): .claude/skills/roadmap-continue/SKILL.md:31 outright; .claude/skills/ship-pr/SKILL.md:14
+    says `just check` plus ''the relevant test suites'', a discretionary hedge that never names the shell
+    suites; and AGENTS.md:45 outright -- which is a CODEX carrier, not a Claude one, since AGENTS.md:1-3
+    declares itself ''the authoritative compact projection of the project rules'' FOR CODEX. CORRECT CARRIERS
+    (name `just codex-check`): .agents/skills/roadmap-continue/SKILL.md:37 and .agents/skills/ship-pr/SKILL.md:17.
+    THE SHARPENED FINDING: Codex guidance is INTERNALLY INCONSISTENT -- its skill mirrors prescribe the
+    strong gate while its own root projection prescribes the weak one -- so a Codex session is exposed depending
+    on which carrier it follows, and the Claude side is uniformly weak. SCOPE CORRECTED TWICE BY OUT-OF-FAMILY
+    REVIEW: round 1 showed the .agents/ skill mirrors are already right (the first filing had not named
+    a tree at all); round 2 showed the resulting ''Claude-side-ONLY'' framing was ALSO wrong, because AGENTS.md
+    is Codex''s authoritative projection. GROUNDED, NOT HYPOTHETICAL: in the B-169 arc `just check` went
+    green (7939 passed) on a branch whose ONLY change was tools/hooks/test_loop_gc.sh; that file was exercised
+    only because the arc separately ran the shell-suite glob by hand. Same family as the ''a gate cannot
+    tell empty from unlooked'' discipline. Exposure is LOCAL-ONLY -- CI does run the glob -- so this delays
+    discovery to CI rather than losing it.'
   close_out: 'NOT fixed inside the B-169 arc: changing the primary gate''s composition (or the guidance
     that selects it) is a scope expansion with its own blast radius -- `just check` is invoked by skills,
     hooks and operator habit, and codex-parity-check adds a ~3-minute pytest lane plus 23 shell suites to
     what is currently a ~4.5-minute run. STEP 1 -- decide the shape: (a) add `codex-parity-check` to `check`,
     paying the full cost on every invocation; (b) add a narrower `hook-suites` recipe running only the shell
-    globs and put THAT in `check`, leaving the codex pytest lane where it is; or (c) leave the recipes alone
-    and align the three Claude-side carriers with the .agents/ mirrors that already prescribe `just codex-check`.
-    (c) IS NOW THE RECOMMENDATION, and the re-grounding is why: the .agents/ tree already runs exactly this
-    fix, so (c) is a proven, docs-only change with no build-tooling risk, where the first filing provisionally
-    recommended (b) on the mistaken belief that no carrier had solved it. (b) remains the fallback if the
-    full codex-check cost proves too heavy for the Claude-side loop, since it buys the shell-suite coverage
-    alone at ~90s measured. STEP 2 -- whichever lands, verify BY EXECUTION that a deliberately reddened
-    hook suite now fails the gate the guidance names; a change that does not actually propagate the non-zero
-    exit is the same did-not-look failure wearing a new name. FALSIFIER: evidence that some other always-on
-    Claude-side path (a git hook, a session hook, a pre-commit) already runs the shell suites locally, in
-    which case the exposure is only documentary and this row closes as over-stated.'
+    globs and put THAT in `check`, leaving the codex pytest lane where it is; or (c) align the three weak
+    carriers (.claude/skills/roadmap-continue:31, .claude/skills/ship-pr:14, AGENTS.md:45) with the .agents/
+    skill mirrors that already prescribe `just codex-check`. (c) IS THE RECOMMENDATION: the .agents/ skill
+    tree already runs exactly this fix, making (c) a proven docs-only change with no build-tooling risk
+    -- and it additionally resolves the internal contradiction inside the Codex projection, which (a) and
+    (b) would leave standing. (b) remains the fallback if the full codex-check cost proves too heavy, buying
+    the shell-suite coverage alone at ~90s measured. STEP 2 -- whichever lands, verify BY EXECUTION that
+    a deliberately reddened hook suite fails the gate the guidance names; a change that does not actually
+    propagate the non-zero exit is the same did-not-look failure wearing a new name. FALSIFIER: evidence
+    that some always-on path (a git hook, a session hook, a pre-commit) already runs the shell suites locally
+    on either runner, in which case the exposure is only documentary and this row closes as over-stated.'
   council: No. The gap is grounded by file:line and the repair is a build-tooling composition choice with
     three enumerated options and a named recommendation. There is no cross-domain tension to convene over
     -- step 1 is an operator-visible cost/coverage trade, not a design fork.
-  heading: '### B-179 · The Claude-side gate guidance names `just check`, which never runs the hook shell
-    suites — the `.agents/` mirrors already name `just codex-check`, which does *(surfaced while grounding
-    `B-169`''s CI venue; scope corrected by codex round 1, 2026-08-15)*'
+  heading: '### B-179 · Gate guidance on BOTH runners names `just check`, which never runs the hook shell
+    suites — only the `.agents/` skill mirrors name `just codex-check`, so Codex''s own guidance contradicts
+    itself *(surfaced while grounding `B-169`''s CI venue; scope corrected by codex rounds 1 and 2, 2026-08-15)*'
+- id: B-180
+  title: Absence-based shell assertions in test_loop_gc.sh cannot distinguish a genuinely quiet hook from
+    a hook that produced no output at all
+  status: registered_finding
+  summary: 'tools/hooks/test_loop_gc.sh S16''s first assertion is `printf ''%s'' "$OUT" | grep -q "unreconciled"
+    && bad ... || ok ...` -- it PASSES whenever the substring is absent, FOR ANY REASON. `sw_ctx` pipes
+    the hook through `jq -r ... 2>/dev/null` and the exit status is discarded by command substitution, so
+    a crashed hook, malformed JSON, or an empty stdout all yield OUT='''' and the assertion reports ok.
+    This is not hypothetical for THIS hook specifically: loop-gc.sh:114-118 states the sweep is deliberately
+    ''failure-invisible'' -- ''any python failure yields no clause on stdout ... and this hook still exits
+    0'' -- so total silence is an ENGINEERED, reachable state rather than a remote crash scenario. The paired
+    second assertion is presence-based and correctly FAILS on the same empty input, so the two halves are
+    asymmetric: a regression that silences the sweep entirely reds the 31-min pin but is reported as a clean
+    PASS by the 29-min pin. PRE-EXISTING AND UNCHANGED BY #1350: both assertion bodies are byte-identical
+    before and after that arc, which only altered fixture stamping. A second, narrower observation from
+    the same lens: the presence-based greps in this file are UNANCHORED, so `grep -q "1 unreconciled subagent"`
+    would also match ''21 unreconciled subagent(s)'' -- not live in S16, whose two-row fixture bounds the
+    count to {0,1,2}, but latent in S1/S5/S6/S7 which share the form.'
+  close_out: 'REGISTERED RATHER THAN PATCHED INSIDE #1350, on the same rule that arc applied to B-179: it
+    is a pre-existing weakness in a test the arc happened to touch, not a defect the arc introduced, and
+    the witness lens that found it explicitly judged it out of scope for the STALE-boundary repair. STEP
+    1 -- decide the assertion shape. The candidate is a POSITIVE CONTROL: assert the hook produced a well-formed
+    envelope at all (e.g. that `sw_run` exited 0 and its stdout parsed as JSON) BEFORE asserting the clause
+    is absent, so ''quiet'' and ''dead'' become distinguishable. Note the tension to resolve first: loop-gc.sh''s
+    failure-invisibility is DELIBERATE and load-bearing for production (SessionStart must never be blocked
+    by a sweep bug), so the test must assert the envelope without requiring the hook to become fail-loud
+    -- these are different surfaces and conflating them would re-litigate a ratified design choice. STEP
+    2 -- the same absence-based form appears in other cases in this file; sweep them and fix the class rather
+    than the instance, but only after step 1 settles the shape. STEP 3 -- mutation-probe it: break the sweep
+    so it emits nothing and confirm the repaired assertion REDS, since an absence-check that still passes
+    on silence is precisely the witness this row exists to remove. FALSIFIER: a demonstration that `sw_ctx`
+    cannot in fact yield an empty string for a broken sweep (e.g. jq erroring in a way that aborts the case
+    under `set -e`), in which case the silence path is unreachable and this row closes as over-stated.'
+  council: No. The mechanism is grounded by file:line, the repair is a test-hygiene change, and the one
+    real tension (production failure-invisibility vs test observability) is nameable and resolvable without
+    cross-domain deliberation -- the test can assert the envelope without changing the hook.
+  heading: '### B-180 · S16''s quiet-side assertion is ABSENCE-based, so a crashed or silent hook reports
+    a PASS — and `loop-gc.sh` is deliberately failure-invisible, which makes silence a reachable state *(found
+    by the merge-gate witness lens during `B-169`, 2026-08-15)*'
