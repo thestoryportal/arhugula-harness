@@ -28,9 +28,9 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    `C-*`/`U-*`/seam/`H_T-*` cite, resolve it with `just overlay-query` (the `overlay-query`
    skill, R-IF-112) before ad-hoc grep. Call `advisor()` before substantive cross-axis work (§13.1).
 4. **Implement with tests.** Posture-correct edits (§11). Hermetic test per new unit;
-   `just codex-check` (the superset gate — `just check` runs pytest ONLY, so it never
-   executes the `tools/hooks/test_*.sh` + `tools/statusline/test_*.sh` shell suites, which
-   run exclusively under `codex-parity-check`); commit the arc's edits (the out-of-family
+   `just codex-check` (the superset gate — `just check` omits `codex-parity-check`, so it
+   never executes the `tools/hooks/test_*.sh` + `tools/statusline/test_*.sh` shell suites
+   that lane runs); commit the arc's edits (the out-of-family
    reviewer reads the committed
    branch diff — an uncommitted tree makes HEAD-bound checks stale); **grounding pass** (re-read every
    file:line cite at the now-current HEAD, recompute every count, verify every #NNN,

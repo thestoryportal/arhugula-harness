@@ -61,11 +61,11 @@ snapshot:
   total: 180
   open: 1
   design_substrate_gated: 1
-  registered_finding: 38
+  registered_finding: 37
   operator_gated: 0
   held: 2
-  closed: 138
-  identity_digest: 4ed27d8a50cd0452
+  closed: 139
+  identity_digest: 01a7f7fe0e0bddaf
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9532,7 +9532,7 @@ items:
 - id: B-179
   title: Gate guidance across BOTH runners names `just check`, which never runs the hook shell suites; only
     the .agents/ skill mirrors name `just codex-check`, so Codex's own guidance contradicts itself
-  status: registered_finding
+  status: closed
   summary: 'The gate that the workflow docs name does not execute the tests it is trusted to cover, and
     the exposure spans BOTH runners rather than one. justfile:47 defines `check: ... test`, and `test` (justfile:23-24)
     is `uv run pytest -m ''not e2e''` -- pytest ONLY. The hook and statusline SHELL suites are run exclusively
@@ -9553,7 +9553,7 @@ items:
     only because the arc separately ran the shell-suite glob by hand. Same family as the ''a gate cannot
     tell empty from unlooked'' discipline. Exposure is LOCAL-ONLY -- CI does run the glob -- so this delays
     discovery to CI rather than losing it.'
-  close_out: 'NOT fixed inside the B-169 arc: changing the primary gate''s composition (or the guidance
+  close_out: 'CLOSED AT #1351 via recommendation (c) -- the weak carriers now name `just codex-check`. THE ROW UNDERCOUNTED ITS OWN CARRIERS: it named three, but grep at HEAD found FIVE occurrences across those three files (roadmap-continue:31 AND :34, ship-pr:14 AND :18 -- the second of each pair is the grounding-pass restatement), plus TWO files it never named (two-lane:41 and self-heal:19). self-heal was a PARTIAL carrier: it named `just check` but separately globbed tools/hooks/test_*.sh, compensating while still missing tools/statusline/test_*.sh. STEP 2 DISCHARGED BY EXECUTION: a deliberately reddened hook suite (backed up via cp, restored after) propagates a non-zero exit through the codex-parity-check glob naming the exact file, while the pytest lane collects ZERO .sh files. REVIEW CORRECTED THE FIX ITSELF: the first wording said `check` runs pytest ONLY, which is FALSE -- `check` also runs sync, lint, fmt, typecheck and five docs/closure gates; the true distinction is that it omits `codex-parity-check`. Reworded across all five carriers. NOT ADOPTED, DELIBERATELY: tools/q1_review_gate.py:236-241 pins the literal string `just check`, but it gates ONE frozen artifact for the CLOSED R-CL-Q1 phase and CI never runs --check against a live report, so no live contradiction exists. KNOWN COST, RECORDED: in a root checkout carrying untracked edits, `codex-check` reds on a HARD ROOT_CHECKOUT_EDIT guard finding where `check` stays green -- pre-existing, reproduces on clean main, and the fallback option (b) (a narrow hook-suites recipe folded into `check`) remains available if that friction proves real. ORIGINAL FILING FOLLOWS. NOT fixed inside the B-169 arc: changing the primary gate''s composition (or the guidance
     that selects it) is a scope expansion with its own blast radius -- `just check` is invoked by skills,
     hooks and operator habit, and codex-parity-check adds a ~3-minute pytest lane plus 23 shell suites to
     what is currently a ~4.5-minute run. STEP 1 -- decide the shape: (a) add `codex-parity-check` to `check`,
@@ -9575,6 +9575,7 @@ items:
   heading: '### B-179 · Gate guidance on BOTH runners names `just check`, which never runs the hook shell
     suites — only the `.agents/` skill mirrors name `just codex-check`, so Codex''s own guidance contradicts
     itself *(surfaced while grounding `B-169`''s CI venue; scope corrected by codex rounds 1 and 2, 2026-08-15)*'
+  pr: '#1351'
 - id: B-180
   title: Absence-based shell assertions in test_loop_gc.sh cannot distinguish a genuinely quiet hook from
     a hook that produced no output at all
