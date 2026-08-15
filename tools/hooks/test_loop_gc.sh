@@ -242,6 +242,13 @@ SLOCK="$SPROJ/.harness/.agents-registry.lock"
 sw_reset() { rm -rf "$SPROJ"; mkdir -p "$SPROJ/.harness"; : > "$SREG"; }
 # ts N-seconds-ago, in the registry's UTC format.
 sw_ts() { /usr/bin/python3 -c 'import sys,time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()-float(sys.argv[1]))))' "$1"; }
+# stamp <file>'s mtime to EXACTLY <seconds> old. `touch -t` takes minute granularity
+# (seconds truncate to :00), so a fixture stamped N minutes back is really aged anywhere
+# in [N m 00 s, N m 59 s] depending on the wall-clock phase the suite happens to reach it
+# at — up to 59s of the intended headroom silently gone. Harmless for the 2-hour fixtures
+# below (90 min of slack against the 30-min STALE boundary), fatal for a near-boundary
+# pin: see S16 (B-169).
+sw_stamp() { /usr/bin/python3 -c 'import os,sys,time; t=time.time()-float(sys.argv[2]); os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
 # one registry row: sw_row <ts> <event> <agent_id> <transcript>
 sw_row() { printf '{"ts":"%s","event":"%s","session":"s1","agent_id":"%s","transcript":"%s","cwd":"/w"}\n' "$1" "$2" "$3" "$4"; }
 # inode + mtime, as one comparable string.
@@ -534,14 +541,32 @@ printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
 
 # ── S16) STALE boundary pin (gate lens-3): 29min unreconciled → quiet; 31min → flagged.
 #        Without this pair any STALE in (~2s, 2h) passed the suite.
+#
+#        HEADROOM, NOT THRESHOLD (B-169). Both pins stay at 29/31 — what changed is how
+#        much wall-clock the assertions spend. Two compounding leaks made a 60s budget
+#        behave like a ~1s one:
+#          (a) `touch -t` truncates to the minute, so the quiet side's real age was
+#              uniform in [29m00s, 29m59s] — headroom to the boundary was a SAWTOOTH from
+#              60s down to ~0s, decided by the phase the suite reached S16 at. Measured:
+#              phase :00 → 59.3s of headroom, phase :59 → 0.70s.
+#          (b) both sides shared one registry, so the 31-min assertion RE-AGED the 29-min
+#              fixture across an intervening hook run (~0.8s idle, more under load).
+#        Reproduced against the real hook: at phase :59 under 12 CPU spinners the 29-min
+#        fixture crossed and the suite reported `2 unreconciled subagent(s)` — the exact
+#        red seen on main at be081e9d. sw_stamp fixes (a); the split registry fixes (b),
+#        so each side now spends ONE hook invocation of its full 60s budget.
+#        Deliberately NOT fixed by moving the quiet side to ~20min: that buys headroom by
+#        un-pinning the constant, leaving any STALE in (20m, 31m) undetected — the
+#        non-discriminating-witness failure B-143's close-out already names.
 sw_reset
-T16A="$SW/t16a.jsonl"; : > "$T16A"; touch -t "$(date -v-29M +%Y%m%d%H%M 2>/dev/null || date -d '29 minutes ago' +%Y%m%d%H%M)" "$T16A"
+T16A="$SW/t16a.jsonl"; : > "$T16A"; sw_stamp "$T16A" 1740
 sw_row "$(sw_ts 1740)" start s16fresh "$T16A" >> "$SREG"
 OUT=$(sw_ctx)
 printf '%s' "$OUT" | grep -q "unreconciled" \
   && bad "S16 29-min agent flagged (STALE boundary drifted low): '$OUT'" \
   || ok "S16 29-min unreconciled stays quiet"
-T16B="$SW/t16b.jsonl"; : > "$T16B"; touch -t "$(date -v-31M +%Y%m%d%H%M 2>/dev/null || date -d '31 minutes ago' +%Y%m%d%H%M)" "$T16B"
+sw_reset
+T16B="$SW/t16b.jsonl"; : > "$T16B"; sw_stamp "$T16B" 1860
 sw_row "$(sw_ts 1860)" start s16stale "$T16B" >> "$SREG"
 OUT=$(sw_ctx)
 printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
