@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 181
+  total: 182
   open: 1
   design_substrate_gated: 2
-  registered_finding: 34
+  registered_finding: 35
   operator_gated: 0
   held: 2
   closed: 142
-  identity_digest: 4190611fb6a811bd
+  identity_digest: e9d7595a39caca04
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9607,3 +9607,50 @@ items:
   council: 'No. This is an empirical attribution question with a named leading candidate and a stated stopping rule.'
   heading: '### B-181 · The 2026-08-13 `test_ow_proceed_deadline_stashed_child_completed_not_cancelled` reds are UNREPRODUCIBLE — the leading candidate is refuted and CI holds no record *(split out of `B-166` when its premise was refuted, 2026-08-15; closed unreproducible-and-stale at #1357)*'
   pr: '#1357'
+- id: B-182
+  title: >-
+    The C-OD-11 §11.1 per-cell cell_rate_limit is declared-and-never-read in-process while its
+    tenant_rate_limit sibling IS enforced, and §11.1 commits no number at the team-binding cells
+  status: registered_finding
+  summary: >-
+    Surfaced while grounding the C11 half of B-137 step (3), whose objection is that C1's
+    1/base_rate multiplier is "unpriced against the C-OD-11 §11.1 per-cell budgets". Three facts
+    about that instrument, all grounded at HEAD and pinned at
+    harness-od/tests/test_b137_c11_budget_grounding.py (5 tests, 2 mutation probes).
+    (A) §11.1 commits NO number at the team-binding cells. Its table gives solo cells a concrete
+    posture ("default 1.0; rotation handles volume") and multi-tenant cells per-tenant isolation,
+    but the team-binding row defers verbatim to "Persona §11.4 throughput rough order-of-magnitude
+    open item; envelope refines downstream of §11.4 closure".
+    (B) That deferral target is Persona_Document_v1.md §11 Open items ROW 4 (not a subsection),
+    whose closing path is "Emerges from operational telemetry once harness is running" — which is
+    CIRCULAR with B-137, since B-137 is the finding that this telemetry is starved at these very
+    cells. The budget cannot close by the route its own contract nominates while the defect it
+    would price stays open.
+    (C) per_cell_cardinality_budget.py commits a flat cell_rate_limit=10_000.0 spans/sec at every
+    ACTIVE cell — a figure §11.1 never states, uniform across cells whose base rates span 0.1 to
+    1.0 — and it has ZERO readers anywhere in harness-*/src outside its own declaration, while
+    tenant_rate_limit IS genuinely consumed at
+    multi_tenant_cross_cutting_enforcement.py:282-291 (raises when observed series exceed it).
+    NOT ASSERTED AS A DEFECT: §11.1 names the enforcement layer as COLLECTOR_BOUNDARY or
+    BACKEND_INGESTION, both out-of-process, and OD spec v1.37 ruled those caps enforce
+    "independently of any sampling decision". A value declared for an out-of-process consumer
+    having no in-process reader may be correct by design. What is registered is that the harness
+    cannot itself witness the cap, so no in-repo artifact can price anything against it.
+  close_out: >-
+    (1) Re-ground all three facts at HEAD — the witness module is the instrument and its
+    assertions are written to fail loudly with the reason if any moves.
+    (2) ADJUDICATE (C): decide whether cell_rate_limit is correctly out-of-process-only (in which
+    case document that at the carrier so the next reader does not re-file this), or whether an
+    in-process enforcement site is owed. Do NOT wire an enforcement site before this decision —
+    minting an in-process cap the contract does not state would be an X-AL-3 design extension.
+    (3) The (B) cycle is NOT closeable here and must NOT be treated as blocking: it is a
+    design-substrate observation about Persona §11 open-item 4, and routing it is a Class 1
+    question for whoever closes B-137 step (3).
+    (4) Carry (A)+(B) into B-137's council as CONTEXT — they change what C11's objection can
+    claim, not whether C1 is affordable. The affordability call is unaffected and still owed.
+  council: >-
+    No at registration. (C) is a single-domain adjudication with a named owner (C7/OD) and
+    grounding answers it. (A)+(B) are inputs to B-137's already-declared C7+C11 convening rather
+    than a separate one.
+
+  heading: '### B-182 · The §11.1 per-cell `cell_rate_limit` is declared-and-never-read in-process, while its `tenant_rate_limit` sibling IS enforced — and §11.1 states no number at the team-binding cells at all *(surfaced grounding B-137 step (3)''s C11 half, 2026-08-15)*'
