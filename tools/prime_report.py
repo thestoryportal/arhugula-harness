@@ -43,18 +43,45 @@ DEFAULT_GAP_HOURS = 5.0
 DESC_WIDTH = 138
 RATE_WINDOW = 10  # closure-bearing sessions used for the throughput estimate
 
-# Buckets in report order: (status, heading, gloss, counts_toward_estimate)
+# Buckets in report order: (status, heading, gloss, counts_toward_estimate).
+#
+# A `*_gated` row is NOT asserted to be blocked on the operator. CLAUDE.md §12.4.1 is
+# explicit that a gate label means "drive it to its genuine gate", not "parked" -- and
+# the live counterexample is B-139, whose own fork doc says a C5+C7/C9 council is owed
+# BEFORE the operator ratifies, i.e. its next step is agent-executable. Deciding which
+# gated rows are agent-ready needs per-row prose judgement, which would not be
+# deterministic, so they are reported separately and excluded from the estimate FLOOR
+# rather than silently relabelled as the operator's problem.
 BUCKETS: list[tuple[str, str, str, bool]] = [
     ("open", "IN FLIGHT", "arc opened, not yet closed", True),
-    ("design_substrate_gated", "OPERATOR-GATED", "grounded; blocked on your decision", False),
-    ("operator_gated", "OPERATOR-GATED", "grounded; blocked on your decision", False),
+    (
+        "design_substrate_gated",
+        "GATED",
+        "grounded; a decision gate is open -- NOT parked (s12.4.1): the next step may "
+        "still be agent-executable (e.g. an owed council), so ground each before blocking",
+        False,
+    ),
+    (
+        "operator_gated",
+        "GATED",
+        "grounded; a decision gate is open -- NOT parked (s12.4.1): ground before blocking",
+        False,
+    ),
     ("registered_finding", "ACTIONABLE", "grounded findings, agent-executable", True),
     ("held", "HELD", "ratified defers -- do not reopen without a fresh operator call", False),
 ]
 
 PR_IN_SUBJECT = re.compile(r"\(#(\d+)\)\s*$")
 PR_REFERENCE = re.compile(r"#(\d+)")
+# A leading bare number is the closing leg ("1078 (impl leg); spec leg at PR #1077").
+# The lookahead keeps a leading date ("2026-08-05 ...") from reading as a PR. It must
+# exclude DIGITS as well as "-": with a bare (?!-) the engine backtracks "2026" -> "202",
+# sees "6" (not "-"), and matches 202. Excluding digits denies every backtrack too.
+PR_LEADING_BARE = re.compile(r"^(\d+)(?![\d-])")
 ID_SORT = re.compile(r"^([A-Za-z-]*?)-?(\d+)$")
+# PR titles are network-controlled text that the /prime command injects into the model's
+# prompt. Strip the characters that could break the fence or read as instructions.
+UNSAFE_IN_TITLE = re.compile(r"[`\x00-\x1f\x7f]")
 
 
 class UnavailableError(Exception):
@@ -90,6 +117,17 @@ def brief(text: str, width: int = DESC_WIDTH) -> str:
     if space > width * 0.6:
         cut = cut[:space]
     return cut.rstrip(" ,;:.-—") + "…"
+
+
+def safe_title(text: str, width: int = 60) -> str:
+    """Neutralize a network-controlled PR title before it reaches the model's prompt.
+
+    `/prime` injects this report into the prompt and the command asks for it to be
+    relayed verbatim inside a fence, so a title is untrusted input on that path:
+    backticks can break the fence and control characters can restructure the output.
+    Strip both, then truncate.
+    """
+    return brief(UNSAFE_IN_TITLE.sub("", str(text)), width)
 
 
 def id_key(item_id: str) -> tuple[str, int]:
@@ -155,10 +193,18 @@ def row_pr(item: dict) -> int | None:
     - free prose citing several legs plus bare dates
       ("#1224 (fork filing) + #1233 (the 2026-08-05 ratification) + #1241 (build leg)")
 
-    Only the prose shape is scanned for `#`-prefixed tokens, because matching bare digits
-    inside prose would read `2026` out of a date. The highest reference is the closing
-    leg. A row citing no PR at all (e.g. an operator ratification) returns None and is
-    reported as unmapped -- never imputed.
+    In prose, two token shapes count and a third must not:
+
+    - `#N` anywhere ("spec leg at PR #1077")
+    - a LEADING bare number, which is how the closing leg is written when a row cites
+      several ("1078 (impl leg); spec leg at PR #1077" -- B-65; "1078 (...)" -- B-67).
+      Without it B-65 resolved to 1077, the wrong PR, and B-67 to None.
+    - a bare date component must NOT count: `2026-08-05` would otherwise read as PR 2026.
+      The leading-number rule excludes it via a `(?!-)` lookahead, and non-leading bare
+      numbers are never scanned at all.
+
+    The highest surviving candidate is the closing leg. A row citing no PR (e.g. an
+    operator ratification) returns None and is reported as unmapped -- never imputed.
     """
     raw = item.get("pr")
     if raw is None:
@@ -168,8 +214,11 @@ def row_pr(item: dict) -> int | None:
     text = str(raw).strip()
     if text.isdigit():
         return int(text)
-    found = PR_REFERENCE.findall(text)
-    return max(int(n) for n in found) if found else None
+    candidates = [int(n) for n in PR_REFERENCE.findall(text)]
+    leading = PR_LEADING_BARE.match(text)
+    if leading:
+        candidates.append(int(leading.group(1)))
+    return max(candidates) if candidates else None
 
 
 def fmt_span(minutes: float) -> str:
@@ -267,7 +316,10 @@ def section_estimate(
     actionable = sum(counts.get(status, 0) for status, _, _, inc in BUCKETS if inc)
     blocked = sum(counts.get(status, 0) for status, _, _, inc in BUCKETS if not inc)
 
-    out.append(f"ESTIMATE TO CLOSE  ({actionable} agent-executable rows)")
+    gated = sum(counts.get(status, 0) for status, heading, _, _ in BUCKETS if heading == "GATED")
+    held = counts.get("held", 0)
+
+    out.append(f"ESTIMATE TO CLOSE  ({actionable} agent-executable rows -- a FLOOR)")
     if not window:
         out.append("  UNAVAILABLE: no closure-bearing session in the scanned window")
         return
@@ -286,7 +338,9 @@ def section_estimate(
         f"  (~{actionable / per_session:.0f} sessions at the observed rate)"
     )
     out.append(
-        f"  excluded  {blocked} rows blocked on you (operator-gated + held) -- not estimable"
+        f"  excluded  {blocked} rows ({gated} gated + {held} held). The gated rows are NOT "
+        "asserted blocked on you -- s12.4.1: ground each; some have an agent-executable "
+        "next step (an owed council), so the figure above is a floor, not a total."
     )
     caveats = []
     if unmapped:
@@ -347,20 +401,24 @@ def _flag_branches(flags: list[str]) -> None:
     §10 rule "is about the remote (GitHub) branch list, not local `.git/refs/heads/*`
     pointers -- local refs are single-clone, cosmetic, and reflog-recoverable regardless".
     Flagging local topic refs produced a standing false action item on every run.
+
+    The CURRENT CI branch is exempt: the same rule permits it and deletes it only after
+    post-merge CI, so flagging it would fire on every ordinary pre-merge run.
     """
     try:
         listing = run("git", "ls-remote", "--heads", "origin", timeout=90)
+        current = run("git", "rev-parse", "--abbrev-ref", "HEAD").strip()
     except UnavailableError as exc:
         flags.append(f"remote branch list UNAVAILABLE: {exc}")
         return
     branches = sorted(
         line.split("refs/heads/", 1)[1] for line in listing.splitlines() if "refs/heads/" in line
     )
-    stale = [b for b in branches if b != "main"]
+    stale = [b for b in branches if b not in {"main", current}]
     if stale:
         flags.append(
-            f"{len(stale)} remote branch(es) beyond main -- CLAUDE.md s10 requires none "
-            f"before a merge action (e.g. {', '.join(stale[:3])})"
+            f"{len(stale)} remote branch(es) beyond main + the current CI branch -- "
+            f"CLAUDE.md s10 requires none before a merge action (e.g. {', '.join(stale[:3])})"
         )
 
 
@@ -473,7 +531,7 @@ def _flag_prs(out: list[str], flags: list[str]) -> None:
             state += f", checks {len(checks) - bad - pending}ok/{bad}bad/{pending}pending"
         else:
             state += ", no checks reported (not-yet-started, NOT green)"
-        flags.append(f"open PR #{pr['number']} {brief(pr['title'], 60)} -- {state}")
+        flags.append(f"open PR #{pr['number']} {safe_title(pr['title'])} -- {state}")
 
 
 def section_git(out: list[str]) -> None:
