@@ -2806,7 +2806,15 @@ def test_reused_temporary_name_stays_bounded_by_its_own_filesystem_timestamp(
 
     Mutation probe: dropping conjunct (a) so a stale record row alone can
     reclaim makes the recreated file disappear at the first post-recreation
-    sweep."""
+    sweep — VERIFIED KILL, failing on this test's own `conjunct (a) is not
+    gating` assertion with the reclaim logged at `age_s=0.9`.
+
+    CONJUNCT (a) HAS TWO CARRIERS AND THE MUTATION MUST DROP BOTH — the
+    `tmp_age > self._ttl_seconds` filter that builds `provisional_tmp`, and
+    the `current_time - tmp_mtime > self._ttl_seconds` re-check that builds
+    `verified_tmp`. Dropping only the second leaves the first still gating and
+    the test passes, which grades as a false NON-kill rather than as evidence
+    about this witness (`B-178`)."""
     ttl = 1.0
     store = _store(tmp_path, ttl_seconds=ttl)
     store_root = tmp_path / "store"
@@ -2833,7 +2841,15 @@ def test_reused_temporary_name_stays_bounded_by_its_own_filesystem_timestamp(
 
     # BEFORE the new file's own timestamp + TTL: conjunct (a) still gates it,
     # even though the stale row has already satisfied conjunct (b).
-    assert store.gc_sweep(now=recreated_at + ttl - 0.1) == []
+    #
+    # `observed_at` is INJECTED on both remaining sweeps, matching the first
+    # sweep above (B-178). Term 3 samples `first_observed_at` from
+    # `time.time()` whenever the caller omits it, so omitting it here left a
+    # SYNTHETIC `now` being compared against a REAL clock inside `_eligible`
+    # — and this test's `now` values are synthetic to the microsecond. The
+    # injected value restates the row `_backdate_observation_record` created,
+    # for the reason the next comment gives.
+    assert store.gc_sweep(now=recreated_at + ttl - 0.1, observed_at=at - 10.0) == []
     assert orphan.exists(), (
         "a recreated file bearing a reused temporary name was reclaimed before "
         "its OWN filesystem timestamp plus the TTL — conjunct (a) is not gating"
@@ -2844,7 +2860,26 @@ def test_reused_temporary_name_stays_bounded_by_its_own_filesystem_timestamp(
     # which is precisely the degradation `B-110` records: for this ONE candidate
     # the reclaim bound falls back to the pre-existing timestamp-derived one,
     # rather than gaining the additional grace a fresh observation would give.
-    assert store.gc_sweep(now=recreated_at + ttl + 0.1) == []
+    #
+    # The injected `observed_at` is LOAD-BEARING here, not decoration, and the
+    # reason is a fact the sweep above establishes rather than an assumption:
+    # the intermediate sweep does not merely leave the backdated row alone, it
+    # DROPS it. `_record_observations` rebuilds the record from `past_ttl_names`
+    # alone, and the recreated file is 0.90s old against a 1.0s TTL there, so it
+    # is not past-TTL and not carried forward — the record is `{}` by the time
+    # this sweep runs (asserted directly below). This sweep therefore MINTS the
+    # row rather than reading one, and whatever `first_observed_at` it mints is
+    # what conjunct (b) is judged against. Injecting the same value
+    # `_backdate_observation_record` established keeps the scenario's meaning —
+    # this name has been under observation since well before — while making the
+    # judgement independent of how long the preceding lines took to run.
+    assert _read_observation_record(store) == {}, (
+        "the intermediate sweep is expected to DROP the backdated row (the "
+        "recreated file is not past-TTL there); if it now survives, the sweep "
+        "that follows reads a row instead of minting one and this test's "
+        "injected `observed_at` no longer describes what is being judged"
+    )
+    assert store.gc_sweep(now=recreated_at + ttl + 0.1, observed_at=at - 10.0) == []
     assert not orphan.exists()
 
 
