@@ -561,10 +561,20 @@ async def test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5(
     failure higher up; deleting the assertion would retire a stated
     performance contract with no witness. Both are ruled out by B-176.
 
-    Each attempt runs against a FRESH database and asserts its own
-    `inserted == 100`. That is load-bearing, not defensive: `insert_spans`
-    is INSERT-OR-IGNORE, so reusing one database would make attempts 2..N
-    no-op inserts that clear the budget trivially and witness nothing.
+    This does soften the claim — from "every invocation is fast" to "the
+    fastest of 5 is fast" — so it catches a CONSTANT regression (both probed
+    mutations are constant) but not one that stalls only a fraction of
+    calls. That is the deliberate trade for an assertion whose single-sample
+    form failed ~5% of the time under load on unchanged code.
+
+    The two per-attempt disciplines are a pair, and neither is defensive.
+    A FRESH database per attempt is what makes every attempt a real
+    attempt: `insert_spans` is INSERT-OR-IGNORE over a fixed `s0..s99` id
+    set, so a shared database would dedup attempts 2..N to zero inserts and
+    time a no-op. The per-attempt `inserted == 100` is what makes that
+    violation LOUD rather than silent — it fires on attempt 1 instead of
+    letting a vacuous `min()` stand — and it independently catches a
+    row-dropping regression, which would otherwise register as *faster*.
     """
     attempts_ns: list[int] = []
     for attempt in range(_AC5_BUDGET_ATTEMPTS):
