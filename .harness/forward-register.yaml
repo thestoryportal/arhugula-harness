@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 182
+  total: 183
   open: 1
   design_substrate_gated: 2
-  registered_finding: 35
+  registered_finding: 36
   operator_gated: 0
   held: 2
   closed: 142
-  identity_digest: e9d7595a39caca04
+  identity_digest: aa020384f3f63f64
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9630,16 +9630,20 @@ items:
     (C) THE LOAD-BEARING HALF. per_cell_cardinality_budget.py:118 commits a flat
     cell_rate_limit=10_000.0 spans/sec at every ACTIVE cell with ZERO readers anywhere in
     harness-*/src outside its own declaration, while tenant_rate_limit IS enforced (witnessed
-    behaviourally at multi_tenant_cross_cutting_enforcement.py). FOUR of the eight ACTIVE cells
-    resolve to COLLECTOR_BOUNDARY, which that module's own docstring calls the IN-PROCESS OTLP
-    collector against the sqlite ring-buffer -- so at those four an absent reader CANNOT be
-    explained as "an out-of-process consumer handles it". At the four BACKEND_INGESTION cells
-    that explanation does hold. The disposition therefore SPLITS BY ENFORCEMENT LAYER.
+    behaviourally at multi_tenant_cross_cutting_enforcement.py). Codex round 3 sharpened the scoping:
+    COLLECTOR_BOUNDARY is a LOGICAL enforcement layer, not a process placement. Only the THREE
+    SOLO rows are documented as in-process ("the in-process OTLP collector against the sqlite
+    ring-buffer"); multi-tenant-compliance x self-hosted-server runs "per-tenant collector
+    instances", which does not establish co-process. The disposition SPLITS THREE WAYS: three
+    solo cells where the out-of-process explanation is unavailable, four BACKEND_INGESTION cells
+    where it holds, and one cell whose placement is simply not established.
     THREE CLAIMS FROM THE FIRST DRAFT ARE WITHDRAWN (out-of-family Codex round 1, five valid
     [P2]s). (i) The "dependency cycle" -- that the budget was unpriceable because it closes only
-    from telemetry B-137 starves -- is FALSE: C-OD-16 §16.2 scales sub-1.0 observations by
-    1/base_rate for unbiased estimation, and open-item 4 asks for an aggregate order-of-magnitude,
-    which such a sample estimates fine. (ii) "Both enforcement layers are out-of-process" is
+    from telemetry B-137 starves -- is WITHDRAWN, and after round 3 so is its refutation. Round 1
+    offered C-OD-16 §16.2 (1/base_rate rescaling) as the refutation; round 3 caught that §16.2 is
+    unbiased only for a UNIFORMLY sampled stream, and this one is not (the head admits §9.2 names
+    at 1.0 while ordinary roots take base_rate). Terminal position is symmetric: neither the cycle
+    nor its refutation is established and this row rests on neither. (ii) "Both enforcement layers are out-of-process" is
     FALSE, and correcting it is what produced (C)'s sharpened form. (iii) "Uniform cap implies
     placeholder" is not established -- a uniform cap may legitimately represent shared collector
     or backend capacity; uniformity is reported, the inference is not drawn.
@@ -9664,3 +9668,45 @@ items:
     grounding answers. (A)+(B) are inputs to B-137's already-declared C7+C11 convening rather
     than a separate one.
   heading: '### B-182 · The §11.1 per-cell `cell_rate_limit` has no in-process reader at the FOUR cells whose declared enforcement layer IS in-process, while its `tenant_rate_limit` sibling is genuinely enforced — and §11.1 commits no number at the team-binding cells *(surfaced grounding B-137 step (3)''s C11 half, 2026-08-15; scoped after out-of-family Codex round 1)*'
+- id: B-183
+  title: >-
+    assert_per_tenant_cardinality_isolation compares a windowed observed_series count against a
+    per-second tenant_rate_limit and never reads observation_window
+  status: registered_finding
+  summary: >-
+    C-OD-11 §11.1's tenant_rate_limit is documented as a PER-SECOND rate --
+    per_cell_cardinality_budget.py:58 "per-tenant rate limit (spans/sec)", and again at :50.
+    CardinalityCounters carries both observed_series and an observation_window string
+    (multi_tenant_cross_cutting_enforcement.py). But assert_per_tenant_cardinality_isolation
+    compares observed.observed_series > budget.tenant_rate_limit directly and NEVER reads
+    observation_window -- it appears exactly once in that module, at the field declaration.
+    So the gate's effective threshold depends entirely on the window the caller happens to pass:
+    1001 series observed over "1m" raises, though it is ~16.7/sec against a 1000/sec limit, while
+    the same 1001 over "1s" is a genuine breach. Both produce identical behaviour. The comparison
+    is dimensionally incoherent, and the direction of the error is UNSAFE-PERMISSIVE in one
+    direction and FALSE-POSITIVE in the other depending on the window.
+    NOT FIXED IN THE SURFACING ARC. The B-182 witness supplies a "1s" window so its own
+    assertion is coherent, and the mismatch is registered rather than repaired, because choosing
+    the repair is a contract question -- see the close-out.
+  close_out: >-
+    (1) Re-ground: confirm tenant_rate_limit is still documented per-second, that
+    observation_window is still unread in the comparison, and enumerate every caller of
+    assert_per_tenant_cardinality_isolation to see which windows are actually passed in
+    production (the surfacing arc did not do this -- it is the first real question).
+    (2) DECIDE the repair, which is a contract question and not a mechanical fix. Either
+    (a) normalise: divide observed_series by the parsed window to get a rate before comparing,
+    which requires committing a window grammar the type does not currently constrain (it is a
+    bare str); or (b) re-declare tenant_rate_limit as a per-window COUNT rather than a rate,
+    which contradicts the two "spans/sec" docstrings and C-OD-21 §21.4's framing; or (c) make
+    the window part of the contract by typing it, so an unparseable window is a construction
+    error rather than a silently-ignored field.
+    (3) Whichever is chosen, witness it BEHAVIOURALLY at both sides of the limit and at two
+    different windows -- a single-window test cannot distinguish a rate gate from a count gate,
+    which is precisely why this went unnoticed.
+    (4) Check the sibling: cell_rate_limit carries the same "spans/sec" documentation and has no
+    consumer at all (B-182 (C)), so any window grammar committed here should be settled BEFORE an
+    in-process cell-cap enforcement site is written, or the two will disagree.
+  council: >-
+    No. A single-domain unit/contract coherence question with a named owner (C7/OD). The
+    three repair options are enumerable and grounding plus the caller survey chooses between them.
+  heading: '### B-183 · `assert_per_tenant_cardinality_isolation` compares a WINDOWED count against a PER-SECOND limit and never reads `observation_window`, so the §21.4 per-tenant gate fires at a threshold that depends on the caller''s window *(surfaced by out-of-family Codex round 3 while grounding `B-182`, 2026-08-15)*'

@@ -8,18 +8,22 @@ telemetry volume and *"the C-OD-11 §11.1 per-cell budgets those caps were sized
 five [P2]s and all five were valid. The corrections are recorded here because the withdrawn
 claims were the interesting ones, and a reader who only sees the survivors would re-derive them.**
 
-1. **WITHDRAWN — the "dependency cycle".** The draft argued §11.1's team budget defers to an
-   open item closable only from operational telemetry, that B-137 starves that telemetry, and
-   therefore that the budget is *unpriceable*: *"you cannot measure throughput from a stream you
-   are dropping 90% of."* **That is false, and the spec says so.** C-OD-16 §16.2 provides for
-   exactly this: *"at sampled rates below 1.0, the dashboard cost rollup is scaled by
-   `1/base_rate` for unbiased cost estimation."* A known-rate sample estimates an aggregate
-   fine, and Persona open-item 4 asks for a *rough order-of-magnitude per day* — an aggregate.
-   The cycle is refuted for the thing the open item actually asks for, and is withdrawn.
-2. **CORRECTED — "both enforcement layers are out-of-process."** False. `COLLECTOR_BOUNDARY` is
-   the **in-process** OTLP collector against the sqlite ring-buffer
-   (`per_cell_cardinality_budget.py:69-70`), and **4 of the 8 ACTIVE cells** resolve to it. This
-   correction *strengthens* the finding rather than dissolving it — see below.
+1. **WITHDRAWN — the "dependency cycle" — and its refutation is withdrawn too (round 3).** The
+   draft argued the budget was *unpriceable* because it closes only from telemetry B-137 starves:
+   *"you cannot measure throughput from a stream you are dropping 90% of."* Round 1 offered
+   C-OD-16 §16.2's `1/base_rate` scaling as the refutation and a first fix adopted it. **Round 3
+   then caught the refutation:** §16.2's flat rescale is unbiased only for a *uniformly* sampled
+   stream, and this one is not — the head admits §9.2 names at 1.0 while ordinary roots take
+   `base_rate`, so a flat rescale overcounts the always-sampled classes. The terminal position is
+   **symmetric**: neither the cycle nor its refutation is established, and `B-182` rests on
+   neither. §16.2 shows only that the spec *contemplates* estimating from a sub-1.0 stream.
+2. **CORRECTED TWICE — "both enforcement layers are out-of-process."** The draft's claim was
+   false; a first fix over-corrected to *"4 of 8 cells are in-process."* **Round 3:**
+   `COLLECTOR_BOUNDARY` is a **logical enforcement layer, not a process placement.** Only the
+   three **SOLO** rows are documented as in-process (*"the in-process OTLP collector against the
+   sqlite ring-buffer"*); `multi-tenant-compliance × self-hosted-server` is described as running
+   *"per-tenant collector instances"*, which does not establish co-process. The in-process claim
+   is scoped to the **three solo cells**.
 3. **WITHDRAWN — "uniform ⇒ placeholder."** A per-cell cap may legitimately be identical across
    cells when it represents shared collector or backend capacity. Uniformity is reported; the
    inference to *placeholder* is not drawn.
@@ -55,11 +59,19 @@ needs to be about — and less than the draft claimed.
 `per_cell_cardinality_budget.py:118` commits a flat `cell_rate_limit=10_000.0` spans/sec at every
 ACTIVE cell, with **zero readers** anywhere in `harness-*/src` outside its own declaration. Its
 sibling `tenant_rate_limit` **is** genuinely enforced — witnessed behaviourally below, not by
-token scan. **The correction in (2) is what makes this load-bearing:** at the 4 cells resolving
-to `COLLECTOR_BOUNDARY`, §11.1's enforcement point is the harness's *own* in-process collector,
-so an absent reader there cannot be explained as "an out-of-process consumer handles it." At the
-4 `BACKEND_INGESTION` cells that explanation does hold. The disposition therefore **splits by
-enforcement layer**, and `B-182` carries it that way.
+token scan. **The correction in (2) is what makes this load-bearing:** at the **three solo**
+cells §11.1's enforcement point is documented as the harness's *own in-process* collector, so an
+absent reader there cannot be explained as "an out-of-process consumer handles it." At the four
+`BACKEND_INGESTION` cells that explanation does hold; at `multi-tenant-compliance ×
+self-hosted-server` the placement is simply **not established** either way. The disposition
+therefore **splits three ways**, and `B-182` carries it that way.
+
+**A production defect surfaced in passing, registered as `B-183`.** `tenant_rate_limit` is
+documented as **spans/sec**, but `assert_per_tenant_cardinality_isolation` compares
+`observed.observed_series` against it while **never reading `observation_window`** — so 1,001
+series observed over a minute is treated as exceeding a 1,000/sec limit, though it is ~16.7/sec.
+The witness below supplies a `"1s"` window so its own comparison is dimensionally coherent; the
+mismatch itself is a separate finding and is not fixed here.
 
 **What this module does NOT establish.** Nothing here says C1 is affordable, or unaffordable. A
 real collector or backend would still see `1/base_rate` more spans under C1 and shed the excess;
@@ -95,6 +107,7 @@ from harness_od.multi_tenant_cross_cutting_enforcement import (
 )
 from harness_od.observability_matrix import CellID
 from harness_od.per_cell_cardinality_budget import PER_CELL_CARDINALITY_BUDGET
+from harness_od.sampling_mode import is_always_sampled
 
 _REPO = pathlib.Path(__file__).resolve().parents[2]
 _SUBSTRATE = _REPO / "design-substrate"
@@ -197,13 +210,25 @@ def test_the_deferral_target_is_still_an_open_item() -> None:
     )
 
 
-def test_the_sampled_stream_is_estimable_by_contract_so_the_cycle_claim_stays_withdrawn() -> None:
-    """**Correction 1, pinned so the withdrawn claim cannot quietly return.**
+def test_neither_the_cycle_claim_nor_its_refutation_is_established() -> None:
+    """**Correction 1, twice-corrected — the honest terminal state is NEITHER claim.**
 
-    C-OD-16 §16.2 scales sub-1.0 observations by `1/base_rate` for unbiased estimation. That is
-    the contract term which refutes "a starved stream cannot yield a throughput figure", and it
-    is why B-182 carries no circularity premise. Pinned because the cycle is a seductive
-    argument that a future reader (or a future me) would otherwise re-invent.
+    Round 1 caught the draft's *dependency cycle* (*"you cannot measure throughput from a stream
+    you are dropping 90% of"*) and offered C-OD-16 §16.2's `1/base_rate` scaling as the refutation.
+    A first fix adopted that and called the cycle *refuted*.
+
+    **Round 2 [P2] then caught the refutation itself.** §16.2's flat `1/base_rate` scaling is
+    unbiased only for a *uniformly* sampled stream, and this stream is not uniform:
+    `HarnessCompositeSampler` admits §9.2 names at 1.0 while ordinary roots take `base_rate`, so
+    a flat rescale **overcounts** the always-sampled classes. §16.2 therefore does not establish
+    that Persona's throughput figure is recoverable from the admitted stream.
+
+    So the terminal position is **symmetric and deliberately weak**: the cycle is *not*
+    established, and neither is its refutation. What §16.2 does show is that the spec
+    **contemplates** estimating from a sub-1.0 stream — enough to make the draft's confident
+    "unpriceable" claim unsupported, and not enough to assert the opposite. `B-182` therefore
+    rests on neither, and this test pins **both** the term's presence and the non-uniformity that
+    stops it from carrying more weight than that.
     """
     baseline = (_SUBSTRATE / "Spec_Operational_Discipline_v1_2.md").read_text()
     scaling = (
@@ -211,9 +236,22 @@ def test_the_sampled_stream_is_estimable_by_contract_so_the_cycle_claim_stays_wi
         "for unbiased cost estimation"
     )
     assert scaling in baseline, (
-        "C-OD-16 §16.2's `1/base_rate` unbiased-estimation term is gone. It is the sole "
-        "grounds on which this arc withdrew its dependency-cycle claim — if the term was "
-        "removed, that withdrawal must be re-examined rather than assumed"
+        "C-OD-16 §16.2's `1/base_rate` scaling term is gone. B-182 cites it as evidence the "
+        "spec CONTEMPLATES estimating from a sampled stream — if the term was removed, the "
+        "withdrawal of the cycle claim must be re-examined rather than assumed"
+    )
+    # The non-uniformity that stops §16.2 from carrying the refutation: the head admits §9.2
+    # names unconditionally while ordinary roots take the ratio, so one flat rescale cannot be
+    # unbiased across both populations. If this stops being true, §16.2 gets stronger and the
+    # symmetric "neither claim established" position should be revisited.
+    assert is_always_sampled("sandbox.violation") is True, (
+        "a §9.2 member is no longer admitted unconditionally — the stream may have become "
+        "uniformly sampled, which would let §16.2's flat 1/base_rate rescale actually carry "
+        "the refutation this arc declined to assert"
+    )
+    assert PER_CELL_BASE_RATE_ENVELOPE[_TEAM_SELF].default_rate < 1.0, (
+        "the team cell now admits at full rate, so there is no sub-1.0 stream to estimate "
+        "from and this whole line of argument is moot"
     )
 
 
@@ -281,6 +319,15 @@ def test_half_the_cells_enforce_in_process_yet_nothing_reads_the_cell_cap() -> N
         "solo-developer×managed-cloud",
         "multi-tenant-compliance×self-hosted-server",
     }
+    # Round 3 [P2]: COLLECTOR_BOUNDARY is a LOGICAL enforcement layer, not a process placement.
+    # Only the SOLO rows are documented as in-process ("the in-process OTLP collector against
+    # the sqlite ring-buffer"); the multi-tenant row says "runs per-tenant collector instances",
+    # which does not establish co-process. The in-process claim is scoped to the solo cells.
+    in_process_documented = {c for c in in_process if c.startswith("solo-developer×")}
+    assert len(in_process_documented) == 3, (
+        f"the documented in-process set is now {sorted(in_process_documented)}; B-182 scopes "
+        "its in-process half to the three SOLO cells and must be re-scoped"
+    )
     assert in_process == expected, (
         f"the COLLECTOR_BOUNDARY cell set is now {sorted(in_process)}, not {sorted(expected)}. "
         "B-182 scopes its in-process half to exactly these cells and must be re-scoped — and if "
@@ -323,14 +370,14 @@ def test_the_tenant_limit_is_enforced_behaviourally_not_merely_referenced() -> N
     )
 
     within = CardinalityCounters(
-        tenant_id="t1", observed_series=int(limit), observation_window="1m"
+        tenant_id="t1", observed_series=int(limit), observation_window="1s"
     )
     assert assert_per_tenant_cardinality_isolation("t1", _MTC_SELF, within) is None, (
         "the tenant limit now rejects an observation AT the limit — boundary semantics changed"
     )
 
     over = CardinalityCounters(
-        tenant_id="t1", observed_series=int(limit) + 1, observation_window="1m"
+        tenant_id="t1", observed_series=int(limit) + 1, observation_window="1s"
     )
     with pytest.raises(PerTenantCardinalityViolation):
         assert_per_tenant_cardinality_isolation("t1", _MTC_SELF, over)
