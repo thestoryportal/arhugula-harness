@@ -148,16 +148,27 @@ def pr_merge_timestamps(commits: list[Commit]) -> dict[int, int]:
 def row_pr(item: dict) -> int | None:
     """Closing PR number for a row -- the highest `#N` reference in its `pr` field.
 
-    The field is free prose that often cites several legs plus bare dates
-    ("#1224 (fork filing) + #1233 (the 2026-08-05 ratification) + #1241 (build leg)"),
-    so only `#`-prefixed tokens count -- matching bare digits would read `2026` out of a
-    date. The highest reference is the closing leg. A row citing no `#N` at all (e.g. an
-    operator ratification with no PR) returns None and is reported as unmapped.
+    The field carries three shapes and all three are live in the register:
+
+    - a YAML integer (`pr: 1331` -- B-136/B-161/B-162/B-163)
+    - a bare numeric string (`pr: '994'`)
+    - free prose citing several legs plus bare dates
+      ("#1224 (fork filing) + #1233 (the 2026-08-05 ratification) + #1241 (build leg)")
+
+    Only the prose shape is scanned for `#`-prefixed tokens, because matching bare digits
+    inside prose would read `2026` out of a date. The highest reference is the closing
+    leg. A row citing no PR at all (e.g. an operator ratification) returns None and is
+    reported as unmapped -- never imputed.
     """
     raw = item.get("pr")
-    if not raw:
+    if raw is None:
         return None
-    found = PR_REFERENCE.findall(str(raw))
+    if isinstance(raw, int):
+        return raw
+    text = str(raw).strip()
+    if text.isdigit():
+        return int(text)
+    found = PR_REFERENCE.findall(text)
     return max(int(n) for n in found) if found else None
 
 
@@ -330,35 +341,62 @@ def _flag_worktree(out: list[str], flags: list[str]) -> None:
 
 
 def _flag_branches(flags: list[str]) -> None:
+    """Branch hygiene is a REMOTE-list discipline, so read the remote, not local refs.
+
+    `.claude/skills/ship-pr/SKILL.md` §"Branch hygiene close-out" is explicit that the
+    §10 rule "is about the remote (GitHub) branch list, not local `.git/refs/heads/*`
+    pointers -- local refs are single-clone, cosmetic, and reflog-recoverable regardless".
+    Flagging local topic refs produced a standing false action item on every run.
+    """
     try:
-        refs = run("git", "for-each-ref", "--format=%(refname:short)", "refs/heads/").split()
+        listing = run("git", "ls-remote", "--heads", "origin", timeout=90)
     except UnavailableError as exc:
-        flags.append(f"branch list UNAVAILABLE: {exc}")
+        flags.append(f"remote branch list UNAVAILABLE: {exc}")
         return
-    branches = sorted(b for b in refs if b != "main")
-    if branches:
+    branches = sorted(
+        line.split("refs/heads/", 1)[1] for line in listing.splitlines() if "refs/heads/" in line
+    )
+    stale = [b for b in branches if b != "main"]
+    if stale:
         flags.append(
-            f"{len(branches)} local branch(es) beyond main -- CLAUDE.md s10 requires none "
-            f"before a merge action (e.g. {', '.join(branches[:3])})"
+            f"{len(stale)} remote branch(es) beyond main -- CLAUDE.md s10 requires none "
+            f"before a merge action (e.g. {', '.join(stale[:3])})"
         )
 
 
 def _flag_worktrees(flags: list[str]) -> None:
+    """Report the count only -- collectability is `codex_worktree_gc`'s judgement, not ours.
+
+    That tool proves cleanliness, inactivity and merge status before calling a worktree
+    collectable; asserting "candidate" here would manufacture action items for worktrees
+    that are active, dirty, detached, or unmerged.
+    """
     try:
         trees = [x for x in run("git", "worktree", "list").splitlines() if x.strip()]
     except UnavailableError as exc:
         flags.append(f"worktree list UNAVAILABLE: {exc}")
         return
     if len(trees) > 1:
-        flags.append(f"{len(trees) - 1} extra worktree(s) registered -- candidates for gc")
+        flags.append(
+            f"{len(trees) - 1} extra worktree(s) registered -- not classified here; run "
+            "`uv run python tools/codex_worktree_gc.py --dry-run` for what is collectable"
+        )
 
 
 def _flag_sync(flags: list[str]) -> None:
+    """Compare origin/main against the LOCAL MAIN REF, never HEAD.
+
+    /prime is normally run from a topic branch or a linked worktree, where
+    `origin/main...HEAD` measures that checkout and not main -- reporting it as
+    "local main N ahead" is simply false there.
+    """
     try:
-        parts = run("git", "rev-list", "--left-right", "--count", "origin/main...HEAD").split()
+        parts = run(
+            "git", "rev-list", "--left-right", "--count", "origin/main...refs/heads/main"
+        ).split()
         behind, ahead = int(parts[0]), int(parts[1])
     except (UnavailableError, ValueError, IndexError) as exc:
-        flags.append(f"ahead/behind UNAVAILABLE: {exc}")
+        flags.append(f"main-vs-origin state UNAVAILABLE: {exc}")
         return
     if behind or ahead:
         flags.append(
@@ -425,8 +463,11 @@ def _flag_prs(out: list[str], flags: list[str]) -> None:
         return
     for pr in prs:
         checks = pr.get("statusCheckRollup") or []
-        bad = sum(1 for c in checks if c.get("conclusion") in {"FAILURE", "CANCELLED", "TIMED_OUT"})
+        # Fail closed: SUCCESS is the ONLY green conclusion. Enumerating the bad ones
+        # instead would silently score ACTION_REQUIRED / STARTUP_FAILURE / STALE as ok
+        # and render a non-green PR as green, against the repo's strict-CI rule.
         pending = sum(1 for c in checks if not c.get("conclusion"))
+        bad = sum(1 for c in checks if c.get("conclusion") and c.get("conclusion") != "SUCCESS")
         state = f"mergeable={pr.get('mergeable')}"
         if checks:
             state += f", checks {len(checks) - bad - pending}ok/{bad}bad/{pending}pending"

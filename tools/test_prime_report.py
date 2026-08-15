@@ -9,6 +9,7 @@ dropped real closures out of the throughput window.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -42,6 +43,25 @@ def test_row_pr_is_none_when_the_field_is_absent() -> None:
 
 def test_row_pr_reads_a_single_plain_reference() -> None:
     assert prime_report.row_pr({"pr": "#994"}) == 994
+
+
+def test_row_pr_reads_a_yaml_integer_field() -> None:
+    """Codex r1 [P1]: B-136/B-161/B-162/B-163 store `pr` as an int, not a string.
+
+    A `#N`-only rule returned None for them, dropping four real recent closures out of
+    the throughput window AND miscounting them as pre-history-floor -- which moves the
+    reported estimate.
+    """
+    assert prime_report.row_pr({"pr": 1331}) == 1331
+
+
+def test_row_pr_reads_a_bare_numeric_string() -> None:
+    assert prime_report.row_pr({"pr": "1327"}) == 1327
+
+
+def test_row_pr_does_not_treat_pr_zero_as_absent() -> None:
+    """`if not raw` would read a falsy-but-present value as unmapped."""
+    assert prime_report.row_pr({"pr": 0}) == 0
 
 
 # ------------------------------------------------- pr_merge_timestamps
@@ -145,6 +165,90 @@ def test_fmt_span_switches_to_hours_for_long_spans() -> None:
 
 def test_fmt_span_drops_the_decimal_for_very_long_spans() -> None:
     assert prime_report.fmt_span(6000) == "100h"
+
+
+# ------------------------------------------------------- git-action flags
+
+
+def test_pr_checks_fail_closed_on_a_non_success_terminal_conclusion(monkeypatch) -> None:
+    """Codex r1 [P2]: ACTION_REQUIRED / STARTUP_FAILURE / STALE must not score as ok.
+
+    Enumerating only FAILURE/CANCELLED/TIMED_OUT left every other terminal conclusion
+    counted as ok, which renders a non-green PR as green.
+    """
+    payload = [
+        {
+            "number": 1,
+            "title": "t",
+            "mergeable": "MERGEABLE",
+            "statusCheckRollup": [
+                {"conclusion": "SUCCESS"},
+                {"conclusion": "ACTION_REQUIRED"},
+                {"conclusion": "STALE"},
+                {"conclusion": None},
+            ],
+        }
+    ]
+    monkeypatch.setattr(prime_report, "run", lambda *a, **k: json.dumps(payload))
+    out: list[str] = []
+    flags: list[str] = []
+    prime_report._flag_prs(out, flags)
+    assert len(flags) == 1
+    assert "1ok/2bad/1pending" in flags[0]
+
+
+def test_branch_flag_reads_the_remote_not_local_refs(monkeypatch) -> None:
+    """Codex r1 [P2]: ship-pr scopes branch hygiene to the REMOTE list.
+
+    Local topic refs "are not what branch hygiene means here", so flagging them was a
+    standing false action item.
+    """
+    listing = "aaa\trefs/heads/main\nbbb\trefs/heads/feat/one\nccc\trefs/heads/feat/two\n"
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        calls.append(args)
+        return listing
+
+    monkeypatch.setattr(prime_report, "run", fake_run)
+    flags: list[str] = []
+    prime_report._flag_branches(flags)
+    assert calls and calls[0][:3] == ("git", "ls-remote", "--heads")
+    assert len(flags) == 1
+    assert "2 remote branch(es) beyond main" in flags[0]
+
+
+def test_branch_flag_is_silent_when_the_remote_holds_only_main(monkeypatch) -> None:
+    monkeypatch.setattr(prime_report, "run", lambda *a, **k: "aaa\trefs/heads/main\n")
+    flags: list[str] = []
+    prime_report._flag_branches(flags)
+    assert flags == []
+
+
+def test_sync_flag_compares_the_main_ref_not_head(monkeypatch) -> None:
+    """Codex r1 [P2]: from a topic branch, origin/main...HEAD is not a claim about main."""
+    seen: list[tuple[str, ...]] = []
+
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        seen.append(args)
+        return "0\t0"
+
+    monkeypatch.setattr(prime_report, "run", fake_run)
+    flags: list[str] = []
+    prime_report._flag_sync(flags)
+    assert "refs/heads/main" in seen[0][-1]
+    assert "HEAD" not in seen[0][-1]
+    assert flags == []
+
+
+def test_worktree_flag_does_not_assert_collectability(monkeypatch) -> None:
+    """Codex r1 [P2]: only codex_worktree_gc proves a worktree is collectable."""
+    monkeypatch.setattr(prime_report, "run", lambda *a, **k: "/a main\n/b topic\n")
+    flags: list[str] = []
+    prime_report._flag_worktrees(flags)
+    assert len(flags) == 1
+    assert "candidates for gc" not in flags[0]
+    assert "not classified here" in flags[0]
 
 
 # ------------------------------------------------------------ fail-loud
