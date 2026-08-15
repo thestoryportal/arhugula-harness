@@ -139,7 +139,7 @@ attribute enforced.
 
 `ADR-D5` §1.10.1 attaches a named failure mode to this attribute: *"a fail-class without
 `cause_attribution` is FM-J per `c5-validation-contract` SKILL.md."* With zero producers,
-**every** validator failure the harness emits today is FM-J by that rule. Either the rule is
+**every validator failure that emits a fail-class** is FM-J by that rule. The qualifier is load-bearing and was added at review round 19: C5 defines FM-J as emitting a fail-class WITHOUT attribution, so a path that emits no fail-class at all — e.g. `ValidatorResult(outcome=REVALIDATE, fail_class=None)`, an accepted input exercised at `harness-cp/tests/test_validator_framework.py:333` — is a *different* nonconformance, not FM-J. The distinction matters to the operator: it separates class-present paths (FM-J today) from class-absent paths (a missing-class question this fork does not route). Either the rule is
 live debt (and the corpus currently describes a harness in permanent violation), or it is
 aspirational and must say so. A declared failure-mode name attached to an unwired attribute is
 the stale-carry-text class this workspace already documents — it must be answered explicitly,
