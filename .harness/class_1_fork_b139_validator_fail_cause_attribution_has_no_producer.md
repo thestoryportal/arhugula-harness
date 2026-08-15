@@ -178,15 +178,18 @@ wiring change.
 
 ## §7 — Confidence tags on this fork's non-trivial claims
 
+*Vocabulary per `docs/governance/design-phase-principles.md` §10.4: `[HIGH]` / `[MODERATE]` / `[SPECULATIVE]`.*
+
 | Claim | Confidence | Basis |
 |---|---|---|
-| No producer writes `validator.fail.cause_attribution` anywhere in `harness-*/src` | **HIGH** | fixed-string search over all seven trees; each of the five hits classified by reading |
-| `ValidatorResult` and the `_build_span_attributes` inputs carry no cause | **HIGH** | direct read of `harness-cp/src/harness_cp/validator_framework_types.py:171-188` + both call sites |
-| The staircase carries `ValidatorRetryExitClass`, not a cause token | **HIGH** | the type annotation at `:64` and its own docstring at `:66` say so verbatim |
-| The `secret_*` arm is typed and **partly** live (3 of 5 values, via TWO producer paths) | **HIGH** | `SecretFailClass` enum; **11 AST-counted** `SecretResolutionError` constructions carrying `SECRET_UNKNOWN`/`SECRET_UNAVAILABLE`, plus a separate `_emit_secret_fetch_span` path for `SECRET_LOCKED`; `SECRET_EXPIRED` / `SECRET_REVOKED` unreferenced. *An earlier draft said "14" from `rg -c`, which counts matching LINES per file, not calls — corrected by AST at review round 9.* |
-| `ReplaySemanticDivergenceError` has no live constructor | **MEDIUM** | a `src`-scoped count returned only its own definition; a dynamic/reflective construction would not be caught by that method |
-| The per-surface inventory above is **complete** | **LOW — explicitly not claimed** | it was wrong in rounds 3, 4 and 5; completeness is owed at the apply arc, not asserted here |
-| (C) is the right disposition | **MEDIUM** | it is the cheapest, most reversible, and precedented option — but it is an operator ratification, not a finding |
+| No producer writes `validator.fail.cause_attribution` anywhere in `harness-*/src` | `[HIGH]` | fixed-string search over all seven trees; each of the five hits classified by reading |
+| `ValidatorResult` and the `_build_span_attributes` inputs carry no cause | `[HIGH]` | direct read of `harness-cp/src/harness_cp/validator_framework_types.py:171-188` + both call sites |
+| The staircase carries `ValidatorRetryExitClass`, not a cause token | `[HIGH]` | the type annotation at `:64` and its own docstring at `:66` say so verbatim |
+| The `secret_*` arm is typed and **partly** live (3 of 5 values, via TWO producer paths) | `[HIGH]` | `SecretFailClass` enum; **11 AST-counted** `SecretResolutionError` constructions carrying `SECRET_UNKNOWN`/`SECRET_UNAVAILABLE`, plus a separate `_emit_secret_fetch_span` path for `SECRET_LOCKED`; `SECRET_EXPIRED` / `SECRET_REVOKED` unreferenced. *An earlier draft said "14" from `rg -c`, which counts matching LINES per file, not calls — corrected by AST at review round 9.* |
+| `ReplaySemanticDivergenceError` has no live constructor | `[MODERATE]` | a `src`-scoped count returned only its own definition; a dynamic/reflective construction would not be caught by that method |
+| The per-surface inventory above is **complete** | `[SPECULATIVE]` — explicitly not claimed | it was wrong in rounds 3, 4 and 5; completeness is owed at the apply arc, not asserted here |
+| (C) is the right disposition | `[MODERATE]` | it is the cheapest, most reversible, and precedented option — but it is an operator ratification, not a finding |
+| That (C) leaves no other corpus surface asserting the always-emitted obligation | `[SPECULATIVE]` | six C5 sites and two canonical surfaces were swept, but no exhaustive corpus-wide search for the obligation's *paraphrases* was run — an apply-arc probe (§8.3) |
 
 ## §8 — Open questions, contested claims, recommended next probes
 
