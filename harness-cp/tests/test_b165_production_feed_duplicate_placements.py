@@ -41,8 +41,9 @@ imports `harness_cp.workflow_driver.execute_workflow`, so a single
 driver-through-composer test IS writable under harness-runtime. The chain is currently
 pinned in two halves — production DELIVERS the shape (here, on an asserted non-excluded
 SYNC_BLOCKING cell) and the composer COLLIDES on it (there, on the same cell) — and
-neither half is quoted as the whole. The unified round-trip is the remaining
-strengthening, recorded as owed rather than dismissed as impossible.
+neither half is quoted as the whole. The unified round-trip is LANDED at
+`harness-runtime/tests/integration/test_b165_driver_through_composer_round_trip.py`,
+which joins them: real driver, real composer, real facade bridge.
 
 **Scope, stated so it cannot be over-read.** This proves production COMPOSES and
 DELIVERS the colliding shape when a manifest declares duplicate placements. It does

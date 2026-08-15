@@ -68,8 +68,10 @@ CP driver. That is FALSE and review corrected it — `tests/integration/
 test_u_rt_95_hitl_pause_trigger_durable_async_full_execution_path.py:84` imports
 `harness_cp.workflow_driver.execute_workflow`. The split is by concern, not by
 capability: one module owns what production DELIVERS, the other what the composer DOES
-with it. A single driver-through-composer round-trip is writable under harness-runtime
-and is registered as the remaining strengthening, not asserted as impossible.)*
+with it. The unified round-trip is now LANDED at
+`harness-runtime/tests/integration/test_b165_driver_through_composer_round_trip.py`,
+which drives the real `execute_workflow` through a real `RuntimeHITLGateComposer`
+wrapped in the real `SyncDispatcherFacade` stage 5 uses.)*
 
 Test 3-bis then answers the last objection — that omitting the Stage-5
 `blast_radius_resolver` describes a configuration the operator may not run. It wires a
