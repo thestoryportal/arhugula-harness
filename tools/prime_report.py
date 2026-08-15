@@ -79,9 +79,11 @@ PR_REFERENCE = re.compile(r"#(\d+)")
 # sees "6" (not "-"), and matches 202. Excluding digits denies every backtrack too.
 PR_LEADING_BARE = re.compile(r"^(\d+)(?![\d-])")
 ID_SORT = re.compile(r"^([A-Za-z-]*?)-?(\d+)$")
-# PR titles are network-controlled text that the /prime command injects into the model's
-# prompt. Strip the characters that could break the fence or read as instructions.
-UNSAFE_IN_TITLE = re.compile(r"[`\x00-\x1f\x7f]")
+# Everything in the report reaches the model's prompt inside a Markdown fence, and some
+# of it is network-controlled (PR titles, remote refnames -- git permits backticks in a
+# refname). Strip what could close the fence or read as instructions. Applied in brief(),
+# so every rendered string goes through it.
+UNSAFE_IN_PROMPT = re.compile(r"[`\x00-\x1f\x7f]")
 
 
 class UnavailableError(Exception):
@@ -108,8 +110,16 @@ def run(*args: str, check: bool = True, timeout: int = 60) -> str:
 
 
 def brief(text: str, width: int = DESC_WIDTH) -> str:
-    """Collapse to one line and truncate at a word boundary. Deterministic."""
-    flat = " ".join(str(text).split())
+    """Collapse to one line, strip fence-breakers, truncate at a word boundary.
+
+    The sanitization lives HERE rather than at the untrusted call sites, because every
+    string in the report reaches the model's prompt through `/prime` and is relayed
+    inside a Markdown fence. Guarding only the obviously-untrusted fields left holes:
+    a git refname may legally contain backticks, so a remote branch name could close
+    the fence just as a PR title could. One choke point covers titles, branch names,
+    register rows, and anything added later.
+    """
+    flat = " ".join(UNSAFE_IN_PROMPT.sub("", str(text)).split())
     if len(flat) <= width:
         return flat
     cut = flat[:width]
@@ -120,14 +130,8 @@ def brief(text: str, width: int = DESC_WIDTH) -> str:
 
 
 def safe_title(text: str, width: int = 60) -> str:
-    """Neutralize a network-controlled PR title before it reaches the model's prompt.
-
-    `/prime` injects this report into the prompt and the command asks for it to be
-    relayed verbatim inside a fence, so a title is untrusted input on that path:
-    backticks can break the fence and control characters can restructure the output.
-    Strip both, then truncate.
-    """
-    return brief(UNSAFE_IN_TITLE.sub("", str(text)), width)
+    """Network-controlled text at report width. Sanitization is `brief`'s job."""
+    return brief(text, width)
 
 
 def id_key(item_id: str) -> tuple[str, int]:
@@ -404,21 +408,38 @@ def _flag_branches(flags: list[str]) -> None:
 
     The CURRENT CI branch is exempt: the same rule permits it and deletes it only after
     post-merge CI, so flagging it would fire on every ordinary pre-merge run.
+
+    Identifying "current" by NAME alone is not enough. `rev-parse --abbrev-ref HEAD`
+    returns the literal "HEAD" in a detached worktree, and detached review worktrees are
+    a normal mode here (AGENTS.md requires isolated worktrees) -- so a name-only rule
+    flagged this very PR's own branch. Matching the remote tip SHA against HEAD covers
+    the detached case; the name check still covers a pushed branch whose local tip has
+    since moved on.
     """
     try:
         listing = run("git", "ls-remote", "--heads", "origin", timeout=90)
         current = run("git", "rev-parse", "--abbrev-ref", "HEAD").strip()
+        head_sha = run("git", "rev-parse", "HEAD").strip()
     except UnavailableError as exc:
         flags.append(f"remote branch list UNAVAILABLE: {exc}")
         return
-    branches = sorted(
-        line.split("refs/heads/", 1)[1] for line in listing.splitlines() if "refs/heads/" in line
+
+    remote: dict[str, str] = {}
+    for line in listing.splitlines():
+        if "refs/heads/" in line:
+            sha, ref = line.split("refs/heads/", 1)
+            remote[ref.strip()] = sha.strip()
+
+    stale = sorted(
+        name
+        for name, sha in remote.items()
+        if name != "main" and name != current and sha != head_sha
     )
-    stale = [b for b in branches if b not in {"main", current}]
     if stale:
         flags.append(
             f"{len(stale)} remote branch(es) beyond main + the current CI branch -- "
-            f"CLAUDE.md s10 requires none before a merge action (e.g. {', '.join(stale[:3])})"
+            f"CLAUDE.md s10 requires none before a merge action "
+            f"(e.g. {', '.join(brief(b, 40) for b in stale[:3])})"
         )
 
 

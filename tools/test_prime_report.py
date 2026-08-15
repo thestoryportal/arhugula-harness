@@ -259,6 +259,54 @@ def test_safe_title_strips_fence_breaking_and_control_characters() -> None:
     assert "\x07" not in out
 
 
+def test_brief_is_the_single_sanitization_choke_point() -> None:
+    """Codex r3 [P2]: git permits backticks in a refname, so branch names need it too.
+
+    Sanitizing only the obviously-untrusted fields left holes; brief() covers every
+    string that reaches the fenced report.
+    """
+    assert "`" not in prime_report.brief("feat/```evil", 60)
+
+
+def test_branch_flag_exempts_the_pr_branch_from_a_detached_worktree(monkeypatch) -> None:
+    """Codex r3 [P2]: `rev-parse --abbrev-ref HEAD` is the literal "HEAD" when detached.
+
+    Detached review worktrees are a normal mode here, and a name-only exemption flagged
+    this PR's own branch during its own review.
+    """
+    listing = "sha_main\trefs/heads/main\nsha_pr\trefs/heads/feat/mine\n"
+
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        if "ls-remote" in args:
+            return listing
+        if "--abbrev-ref" in args:
+            return "HEAD\n"  # detached
+        return "sha_pr\n"  # rev-parse HEAD
+
+    monkeypatch.setattr(prime_report, "run", fake_run)
+    flags: list[str] = []
+    prime_report._flag_branches(flags)
+    assert flags == []
+
+
+def test_branch_flag_still_reports_a_genuinely_stale_remote_branch(monkeypatch) -> None:
+    """The exemptions must not swallow the finding they exist to narrow."""
+    listing = "sha_main\trefs/heads/main\nsha_old\trefs/heads/feat/old\n"
+
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        if "ls-remote" in args:
+            return listing
+        if "--abbrev-ref" in args:
+            return "HEAD\n"
+        return "sha_pr\n"
+
+    monkeypatch.setattr(prime_report, "run", fake_run)
+    flags: list[str] = []
+    prime_report._flag_branches(flags)
+    assert len(flags) == 1
+    assert "feat/old" in flags[0]
+
+
 def test_branch_flag_is_silent_when_the_remote_holds_only_main(monkeypatch) -> None:
     monkeypatch.setattr(prime_report, "run", lambda *a, **k: "aaa\trefs/heads/main\n")
     flags: list[str] = []
