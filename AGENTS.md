@@ -42,7 +42,7 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 ## Verification
 
 - Start with the narrowest meaningful test or static check.
-- For PR-ready code or governance changes, run `just check` unless the change is documentation-only and a narrower documented gate is sufficient.
+- For PR-ready code or governance changes, run `just codex-check` unless the change is documentation-only and a narrower documented gate is sufficient. Name `codex-check`, not `check`: `check` runs pytest ONLY, so the `tools/hooks/test_*.sh` + `tools/statusline/test_*.sh` shell suites — which run exclusively under `codex-parity-check` (and in CI) — are never executed by it. This matches `.agents/skills/roadmap-continue/SKILL.md` and `.agents/skills/ship-pr/SKILL.md`, which already prescribe `just codex-check`.
 - For governance/context changes, also verify instruction discovery or pointer integrity when applicable.
 - For roadmap/status changes, update `.harness/roadmap_status.md` directly (recompute `workspace_state_hash`, `recently_completed`, `next_action` per CLAUDE.md §12.2); do not hand-maintain volatile facts inconsistently with the recipe there. `.harness/roadmap_status.md`'s `## Next action` holds only the live pointer — historical rounds live at `.harness/roadmap-next-action-archive.md`, queried by grep, never read wholesale.
 - Run `just codex-closeout` before final response, commit, or PR; it writes a fresh pre-closeout checkpoint and hard-fails if the guard cannot verify it. Resolve hard findings and report warnings explicitly.

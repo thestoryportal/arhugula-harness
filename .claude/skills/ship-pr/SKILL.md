@@ -11,11 +11,14 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 
 ## Pre-flight (before opening the PR)
 
-- **Green.** `just check` + the relevant test suites pass; `bash -n` on any new shell.
+- **Green.** `just codex-check` + the relevant test suites pass; `bash -n` on any new shell.
+  Name the superset gate, not `just check`: `check` runs pytest ONLY, so the
+  `tools/hooks/test_*.sh` + `tools/statusline/test_*.sh` shell suites — which run
+  exclusively under `codex-parity-check` — are never executed by it.
 - **Grounding pass (U-WT-01).** Before codex round 1: (a) re-read every `file:line` cite in
   the diff and PR body at HEAD — never from recall; (b) recompute every count/arithmetic
   claim from the actual source rather than restating it; (c) confirm every `#NNN` reference
-  actually is that PR (`gh pr view NNN --json title`); (d) confirm `just check` ran at the
+  actually is that PR (`gh pr view NNN --json title`); (d) confirm `just codex-check` ran at the
   *current* HEAD, not an earlier one; (e) state in the PR body that this pass ran. First
   drafts historically burn 5–10 codex rounds on exactly these defect classes — this pass
   collapses them before round 1.
