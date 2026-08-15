@@ -9609,48 +9609,58 @@ items:
   pr: '#1357'
 - id: B-182
   title: >-
-    The C-OD-11 §11.1 per-cell cell_rate_limit is declared-and-never-read in-process while its
-    tenant_rate_limit sibling IS enforced, and §11.1 commits no number at the team-binding cells
+    The C-OD-11 §11.1 per-cell cell_rate_limit has no in-process reader at the four cells whose
+    declared enforcement layer is in-process, while tenant_rate_limit is genuinely enforced, and
+    §11.1 commits no number at the team-binding cells
   status: registered_finding
   summary: >-
-    Surfaced while grounding the C11 half of B-137 step (3), whose objection is that C1's
-    1/base_rate multiplier is "unpriced against the C-OD-11 §11.1 per-cell budgets". Three facts
-    about that instrument, all grounded at HEAD and pinned at
-    harness-od/tests/test_b137_c11_budget_grounding.py (5 tests, 2 mutation probes).
+    Surfaced grounding the C11 half of B-137 step (3), whose objection is that C1's 1/base_rate
+    multiplier is "unpriced against the C-OD-11 §11.1 per-cell budgets". Pinned at
+    harness-od/tests/test_b137_c11_budget_grounding.py (8 tests, 2 mutation probes: removing the
+    tenant-limit raise reds the behavioural witness, and narrowing the OD delta-chain glob reds
+    the spec scans on their never-report-unlooked-as-empty guard).
     (A) §11.1 commits NO number at the team-binding cells. Its table gives solo cells a concrete
     posture ("default 1.0; rotation handles volume") and multi-tenant cells per-tenant isolation,
-    but the team-binding row defers verbatim to "Persona §11.4 throughput rough order-of-magnitude
-    open item; envelope refines downstream of §11.4 closure".
-    (B) That deferral target is Persona_Document_v1.md §11 Open items ROW 4 (not a subsection),
-    whose closing path is "Emerges from operational telemetry once harness is running" — which is
-    CIRCULAR with B-137, since B-137 is the finding that this telemetry is starved at these very
-    cells. The budget cannot close by the route its own contract nominates while the defect it
-    would price stays open.
-    (C) per_cell_cardinality_budget.py commits a flat cell_rate_limit=10_000.0 spans/sec at every
-    ACTIVE cell — a figure §11.1 never states, uniform across cells whose base rates span 0.1 to
-    1.0 — and it has ZERO readers anywhere in harness-*/src outside its own declaration, while
-    tenant_rate_limit IS genuinely consumed at
-    multi_tenant_cross_cutting_enforcement.py:282-291 (raises when observed series exceed it).
-    NOT ASSERTED AS A DEFECT: §11.1 names the enforcement layer as COLLECTOR_BOUNDARY or
-    BACKEND_INGESTION, both out-of-process, and OD spec v1.37 ruled those caps enforce
-    "independently of any sampling decision". A value declared for an out-of-process consumer
-    having no in-process reader may be correct by design. What is registered is that the harness
-    cannot itself witness the cap, so no in-repo artifact can price anything against it.
+    but the team-binding row -- covering exactly the cell B-137 prices against -- defers verbatim
+    to "Persona §11.4 throughput rough order-of-magnitude open item". Scanned across the WHOLE
+    42-file OD delta chain, not the v1.2 baseline alone: no delta supersedes it with a figure.
+    (B) That target is Persona_Document_v1.md §11 Open items ROW 4 (a table row, not a
+    subsection) and is still OPEN. It is CLOSABLE -- see the withdrawal below -- but not closed,
+    so the team-cell budget carries no committed figure today.
+    (C) THE LOAD-BEARING HALF. per_cell_cardinality_budget.py:118 commits a flat
+    cell_rate_limit=10_000.0 spans/sec at every ACTIVE cell with ZERO readers anywhere in
+    harness-*/src outside its own declaration, while tenant_rate_limit IS enforced (witnessed
+    behaviourally at multi_tenant_cross_cutting_enforcement.py). FOUR of the eight ACTIVE cells
+    resolve to COLLECTOR_BOUNDARY, which that module's own docstring calls the IN-PROCESS OTLP
+    collector against the sqlite ring-buffer -- so at those four an absent reader CANNOT be
+    explained as "an out-of-process consumer handles it". At the four BACKEND_INGESTION cells
+    that explanation does hold. The disposition therefore SPLITS BY ENFORCEMENT LAYER.
+    THREE CLAIMS FROM THE FIRST DRAFT ARE WITHDRAWN (out-of-family Codex round 1, five valid
+    [P2]s). (i) The "dependency cycle" -- that the budget was unpriceable because it closes only
+    from telemetry B-137 starves -- is FALSE: C-OD-16 §16.2 scales sub-1.0 observations by
+    1/base_rate for unbiased estimation, and open-item 4 asks for an aggregate order-of-magnitude,
+    which such a sample estimates fine. (ii) "Both enforcement layers are out-of-process" is
+    FALSE, and correcting it is what produced (C)'s sharpened form. (iii) "Uniform cap implies
+    placeholder" is not established -- a uniform cap may legitimately represent shared collector
+    or backend capacity; uniformity is reported, the inference is not drawn.
   close_out: >-
-    (1) Re-ground all three facts at HEAD — the witness module is the instrument and its
-    assertions are written to fail loudly with the reason if any moves.
-    (2) ADJUDICATE (C): decide whether cell_rate_limit is correctly out-of-process-only (in which
-    case document that at the carrier so the next reader does not re-file this), or whether an
-    in-process enforcement site is owed. Do NOT wire an enforcement site before this decision —
-    minting an in-process cap the contract does not state would be an X-AL-3 design extension.
-    (3) The (B) cycle is NOT closeable here and must NOT be treated as blocking: it is a
-    design-substrate observation about Persona §11 open-item 4, and routing it is a Class 1
-    question for whoever closes B-137 step (3).
-    (4) Carry (A)+(B) into B-137's council as CONTEXT — they change what C11's objection can
-    claim, not whether C1 is affordable. The affordability call is unaffected and still owed.
+    (1) Re-ground all three surviving facts at HEAD -- the witness module is the instrument and
+    every assertion states what goes stale if it moves.
+    (2) ADJUDICATE (C) SPLIT BY ENFORCEMENT LAYER, not as one question. At the four
+    BACKEND_INGESTION cells, document at the carrier that the cap is out-of-process-only so the
+    next reader does not re-file this. At the four COLLECTOR_BOUNDARY cells the same explanation
+    is unavailable, so decide whether an in-process enforcement site is owed. Do NOT wire one
+    before that decision -- minting an in-process cap the contract does not state would be an
+    X-AL-3 design extension.
+    (3) Carry (A)+(B) into B-137's council as CONTEXT. They change what C11's objection can
+    claim -- there is no committed team-cell figure to price against -- NOT whether C1 is
+    affordable. That call is unaffected and still owed.
+    (4) The registered-not-asserted question stands and is the discriminator worth answering: if
+    the effective cap is a rate limiter, raising head admission RELOCATES the drop rather than
+    breaching the budget, and a rate limiter carries no §9.2 membership knowledge, so C1's floor
+    could be shed one hop later. No artifact currently asks it.
   council: >-
-    No at registration. (C) is a single-domain adjudication with a named owner (C7/OD) and
-    grounding answers it. (A)+(B) are inputs to B-137's already-declared C7+C11 convening rather
+    No at registration. (C) is a single-domain adjudication with a named owner (C7/OD) that
+    grounding answers. (A)+(B) are inputs to B-137's already-declared C7+C11 convening rather
     than a separate one.
-
-  heading: '### B-182 · The §11.1 per-cell `cell_rate_limit` is declared-and-never-read in-process, while its `tenant_rate_limit` sibling IS enforced — and §11.1 states no number at the team-binding cells at all *(surfaced grounding B-137 step (3)''s C11 half, 2026-08-15)*'
+  heading: '### B-182 · The §11.1 per-cell `cell_rate_limit` has no in-process reader at the FOUR cells whose declared enforcement layer IS in-process, while its `tenant_rate_limit` sibling is genuinely enforced — and §11.1 commits no number at the team-binding cells *(surfaced grounding B-137 step (3)''s C11 half, 2026-08-15; scoped after out-of-family Codex round 1)*'

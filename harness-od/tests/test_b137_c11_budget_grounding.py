@@ -1,62 +1,73 @@
 """B-137 step (3), C11 half: what the §11.1 per-cell budget actually commits and enforces.
 
-B-137's step (3) is a posture fork whose council is declared **dyadic C7 ⊥ C11** — a real
-observability floor (C7) against telemetry volume and *"the C-OD-11 §11.1 per-cell budgets
-those caps were sized against"* (C11). The C7 half was measured at `#1362`. **This module
-grounds the C11 half, and what it finds reframes the objection rather than pricing it.**
+B-137's step (3) council is declared **dyadic C7 ⊥ C11** — an observability floor (C7) against
+telemetry volume and *"the C-OD-11 §11.1 per-cell budgets those caps were sized against"* (C11).
+`#1362` measured the C7 half. This module grounds the C11 half.
 
-C11's objection, as the register states it, is that C1's `1/base_rate` in-envelope multiplier
-is *"unpriced against the C-OD-11 §11.1 per-cell budgets."* Pricing it requires that those
-budgets (a) commit a number at the cells in question, (b) be closable, and (c) be enforced.
-Grounded at HEAD, **all three are weaker than the objection assumes**:
+**A first draft of this module overclaimed in four places; out-of-family Codex round 1 raised
+five [P2]s and all five were valid. The corrections are recorded here because the withdrawn
+claims were the interesting ones, and a reader who only sees the survivors would re-derive them.**
 
-**(1) §11.1 commits NO number at the team-binding cells.** Its three-row table gives
-solo-developer cells a concrete posture (*"default 1.0; rotation handles volume"*) and
-multi-tenant cells per-tenant isolation, but the team-binding row reads, verbatim: *"Per-cell
-cardinality budget bounded per Persona §11.4 throughput rough order-of-magnitude open item;
-envelope refines downstream of §11.4 closure."* The budget at exactly the cells B-137 prices
-against (`team-binding × self-hosted-server`, base rate 0.1) is **deferred, not stated**.
+1. **WITHDRAWN — the "dependency cycle".** The draft argued §11.1's team budget defers to an
+   open item closable only from operational telemetry, that B-137 starves that telemetry, and
+   therefore that the budget is *unpriceable*: *"you cannot measure throughput from a stream you
+   are dropping 90% of."* **That is false, and the spec says so.** C-OD-16 §16.2 provides for
+   exactly this: *"at sampled rates below 1.0, the dashboard cost rollup is scaled by
+   `1/base_rate` for unbiased cost estimation."* A known-rate sample estimates an aggregate
+   fine, and Persona open-item 4 asks for a *rough order-of-magnitude per day* — an aggregate.
+   The cycle is refuted for the thing the open item actually asks for, and is withdrawn.
+2. **CORRECTED — "both enforcement layers are out-of-process."** False. `COLLECTOR_BOUNDARY` is
+   the **in-process** OTLP collector against the sqlite ring-buffer
+   (`per_cell_cardinality_budget.py:69-70`), and **4 of the 8 ACTIVE cells** resolve to it. This
+   correction *strengthens* the finding rather than dissolving it — see below.
+3. **WITHDRAWN — "uniform ⇒ placeholder."** A per-cell cap may legitimately be identical across
+   cells when it represents shared collector or backend capacity. Uniformity is reported; the
+   inference to *placeholder* is not drawn.
+4. **FIXED — the spec read was baseline-only.** The draft read `Spec_Operational_Discipline_v1_2.md`
+   alone. OD is a **delta chain** (42 files, head v1.41) that preserves prior bodies verbatim, so a
+   later delta could re-table §11.1 with a number and leave an anti-rot test green. Every spec
+   assertion now scans the whole chain.
 
-**(2) The deferral target is an OPEN item whose closing path is circular with B-137.**
-*"Persona §11.4"* is not a subsection — it is **§11 Open items, row 4** of
-`Persona_Document_v1.md`: *"Throughput rough order-of-magnitude per day | Dim 3 follow-up |
-**Emerges from operational telemetry once harness is running**."* So the budget that would
-price the fix can only close from operational telemetry — and B-137 is precisely the finding
-that this telemetry is starved at these cells. **You cannot measure throughput from a stream
-you are dropping 90% of.** That is a dependency cycle, and naming it is this module's point:
-C11's instrument is not merely unpriced, it is not currently *priceable* by the route its own
-contract nominates.
+**What survives, and it is sharper than the draft.**
 
-**(3) The one number in code is implementation-chosen, and the per-CELL half is enforced
-NOWHERE.** `per_cell_cardinality_budget.py` commits a flat `cell_rate_limit=10_000.0` spans/sec
-at every ACTIVE cell — a figure §11.1 never states, uniform across cells whose base rates span
-0.1 to 1.0. `tenant_rate_limit` **is** genuinely enforced (`multi_tenant_cross_cutting_enforcement.py`
-raises when observed series exceed it), but `cell_rate_limit` has **zero readers** anywhere in
-`harness-*/src` outside its own declaration. In-process, nothing can breach it because nothing
-consults it.
+**(A) §11.1 commits NO number at the team-binding cells.** Its table gives solo cells a concrete
+posture (*"default 1.0; rotation handles volume"*) and multi-tenant cells per-tenant isolation,
+but the team-binding row — covering exactly the cell B-137 prices against — defers verbatim to
+*"Persona §11.4 throughput rough order-of-magnitude open item; envelope refines downstream of
+§11.4 closure."* No delta in the chain supersedes it with a figure.
 
-**What this does NOT establish — the boundary this module will not cross.** OD spec v1.37
-adjudicated an adjacent question for `B-133`'s F-08 rider and ruled that the §11.1 caps enforce
-*"at the COLLECTOR_BOUNDARY / BACKEND_INGESTION layer independently of any sampling decision."*
-That ruling is about an **out-of-process** enforcement point — a real OTel collector or backend
-— which this repo does not contain and these tests therefore cannot witness. So: **nothing here
-says C1 is affordable.** A real collector-boundary limiter would still see `1/base_rate` more
-spans under C1 and shed the excess. What the tests below establish is narrower and precise —
-that the in-repo instrument C11's objection names does not currently carry, close, or enforce
-the number the objection would need. **The council still owes the affordability call; it now
-owes it against an honestly-described instrument.**
+**(B) The deferral target is still open** — `Persona_Document_v1.md` **§11 Open items, row 4**
+(a table row, not a subsection; the draft's first pass searched for a `§11.4` heading, found
+nothing, and nearly filed the cite as dangling). It is *closable* (per correction 1); it is not
+*closed*. So the team-cell budget has no committed figure today, which is all C11's objection
+needs to be about — and less than the draft claimed.
 
-**A consequence worth the council's attention, stated as a question rather than a finding.**
-If the effective cap is an out-of-process rate limiter, then raising head admission does not
-breach the budget — it **relocates the drop**, from a ratio-based decision at the SDK to a
-rate-based one at the boundary. A boundary limiter has no §9.2 membership knowledge, so the
-floor C1 exists to deliver could be shed one hop later. This module does **not** assert that
-(the limiter is out of repo); it registers it, because it is the shape of question that decides
-between C1 and candidate A and no artifact currently asks it.
+**(C) The in-process cap is declared and read by nothing, at the cells where it IS in-process.**
+`per_cell_cardinality_budget.py:118` commits a flat `cell_rate_limit=10_000.0` spans/sec at every
+ACTIVE cell, with **zero readers** anywhere in `harness-*/src` outside its own declaration. Its
+sibling `tenant_rate_limit` **is** genuinely enforced — witnessed behaviourally below, not by
+token scan. **The correction in (2) is what makes this load-bearing:** at the 4 cells resolving
+to `COLLECTOR_BOUNDARY`, §11.1's enforcement point is the harness's *own* in-process collector,
+so an absent reader there cannot be explained as "an out-of-process consumer handles it." At the
+4 `BACKEND_INGESTION` cells that explanation does hold. The disposition therefore **splits by
+enforcement layer**, and `B-182` carries it that way.
 
-**Grounding, not behaviour.** Every assertion reads substrate declared at HEAD. These are
-anti-rot pins on the facts a council decision will rest on — if any of them moves, the C11
-analysis above is stale and must be re-derived before the decision is made.
+**What this module does NOT establish.** Nothing here says C1 is affordable, or unaffordable. A
+real collector or backend would still see `1/base_rate` more spans under C1 and shed the excess;
+OD spec v1.37 ruled (for `B-133`'s F-08 rider) that these caps enforce *"independently of any
+sampling decision."* The affordability call is **unaffected and still owed**. What changes is
+narrower: at the team cells C11's objection names, §11.1 carries no figure to price against, and
+at half the cells the cap has no enforcement site at the layer §11.1 nominates.
+
+**A question this raises, registered rather than asserted.** If the effective cap is a rate
+limiter, raising head admission does not *breach* the budget — it **relocates the drop**, from a
+ratio-based decision at the SDK to a rate-based one at the cap. A rate limiter carries no §9.2
+membership knowledge, so the floor C1 exists to deliver could be shed one hop later. Not claimed
+here; it is the shape of question that discriminates C1 from candidate A, and no artifact asks it.
+
+**Grounding, not behaviour** — except where a behavioural witness is available, which after
+correction (4) it is for the tenant limit. These are anti-rot pins on facts a council decision
+will rest on; each assertion states what goes stale if it moves.
 """
 
 from __future__ import annotations
@@ -64,62 +75,79 @@ from __future__ import annotations
 import pathlib
 import re
 
+import pytest
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.persona_tier import PersonaTier
 from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
+from harness_od.multi_tenant_cross_cutting_enforcement import (
+    CardinalityCounters,
+    PerTenantCardinalityViolation,
+    assert_per_tenant_cardinality_isolation,
+)
 from harness_od.observability_matrix import CellID
 from harness_od.per_cell_cardinality_budget import PER_CELL_CARDINALITY_BUDGET
 
 _REPO = pathlib.Path(__file__).resolve().parents[2]
-_OD_SPEC_11 = _REPO / "design-substrate" / "Spec_Operational_Discipline_v1_2.md"
-_PERSONA = _REPO / "design-substrate" / "Persona_Document_v1.md"
+_SUBSTRATE = _REPO / "design-substrate"
+_PERSONA = _SUBSTRATE / "Persona_Document_v1.md"
 
 #: The cell B-137 prices step (3) against.
 _TEAM_SELF = CellID(
     persona_tier=PersonaTier.TEAM_BINDING,
     deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
 )
+#: A multi-tenant cell — the only class carrying an enforced per-tenant limit.
+_MTC_SELF = CellID(
+    persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
+)
 
 
-def test_section_11_1_commits_no_number_at_the_team_binding_cells() -> None:
-    """**(1)** The budget B-137 would be priced against is DEFERRED, not stated.
+def _od_spec_chain() -> list[pathlib.Path]:
+    """Every file in the OD spec delta chain, not just the v1.2 baseline.
 
-    §11.1's table gives solo cells a concrete posture and multi-tenant cells per-tenant
-    isolation. The team-binding row defers to an open item. That asymmetry is the finding.
+    Correction (4): OD is a delta chain whose head is v1.41 and whose deltas preserve prior
+    bodies verbatim. Reading only the baseline lets a later delta re-table §11.1 with a number
+    while every anti-rot assertion here stays green — which would defeat `B-182`'s own falsifier.
     """
-    spec = _OD_SPEC_11.read_text()
-    assert "## §11 C-OD-11" in spec, (
-        "C-OD-11's section heading moved in the v1.2 baseline — re-ground the delta chain "
-        "before trusting this module (CLAUDE.md §2 delta-baseline §-cite convention)"
+    chain = sorted(_SUBSTRATE.glob("Spec_Operational_Discipline_v1*.md"))
+    assert len(chain) >= 40, (
+        f"only {len(chain)} OD spec files found — the chain glob is wrong, and a 'no delta "
+        "states a number' result would be an artifact of not looking, not a fact"
     )
+    return chain
+
+
+def test_the_team_binding_budget_is_deferred_and_no_delta_supersedes_it() -> None:
+    """**(A)** The budget B-137 would be priced against is DEFERRED, across the WHOLE chain.
+
+    The solo row's concreteness is the contrast that makes the team row's silence a deliberate
+    deferral rather than the table simply being non-numeric.
+    """
+    chain = _od_spec_chain()
     team_row = (
         "| team-binding × * | Per-cell cardinality budget bounded per Persona §11.4 "
         "throughput rough order-of-magnitude open item; envelope refines downstream of "
         "§11.4 closure |"
     )
-    assert team_row in spec, (
-        "§11.1's team-binding row is no longer the verbatim deferral this module quotes. If it "
-        "now states a number, C11's objection became priceable and B-137 step (3) must be "
-        "re-argued against the new figure"
+    carriers = [p.name for p in chain if team_row in p.read_text()]
+    assert carriers, (
+        "§11.1's team-binding deferral row is no longer present anywhere in the OD delta "
+        "chain. If a delta replaced it with a figure, C11's objection became priceable and "
+        "B-137 step (3) must be re-argued against that number"
     )
-    # The contrast is load-bearing: the solo row DOES commit a posture, so the team row's
-    # silence is a deliberate deferral rather than the table simply being non-numeric.
-    assert "default 1.0; rotation handles volume" in spec, (
+    baseline = _SUBSTRATE / "Spec_Operational_Discipline_v1_2.md"
+    assert "default 1.0; rotation handles volume" in baseline.read_text(), (
         "§11.1's solo row no longer commits a concrete posture — without that contrast the "
         "team row's deferral cannot be read as deliberate"
     )
 
 
-def test_the_deferral_target_is_an_open_item_closed_only_by_the_starved_telemetry() -> None:
-    """**(2) The dependency cycle** — the load-bearing result of this module.
+def test_the_deferral_target_is_still_an_open_item() -> None:
+    """**(B)** `Persona §11.4` is §11 *Open items*, row 4 — and it is still open.
 
-    `Persona §11.4` is §11 *Open items*, row 4 — NOT a subsection. Its closing path is
-    "Emerges from operational telemetry once harness is running", and B-137 is the finding
-    that this telemetry is starved at these very cells. The budget cannot close by the route
-    its own contract nominates while the defect it would price is open.
-
-    (Recorded because a first pass of this grounding searched for a `§11.4` HEADING, found
-    nothing, and nearly concluded the reference was dangling. It is a table row.)
+    Deliberately NOT asserting the withdrawn "unpriceable" cycle (correction 1). The claim is
+    only that no figure is committed today, which is what C11's objection rests on.
     """
     persona = _PERSONA.read_text()
     assert "## §11 Open items" in persona, (
@@ -131,103 +159,152 @@ def test_the_deferral_target_is_an_open_item_closed_only_by_the_starved_telemetr
         "Emerges from operational telemetry once harness is running |"
     )
     assert row4 in persona, (
-        "Persona §11 open-item 4 is not the verbatim row this module quotes. If it CLOSED, "
-        "the C11 half of B-137's council becomes priceable and the dependency cycle below "
-        "dissolves — re-derive before deciding step (3)"
-    )
-    # The cycle, pinned structurally: the closing path names telemetry, and B-137's own cell
-    # is one whose telemetry is rate-suppressed by the very default this arc is about.
-    assert PER_CELL_BASE_RATE_ENVELOPE[_TEAM_SELF].default_rate < 1.0, (
-        "the team×self-hosted cell now admits at full rate, so its telemetry is no longer "
-        "suppressed and the dependency cycle this test names does not apply"
+        "Persona §11 open-item 4 is not the verbatim row this module quotes. If it CLOSED, the "
+        "team-cell budget has a figure and B-137's C11 half becomes priceable — re-derive "
+        "before deciding step (3)"
     )
 
 
-def test_the_flat_ten_thousand_is_implementation_chosen_not_declared_by_11_1() -> None:
-    """**(3a)** The one number in code has no §11.1 provenance, and does not vary by cell.
+def test_the_sampled_stream_is_estimable_by_contract_so_the_cycle_claim_stays_withdrawn() -> None:
+    """**Correction 1, pinned so the withdrawn claim cannot quietly return.**
 
-    A budget genuinely "sized against" a per-cell base rate would differ across cells whose
-    rates differ by 10x. This one does not, which is what makes it a placeholder rather than
-    a sizing.
+    C-OD-16 §16.2 scales sub-1.0 observations by `1/base_rate` for unbiased estimation. That is
+    the contract term which refutes "a starved stream cannot yield a throughput figure", and it
+    is why B-182 carries no circularity premise. Pinned because the cycle is a seductive
+    argument that a future reader (or a future me) would otherwise re-invent.
     """
-    limits = {c: b.cell_rate_limit for c, b in PER_CELL_CARDINALITY_BUDGET.items()}
-    assert len(set(limits.values())) == 1, (
-        f"cell_rate_limit now varies across cells ({sorted(set(limits.values()))}) — it may "
-        "have become a real per-cell sizing, which would give C11's objection an instrument "
-        "it lacks today; re-ground before deciding step (3)"
+    baseline = (_SUBSTRATE / "Spec_Operational_Discipline_v1_2.md").read_text()
+    scaling = (
+        "at sampled rates below 1.0, the dashboard cost rollup is scaled by `1/base_rate` "
+        "for unbiased cost estimation"
     )
-    assert set(limits.values()) == {10_000.0}, (
-        f"the flat cell_rate_limit moved to {set(limits.values())} — B-137's C11 analysis "
-        "quotes 10_000.0 and is now stale"
+    assert scaling in baseline, (
+        "C-OD-16 §16.2's `1/base_rate` unbiased-estimation term is gone. It is the sole "
+        "grounds on which this arc withdrew its dependency-cycle claim — if the term was "
+        "removed, that withdrawal must be re-examined rather than assumed"
+    )
+
+
+def test_the_flat_cap_has_no_contract_provenance_only_a_citation_of_the_code() -> None:
+    """**(C) provenance** — the number lives in code; the chain references it by citing code.
+
+    Reported precisely rather than as "the spec never states it" (which was true only of the
+    baseline read). Exactly one delta mentions the figure, and it does so by quoting the
+    implementation carrier, which is a citation of code and not a contract declaration.
+    """
+    mentions = [p.name for p in _od_spec_chain() if "10_000" in p.read_text()]
+    assert mentions == ["Spec_Operational_Discipline_v1_37.md"], (
+        f"the OD chain's references to the flat cap changed to {mentions}; B-182 states that "
+        "exactly one delta mentions it and does so by citing the code carrier — re-ground"
+    )
+    v137 = (_SUBSTRATE / "Spec_Operational_Discipline_v1_37.md").read_text()
+    assert "per_cell_cardinality_budget.py" in v137, (
+        "v1.37 now states the cap WITHOUT citing the implementation carrier — that would make "
+        "it a contract declaration rather than a citation of code, giving C11's objection the "
+        "provenance B-182 says it lacks"
+    )
+
+
+def test_the_cap_is_uniform_across_cells_whose_base_rates_are_not() -> None:
+    """**(C) shape** — reported, with NO inference to "placeholder" (correction 3).
+
+    A uniform cap may legitimately represent shared collector or backend capacity. The fact is
+    recorded because a council reading "budgets those caps were sized against" should know the
+    caps do not vary with the rates; what it means is left to the adjudication B-182 owes.
+    """
+    limits = {b.cell_rate_limit for b in PER_CELL_CARDINALITY_BUDGET.values()}
+    assert limits == {10_000.0}, (
+        f"cell_rate_limit is now {sorted(limits)} rather than a uniform 10_000.0 — B-137's C11 "
+        "analysis quotes the uniform value and is stale"
     )
     rates = {PER_CELL_BASE_RATE_ENVELOPE[c].default_rate for c in PER_CELL_CARDINALITY_BUDGET}
     assert len(rates) > 1, (
-        "every ACTIVE cell now shares one base rate, so a uniform budget would no longer be "
-        "evidence of a placeholder — this test's inference is void"
-    )
-    spec = _OD_SPEC_11.read_text()
-    assert "10_000" not in spec and "10,000" not in spec, (
-        "§11.1's baseline now states a five-figure rate limit — the code's 10_000.0 may have "
-        "acquired the contract provenance this test asserts it lacks"
+        "every ACTIVE cell now shares one base rate, so 'uniform cap over non-uniform rates' "
+        "is no longer a fact worth reporting to the council"
     )
 
 
-def test_the_per_cell_half_of_the_budget_has_no_consumer_while_the_per_tenant_half_does() -> None:
-    """**(3b)** `cell_rate_limit` is declared-and-never-read; `tenant_rate_limit` is enforced.
+def test_half_the_cells_enforce_in_process_yet_nothing_reads_the_cell_cap() -> None:
+    """**The sharpened finding** — correction 2 turned into the result.
 
-    The asymmetry is the point: this is not "the budget is unimplemented," it is "the half
-    C11's objection names is unimplemented while its sibling is not." In-process, nothing can
-    breach `cell_rate_limit` because nothing consults it.
-
-    Scanned over `harness-*/src` only — the enforcement OD spec v1.37 describes lives at an
-    out-of-process collector/backend this repo does not contain, and this test makes no claim
-    about that layer (see the module docstring's boundary note).
+    At `COLLECTOR_BOUNDARY` cells §11.1's enforcement point is the harness's OWN in-process
+    collector, so an absent reader there cannot be explained away as "an out-of-process consumer
+    handles it." That explanation does hold at `BACKEND_INGESTION` cells. Hence B-182's
+    disposition splits by enforcement layer instead of treating all 8 cells alike.
     """
+    in_process = sorted(
+        f"{c.persona_tier.value}×{c.deployment_surface.value}"
+        for c, b in PER_CELL_CARDINALITY_BUDGET.items()
+        if b.enforcement_layer == "COLLECTOR_BOUNDARY"
+    )
+    assert len(in_process) == 4, (
+        f"the COLLECTOR_BOUNDARY cell set changed to {in_process}; B-182 scopes its in-process "
+        "half to exactly these cells and must be re-scoped"
+    )
+
     src_files = [p for d in sorted(_REPO.glob("harness-*/src")) for p in d.rglob("*.py")]
     assert len(src_files) > 100, (
-        f"only {len(src_files)} src files found — the scan root is wrong and a 'no consumer' "
+        f"only {len(src_files)} src files found — the scan root is wrong and a 'no reader' "
         "result would be an artifact of not looking (never report unlooked as empty)"
     )
     decl = _REPO / "harness-od" / "src" / "harness_od" / "per_cell_cardinality_budget.py"
-
-    cell_readers = sorted(
+    readers = sorted(
         str(p.relative_to(_REPO))
         for p in src_files
         if p != decl and re.search(r"\bcell_rate_limit\b", p.read_text())
     )
-    tenant_readers = sorted(
-        str(p.relative_to(_REPO))
-        for p in src_files
-        if p != decl and re.search(r"\btenant_rate_limit\b", p.read_text())
+    assert readers == [], (
+        f"`cell_rate_limit` acquired a reader at {readers} — the per-cell cap is now consulted "
+        "in-process, which gives C11's objection a real instrument and closes B-182's (C)"
     )
 
-    assert cell_readers == [], (
-        f"`cell_rate_limit` acquired a consumer at {cell_readers} — the per-cell cap is now "
-        "enforced in-process, which gives C11's objection a real instrument and makes the "
-        "'nothing consults it' half of B-137's C11 grounding stale"
+
+def test_the_tenant_limit_is_enforced_behaviourally_not_merely_referenced() -> None:
+    """**Correction 4 for the sibling half** — a behavioural witness, not a token scan.
+
+    The draft established `tenant_rate_limit`'s enforcement by regex, which would stay green if
+    the comparison and raise were deleted while a docstring mention survived. This drives the
+    real function on both sides of the limit, so the asymmetry B-182 rests on ("the half C11
+    names is unenforced while its sibling is not") is witnessed rather than asserted.
+    """
+    limit = PER_CELL_CARDINALITY_BUDGET[_MTC_SELF].tenant_rate_limit
+    assert limit == 1000.0, (
+        f"the multi-tenant per-tenant limit moved to {limit}; this witness pins 1000.0"
     )
-    assert tenant_readers == [
-        "harness-od/src/harness_od/multi_tenant_cross_cutting_enforcement.py"
-    ], (
-        f"the `tenant_rate_limit` consumer set changed to {tenant_readers}; the enforced-vs-"
-        "unenforced asymmetry this module rests on must be re-grounded"
+
+    within = CardinalityCounters(
+        tenant_id="t1", observed_series=int(limit), observation_window="1m"
+    )
+    assert assert_per_tenant_cardinality_isolation("t1", _MTC_SELF, within) is None, (
+        "the tenant limit now rejects an observation AT the limit — boundary semantics changed"
+    )
+
+    over = CardinalityCounters(
+        tenant_id="t1", observed_series=int(limit) + 1, observation_window="1m"
+    )
+    with pytest.raises(PerTenantCardinalityViolation):
+        assert_per_tenant_cardinality_isolation("t1", _MTC_SELF, over)
+
+    # The contrast that makes this an ASYMMETRY: no equivalent callable exists for the cell cap.
+    # If one appears, the enforced/unenforced split B-182 rests on has closed.
+    assert PER_CELL_CARDINALITY_BUDGET[_TEAM_SELF].tenant_rate_limit is None, (
+        "the team cell acquired a per-tenant limit — the multi-tenant-only scoping of the "
+        "enforced half no longer holds"
     )
 
 
 def test_the_cell_this_is_all_priced_against_still_carries_its_rate() -> None:
     """Anti-rot pin on the one figure the C11 narrative quotes.
 
-    B-137 states C1's cost as `1/base_rate` at the team cells. The `×10` reading is only
-    correct while this cell carries 0.1, and the envelope is substrate that can move.
+    The `×10` reading is correct only while this cell carries 0.1. The envelope's `max_rate` is
+    pinned too: a x5 rise over the default is ALREADY operator-tunable under the cleared §10.3
+    envelope, which is context the council should have before treating any increase as novel.
     """
     env = PER_CELL_BASE_RATE_ENVELOPE[_TEAM_SELF]
     assert env.default_rate == 0.1, (
         f"team×self-hosted default rate is now {env.default_rate}, so C1's in-envelope "
         f"multiplier reads ×{1 / env.default_rate:g}, not ×10 — re-price step (3)"
     )
-    # The envelope already authorises the operator to raise this cell to max_rate. That is
-    # context the council should have: a x5 increase over the default is ALREADY sanctioned
-    # by the cleared §10.3 envelope, without any B-137 decision at all.
     assert env.max_rate == 0.5, (
         f"team×self-hosted max_rate moved to {env.max_rate}; the council's sense of how much "
         "volume increase the cleared envelope already permits at this cell is stale"
