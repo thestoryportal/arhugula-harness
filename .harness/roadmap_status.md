@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `9eb199463e68` |
+| `workspace_state_hash` | `8ba08c6cee87` |
 | `last_refreshed` | 2026-08-15T00:00:00Z |
-| `git_head` | `2ca864e7` —  |
+| `git_head` | `5f51b567` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 118 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1361).** **Current next action (post-#1361).** The register stands at 34 `registered_finding` + 1 `open` (B-148, R-CTX-1 pending re-measure) + 2 `design_substrate_gated` + 2 `held` / 142 closed, and `/prime` now derives that projection deterministically — run it to open a session rather than re-deriving by hand. TWO gates remain, and per §12.4.1 NEITHER is parked: **B-139** owes a dyadic C5+C7/C9 **council** (agent-executable, per its own fork §8) BEFORE operator ratification of disposition A/B/C, and **B-165** owes the three-way spec repair decision. The largest coherent agent-executable frontier is the **telemetry/contract-realization cluster** — B-108, B-120, B-124, B-137, B-140, B-160 — of which five share ONE defect shape (*a span attribute declared at a canonical surface with no producer*), so they are likely cheaper batched than closed one at a time; B-172 exists to batch the doc-only half of the register sweep. Measured throughput at this HEAD is 2.9h/row over the last 10 closure-bearing sessions, i.e. ~101h across ~9 sessions for the 35-row floor. STANDING CAUTION carried forward from #1359 and re-confirmed by this arc: a register row's own filing is a FILING, not a finding — four of five rows closed on 2026-08-15 had a materially wrong premise, and this arc's own r1/r2 defects were both dates misparsed as PR numbers, so re-ground every row at HEAD before building against it.
+**Current next action (post-#1361).** The register stands at 34 `registered_finding` + 1 `open` (B-148, R-CTX-1 pending re-measure) + 2 `design_substrate_gated` + 2 `held` / 142 closed, and `/prime` now derives that projection deterministically — run it to open a session rather than re-deriving by hand. TWO gates remain, and per §12.4.1 NEITHER is parked: **B-139** owes a dyadic C5+C7/C9 **council** (agent-executable, per its own fork §8) BEFORE operator ratification of disposition A/B/C, and **B-165** owes the three-way spec repair decision. The largest coherent agent-executable frontier is the **telemetry/contract-realization cluster** — B-108, B-120, B-124, B-137, B-140, B-160 — of which five share ONE defect shape (*a span attribute declared at a canonical surface with no producer*), so they are likely cheaper batched than closed one at a time; B-172 exists to batch the doc-only half of the register sweep. Measured throughput at this HEAD is 2.9h/row over the last 10 closure-bearing sessions, i.e. ~101h across ~9 sessions for the 35-row floor. STANDING CAUTION re-confirmed by this arc: a register row's own filing is a FILING, not a finding — four of five rows closed on 2026-08-15 had a materially wrong premise, and this arc's own r1/r2 defects were both dates misparsed as PR numbers, so re-ground every row at HEAD before building against it.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
