@@ -1375,9 +1375,18 @@ async def test_two_pre_action_placements_emit_per_placement_canonical_4_spans(
     # 2× audit entries reach the writer
     assert len(audit.appends) == 2
     # Note: the v1.11 MVP action_id shape `hitl:<parent>:<position>` collides
-    # across same-position placements; per spec §14.8.2 step 4 NOTE 6-i,
-    # in-loop sub-shape is impl-discretion. This test asserts at-least the
-    # 2-emission cardinality and surface invocation pattern.
+    # across same-position placements. NOTE 6-i does NOT license that — it
+    # ASSERTS the opposite ("Each placement's audit entry uses a distinct
+    # `action_id`"), justifying it by "action_id includes placement.position.value",
+    # which only holds when the positions DIFFER (its own example pairs PRE_ACTION
+    # with SUB_AGENT_BOUNDARY). The earlier reading of this comment — that the
+    # in-loop sub-shape is impl-discretion — inverted the spec into a licence and
+    # is why the collision went unexamined from v1.11. It is now filed as `B-165`
+    # (Class 1 back-flow, `.harness/class_1_fork_b165_same_position_placement_
+    # identity_collision.md`) and witnessed at
+    # `test_b165_same_position_placement_identity_witness.py`. This test's own
+    # scope is unchanged: the 2-emission cardinality and surface invocation
+    # pattern; the identity claim is the B-165 witness's to make.
 
 
 # ---------------------------------------------------------------------------
