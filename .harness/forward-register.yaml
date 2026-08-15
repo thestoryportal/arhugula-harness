@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 176
+  total: 177
   open: 1
   design_substrate_gated: 1
   registered_finding: 38
   operator_gated: 0
   held: 2
-  closed: 134
-  identity_digest: 4ff1db7fb957f9b1
+  closed: 135
+  identity_digest: 2816a5f4ee2af026
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9371,7 +9371,7 @@ items:
   title: Ring-buffer flush budget test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5 asserts a bare
     100ms wall-clock budget with no isolation from load -- the third member of the B-166/B-169 same-sha-differential
     flake class
-  status: registered_finding
+  status: closed
   summary: 'A wall-clock BUDGET assertion, not a wall-clock ORDERING one -- which makes it a sibling of
     B-166 and B-169 rather than a duplicate. harness-runtime/tests/test_lifecycle_ring_buffer.py:525 seeds
     100 span rows, calls ring.flush_to_sqlite(conn) against a real on-disk sqlite database under tmp_path,
@@ -9382,7 +9382,7 @@ items:
     during PR #1341 and PASSED on a rerun of the SAME sha. MECHANISM IS GROUNDED BY CODE READ, NOT BY
     REPRODUCTION -- the read establishes that the assertion is load-sensitive by construction; it does
     NOT establish that load is what actually happened on the observed red.'
-  close_out: 'REGISTERED RATHER THAN WAVED OFF, for the same reason B-169 was: this workspace shipped
+  close_out: 'CLOSED AT #1347. STEP 1 DISCHARGED BY EXECUTION, not by code read: the same unchanged flush measured median 2.51ms / max 4.54ms idle (n=40), median 5.76ms / max 78.52ms under 12 cpu + 4 io spinners (n=40), and median 5.96ms / max 139.92ms with 3 of 60 samples BREACHING the 100ms budget under 24 cpu + 8 io spinners. The median moves 2.4x while the tail moves 31x and crosses, and the breaching samples form a discrete ~130-140ms cluster -- a scheduler stall on the two asyncio.to_thread hops inside the timed window, not slow work. Mechanism CONFIRMED, not falsified. STEP 2 DISCHARGED AS BEST-OF-5 with the 100ms threshold untouched and the assertion retained; each attempt uses a FRESH database and asserts its own inserted == 100, because insert_spans is INSERT OR IGNORE and reusing one database would make attempts 2..N no-ops that clear the budget trivially. PD-8 probe: the FIRST annotation was WRONG and the probe caught it -- a per-row execute+commit runs 33-57ms and PASSES; the verified kill is PRAGMA fullfsync=ON + per-row commit at ~2.0s, which fails all 5 attempts and so confirms best-of-N stays discriminating. The non-kill is registered as B-177 rather than absorbed. ORIGINAL FILING FOLLOWS. REGISTERED RATHER THAN WAVED OFF, for the same reason B-169 was: this workspace shipped
     B-166 specifically so a session would stop dismissing a red as ''the known flake'', and observing
     a THIRD same-sha-differential red without filing it would contradict that discipline in the same breath.
     Filed here by the B-165 grounding leg because the post-#1341 next-action head named the omission explicitly.
@@ -9405,3 +9405,45 @@ items:
     asserts a bare 100 ms wall-clock budget with no isolation from load — the third member of the `B-166`/`B-169`
     flake class *(observed RED once on PR #1341 and GREEN on a same-sha rerun, 2026-08-14; filed by the
     `B-165` grounding leg, which the post-#1341 head had flagged as owing this registration)*'
+  pr: '#1347'
+- id: B-177
+  title: 'AC #5''s 100 ms flush budget has ~40x slack over the ~2.5 ms of real work it measures, so it
+    discriminates only catastrophic regressions -- a moderate (16x) per-row-commit regression measures
+    33-57 ms and passes'
+  status: registered_finding
+  summary: 'SURFACED BY A MUTATION PROBE THAT FAILED TO KILL, during the B-176 arc.
+    test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5 asserts a 100 ms budget against a flush that
+    actually takes ~2.5 ms idle -- roughly 40x slack. MEASURED, NOT INFERRED: replacing the
+    conn.executemany batch at harness_od/sqlite_span_store.py:159 with a per-row conn.execute +
+    conn.commit loop (100 separate commits) measures 33-57 ms across 15 samples and the test PASSES. Only
+    a catastrophic mutation kills it -- PRAGMA fullfsync=ON plus per-row commit, at ~2.0 s. CRITICALLY,
+    THIS IS NOT A BEST-OF-N ARTIFACT: the slack is a property of AC #5''s chosen number, and the
+    single-sample assertion B-176 replaced had the identical blind spot, so the witness was never
+    stronger than this. The test''s own mutation-probe annotation records the measured non-kill so it
+    cannot overstate itself.'
+  close_out: 'REGISTERED RATHER THAN PATCHED, deliberately: tightening 100 ms toward the ~2.5 ms
+    measurement would re-spec a STATED performance contract (AC #5), which is design-substrate territory,
+    not test hygiene -- exactly the silent-absorption failure mode X-AL-3 forecloses. STEP 1 -- decide
+    whether AC #5''s 100 ms is a LATENCY CEILING (a service-level bound the flush must never exceed, in
+    which case the slack is intentional and this row closes as by-design) or a REGRESSION GUARD (in which
+    case it is ~40x too loose to be one). THE TWO CARRIERS FRAME IT DIFFERENTLY, which is why the
+    question is live: the canonical AC text (U-OD-43 AC #5 at
+    design-substrate/Implementation_Plan_Operational_Discipline_v2_14.md:147) says only ''Integration
+    test: 100-span batch flush in < 100ms'', framing a test threshold, while the flush_to_sqlite
+    docstring at harness-runtime/src/harness_runtime/lifecycle/ring_buffer.py:333 calls the same
+    number an ''AC #5 latency target''. A ceiling and a guard want different numbers, and one number
+    is currently doing both jobs. STEP 2 -- if a
+    regression guard is wanted, it needs a SEPARATE assertion with a number derived from measurement
+    (best-of-N makes a tight bound viable; the same probe that produced 2.51 ms median can set it), not a
+    re-pointing of the ceiling. STEP 3 -- whatever lands must kill the per-row-commit mutation, which is
+    the concrete regression this row proves escapes today. FALSIFIER: evidence that AC #5 was specified
+    as a ceiling with the slack intended, which closes this as by-design rather than as a gap. CROSS-REF:
+    B-176 (the flake repair that surfaced this); note the two are independent -- B-176 was about WHEN the
+    assertion is true, this is about WHAT it can detect.'
+  council: 'No. The measurement is unambiguous and the open question is a scoping one (ceiling vs guard)
+    that the spec text can settle; there is no cross-domain tension to convene over. It does touch a
+    stated contract, which is precisely why it is registered rather than fixed in the arc that found it.'
+  heading: '### B-177 · The AC #5 100 ms flush budget has ~40x slack over real work, so it discriminates
+    only catastrophic regressions — a per-row-commit regression runs 16x slower and still PASSES
+    *(measured by the `B-176` mutation probe, 2026-08-14; the annotation it falsified was retracted
+    rather than kept)*'
