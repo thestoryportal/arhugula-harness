@@ -1,10 +1,10 @@
-# Class 1 Fork — `B-139`: `validator.fail.cause_attribution` is declared always-emitted at TWO canonical surfaces, but the declared producer's own contract shape cannot carry it
+# Class 1 Fork — `B-139`: `validator.fail.cause_attribution` is declared always-emitted at THREE canonical surfaces, but the declared producer's own contract shape cannot carry it
 
 **Filed:** 2026-08-15 (`B-139` grounding leg — steps (1) and (2)'s probe, which the register row made mandatory before any disposition)
 **Status:** OPEN — Class 1 (architectural defect; design-phase artifact requires revision)
 **Halt target:** any arc that consumes `validator.fail.cause_attribution` as a present attribute, or that relies on the C5 FM-J rule (*"a fail-class without `cause_attribution` is FM-J"*) as an enforced invariant.
-**Routing target:** `ADR-D5` §1.10.1 bullet 2 **and** `C-CP-21` §21.5 row 2 — the two surfaces that jointly declare the attribute always-emitted. Secondarily `C-CP-25` §25.2 (`ValidatorResult`), if the operator elects the wire-it reading.
-**Detection mode:** exhaustive fixed-string search over all six `harness-*/src` trees + a read of the producer's own input shapes. No new test was authored — this fork reports an ABSENCE, and the honest witness for an absence is the search that found nothing, not a test that asserts nothing.
+**Routing target:** `ADR-D5` §1.10.1 bullet 2, `C-CP-21` §21.5 row 2, **and** `.claude/skills/council/c5-validation-contract/SKILL.md` §33-38 + §234-236 — the THREE surfaces that jointly declare the attribute always-emitted. Secondarily `C-CP-25` §25.2 (`ValidatorResult`), if the operator elects a wire-it reading. **The C5 surface was MISSED in this fork's first draft and added at out-of-family review round 1** — it is load-bearing, because it is where the FM-J rule actually lives.
+**Detection mode:** exhaustive fixed-string search over all **seven** `harness-*/src` trees (`as`, `core`, `cp`, `cxa`, `is`, `od`, `runtime`) + a read of the producer's own input shapes. No new test was authored — this fork reports an ABSENCE, and the honest witness for an absence is the search that found nothing, not a test that asserts nothing.
 
 ---
 
@@ -16,8 +16,8 @@ re-declaring the condition via back-flow — pricing (a) honestly, because the r
 *"the producer does not currently hold a cause to emit."*
 
 Both are now executed. **Step (1) — CONFIRMED, the row is not falsified.** A fixed-string
-search for `validator.fail.cause_attribution` across `harness-{cp,od,is,as,core,runtime}/src`
-returns **five hits, and none is a producer**:
+search for `validator.fail.cause_attribution` across all seven trees —
+`harness-{as,core,cp,cxa,is,od,runtime}/src` — returns **five hits, and none is a producer**:
 
 | Hit | What it actually is |
 |---|---|
@@ -51,7 +51,7 @@ at `validator_framework.py:237` and `:305` with `step`, `result`, `next_action`,
 
 So the contradiction is not "someone forgot a line." It is structural:
 
-> **Two canonical surfaces declare an attribute unconditionally emitted on every
+> **Three canonical surfaces declare an attribute unconditionally emitted on every
 > validator-failure event, while the contract shape the declared producer returns has no
 > member that could carry its value.**
 
@@ -82,8 +82,14 @@ creates a new CP-internal dependency from the validator framework onto retry/bre
 and the §21.2 branches would have to expose a stable cause value. This is the reading that
 best preserves the *declaration's* intent, at the price of new coupling.
 
-**(C) — RECOMMENDED — demote the declaration from always-emitted to conditional, at BOTH
-surfaces.** This is the `B-138` precedent applied to its sibling attribute: **demote, do not
+**(C) — RECOMMENDED — demote the declaration from always-emitted to conditional, at ALL
+THREE surfaces.** **This scope was CORRECTED at out-of-family review round 1**, and the
+correction is load-bearing: the first draft named only ADR-D5 and C-CP-21, but
+`c5-validation-contract/SKILL.md:33-38` independently states *"Every fail-class signal
+carries a `cause_attribution` annotation"* and *"Emitting a fail-class without attribution is
+failure mode FM-J"*, and `:234-236` repeats the obligation. Demoting only the first two would
+leave C5 still requiring what nothing produces — so (C) as first written could NOT have made
+the corpus "true today", which was its entire justification. This is the `B-138` precedent applied to its sibling attribute: **demote, do not
 delete**. `B-138` corrected the `class` domain and demoted the permanence derivation clause
 rather than removing it, and the third §21.5 attribute was left declared-required with no
 owner precisely because that leg stopped short — which is what minted `B-139`. Demoting is
