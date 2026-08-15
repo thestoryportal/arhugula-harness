@@ -570,9 +570,9 @@ async def _time_100_span_flushes(tmp_path: Path, *, prefix: str) -> list[int]:
 # ones. That slack is a property of AC #5's chosen number, not of best-of-N —
 # a single-sample assertion had exactly the same blind spot.
 #
-# B-177 CLOSED that gap WITHOUT touching this number: the slack is intentional
-# (AC #1 sets a 1000ms flush interval, so 100ms asserts the flush fits its own
-# cycle), so the missing coverage became a SEPARATE, tighter assertion —
+# B-177 CLOSED that gap WITHOUT touching this number: no spec states a 100ms
+# bound at all, so tightening it would invent a contract rather than enforce
+# one. The missing coverage became a SEPARATE, tighter assertion —
 # `test_flush_to_sqlite_batch_path_regression_guard_per_b_177` below, which
 # kills exactly the per-row-commit mutation this one cannot see. The non-kill
 # above is still true of THIS witness and stays recorded as such.
@@ -649,26 +649,30 @@ async def test_flush_to_sqlite_batch_path_regression_guard_per_b_177(
     """B-177 — a REGRESSION GUARD on the batch flush path, distinct from and
     additional to AC #5's ceiling. Nothing here re-states AC #5's number.
 
-    WHY BOTH EXIST. AC #5's 100 ms is a CEILING, and its ~40x slack over the
-    ~2.5 ms this path actually takes is intentional rather than accidental:
-    U-OD-43 AC #1 sets the flush interval at 1000 ms, so the ceiling asserts
-    the flush comfortably fits inside its own cycle. Read that way the slack is
-    the contract working as designed, which is why B-177 did NOT tighten it —
-    doing so would re-spec a stated contract to serve a different purpose.
+    WHY BOTH EXIST. AC #5's 100 ms has NO SPEC-LEVEL BASIS — and that, not a
+    designed margin, is why B-177 declined to tighten it. The figure appears
+    nowhere in `design-substrate/` except U-OD-43's own AC list, where it is
+    self-framed as an "Integration test:" criterion rather than a production
+    bound. The spec states no flush latency contract at all: §C-OD-27.2's
+    CURRENT canonical reading (`Spec_Operational_Discipline_v1_25.md` §1.3,
+    which supersedes the v1.8 baseline line) says flush cadence is
+    "operator-orchestrator-driven (NOT bound to `flush_interval_ms` at
+    v1.8-baseline default 1000ms)". So there is no cycle the 100 ms must fit
+    inside; re-pointing it at a tighter number would INVENT a contract the
+    spec deliberately declined to state.
 
-    But a ceiling cannot detect a regression that stays under it. A per-row
-    commit instead of `executemany` runs ~16x slower and still clears 100 ms,
-    so it lands silently. This guard is the second, tighter assertion that
-    B-177's close-out asked for: a measurement-derived bound whose only job is
-    to notice the batch path stopping being a batch.
+    That is also exactly why this guard has to exist separately. An arbitrary
+    ceiling cannot detect a regression that stays under it: a per-row commit
+    instead of `executemany` runs ~16x slower and still clears 100 ms, so it
+    lands silently. Because AC #5's number is undetermined rather than tuned,
+    a measurement-derived bound is the only thing that can notice the batch
+    path stopping being a batch.
 
-    WHAT IT DOES NOT CLAIM. It is not a latency contract and no spec cites it
-    — §C-OD-27.2 states only the 1000 ms flush interval, and the 100 ms figure
-    lives solely in the plan's AC #5. It is a drift detector for THIS
-    implementation on ordinary hardware. Because it asserts `min` of N, it
-    catches a CONSTANT slowdown and not an intermittent one; the bound's
-    derivation and its two margins are recorded at
-    `_FLUSH_REGRESSION_GUARD_NS`, so a future arc can re-price it against
+    WHAT IT DOES NOT CLAIM. It is not a latency contract and no spec cites it;
+    it is a drift detector for THIS implementation on ordinary hardware.
+    Because it asserts `min` of N, it catches a CONSTANT slowdown and not an
+    intermittent one. The bound's derivation and its two margins are recorded
+    at `_FLUSH_REGRESSION_GUARD_NS`, so a future arc can re-price it against
     fresh measurements rather than re-deriving it from scratch.
     """
     attempts_ns = await _time_100_span_flushes(tmp_path, prefix="b177")
