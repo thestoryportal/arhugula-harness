@@ -4,7 +4,7 @@
 **Status:** OPEN — Class 1 (architectural defect; design-phase artifact requires revision)
 **Halt target:** any arc that consumes `validator.fail.cause_attribution` as a present attribute, or that relies on the C5 FM-J rule (*"a fail-class without `cause_attribution` is FM-J"*) as an enforced invariant.
 **Routing target (canonical):** `ADR-D5` §1.10.1 bullet 2 **and** `C-CP-21` §21.5 row 2 — the two CANONICAL surfaces, per the §1.3 authority chain (canonical design artifacts live under `design-substrate/`). Secondarily `C-CP-25` §25.2 (`ValidatorResult`), if the operator elects a wire-it reading.
-**Owed synchronization (derived, NOT a back-flow target):** `.claude/skills/council/c5-validation-contract/SKILL.md` carries the same obligation at **six sites, not two** (`:33-38` reconciliation, `:128` vocabulary rule, `:161` taxonomy, `:234-236`, `:254` self-audit, `:277` FM-J) — the apply arc must sweep every semantic occurrence, not the two first cited (round-4 correction). This is where the FM-J rule text actually lives. It is **derived guidance downstream of the ADR**, so it does not vote on the disposition — but it MUST be synchronized once the canonical surfaces are amended, or stale skill text will keep asserting a requirement nothing produces. *(Scope corrected twice under out-of-family review: round 1 caught that the first draft omitted C5 entirely; round 2 caught that promoting it to a co-equal canonical surface inverted the authority chain.)*
+**Owed synchronization (derived, NOT a back-flow target):** `.claude/skills/council/c5-validation-contract/SKILL.md` carries the same obligation at **every semantic occurrence in `.claude/skills/council/c5-validation-contract/SKILL.md`** — do NOT work from a hand-enumerated site list: this fork carried one that grew 2 → 6 → 11+ across review rounds before being retired, and a `grep -c cause_attribution` over that file currently returns **33** lines. The apply arc must sweep the file by search and disposition each occurrence, not tick off a list — the apply arc must sweep every semantic occurrence, not the two first cited (round-4 correction). This is where the FM-J rule text actually lives. It is **derived guidance downstream of the ADR**, so it does not vote on the disposition — but it MUST be synchronized once the canonical surfaces are amended, or stale skill text will keep asserting a requirement nothing produces. *(Scope corrected twice under out-of-family review: round 1 caught that the first draft omitted C5 entirely; round 2 caught that promoting it to a co-equal canonical surface inverted the authority chain.)*
 **Detection mode:** exhaustive fixed-string search over all **seven** `harness-*/src` trees (`as`, `core`, `cp`, `cxa`, `is`, `od`, `runtime`) + a read of the producer's own input shapes. No new test was authored — this fork reports an ABSENCE, and the honest witness for an absence is the search that found nothing, not a test that asserts nothing.
 
 ---
@@ -147,15 +147,20 @@ not left to the reader.
 
 ## §6 — What would falsify this fork
 
-A producer writing the exact key `validator.fail.cause_attribution` anywhere in `harness-*/src`
-(the fixed-string search above is the instrument — a loose `cause_attribution` search returns
-`retry.*` and pause-state hits and must not be used); **or** a member of `ValidatorResult` /
-the `_build_span_attributes` inputs that carries a cause and was missed here; **or** a LIVE
-constructor of `ReplaySemanticDivergenceError` (or any other producer) that actually emits a
-value from the 15-value alphabet at runtime, which would re-price (B) back down toward a
-wiring change.
+**The defect is falsified only by one of these two.** (a) **Every** required validator-failure
+path emits `validator.fail.cause_attribution` — not one path, not one carrier; the declaration
+is unconditional, so partial coverage leaves it violated. (b) The canonical requirement is
+demoted, at which point there is nothing left to violate.
 
----
+**These do NOT falsify it — they only re-price a disposition:** adding a cause member to
+`ValidatorResult`; wiring the replay-divergence event; giving `SECRET_EXPIRED` /
+`SECRET_REVOKED` producers; or finding one more typed carrier. Each narrows the gap for its own
+surface while every other validator-failure path still omits an attribute declared required on
+all of them.
+
+**Method note for any re-grounding:** use a FIXED-STRING search for the exact key over all
+seven `harness-*/src` trees. A loose `cause_attribution` search returns `retry.*` and
+pause-state hits and will mislead, as it did during this fork's own drafting.
 
 ## §7 — Confidence tags on this fork's non-trivial claims
 
@@ -170,7 +175,7 @@ wiring change.
 | `ReplaySemanticDivergenceError` has no live constructor | `[MODERATE]` | a `src`-scoped count returned only its own definition; a dynamic/reflective construction would not be caught by that method |
 | The per-surface inventory above is **complete** | `[SPECULATIVE]` — explicitly not claimed | it was wrong in rounds 3, 4 and 5; completeness is owed at the apply arc, not asserted here |
 | (C) is the right disposition | `[MODERATE]` | it is the cheapest, most reversible, and precedented option — but it is an operator ratification, not a finding |
-| That (C) leaves no other corpus surface asserting the always-emitted obligation | `[SPECULATIVE]` | six C5 sites and two canonical surfaces were swept, but no exhaustive corpus-wide search for the obligation's *paraphrases* was run — an apply-arc probe (§8.3) |
+| That (C) leaves no other corpus surface asserting the always-emitted obligation | `[SPECULATIVE]` | two canonical surfaces were swept and C5 was surveyed, but no exhaustive corpus-wide search for the obligation's *paraphrases* was run — an apply-arc probe (§8.3) |
 
 ## §8 — Open questions, contested claims, recommended next probes
 
@@ -197,5 +202,5 @@ conflated the probe settling the FACTS with the cross-domain TRADE being settled
 **Recommended next probes (for the apply arc, not blocking ratification).**
 1. **Complete the per-value inventory** — for each of the 10 base values, does any typed carrier or live producer exist? This fork verified four surfaces and explicitly declines to claim completeness.
 2. **Probe for a dynamic constructor** of `ReplaySemanticDivergenceError` (the one MEDIUM-confidence claim above) before treating that carrier as inert.
-3. **Sweep C5's six sites** together (`:33-38`, `:128`, `:161`, `:234-236`, `:254`, `:277`) — a partial sync leaves the skill self-contradictory.
+3. **Sweep C5 by SEARCH, not by list** — **every semantic occurrence in `.claude/skills/council/c5-validation-contract/SKILL.md`** — do NOT work from a hand-enumerated site list: this fork carried one that grew 2 → 6 → 11+ across review rounds before being retired, and a `grep -c cause_attribution` over that file currently returns **33** lines. The apply arc must sweep the file by search and disposition each occurrence, not tick off a list. A partial sync leaves the skill self-contradictory.
 
