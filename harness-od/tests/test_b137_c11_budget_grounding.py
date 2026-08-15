@@ -30,11 +30,20 @@ claims were the interesting ones, and a reader who only sees the survivors would
 
 **What survives, and it is sharper than the draft.**
 
+**Round 2 raised three more [P2]s, also all valid, and they hardened rather than reversed the
+findings:** the (A) check tested *presence anywhere* rather than the **effective** declaration
+(a later delta could add a number while the historical row survived — reproduced with a
+synthetic v1.42); the in-process check asserted the collector-boundary set's *cardinality*
+rather than its *identities* (swapping two cells kept the count at four while inverting which
+cells are in-process); and this arc's own rewrite had **destroyed** a cite correction landed at
+`#1362`, which is restored in the register. The first two are pinned in the tests below.
+
 **(A) §11.1 commits NO number at the team-binding cells.** Its table gives solo cells a concrete
 posture (*"default 1.0; rotation handles volume"*) and multi-tenant cells per-tenant isolation,
 but the team-binding row — covering exactly the cell B-137 prices against — defers verbatim to
 *"Persona §11.4 throughput rough order-of-magnitude open item; envelope refines downstream of
-§11.4 closure."* No delta in the chain supersedes it with a figure.
+§11.4 closure."* Resolved at the **effective** declaration: of every chain file carrying a §11.1
+team-binding row at all, the highest-versioned one carries the deferral.
 
 **(B) The deferral target is still open** — `Persona_Document_v1.md` **§11 Open items, row 4**
 (a table row, not a subsection; the draft's first pass searched for a `§11.4` heading, found
@@ -118,23 +127,46 @@ def _od_spec_chain() -> list[pathlib.Path]:
     return chain
 
 
-def test_the_team_binding_budget_is_deferred_and_no_delta_supersedes_it() -> None:
-    """**(A)** The budget B-137 would be priced against is DEFERRED, across the WHOLE chain.
+def _chain_version(path: pathlib.Path) -> tuple[int, int]:
+    """Order a chain file by its version, so "latest" means latest and not lexicographic.
+
+    `..._v1_37.md` → `(1, 37)`. The unsuffixed baseline and its ` (1)` / ` (2)` copies carry no
+    delta number and sort as `(1, 0)`.
+    """
+    m = re.search(r"_v(\d+)_(\d+)\.md$", path.name)
+    return (int(m.group(1)), int(m.group(2))) if m else (1, 0)
+
+
+def test_the_effective_team_binding_budget_is_still_the_deferral_not_a_number() -> None:
+    """**(A)** The budget B-137 would be priced against is DEFERRED — at the EFFECTIVE head.
+
+    **Out-of-family Codex round 2 [P2]:** a first version asserted only that the deferral row is
+    *present somewhere* in the chain. A later delta could add a numeric team-binding budget while
+    the historical v1.2 row survives verbatim — presence stays true, the test stays green, and
+    `B-182`'s central claim silently becomes false. Codex reproduced this with a synthetic v1.42.
+
+    So this resolves the **effective** declaration: of every chain file that carries a §11.1
+    team-binding cardinality row at all, the highest-versioned one must carry the deferral.
 
     The solo row's concreteness is the contrast that makes the team row's silence a deliberate
     deferral rather than the table simply being non-numeric.
     """
-    chain = _od_spec_chain()
-    team_row = (
+    row_prefix = "| team-binding × * | Per-cell cardinality budget"
+    deferral = (
         "| team-binding × * | Per-cell cardinality budget bounded per Persona §11.4 "
         "throughput rough order-of-magnitude open item; envelope refines downstream of "
         "§11.4 closure |"
     )
-    carriers = [p.name for p in chain if team_row in p.read_text()]
+    carriers = [p for p in _od_spec_chain() if row_prefix in p.read_text()]
     assert carriers, (
-        "§11.1's team-binding deferral row is no longer present anywhere in the OD delta "
-        "chain. If a delta replaced it with a figure, C11's objection became priceable and "
-        "B-137 step (3) must be re-argued against that number"
+        "no OD chain file carries a §11.1 team-binding cardinality row at all — the row was "
+        "removed or reworded, and B-182's (A) must be re-grounded from scratch"
+    )
+    effective = max(carriers, key=_chain_version)
+    assert deferral in effective.read_text(), (
+        f"the EFFECTIVE §11.1 team-binding row now lives at {effective.name} and is not the "
+        "deferral. A delta has superseded it — if it states a figure, C11's objection became "
+        "priceable and B-137 step (3) must be re-argued against that number"
     )
     baseline = _SUBSTRATE / "Spec_Operational_Discipline_v1_2.md"
     assert "default 1.0; rotation handles volume" in baseline.read_text(), (
@@ -231,15 +263,33 @@ def test_half_the_cells_enforce_in_process_yet_nothing_reads_the_cell_cap() -> N
     collector, so an absent reader there cannot be explained away as "an out-of-process consumer
     handles it." That explanation does hold at `BACKEND_INGESTION` cells. Hence B-182's
     disposition splits by enforcement layer instead of treating all 8 cells alike.
+
+    **Out-of-family Codex round 2 [P2]:** a first version asserted only that the in-process set
+    has FOUR members. Swapping one collector-boundary cell for one backend-ingestion cell keeps
+    the count at four while changing *which* cells are in-process — and in particular whether
+    B-137's own target cell (`team-binding × self-hosted-server`) is among them, which would
+    invert this row's scoping. The exact identities are therefore asserted, not the cardinality.
     """
-    in_process = sorted(
+    in_process = {
         f"{c.persona_tier.value}×{c.deployment_surface.value}"
         for c, b in PER_CELL_CARDINALITY_BUDGET.items()
         if b.enforcement_layer == "COLLECTOR_BOUNDARY"
+    }
+    expected = {
+        "solo-developer×local-development",
+        "solo-developer×self-hosted-server",
+        "solo-developer×managed-cloud",
+        "multi-tenant-compliance×self-hosted-server",
+    }
+    assert in_process == expected, (
+        f"the COLLECTOR_BOUNDARY cell set is now {sorted(in_process)}, not {sorted(expected)}. "
+        "B-182 scopes its in-process half to exactly these cells and must be re-scoped — and if "
+        "team-binding×self-hosted-server entered the set, B-137's own target cell became "
+        "in-process and this row's whole disposition inverts"
     )
-    assert len(in_process) == 4, (
-        f"the COLLECTOR_BOUNDARY cell set changed to {in_process}; B-182 scopes its in-process "
-        "half to exactly these cells and must be re-scoped"
+    assert PER_CELL_CARDINALITY_BUDGET[_TEAM_SELF].enforcement_layer == "BACKEND_INGESTION", (
+        "B-137's target cell now enforces at COLLECTOR_BOUNDARY — the out-of-process "
+        "explanation no longer covers it and B-182's (C) applies there directly"
     )
 
     src_files = [p for d in sorted(_REPO.glob("harness-*/src")) for p in d.rglob("*.py")]
