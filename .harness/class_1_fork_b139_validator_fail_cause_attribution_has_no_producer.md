@@ -1,0 +1,206 @@
+# Class 1 Fork — `B-139`: `validator.fail.cause_attribution` is declared always-emitted at TWO canonical surfaces (plus a derived C5 carrier), but the declared producer's own contract shape cannot carry it
+
+**Filed:** 2026-08-15 (`B-139` grounding leg — steps (1) and (2)'s probe, which the register row made mandatory before any disposition)
+**Status:** OPEN — Class 1 (architectural defect; design-phase artifact requires revision)
+**Halt target:** any arc that consumes `validator.fail.cause_attribution` as a present attribute, or that relies on the C5 FM-J rule (*"a fail-class without `cause_attribution` is FM-J"*) as an enforced invariant.
+**Routing target (canonical):** `ADR-D5` §1.10.1 bullet 2 **and** `C-CP-21` §21.5 row 2 — the two CANONICAL surfaces, per the §1.3 authority chain (canonical design artifacts live under `design-substrate/`). Secondarily `C-CP-25` §25.2 (`ValidatorResult`), if the operator elects a wire-it reading.
+**Owed synchronization (derived, NOT a back-flow target):** `.claude/skills/council/c5-validation-contract/SKILL.md` carries the same obligation at **every semantic occurrence in `.claude/skills/council/c5-validation-contract/SKILL.md`** — do NOT work from a hand-enumerated site list: this fork carried one that grew 2 → 6 → 11+ across review rounds before being retired, and a `grep -c cause_attribution` over that file currently returns **33** lines. The apply arc must sweep the file by search and disposition each occurrence, not tick off a list — the apply arc must sweep every semantic occurrence, not the two first cited (round-4 correction). This is where the FM-J rule text actually lives. It is **derived guidance downstream of the ADR**, so it does not vote on the disposition — but it MUST be synchronized once the canonical surfaces are amended, or stale skill text will keep asserting a requirement nothing produces. *(Scope corrected twice under out-of-family review: round 1 caught that the first draft omitted C5 entirely; round 2 caught that promoting it to a co-equal canonical surface inverted the authority chain.)*
+**Detection mode:** exhaustive fixed-string search over all **seven** `harness-*/src` trees (`as`, `core`, `cp`, `cxa`, `is`, `od`, `runtime`) + a read of the producer's own input shapes. No new test was authored — this fork reports an ABSENCE, and the honest witness for an absence is the search that found nothing, not a test that asserts nothing.
+
+---
+
+## §1 — What the register row asked, and what grounding answered
+
+`B-139`'s close-out made two things mandatory before any disposition: **(1)** re-verify zero
+producers at HEAD, and **(2)** decide between **(a)** wiring the emission and **(b)**
+re-declaring the condition via back-flow — pricing (a) honestly, because the row suspected
+*"the producer does not currently hold a cause to emit."*
+
+**Step (1) is executed and answered. Step (2) is PART-DONE — its probe and pricing are complete below, but its DECISION (wire vs re-declare) is deliberately NOT made here and is open for operator ratification (§4, §8).** **Step (1) — CONFIRMED, the row is not falsified.** A fixed-string
+search for `validator.fail.cause_attribution` across all seven trees —
+`harness-{as,core,cp,cxa,is,od,runtime}/src` — returns **five hits, and none is a producer**:
+
+| Hit | What it actually is |
+|---|---|
+| `harness-cp/src/harness_cp/validator_fail_taxonomy.py:144` | the **declaration** (`attribute_name=...`) |
+| `harness-cp/src/harness_cp/validator_fail_taxonomy.py:156` | a cardinality docstring |
+| `harness-od/src/harness_od/content_structure_discipline.py:158` | a name in a content-structure list |
+| `harness-od/src/harness_od/idempotency_join_dedup.py:358` | prose naming a §14.5.3 value |
+| `harness-od/src/harness_od/idempotency_join_dedup.py:375` | a comment |
+
+**A near-miss was ruled out rather than counted.** `harness-runtime/src/harness_runtime/api.py:1182`
+writes `cause_attribution=`, which matches a loose search and would falsify the row if it were
+this attribute. It is not: it constructs a `PauseStateCauseAttribution` on a
+`PauseStateAuditPayload` — the pause-state audit carrier, a different namespace entirely.
+`retry.cause_attribution` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:1321,1376,1391,1418`) is likewise a
+**different attribute** in the retry namespace, and it *does* have producers — which is
+precisely why the loose search is misleading and the fixed-string one is the sound instrument.
+
+## §2 — The defect: the declaration and the producer's contract shape are irreconcilable as written
+
+**Step (2)'s probe is decisive.** `ValidatorResult` — the operator-supplied return shape,
+`C-CP-25` §25.2, at `harness-cp/src/harness_cp/validator_framework_types.py:171-188` — carries
+exactly five fields: `outcome`, `fail_class`, `revalidation_payload`, `escalation_brief`,
+`fail_detail_hash`. **There is no cause field, and none from which a cause is derivable.**
+
+The producer site is no better supplied. `ValidatorFramework._build_span_attributes` is called
+at `harness-cp/src/harness_cp/validator_framework.py:237` and `:305` with `step`, `result`,
+`next_action`, and `burden_count` — **none of which carries a cause**. The runtime escalation
+composer (`harness-runtime/src/harness_runtime/lifecycle/validator_escalation_composer.py:143-153`)
+is the same story.
+
+So the contradiction is not "someone forgot a line." It is structural:
+
+> **Two canonical surfaces — echoed by a derived C5 carrier — declare an attribute
+> unconditionally emitted on every validator-failure event, while the contract shape the
+> declared producer returns has no member that could carry its value.**
+
+### §2.1 — Where cause values DO and DO NOT exist (verified per surface; completeness NOT claimed)
+
+| Surface | Typed carrier | Live producer |
+|---|---|---|
+| 5 F5 `secret_*` refinements | **YES** — `SecretFailClass` StrEnum, `harness-as/src/harness_as/secret_fail_class.py:33-41` (C-AS-07 §7.1) | **PARTIAL — 3 of 5, by TWO paths.** `SECRET_UNKNOWN` + `SECRET_UNAVAILABLE` via **11 AST-counted** `SecretResolutionError` constructions (8 in `harness-runtime/src/harness_runtime/config/provider_secrets.py`, 3 in `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py`, **0 in `types.py`**); `SECRET_LOCKED` via a separate `_emit_secret_fetch_span(..., fail_class=SecretFailClass.SECRET_LOCKED)` after catching `SecretAllowlistDeniedError` (`harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py:817-824`). **`SECRET_EXPIRED` and `SECRET_REVOKED`: ZERO constructions and ZERO emissions** — they appear only in the enum declaration and its own metadata table (`SECRET_EXPIRED` at `harness-as/src/harness_as/secret_fail_class.py:39` + `:98`; `SECRET_REVOKED` at `:41` + `:103`), never at a producer. |
+| `replay_semantic_divergence` (ADR-D6's ADDITION, not a base member) | **YES** — `ReplaySemanticDivergenceError.validator_fail_cause_attribution`, pinned `Literal[...]`, `harness-od/src/harness_od/idempotency_join_dedup.py:375-377` | **NO — zero AST constructor calls.** Its 3 textual `src` mentions are its `__all__` entry, its class definition, and a docstring; none is a construction. |
+| the **10 base values**, for a general validator failure | — | **NO** — nothing maps a `ValidatorResult` onto them |
+| `§21.2` staircase / retry | **NO** — `StaircaseTransition.on_cause` is `ValidatorRetryExitClass` (`harness-cp/src/harness_cp/validator_fail_transient_staircase.py:64`), its docstring saying so verbatim at `:66`: *"(not a fail-cause token)"*; `_classify_provider_exception` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:281`) returns the same class | n/a |
+
+> **The precise defect: per-surface typed causes DO exist and some are live, but no general
+> mapping takes an arbitrary validator failure onto the base alphabet — which is exactly what
+> an always-emitted declaration on EVERY validator-failure event requires.**
+
+This table is **verified per row and NOT asserted as complete** — a complete per-value
+inventory is owed at the apply arc (§8). Two earlier framings of this question were wrong and
+are recorded as contested claims in §8 so neither is quoted forward.
+
+### §2.2 — An undischarged cross-ADR obligation constrains every disposition
+
+`ADR-D6` §1.5.2 (`design-substrate/ADR-D6_v1_2.md:346-352`) extends the C5 catalog with
+`replay_semantic_divergence` and states that *"ADR-D5 v1.2 §1.10.1 ... absorbs the new value at
+the next D5 revision (forward-flagged; not blocking this revision)"*. `B-141` assigns that
+synchronization to this row
+(`.harness/b-141-validator-fail-class-cascade-2026-08-12.md:115-121`). An amendment that
+demotes D5's declaration **while leaving D6's absorb-at-next-revision instruction standing**
+would mint a fresh contradiction — the next D5 revision *is* the one this fork routes.
+
+## §3 — Why this is Class 1 and not a Phase-7 absorption
+
+Wiring it would require **either** extending `ValidatorResult` (an operator-facing contract at
+`C-CP-25` §25.2 — every operator-supplied validator in existence returns this shape) **or**
+threading cause state from the staircase/retry machinery across the seam into the validator
+framework. Both are design-substrate changes. Choosing either silently at Phase 7 is exactly
+the X-AL-3 silent-absorption failure mode, and §1.3's authority chain puts the choice above
+this workspace.
+
+## §4 — Dispositions
+
+**(A) Wire it — extend `ValidatorResult` with a cause member.** Honest cost: it changes an
+operator-facing return contract, so every existing operator validator must supply (or default)
+the new field, and the §25.2 cardinality table grows a row. It also does not, by itself, solve
+availability — the operator's validator would have to *know* the cause, which for the
+staircase-derived values it generally does not.
+
+**(B) Derive the cause and thread it to the emission site.** **Re-priced THREE times; this is the
+current pricing.** The `secret_*` arm is typed and **partly** live — `SecretFailClass` exists
+and 3 of its 5 values reach production by **two distinct paths** — `SECRET_UNKNOWN` and
+`SECRET_UNAVAILABLE` via the 11 AST-counted `SecretResolutionError` constructions, and
+`SECRET_LOCKED` via `_emit_secret_fetch_span` after a `SecretAllowlistDeniedError`
+(`harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py:817-824`) — while `SECRET_EXPIRED` and `SECRET_REVOKED`
+have **none** — so even that arm is part wiring, part
+classification, not pure wiring as round 8 stated. What is missing is a **general mapping** from an
+arbitrary validator failure onto the **10 base values**: nothing today classifies a
+`ValidatorResult` into that alphabet, and `ValidatorRetryExitClass` is a different (5-class)
+taxonomy that must not be silently conflated with it. So (B) is *part wiring, part new
+classification*, plus the CP-internal coupling from the validator framework onto
+retry/breaker state. Its honest cost sits **between** a pure wiring change and inventing a
+taxonomy from scratch — and a complete per-value inventory (owed, §8) is what would price the
+remaining share exactly.
+
+**(C) — RECOMMENDED — demote the declaration from always-emitted to conditional at BOTH
+canonical surfaces, AND synchronize the derived C5 carrier in the same arc.** **The scope was
+corrected twice under review**, and the net correction is load-bearing: the first draft named
+only ADR-D5 and C-CP-21 and would have left `.claude/skills/council/c5-validation-contract/SKILL.md:33-38` still
+stating *"Every fail-class signal carries a `cause_attribution` annotation"* and *"Emitting a
+fail-class without attribution is failure mode FM-J"* (repeated at `:234-236`) — so (C) as
+first written could NOT have made the corpus "true today", which was its entire
+justification. C5 is **derived guidance, not a canonical surface**: it does not vote on the
+disposition, but leaving it unsynchronized reproduces the defect in the carrier operators
+actually read. This is the `B-138` precedent applied to its sibling attribute: **demote, do not
+delete**. `B-138` corrected the `class` domain and demoted the permanence derivation clause
+rather than removing it, and the third §21.5 attribute was left declared-required with no
+owner precisely because that leg stopped short — which is what minted `B-139`. Demoting is
+also the only disposition that makes the corpus *true today* rather than true-after-a-build.
+
+**The choice is the operator's.** (C) is recommended because it is reversible, requires no
+operator-facing contract break, and follows a precedent this workspace already ratified; (A)
+and (B) both remain open if the cause-conditioned staircase branch is judged to need the
+attribute enforced.
+
+## §5 — The FM-J framing must be dispositioned in the same breath (step 3)
+
+`ADR-D5` §1.10.1 attaches a named failure mode to this attribute: *"a fail-class without
+`cause_attribution` is FM-J per `c5-validation-contract` SKILL.md."* With zero producers,
+**every validator failure that emits a fail-class** is FM-J by that rule. The qualifier is load-bearing and was added at review round 19: C5 defines FM-J as emitting a fail-class WITHOUT attribution, so a path that emits no fail-class at all — e.g. `ValidatorResult(outcome=REVALIDATE, fail_class=None)`, an accepted input exercised at `harness-cp/tests/test_validator_framework.py:333` — is a *different* nonconformance, not FM-J. The distinction matters to the operator: it separates class-present paths (FM-J today) from class-absent paths (a missing-class question this fork does not route). Either the rule is
+live debt (and the corpus currently describes a harness in permanent violation), or it is
+aspirational and must say so. A declared failure-mode name attached to an unwired attribute is
+the stale-carry-text class this workspace already documents — it must be answered explicitly,
+not left to the reader.
+
+## §6 — What would falsify this fork
+
+**The defect is falsified only by one of these two.** (a) **Every** required validator-failure
+path emits `validator.fail.cause_attribution` — not one path, not one carrier; the declaration
+is unconditional, so partial coverage leaves it violated. (b) The canonical requirement is
+demoted, at which point there is nothing left to violate.
+
+**These do NOT falsify it — they only re-price a disposition:** adding a cause member to
+`ValidatorResult`; wiring the replay-divergence event; giving `SECRET_EXPIRED` /
+`SECRET_REVOKED` producers; or finding one more typed carrier. Each narrows the gap for its own
+surface while every other validator-failure path still omits an attribute declared required on
+all of them.
+
+**Method note for any re-grounding:** use a FIXED-STRING search for the exact key over all
+seven `harness-*/src` trees. A loose `cause_attribution` search returns `retry.*` and
+pause-state hits and will mislead, as it did during this fork's own drafting.
+
+## §7 — Confidence tags on this fork's non-trivial claims
+
+*Vocabulary per `docs/governance/design-phase-principles.md` §10.4: `[HIGH]` / `[MODERATE]` / `[SPECULATIVE]`.*
+
+| Claim | Confidence | Basis |
+|---|---|---|
+| No producer writes `validator.fail.cause_attribution` anywhere in `harness-*/src` | `[HIGH]` | fixed-string search over all seven trees; each of the five hits classified by reading |
+| `ValidatorResult` and the `_build_span_attributes` inputs carry no cause | `[HIGH]` | direct read of `harness-cp/src/harness_cp/validator_framework_types.py:171-188` + both call sites |
+| The staircase carries `ValidatorRetryExitClass`, not a cause token | `[HIGH]` | the type annotation at `:64` and its own docstring at `:66` say so verbatim |
+| The `secret_*` arm is typed and **partly** live (3 of 5 values, via TWO producer paths) | `[HIGH]` | `SecretFailClass` enum; **11 AST-counted** `SecretResolutionError` constructions carrying `SECRET_UNKNOWN`/`SECRET_UNAVAILABLE`, plus a separate `_emit_secret_fetch_span` path for `SECRET_LOCKED`; `SECRET_EXPIRED` / `SECRET_REVOKED` have zero constructions and zero emissions (present only in the enum + its metadata table). *An earlier draft said "14" from `rg -c`, which counts matching LINES per file, not calls — corrected by AST at review round 9.* |
+| `ReplaySemanticDivergenceError` has no live constructor | `[MODERATE]` | AST inspection finds zero constructor calls (its 3 textual mentions are `__all__`, the class definition, and a docstring); a dynamic/reflective construction would not be caught by that method |
+| The per-surface inventory above is **complete** | `[SPECULATIVE]` — explicitly not claimed | it was wrong in rounds 3, 4 and 5; completeness is owed at the apply arc, not asserted here |
+| (C) is the right disposition | `[MODERATE]` | it is the cheapest, most reversible, and precedented option — but it is an operator ratification, not a finding |
+| That (C) leaves no other corpus surface asserting the always-emitted obligation | `[SPECULATIVE]` | two canonical surfaces were swept and C5 was surveyed, but no exhaustive corpus-wide search for the obligation's *paraphrases* was run — an apply-arc probe (§8.3) |
+
+## §8 — Open questions, contested claims, recommended next probes
+
+**Council is CONDITIONALLY OWED before ratification — C5 ⊥ C7/C9.** The A/B/C choice moves
+the **C5** validation contract (the FM-J rule and the attribution obligation), **C9** retry
+inputs (any new cause-classification source sits beside `ValidatorRetryExitClass` and must not
+be conflated with it), and **C7** observability semantics (a medium-cardinality open-set
+attribute on *every* validator-failure event). That is a nameable multi-domain tension, so a
+dyadic **C5 + C7** (or **C5 + C9**) convening is owed BEFORE the operator ratifies. The
+registration-era *"a probe-first pass may resolve it without convening"* is superseded in its
+grounding-first half only: grounding is DONE, and it showed the tension is **live** rather
+than dissolved. *(An intermediate reading taken mid-review said council was not owed; that
+conflated the probe settling the FACTS with the cross-domain TRADE being settled. It is not.)*
+
+**Open questions (for the operator, at ratification — after the council convening above).**
+1. Which disposition — (A), (B), or (C)? This fork recommends (C), prices all three, and does **not** decide it.
+2. Is the FM-J rule **live debt** or **aspirational**? §5 routes this and deliberately does not answer it; with zero producers, every validator failure is FM-J by the rule as written.
+3. Does the D5 amendment absorb `replay_semantic_divergence` (per ADR-D6 §1.5.2's forward flag) in the *same* revision that demotes the always-emitted claim? Doing one without the other leaves the corpus inconsistent either way.
+
+**Contested / superseded claims — recorded so ratification is not misled.**
+- The register row's premise that the cause values *"live in §21.2's staircase branches and the retry/breaker machinery"* is **DISPROVEN** (§2). This fork repeated it in its first draft.
+- This fork's own round-3 wording, *"the alphabet has no source anywhere"*, is **also wrong** and was corrected at rounds 4-5. Neither statement should be quoted forward.
+
+**Recommended next probes (for the apply arc, not blocking ratification).**
+1. **Complete the per-value inventory** — for each of the 10 base values, does any typed carrier or live producer exist? This fork verified four surfaces and explicitly declines to claim completeness.
+2. **Probe for a dynamic constructor** of `ReplaySemanticDivergenceError` (the one MEDIUM-confidence claim above) before treating that carrier as inert.
+3. **Sweep C5 by SEARCH, not by list** — **every semantic occurrence in `.claude/skills/council/c5-validation-contract/SKILL.md`** — do NOT work from a hand-enumerated site list: this fork carried one that grew 2 → 6 → 11+ across review rounds before being retired, and a `grep -c cause_attribution` over that file currently returns **33** lines. The apply arc must sweep the file by search and disposition each occurrence, not tick off a list. A partial sync leaves the skill self-contradictory.
+
