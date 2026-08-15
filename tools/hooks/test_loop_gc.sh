@@ -274,11 +274,37 @@ printf '%s' "$OUT" | grep -qF "[hygiene]" \
   && ok "S1 clause composed into the existing [hygiene] message" || bad "S1 not composed: $OUT"
 
 # ── S2) AC2: fully reconciled → clause absent; nothing else flagged → hook silent ──
+#         This case pins the SILENCE CONTRACT itself (empty stdout + exit 0), which is
+#         why it stays absence-shaped: any companion row that must be reported would
+#         make stdout non-empty and destroy the very contract under test. S2b below
+#         carries the separable half — reconciled-exclusion — as a PRESENCE-based claim,
+#         so a crashed sweep can no longer masquerade as "correctly reconciled".
 sw_reset
 : > "$SW/t-c.jsonl"; touch -t 202001010000 "$SW/t-c.jsonl"
 { sw_row "$NOW_TS" start ag-c "$SW/t-c.jsonl"; sw_row "$NOW_TS" stop ag-c "$SW/t-c.jsonl"; } > "$SREG"
 OUT=$(sw_run); RC=$?
 { [ -z "$OUT" ] && [ "$RC" -eq 0 ]; } && ok "S2 all reconciled → hook silent, exit 0" || bad "S2 rc=$RC out=$OUT"
+
+# ── S2b) AC2, LIVENESS-ANCHORED (B-180, merge-gate witness lens): S2 alone is vacuous —
+#          a sweep that crashes on a registry of purely reconciled activity emits nothing
+#          and exits 0, which is byte-identical to "correctly reconciled". The carve-out
+#          for S2 is sound only for the silence contract, NOT for the reconciled-exclusion
+#          claim, and nothing else in this file witnessed that claim against a companion.
+#          Here the SAME invocation carries a reconciled pair AND an unambiguously stale
+#          key: the count must be exactly 1 and must name the companion, which proves the
+#          sweep ran AND that the reconciled key contributed 0.
+sw_reset
+: > "$SW/t-c2.jsonl"; touch -t 202001010000 "$SW/t-c2.jsonl"
+: > "$SW/t-c2-live.jsonl"; sw_stamp "$SW/t-c2-live.jsonl" 7200   # 2h ⇒ unambiguously stale
+{ sw_row "$NOW_TS" start ag-c2 "$SW/t-c2.jsonl"; sw_row "$NOW_TS" stop ag-c2 "$SW/t-c2.jsonl"
+  sw_row "$(sw_ts 7200)" start ag-c2-live "$SW/t-c2-live.jsonl"; } > "$SREG"
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
+  && ok "S2b reconciled key contributes 0 while a stale sibling is counted" \
+  || bad "S2b expected exactly 1 (the stale sibling alone): '$OUT'"
+printf '%s' "$OUT" | grep -qF "oldest: ag-c2-live" \
+  && ok "S2b the counted key is the stale sibling, not the reconciled pair" \
+  || bad "S2b counted the WRONG key: '$OUT'"
 
 # ── S3) AC3: fresh (<30 min) unreconciled → NOT flagged (live fan-outs must not alarm) ──
 #         LIVENESS-ANCHORED (B-180): asserting only `[ -z "$OUT" ]` would pass on ANY
