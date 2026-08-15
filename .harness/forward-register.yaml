@@ -61,11 +61,11 @@ snapshot:
   total: 180
   open: 1
   design_substrate_gated: 1
-  registered_finding: 37
+  registered_finding: 36
   operator_gated: 0
   held: 2
-  closed: 139
-  identity_digest: 01a7f7fe0e0bddaf
+  closed: 140
+  identity_digest: 034ce761d4297b75
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9170,7 +9170,7 @@ items:
 - id: B-166
   title: Wall-clock deadline witness test_ow_proceed_deadline_stashed_child_completed_not_cancelled
     flakes only under full-suite interference, risking a masked genuine red in the B-71 impl leg
-  status: registered_finding
+  status: closed
   summary: 'A wall-clock deadline witness that fails intermittently in FULL-SUITE runs and never in
     isolation. Observed 4 of ~12 full-suite runs on 2026-08-13, on an idle machine as well as a loaded
     one, and -- decisively -- against branch diffs containing ZERO Python files (PRs #1336 and #1337),
@@ -9184,7 +9184,7 @@ items:
     RUN AT REGISTRATION: 25 consecutive isolated runs of this test, 25 passed / 0 failed -- which does
     NOT clear the test, it CONFIRMS the flake is interference-dependent and therefore invisible to any
     per-test or per-file re-run used to ''verify'' it.'
-  close_out: 'WHY THIS IS REGISTERED RATHER THAN WAVED OFF: the cost is not the lost minutes, it is
+  close_out: 'CLOSED AT #1353 -- STEP 1 DISCHARGED BY EXECUTION AND THE PREMISE IS REFUTED; NO REPAIR WARRANTED. The premise was a near-boundary race (worker-0 stash must land before the 0.3s barrier deadline, a race the scheduler usually wins). MEASURED, NOT ARGUED: a deadline sweep driving the module own helpers, 5 runs per rung, deviates only at deadline <= 0.0005s versus the pinned 0.3s -- roughly 600x headroom. The deviation SHAPE is exactly as predicted (worker-0 flips to timed_out, giving {0: timed_out, 1: timed_out}), so the mechanism DIRECTION is confirmed while its quantitative premise is not: scheduler noise cannot cover a 600x gap. Consistent with that, 25 full-suite runs produced 0 failures -- most of them 2-at-a-time via a second driver initially misdiagnosed as dead, making them a LOADED venue rather than the idle baseline first claimed -- as did 20 isolated runs under 24 CPU spinners on 8 cores. A SECOND FACTUAL ERROR, in the claim the row called decisive: ZERO Python files (PRs #1336 and #1337) is FALSE for #1336, which changed harness-od/src/harness_od/tail_keep_span_processor.py and added harness-runtime/tests/test_b164b_fanout_orphaned_child_span_repro.py; only #1337 is Python-free, so no arc under review can have caused it does not hold. WHY NO REPAIR: widening is forbidden by this row own step 2, and synchronization machinery for a race needing a 600x stall would re-arm the flake class B-177 just paid to remove. The masking risk has also passed -- the B-71 impl leg landed at 0af632f4 and neither it nor 2c9094c6 touched the barrier/stash/deadline lines; the test file is byte-unchanged since 2026-08-12. NAMED OPEN RESIDUAL (B-104/B-133 precedent): the 2026-08-13 reds were real observations and remain UNATTRIBUTED; this row no longer explains them and #1336 own Python changes lead. Do NOT re-file as a barrier-race row without a reproduction whose captured terminal map contradicts the 600x measurement. ORIGINAL FILING FOLLOWS. WHY THIS IS REGISTERED RATHER THAN WAVED OFF: the cost is not the lost minutes, it is
     MASKING. The next arc (the B-71 impl leg, U-CP-102 + U-RT-155) is a real code arc touching the fan-out
     driver, and a session that has learned to call this red ''the known flake'' will wave away a GENUINE
     regression in exactly the subsystem this test guards. STEP 1 -- REPRODUCE IT AS A FULL-SUITE PHENOMENON,
@@ -9208,6 +9208,7 @@ items:
     barrier deadline vs worker-0's stash) and a named falsifier (a full-suite reproduction whose deviation
     is NOT the predicted worker-0 cut). There is no cross-domain tension to convene over -- step 1 is
     execution, not deliberation.
+  pr: '#1353'
 - id: B-167
   title: leg-selfcheck's count check compares claims against each other rather than against a derived
     ground-truth count, so a mirror in an untouched file is not checked
