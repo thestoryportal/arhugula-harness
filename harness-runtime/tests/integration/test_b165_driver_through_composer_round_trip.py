@@ -68,6 +68,7 @@ from harness_cp.workflow_driver_types import (
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
+from harness_runtime.bootstrap import run_bootstrap
 from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionResult,
     AskUserQuestionSurface,
@@ -77,6 +78,8 @@ from harness_runtime.lifecycle.sync_dispatcher_facade import (
     materialize_sync_dispatcher_facade,
 )
 from opentelemetry.sdk.trace import TracerProvider
+
+from .conftest import WORKLOAD, build_config
 
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-b165-round-trip")
 _GATE = HITLPlacementKind.PRE_ACTION
@@ -360,3 +363,65 @@ async def test_the_composer_receives_a_real_binding_from_the_driver() -> None:
     )
     assert binding.persona_tier is PersonaTier.SOLO_DEVELOPER
     assert binding.engine_class is EngineClass.SAVE_POINT_CHECKPOINT
+
+
+# ---------------------------------------------------------------------------
+# Stage-5 wiring — the regression review named, closed at its own layer
+# ---------------------------------------------------------------------------
+
+
+# mutation-probe: in `bootstrap/stage_5_loop_init.py`, stop installing the PRE_ACTION
+# `RuntimeHITLGateComposer` into the INFERENCE_STEP chain (or replace it with the bare
+# dispatcher), so `ctx.step_dispatchers` no longer resolves to a gate composer.
+@pytest.mark.asyncio
+async def test_stage_5_installs_the_hitl_gate_composer_into_the_dispatcher_registry(
+    tmp_path: Any,
+    patched_runtime: dict[str, Any],
+) -> None:
+    """Closes the named regression — *"if stage-5 wiring stops installing
+    `RuntimeHITLGateComposer` this test still passes"* — at the layer that owns it.
+
+    **Why this is a separate test rather than a deeper version of the round trip.**
+    Driving a HITL gate through the UNMODIFIED stage-5 registry is not achievable: stage
+    5 binds the MCP-backed elicitation surface
+    (`materialize_mcp_backed_ask_user_question_surface_stage`,
+    `stage_5_loop_init.py:243`), which no automated test can answer. Doubling it would
+    replace the very component whose installation is under test, so a "shipped registry"
+    gate-drive is self-defeating as stated. What IS checkable, and is the actual content
+    of the regression, is that stage 5 installs a gate composer at all — asserted here
+    against the real `run_bootstrap`-produced `ctx.step_dispatchers`.
+
+    So the claim is split by what each layer can honestly prove: stage 5 INSTALLS the
+    composer (here), and the composer COLLIDES when the real driver feeds it (the round
+    trip above). Neither is quoted as the other.
+    """
+    _ = patched_runtime
+    # WORKLOAD is the workload_class conftest's path bindings are keyed to; any other
+    # cell fails bootstrap at stage IS on an unresolved PathClass.
+    ctx = await run_bootstrap(build_config(tmp_path), workload_class=WORKLOAD)
+
+    registry = ctx.step_dispatchers
+    assert registry is not None, "stage 5 must bind ctx.step_dispatchers"
+
+    dispatcher = registry.lookup(StepKind.INFERENCE_STEP)
+    assert dispatcher is not None, "INFERENCE_STEP must resolve to a dispatcher"
+
+    # Walk the production wrapper chain (retry/fallback wraps the gate composer, which
+    # wraps the bare dispatcher) looking for the gate. Walking rather than asserting the
+    # outermost type keeps this robust to a wrapper being added, while still failing if
+    # the composer is dropped entirely.
+    seen: list[str] = []
+    node: Any = dispatcher
+    found = False
+    for _ in range(10):
+        seen.append(type(node).__name__)
+        if isinstance(node, RuntimeHITLGateComposer):
+            found = True
+            break
+        node = getattr(node, "inner", None)
+        if node is None:
+            break
+
+    assert found, (
+        f"stage 5 must install a RuntimeHITLGateComposer in the INFERENCE_STEP chain; walked {seen}"
+    )
