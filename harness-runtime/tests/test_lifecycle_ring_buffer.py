@@ -522,21 +522,78 @@ def test_ring_buffer_carries_retention_days_from_config(tmp_path: Path) -> None:
     assert ring.retention_days == 7  # CollectorConfig default
 
 
+# Best-of-N attempt count for the AC #5 budget witness (B-176). Five is set by
+# the measured stall rate below: ~5% of attempts stall under an oversubscribed
+# CPU, so all five stalling is ~3e-7 — while a genuine regression is slow on
+# every attempt and still fails.
+_AC5_BUDGET_ATTEMPTS = 5
+
+
+# mutation-probe: at `harness_od/sqlite_span_store.py:159`, replace the
+# `conn.executemany(_INSERT_SQL, tuples)` + single `conn.commit()` with a
+# durability-hardened per-row loop — `conn.execute("PRAGMA fullfsync=ON")`
+# then `conn.execute(...)` + `conn.commit()` per row. VERIFIED KILL: all 5
+# attempts measured ~2.0s against the 100ms budget, so `min()` fails too.
+#
+# MEASURED NON-KILL, recorded because the annotation above would otherwise
+# overstate this witness (B-177): the per-row commit WITHOUT `fullfsync` runs
+# 33-57ms and PASSES. The budget is 100ms against ~2.5ms of real work, so it
+# only discriminates catastrophic (>=40x) regressions, not moderate (~16x)
+# ones. That slack is a property of AC #5's chosen number, not of best-of-N —
+# a single-sample assertion had exactly the same blind spot.
 async def test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5(
     tmp_path: Path,
 ) -> None:
-    daemon = _daemon(tmp_path)
-    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
-    _seed(daemon, [_span_row(f"s{i}") for i in range(100)])
-    conn = initialize_span_store(tmp_path / "spans.db")
-    try:
-        start_ns = time.perf_counter_ns()
-        inserted = await ring.flush_to_sqlite(conn)
-        elapsed_ns = time.perf_counter_ns() - start_ns
-    finally:
-        conn.close()
-    assert inserted == 100
-    assert elapsed_ns < 100_000_000, f"flush took {elapsed_ns}ns; AC #5 budget 100ms"
+    """AC #5 — a 100-span batch flush clears the 100ms budget.
+
+    Measured best-of-N rather than a single timed run (B-176). AC #5 is a
+    CAPABILITY claim — the flush *can* clear a 100-span batch inside the
+    budget — so the fastest attempt is the estimator least contaminated by
+    load the code under test does not control. A single timed run measures
+    the machine as much as the code: this same unchanged flush was measured
+    at 2.51ms median / 4.54ms max idle, but stalled to 139.92ms on 3 of 60
+    attempts under an oversubscribed CPU, because the timed interval spans
+    two `asyncio.to_thread` hops whose scheduling latency is the runner's,
+    not the flush path's. The median barely moved (5.96ms) while the tail
+    crossed the budget — a scheduler stall, not slow work.
+
+    Raising the threshold instead would buy silence and re-arm the same
+    failure higher up; deleting the assertion would retire a stated
+    performance contract with no witness. Both are ruled out by B-176.
+
+    This does soften the claim — from "every invocation is fast" to "the
+    fastest of 5 is fast" — so it catches a CONSTANT regression (both probed
+    mutations are constant) but not one that stalls only a fraction of
+    calls. That is the deliberate trade for an assertion whose single-sample
+    form failed ~5% of the time under load on unchanged code.
+
+    The two per-attempt disciplines are a pair, and neither is defensive.
+    A FRESH database per attempt is what makes every attempt a real
+    attempt: `insert_spans` is INSERT-OR-IGNORE over a fixed `s0..s99` id
+    set, so a shared database would dedup attempts 2..N to zero inserts and
+    time a no-op. The per-attempt `inserted == 100` is what makes that
+    violation LOUD rather than silent — it fires on attempt 1 instead of
+    letting a vacuous `min()` stand — and it independently catches a
+    row-dropping regression, which would otherwise register as *faster*.
+    """
+    attempts_ns: list[int] = []
+    for attempt in range(_AC5_BUDGET_ATTEMPTS):
+        daemon = _daemon(tmp_path)
+        ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+        _seed(daemon, [_span_row(f"s{i}") for i in range(100)])
+        conn = initialize_span_store(tmp_path / f"spans_ac5_{attempt}.db")
+        try:
+            start_ns = time.perf_counter_ns()
+            inserted = await ring.flush_to_sqlite(conn)
+            elapsed_ns = time.perf_counter_ns() - start_ns
+        finally:
+            conn.close()
+        assert inserted == 100, f"attempt {attempt} inserted {inserted} rows, not 100"
+        attempts_ns.append(elapsed_ns)
+    assert min(attempts_ns) < 100_000_000, (
+        f"fastest of {_AC5_BUDGET_ATTEMPTS} flushes took {min(attempts_ns)}ns; "
+        f"AC #5 budget 100ms (all attempts ns: {attempts_ns})"
+    )
 
 
 # ---------------------------------------------------------------------------
