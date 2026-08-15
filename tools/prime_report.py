@@ -84,6 +84,12 @@ ID_SORT = re.compile(r"^([A-Za-z-]*?)-?(\d+)$")
 # refname). Strip what could close the fence or read as instructions. Applied in brief(),
 # so every rendered string goes through it.
 UNSAFE_IN_PROMPT = re.compile(r"[`\x00-\x1f\x7f]")
+# Non-terminal values that can appear in a rollup entry's `state`/`conclusion`. These
+# mean "still running", NOT "finished with a non-SUCCESS outcome" -- scoring them as
+# terminal would report red CI for a run that is merely in progress.
+NON_TERMINAL_CHECK_STATES = frozenset(
+    {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
+)
 
 
 class UnavailableError(Exception):
@@ -141,11 +147,17 @@ def check_outcome(check: dict) -> str | None:
     (StatusContext) reports `state` and carries no `conclusion` at all. Reading only
     `conclusion` scores every legacy status as forever-pending -- which both hides a
     terminal FAILURE from the bad count and stops a green one from ever counting.
+
+    `state` also carries NON-terminal values (a running StatusContext is `PENDING`).
+    Those must map to None like any unfinished check: returning the literal would make
+    the SUCCESS-only rule score an in-progress check as a FAILURE, reporting red CI for
+    a run that is merely still going.
     """
     for field in ("conclusion", "state"):
         value = check.get(field)
         if value:
-            return str(value).upper()
+            upper = str(value).upper()
+            return None if upper in NON_TERMINAL_CHECK_STATES else upper
     return None
 
 
@@ -324,12 +336,22 @@ def section_estimate(
             closed_ts.append(ts)
 
     # Attribute each measured closure to the session window containing it.
+    #
+    # A single-commit session spans zero minutes -- e.g. a squash merge isolated by more
+    # than the gap on both sides. Its real duration is UNKNOWN, not zero: counting it
+    # would enter "rows closed in 0 minutes" into the mean and drag the rate toward 0.
+    # Unmeasurable is not free, so those sessions are excluded and counted separately.
     measured: list[tuple[float, int]] = []  # (session span minutes, rows closed)
+    unmeasured_sessions = 0
     for session in sessions:
         newest, oldest = session[0].ts, session[-1].ts
         rows = sum(1 for ts in closed_ts if oldest <= ts <= newest)
-        if rows:
-            measured.append(((newest - oldest) / 60, rows))
+        if not rows:
+            continue
+        if newest == oldest:
+            unmeasured_sessions += 1
+            continue
+        measured.append(((newest - oldest) / 60, rows))
     window = measured[:RATE_WINDOW]
 
     actionable = sum(counts.get(status, 0) for status, _, _, inc in BUCKETS if inc)
@@ -371,6 +393,11 @@ def section_estimate(
             "than the history floor, cited no PR, or beyond --limit; each is outside the "
             "rate window and does not move the estimate"
         )
+    if unmeasured_sessions:
+        caveats.append(
+            f"{unmeasured_sessions} closure-bearing session(s) span a single commit, so "
+            "their duration is unknown (not zero) and they are excluded from the rate"
+        )
     caveats.append("span-based: counts elapsed session time, not effort")
     out.append("  caveat    " + "; ".join(caveats))
 
@@ -407,17 +434,22 @@ def _flag_worktree(out: list[str], flags: list[str]) -> None:
         return
     dirty = [x for x in porcelain if not x.startswith("??")]
     untracked = [x for x in porcelain if x.startswith("??")]
+    # Paths go through brief() like every other rendered string: git permits backticks
+    # in a filename, so a raw path slice is a fence-breaker the choke point would miss.
     if dirty:
-        flags.append(f"{len(dirty)} uncommitted change(s): " + ", ".join(x[3:] for x in dirty[:4]))
+        flags.append(
+            f"{len(dirty)} uncommitted change(s): " + ", ".join(brief(x[3:], 60) for x in dirty[:4])
+        )
     if untracked:
         flags.append(
-            f"{len(untracked)} untracked path(s): " + ", ".join(x[3:] for x in untracked[:5])
+            f"{len(untracked)} untracked path(s): "
+            + ", ".join(brief(x[3:], 60) for x in untracked[:5])
         )
     if not porcelain:
         out.append("  worktree  clean")
 
 
-def _flag_branches(flags: list[str]) -> None:
+def _flag_branches(flags: list[str], open_pr_list: list[dict] | None = None) -> None:
     """Branch hygiene is a REMOTE-list discipline, so read the remote, not local refs.
 
     `.claude/skills/ship-pr/SKILL.md` §"Branch hygiene close-out" is explicit that the
@@ -449,13 +481,17 @@ def _flag_branches(flags: list[str]) -> None:
             sha, ref = line.split("refs/heads/", 1)
             remote[ref.strip()] = sha.strip()
 
-    # Exempt exactly ONE branch, because the rule permits exactly one: the current CI
-    # branch. Prefer the name when HEAD is attached. When detached, fall back to the ref
-    # at HEAD -- but only if it is UNAMBIGUOUS: if several refs share the SHA (a copied
-    # branch beside its stale predecessor) there is no deterministic way to tell which
-    # is current, so exempt none and let them be reported. Over-reporting is the safe
-    # direction for a hygiene flag; silently exempting a stale branch is not.
+    # What the rule targets is a STALE branch. A branch heading an open PR is in-flight
+    # by definition, so it is exempt -- and that is also what makes the multi-worktree
+    # case correct: when /prime runs from the main checkout while the PR branch lives in
+    # its own worktree, this checkout's name is "main" and neither the name nor the SHA
+    # identifies the CI branch. The open-PR head does.
     exempt = {"main"}
+    exempt.update(str(pr["headRefName"]) for pr in (open_pr_list or []) if pr.get("headRefName"))
+    # Then this checkout's own branch: by name when attached, else by the ref at HEAD --
+    # but only when UNAMBIGUOUS. If several refs share the SHA (a copied branch beside
+    # its stale predecessor) there is no deterministic way to tell which is current, so
+    # exempt none. Over-reporting a hygiene flag is safe; silently exempting is not.
     if current in remote:
         exempt.add(current)
     else:
@@ -466,7 +502,7 @@ def _flag_branches(flags: list[str]) -> None:
     stale = sorted(name for name in remote if name not in exempt)
     if stale:
         flags.append(
-            f"{len(stale)} remote branch(es) beyond main + the current CI branch -- "
+            f"{len(stale)} remote branch(es) beyond main + in-flight PR branches -- "
             f"CLAUDE.md s10 requires none before a merge action "
             f"(e.g. {', '.join(brief(b, 40) for b in stale[:3])})"
         )
@@ -549,9 +585,15 @@ def _flag_roadmap(out: list[str], flags: list[str]) -> None:
         out.append("  roadmap   at the s12.2.1 fixed point (expected one-commit lag)")
 
 
-def _flag_prs(out: list[str], flags: list[str]) -> None:
+def open_prs() -> tuple[list[dict] | None, str | None]:
+    """Open PRs, fetched ONCE and shared. Returns (prs, error) -- never a silent empty.
+
+    `None` for prs means the query could not run, which is different from an empty
+    list. Both consumers must be able to tell those apart: a branch is not provably
+    stale just because the PR list was unreachable.
+    """
     try:
-        prs = json.loads(
+        return json.loads(
             run(
                 "gh",
                 "pr",
@@ -563,12 +605,17 @@ def _flag_prs(out: list[str], flags: list[str]) -> None:
                 "--limit",
                 "200",
                 "--json",
-                "number,title,isDraft,mergeable,statusCheckRollup",
+                "number,title,isDraft,mergeable,headRefName,statusCheckRollup",
                 timeout=90,
             )
-        )
+        ), None
     except (UnavailableError, json.JSONDecodeError) as exc:
-        flags.append(f"open PRs UNAVAILABLE: {exc}")
+        return None, str(exc)
+
+
+def _flag_prs(out: list[str], flags: list[str], prs: list[dict] | None, error: str | None) -> None:
+    if prs is None:
+        flags.append(f"open PRs UNAVAILABLE: {error}")
         return
     if not prs:
         out.append("  open PRs  none")
@@ -592,12 +639,13 @@ def _flag_prs(out: list[str], flags: list[str]) -> None:
 def section_git(out: list[str]) -> None:
     out.append("GIT ACTIONS")
     flags: list[str] = []
+    prs, pr_error = open_prs()  # fetched once, shared by the branch + PR flags
     _flag_worktree(out, flags)
-    _flag_branches(flags)
+    _flag_branches(flags, prs)
     _flag_worktrees(flags)
     _flag_sync(flags)
     _flag_roadmap(out, flags)
-    _flag_prs(out, flags)
+    _flag_prs(out, flags, prs, pr_error)
     for flag in flags:
         out.append(f"  FLAG      {flag}")
     if not flags:

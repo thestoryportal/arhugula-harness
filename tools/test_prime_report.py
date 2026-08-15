@@ -9,7 +9,6 @@ dropped real closures out of the throughput window.
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -205,10 +204,9 @@ def test_pr_checks_fail_closed_on_a_non_success_terminal_conclusion(monkeypatch)
             ],
         }
     ]
-    monkeypatch.setattr(prime_report, "run", lambda *a, **k: json.dumps(payload))
     out: list[str] = []
     flags: list[str] = []
-    prime_report._flag_prs(out, flags)
+    prime_report._flag_prs(out, flags, payload, None)
     assert len(flags) == 1
     assert "1ok/2bad/1pending" in flags[0]
 
@@ -314,6 +312,84 @@ def test_branch_flag_exempts_none_when_several_refs_share_the_head_sha(monkeypat
     assert "2 remote branch(es)" in flags[0]
 
 
+def test_check_outcome_maps_a_running_legacy_status_to_pending() -> None:
+    """Codex r5 [P2]: a REGRESSION from the r4 fix.
+
+    A running StatusContext reports `state: PENDING`; returning that literal made the
+    SUCCESS-only rule score an in-progress check as a FAILURE, i.e. red CI for a run
+    that was merely still going.
+    """
+    assert prime_report.check_outcome({"state": "PENDING"}) is None
+    assert prime_report.check_outcome({"state": "EXPECTED"}) is None
+    assert prime_report.check_outcome({"conclusion": "IN_PROGRESS"}) is None
+
+
+def test_pr_checks_count_a_running_legacy_status_as_pending() -> None:
+    payload = [
+        {
+            "number": 9,
+            "title": "t",
+            "mergeable": "MERGEABLE",
+            "statusCheckRollup": [{"state": "SUCCESS"}, {"state": "PENDING"}],
+        }
+    ]
+    out: list[str] = []
+    flags: list[str] = []
+    prime_report._flag_prs(out, flags, payload, None)
+    assert "1ok/0bad/1pending" in flags[0]
+
+
+def test_worktree_paths_are_sanitized_before_the_report(monkeypatch) -> None:
+    """Codex r5 [P2]: status paths were interpolated raw, bypassing brief().
+
+    Git permits backticks in a filename, so the r3 "one choke point" claim had a hole.
+    """
+    monkeypatch.setattr(prime_report, "run", lambda *a, **k: " M src/```evil.py\n")
+    out: list[str] = []
+    flags: list[str] = []
+    prime_report._flag_worktree(out, flags)
+    assert flags and "`" not in flags[0]
+
+
+def test_branch_flag_exempts_an_open_prs_head_branch(monkeypatch) -> None:
+    """Codex r5 [P2]: from the main checkout, neither name nor SHA finds the CI branch.
+
+    Running /prime from the orchestrator checkout while the PR branch lives in its own
+    worktree left `current == "main"`, so the valid in-flight branch read as stale.
+    """
+    listing = "sha_main\trefs/heads/main\nsha_pr\trefs/heads/feat/elsewhere\n"
+
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        if "ls-remote" in args:
+            return listing
+        if "--abbrev-ref" in args:
+            return "main\n"
+        return "sha_main\n"
+
+    monkeypatch.setattr(prime_report, "run", fake_run)
+    flags: list[str] = []
+    prime_report._flag_branches(flags, [{"headRefName": "feat/elsewhere"}])
+    assert flags == []
+
+
+def test_branch_flag_reports_stale_when_the_pr_list_is_unavailable(monkeypatch) -> None:
+    """An unreachable PR list must not silently exempt -- absence of proof is not proof."""
+    listing = "sha_main\trefs/heads/main\nsha_old\trefs/heads/feat/old\n"
+
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        if "ls-remote" in args:
+            return listing
+        if "--abbrev-ref" in args:
+            return "main\n"
+        return "sha_main\n"
+
+    monkeypatch.setattr(prime_report, "run", fake_run)
+    flags: list[str] = []
+    prime_report._flag_branches(flags, None)
+    assert len(flags) == 1
+    assert "feat/old" in flags[0]
+
+
 def test_check_outcome_reads_a_legacy_status_context_state() -> None:
     """Codex r4 [P2]: StatusContext carries `state`, not `conclusion`.
 
@@ -336,10 +412,9 @@ def test_pr_checks_count_a_legacy_failure_as_bad(monkeypatch) -> None:
             "statusCheckRollup": [{"state": "SUCCESS"}, {"state": "FAILURE"}],
         }
     ]
-    monkeypatch.setattr(prime_report, "run", lambda *a, **k: json.dumps(payload))
     out: list[str] = []
     flags: list[str] = []
-    prime_report._flag_prs(out, flags)
+    prime_report._flag_prs(out, flags, payload, None)
     assert "1ok/1bad/0pending" in flags[0]
 
 
