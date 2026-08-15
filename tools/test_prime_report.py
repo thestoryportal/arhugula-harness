@@ -488,6 +488,58 @@ def test_run_can_return_output_from_a_nonzero_exit_when_check_is_disabled() -> N
     assert out == ""
 
 
+def test_load_register_refuses_to_project_a_contract_violating_register() -> None:
+    """Codex r6 [P2]: a corrupt register would publish plausible, WRONG totals.
+
+    Keying by id silently drops a duplicate, and /prime tells its caller not to
+    cross-check — so this has to fail loudly here or not at all.
+    """
+    duplicated = (
+        "snapshot:\n"
+        "  total: 2\n"
+        "items:\n"
+        "- id: B-1\n"
+        "  title: one\n"
+        "  status: closed\n"
+        "  summary: s\n"
+        "  heading: '### B-1 one'\n"
+        "- id: B-1\n"
+        "  title: two\n"
+        "  status: closed\n"
+        "  summary: s\n"
+        "  heading: '### B-1 two'\n"
+    )
+    try:
+        prime_report.load_register(duplicated, "synthetic", enforce_contract=True)
+    except prime_report.UnavailableError as exc:
+        assert "contract" in str(exc)
+    else:
+        raise AssertionError("expected UnavailableError on a duplicate id")
+
+
+def test_load_register_does_not_enforce_the_contract_on_history() -> None:
+    """A historical revision may predate a rule; that must not refuse today's report."""
+    duplicated = (
+        "items:\n"
+        "- id: B-1\n"
+        "  title: one\n"
+        "  status: closed\n"
+        "- id: B-1\n"
+        "  title: two\n"
+        "  status: closed\n"
+    )
+    rows, _ = prime_report.load_register(duplicated, "historical")
+    assert list(rows) == ["B-1"]
+
+
+def test_the_live_register_satisfies_the_contract() -> None:
+    """The report this repo actually emits must not be running on a waived check."""
+    rows, _ = prime_report.load_register(
+        prime_report.REGISTER.read_text(), "live", enforce_contract=True
+    )
+    assert len(rows) > 100
+
+
 def test_load_register_raises_unavailable_on_a_shape_it_cannot_read() -> None:
     try:
         prime_report.load_register("just: a scalar", "synthetic")

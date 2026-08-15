@@ -168,12 +168,40 @@ def id_key(item_id: str) -> tuple[str, int]:
     return (match.group(1), int(match.group(2)))
 
 
-def load_register(text: str, origin: str) -> tuple[dict[str, dict], dict]:
+def load_register(
+    text: str, origin: str, *, enforce_contract: bool = False
+) -> tuple[dict[str, dict], dict]:
+    """Parse the register. With `enforce_contract`, refuse to project an invalid one.
+
+    Keying by id silently DROPS a duplicate, and a stale snapshot can disagree with the
+    rows -- either way the report would publish plausible, wrong totals. `/prime` runs
+    against the working-tree register and tells its caller not to cross-check, so a
+    corrupt source has to fail loudly here or not at all.
+
+    The contract is `tools/forward_register.py`'s own `validate` (the same one CI's
+    `--check` gate uses), not a reimplementation. It is enforced only for the CURRENT
+    register: a historical revision loaded for the session delta may predate a rule, and
+    that is not a reason to refuse today's report -- the delta reports UNAVAILABLE.
+    """
     try:
         doc = yaml.safe_load(text)
-        return {it["id"]: it for it in doc["items"]}, doc.get("snapshot", {}) or {}
+        rows = {it["id"]: it for it in doc["items"]}
+        snapshot = doc.get("snapshot", {}) or {}
     except (yaml.YAMLError, KeyError, TypeError) as exc:
         raise UnavailableError(f"{origin} did not parse as the register schema: {exc}") from exc
+
+    if enforce_contract:
+        try:
+            import forward_register
+        except ImportError as exc:  # pragma: no cover - import guard
+            raise UnavailableError(f"register contract unverifiable: {exc}") from exc
+        violations = forward_register.validate(doc)
+        if violations:
+            raise UnavailableError(
+                f"{origin} violates the register contract "
+                f"({len(violations)}): {brief('; '.join(violations), 200)}"
+            )
+    return rows, snapshot
 
 
 def git_commits(limit: int) -> list[Commit]:
@@ -658,7 +686,7 @@ def section_git(out: list[str]) -> None:
 def build_report(gap_hours: float, limit: int) -> str:
     commits = git_commits(limit)
     sessions = cluster_sessions(commits, gap_hours)
-    current, snapshot = load_register(REGISTER.read_text(), REGISTER_REL)
+    current, snapshot = load_register(REGISTER.read_text(), REGISTER_REL, enforce_contract=True)
 
     counts: dict[str, int] = {}
     for item in current.values():
