@@ -113,9 +113,16 @@ def _exported(sampler: object, *, envelope_wrapped: bool) -> list[str]:
 
     `envelope_wrapped` places BOTH the name-backed member and the event-carrier inside a
     `workflow.envelope` root — the shape the driver really produces
-    (`workflow_driver.py:3305` opens the envelope, members are emitted under it). When
+    (`workflow_driver.py:3458` opens the envelope, members are emitted under it). When
     False the carrier is its own trace root, which is the out-of-envelope shape C1 is NOT
     claimed to cover.
+
+    **Cite drift, grounded 2026-08-15.** B-137's register row cites this site as
+    `workflow_driver.py:3305`; at HEAD `:3305` is skill-emitter code and the envelope
+    really opens at `:3458` (`start_as_current_span("workflow.envelope")`, under the
+    C-OD-25 §25.1 comment block). The mechanism the row describes is unchanged — only the
+    line moved — but the row's cite is stale and is corrected in the register alongside
+    this module.
     """
     exporter = InMemorySpanExporter()
     provider = TracerProvider(sampler=sampler)  # type: ignore[arg-type]
