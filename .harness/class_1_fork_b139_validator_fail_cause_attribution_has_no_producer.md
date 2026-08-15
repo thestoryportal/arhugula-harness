@@ -1,9 +1,10 @@
-# Class 1 Fork — `B-139`: `validator.fail.cause_attribution` is declared always-emitted at THREE canonical surfaces, but the declared producer's own contract shape cannot carry it
+# Class 1 Fork — `B-139`: `validator.fail.cause_attribution` is declared always-emitted at TWO canonical surfaces (plus a derived C5 carrier), but the declared producer's own contract shape cannot carry it
 
 **Filed:** 2026-08-15 (`B-139` grounding leg — steps (1) and (2)'s probe, which the register row made mandatory before any disposition)
 **Status:** OPEN — Class 1 (architectural defect; design-phase artifact requires revision)
 **Halt target:** any arc that consumes `validator.fail.cause_attribution` as a present attribute, or that relies on the C5 FM-J rule (*"a fail-class without `cause_attribution` is FM-J"*) as an enforced invariant.
-**Routing target:** `ADR-D5` §1.10.1 bullet 2, `C-CP-21` §21.5 row 2, **and** `.claude/skills/council/c5-validation-contract/SKILL.md` §33-38 + §234-236 — the THREE surfaces that jointly declare the attribute always-emitted. Secondarily `C-CP-25` §25.2 (`ValidatorResult`), if the operator elects a wire-it reading. **The C5 surface was MISSED in this fork's first draft and added at out-of-family review round 1** — it is load-bearing, because it is where the FM-J rule actually lives.
+**Routing target (canonical):** `ADR-D5` §1.10.1 bullet 2 **and** `C-CP-21` §21.5 row 2 — the two CANONICAL surfaces, per the §1.3 authority chain (canonical design artifacts live under `design-substrate/`). Secondarily `C-CP-25` §25.2 (`ValidatorResult`), if the operator elects a wire-it reading.
+**Owed synchronization (derived, NOT a back-flow target):** `.claude/skills/council/c5-validation-contract/SKILL.md` §33-38 + §234-236 carries the same obligation and is where the FM-J rule text actually lives. It is **derived guidance downstream of the ADR**, so it does not vote on the disposition — but it MUST be synchronized once the canonical surfaces are amended, or stale skill text will keep asserting a requirement nothing produces. *(Scope corrected twice under out-of-family review: round 1 caught that the first draft omitted C5 entirely; round 2 caught that promoting it to a co-equal canonical surface inverted the authority chain.)*
 **Detection mode:** exhaustive fixed-string search over all **seven** `harness-*/src` trees (`as`, `core`, `cp`, `cxa`, `is`, `od`, `runtime`) + a read of the producer's own input shapes. No new test was authored — this fork reports an ABSENCE, and the honest witness for an absence is the search that found nothing, not a test that asserts nothing.
 
 ---
@@ -51,9 +52,9 @@ at `validator_framework.py:237` and `:305` with `step`, `result`, `next_action`,
 
 So the contradiction is not "someone forgot a line." It is structural:
 
-> **Three canonical surfaces declare an attribute unconditionally emitted on every
-> validator-failure event, while the contract shape the declared producer returns has no
-> member that could carry its value.**
+> **Two canonical surfaces — echoed by a derived C5 carrier — declare an attribute
+> unconditionally emitted on every validator-failure event, while the contract shape the
+> declared producer returns has no member that could carry its value.**
 
 The cause values the declaration enumerates (10 base + 5 F5 `secret_*` refinements) live in
 `§21.2`'s staircase branches and in the retry/breaker machinery — **on the other side of the
@@ -82,14 +83,16 @@ creates a new CP-internal dependency from the validator framework onto retry/bre
 and the §21.2 branches would have to expose a stable cause value. This is the reading that
 best preserves the *declaration's* intent, at the price of new coupling.
 
-**(C) — RECOMMENDED — demote the declaration from always-emitted to conditional, at ALL
-THREE surfaces.** **This scope was CORRECTED at out-of-family review round 1**, and the
-correction is load-bearing: the first draft named only ADR-D5 and C-CP-21, but
-`c5-validation-contract/SKILL.md:33-38` independently states *"Every fail-class signal
-carries a `cause_attribution` annotation"* and *"Emitting a fail-class without attribution is
-failure mode FM-J"*, and `:234-236` repeats the obligation. Demoting only the first two would
-leave C5 still requiring what nothing produces — so (C) as first written could NOT have made
-the corpus "true today", which was its entire justification. This is the `B-138` precedent applied to its sibling attribute: **demote, do not
+**(C) — RECOMMENDED — demote the declaration from always-emitted to conditional at BOTH
+canonical surfaces, AND synchronize the derived C5 carrier in the same arc.** **The scope was
+corrected twice under review**, and the net correction is load-bearing: the first draft named
+only ADR-D5 and C-CP-21 and would have left `c5-validation-contract/SKILL.md:33-38` still
+stating *"Every fail-class signal carries a `cause_attribution` annotation"* and *"Emitting a
+fail-class without attribution is failure mode FM-J"* (repeated at `:234-236`) — so (C) as
+first written could NOT have made the corpus "true today", which was its entire
+justification. C5 is **derived guidance, not a canonical surface**: it does not vote on the
+disposition, but leaving it unsynchronized reproduces the defect in the carrier operators
+actually read. This is the `B-138` precedent applied to its sibling attribute: **demote, do not
 delete**. `B-138` corrected the `class` domain and demoted the permanence derivation clause
 rather than removing it, and the third §21.5 attribute was left declared-required with no
 owner precisely because that leg stopped short — which is what minted `B-139`. Demoting is
