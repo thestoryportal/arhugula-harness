@@ -353,20 +353,24 @@ def test_the_add_only_fold_preserves_both_same_position_placements() -> None:
 # ---------------------------------------------------------------------------
 
 
-# mutation-probe: make `harness_cp.workflow_driver_types.compose_branch_child_context`
-# strip `hitl_placements` from the context it returns.
+# mutation-probe: in `hitl_gate_composer.dispatch`, drop the `step_context` arm of the
+# placement lookup — i.e. make it read `getattr(step, "hitl_placements", ())` ONLY,
+# instead of `getattr(step_context, ...) or getattr(step, ...)`.
 #
-# NAMED PRECISELY, because the obvious phrasing would be a lie. This test calls
-# `compose_branch_child_context` DIRECTLY and performs its own `model_copy`; it never
-# invokes `workflow_driver.execute_workflow`. So it CANNOT detect the production fan-out
-# site (`workflow_driver.py:8411`/`:8593`) ceasing to carry the tuple — deleting those
-# leaves this test green. That production claim belongs to
-# `harness-cp/tests/test_b165_production_feed_duplicate_placements.py`, which drives the
-# real driver; this test only pins the composer's behaviour on a production-SHAPED
-# context. An annotation worded as "the branch-child composition's model_copy update"
-# would read as the production site and silently miscredit this test as a
-# production-mutation detector. (Found by the merge gate's test-witness lens — the
-# FOURTH annotation in this arc to name a site its test could not kill on.)
+# NAMED THIS WAY BECAUSE IT IS WHAT THIS TEST CAN ACTUALLY DETECT, and finding that out
+# took two wrong answers. The obvious annotation — mutate `compose_branch_child_context`
+# — is UNDETECTABLE here: this test's own `model_copy` below unconditionally overwrites
+# `hitl_placements` and `pre_dispatch_escalation_basis` after calling it, so a mutation
+# to that function is masked before either assertion reads the result. Worse, the probe
+# driver initially reported that mutation as KILLED; it was a SyntaxError producing a
+# collection failure, a vacuous kill indistinguishable from detection until the driver
+# was taught to refuse syntax-breaking mutations. (Found by the merge gate's
+# test-witness lens — the SIXTH annotation in this arc to name a site its test could not
+# kill on, and the second whose "kill" was an artifact.)
+#
+# What this test uniquely pins is the PRODUCER SURFACE: the step it passes is PLAIN, so
+# the gate can only fire if the composer reads placements off `step_context`. Deleting
+# that arm makes both placements invisible and the gate never fires.
 @pytest.mark.asyncio
 async def test_the_production_branch_composition_hands_the_composer_the_colliding_shape() -> None:
     """Closes the gap between "the composer collides IF fed this" and "production
