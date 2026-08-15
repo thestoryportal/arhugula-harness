@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 178
+  total: 180
   open: 1
   design_substrate_gated: 1
-  registered_finding: 37
+  registered_finding: 38
   operator_gated: 0
   held: 2
-  closed: 137
-  identity_digest: 1a62e801339ce936
+  closed: 138
+  identity_digest: 4ed27d8a50cd0452
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9290,7 +9290,7 @@ items:
 - id: B-169
   title: 'test_loop_gc.sh S16 STALE-boundary pin flakes under load: the quiet-side fixture is one minute
     from the boundary and real subprocess work runs between the two assertions'
-  status: registered_finding
+  status: closed
   summary: 'A wall-clock boundary assertion with one minute of headroom. tools/hooks/test_loop_gc.sh
     case S16 pins the unreconciled-subagent STALE boundary from both sides: it stamps a 29-minute fixture
     (expected QUIET), asserts, then stamps a 31-minute fixture and asserts exactly "1 unreconciled subagent".
@@ -9304,26 +9304,50 @@ items:
     (fan-out deadline witness). NOT caused by the arc that observed it: PR #1338 touched ZERO files
     under tools/hooks/ and the same job passed 18/18 on its head 6aeaeee3 minutes earlier; the test
     last changed at #1296.'
-  close_out: 'REGISTERED RATHER THAN WAVED OFF, which is the whole point: this arc shipped B-166 specifically
-    to stop a session dismissing a red as ''the known flake'', so observing a NEW same-sha-differential
-    flake and not filing it would contradict the discipline in the same breath. STEP 1 -- confirm the
-    mechanism by execution rather than by reading: run S16 under artificial load (or with a coarse clock)
-    and capture whether the deviation is the 29-minute fixture being counted, as predicted. If it is
-    something else the mechanism above is FALSIFIED and this row must be rewritten, not patched. STEP
-    2 -- fix the HEADROOM, not the threshold. The candidate repair is to stamp the quiet-side fixture
-    further from the boundary (e.g. 20 minutes rather than 29) while keeping a separate near-boundary
-    case that does NOT straddle intervening subprocess work; widening or removing the boundary pin is
-    explicitly wrong, because S16 exists to stop the STALE constant drifting silently and its own comment
-    says so (''Without this pair any STALE in (~2s, 2h) passed the suite''). STEP 3 -- whatever lands
-    must still fail if the STALE constant moves; mutation-probe it per PD-8, since a loosened pin is
-    a green test that witnesses nothing. FALSIFIER: a demonstration that the two assertions cannot straddle
-    enough wall-clock to cross the boundary, in which case the observed red has another cause and this
-    row closes as misattributed.'
+  close_out: 'CLOSED AT #1350. STEP 1 DISCHARGED BY EXECUTION and the mechanism CONFIRMED -- with this row''s
+    own headroom figure corrected in the process. The budget was never ''one minute'': it is a SAWTOOTH
+    between ~0s and 60s, because `touch -t` takes MINUTE granularity (`date -v-29M +%Y%m%d%H%M` truncates
+    seconds to :00), so the quiet-side fixture''s real age is uniform in [29m00s, 29m59s], decided purely
+    by the wall-clock phase the suite happens to reach S16 at. Measured against the real hook: phase :00
+    -> 59.29s of headroom, phase :30 -> 29.80s, phase :58 -> 1.74s, phase :59 -> 0.70s. POSITIVE CONTROL:
+    replaying S16''s exact logic at phase :59 under 12 CPU spinners reproduced the red, and the deviation
+    was the PREDICTED one -- the 29-minute fixture was ALSO counted, both assertions failing, with ''[hygiene]
+    2 unreconciled subagent(s) (oldest: s16stale, 31m).'', the same shape seen on main at be081e9d. The
+    identical run idle PASSED, which is why per-test re-runs never caught it. Mechanism NOT falsified. STEP
+    2 FIXED THE HEADROOM, NOT THE THRESHOLD, and both pins STAY at 29/31 -- deliberately NOT the candidate
+    repair this row registered (moving the quiet side to ~20 minutes), because that buys headroom by UN-PINNING
+    the constant and leaves any STALE in (20m, 31m) undetected, the non-discriminating-witness failure B-143''s
+    close-out already names. Two compounding leaks were closed instead: (a) a new `sw_stamp` helper sets
+    an EXACT mtime via os.utime, killing the 0-59s truncation sawtooth; (b) the quiet side is RE-STAMPED
+    immediately before the assertion that re-evaluates it, so every hook invocation sees a fixture that
+    is exactly 29m old. Measured: 0.48s of the 60s budget spent at phase :59 under 24 spinners -- a ~125x
+    margin, phase-INDEPENDENT. A FIRST VERSION OF (b) SPLIT the two fixtures onto separate registries and
+    was REJECTED in self-review: it bought the same headroom but quietly DROPPED a witness -- the second
+    assertion''s value is that it reads exactly 1 WHILE A FRESH SIBLING IS ALSO PRESENT, which pins the
+    per-key rule that a stale entry must not drag its fresh sibling into the count. Both fixtures therefore
+    stay in ONE registry exactly as before this arc, and the mutation probe shows that difference is real
+    rather than theoretical. STEP 3 -- the pins are provably still discriminating: mutating STALE in loop-gc.sh
+    to 20*60 reds BOTH S16 assertions (2 failed -- where the rejected split shape red only one) and to 40*60
+    reds ONLY the 31-minute side (1 failed); restored from a cp backup, never git checkout; loop-gc.sh diff
+    empty after). SCOPE SWEEP: S16''s -29M/-31M pair is the ONLY near-boundary relative stamp in the file
+    -- the other relative stamps are -2H against the same 30-minute boundary (90 minutes of slack, truncation
+    immaterial) and the rest are absolute year-2020 dates, so no sibling site is owed the same repair. VENUE
+    GROUNDED, correcting a wrong first reading of my own: a sweep for a NAMED CI step running this suite
+    found none and nearly produced a ''CI never runs this'' claim. It does -- tools/codex-parity-check.sh:20
+    loops over `tools/hooks/test_*.sh` under `set -euo pipefail`, wired at .github/workflows/ci.yml:79 (the
+    `run:` line; :78 is the step''s `name:`) as a blocking step -- so this row''s ''main CI'' attribution
+    is CORRECT, reached through a glob rather than a named invocation. That hunt also surfaced B-179 (the
+    documented local gate `just check` omits this lane). VERIFICATION: suite 74 passed / 0 failed, identical
+    to main''s own baseline of 74 measured by a differential run of HEAD''s version (this row''s ''73/73''
+    predates #1347-#1349); all 23 shell suites in the codex-parity glob rc=0; `just check` green at 7939
+    passed.'
   council: No. Mechanism is named, the falsifier is executable, and the repair is a test-hygiene change
     with no contract surface. Same disposition as B-166.
   heading: '### B-169 · `test_loop_gc.sh` S16 STALE-boundary pin flakes on a loaded runner — a 29-minute
     fixture sits ONE minute from the 30-minute boundary *(observed on `main` at `be081e9d`, 2026-08-14;
     same commit passed on rerun)*'
+  pr: '#1350'
+
 - id: B-170
   title: 'Arc-metrics ledger — per-arc wall-clock capture for efficacy tracking'
   status: closed
@@ -9505,3 +9529,88 @@ items:
     sub-mechanism *(observed RED on CI at `58c9b90b` during PR #1347; mechanism REPRODUCED by positive
     control, 2026-08-14)*'
   pr: '#1348'
+- id: B-179
+  title: Gate guidance across BOTH runners names `just check`, which never runs the hook shell suites; only
+    the .agents/ skill mirrors name `just codex-check`, so Codex's own guidance contradicts itself
+  status: registered_finding
+  summary: 'The gate that the workflow docs name does not execute the tests it is trusted to cover, and
+    the exposure spans BOTH runners rather than one. justfile:47 defines `check: ... test`, and `test` (justfile:23-24)
+    is `uv run pytest -m ''not e2e''` -- pytest ONLY. The hook and statusline SHELL suites are run exclusively
+    by tools/codex-parity-check.sh:20 (`for test_script in tools/hooks/test_*.sh tools/statusline/test_*.sh`),
+    which sits in justfile:66 `codex-check` and in CI at .github/workflows/ci.yml:79 -- but NOT in `check`.
+    WEAK CARRIERS (name `just check`): .claude/skills/roadmap-continue/SKILL.md:31 outright; .claude/skills/ship-pr/SKILL.md:14
+    says `just check` plus ''the relevant test suites'', a discretionary hedge that never names the shell
+    suites; and AGENTS.md:45 outright -- which is a CODEX carrier, not a Claude one, since AGENTS.md:1-3
+    declares itself ''the authoritative compact projection of the project rules'' FOR CODEX. CORRECT CARRIERS
+    (name `just codex-check`): .agents/skills/roadmap-continue/SKILL.md:37 and .agents/skills/ship-pr/SKILL.md:17.
+    THE SHARPENED FINDING: Codex guidance is INTERNALLY INCONSISTENT -- its skill mirrors prescribe the
+    strong gate while its own root projection prescribes the weak one -- so a Codex session is exposed depending
+    on which carrier it follows, and the Claude side is uniformly weak. SCOPE CORRECTED TWICE BY OUT-OF-FAMILY
+    REVIEW: round 1 showed the .agents/ skill mirrors are already right (the first filing had not named
+    a tree at all); round 2 showed the resulting ''Claude-side-ONLY'' framing was ALSO wrong, because AGENTS.md
+    is Codex''s authoritative projection. GROUNDED, NOT HYPOTHETICAL: in the B-169 arc `just check` went
+    green (7939 passed) on a branch whose ONLY change was tools/hooks/test_loop_gc.sh; that file was exercised
+    only because the arc separately ran the shell-suite glob by hand. Same family as the ''a gate cannot
+    tell empty from unlooked'' discipline. Exposure is LOCAL-ONLY -- CI does run the glob -- so this delays
+    discovery to CI rather than losing it.'
+  close_out: 'NOT fixed inside the B-169 arc: changing the primary gate''s composition (or the guidance
+    that selects it) is a scope expansion with its own blast radius -- `just check` is invoked by skills,
+    hooks and operator habit, and codex-parity-check adds a ~3-minute pytest lane plus 23 shell suites to
+    what is currently a ~4.5-minute run. STEP 1 -- decide the shape: (a) add `codex-parity-check` to `check`,
+    paying the full cost on every invocation; (b) add a narrower `hook-suites` recipe running only the shell
+    globs and put THAT in `check`, leaving the codex pytest lane where it is; or (c) align the three weak
+    carriers (.claude/skills/roadmap-continue:31, .claude/skills/ship-pr:14, AGENTS.md:45) with the .agents/
+    skill mirrors that already prescribe `just codex-check`. (c) IS THE RECOMMENDATION: the .agents/ skill
+    tree already runs exactly this fix, making (c) a proven docs-only change with no build-tooling risk
+    -- and it additionally resolves the internal contradiction inside the Codex projection, which (a) and
+    (b) would leave standing. (b) remains the fallback if the full codex-check cost proves too heavy, buying
+    the shell-suite coverage alone at ~90s measured. STEP 2 -- whichever lands, verify BY EXECUTION that
+    a deliberately reddened hook suite fails the gate the guidance names; a change that does not actually
+    propagate the non-zero exit is the same did-not-look failure wearing a new name. FALSIFIER: evidence
+    that some always-on path (a git hook, a session hook, a pre-commit) already runs the shell suites locally
+    on either runner, in which case the exposure is only documentary and this row closes as over-stated.'
+  council: No. The gap is grounded by file:line and the repair is a build-tooling composition choice with
+    three enumerated options and a named recommendation. There is no cross-domain tension to convene over
+    -- step 1 is an operator-visible cost/coverage trade, not a design fork.
+  heading: '### B-179 · Gate guidance on BOTH runners names `just check`, which never runs the hook shell
+    suites — only the `.agents/` skill mirrors name `just codex-check`, so Codex''s own guidance contradicts
+    itself *(surfaced while grounding `B-169`''s CI venue; scope corrected by codex rounds 1 and 2, 2026-08-15)*'
+- id: B-180
+  title: Absence-based shell assertions in test_loop_gc.sh cannot distinguish a genuinely quiet hook from
+    a hook that produced no output at all
+  status: registered_finding
+  summary: 'tools/hooks/test_loop_gc.sh S16''s first assertion is `printf ''%s'' "$OUT" | grep -q "unreconciled"
+    && bad ... || ok ...` -- it PASSES whenever the substring is absent, FOR ANY REASON. `sw_ctx` pipes
+    the hook through `jq -r ... 2>/dev/null` and the exit status is discarded by command substitution, so
+    a crashed hook, malformed JSON, or an empty stdout all yield OUT='''' and the assertion reports ok.
+    This is not hypothetical for THIS hook specifically: loop-gc.sh:114-118 states the sweep is deliberately
+    ''failure-invisible'' -- ''any python failure yields no clause on stdout ... and this hook still exits
+    0'' -- so total silence is an ENGINEERED, reachable state rather than a remote crash scenario. The paired
+    second assertion is presence-based and correctly FAILS on the same empty input, so the two halves are
+    asymmetric: a regression that silences the sweep entirely reds the 31-min pin but is reported as a clean
+    PASS by the 29-min pin. PRE-EXISTING AND UNCHANGED BY #1350: both assertion bodies are byte-identical
+    before and after that arc, which only altered fixture stamping. A second, narrower observation from
+    the same lens: the presence-based greps in this file are UNANCHORED, so `grep -q "1 unreconciled subagent"`
+    would also match ''21 unreconciled subagent(s)'' -- not live in S16, whose two-row fixture bounds the
+    count to {0,1,2}, but latent in S1/S5/S6/S7 which share the form.'
+  close_out: 'REGISTERED RATHER THAN PATCHED INSIDE #1350, on the same rule that arc applied to B-179: it
+    is a pre-existing weakness in a test the arc happened to touch, not a defect the arc introduced, and
+    the witness lens that found it explicitly judged it out of scope for the STALE-boundary repair. STEP
+    1 -- decide the assertion shape. The candidate is a POSITIVE CONTROL: assert the hook produced a well-formed
+    envelope at all (e.g. that `sw_run` exited 0 and its stdout parsed as JSON) BEFORE asserting the clause
+    is absent, so ''quiet'' and ''dead'' become distinguishable. Note the tension to resolve first: loop-gc.sh''s
+    failure-invisibility is DELIBERATE and load-bearing for production (SessionStart must never be blocked
+    by a sweep bug), so the test must assert the envelope without requiring the hook to become fail-loud
+    -- these are different surfaces and conflating them would re-litigate a ratified design choice. STEP
+    2 -- the same absence-based form appears in other cases in this file; sweep them and fix the class rather
+    than the instance, but only after step 1 settles the shape. STEP 3 -- mutation-probe it: break the sweep
+    so it emits nothing and confirm the repaired assertion REDS, since an absence-check that still passes
+    on silence is precisely the witness this row exists to remove. FALSIFIER: a demonstration that `sw_ctx`
+    cannot in fact yield an empty string for a broken sweep (e.g. jq erroring in a way that aborts the case
+    under `set -e`), in which case the silence path is unreachable and this row closes as over-stated.'
+  council: No. The mechanism is grounded by file:line, the repair is a test-hygiene change, and the one
+    real tension (production failure-invisibility vs test observability) is nameable and resolvable without
+    cross-domain deliberation -- the test can assert the envelope without changing the hook.
+  heading: '### B-180 · S16''s quiet-side assertion is ABSENCE-based, so a crashed or silent hook reports
+    a PASS — and `loop-gc.sh` is deliberately failure-invisible, which makes silence a reachable state *(found
+    by the merge-gate witness lens during `B-169`, 2026-08-15)*'
