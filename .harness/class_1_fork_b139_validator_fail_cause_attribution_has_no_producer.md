@@ -16,7 +16,7 @@ producers at HEAD, and **(2)** decide between **(a)** wiring the emission and **
 re-declaring the condition via back-flow — pricing (a) honestly, because the row suspected
 *"the producer does not currently hold a cause to emit."*
 
-Both are now executed. **Step (1) — CONFIRMED, the row is not falsified.** A fixed-string
+**Step (1) is executed and answered. Step (2) is PART-DONE — its probe and pricing are complete below, but its DECISION (wire vs re-declare) is deliberately NOT made here and is open for operator ratification (§4, §8).** **Step (1) — CONFIRMED, the row is not falsified.** A fixed-string
 search for `validator.fail.cause_attribution` across all seven trees —
 `harness-{as,core,cp,cxa,is,od,runtime}/src` — returns **five hits, and none is a producer**:
 
