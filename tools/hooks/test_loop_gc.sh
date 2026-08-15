@@ -266,7 +266,7 @@ sw_reset
 : > "$SW/t-b.jsonl"; touch -t 202006010000 "$SW/t-b.jsonl"
 { sw_row "$NOW_TS" start ag-a "$SW/t-a.jsonl"; sw_row "$NOW_TS" start ag-b "$SW/t-b.jsonl"; } > "$SREG"
 OUT=$(sw_ctx)
-printf '%s' "$OUT" | grep -qF "2 unreconciled subagent(s)" \
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])2 unreconciled subagent\\(s\\)" \
   && ok "S1 two stale unreconciled keys → clause with count" || bad "S1 clause: $OUT"
 printf '%s' "$OUT" | grep -qF "oldest: ag-a" \
   && ok "S1 clause names the oldest key" || bad "S1 oldest: $OUT"
@@ -313,7 +313,7 @@ sw_reset
 : > "$SW/t-f.jsonl"; touch -t 202001010000 "$SW/t-f.jsonl"
 { sw_row "$NOW_TS" start ag-f "$SW/t-f.jsonl"; printf '{"ts":"%s","event":"star' "$NOW_TS"; } > "$SREG"
 OUT=$(sw_ctx)
-printf '%s' "$OUT" | grep -qF "1 unreconciled subagent(s)" \
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent\\(s\\)" \
   && ok "S5 torn tail line skipped; other keys still counted" || bad "S5 sweep aborted: $OUT"
 [ "$(sw_rows)" = "1" ] && ok "S5 malformed line dropped by the prune rewrite" || bad "S5 rows=$(sw_rows): $(cat "$SREG")"
 
@@ -322,7 +322,7 @@ sw_reset
 : > "$SW/t-h.jsonl"; touch -t 202001010000 "$SW/t-h.jsonl"
 { sw_row "$NOW_TS" start ag-h "$SW/t-h.jsonl"; sw_row "$NOW_TS" stop_blocked ag-h "$SW/t-h.jsonl"; } > "$SREG"
 OUT=$(sw_ctx)
-printf '%s' "$OUT" | grep -qF "1 unreconciled subagent(s)" \
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent\\(s\\)" \
   && ok "S6 stop_blocked does not reconcile (still flagged)" || bad "S6 stop_blocked wrongly reconciled: $OUT"
 
 # ── S7) AC7: PER-KEY counting — three fan-out siblings sharing one fallback transcript
@@ -334,7 +334,7 @@ sw_reset
   sw_row "$NOW_TS" start "" "$SW/t-parent.jsonl"
   sw_row "$NOW_TS" stop  "" "$SW/t-parent.jsonl"; } > "$SREG"
 OUT=$(sw_ctx)
-printf '%s' "$OUT" | grep -qF "2 unreconciled subagent(s)" \
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])2 unreconciled subagent\\(s\\)" \
   && ok "S7 per-key counting: 3 starts − 1 stop = 2 (siblings not zeroed)" || bad "S7 count: $OUT"
 printf '%s' "$OUT" | grep -qF "oldest: $SW/t-parent.jsonl" \
   && ok "S7 fallback key is the transcript path when agent_id is empty" || bad "S7 key: $OUT"
@@ -344,7 +344,7 @@ printf '%s' "$OUT" | grep -qF "oldest: $SW/t-parent.jsonl" \
 sw_reset
 { sw_row "$NOW_TS" start ag-gone "$SW/never-existed.jsonl"; } > "$SREG"
 OUT=$(sw_ctx)
-printf '%s' "$OUT" | grep -qF "1 unreconciled subagent(s)" \
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent\\(s\\)" \
   && ok "S7b missing transcript file counts as stale" || bad "S7b missing transcript not flagged: $OUT"
 
 # ── S7c) A key with NO recorded transcript at all is a different case from S7b's
@@ -381,7 +381,7 @@ kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
   || bad "S8 SessionStart blocked ${ELAPSED}s on the lock"
 [ "$(shasum "$SREG" | awk '{print $1}')" = "$REG_SHA_BEFORE" ] \
   && ok "S8 prune skipped this tick (registry byte-identical)" || bad "S8 pruned without the lock"
-printf '%s' "$OUT" | grep -qF "2 unreconciled subagent(s)" \
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])2 unreconciled subagent\\(s\\)" \
   && ok "S8 sweep clause still produced (the read needs no lock)" || bad "S8 clause lost under a held lock: $OUT"
 
 # ── S9) Lock witness (inherited #1200 gate debt): concurrent APPENDS × the prune's
@@ -472,7 +472,7 @@ sw_row "$(sw_ts 700000)" start oldkey12 /tmp/gone12.jsonl >> "$SREG"   # forces 
 OUT=$(sw_ctx)
 # 2 = s12agent (2h, stale) + oldkey12 (8d, transcript gone → stale); the schema-invalid
 # row contributes nothing and, critically, does not crash the sweep to silence.
-printf '%s' "$OUT" | grep -q "2 unreconciled subagent" \
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])2 unreconciled subagent" \
   && ok "S12 sweep survives a schema-invalid row and still counts valid keys" \
   || bad "S12 sweep crashed or miscounted: '$OUT'"
 jq -e 'select(.agent_id==[1])' "$SREG" >/dev/null 2>&1 \
@@ -488,7 +488,7 @@ sw_row "$(sw_ts 700000)" start '' "$T13" >> "$SREG"    # 8d — outside horizon
 sw_row "$(sw_ts 520000)" stop  '' "$T13" >> "$SREG"    # 6d — inside horizon
 sw_row "$(sw_ts 7200)"   start '' "$T13" >> "$SREG"    # 2h — stale, unreconciled
 OUT=$(sw_ctx)
-printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
   && ok "S13 straddling key keeps balance: fresh start reported, not masked" \
   || bad "S13 surplus stop masked the unreconciled start: '$OUT'"
 [ "$(sw_rows)" = "3" ] && ok "S13 whole-key rule retained the straddling history" \
@@ -535,7 +535,7 @@ OUT=$(jq -r '.hookSpecificOutput.additionalContext // ""' "$SW/s14.out" 2>/dev/n
 # The count is the sole live discriminator: the clause names only the OLDEST key
 # (oldkey14, transcript-missing → age inf), so s14agent's name can never appear and a
 # name-grep would be a dead assertion (gate lens-3). Pre-read mutant reports 2.
-printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
   && ok "S14 locked snapshot used: reconciled agent not counted, real key still reported" \
   || bad "S14 stale pre-read counted the reconciled agent (or lost the real key): '$OUT'"
 
@@ -564,9 +564,32 @@ printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
 #        Deliberately NOT fixed by moving the quiet side to ~20min either: that buys
 #        headroom by un-pinning the constant, leaving any STALE in (20m, 31m) undetected —
 #        the non-discriminating-witness failure B-143's close-out already names.
+#        LIVENESS-ANCHORED QUIET SIDE (B-180). The quiet-side pin is ABSENCE-based, so
+#        on its own it passes for ANY reason the substring is missing -- including a
+#        sweep that emitted nothing at all. That is not hypothetical here: loop-gc.sh
+#        :114-118 makes the sweep DELIBERATELY failure-invisible ("any python failure
+#        yields no clause on stdout ... and this hook still exits 0"), so total silence
+#        is an ENGINEERED, reachable state. An envelope/JSON check cannot separate the
+#        two either -- S2 pins that a fully reconciled registry legitimately prints
+#        NOTHING and exits 0, so empty is a CORRECT output, not a broken one.
+#        So prove the sweep can still SPEAK before trusting its silence: with an
+#        unambiguously stale 2h companion present the sweep must report exactly `1`,
+#        which in ONE assertion establishes (a) the sweep is alive and (b) the 29-min
+#        key is NOT being counted. Only then is the absence claim meaningful.
+#        The hook is left untouched: its failure-invisibility is deliberate and
+#        load-bearing for production (SessionStart must never be blocked by a sweep
+#        bug); this is a test-observability fix, not a fail-loud conversion.
 sw_reset
 T16A="$SW/t16a.jsonl"; : > "$T16A"; sw_stamp "$T16A" 1740
 sw_row "$(sw_ts 1740)" start s16fresh "$T16A" >> "$SREG"
+T16P="$SW/t16probe.jsonl"; : > "$T16P"; sw_stamp "$T16P" 7200   # 2h -- unambiguously stale
+sw_row "$(sw_ts 7200)" start s16probe "$T16P" >> "$SREG"
+OUT=$(sw_ctx)
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
+  && ok "S16 liveness: the sweep speaks, and counts the 29-min key as NOT stale" \
+  || bad "S16 liveness probe: expected exactly 1 (the 2h key alone), got: '$OUT'"
+grep -v '"agent_id":"s16probe"' "$SREG" > "$SREG.b180" && mv "$SREG.b180" "$SREG"
+sw_stamp "$T16A" 1740   # the liveness hook run re-aged it; restore before the quiet claim
 OUT=$(sw_ctx)
 printf '%s' "$OUT" | grep -q "unreconciled" \
   && bad "S16 29-min agent flagged (STALE boundary drifted low): '$OUT'" \
@@ -575,7 +598,7 @@ T16B="$SW/t16b.jsonl"; : > "$T16B"; sw_stamp "$T16B" 1860
 sw_row "$(sw_ts 1860)" start s16stale "$T16B" >> "$SREG"
 sw_stamp "$T16A" 1740   # the quiet side must still be 29m old at THIS assertion too
 OUT=$(sw_ctx)
-printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
   && ok "S16 31-min unreconciled is flagged" \
   || bad "S16 31-min agent missed (STALE boundary drifted high): '$OUT'"
 
@@ -601,7 +624,7 @@ T15="$SW/t15.jsonl"; : > "$T15"; touch -t "$(date -v-2H +%Y%m%d%H%M 2>/dev/null 
 sw_row "$(sw_ts 10800)" stop  '' "$T15" >> "$SREG"   # surplus stop (its start was skipped)
 sw_row "$(sw_ts 7200)"  start '' "$T15" >> "$SREG"   # later sibling; died; stale >30min
 OUT=$(sw_ctx)
-printf '%s' "$OUT" | grep -q "1 unreconciled subagent" \
+printf '%s' "$OUT" | grep -qE "(^|[^0-9])1 unreconciled subagent" \
   && ok "S15 surplus stop does not mask the later start" \
   || bad "S15 masked by banked stop credit: '$OUT'"
 
