@@ -77,7 +77,7 @@ fourth time:
 
 | Surface | Typed carrier | Live producer |
 |---|---|---|
-| 5 F5 `secret_*` refinements | **YES** — `SecretFailClass` StrEnum, `harness-as/src/harness_as/secret_fail_class.py:33-41` (C-AS-07 §7.1) | **PARTIAL — 3 of 5.** `SecretResolutionError` is constructed **11×** (AST-counted): 8× in `harness-runtime/src/harness_runtime/config/provider_secrets.py`, 3× in `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py`, **0 in `types.py`**. Only `SECRET_UNKNOWN`, `SECRET_UNAVAILABLE` and `SECRET_LOCKED` are referenced outside the enum module; **`SECRET_EXPIRED` and `SECRET_REVOKED` have NO production reference at all.** |
+| 5 F5 `secret_*` refinements | **YES** — `SecretFailClass` StrEnum, `harness-as/src/harness_as/secret_fail_class.py:33-41` (C-AS-07 §7.1) | **PARTIAL — 3 of 5.** `SecretResolutionError` is constructed **11×** (AST-counted): 8× in `harness-runtime/src/harness_runtime/config/provider_secrets.py`, 3× in `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py`, **0 in `types.py`**. Those 11 constructions carry only `SECRET_UNKNOWN` and `SECRET_UNAVAILABLE`. `SECRET_LOCKED` reaches production by a **separate path** — `_emit_secret_fetch_span(..., fail_class=SecretFailClass.SECRET_LOCKED)` after catching `SecretAllowlistDeniedError`, at `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py:817-824`. **`SECRET_EXPIRED` and `SECRET_REVOKED` have NO production reference at all.** So the arm has two distinct producer paths covering 3 of 5 values. |
 | `replay_semantic_divergence` (ADR-D6's ADDITION, not one of the base set) | **YES** — `ReplaySemanticDivergenceError.validator_fail_cause_attribution`, pinned `Literal[...]`, `harness-od/src/harness_od/idempotency_join_dedup.py:375-377` | **NO** — the only occurrence in `src` is its own definition |
 | the **10 base values**, for a general validator failure | — | **NO** — nothing maps a `ValidatorResult` onto them |
 | `§21.2` staircase / retry | **NO** — `StaircaseTransition.on_cause` is `ValidatorRetryExitClass` (`harness-cp/src/harness_cp/validator_fail_transient_staircase.py:64`), and its docstring says so at `:66`: *"(not a fail-cause token)"*; `_classify_provider_exception` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:281`) returns the same class | n/a |
@@ -120,9 +120,11 @@ staircase-derived values it generally does not.
 
 **(B) Derive the cause and thread it to the emission site.** **Re-priced THREE times; this is the
 current pricing.** The `secret_*` arm is typed and **partly** live — `SecretFailClass` exists
-and 3 of its 5 values (`SECRET_UNKNOWN`, `SECRET_UNAVAILABLE`, `SECRET_LOCKED`) have
-production references across 11 AST-counted `SecretResolutionError` constructions, while
-`SECRET_EXPIRED` and `SECRET_REVOKED` have **none** — so even that arm is part wiring, part
+and 3 of its 5 values reach production by **two distinct paths** — `SECRET_UNKNOWN` and
+`SECRET_UNAVAILABLE` via the 11 AST-counted `SecretResolutionError` constructions, and
+`SECRET_LOCKED` via `_emit_secret_fetch_span` after a `SecretAllowlistDeniedError`
+(`runtime_tool_dispatcher.py:817-824`) — while `SECRET_EXPIRED` and `SECRET_REVOKED`
+have **none** — so even that arm is part wiring, part
 classification, not pure wiring as round 8 stated. What is missing is a **general mapping** from an
 arbitrary validator failure onto the **10 base values**: nothing today classifies a
 `ValidatorResult` into that alphabet, and `ValidatorRetryExitClass` is a different (5-class)
@@ -181,7 +183,7 @@ wiring change.
 | No producer writes `validator.fail.cause_attribution` anywhere in `harness-*/src` | **HIGH** | fixed-string search over all seven trees; each of the five hits classified by reading |
 | `ValidatorResult` and the `_build_span_attributes` inputs carry no cause | **HIGH** | direct read of `harness-cp/src/harness_cp/validator_framework_types.py:171-188` + both call sites |
 | The staircase carries `ValidatorRetryExitClass`, not a cause token | **HIGH** | the type annotation at `:64` and its own docstring at `:66` say so verbatim |
-| The `secret_*` arm is typed and **partly** live (3 of 5 values) | **HIGH** | `SecretFailClass` enum + **11 AST-counted** constructions; per-value reference check shows `SECRET_EXPIRED` / `SECRET_REVOKED` unreferenced. *An earlier draft said "14" from `rg -c`, which counts matching LINES per file, not calls — corrected by AST at review round 9.* |
+| The `secret_*` arm is typed and **partly** live (3 of 5 values, via TWO producer paths) | **HIGH** | `SecretFailClass` enum; **11 AST-counted** `SecretResolutionError` constructions carrying `SECRET_UNKNOWN`/`SECRET_UNAVAILABLE`, plus a separate `_emit_secret_fetch_span` path for `SECRET_LOCKED`; `SECRET_EXPIRED` / `SECRET_REVOKED` unreferenced. *An earlier draft said "14" from `rg -c`, which counts matching LINES per file, not calls — corrected by AST at review round 9.* |
 | `ReplaySemanticDivergenceError` has no live constructor | **MEDIUM** | a `src`-scoped count returned only its own definition; a dynamic/reflective construction would not be caught by that method |
 | The per-surface inventory above is **complete** | **LOW — explicitly not claimed** | it was wrong in rounds 3, 4 and 5; completeness is owed at the apply arc, not asserted here |
 | (C) is the right disposition | **MEDIUM** | it is the cheapest, most reversible, and precedented option — but it is an operator ratification, not a finding |
