@@ -29,7 +29,7 @@ This module is that grounding, BY EXECUTION. It answers the row's (a)/(b)/(c):
 **What this module is NOT.** It is not a repair, and it does not assert the
 collision is *correct*. It PINS the as-built identity so the cost is visible and a
 later fix can re-price it. The repair is not a Phase-7 edit: `Spec_Harness_Runtime_v1.md`
-§14.8.2 NOTE 6-i asserts "Each placement's audit entry uses a distinct `action_id`"
+§14.8.7 NOTE 6-i asserts "Each placement's audit entry uses a distinct `action_id`"
 and "sibling-distinguishability ... is preserved", which these tests show is FALSE
 for the same-position case. Correcting that claim — or widening the §0.4(2) basis to
 include a per-declaration ordinal — revisits a ratified design record, so it routes to
@@ -351,8 +351,20 @@ def test_the_add_only_fold_preserves_both_same_position_placements() -> None:
 # ---------------------------------------------------------------------------
 
 
-# mutation-probe: make the branch-child composition drop `hitl_placements` from its
-# `model_copy` update (so the colliding pair never reaches the per-step context).
+# mutation-probe: make `harness_cp.workflow_driver_types.compose_branch_child_context`
+# strip `hitl_placements` from the context it returns.
+#
+# NAMED PRECISELY, because the obvious phrasing would be a lie. This test calls
+# `compose_branch_child_context` DIRECTLY and performs its own `model_copy`; it never
+# invokes `workflow_driver.execute_workflow`. So it CANNOT detect the production fan-out
+# site (`workflow_driver.py:8411`/`:8593`) ceasing to carry the tuple — deleting those
+# leaves this test green. That production claim belongs to
+# `harness-cp/tests/test_b165_production_feed_duplicate_placements.py`, which drives the
+# real driver; this test only pins the composer's behaviour on a production-SHAPED
+# context. An annotation worded as "the branch-child composition's model_copy update"
+# would read as the production site and silently miscredit this test as a
+# production-mutation detector. (Found by the merge gate's test-witness lens — the
+# FOURTH annotation in this arc to name a site its test could not kill on.)
 @pytest.mark.asyncio
 async def test_the_production_branch_composition_hands_the_composer_the_colliding_shape() -> None:
     """Closes the gap between "the composer collides IF fed this" and "production
