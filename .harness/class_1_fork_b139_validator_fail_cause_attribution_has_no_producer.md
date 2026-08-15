@@ -32,7 +32,7 @@ search for `validator.fail.cause_attribution` across all seven trees —
 writes `cause_attribution=`, which matches a loose search and would falsify the row if it were
 this attribute. It is not: it constructs a `PauseStateCauseAttribution` on a
 `PauseStateAuditPayload` — the pause-state audit carrier, a different namespace entirely.
-`retry.cause_attribution` (`retry_breaker_fallback.py:1321,1376,1391,1418`) is likewise a
+`retry.cause_attribution` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:1321,1376,1391,1418`) is likewise a
 **different attribute** in the retry namespace, and it *does* have producers — which is
 precisely why the loose search is misleading and the fixed-string one is the sound instrument.
 
@@ -46,7 +46,7 @@ fields: `outcome`, `fail_class`, `revalidation_payload`, `escalation_brief`,
 `fail_detail_hash`. **There is no cause field, and no field from which a cause is derivable.**
 
 The producer site is no better supplied. `ValidatorFramework._build_span_attributes` is called
-at `validator_framework.py:237` and `:305` with `step`, `result`, `next_action`, and
+at `harness-cp/src/harness_cp/validator_framework.py:237` and `:305` with `step`, `result`, `next_action`, and
 `burden_count` — **none of which carries a cause**. The runtime escalation composer
 (`validator_escalation_composer.py:143-153`) is the same story.
 
@@ -77,10 +77,10 @@ fourth time:
 
 | Surface | Typed carrier | Live producer |
 |---|---|---|
-| 5 F5 `secret_*` refinements | **YES** — `SecretFailClass` StrEnum, `harness-as/src/harness_as/secret_fail_class.py:33-41` (C-AS-07 §7.1) | **YES** — `SecretResolutionError` constructed 10× in `config/provider_secrets.py`, 3× in `lifecycle/runtime_tool_dispatcher.py`, 1× in `types.py` |
-| `replay_semantic_divergence` (ADR-D6's ADDITION, not one of the base set) | **YES** — `ReplaySemanticDivergenceError.validator_fail_cause_attribution`, pinned `Literal[...]`, `harness-od/.../idempotency_join_dedup.py:375-377` | **NO** — the only occurrence in `src` is its own definition |
+| 5 F5 `secret_*` refinements | **YES** — `SecretFailClass` StrEnum, `harness-as/src/harness_as/secret_fail_class.py:33-41` (C-AS-07 §7.1) | **PARTIAL — 3 of 5.** `SecretResolutionError` is constructed **11×** (AST-counted): 8× in `harness-runtime/src/harness_runtime/config/provider_secrets.py`, 3× in `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py`, **0 in `types.py`**. Only `SECRET_UNKNOWN`, `SECRET_UNAVAILABLE` and `SECRET_LOCKED` are referenced outside the enum module; **`SECRET_EXPIRED` and `SECRET_REVOKED` have NO production reference at all.** |
+| `replay_semantic_divergence` (ADR-D6's ADDITION, not one of the base set) | **YES** — `ReplaySemanticDivergenceError.validator_fail_cause_attribution`, pinned `Literal[...]`, `harness-od/src/harness_od/idempotency_join_dedup.py:375-377` | **NO** — the only occurrence in `src` is its own definition |
 | the **10 base values**, for a general validator failure | — | **NO** — nothing maps a `ValidatorResult` onto them |
-| `§21.2` staircase / retry | **NO** — `StaircaseTransition.on_cause` is `ValidatorRetryExitClass` (`validator_fail_transient_staircase.py:64`), and its docstring says so at `:66`: *"(not a fail-cause token)"*; `_classify_provider_exception` (`retry_breaker_fallback.py:281`) returns the same class | n/a |
+| `§21.2` staircase / retry | **NO** — `StaircaseTransition.on_cause` is `ValidatorRetryExitClass` (`harness-cp/src/harness_cp/validator_fail_transient_staircase.py:64`), and its docstring says so at `:66`: *"(not a fail-cause token)"*; `_classify_provider_exception` (`harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py:281`) returns the same class | n/a |
 
 > **The precise defect is therefore narrower than "nothing exists": per-surface typed causes
 > DO exist and some are live, but there is no general mapping from a validator failure onto
@@ -118,10 +118,12 @@ the new field, and the §25.2 cardinality table grows a row. It also does not, b
 availability — the operator's validator would have to *know* the cause, which for the
 staircase-derived values it generally does not.
 
-**(B) Derive the cause and thread it to the emission site.** **Re-priced TWICE; this is the
-current pricing, and it is lower than rounds 3-4 stated.** The `secret_*` arm needs no
-invention at all — `SecretFailClass` is typed and its producers are live (§2), so for that
-surface (B) is genuinely a wiring change. What is missing is a **general mapping** from an
+**(B) Derive the cause and thread it to the emission site.** **Re-priced THREE times; this is the
+current pricing.** The `secret_*` arm is typed and **partly** live — `SecretFailClass` exists
+and 3 of its 5 values (`SECRET_UNKNOWN`, `SECRET_UNAVAILABLE`, `SECRET_LOCKED`) have
+production references across 11 AST-counted `SecretResolutionError` constructions, while
+`SECRET_EXPIRED` and `SECRET_REVOKED` have **none** — so even that arm is part wiring, part
+classification, not pure wiring as round 8 stated. What is missing is a **general mapping** from an
 arbitrary validator failure onto the **10 base values**: nothing today classifies a
 `ValidatorResult` into that alphabet, and `ValidatorRetryExitClass` is a different (5-class)
 taxonomy that must not be silently conflated with it. So (B) is *part wiring, part new
@@ -177,9 +179,9 @@ wiring change.
 | Claim | Confidence | Basis |
 |---|---|---|
 | No producer writes `validator.fail.cause_attribution` anywhere in `harness-*/src` | **HIGH** | fixed-string search over all seven trees; each of the five hits classified by reading |
-| `ValidatorResult` and the `_build_span_attributes` inputs carry no cause | **HIGH** | direct read of `validator_framework_types.py:171-188` + both call sites |
+| `ValidatorResult` and the `_build_span_attributes` inputs carry no cause | **HIGH** | direct read of `harness-cp/src/harness_cp/validator_framework_types.py:171-188` + both call sites |
 | The staircase carries `ValidatorRetryExitClass`, not a cause token | **HIGH** | the type annotation at `:64` and its own docstring at `:66` say so verbatim |
-| The `secret_*` arm has typed **and live** producers | **HIGH** | `SecretFailClass` enum + 14 counted `SecretResolutionError` constructions |
+| The `secret_*` arm is typed and **partly** live (3 of 5 values) | **HIGH** | `SecretFailClass` enum + **11 AST-counted** constructions; per-value reference check shows `SECRET_EXPIRED` / `SECRET_REVOKED` unreferenced. *An earlier draft said "14" from `rg -c`, which counts matching LINES per file, not calls — corrected by AST at review round 9.* |
 | `ReplaySemanticDivergenceError` has no live constructor | **MEDIUM** | a `src`-scoped count returned only its own definition; a dynamic/reflective construction would not be caught by that method |
 | The per-surface inventory above is **complete** | **LOW — explicitly not claimed** | it was wrong in rounds 3, 4 and 5; completeness is owed at the apply arc, not asserted here |
 | (C) is the right disposition | **MEDIUM** | it is the cheapest, most reversible, and precedented option — but it is an operator ratification, not a finding |
