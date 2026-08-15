@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 180
+  total: 181
   open: 1
   design_substrate_gated: 1
-  registered_finding: 36
+  registered_finding: 37
   operator_gated: 0
   held: 2
   closed: 140
-  identity_digest: 034ce761d4297b75
+  identity_digest: 0cf10dd2fcfeb92b
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9201,9 +9201,7 @@ items:
     that also removes the race the test exists to pin would be a green test that witnesses nothing.
     FALSIFIER: a full-suite reproduction showing the deviation is NOT the predicted worker-0 cut, or
     evidence that the 4/12 observation was itself a misread of a different assertion.'
-  heading: '### B-166 · Wall-clock deadline witness `test_ow_proceed_deadline_stashed_child_completed_not_cancelled`
-    flakes ONLY in full-suite runs, so it can mask a genuine red in the `B-71` impl leg *(registered
-    by the prevention arc that precedes `U-CP-102`, 2026-08-13)*'
+  heading: '### B-166 · Wall-clock deadline witness `test_ow_proceed_deadline_stashed_child_completed_not_cancelled` — the near-boundary-race premise is REFUTED by a measured ~600x barrier headroom *(registered by the prevention arc preceding `U-CP-102`, 2026-08-13; premise refuted and row CLOSED at #1353, 2026-08-15)*'
   council: No. This is a test-hygiene grounding question with a named mechanism (unsynchronized 0.3s
     barrier deadline vs worker-0's stash) and a named falsifier (a full-suite reproduction whose deviation
     is NOT the predicted worker-0 cut). There is no cross-domain tension to convene over -- step 1 is
@@ -9616,3 +9614,10 @@ items:
   heading: '### B-180 · S16''s quiet-side assertion is ABSENCE-based, so a crashed or silent hook reports
     a PASS — and `loop-gc.sh` is deliberately failure-invisible, which makes silence a reachable state *(found
     by the merge-gate witness lens during `B-169`, 2026-08-15)*'
+- id: B-181
+  title: The 2026-08-13 test_ow_proceed_deadline_stashed_child_completed_not_cancelled reds are UNATTRIBUTED after B-166 barrier-race explanation was refuted
+  status: registered_finding
+  summary: 'On 2026-08-13 test_ow_proceed_deadline_stashed_child_completed_not_cancelled was observed RED in 4 of ~12 full-suite runs. Those observations were real. B-166 filed them as a near-boundary barrier race; that explanation was REFUTED at #1353 by a deadline sweep showing ~600x headroom (deviation only at <= 0.0005s against a pinned 0.3s), plus 25 full-suite runs and 20 spinner-loaded isolated runs at 0 failures. So the reds have NO current explanation. Registered rather than dropped because a refuted explanation is not an absent observation: closing B-166 without this row would delete the only record that something reddened this test and --open would never surface it again. LEADING CANDIDATE: B-166 claim that the venue carried ZERO Python files is FALSE for #1336, which changed harness-od/src/harness_od/tail_keep_span_processor.py and added harness-runtime/tests/test_b164b_fanout_orphaned_child_span_repro.py.'
+  close_out: 'STEP 1 -- do not re-derive from the refuted premise: any new barrier-race hypothesis needs a reproduction whose CAPTURED TERMINAL MAP contradicts the 600x measurement recorded at B-166; absent that, the barrier is not the mechanism. STEP 2 -- re-attribute from the venue: inspect #1336 own span-processor change and its new fan-out repro test for interference with this test in a shared full-suite process. STEP 3 -- bound the effort honestly: this row exists so the observation is not lost, not to mandate an open-ended hunt; if a further full-suite campaign at the original scale reproduces nothing, close it as unreproducible-and-stale, recording the run count. FALSIFIER: evidence the 4/12 observation was itself a misread of a different assertion, in which case this row closes as over-stated.'
+  council: 'No. This is an empirical attribution question with a named leading candidate and a stated stopping rule.'
+  heading: '### B-181 · The 2026-08-13 `test_ow_proceed_deadline_stashed_child_completed_not_cancelled` reds are UNATTRIBUTED — `B-166`''s barrier-race explanation was refuted, so their cause is still unknown *(split out of `B-166` when its premise was refuted, 2026-08-15)*'
