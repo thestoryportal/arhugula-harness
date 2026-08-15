@@ -68,23 +68,36 @@ not the 15-value attribution alphabet (10 base + 5 F5 `secret_*` refinements). �
 branch labels (`capability_shortfall_transient`,
 `contract_violation_not_yet_routed_to_Reflexion`) are not §21.5 wire tokens either.
 
-**But "no source anywhere" would ALSO be wrong — corrected at review round 4.** One typed
-carrier does exist: `ReplaySemanticDivergenceError.validator_fail_cause_attribution` is pinned
-`Literal["replay_semantic_divergence"]` at
-`harness-od/src/harness_od/idempotency_join_dedup.py:375-377` (with sibling `fail_class` and
-`permanence` pins). It has **no live constructor** — the only occurrence in `src` is its own
-definition — so it produces nothing at runtime, which is why the fixed-string producer search
-in §1 still stands. The accurate statement is therefore narrower and more useful:
+**The cause-source inventory — VERIFIED PER SURFACE, and deliberately not asserted as
+complete.** This is the one claim in this fork that churned across review rounds 3, 4 and 5
+(*"they live in the staircase"* → *"no source anywhere"* → *"one typed carrier"* → *"per-surface
+carriers exist"*), so it is now stated as verified facts with cites rather than as an
+inventory, and the completeness question is handed to the apply arc rather than guessed a
+fourth time:
 
-> **The 15-value alphabet has exactly one typed carrier, and that carrier is never
-> constructed; no path maps a general validator failure onto the alphabet at all.**
+| Surface | Typed carrier | Live producer |
+|---|---|---|
+| 5 F5 `secret_*` refinements | **YES** — `SecretFailClass` StrEnum, `harness-as/src/harness_as/secret_fail_class.py:33-41` (C-AS-07 §7.1) | **YES** — `SecretResolutionError` constructed 10× in `config/provider_secrets.py`, 3× in `lifecycle/runtime_tool_dispatcher.py`, 1× in `types.py` |
+| `replay_semantic_divergence` (ADR-D6's ADDITION, not one of the base set) | **YES** — `ReplaySemanticDivergenceError.validator_fail_cause_attribution`, pinned `Literal[...]`, `harness-od/.../idempotency_join_dedup.py:375-377` | **NO** — the only occurrence in `src` is its own definition |
+| the **10 base values**, for a general validator failure | — | **NO** — nothing maps a `ValidatorResult` onto them |
+| `§21.2` staircase / retry | **NO** — `StaircaseTransition.on_cause` is `ValidatorRetryExitClass` (`validator_fail_transient_staircase.py:64`), and its docstring says so at `:66`: *"(not a fail-cause token)"*; `_classify_provider_exception` (`retry_breaker_fallback.py:281`) returns the same class | n/a |
 
-**This carries an UNDISCHARGED CROSS-ADR OBLIGATION that any disposition must handle.**
-`ADR-D6` §1.5.2 (`design-substrate/ADR-D6_v1_2.md:346-352`) extends the C5 catalog with
+> **The precise defect is therefore narrower than "nothing exists": per-surface typed causes
+> DO exist and some are live, but there is no general mapping from a validator failure onto
+> the base alphabet — which is exactly what an always-emitted declaration on EVERY
+> validator-failure event requires.**
+
+**This re-prices (B) DOWN from the round-3 wording** (it is not inventing classification from
+scratch — the `secret_*` arm is already typed and live) **while leaving the gap real** for the
+base values. A complete per-value inventory is **owed at the apply arc**, and this fork does
+not assert one.
+
+**An UNDISCHARGED CROSS-ADR OBLIGATION constrains every disposition.** `ADR-D6` §1.5.2
+(`design-substrate/ADR-D6_v1_2.md:346-352`) extends the C5 catalog with
 `replay_semantic_divergence` and states that *"ADR-D5 v1.2 §1.10.1 ... absorbs the new value at
-the next D5 revision (forward-flagged; not blocking this revision)"*. `B-141` assigns exactly
-that synchronization to this row
-(`.harness/b-141-validator-fail-class-cascade-2026-08-12.md:115-121`). So an amendment that
+the next D5 revision (forward-flagged; not blocking this revision)"*. `B-141` assigns that
+synchronization to this row
+(`.harness/b-141-validator-fail-class-cascade-2026-08-12.md:115-121`). An amendment that
 demotes D5's declaration **while leaving D6's absorb-at-next-revision instruction standing**
 would mint a fresh contradiction — the next D5 revision *is* the one this fork routes.
 
