@@ -9626,9 +9626,15 @@ items:
     tenant_rate_limit, has NO call site in harness-*/src either. It has real semantics (it
     raises) but nothing reaches it, so NEITHER cap is enforced on any production path. Three
     drafts claimed an enforced-vs-unenforced asymmetry; that is WITHDRAWN.
-    FACT 3: §11.1's team-binding row commits no figure, deferring to "Persona §11.4 throughput
-    rough order-of-magnitude open item". Resolved at the EFFECTIVE declaration across the whole
-    42-file OD delta chain, not the baseline alone.
+    FACT 3: §11.1's team-binding row commits no figure IN THAT TABLE, deferring to "Persona §11.4
+    throughput rough order-of-magnitude open item". Resolved at the EFFECTIVE declaration across
+    the whole 42-file OD delta chain, not the baseline alone, and guarded against a later delta
+    RE-TABLING §11 with a differently-shaped row. IMPORTANT FRAMING (codex round 6 [P1]): the cap
+    VALUE is stated canonically elsewhere -- Spec_Operational_Discipline_v1_37.md Rider (a) puts
+    cell_rate_limit=10_000.0 spans/sec at EVERY ACTIVE cell including team x self-hosted, and
+    uses it to declare a budget check passed. So C11 HAS a numeric bound; what is open is the
+    THROUGHPUT/POPULATION to assess it against, not the cap. The council must not be told there
+    is no committed figure.
     FACT 4: that target is Persona_Document_v1.md §11 Open items ROW 4 and is still open.
     FACT 5: the canonical placement instrument is C-OD-20 §20.1, and per it exactly ONE cell is
     unambiguously in-process (solo-developer x local-development). This row makes NO claim about

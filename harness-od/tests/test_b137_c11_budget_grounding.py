@@ -139,7 +139,33 @@ def test_the_effective_team_binding_budget_is_still_the_deferral_not_a_number() 
         "no OD chain file carries a §11.1 team-binding cardinality row at all — the row was "
         "removed or reworded, and B-182's (A) must be re-grounded from scratch"
     )
-    effective = max(carriers, key=_chain_version)
+
+    # Round 6 [P2]: selecting the effective carrier by `row_prefix` alone is a false-green
+    # surface. A later delta could supersede the team budget with a differently-SHAPED row (per
+    # deployment surface, different wording), which `row_prefix` would not match — so that file
+    # is excluded from `carriers`, the historical v1.2 deferral stays "effective", and the test
+    # passes while the claim is false. Guard by failing on ANY later §11.1 team-binding
+    # amendment this matcher does not recognise, rather than silently ignoring it.
+    newest_carrier = max(carriers, key=_chain_version)
+    # A delta SUPERSEDES a contract section by re-tabling it — i.e. carrying a `## §11 ` heading
+    # of its own. Merely mentioning "§11.1" or "team-binding" in passing is not a supersession
+    # (many deltas do, in unrelated riders), so the guard keys on the re-tabling shape.
+    unrecognised = sorted(
+        f.name
+        for f in _od_spec_chain()
+        if _chain_version(f) > _chain_version(newest_carrier)
+        and "## §11 " in f.read_text()
+        and row_prefix not in f.read_text()
+    )
+    assert unrecognised == [], (
+        f"later OD delta(s) {unrecognised} RE-TABLE §11 without a team-binding row this matcher "
+        "recognises. A re-tabling is how a delta supersedes a contract section, so these may "
+        "replace the deferral with a differently-shaped row — which would make B-182's (A) "
+        "false while this test stayed green. Read them and either extend the matcher or "
+        "re-ground the claim"
+    )
+
+    effective = newest_carrier
     assert deferral in effective.read_text(), (
         f"the EFFECTIVE §11.1 team-binding row now lives at {effective.name} and is not the "
         "deferral. A delta has superseded it — if it states a figure, C11's objection became "
