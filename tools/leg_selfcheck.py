@@ -648,12 +648,12 @@ def _claim_subject(line: str, enclosing: str, at: int = 0) -> str:
 # MEASURED over every `Implementation_Plan_*.md` in `design-substrate/` (386 blocks
 # carrying an acceptance-criteria section):
 #
-#   * 288 are a FRESH enumeration — an unqualified header plus a contiguous 1..N
-#     numbered list. The recount is exact on these.
-#   * 98 are NOT — amendment / additions blocks that renumber into a PARENT unit's
+#   * 285 are DERIVABLE — an unqualified header plus a contiguous 1..N numbered
+#     list and no top-level bullets. The recount is exact on these.
+#   * 101 are NOT — amendment / additions blocks that renumber into a PARENT unit's
 #     space (one observed list starts at `0`) or carry no numbered list at all.
 #     A recount of these is meaningless: the numbers belong to another artifact.
-#   * Of the 288 fresh blocks only 8 reference their own criteria numbers at all,
+#   * Of the derivable blocks only 8 reference their own criteria numbers at all,
 #     so IN-BLOCK corroboration is nearly absent. All 8 agree once references to
 #     ANOTHER plan's unit are excluded (the one apparent contradiction, U-RT-147,
 #     cites `CP plan v2.41 U-CP-45`'s criterion, not its own).
