@@ -6331,7 +6331,24 @@ items:
     the always-sampled lookup can see it. The finding stands; its precise statement sharpens from
     nothing carries the value to nothing carries it on a span, which is what the two readers require.
     SURFACED AT THE B-116 COUNCIL DELIBERATION, C7 A2 consultant registered adjacency 2, carried as
-    rider (c) of the B-116-t3 leg, 2026-08-07.'
+    rider (c) of the B-116-t3 leg, 2026-08-07.
+    OPERATOR RATIFICATION 2026-08-16 -- READING A (MATERIALIZE THE RETRY-EXIT CLASSIFICATION AT THE
+    EMISSION SITE). Selected by the operator via AskUserQuestion, which DISCHARGES the Class 2 fork
+    filed at PR #1283 and makes the row BUILDABLE.
+    THE FORK RECOMMENDED READING D (defer with a demand trigger) at MODERATE confidence, resting on
+    its section 3(iv) -- that the 9.2 half is the more valuable of the two and does not depend on
+    the derivation landing now. THE OPERATOR SELECTED A INSTEAD. Recorded here as provenance, not
+    as dissent: the recommendation was MODERATE, it argued only that the derivation could WAIT, and
+    Reading A is the direct repair that deferral was deferring. Do not re-litigate it.
+    WHAT READING A COMMITS. Derive the retry-exit classification AT THE EMISSION SITE so
+    validator.fail.permanence exists as something the sampling surfaces can actually read. The root
+    problem it fixes: the field is a FROZEN PYDANTIC RECORD FIELD, not an OTel span attribute, so
+    today neither the 10.2 attribute-reading tail-keep predicate nor the 9.2 always-sampled lookup
+    can see it -- which is why both halves are inert. Reading A is the most direct repair of the
+    four and puts work at EVERY emission path; the implementing arc should expect that breadth
+    rather than treat it as a single-site change.
+    ROUTING NOTE PRESERVED: rider (c) of B-116-t3 is retired as a routing (B-116 closed at #1271 +
+    #1272 and the t3 leg is gone), so the two halves route independently.'
   close_out: '(1) Re-verify zero span-attribute set sites and that the derivation function still has no callers.
     (2) Determine whether a validator-fail span or event is emitted at all on any live path. If none is,
     this row is about a whole missing emission rather than one unset attribute, and it must be re-scoped
@@ -7455,7 +7472,28 @@ items:
     posture of EVERY class the tail preserves, not only the three B-133 named. SURFACED BY OUT-OF-FAMILY
     CODEX ROUND 1 AGAINST THE B-133 LEG''S COMMIT ff63c725, 2026-08-08 -- the reviewer''s premise was
     ADJUDICATED EMPIRICALLY AND CONFIRMED at the real production wiring rather than accepted or declined
-    on argument, and the leg''s own contract TEXT was corrected where it had overclaimed coverage.'
+    on argument, and the leg''s own contract TEXT was corrected where it had overclaimed coverage.
+    OPERATOR RATIFICATION 2026-08-16 -- STEP (3) IS DECIDED: C1 (ADMIT THE ROOT). Selected by the
+    operator via AskUserQuestion after the five-option set was put to them with each option''s
+    measured cost stated. This DISCHARGES the architectural gate this row has carried since
+    2026-08-13 (deferred at three separate loop runs) and makes the row BUILDABLE. Option A was
+    not offered as selectable -- it remains unmeasurable, its tail half unbuilt -- and the
+    operator did not ask for it to be built first.
+    WHAT C1 COMMITS. Add the workflow root to the always-sampled arm so ParentBased hands every
+    child an inherited RECORD_AND_SAMPLE and never consults a child''s name. Measured 2026-08-15
+    on A-prime''s own falsifying test: C1 rescues BOTH starved populations where A-prime rescues
+    one -- crucially the event-carried B-133 family, which dies under A-prime because that repair
+    works by exposing the child''s NAME and an event-carrier''s name is ordinary.
+    THE RATIFIED COST, CARRIED FORWARD RATHER THAN ERASED BY THE DECISION. C1''s cost is DATA LOSS,
+    not delay: under production buffer bounds a workflow trace containing at least one ordinary
+    non-member child becomes a never-resolving buffered trace, drained only by force_flush, and C1
+    MAXIMISES the B-136 pressure this row''s own step (5) predicts. The frequency of that
+    ordinary-child population in real workflows is STILL UNMEASURED. The ratification decides the
+    POSTURE; it does not retire that measurement. The implementing arc MUST (a) measure the
+    ordinary-child population before shipping C1 to a production-bounded cell, and (b) carry the
+    B-136 interaction explicitly rather than discovering it later. If that measurement shows the
+    population is common enough that C1''s steady state is buffer exhaustion, that is a NEW finding
+    to route back -- not a licence to silently re-open this ratified choice.'
   close_out: '(1) RE-GROUND THE WIRING FIRST, because it is explicitly marked as provisional. Re-read tracer_provider.py''s
     sampler resolution at the then-current HEAD and confirm it still binds the per-cell ratio in both modes
     and still carries the "current default sampler ignores the mode ... Future units may wire mode-conditional
