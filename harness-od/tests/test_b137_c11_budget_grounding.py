@@ -165,6 +165,27 @@ def test_the_effective_team_binding_budget_is_still_the_deferral_not_a_number() 
         "re-ground the claim"
     )
 
+    # KNOWN GAP, stated rather than papered over (round 7 [P2]). A delta can amend C-OD-11 in a
+    # RIDER without re-emitting `## §11 ` — v1.37 does exactly that, stating the cap value — and
+    # this guard does not detect that shape. Detecting it reliably needs effective-head
+    # resolution over the delta chain, which is a tool rather than a test. Two consequences,
+    # both deliberate: (1) FACT 3 claims only that §11.1's TABLE ROW defers, never that no later
+    # delta says anything numeric — the register row says so explicitly and cites v1.37 itself;
+    # (2) this assertion pins that v1.37 remains the known rider, so a NEW rider-shaped mention
+    # surfaces here for a human read instead of passing silently.
+    riders = sorted(
+        f.name
+        for f in _od_spec_chain()
+        if _chain_version(f) > _chain_version(newest_carrier)
+        and "C-OD-11" in f.read_text()
+        and "cell_rate_limit" in f.read_text()
+    )
+    assert riders == ["Spec_Operational_Discipline_v1_37.md"], (
+        f"the set of later deltas amending C-OD-11 in RIDER form changed to {riders}. This "
+        "guard cannot tell a rider from a supersession — read the new one and re-ground FACT 3 "
+        "before trusting it"
+    )
+
     effective = newest_carrier
     assert deferral in effective.read_text(), (
         f"the EFFECTIVE §11.1 team-binding row now lives at {effective.name} and is not the "
@@ -264,7 +285,7 @@ def test_the_cap_is_uniform_across_cells_whose_base_rates_are_not() -> None:
     )
 
 
-def test_half_the_cells_enforce_in_process_yet_nothing_reads_the_cell_cap() -> None:
+def test_nothing_in_src_reads_the_per_cell_cap() -> None:
     """**The sharpened finding** — correction 2 turned into the result.
 
     At `COLLECTOR_BOUNDARY` cells §11.1's enforcement point is the harness's OWN in-process
@@ -278,39 +299,19 @@ def test_half_the_cells_enforce_in_process_yet_nothing_reads_the_cell_cap() -> N
     B-137's own target cell (`team-binding × self-hosted-server`) is among them, which would
     invert this row's scoping. The exact identities are therefore asserted, not the cardinality.
     """
-    in_process = {
-        f"{c.persona_tier.value}×{c.deployment_surface.value}"
-        for c, b in PER_CELL_CARDINALITY_BUDGET.items()
-        if b.enforcement_layer == "COLLECTOR_BOUNDARY"
-    }
-    expected = {
-        "solo-developer×local-development",
-        "solo-developer×self-hosted-server",
-        "solo-developer×managed-cloud",
-        "multi-tenant-compliance×self-hosted-server",
-    }
-    # Rounds 3 AND 5 [P1]: `COLLECTOR_BOUNDARY` is a LOGICAL enforcement layer, not a process
-    # placement, and filtering it by persona name is NOT a way to derive placement. The canonical
-    # instrument is C-OD-20 §20.1's per-cell collector placement matrix, asserted separately at
-    # `test_the_canonical_placement_matrix_is_the_instrument_for_process_placement`. This arc
-    # inferred placement from the implementation carrier for three rounds before reading it.
-    assert in_process == expected, (
-        f"the COLLECTOR_BOUNDARY cell set is now {sorted(in_process)}, not {sorted(expected)}. "
-        "B-182 scopes its in-process half to exactly these cells and must be re-scoped — and if "
-        "team-binding×self-hosted-server entered the set, B-137's own target cell became "
-        "in-process and this row's whole disposition inverts"
-    )
-    assert PER_CELL_CARDINALITY_BUDGET[_TEAM_SELF].enforcement_layer == "BACKEND_INGESTION", (
-        "B-137's target cell now enforces at COLLECTOR_BOUNDARY — the out-of-process "
-        "explanation no longer covers it and B-182's (C) applies there directly"
-    )
-
     src_files = [p for d in sorted(_REPO.glob("harness-*/src")) for p in d.rglob("*.py")]
     assert len(src_files) > 100, (
         f"only {len(src_files)} src files found — the scan root is wrong and a 'no reader' "
         "result would be an artifact of not looking (never report unlooked as empty)"
     )
     decl = _REPO / "harness-od" / "src" / "harness_od" / "per_cell_cardinality_budget.py"
+    # Round 7 [P2]: same blind spot — a same-module reader would be excluded wholesale.
+    decl_hits = decl.read_text().count("cell_rate_limit")
+    assert decl_hits == 2, (
+        f"`cell_rate_limit` now appears {decl_hits}x in its own module (known declaration "
+        "sites: the field annotation at :61 and the value at :118 = 2). A new occurrence may be "
+        "a same-module consumer, which would close B-182's FACT 1 — read it"
+    )
     readers = sorted(
         str(p.relative_to(_REPO))
         for p in src_files
@@ -345,6 +346,16 @@ def test_neither_cap_is_reached_in_production_only_their_semantics_differ() -> N
         "result would be an artifact of not looking"
     )
     decl = _REPO / "harness-od" / "src" / "harness_od" / "multi_tenant_cross_cutting_enforcement.py"
+    # Round 7 [P2]: excluding the WHOLE declaring module would hide a production wrapper added
+    # inside it. Count occurrences there instead and pin the known declaration sites, so any
+    # additional mention in that file reds too.
+    decl_hits = decl.read_text().count("assert_per_tenant_cardinality_isolation")
+    assert decl_hits == 4, (
+        f"`assert_per_tenant_cardinality_isolation` now appears {decl_hits}x in its own module "
+        "(known declaration sites: the def, the __all__ entry, and two docstring mentions = 4). "
+        "A new occurrence may be a production wrapper INSIDE the declaring module, which would "
+        "mean the tenant cap is reached after all — read it before trusting B-182/B-183"
+    )
     callers = sorted(
         str(f.relative_to(_REPO))
         for f in src_files
@@ -401,37 +412,44 @@ def test_the_cell_this_is_all_priced_against_still_carries_its_rate() -> None:
 
 
 def test_the_canonical_placement_matrix_is_the_instrument_for_process_placement() -> None:
-    """**Round 5 [P1] — the instrument this arc should have used from the start.**
+    """**The instrument this arc should have used from the start** (rounds 5 + 7 [P1]/[P2]).
 
-    Three rounds of this arc derived "which cells are in-process" by filtering the
-    implementation's logical `COLLECTOR_BOUNDARY` mapping by persona name. That is not a
-    derivation of placement, and it produced a wrong answer twice (first "four cells", then
-    "three solo cells"). **C-OD-20 §20.1 is the canonical per-cell collector placement matrix and
-    it existed the whole time.** Read against it, exactly ONE cell is unambiguously in-process:
+    Three rounds derived "which cells are in-process" by filtering the implementation's LOGICAL
+    `enforcement_layer` enum by persona name — not a derivation of placement, and wrong twice
+    ("four cells", then "three solo cells"). A fourth read C-OD-20 §20.1's **v1.2 prose**, which
+    `Spec_Operational_Discipline_v1_4.md` explicitly supersedes: v1.4 formalises §20.1 as a
+    `Cell → Set<CollectorPlacement>` mapping over a 7-value enum.
 
-    - `solo-developer × local-development` — *"In-process otelcol-contrib + BatchSpanProcessor"*
-    - `solo-developer × self-hosted-server` — in-process only *"permitted as alt-route"*, with the
-      cell-committed backend's collector **preferred**
-    - `solo-developer × managed-cloud` — *"Vendor-pipeline"*, not in-process at all
-
-    So `B-182` makes **no** claim about how many cells are in-process. It records the two
-    no-consumer facts and points at this matrix as the instrument for anyone dispositioning them.
+    That mapping is **realized in code** at `per_cell_collector_placement_matrix.py`, so the
+    effective canonical placement is available without parsing a 42-file delta chain at all.
+    Asserted here over **every** ACTIVE cell rather than one row, so a second cell becoming
+    unambiguously in-process cannot leave the uniqueness claim green.
     """
-    spec = (_SUBSTRATE / "Spec_Operational_Discipline_v1_2.md").read_text()
-    assert "### §20.1 Per-cell collector placement matrix" in spec, (
-        "C-OD-20 §20.1's placement matrix is gone — it is the canonical instrument B-182 points "
-        "at for process placement, and without it that pointer is dangling"
+    from harness_od.per_cell_collector_placement_matrix import (
+        PER_CELL_COLLECTOR_PLACEMENT,
+        CollectorPlacement,
     )
-    unambiguous = (
-        "| solo-developer × local-development | In-process otelcol-contrib + "
-        "BatchSpanProcessor; sqlite ring-buffer; TUI trace browser |"
+
+    unambiguous = {
+        c
+        for c, v in PER_CELL_COLLECTOR_PLACEMENT.items()
+        if v.placement_classes == frozenset({CollectorPlacement.IN_PROCESS})
+    }
+    assert len(unambiguous) == 1, (
+        f"{len(unambiguous)} cells are now unambiguously IN_PROCESS, not 1 — B-182's FACT 5 "
+        "states exactly one and must be re-grounded"
     )
-    assert unambiguous in spec, (
-        "the one unambiguously in-process cell row changed. B-182 states that exactly one cell "
-        "is unambiguously in-process per §20.1 — re-ground that claim"
-    )
-    alt_route = "In-process collector permitted as alt-route"
-    assert alt_route in spec, (
-        "solo × self-hosted-server no longer describes in-process as a permitted ALT-ROUTE. If "
-        "it became the default, the in-process cell count rises and B-182's pointer needs a note"
+    only = next(iter(unambiguous))
+    assert (only.persona_tier, only.deployment_surface) == (
+        PersonaTier.SOLO_DEVELOPER,
+        DeploymentSurface.LOCAL_DEVELOPMENT,
+    ), f"the unambiguously in-process cell moved to {only} — B-182's FACT 5 names solo x local"
+
+    # B-137's own target cell is definitively NOT in-process, which is what makes the row's
+    # "is an absent reader explainable as external enforcement?" question live there.
+    assert CollectorPlacement.IN_PROCESS not in (
+        PER_CELL_COLLECTOR_PLACEMENT[_TEAM_SELF].placement_classes
+    ), (
+        "B-137's target cell can now be in-process — the disposition question B-182 poses for "
+        "it changes shape and must be re-grounded"
     )
