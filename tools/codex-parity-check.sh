@@ -20,6 +20,7 @@ uv run pytest -q \
   tools/test_arc_metrics.py \
   tools/test_closure_certification.py \
   tools/test_docs_completeness.py \
+  tools/test_graft_reachability.py \
   tools/test_leg_selfcheck.py \
   tools/test_memory_closeout_check.py \
   tools/test_prime_report.py \
