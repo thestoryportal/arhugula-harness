@@ -66,3 +66,43 @@ under the gate).
   documented reversible local removal) — steps (1)/(3) above.
 - E7 (venue split: tracked half in PR-6 CI; machine-local half as this
   orchestrator acceptance step) — `.harness/r-ctx-1-implementation-plan-v1.md:64`.
+
+## Operator decision 2026-08-16 — DECIDED: operator runs the move
+
+Put to the operator via `AskUserQuestion` alongside the other two open gates.
+**Selection: "I'll run the move myself"** — the reversible `mv` recorded at §"Blocked
+removal + operator command" above, relocating the four dirs to
+`~/.claude/removed-skills-backup-2026-08-11/`.
+
+- **Status:** AWAITING THE OPERATOR'S OWN EXECUTION. Claude does not run it — the
+  permission classifier blocked it on 2026-08-11 and, per the never-retry-in-variant-forms
+  rule, it was not re-attempted then and is not re-attempted now.
+- **What it closes:** the four dirs contribute ≈600–700 tokens to every session's skill
+  listing. `B-148`'s ≤76,000 gate measured **76,656** — a **656-token miss** — so this
+  removable mass is decisive for that gate.
+- **Reversal:** the documented restore command in the section above, per-name.
+- **Re-measure after:** the `B-148` preload figure must be re-measured once the dirs are
+  gone; the 656-token miss is the pre-removal measurement, not a prediction of the result.
+- **Note (2026-08-16):** `.claude/skills/` has since also acquired `graft/` from an operator
+  tool install. It is **not** part of E7's four-name set and is **not** covered by this
+  decision.
+
+## Operator decision 2026-08-16 — DECIDED: operator runs the move
+
+Put to the operator via `AskUserQuestion` alongside the other two open gates.
+**Selection: "I'll run the move myself"** — the reversible `mv` recorded under
+"Blocked removal + operator command" above, relocating the four dirs to
+`~/.claude/removed-skills-backup-2026-08-11/`.
+
+- **Status:** AWAITING THE OPERATOR'S OWN EXECUTION. Claude does not run it — the
+  permission classifier blocked it on 2026-08-11 and, per the never-retry-in-variant-forms
+  rule, it was not re-attempted then and is not re-attempted now.
+- **What it closes:** the four dirs contribute ≈600–700 tokens to every session's skill
+  listing. `B-148`'s ≤76,000 gate measured **76,656** — a **656-token miss** — so this
+  removable mass is decisive for that gate.
+- **Reversal:** the documented per-name restore command in the section above.
+- **Re-measure after:** the `B-148` preload figure MUST be re-measured once the dirs are
+  gone. The 656-token miss is the pre-removal measurement, not a prediction of the result.
+- **Note (2026-08-16):** `.claude/skills/` has since also acquired `graft/` from an operator
+  tool install. It is **not** part of E7's four-name set and is **not** covered by this
+  decision.
