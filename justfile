@@ -141,6 +141,17 @@ overlay-check:
 overlay-query *ARGS:
     uv run python tools/semantic_overlay/overlay.py query "$@"
 
+# ─── graft reachability — the overlay's reachability-side sibling ───────────
+# The overlay holds no call edges, so it cannot answer "does a production path reach
+# this, or do only the tests touch it?" — the wired-handler-unreachable shape. Reads
+# graft's wiring graph, so it needs `graft build` in this checkout; it fails loud
+# (exit 2) rather than reporting an empty OK when the graph is absent. Advisory:
+# findings never fail the run. NOT a CI gate — the graph is gitignored/per-checkout.
+
+# src symbols whose only inbound callers are tests (needs `graft build`; --all, --json)
+reachability *ARGS:
+    uv run python tools/graft_reachability.py "$@"
+
 # R-CTX-1 context-budget instrument: first-turn preload per session (median/mean),
 # plus --post-compaction (errata E4 selector) and --sidechains views.
 # e.g.: just context-budget --sessions 20 --post-compaction

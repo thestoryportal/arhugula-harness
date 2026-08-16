@@ -31,6 +31,45 @@ gate entirely.** Running a concurrency/test-witness reviewer on a status-refresh
 waste and a spurious-block risk. Fire only when the diff touches `harness-*/src/**`,
 `harness-*/tests/**`, or equivalent runtime code (hooks, tools scripts with real logic).
 
+## Pre-flight — blast radius (run BEFORE launching the reviewers)
+
+A recurring defect class here is not "the changed code is wrong" but **"the change was
+right and a consumer of it was missed"** — `[[unconditional-precondition-tightening-ripples-broadly]]`
+(B-65-A: grep ALL constructors of the now-illegal shape),
+`[[soft-budget-must-never-gate-a-hard-path]]` (grep every consumer on demotion),
+`[[shared-is-shape-change-ripples-cross-axis-field-asserts]]`. Each reviewer below sees only
+what you write into its prompt, so a consumer nobody enumerated is a consumer no lens checks.
+
+Enumerate it mechanically instead of from memory:
+
+```bash
+gh pr diff <PR#> --name-only                 # changed files
+graft skeleton <changed-file>                # symbols + spans in each (~200 tok/file)
+graft callers <symbol> --depth 2             # who reaches it, annotated by depth
+```
+
+Read `--depth 2` output for the **production** consumers — the listing is usually dominated
+by test callers, which are not the blast radius. For a rename, signature change, or
+precondition tightening, use `--depth all` instead: it surfaces the sibling and downstream
+files a single-file edit misses.
+
+Then **paste the resulting consumer list verbatim into Reviewers 1 and 2** (see the prompt
+inserts below). Naming the consumers is the point; a reviewer told "check for missed
+consumers" without the list just re-derives it worse.
+
+**Fail posture — this is not optional and must not be silently skipped.** The graph lives at
+`graft/.graph/wiring.json`, which is gitignored and per-checkout, so a fresh worktree may not
+have one. If `graft` is absent or the graph is unbuilt, run `graft build` (it is `$0`,
+deterministic, no key, and takes seconds). If it still cannot run, **say so explicitly in the
+gate outcome and in the log row** — record `blast-radius: NOT RUN (<reason>)`. A pre-flight
+that quietly did nothing reads downstream as a pre-flight that found nothing, which is the
+`[[gate-cannot-tell-empty-from-unlooked]]` failure this gate exists to avoid.
+
+**Known limits — state them alongside the list, don't imply completeness.** These are static
+call edges: they do not model reference-passing (a callback registered rather than invoked),
+`getattr`, string-keyed registries, or plugin loaders. The list is a floor on the blast
+radius, never a ceiling. `tools/graft_reachability.py` documents this same limit in detail.
+
 ## The three reviewers — launch in ONE message, three parallel Agent calls
 
 Each prompt must be **self-contained** (a subagent sees only what you write — no conversation
@@ -47,7 +86,10 @@ generic pass, and demand a machine-parseable verdict line.
 > a bare `TimeoutError` from an inner coroutine outside it — these are different failure
 > shapes); non-atomic check-then-act patterns; daemon-reused context leaking across concurrent
 > runs (needs per-run isolation, not a shared frozen object); fence/step-id keys that could
-> double-fire on a changed step_id. For each concern found, cite file:line and a concrete
+> double-fire on a changed step_id. These call sites reach the changed symbols — check each
+> for the above, and treat the list as a floor, not a complete set (static call edges miss
+> reference-passing, `getattr`, and string-keyed registries): `<paste blast-radius list>`.
+> For each concern found, cite file:line and a concrete
 > interleaving that breaks. End your response with exactly one line:
 > `VERDICT: APPROVE` or `VERDICT: BLOCK: <one-sentence reason>`.
 
@@ -60,7 +102,11 @@ generic pass, and demand a machine-parseable verdict line.
 > primitive/contract not already in a cleared spec; (c) does it match the disposition already
 > recorded in `.harness/substitutions.yaml`, `.harness/arc-ledger.yaml`, or
 > `.harness/forward-register.yaml`, or does it silently diverge from a recorded row; (d) grep
-> sibling per-axis specs/plans for a stale cite-shape this diff should have updated too. For
+> sibling per-axis specs/plans for a stale cite-shape this diff should have updated too;
+> (e) these files consume the changed symbols — for each, check whether it encodes an
+> assumption this diff invalidates (a cardinality, an enum arm, a precondition, a count in a
+> docstring or spec table) and was not updated: `<paste blast-radius list>`. That list is a
+> floor, not a complete set. For
 > each concern found, cite file:line + the exact ledger/spec line it conflicts with. End your
 > response with exactly one line: `VERDICT: APPROVE` or `VERDICT: BLOCK: <one-sentence
 > reason>`.
@@ -106,8 +152,12 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   ones disagreed. Let the operator decide — this is a real fork per §12.4.1, not routine
   progress to auto-resolve.
 - **Always report the three verdicts**, even on a clean all-approve — append one row to
-  `.harness/merge-gate-log.md` (`PR#`, date, branch, three verdicts, outcome) so "report where
-  they disagreed" is auditable after the fact, not just stated in the turn's response.
+  `.harness/merge-gate-log.md` (`PR#`, date, branch, three verdicts, outcome, plus
+  `blast-radius: <n consumers>` or `blast-radius: NOT RUN (<reason>)`) so "report where
+  they disagreed" is auditable after the fact, not just stated in the turn's response. The
+  blast-radius field is logged even when it is `NOT RUN`: a missing field and a field
+  recording that the pre-flight could not run are different facts, and only one of them is
+  recoverable later.
 
 ## Wiring into `ship-pr` / the loop
 
