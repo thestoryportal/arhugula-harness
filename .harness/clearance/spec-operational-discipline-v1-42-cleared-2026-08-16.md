@@ -37,17 +37,26 @@ non-member child becomes never-resolving"* — and required the implementing arc
 ordinary-child population before shipping. Measured at `team-binding × self-hosted-server`
 through the real `TailKeepSpanProcessor`: **0 buffered / 0 evicted** sequentially, even at a
 buffer cap of 3 where the pre-`B-136` counterfactual read 3 buffered / 97 evicted. `B-136`'s
-name-arm repair (PR #1331) is why. At the worst measured composition (100 concurrent traces,
-cap 8) C1 evicts 92 traces yet still exports the *same* 8 ordinary children as the status quo
-while raising envelope and trigger exports from 8 and 14 to 100 and 100 — **no configuration
-loses a span the status quo would have kept**. Full table at v1.42 §0.3.
+name-arm repair (PR #1331) is why. **One claim from the first draft is WITHDRAWN**, after out-of-family
+review: it read the cap-8 row as *"no configuration loses a span the status quo would have
+kept"* because both worlds exported **8** ordinary children. That was cardinality-only.
+Compared by trace IDENTITY the sets differ — the base-rate sampler preserves a hash-drawn
+spread while C1 admits everything and the buffer's drop-oldest FIFO keeps only the newest
+`max_buffered_traces` — so **under buffer pressure C1 displaces traces the previous sampler
+would have preserved**. What governs shipping is the threshold: displacement requires
+concurrency above the cap, and at the shipped 4096 default the measured displacement set at
+concurrency 100 is **empty** while C1 preserves 100 ordinary children against the baseline's
+13. Full table at v1.42 §0.3; the displacement is pinned at
+`test_c1_displaces_previously_preserved_traces_under_buffer_pressure`.
 
 **The residual that is real, and is stated rather than absorbed:** C1 multiplies *concurrent
 in-flight buffer occupancy* by `1/base_rate` (measured peak 9 → 100 at concurrency 100),
 moving the eviction threshold at a 0.1-rate cell from roughly 40,960 to roughly 4,096
 concurrent envelope-rooted workflows against the shipped `max_buffered_traces` default of
-4096. At that default the measured eviction count is zero. This is a *different* residual from
-the one the ratification carried, and it is registered rather than repaired.
+4096. **Beyond that threshold the cost is displacement, not merely reduced headroom** — a real
+per-trace loss the status quo would not have incurred. Below it the cost is zero. This is a
+*different* residual from the one the ratification carried, and it is registered at `B-185`
+rather than repaired.
 
 No ADR revision. No CP delta — the declaring contract is OD's own C-OD-25. No CXA rows — the
 amendment moves a row inside a table OD owns, consumed by OD's own substrate; aggregate stays
@@ -75,4 +84,9 @@ ratifying a narrower one, so candidate C is explicitly not taken.
   envelope to be a trace root — trades the floor against distributed-trace continuity and would be
   a silent X-AL-3 extension against a delta declaring ZERO emission-site change. It does not narrow
   the ratified scope: `B-137` reasoned throughout from the envelope being the trace root.
+  **Row 20 is written ROOT-CONDITIONAL in the contract itself** (v1.42 §0.2.1 + §0.2.3), joining
+  §9.2's existing `subagent.span (root)` in that shape, so the spec does not assert a floor its
+  own mechanism cannot deliver. That is a precise statement of reach, NOT `B-137`'s candidate C:
+  within a harness-rooted trace the floor is absolute, §9.3 is untouched and all three of its
+  invariants bind row 20, and rows 1–19 acquire no qualifier.
 - See `.harness/clearance/README.md` for marker discipline.

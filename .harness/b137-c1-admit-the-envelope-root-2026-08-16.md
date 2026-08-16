@@ -86,19 +86,31 @@ the real `TailKeepSpanProcessor`:
    superseded cost anyway.** The row's own two bullets contradict each other, and the later one
    is the wrong one. Corrected in the register at this arc.
 
-2. **No configuration loses a span the status quo would have kept.** At the deliberately hostile
-   cap-8 concurrent composition C1 evicts 92 traces yet exports the *identical* 8 ordinary
-   children, while raising envelope and trigger exports from 8 and 14 to 100 and 100. What C1
-   evicts is buffered context belonging to traces the status quo would have head-dropped in
-   their entirety. C1 is a strict improvement at every measured point.
+2. **THIS ARC'S OWN OVERCLAIM, WITHDRAWN — and the correction is the more useful finding.** The
+   first draft concluded *"no configuration loses a span the status quo would have kept"* from
+   the cap-8 row, where both worlds export **8** ordinary children. Out-of-family Codex round 2
+   rejected the inference, correctly: equal counts are not equal sets. Re-measured by trace
+   IDENTITY, the base-rate sampler preserves a hash-drawn spread across the population while C1
+   admits every envelope and `_evict_oldest_trace` (drop-oldest FIFO) keeps exactly the newest
+   `max_buffered_traces` — so at cap 8 over 100 concurrent traces the baseline's survivors are
+   almost entirely displaced. **C1 DOES lose spans the status quo would have kept, above the
+   cap.** This is the `[[assert-the-shape-not-the-measurement]]` failure in its own right: an
+   impeccable measurement read through the wrong comparison.
 
-3. **The real residual is concurrency headroom, not data loss — a different residual from the
-   one the ratification carried.** C1 multiplies *concurrent in-flight buffer occupancy* by
+   What governs shipping is the threshold, and it is asserted in the same witness: at the
+   shipped 4096 default the displacement set at concurrency 100 is **empty**, and C1 preserves
+   100 ordinary children against the baseline's 13. Pinned at
+   `test_c1_displaces_previously_preserved_traces_under_buffer_pressure`, which asserts the
+   deterministic half as an exact set (C1's survivors are precisely the newest `cap`, because
+   the policy is FIFO) and the displacement as a shape rather than a particular hash draw.
+
+3. **The real residual is a concurrency THRESHOLD — a different residual from the one the
+   ratification carried.** C1 multiplies *concurrent in-flight buffer occupancy* by
    `1/base_rate` (peak 9 → 100 at concurrency 100), because every envelope-rooted trace now
    reaches the buffer where previously only the head-admitted fraction did. Against the shipped
-   `max_buffered_traces` default of 4096 (`types.py:741,752`) that moves the eviction threshold
-   at a 0.1-rate cell from ~40,960 to ~4,096 concurrent envelope-rooted workflows. At the default
-   cap the measured eviction count is **zero**.
+   `max_buffered_traces` default of 4096 (`types.py:741,752`) that moves the threshold at a
+   0.1-rate cell from ~40,960 to ~4,096 concurrent envelope-rooted workflows. **Below it the
+   cost is zero; above it the cost is the displacement in item 2.** Registered at `B-185`.
 
 **This does not reopen the ratified choice.** The ratification's own instruction was that a
 measurement showing buffer exhaustion as C1's steady state would be *"a new finding to route back

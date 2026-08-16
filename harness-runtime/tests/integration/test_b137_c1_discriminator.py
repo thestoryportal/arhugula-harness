@@ -109,7 +109,7 @@ a permanent regression guard rather than a lesson in prose.
 from __future__ import annotations
 
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 import harness_od.sampling_mode as _sm
 from harness_core.deployment_surface import DeploymentSurface
@@ -535,4 +535,110 @@ def test_c1_does_not_survive_an_unsampled_ambient_parent() -> None:
     assert sorted(s.name for s in exporter.get_finished_spans()) == sorted([_ENVELOPE, _MEMBER]), (
         "the root-envelope control did not export the whole trace — this module's C1 "
         "results are not reproducing, so the ambient-parent bound above proves nothing"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Result 5 — C1 DISPLACES under buffer pressure (identities, not counts)
+# ---------------------------------------------------------------------------
+
+
+def _preserved_ordinary_tags(*, traces: int, cap: int | None, with_c1: bool) -> set[str]:
+    """Trace tags whose ORDINARY child reached the exporter, at `cap` concurrent traces.
+
+    Every trace carries a §10.2 trigger, so its ordinary child is rescue-ELIGIBLE at root
+    close and the only thing that can lose it is buffer eviction.
+    """
+    rate = PER_CELL_BASE_RATE_ENVELOPE[_PROD_CELL].default_rate
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(sampler=build_default_sampler(base_rate=rate))
+    provider.add_span_processor(
+        TailKeepSpanProcessor(
+            downstream=SimpleSpanProcessor(exporter),
+            max_buffered_traces=cap,
+            max_spans_per_trace=cap,
+        )
+    )
+    tracer = provider.get_tracer("b137.displacement")
+    roots = []
+    with nullcontext() if with_c1 else _without_c1():
+        for i in range(traces):
+            root = tracer.start_span(_ENVELOPE)
+            ctx = otel_trace.set_span_in_context(root)
+            child = tracer.start_span("validator.evaluate", context=ctx)
+            child.set_attribute("probe.tag", f"t{i}")
+            child.end()
+            tracer.start_span(_TRIGGER_EVENT, context=ctx).end()
+            roots.append(root)
+        for root in roots:
+            root.end()
+    provider.force_flush()
+    return {
+        str(s.attributes.get("probe.tag"))
+        for s in exporter.get_finished_spans()
+        if s.name == "validator.evaluate" and s.attributes
+    }
+
+
+def test_c1_displaces_previously_preserved_traces_under_buffer_pressure() -> None:
+    """**A cost this arc first UNDERSTATED, corrected by out-of-family Codex round 2.**
+
+    The arc originally claimed *"no configuration loses a span the status quo would have
+    kept"*, on the strength of a cap-8 comparison in which both worlds exported **8**
+    ordinary children. That comparison comfired only CARDINALITY. Compared by IDENTITY the
+    two sets are **disjoint**: the base-rate sampler preserves whichever traces its hash
+    admits, while C1 admits all of them and `_evict_oldest_trace` (drop-oldest FIFO) keeps
+    only the newest `cap`. So C1-admitted traffic really does displace traces the previous
+    sampler would have preserved, and the claim was false. It is withdrawn, and the real
+    behaviour is pinned here rather than described in prose
+    (`[[assert-the-shape-not-the-measurement]]`, `[[witness-a-cost-so-a-later-fix-can-reprice-it]]`).
+
+    **This does not reopen the ratified choice**, and the second assertion is why: at the
+    SHIPPED `max_buffered_traces` default the displacement set is EMPTY and C1 is a strict
+    improvement. Displacement requires concurrent in-flight traces to exceed the cap, which
+    is exactly the headroom residual `B-185` tracks. Registering the number here means a
+    later fix — a priority-eviction policy, a larger per-cell cap — can be re-priced against
+    a measurement instead of an argument.
+    """
+    traces, cap = 100, 8
+    tight_base = _preserved_ordinary_tags(traces=traces, cap=cap, with_c1=False)
+    tight_c1 = _preserved_ordinary_tags(traces=traces, cap=cap, with_c1=True)
+
+    assert tight_base, "the pre-C1 baseline preserved nothing at cap=8 — fixture is not exercising"
+
+    # The DETERMINISTIC half, and the mechanism: `_evict_oldest_trace` is drop-oldest FIFO,
+    # so under C1 — which admits every envelope — the survivors are exactly the newest `cap`
+    # traces, regardless of trace-id hash. Asserted as an exact set, not a count.
+    assert tight_c1 == {f"t{i}" for i in range(traces - cap, traces)}, (
+        f"C1's survivors are no longer exactly the newest {cap} traces (got "
+        f"{sorted(tight_c1)}) — the eviction policy changed, so B-185's displacement "
+        "cost must be re-derived rather than assumed"
+    )
+
+    # The DISPLACEMENT itself: the baseline's survivors are drawn by trace-id hash across the
+    # whole index range, so any of them outside that newest-`cap` window is lost under C1.
+    # Not asserted as an exact set — WHICH traces the base-rate sampler admits is a hash draw
+    # and varies per run, and pinning a specific set would be asserting a measurement rather
+    # than a shape (`[[assert-the-shape-not-the-measurement]]`). The residual flake surface is
+    # the chance that EVERY baseline survivor happens to land in the last 8 of 100, i.e.
+    # (8/100)^|base| — about 1e-11 at the ~10 survivors this rate yields.
+    displaced = tight_base - tight_c1
+    assert displaced, (
+        f"C1 displaced NOTHING at cap={cap} (base={sorted(tight_base)}, c1={sorted(tight_c1)}) "
+        "— if buffer pressure no longer displaces previously-preserved traces the "
+        "displacement has been mitigated and B-185's cost must be re-priced downward; a good "
+        "outcome, but not one to absorb silently"
+    )
+
+    # ...and at the SHIPPED default the displacement is empty and C1 strictly dominates.
+    default_base = _preserved_ordinary_tags(traces=100, cap=4096, with_c1=False)
+    default_c1 = _preserved_ordinary_tags(traces=100, cap=4096, with_c1=True)
+    assert default_base - default_c1 == set(), (
+        f"C1 lost {sorted(default_base - default_c1)} at the SHIPPED 4096 cap — the "
+        "displacement is no longer confined to over-cap concurrency, which contradicts "
+        "B-185's bound and makes C1 a regression at default configuration"
+    )
+    assert default_c1 > default_base, (
+        f"C1 did not strictly dominate at the shipped cap (base={len(default_base)}, "
+        f"c1={len(default_c1)}) — the whole point of the row is more preservation, not less"
     )

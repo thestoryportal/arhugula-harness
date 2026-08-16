@@ -79,7 +79,7 @@ Cross-axis citation / Persona linkage) is **UNCHANGED**.
 
 | Event class | Source declaration | Rationale |
 |---|---|---|
-| `workflow.envelope` | C-OD-25 §25.1 (`Spec_Operational_Discipline_v1_8.md:90`) | Trace-root envelope — the declared *"the envelope ALWAYS persists"* floor, ingested. Root membership is additionally the **only** mechanism that delivers the §9.2 floor to in-envelope member spans, because `ParentBased` never consults a non-root child's name |
+| `workflow.envelope` **at the trace root** | C-OD-25 §25.1 (`Spec_Operational_Discipline_v1_8.md:90`) | Trace-root envelope — the declared *"the envelope ALWAYS persists"* floor, ingested. Root membership is additionally the **only** mechanism that delivers the §9.2 floor to in-envelope member spans, because `ParentBased` never consults a non-root child's name. **Root-conditional**, like `subagent.span (root)`: the guarantee binds where the envelope opens the trace, and an envelope opened beneath a foreign unsampled parent is outside it — see §0.2.3 |
 
 **The Source-declaration cell cites an OD contract rather than a CP one**, and
 deliberately so: unlike rows 1–19 this row ingests from *within* the axis. Citing a CP
@@ -87,12 +87,43 @@ contract here would misdescribe the provenance.
 
 #### §0.2.2 Post-amendment cardinality — stated as contract
 
-**The §9.2 always-sampled exception set is EXACTLY TWENTY members.** The four
+**The §9.2 always-sampled exception set is EXACTLY TWENTY members.** The
 conditional-by-attribute rows are UNCHANGED at four (`files.operation`,
-`memory.operation`, `validator.fail.*`, and the root-conditional `subagent.span`); row 20
-is **unconditional**. The two wildcard entries are UNCHANGED at two (`audit.*`,
-`validator.fail.*`), so the literal-vs-prefix decomposition the SDK-boundary lookup
-derives moves to **18 literals + 2 prefixes** (from 17 + 2).
+`memory.operation`, `validator.fail.*`, plus the root-conditional `subagent.span`); row 20
+is a **second root-conditional** row, joining `subagent.span` in that shape and taking the
+set's structurally-qualified rows from one to two. Neither is attribute-conditional, so the
+`_conditional_always_sampled` attribute resolver is **unchanged at three rows**. The two
+wildcard entries are UNCHANGED at two (`audit.*`, `validator.fail.*`), so the
+literal-vs-prefix decomposition the SDK-boundary lookup derives moves to **18 literals + 2
+prefixes** (from 17 + 2).
+
+#### §0.2.3 Row 20 is ROOT-CONDITIONAL, and the contract says so rather than only the change-note
+
+`[HIGH]` **The guarantee is scoped in the row itself, deliberately.** Row 20 delivers the
+floor by *inheritance*: the envelope is admitted at the head, and `ParentBased` hands every
+child an inherited `RECORD_AND_SAMPLE`. `ParentBased` consults the inner sampler **only for
+roots**, so where the envelope is NOT the trace root — a run begun beneath a foreign
+unsampled ambient OTel span — it short-circuits to the parent's DROP and the membership is
+never consulted at all. Writing row 20 as an unqualified *head=1.0 across all cells* would
+therefore state a guarantee the mechanism does not deliver, and the spec would contradict
+its own §0.3.1 three sections later. Out-of-family review flagged exactly that incoherence,
+and it is fixed in the contract text rather than left to prose.
+
+**This is a precise statement of reach, NOT candidate C.** `B-137`'s candidate C was to
+ratify that the §9.2 floor is a floor over the *admitted stream* — accepting base-rate
+starvation for in-envelope members. The operator did not select it and this delta does not
+take it: within a harness-rooted trace the floor is absolute, which is the whole substance
+of C1. **§9.3 is UNTOUCHED and all three of its invariants bind row 20** — the floor stays
+inviolable at the deployment-binding layer and per-cell uniform. **Rows 1–19 are UNTOUCHED**;
+no other row acquires a qualifier. The precedent for a structurally-qualified row is §9.2's
+own `subagent.span (root)`, which has carried exactly this shape since original ingestion.
+
+**The out-of-scope venue is registered, not absorbed.** `B-186` carries it with a measured
+witness and a three-way option set (force the envelope to a trace root; attach the ambient
+parent as an OTel *link* rather than a parent; or ratify this scope permanently). Choosing
+among those changes trace topology for embedded hosts and is an architectural decision, so
+it routes to the register rather than being settled inside a delta that declares ZERO
+emission-site change.
 
 ### §0.3 The ratified cost, RE-MEASURED at this filing — and the carried-forward pricing it supersedes
 
@@ -119,21 +150,33 @@ materializes and frees its buffer slot in the same `on_end`. Sequentially, C1 co
 **zero** buffered traces and **zero** evictions even at a cap of 3 — the exact
 counterfactual that read 3 buffered / 97 evicted before the repair.
 
-`[HIGH]` **No configuration loses a span the status quo would have kept.** At the cap-8
-concurrent composition — deliberately chosen as the worst measured case — C1 evicts 92
-traces yet still exports **8 ordinary children, identical to the status quo's 8**, while
-raising trigger-span and envelope exports from 14 and 8 to 100 and 100. What C1 evicts is
-buffered context belonging to traces the status quo would have **head-dropped in their
-entirety**. C1 is a strict improvement at every measured point.
+`[HIGH]` **A CLAIM THIS DELTA FIRST MADE AND NOW WITHDRAWS.** A first draft stated *"no
+configuration loses a span the status quo would have kept"*, resting on the cap-8 row
+above: both worlds export **8** ordinary children. **That comparison was cardinality-only,
+and out-of-family review was right to reject it.** Re-measured by trace IDENTITY, the two
+sets are materially different: the base-rate sampler preserves whichever traces its
+trace-id hash admits, spread across the whole population, while C1 admits every envelope
+and the buffer's **drop-oldest FIFO** keeps exactly the newest `max_buffered_traces`. So
+under buffer pressure C1-admitted traffic **does displace traces the previous sampler
+would have preserved** — at cap 8 over 100 concurrent traces the baseline's survivors were
+almost entirely evicted. Equal counts concealed it. The claim is withdrawn and the real
+behaviour is pinned at
+`test_c1_displaces_previously_preserved_traces_under_buffer_pressure`.
 
-`[MEDIUM]` **The real residual is concurrency headroom, and it is stated rather than
-buried.** C1 multiplies **concurrent in-flight buffer occupancy by `1/base_rate`** (peak
-9 → 100 at concurrency 100), because every envelope-rooted trace now reaches the buffer
-where previously only the head-admitted fraction did. Against the shipped
-`max_buffered_traces` default of 4096 (`types.py:741,752`) that moves the eviction
-threshold from roughly 40,960 to roughly 4,096 **concurrent** envelope-rooted workflows at
-a 0.1-rate cell. At the default cap the measured eviction count is **zero**; the headroom
-reduction is real, bounded, and does not bite at any concurrency this cell is sized for.
+`[HIGH]` **What survives the correction, and it is the part that governs shipping.** The
+displacement requires **concurrent in-flight traces to exceed `max_buffered_traces`**. At
+the shipped default of 4096 (`types.py:741,752`) the measured displacement set at
+concurrency 100 is **EMPTY**, and C1 strictly dominates: 100 ordinary children preserved
+against the baseline's 13. Both halves are asserted in the same witness, so neither can
+drift without reddening.
+
+`[MEDIUM]` **The residual, restated at its true strength.** C1 multiplies **concurrent
+in-flight buffer occupancy by `1/base_rate`** (peak 9 → 100 at concurrency 100), moving the
+eviction threshold at a 0.1-rate cell from roughly 40,960 to roughly 4,096 **concurrent**
+envelope-rooted workflows. Beyond that threshold the cost is **not** merely reduced
+headroom — it is the displacement above, a real per-trace loss the status quo would not
+have incurred. Below it the cost is zero. Registered at `B-185`, which now carries the
+displacement measurement rather than a headroom figure alone.
 
 `[MEDIUM]` **What is NOT priced here.** The `1/base_rate` **exported-volume** multiplier
 against the C-OD-11 §11.1 per-cell budgets — C11's half of the `B-137` C7 ⊥ C11 tension —

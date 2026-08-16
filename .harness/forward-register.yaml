@@ -7504,11 +7504,16 @@ items:
     SEQUENTIALLY even at a buffer cap of 3 (where the pre-B-136 counterfactual read 3 buffered / 97
     evicted), because B-136''s name-arm repair makes an always-sampled root run the root-close
     flush-or-drop decision BEFORE forwarding itself, materializing its trace and freeing its slot in
-    the same on_end. And NO configuration loses a span the status quo would have kept: at the
-    deliberately hostile composition of 100 CONCURRENT traces at cap 8, C1 evicts 92 traces yet
-    exports the IDENTICAL 8 ordinary children the status quo exports, while raising envelope and
-    trigger exports from 8 and 14 to 100 and 100. What C1 evicts is buffered context belonging to
-    traces the status quo would have head-dropped entirely.
+    the same on_end. ** AND ONE CLAIM THIS ARC MADE IS WITHDRAWN. ** A first
+    draft added "no configuration loses a span the status quo would have kept", reading the cap-8
+    composition where both worlds export 8 ordinary children. Out-of-family Codex round 2 rejected
+    the inference and was right: equal COUNTS are not equal SETS. Re-measured by trace IDENTITY, the
+    base-rate sampler preserves a hash-drawn spread while C1 admits every envelope and drop-oldest
+    FIFO keeps only the newest max_buffered_traces, so above the cap C1 DISPLACES traces the previous
+    sampler would have preserved. The threshold is what governs: at the shipped 4096 default the
+    displacement set at concurrency 100 is EMPTY and C1 preserves 100 ordinary children against the
+    baseline''s 13. Pinned at
+    test_c1_displaces_previously_preserved_traces_under_buffer_pressure; cost carried at B-185.
     THE RESIDUAL THAT IS REAL IS A DIFFERENT ONE, AND IT IS TRACKED AT B-185. C1 multiplies CONCURRENT
     in-flight buffer occupancy by 1/base_rate (measured peak 9 -> 100 at concurrency 100), moving the
     eviction threshold at a 0.1-rate cell from roughly 40,960 to roughly 4,096 concurrent
@@ -9791,12 +9796,21 @@ items:
     40,960 to roughly 4,096 CONCURRENT envelope-rooted workflows. At the default cap the measured
     eviction count is ZERO at concurrency 100. The reduction is real and it is bounded; it does not
     bite at any concurrency these cells are currently sized for.
-    WHY IT IS NOT A DEFECT AND WAS NOT REPAIRED. Eviction under C1 sheds buffered context belonging to
-    traces the STATUS QUO would have head-dropped in their entirety. Measured at a deliberately
-    hostile cap of 8 with 100 concurrent traces, C1 exports the IDENTICAL 8 ordinary children the
-    status quo exports while raising envelope and trigger exports from 8 and 14 to 100 and 100. There
-    is no measured configuration in which C1 loses a span the status quo would have kept, so this is
-    a headroom fact to track, not a regression to fix.
+    WHAT IT COSTS ABOVE THE THRESHOLD -- CORRECTED, and this row''s first draft understated it. That
+    draft called the eviction harmless because C1 and the status quo both exported 8 ordinary
+    children at cap 8. Out-of-family Codex round 2 caught that this compares CARDINALITY, not
+    IDENTITY. Re-measured: the base-rate sampler preserves a hash-drawn spread across the whole
+    population, while C1 admits every envelope and _evict_oldest_trace (drop-oldest FIFO) keeps
+    exactly the newest cap traces -- so at cap 8 over 100 concurrent traces the baseline''s survivors
+    are almost entirely DISPLACED. Above the threshold C1 therefore causes a real per-trace loss the
+    status quo would not have. Equal counts concealed it.
+    WHY IT IS STILL NOT A SHIP BLOCKER. Displacement requires concurrency ABOVE
+    max_buffered_traces. At the shipped 4096 default, measured at concurrency 100, the displacement
+    set is EMPTY and C1 strictly dominates (100 ordinary children preserved against the baseline''s
+    13). Both halves are asserted in ONE witness
+    (test_c1_displaces_previously_preserved_traces_under_buffer_pressure) so neither can drift
+    without reddening: the deterministic half as an exact set (C1''s survivors are precisely the
+    newest cap, because the policy is FIFO), the displacement as a shape rather than a hash draw.
     WHAT WOULD MAKE IT LIVE. A production cell whose steady-state CONCURRENT envelope-rooted workflow
     count approaches max_buffered_traces. That number is a throughput figure, and it is the same
     unmeasured denominator B-182 / B-183 need -- Persona_Document_v1.md section 11 open-item 4, still
@@ -9814,9 +9828,13 @@ items:
     B-183 (Persona section 11 open-item 4, workflow throughput). Re-ground when that lands.
     (2) If it does land and the concurrent envelope-rooted count is within an order of magnitude of
     max_buffered_traces at any ACTIVE cell, the repair candidates are: raise the per-cell
-    max_buffered_traces (config-only, but re-prices memory), or make the section 9.2 root-bypass arm
+    max_buffered_traces (config-only, but re-prices memory); make the section 9.2 root-bypass arm
     release its buffer slot eagerly rather than at root close (mechanism change, needs its own
-    measurement).
+    measurement); or replace drop-oldest FIFO with a PRIORITY eviction that sheds C1-admitted traffic
+    before traffic the base-rate draw would have admitted -- what out-of-family Codex proposed when it
+    surfaced the displacement. That targets the measured failure mode directly, but it needs the head
+    decision to be legible at the tail, which today it is not, so it is a design question not a tuning
+    one.
     (3) Falsified by: a measurement showing sequential-equivalent occupancy under real concurrency
     (which would mean the 1/base_rate scaling does not reproduce outside this probe''s shape), or a
     mode-conditional sampler landing that moves the ratio into the tail consumer (candidate A), which
