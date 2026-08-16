@@ -7,6 +7,12 @@
         "--transport",
         "stdio"
       ]
+    },
+    "graft": {
+      "command": "graft",
+      "args": [
+        "mcp"
+      ]
     }
   }
 }
