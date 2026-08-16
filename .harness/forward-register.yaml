@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 181
+  total: 183
   open: 1
   design_substrate_gated: 2
-  registered_finding: 34
+  registered_finding: 36
   operator_gated: 0
   held: 2
   closed: 142
-  identity_digest: 4190611fb6a811bd
+  identity_digest: aa020384f3f63f64
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9607,3 +9607,110 @@ items:
   council: 'No. This is an empirical attribution question with a named leading candidate and a stated stopping rule.'
   heading: '### B-181 · The 2026-08-13 `test_ow_proceed_deadline_stashed_child_completed_not_cancelled` reds are UNREPRODUCIBLE — the leading candidate is refuted and CI holds no record *(split out of `B-166` when its premise was refuted, 2026-08-15; closed unreproducible-and-stale at #1357)*'
   pr: '#1357'
+- id: B-182
+  title: >-
+    Both halves of the C-OD-11 §11.1 per-cell budget are declared but reach no production path --
+    cell_rate_limit has no consumer at all and the tenant_rate_limit helper has no caller -- and
+    §11.1's team-binding row commits no figure
+  status: registered_finding
+  summary: >-
+    Surfaced grounding the C11 half of B-137 step (3). REDUCED TO FACTS ONLY after five
+    out-of-family Codex rounds raised 19 valid findings (four [P1]): every one falsified an
+    INTERPRETATION this arc layered on its facts, none falsified a fact, and the recurring
+    mistake was identical each time -- inferring contract meaning from an implementation carrier
+    instead of reading the canonical matrix that already answered the question. Pinned at
+    harness-od/tests/test_b137_c11_budget_grounding.py (8 tests, mutation-probed).
+    FACT 1: cell_rate_limit (flat 10_000.0 at every ACTIVE cell) has ZERO readers anywhere in
+    harness-*/src outside its own declaration.
+    FACT 2: assert_per_tenant_cardinality_isolation, the only implemented consumer of the sibling
+    tenant_rate_limit, has NO call site in harness-*/src either. It has real semantics (it
+    raises) but nothing in this repository reaches it, so NEITHER cap is reached by any IN-REPO
+    wiring. Three drafts claimed an enforced-vs-unenforced asymmetry; that is WITHDRAWN. SCOPE
+    (codex round 8): this is a claim about THIS REPOSITORY, not global enforcement -- at cells
+    whose canonical placement is a sidecar, vendor pipeline, or self-hosted backend collector
+    (team x self-hosted among them) an EXTERNAL collector or backend may enforce these caps, and
+    nothing in this arc observes those venues.
+    FACT 3: §11.1's team-binding row commits no figure IN THAT TABLE, deferring to "Persona §11.4
+    throughput rough order-of-magnitude open item". Resolved at the EFFECTIVE declaration across
+    the whole 42-file OD delta chain, not the baseline alone, and guarded against a later delta
+    RE-TABLING §11 with a differently-shaped row. IMPORTANT FRAMING (codex round 6 [P1]): the cap
+    VALUE is stated canonically elsewhere -- Spec_Operational_Discipline_v1_37.md Rider (a) puts
+    cell_rate_limit=10_000.0 spans/sec at EVERY ACTIVE cell including team x self-hosted, and
+    uses it to declare a budget check passed. So C11 HAS a numeric bound; what is open is the
+    THROUGHPUT/POPULATION to assess it against, not the cap. The council must not be told there
+    is no committed figure.
+    FACT 4: that target is Persona_Document_v1.md §11 Open items ROW 4 and is still open.
+    FACT 5: the canonical placement instrument is C-OD-20 §20.1, and per it exactly ONE cell is
+    unambiguously in-process (solo-developer x local-development). This row makes NO claim about
+    how many cells are in-process; it names the instrument.
+    NOT ESTABLISHED: whether C1 is affordable; whether the caps are correctly external; whether
+    throughput is recoverable from a starved stream (a dependency cycle was asserted and
+    withdrawn, and its refutation via C-OD-16 §16.2 was withdrawn too). B-137's affordability
+    call is untouched.
+  close_out: >-
+    (1) Re-ground the five facts; the witness module is the instrument and every assertion states
+    what goes stale if it moves.
+    (2) Disposition FACT 1 and FACT 2 together, and derive placement from C-OD-20 §20.1 rather
+    than from the enforcement-layer enum. The question is whether a declared cap with no consumer
+    is correct-by-design (external enforcement) or a gap, and it may answer differently per cell.
+    Do NOT wire an in-process enforcement site before that decision -- minting a cap the contract
+    does not state would be an X-AL-3 design extension.
+    (3) Carry FACT 3 and FACT 4 into B-137's council as CONTEXT, not as a blocker.
+    (4) Settle B-183's quantity question first if any consumer is authorised, or the two caps
+    will disagree on units.
+  council: >-
+    No at registration. These are facts plus a single-domain disposition with a named owner
+    (C7/OD); they are inputs to B-137's already-declared C7+C11 convening, not a separate one.
+  heading: '### B-182 · Both halves of the C-OD-11 §11.1 per-cell budget are declared but reach no production path — `cell_rate_limit` has no consumer at all and the `tenant_rate_limit` helper has no caller — and §11.1''s team-binding row commits no figure *(surfaced grounding B-137 step (3)''s C11 half, 2026-08-15; reduced to facts after five out-of-family Codex rounds falsified every interpretation layered on them)*'
+- id: B-183
+  title: >-
+    assert_per_tenant_cardinality_isolation compares a windowed observed_series count against a
+    per-second tenant_rate_limit and never reads observation_window
+  status: registered_finding
+  summary: >-
+    C-OD-11 §11.1's tenant_rate_limit is documented as a PER-SECOND rate --
+    per_cell_cardinality_budget.py:58 "per-tenant rate limit (spans/sec)", and again at :50.
+    CardinalityCounters carries both observed_series and an observation_window string
+    (multi_tenant_cross_cutting_enforcement.py). But assert_per_tenant_cardinality_isolation
+    compares observed.observed_series > budget.tenant_rate_limit directly and NEVER reads
+    observation_window -- it appears exactly once in that module, at the field declaration.
+    TWO MISMATCHES, and time is the lesser (codex rounds 4 and 5). (a) QUANTITY: observed_series
+    counts DISTINCT ATTRIBUTE-VALUE SERIES while tenant_rate_limit is documented in SPANS/sec --
+    different things, since a series may contain any number of spans, so no time normalisation
+    alone reconciles them. (b) TIME: the window is dropped entirely, so 1001 over "1m" behaves
+    exactly as 1001 over "1s". An earlier draft called the former "~16.7/sec" and asserted an
+    unsafe-permissive/false-positive direction; both are WITHDRAWN -- that arithmetic equates
+    series with spans, and no direction follows until the quantity is settled.
+    SCOPE, corrected at codex round 4 [P1]: this is a defect in an UNCALLED helper.
+    assert_per_tenant_cardinality_isolation has no call site in harness-*/src -- only its
+    definition, its __all__ entry, two docstring mentions, and tests. No production path reaches
+    this comparison today, so the row is NOT a live production defect. It is registered because
+    the helper's semantics are what a future caller inherits, and because the same "spans/sec"
+    documentation governs the sibling cell_rate_limit that B-182 (C) may yet authorise a consumer
+    for. NOT FIXED IN THE SURFACING ARC. The B-182 witness supplies a "1s" window so its own
+    assertion is coherent, and the mismatch is registered rather than repaired, because choosing
+    the repair is a contract question -- see the close-out.
+  close_out: >-
+    (1) Re-ground: confirm tenant_rate_limit is still documented per-second, that
+    observation_window is still unread in the comparison, and enumerate every caller of
+    assert_per_tenant_cardinality_isolation to see which windows are actually passed in
+    production (the surfacing arc did not do this -- it is the first real question).
+    (2) DECIDE THE QUANTITY BEFORE THE UNIT. Codex round 4 [P2]: there are TWO mismatches and
+    time is the lesser -- observed_series counts DISTINCT SERIES while tenant_rate_limit is
+    documented in SPANS/sec, so dividing by a parsed window yields series/sec, not spans/sec.
+    Decide first whether the limit measures spans, series, or a windowed count. Only then:
+    (a) normalise against MATCHING units, which needs both a window grammar (observation_window
+    is a bare str) and agreement on the quantity; or (b) re-declare tenant_rate_limit as a
+    per-window series COUNT, which contradicts the two "spans/sec" docstrings and C-OD-21 §21.4's
+    framing; or (c) type the window -- necessary for (a) but insufficient alone, since it leaves
+    the raw comparison unchanged.
+    (3) Whichever is chosen, witness it BEHAVIOURALLY at both sides of the limit and at two
+    different windows -- a single-window test cannot distinguish a rate gate from a count gate,
+    which is precisely why this went unnoticed.
+    (4) Check the sibling: cell_rate_limit carries the same "spans/sec" documentation and has no
+    consumer at all (B-182 (C)), so any window grammar committed here should be settled BEFORE an
+    in-process cell-cap enforcement site is written, or the two will disagree.
+  council: >-
+    No. A single-domain unit/contract coherence question with a named owner (C7/OD). The
+    three repair options are enumerable and grounding plus the caller survey chooses between them.
+  heading: '### B-183 · `assert_per_tenant_cardinality_isolation` compares a WINDOWED count against a PER-SECOND limit and never reads `observation_window`, so the §21.4 per-tenant gate fires at a threshold that depends on the caller''s window *(surfaced by out-of-family Codex round 3 while grounding `B-182`, 2026-08-15)*'
