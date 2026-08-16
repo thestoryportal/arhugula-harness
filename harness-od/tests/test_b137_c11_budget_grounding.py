@@ -35,7 +35,7 @@ left to whoever dispositions it, with the canonical instruments named.
    `harness-*/src` outside its own declaration.
 2. `assert_per_tenant_cardinality_isolation` — the only implemented consumer of the sibling
    `tenant_rate_limit` — has **no call site in `harness-*/src`** either. It has real semantics
-   (it raises), but nothing reaches it. **Neither cap is enforced on any production path.**
+   (it raises), but nothing reaches it. **Neither cap is reached by any IN-REPO wiring.** *(Round 8 [P2]: this is a claim about this repository only. At cells whose canonical placement is a sidecar, vendor pipeline, or self-hosted backend collector — `_TEAM_SELF` among them — an EXTERNAL collector or backend may well enforce these caps. Nothing here observes those venues, and B-182's close-out leaves that possibility explicitly open.)*
 3. §11.1's **team-binding** row commits no figure; it defers to *"Persona §11.4 throughput rough
    order-of-magnitude open item."* Resolved at the **effective** declaration across the whole
    42-file OD delta chain, not the baseline alone.
@@ -355,6 +355,24 @@ def test_neither_cap_is_reached_in_production_only_their_semantics_differ() -> N
         "(known declaration sites: the def, the __all__ entry, and two docstring mentions = 4). "
         "A new occurrence may be a production wrapper INSIDE the declaring module, which would "
         "mean the tenant cap is reached after all — read it before trusting B-182/B-183"
+    )
+    # Round 8 [P2]: inventory DIRECT field readers too. A production path could consume
+    # `PER_CELL_CARDINALITY_BUDGET[cell].tenant_rate_limit` without ever naming the helper, which
+    # a helper-name-only scan would miss entirely.
+    direct = sorted(
+        str(f.relative_to(_REPO))
+        for f in src_files
+        if f
+        not in (
+            decl,
+            _REPO / "harness-od" / "src" / "harness_od" / "per_cell_cardinality_budget.py",
+        )
+        and "tenant_rate_limit" in f.read_text()
+    )
+    assert direct == [], (
+        f"`tenant_rate_limit` acquired a DIRECT reader at {direct} — the tenant cap is consumed "
+        "without going through the helper, so B-182's FACT 2 (the helper is its only consumer) "
+        "is false and must be re-stated"
     )
     callers = sorted(
         str(f.relative_to(_REPO))

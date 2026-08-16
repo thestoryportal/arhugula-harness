@@ -9624,8 +9624,12 @@ items:
     harness-*/src outside its own declaration.
     FACT 2: assert_per_tenant_cardinality_isolation, the only implemented consumer of the sibling
     tenant_rate_limit, has NO call site in harness-*/src either. It has real semantics (it
-    raises) but nothing reaches it, so NEITHER cap is enforced on any production path. Three
-    drafts claimed an enforced-vs-unenforced asymmetry; that is WITHDRAWN.
+    raises) but nothing in this repository reaches it, so NEITHER cap is reached by any IN-REPO
+    wiring. Three drafts claimed an enforced-vs-unenforced asymmetry; that is WITHDRAWN. SCOPE
+    (codex round 8): this is a claim about THIS REPOSITORY, not global enforcement -- at cells
+    whose canonical placement is a sidecar, vendor pipeline, or self-hosted backend collector
+    (team x self-hosted among them) an EXTERNAL collector or backend may enforce these caps, and
+    nothing in this arc observes those venues.
     FACT 3: §11.1's team-binding row commits no figure IN THAT TABLE, deferring to "Persona §11.4
     throughput rough order-of-magnitude open item". Resolved at the EFFECTIVE declaration across
     the whole 42-file OD delta chain, not the baseline alone, and guarded against a later delta
