@@ -9656,16 +9656,16 @@ items:
     Do NOT wire an in-process enforcement site before that decision -- minting a cap the contract
     does not state would be an X-AL-3 design extension.
     (3) Carry FACT 3 and FACT 4 into B-137's council as CONTEXT, not as a blocker.
-    (4) Settle B-183's quantity question first if any consumer is authorised, or the two caps
-    will disagree on units.
+    (4) NARROWED at #1380 (review round 4 [P2]) so this row and B-183 stop giving opposite instructions: settle B-183's quantity question first ONLY for a TENANT-cap consumer. Authorising a consumer for cell_rate_limit ALONE does not require it -- cell_rate_limit is declared a span rate at plan :978, nothing contradicts that, and B-183's filed fork deliberately excludes cell-limit consumers from its halt target. The exception is fork disposition (B), which would make the tenant cap a span rate too and re-unify them.
   council: >-
     No at registration. These are facts plus a single-domain disposition with a named owner
     (C7/OD); they are inputs to B-137's already-declared C7+C11 convening, not a separate one.
   heading: '### B-182 · Both halves of the C-OD-11 §11.1 per-cell budget are declared but reach no production path — `cell_rate_limit` has no consumer at all and the `tenant_rate_limit` helper has no caller — and §11.1''s team-binding row commits no figure *(surfaced grounding B-137 step (3)''s C11 half, 2026-08-15; reduced to facts after five out-of-family Codex rounds falsified every interpretation layered on them)*'
 - id: B-183
   title: >-
-    assert_per_tenant_cardinality_isolation compares a windowed observed_series count against a
-    per-second tenant_rate_limit and never reads observation_window
+    The C-OD-11 §11.1 per-tenant cap's QUANTITY is declared two ways inside the OD spec lineage
+    (cardinality vs spans/sec) and its temporal dimension is undeclared; observation_window is
+    never read
   status: design_substrate_gated
   summary: >-
     C-OD-11 §11.1's tenant_rate_limit is documented as a PER-SECOND rate --
@@ -9681,27 +9681,49 @@ items:
     exactly as 1001 over "1s". An earlier draft called the former "~16.7/sec" and asserted an
     unsafe-permissive/false-positive direction; both are WITHDRAWN -- that arithmetic equates
     series with spans, and no direction follows until the quantity is settled.
-    FORK-DOC PHASE: **OWED, not filed** (schema requirement for design_substrate_gated).
-    Grounding at #1378 located the conflict and showed it is not agent-decidable: C-OD-11
-    frames the contract as CARDINALITY (distinct values) while the OD plan's own field
-    signature and TWO CLEARED SPEC DELTAS (v1.37, v1.38) quantify the same limit in
-    SPANS/SEC, and the shipped code compares SERIES. Spans and series are not
-    interchangeable, so at most one reading is right and the choice changes what a
-    compliance surface measures at the two multi-tenant cells. The owed fork doc must put
-    the quantity to the operator (cardinality vs spans/sec) and reconcile whichever loses.
-    IT MUST ALSO SETTLE THE TEMPORAL INTERPRETATION SEPARATELY (codex round 2 [P2]): even
-    under "cardinality" the limit could mean STANDING/concurrent cardinality, distinct series
-    observed PER WINDOW, or a cardinality RATE -- and the carrier already records an
-    observation_window, so choosing the quantity alone would leave B-183's original time
-    mismatch unresolved. TWO decisions, not one. No fork doc exists yet and none is filed by
-    this arc.
+    FORK-DOC PHASE: **FILED 2026-08-16** at
+    .harness/class_1_fork_b183_tenant_limit_quantity_declared_two_ways.md (schema
+    requirement for design_substrate_gated; the row's earlier OWED state is discharged).
+    THE FORK CORRECTS THIS ROW'S OWN EVIDENCE. Grounding the plan line-by-line falsified the
+    claim that "the OD plan's own field signature says SPANS/SEC" for the tenant limit: that
+    comment is on cell_rate_limit (Implementation_Plan_Operational_Discipline_v2.md:978), and
+    the tenant field at :977 carries NO unit at all. Everywhere the plan speaks of the tenant
+    limit in prose it says CARDINALITY -- at :991, and at :2186 in the acceptance criterion
+    for this very function ("when per-tenant cardinality exceeds tenant_rate_limit"). The
+    counter's declared shape (plan v2_6:721, "observed distinct attribute-value series")
+    matches the shipped code verbatim. So the conflict is NOT three-surfaces-disagree: it is
+    ONE LABEL -- "spans/sec" -- against everything else, and that label appears only in the
+    implementation's own docstring (per_cell_cardinality_budget.py:49-50,58) and in the two
+    cleared deltas v1.37/v1.38, where they are USED NORMATIVELY, not merely quoted:
+    v1.37:38-40 rules that the caps bound ADMITTED SPAN THROUGHPUT independently of sampling
+    and then leaves an OPEN question on "whether the realized keep-volume approaches the
+    per-tenant 1,000 spans/sec budget", re-stated at v1.38:69 as B-133's owed step (3). A
+    distinct-series bound would make that open question MALFORMED. THE FORK THEREFORE
+    RECOMMENDS NEITHER DISPOSITION (its own first draft recommended (A) and was corrected at
+    out-of-family review [P1]). A second draft then OVER-CORRECTED, ranking the spec passage over
+    the plan via the §1.3 chain; review round 2 [P2] falsified that too -- §1.3 orders artifact
+    LEVELS, not passages within one artifact, and v1.37:3-8 declares "exactly ONE amendment"
+    (to C-OD-09) while :106 lists C-OD-11 §11.1 UNCHANGED, as does v1.39:47-58. THE STABLE
+    SHAPE IS AN INTERNAL CONTRADICTION INSIDE THE OD SPEC LINEAGE: C-OD-11's contract body
+    frames the cap as cardinality (and the plan and code implement exactly that) while two
+    later deltas' CHANGE-NOTE PROSE reasons in spans/sec while disclaiming any change to
+    C-OD-11. No authority rule breaks the tie -- resolution needs ADR-D6 §1.3 (non-resident
+    here) or a new OD amendment. (A)'s true price is that it
+    invalidates v1.37's population question and B-133's step (3), which must be re-expressed
+    rather than re-worded. Routed rather than repaired because a Phase-7 edit cannot amend
+    cleared spec text, and leaving the contradiction would be silent absorption
+    (CLAUDE.md §4.3). THE TEMPORAL DECISION REMAINS
+    OWED IN THE SAME PASS: standing cardinality, distinct series per window, or a cardinality
+    rate -- settling the quantity alone does not settle it.
     SCOPE, corrected at codex round 4 [P1]: this is a defect in an UNCALLED helper.
     assert_per_tenant_cardinality_isolation has no call site in harness-*/src -- only its
     definition, its __all__ entry, two docstring mentions, and tests. No production path reaches
     this comparison today, so the row is NOT a live production defect. It is registered because
-    the helper's semantics are what a future caller inherits, and because the same "spans/sec"
-    documentation governs the sibling cell_rate_limit that B-182 (C) may yet authorise a consumer
-    for. NOT FIXED IN THE SURFACING ARC. The B-182 witness supplies a "1s" window so its own
+    the helper's semantics are what a future caller inherits.
+    THE CLAIM THAT B-183 GOVERNS B-182'S HALF IS WITHDRAWN (fork §6(ii)): cell_rate_limit's
+    plan comment at :978 declares it a SPAN RATE and nothing contradicts that, so the two
+    fields plausibly carry DIFFERENT quantities by design. What they share is only that
+    v1.37 rider (a) describes both in one parenthetical. NOT FIXED IN THE SURFACING ARC. The B-182 witness supplies a "1s" window so its own
     assertion is coherent, and the mismatch is registered rather than repaired, because choosing
     the repair is a contract question -- see the close-out.
   close_out: >-
@@ -9709,10 +9731,9 @@ items:
     observation_window is still unread in the comparison, and enumerate every caller of
     assert_per_tenant_cardinality_isolation to see which windows are actually passed in
     production (the surfacing arc did not do this -- it is the first real question).
-    (2) SUPERSEDED at #1378 — the quantity is NOT choosable here. Grounding found three
-    disagreeing authority surfaces (see the fork-doc phase above), so this step routes to
-    a design-substrate decision rather than a caller survey. The three repair options
-    below are retained ONLY as the shapes the decision picks among, not as an
+    (2) DISCHARGED at #1380 -- the fork doc is FILED (see the fork-doc phase above); the
+    quantity and the temporal dimension are both routed to the operator there. The three
+    repair options below are retained ONLY as the shapes the decision picks among, not as an
     agent-executable menu. Original text follows: decide the quantity before the unit. Codex round 4 [P2]: there are TWO mismatches and
     time is the lesser -- observed_series counts DISTINCT SERIES while tenant_rate_limit is
     documented in SPANS/sec, so dividing by a parsed window yields series/sec, not spans/sec.
@@ -9725,16 +9746,29 @@ items:
     (3) Whichever is chosen, witness it BEHAVIOURALLY at both sides of the limit and at two
     different windows -- a single-window test cannot distinguish a rate gate from a count gate,
     which is precisely why this went unnoticed.
-    (4) Check the sibling: cell_rate_limit carries the same "spans/sec" documentation and has no
-    consumer at all (B-182 (C)), so any window grammar committed here should be settled BEFORE an
-    in-process cell-cap enforcement site is written, or the two will disagree.
+    (4) The sibling is DECOUPLED, correcting this row's earlier text: cell_rate_limit is
+    declared a span rate at plan :978 and B-182's open question (external enforcement vs gap)
+    is largely independent of the quantity decision here. THE SURVIVING GATE IS NARROW AND
+    TENANT-SIDE ONLY (tightened at review round 3 [P2], which caught this step still
+    re-coupling the two): authorising a consumer for the TENANT cap requires B-183 settled
+    first; authorising a consumer for cell_rate_limit ALONE does NOT -- that is B-182's own
+    call, and the fork's halt target deliberately excludes it. The one exception is a
+    disposition that explicitly unifies them: under (B) the tenant cap becomes a span rate
+    too, so a delta choosing (B) must say whether it governs cell_rate_limit as well.
+    (5) OWED, impl-only follow-up: harness-od/tests/test_b183_tenant_limit_quantity_conflict.py
+    carries test_the_plan_signature_declares_spans_per_second, which reads :978 -- the CELL
+    limit -- inside a module about the TENANT limit. The assertion is true and stays green but
+    its stated relevance is wrong. Fork docs match the codex guard's DESIGN_RE, so the
+    doc-only filing at #1380 could not carry the test edit.
   council: >-
-    SUPERSEDED at #1378. The registration read this as single-domain unit/contract
-    coherence choosable by a caller survey. It is not: the quantity is declared three ways
-    across C-OD-11, the OD plan signature and two cleared spec deltas, so the decision is
-    design-substrate and belongs to the owed fork doc. Whether that doc needs a council is
-    for whoever files it; this row no longer asserts no.
-  heading: '### B-183 · `assert_per_tenant_cardinality_isolation` compares a WINDOWED count against a PER-SECOND limit and never reads `observation_window`, so the §21.4 per-tenant gate fires at a threshold that depends on the caller''s window *(surfaced by out-of-family Codex round 3 while grounding `B-182`, 2026-08-15)*'
+    SUPERSEDED again at #1380, and the fork's own first answer here was wrong too. That draft
+    said no council was owed because the evidence favoured (A). With v1.37/v1.38 restored to
+    independent normative weight the evidence is TWO-SIDED, and no authority rule breaks the tie
+    (the contradiction is internal to the OD spec lineage). A DYADIC C7 vs C10 CONVENING IS THE
+    RECOMMENDED SHAPE -- what a compliance cap measures at the two multi-tenant cells against
+    what the observability substrate can count and afford -- after the fork's probes (1) and
+    (2) are run.
+  heading: '### B-183 · The `C-OD-11` §11.1 per-tenant cap''s QUANTITY is declared two ways INSIDE THE OD SPEC LINEAGE — the contract body says cardinality (and the plan and shipped code implement distinct series) while two later deltas'' change-note prose reasons in spans/sec — and its TEMPORAL dimension is undeclared, `observation_window` being read nowhere *(surfaced by out-of-family Codex round 3 while grounding `B-182`, 2026-08-15; **heading neutralised at #1380** — the prior wording asserted a PER-SECOND limit whose threshold depends on the caller''s window, which is one of the two readings the filed fork does **not** settle)*'
 - id: B-184
   title: >-
     tools/ test-execution audit — 15 of 43 test modules were executed by no mechanism; 14 now wired
