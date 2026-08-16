@@ -9748,8 +9748,16 @@ items:
     was not excluded from execution at all -- 82s is a reason to move a module to a cheaper lane,
     not to stop running it -- so it has its own CI job and stays out of the pre-push gate on
     latency. EXCLUSIONS is empty; the guard reports 44 modules / 44 executed / 0 excluded.
-    (3) Normalise the two import conventions, or document the required cwd per file, so the next
-    audit cannot manufacture failures by running from the wrong venue.
+    (3) DONE at #1374, and it was a latent defect rather than a style nit. tools/ is not a package
+    and pytest runs under --import-mode=importlib, so nothing puts it on sys.path; TEN modules
+    passed only because an unrelated sibling inserted the path first in the same invocation, and
+    failed at collection when run alone (witnessed: test_arc_ledger alone errors; paired with
+    test_leg_selfcheck it is 97 passed). Measured 11 failing from the root and 2 from tools/. The
+    ten now insert their own directory, and test_q4_packaging_gate additionally passed Path.cwd()
+    as the repo root -- now anchored to __file__. from tools.X imports are left alone as a second
+    working convention. The coverage guard now enforces sibling self-sufficiency, detecting
+    siblings BY RESOLUTION rather than a stdlib blocklist (a blocklist draft fired on harness_core
+    and friends -- eleven non-defects). 30 tests, mutation-probed.
   council: >-
     No. A tooling-coverage question settled by execution; the only judgement is the runtime
     tradeoff at step 1, which is a cost call with a named number.

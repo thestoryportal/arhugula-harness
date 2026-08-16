@@ -251,3 +251,67 @@ def test_runner_wrappers_before_pytest_still_count_as_execution(tmp_path: Path) 
     ):
         root = _repo(tmp_path / f"case{i}", modules=["test_a.py"], workflow=_wf(cmd))
         assert guard.validate(root) == [], cmd
+
+
+# --- import self-sufficiency (B-184 close-out 3) ------------------------------
+
+
+def _mod(tmp_path: Path, name: str, body: str) -> Path:
+    root = _repo(tmp_path, modules=[], workflow=_wf(f"pytest tools/{name}"))
+    (root / "tools" / name).write_text(body, encoding="utf-8")
+    return root
+
+
+def test_fires_on_a_bare_sibling_import_with_no_path_insert(tmp_path: Path) -> None:
+    """The order-dependent green: passes only if another file inserted the path first."""
+    root = _mod(tmp_path, "test_x.py", "import arc_ledger\n")
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
+    (problem,) = guard.import_self_sufficiency_problems(root)
+    assert "test_x.py" in problem and "order-dependent" in problem
+
+
+def test_silent_when_the_module_inserts_the_path_itself(tmp_path: Path) -> None:
+    root = _mod(
+        tmp_path,
+        "test_x.py",
+        "import sys\nfrom pathlib import Path\n"
+        "sys.path.insert(0, str(Path(__file__).resolve().parent))\n"
+        "import arc_ledger\n",
+    )
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
+    assert guard.import_self_sufficiency_problems(root) == []
+
+
+def test_silent_when_the_sibling_is_loaded_by_file_path(tmp_path: Path) -> None:
+    """`spec_from_file_location` is cwd-agnostic by construction."""
+    root = _mod(tmp_path, "test_x.py", "import importlib.util\nspec_from_file_location\n")
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
+    assert guard.import_self_sufficiency_problems(root) == []
+
+
+def test_an_installed_package_import_is_not_a_sibling(tmp_path: Path) -> None:
+    """Detection is by RESOLUTION, not a stdlib blocklist.
+
+    An earlier blocklist version fired on `harness_core` / `harness_as` — installed
+    workspace packages, always importable — which would have made this gate flag eleven
+    non-defects and be muted within two rounds.
+    """
+    root = _mod(tmp_path, "test_x.py", "from harness_core import DeploymentSurface\n")
+    assert guard.import_self_sufficiency_problems(root) == []
+
+
+def test_a_package_style_tools_import_is_not_flagged(tmp_path: Path) -> None:
+    """`from tools.X import ...` resolves via the repo root — a second working convention."""
+    root = _mod(tmp_path, "test_x.py", "from tools.arc_ledger import thing\n")
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
+    assert guard.import_self_sufficiency_problems(root) == []
+
+
+def test_a_module_importing_only_stdlib_needs_no_marker(tmp_path: Path) -> None:
+    root = _mod(tmp_path, "test_x.py", "import json\nimport subprocess\n")
+    assert guard.import_self_sufficiency_problems(root) == []
+
+
+def test_the_repository_is_import_self_sufficient_today() -> None:
+    """The real tree, after B-184 close-out (3). Ten modules were order-dependent."""
+    assert guard.import_self_sufficiency_problems() == []

@@ -32,6 +32,7 @@ Run standalone (`python tools/tools_test_coverage_guard.py`) or import `validate
 
 from __future__ import annotations
 
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -160,6 +161,52 @@ def executed_modules(root: Path | None = None) -> set[str]:
     return {name for name in test_modules(base) if name in targets}
 
 
+#: A module that imports a sibling `tools/` module must put this directory on `sys.path`
+#: itself, or load the sibling by file path. Anything else passes only when some OTHER
+#: file in the same pytest invocation inserted the path first.
+_SELF_SUFFICIENCY_MARKERS = ("sys.path.insert", "spec_from_file_location")
+
+#: Only BARE sibling imports are fragile. `from tools.X import ...` resolves through the
+#: repo root and was measured working from both the root and `tools/`, so it is a second
+#: legitimate convention rather than a violation.
+#:
+#: Detection is by RESOLUTION, not by a stdlib blocklist: a name counts as a sibling only
+#: when `tools/<name>.py` actually exists. An earlier blocklist version fired on
+#: `harness_core`, `harness_as` and friends — installed workspace packages that are always
+#: importable — which would have made this a gate that flags eleven non-defects.
+_IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+([a-z_][a-z_0-9]*)\b", re.MULTILINE)
+
+
+def import_self_sufficiency_problems(root: Path | None = None) -> list[str]:
+    """Modules that import a sibling without making `tools/` importable themselves.
+
+    `B-184` close-out (3). `tools/` is not a package and pytest runs under
+    `--import-mode=importlib`, so nothing puts this directory on `sys.path`. Ten modules
+    nevertheless passed in the parity gate — because an unrelated sibling happened to
+    insert the path first, earlier in the same invocation. Run alone from the repo root
+    they failed at collection. That is an order-dependent green: silent, and it evaporates
+    the moment the inserting sibling is renamed or the file order changes.
+    """
+    base = root or ROOT
+    tools_dir = base / "tools"
+    siblings = {p.stem for p in tools_dir.glob("*.py")}
+    problems: list[str] = []
+    for path in sorted(tools_dir.glob("test_*.py")):
+        text = path.read_text(encoding="utf-8")
+        if any(marker in text for marker in _SELF_SUFFICIENCY_MARKERS):
+            continue
+        imported = {m.group(1) for m in _IMPORT_RE.finditer(text)}
+        if imported & siblings - {path.stem}:
+            problems.append(
+                f"{path.name}: imports a sibling `tools/` module but never puts this "
+                f"directory on `sys.path`. It will import only when another file in the "
+                f"same pytest run inserted the path first — an order-dependent pass. Add "
+                f"`sys.path.insert(0, str(Path(__file__).resolve().parent))`, or load the "
+                f"sibling via `importlib.util.spec_from_file_location`."
+            )
+    return problems
+
+
 def validate(root: Path | None = None) -> list[str]:
     """Return the violations, empty when the invariant holds."""
     base = root or ROOT
@@ -184,6 +231,7 @@ def validate(root: Path | None = None) -> list[str]:
     for name, reason in sorted(EXCLUSIONS.items()):
         if not reason.strip():
             problems.append(f"{name}: EXCLUSIONS entry has an empty reason.")
+    problems.extend(import_self_sufficiency_problems(base))
     return problems
 
 
