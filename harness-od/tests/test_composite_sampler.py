@@ -44,6 +44,7 @@ _LITERAL_ALWAYS_SAMPLED = (
     "managed_agents.runtime",
     "skill.activation",
     "fallback.exhausted",  # §9.2 row 19 (NEW at OD spec v1.37 — U-OD-58)
+    "workflow.envelope",  # §9.2 row 20 (NEW at OD spec v1.42 — `B-137` C1)
 )
 
 
@@ -52,8 +53,8 @@ _LITERAL_ALWAYS_SAMPLED = (
 # ---------------------------------------------------------------------------
 
 
-def test_canonical_set_carries_19_entries_per_spec_9_2() -> None:
-    assert len(ALWAYS_SAMPLED_EVENT_CLASSES) == 19
+def test_canonical_set_carries_20_entries_per_spec_9_2() -> None:
+    assert len(ALWAYS_SAMPLED_EVENT_CLASSES) == 20
 
 
 def test_literal_fixture_is_complete_against_the_canonical_literal_arm() -> None:
@@ -66,7 +67,7 @@ def test_literal_fixture_is_complete_against_the_canonical_literal_arm() -> None
     """
     wildcards = {e for e in ALWAYS_SAMPLED_EVENT_CLASSES if e.endswith(".*")}
     assert frozenset(_LITERAL_ALWAYS_SAMPLED) == ALWAYS_SAMPLED_EVENT_CLASSES - wildcards
-    assert len(_LITERAL_ALWAYS_SAMPLED) == 17
+    assert len(_LITERAL_ALWAYS_SAMPLED) == 18
 
 
 @pytest.mark.parametrize("name", _LITERAL_ALWAYS_SAMPLED)

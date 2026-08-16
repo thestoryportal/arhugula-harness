@@ -1,6 +1,18 @@
 """B-137 step-(3) discriminator: candidate C1 measured on A′'s own falsifying test.
 
-`B-137`'s step (3) is a posture fork over a live option set — A (mode-conditional
+**AS-BUILT SINCE OD SPEC v1.42 — the polarity of this module is INVERTED, deliberately.**
+When it was written, C1 was a *counterfactual*: `workflow.envelope` was absent from §9.2 and
+a context manager patched it in. The operator ratified C1 at step (3) on 2026-08-16 and OD
+spec v1.42 §0.2 landed `workflow.envelope` as §9.2 row 20, so the shipped set now carries it
+and the patch has nothing to add. The measurements below are unchanged in substance — every
+one still runs at the same composition and asserts the same outcome — but they now measure
+**HEAD** rather than a hypothesis, and the counterfactual arm has flipped to `_without_c1`,
+which REMOVES the envelope to reproduce the pre-v1.42 world. That inversion is what keeps
+the module non-circular: an as-built assertion that never exercises the negative arm cannot
+distinguish "C1 works" from "this test asserts nothing"
+(`[[only-the-classifier-can-witness-the-classifier]]`).
+
+`B-137`'s step (3) was a posture fork over a live option set — A (mode-conditional
 `ALWAYS_ON` head with the §10.3 ratio moved into the tail consumer, unmeasured), A′
 (bare-composite head, measured), C1 (admit the root), B (reporting only) and C (ratify a
 root-only floor). Two of those had been measured at the real venue, but **never against the
@@ -80,12 +92,13 @@ evidence. The cell's rate is grounded separately so the `×10` figure cannot go 
 against literal/prefix structures derived once at import (`sampling_mode.py:160-172`), so
 patching the public `ALWAYS_SAMPLED_EVENT_CLASSES` frozenset alone is a silent no-op. There
 is no runtime mutation path to the set in `src/`; this is test mechanics, and
-`test_the_c1_patch_actually_reaches_the_sampler` is the positive control that fails loudly
-if it stops reaching it.
+`test_c1_is_as_built_and_the_counterfactual_arm_still_bites` is the positive control that
+fails loudly if the patch target moves — now guarding the `_without_c1` direction.
 
-**Mutation-probed on both load-bearing mechanisms.** *(1)* Neutering the C1 patch
-(`_c1_member_set` yielding the unmodified set) reds four tests — the positive control, the
-discriminator, the non-equivalence result and the contrast witness. *(2)* Reverting
+**Mutation-probed on both load-bearing mechanisms.** *(1)* Reverting the v1.42 membership
+(dropping `workflow.envelope` from `ALWAYS_SAMPLED_EVENT_CLASSES`) reds the positive
+control, the discriminator, the non-equivalence result and the contrast witness. *(2)*
+Reverting
 `_B133_EVENT` to the flattering `sandbox.violation` reds three — the trigger-status
 grounding, the non-equivalence result (A's head half suddenly exports the envelope), and the
 contrast witness (the two event names stop disagreeing). Probe (2) is the one that matters
@@ -136,10 +149,15 @@ _PROD_CELL = CellID(
 
 
 @contextmanager
-def _c1_member_set() -> Generator[None]:
-    """Candidate C1: `workflow.envelope` joins the §9.2 always-sampled set."""
+def _without_c1() -> Generator[None]:
+    """The PRE-v1.42 counterfactual: `workflow.envelope` leaves the §9.2 set.
+
+    The inverse of this module's original patch. C1 is as-built, so the hypothesis that
+    needs constructing is now the *old* world — and constructing it is what proves the
+    as-built assertions are discriminating rather than vacuous.
+    """
     original = _sm._ALWAYS_SAMPLED_LITERALS
-    _sm._ALWAYS_SAMPLED_LITERALS = frozenset(original | {_ENVELOPE})
+    _sm._ALWAYS_SAMPLED_LITERALS = frozenset(original - {_ENVELOPE})
     try:
         yield
     finally:
@@ -212,22 +230,28 @@ def _head_admitted(
 # ---------------------------------------------------------------------------
 
 
-def test_the_c1_patch_actually_reaches_the_sampler() -> None:
-    """Positive control for the private-structure patch (see module docstring).
+def test_c1_is_as_built_and_the_counterfactual_arm_still_bites() -> None:
+    """Positive control, INVERTED for the as-built world (see module docstring).
 
-    Without this, every C1 result below could be a silent no-op reported as a finding.
+    Two things, and the second is the one that carries weight. First, C1 really is shipped:
+    `workflow.envelope` resolves as always-sampled through `is_always_sampled` at HEAD, not
+    merely as a literal in the public frozenset. Second — and this is what keeps every
+    as-built assertion below from being vacuous — the `_without_c1` arm still reaches the
+    derived literal/prefix structures, so the pre-v1.42 comparison is a real counterfactual
+    rather than a no-op that would let every test pass by construction.
     """
-    assert is_always_sampled(_ENVELOPE) is False, (
-        f"`{_ENVELOPE}` is in the §9.2 set at HEAD — C1 is no longer a counterfactual and "
-        "B-137's step (3) must be re-grounded before this module is trusted"
+    assert is_always_sampled(_ENVELOPE) is True, (
+        f"`{_ENVELOPE}` is NOT in the §9.2 set at HEAD — OD spec v1.42 row 20 has been "
+        "reverted or the derived literal structures no longer see it; B-137's ratified "
+        "step (3) is not in force and every result in this module is measuring the old world"
     )
-    with _c1_member_set():
-        assert is_always_sampled(_ENVELOPE) is True, (
-            "the C1 patch did not reach `is_always_sampled` — the literal/prefix "
+    with _without_c1():
+        assert is_always_sampled(_ENVELOPE) is False, (
+            "the `_without_c1` patch did not reach `is_always_sampled` — the literal/prefix "
             "structures at `sampling_mode.py:160-172` are derived at import, so the patch "
-            "target has moved and every result in this module is a false negative"
+            "target has moved and the counterfactual arm is a silent no-op"
         )
-    assert is_always_sampled(_ENVELOPE) is False, "the C1 patch leaked out of its context"
+    assert is_always_sampled(_ENVELOPE) is True, "the counterfactual leaked out of its context"
 
 
 def test_the_representative_event_is_a_member_but_not_a_ten_two_trigger() -> None:
@@ -273,10 +297,21 @@ def test_c1_rescues_the_event_carried_population_that_a_prime_cannot() -> None:
     `RECORD_AND_SAMPLE`. A repair that works by *inheritance* is indifferent to how a member
     is realized (name or event); a repair that works by *name exposure* is not.
     """
-    with _c1_member_set():
-        under_c1 = _exported(build_default_sampler(base_rate=0.0))
-    under_a_prime = _exported(HarnessCompositeSampler(base_rate=0.0))
+    under_c1 = _exported(build_default_sampler(base_rate=0.0))
+    # A′ is an ALTERNATIVE to C1, not something co-resident with it: its whole mechanism is
+    # exposing a child's NAME to the composite sampler, so with C1 also in force the envelope
+    # would be rescued by its own §9.2 membership and A′ would be flattered by the very row
+    # it is being compared against. Measure it in the world it was proposed for.
+    with _without_c1():
+        under_a_prime = _exported(HarnessCompositeSampler(base_rate=0.0))
+        pre_v1_42 = _exported(build_default_sampler(base_rate=0.0))
 
+    assert pre_v1_42 == [], (
+        f"the pre-v1.42 world exported {pre_v1_42}, expected nothing: at base_rate=0.0 an "
+        "ordinary envelope root took the ratio arm and its children inherited the drop. If "
+        "this is non-empty the counterfactual is not reproducing the starvation B-137 "
+        "measured, and the as-built result below is not attributable to C1"
+    )
     assert under_c1 == sorted([_ENVELOPE, _MEMBER, _CARRIER]), (
         f"expected C1 to export the whole in-envelope trace; got {under_c1}. If the "
         f"event-carrier `{_CARRIER}` is missing, C1 shares A′'s name-only hole and B-137 "
@@ -305,8 +340,7 @@ def test_c1_does_not_rescue_a_carrier_that_is_its_own_root() -> None:
     the members emitted inside the envelope."* C1's coverage and that scope coincide. The
     bound is recorded so step (3) is not chosen against a coverage claim C1 does not make.
     """
-    with _c1_member_set():
-        exported = _exported(build_default_sampler(base_rate=0.0), envelope_wrapped=False)
+    exported = _exported(build_default_sampler(base_rate=0.0), envelope_wrapped=False)
 
     assert exported == [_MEMBER], (
         f"expected C1 to rescue only the name-backed ROOT member out of the envelope; got "
@@ -336,9 +370,12 @@ def test_c1_and_an_unconditional_head_are_not_export_equivalent() -> None:
     cannot be measured; `ALWAYS_ON` here is **A's head half against today's tail**, and no
     conclusion about A's full cost or behaviour is drawn from it.
     """
-    with _c1_member_set():
-        under_c1 = _exported(build_default_sampler(base_rate=0.0))
-    under_a_head = _exported(ALWAYS_ON)
+    under_c1 = _exported(build_default_sampler(base_rate=0.0))
+    # Candidate A is an ALTERNATIVE to C1 (see the A′ note in the discriminator above): with
+    # C1 also in force the envelope takes its own §9.2 bypass arm under A's head too, and the
+    # two candidates would appear equivalent for a reason that has nothing to do with A.
+    with _without_c1():
+        under_a_head = _exported(ALWAYS_ON)
 
     assert under_c1 == sorted([_ENVELOPE, _MEMBER, _CARRIER]), (
         f"C1 exported {under_c1}, not the whole trace — re-ground result 1 first"
@@ -365,9 +402,9 @@ def test_the_trigger_event_hides_the_difference_that_the_representative_event_sh
 
     Pinned so no future revision silently reintroduces the flattering choice.
     """
-    with _c1_member_set():
-        c1_trigger = _exported(build_default_sampler(base_rate=0.0), event=_TRIGGER_EVENT)
-    a_head_trigger = _exported(ALWAYS_ON, event=_TRIGGER_EVENT)
+    c1_trigger = _exported(build_default_sampler(base_rate=0.0), event=_TRIGGER_EVENT)
+    with _without_c1():
+        a_head_trigger = _exported(ALWAYS_ON, event=_TRIGGER_EVENT)
 
     assert c1_trigger == a_head_trigger == sorted([_ENVELOPE, _MEMBER, _CARRIER]), (
         f"with the §10.2 trigger event the candidates diverged (C1={c1_trigger}, "
@@ -375,9 +412,9 @@ def test_the_trigger_event_hides_the_difference_that_the_representative_event_sh
         "holds, so the module's discipline-2 rationale needs re-grounding"
     )
 
-    with _c1_member_set():
-        c1_repr = _exported(build_default_sampler(base_rate=0.0))
-    a_head_repr = _exported(ALWAYS_ON)
+    c1_repr = _exported(build_default_sampler(base_rate=0.0))
+    with _without_c1():
+        a_head_repr = _exported(ALWAYS_ON)
     assert c1_repr != a_head_repr, (
         "the representative event no longer separates the candidates — if both event names "
         "now agree, the event choice is no longer decisive and result 3 must be re-derived"
@@ -396,10 +433,9 @@ def test_c1_leaves_out_of_envelope_roots_on_their_base_rate_draw() -> None:
     This uses `_head_admitted` deliberately: it is a claim about what the head lets in, which
     is where the volume cost is actually incurred.
     """
-    with _c1_member_set():
-        c1_admits_carrier = _CARRIER in _head_admitted(
-            build_default_sampler(base_rate=0.0), envelope_wrapped=False
-        )
+    c1_admits_carrier = _CARRIER in _head_admitted(
+        build_default_sampler(base_rate=0.0), envelope_wrapped=False
+    )
     unconditional_admits_carrier = _CARRIER in _head_admitted(ALWAYS_ON, envelope_wrapped=False)
 
     assert unconditional_admits_carrier is True, (

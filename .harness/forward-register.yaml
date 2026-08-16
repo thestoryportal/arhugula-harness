@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 184
+  total: 185
   open: 1
   design_substrate_gated: 3
   registered_finding: 36
   operator_gated: 0
   held: 2
-  closed: 142
-  identity_digest: a1f50c51faf8a138
+  closed: 143
+  identity_digest: 91a33b00290bd745
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7436,7 +7436,12 @@ items:
 - id: B-137
   title: 'Head sampling starves the tail-keep mechanism for every preserved class that is NOT a root span
     name -- the shipped head sampler applies the section 10.3 ratio in BOTH section 9.1 modes'
-  status: registered_finding
+  status: closed
+  pr: '#PR_PLACEHOLDER -- the C1 build leg. OD spec v1.42 section 0.2 lands workflow.envelope as
+    section 9.2 row 20; count contract reconciled across five carriers; clearance marker at
+    .harness/clearance/spec-operational-discipline-v1-42-cleared-2026-08-16.md; build record and the
+    two Class-3 findings at .harness/b137-c1-admit-the-envelope-root-2026-08-16.md. The concurrency-
+    headroom residual this arc measured is carried at its OWN row B-185, not here.'
   summary: 'WHAT IT IS, MEASURED AT THE REAL PRODUCTION COMPOSITION. C-OD-09 section 9.1 says TAIL_BASED_PROD
     means the sampling decision is taken at TRACE COMPLETION. The shipped composition does not deliver
     that: harness-runtime/src/harness_runtime/lifecycle/tracer_provider.py resolves
@@ -7484,16 +7489,38 @@ items:
     on A-prime''s own falsifying test: C1 rescues BOTH starved populations where A-prime rescues
     one -- crucially the event-carried B-133 family, which dies under A-prime because that repair
     works by exposing the child''s NAME and an event-carrier''s name is ordinary.
-    THE RATIFIED COST, CARRIED FORWARD RATHER THAN ERASED BY THE DECISION. C1''s cost is DATA LOSS,
-    not delay: under production buffer bounds a workflow trace containing at least one ordinary
-    non-member child becomes a never-resolving buffered trace, drained only by force_flush, and C1
-    MAXIMISES the B-136 pressure this row''s own step (5) predicts. The frequency of that
-    ordinary-child population in real workflows is STILL UNMEASURED. The ratification decides the
-    POSTURE; it does not retire that measurement. The implementing arc MUST (a) measure the
-    ordinary-child population before shipping C1 to a production-bounded cell, and (b) carry the
-    B-136 interaction explicitly rather than discovering it later. If that measurement shows the
-    population is common enough that C1''s steady state is buffer exhaustion, that is a NEW finding
-    to route back -- not a licence to silently re-open this ratified choice.'
+    THE RATIFIED COST -- STATED AS THE OPERATOR RATIFIED IT, THEN SUPERSEDED BY THE BUILD ARC''S OWN
+    MEASUREMENT. As ratified: C1''s cost is DATA LOSS, not delay -- under production buffer bounds a
+    workflow trace containing at least one ordinary non-member child becomes a never-resolving
+    buffered trace, drained only by force_flush, and C1 MAXIMISES the B-136 pressure this row''s own
+    step (5) predicts; the frequency of that ordinary-child population was STILL UNMEASURED, and the
+    implementing arc was required to (a) measure it before shipping C1 to a production-bounded cell
+    and (b) carry the B-136 interaction explicitly.
+    ** THAT COST DOES NOT HOLD, AND THIS ROW''S OWN EARLIER BULLET ALREADY SAID SO. ** The ratification
+    bullet (2026-08-16) restated a cost the RE-PRICED bullet (2026-08-13, PR #1331) had already
+    superseded -- the two bullets contradicted each other and the LATER one was the wrong one. The
+    build arc discharged (a) and (b) and the measurement is clean: at team-binding x
+    self-hosted-server through the real TailKeepSpanProcessor, C1 costs 0 buffered / 0 evicted
+    SEQUENTIALLY even at a buffer cap of 3 (where the pre-B-136 counterfactual read 3 buffered / 97
+    evicted), because B-136''s name-arm repair makes an always-sampled root run the root-close
+    flush-or-drop decision BEFORE forwarding itself, materializing its trace and freeing its slot in
+    the same on_end. And NO configuration loses a span the status quo would have kept: at the
+    deliberately hostile composition of 100 CONCURRENT traces at cap 8, C1 evicts 92 traces yet
+    exports the IDENTICAL 8 ordinary children the status quo exports, while raising envelope and
+    trigger exports from 8 and 14 to 100 and 100. What C1 evicts is buffered context belonging to
+    traces the status quo would have head-dropped entirely.
+    THE RESIDUAL THAT IS REAL IS A DIFFERENT ONE, AND IT IS TRACKED AT B-185. C1 multiplies CONCURRENT
+    in-flight buffer occupancy by 1/base_rate (measured peak 9 -> 100 at concurrency 100), moving the
+    eviction threshold at a 0.1-rate cell from roughly 40,960 to roughly 4,096 concurrent
+    envelope-rooted workflows against the shipped max_buffered_traces default of 4096. At that default
+    the measured eviction count is ZERO. Registered rather than repaired.
+    THE PREMISE WAS ALSO INCOMPLETE, IN THE FAVOURABLE DIRECTION. This row framed C1 as minting a new
+    floor. Build-time grounding found C-OD-25 section 25.1 (Spec_Operational_Discipline_v1_8.md:90)
+    has declared "workflow.envelope head=1.0 ... the envelope ALWAYS persists" since v1.8, preserved
+    verbatim through the whole v1.9 -> v1.41 chain, and section 9.2 simply never ingested it. C1 is an
+    INGESTION REPAIR of the same class v1.37 fixed for fallback.exhausted -- NOT a Phase-7 design
+    extension. This strengthens the ratification rather than undermining it, so the arc proceeded;
+    had it cut the other way it would have been a Class 1 halt.'
   close_out: '(1) RE-GROUND THE WIRING FIRST, because it is explicitly marked as provisional. Re-read tracer_provider.py''s
     sampler resolution at the then-current HEAD and confirm it still binds the per-cell ratio in both modes
     and still carries the "current default sampler ignores the mode ... Future units may wire mode-conditional
@@ -9855,3 +9882,58 @@ items:
     No. A tooling-coverage question settled by execution; the only judgement is the runtime
     tradeoff at step 1, which is a cost call with a named number.
   heading: '### B-184 · `tools/` test-execution audit — 15 of 43 test modules ran nowhere; **14 are now wired (+128 tests)** and only 1 is excluded, on runtime *(surfaced by the dead-file finding at `B-167` / #1368, audited as a class 2026-08-16)*'
+- id: B-185
+  title: >-
+    C1 raises CONCURRENT tail-buffer occupancy by 1/base_rate, cutting max_buffered_traces headroom
+    ~10x at the 0.1-rate production cells — measured, bounded, zero evictions at the shipped default
+  status: registered_finding
+  summary: 'SPLIT OFF B-137 AT ITS CLOSE, because a named residual left on a closed row is untracked
+    (--open skips closed rows). B-137 step (3) landed candidate C1: workflow.envelope joined section
+    9.2 as row 20, so every envelope-rooted trace is now head-admitted rather than only the base-rate
+    fraction.
+    WHAT WAS MEASURED. At team-binding x self-hosted-server (base rate 0.1), 100 traces through the
+    real TailKeepSpanProcessor. SEQUENTIALLY C1 is free: 0 buffered / 0 evicted, even at a buffer cap
+    of 3, because B-136''s name-arm repair materializes each trace and frees its slot at root close.
+    CONCURRENTLY it is not: with 100 traces open at once, peak buffered occupancy goes 9 -> 100. Every
+    envelope-rooted trace now reaches the buffer where previously only the head-admitted fraction did,
+    so occupancy scales by 1/base_rate.
+    WHAT THAT COSTS. Against the shipped max_buffered_traces default of 4096
+    (harness-runtime types.py:741,752) the eviction threshold at a 0.1-rate cell moves from roughly
+    40,960 to roughly 4,096 CONCURRENT envelope-rooted workflows. At the default cap the measured
+    eviction count is ZERO at concurrency 100. The reduction is real and it is bounded; it does not
+    bite at any concurrency these cells are currently sized for.
+    WHY IT IS NOT A DEFECT AND WAS NOT REPAIRED. Eviction under C1 sheds buffered context belonging to
+    traces the STATUS QUO would have head-dropped in their entirety. Measured at a deliberately
+    hostile cap of 8 with 100 concurrent traces, C1 exports the IDENTICAL 8 ordinary children the
+    status quo exports while raising envelope and trigger exports from 8 and 14 to 100 and 100. There
+    is no measured configuration in which C1 loses a span the status quo would have kept, so this is
+    a headroom fact to track, not a regression to fix.
+    WHAT WOULD MAKE IT LIVE. A production cell whose steady-state CONCURRENT envelope-rooted workflow
+    count approaches max_buffered_traces. That number is a throughput figure, and it is the same
+    unmeasured denominator B-182 / B-183 need -- Persona_Document_v1.md section 11 open-item 4, still
+    open. So this row is DORMANT ON THE SAME EVIDENCE GAP as the C11 half, and should be re-grounded
+    whenever that figure lands rather than probed independently.'
+  council: >-
+    NO. This row carries a measured number and a named repair set, not a cross-domain tension.
+    Its parent B-137 genuinely earned a council because candidate A traded an observability floor
+    (C7) against per-cell budget (C11) with no measurement to break the tie. Here the measurement
+    exists and points one way: C1 loses no span the status quo kept, at any composition probed, so
+    there is nothing for a second voice to weigh. What is missing is a THROUGHPUT FIGURE, and a
+    council cannot supply one -- it is the same Persona section 11 open-item 4 denominator
+    B-182 / B-183 wait on. Convene nothing; re-ground when the figure lands.
+  close_out: '(1) Do NOT probe this in isolation -- it shares its blocking denominator with B-182 /
+    B-183 (Persona section 11 open-item 4, workflow throughput). Re-ground when that lands.
+    (2) If it does land and the concurrent envelope-rooted count is within an order of magnitude of
+    max_buffered_traces at any ACTIVE cell, the repair candidates are: raise the per-cell
+    max_buffered_traces (config-only, but re-prices memory), or make the section 9.2 root-bypass arm
+    release its buffer slot eagerly rather than at root close (mechanism change, needs its own
+    measurement).
+    (3) Falsified by: a measurement showing sequential-equivalent occupancy under real concurrency
+    (which would mean the 1/base_rate scaling does not reproduce outside this probe''s shape), or a
+    mode-conditional sampler landing that moves the ratio into the tail consumer (candidate A), which
+    would change the admitted population and invalidate the 9 -> 100 figure entirely.'
+  heading: '### B-185 · C1 raises **concurrent** tail-buffer occupancy by `1/base_rate`, cutting
+    `max_buffered_traces` headroom ~10× at the 0.1-rate production cells *(measured at the `B-137` C1
+    build arc, 2026-08-16; split off `B-137` at its close so the residual stays queryable — bounded,
+    zero evictions at the shipped 4096 default, and dormant on the same throughput denominator as
+    `B-182` / `B-183`)*'

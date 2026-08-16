@@ -22,7 +22,7 @@ from harness_od.sampling_mode import (
     sampling_decision,
 )
 
-# §9.2 always-sampled member set — the 19 rows, byte-exact per the §9.2 table.
+# §9.2 always-sampled member set — the 20 rows, byte-exact per the §9.2 table.
 _EXPECTED_ALWAYS_SAMPLED: frozenset[str] = frozenset(
     {
         "sandbox.violation",
@@ -44,6 +44,7 @@ _EXPECTED_ALWAYS_SAMPLED: frozenset[str] = frozenset(
         "managed_agents.runtime",
         "skill.activation",
         "fallback.exhausted",  # §9.2 row 19 (NEW at OD spec v1.37 — U-OD-58)
+        "workflow.envelope",  # §9.2 row 20 (NEW at OD spec v1.42 — `B-137` C1)
     }
 )
 
@@ -91,13 +92,13 @@ def test_per_surface_sampling_covers_all_surfaces() -> None:
 
 
 # --- acc #3 ----------------------------------------------------------------
-def test_always_sampled_event_classes_cardinality_nineteen() -> None:
-    """`ALWAYS_SAMPLED_EVENT_CLASSES` has cardinality 19 per §9.2."""
-    assert len(ALWAYS_SAMPLED_EVENT_CLASSES) == 19
+def test_always_sampled_event_classes_cardinality_twenty() -> None:
+    """`ALWAYS_SAMPLED_EVENT_CLASSES` has cardinality 20 per §9.2."""
+    assert len(ALWAYS_SAMPLED_EVENT_CLASSES) == 20
 
 
 def test_always_sampled_event_class_members_byte_exact_per_9_2() -> None:
-    """Member set is byte-exact against the §9.2 table (19 rows)."""
+    """Member set is byte-exact against the §9.2 table (20 rows)."""
     assert ALWAYS_SAMPLED_EVENT_CLASSES == _EXPECTED_ALWAYS_SAMPLED
 
 
@@ -191,18 +192,20 @@ def test_fallback_exhausted_in_always_sampled_set() -> None:
     )
 
 
-def test_row_19_is_an_unconditional_literal_not_a_prefix() -> None:
-    """§9.2 row 19 resolves through the LITERAL arm — 17 literals + 2 prefixes.
+def test_rows_19_and_20_are_unconditional_literals_not_prefixes() -> None:
+    """§9.2 rows 19 + 20 resolve through the LITERAL arm — 18 literals + 2 prefixes.
 
-    Row 19 is unconditional: not a wildcard, and not one of the four
-    conditional-by-attribute rows. A member that accidentally acquired a `.*`
-    suffix would silently always-sample every `fallback.exhausted.*`
-    descendant, so the decomposition is asserted on both sides.
+    Both rows are unconditional: neither is a wildcard, and neither is one of the
+    four conditional-by-attribute rows. A member that accidentally acquired a `.*`
+    suffix would silently always-sample every descendant, so the decomposition is
+    asserted on both sides for each.
     """
     assert "fallback.exhausted" in _ALWAYS_SAMPLED_LITERALS
-    assert len(_ALWAYS_SAMPLED_LITERALS) == 17
+    assert "workflow.envelope" in _ALWAYS_SAMPLED_LITERALS
+    assert len(_ALWAYS_SAMPLED_LITERALS) == 18
     assert _ALWAYS_SAMPLED_PREFIXES == ("audit.", "validator.fail.")
     assert is_always_sampled("fallback.exhausted.detail") is False
+    assert is_always_sampled("workflow.envelope.partial") is False
 
 
 # --- B7 §9.2 conditional-by-attribute rows (over-sampling refinement) -------
