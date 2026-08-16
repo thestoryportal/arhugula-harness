@@ -10,6 +10,7 @@ export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/arhugula-uv-cache}"
 
 uv run pytest -q \
+  tools/test_ac_claim_precision.py \
   tools/test_agy_review.py \
   tools/test_codex_stop_gate.py \
   tools/test_codex_workflow_parity.py \

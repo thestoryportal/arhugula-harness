@@ -645,11 +645,14 @@ def _claim_subject(line: str, enclosing: str, at: int = 0) -> str:
 # of its close-out says to answer that BY EXECUTION against the real plan corpus
 # rather than by argument. It was, and this is the result.
 #
-# MEASURED over every `Implementation_Plan_*.md` in `design-substrate/` (386 blocks
+# MEASURED over every `Implementation_Plan_*.md` in `design-substrate/` (388 blocks
 # carrying an acceptance-criteria section):
 #
-#   * 285 are DERIVABLE — an unqualified header plus a contiguous 1..N numbered
+#   * 287 are DERIVABLE — an unqualified header plus a contiguous 1..N numbered
 #     list and no top-level bullets. The recount is exact on these.
+#     (re-derived 2026-08-16 under fence-aware block segmentation: an earlier pass
+#     counted `#` comments INSIDE fenced code as unit headings, splitting two real
+#     blocks, and read `U-CP-00b` as `U-CP-00`.)
 #   * 101 are NOT — amendment / additions blocks that renumber into a PARENT unit's
 #     space (one observed list starts at `0`) or carry no numbered list at all.
 #     A recount of these is meaningless: the numbers belong to another artifact.
