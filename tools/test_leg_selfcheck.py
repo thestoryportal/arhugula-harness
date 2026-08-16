@@ -957,3 +957,76 @@ def test_recount_is_exact_on_the_real_u_cp_102_block() -> None:
     end = text.find("### ", start + 10)
     block = text[start:end] if end > start else text[start:]
     assert ls.derive_acceptance_criteria_count(block) == 16
+
+
+def test_recount_refuses_a_mixed_numbered_and_bulleted_section() -> None:
+    """A numbered list PLUS top-level bullets is not exactly countable.
+
+    Counting the numbered items alone yields a confidently INCOMPLETE ground
+    truth, which is worse than declining. Regression from out-of-family review:
+    an earlier draft returned 4 for `U-RT-138` (4 numbered + 1 bullet) and 6 for
+    `U-RT-141` (6 + 2).
+    """
+    block = "**Acceptance criteria:**\n\n1. one\n2. two\n\n- a bullet criterion\n"
+    assert ls.derive_acceptance_criteria_count(block) is None
+
+
+def test_recount_refuses_the_real_mixed_blocks_from_the_corpus() -> None:
+    """The two shapes review named, read from the shipped artifacts."""
+    import re as _re
+
+    for name, unit in (
+        ("Implementation_Plan_Harness_Runtime_v2_49.md", "U-RT-138"),
+        ("Implementation_Plan_Harness_Runtime_v2_50.md", "U-RT-141"),
+    ):
+        plan = ROOT / "design-substrate" / name
+        if not plan.exists():  # pragma: no cover - corpus moved
+            continue
+        text = plan.read_text(encoding="utf-8")
+        heads = list(_re.finditer(r"^#+.*\bU-[A-Z]+-\d+\b.*$", text, _re.M))
+        for k, h in enumerate(heads):
+            if unit in h.group(0):
+                end = heads[k + 1].start() if k + 1 < len(heads) else len(text)
+                assert ls.derive_acceptance_criteria_count(text[h.start() : end]) is None, unit
+                break
+
+
+def test_mutation_probe_recount_reads_the_obligations_line() -> None:
+    block = "**Mutation-probe obligations (PD-9).** Criteria 4, 6, 7 and 9 each carry a probe.\n"
+    assert ls.derive_mutation_probe_count(block) == 4
+
+
+def test_mutation_probe_recount_deduplicates_repeated_references() -> None:
+    block = "**Mutation-probe obligations.** Criteria 3 and 5; criterion 3 again.\n"
+    assert ls.derive_mutation_probe_count(block) == 2
+
+
+def test_mutation_probe_recount_ignores_criteria_named_outside_the_section() -> None:
+    """The cross-reference trap. Prose elsewhere in the block naming other
+    criteria must not inflate the probe count -- the same trap that made a naive
+    corroboration check mis-score `U-RT-147`."""
+    block = (
+        "Some prose citing Criteria 11, 12 and 13 from an unrelated unit.\n\n"
+        "**Mutation-probe obligations.** Criteria 1 and 2 each carry a probe.\n\n"
+        "**Tests:** more prose about Criteria 40, 41.\n"
+    )
+    assert ls.derive_mutation_probe_count(block) == 2
+
+
+def test_mutation_probe_recount_returns_none_when_no_obligations_section() -> None:
+    assert ls.derive_mutation_probe_count("**Acceptance criteria:**\n\n1. one\n") is None
+
+
+def test_mutation_probe_recount_returns_none_not_zero_when_none_are_named() -> None:
+    assert ls.derive_mutation_probe_count("**Mutation-probe obligations.** None owed.\n") is None
+
+
+def test_mutation_probe_recount_is_exact_on_the_real_u_cp_102_block() -> None:
+    """U-CP-102 names nine probe-carrying criteria: 4, 6, 7, 10, 11, 12, 14, 15, 16."""
+    plan = ROOT / "design-substrate" / "Implementation_Plan_Control_Plane_v2_53.md"
+    if not plan.exists():  # pragma: no cover - corpus moved
+        return
+    text = plan.read_text(encoding="utf-8")
+    start = text.find("### §0.2 U-CP-102")
+    end = text.find("### ", start + 10)
+    assert ls.derive_mutation_probe_count(text[start:end]) == 9

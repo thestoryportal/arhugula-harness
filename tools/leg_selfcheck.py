@@ -666,6 +666,9 @@ def _claim_subject(line: str, enclosing: str, at: int = 0) -> str:
 _AC_HEADER_RE = re.compile(r"\*\*Acceptance criteria([^*]*)\*\*")
 _AC_NEXT_SECTION_RE = re.compile(r"\n\*\*[A-Z][^*\n]{3,}\*\*")
 _AC_ITEM_RE = re.compile(r"^([0-9]+)\. ", re.MULTILINE)
+_AC_BULLET_RE = re.compile(r"^[-*] ", re.MULTILINE)
+_MP_HEADER_RE = re.compile(r"\*\*Mutation-probe obligations[^*]*\*\*")
+_MP_CRITERIA_RE = re.compile(r"[Cc]riteri(?:on|a)\s+#?([0-9][0-9,\s and#]*)")
 
 
 def derive_acceptance_criteria_count(unit_block: str) -> int | None:
@@ -698,7 +701,43 @@ def derive_acceptance_criteria_count(unit_block: str) -> int | None:
     numbers = [int(m.group(1)) for m in _AC_ITEM_RE.finditer(section)]
     if not numbers or numbers != list(range(1, len(numbers) + 1)):
         return None
+    # A MIXED section — a numbered list plus top-level bullet criteria — is not
+    # exactly countable by the numbered list alone, and counting it anyway is
+    # worse than declining: it yields a confidently INCOMPLETE ground truth.
+    # The corpus really carries this shape (`U-RT-138` is 4 numbered + 1 bullet;
+    # `U-RT-141` is 6 + 2), and an earlier draft of this helper returned 4 and 6.
+    if _AC_BULLET_RE.search(section):
+        return None
     return len(numbers)
+
+
+def derive_mutation_probe_count(unit_block: str) -> int | None:
+    """Recount the criteria a unit block's mutation-probe obligation names.
+
+    The second recipe `B-167` step 1 supplies. The obligations line enumerates the
+    criteria carrying a `# mutation-probe:` annotation ("Criteria 4, 6, 7, 10, 11,
+    12, 14, 15 and 16 each carry..."), so the derived count is the size of that
+    set — de-duplicated, because a block may name the same criterion twice.
+
+    Returns `None` when no obligations section names any criterion, so a caller
+    cannot mistake "not stated" for "zero probes owed".
+
+    Only the obligations SECTION is read. An earlier ad-hoc run of this recipe
+    over a whole block also matched a `Criteria 9 and ...` reference belonging to
+    unrelated prose, which is the same cross-reference trap that made a naive
+    corroboration check mis-score `U-RT-147`.
+    """
+    header = _MP_HEADER_RE.search(unit_block)
+    if header is None:
+        return None
+    rest = unit_block[header.end() :]
+    nxt = _AC_NEXT_SECTION_RE.search(rest)
+    section = rest[: nxt.start()] if nxt else rest
+
+    found: set[int] = set()
+    for run in _MP_CRITERIA_RE.findall(section):
+        found.update(int(x) for x in re.findall(r"\d+", run))
+    return len(found) or None
 
 
 def check_counts(
