@@ -60,12 +60,12 @@
 snapshot:
   total: 184
   open: 1
-  design_substrate_gated: 2
-  registered_finding: 37
+  design_substrate_gated: 3
+  registered_finding: 36
   operator_gated: 0
   held: 2
   closed: 142
-  identity_digest: a52b4e7821905d33
+  identity_digest: a1f50c51faf8a138
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9666,7 +9666,7 @@ items:
   title: >-
     assert_per_tenant_cardinality_isolation compares a windowed observed_series count against a
     per-second tenant_rate_limit and never reads observation_window
-  status: registered_finding
+  status: design_substrate_gated
   summary: >-
     C-OD-11 §11.1's tenant_rate_limit is documented as a PER-SECOND rate --
     per_cell_cardinality_budget.py:58 "per-tenant rate limit (spans/sec)", and again at :50.
