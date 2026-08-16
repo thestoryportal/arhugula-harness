@@ -9717,7 +9717,7 @@ items:
 - id: B-184
   title: >-
     tools/ test-execution audit — 15 of 43 test modules were executed by no mechanism; 14 now wired
-    (+206 tests), only 1 excluded on runtime, and two import conventions coexist
+    (+128 tests), only 1 excluded on runtime, and two import conventions coexist
   status: registered_finding
   summary: >-
     #1368 found tools/test_leg_selfcheck.py doubly dead and its own next-action said to treat that
@@ -9734,14 +9734,14 @@ items:
     self_hosted_readiness and managed_cloud_readiness in fact hold 64 unmarked provider-free unit
     and static tests that pass in 5.5s with every credential stripped -- exactly the environment
     the parity gate runs. They are wired too. ONLY ONE module stays out: test_codex_loop.py, on
-    RUNTIME, at 82s against a ~180s gate. All 206 newly-wired tests pass; none was hiding a red.
+    RUNTIME: its 16 tests cost 82s, a ~46% increase on a ~180s gate. All 128 newly-wired tests pass; none was hiding a red.
     Collection proven 469 -> 533 -> 597, each delta reconciling exactly.
     A VENUE TRAP worth carrying: tools/ hosts TWO import conventions -- bare (import leg_selfcheck,
     needing a sys.path insert or cwd=tools) and package (from tools.q4_packaging_gate import,
     needing cwd=ROOT). Running test_q4_packaging_gate.py from inside tools/ reports 4 FAILED; from
     the root it passes 4/4. An audit that runs these from the wrong cwd manufactures failures.
   close_out: >-
-    (1) DECIDE test_codex_loop.py: 82s in a ~180s gate. Either accept the cost, move it to a
+    (1) DECIDE test_codex_loop.py: 16 tests, 82s, a ~46% increase on a ~180s gate. Either accept the cost, move it to a
     non-blocking or nightly lane, or profile it -- do not silently leave it unrun, which is the
     state this row exists to end.
     (2) Make the audit a standing invariant: a cheap guard enumerating tools/test_*.py,
@@ -9753,4 +9753,4 @@ items:
   council: >-
     No. A tooling-coverage question settled by execution; the only judgement is the runtime
     tradeoff at step 1, which is a cost call with a named number.
-  heading: '### B-184 · `tools/` test-execution audit — 15 of 43 test modules ran nowhere; **14 are now wired (+206 tests)** and only 1 is excluded, on runtime *(surfaced by the dead-file finding at `B-167` / #1368, audited as a class 2026-08-16)*'
+  heading: '### B-184 · `tools/` test-execution audit — 15 of 43 test modules ran nowhere; **14 are now wired (+128 tests)** and only 1 is excluded, on runtime *(surfaced by the dead-file finding at `B-167` / #1368, audited as a class 2026-08-16)*'
