@@ -39,10 +39,23 @@ on:
   push:
     branches: [main]
 
-# Cancel superseded runs on the same ref so a fast push series doesn't queue.
+# Cancel superseded runs on the same ref so a fast push series doesn't queue —
+# EXCEPT on `main`, where every post-merge run is the sole evidence for its own
+# commit and cancelling one destroys that evidence.
+#
+# Why the carve-out is load-bearing (out-of-family Codex, round 2 of the
+# refresh-fast-path arc): a substantive merge and its follow-on terminating
+# refresh both push `refs/heads/main`, so they share a concurrency group and the
+# refresh run CANCELS the code merge's run. That was survivable while every main
+# run was full — the refresh SHA contains the code, so the surviving run still
+# tested it. The `scope` fast path below breaks that: the refresh run SKIPS
+# test/typecheck/axis-isolation, so cancelling the substantive run would leave the
+# merged code with NO successful main-push evidence at all. Serialising by hand
+# (wait for the code merge's main CI before enabling auto-merge on the refresh)
+# also works, but relies on discipline; this removes the hazard at the root.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
