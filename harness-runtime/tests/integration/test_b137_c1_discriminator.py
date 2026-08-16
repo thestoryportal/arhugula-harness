@@ -124,6 +124,7 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.trace.id_generator import IdGenerator
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 from opentelemetry.trace import SpanContext, TraceFlags
 from opentelemetry.trace.span import NonRecordingSpan
@@ -543,6 +544,36 @@ def test_c1_does_not_survive_an_unsampled_ambient_parent() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _DeterministicIds(IdGenerator):
+    """Trace ids chosen so `TraceIdRatioBased` admission is EXACT, not a hash draw.
+
+    `TraceIdRatioBased` admits when `trace_id & (2**64 - 1) < rate * 2**64`, so supplying the
+    low 64 bits directly makes the base-rate arm deterministic: every `admit_every`-th trace
+    is admitted and the rest are not. Nothing about the SAMPLER is stubbed — the shipped
+    `build_default_sampler` still makes the decision — only the id draw it reads is fixed,
+    which is exactly the nondeterminism under test rather than part of the claim.
+    """
+
+    def __init__(self, *, admit_every: int) -> None:
+        self._admit_every = admit_every
+        self._traces = -1
+        # Span ids MUST advance on their own counter. Sharing one counter with the trace ids
+        # silently changes which traces are admitted (every 5th rather than every 10th, since
+        # each trace also draws span ids), which is the kind of fixture bug that would make
+        # this witness measure a composition nobody chose.
+        self._spans = -1
+
+    def generate_trace_id(self) -> int:
+        self._traces += 1
+        # low 64 bits: 0 sorts below any positive ratio bound; all-ones sorts above it.
+        low = 0 if self._traces % self._admit_every == 0 else (1 << 64) - 1
+        return ((self._traces + 1) << 64) | low  # high bits keep every trace id distinct
+
+    def generate_span_id(self) -> int:
+        self._spans += 1
+        return self._spans + 1
+
+
 def _preserved_ordinary_tags(*, traces: int, cap: int | None, with_c1: bool) -> set[str]:
     """Trace tags whose ORDINARY child reached the exporter, at `cap` concurrent traces.
 
@@ -551,7 +582,10 @@ def _preserved_ordinary_tags(*, traces: int, cap: int | None, with_c1: bool) -> 
     """
     rate = PER_CELL_BASE_RATE_ENVELOPE[_PROD_CELL].default_rate
     exporter = InMemorySpanExporter()
-    provider = TracerProvider(sampler=build_default_sampler(base_rate=rate))
+    provider = TracerProvider(
+        sampler=build_default_sampler(base_rate=rate),
+        id_generator=_DeterministicIds(admit_every=10),
+    )
     provider.add_span_processor(
         TailKeepSpanProcessor(
             downstream=SimpleSpanProcessor(exporter),
@@ -615,19 +649,23 @@ def test_c1_displaces_previously_preserved_traces_under_buffer_pressure() -> Non
         "cost must be re-derived rather than assumed"
     )
 
-    # The DISPLACEMENT itself: the baseline's survivors are drawn by trace-id hash across the
-    # whole index range, so any of them outside that newest-`cap` window is lost under C1.
-    # Not asserted as an exact set — WHICH traces the base-rate sampler admits is a hash draw
-    # and varies per run, and pinning a specific set would be asserting a measurement rather
-    # than a shape (`[[assert-the-shape-not-the-measurement]]`). The residual flake surface is
-    # the chance that EVERY baseline survivor happens to land in the last 8 of 100, i.e.
-    # (8/100)^|base| — about 1e-11 at the ~10 survivors this rate yields.
+    # The DISPLACEMENT itself, now asserted as an EXACT set because the trace ids are
+    # deterministic. An earlier cut left the ids random and reasoned about a flake
+    # probability; out-of-family Codex round 3 showed that reasoning was wrong too — the real
+    # exposure was P(no trace below the window is admitted) = 0.9**92 ≈ 6.2e-5, i.e. about one
+    # CI run in sixteen thousand, not the 1e-11 the comment claimed. A one-in-16k random red is
+    # not a flake budget worth spending, and "compute a smaller probability" was the wrong fix:
+    # `_DeterministicIds` removes the randomness instead, so the set below is reproducible and
+    # the assertion is exact.
     displaced = tight_base - tight_c1
-    assert displaced, (
-        f"C1 displaced NOTHING at cap={cap} (base={sorted(tight_base)}, c1={sorted(tight_c1)}) "
-        "— if buffer pressure no longer displaces previously-preserved traces the "
-        "displacement has been mitigated and B-185's cost must be re-priced downward; a good "
-        "outcome, but not one to absorb silently"
+    assert displaced == tight_base, (
+        f"expected C1 to displace the ENTIRE baseline-preserved set at cap={cap}; "
+        f"base={sorted(tight_base)} c1={sorted(tight_c1)} displaced={sorted(displaced)}. "
+        "Total displacement is what the deterministic composition produces — the baseline's "
+        "admitted traces are spread every 10th across the population and C1's survivors are "
+        "the last 8, so the sets cannot intersect. A partial or empty result means either the "
+        "eviction policy changed or the id fixture stopped controlling admission; re-derive "
+        "B-185's cost rather than relaxing this assertion."
     )
 
     # ...and at the SHIPPED default the displacement is empty and C1 strictly dominates.

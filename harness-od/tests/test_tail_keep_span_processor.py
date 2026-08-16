@@ -582,3 +582,69 @@ def test_root_close_only_trace_does_not_evict_at_saturation() -> None:
     assert proc.buffered_trace_count == 2
     assert proc.dropped_trace_count == 0
     assert len(roots) == 2
+
+
+# ---------------------------------------------------------------------------
+# OD spec v1.42 §0.2.3 — row 20 is ROOT-CONDITIONAL at the tail too
+# ---------------------------------------------------------------------------
+
+
+def test_nested_workflow_envelope_buffers_instead_of_force_forwarding() -> None:
+    """A NESTED `workflow.envelope` must NOT take the §9.2 name arm (v1.42 §0.2.3).
+
+    Row 20 is root-conditional, exactly like `subagent.span (root)`: the floor rides
+    `ParentBased` inheritance, which the head applies only at a trace root. The tail has no
+    `ParentBased` wrapper, so it gates with a parent check — otherwise an envelope opened
+    *inside* another trace would be force-forwarded even when its surrounding unclassified
+    trace is dropped, which contradicts the contract and adds unpriced export volume.
+
+    This is a real shape: `execute_workflow` is re-entered by the child runner under an
+    active `subagent.span`, so the nested envelope exists in production.
+
+    Surfaced by out-of-family Codex round 3 against the C1 arc — the head enforced
+    root-conditionality structurally while the tail still read row 20 as unconditional.
+    """
+    recorder = _RecordingProcessor()
+    tail = TailKeepSpanProcessor(downstream=recorder)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("v142-root-conditional")
+
+    # An ordinary root carrying NO §10.2 trigger, with a nested envelope inside it.
+    with tracer.start_as_current_span("ordinary.root"):
+        with tracer.start_as_current_span("workflow.envelope"):
+            pass
+
+    forwarded = {s.name for s in recorder.on_end_calls}
+    assert "workflow.envelope" not in forwarded, (
+        "a NESTED `workflow.envelope` was force-forwarded by the §9.2 name arm — row 20 is "
+        "root-conditional per OD spec v1.42 §0.2.3, so a non-root envelope must buffer and "
+        "fall to the §10.2 decision (which drops it here, the trace carrying no trigger)"
+    )
+    assert "ordinary.root" not in forwarded, (
+        "the unclassified root was forwarded — the trace should drop entirely"
+    )
+
+
+def test_root_workflow_envelope_still_takes_the_always_sampled_arm() -> None:
+    """The positive control for the parent check — C1 itself must still work.
+
+    Without this, the root-conditional gate above could be over-broad (never forwarding an
+    envelope at all) and the previous test would still pass, silently reverting C1.
+    """
+    recorder = _RecordingProcessor()
+    tail = TailKeepSpanProcessor(downstream=recorder)
+    provider = TracerProvider()
+    provider.add_span_processor(tail)
+    tracer = provider.get_tracer("v142-root-control")
+
+    with tracer.start_as_current_span("workflow.envelope"):
+        with tracer.start_as_current_span("hitl.gate.evaluated"):
+            pass
+
+    forwarded = {s.name for s in recorder.on_end_calls}
+    assert "workflow.envelope" in forwarded, (
+        "a ROOT `workflow.envelope` was not forwarded — the parent check is over-broad and "
+        "has reverted candidate C1 (OD spec v1.42 §9.2 row 20)"
+    )
+    assert "hitl.gate.evaluated" in forwarded, "the in-envelope §9.2 member must still forward"
