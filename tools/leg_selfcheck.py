@@ -638,6 +638,108 @@ def _claim_subject(line: str, enclosing: str, at: int = 0) -> str:
     return best or enclosing
 
 
+# --- B-167 step 1: a FORMAT-SCOPED acceptance-criteria recount ------------------
+#
+# `check_counts` below compares claims against each other and never recounts.
+# `B-167` asked whether a recount against GROUND TRUTH is buildable at all. Step 1
+# of its close-out says to answer that BY EXECUTION against the real plan corpus
+# rather than by argument. It was, and this is the result.
+#
+# MEASURED over every `Implementation_Plan_*.md` in `design-substrate/` (386 blocks
+# carrying an acceptance-criteria section):
+#
+#   * 285 are DERIVABLE — an unqualified header plus a contiguous 1..N numbered
+#     list and no top-level bullets. The recount is exact on these.
+#   * 101 are NOT — amendment / additions blocks that renumber into a PARENT unit's
+#     space (one observed list starts at `0`) or carry no numbered list at all.
+#     A recount of these is meaningless: the numbers belong to another artifact.
+#   * Of the derivable blocks only 8 reference their own criteria numbers at all,
+#     so IN-BLOCK corroboration is nearly absent. All 8 agree once references to
+#     ANOTHER plan's unit are excluded (the one apparent contradiction, U-RT-147,
+#     cites `CP plan v2.41 U-CP-45`'s criterion, not its own).
+#
+# So the recount's value is exactly what `B-167` wanted and no more: it derives a
+# ground-truth number that an EXTERNAL claim can be checked against. It is not
+# self-checking, and it is NOT wired into any gate here — `B-167` step 3 owes a
+# false-positive measurement against already-merged arcs before that is earned.
+
+_AC_HEADER_RE = re.compile(r"\*\*Acceptance criteria([^*]*)\*\*")
+_AC_NEXT_SECTION_RE = re.compile(r"\n\*\*[A-Z][^*\n]{3,}\*\*")
+_AC_ITEM_RE = re.compile(r"^([0-9]+)\. ", re.MULTILINE)
+_AC_BULLET_RE = re.compile(r"^[-*] ", re.MULTILINE)
+_MP_HEADER_RE = re.compile(r"\*\*Mutation-probe obligations[^*]*\*\*")
+_MP_CRITERIA_RE = re.compile(r"[Cc]riteri(?:on|a)\s+#?([0-9][0-9,\s and#]*)")
+
+
+def derive_acceptance_criteria_count(unit_block: str) -> int | None:
+    """Recount a unit block's acceptance criteria, or `None` when not exact.
+
+    Returns a count ONLY for a FRESH enumeration: an acceptance-criteria header
+    with no parenthetical qualifier, followed by a numbered list running
+    contiguously from 1. Returns `None` for everything else — an amendment or
+    additions block, a list that starts anywhere but 1, a gap in the numbering,
+    or no list at all.
+
+    `None` means "not exactly derivable here", never "zero". A caller must treat
+    the two differently: reporting a disagreement against a `None` would be the
+    false-positive class that gets a gate muted.
+    """
+    header = _AC_HEADER_RE.search(unit_block)
+    if header is None:
+        return None
+    # A parenthetical qualifier marks a delta against a parent unit's numbering
+    # ("(v2.41 additions):", "(v2.4 amendment):"). Its numbers are not this
+    # block's to count.
+    qualifier = header.group(1).strip()
+    if qualifier not in ("", ".", ":"):
+        return None
+
+    rest = unit_block[header.end() :]
+    nxt = _AC_NEXT_SECTION_RE.search(rest)
+    section = rest[: nxt.start()] if nxt else rest
+
+    numbers = [int(m.group(1)) for m in _AC_ITEM_RE.finditer(section)]
+    if not numbers or numbers != list(range(1, len(numbers) + 1)):
+        return None
+    # A MIXED section — a numbered list plus top-level bullet criteria — is not
+    # exactly countable by the numbered list alone, and counting it anyway is
+    # worse than declining: it yields a confidently INCOMPLETE ground truth.
+    # The corpus really carries this shape (`U-RT-138` is 4 numbered + 1 bullet;
+    # `U-RT-141` is 6 + 2), and an earlier draft of this helper returned 4 and 6.
+    if _AC_BULLET_RE.search(section):
+        return None
+    return len(numbers)
+
+
+def derive_mutation_probe_count(unit_block: str) -> int | None:
+    """Recount the criteria a unit block's mutation-probe obligation names.
+
+    The second recipe `B-167` step 1 supplies. The obligations line enumerates the
+    criteria carrying a `# mutation-probe:` annotation ("Criteria 4, 6, 7, 10, 11,
+    12, 14, 15 and 16 each carry..."), so the derived count is the size of that
+    set — de-duplicated, because a block may name the same criterion twice.
+
+    Returns `None` when no obligations section names any criterion, so a caller
+    cannot mistake "not stated" for "zero probes owed".
+
+    Only the obligations SECTION is read. An earlier ad-hoc run of this recipe
+    over a whole block also matched a `Criteria 9 and ...` reference belonging to
+    unrelated prose, which is the same cross-reference trap that made a naive
+    corroboration check mis-score `U-RT-147`.
+    """
+    header = _MP_HEADER_RE.search(unit_block)
+    if header is None:
+        return None
+    rest = unit_block[header.end() :]
+    nxt = _AC_NEXT_SECTION_RE.search(rest)
+    section = rest[: nxt.start()] if nxt else rest
+
+    found: set[int] = set()
+    for run in _MP_CRITERIA_RE.findall(section):
+        found.update(int(x) for x in re.findall(r"\d+", run))
+    return len(found) or None
+
+
 def check_counts(
     by_file: dict[str, list[str]],
     report: Report,
