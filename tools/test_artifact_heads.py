@@ -10,7 +10,14 @@ Plus the two gates (generated-vs-committed, marker-completeness) in both directi
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
+
+# `tools/` is not a package and pytest runs under `--import-mode=importlib`, which does
+# NOT put this directory on `sys.path`. Without this insert the module imports only when
+# some OTHER test file in the same invocation happens to have inserted it first — an
+# order-dependent pass that vanishes the moment that sibling is renamed (B-184 close-out 3).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import artifact_heads as ah
 import clearance_frontmatter as cf

@@ -32,6 +32,7 @@ Run standalone (`python tools/tools_test_coverage_guard.py`) or import `validate
 
 from __future__ import annotations
 
+import ast
 import shlex
 import sys
 from pathlib import Path
@@ -160,6 +161,114 @@ def executed_modules(root: Path | None = None) -> set[str]:
     return {name for name in test_modules(base) if name in targets}
 
 
+def _mutates_sys_path(node: ast.stmt) -> bool:
+    """True when this TOP-LEVEL statement unconditionally mutates `sys.path`.
+
+    Deliberately narrow (out-of-family review [P2]): an `ast.walk` over the statement
+    would accept `some.path.append(...)`, a call nested inside an `if`, or one merely
+    defined in a function body — none of which make `tools/` importable at module scope.
+    Only a bare `sys.path.insert(...)` / `sys.path.append(...)` expression statement counts.
+
+    `spec_from_file_location` is NOT accepted: it loads one module by path and does not
+    touch `sys.path`, so it cannot license a later bare import of a DIFFERENT sibling.
+    Modules that use it simply have no bare sibling import to flag.
+    """
+    if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+        return False
+    func = node.value.func
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr in {"insert", "append"}
+        and isinstance(func.value, ast.Attribute)
+        and func.value.attr == "path"
+        and isinstance(func.value.value, ast.Name)
+        and func.value.value.id == "sys"
+    )
+
+
+def _bare_sibling(node: ast.AST, siblings: set[str], own: str) -> str | None:
+    """The sibling module this import node names BARE, if any.
+
+    `from tools.X import ...` is excluded: it resolves through the repo root and was
+    measured working from both cwds, so it is a second legitimate convention.
+    """
+    names: list[str] = []
+    if isinstance(node, ast.Import):
+        names = [a.name.split(".")[0] for a in node.names]
+    elif isinstance(node, ast.ImportFrom):
+        if node.level or not node.module:
+            return None
+        if node.module.split(".")[0] == "tools":
+            return None
+        names = [node.module.split(".")[0]]
+    for name in names:
+        if name in siblings and name != own:
+            return name
+    return None
+
+
+def import_self_sufficiency_problems(root: Path | None = None) -> list[str]:
+    """Modules that import a sibling without `tools/` being on `sys.path` in time.
+
+    `B-184` close-out (3). `tools/` is not a package and pytest runs under
+    `--import-mode=importlib`, so nothing puts this directory on `sys.path`. Ten modules
+    nevertheless passed in the parity gate — because an unrelated sibling happened to
+    insert the path first, earlier in the same invocation. Run alone from the repo root
+    they failed at collection: an order-dependent green that evaporates the moment the
+    inserting sibling is renamed or reordered.
+
+    Read through the **AST**, not raw text (review [P2], twice): a text scan is excused by
+    a marker in a comment — or one appearing *after* the import — while a docstring code
+    example fabricates a failure. Two timings are then distinguished (review [P2] again):
+
+    * a **top-level** import must come AFTER the `sys.path` mutation, since both run at
+      module-import time in source order;
+    * an import **nested** in a function or class body runs later, so any top-level
+      mutation anywhere in the module covers it — but with none at all, it is still a
+      violation.
+    """
+    base = root or ROOT
+    tools_dir = base / "tools"
+    siblings = {p.stem for p in tools_dir.glob("*.py")}
+    problems: list[str] = []
+
+    for path in sorted(tools_dir.glob("test_*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:  # a broken module is pytest's problem, not this guard's
+            continue
+
+        top_level_setup_at: int | None = None
+        for i, node in enumerate(tree.body):
+            if _mutates_sys_path(node):
+                top_level_setup_at = i
+                break
+
+        offender: str | None = None
+        for i, node in enumerate(tree.body):
+            sibling = _bare_sibling(node, siblings, path.stem)
+            if sibling and (top_level_setup_at is None or i < top_level_setup_at):
+                offender = sibling
+                break
+        if offender is None and top_level_setup_at is None:
+            for node in ast.walk(tree):
+                if node in tree.body:
+                    continue
+                sibling = _bare_sibling(node, siblings, path.stem)
+                if sibling:
+                    offender = sibling
+                    break
+        if offender:
+            problems.append(
+                f"{path.name}: imports the sibling `{offender}` without `tools/` being on "
+                f"`sys.path` first. It will import only when another file in the same "
+                f"pytest run inserted the path — an order-dependent pass. Add "
+                f"`sys.path.insert(0, str(Path(__file__).resolve().parent))` ABOVE the "
+                f"import."
+            )
+    return problems
+
+
 def validate(root: Path | None = None) -> list[str]:
     """Return the violations, empty when the invariant holds."""
     base = root or ROOT
@@ -184,6 +293,7 @@ def validate(root: Path | None = None) -> list[str]:
     for name, reason in sorted(EXCLUSIONS.items()):
         if not reason.strip():
             problems.append(f"{name}: EXCLUSIONS entry has an empty reason.")
+    problems.extend(import_self_sufficiency_problems(base))
     return problems
 
 

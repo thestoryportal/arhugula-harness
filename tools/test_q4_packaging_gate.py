@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+import sys
 import zipfile
 from pathlib import Path
 
-from tools.q4_packaging_gate import (
+# See the note in the sibling modules: tools/ is not a package and pytest runs under
+# --import-mode=importlib, so this module must put its own directory on sys.path rather
+# than depend on the caller cwd being the repo root (B-184 close-out 3).
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+#: The repository root, anchored to THIS FILE. An earlier version passed `Path.cwd()`,
+#: which silently assumed the caller ran from the repo root — the test failed from any
+#: other directory with a FileNotFoundError for `tools/pyproject.toml` (B-184 close-out 3).
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+from q4_packaging_gate import (  # noqa: E402
     REQUIREMENTS_LOCK,
     RUNTIME_ENTRY_POINTS,
     WORKSPACE_PACKAGES,
@@ -53,7 +65,7 @@ def _write_dist(tmp_path: Path, *, include_harness_entry_point: bool = True) -> 
 
 
 def test_q4_packaging_gate_accepts_complete_dist(tmp_path: Path) -> None:
-    report = validate(Path.cwd(), _write_dist(tmp_path))
+    report = validate(_REPO_ROOT, _write_dist(tmp_path))
 
     assert report.ready is True
     assert {check.name for check in report.checks if not check.ok} == set()
@@ -63,7 +75,7 @@ def test_q4_packaging_gate_rejects_missing_workspace_wheel(tmp_path: Path) -> No
     dist = _write_dist(tmp_path)
     (dist / "harness_cp-0.0.0-py3-none-any.whl").unlink()
 
-    report = validate(Path.cwd(), dist)
+    report = validate(_REPO_ROOT, dist)
 
     failed = {check.name: check.detail for check in report.checks if not check.ok}
     assert report.ready is False
@@ -74,7 +86,7 @@ def test_q4_packaging_gate_rejects_missing_workspace_wheel(tmp_path: Path) -> No
 def test_q4_packaging_gate_rejects_runtime_wheel_without_harness_cli(
     tmp_path: Path,
 ) -> None:
-    report = validate(Path.cwd(), _write_dist(tmp_path, include_harness_entry_point=False))
+    report = validate(_REPO_ROOT, _write_dist(tmp_path, include_harness_entry_point=False))
 
     failed = {check.name: check.detail for check in report.checks if not check.ok}
     assert report.ready is False
@@ -86,7 +98,7 @@ def test_q4_packaging_gate_rejects_unhashed_requirements_lock(tmp_path: Path) ->
     dist = _write_dist(tmp_path)
     (dist / REQUIREMENTS_LOCK).write_text("pydantic==2.11.0\n", encoding="utf-8")
 
-    report = validate(Path.cwd(), dist)
+    report = validate(_REPO_ROOT, dist)
 
     failed = {check.name: check.detail for check in report.checks if not check.ok}
     assert report.ready is False
