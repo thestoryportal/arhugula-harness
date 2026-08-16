@@ -315,3 +315,48 @@ def test_a_module_importing_only_stdlib_needs_no_marker(tmp_path: Path) -> None:
 def test_the_repository_is_import_self_sufficient_today() -> None:
     """The real tree, after B-184 close-out (3). Ten modules were order-dependent."""
     assert guard.import_self_sufficiency_problems() == []
+
+
+# --- the AST walk closes both text-scan holes (review round 1) ----------------
+
+
+def test_a_docstring_example_is_not_a_real_import(tmp_path: Path) -> None:
+    """A text scan fabricates a failure here; the AST sees no Import node."""
+    root = _mod(
+        tmp_path,
+        "test_x.py",
+        '"""Docs.\n\nUsage example::\n\n    import arc_ledger\n"""\n\nimport json\n',
+    )
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
+    assert guard.import_self_sufficiency_problems(root) == []
+
+
+def test_a_marker_in_a_comment_does_not_excuse_a_bare_import(tmp_path: Path) -> None:
+    """A text scan is excused by the mention; the AST sees no call."""
+    root = _mod(
+        tmp_path,
+        "test_x.py",
+        "# we should sys.path.insert here one day\nimport arc_ledger\n",
+    )
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
+    (problem,) = guard.import_self_sufficiency_problems(root)
+    assert "arc_ledger" in problem
+
+
+def test_a_path_insert_after_the_import_does_not_excuse_it(tmp_path: Path) -> None:
+    """ORDER is the thing. Inserting the path afterwards is too late for the import."""
+    root = _mod(
+        tmp_path,
+        "test_x.py",
+        "import sys\nfrom pathlib import Path\n"
+        "import arc_ledger\n"
+        "sys.path.insert(0, str(Path(__file__).resolve().parent))\n",
+    )
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
+    (problem,) = guard.import_self_sufficiency_problems(root)
+    assert "before putting" in problem
+
+
+def test_a_syntactically_broken_module_does_not_crash_the_guard(tmp_path: Path) -> None:
+    root = _mod(tmp_path, "test_x.py", "def (:\n")
+    assert guard.import_self_sufficiency_problems(root) == []
