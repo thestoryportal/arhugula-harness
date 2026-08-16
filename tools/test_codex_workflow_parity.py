@@ -1253,3 +1253,110 @@ def test_arc_metrics_capture_is_mirrored_across_both_ship_carriers() -> None:
         # the two properties a carrier must not silently drop
         assert "outside" in section.lower(), path  # queue lives out of the repo
         assert "merged history" in section.lower(), path  # release point, not any merge
+
+
+# ---------------------------------------------------------------------------
+# Refresh fast path (`scope` job) — structural invariants.
+#
+# The classifier's BEHAVIOUR is tested hermetically at
+# tools/hooks/test_classify_refresh_scope.sh. What that suite cannot see is how the
+# workflow WIRES it, and the wiring is where two behaviour-changing defects landed:
+# a job-level `if:` that made required checks conclude `skipped` (which
+# .agents/skills/ship-pr/SKILL.md:76 calls not-green, so refresh PRs would have been
+# unmergeable), and dependent jobs that would silently skip on an upstream failure.
+# Both are YAML-shape facts, so they are pinned here.
+# ---------------------------------------------------------------------------
+
+_FAST_PATH_GATED_JOBS = ("test", "typecheck", "axis-isolation", "coverage")
+_FAST_PATH_COND = "needs.scope.outputs.refresh_only != 'true'"
+
+
+def _ci_workflow() -> dict:
+    return yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+
+
+def test_fast_path_is_gated_at_step_level_never_job_level() -> None:
+    """A job-level `if:` on these jobs concludes `skipped`, which is NOT green.
+
+    Guarding at STEP level keeps every required context reporting `success` while
+    skipping the work. A future edit that "simplifies" this back to a job-level
+    condition would silently make every terminating-refresh PR unmergeable — this
+    assertion is the only thing standing between that edit and merge.
+    """
+    jobs = _ci_workflow()["jobs"]
+    for name in _FAST_PATH_GATED_JOBS:
+        job_if = str(jobs[name].get("if", ""))
+        assert "refresh_only" not in job_if, (
+            f"job `{name}` gates the fast path at JOB level (`if: {job_if}`) — that makes it "
+            "conclude `skipped`, which .agents/skills/ship-pr/SKILL.md:76 defines as not "
+            "green. Guard the steps instead."
+        )
+
+
+def test_every_step_of_the_gated_jobs_carries_the_fast_path_condition() -> None:
+    """A step added without the guard silently defeats the fast path for that step."""
+    jobs = _ci_workflow()["jobs"]
+    for name in _FAST_PATH_GATED_JOBS:
+        for step in jobs[name]["steps"]:
+            cond = str(step.get("if", ""))
+            if step.get("name") == "Upstream scope job must have succeeded":
+                continue  # the failure-propagation guard is deliberately the inverse
+            if "refresh_only == 'true'" in cond:
+                continue  # a step that runs ONLY on the fast path (the consumer suite)
+            assert _FAST_PATH_COND in cond, (
+                f"step {step.get('name')!r} in job `{name}` has no fast-path guard "
+                f"(`if: {cond}`) — it would run its work on a refresh-only PR"
+            )
+
+
+def test_gated_jobs_fail_loudly_when_the_scope_job_does_not_succeed() -> None:
+    """`needs:` alone turns an upstream failure into `skipped`, not `failure`.
+
+    Without `if: always()` plus an explicit first step, a `scope` infra flake (its
+    checkout, say) would silently skip nine required checks into a state that is
+    neither green nor red.
+    """
+    jobs = _ci_workflow()["jobs"]
+    for name in _FAST_PATH_GATED_JOBS:
+        job = jobs[name]
+        assert job.get("needs") == "scope", f"job `{name}` lost its `needs: scope`"
+        assert str(job.get("if", "")).strip() == "always()", (
+            f"job `{name}` must carry `if: always()` so an upstream `scope` failure "
+            "reaches the guard step below instead of skipping the job"
+        )
+        first = job["steps"][0]
+        assert first.get("name") == "Upstream scope job must have succeeded", (
+            f"job `{name}`'s FIRST step must be the upstream-failure guard; got "
+            f"{first.get('name')!r}"
+        )
+        assert "needs.scope.result != 'success'" in str(first.get("if", ""))
+
+
+def test_roadmap_status_consumers_still_run_on_the_fast_path() -> None:
+    """The fast path skips the parity suite, which is the ONLY CI home of two
+    `.harness/roadmap_status.md` consumers (`arc_exit_report`, `docs_completeness`).
+
+    Skipping them would leave the one file a refresh PR changes with LESS coverage than
+    a code PR gives it. Out-of-family review caught that the original "every consumer
+    runs in a job the filter keeps" claim was false; this pins the repair.
+    """
+    steps = _ci_workflow()["jobs"]["test"]["steps"]
+    fast = [s for s in steps if "refresh_only == 'true'" in str(s.get("if", ""))]
+    assert fast, "no step runs on the refresh fast path — roadmap_status consumers are uncovered"
+    body = "\n".join(str(s.get("run") or "") for s in fast)
+    for consumer in (
+        "tools/test_arc_exit_report.py",
+        "tools/test_docs_completeness.py",
+        "tools/test_roadmap_status_refresh.py",
+        "tools/test_roadmap_status_consumers.py",
+    ):
+        assert consumer in body, f"{consumer} does not run on the refresh fast path"
+
+
+def test_the_classifier_lives_in_a_tested_script_not_inline_yaml() -> None:
+    """Inline `run:` bash carries no regression witness; the extracted script does."""
+    scope_steps = _ci_workflow()["jobs"]["scope"]["steps"]
+    runs = "\n".join(str(s.get("run") or "") for s in scope_steps)
+    assert "tools/hooks/classify-refresh-scope.sh" in runs
+    assert (ROOT / "tools" / "hooks" / "classify-refresh-scope.sh").is_file()
+    assert (ROOT / "tools" / "hooks" / "test_classify_refresh_scope.sh").is_file()

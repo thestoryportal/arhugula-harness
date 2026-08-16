@@ -95,48 +95,32 @@ jobs:
         env:
           # Empty on `push`; the PR base SHA on `pull_request`.
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          # `push` only: the ref's tip BEFORE this push. A push can carry MANY
-          # commits (multi-commit push, rebase merge), so `HEAD^ HEAD` would look
-          # at the last commit alone — and a push whose FINAL commit touches only
-          # roadmap_status.md while an EARLIER one touches code would wrongly take
-          # the fast path and skip the blocking jobs. Out-of-family Codex caught
-          # this; the whole range is compared instead.
+          # `push` only: the ref tip BEFORE this push. A push can carry MANY commits,
+          # so the classifier compares the whole range, never just HEAD^..HEAD.
           PUSH_BEFORE: ${{ github.event.before }}
-        run: |
-          set -uo pipefail
-          if [ -n "${BASE_SHA:-}" ]; then
-            changed="$(git diff --name-only "$BASE_SHA"...HEAD 2>/dev/null)" || changed=""
-          elif [ -n "${PUSH_BEFORE:-}" ] \
-            && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ] \
-            && git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
-            changed="$(git diff --name-only "$PUSH_BEFORE" HEAD 2>/dev/null)" || changed=""
-          else
-            # Branch creation, force-push, or an unreachable prior SHA: the range
-            # is unknowable, so fail closed rather than guess from HEAD^.
-            echo "push range unavailable — running the full matrix (fail-closed)"
-            echo "refresh_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ -z "$changed" ]; then
-            echo "empty or unreadable diff — running the full matrix (fail-closed)"
-            echo "refresh_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "changed files:"; printf '  %s\n' $changed
-          # Everything that is NOT the one blessed path. Non-empty => full matrix.
-          other="$(printf '%s\n' "$changed" | grep -vFx '.harness/roadmap_status.md' || true)"
-          if [ -z "$other" ]; then
-            echo "terminating-refresh shape — skipping pytest/pyright/axis-isolation/coverage"
-            echo "refresh_only=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "refresh_only=false" >> "$GITHUB_OUTPUT"
-          fi
+        # Logic lives in a script, not this YAML string, so it can carry a hermetic
+        # regression suite: tools/hooks/test_classify_refresh_scope.sh (18 cases,
+        # auto-discovered by tools/codex-parity-check.sh). Two behaviour-changing
+        # defects shipped while it was inline and were caught only by ad-hoc review.
+        run: bash tools/hooks/classify-refresh-scope.sh
 
   test:
     needs: scope
+    if: always()
     runs-on: ubuntu-latest
     name: pytest (all axis packages) — blocking
     steps:
+      # `needs: scope` alone means an UPSTREAM failure (e.g. scope's checkout
+      # flaking) makes this job conclude `skipped` — not `failure` — and
+      # `.agents/skills/ship-pr/SKILL.md:76` names skipped-required checks as NOT
+      # green. `if: always()` keeps the job running so this step can convert that
+      # ambiguity into an explicit red (out-of-family concurrency lens on #1392).
+      - name: Upstream scope job must have succeeded
+        if: needs.scope.result != 'success'
+        run: |
+          echo "scope job concluded '${{ needs.scope.result }}' — failing loudly" >&2
+          echo "rather than reporting a skipped (non-green, non-red) check." >&2
+          exit 1
       - name: Checkout
         if: needs.scope.outputs.refresh_only != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -167,6 +151,22 @@ jobs:
       - name: Codex compatibility regressions — blocking
         if: needs.scope.outputs.refresh_only != 'true'
         run: bash tools/codex-parity-check.sh
+      # On the refresh fast path the full parity suite is skipped, but
+      # `.harness/roadmap_status.md` HAS `tools/` consumers whose only CI home is
+      # that suite — `arc_exit_report` and `docs_completeness` read the file, and
+      # `roadmap_status_refresh` / its consumers validate its shape. Skipping them
+      # would leave the ONE file a refresh PR changes with less coverage than a
+      # code PR gives it, which inverts the intent. Out-of-family review caught
+      # that the "every consumer runs in a job the filter keeps" claim was FALSE.
+      # Run exactly those four here (~seconds) so the claim becomes true.
+      - name: roadmap_status consumers — blocking (refresh fast path)
+        if: needs.scope.outputs.refresh_only == 'true'
+        run: |
+          uv run pytest -q -o testpaths= \
+            tools/test_arc_exit_report.py \
+            tools/test_docs_completeness.py \
+            tools/test_roadmap_status_refresh.py \
+            tools/test_roadmap_status_consumers.py
 
   lint:
     runs-on: ubuntu-latest
@@ -196,6 +196,7 @@ jobs:
 
   typecheck:
     needs: scope
+    if: always()
     runs-on: ubuntu-latest
     name: pyright (strict) — blocking
     # Blocking as of R-200-ci-lint-typecheck-blocking (pyright half) — the tree
@@ -203,6 +204,17 @@ jobs:
     # note for the drive-clean approach (test-dir executionEnvironments + src
     # fixes). Run locally exactly as here: `uv sync --all-packages && uv run pyright`.
     steps:
+      # `needs: scope` alone means an UPSTREAM failure (e.g. scope's checkout
+      # flaking) makes this job conclude `skipped` — not `failure` — and
+      # `.agents/skills/ship-pr/SKILL.md:76` names skipped-required checks as NOT
+      # green. `if: always()` keeps the job running so this step can convert that
+      # ambiguity into an explicit red (out-of-family concurrency lens on #1392).
+      - name: Upstream scope job must have succeeded
+        if: needs.scope.result != 'success'
+        run: |
+          echo "scope job concluded '${{ needs.scope.result }}' — failing loudly" >&2
+          echo "rather than reporting a skipped (non-green, non-red) check." >&2
+          exit 1
       - name: Checkout
         if: needs.scope.outputs.refresh_only != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -224,6 +236,7 @@ jobs:
 
   axis-isolation:
     needs: scope
+    if: always()
     # R-200-ci-axis-matrix — per-axis test-isolation matrix. Each leg installs
     # ONLY one library package + its DECLARED workspace deps (`uv sync --package`
     # prunes the rest), then runs that package's own tests. A test (or src
@@ -257,6 +270,17 @@ jobs:
       matrix:
         axis: [core, is, as, cp, od, cxa]
     steps:
+      # `needs: scope` alone means an UPSTREAM failure (e.g. scope's checkout
+      # flaking) makes this job conclude `skipped` — not `failure` — and
+      # `.agents/skills/ship-pr/SKILL.md:76` names skipped-required checks as NOT
+      # green. `if: always()` keeps the job running so this step can convert that
+      # ambiguity into an explicit red (out-of-family concurrency lens on #1392).
+      - name: Upstream scope job must have succeeded
+        if: needs.scope.result != 'success'
+        run: |
+          echo "scope job concluded '${{ needs.scope.result }}' — failing loudly" >&2
+          echo "rather than reporting a skipped (non-green, non-red) check." >&2
+          exit 1
       - name: Checkout
         if: needs.scope.outputs.refresh_only != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -282,6 +306,7 @@ jobs:
 
   coverage:
     needs: scope
+    if: always()
     # R-200-ci-coverage-gating — INFORMATIONAL coverage at PR. v1 posture: NO
     # threshold ("gather data first" per the roadmap entry); advisory
     # (continue-on-error) so a coverage hiccup never blocks merge. Re-runs the
@@ -296,6 +321,17 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
+      # `needs: scope` alone means an UPSTREAM failure (e.g. scope's checkout
+      # flaking) makes this job conclude `skipped` — not `failure` — and
+      # `.agents/skills/ship-pr/SKILL.md:76` names skipped-required checks as NOT
+      # green. `if: always()` keeps the job running so this step can convert that
+      # ambiguity into an explicit red (out-of-family concurrency lens on #1392).
+      - name: Upstream scope job must have succeeded
+        if: needs.scope.result != 'success'
+        run: |
+          echo "scope job concluded '${{ needs.scope.result }}' — failing loudly" >&2
+          echo "rather than reporting a skipped (non-green, non-red) check." >&2
+          exit 1
       - name: Checkout
         if: needs.scope.outputs.refresh_only != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
