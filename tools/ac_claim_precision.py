@@ -1,14 +1,14 @@
 """B-167 step 3: the OBSTACLES a claim-versus-recount gate must solve. NOT a precision figure.
 
 `B-167` steps 1–2 established that a format-scoped acceptance-criteria recount **is**
-buildable and exact where it applies (285 of 386 plan blocks), and landed it as
+buildable and exact where it applies (287 of 388 plan blocks), and landed it as
 `leg_selfcheck.derive_acceptance_criteria_count` — **deliberately unwired**. Step 3 asks
 for a false-positive measurement *"before wiring it into the pre-push path; a gate is only
 as useful as its precision."*
 
 **This module does NOT deliver that measurement, and step 3 is NOT complete.** Three
-successive attempts produced 68%, then 40%, then 62%, each after out-of-family review found
-a different methodological flaw — and the third round showed the *classification* behind the
+successive attempts produced 68%, then 40%, then 62%, then 61%, each after out-of-family
+review found a different methodological flaw — and the third round showed the *classification* behind the
 verdict was itself unsupported. Reporting a fourth number would be guessing with extra
 steps. What survives, and is genuinely useful, is the **census of obstacles** each attempt
 uncovered: every one is a real shape in this corpus that a naive comparison mishandles.
@@ -32,6 +32,12 @@ uncovered: every one is a real shape in this corpus that a naive comparison mish
    line, so **any claim that "most firings are legitimate ambiguity" is unsupported.**
 6. **Carrier population.** `leg_selfcheck.check_counts` treats `.md`, `.yaml` and `.yml` as
    eligible; this scan reads `.md` only, so its population is not the gate's population.
+7. **Block segmentation — the ground truth itself was wrong.** A `#` inside a fenced code
+   block is a shell comment, not a heading: the corpus carries **twelve** such lines naming
+   a unit (`# execute_workflow() from U-CP-56 …` at CP v2.11:213), each creating a false
+   block boundary that attributes one unit's criteria to another. And `U-CP-00b` was read as
+   `U-CP-00`. Fixing both moved the **step-1** figure too — 386/285 → **388/287** — so a
+   number already published had to be corrected in every carrier.
 
 **What a sound step-3 measurement requires** — stated so the next attempt does not repeat
 these: replay each merged arc against its **then-current plan head** (or otherwise preserve
@@ -78,8 +84,11 @@ _CLAIM_RE = re.compile(
     r"(?:acceptance\s+criteri\w+|ACs?\b)",
     re.IGNORECASE,
 )
-_UNIT_RE = re.compile(r"\bU-[A-Z]+-\d+\b")
-_UNIT_HEAD_RE = re.compile(r"^#+.*\bU-[A-Z]+-\d+\b.*$", re.MULTILINE)
+#: Unit ids carry an optional letter suffix in this corpus (`U-CP-00b`, `U-CP-00c`).
+#: Capturing only `U-CP-00` from `U-CP-00b` misattributes that unit's criteria to another.
+_UNIT_RE = re.compile(r"\bU-[A-Z]+-\d+[a-z]?\b")
+_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+_HEADING_RE = re.compile(r"^#+\s")
 #: Digit runs that belong to an identifier rather than to a count.
 _IDENT_RE = re.compile(r"\b[A-Z]-[A-Z]+-\d+\b|#\d+\b|\bv\d+[._]\d+\b")
 #: Carriers that RECORD this measurement's result. Scanning them is self-reference.
@@ -104,19 +113,46 @@ class Precision:
         return self.disagree / self.associable_claims if self.associable_claims else 0.0
 
 
+def _unit_blocks(text: str) -> list[tuple[str, str]]:
+    """`(heading line, block body)` for every real unit heading, fences excluded.
+
+    A `#` inside a fenced code block is a SHELL COMMENT, not a Markdown heading — the corpus
+    carries twelve such lines naming a unit, and treating them as headings creates false
+    block boundaries that attribute one unit's criteria to another (out-of-family review
+    [P2]: CP v2.11:213 `# execute_workflow() from U-CP-56 …` did exactly that).
+    """
+    lines = text.splitlines(keepends=True)
+    in_fence = False
+    starts: list[int] = []
+    offsets: list[int] = []
+    pos = 0
+    for line in lines:
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+        elif not in_fence and _HEADING_RE.match(line) and _UNIT_RE.search(line):
+            starts.append(pos)
+            offsets.append(len(line))
+        pos += len(line)
+
+    blocks: list[tuple[str, str]] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(text)
+        head_line = text[start : start + offsets[i]]
+        blocks.append((head_line, text[start:end]))
+    return blocks
+
+
 def derived_counts(root: Path | None = None) -> dict[str, set[int]]:
     """Unit id → every count the recount derives for it across the plan corpus."""
     base = root or ROOT
     truth: dict[str, set[int]] = {}
     for path in sorted((base / "design-substrate").glob("Implementation_Plan_*.md")):
         text = path.read_text(encoding="utf-8")
-        heads = list(_UNIT_HEAD_RE.finditer(text))
-        for i, head in enumerate(heads):
-            end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
-            count = ls.derive_acceptance_criteria_count(text[head.start() : end])
+        for head_line, block in _unit_blocks(text):
+            count = ls.derive_acceptance_criteria_count(block)
             if count is None:
                 continue
-            unit = _UNIT_RE.search(head.group(0))
+            unit = _UNIT_RE.search(head_line)
             if unit:
                 truth.setdefault(unit.group(0), set()).add(count)
     return truth
