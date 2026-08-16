@@ -34,7 +34,7 @@ is the one that resolved the head.
 | `implementation-plan-harness-runtime` | `v2.63` | 2026-08-13 | `design-substrate/Implementation_Plan_Harness_Runtime_v2_63.md` | 22 | `implementation-plan-harness-runtime-v2-63-cleared-2026-08-13.md` |
 | `implementation-plan-information-substrate` | `v2.9` | 2026-08-07 | `design-substrate/Implementation_Plan_Information_Substrate_v2_9.md` | 5 | `implementation-plan-information-substrate-v2-9-cleared-2026-08-07.md` |
 | `implementation-plan-memory-substrate` | `v1.3` | 2026-08-06 | `design-substrate/Implementation_Plan_Memory_Substrate_v1.md` | 4 | `implementation-plan-memory-substrate-v1-3-cleared-2026-08-06.md` |
-| `implementation-plan-operational-discipline` | `v2.35` | 2026-08-12 | `design-substrate/Implementation_Plan_Operational_Discipline_v2_35.md` | 9 | `implementation-plan-operational-discipline-v2-35-cleared-2026-08-12.md` |
+| `implementation-plan-operational-discipline` | `v2.36` | 2026-08-16 | `design-substrate/Implementation_Plan_Operational_Discipline_v2_36.md` | 10 | `implementation-plan-operational-discipline-v2-36-cleared-2026-08-16.md` |
 | `memory-substrate-design` | `v1 (Proposed design back-flow packet, 2026-07-01)` | 2026-07-09 | `design-substrate/Memory_Substrate_Design_v1.md` | 1 | `Memory_Substrate_Design_v1-cleared-2026-07-09.md` |
 | `prd` | `v1.2 (Proposed, 2026-07-01)` | 2026-07-09 | `design-substrate/PRD_v1_2.md` | 1 | `PRD_v1_2-cleared-2026-07-09.md` |
 | `project-workflow` | `v1.19` | 2026-07-24 | `design-substrate/Project_Workflow_v1_19.md` | 7 | `Project_Workflow-v1_19-cleared-2026-07-24.md` |

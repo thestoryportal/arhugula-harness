@@ -188,16 +188,29 @@ def test_a_head_advance_forces_regrounding() -> None:
 
     Pinning the CURRENT heads closes it: any head advance reds this test, which is the
     signal to re-ground the row rather than trust the frozen quotes.
+
+    **RE-GROUNDED 2026-08-16 against OD spec v1.42 + OD plan v2.36 (the `B-137` C1 leg), and
+    the pins advanced.** The tripwire fired exactly as designed and the re-grounding was
+    performed rather than the pin bumped to silence it. Result: **`B-183`'s conflict is
+    unmoved.** v1.42 amends C-OD-09 §9.2 only (one row, `workflow.envelope`); it names
+    C-OD-11 §11.1 in exactly one place, its §0.3, and only to state that §11.1 is
+    **untouched** and that v1.37 rider (a) still holds — §11.1 enforces at the
+    COLLECTOR_BOUNDARY / BACKEND_INGESTION layer independently of any sampling decision. It
+    declares **no** quantity for the per-tenant cap and **no** temporal dimension, so neither
+    half of this row's conflict is settled or altered. Plan v2.36 adds one unit (`U-OD-61`,
+    the row-20 membership + count reconciliation) and touches neither `tenant_rate_limit` nor
+    `observation_window`, so the spans/sec field signature this row disputes is unchanged.
+    The frozen quotes above therefore remain accurate at the new heads.
     """
     heads = (Path(__file__).resolve().parents[2] / ".harness" / "artifact-heads.md").read_text(
         encoding="utf-8"
     )
-    assert "| `spec-operational-discipline` | `v1.41` |" in heads, (
-        "the OD spec head advanced past v1.41. B-183's quantity conflict is pinned against "
+    assert "| `spec-operational-discipline` | `v1.42` |" in heads, (
+        "the OD spec head advanced past v1.42. B-183's quantity conflict is pinned against "
         "historical deltas that a new head does not touch — re-ground the row against the "
         "new head before trusting anything above."
     )
-    assert "| `implementation-plan-operational-discipline` | `v2.35` |" in heads, (
-        "the OD plan head advanced past v2.35 — same reason: re-ground B-183, since the "
+    assert "| `implementation-plan-operational-discipline` | `v2.36` |" in heads, (
+        "the OD plan head advanced past v2.36 — same reason: re-ground B-183, since the "
         "spans/sec field signature may have been amended by the new delta."
     )

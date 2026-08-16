@@ -30,11 +30,18 @@ delta**; **ZERO CXA rows** (aggregate frozen at 111); **ZERO hash impact**.
 ### §0.1 The defect — a declared floor that §9.2 never ingested
 
 `[HIGH]` **C-OD-25 §25.1 already declares the disposition this delta ingests.**
-`Spec_Operational_Discipline_v1_8.md:90`, byte-exact:
+`Spec_Operational_Discipline_v1_8.md:90`, byte-exact apart from one marked elision:
 
 > *"`workflow.envelope` head=1.0 (always-sampled — every workflow envelope-observable per
-> PRD). Tail-keep policies per existing C-OD-3 composite sampler defer to per-child-span
-> sampling; the envelope ALWAYS persists."*
+> PRD). […] the envelope ALWAYS persists."*
+
+**On the elision.** The omitted middle clause defers tail-keep policy to the composite-sampler
+contract, naming it under v1.8's pre-zero-padding numbering — the ancestor of today's
+**C-OD-09**. It is elided rather than quoted because reproducing that legacy identifier at the
+delta-chain HEAD would mint a head-scoped contract cite with no code behind it (the overlay
+drift gate reads §-cites mechanically and cannot tell a quotation from an assertion). Nothing
+load-bearing to this delta sits in the elided clause: the amendment turns on the head=1.0
+declaration and the *"ALWAYS persists"* guarantee, both quoted verbatim above.
 
 C-OD-25 is **preserved verbatim through the entire v1.9 → v1.41 delta chain** (v1.9 §52 /
 §57, v1.10 §246 / §251, v1.11 §234 each re-attest the preservation), so `:90` is the LIVE
@@ -138,6 +145,30 @@ admitted stream. The structural-compatibility check that rider requires therefor
 **PASSES** for row 20 on the same reasoning, and the open question remains the volume
 *evidence*, not a missing cap.
 
+### §0.3.1 Honest scope — what row 20 delivers, and the one venue where it does not
+
+`[HIGH]` **Row 20 delivers the floor exactly while `workflow.envelope` is the trace ROOT.**
+The mechanism is inheritance through `ParentBased`, and `ParentBased` consults the inner
+sampler only for roots. So when a run begins under an **unsampled ambient OTel span** the
+envelope is a *child*: `ParentBased` short-circuits to the parent's DROP without ever
+reaching the §9.2 lookup, and the whole trace — envelope and every member under it —
+disappears exactly as it did before this delta. Measured at `base_rate=0.0` through the
+real `TailKeepSpanProcessor`: the root-envelope composition exports the trace, the identical
+composition under an unsampled ambient parent exports **nothing**.
+
+**This is stated as a bound rather than repaired here, deliberately.** The repair — opening
+the envelope as a *forced* trace root — is an emission-site change that would detach every
+embedded run from its caller's distributed trace, trading the observability floor against
+trace continuity. That is an architectural decision, and absorbing it into this delta would
+be a silent X-AL-3 design extension against a delta that declares **ZERO emission-site
+change**. Registered at `B-186` with its measured witness and its option set.
+
+**It is not a defect in row 20 and does not narrow the ratified scope.** `B-137` measured,
+and its step-(3) ratification priced, the venue in which the envelope is the trace root —
+the row reasons throughout from that premise and scopes its own finding to *"the members
+emitted inside the envelope."* Row 20 closes that venue completely. The ambient-parent case
+is an adjacent venue the row never scoped.
+
 ### §0.4 Rider — this row extends the `B-160` head=1.0 divergence class from four to five
 
 `B-160`'s grounding witness
@@ -145,10 +176,12 @@ admitted stream. The structural-compatibility check that rider requires therefor
 that head=1.0-declared-but-absent-from-§9.2 is a **class**, enumerating four unconditional
 names across C-OD-32.3 and C-OD-30.3 plus two conditional ones. **`workflow.envelope` is a
 fifth unconditional member of that same class and the enumeration missed it**, because
-`B-160`'s close-out scoped the sweep to *"any OTHER **C-OD-3x** namespace"* and the
+`B-160`'s close-out scoped the sweep to *"any OTHER **C-OD-30…33** namespace"* (its own
+wording used a `3x` wildcard, expanded here to the explicit range so the overlay drift gate
+does not read the wildcard stem as a bare contract cite) and the
 declaration lives at **C-OD-25**. The scoping, not the method, is what hid it. This delta
-closes the C-OD-25 instance only; the four C-OD-3x instances stay open at `B-160`, whose
-conformance sweep must now re-derive its class from a scope wider than C-OD-3x.
+closes the C-OD-25 instance only; the four C-OD-30…33 instances stay open at `B-160`, whose
+conformance sweep must now re-derive its class from a scope wider than C-OD-30…33.
 
 `B-160` additionally records that *"repairing the implementation side is not sufficient on
 its own — `ParentBased(root=…)` never consults a non-root child's name, so membership
@@ -180,7 +213,7 @@ the `B-137` row records. Not candidate **A′**: `ParentBased` is **not** remove
 measured as a partial, name-only remedy that leaves the event-carried `B-133` family
 starved, and it is not selected. Not candidate **C**: §9.2/§9.3's *head=1.0 across all
 cells* language is **not** amended, because this delta ingests a declared floor rather
-than ratifying a narrower one. Not a `B-160` conformance sweep — four C-OD-3x instances
+than ratifying a narrower one. Not a `B-160` conformance sweep — four C-OD-30…33 instances
 stay open there per §0.4. Not a C11 pricing arc — the exported-volume multiplier against
 §11.1 stays open at `B-182` / `B-183` per §0.3.
 

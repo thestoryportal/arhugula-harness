@@ -65,4 +65,14 @@ ratifying a narrower one, so candidate C is explicitly not taken.
   close-out scoped the sweep to *"any OTHER **C-OD-3x** namespace"*, and this declaration
   lives at C-OD-25, so the enumeration was structurally unable to see it. The four C-OD-3x
   instances stay open there.
+- **One venue row 20 does NOT reach, surfaced by out-of-family Codex against the build PR and
+  confirmed by direct measurement before acceptance:** the floor works by inheritance through
+  `ParentBased`, which consults the inner sampler only for roots — so under an **unsampled ambient
+  OTel parent** the envelope is a child, `ParentBased` short-circuits to the parent's DROP, and the
+  whole trace disappears as it did pre-v1.42. Production-reachable (the MCP daemon path hands the
+  ambient context to its worker via `asyncio.to_thread` + `copy_context()`). Stated as a bound at
+  v1.42 §0.3.1 and registered at `B-186` rather than repaired, because the fix — forcing the
+  envelope to be a trace root — trades the floor against distributed-trace continuity and would be
+  a silent X-AL-3 extension against a delta declaring ZERO emission-site change. It does not narrow
+  the ratified scope: `B-137` reasoned throughout from the envelope being the trace root.
 - See `.harness/clearance/README.md` for marker discipline.

@@ -37,8 +37,11 @@ floor. **Grounding at build time falsified that framing in the favourable direct
 `Spec_Operational_Discipline_v1_8.md:90` (C-OD-25 §25.1), byte-exact:
 
 > *"`workflow.envelope` head=1.0 (always-sampled — every workflow envelope-observable per PRD).
-> Tail-keep policies per existing C-OD-3 composite sampler defer to per-child-span sampling; the
-> envelope ALWAYS persists."*
+> […] the envelope ALWAYS persists."*
+
+*(The elided clause defers tail-keep policy to the composite-sampler contract under v1.8's
+pre-zero-padding numbering — today's C-OD-09. Elided, not quoted, so the head-scoped overlay
+drift gate does not read a legacy identifier as a live contract cite with no code behind it.)*
 
 C-OD-25 is preserved verbatim through the entire v1.9 → v1.41 chain (v1.9 §52/§57, v1.10
 §246/§251, v1.11 §234 each re-attest it), so this is the **live** declaration at HEAD. §9.2 never
@@ -133,6 +136,22 @@ the derived literal structures, and the load-bearing discriminator gains a pre-v
 the starvation reproduces. Without that negative arm an as-built assertion cannot distinguish
 "C1 works" from "this test asserts nothing"
 (`[[only-the-classifier-can-witness-the-classifier]]`).
+
+**A SECOND coverage bound, surfaced by out-of-family Codex against this arc's PR and confirmed
+before acceptance (Class 3).** C1's floor works by inheritance through `ParentBased`, which consults
+the inner sampler only for roots — so under an **unsampled ambient OTel parent** the envelope is a
+child, `ParentBased` short-circuits to the parent's DROP without reaching the §9.2 lookup, and the
+entire trace disappears exactly as it did pre-C1. Measured at `base_rate=0.0` through the real
+`TailKeepSpanProcessor`: root-envelope exports the trace, ambient-unsampled exports nothing. The
+reviewer's claim was **not taken at face value** — it was reproduced directly, and the production
+reachability was verified by reading the MCP path (`lifecycle/mcp_server.py` dispatches through
+`asyncio.to_thread`, inheriting the caller's `copy_context()`; the OTel current span is a
+`ContextVar`). Pinned at `test_c1_does_not_survive_an_unsampled_ambient_parent` with a root-envelope
+positive control, stated as a bound at v1.42 §0.3.1, and registered at **`B-186`** — not repaired,
+because forcing the envelope to be a trace root trades the observability floor against
+distributed-trace continuity, which is an architectural fork, and absorbing it would be a silent
+X-AL-3 extension against a delta declaring ZERO emission-site change. It does **not** reopen
+`B-137`, whose entire analysis reasons from the envelope being the trace root.
 
 **What stays open.** C11's half of the C7 ⊥ C11 tension — the *exported-volume* multiplier against
 the C-OD-11 §11.1 per-cell budgets — is untouched here and stays at `B-182` / `B-183`. v1.37 rider

@@ -120,10 +120,13 @@ from harness_od.observability_matrix import CellID
 from harness_od.sampling_mode import is_always_sampled
 from harness_od.tail_keep_classification import SECTION_10_2_EVENT_TRIGGER_NAMES
 from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
+from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON
+from opentelemetry.trace import SpanContext, TraceFlags
+from opentelemetry.trace.span import NonRecordingSpan
 
 _ENVELOPE = "workflow.envelope"
 #: A §9.2 member with a real span-open site inside the envelope — the name-backed
@@ -460,4 +463,76 @@ def test_the_production_cell_this_is_priced_against_still_carries_its_rate() -> 
     assert rate == 0.1, (
         f"`{_PROD_CELL}` now has base rate {rate}, not 0.1 — B-137's quoted ×10 in-envelope "
         f"multiplier is stale and reads ×{1 / rate:g}; re-price step (3) before deciding"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Result 4 — C1's SECOND coverage bound: an unsampled ambient parent
+# ---------------------------------------------------------------------------
+
+
+def test_c1_does_not_survive_an_unsampled_ambient_parent() -> None:
+    """**The bound out-of-family Codex surfaced against this arc, measured and pinned.**
+
+    C1 works by making the envelope always-sampled at the HEAD, and `ParentBased` consults
+    the inner sampler **only for roots**. So C1's floor holds exactly while the envelope IS
+    the trace root. When the run begins under an **unsampled ambient OTel span**, the
+    envelope is a CHILD, `ParentBased` short-circuits to the parent's DROP without ever
+    consulting the name, and the whole trace — envelope and every §9.2 member under it —
+    disappears again.
+
+    **This is production-reachable, not hypothetical.** `workflow_driver.py:3458` opens the
+    envelope with no explicit root context, and the MCP daemon path hands the ambient
+    context to its worker: `lifecycle/mcp_server.py` dispatches through
+    `asyncio.to_thread`, which inherits the caller's `copy_context()` — and the OTel current
+    span lives in a `ContextVar`.
+
+    **Why it is pinned rather than repaired here.** The fix — opening the envelope as a
+    forced trace root — is an emission-site change that would detach every embedded/MCP run
+    from its caller's distributed trace. That trades the observability floor against trace
+    continuity, which is an architectural decision and not a mechanical repair, so it routes
+    to the register (`B-186`) rather than being absorbed silently into this arc (X-AL-3).
+
+    **What this does NOT say.** It does not reopen `B-137`. That row measured, and its
+    step-(3) ratification priced, the venue where the envelope is the trace root — the whole
+    row reasons from *"`workflow_driver.py` opens `workflow.envelope` as the trace root"*.
+    C1 closes that venue completely. The ambient-parent venue was never in scope and is a
+    newly-surfaced adjacent gap.
+    """
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
+    provider.add_span_processor(TailKeepSpanProcessor(downstream=SimpleSpanProcessor(exporter)))
+    tracer = provider.get_tracer("b137.ambient.parent")
+
+    unsampled_parent = NonRecordingSpan(
+        SpanContext(
+            trace_id=0x1234567890ABCDEF1234567890ABCDEF,
+            span_id=0x1234567890ABCDEF,
+            is_remote=True,
+            trace_flags=TraceFlags(TraceFlags.DEFAULT),  # NOT sampled
+        )
+    )
+    ambient = otel_trace.set_span_in_context(unsampled_parent)
+    with tracer.start_as_current_span(_ENVELOPE, context=ambient):
+        with tracer.start_as_current_span(_MEMBER):
+            pass
+    provider.force_flush()
+
+    assert [s.name for s in exporter.get_finished_spans()] == [], (
+        "the envelope survived an UNSAMPLED ambient parent — if `ParentBased` no longer "
+        "short-circuits on an unsampled parent, or the envelope is now opened as a forced "
+        "root, then B-186's gap is closed and this bound must be re-derived"
+    )
+
+    # POSITIVE CONTROL — the identical composition with NO ambient parent exports the whole
+    # trace. Without it, the emptiness above could come from a broken fixture rather than
+    # from the bound being measured.
+    exporter.clear()
+    with tracer.start_as_current_span(_ENVELOPE):
+        with tracer.start_as_current_span(_MEMBER):
+            pass
+    provider.force_flush()
+    assert sorted(s.name for s in exporter.get_finished_spans()) == sorted([_ENVELOPE, _MEMBER]), (
+        "the root-envelope control did not export the whole trace — this module's C1 "
+        "results are not reproducing, so the ambient-parent bound above proves nothing"
     )

@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 185
+  total: 186
   open: 1
   design_substrate_gated: 3
-  registered_finding: 36
+  registered_finding: 37
   operator_gated: 0
   held: 2
   closed: 143
-  identity_digest: 91a33b00290bd745
+  identity_digest: 7d5ae6e182bcf73d
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -7437,7 +7437,7 @@ items:
   title: 'Head sampling starves the tail-keep mechanism for every preserved class that is NOT a root span
     name -- the shipped head sampler applies the section 10.3 ratio in BOTH section 9.1 modes'
   status: closed
-  pr: '#PR_PLACEHOLDER -- the C1 build leg. OD spec v1.42 section 0.2 lands workflow.envelope as
+  pr: '#1390 -- the C1 build leg. OD spec v1.42 section 0.2 lands workflow.envelope as
     section 9.2 row 20; count contract reconciled across five carriers; clearance marker at
     .harness/clearance/spec-operational-discipline-v1-42-cleared-2026-08-16.md; build record and the
     two Class-3 findings at .harness/b137-c1-admit-the-envelope-root-2026-08-16.md. The concurrency-
@@ -7521,145 +7521,34 @@ items:
     INGESTION REPAIR of the same class v1.37 fixed for fallback.exhausted -- NOT a Phase-7 design
     extension. This strengthens the ratification rather than undermining it, so the arc proceeded;
     had it cut the other way it would have been a Class 1 halt.'
-  close_out: '(1) RE-GROUND THE WIRING FIRST, because it is explicitly marked as provisional. Re-read tracer_provider.py''s
-    sampler resolution at the then-current HEAD and confirm it still binds the per-cell ratio in both modes
-    and still carries the "current default sampler ignores the mode ... Future units may wire mode-conditional
-    samplers" note. If a mode-conditional sampler has since landed, this row may already be closed by that
-    work and should be re-measured rather than re-argued. (2) RE-MEASURE, do not re-reason. The probe is
-    four lines of composition (build_default_sampler at the cell rate + the real TailKeepSpanProcessor,
-    counting arrivals at on_end) across the three populations the summary names -- root-name-matched, event-carried,
-    and non-root trigger -- so the non-uniformity is re-established rather than assumed. (3) DECIDE THE
-    POSTURE, and this is a genuine architectural fork rather than a bug with a fix. Candidate A: mode-conditional
-    head -- ALWAYS_ON (or ParentBased(ALWAYS_ON)) in TAIL_BASED_PROD mode, with the section 10.3 ratio applied
-    inside the tail consumer at the root-close decision. This is what section 9.1 actually says and what
-    tracer_provider.py already names as an unbuilt surface, but it multiplies in-process span volume by
-    1/base_rate and moves the ratio decision to a component that currently has no ratio logic at all. Candidate
-    B: rejected-carrier recording -- leave the head as is, but have the sampler record a counter or a minimal
-    marker for dropped spans that WOULD have carried a preserved class, so the loss is observable rather
-    than silent. Cheaper and honest, but it does not deliver the floor. Candidate C: accept and document
-    -- ratify that the section 9.2 floor is a floor over the ADMITTED stream, which would require amending
-    section 9.2/section 9.3''s "head=1.0 across all cells" language, since that language is what makes A
-    the literal reading. (4) PRICE THE VOLUME CONSEQUENCE BEFORE CHOOSING A -- and note that this MERGES
-    with B-133''s still-open F-08 residual rather than sitting beside it. Today''s ~20% multi-tenant admission
-    is the ceiling on the B-133 arm''s added keep-volume; candidate A removes that ceiling, so F-08 measured
-    against today''s admission would not survive this repair. The two MUST be measured together. (5) NOTE
-    THE B-136 INTERACTION -- candidate A increases the population of buffered traces by 1/base_rate, which
-    makes B-136''s never-resolving always-sampled-root traces a proportionally larger share of max_buffered_traces
-    pressure. WHAT WOULD FALSIFY IT. A re-measurement showing event-carried and non-root-trigger admission
-    at parity with root-name-matched admission (which would mean the head composition changed), or a ratified
-    reading under candidate C that the floor was always scoped to the admitted stream. RE-MEASURED AT THE
-    REAL VENUE 2026-08-13 -- STEPS (1) AND (2) ARE DONE; STEP (3) IS THE ONLY LIVE STEP. (1) tracer_provider.py:236-240
-    still binds the per-cell ratio unconditionally, still discards the mode, and still carries the note
-    that future units may wire mode-conditional samplers -- NO mode-conditional sampler has landed, so this
-    row is NOT closed by other work. (2) EXECUTED THROUGH api.run, not a manufactured composition (an earlier
-    draft of this arc was correctly rejected by out-of-family Codex for driving an uncalled helper): running
-    the B-72 fan-out workflow end to end with a real TracerProvider and the production sampler at base_rate=0.0,
-    NOTHING is exported at all -- including hitl.gate.evaluated, which IS a s9.2 member with a declared
-    head=1.0 floor. With an always-on provider the same run records exactly workflow.envelope (ROOT) and
-    hitl.gate.evaluated nested under it, so the loss is structural: workflow_driver.py:3305 opens workflow.envelope
-    as the trace root, workflow.envelope is NOT a s9.2 member, and ParentBased consults the composite sampler
-    ONLY for roots -- the root loses its draw and the child inherits the drop with its own name never consulted.
-    THE s9.2 FLOOR IS ROOT-ONLY. TAIL HALF EXECUTED TOO (the row''s step (2) names TailKeepSpanProcessor
-    explicitly): driving the REAL processor through the REAL run at base_rate=0.0, on_end receives ZERO
-    arrivals -- a head-dropped span is never recorded, so the processor''s own s9.2 bypass-the-buffer arm
-    can never act on it. SCOPE, STATED HONESTLY (an earlier draft of this arc claimed all 19 members are
-    children of the envelope; that was FALSE and is WITHDRAWN): only 11 of the 19 members have a span-open
-    site in src/ at all -- the other 8 are event-carried or unimplemented, i.e. population (i) -- and at
-    least one span-backed member is a ROOT, since skill.activation is emitted from workflow_driver.py:3206
-    which PRECEDES the envelope open at :3305. The starvation is therefore SCOPED to members emitted inside
-    the envelope, and any repricing of step (3) must be against that set, not all 19. WITNESS: harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py
-    -- 18 tests, deterministic at base_rate=0.0, with a positive control on the membership patch, mutation-probed
-    by replacing ParentBased(root=X) with the bare X (both load-bearing tests go RED). STEP (3) REPRICED
-    BY TWO MEASURED COUNTERFACTUALS AT THE SAME VENUE. (a) CANDIDATE A-PRIME -- NOT the row''s candidate
-    A, which is mode-conditional ALWAYS_ON with the s10.3 ratio moved INTO the tail consumer and was NOT
-    measured here; A-prime is dropping ParentBased so the composite sampler is consulted for EVERY span.
-    A-prime admits hitl.gate.evaluated but STILL DROPS workflow.envelope, so it yields ORPHANED floor spans
-    whose parent trace was discarded -- and its volume cost is 1/base_rate applied to FLOOR-MEMBER spans
-    only, NOT to all spans, which is cheaper than the row''s original x10-on-everything framing but buys
-    broken traces. (b) NEW candidate C1 -- add workflow.envelope itself to s9.2 -- delivers the floor to
-    every in-workflow member by inheritance, in a one-line change. CORRECTED 2026-08-13 (codex round 3):
-    C1 does NOT keep traces whole, and its real cost is worse than a volume multiplier. Measured through
-    the SHIPPED TailKeepSpanProcessor, C1 forwards the envelope and every s9.2 member (both take the always-sampled
-    bypass arm at tail_keep_span_processor.py:361), but an ordinary non-member child stays BUFFERED at root
-    close -- and a s10.2 classification trigger does NOT rescue it, because making the ROOT always-sampled
-    means the root takes the bypass arm and returns BEFORE the root-close flush-or-drop decision runs. So
-    under C1 a workflow trace THAT CONTAINS AT LEAST ONE ORDINARY NON-MEMBER CHILD becomes a never-resolving
-    buffered trace drained only by force_flush -- and WORSE THAN THAT under production bounds (measured
-    2026-08-13, codex round 12): span_processor.py:373-374 always supplies max_buffered_traces / max_spans_per_trace
-    from CollectorConfig (defaults 4096 each, types.py:741,752) and the buffer evicts DROP-OLDEST, so beyond
-    the ceiling the ordinary children are EVICTED AND LOST rather than held -- force_flush never sees them.
-    Measured at a cap of 3 over 100 traces: 3 buffered, 97 evicted. Under sustained load that IS the steady
-    state, since under C1 every trace with an ordinary child occupies a slot and none is released at root
-    close. So C1''s cost is DATA LOSS, not delay. SCOPED 2026-08-13 (codex round 4): an earlier wording
-    said EVERY trace, which is wrong -- this arc''s own B-72 venue emits only workflow.envelope + hitl.gate.evaluated,
-    both of which bypass the buffer under C1, leaving its buffer at ZERO; the measured stranding used a
-    manufactured validator.evaluate child. HOW OFTEN that child population occurs in real workflows is UNMEASURED
-    and is owed before step (3) chooses C1 (the driver does open ordinary spans -- validator.evaluate at
-    workflow_driver.py:5600, plus tool.dispatch / sandbox.* / secret.fetch in the tool dispatcher -- so
-    the population is non-empty, but its frequency is not established here) -- exactly the B-136 pressure
-    this row''s own step (5) predicts, which C1 MAXIMISES rather than avoids. So the fork is no longer A-vs-B-vs-C
-    but a sharper trade, and note the labels are FIVE distinct options not three: ORPHANED FLOOR SPANS AT
-    LOWER VOLUME (A-PRIME, measured; the ORIGINAL candidate A -- mode-conditional ALWAYS_ON with the ratio
-    moved into the tail consumer -- REMAINS IN THE OPTION SET, unmeasured, at its stated x10-on-everything
-    cost) vs (C1) FULL TRACE ADMITTED AT THE HEAD BUT ORDINARY CHILDREN STRANDED IN THE TAIL BUFFER, at
-    full volume -- NOT ''whole traces'' (corrected 2026-08-13, codex round 5): C1 admits the envelope and
-    every s9.2 member at the head, but an ordinary non-member child is still buffered at root close and
-    a s10.2 trigger does not rescue it vs RATIFYING A ROOT-ONLY FLOOR (C, which must amend s9.2/s9.3''s
-    head=1.0-across-all-cells language). Candidate B remains a reporting option, not a repair. The dyadic
-    C7+C11 council''s stated precondition (step (2) re-measurement first) is now MET. ALL THREE OF STEP
-    (2)''s POPULATIONS ARE NOW EXECUTED (codex round 6): the api.run witness covers the non-root population
-    only; test_all_three_starved_populations_at_one_composition covers root-name-matched (survives), non-root
-    (dropped) and event-carried (dropped) at one composition, which is the probe shape step (2) actually
-    prescribes. AND A TRIPWIRE FOR THE FIX THIS ROW AWAITS: every other measurement supplies a deterministic
-    sampler override, so a future mode-conditional sampler repairing only TAIL_BASED_PROD would leave them
-    all green -- test_a_production_cell_still_binds_the_unconditional_ratio_sampler composes a real production
-    cell (team-binding x self-hosted-server, rate 0.1) through the shipped stage with NO override, so it
-    reddens the moment that sampler lands. STEP (2)''s TAIL ARMS ARE NOW ALL EXECUTED (codex round 13 closed
-    the contradiction the round-12 note conceded): test_all_three_populations_through_the_real_tail_processor
-    runs root-name-matched, non-root member, non-root TRIGGER and event-carried through the REAL TailKeepSpanProcessor
-    at production buffer bounds, spying on the processor''s own on_end. Only the root-name-matched span
-    arrives; the starved populations never reach the tail at all, because the head drops them before recording.
-    Step (2) is therefore discharged at the shape the row prescribes (build_default_sampler + the real tail
-    processor across all three populations), not merely at the head. SEPARATELY, the nested-resume witness
-    is STRUCTURAL, not executed: it proves the child dispatch is lexically inside the subagent.span block,
-    NOT that the OTel context is still current at the child driver''s resume detection nor that the snapshot
-    value is non-None. The conclusion (resume.attempted is a non-root child for nested resumes) therefore
-    rests on containment plus the ordinary OTel context-propagation semantics, and an executed nested-resume
-    parentage witness is OWED before B-162 acts on it. QUALIFIED 2026-08-13 (codex round 14, the SAME defect
-    class as round 7 which this arc fixed for resume.attempted and initially missed here): skill.activation''s
-    ROOT status holds for a TOP-LEVEL run only. The emit sits inside execute_workflow, which is exactly
-    the function the child runner re-enters under an active subagent.span, so under a nested recursive run
-    the same pre-envelope emit is a CHILD and is starved like the rest. The counterexample therefore SCOPES
-    the starved population (it is not universal) rather than exempting skill.activation outright. GENERAL
-    LESSON now applied to every root/child claim on this row: source-line ordering relative to the local
-    envelope proves ORDERING, never TRACE-ROOT STATUS -- root status depends on the call venue, and this
-    workspace has at least two venues (top-level api.run and nested sub-agent dispatch) for the same code.
-    A-PRIME IS A PARTIAL, NAME-ONLY REMEDY (measured 2026-08-13, codex round 15): it addresses only ONE
-    of the two starved populations. Removing ParentBased exposes every span''s NAME to HarnessCompositeSampler,
-    repairing the non-root NAME-BACKED members; it does NOTHING for the EVENT-CARRIED members (the B-133
-    family, which B-137 explicitly includes), because those ride as span EVENTS on an ordinary carrier and
-    at span creation the head still sees only the carrier''s name and applies the base-rate draw. Measured
-    at base_rate=0.0: A-prime exports hitl.gate.evaluated and NOT the event-carrying ordinary.carrier. So
-    A-prime must NOT be selected at step (3) as a complete repair -- it would leave the event-carried floor
-    starved. Pinned by test_candidate_a_prime_is_a_name_only_remedy. C1 RE-PRICED 2026-08-13 (PR #1331)
-    -- SUPERSEDES this row''s C1 cost statement and the same-day deferral note. C1''s ''data loss, not delay''
-    cost was a consequence of B-136''s name-arm early return, NOT of C1 itself: under C1 every workflow
-    trace has an always-sampled root and so hit that arm. With B-136 REPAIRED the identical C1 counterfactual
-    reads 0 buffered / 0 evicted (was 3 / 97 at a cap of 3), and with a s10.2 trigger present 100/100 ordinary
-    children export where 0 did before. C1 therefore now costs its 1/base_rate volume multiplier with ORDINARY
-    trace semantics -- no stranding, no eviction, no never-resolving population, and the B-136 interaction
-    this row''s step (5) predicted is DISCHARGED rather than aggravated. The step-(3) council must weigh
-    C1 at this corrected price; A-prime''s partial name-only limitation is UNCHANGED, so the A-prime-vs-C1
-    comparison has moved materially toward C1.'
-  council: 'YES, and this is the row in the family that genuinely earns one -- unlike B-133, whose repair was
-    single-domain. Candidate A trades a real observability floor (C7: a preserved class that is dropped
-    before any preservation rule can act on it is not preserved) against a 5x-to-10x in-process span
-    volume increase at every production cell (C11: telemetry volume, collector capacity, and the C-OD-11
-    section 11.1 per-cell budgets those caps were sized against). The tension is nameable in advance
-    between two specific voices, which is the convening discriminator, and the decision changes a
-    committed per-cell envelope rather than an implementation detail. Convene DYADIC C7 + C11 at step
-    (3), NOT before step (2)''s re-measurement -- the pilot lesson is that councils convened before the
-    probe converge to a single voice plus cosmetic consultants.'
+  close_out: 'DISCHARGED — all five steps are done and this row is CLOSED at #1390. Retained as a
+    RESULT, not as instructions: returning the original "re-ground the wiring / decide step (3)"
+    text from a closed row would hand the next reader work that is already finished (out-of-family
+    Codex [P2] against #1390).
+    (1) RE-GROUND THE WIRING — DONE. tracer_provider.py:236-240 still binds
+    build_default_sampler(base_rate=PER_CELL_BASE_RATE_ENVELOPE[cell].default_rate) unconditionally
+    and still discards the mode; no mode-conditional sampler landed, so the row was not closed by
+    other work.
+    (2) RE-MEASURE, DO NOT RE-REASON — DONE, at the real api.run venue plus a one-composition probe
+    across all three populations. Witnesses at
+    harness-runtime/tests/integration/test_b137_ninety_two_floor_at_the_real_run_venue.py, now
+    INVERTED to as-built with a _pre_c1() counterfactual arm so the starvation evidence survives the
+    repair instead of silently measuring the repaired world.
+    (3) DECIDE THE POSTURE — DONE. Operator ratified C1 on 2026-08-16; OD spec v1.42 section 0.2
+    lands workflow.envelope as section 9.2 row 20. Grounding at build time found C1 is an INGESTION
+    REPAIR of a C-OD-25 section 25.1 declaration live since v1.8, not a new floor.
+    (4) PRICE THE VOLUME CONSEQUENCE — DONE for the buffer side (0 buffered / 0 evicted sequentially;
+    no measured configuration loses a span the status quo kept) and SPLIT for the rest: the
+    concurrency-headroom residual is B-185, and the C11 exported-volume half against C-OD-11
+    section 11.1 remains at B-182 / B-183. The B-133 F-08 merge this step predicted did not
+    materialize as a blocker, because C1 does not remove the admission ceiling the way candidate A
+    would.
+    (5) NOTE THE B-136 INTERACTION — DONE and INVERTED: B-136 was not aggravated by C1, it was the
+    CAUSE of C1''s formerly-quoted stranding cost, and its repair at #1331 is what makes C1 cheap.
+    NEWLY SURFACED, NOT PART OF THIS ROW: C1''s floor does not survive an UNSAMPLED AMBIENT OTel
+    PARENT (envelope is then not a root, ParentBased short-circuits to the parent DROP). Registered
+    at B-186 with a measured witness; NOT a reopening of this row, whose whole analysis reasons from
+    the envelope being the trace root.'
   heading: '### B-137 · Head sampling starves the tail-keep mechanism for every preserved class that is **not a
     root span name** — the shipped head sampler applies the §10.3 ratio in **both** §9.1 modes
     *(surfaced by out-of-family Codex round 1 against the `B-133` leg''s commit `ff63c725`, 2026-08-08;
@@ -9937,3 +9826,68 @@ items:
     build arc, 2026-08-16; split off `B-137` at its close so the residual stays queryable — bounded,
     zero evictions at the shipped 4096 default, and dormant on the same throughput denominator as
     `B-182` / `B-183`)*'
+- id: B-186
+  title: >-
+    C1's §9.2 floor evaporates under an UNSAMPLED AMBIENT OTel parent — the envelope is then not a
+    trace root, so ParentBased short-circuits to the parent's DROP and never consults the name
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX against the B-137 C1 build leg (#1390) and CONFIRMED by
+    direct measurement before acceptance -- the reviewer''s claim was not taken at face value.
+    WHAT IT IS. C1 (OD spec v1.42 section 9.2 row 20) delivers the floor by making the envelope
+    always-sampled at the HEAD, and ParentBased consults the inner sampler ONLY for roots. So the
+    floor holds exactly while workflow.envelope IS the trace root. Under an unsampled ambient OTel
+    span the envelope is a CHILD: ParentBased short-circuits to the parent''s DROP without ever
+    reaching is_always_sampled, and the entire trace -- envelope plus every section 9.2 member under
+    it -- disappears exactly as it did before C1.
+    MEASURED, not argued: at base_rate=0.0 through the real TailKeepSpanProcessor, the root-envelope
+    composition exports [hitl.gate.evaluated, workflow.envelope] and the identical composition under
+    an unsampled ambient parent exports NOTHING.
+    PRODUCTION-REACHABLE, verified rather than assumed. workflow_driver.py:3458 opens the envelope
+    with no explicit root context, and the MCP daemon path hands the ambient context to its worker:
+    lifecycle/mcp_server.py dispatches via asyncio.to_thread, which inherits the caller''s
+    copy_context(), and the OTel current span lives in a ContextVar. So any embedded or
+    daemon-hosted run beginning under an unsampled caller span is in scope.
+    WHY IT IS NOT A B-137 REOPENING. B-137 measured, and its step-(3) ratification priced, the venue
+    where the envelope is the trace root -- the row reasons throughout from "workflow_driver.py opens
+    workflow.envelope as the trace root", and its own scope statement is that the starvation is
+    "scoped to the members emitted inside the envelope". C1 closes that venue completely. This is an
+    adjacent venue that was never in scope, split to its own row so it stays queryable
+    (--open skips closed rows).
+    WHY IT WAS NOT REPAIRED IN THE SAME ARC. The obvious fix -- open the envelope as a FORCED trace
+    root -- is an emission-site change that would detach every embedded/MCP run from its caller''s
+    distributed trace. That trades the observability floor against trace continuity, which is an
+    architectural decision rather than a mechanical repair, so absorbing it into the C1 arc would be
+    a silent X-AL-3 design extension. The C1 delta declares ZERO emission-site change and keeps that
+    promise.'
+  close_out: '(1) ESTABLISH THE REAL POPULATION FIRST, because the repair is only worth its cost if
+    the venue is real at a production cell. Determine whether any SHIPPED deployment actually invokes
+    api.run / the MCP daemon under an ambient OTel span that can be UNSAMPLED -- the harness''s own
+    bootstrap does not, so this may be reachable only for an embedding host. Grep the entry points
+    and, if an embedding host is in scope, measure it rather than reasoning about it.
+    (2) IF REAL, THE OPTION SET IS A GENUINE FORK, not a fix: (a) open the envelope as a FORCED root
+    (floor guaranteed; embedded runs lose distributed-trace continuity with their caller, and the
+    caller''s trace loses the harness subtree entirely); (b) leave the envelope linked but attach the
+    parent as an OTel LINK rather than a parent (keeps a navigable association without inheriting the
+    sampling decision -- needs verification that the shipped exporter chain preserves links);
+    (c) ratify that the section 9.2 floor is scoped to harness-rooted traces and amend section 9.3
+    accordingly, which is the C-shaped option B-137 declined for its own venue.
+    (3) COUNCIL: likely YES if step (1) finds the venue real -- (a) vs (b) is the same C7 (an
+    observability floor that a caller can silently switch off is not a floor) against a
+    trace-topology/interop concern, and it changes a committed contract''s reach rather than an
+    implementation detail. Do NOT convene before step (1); the pilot lesson is that a council
+    convened before the probe converges to one voice plus consultants.
+    (4) FALSIFIED BY: a measurement showing no shipped entry point can begin under an unsampled
+    ambient span (which would make this dormant-by-construction rather than open), or a
+    mode-conditional sampler landing (B-137 candidate A) that moves the ratio into the tail consumer
+    -- under which head inheritance stops deciding the outcome and this bound dissolves.'
+  council: >-
+    DEFERRED, not declined — and the discriminator is step (1), not a judgement call. If no shipped
+    entry point can begin under an unsampled ambient span the row is dormant-by-construction and no
+    council is owed. If one can, then (a) forced root vs (b) parent-as-link vs (c) ratify-the-scope
+    is a real C7-versus-trace-interop tension over a committed contract's reach, which is the
+    convening discriminator. Ground first, convene second.
+  heading: '### B-186 · C1''s §9.2 floor evaporates under an **unsampled ambient OTel parent** — the
+    envelope is then not a trace root, so `ParentBased` short-circuits to the parent''s DROP and never
+    consults the name *(surfaced by out-of-family Codex against the `B-137` C1 build leg #1390,
+    2026-08-16; premise CONFIRMED by direct measurement and by tracing the MCP `copy_context()` path
+    before acceptance — an adjacent venue `B-137` never scoped, not a reopening of it)*'

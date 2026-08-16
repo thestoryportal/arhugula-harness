@@ -70,7 +70,7 @@ Canonical plan heads — one family per row (same adjacency rule as §2.3):
 | IS | `Implementation_Plan_Information_Substrate_v2_9.md` |
 | AS | `Implementation_Plan_Action_Surface_v1_6.md` (v1.6, cleared 2026-07-15) |
 | CP | `Implementation_Plan_Control_Plane_v2_53.md` |
-| OD | `Implementation_Plan_Operational_Discipline_v2_35.md` |
+| OD | `Implementation_Plan_Operational_Discipline_v2_36.md` |
 | Runtime | `Implementation_Plan_Harness_Runtime_v2_63.md` |
 | CXA | `Cross_Axis_Composition_Document_v2_23.md` |
 | Memory | `Implementation_Plan_Memory_Substrate_v1.md` v1.3 (cleared 2026-08-06) |
