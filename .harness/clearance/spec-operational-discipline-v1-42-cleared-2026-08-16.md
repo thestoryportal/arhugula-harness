@@ -8,7 +8,7 @@ back_reference:
   - .harness/forward-register.yaml B-137 (step (3) OPERATOR RATIFICATION 2026-08-16)
 merge_commit: <filled at PR merge>
 reviewer_chain:
-  - operator AskUserQuestion ratification 2026-08-16 (B-137 step (3) = C1, recorded at PR #1383)
+  - "operator AskUserQuestion ratification 2026-08-16 (B-137 step (3) = C1, recorded at PR #1383)"
   - build-time re-measurement of the ratification's carried-forward cost (this arc)
 supersedes: Spec_Operational_Discipline_v1_41.md
 ---
