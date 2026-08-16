@@ -65,11 +65,19 @@ mistake this workspace has already paid for.
 
 ## Failure posture
 
-If the wiring graph is missing or unreadable the tool exits **non-zero with an explicit
-message** and reports nothing. "Could not look" must never render as "looked, found
-nothing" — see `[[gate-cannot-tell-empty-from-unlooked]]`. It is otherwise advisory: a
-clean run and a run with findings both exit 0, so this can never abort a caller that
-merely wanted the report.
+If the wiring graph is missing, unreadable, **or stale** the tool exits **non-zero with an
+explicit message** and reports nothing. "Could not look" must never render as "looked,
+found nothing" — see `[[gate-cannot-tell-empty-from-unlooked]]`.
+
+Staleness counts as "cannot look" deliberately. A graph that exists but predates an edit,
+branch switch, or rebase still parses, still yields edges, and still exits 0 — while
+describing code that is no longer here. That is worse than no answer, because nothing
+about the output marks it as wrong. graft's own CLI re-derives before answering, so this
+failure is only reachable by reading the artifact directly, which is what this module
+does; detecting it is therefore this module's job.
+
+It is otherwise advisory: a clean run and a run with findings both exit 0, so this can
+never abort a caller that merely wanted the report.
 
 Usage:
     python tools/graft_reachability.py                 # report private findings
@@ -245,10 +253,53 @@ def derive(
     return findings
 
 
+def stale_sources(root: Path | None = None, *, limit: int = 5) -> list[Path]:
+    """Indexed `.py` files modified after the wiring graph was written.
+
+    A graph that merely EXISTS is not a graph that describes this checkout. An edit, a
+    branch switch, or a rebase leaves `wiring.json` intact but describing other code, and
+    call edges derived from it are then confidently wrong — a worse outcome than no
+    answer, because it still exits 0 and still looks like a clean result.
+
+    graft's own CLI re-derives before answering, so a stale graph is only reachable by
+    reading the artifact directly, which is exactly what this module does. Detecting it
+    is therefore this module's job, not graft's.
+
+    Returns at most `limit` offenders — enough to name in an error, not a full listing.
+    """
+    base = root or Path(".")
+    graph_path = base / WIRING
+    if not graph_path.exists():
+        return []
+    graph_mtime = graph_path.stat().st_mtime
+    stale: list[Path] = []
+    for path in base.glob("harness-*/**/*.py"):
+        try:
+            if path.stat().st_mtime > graph_mtime:
+                stale.append(path)
+        except OSError:
+            continue
+        if len(stale) >= limit:
+            break
+    return stale
+
+
 def collect(root: Path | None = None) -> list[Finding]:
-    """Full pipeline against a real checkout."""
+    """Full pipeline against a real checkout.
+
+    Refuses to derive from a stale graph for the same reason it refuses to derive from a
+    missing one: both are "cannot look reliably", and neither may render as "looked,
+    found nothing".
+    """
     base = root or Path(".")
     graph = load_graph(base)
+    if stale := stale_sources(base):
+        names = ", ".join(str(p) for p in stale[:3])
+        raise GraphUnavailableError(
+            f"{base / WIRING} predates {len(stale)}+ indexed source file(s) ({names}). "
+            f"Derived call edges would describe code that is no longer here. "
+            f"Run `graft build` (seconds, $0, no key) and re-run."
+        )
     src_files = [
         p for p in base.glob("harness-*/src/**/*.py") if not is_test(str(p.relative_to(base)))
     ]

@@ -16,6 +16,7 @@ path, and that is asserted directly.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -253,6 +254,47 @@ def test_wrong_shape_graph_raises(tmp_path: Path) -> None:
     target.write_text(json.dumps({"something": "else"}))
     with pytest.raises(gr.GraphUnavailableError):
         gr.load_graph(tmp_path)
+
+
+def _checkout(tmp_path: Path, *, graph_first: bool) -> Path:
+    """A miniature checkout with a wiring graph and one indexed source file.
+
+    `os.utime` sets both mtimes explicitly rather than relying on write order — a
+    near-boundary fixture age is a sawtooth by clock phase, per
+    `[[touch-t-truncation-eats-boundary-headroom]]`, and an ordering assertion that
+    depends on how fast the test machine writes two files is not an assertion.
+    """
+    graph = tmp_path / gr.WIRING
+    graph.parent.mkdir(parents=True)
+    graph.write_text(json.dumps({"nodes": [], "edges": []}))
+    src = tmp_path / "harness-cp" / "src" / "harness_cp" / "m.py"
+    src.parent.mkdir(parents=True)
+    src.write_text("x = 1\n")
+    graph_t, src_t = (100.0, 50.0) if graph_first else (50.0, 100.0)
+    os.utime(graph, (graph_t, graph_t))
+    os.utime(src, (src_t, src_t))
+    return tmp_path
+
+
+def test_a_graph_older_than_an_indexed_source_is_refused(tmp_path: Path) -> None:
+    """Codex P2: an existing-but-stale graph yields confidently wrong edges at exit 0."""
+    root = _checkout(tmp_path, graph_first=False)
+    assert gr.stale_sources(root)
+    with pytest.raises(gr.GraphUnavailableError) as exc:
+        gr.collect(root)
+    assert "graft build" in str(exc.value)
+
+
+def test_a_graph_newer_than_every_indexed_source_is_accepted(tmp_path: Path) -> None:
+    """The other direction — a fresh graph must not be refused, or the tool is unusable."""
+    root = _checkout(tmp_path, graph_first=True)
+    assert gr.stale_sources(root) == []
+    assert gr.collect(root) == []
+
+
+def test_staleness_check_is_inert_when_there_is_no_graph(tmp_path: Path) -> None:
+    """Absence is `load_graph`'s error to raise; the staleness probe must not preempt it."""
+    assert gr.stale_sources(tmp_path) == []
 
 
 def test_cli_exits_2_and_reports_nothing_when_the_graph_is_missing(
