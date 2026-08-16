@@ -2,8 +2,8 @@
 
 **Filed:** 2026-08-16 (`B-183` close-out step (2) — the fork doc the row declared OWED at PR #1378)
 **Status:** OPEN — Class 1 (design-phase artifact requires revision)
-**Halt target:** any arc that authorises a **production caller** for `assert_per_tenant_cardinality_isolation`, or that "corrects" `per_cell_cardinality_budget.py:58`'s unit comment in place. **Nothing in flight is blocked today** — the helper has no production caller, so this is filed at discovery, not at obstruction, per `CLAUDE.md` §4.3.
-**Routing target:** `Spec_Operational_Discipline_v1_37.md` rider (a) and `Spec_Operational_Discipline_v1_38.md` §(the `B-133` step-3 paragraph) — the two **cleared** deltas that state the per-tenant cap in `spans/sec`. Secondary, only under disposition (B): `Spec_Operational_Discipline_v1_2.md` §11.1 + §11.4 and `C-OD-21` §21.4.
+**Halt target:** **every consumer and every MEASUREMENT of `tenant_rate_limit`**, not only code callers (broadened at out-of-family review round 2 [P2]) — (a) any arc authorising a **production caller** for `assert_per_tenant_cardinality_isolation`; (b) any arc "correcting" `per_cell_cardinality_budget.py:49-50,58`'s unit comment in place; (c) **`B-133` close-out step (3) / `B-137`'s F-08 per-tenant keep-volume measurement**, which compares a keep-volume against this very cap and would therefore **silently assume disposition (B)** before ratification; and (d) any external collector or backend enforcement configured against this cap, which bypasses the helper entirely. **Nothing in flight is blocked today** — the helper has no production caller and the F-08 measurement is unperformed — so this is filed at discovery, not at obstruction, per `CLAUDE.md` §4.3.
+**Routing target — under EVERY disposition** (corrected at review round 2 [P2]; an earlier line made the contract route conditional on (B) and omitted the plan entirely): **(1) `C-OD-11` §11.1 + §11.4** and **`C-OD-21` §21.4** — the canonical contract must state the quantity explicitly and must define what `observation_window` means, since the **temporal decision (§5) is owed under (A) just as much as under (B)** and the contract is silent on it today. **(2) The OD plan** — the `PerCellCardinalityBudget` signature (`v2:977-978`), U-OD-31's AC 5 (`v2:2186`) and the `CardinalityCounters` shape (`v2_6:721`); under (B) these need substantive amendment, under (A) at minimum the window's role. **(3) `Spec_Operational_Discipline_v1_37.md` rider (a) + `v1_38.md:69`** — the two cleared deltas whose prose reasons in `spans/sec`, and which carry the still-open keep-volume question that (A) would invalidate.
 **Detection mode:** corpus grounding at HEAD `fcddd96f`, every quote re-read this session. Witness at `harness-od/tests/test_b183_tenant_limit_quantity_conflict.py` (7 tests, landed #1378) — **and that module's own framing is corrected by this fork; see §6.**
 
 ---
@@ -29,18 +29,33 @@ The tenant field carries **no unit at all** in the signature. And everywhere the
 about the tenant limit in prose, it says **cardinality** — including the acceptance criterion
 for this exact function.
 
-**But the correction runs both ways, and the second half of it was found by out-of-family
-review after this fork's first draft.** That draft concluded the conflict was *"one label
-against everything else"* and recommended the cardinality reading. It is not: v1.37 does not
-merely *mention* `spans/sec`, it **reasons with the cap as a bound on admitted span
-throughput** and leaves an **open measurement question** phrased in those units (§2.2). Per
-the `CLAUDE.md` §1.3 authority chain a cleared **spec** outranks a plan, so the real shape is:
+**But the correction runs both ways.** This fork's first draft concluded the conflict was
+*"one label against everything else"* and recommended the cardinality reading. That was too
+quick: v1.37 does not merely *mention* `spans/sec`, it **reasons with the cap as a bound on
+admitted span throughput** and leaves an **open measurement question** phrased in those units
+(§2.2).
 
-> **the SPEC treats the per-tenant cap as a span rate; the PLAN and the shipped code implement
-> it as a distinct-series cardinality bound — and the spec is the higher authority.**
+**And the correction to THAT was too quick as well — this fork has now swung twice, and the
+stable framing is neither.** A second draft ranked the spec passage over the plan via the
+`CLAUDE.md` §1.3 authority chain. **Review round 2 [P2] falsified it, correctly:** §1.3 orders
+*artifact levels* (ADR → ADD → PRD → spec → plan), not passages **within one artifact**, and
+both readings live inside the **same OD spec lineage**. Worse for that argument, v1.37 is
+delta-only and declares it carries *"exactly ONE amendment — the C-OD-09 §9.2 always-sampled
+exception set gains ONE row"* (`v1_37:3-8`), and it lists **`C-OD-11` §11.1 as UNCHANGED**
+(`:106`) — as does v1.39 (`:47-58`). A change-note rider that **explicitly disclaims amending
+`C-OD-11`** cannot be `C-OD-11`'s override.
 
-That is a genuine architectural fork, not a documentation tidy, and this fork doc **makes no
-recommendation between them**.
+> **The stable shape: an INTERNAL CONTRADICTION inside the OD spec lineage.** `C-OD-11`'s
+> canonical **contract body** frames the cap as cardinality, and the plan and shipped code
+> implement exactly that. Two later deltas' **change-note prose** reasons about the same cap in
+> `spans/sec` while each declaring `C-OD-11` unchanged. Nothing in the authority chain ranks
+> one over the other; resolution needs **ADR-D6 §1.3** (§2.4 — not resident here) or a **new OD
+> amendment** that reconciles the rider prose with the contract body.
+
+**This fork makes no recommendation between the dispositions.** Within the lineage a contract
+body outranks a compatibility rider, which is a real point for (A) — but (A) genuinely
+invalidates a still-open, cleared measurement question (§4), and that is the operator's call,
+not this filing's.
 
 ---
 
@@ -94,12 +109,16 @@ per-tenant keep-volume measurement against the C-OD-11 §11.1 1,000 spans/sec bu
 span-rate reading is load-bearing for a ruling and an owed measurement in cleared spec text,
 not an inherited label.
 
-**This is what makes the fork real rather than a docstring tidy — and it cuts against
-disposition (A).** Per the `CLAUDE.md` §1.3 authority chain (ADR → ADD → PRD → **spec** →
-plan), a cleared **spec** delta using the cap as a span rate **outranks** the plan's
-acceptance-criterion wording and the implementation. The evidence is therefore genuinely
-two-sided: **higher authority favours spans/sec; the plan and the shipped code implement
-cardinality.**
+**This is what makes the fork real rather than a docstring tidy.** It does **not**, however,
+make `spans/sec` the higher-authority reading — a second draft of this fork argued that via
+the `CLAUDE.md` §1.3 chain and **review round 2 [P2] falsified it** (§1): §1.3 orders artifact
+*levels*, not passages within one artifact, and v1.37 explicitly declares `C-OD-11` §11.1
+**UNCHANGED** (`:106`, echoed at v1.39`:47-58`) while carrying *"exactly ONE amendment"* to
+`C-OD-09` (`:3-8`). What rows 9-10 establish is narrower and still decisive: the span-rate
+reading is **load-bearing for a cleared ruling and an owed measurement**, so it cannot be
+dismissed as an inherited label. The evidence is genuinely two-sided — **a contract body
+(cardinality, implemented) against change-note prose that reasons in spans/sec and leaves an
+open question in those units** — and §1.3 does not break the tie.
 
 ### §2.3 A third naming that is a MECHANISM, not a quantity
 
@@ -169,15 +188,16 @@ operator's call.
 Declare the per-tenant cap a bound on distinct attribute-value series. **No code behaviour
 changes** — the comparison already implements this. *Supported by:* rows 1-6, including the
 plan's own AC for this function and the counter's declared shape. *Costs:* amends **two
-cleared spec deltas**, against the §1.3 authority chain's grain; and it **invalidates v1.37's
+cleared spec deltas**' prose; and it **invalidates v1.37's
 still-open POPULATION question and `B-133`'s owed close-out step (3)**, which are both phrased
 as a keep-volume-in-spans/sec comparison. Those would have to be re-expressed, not merely
 re-worded — you cannot measure a span keep-volume against a series budget. **That
 consequence, not the docstring, is (A)'s real price.**
 
-**(B) — SPANS/SEC.** Declare the cap a rate on admitted spans. *Supported by:* rows 7-10, and
-by the §1.3 authority chain — a cleared spec outranks the plan. It also **preserves v1.37's
-open population question and `B-133` step (3) as posed**. *Requires:* a new counter carrying a
+**(B) — SPANS/SEC.** Declare the cap a rate on admitted spans. *Supported by:* rows 7-10. It also **preserves v1.37's
+open population question and `B-133` step (3) as posed** — the one thing (A) breaks. *(Not
+supported by the §1.3 authority chain; that argument appeared in a draft and was falsified at
+review round 2 — see §1.)* *Requires:* a new counter carrying a
 span count (or re-purposing `observed_series`, contradicting plan v2_6`:721`), a reader for
 `observation_window`, amendments to plan AC `:2186` and to `observed_series`'s declared shape,
 and a re-reading of §11's cardinality framing and `C-OD-21` §21.4's row title. *Costs:* amends
@@ -271,7 +291,8 @@ PR** and is recorded on the `B-183` row.
 | §11.1's "rate limits" parenthetical names a mechanism, not a quantity | **MODERATE** — a coherent reading of `:623` + `:1207` + §11.4, not an explicit statement anywhere |
 | v1.37/v1.38 constitute independent normative use of the span-rate reading | **HIGH** — v1.37`:40` poses an OPEN keep-volume-vs-budget question in spans/sec, re-stated at v1.38`:69`; both re-read this session. *(This fork's first draft rated the opposite claim MODERATE and was wrong — corrected at review [P1].)* |
 | ADR-D6 §1.3's body is absent from this workspace | **HIGH** — `ADR-D6_v1_2.md` is the only D6 file; `:227-229` is a bracket placeholder |
-| No disposition is recommended | By design — the evidence is two-sided (spec vs plan+code) and the §1.3 authority chain favours the surface the implementation contradicts |
+| No disposition is recommended | By design — the contradiction is INTERNAL to the OD spec lineage (contract body vs change-note rider), so §1.3 does not break the tie; each option's cost is named at §4 instead |
+| §1.3 does NOT rank v1.37's rider over `C-OD-11` | **HIGH** — v1.37`:3-8` declares one amendment (C-OD-09) and `:106` lists C-OD-11 §11.1 UNCHANGED; v1.39`:47-58` repeats it. *(Two drafts of this fork got this wrong in opposite directions; corrected at review round 2 [P2].)* |
 
 ---
 
@@ -290,8 +311,8 @@ PR** and is recorded on the `B-183` row.
    since v1.37 rider (a) describes them in one sentence and a delta will touch that sentence
    either way.
 5. **Council: likely owed, and the first draft of this fork said otherwise.** With the
-   evidence two-sided and the §1.3 authority chain pointing at the surface the implementation
-   contradicts, this is no longer single-domain coherence: it sets what a **compliance** cap
+   evidence two-sided — a contract body against change-note prose, with no authority rule to
+   break the tie — this is no longer single-domain coherence: it sets what a **compliance** cap
    measures at the two multi-tenant cells (C10) against what the observability substrate can
    actually count and afford (C7). **A dyadic C7 ⊥ C10 convening is the recommended shape**,
    with probes (1) and (2) run first so it deliberates on evidence rather than on readings.

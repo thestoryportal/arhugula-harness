@@ -9700,9 +9700,15 @@ items:
     per-tenant 1,000 spans/sec budget", re-stated at v1.38:69 as B-133's owed step (3). A
     distinct-series bound would make that open question MALFORMED. THE FORK THEREFORE
     RECOMMENDS NEITHER DISPOSITION (its own first draft recommended (A) and was corrected at
-    out-of-family review [P1]): per the CLAUDE.md §1.3 authority chain a cleared SPEC outranks
-    the plan, so the real shape is -- the spec treats the cap as a span rate; the plan and the
-    shipped code implement a distinct-series cardinality bound. (A)'s true price is that it
+    out-of-family review [P1]). A second draft then OVER-CORRECTED, ranking the spec passage over
+    the plan via the §1.3 chain; review round 2 [P2] falsified that too -- §1.3 orders artifact
+    LEVELS, not passages within one artifact, and v1.37:3-8 declares "exactly ONE amendment"
+    (to C-OD-09) while :106 lists C-OD-11 §11.1 UNCHANGED, as does v1.39:47-58. THE STABLE
+    SHAPE IS AN INTERNAL CONTRADICTION INSIDE THE OD SPEC LINEAGE: C-OD-11's contract body
+    frames the cap as cardinality (and the plan and code implement exactly that) while two
+    later deltas' CHANGE-NOTE PROSE reasons in spans/sec while disclaiming any change to
+    C-OD-11. No authority rule breaks the tie -- resolution needs ADR-D6 §1.3 (non-resident
+    here) or a new OD amendment. (A)'s true price is that it
     invalidates v1.37's population question and B-133's step (3), which must be re-expressed
     rather than re-worded. Routed rather than repaired because a Phase-7 edit cannot amend
     cleared spec text, and leaving the contradiction would be silent absorption
@@ -9753,8 +9759,8 @@ items:
   council: >-
     SUPERSEDED again at #1380, and the fork's own first answer here was wrong too. That draft
     said no council was owed because the evidence favoured (A). With v1.37/v1.38 restored to
-    independent normative weight the evidence is TWO-SIDED and the §1.3 authority chain points
-    at the surface the implementation contradicts. A DYADIC C7 vs C10 CONVENING IS THE
+    independent normative weight the evidence is TWO-SIDED, and no authority rule breaks the tie
+    (the contradiction is internal to the OD spec lineage). A DYADIC C7 vs C10 CONVENING IS THE
     RECOMMENDED SHAPE -- what a compliance cap measures at the two multi-tenant cells against
     what the observability substrate can count and afford -- after the fork's probes (1) and
     (2) are run.
