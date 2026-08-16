@@ -638,6 +638,69 @@ def _claim_subject(line: str, enclosing: str, at: int = 0) -> str:
     return best or enclosing
 
 
+# --- B-167 step 1: a FORMAT-SCOPED acceptance-criteria recount ------------------
+#
+# `check_counts` below compares claims against each other and never recounts.
+# `B-167` asked whether a recount against GROUND TRUTH is buildable at all. Step 1
+# of its close-out says to answer that BY EXECUTION against the real plan corpus
+# rather than by argument. It was, and this is the result.
+#
+# MEASURED over every `Implementation_Plan_*.md` in `design-substrate/` (386 blocks
+# carrying an acceptance-criteria section):
+#
+#   * 288 are a FRESH enumeration — an unqualified header plus a contiguous 1..N
+#     numbered list. The recount is exact on these.
+#   * 98 are NOT — amendment / additions blocks that renumber into a PARENT unit's
+#     space (one observed list starts at `0`) or carry no numbered list at all.
+#     A recount of these is meaningless: the numbers belong to another artifact.
+#   * Of the 288 fresh blocks only 8 reference their own criteria numbers at all,
+#     so IN-BLOCK corroboration is nearly absent. All 8 agree once references to
+#     ANOTHER plan's unit are excluded (the one apparent contradiction, U-RT-147,
+#     cites `CP plan v2.41 U-CP-45`'s criterion, not its own).
+#
+# So the recount's value is exactly what `B-167` wanted and no more: it derives a
+# ground-truth number that an EXTERNAL claim can be checked against. It is not
+# self-checking, and it is NOT wired into any gate here — `B-167` step 3 owes a
+# false-positive measurement against already-merged arcs before that is earned.
+
+_AC_HEADER_RE = re.compile(r"\*\*Acceptance criteria([^*]*)\*\*")
+_AC_NEXT_SECTION_RE = re.compile(r"\n\*\*[A-Z][^*\n]{3,}\*\*")
+_AC_ITEM_RE = re.compile(r"^([0-9]+)\. ", re.MULTILINE)
+
+
+def derive_acceptance_criteria_count(unit_block: str) -> int | None:
+    """Recount a unit block's acceptance criteria, or `None` when not exact.
+
+    Returns a count ONLY for a FRESH enumeration: an acceptance-criteria header
+    with no parenthetical qualifier, followed by a numbered list running
+    contiguously from 1. Returns `None` for everything else — an amendment or
+    additions block, a list that starts anywhere but 1, a gap in the numbering,
+    or no list at all.
+
+    `None` means "not exactly derivable here", never "zero". A caller must treat
+    the two differently: reporting a disagreement against a `None` would be the
+    false-positive class that gets a gate muted.
+    """
+    header = _AC_HEADER_RE.search(unit_block)
+    if header is None:
+        return None
+    # A parenthetical qualifier marks a delta against a parent unit's numbering
+    # ("(v2.41 additions):", "(v2.4 amendment):"). Its numbers are not this
+    # block's to count.
+    qualifier = header.group(1).strip()
+    if qualifier not in ("", ".", ":"):
+        return None
+
+    rest = unit_block[header.end() :]
+    nxt = _AC_NEXT_SECTION_RE.search(rest)
+    section = rest[: nxt.start()] if nxt else rest
+
+    numbers = [int(m.group(1)) for m in _AC_ITEM_RE.finditer(section)]
+    if not numbers or numbers != list(range(1, len(numbers) + 1)):
+        return None
+    return len(numbers)
+
+
 def check_counts(
     by_file: dict[str, list[str]],
     report: Report,
