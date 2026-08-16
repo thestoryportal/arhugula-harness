@@ -112,7 +112,8 @@ def test_silent_on_a_production_reference_rather_than_a_call() -> None:
         [(f"{TEST}#t1", f"{SRC}#_on_drain_signal")],
     )
     assert [f.name for f in gr.derive(graph, set())] == ["_on_drain_signal"]
-    assert gr.derive(graph, {"_on_drain_signal"}) == []
+    mod = gr.module_of(SRC)
+    assert gr.derive(graph, {(mod, "_on_drain_signal")}) == []
 
 
 def test_silent_on_symbols_outside_harness_src() -> None:
@@ -206,20 +207,65 @@ def test_dunder_all_extraction_ignores_other_assignments(tmp_path: Path) -> None
 def test_ast_pass_finds_a_callback_argument(tmp_path: Path) -> None:
     f = tmp_path / "m.py"
     f.write_text("def register(loop):\n    loop.add_signal_handler(1, _on_drain, None)\n")
-    assert "_on_drain" in gr.production_references([f])
+    assert any(n == "_on_drain" for _, n in gr.production_references([f], tmp_path))
 
 
-def test_ast_pass_finds_an_attribute_reference(tmp_path: Path) -> None:
-    f = tmp_path / "m.py"
-    f.write_text("def go(obj):\n    return obj._helper\n")
-    assert "_helper" in gr.production_references([f])
+def test_attribute_reference_is_scoped_to_the_referencing_module(tmp_path: Path) -> None:
+    """Codex P2: `Attribute.attr` has an unresolvable receiver, so a GLOBAL name set
+    over-suppresses — a test-only method named `append` was being rescued by every
+    unrelated `.append` in the tree. Attributing it to the referencing file's own module
+    keeps the local rescue (`parent._link_child(self)` beside its own definition, which
+    graft does not always resolve into an edge) while dropping the cross-module claim.
+    """
+    pkg = tmp_path / "harness-cp" / "src" / "harness_cp"
+    pkg.mkdir(parents=True)
+    (pkg / "m.py").write_text(
+        "class C:\n"
+        "    def go(self):\n"
+        "        return self._helper()\n"
+        "    def other(self, items):\n"
+        "        items.append(1)\n"
+    )
+    refs = gr.production_references([pkg / "m.py"], tmp_path)
+    assert ("harness_cp.m", "_helper") in refs, "self. receiver must rescue a sibling member"
+    assert ("harness_cp.m", "append") not in refs, (
+        "a non-self receiver must NOT rescue: this is the `append` collateral, where three "
+        "real test-only append methods were hidden by unrelated list.append calls"
+    )
+
+
+def test_an_unrelated_same_named_attribute_does_not_suppress_a_finding() -> None:
+    """The concrete `append` collateral Codex named, as a regression test."""
+    graph = _graph(
+        [_node(SRC, "append", kind="method"), _node(TEST, "t1")],
+        [(f"{TEST}#t1", f"{SRC}#append")],
+    )
+    unrelated = {("harness_cp.somewhere_else", "append")}
+    assert [f.name for f in gr.derive(graph, unrelated)] == ["append"]
+
+
+def test_a_reference_from_an_importing_module_does_rescue() -> None:
+    """Scoping must not break the real cross-module callback case."""
+    graph = _graph(
+        [_node(SRC, "_cb"), _node(TEST, "t1")],
+        [(f"{TEST}#t1", f"{SRC}#_cb")],
+    )
+    assert gr.derive(graph, {(gr.module_of(SRC), "_cb")}) == []
+
+
+def test_import_source_attribution_survives_a_relative_import(tmp_path: Path) -> None:
+    pkg = tmp_path / "harness-cp" / "src" / "harness_cp" / "lifecycle"
+    pkg.mkdir(parents=True)
+    (pkg / "user.py").write_text("from .drain import _on_x\n\ndef go(loop):\n    loop.add(_on_x)\n")
+    refs = gr.production_references([pkg / "user.py"], tmp_path)
+    assert ("harness_cp.lifecycle.drain", "_on_x") in refs
 
 
 def test_a_definition_is_not_a_reference_to_itself(tmp_path: Path) -> None:
     """Otherwise every symbol would self-rescue and the detector would never fire."""
     f = tmp_path / "m.py"
     f.write_text("def _helper():\n    return 1\n")
-    assert "_helper" not in gr.production_references([f])
+    assert all(n != "_helper" for _, n in gr.production_references([f], tmp_path))
 
 
 def test_unparseable_file_is_skipped_without_emptying_the_set(tmp_path: Path) -> None:
@@ -227,7 +273,7 @@ def test_unparseable_file_is_skipped_without_emptying_the_set(tmp_path: Path) ->
     good.write_text("x = _wanted\n")
     bad = tmp_path / "bad.py"
     bad.write_text("def (((\n")
-    assert "_wanted" in gr.production_references([bad, good])
+    assert any(n == "_wanted" for _, n in gr.production_references([bad, good], tmp_path))
 
 
 # --- fail-loud posture --------------------------------------------------------
@@ -290,6 +336,25 @@ def test_a_graph_newer_than_every_indexed_source_is_accepted(tmp_path: Path) -> 
     root = _checkout(tmp_path, graph_first=True)
     assert gr.stale_sources(root) == []
     assert gr.collect(root) == []
+
+
+def test_a_graph_indexing_a_deleted_file_is_refused(tmp_path: Path) -> None:
+    """Codex P2: walking the checkout cannot see a deleted file — that is where it isn't.
+
+    Only the graph's own node paths reveal it. Without this the graph passes the mtime
+    check and yields a finding naming a path that no longer exists, at exit 0.
+    """
+    root = _checkout(tmp_path, graph_first=True)
+    graph = {"nodes": [{"path": "harness-cp/src/harness_cp/gone.py", "name": "x"}], "edges": []}
+    assert gr.stale_sources(root) == []  # mtime alone sees nothing
+    reasons = gr.stale_sources(root, graph=graph)
+    assert reasons and "no longer on disk" in reasons[0]
+
+
+def test_a_graph_indexing_only_present_files_is_accepted(tmp_path: Path) -> None:
+    root = _checkout(tmp_path, graph_first=True)
+    graph = {"nodes": [{"path": "harness-cp/src/harness_cp/m.py", "name": "x"}], "edges": []}
+    assert gr.stale_sources(root, graph=graph) == []
 
 
 def test_staleness_check_is_inert_when_there_is_no_graph(tmp_path: Path) -> None:

@@ -107,6 +107,10 @@ _TEST = re.compile(r"(^|/)tests?/|(^|/)test_[^/]*\.py$|conftest\.py$")
 # are reached by construction and import, which `calls` edges model differently.
 _CALLABLE_KINDS = frozenset({"function", "method"})
 
+# The only attribute receivers resolvable without type inference: they name a sibling
+# member of the enclosing class. Everything else (`items.append`) is a guess.
+_SELF_RECEIVERS = frozenset({"self", "cls"})
+
 
 class GraphUnavailableError(RuntimeError):
     """The wiring graph could not be read. Never degrade this to an empty result."""
@@ -147,28 +151,103 @@ def load_graph(root: Path | None = None) -> dict[str, Any]:
     return graph
 
 
-def production_references(paths: Iterable[Path]) -> set[str]:
-    """Every bare name referenced in production source, via AST — not substring.
+def module_of(path: str) -> str:
+    """Dotted module name for a `harness-*/src/<pkg>/...` path, or "" if not importable."""
+    marker = "/src/"
+    i = path.find(marker)
+    if i == -1:
+        return ""
+    rel = path[i + len(marker) :]
+    if rel.endswith(".py"):
+        rel = rel[: -len(".py")]
+    if rel.endswith("/__init__"):
+        rel = rel[: -len("/__init__")]
+    return rel.replace("/", ".")
 
-    Collects `Name.id` and `Attribute.attr`, which is what a callback argument, a
-    decorator, a registry value, or a re-export looks like once parsed. A `def foo` is an
-    `ast.FunctionDef`, not a `Name`, so a definition never counts as a reference to
-    itself.
+
+def _resolved_import_sources(tree: ast.AST, mod: str) -> dict[str, str]:
+    """`{imported_name: defining_module}` for every `from X import Y` in one file.
+
+    Relative imports are resolved against `mod`'s package so `from .drain import _on_x`
+    inside `harness_runtime.lifecycle.a` attributes `_on_x` to `harness_runtime.lifecycle.drain`
+    rather than to a bare `drain` that would match nothing.
+    """
+    sources: dict[str, str] = {}
+    pkg = mod.rsplit(".", 1)[0] if "." in mod else ""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level:
+            base = pkg
+            for _ in range(node.level - 1):
+                base = base.rsplit(".", 1)[0] if "." in base else ""
+            origin = f"{base}.{node.module}" if node.module else base
+        else:
+            origin = node.module or ""
+        for alias in node.names:
+            sources[alias.asname or alias.name] = origin
+    return sources
+
+
+def production_references(paths: Iterable[Path], root: Path | None = None) -> set[tuple[str, str]]:
+    """`{(defining_module, name)}` referenced — not called — from production source.
+
+    **Scoped by module on purpose.** A flat set of bare names over-suppresses badly: a
+    test-only method named `append` vanishes because unrelated `.append` calls exist
+    somewhere in the tree. Since this module is a triage list, a false negative (a real
+    finding silently hidden) is strictly worse than a false positive (a live symbol worth
+    30 seconds to dismiss), so the rescue must be precise rather than generous.
+
+    A `Name` reference is attributed to the module that can actually see it: the module it
+    was imported from, or — absent an import — the referencing file's own module. So
+    `loop.add_signal_handler(sig, _on_drain_signal, ctx)` inside `drain.py` rescues
+    `drain._on_drain_signal` and nothing else.
+
+    `Attribute.attr` is collected **only for a `self.` / `cls.` receiver**, and attributed
+    to the referencing file's own module. That receiver is the one resolvable without type
+    inference — it names a sibling member of the enclosing class — and it is exactly the
+    `self._compose_and_persist_audit(...)` pattern graft does not always turn into a call
+    edge. Any other receiver is a guess, and a wrong guess hides a finding: collecting
+    every `.attr` was suppressing three real test-only `append` methods (one with 28 test
+    callers) because unrelated `list.append` calls exist.
+
+    Measured on this repo, the rules compose to 2 residual rows, both documented classes
+    below. Accepted rather than tuned further.
+
+    Residue, accepted and NOT fixed:
+      * a method reached through a non-`self` receiver of its own type
+        (`parent._link_child(self)`) surfaces as a row to dismiss;
+      * `__init__` reached only by construction surfaces likewise.
+    Both are cheap to dismiss. Narrowing them further needs type inference, which buys
+    two rows at the cost of a resolver this module has no business owning.
 
     A file that fails to parse is skipped rather than fatal: a syntax error in one module
     must not silently empty the whole reference set, but it also must not stop the run.
     """
-    refs: set[str] = set()
+    base = root or Path(".")
+    refs: set[tuple[str, str]] = set()
     for path in paths:
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, SyntaxError, ValueError):
             continue
+        try:
+            mod = module_of(str(path.relative_to(base)))
+        except ValueError:
+            mod = module_of(str(path))
+        imported = _resolved_import_sources(tree, mod)
         for node in ast.walk(tree):
             if isinstance(node, ast.Name):
-                refs.add(node.id)
-            elif isinstance(node, ast.Attribute):
-                refs.add(node.attr)
+                refs.add((imported.get(node.id, mod), node.id))
+            elif (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id in _SELF_RECEIVERS
+            ):
+                # `self.x` / `cls.x` is the one attribute receiver resolvable without
+                # inference: it names a sibling member of the enclosing class. Any other
+                # receiver (`items.append`) is a guess, and guessing hides findings.
+                refs.add((mod, node.attr))
     return refs
 
 
@@ -205,14 +284,14 @@ def dunder_all_names(paths: Iterable[Path]) -> set[str]:
 
 def derive(
     graph: dict[str, Any],
-    prod_refs: set[str] | None = None,
+    prod_refs: set[tuple[str, str]] | None = None,
     all_names: set[str] | None = None,
 ) -> list[Finding]:
     """Symbols under `harness-*/src/**` whose only inbound callers are tests.
 
-    `prod_refs` is the AST reference set from `production_references`; pass an empty set
-    to disable step 4 (used by tests that exercise the call-edge logic in isolation).
-    `all_names` is the `__all__` membership set, OR-ed into each finding's `exported`.
+    `prod_refs` is the module-scoped `(module, name)` set from `production_references`;
+    pass an empty set to disable step 4 (used by tests that exercise the call-edge logic
+    in isolation). `all_names` is the `__all__` membership set, OR-ed into `exported`.
     """
     prod_refs = set() if prod_refs is None else prod_refs
     all_names = set() if all_names is None else all_names
@@ -236,8 +315,8 @@ def derive(
         if any(not is_test(p) for p in caller_paths):
             continue  # a production caller exists — reachable
 
-        if node["name"] in prod_refs:
-            continue  # referenced (not called) from production — e.g. a registered callback
+        if (module_of(node["path"]), node["name"]) in prod_refs:
+            continue  # referenced (not called) from a module that can see it — e.g. a callback
 
         findings.append(
             Finding(
@@ -253,35 +332,58 @@ def derive(
     return findings
 
 
-def stale_sources(root: Path | None = None, *, limit: int = 5) -> list[Path]:
-    """Indexed `.py` files modified after the wiring graph was written.
+def stale_sources(
+    root: Path | None = None, *, graph: dict[str, Any] | None = None, limit: int = 5
+) -> list[str]:
+    """Reasons the wiring graph does not describe this checkout.
 
     A graph that merely EXISTS is not a graph that describes this checkout. An edit, a
     branch switch, or a rebase leaves `wiring.json` intact but describing other code, and
     call edges derived from it are then confidently wrong — a worse outcome than no
     answer, because it still exits 0 and still looks like a clean result.
 
+    Two independent ways to be stale, and mtime alone catches only the first:
+
+    * a tracked file is **newer** than the graph — it was edited after the build;
+    * a file the graph **indexes no longer exists** — deleted by a branch switch or
+      rebase. Walking the checkout can never see these, because the checkout is precisely
+      where they are absent; the graph's own node paths have to be checked against disk.
+      Without this, a deleted target still yields a finding naming a nonexistent path.
+
     graft's own CLI re-derives before answering, so a stale graph is only reachable by
     reading the artifact directly, which is exactly what this module does. Detecting it
     is therefore this module's job, not graft's.
 
-    Returns at most `limit` offenders — enough to name in an error, not a full listing.
+    Returns at most `limit` reasons — enough to name in an error, not a full listing.
     """
     base = root or Path(".")
     graph_path = base / WIRING
     if not graph_path.exists():
         return []
     graph_mtime = graph_path.stat().st_mtime
-    stale: list[Path] = []
+    reasons: list[str] = []
+
     for path in base.glob("harness-*/**/*.py"):
         try:
             if path.stat().st_mtime > graph_mtime:
-                stale.append(path)
+                reasons.append(f"{path} is newer than the graph")
         except OSError:
             continue
-        if len(stale) >= limit:
-            break
-    return stale
+        if len(reasons) >= limit:
+            return reasons
+
+    if graph is not None:
+        seen: set[str] = set()
+        for node in graph.get("nodes", []):
+            path_str = node.get("path", "")
+            if not path_str or path_str in seen or not is_src(path_str):
+                continue
+            seen.add(path_str)
+            if not (base / path_str).exists():
+                reasons.append(f"{path_str} is indexed but no longer on disk")
+                if len(reasons) >= limit:
+                    return reasons
+    return reasons
 
 
 def collect(root: Path | None = None) -> list[Finding]:
@@ -293,17 +395,17 @@ def collect(root: Path | None = None) -> list[Finding]:
     """
     base = root or Path(".")
     graph = load_graph(base)
-    if stale := stale_sources(base):
-        names = ", ".join(str(p) for p in stale[:3])
+    if stale := stale_sources(base, graph=graph):
+        detail = "; ".join(stale[:3])
         raise GraphUnavailableError(
-            f"{base / WIRING} predates {len(stale)}+ indexed source file(s) ({names}). "
+            f"{base / WIRING} does not describe this checkout ({detail}). "
             f"Derived call edges would describe code that is no longer here. "
             f"Run `graft build` (seconds, $0, no key) and re-run."
         )
     src_files = [
         p for p in base.glob("harness-*/src/**/*.py") if not is_test(str(p.relative_to(base)))
     ]
-    return derive(graph, production_references(src_files), dunder_all_names(src_files))
+    return derive(graph, production_references(src_files, base), dunder_all_names(src_files))
 
 
 def render(findings: list[Finding], *, show_all: bool) -> str:
