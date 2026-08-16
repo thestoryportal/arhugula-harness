@@ -9694,12 +9694,19 @@ items:
     matches the shipped code verbatim. So the conflict is NOT three-surfaces-disagree: it is
     ONE LABEL -- "spans/sec" -- against everything else, and that label appears only in the
     implementation's own docstring (per_cell_cardinality_budget.py:49-50,58) and in the two
-    cleared deltas v1.37/v1.38, where v1.37 states it in a parenthetical that DESCRIBES
-    per_cell_cardinality_budget.py by name. The fork's recommended disposition is (A)
-    CARDINALITY -- no code behaviour changes, since the comparison already implements it --
-    with the amendment owed against v1.37/v1.38's prose and the code docstring. Routed rather
-    than repaired because a Phase-7 edit cannot amend cleared spec text, and leaving the
-    contradiction would be silent absorption (CLAUDE.md §4.3). THE TEMPORAL DECISION REMAINS
+    cleared deltas v1.37/v1.38, where they are USED NORMATIVELY, not merely quoted:
+    v1.37:38-40 rules that the caps bound ADMITTED SPAN THROUGHPUT independently of sampling
+    and then leaves an OPEN question on "whether the realized keep-volume approaches the
+    per-tenant 1,000 spans/sec budget", re-stated at v1.38:69 as B-133's owed step (3). A
+    distinct-series bound would make that open question MALFORMED. THE FORK THEREFORE
+    RECOMMENDS NEITHER DISPOSITION (its own first draft recommended (A) and was corrected at
+    out-of-family review [P1]): per the CLAUDE.md §1.3 authority chain a cleared SPEC outranks
+    the plan, so the real shape is -- the spec treats the cap as a span rate; the plan and the
+    shipped code implement a distinct-series cardinality bound. (A)'s true price is that it
+    invalidates v1.37's population question and B-133's step (3), which must be re-expressed
+    rather than re-worded. Routed rather than repaired because a Phase-7 edit cannot amend
+    cleared spec text, and leaving the contradiction would be silent absorption
+    (CLAUDE.md §4.3). THE TEMPORAL DECISION REMAINS
     OWED IN THE SAME PASS: standing cardinality, distinct series per window, or a cardinality
     rate -- settling the quantity alone does not settle it.
     SCOPE, corrected at codex round 4 [P1]: this is a defect in an UNCALLED helper.
@@ -9744,11 +9751,13 @@ items:
     its stated relevance is wrong. Fork docs match the codex guard's DESIGN_RE, so the
     doc-only filing at #1380 could not carry the test edit.
   council: >-
-    SUPERSEDED again at #1380, now that the fork is filed. Under the fork's recommended
-    disposition (A) this is single-domain (C7/OD) unit-and-contract coherence with a clear
-    evidence balance, and no council is owed. If disposition (B) SPANS/SEC is seriously
-    entertained -- it would make the shipped comparison wrong at a compliance surface -- that
-    is a C7 vs C10 tension worth a dyadic convening.
+    SUPERSEDED again at #1380, and the fork's own first answer here was wrong too. That draft
+    said no council was owed because the evidence favoured (A). With v1.37/v1.38 restored to
+    independent normative weight the evidence is TWO-SIDED and the §1.3 authority chain points
+    at the surface the implementation contradicts. A DYADIC C7 vs C10 CONVENING IS THE
+    RECOMMENDED SHAPE -- what a compliance cap measures at the two multi-tenant cells against
+    what the observability substrate can count and afford -- after the fork's probes (1) and
+    (2) are run.
   heading: '### B-183 · `assert_per_tenant_cardinality_isolation` compares a WINDOWED count against a PER-SECOND limit and never reads `observation_window`, so the §21.4 per-tenant gate fires at a threshold that depends on the caller''s window *(surfaced by out-of-family Codex round 3 while grounding `B-182`, 2026-08-15)*'
 - id: B-184
   title: >-

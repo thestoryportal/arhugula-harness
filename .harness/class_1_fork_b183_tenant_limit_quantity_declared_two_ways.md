@@ -1,4 +1,4 @@
-# Class 1 Fork — `B-183`: the C-OD-11 §11.1 per-tenant limit's QUANTITY is declared two ways, and the "spans/sec" reading originates in an implementation docstring that two cleared spec deltas then quoted forward
+# Class 1 Fork — `B-183`: the C-OD-11 §11.1 per-tenant limit's QUANTITY is declared two ways — the cleared SPEC reasons with it as a span rate, while the PLAN and the shipped code implement a distinct-series cardinality bound
 
 **Filed:** 2026-08-16 (`B-183` close-out step (2) — the fork doc the row declared OWED at PR #1378)
 **Status:** OPEN — Class 1 (design-phase artifact requires revision)
@@ -26,9 +26,21 @@ attached to **`cell_rate_limit`**, not to `tenant_rate_limit`:
 — `Implementation_Plan_Operational_Discipline_v2.md:977-978`
 
 The tenant field carries **no unit at all** in the signature. And everywhere the plan speaks
-about the tenant limit in prose, it says **cardinality**. So the conflict is not
-three-surfaces-disagree; it is **one label against everything else**, and the label's
-provenance is traceable.
+about the tenant limit in prose, it says **cardinality** — including the acceptance criterion
+for this exact function.
+
+**But the correction runs both ways, and the second half of it was found by out-of-family
+review after this fork's first draft.** That draft concluded the conflict was *"one label
+against everything else"* and recommended the cardinality reading. It is not: v1.37 does not
+merely *mention* `spans/sec`, it **reasons with the cap as a bound on admitted span
+throughput** and leaves an **open measurement question** phrased in those units (§2.2). Per
+the `CLAUDE.md` §1.3 authority chain a cleared **spec** outranks a plan, so the real shape is:
+
+> **the SPEC treats the per-tenant cap as a span rate; the PLAN and the shipped code implement
+> it as a distinct-series cardinality bound — and the spec is the higher authority.**
+
+That is a genuine architectural fork, not a documentation tidy, and this fork doc **makes no
+recommendation between them**.
 
 ---
 
@@ -61,16 +73,33 @@ count. The implementation is **not** deviating from its plan here.
 | 9 | `Spec_Operational_Discipline_v1_37.md` rider (a) | *"(`per_cell_cardinality_budget.py`: `cell_rate_limit=10_000.0` spans/sec at every ACTIVE cell; `tenant_rate_limit=1_000.0` spans/sec at the two multi-tenant cells)"* | **cleared spec text** |
 | 10 | `Spec_Operational_Discipline_v1_38.md:69` | *"the C-OD-11 §11.1 1,000 spans/sec budget"* | **cleared spec text** |
 
-**Row 9 is a parenthetical that describes the implementation file by name.** It reads as a
-*report of what the code contains*, not as an independent contract declaration — and what
-the code contains, at rows 7-8, is the docstring. Row 10 then refers back to *"the C-OD-11
-§11.1 1,000 spans/sec budget"* as an established term. **[MODERATE confidence]** that the
-`spans/sec` unit entered canonical spec text by being quoted forward from the
-implementation's own comment rather than by an independent ruling. *Falsifier:* any
-pre-v1.37 surface, or ADR-D6 §1.3's resident body (see §2.4), stating the per-tenant cap in
-spans/sec independently of `per_cell_cardinality_budget.py`. **This fork does not claim the
-provenance is proven** — it claims the disposition should not rest on rows 9-10 without
-checking it.
+**Rows 9-10 are INDEPENDENT NORMATIVE USE, not a report of the docstring. An earlier draft
+of this fork said otherwise and is corrected here (out-of-family review [P1]).** Row 9's
+parenthetical does cite the implementation file by name, and read alone it looks descriptive.
+But the sentence it sits in is a **structural-compatibility ruling** that reasons *with* the
+cap as a bound on admitted spans: the budget *"enforces at the COLLECTOR_BOUNDARY /
+BACKEND_INGESTION layer independently of any sampling decision — sampling governs which spans
+are KEPT within the admitted stream, not the admitted rate — so §9.2 membership **cannot admit
+throughput past the enforced caps**."* And v1.37 immediately continues (`:40`):
+
+> *"**The POPULATION question — the actual multi-tenant chain-exhaustion volume, and whether
+> the realized keep-volume approaches the per-tenant 1,000 spans/sec budget — remains
+> explicitly OPEN**"*
+
+That is the cleared spec posing a **still-open measurement question** that compares a
+**keep-volume** — spans kept per unit time — against the per-tenant cap. It is carried
+forward as `B-133`'s close-out step (3), and v1.38`:69` re-states it as *"the C7 F-08
+per-tenant keep-volume measurement against the C-OD-11 §11.1 1,000 spans/sec budget."*
+**A distinct-series cardinality bound would make that open question malformed.** So the
+span-rate reading is load-bearing for a ruling and an owed measurement in cleared spec text,
+not an inherited label.
+
+**This is what makes the fork real rather than a docstring tidy — and it cuts against
+disposition (A).** Per the `CLAUDE.md` §1.3 authority chain (ADR → ADD → PRD → **spec** →
+plan), a cleared **spec** delta using the cap as a span rate **outranks** the plan's
+acceptance-criterion wording and the implementation. The evidence is therefore genuinely
+two-sided: **higher authority favours spans/sec; the plan and the shipped code implement
+cardinality.**
 
 ### §2.3 A third naming that is a MECHANISM, not a quantity
 
@@ -131,28 +160,37 @@ a partial read of the corpus. That is why this is routed rather than repaired.
 
 ## §4 — Dispositions (decision 1 of 2: the QUANTITY)
 
-**(A) — CARDINALITY (distinct attribute-value series). RECOMMENDED.**
-Declare the per-tenant cap a bound on distinct attribute-value series. Amend v1.37 rider (a)
-and v1.38's phrase by delta to drop `spans/sec` **for the tenant cap**; correct
-`per_cell_cardinality_budget.py:49-50,58`. **No code behaviour changes** — the comparison
-already implements this. *Supported by:* rows 1-6, including the plan's own AC for this
-function and the counter's declared shape; the code is already conformant. *Costs:* a spec
-delta amending two cleared deltas' prose.
+**No disposition is recommended.** The first draft of this fork recommended (A); out-of-family
+review [P1] showed that rested on downgrading v1.37/v1.38 to descriptive text, which §2.2
+withdraws. Each option below carries a real, named cost, and choosing between them is the
+operator's call.
 
-**(B) — SPANS/SEC.** Declare the cap a rate on admitted spans. Requires: a new counter
-carrying a span count (or re-purposing `observed_series`, contradicting plan v2_6:721), a
-reader for `observation_window`, an amendment to plan AC `:2186` and to `observed_series`'s
-declared shape, and a re-reading of §11's cardinality framing and `C-OD-21` §21.4's row
-title. *Supported by:* rows 7-10. *Costs:* amends the execution authority and the contract
-surface, and makes the shipped comparison wrong.
+**(A) — CARDINALITY (distinct attribute-value series).**
+Declare the per-tenant cap a bound on distinct attribute-value series. **No code behaviour
+changes** — the comparison already implements this. *Supported by:* rows 1-6, including the
+plan's own AC for this function and the counter's declared shape. *Costs:* amends **two
+cleared spec deltas**, against the §1.3 authority chain's grain; and it **invalidates v1.37's
+still-open POPULATION question and `B-133`'s owed close-out step (3)**, which are both phrased
+as a keep-volume-in-spans/sec comparison. Those would have to be re-expressed, not merely
+re-worded — you cannot measure a span keep-volume against a series budget. **That
+consequence, not the docstring, is (A)'s real price.**
+
+**(B) — SPANS/SEC.** Declare the cap a rate on admitted spans. *Supported by:* rows 7-10, and
+by the §1.3 authority chain — a cleared spec outranks the plan. It also **preserves v1.37's
+open population question and `B-133` step (3) as posed**. *Requires:* a new counter carrying a
+span count (or re-purposing `observed_series`, contradicting plan v2_6`:721`), a reader for
+`observation_window`, amendments to plan AC `:2186` and to `observed_series`'s declared shape,
+and a re-reading of §11's cardinality framing and `C-OD-21` §21.4's row title. *Costs:* amends
+the execution authority, and makes the shipped comparison **wrong at a compliance surface** —
+which is real work, not a relabel.
 
 **(C) — BOTH, as two fields.** Keep `tenant_rate_limit` as a cardinality bound and note that
 `cell_rate_limit` is genuinely a span rate (its plan comment at `:978` says so, and nothing
 contradicts it). The record then legitimately carries two different quantities, and only the
-**names** mislead — a rename (`tenant_series_budget`) would be the honest repair.
-*Consideration:* this is (A) plus a naming decision, and it is the reading that best fits
-every surface at once. It is listed separately because the rename touches a frozen
-`PerCellCardinalityBudget` field name and therefore needs the same ratification.
+**names** mislead — a rename (`tenant_series_budget`) would be the honest repair. *Note:* (C)
+is (A) plus a rename, so it **inherits (A)'s cost** — v1.37's population question still has to
+be re-expressed, and v1.37 treats *both* caps in one throughput argument. The rename also
+touches a frozen `PerCellCardinalityBudget` field name and needs the same ratification.
 
 **Not a disposition: leaving it.** The row is `design_substrate_gated`; a future caller
 inherits whichever semantics are documented, and the two labels currently disagree.
@@ -192,10 +230,12 @@ withdrawn.** #1378's register text and refresh PR body both say *"one decision g
 halves, since `cell_rate_limit` carries the same spans/sec documentation."* Grounding shows
 the opposite: `cell_rate_limit`'s plan comment (`:978`) declares it a **span rate**, and
 nothing contradicts that — so the two fields plausibly carry **different quantities by
-design** (disposition (C)). What they actually share is only that v1.37 rider (a) describes
-both in one parenthetical. `B-182`'s open question — whether a declared cap with no consumer
-is correct-by-design external enforcement or a gap — is **largely independent** of the
-quantity decision here. The `B-182` row's close-out step (4) (*"Settle `B-183`'s quantity
+design** (disposition (C)). What they actually share is only that v1.37 rider (a) treats
+both caps inside one admitted-throughput argument. `B-182`'s open question — whether a declared
+cap with no consumer is correct-by-design external enforcement or a gap — is **largely
+independent** of the quantity decision here. **The decoupling is disposition-dependent:** under
+(B) the tenant cap becomes a span rate too and the two fields re-unify, so a delta settling
+(B) should say explicitly whether it governs `cell_rate_limit` as well. The `B-182` row's close-out step (4) (*"Settle `B-183`'s quantity
 question first if any consumer is authorised"*) still holds in the narrow form it states, and
 only in that form.
 
@@ -216,7 +256,7 @@ PR** and is recorded on the `B-183` row.
 | The plan's AC for this function says cardinality | `:2186` changing wording |
 | `observed_series` is declared as distinct series | plan v2_6`:721` changing, or the code comment at `:177` diverging from it |
 | Only v1.37/v1.38 assert tenant = spans/sec in spec text | Any other OD delta, or a resident ADR-D6 §1.3, stating it |
-| The `spans/sec` label plausibly originates in the code docstring | A pre-v1.37 surface stating it independently of `per_cell_cardinality_budget.py` |
+| v1.37/v1.38 use the cap as a span rate independently (not merely quoting the docstring) | v1.37`:38-40` or v1.38`:69` being re-worded so the population/keep-volume question no longer compares spans against the cap |
 | Nothing is blocked today | A production caller for `assert_per_tenant_cardinality_isolation` appearing in `harness-*/src` |
 
 ---
@@ -229,9 +269,9 @@ PR** and is recorded on the `B-183` row.
 | The plan's AC `:2186` and counter shape v2_6`:721` both declare cardinality, and the code conforms | **HIGH** — all three read this session |
 | v1.37/v1.38 state the tenant cap in `spans/sec` in cleared spec text | **HIGH** — quoted byte-exact |
 | §11.1's "rate limits" parenthetical names a mechanism, not a quantity | **MODERATE** — a coherent reading of `:623` + `:1207` + §11.4, not an explicit statement anywhere |
-| The `spans/sec` unit was quoted forward from the implementation docstring | **MODERATE** — provenance-shaped inference from v1.37's parenthetical form; explicitly not proven |
+| v1.37/v1.38 constitute independent normative use of the span-rate reading | **HIGH** — v1.37`:40` poses an OPEN keep-volume-vs-budget question in spans/sec, re-stated at v1.38`:69`; both re-read this session. *(This fork's first draft rated the opposite claim MODERATE and was wrong — corrected at review [P1].)* |
 | ADR-D6 §1.3's body is absent from this workspace | **HIGH** — `ADR-D6_v1_2.md` is the only D6 file; `:227-229` is a bracket placeholder |
-| Disposition (A) is the lowest-cost reconciliation | **MODERATE** — follows from the evidence balance, but the non-resident ADR §1.3 could overturn it |
+| No disposition is recommended | By design — the evidence is two-sided (spec vs plan+code) and the §1.3 authority chain favours the surface the implementation contradicts |
 
 ---
 
@@ -239,19 +279,22 @@ PR** and is recorded on the `B-183` row.
 
 1. **Read ADR-D6 v1.1 §1.3 in the design-phase workspace.** It is the cited root authority
    and is not resident here. It may settle decision 1 outright, and it is the cheapest probe.
-2. **Establish the provenance of `spans/sec`.** Search the pre-v1.37 OD chain and the D6
-   corpus for any independent statement of a per-tenant span rate. If none exists, (A)
-   becomes near-mechanical.
+2. **Decide what happens to v1.37's open POPULATION question under (A).** It and `B-133`'s
+   close-out step (3) are phrased as a keep-volume-in-spans/sec comparison against this cap;
+   under (A) they are malformed and must be re-expressed, not re-worded. This is the concrete
+   cost that decides between (A) and (B), and it is the second-cheapest probe after (1).
 3. **Decide the temporal dimension (§5) in the same pass**, and say explicitly what
    `observation_window` is for under the chosen reading.
 4. **Decide whether `cell_rate_limit` is in scope.** This fork's position is that it is not
    (§6(ii)) — but the operator may prefer to settle both fields' quantities in one delta,
    since v1.37 rider (a) describes them in one sentence and a delta will touch that sentence
    either way.
-5. **Council:** not obviously owed. Under (A) this is single-domain (C7/OD) unit-and-contract
-   coherence with a clear evidence balance. If disposition (B) is seriously entertained — it
-   would make the shipped comparison wrong at a compliance surface — that is a C7 ⊥ C10
-   tension worth a dyadic convening.
+5. **Council: likely owed, and the first draft of this fork said otherwise.** With the
+   evidence two-sided and the §1.3 authority chain pointing at the surface the implementation
+   contradicts, this is no longer single-domain coherence: it sets what a **compliance** cap
+   measures at the two multi-tenant cells (C10) against what the observability substrate can
+   actually count and afford (C7). **A dyadic C7 ⊥ C10 convening is the recommended shape**,
+   with probes (1) and (2) run first so it deliberates on evidence rather than on readings.
 
 ---
 
