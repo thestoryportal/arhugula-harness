@@ -7,8 +7,9 @@ for a false-positive measurement *"before wiring it into the pre-push path; a ga
 as useful as its precision."*
 
 **This module does NOT deliver that measurement, and step 3 is NOT complete.** Three
-successive attempts produced 68%, then 40%, then 62%, then 61%, each after out-of-family
-review found a different methodological flaw — and the third round showed the *classification* behind the
+successive attempts produced 68%, then 40%, then 62%, then 61% — each after out-of-family
+review found a different methodological flaw — and round three showed the *classification*
+behind the
 verdict was itself unsupported. Reporting a fourth number would be guessing with extra
 steps. What survives, and is genuinely useful, is the **census of obstacles** each attempt
 uncovered: every one is a real shape in this corpus that a naive comparison mishandles.
