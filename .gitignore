@@ -181,3 +181,12 @@ tools/semantic_overlay/overlay.json
 # crash can leave either, and an unignored artifact next to source is one `git add -A`
 # away from being committed.
 *.mutprobe.*
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/
+# ...but re-admit the Claude-side graft skill, which the unanchored pattern above also
+# matches. The pattern is written by graft's own ensureGitignored() on every build and
+# its idempotency check only recognises `graft/` or `graft`, so anchoring it to /graft/
+# would be silently re-appended next build. A negation coexists with that rewrite.
+!.claude/skills/graft/
+!.agents/skills/graft/

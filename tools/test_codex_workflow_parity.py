@@ -364,6 +364,48 @@ def test_codex_hooks_cover_supported_claude_lifecycle(
         )
 
 
+# Claude-runtime-only hook helpers, exempt from the Codex mirror by explicit decision
+# (operator-approved 2026-08-16). These inject retrieval context into Claude's own prompt
+# and session lifecycle — `UserPromptSubmit` context packs, `PostToolUse` savings
+# accounting, end-of-turn card rebuilds. Codex has no equivalent injection point, so a
+# mirrored command would have nothing to bind to; the Codex side receives the same
+# guidance declaratively through the marker-fenced Graft block in `AGENTS.md` instead.
+#
+# The exemption is deliberately NOT a skip. Each exempt command must still reference a
+# helper that exists AND is git-tracked: `.claude/settings.json` shipping a reference to
+# an untracked local file is precisely the defect this exemption was written alongside —
+# every hook would fail MODULE_NOT_FOUND on a clean checkout while this suite stayed green.
+_CLAUDE_ONLY_HELPER_DIR = ".claude/helpers/"
+
+
+def _claude_only_helper(command: str) -> str | None:
+    """Repo-relative helper path if `command` is an exempt Claude-only hook, else None."""
+    marker = f"{_CLAUDE_ONLY_HELPER_DIR}"
+    if marker not in command:
+        return None
+    tail = command.split(marker, 1)[1]
+    name = tail.split('"', 1)[0].split()[0]
+    return f"{_CLAUDE_ONLY_HELPER_DIR}{name}"
+
+
+def _assert_claude_only_helper_is_tracked(command: str) -> None:
+    relative = _claude_only_helper(command)
+    assert relative is not None
+    path = ROOT / relative
+    assert path.exists(), f"exempt hook references a missing helper: {relative}"
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", relative],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert tracked.returncode == 0, (
+        f"exempt hook references an UNTRACKED helper: {relative}. A clean checkout would "
+        f"run node against a missing module on every hook fire."
+    )
+
+
 def test_codex_hook_map_tracks_every_canonical_claude_hook_command() -> None:
     claude = json.loads((ROOT / ".claude/settings.json").read_text(encoding="utf-8"))["hooks"]
     codex = json.loads((ROOT / ".codex/hooks.json").read_text(encoding="utf-8"))["hooks"]
@@ -392,7 +434,9 @@ def test_codex_hook_map_tracks_every_canonical_claude_hook_command() -> None:
             for hook in group["hooks"]:
                 command = hook["command"]
                 prefix = "${CLAUDE_PROJECT_DIR}/"
-                if command.startswith(prefix):
+                if _claude_only_helper(command) is not None:
+                    _assert_claude_only_helper_is_tracked(command)
+                elif command.startswith(prefix):
                     relative = command.removeprefix(prefix)
                     if relative in wrapper_targets:
                         assert wrapper_targets[relative] in wrappers
