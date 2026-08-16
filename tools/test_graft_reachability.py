@@ -304,6 +304,22 @@ def test_a_reference_from_an_importing_module_does_rescue() -> None:
     assert gr.derive(graph, gr.ProductionRefs({(gr.module_of(SRC), "_cb")}, set())) == []
 
 
+def test_an_aliased_import_resolves_to_the_original_symbol_name(tmp_path: Path) -> None:
+    """Codex P2: `from .drain import callback as cb` then `reg(cb)`.
+
+    The graph keys the symbol as `callback`; recording the local alias `cb` means the
+    rescue never matches and a live aliased callback is reported as test-only. Unlike the
+    other findings in this arc this one over-REPORTS, but it is the same root error:
+    matching on the wrong name.
+    """
+    pkg = tmp_path / "harness-cp" / "src" / "harness_cp" / "lifecycle"
+    pkg.mkdir(parents=True)
+    (pkg / "user.py").write_text("from .drain import callback as cb\n\ndef go(reg):\n    reg(cb)\n")
+    refs = gr.production_references([pkg / "user.py"], tmp_path)
+    assert ("harness_cp.lifecycle.drain", "callback") in refs.names
+    assert ("harness_cp.lifecycle.drain", "cb") not in refs.names
+
+
 def test_import_source_attribution_survives_a_relative_import(tmp_path: Path) -> None:
     pkg = tmp_path / "harness-cp" / "src" / "harness_cp" / "lifecycle"
     pkg.mkdir(parents=True)

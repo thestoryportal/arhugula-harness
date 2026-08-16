@@ -67,6 +67,17 @@ rows are hidden by default and a mis-attributed export silently drops a finding.
   known false-positive rate for a large unknown one.
 * **Dynamic dispatch is invisible.** `getattr(obj, name)()`, string-keyed registries, and
   plugin loaders defeat both passes. A row may still be live.
+* **REGISTERED AND HELD — references are module-scoped, not lexically scoped.** Within one
+  module the rescue still matches on name, so two shapes under-report:
+  a local variable or parameter named `_helper` suppresses a module-level function
+  `_helper` in that same module; and `self._helper` in class `B` suppresses a same-named
+  method in class `A` of the same file, because class ownership is discarded.
+  Closing this needs a real scope-and-owner resolver (bindings per function scope, class
+  membership per method). Three review rounds narrowed this same root error — bare name →
+  module-scoped → kind-split — each time recovering real hidden findings; this remainder is
+  where narrowing stops paying and a resolver would begin. It is deliberately NOT fixed.
+  Consequence to keep in mind: for a symbol whose name collides inside its own module, a
+  clean report is weaker evidence than it looks.
 * **`exported` rows are usually legitimate.** A public symbol with no in-repo production
   caller is often intended API surface. They are counted, and only listed under `--all`.
 * **The graph is per-checkout.** `graft/.graph/wiring.json` is gitignored, so this tool
@@ -192,14 +203,14 @@ def module_of(path: str) -> str:
     return rel.replace("/", ".")
 
 
-def _resolved_import_sources(tree: ast.AST, mod: str) -> dict[str, str]:
+def _resolved_import_sources(tree: ast.AST, mod: str) -> dict[str, tuple[str, str]]:
     """`{imported_name: defining_module}` for every `from X import Y` in one file.
 
     Relative imports are resolved against `mod`'s package so `from .drain import _on_x`
     inside `harness_runtime.lifecycle.a` attributes `_on_x` to `harness_runtime.lifecycle.drain`
     rather than to a bare `drain` that would match nothing.
     """
-    sources: dict[str, str] = {}
+    sources: dict[str, tuple[str, str]] = {}
     pkg = mod.rsplit(".", 1)[0] if "." in mod else ""
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
@@ -212,7 +223,11 @@ def _resolved_import_sources(tree: ast.AST, mod: str) -> dict[str, str]:
         else:
             origin = node.module or ""
         for alias in node.names:
-            sources[alias.asname or alias.name] = origin
+            # Key by the LOCAL binding, value the ORIGINAL name: `import callback as cb`
+            # must resolve a later `cb` to (origin, "callback"), because that is how the
+            # graph keys the symbol. Storing "cb" reports a live aliased callback as
+            # test-only.
+            sources[alias.asname or alias.name] = (origin, alias.name)
     return sources
 
 
@@ -266,7 +281,7 @@ def production_references(paths: Iterable[Path], root: Path | None = None) -> Pr
         imported = _resolved_import_sources(tree, mod)
         for node in ast.walk(tree):
             if isinstance(node, ast.Name):
-                names.add((imported.get(node.id, mod), node.id))
+                names.add(imported.get(node.id, (mod, node.id)))
             elif (
                 isinstance(node, ast.Attribute)
                 and isinstance(node.value, ast.Name)
