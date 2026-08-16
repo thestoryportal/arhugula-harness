@@ -9716,8 +9716,8 @@ items:
   heading: '### B-183 · `assert_per_tenant_cardinality_isolation` compares a WINDOWED count against a PER-SECOND limit and never reads `observation_window`, so the §21.4 per-tenant gate fires at a threshold that depends on the caller''s window *(surfaced by out-of-family Codex round 3 while grounding `B-182`, 2026-08-15)*'
 - id: B-184
   title: >-
-    tools/ test-execution audit — 15 of 43 test modules were executed by no mechanism; 6 wired,
-    9 deliberately credential-gated, 1 excluded on runtime, and two import conventions coexist
+    tools/ test-execution audit — 15 of 43 test modules were executed by no mechanism; 14 now wired
+    (+206 tests), only 1 excluded on runtime, and two import conventions coexist
   status: registered_finding
   summary: >-
     #1368 found tools/test_leg_selfcheck.py doubly dead and its own next-action said to treat that
@@ -9726,14 +9726,16 @@ items:
     successive naive matchers each gave a different wrong answer (a path-prefixed pattern missed
     CI's bare-filename invocations under working-directory: tools; a continuation-line pattern
     mis-reported an already-wired file as dead).
-    RESULT: 43 test modules on disk, 28 executed somewhere, 15 executed by NOTHING. Of those 15,
-    NINE are deliberately credential/infra-gated live probes and readiness checks (r420, r421 x2,
-    r430, r810, r820, sandbox_host_readiness, self_hosted_readiness, managed_cloud_readiness) and
-    are correctly excluded. ONE, test_codex_loop.py, is excluded on RUNTIME -- it takes 82s, which
-    would nearly double the parity gate.
-    The remaining FIVE were dead weight and are now wired (arc_metrics, closure_certification,
-    docs_completeness, memory_closeout_check, q4_packaging_gate). All pass; none was hiding a red.
-    Collection proven 469 -> 533, reconciling exactly against 46+6+5+3+4.
+    RESULT: 43 test modules on disk, 28 executed somewhere, 15 executed by NOTHING -- and 14 of
+    those 15 are now wired. FIVE were plain dead weight (arc_metrics, closure_certification,
+    docs_completeness, memory_closeout_check, q4_packaging_gate). NINE more were MIS-CLASSIFIED by
+    this arc as credential/infra-gated FROM THEIR FILENAMES rather than from reading them
+    (out-of-family Codex [P2] caught it): r420, r421 x2, r430, r810, r820, sandbox_host_readiness,
+    self_hosted_readiness and managed_cloud_readiness in fact hold 64 unmarked provider-free unit
+    and static tests that pass in 5.5s with every credential stripped -- exactly the environment
+    the parity gate runs. They are wired too. ONLY ONE module stays out: test_codex_loop.py, on
+    RUNTIME, at 82s against a ~180s gate. All 206 newly-wired tests pass; none was hiding a red.
+    Collection proven 469 -> 533 -> 597, each delta reconciling exactly.
     A VENUE TRAP worth carrying: tools/ hosts TWO import conventions -- bare (import leg_selfcheck,
     needing a sys.path insert or cwd=tools) and package (from tools.q4_packaging_gate import,
     needing cwd=ROOT). Running test_q4_packaging_gate.py from inside tools/ reports 4 FAILED; from
@@ -9742,13 +9744,13 @@ items:
     (1) DECIDE test_codex_loop.py: 82s in a ~180s gate. Either accept the cost, move it to a
     non-blocking or nightly lane, or profile it -- do not silently leave it unrun, which is the
     state this row exists to end.
-    (2) The nine gated probes are correctly excluded, but nothing ASSERTS that they are gated
-    rather than forgotten. A cheap guard would enumerate tools/test_*.py, subtract the executed
-    set, and require every remainder to carry an explicit gated/excluded marker -- turning this
-    audit into a standing invariant instead of a one-off sweep.
+    (2) Make the audit a standing invariant: a cheap guard enumerating tools/test_*.py,
+    subtracting the executed set, and requiring every remainder to carry an explicit excluded
+    marker WITH A REASON. This arc's own mis-classification is the argument for it -- a filename
+    is not a gate, and nothing today distinguishes deliberately excluded from forgotten.
     (3) Normalise the two import conventions, or document the required cwd per file, so the next
     audit cannot manufacture failures by running from the wrong venue.
   council: >-
     No. A tooling-coverage question settled by execution; the only judgement is the runtime
     tradeoff at step 1, which is a cost call with a named number.
-  heading: '### B-184 · `tools/` test-execution audit — 15 of 43 test modules ran nowhere; 6 are now wired, 9 are deliberately credential-gated, and 1 is excluded on runtime *(surfaced by the dead-file finding at `B-167` / #1368, audited as a class 2026-08-16)*'
+  heading: '### B-184 · `tools/` test-execution audit — 15 of 43 test modules ran nowhere; **14 are now wired (+206 tests)** and only 1 is excluded, on runtime *(surfaced by the dead-file finding at `B-167` / #1368, audited as a class 2026-08-16)*'

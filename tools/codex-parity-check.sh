@@ -22,7 +22,16 @@ uv run pytest -q \
   tools/test_leg_selfcheck.py \
   tools/test_memory_closeout_check.py \
   tools/test_prime_report.py \
-  tools/test_q4_packaging_gate.py
+  tools/test_managed_cloud_readiness.py \
+  tools/test_q4_packaging_gate.py \
+  tools/test_r420_self_hosted_local_stack.py \
+  tools/test_r421_e2b_live_probe.py \
+  tools/test_r421_managed_cloud_live_e2e.py \
+  tools/test_r430_tail_keep_collector.py \
+  tools/test_r810_files_live_e2e.py \
+  tools/test_r820_managed_agents_live_e2e.py \
+  tools/test_sandbox_host_readiness.py \
+  tools/test_self_hosted_readiness.py
 
 for test_script in tools/hooks/test_*.sh tools/statusline/test_*.sh; do
   bash "$test_script"
