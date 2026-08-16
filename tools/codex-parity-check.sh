@@ -16,8 +16,13 @@ uv run pytest -q \
   tools/test_codex_worktree_gc.py \
   tools/test_arc_exit_report.py \
   tools/test_mutation_probe.py \
+  tools/test_arc_metrics.py \
+  tools/test_closure_certification.py \
+  tools/test_docs_completeness.py \
   tools/test_leg_selfcheck.py \
-  tools/test_prime_report.py
+  tools/test_memory_closeout_check.py \
+  tools/test_prime_report.py \
+  tools/test_q4_packaging_gate.py
 
 for test_script in tools/hooks/test_*.sh tools/statusline/test_*.sh; do
   bash "$test_script"
