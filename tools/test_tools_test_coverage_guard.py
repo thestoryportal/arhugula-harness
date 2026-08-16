@@ -21,7 +21,7 @@ import tools_test_coverage_guard as guard
 
 
 def _repo(tmp_path: Path, *, modules: list[str], workflow: str = "", parity: str = "") -> Path:
-    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools").mkdir(parents=True, exist_ok=True)
     for m in modules:
         (tmp_path / "tools" / m).write_text("# test module\n", encoding="utf-8")
     wf_dir = tmp_path / ".github" / "workflows"
@@ -218,3 +218,36 @@ def test_workflows_with_the_yaml_extension_are_scanned(tmp_path: Path) -> None:
         _wf("pytest tools/test_a.py -q"), encoding="utf-8"
     )
     assert guard.validate(root) == []
+
+
+def test_a_space_separated_ignore_flag_is_not_execution(tmp_path: Path) -> None:
+    """`--ignore tools/test_x.py` — the value is a separate token (review round 2)."""
+    root = _repo(
+        tmp_path,
+        modules=["test_orphan.py"],
+        workflow=_wf("pytest tools --ignore tools/test_orphan.py -q"),
+    )
+    (problem,) = guard.validate(root)
+    assert "test_orphan.py" in problem
+
+
+def test_a_line_that_merely_mentions_pytest_is_not_execution(tmp_path: Path) -> None:
+    """`echo pytest tools/test_x.py` prints a string; the COMMAND is `echo`."""
+    root = _repo(
+        tmp_path, modules=["test_orphan.py"], workflow=_wf("echo pytest tools/test_orphan.py")
+    )
+    (problem,) = guard.validate(root)
+    assert "test_orphan.py" in problem
+
+
+def test_runner_wrappers_before_pytest_still_count_as_execution(tmp_path: Path) -> None:
+    """The positive control for the command walk: real invocations wear prefixes."""
+    for i, cmd in enumerate(
+        (
+            "uv run pytest tools/test_a.py -q",
+            "uv run python -m pytest tools/test_a.py -q",
+            "env PYTHON_KEYRING_BACKEND=x uv run pytest tools/test_a.py",
+        )
+    ):
+        root = _repo(tmp_path / f"case{i}", modules=["test_a.py"], workflow=_wf(cmd))
+        assert guard.validate(root) == [], cmd

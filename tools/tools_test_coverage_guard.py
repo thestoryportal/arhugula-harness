@@ -32,6 +32,7 @@ Run standalone (`python tools/tools_test_coverage_guard.py`) or import `validate
 
 from __future__ import annotations
 
+import shlex
 import sys
 from pathlib import Path
 
@@ -85,28 +86,66 @@ def _run_blocks(root: Path) -> list[str]:
     return blobs
 
 
-#: `pytest` flags whose VALUE is a test path being EXCLUDED, not run.
-_NEGATING_FLAGS = ("--ignore", "--deselect")
+#: `pytest` flags whose VALUE names a test path being EXCLUDED, not run. Both the
+#: `--flag=value` and the space-separated `--flag value` spellings are handled.
+_NEGATING_FLAGS = ("--ignore", "--ignore-glob", "--deselect")
+
+#: Tokens that may precede the real command without being it: environment prefixes and
+#: runner wrappers. `env A=B uv run python -m pytest ...` is a pytest invocation;
+#: `echo pytest ...` is not, and the difference is which token is the COMMAND.
+_WRAPPERS = frozenset(
+    {"env", "uv", "run", "poetry", "python", "python3", "-m", "--no-sync", "exec", "time"}
+)
+
+
+def _is_pytest_command(tokens: list[str]) -> int | None:
+    """Index of the `pytest` token when these tokens are a pytest COMMAND, else `None`.
+
+    Out-of-family review [P2], twice: a line merely *containing* `pytest` is not a pytest
+    run. `echo pytest tools/test_x.py` prints a string. So walk from the command position,
+    stepping over wrappers and `VAR=value` prefixes only, and require `pytest` to be the
+    command actually reached.
+    """
+    for i, tok in enumerate(tokens):
+        if tok == "pytest" or tok.endswith("/pytest"):
+            return i
+        if tok in _WRAPPERS or ("=" in tok.split("/")[0][:64] and not tok.startswith("-")):
+            continue  # environment assignment or runner wrapper
+        return None
+    return None
 
 
 def _pytest_targets(blob: str) -> set[str]:
-    """Test paths a shell body actually hands to pytest.
+    """Test paths a shell body actually hands to pytest as positional targets.
 
-    Presence of a basename anywhere in the text is NOT execution — out-of-family review
-    [P2]: `cat tools/test_x.py`, a comment inside a `run:` block, and
-    `--ignore=tools/test_x.py` each satisfy a substring check while running nothing, and
-    `--ignore` means the exact opposite. So: join shell continuations, drop comments, keep
-    only commands that invoke pytest, and within those skip negating flags.
+    Presence of a basename anywhere in the text is NOT execution. Three shapes that a
+    substring check wrongly certifies, each pinned by a test: `cat tools/test_x.py` (wrong
+    command), a `#` comment inside a `run:` block (not a command at all), and
+    `--ignore=tools/test_x.py` / `--ignore tools/test_x.py` (which mean the OPPOSITE).
     """
     joined = blob.replace("\\\n", " ")
     targets: set[str] = set()
     for raw in joined.splitlines():
-        line = raw.split("#", 1)[0]
-        if "pytest" not in line:
+        line = raw.split("#", 1)[0].strip()
+        if not line:
             continue
-        for token in line.split():
-            if any(token.startswith(flag) for flag in _NEGATING_FLAGS):
+        try:
+            tokens = shlex.split(line)
+        except ValueError:  # unbalanced quotes in a shell fragment
+            tokens = line.split()
+        idx = _is_pytest_command(tokens)
+        if idx is None:
+            continue
+        skip_next = False
+        for token in tokens[idx + 1 :]:
+            if skip_next:
+                skip_next = False
                 continue
+            if token in _NEGATING_FLAGS:
+                skip_next = True  # `--ignore tools/test_x.py`
+                continue
+            if any(token.startswith(f + "=") for f in _NEGATING_FLAGS):
+                continue  # `--ignore=tools/test_x.py`
             if token.endswith(".py"):
                 targets.add(Path(token).name)
     return targets
