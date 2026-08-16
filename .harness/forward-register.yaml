@@ -60,12 +60,12 @@
 snapshot:
   total: 184
   open: 1
-  design_substrate_gated: 2
-  registered_finding: 37
+  design_substrate_gated: 3
+  registered_finding: 36
   operator_gated: 0
   held: 2
   closed: 142
-  identity_digest: a52b4e7821905d33
+  identity_digest: a1f50c51faf8a138
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9666,7 +9666,7 @@ items:
   title: >-
     assert_per_tenant_cardinality_isolation compares a windowed observed_series count against a
     per-second tenant_rate_limit and never reads observation_window
-  status: registered_finding
+  status: design_substrate_gated
   summary: >-
     C-OD-11 §11.1's tenant_rate_limit is documented as a PER-SECOND rate --
     per_cell_cardinality_budget.py:58 "per-tenant rate limit (spans/sec)", and again at :50.
@@ -9681,6 +9681,20 @@ items:
     exactly as 1001 over "1s". An earlier draft called the former "~16.7/sec" and asserted an
     unsafe-permissive/false-positive direction; both are WITHDRAWN -- that arithmetic equates
     series with spans, and no direction follows until the quantity is settled.
+    FORK-DOC PHASE: **OWED, not filed** (schema requirement for design_substrate_gated).
+    Grounding at #1378 located the conflict and showed it is not agent-decidable: C-OD-11
+    frames the contract as CARDINALITY (distinct values) while the OD plan's own field
+    signature and TWO CLEARED SPEC DELTAS (v1.37, v1.38) quantify the same limit in
+    SPANS/SEC, and the shipped code compares SERIES. Spans and series are not
+    interchangeable, so at most one reading is right and the choice changes what a
+    compliance surface measures at the two multi-tenant cells. The owed fork doc must put
+    the quantity to the operator (cardinality vs spans/sec) and reconcile whichever loses.
+    IT MUST ALSO SETTLE THE TEMPORAL INTERPRETATION SEPARATELY (codex round 2 [P2]): even
+    under "cardinality" the limit could mean STANDING/concurrent cardinality, distinct series
+    observed PER WINDOW, or a cardinality RATE -- and the carrier already records an
+    observation_window, so choosing the quantity alone would leave B-183's original time
+    mismatch unresolved. TWO decisions, not one. No fork doc exists yet and none is filed by
+    this arc.
     SCOPE, corrected at codex round 4 [P1]: this is a defect in an UNCALLED helper.
     assert_per_tenant_cardinality_isolation has no call site in harness-*/src -- only its
     definition, its __all__ entry, two docstring mentions, and tests. No production path reaches
@@ -9695,7 +9709,11 @@ items:
     observation_window is still unread in the comparison, and enumerate every caller of
     assert_per_tenant_cardinality_isolation to see which windows are actually passed in
     production (the surfacing arc did not do this -- it is the first real question).
-    (2) DECIDE THE QUANTITY BEFORE THE UNIT. Codex round 4 [P2]: there are TWO mismatches and
+    (2) SUPERSEDED at #1378 — the quantity is NOT choosable here. Grounding found three
+    disagreeing authority surfaces (see the fork-doc phase above), so this step routes to
+    a design-substrate decision rather than a caller survey. The three repair options
+    below are retained ONLY as the shapes the decision picks among, not as an
+    agent-executable menu. Original text follows: decide the quantity before the unit. Codex round 4 [P2]: there are TWO mismatches and
     time is the lesser -- observed_series counts DISTINCT SERIES while tenant_rate_limit is
     documented in SPANS/sec, so dividing by a parsed window yields series/sec, not spans/sec.
     Decide first whether the limit measures spans, series, or a windowed count. Only then:
@@ -9711,8 +9729,11 @@ items:
     consumer at all (B-182 (C)), so any window grammar committed here should be settled BEFORE an
     in-process cell-cap enforcement site is written, or the two will disagree.
   council: >-
-    No. A single-domain unit/contract coherence question with a named owner (C7/OD). The
-    three repair options are enumerable and grounding plus the caller survey chooses between them.
+    SUPERSEDED at #1378. The registration read this as single-domain unit/contract
+    coherence choosable by a caller survey. It is not: the quantity is declared three ways
+    across C-OD-11, the OD plan signature and two cleared spec deltas, so the decision is
+    design-substrate and belongs to the owed fork doc. Whether that doc needs a council is
+    for whoever files it; this row no longer asserts no.
   heading: '### B-183 · `assert_per_tenant_cardinality_isolation` compares a WINDOWED count against a PER-SECOND limit and never reads `observation_window`, so the §21.4 per-tenant gate fires at a threshold that depends on the caller''s window *(surfaced by out-of-family Codex round 3 while grounding `B-182`, 2026-08-15)*'
 - id: B-184
   title: >-
