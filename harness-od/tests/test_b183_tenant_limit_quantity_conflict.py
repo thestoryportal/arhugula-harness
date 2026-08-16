@@ -68,9 +68,19 @@ _MTC_SELF = CellID(
 
 
 def _read(name: str) -> str:
+    """Read an authority file, FAILING CLOSED when it is gone.
+
+    An earlier version skipped on absence. That inverts the module's purpose: a renamed or
+    retired authority file is exactly the condition that must force `B-183` to be
+    re-grounded, and a skip turns that signal into a green suite (out-of-family review
+    [P2] — and this repo's own "couldn't look is not OK" discipline).
+    """
     path = _SUBSTRATE / name
-    if not path.exists():  # pragma: no cover - corpus moved
-        pytest.skip(f"{name} is absent; re-ground B-183 before trusting this module")
+    assert path.exists(), (
+        f"{name} is absent. It is one of the three authority surfaces B-183's quantity "
+        "conflict is pinned against — its disappearance means the conflict has moved and "
+        "the row must be re-grounded, NOT that this check passes."
+    )
     return path.read_text(encoding="utf-8")
 
 
