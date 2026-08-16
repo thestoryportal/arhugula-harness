@@ -1,97 +1,58 @@
-"""B-137 step (3), C11 half: what the §11.1 per-cell budget actually commits and enforces.
+"""B-137 step (3), C11 half: what the §11.1 per-cell budget actually commits and consumes.
 
 B-137's step (3) council is declared **dyadic C7 ⊥ C11** — an observability floor (C7) against
 telemetry volume and *"the C-OD-11 §11.1 per-cell budgets those caps were sized against"* (C11).
 `#1362` measured the C7 half. This module grounds the C11 half.
 
-**A first draft of this module overclaimed in four places; out-of-family Codex round 1 raised
-five [P2]s and all five were valid. The corrections are recorded here because the withdrawn
-claims were the interesting ones, and a reader who only sees the survivors would re-derive them.**
+**Read this first: the arc that produced this module was wrong five times, and the shape of the
+error is worth more than most of what survived.** Out-of-family Codex reviewed it across five
+rounds and raised **19 valid findings**, including four [P1]s. Every one of them falsified an
+*interpretation* this arc layered on top of its facts; **none falsified a fact.** The recurring
+mistake was always the same: **inferring contract meaning from an implementation carrier instead
+of reading the canonical matrix that already answered the question.** Concretely —
 
-1. **WITHDRAWN — the "dependency cycle" — and its refutation is withdrawn too (round 3).** The
-   draft argued the budget was *unpriceable* because it closes only from telemetry B-137 starves:
-   *"you cannot measure throughput from a stream you are dropping 90% of."* Round 1 offered
-   C-OD-16 §16.2's `1/base_rate` scaling as the refutation and a first fix adopted it. **Round 3
-   then caught the refutation:** §16.2's flat rescale is unbiased only for a *uniformly* sampled
-   stream, and this one is not — the head admits §9.2 names at 1.0 while ordinary roots take
-   `base_rate`, so a flat rescale overcounts the always-sampled classes. The terminal position is
-   **symmetric**: neither the cycle nor its refutation is established, and `B-182` rests on
-   neither. §16.2 shows only that the spec *contemplates* estimating from a sub-1.0 stream.
-2. **CORRECTED TWICE — "both enforcement layers are out-of-process."** The draft's claim was
-   false; a first fix over-corrected to *"4 of 8 cells are in-process."* **Round 3:**
-   `COLLECTOR_BOUNDARY` is a **logical enforcement layer, not a process placement.** Only the
-   three **SOLO** rows are documented as in-process (*"the in-process OTLP collector against the
-   sqlite ring-buffer"*); `multi-tenant-compliance × self-hosted-server` is described as running
-   *"per-tenant collector instances"*, which does not establish co-process. The in-process claim
-   is scoped to the **three solo cells**.
-3. **WITHDRAWN — "uniform ⇒ placeholder."** A per-cell cap may legitimately be identical across
-   cells when it represents shared collector or backend capacity. Uniformity is reported; the
-   inference to *placeholder* is not drawn.
-4. **FIXED — the spec read was baseline-only.** The draft read `Spec_Operational_Discipline_v1_2.md`
-   alone. OD is a **delta chain** (42 files, head v1.41) that preserves prior bodies verbatim, so a
-   later delta could re-table §11.1 with a number and leave an anti-rot test green. Every spec
-   assertion now scans the whole chain.
+- Placement was "derived" by filtering the implementation's logical `COLLECTOR_BOUNDARY` mapping
+  by persona name, twice (first "four cells in-process", then "three solo cells"). **C-OD-20
+  §20.1 is a per-cell collector placement matrix and it existed the whole time.** Read against
+  it, exactly ONE cell is unambiguously in-process.
+- Provenance was "derived" from the number's absence in the v1.2 baseline. **`Spec_Operational_
+  Discipline_v1_37.md` states the figure in canonical spec text** and uses it to declare a budget
+  check passed; naming the carrier alongside does not make it non-contractual.
+- An enforcement *asymmetry* was asserted between the two caps. **Neither cap is reached in
+  production** — the tenant helper has no call site either.
+- A *dependency cycle* was asserted, then "refuted" via C-OD-16 §16.2's `1/base_rate` rescaling,
+  and the refutation was itself wrong (§16.2 is unbiased only for a uniformly sampled stream;
+  this one is not). **Neither the cycle nor its refutation is established.**
+- A *placeholder* inference was drawn from the cap's uniformity across cells. A uniform cap may
+  simply represent shared capacity.
 
-**What survives, and it is sharper than the draft.**
+**So this module now asserts FACTS ONLY, and `B-182` records facts only.** The interpretation is
+left to whoever dispositions it, with the canonical instruments named.
 
-**Round 2 raised three more [P2]s, also all valid, and they hardened rather than reversed the
-findings:** the (A) check tested *presence anywhere* rather than the **effective** declaration
-(a later delta could add a number while the historical row survived — reproduced with a
-synthetic v1.42); the in-process check asserted the collector-boundary set's *cardinality*
-rather than its *identities* (swapping two cells kept the count at four while inverting which
-cells are in-process); and this arc's own rewrite had **destroyed** a cite correction landed at
-`#1362`, which is restored in the register. The first two are pinned in the tests below.
+**The facts, each mutation-probed or anti-rot-guarded.**
 
-**(A) §11.1 commits NO number at the team-binding cells.** Its table gives solo cells a concrete
-posture (*"default 1.0; rotation handles volume"*) and multi-tenant cells per-tenant isolation,
-but the team-binding row — covering exactly the cell B-137 prices against — defers verbatim to
-*"Persona §11.4 throughput rough order-of-magnitude open item; envelope refines downstream of
-§11.4 closure."* Resolved at the **effective** declaration: of every chain file carrying a §11.1
-team-binding row at all, the highest-versioned one carries the deferral.
+1. `cell_rate_limit` (flat `10_000.0` at every ACTIVE cell) has **zero readers** anywhere in
+   `harness-*/src` outside its own declaration.
+2. `assert_per_tenant_cardinality_isolation` — the only implemented consumer of the sibling
+   `tenant_rate_limit` — has **no call site in `harness-*/src`** either. It has real semantics
+   (it raises), but nothing reaches it. **Neither cap is enforced on any production path.**
+3. §11.1's **team-binding** row commits no figure; it defers to *"Persona §11.4 throughput rough
+   order-of-magnitude open item."* Resolved at the **effective** declaration across the whole
+   42-file OD delta chain, not the baseline alone.
+4. That target is `Persona_Document_v1.md` **§11 Open items, row 4** (a table row, not a
+   subsection) and is still **open**.
+5. **C-OD-20 §20.1** is the canonical placement instrument; per it, only
+   `solo-developer × local-development` is unambiguously in-process.
 
-**(B) The deferral target is still open** — `Persona_Document_v1.md` **§11 Open items, row 4**
-(a table row, not a subsection; the draft's first pass searched for a `§11.4` heading, found
-nothing, and nearly filed the cite as dangling). It is *closable* (per correction 1); it is not
-*closed*. So the team-cell budget has no committed figure today, which is all C11's objection
-needs to be about — and less than the draft claimed.
+**What this module does NOT establish.** Whether C1 is affordable; whether the §11.1 caps are
+correctly external; how many cells are in-process beyond fact 5; whether the throughput figure is
+recoverable from a starved stream. The affordability call B-137's council owes is **untouched**.
 
-**(C) The in-process cap is declared and read by nothing, at the cells where it IS in-process.**
-`per_cell_cardinality_budget.py:118` commits a flat `cell_rate_limit=10_000.0` spans/sec at every
-ACTIVE cell, with **zero readers** anywhere in `harness-*/src` outside its own declaration. Its
-sibling `tenant_rate_limit` has an implemented, tested comparison — but **round 4 [P1] showed
-neither cap is reached in production**: `assert_per_tenant_cardinality_isolation` has no call
-site in `harness-*/src` either. The claimed enforced-vs-unenforced asymmetry is **WITHDRAWN**;
-what remains is that one cap has semantics a caller could reach and the other has no consumer at
-all. **The correction in (2) is what makes this load-bearing:** at the **three solo**
-cells §11.1's enforcement point is documented as the harness's *own in-process* collector, so an
-absent reader there cannot be explained as "an out-of-process consumer handles it." At the four
-`BACKEND_INGESTION` cells that explanation does hold; at `multi-tenant-compliance ×
-self-hosted-server` the placement is simply **not established** either way. The disposition
-therefore **splits three ways**, and `B-182` carries it that way.
-
-**A production defect surfaced in passing, registered as `B-183`.** `tenant_rate_limit` is
-documented as **spans/sec**, but `assert_per_tenant_cardinality_isolation` compares
-`observed.observed_series` against it while **never reading `observation_window`** — so 1,001
-series observed over a minute is treated as exceeding a 1,000/sec limit, though it is ~16.7/sec.
-The witness below supplies a `"1s"` window so its own comparison is dimensionally coherent; the
-mismatch itself is a separate finding and is not fixed here.
-
-**What this module does NOT establish.** Nothing here says C1 is affordable, or unaffordable. A
-real collector or backend would still see `1/base_rate` more spans under C1 and shed the excess;
-OD spec v1.37 ruled (for `B-133`'s F-08 rider) that these caps enforce *"independently of any
-sampling decision."* The affordability call is **unaffected and still owed**. What changes is
-narrower: at the team cells C11's objection names, §11.1 carries no figure to price against, and
-at half the cells the cap has no enforcement site at the layer §11.1 nominates.
-
-**A question this raises, registered rather than asserted.** If the effective cap is a rate
-limiter, raising head admission does not *breach* the budget — it **relocates the drop**, from a
-ratio-based decision at the SDK to a rate-based one at the cap. A rate limiter carries no §9.2
-membership knowledge, so the floor C1 exists to deliver could be shed one hop later. Not claimed
-here; it is the shape of question that discriminates C1 from candidate A, and no artifact asks it.
-
-**Grounding, not behaviour** — except where a behavioural witness is available, which after
-correction (4) it is for the tenant limit. These are anti-rot pins on facts a council decision
-will rest on; each assertion states what goes stale if it moves.
+**A LATENT defect surfaced in passing, registered as `B-183`** (latent, not live — no production
+caller): `tenant_rate_limit` is documented in **spans**/sec while `observed_series` counts
+**distinct series**, and `assert_per_tenant_cardinality_isolation` compares them directly while
+never reading `observation_window`. Two mismatched quantities *and* a dropped time dimension; the
+quantity must be settled before the unit. Not repaired here.
 """
 
 from __future__ import annotations
@@ -258,26 +219,6 @@ def test_neither_the_cycle_claim_nor_its_refutation_is_established() -> None:
     )
 
 
-def test_the_flat_cap_has_no_contract_provenance_only_a_citation_of_the_code() -> None:
-    """**(C) provenance** — the number lives in code; the chain references it by citing code.
-
-    Reported precisely rather than as "the spec never states it" (which was true only of the
-    baseline read). Exactly one delta mentions the figure, and it does so by quoting the
-    implementation carrier, which is a citation of code and not a contract declaration.
-    """
-    mentions = [p.name for p in _od_spec_chain() if "10_000" in p.read_text()]
-    assert mentions == ["Spec_Operational_Discipline_v1_37.md"], (
-        f"the OD chain's references to the flat cap changed to {mentions}; B-182 states that "
-        "exactly one delta mentions it and does so by citing the code carrier — re-ground"
-    )
-    v137 = (_SUBSTRATE / "Spec_Operational_Discipline_v1_37.md").read_text()
-    assert "per_cell_cardinality_budget.py" in v137, (
-        "v1.37 now states the cap WITHOUT citing the implementation carrier — that would make "
-        "it a contract declaration rather than a citation of code, giving C11's objection the "
-        "provenance B-182 says it lacks"
-    )
-
-
 def test_the_cap_is_uniform_across_cells_whose_base_rates_are_not() -> None:
     """**(C) shape** — reported, with NO inference to "placeholder" (correction 3).
 
@@ -322,15 +263,11 @@ def test_half_the_cells_enforce_in_process_yet_nothing_reads_the_cell_cap() -> N
         "solo-developer×managed-cloud",
         "multi-tenant-compliance×self-hosted-server",
     }
-    # Round 3 [P2]: COLLECTOR_BOUNDARY is a LOGICAL enforcement layer, not a process placement.
-    # Only the SOLO rows are documented as in-process ("the in-process OTLP collector against
-    # the sqlite ring-buffer"); the multi-tenant row says "runs per-tenant collector instances",
-    # which does not establish co-process. The in-process claim is scoped to the solo cells.
-    in_process_documented = {c for c in in_process if c.startswith("solo-developer×")}
-    assert len(in_process_documented) == 3, (
-        f"the documented in-process set is now {sorted(in_process_documented)}; B-182 scopes "
-        "its in-process half to the three SOLO cells and must be re-scoped"
-    )
+    # Rounds 3 AND 5 [P1]: `COLLECTOR_BOUNDARY` is a LOGICAL enforcement layer, not a process
+    # placement, and filtering it by persona name is NOT a way to derive placement. The canonical
+    # instrument is C-OD-20 §20.1's per-cell collector placement matrix, asserted separately at
+    # `test_the_canonical_placement_matrix_is_the_instrument_for_process_placement`. This arc
+    # inferred placement from the implementation carrier for three rounds before reading it.
     assert in_process == expected, (
         f"the COLLECTOR_BOUNDARY cell set is now {sorted(in_process)}, not {sorted(expected)}. "
         "B-182 scopes its in-process half to exactly these cells and must be re-scoped — and if "
@@ -434,4 +371,41 @@ def test_the_cell_this_is_all_priced_against_still_carries_its_rate() -> None:
     assert env.max_rate == 0.5, (
         f"team×self-hosted max_rate moved to {env.max_rate}; the council's sense of how much "
         "volume increase the cleared envelope already permits at this cell is stale"
+    )
+
+
+def test_the_canonical_placement_matrix_is_the_instrument_for_process_placement() -> None:
+    """**Round 5 [P1] — the instrument this arc should have used from the start.**
+
+    Three rounds of this arc derived "which cells are in-process" by filtering the
+    implementation's logical `COLLECTOR_BOUNDARY` mapping by persona name. That is not a
+    derivation of placement, and it produced a wrong answer twice (first "four cells", then
+    "three solo cells"). **C-OD-20 §20.1 is the canonical per-cell collector placement matrix and
+    it existed the whole time.** Read against it, exactly ONE cell is unambiguously in-process:
+
+    - `solo-developer × local-development` — *"In-process otelcol-contrib + BatchSpanProcessor"*
+    - `solo-developer × self-hosted-server` — in-process only *"permitted as alt-route"*, with the
+      cell-committed backend's collector **preferred**
+    - `solo-developer × managed-cloud` — *"Vendor-pipeline"*, not in-process at all
+
+    So `B-182` makes **no** claim about how many cells are in-process. It records the two
+    no-consumer facts and points at this matrix as the instrument for anyone dispositioning them.
+    """
+    spec = (_SUBSTRATE / "Spec_Operational_Discipline_v1_2.md").read_text()
+    assert "### §20.1 Per-cell collector placement matrix" in spec, (
+        "C-OD-20 §20.1's placement matrix is gone — it is the canonical instrument B-182 points "
+        "at for process placement, and without it that pointer is dangling"
+    )
+    unambiguous = (
+        "| solo-developer × local-development | In-process otelcol-contrib + "
+        "BatchSpanProcessor; sqlite ring-buffer; TUI trace browser |"
+    )
+    assert unambiguous in spec, (
+        "the one unambiguously in-process cell row changed. B-182 states that exactly one cell "
+        "is unambiguously in-process per §20.1 — re-ground that claim"
+    )
+    alt_route = "In-process collector permitted as alt-route"
+    assert alt_route in spec, (
+        "solo × self-hosted-server no longer describes in-process as a permitted ALT-ROUTE. If "
+        "it became the default, the in-process cell count rises and B-182's pointer needs a note"
     )

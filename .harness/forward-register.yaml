@@ -9609,71 +9609,49 @@ items:
   pr: '#1357'
 - id: B-182
   title: >-
-    The C-OD-11 §11.1 per-cell cell_rate_limit has no consumer at all and §11.1 commits no number
-    at the team-binding cells; the in-process scope is three solo cells, one cell's placement is
-    unknown, and neither cap is reached in production
+    Both halves of the C-OD-11 §11.1 per-cell budget are declared but reach no production path --
+    cell_rate_limit has no consumer at all and the tenant_rate_limit helper has no caller -- and
+    §11.1's team-binding row commits no figure
   status: registered_finding
   summary: >-
-    Surfaced grounding the C11 half of B-137 step (3), whose objection is that C1's 1/base_rate
-    multiplier is "unpriced against the C-OD-11 §11.1 per-cell budgets". Pinned at
-    harness-od/tests/test_b137_c11_budget_grounding.py (8 tests, 2 mutation probes: removing the
-    tenant-limit raise reds the behavioural witness, and narrowing the OD delta-chain glob reds
-    the spec scans on their never-report-unlooked-as-empty guard).
-    (A) §11.1 commits NO number at the team-binding cells. Its table gives solo cells a concrete
-    posture ("default 1.0; rotation handles volume") and multi-tenant cells per-tenant isolation,
-    but the team-binding row -- covering exactly the cell B-137 prices against -- defers verbatim
-    to "Persona §11.4 throughput rough order-of-magnitude open item". Scanned across the WHOLE
-    42-file OD delta chain, not the v1.2 baseline alone: no delta supersedes it with a figure.
-    (B) That target is Persona_Document_v1.md §11 Open items ROW 4 (a table row, not a
-    subsection) and is still OPEN. It is CLOSABLE -- see the withdrawal below -- but not closed,
-    so the team-cell budget carries no committed figure today.
-    (C) THE LOAD-BEARING HALF. per_cell_cardinality_budget.py:118 commits a flat
-    cell_rate_limit=10_000.0 spans/sec at every ACTIVE cell with ZERO readers anywhere in
-    harness-*/src outside its own declaration. AN EARLIER DRAFT CLAIMED ITS SIBLING
-    tenant_rate_limit IS ENFORCED; codex round 4 [P1] WITHDREW that --
-    assert_per_tenant_cardinality_isolation has no call site in harness-*/src either, so NEITHER
-    cap is reached in production. What actually differs is weaker and is all this row claims: one
-    cap has implemented, tested semantics a caller COULD reach; the other has no consumer at all. Codex round 3 sharpened the scoping:
-    COLLECTOR_BOUNDARY is a LOGICAL enforcement layer, not a process placement. Only the THREE
-    SOLO rows are documented as in-process ("the in-process OTLP collector against the sqlite
-    ring-buffer"); multi-tenant-compliance x self-hosted-server runs "per-tenant collector
-    instances", which does not establish co-process. The disposition SPLITS THREE WAYS: three
-    solo cells where the out-of-process explanation is unavailable, four BACKEND_INGESTION cells
-    where it holds, and one cell whose placement is simply not established.
-    THREE CLAIMS FROM THE FIRST DRAFT ARE WITHDRAWN (out-of-family Codex round 1, five valid
-    [P2]s). (i) The "dependency cycle" -- that the budget was unpriceable because it closes only
-    from telemetry B-137 starves -- is WITHDRAWN, and after round 3 so is its refutation. Round 1
-    offered C-OD-16 §16.2 (1/base_rate rescaling) as the refutation; round 3 caught that §16.2 is
-    unbiased only for a UNIFORMLY sampled stream, and this one is not (the head admits §9.2 names
-    at 1.0 while ordinary roots take base_rate). Terminal position is symmetric: neither the cycle
-    nor its refutation is established and this row rests on neither. (ii) "Both enforcement layers are out-of-process" is
-    FALSE, and correcting it is what produced (C)'s sharpened form. (iii) "Uniform cap implies
-    placeholder" is not established -- a uniform cap may legitimately represent shared collector
-    or backend capacity; uniformity is reported, the inference is not drawn.
+    Surfaced grounding the C11 half of B-137 step (3). REDUCED TO FACTS ONLY after five
+    out-of-family Codex rounds raised 19 valid findings (four [P1]): every one falsified an
+    INTERPRETATION this arc layered on its facts, none falsified a fact, and the recurring
+    mistake was identical each time -- inferring contract meaning from an implementation carrier
+    instead of reading the canonical matrix that already answered the question. Pinned at
+    harness-od/tests/test_b137_c11_budget_grounding.py (8 tests, mutation-probed).
+    FACT 1: cell_rate_limit (flat 10_000.0 at every ACTIVE cell) has ZERO readers anywhere in
+    harness-*/src outside its own declaration.
+    FACT 2: assert_per_tenant_cardinality_isolation, the only implemented consumer of the sibling
+    tenant_rate_limit, has NO call site in harness-*/src either. It has real semantics (it
+    raises) but nothing reaches it, so NEITHER cap is enforced on any production path. Three
+    drafts claimed an enforced-vs-unenforced asymmetry; that is WITHDRAWN.
+    FACT 3: §11.1's team-binding row commits no figure, deferring to "Persona §11.4 throughput
+    rough order-of-magnitude open item". Resolved at the EFFECTIVE declaration across the whole
+    42-file OD delta chain, not the baseline alone.
+    FACT 4: that target is Persona_Document_v1.md §11 Open items ROW 4 and is still open.
+    FACT 5: the canonical placement instrument is C-OD-20 §20.1, and per it exactly ONE cell is
+    unambiguously in-process (solo-developer x local-development). This row makes NO claim about
+    how many cells are in-process; it names the instrument.
+    NOT ESTABLISHED: whether C1 is affordable; whether the caps are correctly external; whether
+    throughput is recoverable from a starved stream (a dependency cycle was asserted and
+    withdrawn, and its refutation via C-OD-16 §16.2 was withdrawn too). B-137's affordability
+    call is untouched.
   close_out: >-
-    (1) Re-ground all three surviving facts at HEAD -- the witness module is the instrument and
-    every assertion states what goes stale if it moves.
-    (2) ADJUDICATE (C) AS A THREE-WAY SPLIT, not one question and not two. At the four
-    BACKEND_INGESTION cells, document at the carrier that the cap is out-of-process-only so the
-    next reader does not re-file this. At the THREE SOLO cells that explanation is unavailable
-    (they are documented in-process), so decide whether an in-process enforcement site is owed.
-    At multi-tenant-compliance x self-hosted-server the placement is UNKNOWN -- "per-tenant
-    collector instances" establishes neither -- so determine placement BEFORE dispositioning it;
-    do not fold it into either group. Do NOT wire one
-    before that decision -- minting an in-process cap the contract does not state would be an
-    X-AL-3 design extension.
-    (3) Carry (A)+(B) into B-137's council as CONTEXT. They change what C11's objection can
-    claim -- there is no committed team-cell figure to price against -- NOT whether C1 is
-    affordable. That call is unaffected and still owed.
-    (4) The registered-not-asserted question stands and is the discriminator worth answering: if
-    the effective cap is a rate limiter, raising head admission RELOCATES the drop rather than
-    breaching the budget, and a rate limiter carries no §9.2 membership knowledge, so C1's floor
-    could be shed one hop later. No artifact currently asks it.
+    (1) Re-ground the five facts; the witness module is the instrument and every assertion states
+    what goes stale if it moves.
+    (2) Disposition FACT 1 and FACT 2 together, and derive placement from C-OD-20 §20.1 rather
+    than from the enforcement-layer enum. The question is whether a declared cap with no consumer
+    is correct-by-design (external enforcement) or a gap, and it may answer differently per cell.
+    Do NOT wire an in-process enforcement site before that decision -- minting a cap the contract
+    does not state would be an X-AL-3 design extension.
+    (3) Carry FACT 3 and FACT 4 into B-137's council as CONTEXT, not as a blocker.
+    (4) Settle B-183's quantity question first if any consumer is authorised, or the two caps
+    will disagree on units.
   council: >-
-    No at registration. (C) is a single-domain adjudication with a named owner (C7/OD) that
-    grounding answers. (A)+(B) are inputs to B-137's already-declared C7+C11 convening rather
-    than a separate one.
-  heading: '### B-182 · The §11.1 per-cell `cell_rate_limit` has no consumer at all, and §11.1 commits no number at the team-binding cells — the in-process scope is THREE solo cells, one cell''s placement is unknown, and NEITHER cap is reached in production *(surfaced grounding B-137 step (3)''s C11 half, 2026-08-15; scoped after out-of-family Codex round 1)*'
+    No at registration. These are facts plus a single-domain disposition with a named owner
+    (C7/OD); they are inputs to B-137's already-declared C7+C11 convening, not a separate one.
+  heading: '### B-182 · Both halves of the C-OD-11 §11.1 per-cell budget are declared but reach no production path — `cell_rate_limit` has no consumer at all and the `tenant_rate_limit` helper has no caller — and §11.1''s team-binding row commits no figure *(surfaced grounding B-137 step (3)''s C11 half, 2026-08-15; reduced to facts after five out-of-family Codex rounds falsified every interpretation layered on them)*'
 - id: B-183
   title: >-
     assert_per_tenant_cardinality_isolation compares a windowed observed_series count against a
@@ -9686,11 +9664,13 @@ items:
     (multi_tenant_cross_cutting_enforcement.py). But assert_per_tenant_cardinality_isolation
     compares observed.observed_series > budget.tenant_rate_limit directly and NEVER reads
     observation_window -- it appears exactly once in that module, at the field declaration.
-    So the gate's effective threshold depends entirely on the window the caller happens to pass:
-    1001 series observed over "1m" raises, though it is ~16.7/sec against a 1000/sec limit, while
-    the same 1001 over "1s" is a genuine breach. Both produce identical behaviour. The comparison
-    is dimensionally incoherent, and the direction of the error is UNSAFE-PERMISSIVE in one
-    direction and FALSE-POSITIVE in the other depending on the window.
+    TWO MISMATCHES, and time is the lesser (codex rounds 4 and 5). (a) QUANTITY: observed_series
+    counts DISTINCT ATTRIBUTE-VALUE SERIES while tenant_rate_limit is documented in SPANS/sec --
+    different things, since a series may contain any number of spans, so no time normalisation
+    alone reconciles them. (b) TIME: the window is dropped entirely, so 1001 over "1m" behaves
+    exactly as 1001 over "1s". An earlier draft called the former "~16.7/sec" and asserted an
+    unsafe-permissive/false-positive direction; both are WITHDRAWN -- that arithmetic equates
+    series with spans, and no direction follows until the quantity is settled.
     SCOPE, corrected at codex round 4 [P1]: this is a defect in an UNCALLED helper.
     assert_per_tenant_cardinality_isolation has no call site in harness-*/src -- only its
     definition, its __all__ entry, two docstring mentions, and tests. No production path reaches
