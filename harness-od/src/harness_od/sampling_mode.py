@@ -35,7 +35,7 @@ siblings at CP `:409`/`:411` were absorbed at OD `:521`/`:522`), carried at
 
 The TWENTIETH row (`workflow.envelope`) is the `B-137` step-(3) candidate **C1**
 leg, operator-ratified 2026-08-16: `Spec_Operational_Discipline_v1_42.md` §0.2
-amends §9.2 19 → 20 on an INTRA-axis declares/ingests chain — C-OD-25 §25.1
+amends §9.2 19 → 20 on an INTRA-axis declares/ingests chain — C-OD-25 §25.3
 (`Spec_Operational_Discipline_v1_8.md:90`) has declared *"the envelope ALWAYS
 persists"* at head=1.0 since v1.8 and §9.2 never absorbed it. Root membership is
 also the only mechanism that delivers the §9.2 floor to in-envelope member
@@ -153,7 +153,7 @@ ALWAYS_SAMPLED_EVENT_CLASSES: frozenset[str] = frozenset(
         "skill.activation",
         "fallback.exhausted",  # §9.2 row 19 (NEW at OD spec v1.37 — U-OD-58)
         # §9.2 row 20 (NEW at OD spec v1.42 — `B-137` step (3) candidate C1,
-        # operator-ratified 2026-08-16). Ingests the C-OD-25 §25.1 head=1.0
+        # operator-ratified 2026-08-16). Ingests the C-OD-25 §25.3 head=1.0
         # declaration; ALSO the carrier of the floor for in-envelope member
         # spans, which `ParentBased` reaches only by root inheritance.
         "workflow.envelope",

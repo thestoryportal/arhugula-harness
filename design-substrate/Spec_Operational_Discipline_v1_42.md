@@ -3,7 +3,7 @@
 *Delta-only file. The v1.41 body + the entire C-OD-01 … C-OD-34 contract body are
 PRESERVED VERBATIM (delta-only-spec-file convention). This delta carries exactly ONE
 amendment — the **C-OD-09 §9.2 always-sampled exception set gains ONE row, 19 → 20**,
-ingesting the `workflow.envelope` head=1.0 disposition that **C-OD-25 §25.1 has declared
+ingesting the `workflow.envelope` head=1.0 disposition that **C-OD-25 §25.3 has declared
 since v1.8** and that §9.2 never absorbed. §9.1 and §9.3 are UNTOUCHED; §9.2's other
 **nineteen** rows are PRESERVED VERBATIM and are cross-referenced here, never restated.*
 
@@ -29,7 +29,7 @@ delta**; **ZERO CXA rows** (aggregate frozen at 111); **ZERO hash impact**.
 
 ### §0.1 The defect — a declared floor that §9.2 never ingested
 
-`[HIGH]` **C-OD-25 §25.1 already declares the disposition this delta ingests.**
+`[HIGH]` **C-OD-25 §25.3 already declares the disposition this delta ingests.**
 `Spec_Operational_Discipline_v1_8.md:90`, byte-exact apart from one marked elision:
 
 > *"`workflow.envelope` head=1.0 (always-sampled — every workflow envelope-observable per
@@ -79,7 +79,7 @@ Cross-axis citation / Persona linkage) is **UNCHANGED**.
 
 | Event class | Source declaration | Rationale |
 |---|---|---|
-| `workflow.envelope` **at the trace root** | C-OD-25 §25.1 (`Spec_Operational_Discipline_v1_8.md:90`) | Trace-root envelope — the declared *"the envelope ALWAYS persists"* floor, ingested. Root membership is additionally the **only** mechanism that delivers the §9.2 floor to in-envelope member spans, because `ParentBased` never consults a non-root child's name. **Root-conditional**, like `subagent.span (root)`: the guarantee binds where the envelope opens the trace, and an envelope opened beneath a foreign unsampled parent is outside it — see §0.2.3 |
+| `workflow.envelope` **at the trace root** | C-OD-25 §25.3 (`Spec_Operational_Discipline_v1_8.md:90`) | Trace-root envelope — the declared *"the envelope ALWAYS persists"* floor, ingested. Root membership is additionally the **only** mechanism that delivers the §9.2 floor to in-envelope member spans, because `ParentBased` never consults a non-root child's name. **Root-conditional**, like `subagent.span (root)`: the guarantee binds where the envelope opens the trace, and an envelope opened beneath a foreign unsampled parent is outside it — see §0.2.3 |
 
 **The Source-declaration cell cites an OD contract rather than a CP one**, and
 deliberately so: unlike rows 1–19 this row ingests from *within* the axis. Citing a CP

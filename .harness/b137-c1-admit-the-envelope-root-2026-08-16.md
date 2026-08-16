@@ -34,7 +34,7 @@ nineteen-row statements) are **preserved verbatim** per the v1.37 precedent.
 C1 as *"add `workflow.envelope` itself to §9.2"* — i.e. as the workspace choosing to mint a new
 floor. **Grounding at build time falsified that framing in the favourable direction.**
 
-`Spec_Operational_Discipline_v1_8.md:90` (C-OD-25 §25.1), byte-exact:
+`Spec_Operational_Discipline_v1_8.md:90` (C-OD-25 §25.3), byte-exact:
 
 > *"`workflow.envelope` head=1.0 (always-sampled — every workflow envelope-observable per PRD).
 > […] the envelope ALWAYS persists."*

@@ -23,7 +23,7 @@ the `harness-od` substrate change, the count-contract reconciliation across five
 and the test updates.
 
 **The amendment is an ingestion repair, not a new declaration.** Build-time grounding found
-that C-OD-25 §25.1 (`Spec_Operational_Discipline_v1_8.md:90`) has declared *"`workflow.envelope`
+that C-OD-25 §25.3 (`Spec_Operational_Discipline_v1_8.md:90`) has declared *"`workflow.envelope`
 head=1.0 (always-sampled … the envelope ALWAYS persists)"* since v1.8, and that C-OD-25 is
 preserved verbatim through the whole v1.9 → v1.41 chain. §9.2 simply never absorbed it. That
 is the same defect shape v1.37 repaired for `fallback.exhausted` (declared at CP `:410`,

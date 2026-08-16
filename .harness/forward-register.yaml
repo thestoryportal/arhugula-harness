@@ -7520,7 +7520,7 @@ items:
     envelope-rooted workflows against the shipped max_buffered_traces default of 4096. At that default
     the measured eviction count is ZERO. Registered rather than repaired.
     THE PREMISE WAS ALSO INCOMPLETE, IN THE FAVOURABLE DIRECTION. This row framed C1 as minting a new
-    floor. Build-time grounding found C-OD-25 section 25.1 (Spec_Operational_Discipline_v1_8.md:90)
+    floor. Build-time grounding found C-OD-25 section 25.3 (Spec_Operational_Discipline_v1_8.md:90)
     has declared "workflow.envelope head=1.0 ... the envelope ALWAYS persists" since v1.8, preserved
     verbatim through the whole v1.9 -> v1.41 chain, and section 9.2 simply never ingested it. C1 is an
     INGESTION REPAIR of the same class v1.37 fixed for fallback.exhausted -- NOT a Phase-7 design
@@ -7541,7 +7541,7 @@ items:
     repair instead of silently measuring the repaired world.
     (3) DECIDE THE POSTURE — DONE. Operator ratified C1 on 2026-08-16; OD spec v1.42 section 0.2
     lands workflow.envelope as section 9.2 row 20. Grounding at build time found C1 is an INGESTION
-    REPAIR of a C-OD-25 section 25.1 declaration live since v1.8, not a new floor.
+    REPAIR of a C-OD-25 section 25.3 declaration live since v1.8, not a new floor.
     (4) PRICE THE VOLUME CONSEQUENCE — DONE for the buffer side (0 buffered / 0 evicted sequentially;
     no measured configuration loses a span the status quo kept) and SPLIT for the rest: the
     concurrency-headroom residual is B-185, and the C11 exported-volume half against C-OD-11

@@ -17,8 +17,9 @@ root-only**, so a member emitted inside the envelope does not receive it.
 **Two prior overclaims by this arc, corrected here (out-of-family Codex, round 1).**
 
 1. An earlier draft asserted *"all 19 §9.2 members, at their real emission sites, are
-   children of the envelope."* **False.** Only **11 of the 19** have a span-open site in
-   `src/` at all (the other 8 are event-carried names or unimplemented — population (i) of
+   children of the envelope."* **False.** Only **11 of the 19** had a span-open site in
+   `src/` at all (12 of 20 since v1.42 added `workflow.envelope` itself as row 20; the
+   figures below are stated as the row recorded them) (the other 8 are event-carried names or unimplemented — population (i) of
    the row), and at least one span-backed member is a **root**: `skill.activation` is
    emitted from `workflow_driver.py:3206`, which precedes the envelope's open at `:3305`.
    The starvation is therefore **scoped to the members emitted inside the envelope**, not
@@ -91,7 +92,8 @@ _MEMBER = "hitl.gate.evaluated"
 _SANDBOX = "sandbox.violation"
 _REPO = pathlib.Path(__file__).resolve().parents[3]
 
-#: The §9.2 members that have a `start_as_current_span` site in `src/` — 11 of the 19.
+#: The §9.2 members that have a `start_as_current_span` site in `src/` — 12 of the 20
+#: since OD spec v1.42 added `workflow.envelope` as row 20 (11 of 19 as the row was written).
 #: The register cites this exact count to scope and price B-137's step (3), so the
 #: identity set is pinned rather than its cardinality alone (out-of-family Codex round 2:
 #: a "some but not all" check would let an emission site appear or vanish silently and
@@ -671,11 +673,14 @@ def test_candidate_c1_no_longer_evicts_under_production_bounds() -> None:
     tracer = provider.get_tracer("b137.c1.bounded")
 
     traces = 100
-    with _member_set(add=frozenset({_ENVELOPE})):
-        for _ in range(traces):
-            with tracer.start_as_current_span(_ENVELOPE):
-                with tracer.start_as_current_span("validator.evaluate"):
-                    pass
+    # AS-BUILT since v1.42: no patch needed — row 20 ships, so this runs at HEAD. The
+    # `_member_set(add={_ENVELOPE})` wrapper this used to carry became a silent no-op the
+    # moment C1 landed (adding a member the frozenset already has), and a no-op wrapper reads
+    # to the next maintainer as a live counterfactual. Removed rather than left decorative.
+    for _ in range(traces):
+        with tracer.start_as_current_span(_ENVELOPE):
+            with tracer.start_as_current_span("validator.evaluate"):
+                pass
 
     # POST-B-136 these are both ZERO: every trace resolves at its own root close, so no
     # population accumulates to be evicted. Before B-136 this read `cap` buffered and

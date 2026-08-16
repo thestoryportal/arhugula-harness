@@ -82,11 +82,16 @@ an emission-site change trading the floor against distributed-trace continuity.
    and its §9.2 children; the same run reconstructed in the pre-v1.42 world exports nothing.
    Both arms required — the as-built assertion alone cannot distinguish "the row works" from
    "the assertion is vacuous".
-5. **The ratified cost is measured before the row is called closed.** `B-137`'s ratification
-   required the ordinary-child population to be measured at a production-bounded cell. Through
-   the real `TailKeepSpanProcessor` at `team-binding × self-hosted-server`: 0 buffered / 0
-   evicted sequentially, and no measured configuration exports fewer spans than the status quo.
-   Any residual is registered on its own row rather than left on the closed parent.
+5. **The ratified cost is measured before the row is called closed — by IDENTITY, not by
+   count.** `B-137`'s ratification required the ordinary-child population to be measured at a
+   production-bounded cell. Through the real `TailKeepSpanProcessor` at `team-binding ×
+   self-hosted-server`: 0 buffered / 0 evicted sequentially. The comparison must be made on the
+   SET of traces preserved, not the cardinality — an earlier pass of this very arc concluded
+   "no configuration loses a span the status quo would have kept" from equal counts of 8, and
+   equal counts turned out to conceal disjoint sets under buffer pressure. At the shipped
+   `max_buffered_traces` default the displacement set is empty and the change strictly
+   dominates; above the cap it does not, and that residual is registered on its own row rather
+   than left on the closed parent.
 6. **Mutation-probed.** Removing row 20 from the canonical set must red the as-built witnesses,
    including the positive controls. A membership change no test detects is not landed.
 

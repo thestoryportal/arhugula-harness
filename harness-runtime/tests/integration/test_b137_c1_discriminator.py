@@ -179,7 +179,7 @@ def _emit(provider: TracerProvider, *, envelope_wrapped: bool, event: str) -> No
 
     **Cite drift, grounded 2026-08-15.** B-137's register row cites this site as
     `workflow_driver.py:3305`; at HEAD `:3305` is skill-emitter code and the envelope really
-    opens at `:3458` (`start_as_current_span("workflow.envelope")`, under the C-OD-25 §25.1
+    opens at `:3458` (`start_as_current_span("workflow.envelope")`, under the C-OD-25 §25.3
     comment block). The mechanism the row describes is unchanged — only the line moved.
     """
     tracer = provider.get_tracer("b137.c1.discriminator")
