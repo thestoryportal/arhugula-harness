@@ -76,12 +76,27 @@ jobs:
         env:
           # Empty on `push`; the PR base SHA on `pull_request`.
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # `push` only: the ref's tip BEFORE this push. A push can carry MANY
+          # commits (multi-commit push, rebase merge), so `HEAD^ HEAD` would look
+          # at the last commit alone — and a push whose FINAL commit touches only
+          # roadmap_status.md while an EARLIER one touches code would wrongly take
+          # the fast path and skip the blocking jobs. Out-of-family Codex caught
+          # this; the whole range is compared instead.
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -uo pipefail
           if [ -n "${BASE_SHA:-}" ]; then
             changed="$(git diff --name-only "$BASE_SHA"...HEAD 2>/dev/null)" || changed=""
+          elif [ -n "${PUSH_BEFORE:-}" ] \
+            && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+            changed="$(git diff --name-only "$PUSH_BEFORE" HEAD 2>/dev/null)" || changed=""
           else
-            changed="$(git diff --name-only HEAD^ HEAD 2>/dev/null)" || changed=""
+            # Branch creation, force-push, or an unreachable prior SHA: the range
+            # is unknowable, so fail closed rather than guess from HEAD^.
+            echo "push range unavailable — running the full matrix (fail-closed)"
+            echo "refresh_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           if [ -z "$changed" ]; then
             echo "empty or unreadable diff — running the full matrix (fail-closed)"

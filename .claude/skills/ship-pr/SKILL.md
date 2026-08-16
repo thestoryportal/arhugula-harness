@@ -65,11 +65,22 @@ nothing requires a push between rounds.
    artifact-heads staleness) was locally reproducible. It is also the ONLY place
    `ROOT_CHECKOUT_EDIT` can fire, since CI never sees a dirty tree.
 2. **Commit locally. Do not push.**
-3. `just codex-review` + the `merge-gate` 3 lenses **in parallel, against local commits**,
-   iterating to convergence. Between rounds run only the targeted tests, not the full gate.
+3. `just codex-review` **against local commits** (`--base`), iterating to convergence.
+   Between rounds run only the targeted tests, not the full gate.
 4. One final `just codex-check`.
 5. **Push once → one CI run.**
-6. Merge once CI is green and the gate is all-approve.
+6. **THEN `merge-gate`** — it must run after the push, not alongside step 3. Its scope check
+   and all three reviewer prompts read `gh pr diff <PR#>` (`merge-gate/SKILL.md:27,75-83`),
+   i.e. the REMOTE PR head. Run it against local commits and it reviews a diff that does not
+   yet contain them — every local-only fix would bypass the gate. Out-of-family Codex caught
+   this in the very commit that introduced this section.
+7. Merge once CI is green and the gate is all-approve. A merge-gate BLOCK costs one more
+   push + CI round; that is rarer than a codex round and correctness outranks the saving.
+
+**If a gate fails only on a whole-tree condition, re-run only the affected check.** A
+`ROOT_CHECKOUT_EDIT` failure means the tree was dirty, not that any code is wrong —
+committing changes `git status` and nothing else, so re-run `tools/test_codex_stop_gate.py`
+(~5s), not the whole 209s parity suite.
 
 **Never run `just codex-check` after CI is green on the same SHA** — it re-executes the
 identical checks in a worse environment and verifies nothing. Its whole value is pre-push.
@@ -189,9 +200,19 @@ This is the step most often done wrong. After the PR merges:
    **Merge it with `--auto`, and run NO local gate on it.** A terminating refresh is
    doc-only: the `merge-gate` skill's own scope rule says skip it, the LEAN protocol
    exempts it from `codex-review`, and `just codex-check` on a four-line markdown edit is
-   pure duplication. So the whole ritual is one command that needs no polling:
+   pure duplication. So no review gate applies:
    ```
    gh pr merge <NNN> --squash --delete-branch --auto
+   ```
+   **`--auto` still has to be waited on — it is not fire-and-forget.** When checks are
+   pending (the normal case right after opening the PR) `gh pr merge --auto` only ENABLES
+   auto-merge and returns; it does not block until the PR is `MERGED`, and it says nothing
+   about the resulting `main`-push CI. Ending the loop there leaves an unmerged refresh and a
+   stale local `main`. Poll to `MERGED`, then wait for main's own post-merge run:
+   ```
+   until [ "$(gh pr view <NNN> --json state -q .state)" = "MERGED" ]; do sleep 15; done
+   git fetch && git merge --ff-only origin/main
+   # then wait for main's push-triggered run to conclude success (§10 CI discipline)
    ```
    CI is also path-filtered for this exact shape — `ci.yml`'s `scope` job classifies a diff
    whose changed set is exactly `.harness/roadmap_status.md` and skips `test`, `typecheck`,

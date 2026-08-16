@@ -37,7 +37,9 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    at the *current* HEAD, state the pass in the PR body — per ship-pr U-WT-01) then
    out-of-family `just codex-review` to convergence (§13.1).
    **Committed ≠ pushed, and the difference is ~5 CI runs per arc.** Iterate `codex-review`
-   and the `merge-gate` lenses against LOCAL commits; push only once every reviewer is green.
+   against LOCAL commits (`--base`); push only once it is green. `merge-gate` is the one
+   reviewer that CANNOT run locally — its lenses read `gh pr diff <PR#>`, the remote head —
+   so it runs after the single push, per ship-pr step 6.
    Measured on #1390: pushing between rounds turned one CI run into six (~30 min). `codex-check`
    is the CI proxy that makes this work — and must NEVER be re-run after CI is green on the
    same SHA, where it verifies nothing. See ship-pr's "Converge locally, then push ONCE" and
