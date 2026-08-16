@@ -161,29 +161,33 @@ def executed_modules(root: Path | None = None) -> set[str]:
     return {name for name in test_modules(base) if name in targets}
 
 
-def _establishes_import_path(node: ast.stmt) -> bool:
-    """True when this statement makes `tools/` importable for what follows.
+def _mutates_sys_path(node: ast.stmt) -> bool:
+    """True when this TOP-LEVEL statement unconditionally mutates `sys.path`.
 
-    Either `sys.path.insert(...)` / `sys.path.append(...)`, or an `importlib` file-path
-    load (`spec_from_file_location`) which sidesteps `sys.path` entirely.
+    Deliberately narrow (out-of-family review [P2]): an `ast.walk` over the statement
+    would accept `some.path.append(...)`, a call nested inside an `if`, or one merely
+    defined in a function body — none of which make `tools/` importable at module scope.
+    Only a bare `sys.path.insert(...)` / `sys.path.append(...)` expression statement counts.
+
+    `spec_from_file_location` is NOT accepted: it loads one module by path and does not
+    touch `sys.path`, so it cannot license a later bare import of a DIFFERENT sibling.
+    Modules that use it simply have no bare sibling import to flag.
     """
-    for sub in ast.walk(node):
-        if not isinstance(sub, ast.Call):
-            continue
-        func = sub.func
-        if isinstance(func, ast.Attribute):
-            if func.attr in {"insert", "append"} and isinstance(func.value, ast.Attribute):
-                if func.value.attr == "path":
-                    return True
-            if func.attr == "spec_from_file_location":
-                return True
-        if isinstance(func, ast.Name) and func.id == "spec_from_file_location":
-            return True
-    return False
+    if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+        return False
+    func = node.value.func
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr in {"insert", "append"}
+        and isinstance(func.value, ast.Attribute)
+        and func.value.attr == "path"
+        and isinstance(func.value.value, ast.Name)
+        and func.value.value.id == "sys"
+    )
 
 
-def _bare_sibling(node: ast.stmt, siblings: set[str], own: str) -> str | None:
-    """The sibling module this statement imports BARE, if any.
+def _bare_sibling(node: ast.AST, siblings: set[str], own: str) -> str | None:
+    """The sibling module this import node names BARE, if any.
 
     `from tools.X import ...` is excluded: it resolves through the repo root and was
     measured working from both cwds, so it is a second legitimate convention.
@@ -204,20 +208,24 @@ def _bare_sibling(node: ast.stmt, siblings: set[str], own: str) -> str | None:
 
 
 def import_self_sufficiency_problems(root: Path | None = None) -> list[str]:
-    """Modules that import a sibling before making `tools/` importable.
+    """Modules that import a sibling without `tools/` being on `sys.path` in time.
 
     `B-184` close-out (3). `tools/` is not a package and pytest runs under
     `--import-mode=importlib`, so nothing puts this directory on `sys.path`. Ten modules
     nevertheless passed in the parity gate — because an unrelated sibling happened to
     insert the path first, earlier in the same invocation. Run alone from the repo root
-    they failed at collection. That is an order-dependent green: silent, and it evaporates
-    the moment the inserting sibling is renamed or the file order changes.
+    they failed at collection: an order-dependent green that evaporates the moment the
+    inserting sibling is renamed or reordered.
 
-    Read through the **AST**, not the raw text (out-of-family review [P2], twice). A text
-    scan has two holes in opposite directions: a marker appearing in a comment — or *after*
-    the import it is supposed to precede — silently excuses a genuinely broken module,
-    while a docstring containing `import arc_ledger` as an example fabricates a failure.
-    Parsing removes both, and lets the check enforce what actually matters: **order**.
+    Read through the **AST**, not raw text (review [P2], twice): a text scan is excused by
+    a marker in a comment — or one appearing *after* the import — while a docstring code
+    example fabricates a failure. Two timings are then distinguished (review [P2] again):
+
+    * a **top-level** import must come AFTER the `sys.path` mutation, since both run at
+      module-import time in source order;
+    * an import **nested** in a function or class body runs later, so any top-level
+      mutation anywhere in the module covers it — but with none at all, it is still a
+      violation.
     """
     base = root or ROOT
     tools_dir = base / "tools"
@@ -229,22 +237,35 @@ def import_self_sufficiency_problems(root: Path | None = None) -> list[str]:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError:  # a broken module is pytest's problem, not this guard's
             continue
-        established = False
-        for node in tree.body:
-            if _establishes_import_path(node):
-                established = True
-                continue
-            sibling = _bare_sibling(node, siblings, path.stem)
-            if sibling and not established:
-                problems.append(
-                    f"{path.name}: imports the sibling `{sibling}` before putting `tools/` "
-                    f"on `sys.path`. It will import only when another file in the same "
-                    f"pytest run inserted the path first — an order-dependent pass. Add "
-                    f"`sys.path.insert(0, str(Path(__file__).resolve().parent))` ABOVE the "
-                    f"import, or load the sibling via "
-                    f"`importlib.util.spec_from_file_location`."
-                )
+
+        top_level_setup_at: int | None = None
+        for i, node in enumerate(tree.body):
+            if _mutates_sys_path(node):
+                top_level_setup_at = i
                 break
+
+        offender: str | None = None
+        for i, node in enumerate(tree.body):
+            sibling = _bare_sibling(node, siblings, path.stem)
+            if sibling and (top_level_setup_at is None or i < top_level_setup_at):
+                offender = sibling
+                break
+        if offender is None and top_level_setup_at is None:
+            for node in ast.walk(tree):
+                if node in tree.body:
+                    continue
+                sibling = _bare_sibling(node, siblings, path.stem)
+                if sibling:
+                    offender = sibling
+                    break
+        if offender:
+            problems.append(
+                f"{path.name}: imports the sibling `{offender}` without `tools/` being on "
+                f"`sys.path` first. It will import only when another file in the same "
+                f"pytest run inserted the path — an order-dependent pass. Add "
+                f"`sys.path.insert(0, str(Path(__file__).resolve().parent))` ABOVE the "
+                f"import."
+            )
     return problems
 
 

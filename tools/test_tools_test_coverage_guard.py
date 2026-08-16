@@ -354,9 +354,74 @@ def test_a_path_insert_after_the_import_does_not_excuse_it(tmp_path: Path) -> No
     )
     (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
     (problem,) = guard.import_self_sufficiency_problems(root)
-    assert "before putting" in problem
+    assert "without `tools/` being on" in problem
 
 
 def test_a_syntactically_broken_module_does_not_crash_the_guard(tmp_path: Path) -> None:
     root = _mod(tmp_path, "test_x.py", "def (:\n")
+    assert guard.import_self_sufficiency_problems(root) == []
+
+
+def test_an_unrelated_path_append_does_not_count_as_setup(tmp_path: Path) -> None:
+    """`some.path.append(...)` is not `sys.path` (review round 2)."""
+    root = _mod(
+        tmp_path,
+        "test_x.py",
+        "import some\nsome.path.append('x')\nimport arc_ledger\n",
+    )
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
+    (problem,) = guard.import_self_sufficiency_problems(root)
+    assert "arc_ledger" in problem
+
+
+def test_a_conditional_sys_path_insert_does_not_count_as_setup(tmp_path: Path) -> None:
+    """A mutation inside an `if` is not unconditional module-scope setup."""
+    root = _mod(
+        tmp_path,
+        "test_x.py",
+        "import sys\nfrom pathlib import Path\n"
+        "if False:\n    sys.path.insert(0, str(Path(__file__).parent))\n"
+        "import arc_ledger\n",
+    )
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
+    (problem,) = guard.import_self_sufficiency_problems(root)
+    assert "arc_ledger" in problem
+
+
+def test_a_file_path_load_does_not_license_a_later_bare_import(tmp_path: Path) -> None:
+    """`spec_from_file_location` loads ONE module; it does not touch `sys.path`."""
+    root = _mod(
+        tmp_path,
+        "test_x.py",
+        "import importlib.util\n"
+        "spec = importlib.util.spec_from_file_location('a', 'a.py')\n"
+        "import arc_ledger\n",
+    )
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
+    (problem,) = guard.import_self_sufficiency_problems(root)
+    assert "arc_ledger" in problem
+
+
+def test_a_sibling_import_nested_in_a_function_is_seen(tmp_path: Path) -> None:
+    """Iterating only `tree.body` never sees this — the exact order-dependent shape."""
+    root = _mod(
+        tmp_path,
+        "test_x.py",
+        "def test_thing():\n    import arc_ledger\n    assert arc_ledger\n",
+    )
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
+    (problem,) = guard.import_self_sufficiency_problems(root)
+    assert "arc_ledger" in problem
+
+
+def test_a_nested_import_is_covered_by_a_top_level_insert(tmp_path: Path) -> None:
+    """The positive control: module-scope setup runs before any test function body does."""
+    root = _mod(
+        tmp_path,
+        "test_x.py",
+        "import sys\nfrom pathlib import Path\n"
+        "sys.path.insert(0, str(Path(__file__).resolve().parent))\n\n"
+        "def test_thing():\n    import arc_ledger\n    assert arc_ledger\n",
+    )
+    (root / "tools" / "arc_ledger.py").write_text("# sibling\n", encoding="utf-8")
     assert guard.import_self_sufficiency_problems(root) == []
