@@ -61,11 +61,11 @@ snapshot:
   total: 184
   open: 1
   design_substrate_gated: 2
-  registered_finding: 36
+  registered_finding: 37
   operator_gated: 0
   held: 2
-  closed: 143
-  identity_digest: a9aa8a59645bc1d7
+  closed: 142
+  identity_digest: a52b4e7821905d33
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9196,7 +9196,7 @@ items:
 - id: B-167
   title: leg-selfcheck's count check compares claims against each other rather than against a derived
     ground-truth count, so a mirror in an untouched file is not checked
-  status: closed
+  status: registered_finding
   summary: 'The count check detects DISAGREEMENT between count claims; it does not RECOUNT. Out-of-family
     review raised this as a [P1] against the arc''s own brief, which asked for cross-checking each claim
     against the artifact it describes AND against every mirror (spec preamble, section heading, body,
@@ -9231,7 +9231,6 @@ items:
   heading: '### B-167 · `just leg-selfcheck`''s count check compares CLAIMS against each other, never
     against GROUND TRUTH, so a mirror in an untouched file is invisible *(registered at the prevention
     arc that precedes `U-CP-102`, from out-of-family review round 1 [P1], 2026-08-13)*'
-  pr: '#1376'
 - id: B-168
   title: 'archiving a superseded next-action round has no legal commit shape: prior-only archive, single-file
     terminating refresh, and one-non-refresh-commit lag tolerance cannot all hold'

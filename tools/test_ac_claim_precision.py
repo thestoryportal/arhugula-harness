@@ -1,10 +1,15 @@
-"""Tests for `tools/ac_claim_precision.py` — B-167 step 3's measurement.
+"""Tests for `tools/ac_claim_precision.py` — B-167 step 3's OBSTACLE CENSUS.
 
-The verdict this module supports is *"a claim-versus-recount gate is not viable"*, so the
-assertions pin the **shape** that makes it non-viable, not the exact percentage. A test
-asserting `fire_rate == 0.40` would redden on any corpus growth and teach nothing; a test
-asserting *"firing is common AND dominated by legitimate multi-number prose"* stays true
-for the reason the verdict is true, and reddens only if that reason stops holding.
+**No precision verdict is asserted here, because none is supported.** Three attempts
+produced 68%, 40% and 62%, each after out-of-family review found a different methodological
+flaw, and the third round showed the classification behind the last figure was itself
+unsupported (delta and reference forms were being counted as total-count claims). Two
+obstacles — revision collapse and count semantics — remain UNSOLVED, so the ratio does not
+model the gate.
+
+What the real-corpus tests pin is that each named obstacle is **real in this corpus**. That
+is what survived, and it is what the next attempt has to solve. The mechanics tests below
+still pin the matcher's behaviour, which is sound as far as it goes.
 """
 
 from __future__ import annotations
@@ -49,10 +54,10 @@ def test_a_mismatching_claim_counts_as_a_firing(tmp_path: Path) -> None:
 
 
 def test_identifier_digits_are_not_read_as_a_claimed_count(tmp_path: Path) -> None:
-    """The trap that made a first pass report 68% instead of 40%.
+    """Obstacle 1. `U-CP-56 acceptance criteria` is not a claim of fifty-six.
 
-    `U-CP-56 acceptance criteria` is not a claim of fifty-six. Condemning a design on a
-    strawman implementation is its own failure mode, so this is pinned.
+    Fixing this moved the reported figure 68% → 40%. Condemning a design on a strawman
+    implementation is its own failure mode, so the exclusion is pinned.
     """
     root = _corpus(tmp_path, _BLOCK, "U-XX-01 acceptance criteria are listed above.\n")
     assert acp.measure(root).associable_claims == 0
@@ -77,8 +82,12 @@ def test_word_numbers_are_understood(tmp_path: Path) -> None:
 
 
 def test_a_multi_number_line_is_classified_as_such(tmp_path: Path) -> None:
-    """The shape that makes the gate non-viable: a live count and a declared count
-    stated together, both correct."""
+    """The live-versus-declared shape, which the matcher classifies separately.
+
+    NOTE this classifier is exactly what review round 2 showed to be too crude on the real
+    corpus: it cannot distinguish this genuine case from `+1 AC` or `AC #1`. It is retained
+    to locate the shape, not to support a ratio.
+    """
     root = _corpus(
         tmp_path, _BLOCK, "| U-XX-01 body | 7 acceptance criteria (12 declared, 5 STRUCK) |\n"
     )
@@ -92,36 +101,52 @@ def test_fire_rate_is_zero_when_there_is_nothing_to_compare(tmp_path: Path) -> N
     assert acp.measure(root).fire_rate == 0.0
 
 
-# --- the verdict, on the real corpus ------------------------------------------
+# --- the obstacles, on the real corpus ----------------------------------------
+#
+# These do NOT assert a precision figure. Three attempts produced 68%, 40% and 62%, and
+# review showed the classification behind the last was unsupported, so the rate is withdrawn
+# (see the module docstring). What is pinned is that each named obstacle is REAL in this
+# corpus — because the obstacle census is what survived, and it is what the next attempt
+# must solve.
 
 
-def test_the_real_corpus_still_makes_the_gate_non_viable() -> None:
-    """B-167 step 3's actual result, asserted as a SHAPE.
-
-    Two conditions carry the verdict, and both must hold for it to stand:
-      * firing is common — well above a rate anyone would tolerate in a pre-push gate; and
-      * the firings are dominated by legitimate multi-number prose, which no better matcher
-        resolves because the ambiguity is in the artifact.
-
-    If either stops holding, the disposition is re-openable and this test says so by going
-    red — which is the point of pinning the reason rather than the number.
-    """
-    p = acp.measure()
-    assert p.associable_claims >= 20, (
-        f"only {p.associable_claims} associable claims — too few to support a precision "
-        "verdict either way; re-derive B-167 step 3 before trusting its disposition"
+def test_revision_collapse_is_real_obstacle_four() -> None:
+    """A unit-id key collapses delta revisions, so a STALE claim can score as agreement."""
+    truth = acp.derived_counts()
+    collapsed = {u: c for u, c in truth.items() if len(c) > 1}
+    assert collapsed, (
+        "no unit derives multiple counts any more — obstacle 4 (revision collapse) may be "
+        "gone, which would materially change what a sound step-3 measurement costs"
     )
-    assert p.fire_rate > 0.25, (
-        f"fire rate fell to {p.fire_rate:.0%}. A claim-versus-recount gate may now be "
-        "viable — B-167 step 3's refutation was measured at 40% and must be re-derived"
-    )
-    assert p.disagree_on_multi_number_lines / p.disagree > 0.5, (
-        "multi-number prose no longer dominates the firings, so the 'ambiguity is in the "
-        "artifact' argument no longer carries the verdict — re-derive B-167 step 3"
+
+
+def test_delta_and_reference_forms_are_real_obstacle_five() -> None:
+    """`+1 AC`, `STRUCK 4 ACs`, `AC #1` are not total-count claims."""
+    import re
+
+    forms = re.compile(r"\+\d+ ACs?\b|STRUCK \d+ ACs?\b|\bACs? #\d+")
+    hits = 0
+    for folder in ("design-substrate", ".harness"):
+        for path in (ROOT / folder).rglob("*.md"):
+            hits += len(forms.findall(path.read_text(encoding="utf-8", errors="ignore")))
+    assert hits > 0, (
+        "no delta or reference count forms found — obstacle 5 may be gone, in which case a "
+        "claim matcher no longer needs to validate count semantics"
     )
 
 
 def test_the_recount_itself_is_still_exact_where_it_applies() -> None:
-    """The verdict refutes the GATE, not the recount. Steps 1-2 must still hold."""
+    """Steps 1-2 are unaffected by step 3's withdrawal. The recount still works."""
     truth = acp.derived_counts()
     assert len(truth) >= 100, f"only {len(truth)} units carry a derived count — re-ground B-167"
+
+
+def test_the_measurement_makes_no_precision_claim() -> None:
+    """A guard on this arc's own honesty.
+
+    The module must not re-acquire a verdict while obstacles 4 and 5 are unsolved. If a
+    future edit deletes this disclaimer, that edit owes the sound measurement first.
+    """
+    text = (ROOT / "tools" / "ac_claim_precision.py").read_text(encoding="utf-8")
+    assert "NOT a precision figure" in text or "NOT A PRECISION FIGURE" in text
+    assert "UNSOLVED" in text

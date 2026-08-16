@@ -1,51 +1,52 @@
-"""B-167 step 3: measure what a claim-versus-recount gate would actually fire on.
+"""B-167 step 3: the OBSTACLES a claim-versus-recount gate must solve. NOT a precision figure.
 
 `B-167` steps 1–2 established that a format-scoped acceptance-criteria recount **is**
 buildable and exact where it applies (285 of 386 plan blocks), and landed it as
-`leg_selfcheck.derive_acceptance_criteria_count` — **deliberately unwired**. Step 3 is the
-precondition for wiring it: *"measure false positives against a sample of already-merged
-arcs before wiring it into the pre-push path; a gate is only as useful as its precision."*
+`leg_selfcheck.derive_acceptance_criteria_count` — **deliberately unwired**. Step 3 asks
+for a false-positive measurement *"before wiring it into the pre-push path; a gate is only
+as useful as its precision."*
 
-This module is that measurement, kept as code so the verdict can be re-derived rather than
-trusted.
+**This module does NOT deliver that measurement, and step 3 is NOT complete.** Three
+successive attempts produced 68%, then 40%, then 62%, each after out-of-family review found
+a different methodological flaw — and the third round showed the *classification* behind the
+verdict was itself unsupported. Reporting a fourth number would be guessing with extra
+steps. What survives, and is genuinely useful, is the **census of obstacles** each attempt
+uncovered: every one is a real shape in this corpus that a naive comparison mishandles.
 
-**What it measures.** Every `N acceptance criteria` / `N ACs` claim in `design-substrate/`
-and `.harness/` that can be associated with a unit whose count the recount derives, then
-compares. A disagreement is what a gate would fire on.
+**The obstacles, each observed here.**
 
-**Result (2026-08-16): the gate is NOT viable, and the cause is intrinsic.** 37 claims are
-associable with a single, unambiguously-owning unit; **23 disagree — a 62% fire rate — and
-18 of those 23 sit on lines carrying several numbers at once**, e.g.
+1. **Identifier digits read as counts.** `U-CP-56 acceptance criteria` is not a claim of
+   fifty-six. Excluding `U-XX-NN` / `#NN` / `vN.M` moved the figure 68% → 40%.
+2. **Attribution by proximity.** On a line naming several units — *"…U-CP-34… 12 ACs for
+   U-RT-111"* — nearest-left picks the cited dependency and manufactures a disagreement.
+   Only single-unit lines can be attributed structurally.
+3. **Self-reference.** The register paragraph recording a result quotes the corpus examples
+   it cites, so the measured figure came to depend on having published it.
+4. **Revision collapse — UNSOLVED.** This corpus keeps every delta revision, so a unit-id
+   key collapses them: `U-AS-06` derives `{6, 8}`, which lets a **stale** claim of 6 score
+   as agreement, while `U-RT-106`'s v2.32 claims are compared against a v2.31 body. **Neither
+   models what a pre-push gate would have seen when each arc merged.**
+5. **Count semantics — UNSOLVED.** Not every match is a total-count claim. `+1 AC`,
+   `ZERO acceptance criterion change`, `STRUCK 4 ACs` and `AC #1` are deltas and references.
+   The `>2 bare numbers` heuristic below cannot tell those from a genuine live-versus-declared
+   line, so **any claim that "most firings are legitimate ambiguity" is unsupported.**
+6. **Carrier population.** `leg_selfcheck.check_counts` treats `.md`, `.yaml` and `.yml` as
+   eligible; this scan reads `.md` only, so its population is not the gate's population.
 
-    | U-RT-111 unit body | 7 ACs (12 declared with 5 STRUCK at v2.36 ...) |
+**What a sound step-3 measurement requires** — stated so the next attempt does not repeat
+these: replay each merged arc against its **then-current plan head** (or otherwise preserve
+revision identity); **validate count semantics** before classifying a firing, excluding
+delta and reference forms and confirming true live-versus-declared cases individually; and
+use the **gate's own carrier eligibility**. That is substantial work, and it is what step 3
+actually costs.
 
-Both numbers are correct: the plan states a **live** count and a **declared** count in one
-sentence, because a delta chain records what was struck. A comparison gate cannot tell
-which number it is looking at, and no better matcher fixes that — the ambiguity is in the
-artifact, by design. At 62% firing with ~78% of firings legitimate, the gate would be muted
-within two rounds, which is the outcome `B-167`'s own reasoning says to avoid.
+**Disposition.** `B-167` stays **open**. The recount remains a *derivation* utility and
+remains **unwired**; `leg_selfcheck`'s claims-versus-claims check plus diff context remains
+the shipped behaviour, as its docstring already says. No refutation of the gate is claimed,
+and no endorsement either — the honest state is *not yet measured*.
 
-**Three measurement traps this module exists to not repeat**, each caught before the
-verdict was trusted and each having moved the number:
-
-1. A first pass read **identifier digits as counts** — `U-CP-56 acceptance criteria` scored
-   as a claim of *56* — and reported **68%**. Condemning a design on a strawman
-   implementation is its own failure, so `U-XX-NN` / `#NN` / `vN.M` digits are excluded.
-2. Attribution by **proximity** picked a cited dependency instead of the claim's owner on
-   lines naming several units, manufacturing disagreements. Only claims with exactly ONE
-   unit id on the line are scored now (out-of-family review [P2]).
-3. The scan ingested **its own reporting carrier**: the register paragraph recording this
-   result quotes the `7 ACs (12 declared…)` example, so the figure depended on having
-   published it. `_REPORTING_CARRIERS` excludes it.
-
-The honest rate after all three is **62%**, and the verdict is unchanged.
-
-**Disposition.** The recount stays a *derivation* utility — a human or an arc can ask "what
-is the real count?" and get an exact answer. The automatic claim-versus-truth comparison is
-**refuted by measurement**, and `leg_selfcheck`'s existing claims-versus-claims check plus
-diff context remains the sound ceiling, exactly as that tool's docstring already states.
-
-Run: `python tools/ac_claim_precision.py`
+The counters below are retained because they locate the obstacle shapes, not because their
+ratio means anything. Run: `python tools/ac_claim_precision.py`
 """
 
 from __future__ import annotations
@@ -179,11 +180,10 @@ def main() -> int:
     print(f"      on multi-number lines      : {p.disagree_on_multi_number_lines}")
     print(f"  fire rate                      : {p.fire_rate * 100:.0f}%")
     print()
-    print("  VERDICT: not viable as a gate. The dominant disagreement is a line stating a")
-    print("  LIVE and a DECLARED count together ('7 ACs (12 declared with 5 STRUCK)'), where")
-    print("  both numbers are correct. No matcher resolves that — the ambiguity is in the")
-    print("  artifact. The recount stays a derivation utility; claims-versus-claims plus")
-    print("  diff context remains the sound ceiling.")
+    print("  NOT A PRECISION FIGURE. Revision collapse and unvalidated count semantics")
+    print("  (obstacles 4 and 5 in the module docstring) are UNSOLVED, so this ratio does")
+    print("  not model the gate. B-167 step 3 remains incomplete and the recount stays")
+    print("  unwired. See the docstring for what a sound measurement requires.")
     return 0
 
 
