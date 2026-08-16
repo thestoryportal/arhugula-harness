@@ -31,7 +31,8 @@ uv run pytest -q \
   tools/test_r810_files_live_e2e.py \
   tools/test_r820_managed_agents_live_e2e.py \
   tools/test_sandbox_host_readiness.py \
-  tools/test_self_hosted_readiness.py
+  tools/test_self_hosted_readiness.py \
+  tools/test_tools_test_coverage_guard.py
 
 for test_script in tools/hooks/test_*.sh tools/statusline/test_*.sh; do
   bash "$test_script"
