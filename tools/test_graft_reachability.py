@@ -111,9 +111,11 @@ def test_silent_on_a_production_reference_rather_than_a_call() -> None:
         [_node(SRC, "_on_drain_signal"), _node(TEST, "t1")],
         [(f"{TEST}#t1", f"{SRC}#_on_drain_signal")],
     )
-    assert [f.name for f in gr.derive(graph, set())] == ["_on_drain_signal"]
+    assert [f.name for f in gr.derive(graph, gr.ProductionRefs(set(), set()))] == [
+        "_on_drain_signal"
+    ]
     mod = gr.module_of(SRC)
-    assert gr.derive(graph, {(mod, "_on_drain_signal")}) == []
+    assert gr.derive(graph, gr.ProductionRefs({(mod, "_on_drain_signal")}, set())) == []
 
 
 def test_silent_on_symbols_outside_harness_src() -> None:
@@ -182,8 +184,8 @@ def test_dunder_all_membership_promotes_an_underscore_name_to_exported() -> None
         [_node(SRC, "_published"), _node(TEST, "t1")],
         [(f"{TEST}#t1", f"{SRC}#_published")],
     )
-    assert gr.derive(graph, set(), set())[0].exported is False
-    assert gr.derive(graph, set(), {"_published"})[0].exported is True
+    assert gr.derive(graph, None, set())[0].exported is False
+    assert gr.derive(graph, None, {(gr.module_of(SRC), "_published")})[0].exported is True
 
 
 def test_dunder_all_extraction_reads_list_and_tuple_forms(tmp_path: Path) -> None:
@@ -191,14 +193,63 @@ def test_dunder_all_extraction_reads_list_and_tuple_forms(tmp_path: Path) -> Non
     lst.write_text('__all__ = ["_a", "_b"]\n')
     tup = tmp_path / "b.py"
     tup.write_text('__all__ = ("_c",)\n')
-    assert gr.dunder_all_names([lst, tup]) == {"_a", "_b", "_c"}
+    assert {n for _, n in gr.dunder_all_names([lst, tup], tmp_path)} == {"_a", "_b", "_c"}
 
 
 def test_dunder_all_extraction_ignores_other_assignments(tmp_path: Path) -> None:
     """Only `__all__` publishes; an unrelated list of strings must not promote anything."""
     f = tmp_path / "m.py"
     f.write_text('_REGISTRY = ["_a"]\n')
-    assert gr.dunder_all_names([f]) == set()
+    assert gr.dunder_all_names([f], tmp_path) == set()
+
+
+def test_a_local_variable_does_not_rescue_a_method_of_the_same_name() -> None:
+    """Codex P2: `EngineOutputStore.record` vanished behind local dicts named `record`.
+
+    A bare name and a method live in different namespaces. Only a `self.`/`cls.` receiver
+    can reach a method, so a `Name` binding — local, parameter, or module global — must
+    never suppress one. `dry_run` and `health` were hidden the same way.
+    """
+    graph = _graph(
+        [_node(SRC, "record", kind="method"), _node(TEST, "t1")],
+        [(f"{TEST}#t1", f"{SRC}#record")],
+    )
+    local_binding = gr.ProductionRefs({(gr.module_of(SRC), "record")}, set())
+    assert [f.name for f in gr.derive(graph, local_binding)] == ["record"]
+
+
+def test_a_self_receiver_still_rescues_a_method() -> None:
+    """The other direction — the kind split must not break the real method rescue."""
+    graph = _graph(
+        [_node(SRC, "_helper", kind="method"), _node(TEST, "t1")],
+        [(f"{TEST}#t1", f"{SRC}#_helper")],
+    )
+    assert gr.derive(graph, gr.ProductionRefs(set(), {(gr.module_of(SRC), "_helper")})) == []
+
+
+def test_a_self_attr_does_not_rescue_a_module_level_function() -> None:
+    """Symmetric guard: `self.x` cannot reach a module-level function either."""
+    graph = _graph(
+        [_node(SRC, "helper", kind="function"), _node(TEST, "t1")],
+        [(f"{TEST}#t1", f"{SRC}#helper")],
+    )
+    assert [
+        f.name for f in gr.derive(graph, gr.ProductionRefs(set(), {(gr.module_of(SRC), "helper")}))
+    ] == ["helper"]
+
+
+def test_dunder_all_in_an_unrelated_module_does_not_mark_a_symbol_exported() -> None:
+    """Codex P2: a global `__all__` set let one module's export hide another's finding.
+
+    Exported rows are hidden by default, so a mis-attributed `__all__` silently drops a
+    real private finding from the report.
+    """
+    graph = _graph(
+        [_node(SRC, "_priv"), _node(TEST, "t1")],
+        [(f"{TEST}#t1", f"{SRC}#_priv")],
+    )
+    elsewhere = {("harness_cp.other_module", "_priv")}
+    assert gr.derive(graph, None, elsewhere)[0].exported is False
 
 
 # --- the AST reference pass ---------------------------------------------------
@@ -207,7 +258,7 @@ def test_dunder_all_extraction_ignores_other_assignments(tmp_path: Path) -> None
 def test_ast_pass_finds_a_callback_argument(tmp_path: Path) -> None:
     f = tmp_path / "m.py"
     f.write_text("def register(loop):\n    loop.add_signal_handler(1, _on_drain, None)\n")
-    assert any(n == "_on_drain" for _, n in gr.production_references([f], tmp_path))
+    assert any(n == "_on_drain" for _, n in gr.production_references([f], tmp_path).names)
 
 
 def test_attribute_reference_is_scoped_to_the_referencing_module(tmp_path: Path) -> None:
@@ -227,8 +278,8 @@ def test_attribute_reference_is_scoped_to_the_referencing_module(tmp_path: Path)
         "        items.append(1)\n"
     )
     refs = gr.production_references([pkg / "m.py"], tmp_path)
-    assert ("harness_cp.m", "_helper") in refs, "self. receiver must rescue a sibling member"
-    assert ("harness_cp.m", "append") not in refs, (
+    assert ("harness_cp.m", "_helper") in refs.self_attrs, "self. rescues a sibling member"
+    assert ("harness_cp.m", "append") not in refs.self_attrs, (
         "a non-self receiver must NOT rescue: this is the `append` collateral, where three "
         "real test-only append methods were hidden by unrelated list.append calls"
     )
@@ -240,7 +291,7 @@ def test_an_unrelated_same_named_attribute_does_not_suppress_a_finding() -> None
         [_node(SRC, "append", kind="method"), _node(TEST, "t1")],
         [(f"{TEST}#t1", f"{SRC}#append")],
     )
-    unrelated = {("harness_cp.somewhere_else", "append")}
+    unrelated = gr.ProductionRefs(set(), {("harness_cp.somewhere_else", "append")})
     assert [f.name for f in gr.derive(graph, unrelated)] == ["append"]
 
 
@@ -250,7 +301,7 @@ def test_a_reference_from_an_importing_module_does_rescue() -> None:
         [_node(SRC, "_cb"), _node(TEST, "t1")],
         [(f"{TEST}#t1", f"{SRC}#_cb")],
     )
-    assert gr.derive(graph, {(gr.module_of(SRC), "_cb")}) == []
+    assert gr.derive(graph, gr.ProductionRefs({(gr.module_of(SRC), "_cb")}, set())) == []
 
 
 def test_import_source_attribution_survives_a_relative_import(tmp_path: Path) -> None:
@@ -258,14 +309,14 @@ def test_import_source_attribution_survives_a_relative_import(tmp_path: Path) ->
     pkg.mkdir(parents=True)
     (pkg / "user.py").write_text("from .drain import _on_x\n\ndef go(loop):\n    loop.add(_on_x)\n")
     refs = gr.production_references([pkg / "user.py"], tmp_path)
-    assert ("harness_cp.lifecycle.drain", "_on_x") in refs
+    assert ("harness_cp.lifecycle.drain", "_on_x") in refs.names
 
 
 def test_a_definition_is_not_a_reference_to_itself(tmp_path: Path) -> None:
     """Otherwise every symbol would self-rescue and the detector would never fire."""
     f = tmp_path / "m.py"
     f.write_text("def _helper():\n    return 1\n")
-    assert all(n != "_helper" for _, n in gr.production_references([f], tmp_path))
+    assert all(n != "_helper" for _, n in gr.production_references([f], tmp_path).names)
 
 
 def test_unparseable_file_is_skipped_without_emptying_the_set(tmp_path: Path) -> None:
@@ -273,7 +324,7 @@ def test_unparseable_file_is_skipped_without_emptying_the_set(tmp_path: Path) ->
     good.write_text("x = _wanted\n")
     bad = tmp_path / "bad.py"
     bad.write_text("def (((\n")
-    assert any(n == "_wanted" for _, n in gr.production_references([bad, good], tmp_path))
+    assert any(n == "_wanted" for _, n in gr.production_references([bad, good], tmp_path).names)
 
 
 # --- fail-loud posture --------------------------------------------------------

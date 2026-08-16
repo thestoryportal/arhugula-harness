@@ -24,11 +24,11 @@ For every function/method defined under `harness-*/src/**`:
   2. skip symbols with **no** inbound edges at all — that set is dominated by CLI entry
      points, public API, and framework hooks, and is too noisy to be a signal;
   3. skip symbols with **any** inbound edge from a production (non-test) file;
-  4. of what remains — called by tests and only by tests — skip any symbol whose bare name
-     is *referenced* (not called) from a production file, via an AST pass (see below);
+  4. of what remains — called by tests and only by tests — skip any symbol *referenced*
+     rather than called from a production file, via an AST pass (see below);
   5. report the rest, split into `exported` and `private`.
 
-## Why step 4 exists
+## Why step 4 exists, and why it is narrow
 
 graft's `calls` relation models call sites. It does **not** model reference-passing, so a
 callback registered rather than invoked looks unreachable when it is not. The real case
@@ -37,14 +37,23 @@ this was built against, in `harness-runtime/src/harness_runtime/drain.py`:
     loop.add_signal_handler(sig, _on_drain_signal, ctx)
 
 `_on_drain_signal` has four inbound `calls` edges, all from `tests/test_drain.py`, and is
-nonetheless live in production. Shipping that as a finding would have been a false
-positive. Step 4 catches it by walking the AST of every production source file and
-collecting `Name.id` and `Attribute.attr`, which covers callback arguments, decorators,
-dict/registry values, and re-exports.
+nonetheless live in production. Shipping that as a finding would be a false positive.
 
-The pass is AST-based, not substring-based, on purpose — see
-`[[source-ordering-is-not-runtime-parentage]]`: resolving call sites by substring is a
-mistake this workspace has already paid for.
+The pass is AST-based, not substring-based — `[[source-ordering-is-not-runtime-parentage]]`
+is a mistake this workspace has already paid for. But AST alone is not enough: a rescue
+that matches on bare names **hides real findings**, which for a detector is the worse
+error. Two rounds of review found eight concrete victims, so the match is keyed by
+namespace, not name:
+
+  * a `Name` can only reach a **module-level function**, and is attributed to the module it
+    was imported from (relative imports resolved) or else the referencing file's own;
+  * a `self.` / `cls.` attribute can only reach a **method** — the one receiver resolvable
+    without type inference.
+
+Checking both against one flat set is what hid `EngineOutputStore.record` behind a local
+dict named `record`, and three test-only `append` methods (one with 28 test callers) behind
+unrelated `list.append` calls. `__all__` membership is keyed the same way, since exported
+rows are hidden by default and a mis-attributed export silently drops a finding.
 
 ## Known limits — read before treating output as a defect list
 
@@ -96,7 +105,7 @@ import sys
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 WIRING = Path("graft/.graph/wiring.json")
 
@@ -114,6 +123,24 @@ _SELF_RECEIVERS = frozenset({"self", "cls"})
 
 class GraphUnavailableError(RuntimeError):
     """The wiring graph could not be read. Never degrade this to an empty result."""
+
+
+class ProductionRefs(NamedTuple):
+    """Production references, split by how the referenced symbol could be reached.
+
+    `names` — `(module, bare_name)` from `ast.Name`. Only a module-level FUNCTION can be
+    reached this way.
+
+    `self_attrs` — `(module, attr)` from a `self.` / `cls.` receiver. Only a METHOD can be
+    reached this way.
+
+    Keeping them apart is what stops a local variable named `record` from rescuing
+    `EngineOutputStore.record`: a bare name and a method live in different namespaces, so
+    matching them against one flat set silently hides findings.
+    """
+
+    names: set[tuple[str, str]]
+    self_attrs: set[tuple[str, str]]
 
 
 @dataclass(frozen=True)
@@ -189,7 +216,7 @@ def _resolved_import_sources(tree: ast.AST, mod: str) -> dict[str, str]:
     return sources
 
 
-def production_references(paths: Iterable[Path], root: Path | None = None) -> set[tuple[str, str]]:
+def production_references(paths: Iterable[Path], root: Path | None = None) -> ProductionRefs:
     """`{(defining_module, name)}` referenced — not called — from production source.
 
     **Scoped by module on purpose.** A flat set of bare names over-suppresses badly: a
@@ -225,7 +252,8 @@ def production_references(paths: Iterable[Path], root: Path | None = None) -> se
     must not silently empty the whole reference set, but it also must not stop the run.
     """
     base = root or Path(".")
-    refs: set[tuple[str, str]] = set()
+    names: set[tuple[str, str]] = set()
+    self_attrs: set[tuple[str, str]] = set()
     for path in paths:
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -238,20 +266,17 @@ def production_references(paths: Iterable[Path], root: Path | None = None) -> se
         imported = _resolved_import_sources(tree, mod)
         for node in ast.walk(tree):
             if isinstance(node, ast.Name):
-                refs.add((imported.get(node.id, mod), node.id))
+                names.add((imported.get(node.id, mod), node.id))
             elif (
                 isinstance(node, ast.Attribute)
                 and isinstance(node.value, ast.Name)
                 and node.value.id in _SELF_RECEIVERS
             ):
-                # `self.x` / `cls.x` is the one attribute receiver resolvable without
-                # inference: it names a sibling member of the enclosing class. Any other
-                # receiver (`items.append`) is a guess, and guessing hides findings.
-                refs.add((mod, node.attr))
-    return refs
+                self_attrs.add((mod, node.attr))
+    return ProductionRefs(names=names, self_attrs=self_attrs)
 
 
-def dunder_all_names(paths: Iterable[Path]) -> set[str]:
+def dunder_all_names(paths: Iterable[Path], root: Path | None = None) -> set[tuple[str, str]]:
     """Names listed in any `__all__`, which is what "exported" actually means in Python.
 
     graft's own `exported` flag is name-convention-based (no leading underscore), so it
@@ -262,12 +287,17 @@ def dunder_all_names(paths: Iterable[Path]) -> set[str]:
     `__all__` entries are string constants, not `Name` nodes, so `production_references`
     cannot see them; this is a separate walk on purpose.
     """
-    names: set[str] = set()
+    base = root or Path(".")
+    names: set[tuple[str, str]] = set()
     for path in paths:
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, SyntaxError, ValueError):
             continue
+        try:
+            mod = module_of(str(path.relative_to(base)))
+        except ValueError:
+            mod = module_of(str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Assign):
                 continue
@@ -275,7 +305,7 @@ def dunder_all_names(paths: Iterable[Path]) -> set[str]:
                 continue
             if isinstance(node.value, ast.List | ast.Tuple):
                 names.update(
-                    e.value
+                    (mod, e.value)
                     for e in node.value.elts
                     if isinstance(e, ast.Constant) and isinstance(e.value, str)
                 )
@@ -284,8 +314,8 @@ def dunder_all_names(paths: Iterable[Path]) -> set[str]:
 
 def derive(
     graph: dict[str, Any],
-    prod_refs: set[tuple[str, str]] | None = None,
-    all_names: set[str] | None = None,
+    prod_refs: ProductionRefs | None = None,
+    all_names: set[tuple[str, str]] | None = None,
 ) -> list[Finding]:
     """Symbols under `harness-*/src/**` whose only inbound callers are tests.
 
@@ -293,7 +323,7 @@ def derive(
     pass an empty set to disable step 4 (used by tests that exercise the call-edge logic
     in isolation). `all_names` is the `__all__` membership set, OR-ed into `exported`.
     """
-    prod_refs = set() if prod_refs is None else prod_refs
+    prod_refs = ProductionRefs(set(), set()) if prod_refs is None else prod_refs
     all_names = set() if all_names is None else all_names
     by_id = {n["id"]: n for n in graph["nodes"]}
 
@@ -315,7 +345,14 @@ def derive(
         if any(not is_test(p) for p in caller_paths):
             continue  # a production caller exists — reachable
 
-        if (module_of(node["path"]), node["name"]) in prod_refs:
+        key = (module_of(node["path"]), node["name"])
+        # A bare name can only reach a module-level function; `self.x` can only reach a
+        # method. Checking both against one set is what hid `EngineOutputStore.record`
+        # behind a local dict of the same name.
+        reachable_by_reference = (
+            key in prod_refs.self_attrs if node.get("kind") == "method" else key in prod_refs.names
+        )
+        if reachable_by_reference:
             continue  # referenced (not called) from a module that can see it — e.g. a callback
 
         findings.append(
@@ -324,7 +361,7 @@ def derive(
                 path=node["path"],
                 span=node.get("span", ""),
                 test_callers=len(sources),
-                exported=bool(node.get("exported")) or node["name"] in all_names,
+                exported=bool(node.get("exported")) or key in all_names,
             )
         )
 
@@ -405,7 +442,7 @@ def collect(root: Path | None = None) -> list[Finding]:
     src_files = [
         p for p in base.glob("harness-*/src/**/*.py") if not is_test(str(p.relative_to(base)))
     ]
-    return derive(graph, production_references(src_files, base), dunder_all_names(src_files))
+    return derive(graph, production_references(src_files, base), dunder_all_names(src_files, base))
 
 
 def render(findings: list[Finding], *, show_all: bool) -> str:
