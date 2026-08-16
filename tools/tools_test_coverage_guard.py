@@ -66,7 +66,7 @@ def _run_blocks(root: Path) -> list[str]:
     blobs: list[str] = []
     workflows = root / ".github" / "workflows"
     if workflows.is_dir():
-        for wf in sorted(workflows.glob("*.yml")):
+        for wf in sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml")]):
             try:
                 doc = yaml.safe_load(wf.read_text(encoding="utf-8"))
             except yaml.YAMLError:  # a malformed workflow is not this guard's business
@@ -85,11 +85,40 @@ def _run_blocks(root: Path) -> list[str]:
     return blobs
 
 
+#: `pytest` flags whose VALUE is a test path being EXCLUDED, not run.
+_NEGATING_FLAGS = ("--ignore", "--deselect")
+
+
+def _pytest_targets(blob: str) -> set[str]:
+    """Test paths a shell body actually hands to pytest.
+
+    Presence of a basename anywhere in the text is NOT execution — out-of-family review
+    [P2]: `cat tools/test_x.py`, a comment inside a `run:` block, and
+    `--ignore=tools/test_x.py` each satisfy a substring check while running nothing, and
+    `--ignore` means the exact opposite. So: join shell continuations, drop comments, keep
+    only commands that invoke pytest, and within those skip negating flags.
+    """
+    joined = blob.replace("\\\n", " ")
+    targets: set[str] = set()
+    for raw in joined.splitlines():
+        line = raw.split("#", 1)[0]
+        if "pytest" not in line:
+            continue
+        for token in line.split():
+            if any(token.startswith(flag) for flag in _NEGATING_FLAGS):
+                continue
+            if token.endswith(".py"):
+                targets.add(Path(token).name)
+    return targets
+
+
 def executed_modules(root: Path | None = None) -> set[str]:
-    """The subset of `test_modules` named in something that executes it."""
+    """The subset of `test_modules` genuinely handed to pytest somewhere."""
     base = root or ROOT
-    haystack = "\n".join(_run_blocks(base))
-    return {name for name in test_modules(base) if name in haystack}
+    targets: set[str] = set()
+    for blob in _run_blocks(base):
+        targets |= _pytest_targets(blob)
+    return {name for name in test_modules(base) if name in targets}
 
 
 def validate(root: Path | None = None) -> list[str]:

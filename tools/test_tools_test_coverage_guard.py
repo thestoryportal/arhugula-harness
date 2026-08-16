@@ -158,3 +158,63 @@ def test_the_repository_has_no_unexecuted_modules_left() -> None:
         f"unexecuted modules reappeared: {sorted(present - executed)}"
     )
     assert len(present) >= 43, f"only {len(present)} modules found — the glob root is wrong"
+
+
+# --- presence is not execution (out-of-family review round 1) ------------------
+
+
+def test_a_non_pytest_command_naming_the_module_is_not_execution(tmp_path: Path) -> None:
+    """`cat tools/test_x.py` reads the file; it does not run it."""
+    root = _repo(tmp_path, modules=["test_orphan.py"], workflow=_wf("cat tools/test_orphan.py"))
+    (problem,) = guard.validate(root)
+    assert "test_orphan.py" in problem
+
+
+def test_an_ignore_flag_is_not_execution_it_is_the_opposite(tmp_path: Path) -> None:
+    """`--ignore=` naming a module means pytest was told NOT to run it."""
+    root = _repo(
+        tmp_path,
+        modules=["test_orphan.py"],
+        workflow=_wf("pytest tools --ignore=tools/test_orphan.py -q"),
+    )
+    (problem,) = guard.validate(root)
+    assert "test_orphan.py" in problem
+
+
+def test_a_deselect_flag_is_not_execution(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path,
+        modules=["test_orphan.py"],
+        workflow=_wf("pytest tools --deselect=tools/test_orphan.py -q"),
+    )
+    assert len(guard.validate(root)) == 1
+
+
+def test_a_comment_inside_a_run_block_is_not_execution(tmp_path: Path) -> None:
+    """The subtler sibling of the prose-comment case: a `#` line within the shell body."""
+    wf = (
+        "jobs:\n  a:\n    steps:\n      - run: |\n"
+        "          # pytest tools/test_orphan.py\n          echo hi\n"
+    )
+    root = _repo(tmp_path, modules=["test_orphan.py"], workflow=wf)
+    (problem,) = guard.validate(root)
+    assert "test_orphan.py" in problem
+
+
+def test_a_real_pytest_invocation_in_a_multiline_block_still_counts(tmp_path: Path) -> None:
+    """The negative cases must not have broken the positive one."""
+    wf = (
+        "jobs:\n  a:\n    steps:\n      - run: |\n"
+        "          # about to run it\n          pytest tools/test_a.py -q\n"
+    )
+    root = _repo(tmp_path, modules=["test_a.py"], workflow=wf)
+    assert guard.validate(root) == []
+
+
+def test_workflows_with_the_yaml_extension_are_scanned(tmp_path: Path) -> None:
+    """GitHub honours both `.yml` and `.yaml`; a guard that reads one blocks CI on the other."""
+    root = _repo(tmp_path, modules=["test_a.py"], workflow="jobs: {}\n")
+    (root / ".github" / "workflows" / "nightly.yaml").write_text(
+        _wf("pytest tools/test_a.py -q"), encoding="utf-8"
+    )
+    assert guard.validate(root) == []
