@@ -9748,9 +9748,13 @@ items:
     which is precisely why this went unnoticed.
     (4) The sibling is DECOUPLED, correcting this row's earlier text: cell_rate_limit is
     declared a span rate at plan :978 and B-182's open question (external enforcement vs gap)
-    is largely independent of the quantity decision here. What survives is only the narrow
-    form -- if a consumer is authorised for either cap, settle B-183's quantity first so the
-    two do not disagree on units.
+    is largely independent of the quantity decision here. THE SURVIVING GATE IS NARROW AND
+    TENANT-SIDE ONLY (tightened at review round 3 [P2], which caught this step still
+    re-coupling the two): authorising a consumer for the TENANT cap requires B-183 settled
+    first; authorising a consumer for cell_rate_limit ALONE does NOT -- that is B-182's own
+    call, and the fork's halt target deliberately excludes it. The one exception is a
+    disposition that explicitly unifies them: under (B) the tenant cap becomes a span rate
+    too, so a delta choosing (B) must say whether it governs cell_rate_limit as well.
     (5) OWED, impl-only follow-up: harness-od/tests/test_b183_tenant_limit_quantity_conflict.py
     carries test_the_plan_signature_declares_spans_per_second, which reads :978 -- the CELL
     limit -- inside a module about the TENANT limit. The assertion is true and stays green but

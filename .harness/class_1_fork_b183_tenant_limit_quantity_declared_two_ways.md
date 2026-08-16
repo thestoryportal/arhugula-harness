@@ -136,8 +136,15 @@ ingestion"*.
 and the PROPERTY it protects — cardinality isolation.** A collector rate-limits a stream in
 order to bound cardinality downstream. So §11.1 is not self-contradictory; it is a property
 plus the mechanism that delivers it. **This is the reading that lets §11's cardinality
-framing and §11.1's "rate limits" parenthetical both stand**, and it is why this fork does
-**not** route §11.1 unless disposition (B) is chosen.
+framing and §11.1's "rate limits" parenthetical both stand** without either being a defect.
+
+**It does NOT mean §11.1 escapes routing** — an earlier line here said the fork routes §11.1
+only under (B), which contradicted the header's routing target and is corrected (review round
+3 [P2]). §11.1 is routed under **every** disposition: whichever quantity is chosen, the
+canonical contract has to **say so explicitly** rather than leave the reader to infer it from a
+mechanism parenthetical, and §11.1/§11.4 are also where `observation_window`'s meaning must
+land for decision 2 (§5). What this section establishes is only that §11.1 is not *itself*
+self-contradictory — not that it is already sufficient.
 
 ### §2.4 The root ADR paragraph is NOT RESIDENT in this workspace
 
@@ -277,7 +284,7 @@ PR** and is recorded on the `B-183` row.
 | `observed_series` is declared as distinct series | plan v2_6`:721` changing, or the code comment at `:177` diverging from it |
 | Only v1.37/v1.38 assert tenant = spans/sec in spec text | Any other OD delta, or a resident ADR-D6 §1.3, stating it |
 | v1.37/v1.38 use the cap as a span rate independently (not merely quoting the docstring) | v1.37`:38-40` or v1.38`:69` being re-worded so the population/keep-volume question no longer compares spans against the cap |
-| Nothing is blocked today | A production caller for `assert_per_tenant_cardinality_isolation` appearing in `harness-*/src` |
+| Nothing is blocked today | **Any** halt-target condition materialising (review round 3 [P2] — this row previously named only the first): a production caller for `assert_per_tenant_cardinality_isolation` in `harness-*/src`; **`B-133` step (3) / `B-137`'s F-08 keep-volume measurement starting**; or an external collector/backend being configured to enforce this cap |
 
 ---
 
