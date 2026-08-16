@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `f9798515fe03` |
+| `workspace_state_hash` | `9b8a0f666e2b` |
 | `last_refreshed` | 2026-08-16T00:00:00Z |
-| `git_head` | `a33b4c94` —  |
+| `git_head` | `be8ed178` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 119 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1386).** Close the graft integration arc, then resume the forward register. PR #1386 landed the additive half — the reachability detector and the merge-gate blast-radius pre-flight — and is CI-green on main. The residual is the uncommitted graft init output in the working tree: .claude/settings.json (5 hooks whose timeouts are written in milliseconds but read by Claude Code as SECONDS), .gitignore (graft's own deterministic ensureGitignored line, unanchored so it also hides .claude/skills/graft/SKILL.md), untracked .claude/helpers/graft-hooks.cjs and graft-statusline.cjs, and a Codex-parity projection that no longer matches the Claude hook set. None of it is committed, so main is unaffected today, but the tree is one git add -A away from breaking every session's hooks and the parity gate. Next action: land one hardening PR converting the timeouts to seconds, tracking the two helper shims, re-admitting the graft skill via a negation that coexists with graft's idempotent rewrite, and either mirroring or explicitly exempting the graft hooks in the Codex parity layer; then resume at B-137.
+**Current next action (post-#1388).** The graft integration arc is CLOSED — resume the forward register at B-137. Three PRs landed it: #1386 (reachability detector + merge-gate blast-radius pre-flight), #1387 (refresh), #1388 (hardening). The working tree is clean for the first time this arc and all Codex-parity tests are green, including the stop-gate test that was red throughout. Three upstream @nanonets/graft 0.10.1 limits are REGISTERED, NOT FIXED, at .harness/graft-integration-notes.md — do not patch them in generated files, which graft rewrites on every init/build: (1) the settings.json hook timeout field is read by Claude Code as SECONDS and by graft's promptAskTimeout() as MILLISECONDS, decided in favour of seconds, accepting that graft's prompt-ask child budget falls to its 4000 ms floor rather than leave a 4.2-hour kill deadline on a hung hook; (2) .mcp.json declares a bare command graft which does not resolve on a clean PATH, so graft is a local operator prerequisite alongside codex and agy, deliberately not bootstrapped; (3) .claude/helpers/graft-hooks.cjs exits 0 with no output when the package fails to load, so run graft check directly rather than reading absent context as an empty graph. Forward work resumes at B-137 step 3, whose posture decision (A vs A-prime vs B vs C vs C1) changes a committed per-cell base-rate envelope and is therefore an operator architectural ratification; both council halves are already grounded per #1362/#1364/#1366.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1388 | 2026-08-16 | graft integration hardened: hook timeouts ms->seconds, helper shims tracked, gitignore negations for both graft skill dirs, Codex parity exemption written as a tracked-helper guard, upstream limits registered at .harness/graft-integration-notes.md |
 | PR #1386 | 2026-08-16 | graft reachability detector (tools/graft_reachability.py, 37 tests) + merge-gate blast-radius pre-flight |
 | 1384 | 2026-08-16 | Bundled roadmap round for the #1383 ratifications: post-#1380 archived + pointer re-derived. This is the owed follow-on terminating refresh (§12.2.1); the next-action pointer is unchanged because it was authored for this very round and still holds. |
 | 1383 | 2026-08-16 | Three operator gates RATIFIED and now buildable: B-137 step (3) = C1 (admit the root, with its unmeasured ordinary-child cost carried forward); B-124 = Reading A (materialize at the emission site, overriding the fork's MODERATE recommendation of D); R-CTX-1 E7 = operator runs the reversible mv themselves. B-182 also newly un-gated after #1380 decoupled it from B-183. |
 | 1381 | 2026-08-16 | Bundled roadmap round: post-#1378 archived + live pointer refreshed to post-#1380. This is the owed follow-on terminating refresh (§12.2.1); the next-action pointer is unchanged because it was authored for this very round and still holds. |
-| 1380 | 2026-08-16 | B-183 owed Class 1 fork FILED; the per-tenant cap's quantity is contradicted INSIDE the OD spec lineage (contract body says cardinality, two later deltas' change-note prose says spans/sec while disclaiming any change to C-OD-11); no codified rule breaks the tie, so no disposition is recommended. B-182 DECOUPLED — #1378's one-decision-governs-both claim withdrawn. |
 
 ---
 
