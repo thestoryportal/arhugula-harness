@@ -1,4 +1,4 @@
-"""Per-deployment-surface sampling mode + 19-entry always-sampled set — U-OD-11.
+"""Per-deployment-surface sampling mode + 20-entry always-sampled set — U-OD-11.
 
 Implements C-OD-09 §9.1 (per-deployment-surface sampling mode), §9.2
 (always-sampled exception set — head=1.0 across all cells), and §9.3
@@ -6,7 +6,7 @@ Implements C-OD-09 §9.1 (per-deployment-surface sampling mode), §9.2
 
 `SamplingMode` enumerates the two per-deployment-surface modes;
 `PER_DEPLOYMENT_SURFACE_SAMPLING` maps each `DeploymentSurface` to its mode.
-`ALWAYS_SAMPLED_EVENT_CLASSES` carries the §9.2 19-entry always-sampled set
+`ALWAYS_SAMPLED_EVENT_CLASSES` carries the §9.2 20-entry always-sampled set
 (head=1.0 across all cells, inviolable per §9.3). `sampling_decision` returns
 `SAMPLE_ALWAYS` for any event in the always-sampled set, `SAMPLE_AT_BASE_RATE`
 otherwise.
@@ -32,6 +32,16 @@ the CP-declares/OD-ingests chain (`Spec_Control_Plane_v1_2.md:410` declares it
 always-sampled; the row was dropped at original OD ingestion while its two
 siblings at CP `:409`/`:411` were absorbed at OD `:521`/`:522`), carried at
 `Implementation_Plan_Operational_Discipline_v2_32.md` U-OD-58.
+
+The TWENTIETH row (`workflow.envelope`) is the `B-137` step-(3) candidate **C1**
+leg, operator-ratified 2026-08-16: `Spec_Operational_Discipline_v1_42.md` §0.2
+amends §9.2 19 → 20 on an INTRA-axis declares/ingests chain — C-OD-25 §25.3
+(`Spec_Operational_Discipline_v1_8.md:90`) has declared *"the envelope ALWAYS
+persists"* at head=1.0 since v1.8 and §9.2 never absorbed it. Root membership is
+also the only mechanism that delivers the §9.2 floor to in-envelope member
+SPANS: the shipped head is `ParentBased(root=HarnessCompositeSampler)`, which
+consults the inner sampler only for roots, so before this row an ordinary
+envelope root took every in-envelope member down with its own base-rate draw.
 
 `SamplingDecision` is declared in-unit: the spec §9.3 / acc #6 commit the two
 sampling-regime outcomes (`SAMPLE_ALWAYS` / `SAMPLE_AT_BASE_RATE`) without
@@ -119,7 +129,7 @@ PER_DEPLOYMENT_SURFACE_SAMPLING: dict[DeploymentSurface, SamplingMode] = {
 # --- §9.2 always-sampled exception set (head=1.0 across all cells) ---------
 
 #: §9.2 verbatim — the always-sampled exception set. Member set conformed to
-#: the §9.2 table (19 rows). Inviolable per §9.3: a hard floor at the
+#: the §9.2 table (20 rows). Inviolable per §9.3: a hard floor at the
 #: deployment-binding layer, not operator-tunable at base-rate.
 ALWAYS_SAMPLED_EVENT_CLASSES: frozenset[str] = frozenset(
     {
@@ -142,13 +152,18 @@ ALWAYS_SAMPLED_EVENT_CLASSES: frozenset[str] = frozenset(
         "managed_agents.runtime",
         "skill.activation",
         "fallback.exhausted",  # §9.2 row 19 (NEW at OD spec v1.37 — U-OD-58)
+        # §9.2 row 20 (NEW at OD spec v1.42 — `B-137` step (3) candidate C1,
+        # operator-ratified 2026-08-16). Ingests the C-OD-25 §25.3 head=1.0
+        # declaration; ALSO the carrier of the floor for in-envelope member
+        # spans, which `ParentBased` reaches only by root inheritance.
+        "workflow.envelope",
     }
-)  # exactly 19 entries per §9.2
+)  # exactly 20 entries per §9.2
 
 
 # --- §9.2 always-sampled lookup at SDK boundary ----------------------------
 #
-# `ALWAYS_SAMPLED_EVENT_CLASSES` above declares the §9.2 19-entry set
+# `ALWAYS_SAMPLED_EVENT_CLASSES` above declares the §9.2 20-entry set
 # verbatim per spec fidelity-grammar, including two wildcard entries
 # (`audit.*` and `validator.fail.*`). At the SDK boundary the sampler
 # receives concrete span names (`"audit.signature.write"`,

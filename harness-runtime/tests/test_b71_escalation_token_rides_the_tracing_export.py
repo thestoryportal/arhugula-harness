@@ -403,8 +403,10 @@ def test_the_carrying_span_is_declared_always_sampled_but_omitted_from_the_set()
 
     - **Contract:** OD spec v1.8 §C-OD-32.3 — *"Webhook spans head=1.0 (always-sampled —
       HITL delivery audit-critical)"* — restated verbatim in `hitl_webhook_namespace.py`.
-    - **Implementation:** `hitl.webhook.deliver` is **absent** from the 19-entry
-      `ALWAYS_SAMPLED_EVENT_CLASSES`, which §9.2 defines as exactly the head=1.0 set.
+    - **Implementation:** `hitl.webhook.deliver` is **absent** from the 20-entry
+      `ALWAYS_SAMPLED_EVENT_CLASSES` (19 until OD spec v1.42 added `workflow.envelope` as
+      row 20 — the divergence this bullet records is unaffected by that row), which §9.2
+      defines as exactly the head=1.0 set.
 
     Both halves asserted below, so the drift cannot be silently resolved in either
     direction without reddening this test.

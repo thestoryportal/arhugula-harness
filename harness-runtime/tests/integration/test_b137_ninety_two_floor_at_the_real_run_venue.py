@@ -17,8 +17,9 @@ root-only**, so a member emitted inside the envelope does not receive it.
 **Two prior overclaims by this arc, corrected here (out-of-family Codex, round 1).**
 
 1. An earlier draft asserted *"all 19 §9.2 members, at their real emission sites, are
-   children of the envelope."* **False.** Only **11 of the 19** have a span-open site in
-   `src/` at all (the other 8 are event-carried names or unimplemented — population (i) of
+   children of the envelope."* **False.** Only **11 of the 19** had a span-open site in
+   `src/` at all (12 of 20 since v1.42 added `workflow.envelope` itself as row 20; the
+   figures below are stated as the row recorded them) (the other 8 are event-carried names or unimplemented — population (i) of
    the row), and at least one span-backed member is a **root**: `skill.activation` is
    emitted from `workflow_driver.py:3206`, which precedes the envelope's open at `:3305`.
    The starvation is therefore **scoped to the members emitted inside the envelope**, not
@@ -63,7 +64,7 @@ import pathlib
 import sys
 import tempfile
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Any
 
 import harness_od.sampling_mode as _sm
@@ -91,7 +92,8 @@ _MEMBER = "hitl.gate.evaluated"
 _SANDBOX = "sandbox.violation"
 _REPO = pathlib.Path(__file__).resolve().parents[3]
 
-#: The §9.2 members that have a `start_as_current_span` site in `src/` — 11 of the 19.
+#: The §9.2 members that have a `start_as_current_span` site in `src/` — 12 of the 20
+#: since OD spec v1.42 added `workflow.envelope` as row 20 (11 of 19 as the row was written).
 #: The register cites this exact count to scope and price B-137's step (3), so the
 #: identity set is pinned rather than its cardinality alone (out-of-family Codex round 2:
 #: a "some but not all" check would let an emission site appear or vanish silently and
@@ -109,6 +111,9 @@ _SPAN_BACKED_MEMBERS = frozenset(
         "sandbox.violation",
         "skill.activation",
         "subagent.span",
+        # §9.2 row 20, span-backed by construction — the envelope's own open at
+        # `workflow_driver.py` is the site the whole row is about (OD spec v1.42, `B-137` C1).
+        "workflow.envelope",
     }
 )
 
@@ -130,13 +135,36 @@ def _b72() -> Any:
 
 
 @contextmanager
-def _member_set(*, add: frozenset[str] = frozenset()) -> Generator[None]:
+def _member_set(
+    *, add: frozenset[str] = frozenset(), remove: frozenset[str] = frozenset()
+) -> Generator[None]:
     original = _sm._ALWAYS_SAMPLED_LITERALS
-    _sm._ALWAYS_SAMPLED_LITERALS = frozenset(original | add)
+    _sm._ALWAYS_SAMPLED_LITERALS = frozenset(original | add) - remove
     try:
         yield
     finally:
         _sm._ALWAYS_SAMPLED_LITERALS = original
+
+
+@contextmanager
+def _pre_c1() -> Generator[None]:
+    """Reconstruct the PRE-v1.42 world, in which `workflow.envelope` carried no floor.
+
+    **Why this module needs it.** Everything below measures the STARVATION — the condition
+    `B-137` was opened to establish. OD spec v1.42 §0.2 landed candidate C1
+    (`workflow.envelope` as §9.2 row 20, operator-ratified 2026-08-16), which *removed* that
+    condition, so at HEAD these measurements would silently measure the repaired world and
+    report it as the finding. Rather than delete the evidence, each starvation measurement
+    now runs explicitly in the pre-C1 world and the module becomes a two-sided record: the
+    starvation was real (here), and C1 is what closed it
+    (`test_admitting_the_root_delivers_the_floor_candidate_c1`, which runs at HEAD).
+
+    Do NOT "simplify" this away by dropping the context manager — an unwrapped assertion
+    here passes against the fix rather than against the defect, which is the same
+    silent-inversion hazard `[[only-the-classifier-can-witness-the-classifier]]` names.
+    """
+    with _member_set(remove=frozenset({_ENVELOPE})):
+        yield
 
 
 def _production_provider(config: Any, *, base_rate: float) -> TracerProvider:
@@ -191,14 +219,25 @@ async def _run_the_real_workflow(*, base_rate: float) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_the_member_carries_a_floor_and_the_root_does_not() -> None:
-    """The asymmetry the whole finding rests on."""
+def test_the_member_carries_a_floor_and_the_root_does_not_pre_c1() -> None:
+    """The asymmetry the whole finding rests on — stated for the PRE-C1 world.
+
+    At HEAD the asymmetry is GONE, and that is the point: OD spec v1.42 gave the root a
+    floor too. Both halves are asserted so the module records the transition rather than
+    just one side of it.
+    """
     assert is_always_sampled(_MEMBER) is True, (
         f"`{_MEMBER}` left the §9.2 set — re-ground B-137 before trusting this module"
     )
-    assert is_always_sampled(_ENVELOPE) is False, (
-        f"`{_ENVELOPE}` entered the §9.2 set — that would deliver the floor to every "
-        "in-workflow member by inheritance and close the production half of B-137"
+    with _pre_c1():
+        assert is_always_sampled(_ENVELOPE) is False, (
+            f"`{_ENVELOPE}` still carries a floor with the C1 membership patched OUT — the "
+            "`_pre_c1` counterfactual is not reaching the derived literal structures, so "
+            "every starvation measurement in this module is a silent no-op"
+        )
+    assert is_always_sampled(_ENVELOPE) is True, (
+        f"`{_ENVELOPE}` is NOT in the §9.2 set at HEAD — OD spec v1.42 row 20 has been "
+        "reverted, which would re-open the production half of B-137"
     )
 
 
@@ -303,25 +342,28 @@ def test_all_three_populations_through_the_real_tail_processor() -> None:
             arrivals.append(span.name)
             super().on_end(span)
 
-    provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
-    provider.add_span_processor(
-        _SpyingTailKeep(downstream=downstream, max_buffered_traces=4096, max_spans_per_trace=4096)
-    )
-    tracer = provider.get_tracer("b137.populations.tail")
+    with _pre_c1():
+        provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
+        provider.add_span_processor(
+            _SpyingTailKeep(
+                downstream=downstream, max_buffered_traces=4096, max_spans_per_trace=4096
+            )
+        )
+        tracer = provider.get_tracer("b137.populations.tail")
 
-    # (i) root-name-matched
-    with tracer.start_as_current_span(_SANDBOX):
-        pass
-    # (ii) non-root member, and (ii-b) non-root TRIGGER
-    with tracer.start_as_current_span(_ENVELOPE):
-        with tracer.start_as_current_span(_MEMBER):
-            pass
-    with tracer.start_as_current_span(_ENVELOPE):
+        # (i) root-name-matched
         with tracer.start_as_current_span(_SANDBOX):
             pass
-    # (iii) event-carried
-    with tracer.start_as_current_span("ordinary.carrier") as carrier:
-        carrier.add_event(_SANDBOX)
+        # (ii) non-root member, and (ii-b) non-root TRIGGER
+        with tracer.start_as_current_span(_ENVELOPE):
+            with tracer.start_as_current_span(_MEMBER):
+                pass
+        with tracer.start_as_current_span(_ENVELOPE):
+            with tracer.start_as_current_span(_SANDBOX):
+                pass
+        # (iii) event-carried
+        with tracer.start_as_current_span("ordinary.carrier") as carrier:
+            carrier.add_event(_SANDBOX)
 
     assert arrivals == [_SANDBOX], (
         f"`TailKeepSpanProcessor.on_end` arrivals were {arrivals}, expected only the "
@@ -366,26 +408,27 @@ def test_all_three_starved_populations_at_one_composition() -> None:
     **10.8%** control.
     """
     exporter = InMemorySpanExporter()
-    provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("b137.populations")
+    with _pre_c1():
+        provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer("b137.populations")
 
-    # (i) root-name-matched — the ONE population that is not starved.
-    with tracer.start_as_current_span(_SANDBOX):
-        pass
-    # (ii) non-root — a §9.2 member under an unlisted root. Two arms, because step (2)
-    # names the "non-root TRIGGER" case specifically and `hitl.gate.evaluated` is NOT a
-    # §10.2 classification trigger (out-of-family Codex round 8 — an earlier draft labelled
-    # this arm as the trigger population when it was not one).
-    with tracer.start_as_current_span(_ENVELOPE):
-        with tracer.start_as_current_span(_MEMBER):  # member, NOT a trigger
+        # (i) root-name-matched — the ONE population that is not starved.
+        with tracer.start_as_current_span(_SANDBOX):
             pass
-    with tracer.start_as_current_span(_ENVELOPE):
-        with tracer.start_as_current_span(_SANDBOX):  # member AND a §10.2 trigger
-            pass
-    # (iii) event-carried — a §9.2 name riding as an EVENT on an unlisted carrier span.
-    with tracer.start_as_current_span("ordinary.carrier") as carrier:
-        carrier.add_event(_SANDBOX)
+        # (ii) non-root — a §9.2 member under an unlisted root. Two arms, because step (2)
+        # names the "non-root TRIGGER" case specifically and `hitl.gate.evaluated` is NOT a
+        # §10.2 classification trigger (out-of-family Codex round 8 — an earlier draft labelled
+        # this arm as the trigger population when it was not one).
+        with tracer.start_as_current_span(_ENVELOPE):
+            with tracer.start_as_current_span(_MEMBER):  # member, NOT a trigger
+                pass
+        with tracer.start_as_current_span(_ENVELOPE):
+            with tracer.start_as_current_span(_SANDBOX):  # member AND a §10.2 trigger
+                pass
+        # (iii) event-carried — a §9.2 name riding as an EVENT on an unlisted carrier span.
+        with tracer.start_as_current_span("ordinary.carrier") as carrier:
+            carrier.add_event(_SANDBOX)
 
     # The trigger arm's own premise, asserted rather than assumed.
     assert is_classification_trigger(_trigger_probe()), (
@@ -406,13 +449,26 @@ def test_all_three_starved_populations_at_one_composition() -> None:
 
 
 def test_control_the_membership_patch_reaches_the_sampler() -> None:
-    """Positive control — without it every membership result here could pass wrongly."""
-    assert is_always_sampled(_ENVELOPE) is False
-    with _member_set(add=frozenset({_ENVELOPE})):
-        assert is_always_sampled(_ENVELOPE) is True, (
-            "patching `_ALWAYS_SAMPLED_LITERALS` no longer reaches the sampler"
+    """Positive control — without it every membership result here could pass wrongly.
+
+    Re-based on the as-built world: C1 shipped, so the patch that has to be proven live is
+    the REMOVING one (`_pre_c1`). Both directions are exercised, since the module now uses
+    both — `_pre_c1` for every starvation measurement and the plain HEAD set for the C1
+    arms.
+    """
+    assert is_always_sampled(_ENVELOPE) is True, (
+        "`workflow.envelope` is not always-sampled at HEAD — OD spec v1.42 row 20 reverted"
+    )
+    with _pre_c1():
+        assert is_always_sampled(_ENVELOPE) is False, (
+            "removing from `_ALWAYS_SAMPLED_LITERALS` no longer reaches the sampler — every "
+            "starvation measurement in this module is silently measuring the REPAIRED world"
         )
-    assert is_always_sampled(_ENVELOPE) is False, "the patch did not restore"
+    assert is_always_sampled(_ENVELOPE) is True, "the patch did not restore"
+    with _member_set(add=frozenset({"probe.only.name"})):
+        assert is_always_sampled("probe.only.name") is True, (
+            "adding to `_ALWAYS_SAMPLED_LITERALS` no longer reaches the sampler"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +527,8 @@ async def test_the_floor_does_not_survive_the_real_run_at_a_starving_base_rate()
     C-OD contract declares `head=1.0` — leaves the process not at all. Nothing about its
     own name is ever consulted.
     """
-    exported = await _run_the_real_workflow(base_rate=0.0)
+    with _pre_c1():
+        exported = await _run_the_real_workflow(base_rate=0.0)
     assert exported == [], (
         f"spans survived a base_rate=0.0 run ({exported}) — the head composition changed "
         "and B-137 must be RE-MEASURED, which its close-out step (2) requires over "
@@ -481,11 +538,13 @@ async def test_the_floor_does_not_survive_the_real_run_at_a_starving_base_rate()
 
 @pytest.mark.asyncio
 async def test_admitting_the_root_delivers_the_floor_candidate_c1() -> None:
-    """The counterfactual, at the same venue — and it prices step (3).
+    """**AS-BUILT since OD spec v1.42** — the repair, at the same venue as the finding.
 
-    Adding `workflow.envelope` itself to §9.2 makes the identical run export both spans.
-    So the loss is the ROOT's decision, not an emission failure. Without this arm the
-    finding above could be read as "the member is never emitted", which it is not.
+    Formerly the counterfactual that priced step (3); C1 is now shipped, so this runs at
+    HEAD with no patch and is the standing regression witness that the repair holds. Read
+    against `test_the_floor_does_not_survive_the_real_run_at_a_starving_base_rate` directly
+    above, which reconstructs the pre-C1 world: same run, same base rate, opposite outcome.
+    That pairing is what shows the loss was the ROOT's decision and not an emission failure.
 
     **Scope — this arm uses `SimpleSpanProcessor`, so it prices the HEAD only.** What C1
     costs through the shipped tail chain is a separate question, measured by
@@ -493,8 +552,7 @@ async def test_admitting_the_root_delivers_the_floor_candidate_c1() -> None:
     draft of this arc called C1 "whole traces" on the strength of this test alone, which
     out-of-family Codex round 3 correctly rejected.
     """
-    with _member_set(add=frozenset({_ENVELOPE})):
-        exported = await _run_the_real_workflow(base_rate=0.0)
+    exported = await _run_the_real_workflow(base_rate=0.0)
     # `pause.captured` joined this set when B-162 wired the driver-side emission — the
     # B-72 venue really does pause, so the span is now live on this path.
     assert exported == sorted([_MEMBER, "pause.captured", _ENVELOPE]), (
@@ -550,7 +608,9 @@ def test_candidate_c1_resolves_every_trace_at_root_close() -> None:
         provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
         provider.add_span_processor(tail)
         tracer = provider.get_tracer("b137.c1")
-        with _member_set(add=frozenset({_ENVELOPE}) if envelope_in_set else frozenset()):
+        # AS-BUILT since v1.42: `envelope_in_set=True` is simply HEAD, and the arm that now
+        # needs constructing is the pre-C1 one.
+        with nullcontext() if envelope_in_set else _pre_c1():
             with tracer.start_as_current_span(_ENVELOPE):
                 with tracer.start_as_current_span("validator.evaluate"):  # ORDINARY child
                     pass
@@ -613,11 +673,14 @@ def test_candidate_c1_no_longer_evicts_under_production_bounds() -> None:
     tracer = provider.get_tracer("b137.c1.bounded")
 
     traces = 100
-    with _member_set(add=frozenset({_ENVELOPE})):
-        for _ in range(traces):
-            with tracer.start_as_current_span(_ENVELOPE):
-                with tracer.start_as_current_span("validator.evaluate"):
-                    pass
+    # AS-BUILT since v1.42: no patch needed — row 20 ships, so this runs at HEAD. The
+    # `_member_set(add={_ENVELOPE})` wrapper this used to carry became a silent no-op the
+    # moment C1 landed (adding a member the frozenset already has), and a no-op wrapper reads
+    # to the next maintainer as a live counterfactual. Removed rather than left decorative.
+    for _ in range(traces):
+        with tracer.start_as_current_span(_ENVELOPE):
+            with tracer.start_as_current_span("validator.evaluate"):
+                pass
 
     # POST-B-136 these are both ZERO: every trace resolves at its own root close, so no
     # population accumulates to be evicted. Before B-136 this read `cap` buffered and
@@ -681,23 +744,24 @@ async def test_the_tail_processor_never_sees_what_the_head_dropped() -> None:
             arrivals.append(span.name)
             super().on_end(span)
 
-    provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
-    provider.add_span_processor(_SpyingTailKeep(downstream=_Counting()))
+    with _pre_c1():
+        provider = TracerProvider(sampler=build_default_sampler(base_rate=0.0))
+        provider.add_span_processor(_SpyingTailKeep(downstream=_Counting()))
 
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(
-            harness._FakeTracerProvider,
-            "get_tracer",
-            lambda self, name, /: provider.get_tracer(name),
-        )
-        harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
-        harness._install_fake_od_stage4(mp)
-        harness._install_fake_webhook_composer_factory(mp, [])
-        with tempfile.TemporaryDirectory() as tmp:
-            await harness.api_run(
-                harness._FanOutSubAgentDispatchWorkflow(),
-                config=harness._config(pathlib.Path(tmp)),
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                harness._FakeTracerProvider,
+                "get_tracer",
+                lambda self, name, /: provider.get_tracer(name),
             )
+            harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
+            harness._install_fake_od_stage4(mp)
+            harness._install_fake_webhook_composer_factory(mp, [])
+            with tempfile.TemporaryDirectory() as tmp:
+                await harness.api_run(
+                    harness._FanOutSubAgentDispatchWorkflow(),
+                    config=harness._config(pathlib.Path(tmp)),
+                )
 
     assert arrivals == [], (
         f"`TailKeepSpanProcessor.on_end` was REACHED with {arrivals} from a head-dropped "
@@ -835,7 +899,8 @@ def test_the_scope_is_inside_the_envelope_not_all_nineteen() -> None:
         if (any(n.startswith(m[:-1]) for n in sites) if m.endswith("*") else m in sites)
     }
     # Pin the EXACT identity set, not merely "some but not all" (out-of-family Codex
-    # round 2): the register cites 11-of-19 to scope and price B-137's step (3), so an
+    # round 2): the register cites this scope to price B-137's step (3) — 11-of-19 as the row
+    # was written, 12-of-20 since OD spec v1.42 added the envelope itself — so an
     # emission site appearing or disappearing must redden this rather than pass silently.
     assert span_backed == _SPAN_BACKED_MEMBERS, (
         "the span-backed §9.2 population changed — B-137's scope and step-(3) pricing "
@@ -1087,23 +1152,27 @@ async def test_candidate_a_prime_admits_the_member_but_orphans_it() -> None:
     """
     harness = _b72()
     exporter = InMemorySpanExporter()
-    provider = TracerProvider(sampler=HarnessCompositeSampler(base_rate=0.0))
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    # A′ is an ALTERNATIVE to C1, so it is measured in the pre-C1 world. Co-resident with
+    # v1.42 row 20 the envelope would be admitted by its OWN membership — A′ would look like
+    # it keeps traces whole, which is precisely the property it does not have.
+    with _pre_c1():
+        provider = TracerProvider(sampler=HarnessCompositeSampler(base_rate=0.0))
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
 
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(
-            harness._FakeTracerProvider,
-            "get_tracer",
-            lambda self, name, /: provider.get_tracer(name),
-        )
-        harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
-        harness._install_fake_od_stage4(mp)
-        harness._install_fake_webhook_composer_factory(mp, [])
-        with tempfile.TemporaryDirectory() as tmp:
-            await harness.api_run(
-                harness._FanOutSubAgentDispatchWorkflow(),
-                config=harness._config(pathlib.Path(tmp)),
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                harness._FakeTracerProvider,
+                "get_tracer",
+                lambda self, name, /: provider.get_tracer(name),
             )
+            harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
+            harness._install_fake_od_stage4(mp)
+            harness._install_fake_webhook_composer_factory(mp, [])
+            with tempfile.TemporaryDirectory() as tmp:
+                await harness.api_run(
+                    harness._FanOutSubAgentDispatchWorkflow(),
+                    config=harness._config(pathlib.Path(tmp)),
+                )
 
     exported = {s.name: s for s in exporter.get_finished_spans()}
     assert _MEMBER in exported, (
@@ -1208,15 +1277,18 @@ def test_candidate_a_prime_is_a_name_only_remedy() -> None:
     that qualification could lead the council to select an incomplete repair.
     """
     exporter = InMemorySpanExporter()
-    provider = TracerProvider(sampler=HarnessCompositeSampler(base_rate=0.0))
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("b137.a_prime.scope")
+    # Pre-C1, for the same reason as the A′ orphaning witness above: A′ is an alternative to
+    # C1, and with row 20 in force the envelope's own membership would mask A′'s real scope.
+    with _pre_c1():
+        provider = TracerProvider(sampler=HarnessCompositeSampler(base_rate=0.0))
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer("b137.a_prime.scope")
 
-    with tracer.start_as_current_span(_ENVELOPE):
-        with tracer.start_as_current_span(_MEMBER):  # name-backed §9.2 member
-            pass
-    with tracer.start_as_current_span("ordinary.carrier") as carrier:
-        carrier.add_event(_SANDBOX)  # §9.2 member riding as an EVENT
+        with tracer.start_as_current_span(_ENVELOPE):
+            with tracer.start_as_current_span(_MEMBER):  # name-backed §9.2 member
+                pass
+        with tracer.start_as_current_span("ordinary.carrier") as carrier:
+            carrier.add_event(_SANDBOX)  # §9.2 member riding as an EVENT
 
     exported = sorted(s.name for s in exporter.get_finished_spans())
     assert exported == [_MEMBER], (

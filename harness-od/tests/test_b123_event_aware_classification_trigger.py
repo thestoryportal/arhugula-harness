@@ -173,8 +173,8 @@ def test_ac5_section_9_2_member_event_is_not_a_section_10_2_trigger() -> None:
     sibling in the same trace is DROPPED at root close.
 
     This discriminates `SECTION_10_2_EVENT_TRIGGER_NAMES` (2 names) from
-    `ALWAYS_SAMPLED_EVENT_CLASSES` (19 names, a strict superset containing
-    both §10.2 names plus 17 more): a mutation that replaces the former with
+    `ALWAYS_SAMPLED_EVENT_CLASSES` (20 names since OD spec v1.42 row 20, a strict
+    superset containing both §10.2 names plus 18 more): a mutation that replaces the former with
     the latter in `is_classification_trigger` would make this event ALSO a
     §10.2 trigger, preserve `sibling.work`, and fail this test (PD-8 probe P2).
     """

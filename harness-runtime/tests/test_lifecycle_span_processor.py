@@ -504,7 +504,7 @@ def test_production_surface_threads_collector_buffer_bounds(tmp_path: Path) -> N
     tracer = provider.get_tracer("v1-28-bounds-threading-test")
     roots = []
     for _ in range(20):  # 20 >> 4 ceiling: pathological producer
-        root = tracer.start_span("workflow.envelope.pathological")
+        root = tracer.start_span("ordinary.root.pathological")
         child = tracer.start_span("inner.work", context=otel_trace.set_span_in_context(root))
         child.end()
         roots.append(root)
@@ -525,7 +525,7 @@ def test_production_surface_drops_unclassified_trace_at_export(
         exporter=in_memory,
     )
     tracer = provider.get_tracer("u-od-3-tail-keep-test")
-    with tracer.start_as_current_span("workflow.envelope"):
+    with tracer.start_as_current_span("ordinary.root"):
         with tracer.start_as_current_span("plain.work"):
             pass
     assert stage.flush(timeout_millis=5000) is True
@@ -545,14 +545,14 @@ def test_production_surface_preserves_trace_when_sandbox_violation_present(
         exporter=in_memory,
     )
     tracer = provider.get_tracer("u-od-3-tail-keep-test")
-    with tracer.start_as_current_span("workflow.envelope"):
+    with tracer.start_as_current_span("ordinary.root"):
         with tracer.start_as_current_span("sandbox.violation"):
             pass
     assert stage.flush(timeout_millis=5000) is True
     finished = in_memory.get_finished_spans()
     finished_names = {s.name for s in finished}
     assert "sandbox.violation" in finished_names
-    assert "workflow.envelope" in finished_names
+    assert "ordinary.root" in finished_names
 
 
 def test_aws_kms_mapping_missing_token_map_key_fails_at_bootstrap(tmp_path: Path) -> None:

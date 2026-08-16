@@ -70,6 +70,7 @@ __all__ = [
     "SUBAGENT_SPAN_NAME",
     "VALIDATOR_FAIL_PERMANENCE_ATTR",
     "VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE",
+    "WORKFLOW_ENVELOPE_SPAN_NAME",
     "is_classification_trigger",
 ]
 
@@ -101,6 +102,14 @@ VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE: str = "permanent"
 #: Span name carrying the §14.3 subagent tail-keep-on-failure row (`subagent.span`,
 #: the real producer-emitted name per harness-runtime sub_agent_dispatch.py).
 SUBAGENT_SPAN_NAME: str = "subagent.span"
+
+#: Span name carrying the C-OD-09 §9.2 ROW 20 root-conditional floor
+#: (`workflow.envelope`, opened by `harness_cp.workflow_driver`). Root-conditional per OD
+#: spec v1.42 §0.2.3: the floor rides `ParentBased` inheritance, which the head applies only
+#: at a trace root, so a NESTED envelope must fall to the §10.1 base-rate regime. The tail
+#: has no `ParentBased` wrapper and gates it with a parent check, exactly as it does for the
+#: `subagent.span (root)` row above.
+WORKFLOW_ENVELOPE_SPAN_NAME: str = "workflow.envelope"
 
 #: Span attribute key carrying the subagent result status (CP C-CP-14 §14.2/§14.3;
 #: ingested verbatim per the D6 namespace-ingestion pattern, like the validator attr above).

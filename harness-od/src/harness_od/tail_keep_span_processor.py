@@ -255,6 +255,7 @@ from harness_od.tail_keep_classification import (
     SUBAGENT_RESULT_STATUS_ATTR,
     SUBAGENT_RESULT_STATUS_FAILED_VALUE,
     SUBAGENT_SPAN_NAME,
+    WORKFLOW_ENVELOPE_SPAN_NAME,
     is_classification_trigger,
 )
 
@@ -581,7 +582,29 @@ class TailKeepSpanProcessor(SpanProcessor):
         _buffer_nonroot_subagent = (
             span.name == SUBAGENT_SPAN_NAME and span.parent is not None and not _failed_subagent
         )
-        if not _buffer_nonroot_subagent and is_always_sampled(span.name, span.attributes):
+        # OD spec v1.42 §0.2.3 — `workflow.envelope` is §9.2 row 20 and, like
+        # `subagent.span (root)`, it is ROOT-CONDITIONAL: the floor is delivered by
+        # `ParentBased` inheritance, which the head applies only at a trace root. A NESTED
+        # envelope — `execute_workflow` re-entered by the child runner under an active
+        # `subagent.span` — is not a root, so it must fall to the §10.1 base-rate regime and
+        # buffer for the §10.2 decision rather than force-forwarding here.
+        #
+        # Without this the tail would contradict the contract the same delta writes: a nested
+        # envelope would be exported even when its surrounding unclassified trace is dropped,
+        # which both breaks the root-only declaration and adds tail-export volume the row is
+        # not priced for (out-of-family Codex round 3). The head already enforces this
+        # structurally via `ParentBased`; the tail has no such wrapper, so — exactly as the
+        # `subagent.span` arm above does — it gates with a parent check. Root-ness is
+        # structural, not a name or attribute, so this belongs here and not in
+        # `is_always_sampled`.
+        _buffer_nonroot_envelope = (
+            span.name == WORKFLOW_ENVELOPE_SPAN_NAME and span.parent is not None
+        )
+        if (
+            not _buffer_nonroot_subagent
+            and not _buffer_nonroot_envelope
+            and is_always_sampled(span.name, span.attributes)
+        ):
             # Mark the trace keep-flag if the always-sampled span is a classification
             # trigger (sandbox.violation + breaker.tripped are both in §9.2 AND in §10.2)
             # so tree-siblings buffered under the same trace get preserved at root close.
