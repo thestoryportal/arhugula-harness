@@ -9656,16 +9656,16 @@ items:
     Do NOT wire an in-process enforcement site before that decision -- minting a cap the contract
     does not state would be an X-AL-3 design extension.
     (3) Carry FACT 3 and FACT 4 into B-137's council as CONTEXT, not as a blocker.
-    (4) Settle B-183's quantity question first if any consumer is authorised, or the two caps
-    will disagree on units.
+    (4) NARROWED at #1380 (review round 4 [P2]) so this row and B-183 stop giving opposite instructions: settle B-183's quantity question first ONLY for a TENANT-cap consumer. Authorising a consumer for cell_rate_limit ALONE does not require it -- cell_rate_limit is declared a span rate at plan :978, nothing contradicts that, and B-183's filed fork deliberately excludes cell-limit consumers from its halt target. The exception is fork disposition (B), which would make the tenant cap a span rate too and re-unify them.
   council: >-
     No at registration. These are facts plus a single-domain disposition with a named owner
     (C7/OD); they are inputs to B-137's already-declared C7+C11 convening, not a separate one.
   heading: '### B-182 · Both halves of the C-OD-11 §11.1 per-cell budget are declared but reach no production path — `cell_rate_limit` has no consumer at all and the `tenant_rate_limit` helper has no caller — and §11.1''s team-binding row commits no figure *(surfaced grounding B-137 step (3)''s C11 half, 2026-08-15; reduced to facts after five out-of-family Codex rounds falsified every interpretation layered on them)*'
 - id: B-183
   title: >-
-    assert_per_tenant_cardinality_isolation compares a windowed observed_series count against a
-    per-second tenant_rate_limit and never reads observation_window
+    The C-OD-11 §11.1 per-tenant cap's QUANTITY is declared two ways inside the OD spec lineage
+    (cardinality vs spans/sec) and its temporal dimension is undeclared; observation_window is
+    never read
   status: design_substrate_gated
   summary: >-
     C-OD-11 §11.1's tenant_rate_limit is documented as a PER-SECOND rate --
@@ -9768,7 +9768,7 @@ items:
     RECOMMENDED SHAPE -- what a compliance cap measures at the two multi-tenant cells against
     what the observability substrate can count and afford -- after the fork's probes (1) and
     (2) are run.
-  heading: '### B-183 · `assert_per_tenant_cardinality_isolation` compares a WINDOWED count against a PER-SECOND limit and never reads `observation_window`, so the §21.4 per-tenant gate fires at a threshold that depends on the caller''s window *(surfaced by out-of-family Codex round 3 while grounding `B-182`, 2026-08-15)*'
+  heading: '### B-183 · The `C-OD-11` §11.1 per-tenant cap''s QUANTITY is declared two ways INSIDE THE OD SPEC LINEAGE — the contract body says cardinality (and the plan and shipped code implement distinct series) while two later deltas'' change-note prose reasons in spans/sec — and its TEMPORAL dimension is undeclared, `observation_window` being read nowhere *(surfaced by out-of-family Codex round 3 while grounding `B-182`, 2026-08-15; **heading neutralised at #1380** — the prior wording asserted a PER-SECOND limit whose threshold depends on the caller''s window, which is one of the two readings the filed fork does **not** settle)*'
 - id: B-184
   title: >-
     tools/ test-execution audit — 15 of 43 test modules were executed by no mechanism; 14 now wired

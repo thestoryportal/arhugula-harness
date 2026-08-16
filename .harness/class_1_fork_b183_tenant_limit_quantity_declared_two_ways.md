@@ -52,10 +52,20 @@ exception set gains ONE row"* (`v1_37:3-8`), and it lists **`C-OD-11` §11.1 as 
 > one over the other; resolution needs **ADR-D6 §1.3** (§2.4 — not resident here) or a **new OD
 > amendment** that reconciles the rider prose with the contract body.
 
-**This fork makes no recommendation between the dispositions.** Within the lineage a contract
-body outranks a compatibility rider, which is a real point for (A) — but (A) genuinely
-invalidates a still-open, cleared measurement question (§4), and that is the operator's call,
-not this filing's.
+**This fork makes no recommendation between the dispositions, and the two statements below are
+deliberately kept apart** (a draft ran them together and review round 4 [P2] flagged the
+contradiction — if precedence were normative here, (A) would already have won and the menu
+would not be neutral):
+
+- **No CODIFIED rule ranks them.** `CLAUDE.md` §1.3 orders artifact levels only, and this
+  workspace codifies no precedence *within* an artifact. So nothing in governance decides it.
+- **There is an EVIDENTIARY argument, not a ruling.** A contract body is the surface a reader
+  is meant to treat as the contract, and a change-note rider that explicitly disclaims amending
+  that contract is weaker evidence of intent. That is a real point for (A) — but it is a
+  *reading*, and this filing does not elevate it to a rule.
+
+Against it, (A) genuinely invalidates a still-open, cleared measurement question (§4). **That
+balance is the operator's to strike, which is precisely why this is routed.**
 
 ---
 
