@@ -134,23 +134,25 @@ jobs:
 
   test:
     needs: scope
-    if: needs.scope.outputs.refresh_only != 'true'
     runs-on: ubuntu-latest
     name: pytest (all axis packages) — blocking
     steps:
       - name: Checkout
+        if: needs.scope.outputs.refresh_only != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # Stop-hook parity verifies terminating-refresh file shape against HEAD's parent.
           fetch-depth: 0
 
       - name: Install uv + Python 3.12
+        if: needs.scope.outputs.refresh_only != 'true'
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
 
       - name: Sync workspace (all members)
+        if: needs.scope.outputs.refresh_only != 'true'
         run: uv sync --all-packages
 
       # Excludes the `e2e` marker — those tests exercise real external services
@@ -159,9 +161,11 @@ jobs:
       # [tool.pytest.ini_options] cover all 7 workspace packages (the 5 axes +
       # harness-core + harness-runtime).
       - name: Pytest (excludes e2e)
+        if: needs.scope.outputs.refresh_only != 'true'
         run: uv run pytest -m "not e2e"
 
       - name: Codex compatibility regressions — blocking
+        if: needs.scope.outputs.refresh_only != 'true'
         run: bash tools/codex-parity-check.sh
 
   lint:
@@ -192,7 +196,6 @@ jobs:
 
   typecheck:
     needs: scope
-    if: needs.scope.outputs.refresh_only != 'true'
     runs-on: ubuntu-latest
     name: pyright (strict) — blocking
     # Blocking as of R-200-ci-lint-typecheck-blocking (pyright half) — the tree
@@ -201,23 +204,26 @@ jobs:
     # fixes). Run locally exactly as here: `uv sync --all-packages && uv run pyright`.
     steps:
       - name: Checkout
+        if: needs.scope.outputs.refresh_only != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv + Python 3.12
+        if: needs.scope.outputs.refresh_only != 'true'
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
 
       - name: Sync workspace (all members)
+        if: needs.scope.outputs.refresh_only != 'true'
         run: uv sync --all-packages
 
       - name: Pyright (strict; config at root pyproject [tool.pyright])
+        if: needs.scope.outputs.refresh_only != 'true'
         run: uv run pyright
 
   axis-isolation:
     needs: scope
-    if: needs.scope.outputs.refresh_only != 'true'
     # R-200-ci-axis-matrix — per-axis test-isolation matrix. Each leg installs
     # ONLY one library package + its DECLARED workspace deps (`uv sync --package`
     # prunes the rest), then runs that package's own tests. A test (or src
@@ -252,26 +258,30 @@ jobs:
         axis: [core, is, as, cp, od, cxa]
     steps:
       - name: Checkout
+        if: needs.scope.outputs.refresh_only != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv + Python 3.12
+        if: needs.scope.outputs.refresh_only != 'true'
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
 
       - name: Sync ONLY harness-${{ matrix.axis }} (+ declared deps; prune siblings)
+        if: needs.scope.outputs.refresh_only != 'true'
         run: uv sync --package harness-${{ matrix.axis }}
 
       - name: Layer test tooling (no harness deps — isolation preserved)
+        if: needs.scope.outputs.refresh_only != 'true'
         run: uv pip install "pytest>=8.3" "pytest-asyncio>=0.25"
 
       - name: Pytest harness-${{ matrix.axis }}/tests in isolation (excludes e2e)
+        if: needs.scope.outputs.refresh_only != 'true'
         run: uv run --no-sync pytest harness-${{ matrix.axis }}/tests -m "not e2e"
 
   coverage:
     needs: scope
-    if: needs.scope.outputs.refresh_only != 'true'
     # R-200-ci-coverage-gating — INFORMATIONAL coverage at PR. v1 posture: NO
     # threshold ("gather data first" per the roadmap entry); advisory
     # (continue-on-error) so a coverage hiccup never blocks merge. Re-runs the
@@ -287,22 +297,26 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout
+        if: needs.scope.outputs.refresh_only != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv + Python 3.12
+        if: needs.scope.outputs.refresh_only != 'true'
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.12"
           enable-cache: true
 
       - name: Sync workspace (all members)
+        if: needs.scope.outputs.refresh_only != 'true'
         run: uv sync --all-packages
 
       - name: Pytest with coverage (excludes e2e)
+        if: needs.scope.outputs.refresh_only != 'true'
         run: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
 
       - name: Publish coverage total to job summary
-        if: always()
+        if: (always()) && needs.scope.outputs.refresh_only != 'true'
         run: |
           uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json, pathlib
@@ -319,7 +333,7 @@ jobs:
           PY
 
       - name: Upload coverage.xml artifact
-        if: always()
+        if: (always()) && needs.scope.outputs.refresh_only != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-xml

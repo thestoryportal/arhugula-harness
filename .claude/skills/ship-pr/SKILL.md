@@ -90,8 +90,11 @@ surface. Only genuinely documentation-only diffs skip them:
 
 **A code PR costs TWO pushes, not one, and that is correct.** The merge-gate verdict row must
 be committed to `.harness/merge-gate-log.md` and pushed before merge, so the gate result is
-auditable in the PR it gated. Push once for the arc, run the lenses, push the log row. The
-push-once rule targets *review-round churn*, not this mandatory second push.
+auditable in the PR it gated. Push once for the arc, run the lenses, push the log row —
+**then wait for CI on that FINAL head before merging.** The log-only commit does not need the
+lenses re-run, but it creates a new PR HEAD whose checks can still fail, and
+`.agents/skills/ship-pr/SKILL.md:83-88` requires final-head green. The push-once rule targets
+*review-round churn*, not this mandatory second push.
 
 ## Open the PR
 
