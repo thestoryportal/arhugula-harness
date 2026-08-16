@@ -48,7 +48,59 @@ permissions:
   contents: read
 
 jobs:
+  # ─── terminating-refresh fast path ────────────────────────────────────────
+  # A §12.2.1 terminating refresh changes EXACTLY `.harness/roadmap_status.md`
+  # and nothing else. Running pytest / pyright / the axis-isolation matrix /
+  # coverage against a four-line markdown edit costs ~10 minutes and proves
+  # nothing: no module under `harness-*/tests` reads that file (verified by
+  # grep across all six axis test trees), and its only consumers are `tools/`
+  # scripts, every one of which runs in a job this filter KEEPS.
+  #
+  # FAIL CLOSED. `refresh_only` is true ONLY when the changed set is exactly
+  # that one path. An empty diff, a git failure, or any second file all fall
+  # through to false and the full matrix runs. The gate can therefore only ever
+  # SKIP work for the one file set §12.2.1 already blesses — it can never let a
+  # code change past, because any code path in the diff makes the set unequal.
+  scope:
+    runs-on: ubuntu-latest
+    name: scope (refresh fast-path classifier)
+    outputs:
+      refresh_only: ${{ steps.classify.outputs.refresh_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - name: Classify the changed file set
+        id: classify
+        env:
+          # Empty on `push`; the PR base SHA on `pull_request`.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            changed="$(git diff --name-only "$BASE_SHA"...HEAD 2>/dev/null)" || changed=""
+          else
+            changed="$(git diff --name-only HEAD^ HEAD 2>/dev/null)" || changed=""
+          fi
+          if [ -z "$changed" ]; then
+            echo "empty or unreadable diff — running the full matrix (fail-closed)"
+            echo "refresh_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed files:"; printf '  %s\n' $changed
+          # Everything that is NOT the one blessed path. Non-empty => full matrix.
+          other="$(printf '%s\n' "$changed" | grep -vFx '.harness/roadmap_status.md' || true)"
+          if [ -z "$other" ]; then
+            echo "terminating-refresh shape — skipping pytest/pyright/axis-isolation/coverage"
+            echo "refresh_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "refresh_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
+    needs: scope
+    if: needs.scope.outputs.refresh_only != 'true'
     runs-on: ubuntu-latest
     name: pytest (all axis packages) — blocking
     steps:
@@ -105,6 +157,8 @@ jobs:
         run: uv run ruff format --check .
 
   typecheck:
+    needs: scope
+    if: needs.scope.outputs.refresh_only != 'true'
     runs-on: ubuntu-latest
     name: pyright (strict) — blocking
     # Blocking as of R-200-ci-lint-typecheck-blocking (pyright half) — the tree
@@ -128,6 +182,8 @@ jobs:
         run: uv run pyright
 
   axis-isolation:
+    needs: scope
+    if: needs.scope.outputs.refresh_only != 'true'
     # R-200-ci-axis-matrix — per-axis test-isolation matrix. Each leg installs
     # ONLY one library package + its DECLARED workspace deps (`uv sync --package`
     # prunes the rest), then runs that package's own tests. A test (or src
@@ -180,6 +236,8 @@ jobs:
         run: uv run --no-sync pytest harness-${{ matrix.axis }}/tests -m "not e2e"
 
   coverage:
+    needs: scope
+    if: needs.scope.outputs.refresh_only != 'true'
     # R-200-ci-coverage-gating — INFORMATIONAL coverage at PR. v1 posture: NO
     # threshold ("gather data first" per the roadmap entry); advisory
     # (continue-on-error) so a coverage hiccup never blocks merge. Re-runs the

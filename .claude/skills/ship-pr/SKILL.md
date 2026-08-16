@@ -49,6 +49,33 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 - **X-AL-3 (§4.4).** If `design-substrate/**` is touched, the PR must include a back-flow
   doc or a clearance marker (§4.5), else the CI guard fails.
 
+## Converge locally, then push ONCE (wall-clock discipline, 2026-08-16)
+
+**Every review round that edits and pushes costs a full CI run.** Measured on the `B-137`
+arc (#1390): ~6 CI runs ≈ 30 min, five of them triggered by an edit a review round demanded.
+`just codex-review` reads the **committed branch diff** — but *committed ≠ pushed*, and
+nothing requires a push between rounds.
+
+**Sequence — do not push until every reviewer is green:**
+
+1. Build → `just codex-check` **locally**. This is the CI *proxy*: `ci.yml:79` runs the same
+   `codex-parity-check.sh`, and ruff / pyright / `pytest -m "not e2e"` / `test_artifact_heads`
+   / `closure_gate` / clearance / ledger / overlay all have CI counterparts. Every CI-only
+   failure on the #1390 arc (the `B-183` head-advance tripwire, Q3 G1.3's contract orphan,
+   artifact-heads staleness) was locally reproducible. It is also the ONLY place
+   `ROOT_CHECKOUT_EDIT` can fire, since CI never sees a dirty tree.
+2. **Commit locally. Do not push.**
+3. `just codex-review` + the `merge-gate` 3 lenses **in parallel, against local commits**,
+   iterating to convergence. Between rounds run only the targeted tests, not the full gate.
+4. One final `just codex-check`.
+5. **Push once → one CI run.**
+6. Merge once CI is green and the gate is all-approve.
+
+**Never run `just codex-check` after CI is green on the same SHA** — it re-executes the
+identical checks in a worse environment and verifies nothing. Its whole value is pre-push.
+
+`[[local-gate-after-ci-green-is-pure-duplication]]`
+
 ## Open the PR
 
 - Branch off the default branch (never the operator's working branch); conventional-commit
@@ -158,6 +185,19 @@ This is the step most often done wrong. After the PR merges:
    against). The roadmap_status.md hash then legitimately lags HEAD by one commit; the next
    §12.1 audit recognizes the lag (step-6 carve-out) and does NOT spawn another. **Do not
    spawn a refresh PR for a refresh PR.**
+
+   **Merge it with `--auto`, and run NO local gate on it.** A terminating refresh is
+   doc-only: the `merge-gate` skill's own scope rule says skip it, the LEAN protocol
+   exempts it from `codex-review`, and `just codex-check` on a four-line markdown edit is
+   pure duplication. So the whole ritual is one command that needs no polling:
+   ```
+   gh pr merge <NNN> --squash --delete-branch --auto
+   ```
+   CI is also path-filtered for this exact shape — `ci.yml`'s `scope` job classifies a diff
+   whose changed set is exactly `.harness/roadmap_status.md` and skips `test`, `typecheck`,
+   `axis-isolation` and `coverage`, so the refresh settles in well under a minute instead of
+   ~10. The classifier FAILS CLOSED: an empty diff, a git error, or any second changed path
+   all fall through to the full matrix, so it can never let a code change past.
 3. **Bundled changes drop the prefix.** If the PR carries substantive non-refresh changes
    alongside a roadmap_status.md touch, its title MUST NOT use the reserved prefix
    (§12.2.1), and a follow-on terminating refresh is owed.
