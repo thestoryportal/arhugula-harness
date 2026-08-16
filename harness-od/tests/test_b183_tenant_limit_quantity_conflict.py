@@ -172,3 +172,32 @@ def test_the_conflict_is_between_two_non_interchangeable_quantities() -> None:
         "one observed SERIES — which may carry any number of spans. The comparison treats "
         "this as one unit against a limit the plan signature calls spans/sec."
     )
+
+
+# --- head-advance tripwire ----------------------------------------------------
+
+
+def test_a_head_advance_forces_regrounding() -> None:
+    """The frozen-delta trap, closed (out-of-family review [P2]).
+
+    Every declaration above lives in a **historical** delta — `v1.2`, `v2`, `v1.37`, `v1.38`
+    — and historical deltas never change. So when `B-183` is resolved the normal way, by a
+    NEW delta (`v1.42` / `v2.36`), those files stay byte-identical, every assertion above
+    stays green, and this gated row goes stale in silence. That is the same
+    baseline-versus-effective-head error this workspace has hit repeatedly.
+
+    Pinning the CURRENT heads closes it: any head advance reds this test, which is the
+    signal to re-ground the row rather than trust the frozen quotes.
+    """
+    heads = (Path(__file__).resolve().parents[2] / ".harness" / "artifact-heads.md").read_text(
+        encoding="utf-8"
+    )
+    assert "| `spec-operational-discipline` | `v1.41` |" in heads, (
+        "the OD spec head advanced past v1.41. B-183's quantity conflict is pinned against "
+        "historical deltas that a new head does not touch — re-ground the row against the "
+        "new head before trusting anything above."
+    )
+    assert "| `implementation-plan-operational-discipline` | `v2.35` |" in heads, (
+        "the OD plan head advanced past v2.35 — same reason: re-ground B-183, since the "
+        "spans/sec field signature may have been amended by the new delta."
+    )
