@@ -54,7 +54,13 @@ on:
 # (wait for the code merge's main CI before enabling auto-merge on the refresh)
 # also works, but relies on discipline; this removes the hazard at the root.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # On main the group is SHA-specific, so each post-merge run is alone in its
+  # group and can be neither cancelled nor evicted. `cancel-in-progress: false`
+  # alone is NOT enough: GitHub keeps only one running + one PENDING run per
+  # group, so a third rapid main push still displaces the pending second one and
+  # that SHA loses its only evidence (out-of-family Codex round 3).
+  # Topic branches keep the shared ref-scoped group and still cancel supersedes.
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'shared' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:

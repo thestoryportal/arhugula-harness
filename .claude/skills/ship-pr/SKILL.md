@@ -51,57 +51,47 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 
 ## Converge locally, then push ONCE (wall-clock discipline, 2026-08-16)
 
-**Every review round that edits and pushes costs a full CI run.** Measured on the `B-137`
-arc (#1390): ~6 CI runs ≈ 30 min, five of them triggered by an edit a review round demanded.
-`just codex-review` reads the **committed branch diff** — but *committed ≠ pushed*, and
-nothing requires a push between rounds.
+**Every review round that edits and pushes costs a full CI run.** Measured on #1390: ~6 CI
+runs ≈ 30 min, five triggered by an edit a review round demanded. `just codex-review` reads
+the **committed branch diff** — and *committed ≠ pushed*.
 
-**Sequence — do not push until every reviewer is green:**
+1. Build → `just codex-check` locally, then commit. **Do not push.**
+2. `just codex-review` (`--base`) against local commits, to convergence. Between rounds
+   re-run only the checks the change can affect, not the whole gate.
+3. Push once → one CI run. `merge-gate` runs **after** this push (its lenses read
+   `gh pr diff <PR#>`, the remote head, so it cannot see local-only commits).
+4. Merge on CI-green + all-approve.
 
-1. Build → `just codex-check` **locally**. This is the CI *proxy*: `ci.yml:79` runs the same
-   `codex-parity-check.sh`, and ruff / pyright / `pytest -m "not e2e"` / `test_artifact_heads`
-   / `closure_gate` / clearance / ledger / overlay all have CI counterparts. Every CI-only
-   failure on the #1390 arc (the `B-183` head-advance tripwire, Q3 G1.3's contract orphan,
-   artifact-heads staleness) was locally reproducible. It is also the ONLY place
-   `ROOT_CHECKOUT_EDIT` can fire, since CI never sees a dirty tree.
-2. **Commit locally. Do not push.**
-3. `just codex-review` **against local commits** (`--base`), iterating to convergence.
-   Between rounds run only the targeted tests, not the full gate.
-4. One final `just codex-check`.
-5. **Push once → one CI run.**
-6. **THEN `merge-gate`** — it must run after the push, not alongside step 3. Its scope check
-   and all three reviewer prompts read `gh pr diff <PR#>` (`merge-gate/SKILL.md:27,75-83`),
-   i.e. the REMOTE PR head. Run it against local commits and it reviews a diff that does not
-   yet contain them — every local-only fix would bypass the gate. Out-of-family Codex caught
-   this in the very commit that introduced this section.
-7. Merge once CI is green and the gate is all-approve. A merge-gate BLOCK costs one more
-   push + CI round; that is rarer than a codex round and correctness outranks the saving.
+**`codex-check` is a partial CI proxy, not a complete one.** It omits the semantic-overlay,
+substitution-ledger, arc-ledger and dedicated tools-test jobs (`justfile:66`), so a change to
+those surfaces can pass locally and still red on the first push. Run the matching local
+counterpart (`just overlay-check`, `tools/arc_ledger.py --check`, the relevant
+`tools/test_*.py`) when the diff touches them. **Never re-run it after CI is green on the
+same SHA** — there it duplicates CI exactly and verifies nothing.
 
 **If a gate fails only on a whole-tree condition, re-run only the affected check.** A
-`ROOT_CHECKOUT_EDIT` failure means the tree was dirty, not that any code is wrong —
-committing changes `git status` and nothing else, so re-run `tools/test_codex_stop_gate.py`
-(~5s), not the whole 209s parity suite.
+`ROOT_CHECKOUT_EDIT` failure means the tree was dirty, not that code is wrong — committing
+changes `git status` and nothing else, so re-run `tools/test_codex_stop_gate.py` (~5s), not
+the 209s parity suite.
 
-**Pick gates by diff class — running all of them on every PR is where the wall clock goes.**
-Measured on the 2026-08-16 session: ~84 of ~140 minutes of gate time was duplication, not
-coverage. Operator directive: *"any redundancies that are taking an inordinate amount of time
-for no code quality benefit are unnecessary"* — while the byte-exact review goal is NOT to be
-degraded. So cut duplication, never coverage:
+**Never run a standalone full suite AND `codex-check`** — the gate already runs
+`pytest -m "not e2e"`; doing both double-pays the loop's most expensive step (~14 min
+measured).
+
+**Gate selection is by diff class, and the code exemption is narrow.** `AGENTS.md:59`
+requires every *substantive code* PR to transit the 3 lenses — that includes executable
+`tools/` and `.github/` logic, where the concurrency and test-witness lenses have real
+surface. Only genuinely documentation-only diffs skip them:
 
 | Diff class | Gates |
 |---|---|
 | Doc-only; `ops: roadmap status refresh` | none — path-filtered CI + `--auto` |
-| `.github/`, `.claude/skills/`, `tools/` | `codex-review` to convergence. **No 3-lens** — the concurrency and spec-conformance lenses have no surface here, and codex is the decorrelated eye that matters |
-| `harness-*/src` or `harness-*/tests` | `codex-review` to convergence **+ the 3-lens `merge-gate`** after the push |
+| Any executable surface (`harness-*/src|tests`, `tools/`, `.github/`, hooks) | `codex-review` to convergence **+ 3-lens `merge-gate`** after the push |
 
-**Never run a standalone full suite AND `just codex-check`** — the gate already runs
-`pytest -m "not e2e"`. Running the axis suites separately and then the gate double-pays the
-most expensive step in the loop (~14 min on the session above).
-
-**Never run `just codex-check` after CI is green on the same SHA** — it re-executes the
-identical checks in a worse environment and verifies nothing. Its whole value is pre-push.
-
-`[[local-gate-after-ci-green-is-pure-duplication]]`
+**A code PR costs TWO pushes, not one, and that is correct.** The merge-gate verdict row must
+be committed to `.harness/merge-gate-log.md` and pushed before merge, so the gate result is
+auditable in the PR it gated. Push once for the arc, run the lenses, push the log row. The
+push-once rule targets *review-round churn*, not this mandatory second push.
 
 ## Open the PR
 
@@ -220,39 +210,21 @@ This is the step most often done wrong. After the PR merges:
    ```
    gh pr merge <NNN> --squash --delete-branch --auto
    ```
-   **`--auto` still has to be waited on — it is not fire-and-forget.** When checks are
-   pending (the normal case right after opening the PR) `gh pr merge --auto` only ENABLES
-   auto-merge and returns; it does not block until the PR is `MERGED`, and it says nothing
-   about the resulting `main`-push CI. Ending the loop there leaves an unmerged refresh and a
-   stale local `main`.
+   **Order matters, and `--auto` is not fire-and-forget.** Two rules, both fail-closed:
 
-   **The poll must be BOUNDED and must abort on every terminal state, not just success.**
-   Auto-merge leaves the PR OPEN when a required check fails, and a human can CLOSE it; a
-   loop that waits only for `MERGED` sleeps forever on either, and on a persistent
-   `gh` error. Fetch and fast-forward **from the worktree that has `main` checked out** — a
-   squash merge creates a commit on `origin/main` that is NOT a descendant of the refresh
-   topic branch, so `--ff-only` run while still on that branch fails, and even on success
-   would move the topic ref rather than `main`:
-   ```
-   for _ in $(seq 1 80); do                      # ~20 min ceiling, then give up loudly
-     state="$(gh pr view <NNN> --json state -q .state 2>/dev/null)" || state=QUERY_FAILED
-     case "$state" in
-       MERGED) break ;;
-       CLOSED|QUERY_FAILED) echo "refresh did not merge: $state" >&2; exit 1 ;;
-     esac
-     if gh pr checks <NNN> 2>/dev/null | grep -qE '\bfail\b'; then
-       echo "refresh CI failed — auto-merge will never fire" >&2; exit 1
-     fi
-     sleep 15
-   done
-   [ "$state" = MERGED ] || { echo "timed out waiting for refresh merge" >&2; exit 1; }
-   git -C <path-to-main-worktree> fetch
-   git -C <path-to-main-worktree> merge --ff-only origin/main
-   ```
-   Then wait for main's own push-triggered run to conclude `success` (§10 CI discipline).
-   Main runs no longer cancel each other — `ci.yml`'s `concurrency` block exempts
-   `refs/heads/main` from `cancel-in-progress` precisely so the substantive merge's evidence
-   survives the refresh's push.
+   - **Wait for the SUBSTANTIVE merge's `main` CI to conclude `success` BEFORE enabling
+     auto-merge on the refresh.** The refresh's own run is path-filtered — it skips
+     `test`/`typecheck`/`axis-isolation` — so it is not evidence for the code that just
+     merged. (`ci.yml`'s `concurrency` block additionally exempts `refs/heads/main` from
+     `cancel-in-progress` so the refresh push cannot destroy that evidence, but *preserving*
+     a run is not the same as *verifying* it.)
+   - **Then poll the refresh to a terminal state — bounded, aborting on ALL of them.** With
+     checks pending, `gh pr merge --auto` only ENABLES auto-merge and returns. A loop that
+     waits solely for `MERGED` hangs forever on a failed check (PR stays open), a `CLOSED`
+     PR, a *cancelled* check (`gh pr checks` buckets that as `cancel`, not `fail`), or a
+     persistent `gh` error. Bound the loop, treat every one of those as a loud abort, and
+     run the `fetch` + `merge --ff-only` **from the worktree that has `main` checked out** —
+     a squash-merge commit is not a descendant of the refresh topic branch.
    CI is also path-filtered for this exact shape — `ci.yml`'s `scope` job classifies a diff
    whose changed set is exactly `.harness/roadmap_status.md` and skips `test`, `typecheck`,
    `axis-isolation` and `coverage`, so the refresh settles in well under a minute instead of
