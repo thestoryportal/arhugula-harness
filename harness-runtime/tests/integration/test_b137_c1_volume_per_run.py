@@ -1,49 +1,52 @@
-"""B-137 step (3): what C1's `1/base_rate` multiplier costs, measured per workflow RUN.
+"""B-137: C1's per-run EXPORTED span count, measured through the real processor chain.
 
-`B-137`'s C11 objection is that C1's multiplier is *"unpriced against the C-OD-11 §11.1 per-cell
-budgets."* `B-182` grounded the instrument and found the cap **does** carry a number —
-`cell_rate_limit=10_000.0` **spans/sec** at every ACTIVE cell — and that what §11.1 leaves open at
-the team cells is the **volume evidence** to price against it, deferred to `Persona_Document_v1.md`
-§11 open-item 4 (*"throughput rough order-of-magnitude per day"*, still open).
+`B-137`'s C11 objection is that C1's `1/base_rate` multiplier is *"unpriced against the C-OD-11
+§11.1 per-cell budgets."* `B-182` established that the cap **does** carry a number
+(`cell_rate_limit=10_000.0` **spans/sec**) and that what is open is the **volume evidence**. A
+spans/sec budget factors as `spans-per-run × runs-per-sec`, and `runs/sec` is Persona §11
+open-item 4 — still open, and not closable here.
 
-**This module supplies the half of that evidence which is measurable today.** A spans/sec budget
-factors into two terms:
+**This module measures `spans per run`, and it is deliberately narrow about what that buys.**
 
-    spans/sec  =  spans per run  ×  runs per sec
+**A first draft of this module was wrong in the most embarrassing way available.** It reused the
+sibling module's `_run_the_real_workflow`, which attaches only a `SimpleSpanProcessor` — so it
+counted **head admission** and reported it as **exports**. That is *precisely* the error the
+immediately-preceding arc documented, in a module this one cites by name
+(`test_b137_c1_discriminator.py`, discipline 1: *"Head admission is not export"*). Out-of-family
+Codex caught it in one round. The corrected composition routes through the real
+`TailKeepSpanProcessor`, and the numbers change materially:
 
-`runs/sec` is exactly the open item, and nothing here can close it. **`spans per run` is
-measurable at the real `api.run` venue, and no artifact had measured it.** Measuring it converts
-C11's objection from *"unpriced"* into *"priced up to one named factor"*, and turns the open item
-into a specific answerable question rather than an open-ended unknown.
+| composition | exported |
+|---|---|
+| head only, `base_rate=1.0` (the draft's mistake) | 3 — `workflow.envelope`, `hitl.gate.evaluated`, `pause.captured` |
+| **real chain**, `base_rate=1.0` | **1** — `hitl.gate.evaluated` |
+| **real chain**, C1 at `base_rate=0.0` | **2** — `hitl.gate.evaluated`, `workflow.envelope` |
+| **real chain**, no C1 at `base_rate=0.0` | **0** |
 
-**Measured.** Driving the shipped B-72 fan-out end-to-end through `api.run` with a real
-`TracerProvider`, a fully-admitting head exports **3 spans per run** — `workflow.envelope`,
-`hitl.gate.evaluated`, `pause.captured`. Under C1 (envelope in the §9.2 set) every run exports the
-same 3, deterministically, because the root takes the always-sampled arm and its children inherit.
+The envelope and `pause.captured` are head-admitted at `1.0` but **buffered and dropped at root
+close**, because the trace carries no §10.2 classification trigger. Only C1 rescues the envelope,
+and it does so by making the root take the always-sampled bypass arm.
 
-**Derived, so the council does not have to.** At 3 spans/run, saturating the 10,000 spans/sec cap
-under C1 requires **~3,333 workflow runs per second**. Equivalently: at a plausible harness run
-rate of 1 run/sec, a workflow would need ~10,000 spans **per run** before C1 could reach the cap.
+**What is claimed, and it is one sentence.** At the venue this actually ran —
+`solo-developer × local-development`, the B-72 fan-out — C1 exports **2 spans per run** where the
+shipped configuration exports **1**.
 
-**THE SCOPE BOUND, AND IT IS LOAD-BEARING — read it before quoting the number.** The B-72 fan-out
-is *one small workflow shape*, chosen by the sibling module because it reaches a HITL gate, not
-because it is representative. Three spans per run is therefore a **lower bound** on span volume,
-which makes ~3,333 runs/sec an **upper bound** on the break-even rate. A span-heavier workflow —
-many tool dispatches, validator evaluations, retries, nested sub-agents — moves the break-even
-down **proportionally**: at 30 spans/run it is ~333 runs/sec, at 300 it is ~33.
+**What is NOT claimed, each because a reviewer was right to stop it.**
 
-So this module does **not** conclude that C1 is affordable. It establishes that **two** factors
-were missing and now **one** is measured at one venue, and it names precisely what the council
-still needs: a *representative* spans/run for the workloads a cell actually carries, and the
-runs/sec of Persona open-item 4. *(This scoping is deliberate and hard-won: the `B-182` arc that
-preceded this one took eight out-of-family review rounds and 28 valid findings, every one of which
-falsified an interpretation layered on a fact rather than a fact — see that row.)*
+- **No break-even run rate.** A first draft divided the `team-binding × self-hosted-server` cap by
+  a span count measured at `solo-developer × local-development`. The deployment surface selects the
+  tail pipeline and the persona tier affects HITL behaviour, so that division is invalid. Pricing
+  the team cell requires measuring **at** the team cell, which this arc did not do — registered as
+  the explicit next step rather than approximated.
+- **No "lower bound" on span volume.** A first draft called 3 spans/run a floor. Wrong direction:
+  B-72 is a *HITL-focused* fixture, so a workflow that never reaches a gate or captures a pause
+  emits **fewer** of exactly these spans. One observed sample is a sample, not a bound.
+- **Nothing about affordability.** B-137's council call is untouched.
 
-**Determinism.** Only the two *decidable* compositions are asserted: `base_rate=1.0`, where every
-span is admitted, and C1 at `base_rate=0.0`, where the ratio arm admits nothing and the
-always-sampled arm admits everything. The intermediate production rate (0.1) is a genuine **sample**
-— a probe run at 0.1 happened to export all 3 spans because the root won its draw — so nothing is
-asserted there (`[[assert-the-shape-not-the-measurement]]`).
+**Determinism.** Only decidable compositions are asserted: `base_rate=1.0` (everything admitted at
+the head) and `base_rate=0.0` (the ratio arm admits nothing; only the always-sampled arm can). The
+production rate 0.1 is a genuine sample — a probe run at 0.1 exported all three head-admitted spans
+because the root happened to win its draw — so nothing is asserted there.
 """
 
 from __future__ import annotations
@@ -51,32 +54,21 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
+import tempfile
 from typing import Any
 
 import pytest
-from harness_core.deployment_surface import DeploymentSurface
-from harness_core.persona_tier import PersonaTier
-from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
-from harness_od.observability_matrix import CellID
-from harness_od.per_cell_cardinality_budget import PER_CELL_CARDINALITY_BUDGET
+from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-#: The cell B-137 prices step (3) against.
-_TEAM_SELF = CellID(
-    persona_tier=PersonaTier.TEAM_BINDING,
-    deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
-)
-
-#: The spans the shipped B-72 fan-out really exports per run, measured at the `api.run` venue.
-_EXPECTED_SPANS = ("hitl.gate.evaluated", "pause.captured", "workflow.envelope")
+#: The cell the B-72 harness config really binds. NOT the cell whose cap B-137 quotes — which is
+#: exactly why this module derives no break-even rate. See the docstring.
+_MEASURED_CELL = ("solo-developer", "local-development")
 
 
 def _venue() -> Any:
-    """Load the sibling step-(2) module, which owns the real-`api.run` driver.
-
-    Re-using its `_run_the_real_workflow` rather than re-implementing the composition is
-    deliberate: a re-implementation would prove this module's model of the venue, not the venue
-    (`[[a repro must drive the REAL function]]`).
-    """
+    """Load the sibling step-(2) module, which owns the real-`api.run` harness."""
     path = pathlib.Path(__file__).with_name("test_b137_ninety_two_floor_at_the_real_run_venue.py")
     name = "_b137_volume_venue"
     if name in sys.modules:
@@ -89,86 +81,95 @@ def _venue() -> Any:
     return module
 
 
-@pytest.mark.asyncio
-async def test_the_real_run_exports_three_spans_when_the_head_admits_everything() -> None:
-    """**The measurement.** Span count per run at the real venue, fully admitting.
+async def _exported_through_the_real_chain(*, base_rate: float) -> list[str]:
+    """Drive the shipped `api.run` path and return what the REAL processor chain EXPORTS.
 
-    This is the multiplicand C11's budget needs and that no artifact had measured. Asserted as an
-    exact name set rather than a bare count, so a span appearing or vanishing surfaces as a
-    changed identity rather than a silently-shifted number
-    (`[[count-contract-sweep-every-granularity]]`).
+    The sibling's `_run_the_real_workflow` attaches only a `SimpleSpanProcessor`, which observes
+    head ADMISSION. Pricing a spans/sec cap needs EXPORTS, so this composes the production
+    `TailKeepSpanProcessor` in front of the exporter — the correction out-of-family Codex forced.
     """
-    exported = await _venue()._run_the_real_workflow(base_rate=1.0)
-    assert tuple(sorted(set(exported))) == _EXPECTED_SPANS, (
-        f"the B-72 venue now exports {sorted(set(exported))}, not {list(_EXPECTED_SPANS)}. "
-        "B-137's per-run volume figure is derived from this set and is stale — re-derive the "
-        "break-even run rate before quoting it"
-    )
-    assert len(exported) == 3, (
-        f"the venue exported {len(exported)} spans, not 3 — the break-even arithmetic in this "
-        "module's docstring is stale"
+    venue = _venue()
+    harness = venue._b72()
+    exporter = InMemorySpanExporter()
+    with tempfile.TemporaryDirectory() as cfg_tmp:
+        provider = venue._production_provider(
+            harness._config(pathlib.Path(cfg_tmp)), base_rate=base_rate
+        )
+    provider.add_span_processor(TailKeepSpanProcessor(downstream=SimpleSpanProcessor(exporter)))
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            harness._FakeTracerProvider,
+            "get_tracer",
+            lambda self, name, /: provider.get_tracer(name),
+        )
+        harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
+        harness._install_fake_od_stage4(mp)
+        harness._install_fake_webhook_composer_factory(mp, [])
+        with tempfile.TemporaryDirectory() as tmp:
+            result = await harness.api_run(
+                harness._FanOutSubAgentDispatchWorkflow(),
+                config=harness._config(pathlib.Path(tmp)),
+            )
+    assert result.status == "paused", f"the B-72 venue did not reach its gate: {result.status}"
+    provider.force_flush()
+    return sorted(s.name for s in exporter.get_finished_spans())
+
+
+def test_the_measured_cell_is_recorded_and_is_not_the_cell_whose_cap_b137_quotes() -> None:
+    """**The scope pin that stops the number being misused** (out-of-family Codex [P2]).
+
+    A first draft divided the `team-binding × self-hosted-server` cap by a count measured here.
+    The deployment surface selects the tail pipeline and the persona tier affects HITL behaviour,
+    so that division is invalid. This asserts the venue's real binding so the mismatch is visible
+    at the top of any future read rather than buried.
+    """
+    venue = _venue()
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = venue._b72()._config(pathlib.Path(tmp))
+    measured = (cfg.persona_tier.value, cfg.deployment_surface.value)
+    assert measured == _MEASURED_CELL, (
+        f"the B-72 harness now binds {measured}, not {_MEASURED_CELL}. If it now binds the team "
+        "cell, this module's counts CAN price B-137's cap and the derivation it currently "
+        "refuses becomes available — re-ground B-137 before assuming either way"
     )
 
 
 @pytest.mark.asyncio
-async def test_c1_exports_the_same_three_spans_deterministically_at_a_starving_rate() -> None:
-    """C1's per-run cost equals the fully-admitting cost — which is what makes ×10 the multiplier.
+async def test_the_shipped_configuration_exports_one_span_per_run() -> None:
+    """The baseline C1 is a cost against: what the real chain exports with everything admitted.
 
-    At `base_rate=0.0` the ratio arm admits nothing, so every span here is admitted by the
-    always-sampled arm via root inheritance. That makes this a decision, not a sample.
+    Only `hitl.gate.evaluated` survives. `workflow.envelope` and `pause.captured` are admitted at
+    the head but buffered and dropped at root close — the trace carries no §10.2 trigger.
+    """
+    exported = await _exported_through_the_real_chain(base_rate=1.0)
+    assert exported == ["hitl.gate.evaluated"], (
+        f"the real chain now exports {exported} at full admission, not ['hitl.gate.evaluated']. "
+        "B-137's per-run figures are derived from this and are stale"
+    )
+
+
+@pytest.mark.asyncio
+async def test_c1_exports_two_spans_per_run_deterministically() -> None:
+    """**The measurement.** C1's exported per-run count at a decidable rate.
+
+    At `base_rate=0.0` the ratio arm admits nothing, so everything here is admitted by the
+    always-sampled arm via root inheritance — a decision, not a sample.
     """
     venue = _venue()
     with venue._member_set(add=frozenset({venue._ENVELOPE})):
-        exported = await venue._run_the_real_workflow(base_rate=0.0)
-    assert tuple(sorted(set(exported))) == _EXPECTED_SPANS, (
-        f"under C1 at a starving rate the venue exported {sorted(set(exported))}, not "
-        f"{list(_EXPECTED_SPANS)} — C1 no longer delivers the whole trace and B-137's C7 half "
-        "must be re-grounded before this module's cost figure means anything"
+        exported = await _exported_through_the_real_chain(base_rate=0.0)
+    assert exported == ["hitl.gate.evaluated", "workflow.envelope"], (
+        f"under C1 the real chain now exports {exported}, not the measured pair. B-137's per-run "
+        "figure is stale — re-measure before quoting it"
     )
 
 
 @pytest.mark.asyncio
-async def test_nothing_is_exported_without_c1_at_a_starving_rate() -> None:
-    """The contrast that makes the C1 figure a *cost* rather than a baseline.
-
-    Without C1 the root loses its draw and every child inherits the drop, so the same run exports
-    nothing. C1's per-run cost is therefore the full 3 spans, not a delta against some smaller
-    admitted set.
-    """
-    exported = await _venue()._run_the_real_workflow(base_rate=0.0)
+async def test_without_c1_the_same_run_exports_nothing_at_a_starving_rate() -> None:
+    """The contrast that makes C1's count a marginal COST rather than a baseline."""
+    exported = await _exported_through_the_real_chain(base_rate=0.0)
     assert exported == [], (
         f"a starving rate now exports {exported} without C1 — the floor reaches the run by some "
-        "other route, and C1's marginal cost is smaller than this module computes"
-    )
-
-
-def test_the_break_even_run_rate_is_derived_from_live_substrate_not_hard_coded() -> None:
-    """**The derivation**, recomputed from the cap and the measured count rather than quoted.
-
-    `spans/sec = spans/run × runs/sec`, so `runs/sec at saturation = cap ÷ spans/run`. Both inputs
-    are read live, so the figure cannot go stale silently: if the cap moves or the venue's span
-    count moves, the assertion moves with them and the docstring's arithmetic is re-derived.
-    """
-    cap = PER_CELL_CARDINALITY_BUDGET[_TEAM_SELF].cell_rate_limit
-    assert cap == 10_000.0, (
-        f"the per-cell cap is now {cap}, not 10_000.0 — every figure in this module's docstring "
-        "is stale and must be re-derived"
-    )
-    spans_per_run = len(_EXPECTED_SPANS)
-    break_even = cap / spans_per_run
-    assert 3_300 < break_even < 3_400, (
-        f"break-even is now {break_even:.0f} runs/sec, outside the ~3,333 this module and B-137 "
-        "quote — re-derive before the council uses it"
-    )
-
-    # The reciprocal framing, which is the one a council can sanity-check against a real
-    # deployment: at ONE run per second, how span-heavy must a workflow be to reach the cap?
-    spans_per_run_to_saturate_at_one_run_per_sec = cap / 1.0
-    assert spans_per_run_to_saturate_at_one_run_per_sec == 10_000.0
-
-    # And the bound that stops the number being over-quoted: this venue is a LOWER bound on span
-    # volume, so the break-even above is an UPPER bound on the tolerable run rate.
-    assert PER_CELL_BASE_RATE_ENVELOPE[_TEAM_SELF].default_rate == 0.1, (
-        "the cell's base rate moved, so C1's multiplier is no longer x10 and the per-run cost "
-        "comparison in this module's docstring is stale"
+        "other route and C1's marginal cost is smaller than measured here"
     )
