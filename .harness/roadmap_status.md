@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d0b4ba1b29f4` |
+| `workspace_state_hash` | `8954b125aea8` |
 | `last_refreshed` | 2026-08-16T00:00:00Z |
-| `git_head` | `369d5545` —  |
+| `git_head` | `d288153a` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 119 |
 
@@ -43,7 +43,6 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
-| #1381 | `archive-superseded-post-1378` | — | — |
 
 ---
 
@@ -51,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1381 | 2026-08-16 | Bundled roadmap round: post-#1378 archived + live pointer refreshed to post-#1380. This is the owed follow-on terminating refresh (§12.2.1); the next-action pointer is unchanged because it was authored for this very round and still holds. |
 | 1380 | 2026-08-16 | B-183 owed Class 1 fork FILED; the per-tenant cap's quantity is contradicted INSIDE the OD spec lineage (contract body says cardinality, two later deltas' change-note prose says spans/sec while disclaiming any change to C-OD-11); no codified rule breaks the tie, so no disposition is recommended. B-182 DECOUPLED — #1378's one-decision-governs-both claim withdrawn. |
 | #1378 | 2026-08-16 | B-183 transited to design_substrate_gated with fork doc OWED; three-way quantity conflict located; gates B-182 |
 | #1376 | 2026-08-16 | B-167 step 3 precision verdict WITHDRAWN after four attempts; obstacle census shipped; step-1 figure corrected 386/285 to 388/287 |
 | #1374 | 2026-08-16 | B-184 (3) done: order-dependent green removed, all 44 tools modules cwd-agnostic, guard enforces self-sufficiency |
-| #1372 | 2026-08-16 | B-184 (1)+(2) done: standing tools/ test-coverage invariant; 44/44 executed; codex_loop just-dependency declared |
 
 ---
 
