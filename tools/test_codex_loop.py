@@ -7,9 +7,12 @@ Codex workflow docs. It records gates as evidence, not agent memory.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -498,6 +501,15 @@ def test_justfile_exposes_autonomous_loop_and_coderabbit_review() -> None:
     assert ".harness/codex_loop_state.json" in gitignore
 
 
+@pytest.mark.skipif(
+    shutil.which("just") is None,
+    reason=(
+        "drives the `just` recipes directly, so it needs the `just` binary on PATH. "
+        "CI runners do not install it. This dependency was invisible for as long as the "
+        "module ran nowhere (B-184); declaring it lets the other 15 tests execute in CI "
+        "instead of the whole module staying dark."
+    ),
+)
 def test_just_codex_loop_record_preserves_spaced_arguments() -> None:
     state_path = ROOT / ".harness" / "codex_loop_state.json"
     original = state_path.read_bytes() if state_path.exists() else None

@@ -412,6 +412,40 @@ jobs:
         working-directory: tools
         run: uv run python -m pytest semantic_overlay/test_overlay.py -q
 
+  tools-test-coverage-and-codex-loop:
+    # B-184 — two things pytest's 7 package testpaths cannot cover on their own.
+    #
+    # (1) The COVERAGE GUARD: every `tools/test_*.py` must either run somewhere or
+    #     carry a written exclusion reason. B-184 found 15 of 43 modules executed by
+    #     nothing at all, purely by drift; this keeps that from recurring.
+    # (2) `tools/test_codex_loop.py` itself: 16 tests costing ~82s. That is a ~46%
+    #     increase on the ~180s parity gate, which runs pre-push, so it is kept OUT of
+    #     that gate and executed HERE instead — CI latency is not the scarce resource a
+    #     local pre-push gate's is. B-184 close-out (a).
+    runs-on: ubuntu-latest
+    name: tools/ test coverage guard + codex-loop tests — blocking
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: tools/ test-coverage invariant
+        run: uv run python tools/tools_test_coverage_guard.py
+
+      - name: Coverage-guard tests
+        run: uv run python -m pytest tools/test_tools_test_coverage_guard.py -q
+
+      - name: Codex loop tests (kept out of the parity gate on latency)
+        run: uv run python -m pytest tools/test_codex_loop.py -q
+
   q1-review-gate:
     # R-CL-Q1 — provider-free structured review artifact gate. This tool lives
     # outside pytest's 7 package testpaths, so CI pins its tests explicitly.

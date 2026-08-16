@@ -9741,13 +9741,13 @@ items:
     needing cwd=ROOT). Running test_q4_packaging_gate.py from inside tools/ reports 4 FAILED; from
     the root it passes 4/4. An audit that runs these from the wrong cwd manufactures failures.
   close_out: >-
-    (1) DECIDE test_codex_loop.py: 16 tests, 82s, a ~46% increase on a ~180s gate. Either accept the cost, move it to a
-    non-blocking or nightly lane, or profile it -- do not silently leave it unrun, which is the
-    state this row exists to end.
-    (2) Make the audit a standing invariant: a cheap guard enumerating tools/test_*.py,
-    subtracting the executed set, and requiring every remainder to carry an explicit excluded
-    marker WITH A REASON. This arc's own mis-classification is the argument for it -- a filename
-    is not a gate, and nothing today distinguishes deliberately excluded from forgotten.
+    (1) and (2) are DONE at #1372. The guard is tools/tools_test_coverage_guard.py: every
+    tools/test_*.py must be executed by a workflow run block, the parity script or the justfile,
+    or carry an EXCLUSIONS entry WITH A REASON. Two-way (a stale exclusion fails too) and it
+    PARSES workflow YAML rather than scanning text. 14 tests, mutation-probed. test_codex_loop.py
+    was not excluded from execution at all -- 82s is a reason to move a module to a cheaper lane,
+    not to stop running it -- so it has its own CI job and stays out of the pre-push gate on
+    latency. EXCLUSIONS is empty; the guard reports 44 modules / 44 executed / 0 excluded.
     (3) Normalise the two import conventions, or document the required cwd per file, so the next
     audit cannot manufacture failures by running from the wrong venue.
   council: >-
