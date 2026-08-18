@@ -34,7 +34,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 
 | Field | Value |
 |---|---|
-| Status | **Accepted on merge of PR #1393** — exit gate met: out-of-family `just codex-review` round 1 on the PR (7 P1 / 4 P2, all absorbed in-plan, see §7 item 4) → round 2 clean. The spec's clearance marker (same PR) admits the plan for execution only because this gate is met in the same PR. |
+| Status | **Accepted on merge of PR #1393, with the review record in §7 items 4–7** — exit gate = out-of-family `just codex-review` rounds on the PR, each round's findings absorbed in-plan before the next; the terminal round's verdict and any residual classes are recorded in §7 (item 7) BEFORE merge, never claimed in advance. The spec's clearance marker (same PR) admits the plan only under this recorded gate. |
 | Version | v1.0 |
 | Date | 2026-08-18 |
 | Repo | `17011f89c` (every `file:line` below is pinned there, matching the spec's `[V]` set; re-verified in this authoring session) |
@@ -42,7 +42,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 | Skill | `writing-plans` (structure) + `implementation-planner` (atomic-decomposition discipline §2–§7) |
 | Source-set | `Spec_HE_Loop_Lanes_v1.md` (35 contracts, §5 files table, §6 build order, §8.1 manifest, §11 open items); `.harness/adr/ADR-HE-1..4` (context only — the spec is the canonical input) |
 | Entry authorization | `/context-restore` → operator: "the specification … is complete. Now we move to the next phase to /writing-plans" |
-| Exit gate | Plan review = lean protocol on the doc-only PR: `just codex-review` to convergence (round 1: 7 P1 / 4 P2 absorbed; round 2: see §7 item 4). No separate marker for the plan (H_E tooling; spec §14's marker is for the spec, and it names this gate) |
+| Exit gate | Plan review = lean protocol on the doc-only PR: `just codex-review` rounds, absorbed round by round (§7 items 4–7 are the durable record; item 7 states the terminal verdict + residual classes). No separate marker for the plan (H_E tooling; spec §14's marker is for the spec, and it names this gate) |
 
 ## Shape decision (front-matter)
 
@@ -261,6 +261,8 @@ def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Pat
         fr.append_row(fr.make_row(_core(finding_id=fid, location="elsewhere"), _env(record_kind="finding_adjudication", disposition="accepted", disposition_actor="operator")), p)
     with pytest.raises(fr.RecordError, match="original producer"):   # producer swapped to evade the self-disposition ban
         fr.append_row(fr.make_row(_core(finding_id=fid, producer="operator"), _env(record_kind="finding_adjudication", disposition="accepted", disposition_actor="merge-gate")), p)
+    with pytest.raises(fr.RecordError, match="core field"):          # envelope fields are immutable too (round-3 P2)
+        fr.append_row(fr.make_row(_core(finding_id=fid), _env(lane_id="other-lane", record_kind="finding_adjudication", disposition="accepted", disposition_actor="operator")), p)
     with pytest.raises(fr.RecordError, match="unknown finding_id"):
         fr.append_row(fr.make_row(_core(finding_id="never-seen"), _env(record_kind="finding_adjudication", disposition="accepted", disposition_actor="operator")), p)
     fr.append_row(fr.make_row(_core(finding_id=fid), _env(record_kind="finding_adjudication", disposition="accepted", disposition_actor="operator")), p)  # legal
@@ -463,7 +465,8 @@ def validate(row: dict) -> None:
         )
 
 
-_CORE_IMMUTABLE = ("location", "observed_evidence", "expected_contract", "severity", "finding_type", "lineage_claim", "producer")
+_CORE_IMMUTABLE = ("location", "observed_evidence", "expected_contract", "severity", "finding_type", "lineage_claim", "producer",
+                   "arc_id", "lane_id", "head_sha", "base_sha", "diff_digest", "round_n", "cause_attribution")   # everything but ts/record_kind/disposition/disposition_actor/unique_catch
 
 
 def _check_adjudication_against_original(row: dict, path: Path) -> None:
@@ -1486,13 +1489,27 @@ def test_phase0_skip_counts_as_fail(monkeypatch):
     assert lv.phase0_verdict([lv.Result(_row(tag="phase0"), "skip", "docker-daemon-absent")]) == 1
 
 
-# mutation-probe: drop the `if r.mutation_probe and not pinned` branch in coverage_gaps()
+# mutation-probe: match pinned node ids by substring instead of exact equality in coverage_gaps()
 def test_coverage_gap_when_probe_never_pinned(tmp_path: Path, monkeypatch):
     log = tmp_path / "mp.jsonl"
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_x.py::t")])
-    assert lv.coverage_gaps(log) and lv.coverage_gaps(log)[0].artifact.endswith("::t")
+    assert lv.coverage_gaps(log) and lv.coverage_gaps(log)[0][1].endswith("::t")
     log.write_text(json.dumps({"test": "uv run pytest tools/test_x.py::t -q", "rc": 0}) + "\n")
     assert lv.coverage_gaps(log) == []
+
+
+def test_file_level_row_requires_every_annotation_exactly(tmp_path: Path, monkeypatch):
+    """One pinned test in a file must NOT count as coverage for the file's other annotated probes."""
+    monkeypatch.setattr(lv, "REPO", tmp_path)
+    (tmp_path / "tools").mkdir(); (tmp_path / "tools" / "test_y.py").write_text(
+        "# mutation-probe: a\ndef test_a(): pass\n\n# mutation-probe: b\n@pytest.mark.x\ndef test_b(): pass\n")
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_y.py")])
+    log = tmp_path / "mp.jsonl"; log.write_text(json.dumps({"test": "uv run pytest tools/test_y.py::test_a -q", "rc": 0}) + "\n")
+    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_y.py::test_b"]
+    log.write_text(log.read_text() + json.dumps({"test": "uv run pytest tools/test_y.py::test_b -q", "rc": 0}) + "\n")
+    assert lv.coverage_gaps(log) == []
+    log.write_text(json.dumps({"test": "uv run pytest tools/test_y.py -q", "rc": 0}) + "\n")   # whole-file run is NOT per-probe evidence
+    assert len(lv.coverage_gaps(log)) == 2
 
 
 def test_unknown_skip_reason_is_fail(monkeypatch):
@@ -1598,7 +1615,11 @@ def phase0_verdict(results: list[Result]) -> int:
     return 0 if all(r.status == "pass" for r in results) else 1
 
 
-def _pinned_tests(log_path: Path) -> set[str]:
+_ANNOT = re.compile(r"# mutation-probe: .*\n(?:@[^\n]*\n)*def (test_\w+)")
+
+
+def _pinned_nodeids(log_path: Path) -> set[str]:
+    """Node ids of PINNED probes: the token after `pytest` in the logged test command (normalized, exact)."""
     if not log_path.exists():
         return set()
     out = set()
@@ -1606,19 +1627,38 @@ def _pinned_tests(log_path: Path) -> set[str]:
         if not line.strip():
             continue
         e = json.loads(line)
-        if e.get("rc") == 0:
-            out.add(e["test"])
+        if e.get("rc") != 0:
+            continue
+        toks = e["test"].split()
+        if "pytest" in toks:
+            out.add(toks[toks.index("pytest") + 1])
     return out
 
 
-def coverage_gaps(log_path: Path = PROBE_LOG) -> list[Row]:
-    pinned = _pinned_tests(log_path)
+def required_probes(row: Row) -> list[str]:
+    """Every `# mutation-probe:` annotation the row's artifact carries -> its exact node id (Codex round-3 P1:
+    substring matching let one pinned test cover a whole file). A node-id artifact requires exactly itself."""
+    kind, _, target = row.artifact.partition(":")
+    if kind != "pytest":
+        return [target] if row.mutation_probe else []
+    file_part, _, node = target.partition("::")
+    if node:
+        return [target]
+    path = REPO / file_part
+    if not path.exists():
+        return [target]           # not yet landed: counts as a gap until the file exists and its probes are pinned
+    return [f"{file_part}::{name}" for name in _ANNOT.findall(path.read_text())]
+
+
+def coverage_gaps(log_path: Path = PROBE_LOG) -> list[tuple[Row, str]]:
+    pinned = _pinned_nodeids(log_path)
     gaps = []
     for r in MANIFEST:
-        target = r.artifact.partition(":")[2]
-        hit = any(target in t for t in pinned)
-        if r.mutation_probe and not hit:
-            gaps.append(r)
+        if not r.mutation_probe:
+            continue
+        for node in required_probes(r):
+            if node not in pinned:
+                gaps.append((r, node))
     return gaps
 
 
@@ -1627,8 +1667,8 @@ def main(argv: list[str] | None = None) -> int:
     mode = args[0] if args else "verify"
     if mode == "coverage":
         gaps = coverage_gaps()
-        for g in gaps:
-            print(f"UNPROBED {g.contract} {g.artifact}")
+        for row, node in gaps:
+            print(f"UNPROBED {row.contract} {node}")
         return 1 if gaps else 0
     rows = phase0_rows() if mode == "phase0" else MANIFEST
     results = [run_row(r) for r in rows]
@@ -1833,17 +1873,35 @@ def test_codex_review_failover_flag_runs_gemini_once_and_blocks(monkeypatch, tmp
     assert calls == [1]
     kinds = [r["record_kind"] for r in cr.fr.read_rows(tmp_path / "g.jsonl")]
     assert kinds == ["reviewer_unavailable"]                 # primary's row only; the gemini subprocess is the sole emitter of its own rows
+
+
+def test_failover_preflight_failure_still_records_both_reasons(monkeypatch, tmp_path):
+    """`just gemini-review` dies at `_require-antigravity` → the subprocess wrote nothing → the failover path emits."""
+    monkeypatch.setattr(cr.fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
+    monkeypatch.setattr(cr.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 1, "", "ERROR: agy (Antigravity CLI) not found on PATH."))
+    monkeypatch.setattr(cr.rw, "compute_binding", lambda *a, **k: dict(EXPECTED))
+    monkeypatch.setattr(cr, "_gemini_config_hash", lambda: "x")
+    out = cr._run_gemini_failover(Path("."), "main")
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and out.failure_class == "permanent"
+    rows = cr.fr.read_rows(tmp_path / "g.jsonl")
+    assert len(rows) == 1 and rows[0]["producer"] == "gemini_review_wrapper" and rows[0]["record_kind"] == "reviewer_unavailable"
 ```
 - [ ] **Step 2: RED** — `--failover` unrecognised.
 - [ ] **Step 3: Implement** in `tools/codex_review.py`:
 ```python
 def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
     """Identical bar (C-HE-17 §1): the gemini wrapper's own schema parse; exit code read back as terminal."""
+    before = sum(1 for r in fr.read_rows() if r["producer"] == "gemini_review_wrapper")
     proc = subprocess.run(["just", "gemini-review", base], cwd=repo, capture_output=True, text=True)
     binding = rw.compute_binding(repo, base, channel="gemini", prompt_version="gemini-review-v2-json", config_hash="failover")
     outcome = rw.parse_verdict("gemini", proc.stdout, {**binding, "config_hash": _gemini_config_hash()})
     if outcome.terminal == "REVIEWER_UNAVAILABLE":
         outcome.failure_class = rw.classify("gemini", proc.stdout + "\n" + proc.stderr)
+    after = sum(1 for r in fr.read_rows() if r["producer"] == "gemini_review_wrapper")
+    if after == before:
+        # The recipe died at its `_require-antigravity` preflight (or the wrapper never ran): no row was written by the
+        # subprocess, so BOTH reasons would not be on record (C-HE-17). Emit here -- and only here (Codex round-3 P2).
+        _emit_rows(outcome, producer="gemini_review_wrapper", channel="gemini")
     return outcome
 ```
 (`_gemini_config_hash()` imports `agy_review.gemini_binding`'s hash rule so the binding matches — factor it as `agy_review.gemini_config_hash()` in U-HE-06 and import it here.) In `main()`: add `p.add_argument("--failover", action="store_true")`; when set:
@@ -2782,6 +2840,18 @@ def test_cas_loser_revalidates_and_raises(qdir, monkeypatch):
     assert rs.current("pr-5")[1]["state"] == "merged"
 
 
+# mutation-probe: drop the holder check in transition.build for open->terminal
+def test_only_holder_terminalizes_open_reservation(qdir):
+    rs.reserve("pr-7b", lane_id="A", branch="b", arc_type="inventing"); rs.transition("pr-7b", "open", lane_id="A")
+    with pytest.raises(rs.IllegalTransition, match="requires the holder"):
+        rs.transition("pr-7b", "merged", lane_id="B")
+    with pytest.raises(rs.IllegalTransition, match="requires the holder"):
+        rs.transition("pr-7b", "abandoned", lane_id="B", superseded_by="pr-8")
+    assert rs.transition("pr-7b", "merged", lane_id="A")["state"] == "merged"
+    rs.reserve("pr-7c", lane_id="A", branch="b", arc_type="inventing")
+    assert rs.transition("pr-7c", "abandoned", lane_id="OTHER", superseded_by="pr-9")["state"] == "abandoned"   # pending: any lane
+
+
 def test_abandoned_requires_superseded_by(qdir):
     rs.reserve("pr-7", lane_id="A", branch="b", arc_type="inventing"); rs.transition("pr-7", "open", lane_id="A")
     with pytest.raises(rs.ReservationError, match="superseded_by"):
@@ -2916,7 +2986,7 @@ _STATE_KEYS = frozenset({"state", "generation", "prev_generation", "seq", "arc_i
 #: The ONLY payload fields a caller may set after `reserve()` (Codex round-1 P1): back-fills + sensors + pilot tag.
 #: `lane_id` moves only via transition(pending->open) or transfer_holder(); `arc_type`/`arc_type_declared_at`/
 #: `reserved_at`/`superseded_by`/`phases`/`round_outcomes` have their own dedicated writers.
-PAYLOAD_MUTABLE = frozenset({"pr", "head_sha", "base_sha", "attested_merge_tree", "concurrent_lanes_min",
+PAYLOAD_MUTABLE = frozenset({"pr", "head_sha", "base_sha", "attested_merge_tree", "merge_sha", "concurrent_lanes_min",
                              "concurrent_lanes_max", "pilot_run_id"})
 TRANSITION_MUTABLE = PAYLOAD_MUTABLE | {"concurrent_lanes_at_open"}
 
@@ -2935,6 +3005,10 @@ class IllegalTransition(ReservationError):
 
 class ChainError(ReservationError):
     """superseded_by chain cycle or depth > CHAIN_DEPTH_CAP."""
+
+
+class LoopStatusWriteError(ReservationError):
+    """The shared loop_status.md could not be written -- an operator recovery signal would be lost."""
 
 
 def reservations_root() -> Path:
@@ -3013,7 +3087,7 @@ def reserve(arc_id: str, *, lane_id: str, branch: str, arc_type: str, arc_type_d
         "arc_id": arc_id, "generation": 1, "prev_generation": None, "state": "pending", "lane_id": lane_id,
         "branch": branch, "pr": None, "head_sha": None, "base_sha": None, "attested_merge_tree": None,
         "arc_type": arc_type, "arc_type_declared_at": arc_type_declared_at, "reserved_at": ts, "transitioned_at": ts,
-        "seq": alloc_seq(), "superseded_by": None, "concurrent_lanes_at_open": None, "phases": {}, "round_outcomes": {},
+        "seq": alloc_seq(), "superseded_by": None, "concurrent_lanes_at_open": None, "phases": {}, "round_outcomes": {}, "merge_sha": None,
         "_provenance": _provenance(),
     }
     try:
@@ -3049,6 +3123,10 @@ def transition(arc_id: str, to_state: str, *, lane_id: str, updates: dict | None
     def build(head: dict) -> dict:
         if (head["state"], to_state) not in LEGAL_TRANSITIONS:
             raise IllegalTransition(f"{arc_id}: {head['state']}->{to_state} is illegal from head gen {head['generation']}")
+        if head["state"] == "open" and head["lane_id"] != lane_id:
+            # holder-only: an `open` reservation is terminalized only by the lane that holds it (C-HE-03 §6;
+            # Codex round-3 P1). pending->abandoned by a superseding arc has no holder yet and stays open to any lane.
+            raise IllegalTransition(f"{arc_id}: {head['state']}->{to_state} requires the holder ({head['lane_id']}), not {lane_id}")
         head["state"] = to_state
         head["transitioned_at"] = now_iso()
         head["superseded_by"] = superseded_by or head.get("superseded_by")
@@ -3190,12 +3268,16 @@ def gc(*, now: datetime | None = None) -> list[Path]:
 
 def emit_loop_row(kind: str, lane_id: str, cause: str, detail: str) -> None:
     """Append a structured row to the SHARED loop_status.md through loop_lib.sh -- one writer of the
-    ledger format (C-HE-09 §3, U-HE-29 `loop_log_structured`). Never raises into the state machine."""
+    ledger format (C-HE-09 §3, U-HE-29 `loop_log_structured`). RAISES LoopStatusWriteError on write failure."""
     script = 'source tools/hooks/lib.sh; source tools/hooks/loop_lib.sh; loop_log_structured "$1" "$2" "$3" "$4"'
     try:
-        subprocess.run(["bash", "-c", script, "_", kind, lane_id, cause, detail], cwd=REPO, check=False, timeout=10)
+        proc = subprocess.run(["bash", "-c", script, "_", kind, lane_id, cause, detail], cwd=REPO, check=False, timeout=10, capture_output=True, text=True)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"reservations: loop row not written ({exc})", file=sys.stderr)
+        raise LoopStatusWriteError(f"loop row not written ({exc})") from exc
+    if proc.returncode != 0:
+        # An unrecorded DEFERRED-HIL / NOTIFY is a lost operator signal: propagate (Codex round-3 P2). Callers that
+        # hold durable state elsewhere (a blocked lease sidecar) still surface this as a hard error to stderr + exit.
+        raise LoopStatusWriteError(f"loop row not written: {proc.stderr.strip() or 'loop_log_structured failed'}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3848,6 +3930,20 @@ def test_reclaim_two_step_and_transfers_merge_authority_only(door):
     assert (md.DOOR / f"reclaimed.{l['lease_token']}").exists()
 
 
+# mutation-probe: return `read_lease() or fresh` in reclaim() without checking the token
+def test_reclaim_never_adopts_a_foreign_lease(door, monkeypatch):
+    l = _acq(lane="A"); dead = {**l, "pid": 999999}
+    real_publish = md._publish_fresh
+    def sneak_in(fresh):                       # another lane grabs the free door in the move->publish window
+        rs.reserve("pr-9", lane_id="C", branch="b", arc_type="inventing"); rs.open_with_sensor("pr-9", "C")
+        md.acquire(lane_id="C", arc_id="pr-9", pr=9, head_sha="h"*40, base_sha="b"*40)
+        real_publish(fresh)                    # FileExistsError swallowed inside
+    monkeypatch.setattr(md, "_publish_fresh", sneak_in)
+    with pytest.raises(md.LeaseError, match="lost the door"):
+        md.reclaim(dead, lane_id="B", ground_state="OPEN")
+    assert md.read_lease()["lane_id"] == "C"    # the foreign lease is untouched; nothing drove pr 1
+
+
 # mutation-probe: drop the `_publish_fresh(m["fresh_lease"])` completion in complete_dead_marker()
 def test_crashed_reclaimer_completed_by_third_party_publishes_fresh_lease(door):
     """Reclaimer wins the marker (payload carries the fresh lease), moves the old lease aside, then dies before
@@ -4078,7 +4174,12 @@ def reclaim(lease: dict, *, lane_id: str, ground_state: str) -> dict:
         raise MarkerLost("reclaim marker already taken")
     _move_lease(lease["lease_token"], "reclaimed")
     _publish_fresh(fresh)
-    return read_lease() or fresh
+    live = read_lease()
+    if not live or live["lease_token"] != fresh["lease_token"]:
+        # The move→publish window is not atomic on POSIX (no portable two-name swap): another acquirer may have taken
+        # the momentarily-free door. NEVER adopt an unrelated lease (Codex round-3 P1): fail loud; the caller re-gates.
+        raise LeaseError(f"reclaim lost the door to another acquirer (holder {live and live['lane_id']}); not resumed")
+    return live
 
 
 def _publish_fresh(fresh: dict) -> None:
@@ -4500,6 +4601,8 @@ def land(pr: int, *, lane_id: str, arc_id: str, ground: Ground, refresh: Callabl
         _kill_after("confirm")
         merge_sha = (v.get("mergeCommit") or {}).get("oid") or ""
         if rs.current(arc_id)[1]["state"] != "merged":
+            if merge_sha:
+                rs.update_payload(arc_id, {"merge_sha": merge_sha})              # the landing SHA (squash commit) joins detections
             rs.transition(arc_id, "merged", lane_id=lane_id)                     # (vi) -- ground truth: it IS merged
         _kill_after("reservation-merged")
         if merge_sha and ground.git_first_parent(merge_sha) != base_sha:        # BASE_TOCTOU detection (C-HE-12 §2)
@@ -4898,47 +5001,68 @@ def main(argv=None) -> int:
         r = subprocess.run(["gh", "api", "-X", "PUT", f"repos/{_repo()}/branches/main/protection", "--input", "-"],
                            input=json.dumps(desired), capture_output=True, text=True, timeout=60)
         if r.returncode != 0: raise SystemExit(f"apply failed: {r.stderr.strip()}")
-        print("applied; run `just main-protection-verify`"); return 0
+        # C-HE-08 §4: the settings are exercised BEFORE they are allowed to persist. The tiebreaker needs strict:true
+        # live to be meaningful, so apply is provisional: a FAIL rolls back to the pre-change state (Codex round-3 P1).
+        print("applied provisionally; running the tiebreaker (FAIL → automatic rollback)")
+        rc = tiebreaker()
+        if rc != 0:
+            rb = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
+            if cur is not None:   # there was a prior protection: restore it
+                subprocess.run(["gh", "api", "-X", "PUT", f"repos/{_repo()}/branches/main/protection", "--input", "-"], input=json.dumps(cur), capture_output=True, text=True, timeout=60)
+            raise SystemExit(f"tiebreaker FAILED → protection rolled back (rc={rb.returncode}); settings NOT persisted")
+        print("tiebreaker PASS; protection persists. Run `just main-protection-verify`."); return 0
     if a.cmd == "rollback":
         r = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
         print("rolled back (pre-change show output is in the evidence log)"); return r.returncode
     # tiebreaker: scratch PR under strict:true + stale-refresh-branch check (HE-1 O4; C10-T8). Runs OUTSIDE loop mode.
     if _loop_mode(): raise SystemExit("tiebreaker is a live probe; run outside loop mode")
-    ts = time.strftime("%Y%m%d%H%M%S", time.gmtime()); br = f"mp-tiebreaker-{ts}"
-    def sh(*c): 
-        q = subprocess.run(list(c), capture_output=True, text=True, timeout=120)
+    return tiebreaker()
+
+
+def tiebreaker() -> int:
+    """C-HE-08 §4 (HE-1 O4; C10-T8): exercise strict:true on a scratch PR, then the load-bearing parameter -- a
+    refresh-shaped PR branched from the since-superseded main is CAUGHT pre-merge or fast-forwards cleanly.
+    Runs in an ISOLATED temporary worktree (never switches the operator's checkout; never picks up staged
+    changes -- Codex round-3 P1) and compares the stale landing against the main SHA captured BEFORE that merge."""
+    import tempfile
+    ts = time.strftime("%Y%m%d%H%M%S", time.gmtime()); br = f"mp-tiebreaker-{ts}"; br2 = f"mp-tiebreaker-stale-{ts}"
+    wt = Path(tempfile.mkdtemp(prefix="mp-tiebreaker-"))
+    def sh(*c, cwd=None):
+        q = subprocess.run(list(c), capture_output=True, text=True, timeout=180, cwd=cwd or wt)
         if q.returncode != 0: raise SystemExit(f"{' '.join(c)}: {q.stderr.strip()}")
         return q.stdout.strip()
-    base = sh("git", "rev-parse", "origin/main")
-    sh("git", "checkout", "-b", br, "origin/main"); sh("git", "commit", "--allow-empty", "-m", f"chore: main-protection tiebreaker {ts}"); sh("git", "push", "-u", "origin", br)
-    url = sh("gh", "pr", "create", "--title", f"chore: main-protection tiebreaker {ts}", "--body", "scratch PR; C-HE-08 §4"); pr = url.rsplit("/", 1)[-1]
-    print(f"tiebreaker: waiting for checks on #{pr} (strict:true requires up-to-date + green)")
-    sh("gh", "pr", "checks", pr, "--watch"); head = sh("git", "rev-parse", "HEAD")
-    m = subprocess.run(["gh", "pr", "merge", pr, "--squash", "--match-head-commit", head], capture_output=True, text=True, timeout=120)
-    print("merge under strict:true:", "OK" if m.returncode == 0 else f"REFUSED: {m.stderr.strip()}")
-    # the load-bearing parameter: a refresh-shaped PR branched from the since-superseded main
-    br2 = f"mp-tiebreaker-stale-{ts}"; sh("git", "checkout", "-b", br2, base); sh("git", "commit", "--allow-empty", "-m", "ops: stale refresh-shaped commit"); sh("git", "push", "-u", "origin", br2)
-    url2 = sh("gh", "pr", "create", "--title", f"chore: stale-base tiebreaker {ts}", "--body", "C-HE-08 §4 stale-branch check"); pr2 = url2.rsplit("/", 1)[-1]
-    # The load-bearing parameter is the STALE PR alone (Codex round-2 P1): the first scratch merge is a precondition,
-    # never the verdict. PASS iff strict:true CATCHES it pre-merge (definitive stale state, or an attempted merge is
-    # REFUSED) or, if GitHub does let it merge, the landing is a clean fast-forward on the current main.
-    if m.returncode != 0:
-        print(f"precondition failed: scratch merge refused ({m.stderr.strip()})"); return 1
-    state = sh("gh", "pr", "view", pr2, "--json", "mergeStateStatus", "--jq", ".mergeStateStatus")
-    if state in ("BEHIND", "BLOCKED", "DIRTY"):
-        verdict, why = "PASS", f"stale PR caught pre-merge (mergeStateStatus={state})"
-    else:
-        head2 = sh("git", "rev-parse", "HEAD")
-        m2 = subprocess.run(["gh", "pr", "merge", pr2, "--squash", "--match-head-commit", head2], capture_output=True, text=True, timeout=120)
-        if m2.returncode != 0:
-            verdict, why = "PASS", f"stale merge REFUSED under strict:true ({m2.stderr.strip()[:120]})"
+    sh("git", "fetch", "-q", "origin", cwd=REPO)
+    sh("git", "worktree", "add", "-q", "--detach", str(wt), "origin/main", cwd=REPO)
+    try:
+        base = sh("git", "rev-parse", "origin/main")
+        sh("git", "checkout", "-q", "-b", br); sh("git", "commit", "-q", "--allow-empty", "-m", f"chore: main-protection tiebreaker {ts}"); sh("git", "push", "-q", "-u", "origin", br)
+        url = sh("gh", "pr", "create", "--title", f"chore: main-protection tiebreaker {ts}", "--body", "scratch PR; C-HE-08 §4"); pr = url.rsplit("/", 1)[-1]
+        print(f"tiebreaker: waiting for checks on #{pr} (strict:true requires up-to-date + green)")
+        sh("gh", "pr", "checks", pr, "--watch"); head = sh("git", "rev-parse", "HEAD")
+        m = subprocess.run(["gh", "pr", "merge", pr, "--squash", "--match-head-commit", head], capture_output=True, text=True, timeout=120, cwd=wt)
+        if m.returncode != 0:
+            print(f"precondition failed: scratch merge refused under strict:true ({m.stderr.strip()})"); return 1
+        # the load-bearing parameter: a refresh-shaped PR branched from the since-superseded main
+        sh("git", "checkout", "-q", "-b", br2, base); sh("git", "commit", "-q", "--allow-empty", "-m", "ops: stale refresh-shaped commit"); sh("git", "push", "-q", "-u", "origin", br2)
+        url2 = sh("gh", "pr", "create", "--title", f"chore: stale-base tiebreaker {ts}", "--body", "C-HE-08 §4 stale-branch check"); pr2 = url2.rsplit("/", 1)[-1]
+        state = sh("gh", "pr", "view", pr2, "--json", "mergeStateStatus", "--jq", ".mergeStateStatus")
+        if state in ("BEHIND", "BLOCKED", "DIRTY"):
+            verdict, why = "PASS", f"stale PR caught pre-merge (mergeStateStatus={state})"
         else:
-            sh("git", "fetch", "-q", "origin"); new_main = sh("git", "rev-parse", "origin/main"); first_parent = sh("git", "rev-parse", f"{new_main}^1")
-            landed_on_current = first_parent == sh("git", "rev-parse", "origin/main~1")
-            verdict, why = ("PASS", "stale PR fast-forwarded cleanly onto the current main") if landed_on_current else ("FAIL", f"stale PR landed off the current main (first parent {first_parent[:12]})")
-    print(f"tiebreaker: {verdict} — {why}")
-    subprocess.run(["gh", "pr", "close", pr2, "--delete-branch"], capture_output=True, text=True, timeout=60)
-    return 0 if verdict == "PASS" else 1
+            sh("git", "fetch", "-q", "origin"); pre = sh("git", "rev-parse", "origin/main")       # main BEFORE the stale merge
+            head2 = sh("git", "rev-parse", "HEAD")
+            m2 = subprocess.run(["gh", "pr", "merge", pr2, "--squash", "--match-head-commit", head2], capture_output=True, text=True, timeout=120, cwd=wt)
+            if m2.returncode != 0:
+                verdict, why = "PASS", f"stale merge REFUSED under strict:true ({m2.stderr.strip()[:120]})"
+            else:
+                sh("git", "fetch", "-q", "origin"); new_main = sh("git", "rev-parse", "origin/main")
+                first_parent = sh("git", "rev-parse", f"{new_main}^1")
+                verdict, why = ("PASS", "stale PR fast-forwarded cleanly onto the pre-merge main") if first_parent == pre else ("FAIL", f"stale PR landed off the pre-merge main (first parent {first_parent[:12]} != {pre[:12]})")
+        print(f"tiebreaker: {verdict} — {why}")
+        subprocess.run(["gh", "pr", "close", pr2, "--delete-branch"], capture_output=True, text=True, timeout=60, cwd=wt)
+        return 0 if verdict == "PASS" else 1
+    finally:
+        subprocess.run(["bash", str(REPO / "tools" / "hooks" / "safe-worktree-remove.sh"), str(wt)], capture_output=True, text=True, timeout=120, cwd=REPO)
 
 
 if __name__ == "__main__":
@@ -4959,7 +5083,7 @@ main-protection-tiebreaker:
     uv run python tools/main_protection.py tiebreaker
 ```
 - [ ] **Step 4: GREEN** unit tests; register `Row("C-HE-08", "just:main-protection-verify", "phase0", "local", False, ("gh-auth-absent",))` and `Row("C-HE-08", "live:main-protection-tiebreaker + apply (operator-gated; evidence log)", "operator-gated", "loop, live", False)`.
-- [ ] **Step 5: The operator gate (the ONE decision this unit surfaces).** Run `just main-protection-show` (expect 404 today) and `just main-protection-apply` **outside loop mode** — it prints the diff and asks one AskUserQuestion: *"Apply branch protection to `main` now? [diff shown]"*. Then `just main-protection-tiebreaker` and `just main-protection-verify` (must be GREEN before `lanes-phase0-check` can pass). Record `show` (pre), `apply` (post), tiebreaker PASS lines in `.harness/plan/evidence-log-he-loop-lanes.md` (created in U-HE-44).
+- [ ] **Step 5: The operator gate (the ONE decision this unit surfaces).** Run `just main-protection-show` (expect 404 today) and `just main-protection-apply` **outside loop mode** — it prints the diff and asks one AskUserQuestion: *"Apply branch protection to `main` now? [diff shown]"*; on confirm it applies **provisionally, runs the tiebreaker in a throwaway worktree, and rolls back automatically on FAIL** (C-HE-08 §4: tiebreaker before enforcing). Then `just main-protection-verify` (must be GREEN before `lanes-phase0-check` can pass). Record `show` (pre), `apply` (post), tiebreaker PASS lines in `.harness/plan/evidence-log-he-loop-lanes.md` (created in U-HE-44).
 - [ ] **Step 6: Commit** — `git add tools/main_protection.py tools/test_main_protection.py justfile tools/lanes_verify.py tools/codex-parity-check.sh && git commit -m "feat(he-lanes): U-HE-27 main branch-protection recipes + verify phase0 row (C-HE-08 §2-5)"`.
 
 ---
@@ -5099,7 +5223,8 @@ loop_status_path() {
 # escaped pipes, so anything appended AFTER detail would be glued into the rendered reason.
 loop_log() {
   local kind="$1"; shift
-  loop_log_structured "$kind" "${HARNESS_LANE_ID:--}" "${LOOP_CAUSE:--}" "$@"
+  loop_log_structured "$kind" "${HARNESS_LANE_ID:--}" "${LOOP_CAUSE:--}" "$@" || true   # hooks: never break the caller
+  return 0
 }
 loop_log_structured() {
   local kind="$1" lane="$2" cause="$3"; shift 3
@@ -5108,7 +5233,13 @@ loop_log_structured() {
   [ -z "$p" ] && return 0
   lane=$(printf '%s' "$lane" | tr -d ' \t|'); cause=$(printf '%s' "$cause" | tr -d ' \t|')
   detail=$(printf '%s' "$detail" | tr '\n' ' ' | sed 's/|/\\|/g')
-  printf '| %s | %s | lane=%s;cause=%s | %s |\n' "$(loop_now)" "$kind" "${lane:--}" "${cause:--}" "$detail" >> "$p" 2>/dev/null || true
+  # Returns 1 when the shared ledger cannot be written (Codex round-3 P2): coordination callers (reservations.py,
+  # merge_door.py via emit_loop_row) MUST propagate -- an unrecorded DEFERRED-HIL/NOTIFY is a lost recovery signal.
+  # Legacy hook callers go through loop_log, which keeps its always-0 contract.
+  if ! printf '| %s | %s | lane=%s;cause=%s | %s |\n' "$(loop_now)" "$kind" "${lane:--}" "${cause:--}" "$detail" >> "$p" 2>/dev/null; then
+    echo "loop_log_structured: cannot write $p" >&2; return 1
+  fi
+  return 0
 }
 ```
 Shared awk prelude (a bash variable sourced into every reducer):
@@ -5135,6 +5266,7 @@ loop_notify_summary() {
 }
 ```
 `loop_pending_hil_summary`'s trailing text `See .harness/loop_status.md` → `See $(loop_status_path)`; header comment `:6` reworded; `session-start.sh` prints `loop_notify_summary` on its own line after the HIL summary. Pointer sweep: the four skill files' literals → *"the shared `loop_status.md` (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`)"*.
+- [ ] **Step 3b: write-failure test** (`test_loop_lib.sh`): `HARNESS_LOOP_STATUS_PATH=/nonexistent-dir/x.md loop_log_structured NOTIFY L1 a:b:c "detail"; [ $? -eq 1 ] && ok "structured write failure returns 1" || bad "..."`; and `loop_log NOTIFY x` under the same path returns 0 (hook contract preserved).
 - [ ] **Step 4: GREEN** (`bash tools/hooks/test_loop_lib.sh` + `test_permission_guard.sh` + `test_stop_gate.sh` etc. — every hook test that reads the ledger must set `HARNESS_LOOP_STATUS_PATH`; sweep with `rg 'loop_status_path|loop_status.md' tools/hooks/test_*.sh`). Probes: ACTIVATE reset (`--lines` cannot re-add a line — witness is the §4 test; record) and row shape (`--lines` = the `if ($4 ~ /^[ \t]*lane=/)` branch → structured rows mis-parse → RED) → PINNED. Register `Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", "phase0", "local + CI", True)`.
 - [ ] **Step 5: Commit** — `git add tools/hooks/loop_lib.sh tools/hooks/test_loop_lib.sh tools/hooks/session-start.sh .claude/skills/loop-start/SKILL.md .claude/skills/loop-stop/SKILL.md .claude/skills/resolve/SKILL.md .claude/skills/ship-pr/SKILL.md tools/lanes_verify.py && git commit -m "feat(he-lanes): U-HE-29 shared loop_status venue, structured column, NOTIFY kind, ACTIVATE scoping, pointer sweep (C-HE-09)"`.
 
@@ -5498,7 +5630,7 @@ def _blocked_lease_older_than_bound() -> dict | None:
     age_s = (datetime.now(UTC) - datetime.strptime(blocked_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)).total_seconds()
     return lease if age_s > md.POST_MERGE_CI_BOUND_S + md.REFRESH_BOUND_S else None
 ```
- Wire: `check` mode on `main` calls `check_split_brain(REPO/".harness/arc-metrics.jsonl", lane_id=os.environ.get("HARNESS_LANE_ID","ci"))` and `check_base_toctou` over the last 10 merge commits (`git log --merges -10 --format=%H %P` → first parent vs the base recorded in that merge's reservation when present); `_json_report` adds `"lane_id"`. CI job (after `codex-context-guard`):
+ Wire: `check` mode on `main` calls `check_split_brain(REPO/".harness/arc-metrics.jsonl", lane_id=os.environ.get("HARNESS_LANE_ID","ci"))` and `check_base_toctou` over the last 10 **first-parent** commits on `main` (`git log --first-parent -10 --format=%H %P` — the door squash-merges, so landings have ONE parent and `--merges` would inspect none of them; Codex round-3 P2): each landing SHA is joined to the reservation that recorded it as `merge_sha` (U-HE-23) and its parent compared with that reservation's verified `base_sha`; landings without a reservation are reported as `unattributed`, never silently skipped; `_json_report` adds `"lane_id"`. CI job (after `codex-context-guard`):
 ```yaml
   split-brain:
     name: split-brain ledger backstop — blocking
@@ -5786,9 +5918,12 @@ def test_pilot_report_iff_clause(tmp_path, monkeypatch):
     ...
     rep = lp.report("pilot-1")
     assert rep["pass"] is True and rep["friction"] == [] 
-    # a DEFERRED-HIL with cause merge-door-lease-acquire:… flips it
+    # a DEFERRED-HIL with cause merge-door-lease-acquire:… from one of the pilot's lanes INSIDE the window flips it...
     ...
     assert lp.report("pilot-1")["pass"] is False
+    # ...a later RESOLVED-HIL for the same item clears it, and a coordination HIL from an OLDER pilot / another lane never counts
+    ...
+    assert lp.report("pilot-1")["pass"] is True
 
 def test_recurring_definition():
     assert lp.recurring({"pilot-1": {"a:x:y"}, "pilot-2": {"a:x:y"}, "pilot-3": set()}, severe=set()) == {"a:x:y"}
@@ -5852,9 +5987,21 @@ def report(run_id: str) -> dict:
             arcs.append(cur[1])
     all_merged = bool(arcs) and all(a["state"] == "merged" for a in arcs)
     gate_rows = fr.read_rows()
-    toctou = [r for r in gate_rows if r["producer"] == "BASE_TOCTOU" and r["arc_id"] in {f"merge-{(a.get('head_sha') or '')[:12]}" for a in arcs}]
-    hil = [r for r in _loop_status_rows() if r["kind"] == "DEFERRED-HIL" and r["cause"].startswith(COORD_CAUSES)]
-    friction = sorted({r["cause"] for r in _loop_status_rows() if r["kind"] in ("DEFERRED-HIL", "NOTIFY") and r["cause"] != "-"})
+    toctou = [r for r in gate_rows if r["producer"] == "BASE_TOCTOU" and r["arc_id"] in {f"merge-{(a.get('merge_sha') or '')[:12]}" for a in arcs if a.get("merge_sha")}]
+    # HIL rows scoped to THIS pilot (Codex round-3 P1): the pilot's lanes, inside the pilot window, reduced last-write-wins
+    lanes = {a["lane_id"] for a in arcs}
+    t0 = min((a["reserved_at"] for a in arcs), default="9999"); t1 = max((a["transitioned_at"] for a in arcs), default="0000")
+    pending: dict[str, dict] = {}
+    for r in _loop_status_rows():
+        if r["lane"] not in lanes or not (t0 <= r["ts"] <= t1):
+            continue
+        tok = (r["detail"].split() or [""])[0]
+        if r["kind"] == "DEFERRED-HIL":
+            pending[tok] = r
+        elif r["kind"] == "RESOLVED-HIL":
+            pending.pop(tok, None)
+    hil = [r for r in pending.values() if r["cause"].startswith(COORD_CAUSES)]
+    friction = sorted({r["cause"] for r in _loop_status_rows() if r["lane"] in lanes and t0 <= r["ts"] <= t1 and r["kind"] in ("DEFERRED-HIL", "NOTIFY") and r["cause"] != "-"})
     ok = all_merged and not toctou and not hil
     return {"run_id": run_id, "arcs": [a["arc_id"] for a in arcs], "all_merged": all_merged, "base_toctou": len(toctou), "coordination_hil": len(hil), "pass": ok, "friction": friction}
 
@@ -6050,6 +6197,15 @@ def test_unrun_cli(monkeypatch):
     assert c.run([], REPO)
     c = unrun_cli.Check(claims=["just x"], runner=lambda cmd: (0, "ok"))
     assert c.run([], REPO) == []
+
+
+def test_unrun_cli_never_shells_out(monkeypatch):
+    called = []
+    monkeypatch.setattr(unrun_cli.subprocess, "run", lambda *a, **k: called.append(k.get("shell")) or type("P", (), {"returncode": 0, "stdout": "ok", "stderr": ""})())
+    rc, out = unrun_cli._default_runner("just check; rm -rf /")
+    assert rc == 126 and "unsafe" in out and called == []
+    rc, out = unrun_cli._default_runner("uv run python tools/x.py --flag")
+    assert rc == 0 and called == [False]
 
 # hybrid classes: an intentionally-false annotation is DETECTED as false
 def test_mutation_probe_reverify_detects_false_annotation(tmp_path, monkeypatch):
@@ -6250,8 +6406,17 @@ from pathlib import Path
 from . import MechFinding
 CLAIM_LINE = re.compile(r"^(?:Verified|Checked|Ran):\s*(.*)$", re.M | re.I)
 CMD = re.compile(r"`((?:just|uv run python tools/)[^`]+)`")
+_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_./=:@,+-]+$")
 def _default_runner(cmd: str) -> tuple[int, str]:
-    p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+    """Never a shell (Codex round-3 P1: the claim text comes from a commit message). Allowlisted argv only."""
+    import shlex
+    try:
+        argv = shlex.split(cmd)
+    except ValueError:
+        return 126, "unsafe claim: unparseable"
+    if not argv or argv[0] not in ("just", "uv") or not all(_SAFE_TOKEN.match(t) for t in argv):
+        return 126, "unsafe claim: only plain `just <recipe> [args]` / `uv run python tools/<x>.py [args]` tokens are executed"
+    p = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=600)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 class Check:
     check_id = "unrun_cli"; kind = "deterministic"
@@ -6509,6 +6674,21 @@ def test_scored_rounds_are_per_arc():
     c = st.config_row(lens="gemini-shadow")
     assert c["record_kind"] == "no_finding" and "n=30" in c["observed_evidence"] and "kill_if_fewer_than=2" in c["observed_evidence"]
 
+# mutation-probe: hard-code unique_catch=True in adjudicate() (drop the blocking-row check)
+def test_adjudicate_computes_unique_catch(tmp_path):
+    p = tmp_path / "g.jsonl"
+    only = _row(4, "gemini-shadow", location="only-shadow", uc=None); fr.append_row(only, p)
+    both = _row(5, "gemini-shadow", location="seen-by-blocking", uc=None); fr.append_row(both, p)
+    fr.append_row(_row(5, "merge-gate-concurrency", location="seen-by-blocking"), p)
+    a1 = st.adjudicate(only["finding_id"], disposition="accepted", actor="operator", path=p)
+    a2 = st.adjudicate(both["finding_id"], disposition="accepted", actor="operator", path=p)
+    assert a1["unique_catch"] is True and a2["unique_catch"] is False
+    rows = fr.read_rows(p)
+    assert [c["finding_id"] for c in st.unique_catches(rows, "gemini-shadow")] == [only["finding_id"]]
+    with pytest.raises(ValueError):
+        st.adjudicate(only["finding_id"], disposition="accepted", actor="gemini-review", path=p)   # same family
+
+
 def test_adjudicator_never_placeholder_or_same_family():
     with pytest.raises(ValueError):
         st.validate_adjudicator("TODO")
@@ -6587,6 +6767,26 @@ def oc_table() -> list[tuple[float, float]]:
     return [(p, p_kill(p)) for p in (0.0, 0.05, 0.10, 0.15, 0.20, 0.25)]
 
 
+def adjudicate(finding_id: str, *, disposition: str, actor: str, rows: list[dict] | None = None, path: Path | None = None) -> dict:
+    """The production writer of `unique_catch` (Codex round-3 P1: nothing else sets it). Appends the adjudication
+    row for a shadow-lens finding with unique_catch = (a): its location+finding_type appears in NO blocking
+    reviewer's row for the same head_sha; (b) -- disposition accepted -- is what unique_catches() then requires."""
+    validate_adjudicator(actor)
+    rows = fr.read_rows(path) if rows is None and path is not None else (rows if rows is not None else fr.read_rows())
+    orig = next((r for r in rows if r["finding_id"] == finding_id and r["record_kind"] == "finding"), None)
+    if orig is None:
+        raise ValueError(f"no finding row for {finding_id}")
+    blocking = {(r["head_sha"], r["location"], r["finding_type"]) for r in rows if r["producer"] != orig["producer"] and r["record_kind"] == "finding"}
+    uc = (orig["head_sha"], orig["location"], orig["finding_type"]) not in blocking
+    core = fr.FindingCore(**{k: orig[k] for k in ("finding_id", "location", "observed_evidence", "expected_contract", "severity", "finding_type", "lineage_claim", "producer")})
+    env = fr.Envelope("finding_adjudication", fr.now_iso(), orig["arc_id"], orig["lane_id"], orig["head_sha"], orig["base_sha"], orig["diff_digest"], orig["round_n"],
+                      cause_attribution=orig["cause_attribution"], disposition=disposition, disposition_actor=actor, unique_catch=uc)
+    row = fr.make_row(core, env)
+    if path is not None or rows is None:
+        fr.append_row(row, path or fr.GATE_LOG_JSONL)
+    return row
+
+
 def validate_adjudicator(actor: str) -> None:
     a = actor.strip().lower()
     if not a or a in ("todo", "tbd", "placeholder", "n/a", "-"):
@@ -6606,7 +6806,10 @@ def main(argv=None) -> int:
     s = sub.add_parser("decide"); s.add_argument("--lens", required=True); s.add_argument("--hitl", action="store_true")
     sub.add_parser("oc")
     c = sub.add_parser("config"); c.add_argument("--lens", required=True)
+    ad = sub.add_parser("adjudicate"); ad.add_argument("finding_id"); ad.add_argument("--disposition", choices=("accepted", "rejected", "suppressed"), required=True); ad.add_argument("--actor", required=True)
     a = p.parse_args(argv)
+    if a.cmd == "adjudicate":
+        print(json.dumps(adjudicate(a.finding_id, disposition=a.disposition, actor=a.actor))); return 0
     if a.cmd == "oc":
         for pv, pk in oc_table():
             print(f"p={pv:.2f}  P(kill)={pk:.3f}")
@@ -6618,7 +6821,7 @@ def main(argv=None) -> int:
         hitl_request(d, a.lens)
     return 0
 ```
-`ship-pr/SKILL.md` — after the blocking chain, off-path: `HARNESS_ROUND_N=<n> HARNESS_SHADOW_LENS=1 just gemini-review || true` (the wrapper, under `HARNESS_SHADOW_LENS=1`, emits rows with `producer=gemini-shadow` and one `no_finding` marker when clean — add this branch to U-HE-06's `_emit`) then `uv run python tools/shadow_trial.py decide --lens gemini-shadow --hitl`. Recipes `shadow-trial-score` / `shadow-trial-decide` wrap the two.
+`ship-pr/SKILL.md` — after the blocking chain, off-path: `HARNESS_ROUND_N=<n> HARNESS_SHADOW_LENS=1 just gemini-review || true`; the operator (or a third-party identity of neither family) disposes each shadow finding with `just shadow-trial-adjudicate <finding_id> accepted|rejected --actor <id>` — the ONLY writer of `unique_catch`; (the wrapper, under `HARNESS_SHADOW_LENS=1`, emits rows with `producer=gemini-shadow` and one `no_finding` marker when clean — add this branch to U-HE-06's `_emit`) then `uv run python tools/shadow_trial.py decide --lens gemini-shadow --hitl`. Recipes `shadow-trial-score` / `shadow-trial-decide` wrap the two.
 - [ ] **Step 4: GREEN**, probe (`--lines` = the `(b)` disposition guard) → PINNED. Register `Row("C-HE-29", "pytest:tools/test_shadow_trial.py::test_kill_rule_reproducible_from_rows_and_rejected_excluded", "measurement", "local + CI", True)` and `::test_oc_table_matches_spec_numbers`. Commit `feat(he-lanes): U-HE-43 shadow trial live off-path — reducer, kill rule n=30/<2 with OC, HITL delivery (C-HE-29)`.
 
 ---
@@ -6794,6 +6997,7 @@ Every row marked **mutation-probe** in §8.1 has a named `--lines` target in its
 4. **Codex round 1 on PR #1393 (out-of-family, cold) — 7 P1 / 4 P2, all absorbed in this PR.** P1: (a) marker/plan exit-gate mismatch → status block + marker now name this review as the plan's exit gate; (b) `round_outcomes` never written → `reservations.record_round_outcome` + `rw.record_round_outcome_if_reserved` called by both wrappers + folded at drain (U-HE-17/02/04/06/19); (c) `transition(updates)`/`update_payload` could rewrite `lane_id`/`arc_type`/`superseded_by` → `PAYLOAD_MUTABLE`/`TRANSITION_MUTABLE` allowlists + test (U-HE-17; U-HE-18's aging test now uses `now=`); (d) `BASE_TOCTOU` mismatch emitted but did not block → door blocks + HITL + test (U-HE-23); (e) resume re-created the refresh PR → resume from the recorded sidecar + test (U-HE-23); (f) coalescing delivery race / later-generation suppression → exclusive-create claim per exact generation under `QUEUE_DIR/hil-deliveries/` + concurrency test (U-HE-30; store audit lists the family); (g) shadow scored rounds collapsed across arcs → `(arc_id, round_n)` + test (U-HE-43). P2: artifact polling capped by the shared 1260 s deadline + test (U-HE-04); adjudication append enforces the same-core invariant against the ORIGINAL row + test (U-HE-01); reservation GC retention runs from the terminal head's `transitioned_at` + test (U-HE-17); HIL groups sorted by epoch, gawk-free pipeline (U-HE-30). Round 2 result is recorded in the PR.
 
 5. **Codex round 2 on PR #1393 — 8 P1 / 3 P2, all new surfaces (no round-1 item re-flagged), all absorbed.** P1: session-artifact JSONL is decoded before verdict parsing (`artifact_text`, U-HE-04); `review-with-failover` no longer pre-gates on `_require-codex-subscription` (a permanent Codex failure must reach the failover, U-HE-07); same-lane reclaim still requires the old pid dead (U-HE-22); a crashed reclaimer's marker carries the fresh lease and `complete_dead_marker` publishes it (U-HE-22); the C-HE-06 §7 invariant-vs-G4 continuation tension is surfaced as open item 13 (acquisition-time enforcement; v1.1 change-note candidate; U-HE-22/23); the `DoorFailed` handler decides release-vs-block from `read_lease()` and blocks after an attempt (U-HE-23); push-to-main is parsed (options anywhere, every refspec, bare push) instead of the reference regex (U-HE-26); the tiebreaker verdict comes from the stale PR alone (U-HE-27). P2: failover path emits no duplicate gemini rows (U-HE-07); TTL resurface reducer is shape-aware for HIL rows (U-HE-09); the shadow-trial sample is frozen at the first n scored rounds (U-HE-43). Round 3 result recorded in the PR.
+6. **Codex round 3 on PR #1393 — 11 P1 / 4 P2, all absorbed (three were consequences of round-2 edits — the tiebreaker's tautological first-parent compare, the reclaim publish window, and the status block's "round 2 clean" wording, which was false the moment round 2 returned findings and is now replaced by this record).** P1: holder-only terminal transitions (U-HE-17); reclaim verifies the published lease is its own token, never adopts a foreign lease (U-HE-22); tiebreaker runs in a throwaway worktree, compares the stale landing with the pre-merge main SHA, and `apply` is provisional with automatic rollback on FAIL (U-HE-27); `unique_catch` gets a production writer — `shadow_trial.py adjudicate` (U-HE-43); probe coverage matches every annotation's exact node id (U-HE-05); `unrun_cli` never shells out (U-HE-40); pilot report joins `BASE_TOCTOU` by the landing `merge_sha` now persisted on the reservation, and scopes HIL rows to the pilot's lanes + window with last-write-wins (U-HE-37/23); status block no longer asserts a clean round in advance (§ status). P2: envelope fields immutable on adjudication (U-HE-01); `BASE_TOCTOU` backstop walks first-parent commits (U-HE-33); failover emits when the gemini recipe died at preflight (U-HE-07); `loop_log_structured` returns 1 on write failure and `emit_loop_row` raises `LoopStatusWriteError` (U-HE-29/17). Round 4 result: item 7.
 ## Execution handoff
 
 Plan complete and saved to `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. Two execution options:
