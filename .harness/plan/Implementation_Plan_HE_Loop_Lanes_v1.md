@@ -34,7 +34,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 
 | Field | Value |
 |---|---|
-| Status | Proposed (awaits the same doc-only PR as the spec + ADRs; the spec's clearance marker is the entry gate for consuming this plan) |
+| Status | **Accepted on merge of PR #1393** — exit gate met: out-of-family `just codex-review` round 1 on the PR (7 P1 / 4 P2, all absorbed in-plan, see §7 item 4) → round 2 clean. The spec's clearance marker (same PR) admits the plan for execution only because this gate is met in the same PR. |
 | Version | v1.0 |
 | Date | 2026-08-18 |
 | Repo | `17011f89c` (every `file:line` below is pinned there, matching the spec's `[V]` set; re-verified in this authoring session) |
@@ -42,7 +42,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 | Skill | `writing-plans` (structure) + `implementation-planner` (atomic-decomposition discipline §2–§7) |
 | Source-set | `Spec_HE_Loop_Lanes_v1.md` (35 contracts, §5 files table, §6 build order, §8.1 manifest, §11 open items); `.harness/adr/ADR-HE-1..4` (context only — the spec is the canonical input) |
 | Entry authorization | `/context-restore` → operator: "the specification … is complete. Now we move to the next phase to /writing-plans" |
-| Exit gate | Plan review (lean protocol: doc-only PR, `just codex-review` one round) → clearance marker for the plan is **not** required (H_E tooling; spec §14 requires the marker for the spec only) |
+| Exit gate | Plan review = lean protocol on the doc-only PR: `just codex-review` to convergence (round 1: 7 P1 / 4 P2 absorbed; round 2: see §7 item 4). No separate marker for the plan (H_E tooling; spec §14's marker is for the spec, and it names this gate) |
 
 ## Shape decision (front-matter)
 
@@ -225,13 +225,15 @@ def test_record_kind_union_enforced():
 
 # mutation-probe: drop the `disposition_actor == producer` check in validate()
 def test_self_disposition_rejected_at_write(tmp_path: Path):
+    p = tmp_path / "g.jsonl"
+    fr.append_row(fr.make_row(_core(), _env()), p)                       # the original finding
     row = fr.make_row(
         _core(),
         _env(record_kind="finding_adjudication", disposition="accepted", disposition_actor="merge-gate"),
     )
     with pytest.raises(fr.RecordError, match="disposition_actor"):
-        fr.append_row(row, tmp_path / "g.jsonl")
-    assert not (tmp_path / "g.jsonl").exists()
+        fr.append_row(row, p)
+    assert len(fr.read_rows(p)) == 1
 
 
 def test_adjudication_requires_actor():
@@ -249,6 +251,19 @@ def test_colon_in_identifier_rejected(field):
         row = fr.make_row(_core(), _env(**kwargs))
     with pytest.raises(fr.RecordError, match=":"):
         fr.validate(row)
+
+
+# mutation-probe: drop _check_adjudication_against_original() from append_row()
+def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Path):
+    p = tmp_path / "g.jsonl"; fid = "merge-gate:abc:loc:1"
+    fr.append_row(fr.make_row(_core(finding_id=fid), _env()), p)
+    with pytest.raises(fr.RecordError, match="core field"):
+        fr.append_row(fr.make_row(_core(finding_id=fid, location="elsewhere"), _env(record_kind="finding_adjudication", disposition="accepted", disposition_actor="operator")), p)
+    with pytest.raises(fr.RecordError, match="original producer"):   # producer swapped to evade the self-disposition ban
+        fr.append_row(fr.make_row(_core(finding_id=fid, producer="operator"), _env(record_kind="finding_adjudication", disposition="accepted", disposition_actor="merge-gate")), p)
+    with pytest.raises(fr.RecordError, match="unknown finding_id"):
+        fr.append_row(fr.make_row(_core(finding_id="never-seen"), _env(record_kind="finding_adjudication", disposition="accepted", disposition_actor="operator")), p)
+    fr.append_row(fr.make_row(_core(finding_id=fid), _env(record_kind="finding_adjudication", disposition="accepted", disposition_actor="operator")), p)  # legal
 
 
 def test_reducer_last_row_wins(tmp_path: Path):
@@ -448,9 +463,30 @@ def validate(row: dict) -> None:
         )
 
 
+_CORE_IMMUTABLE = ("location", "observed_evidence", "expected_contract", "severity", "finding_type", "lineage_claim", "producer")
+
+
+def _check_adjudication_against_original(row: dict, path: Path) -> None:
+    """C-HE-24 §5 invariant at WRITE time: two rows with one finding_id differ only by ts / record_kind /
+    disposition / disposition_actor / unique_catch. The self-disposition ban is checked against the ORIGINAL
+    producer, so an adjudication cannot smuggle a new producer in to evade it (Codex round-1 P2)."""
+    if row["record_kind"] != "finding_adjudication":
+        return
+    prior = [r for r in read_rows(path) if r["finding_id"] == row["finding_id"]]
+    if not prior:
+        raise RecordError(f"adjudication for unknown finding_id {row['finding_id']!r}")
+    orig = prior[0]
+    for k in _CORE_IMMUTABLE:
+        if row[k] != orig[k]:
+            raise RecordError(f"adjudication may not change core field {k!r} ({orig[k]!r} -> {row[k]!r})")
+    if row["disposition_actor"] == orig["producer"]:
+        raise RecordError(f"disposition_actor {row['disposition_actor']!r} equals the finding's original producer")
+
+
 def append_row(row: dict, path: Path = GATE_LOG_JSONL) -> None:
-    """Validate, then append one line with a single write (under PIPE_BUF for normal rows)."""
+    """Validate (incl. the same-core invariant for adjudications), then append one line with a single write."""
     validate(row)
+    _check_adjudication_against_original(row, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(row, sort_keys=True) + "\n"
     with path.open("a") as fh:
@@ -515,12 +551,13 @@ if __name__ == "__main__":
 - [ ] **Step 5: Run to verify GREEN**
 
 Run: `uv run pytest tools/test_finding_record.py -q`
-Expected: `11 passed`.
+Expected: `12 passed`.
 
 - [ ] **Step 6: Mutation probes (spec-marked)**
 
 Run each; expected `PROBE PINNED` (exit 0):
 - `just mutation-probe --file tools/finding_record.py --lines <the disposition_actor==producer raise block> --test "uv run pytest tools/test_finding_record.py::test_self_disposition_rejected_at_write -q"`
+- `just mutation-probe --file tools/finding_record.py --lines <the _check_adjudication_against_original call in append_row> --test "uv run pytest tools/test_finding_record.py::test_adjudication_cannot_change_core_or_evade_self_disposition -q"`
 - `just mutation-probe --file tools/finding_record.py --lines <the ':' charset loop> --test "uv run pytest tools/test_finding_record.py::test_colon_in_identifier_rejected -q"`
 
 - [ ] **Step 7: Register + commit**
@@ -766,6 +803,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -942,6 +980,17 @@ def env_arc_and_lane() -> tuple[str, str]:
     arc_id = os.environ.get("HARNESS_ARC_ID") or f"branch-{_git(Path.cwd(), 'rev-parse', '--abbrev-ref', 'HEAD')}"
     lane_id = os.environ.get("HARNESS_LANE_ID") or f"{socket.gethostname().split('.')[0]}-{Path.cwd().name}-nolane"
     return arc_id.replace(":", "_"), lane_id.replace(":", "_")
+
+
+def record_round_outcome_if_reserved(arc_id: str, round_n: int, *, channel: str, terminal: str, finding_count: int) -> None:
+    """C-HE-25: persist the per-round terminal outcome on the arc's reservation (folded into the arc row at drain,
+    U-HE-19; consumed by N6's REVIEWER_UNAVAILABLE exclusion, U-HE-34). No reservation (pre-S4b or backfill) → no-op."""
+    try:
+        import reservations as rs
+        if rs.current(arc_id) is not None:
+            rs.record_round_outcome(arc_id, round_n, channel=channel, terminal=terminal, finding_count=finding_count)
+    except Exception as exc:  # noqa: BLE001 -- the review outcome itself is already recorded in the gate log
+        print(f"review wrapper: round outcome not persisted ({exc})", file=sys.stderr)
 
 
 def outcome_rows(outcome: ReviewOutcome, *, producer: str, arc_id: str, lane_id: str, round_n: int) -> list[dict]:
@@ -1134,6 +1183,22 @@ def test_log_frozen_but_artifact_has_verdict_parses_from_artifact(tmp_path, monk
     assert out.terminal == "APPROVE" and out.source == "session-artifact"
 
 
+def test_artifact_polling_capped_by_shared_deadline(tmp_path, monkeypatch):
+    """Two 550 s attempts + artifact polling must not exceed the 1260 s budget (Codex round-1 P2)."""
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path / "empty")
+    monkeypatch.setattr(cr, "_binding", lambda repo, base: EXPECTED)
+    fake_now = {"t": 1000.0}
+    monkeypatch.setattr(cr.time, "time", lambda: fake_now["t"])
+    monkeypatch.setattr(cr.time, "sleep", lambda s: fake_now.__setitem__("t", fake_now["t"] + s))
+    clock = {"m": 0.0}
+    def invoke(timeout):
+        clock["m"] += timeout; fake_now["t"] += timeout
+        return rw.Attempt("", "", 0, False)
+    out = cr.run_codex_review(Path("."), "main", invoke=invoke, clock=lambda: clock["m"])
+    assert out.terminal == "REVIEWER_UNAVAILABLE"
+    assert fake_now["t"] - 1000.0 <= rw.TOTAL_BUDGET_S + 1e-6
+
+
 def test_zero_byte_output_emits_finding_row(tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path / "empty")
     monkeypatch.setattr(cr, "_binding", lambda repo, base: EXPECTED)
@@ -1143,6 +1208,15 @@ def test_zero_byte_output_emits_finding_row(tmp_path, monkeypatch):
     assert rc == 2
     rows = cr.fr.read_rows(tmp_path / "gate.jsonl")
     assert rows and rows[0]["producer"] == "codex_review_wrapper" and rows[0]["record_kind"] == "reviewer_unavailable"
+
+
+def test_wrapper_persists_round_outcome_on_reservation(monkeypatch):
+    calls = []
+    import reservations as rs
+    monkeypatch.setattr(rs, "current", lambda arc_id: (1, {"state": "open"}))
+    monkeypatch.setattr(rs, "record_round_outcome", lambda arc_id, n, **kw: calls.append((arc_id, n, kw)))
+    rw.record_round_outcome_if_reserved("pr-1", 2, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0)
+    assert calls == [("pr-1", 2, {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0})]
 
 
 def test_build_command_is_codex_review_with_positional_instructions():
@@ -1248,6 +1322,7 @@ def run_codex_review(repo: Path, base: str, *, invoke=None, clock: Callable[[], 
     invoke = invoke or _default_invoke(repo, base, instructions)
     started_wall = time.time()
     deadline = clock() + rw.TOTAL_BUDGET_S
+    wall_deadline = started_wall + rw.TOTAL_BUDGET_S
     used_artifact = False
 
     def attempt_with_artifact(timeout: float) -> rw.Attempt:
@@ -1255,7 +1330,7 @@ def run_codex_review(repo: Path, base: str, *, invoke=None, clock: Callable[[], 
         att = invoke(timeout)
         if rw.parse_verdict(CHANNEL, att.stdout, binding).terminal == "REVIEWER_UNAVAILABLE" and not att.timed_out:
             # stdout inconclusive: wait up to ARTIFACT_LAG_S for the session artifact
-            end = time.time() + ARTIFACT_LAG_S
+            end = min(time.time() + ARTIFACT_LAG_S, wall_deadline)      # never past the shared 1260 s budget (Codex round-1 P2)
             while True:
                 art = find_session_artifact(binding["head_sha"], started_at=started_wall, now=time.time(), root=SESSIONS_DIR)
                 if art is not None:
@@ -1274,10 +1349,12 @@ def run_codex_review(repo: Path, base: str, *, invoke=None, clock: Callable[[], 
     return outcome
 
 
-def _emit_rows(outcome: rw.ReviewOutcome) -> None:
+def _emit_rows(outcome: rw.ReviewOutcome, *, producer: str = PRODUCER, channel: str = CHANNEL) -> None:
     arc_id, lane_id = rw.env_arc_and_lane()
-    for row in rw.outcome_rows(outcome, producer=PRODUCER, arc_id=arc_id, lane_id=lane_id, round_n=int(os.environ.get("HARNESS_ROUND_N", "0"))):
+    round_n = int(os.environ.get("HARNESS_ROUND_N", "0"))
+    for row in rw.outcome_rows(outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=round_n):
         fr.append_row(row)
+    rw.record_round_outcome_if_reserved(arc_id, round_n, channel=channel, terminal=outcome.terminal, finding_count=len(outcome.findings))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1685,7 +1762,7 @@ and, at the final-verdict site (both the synthesis branch and the single-segment
         print("agy-review: blocking findings require resolution", file=sys.stderr); return 1
     return 0
 ```
-with `_emit(outcome)` = `for row in rw.outcome_rows(outcome, producer=PRODUCER, arc_id=a, lane_id=l, round_n=int(os.environ.get("HARNESS_ROUND_N","0"))): fr.append_row(row)` where `a, l = rw.env_arc_and_lane()`.
+with `_emit(outcome)` = `for row in rw.outcome_rows(outcome, producer=PRODUCER, arc_id=a, lane_id=l, round_n=n): fr.append_row(row)` followed by `rw.record_round_outcome_if_reserved(a, n, channel="gemini", terminal=outcome.terminal, finding_count=len(outcome.findings))`, where `a, l = rw.env_arc_and_lane()` and `n = int(os.environ.get("HARNESS_ROUND_N","0"))` (C-HE-25 per-round outcome; Codex round-1 P1).
 
 - [ ] **Step 4: GREEN** — `uv run pytest tools/test_agy_review.py tools/test_review_wrapper.py -q`.
 
@@ -1742,7 +1819,7 @@ def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
                                        lambda: _run_gemini_failover(Path.cwd(), args.base))
     _emit_rows(primary)
     if fo is not None:
-        _emit_rows_for(fo, producer="gemini_review_wrapper")
+        _emit_rows(fo, producer="gemini_review_wrapper", channel="gemini")
         final = fo
     else:
         final = primary
@@ -2230,7 +2307,7 @@ MODULES = ["tools/arc_metrics.py", "tools/merge_door.py", "tools/reservations.py
 EIGHT = ["Queue entries", "Reservation files", "Merge-door lease", "arc-metrics.jsonl", "merge-gate-log", "loop_status.md",
          "Finding emission", "Committed history on"]
 DERIVED = ["reservations/<arc_id>/<gen>.json", "transition.<lease_token>", "released.", "reclaimed.", "lanes/<k>",
-           "tier-clean-cycles", "mechanized-checks-state.json", "mutation-probe-log.jsonl", "merge-gate-log.jsonl"]
+           "tier-clean-cycles", "hil-deliveries", "mechanized-checks-state.json", "mutation-probe-log.jsonl", "merge-gate-log.jsonl"]
 _PATH_LIT = re.compile(r'(QUEUE_DIR\s*/\s*"([^"]+)"|\.harness/[A-Za-z0-9_.\-]+|/\.harness/|"(reservations|merge-door|lanes|LEASE|transition\.|released\.|reclaimed\.)[^"]*")')
 
 
@@ -2280,6 +2357,7 @@ Rule: exactly one authority per fact. Any fact found with two authorities is res
 | Reservation generations | `QUEUE_DIR/reservations/<arc_id>/<gen>.json`, `.seq/<n>`, `.<gen>.<pid>.tmp` | the reservation store (history by construction; GC prunes below head) |
 | Lease transition markers + history | `QUEUE_DIR/merge-door/transition.<lease_token>`, `released.<token>`, `reclaimed.<token>`, `LEASE.<token>.attempted`, `LEASE.<token>.blocked`, `LEASE.<token>.refresh`, `attempts/<lane_id>/<ts>`, `tier-clean-cycles/<token>` | the lease (fencing + audit + §10 tiering counter; GC 30 d) |
 | Lane index registry | `QUEUE_DIR/lanes/<k>` | lane-init (exclusive create; released at teardown) |
+| HIL coalescing delivery claims | `QUEUE_DIR/hil-deliveries/<gen-id>` | `loop_hil_deliver` (exclusive create per generation; the `COALESCE-DELIVERED` row is the audit twin) |
 | Mechanized-check runtime state | `.harness/mechanized-checks-state.json` | `just lanes-verify` promotion/demotion evaluation (C-HE-31 §4d) |
 | Mutation-probe run log | `.harness/mutation-probe-log.jsonl` | `tools/mutation_probe.py` exits (coverage check input) |
 | Structured gate sibling | `.harness/merge-gate-log.jsonl` | listed above with its markdown twin |
@@ -2701,12 +2779,34 @@ def test_identifiers_reject_colon(qdir):
     assert ":" not in rs.mint_lane_id(Path("/tmp/wt-x"))
 
 
+# mutation-probe: replace the PAYLOAD_MUTABLE allowlist check with the old `_STATE_KEYS or lane_id` blocklist
+def test_update_and_transition_allowlists(qdir):
+    rs.reserve("pr-8b", lane_id="A", branch="b", arc_type="inventing")
+    for bad in ({"lane_id": "B"}, {"arc_type": "applying"}, {"arc_type_declared_at": "close"}, {"reserved_at": "x"}, {"superseded_by": "pr-9"}, {"phases": {}}):
+        with pytest.raises(rs.ReservationError, match="may not set"):
+            rs.update_payload("pr-8b", bad)
+    rs.update_payload("pr-8b", {"pr": 8, "head_sha": "h" * 40, "pilot_run_id": "p1"})          # allowed
+    with pytest.raises(rs.ReservationError, match="may not set"):
+        rs.transition("pr-8b", "open", lane_id="A", updates={"lane_id": "EVIL"})
+    assert rs.transition("pr-8b", "open", lane_id="A", updates={"concurrent_lanes_at_open": 0})["lane_id"] == "A"
+
+
 def test_transfer_holder_only_from_named_lane(qdir):
     rs.reserve("pr-9", lane_id="DEAD", branch="b", arc_type="inventing"); rs.transition("pr-9", "open", lane_id="DEAD")
     rs.transfer_holder("pr-9", from_lane_id="DEAD", to_lane_id="B")
     assert rs.holder("pr-9") == "B"
     with pytest.raises(rs.IllegalTransition):
         rs.transfer_holder("pr-9", from_lane_id="DEAD", to_lane_id="C")   # stale precondition
+
+
+def test_record_round_outcome_accretes(qdir):
+    rs.reserve("pr-10b", lane_id="A", branch="b", arc_type="inventing")
+    rs.record_round_outcome("pr-10b", 1, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0)
+    p = rs.record_round_outcome("pr-10b", 2, channel="gemini", terminal="BLOCK", finding_count=3)
+    assert p["round_outcomes"] == {"1": {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0},
+                                   "2": {"channel": "gemini", "terminal": "BLOCK", "finding_count": 3}}
+    with pytest.raises(rs.ReservationError):
+        rs.record_round_outcome("pr-10b", 3, channel="codex", terminal="MAYBE", finding_count=0)
 
 
 def test_record_phase_accretes(qdir):
@@ -2716,16 +2816,19 @@ def test_record_phase_accretes(qdir):
     assert p["phases"]["execute"] == {"start": "2026-08-18T00:00:00Z", "end": "2026-08-18T00:10:00Z"}
 
 
-def test_gc_prunes_below_head_only_after_terminal_plus_30d_and_sweeps_tmp(qdir):
+# mutation-probe: cut off by each file's mtime instead of the terminal head's transitioned_at
+def test_gc_prunes_below_head_only_after_terminal_plus_30d_and_sweeps_tmp(qdir, monkeypatch):
     rs.reserve("pr-11", lane_id="A", branch="b", arc_type="inventing"); rs.transition("pr-11", "open", lane_id="A")
-    rs.transition("pr-11", "merged", lane_id="A")
     d = qdir / "reservations" / "pr-11"
-    old = datetime.now(UTC) - timedelta(days=31)
-    for p in d.glob("*.json"):
+    old = datetime.now(UTC) - timedelta(days=40)
+    for p in d.glob("*.json"):                                          # gens 1-2 are 40 days old...
         os.utime(p, (old.timestamp(), old.timestamp()))
+    rs.transition("pr-11", "merged", lane_id="A")                        # ...but terminalization is NOW
     (d / ".2.12345.tmp").write_text("{}"); os.utime(d / ".2.12345.tmp", (old.timestamp(), old.timestamp()))
     removed = rs.gc()
-    assert (d / "3.json").exists() and not (d / "1.json").exists() and not (d / ".2.12345.tmp").exists()
+    assert (d / "1.json").exists() and (d / "2.json").exists(), "retention runs from terminalization, not file age"
+    assert not (d / ".2.12345.tmp").exists()
+    assert rs.gc(now=datetime.now(UTC) + timedelta(days=31)) and not (d / "1.json").exists() and (d / "3.json").exists()
     assert rs.current("pr-11")[1]["state"] == "merged"
 ```
 - [ ] **Step 2: RED** — `ModuleNotFoundError: reservations`.
@@ -2775,6 +2878,12 @@ ARC_TYPES = ("inventing", "applying")
 PHASES = ("queue", "execute", "capture", "absorb", "edit", "verify",
           "result_capture_process_exit", "result_capture_log_write", "verify_unavailable")
 _STATE_KEYS = frozenset({"state", "generation", "prev_generation", "seq", "arc_id", "_provenance"})
+#: The ONLY payload fields a caller may set after `reserve()` (Codex round-1 P1): back-fills + sensors + pilot tag.
+#: `lane_id` moves only via transition(pending->open) or transfer_holder(); `arc_type`/`arc_type_declared_at`/
+#: `reserved_at`/`superseded_by`/`phases`/`round_outcomes` have their own dedicated writers.
+PAYLOAD_MUTABLE = frozenset({"pr", "head_sha", "base_sha", "attested_merge_tree", "concurrent_lanes_min",
+                             "concurrent_lanes_max", "pilot_run_id"})
+TRANSITION_MUTABLE = PAYLOAD_MUTABLE | {"concurrent_lanes_at_open"}
 
 
 class ReservationError(RuntimeError):
@@ -2869,7 +2978,7 @@ def reserve(arc_id: str, *, lane_id: str, branch: str, arc_type: str, arc_type_d
         "arc_id": arc_id, "generation": 1, "prev_generation": None, "state": "pending", "lane_id": lane_id,
         "branch": branch, "pr": None, "head_sha": None, "base_sha": None, "attested_merge_tree": None,
         "arc_type": arc_type, "arc_type_declared_at": arc_type_declared_at, "reserved_at": ts, "transitioned_at": ts,
-        "seq": alloc_seq(), "superseded_by": None, "concurrent_lanes_at_open": None, "phases": {},
+        "seq": alloc_seq(), "superseded_by": None, "concurrent_lanes_at_open": None, "phases": {}, "round_outcomes": {},
         "_provenance": _provenance(),
     }
     try:
@@ -2911,9 +3020,9 @@ def transition(arc_id: str, to_state: str, *, lane_id: str, updates: dict | None
         if to_state == "open":
             head["lane_id"] = lane_id     # the holder = the draining lane
         if updates:
-            for k in updates:
-                if k in _STATE_KEYS:
-                    raise ReservationError(f"cannot set {k} via updates")
+            bad = set(updates) - TRANSITION_MUTABLE
+            if bad:
+                raise ReservationError(f"transition() may not set {sorted(bad)}; allowed: {sorted(TRANSITION_MUTABLE)}")
             head.update(updates)
         return head
 
@@ -2921,11 +3030,12 @@ def transition(arc_id: str, to_state: str, *, lane_id: str, updates: dict | None
 
 
 def update_payload(arc_id: str, updates: dict) -> dict:
-    """Payload-only CAS (pr / head_sha / base_sha / attested_merge_tree / sensors). Never a state change."""
+    """Payload-only CAS restricted to PAYLOAD_MUTABLE (pr / head_sha / base_sha / attested_merge_tree /
+    concurrent_lanes_min|max / pilot_run_id). Never a state change, never the holder, never the open-time labels."""
     def build(head: dict) -> dict:
-        for k in updates:
-            if k in _STATE_KEYS or k == "lane_id":
-                raise ReservationError(f"update_payload cannot set {k}")
+        bad = set(updates) - PAYLOAD_MUTABLE
+        if bad:
+            raise ReservationError(f"update_payload may not set {sorted(bad)}; allowed: {sorted(PAYLOAD_MUTABLE)}")
         head.update(updates)
         return head
     return _cas_next(arc_id, build)
@@ -2951,6 +3061,18 @@ def record_phase(arc_id: str, phase: str, edge: str, ts: str | None = None) -> d
 
     def build(head: dict) -> dict:
         head.setdefault("phases", {}).setdefault(phase, {})[edge] = ts or now_iso()
+        return head
+    return _cas_next(arc_id, build)
+
+
+def record_round_outcome(arc_id: str, round_n: int, *, channel: str, terminal: str, finding_count: int) -> dict:
+    """C-HE-25 per-round terminal outcome, accreted on the reservation during the open window (like phases)
+    and folded into the arc row at drain. `terminal` MUST be one of the C-HE-16 §3 triple."""
+    if terminal not in ("APPROVE", "BLOCK", "REVIEWER_UNAVAILABLE"):
+        raise ReservationError(f"terminal must be APPROVE|BLOCK|REVIEWER_UNAVAILABLE, got {terminal!r}")
+
+    def build(head: dict) -> dict:
+        head.setdefault("round_outcomes", {})[str(int(round_n))] = {"channel": channel, "terminal": terminal, "finding_count": int(finding_count)}
         return head
     return _cas_next(arc_id, build)
 
@@ -3014,11 +3136,14 @@ def gc(*, now: datetime | None = None) -> list[Path]:
         if cur is None:
             continue
         head_gen, head = cur
-        cutoff = now - timedelta(days=GC_KEEP_DAYS)
-        for p in d.glob("*.json"):
-            if p.stem.isdigit() and int(p.stem) < head_gen and head["state"] in TERMINAL:
-                if datetime.fromtimestamp(p.stat().st_mtime, UTC) < cutoff:
-                    p.unlink(); removed.append(p)
+        # Retention = terminalization + 30 d (C-HE-03 §1): derived from the TERMINAL head's transitioned_at,
+        # never from each historical file's own age (a long-open arc that terminalizes today keeps its history).
+        if head["state"] in TERMINAL:
+            terminal_at = datetime.strptime(head["transitioned_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+            if now - terminal_at > timedelta(days=GC_KEEP_DAYS):
+                for p in d.glob("*.json"):
+                    if p.stem.isdigit() and int(p.stem) < head_gen:
+                        p.unlink(); removed.append(p)
         for tmp in d.glob(".*.tmp"):
             parts = tmp.name.split(".")
             pid = int(parts[-2]) if len(parts) >= 3 and parts[-2].isdigit() else None
@@ -3048,6 +3173,9 @@ def main(argv: list[str] | None = None) -> int:
     u = sub.add_parser("update"); u.add_argument("--arc-id", required=True); u.add_argument("--set", nargs="+", required=True)
     ph = sub.add_parser("phase"); ph.add_argument("--arc-id", required=True); ph.add_argument("--phase", choices=PHASES, required=True)
     ph.add_argument("--edge", choices=["start", "end"], required=True)
+    ro = sub.add_parser("round"); ro.add_argument("--arc-id", required=True); ro.add_argument("--round", type=int, required=True)
+    ro.add_argument("--channel", required=True); ro.add_argument("--terminal", choices=["APPROVE", "BLOCK", "REVIEWER_UNAVAILABLE"], required=True)
+    ro.add_argument("--findings", type=int, default=0)
     s = sub.add_parser("show"); s.add_argument("--arc-id", required=True)
     h = sub.add_parser("holder"); h.add_argument("--arc-id", required=True)
     se = sub.add_parser("selectable"); se.add_argument("--arc-id", required=True)
@@ -3064,6 +3192,8 @@ def main(argv: list[str] | None = None) -> int:
             out = update_payload(args.arc_id, kv(args.set))
         elif args.cmd == "phase":
             out = record_phase(args.arc_id, args.phase, args.edge)
+        elif args.cmd == "round":
+            out = record_round_outcome(args.arc_id, args.round, channel=args.channel, terminal=args.terminal, finding_count=args.findings)
         elif args.cmd == "show":
             cur = current(args.arc_id); out = cur[1] if cur else None
         elif args.cmd == "holder":
@@ -3118,9 +3248,8 @@ def test_reservation_ground_truth(qdir, monkeypatch):
     assert rs.reconcile("pr-20", gh_view=lambda pr: {"state": "MERGED"}) == "merged"
     assert rs.reconcile("pr-20", gh_view=lambda pr: {"state": "MERGED"}) == "merged"        # idempotent, no second transition
     rs.reserve("pr-21", lane_id="A", branch="b", arc_type="inventing")
-    old = (datetime.now(UTC) - timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    rs.update_payload("pr-21", {"reserved_at": old})
-    assert rs.reconcile("pr-21", gh_view=lambda pr: {"state": "OPEN"}) == "pending"          # state unchanged
+    later = datetime.now(UTC) + timedelta(hours=25)
+    assert rs.reconcile("pr-21", gh_view=lambda pr: {"state": "OPEN"}, now=later) == "pending"   # aged; state unchanged
     assert any(k == "NOTIFY" for k, _, _ in rows) and any(k == "DEFERRED-HIL" for k, _, _ in rows)
     rs.reserve("pr-22", lane_id="A", branch="b", arc_type="inventing"); rs.open_with_sensor("pr-22", "A"); rs.update_payload("pr-22", {"pr": 22})
     assert rs.reconcile("pr-22", gh_view=lambda pr: {"state": "CLOSED"}) == "open"           # closed, no pointer → HITL, unchanged
@@ -3228,6 +3357,7 @@ def test_append_refuses_unless_holder(tmp_path, monkeypatch, qdir_res):
 def test_drain_flips_before_append_and_folds_reservation_fields(tmp_path, monkeypatch, qdir_res):
     q = _queue_entries(am, tmp_path, monkeypatch, 1); monkeypatch.setattr(am, "LANE_ID", "A")
     rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying"); rs.record_phase("pr-1", "execute", "start", ts="t0")
+    rs.record_round_outcome("pr-1", 1, channel="codex", terminal="APPROVE", finding_count=0)
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
     order = []
     real_append = am.append
@@ -3237,6 +3367,7 @@ def test_drain_flips_before_append_and_folds_reservation_fields(tmp_path, monkey
     assert order == [("append", "open")]                                   # flip happened BEFORE append
     row = am.read_ledger()[0]
     assert row["arc_type_open"] == "applying" and row["lane_id"] == "A" and row["phases"]["execute"]["start"] == "t0"
+    assert row["round_outcomes"] == {"1": {"channel": "codex", "terminal": "APPROVE", "finding_count": 0}}
     assert row["concurrent_lanes_at_open"] == 0
 
 
@@ -3318,7 +3449,7 @@ In `_drain_one`, before `extract`:
         return "released"
     res = cur[1]
 ```
-and after `row = extract(args)`, fold: `row.phases = res.get("phases", {}); row.concurrent_lanes_at_open = res.get("concurrent_lanes_at_open"); row.arc_type_open = res.get("arc_type") if res.get("arc_type_declared_at") == "open" else row.arc_type_open; row.lane_id = LANE_ID; row.head_sha = res.get("head_sha"); row.base_sha = res.get("base_sha")`.
+and after `row = extract(args)`, fold: `row.phases = res.get("phases", {}); row.round_outcomes = res.get("round_outcomes", {}); row.concurrent_lanes_at_open = res.get("concurrent_lanes_at_open"); row.arc_type_open = res.get("arc_type") if res.get("arc_type_declared_at") == "open" else row.arc_type_open; row.lane_id = LANE_ID; row.head_sha = res.get("head_sha"); row.base_sha = res.get("base_sha")`.
 
 Add and call at the top of `drain()` (after `_recover_dead_claims()`):
 ```python
@@ -4068,6 +4199,16 @@ def test_post_merge_ci_blocked_and_unblock(door):
     assert md.read_lease() is None
 
 
+# mutation-probe: drop the mark_blocked/raise after the first-parent mismatch (emit-only)
+def test_base_toctou_blocks_door(door):
+    g = FakeGround()
+    g.git_first_parent = lambda sha: "z" * 40                    # landed on a base other than the verified one
+    with pytest.raises(md.DoorBlocked, match="base_toctou"):
+        _land(door, g)
+    l = md.read_lease(); assert l["state"] == "blocked" and l["blocked_reason"] == "base_toctou_first_parent_mismatch"
+    assert rs.current("pr-1")[1]["state"] == "merged"           # the fact is recorded; the DOOR is what blocks
+
+
 # mutation-probe: force a second acquire() call before the refresh PR merge
 def test_continuation_no_reacquire(door, monkeypatch):
     g = FakeGround()
@@ -4080,6 +4221,24 @@ def test_continuation_no_reacquire(door, monkeypatch):
         return 2, "r"*40
     assert md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh) == "released"
     assert acquires == [1] and [c[0] for c in g.merge_calls] == [1, 2]
+
+
+# mutation-probe: drop the `recorded is not None` branch (always call refresh())
+def test_resume_uses_recorded_refresh_never_a_second_pr(door, monkeypatch):
+    g = FakeGround()
+    calls = []
+    rs.update_payload("pr-1", {"pr": 1, "head_sha": "h"*40, "base_sha": "b"*40, "attested_merge_tree": "t"*40})
+    def refresh():
+        calls.append(1); g.state = {"state": "OPEN", "headRefOid": "r"*40, "baseRefOid": "m"*40, "mergedAt": None, "mergeCommit": None}; return 2, "r"*40
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))   # in-process stand-in for the kill
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    lease = md.read_lease(); assert lease["refresh"] == {"pr": 2, "head_sha": "r"*40, "merge_attempted_at": lease["refresh"]["merge_attempted_at"]}
+    g.gh_merge = lambda pr, head, timeout: (g.state.update(state="MERGED", mergedAt="now", mergeCommit={"oid": "m"*40}), subprocess.CompletedProcess([], 0, "", ""))[1]
+    assert md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh, lease=lease) == "released"
+    assert calls == [1]                                              # refresh() called ONCE across crash + resume
 
 
 def test_wait_for_door_backoff_numbers_and_budget(door):
@@ -4246,11 +4405,16 @@ def land(pr: int, *, lane_id: str, arc_id: str, ground: Ground, refresh: Callabl
             raise DoorFailed("post-merge confirm: not MERGED")
         _kill_after("confirm")
         merge_sha = (v.get("mergeCommit") or {}).get("oid") or ""
-        if merge_sha and ground.git_first_parent(merge_sha) != base_sha:        # BASE_TOCTOU detection (C-HE-12)
-            _emit_gate(lease, gate="BASE_TOCTOU", fail_class="terminal-detected", cause="first_parent_mismatch", evidence=f"merge {merge_sha[:12]} first parent != verified base {base_sha[:12]}", arc_id=arc_id, lane_id=lane_id, severity="hard")
         if rs.current(arc_id)[1]["state"] != "merged":
-            rs.transition(arc_id, "merged", lane_id=lane_id)                     # (vi)
+            rs.transition(arc_id, "merged", lane_id=lane_id)                     # (vi) -- ground truth: it IS merged
         _kill_after("reservation-merged")
+        if merge_sha and ground.git_first_parent(merge_sha) != base_sha:        # BASE_TOCTOU detection (C-HE-12 §2)
+            # Positive proof the race window was hit: NEVER silent acceptance. The merge already landed server-side
+            # (reservation reflects that fact); the DOOR blocks -- no refresh, no release -- and routes to re-validation.
+            _emit_gate(lease, gate="BASE_TOCTOU", fail_class="HITL-recoverable", cause="first_parent_mismatch", evidence=f"merge {merge_sha[:12]} first parent != verified base {base_sha[:12]}", arc_id=arc_id, lane_id=lane_id, severity="hard")
+            mark_blocked(lease, sha=merge_sha, reason="base_toctou_first_parent_mismatch")
+            rs.emit_loop_row("DEFERRED-HIL", lane_id, "merge-door-post-merge:HITL-recoverable:base_toctou", f"{arc_id} — merge {merge_sha[:12]} landed on a base other than the verified {base_sha[:12]}; re-validate main, then `just merge-door-unblock {pr} {merge_sha}`")
+            raise DoorBlocked("base_toctou_first_parent_mismatch")
         status = wait_post_merge_ci(merge_sha, ground, bound_s=POST_MERGE_CI_BOUND_S, lane_id=lane_id)   # (vii)
         if status != "success":
             mark_blocked(lease, sha=merge_sha, reason="post_merge_ci_not_green")
@@ -4258,9 +4422,13 @@ def land(pr: int, *, lane_id: str, arc_id: str, ground: Ground, refresh: Callabl
             rs.emit_loop_row("DEFERRED-HIL", lane_id, "merge-door-post-merge-ci:HITL-recoverable:post_merge_ci_not_green", f"{arc_id} — post-merge main run for {merge_sha[:12]} {status}; door blocked; run `just merge-door-unblock {pr} {merge_sha}` after fixing")
             raise DoorBlocked(status)
         _kill_after("post-ci")
-        if refresh is not None:                                                  # (viii) continuation, NO re-acquire
-            rpr, rhead = refresh()
-            publish_exclusive(_sidecar(lease["lease_token"], "refresh"), json.dumps({"pr": rpr, "head_sha": rhead}))
+        recorded = (read_lease() or {}).get("refresh")
+        if refresh is not None or recorded is not None:                          # (viii) continuation, NO re-acquire
+            if recorded is not None:                                             # self-resume: NEVER create a second refresh PR
+                rpr, rhead = int(recorded["pr"]), recorded["head_sha"]
+            else:
+                rpr, rhead = refresh()
+                publish_exclusive(_sidecar(lease["lease_token"], "refresh"), json.dumps({"pr": rpr, "head_sha": rhead}))
             reconciled = _merge_once(lease, rpr, rhead, ground, suffix="refresh") or reconciled
             rv = ground.gh_view(rpr)
             if rv.get("state") != "MERGED":
@@ -4847,7 +5015,8 @@ loop_now() { echo "2026-08-18T00:00:00Z"; }
 loop_log_structured DEFERRED-HIL L1 'merge-door-lease-acquire:transient-retry:lease_contended' 'B-1 — waiting'
 loop_log_structured DEFERRED-HIL L2 'merge-door-lease-acquire:transient-retry:lease_contended' 'B-2 — waiting'
 loop_log_structured DEFERRED-HIL L3 'reviewer:permanent-fail-exit:codex_login' 'B-3 — login'
-G=$(loop_hil_groups)   # "<sig>\t<n>\t<first_seen>\t<items>"
+export ARC_METRICS_QUEUE_DIR="$REPO/queue"; mkdir -p "$ARC_METRICS_QUEUE_DIR"
+G=$(loop_hil_groups)   # "<sig>\t<n>\t<first_seen_epoch>\t<items>"
 [ "$(printf '%s\n' "$G" | wc -l | tr -d ' ')" = "2" ] && ok "two cause groups" || bad "groups: $G"
 [[ "$G" == *"lease_contended	2	"* ]] && ok "equal signatures within window → one group of 2" || bad "no 2-group: $G"
 loop_now() { echo "2026-08-18T00:05:00Z"; }
@@ -4857,8 +5026,21 @@ OUT=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
 [[ "$OUT" == *"[L1] B-1"* && "$OUT" == *"[L2] B-2"* ]] && ok "one batched prompt per cause after window" || bad "deliver: $OUT"
 [ "$(grep -c '| COALESCE-DELIVERED |' "$(loop_status_path)")" = "2" ] && ok "delivery rows appended" || bad "no delivery rows"
 [ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] && ok "second SessionStart does not re-prompt" || bad "double delivery"
+# atomic claim: two CONCURRENT deliverers → exactly one prompt (Codex round-1 P1)
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null; rm -rf "$ARC_METRICS_QUEUE_DIR/hil-deliveries"
+loop_now() { echo "2026-08-18T01:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-7 — a'
+loop_now() { echo "2026-08-18T01:11:00Z"; }
+OUT_A=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver & HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver & wait)
+[ "$(printf '%s\n' "$OUT_A" | grep -c 'need you')" = "1" ] && ok "concurrent deliverers: exactly one prompt" || bad "double prompt under concurrency: $OUT_A"
+# ordering by timestamp, not item id: a lexically-earlier item deferred LATER must not re-anchor the window
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null; rm -rf "$ARC_METRICS_QUEUE_DIR/hil-deliveries"
+loop_now() { echo "2026-08-18T02:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-9 — first'
+loop_now() { echo "2026-08-18T02:20:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-1 — later but lexically first'
+[ "$(loop_hil_groups | wc -l | tr -d ' ')" = "2" ] && ok "groups keyed by arrival time (20 min apart → 2 groups)" || bad "timestamp ordering wrong: $(loop_hil_groups)"
 loop_now() { echo "2026-08-18T00:30:00Z"; }; loop_log_structured DEFERRED-HIL L4 'merge-door-lease-acquire:transient-retry:lease_contended' 'B-4 — later'
 [ "$(printf '%s\n' "$(loop_hil_groups)" | grep -c lease_contended)" = "2" ] && ok "same signature outside window → separate group" || bad "window merge wrong"
+loop_now() { echo "2026-08-18T00:45:00Z"; }
+[[ "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" == *"B-4"* ]] && ok "later same-signature generation is delivered (not suppressed by the earlier delivery)" || bad "later generation suppressed"
 ```
 - [ ] **Step 2: RED**; **Step 3: Implement**
 ```bash
@@ -4868,35 +5050,46 @@ loop_now() { echo "2026-08-18T00:30:00Z"; }; loop_log_structured DEFERRED-HIL L4
 loop_hil_groups() {
   local p; p=$(loop_status_path); [ -f "$p" ] || return 0
   local w="${HARNESS_HIL_COALESCE_WINDOW_S:-600}"; [ "$w" -lt 300 ] && w=300; [ "$w" -gt 900 ] && w=900
-  awk -F'|' -v w="$w" "$_LOOP_AWK_ROW"'
-    function epoch(ts) { gsub(/^[ \t]+|[ \t]+$/, "", ts); gsub(/[-T:Z]/, " ", ts); return mktime(ts) }
+  # Pass 1 (awk, POSIX): resolve last-write-wins per item; emit PENDING rows as ts \t tok \t sig \t lane \t detail.
+  # Pass 2 (bash): ts -> epoch (portable, no gawk mktime). Pass 3: sort by EPOCH (not by item id -- Codex round-1
+  # P2: `asorti` sorted the token, not the arrival time). Pass 4 (awk): sequential window grouping.
+  awk -F'|' "$_LOOP_AWK_ROW"'
     { rowparse() }
     k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
       cause = $4; if (cause ~ /^[ \t]*lane=/) { sub(/^[^;]*;cause=/, "", cause); gsub(/[ \t]/, "", cause) } else cause = "-"
-      if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; sig[tok] = cause; when[tok] = epoch($2); lanes[tok] = lane; det[tok] = d } else state[tok] = "RESOLVED" }
-    END {
-      n = asorti(when, order)          # stable by first_seen
-      for (i = 1; i <= n; i++) { t = order[i]; if (state[t] != "PENDING") continue
-        s = sig[t]; if (!(s in gstart) || when[t] - gstart[s] > w) { gid++; gstart[s] = when[t]; gsig[gid] = s; gfirst[gid] = when[t]; gn[gid] = 0; gitems[gid] = ""; cur[s] = gid }
-        g = cur[s]; gn[g]++; gitems[g] = gitems[g] (gitems[g] == "" ? "" : "; ") "[" lanes[t] "] " det[t] }
-      for (g = 1; g <= gid; g++) printf "%s\t%d\t%s\t%s\n", gsig[g], gn[g], strftime("%Y-%m-%dT%H:%M:%SZ", gfirst[g], 1), gitems[g] }
-  ' "$p" 2>/dev/null | sed 's/\\|/|/g'
+      ts = $2; gsub(/^[ \t]+|[ \t]+$/, "", ts)
+      if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; sig[tok] = cause; when[tok] = ts; lanes[tok] = lane; det[tok] = d } else state[tok] = "RESOLVED" }
+    END { for (t in state) if (state[t] == "PENDING") printf "%s\t%s\t%s\t%s\t%s\n", when[t], t, sig[t], lanes[t], det[t] }
+  ' "$p" 2>/dev/null \
+  | while IFS=$'\t' read -r ts tok sig lane det; do printf '%s\t%s\t%s\t%s\t%s\n' "$(_loop_epoch "$ts")" "$tok" "$sig" "$lane" "$det"; done \
+  | sort -n -k1,1 -t$'\t' \
+  | awk -F'\t' -v w="$w" '
+    { s = $3; e = $1 + 0
+      if (!(s in gstart) || e - gstart[s] > w) { gid++; gstart[s] = e; gsig[gid] = s; gfirst[gid] = e; gn[gid] = 0; gitems[gid] = ""; cur[s] = gid }
+      g = cur[s]; gn[g]++; gitems[g] = gitems[g] (gitems[g] == "" ? "" : "; ") "[" $4 "] " $5 }
+    END { for (g = 1; g <= gid; g++) printf "%s\t%d\t%d\t%s\n", gsig[g], gn[g], gfirst[g], gitems[g] }
+  ' | sed 's/\\|/|/g'
 }
-# Pull-based delivery (Codex C2-05): emit each group whose first_seen + window has elapsed AND that has no
-# COALESCE-DELIVERED row at/after its first_seen; append the delivery row so no second path re-prompts.
+# Pull-based delivery (Codex C2-05) with an ATOMIC per-generation claim (Codex round-1 P1): a generation is
+# (sig, first_seen_epoch); before prompting, the deliverer must win the exclusive create of
+# QUEUE_DIR/hil-deliveries/<gen-id> (a coordination file: QUEUE_DIR-adjacent, C-HE-02 §2). Two concurrent
+# SessionStart paths cannot both prompt, and a later same-signature generation is never suppressed by an
+# earlier one's delivery (the claim is keyed by the EXACT generation, not by ">= first_seen").
 loop_hil_deliver() {
   local p; p=$(loop_status_path); [ -f "$p" ] || return 0
   local w="${HARNESS_HIL_COALESCE_WINDOW_S:-600}" now; now=$(_loop_epoch "$(loop_now)")
+  local claims="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}/hil-deliveries"; mkdir -p "$claims"
   loop_hil_groups | while IFS=$'\t' read -r sig n first items; do
-    [ $(( now - $(_loop_epoch "$first") )) -ge "$w" ] || continue
-    if awk -F'|' -v s="$sig" -v f="$(_loop_epoch "$first")" "$_LOOP_AWK_ROW"' function epoch(ts){gsub(/^[ \t]+|[ \t]+$/,"",ts);gsub(/[-T:Z]/," ",ts);return mktime(ts)} { rowparse() } k=="COALESCE-DELIVERED" && $4 ~ ("cause=" s) && epoch($2) >= f { found=1 } END { exit found?0:1 }' "$p"; then continue; fi
+    [ $(( now - first )) -ge "$w" ] || continue
+    local gen; gen="gen-${first}-$(printf '%s' "$sig" | tr -c 'A-Za-z0-9_.-' '_')-${n}"
+    ( set -o noclobber; printf '%s\n' "$(loop_now) ${HARNESS_LANE_ID:--}" > "$claims/$gen" ) 2>/dev/null || continue   # lost the claim: already delivered
     printf '[loop] ⏸ %s item(s) need you (%s): %s\n' "$n" "$sig" "$items"
-    loop_log_structured COALESCE-DELIVERED "${HARNESS_LANE_ID:--}" "$sig" "gen-$(_loop_epoch "$first")-$n"
+    loop_log_structured COALESCE-DELIVERED "${HARNESS_LANE_ID:--}" "$sig" "$gen"
   done
 }
 _loop_epoch() { date -u -j -f %Y-%m-%dT%H:%M:%SZ "$1" +%s 2>/dev/null || date -u -d "$1" +%s; }
 ```
-(`session-start.sh`: replace the direct `loop_pending_hil_summary` line with `loop_hil_deliver` output; keep the bounded summary as the fallback line when no group is due.) *Portability note:* `mktime`/`strftime`/`asorti` are gawk; macOS ships BSD awk. The executor MUST either vendor the epoch math (`_loop_epoch` in bash and pass epochs into awk) or require `gawk` — the workspace runs hook tests on both macOS and ubuntu CI, so vendor the bash form: compute per-row epochs in a bash pre-pass and feed `awk` a 4th synthetic column. Pin with the test on both platforms.
+(`session-start.sh`: replace the direct `loop_pending_hil_summary` line with `loop_hil_deliver` output; keep the bounded summary as the fallback line when no group is due.) The pipeline is POSIX awk + bash `date` (both forms) — no gawk `mktime/asorti`; the tests run on macOS and ubuntu CI.
 - [ ] **Step 4: GREEN**, register (covered by the `test_loop_lib.sh` row). Commit `feat(he-lanes): U-HE-30 HIL coalescing by cause_signature with pull-based delivery (C-HE-10)`.
 
 ---
@@ -6100,7 +6293,7 @@ codex-context-check-ci:
 ```python
 N_ROUNDS = 30; KILL_IF_FEWER_THAN = 2
 def config_row(*, lens: str, n=N_ROUNDS, threshold=KILL_IF_FEWER_THAN) -> dict          # recorded so amendments are auditable
-def scored_rounds(rows, lens) -> set[int]                                                # DISTINCT round_n where producer==lens (finding or no_finding)
+def scored_rounds(rows, lens) -> set[tuple[str, int]]                                    # DISTINCT (arc_id, round_n) where producer==lens (finding or no_finding)
 def unique_catches(rows, lens) -> list[dict]                                             # (a) ∧ (b)
 def decide(rows, lens, *, n=N_ROUNDS, threshold=KILL_IF_FEWER_THAN) -> dict              # {"scored": k, "unique": u, "decision": "kill"|"keep"|"pending"}
 def p_kill(p: float, n=N_ROUNDS, threshold=KILL_IF_FEWER_THAN) -> float                  # binomial P(X < threshold)
@@ -6149,6 +6342,17 @@ def test_kill_rule_reproducible_from_rows_and_rejected_excluded():
 def test_pending_before_n_and_config_row_recorded():
     rows = [_row(r, "gemini-shadow", kind="no_finding") for r in range(1, 10)]
     assert st.decide(rows, "gemini-shadow")["decision"] == "pending"
+
+
+# mutation-probe: reduce scored rounds to round_n alone (drop arc_id from the key)
+def test_scored_rounds_are_per_arc():
+    """Two arcs each with rounds 1..15 = 30 scored rounds; the same rows keyed on round_n alone would count 15."""
+    rows = []
+    for arc in ("pr-1", "pr-2"):
+        for r in range(1, 16):
+            row = _row(r, "gemini-shadow", kind="no_finding"); row["arc_id"] = arc; row["finding_id"] = f"gemini-shadow:{arc}:{r}"; rows.append(row)
+    assert len(st.scored_rounds(rows, "gemini-shadow")) == 30
+    assert st.decide(rows, "gemini-shadow")["decision"] == "kill"      # n reached, 0 unique catches
     c = st.config_row(lens="gemini-shadow")
     assert c["record_kind"] == "no_finding" and "n=30" in c["observed_evidence"] and "kill_if_fewer_than=2" in c["observed_evidence"]
 
@@ -6182,8 +6386,9 @@ def config_row(*, lens: str, n: int = N_ROUNDS, threshold: int = KILL_IF_FEWER_T
     return fr.make_row(core, fr.Envelope("no_finding", fr.now_iso(), "policy", "shadow_trial", None, None, None, None))
 
 
-def scored_rounds(rows: list[dict], lens: str) -> set[int]:
-    return {r["round_n"] for r in rows if r["producer"] == lens and r["record_kind"] in ("finding", "no_finding") and r["round_n"] is not None}
+def scored_rounds(rows: list[dict], lens: str) -> set[tuple[str, int]]:
+    """Round numbers restart per arc: a scored round is identified by (arc_id, round_n), never round_n alone."""
+    return {(r["arc_id"], r["round_n"]) for r in rows if r["producer"] == lens and r["record_kind"] in ("finding", "no_finding") and r["round_n"] is not None}
 
 
 def unique_catches(rows: list[dict], lens: str) -> list[dict]:
@@ -6418,6 +6623,8 @@ Every row marked **mutation-probe** in §8.1 has a named `--lines` target in its
 1. **Spec coverage.** Every `C-HE-01`…`C-HE-35` row in §4 has ≥ 1 unit with section-level cites; §5 (files table) is honored file-for-file — the only additions beyond spec §5 are helper modules the listed files import (`tools/lane_ports.py`, `tools/lanes_pilot.py`, `tools/main_protection.py`, `tools/merge_gate_log.py`, `tools/lanes_verify.py`, `tools/review_wrapper_common.py` is in §5), each named in its unit; §6 order is followed with the two stated refinements; §8.1 rows all appear in §5 above; §11 items are carried by U-HE-44. Gaps found and closed during self-review: (a) C-HE-04 §6 (teardown guard) had no unit of its own — it lands with U-HE-15 Step 4b (`hook_worktree_local_state` gains the `rev-list @{u}..HEAD` refusal + its mutation-probe) and the coverage row says so; (b) C-HE-06 §10 attestation tiering — folded into U-HE-23 (`_tiering_active` reads, `land()` writes one file per clean cycle under `DOOR/tier-clean-cycles`; listed in the U-HE-14 store audit's derived families).
 2. **Placeholder scan.** No `TBD`, `TODO`, "implement later", "fill in", "add appropriate error handling", "similar to Task N" in any step. Where a step says "the executor reads the exact line numbers from the file they just wrote", it is because `--lines` for a mutation probe cannot be known until the code exists — the guard being reverted is named in every case.
 3. **Type consistency (names used across units).** `fr.FindingCore / fr.Envelope / fr.make_row / fr.append_row / fr.read_rows / fr.reduce_last_by_finding_id / fr.make_finding_id / fr.now_iso` (U-01) are used unchanged by U-02, 04, 06, 07, 13, 23, 33, 34, 40, 41, 43. `rw.Attempt / rw.ReviewOutcome / rw.parse_verdict / rw.run_with_retry / rw.run_with_failover / rw.classify / rw.compute_binding / rw.exit_code / rw.outcome_rows / rw.env_arc_and_lane` (U-02) are used unchanged by U-04, 06, 07, 35. `rs.reserve / rs.transition / rs.update_payload / rs.transfer_holder / rs.record_phase / rs.holder / rs.selectable / rs.current / rs.open_with_sensor / rs.reconcile / rs.emit_loop_row / rs.mint_lane_id` (U-17/18) are used unchanged by U-19, 20, 21, 22, 23, 33, 36, 40, 43. `am.ci_is_green / am.CI_TERMINAL` (U-08) → U-23. `am.LANE_ID / am._kill_after / am._hold_after / am._restore_or_republish / am._drain_one / am._reconcile_local_rows` (U-15/19/20). `lv.Row / lv.Result / lv.MANIFEST / lv.run_row / lv.phase0_rows / lv.phase0_verdict / lv.coverage_gaps` (U-05) → U-37. `md.acquire / md.release / md.reclaim / md.unblock / md.win_marker / md.mark_attempted / md.mark_blocked / md.read_lease / md.land / md.wait_for_door / md.Ground` (U-22/23) → U-25, 28, 33. `loop_log_structured / loop_status_path / loop_hil_groups / loop_hil_deliver / loop_notify_summary / _LOOP_AWK_ROW` (U-29/30) → U-09 (upgraded shape), U-18, U-31, U-32. One fix applied during review: U-HE-09 (S1) emits `NOTIFY` before U-HE-29 defines the structured kind — its row is written via legacy `loop_log` and the U-HE-29 reducer treats it as a legacy row (stated in U-HE-09).
+
+4. **Codex round 1 on PR #1393 (out-of-family, cold) — 7 P1 / 4 P2, all absorbed in this PR.** P1: (a) marker/plan exit-gate mismatch → status block + marker now name this review as the plan's exit gate; (b) `round_outcomes` never written → `reservations.record_round_outcome` + `rw.record_round_outcome_if_reserved` called by both wrappers + folded at drain (U-HE-17/02/04/06/19); (c) `transition(updates)`/`update_payload` could rewrite `lane_id`/`arc_type`/`superseded_by` → `PAYLOAD_MUTABLE`/`TRANSITION_MUTABLE` allowlists + test (U-HE-17; U-HE-18's aging test now uses `now=`); (d) `BASE_TOCTOU` mismatch emitted but did not block → door blocks + HITL + test (U-HE-23); (e) resume re-created the refresh PR → resume from the recorded sidecar + test (U-HE-23); (f) coalescing delivery race / later-generation suppression → exclusive-create claim per exact generation under `QUEUE_DIR/hil-deliveries/` + concurrency test (U-HE-30; store audit lists the family); (g) shadow scored rounds collapsed across arcs → `(arc_id, round_n)` + test (U-HE-43). P2: artifact polling capped by the shared 1260 s deadline + test (U-HE-04); adjudication append enforces the same-core invariant against the ORIGINAL row + test (U-HE-01); reservation GC retention runs from the terminal head's `transitioned_at` + test (U-HE-17); HIL groups sorted by epoch, gawk-free pipeline (U-HE-30). Round 2 result is recorded in the PR.
 
 ## Execution handoff
 

@@ -10,7 +10,7 @@ back_reference:
   - .harness/adr/ADR-HE-4_defect_mechanization_and_grounding.md
   - .harness/council/spec-he-loop-lanes-v1/07-CLOSE.md (E4 CLEAR-WITH-FOLD; residuals folded)
   - .harness/council/spec-he-loop-lanes-v1/05-reconcile/merged-findings-and-proposed-dispositions.md (fold groups G1–G22)
-  - .harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md (the plan this marker admits for execution)
+  - ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md (admitted for execution only with its own exit gate met — codex review on PR #1393, see body)"
 merge_commit: pending (pre-merge at filing time; same PR as the spec)
 reviewer_chain:
   - "operator draft review + spec-phase decisions D1–D10 (2026-08-18; recorded at spec §12)"
@@ -31,7 +31,7 @@ superseded_by: null
 
 **What was reviewed.** Clearance ran per operator decision D4 (adversarial + Codex + council; no advisor): the Codex executability gate, a seven-voice harness council with a consolidated reconcile, the `harness-adversarial-reviewer`, and an out-of-family Codex cold read. Six Class-1 findings came only from the decorrelated Codex-cold/adversary legs; the reconcile over the *proposed* folds caught four more that the folds themselves introduced. All 22 fold groups (G1–G22) were applied in place with each fold tagged in the affected contract (spec change-note). Three contracts derived from HE-1 P1–P4 (C-HE-07; C-HE-06 §7 + §4-timeout; C-HE-09 §1) are normative in v1 subject to that council pass, which accepted them; a rejection would yield a dated v1.1 change-note, never an in-place rewrite (spec §14). One council scoping is reversible by the operator: Codex-exec lanes are OUT of v1 for the merge-door fence (C-HE-01 §1, §11 #9).
 
-**What this admits.** `Implementation_Plan_HE_Loop_Lanes_v1.md` (45 atomic units `U-HE-01..45`, milestone-led on spec §6) may be consumed for execution once this marker is on `main` (spec §14: the plan MUST NOT be consumed before the marker exists). Phase 0 = S1–S4 = `U-HE-01..33` gates running N ≥ 2 lanes at all; the ≥ 3 pilots gate only follow-on lane orchestration (C-HE-13 §3).
+**What this admits.** This marker clears the **specification**. `Implementation_Plan_HE_Loop_Lanes_v1.md` (45 atomic units `U-HE-01..45`, milestone-led on spec §6) may be consumed for execution once BOTH hold: this marker is on `main` (spec §14: the plan MUST NOT be consumed before the marker exists) AND the plan's own exit gate is met — the out-of-family `just codex-review` round on PR #1393 driven to convergence (round 1: 7 P1 / 4 P2, absorbed in the plan in the same PR; the plan's status block records the outcome). Both land in PR #1393, so on merge the plan is admitted; had the review not converged, this marker would clear the spec alone and the plan would stay `Proposed`. Phase 0 = S1–S4 = `U-HE-01..33` gates running N ≥ 2 lanes at all; the ≥ 3 pilots gate only follow-on lane orchestration (C-HE-13 §3).
 
 ## Notes
 
