@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d79f30d97faa` |
-| `last_refreshed` | 2026-08-16T00:00:00Z |
-| `git_head` | `f7765fb7` —  |
+| `workspace_state_hash` | `ce99f89ca534` |
+| `last_refreshed` | 2026-08-18T00:00:00Z |
+| `git_head` | `cd02e406` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 119 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1390).** B-137 is CLOSED — OD spec v1.42 §0.2 landed candidate C1 (`workflow.envelope` as C-OD-09 §9.2 row 20) with plan v2.36 / U-OD-61, both clearance markers, and the back-flow record at `.harness/b137-c1-admit-the-envelope-root-2026-08-16.md`. Build-time grounding reframed the arc twice and both reframings are load-bearing for whoever reads the row next: (i) C1 is an INGESTION REPAIR, not a Phase-7 design extension — C-OD-25 §25.3 (`Spec_Operational_Discipline_v1_8.md:90`) has declared the envelope's head=1.0 floor since v1.8, preserved verbatim through v1.9→v1.41, and §9.2 simply never absorbed it; (ii) the ratification's carried-forward "data loss, not delay" cost was already superseded by B-136's #1331 repair, and the arc's own replacement claim ("no configuration loses a span the status quo would have kept") was ALSO false and is withdrawn — it compared cardinality, and by trace identity C1 displaces above `max_buffered_traces` while strictly dominating below it. Two residuals were split to their own rows rather than left on a closed parent: **B-185** (concurrency threshold — displacement above the cap, dormant on the same Persona §11 open-item-4 throughput denominator as B-182/B-183) and **B-186** (the floor does NOT survive an unsampled ambient OTel parent; confirmed reachable via the MCP `copy_context()` path, registered rather than repaired because forcing the envelope to a trace root trades the observability floor against distributed-trace continuity). **The recommended next action is B-186 close-out step (1)**, which is fully Claude-executable and gates everything else on that row: determine by grep + execution whether any SHIPPED entry point can begin `api.run` / the MCP daemon under an ambient OTel span that is unsampled — the harness's own bootstrap does not, so the row may be dormant-by-construction, and that finding is worth as much as a repair. Only if step (1) finds the venue real does the (a) forced-root / (b) parent-as-link / (c) ratify-the-scope fork become live, and only then is the C7-versus-trace-interop council owed. Alternatives if that grounds out: B-160's conformance sweep (its head=1.0 divergence class grew four → five at this arc, and its close-out must now re-derive from a scope wider than C-OD-30…33), or the standing R-CTX-1 program at B-148.
+**Current next action (post-#1393).** The H_E autonomous-loop + parallel-lanes design chain is on main and cleared: `.harness/adr/ADR-HE-1..4` → `.harness/spec/Spec_HE_Loop_Lanes_v1.md` (35 `C-HE-*` contracts; clearance marker `.harness/clearance/spec-he-loop-lanes-v1-cleared-2026-08-18.md`) → `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md` (45 atomic units `U-HE-01..45`, milestone-led on spec §6 S1–S8; five out-of-family codex rounds absorbed, terminal record at plan §7 item 8 with six residual defect classes carried by unit execution). Namespace is H_E dev tooling only (spec §0.2) — no H_T design surface, no X-AL-3 implication. **The recommended next action is executing the plan in its §3 topological order, starting at `U-HE-01` (finding record — `tools/finding_record.py`, C-HE-24): one unit per RED-first cycle, one PR per S-step cluster through ship-pr, per-PR `just codex-review` + `merge-gate` on code PRs;** the first content PR also owes `just roadmap-status --archive-superseded` (the post-#1390 round). Phase 0 = S1–S4 = `U-HE-01..33` gates running N ≥ 2 lanes at all (`just lanes-phase0-check`); the single operator gate in the whole plan is `just main-protection-apply-confirm` (C-HE-08, one AskUserQuestion with the printed diff). U-HE-44/45 register the spec §11 carry-forwards, the C-HE-06 §7-vs-G4 invariant-wording tension (plan §6 item 13, v1.1 change-note candidate), and the six residual classes as forward-register rows. Alternatives if the operator defers the lanes program: B-186 step (1) grounding (unchanged from post-#1390), B-160's conformance sweep, or the standing R-CTX-1 program at B-148.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1393 | 2026-08-18 | H_E loop+lanes: ADR-HE-1..4, Spec_HE_Loop_Lanes_v1 (35 C-HE-*, council-cleared, marker filed), Implementation_Plan_HE_Loop_Lanes_v1 (45 U-HE-* units; 5 codex rounds absorbed), both council ledgers |
 | PR #1390 | 2026-08-16 | B-137 step (3) = C1 CLOSED: workflow.envelope lands as C-OD-09 §9.2 row 20 (OD spec v1.42 + plan v2.36/U-OD-61). Grounding found C1 is an INGESTION REPAIR of a C-OD-25 §25.3 declaration live since v1.8, not a design extension. Four out-of-family Codex rounds (P1/P1 → P1/P1 → P2/P2 → clean) withdrew TWO claims the arc itself made, including a cardinality-vs-identity error that concealed trace displacement under buffer pressure. Residuals split to B-185 + B-186; merge-gate 3/3 APPROVE. |
 | PR #1388 | 2026-08-16 | graft integration hardened: hook timeouts ms->seconds, helper shims tracked, gitignore negations for both graft skill dirs, Codex parity exemption written as a tracked-helper guard, upstream limits registered at .harness/graft-integration-notes.md |
 | PR #1386 | 2026-08-16 | graft reachability detector (tools/graft_reachability.py, 37 tests) + merge-gate blast-radius pre-flight |
 | 1384 | 2026-08-16 | Bundled roadmap round for the #1383 ratifications: post-#1380 archived + pointer re-derived. This is the owed follow-on terminating refresh (§12.2.1); the next-action pointer is unchanged because it was authored for this very round and still holds. |
-| 1383 | 2026-08-16 | Three operator gates RATIFIED and now buildable: B-137 step (3) = C1 (admit the root, with its unmeasured ordinary-child cost carried forward); B-124 = Reading A (materialize at the emission site, overriding the fork's MODERATE recommendation of D); R-CTX-1 E7 = operator runs the reversible mv themselves. B-182 also newly un-gated after #1380 decoupled it from B-183. |
 
 ---
 
