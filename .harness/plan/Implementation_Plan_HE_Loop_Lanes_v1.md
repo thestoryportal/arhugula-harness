@@ -1154,10 +1154,18 @@ def _artifact_tree(tmp_path: Path, head: str, mtime: float) -> Path:
     d = tmp_path / "2026" / "08" / "18"
     d.mkdir(parents=True)
     p = d / "rollout-2026-08-18T00-00-00-abc.jsonl"
-    p.write_text(json.dumps({"type": "message", "content": _block(head_sha=head)}) + "\n")
+    # real shape: the assistant text (fenced block, newlines ESCAPED inside the string) nested in a JSONL envelope
+    p.write_text(json.dumps({"type": "response_item", "payload": {"role": "assistant", "content": [{"type": "output_text", "text": _block(head_sha=head)}]}}) + "\n")
     import os
     os.utime(p, (mtime, mtime))
     return p
+
+
+def test_artifact_text_decodes_jsonl_envelopes(tmp_path):
+    p = _artifact_tree(tmp_path, "a" * 40, mtime=1.0)
+    raw = p.read_text(); decoded = cr.artifact_text(p)
+    assert cr.rw.extract_fenced_json(raw) is None            # the raw envelope hides the fence behind escaping
+    assert cr.rw.extract_fenced_json(decoded) is not None    # decoding exposes it
 
 
 def test_session_artifact_discovery_newest_after_start_containing_head(tmp_path):
@@ -1246,6 +1254,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -1286,6 +1295,30 @@ def _config_hash() -> str:
 
 def _binding(repo: Path, base: str) -> dict[str, str]:
     return rw.compute_binding(repo, base, channel=CHANNEL, prompt_version=PROMPT_VERSION, config_hash=_config_hash())
+
+
+def artifact_text(path: Path) -> str:
+    """Session artifacts are JSONL envelopes: the assistant text (with its fenced block) sits INSIDE string fields,
+    newline-escaped. Deserialize every line and collect all string values so the fenced JSON is visible to the parser
+    (Codex round-2 P1: raw `read_text()` can never match `_FENCE_RE`)."""
+    out: list[str] = []
+    def collect(v):
+        if isinstance(v, str):
+            out.append(v)
+        elif isinstance(v, dict):
+            for x in v.values():
+                collect(x)
+        elif isinstance(v, list):
+            for x in v:
+                collect(x)
+    for line in path.read_text(errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            collect(json.loads(line))
+        except json.JSONDecodeError:
+            out.append(line)          # a non-JSON line is kept verbatim; the schema parse decides
+    return "\n".join(out)
 
 
 def find_session_artifact(head_sha: str, *, started_at: float, now: float, root: Path = SESSIONS_DIR) -> Path | None:
@@ -1334,7 +1367,7 @@ def run_codex_review(repo: Path, base: str, *, invoke=None, clock: Callable[[], 
             while True:
                 art = find_session_artifact(binding["head_sha"], started_at=started_wall, now=time.time(), root=SESSIONS_DIR)
                 if art is not None:
-                    text = art.read_text(errors="replace")
+                    text = artifact_text(art)
                     if rw.parse_verdict(CHANNEL, text, binding).terminal != "REVIEWER_UNAVAILABLE":
                         used_artifact = True
                         return rw.Attempt(text, att.stderr, att.returncode, False)
@@ -1799,7 +1832,7 @@ def test_codex_review_failover_flag_runs_gemini_once_and_blocks(monkeypatch, tmp
     assert cr.main(["--base", "main", "--failover"]) == 1
     assert calls == [1]
     kinds = [r["record_kind"] for r in cr.fr.read_rows(tmp_path / "g.jsonl")]
-    assert "reviewer_unavailable" in kinds and "finding" in kinds
+    assert kinds == ["reviewer_unavailable"]                 # primary's row only; the gemini subprocess is the sole emitter of its own rows
 ```
 - [ ] **Step 2: RED** — `--failover` unrecognised.
 - [ ] **Step 3: Implement** in `tools/codex_review.py`:
@@ -1819,9 +1852,8 @@ def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
                                        lambda: _run_gemini_failover(Path.cwd(), args.base))
     _emit_rows(primary)
     if fo is not None:
-        _emit_rows(fo, producer="gemini_review_wrapper", channel="gemini")
-        final = fo
-    else:
+        final = fo            # NO second emission: `just gemini-review` (agy_review, U-HE-06) already wrote its rows
+    else:                     # and its round outcome (Codex round-2 P2: no duplicated findings in the ledger)
         final = primary
 ```
 and print/return `rw.exit_code(final)` (a failover `REVIEWER_UNAVAILABLE` → 2 with both reasons on stderr).
@@ -1829,7 +1861,10 @@ and print/return `rw.exit_code(final)` (a failover `REVIEWER_UNAVAILABLE` → 2 
 ```make
 # D-C failover chain (C-HE-17): codex-review, then gemini-review ONCE on REVIEWER_UNAVAILABLE,
 # identical bar; the failover verdict blocks. Exit 0/1/2 as codex-review.
-review-with-failover base='main': _require-codex-subscription
+# NO `_require-codex-subscription` prerequisite here (Codex round-2 P1): a missing binary / stale login is exactly the
+# permanent failure the wrapper classifies (C-HE-16 §4) and that MUST reach the failover (C-HE-17). The wrapper is the
+# loud-failure surface: exit 2 + a `reviewer_unavailable` row -- never a silent metered fallback.
+review-with-failover base='main':
     uv run python tools/codex_review.py --base {{base}} --failover
 ```
 - [ ] **Step 5: Carriers.** In `.claude/skills/ship-pr/SKILL.md` and `.claude/skills/roadmap-continue/SKILL.md`, replace the review-step instruction that invokes `just codex-review` with `just review-with-failover` and add this sentence under the review step: *"Invariant #3 (restated, C-HE-17 §3): out-of-family review covers Codex-authored work as before, AND serves as the D-C failover for Claude-authored diffs at the identical bar. Exit 2 (`REVIEWER_UNAVAILABLE` on both channels) blocks the arc; record both reasons."*
@@ -1916,7 +1951,7 @@ loop_hil_ttl_resurface() {
   awk -F'|' -v now="$now_s" -v ttl="$ttl" '
     function epoch(ts,   c) { gsub(/^[ \t]+|[ \t]+$/, "", ts); c = "date -u -j -f %Y-%m-%dT%H:%M:%SZ " ts " +%s 2>/dev/null || date -u -d " ts " +%s"; c | getline e; close(c); return e }
     { k = $3; gsub(/^[ \t]+|[ \t]+$/, "", k) }
-    k == "DEFERRED-HIL" || k == "RESOLVED-HIL" { s = $4; sub(/^[ \t]+/, "", s); split(s, a, /[ \t]/); tok = a[1]
+    k == "DEFERRED-HIL" || k == "RESOLVED-HIL" { s = $4; if (s ~ /^[ \t]*lane=/) s = $5; sub(/^[ \t]+/, "", s); split(s, a, /[ \t]/); tok = a[1]
       if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; at[tok] = epoch($2) } else { state[tok] = "RESOLVED" } }
     k == "NOTIFY" { d = $4; if (d ~ /^[ \t]*lane=/) d = $5; sub(/^[ \t]+/, "", d); split(d, b, /[ \t]+/)
       if (b[1] == "ttl-expired") last[b[2]] = epoch($2) }
@@ -1926,7 +1961,7 @@ loop_hil_ttl_resurface() {
   done
 }
 ```
-(Executor note: the `date` invocation must work on macOS (`-j -f`) and Linux (`-d`); the two-form fallback above is the file's convention for portable date parsing — verify on both with `bash tools/hooks/test_loop_lib.sh` locally and in CI.)
+(Executor note: the `date` invocation must work on macOS (`-j -f`) and Linux (`-d`); the two-form fallback above is the file's convention for portable date parsing — verify on both with `bash tools/hooks/test_loop_lib.sh` locally and in CI. The reducer is already shape-aware for the structured column U-HE-29 introduces (`$4 ~ /^lane=/` → detail is `$5`) so it keeps keying on the HIL item token after the venue change; U-HE-29's test file re-runs this block against structured rows.)
 - [ ] **Step 4:** In `tools/hooks/session-start.sh`, after the existing pending-HIL summary line, add `loop_hil_ttl_resurface`.
 - [ ] **Step 5: GREEN, probe.** `just mutation-probe --file tools/hooks/loop_lib.sh --lines <the "state unchanged" contract: replace loop_log NOTIFY with loop_resolve in a scratch mutation is not a line-removal; instead probe by removing the `(!(t in last) || …)` idempotence clause> --test "bash tools/hooks/test_loop_lib.sh"` → PINNED. The spec's stated probe ("add a reclaim-on-TTL → red") is a *positive* mutation the tool cannot express; the second assertion (`loop_skip_set` unchanged) is the witness that a reclaim would turn red — record this in the evidence log. **Register** `Row("C-HE-19/20", "shell:tools/hooks/test_loop_lib.sh", "phase0", "local + CI", True)`.
 - [ ] **Step 6: Commit** — `git add tools/hooks/loop_lib.sh tools/hooks/test_loop_lib.sh tools/hooks/session-start.sh tools/lanes_verify.py && git commit -m "feat(he-lanes): U-HE-09 HITL TTL re-surface as NOTIFY, never reclaim (C-HE-20)"`.
@@ -3804,11 +3839,30 @@ def test_release_then_history_file(door):
 
 def test_reclaim_two_step_and_transfers_merge_authority_only(door):
     l = _acq(lane="A")
+    with pytest.raises(md.LeaseError, match="live"):
+        md.reclaim(l, lane_id="A", ground_state="OPEN")             # same lane, holder pid ALIVE → refused (round-2 P1)
     dead = {**l, "pid": 999999}
     new = md.reclaim(dead, lane_id="B", ground_state="OPEN")
     assert new["lease_token"] != l["lease_token"] and new["lane_id"] == "B" and new["pr"] == 1
     assert rs.holder("pr-1") == "A"                                  # reservation ownership NOT transferred (P2)
     assert (md.DOOR / f"reclaimed.{l['lease_token']}").exists()
+
+
+# mutation-probe: drop the `_publish_fresh(m["fresh_lease"])` completion in complete_dead_marker()
+def test_crashed_reclaimer_completed_by_third_party_publishes_fresh_lease(door):
+    """Reclaimer wins the marker (payload carries the fresh lease), moves the old lease aside, then dies before
+    publishing. A third party completing the marker MUST publish the fresh token -- otherwise the door reads free and
+    the attempted-state continuation is lost (Codex round-2 P1)."""
+    l = _acq(lane="A"); md.mark_attempted(l)
+    dead = {**l, "pid": 999999}
+    fresh = {**dead, "lease_token": "f" * 32, "lane_id": "B", "pid": 999998, "state": "held", "merge_attempted_at": md.read_lease()["merge_attempted_at"]}
+    m = md.win_marker(l["lease_token"], "reclaim", extra={"fresh_lease": fresh})
+    body = json.loads(m.read_text()); body["pid"] = 999999; m.write_text(json.dumps(body))   # creator died
+    md._move_lease(l["lease_token"], "reclaimed")                     # ...after moving the old lease aside
+    assert md.read_lease() is None                                   # door LOOKS free: the hazard
+    assert md.complete_dead_marker(m) is True
+    got = md.read_lease(); assert got and got["lease_token"] == "f" * 32 and got["merge_attempted_at"] is not None
+    assert md.complete_dead_marker(m) is False                       # idempotent
 
 
 # mutation-probe: remove complete_dead_marker's rename (third-party completion) → door locked after a reclaimer crash
@@ -3944,6 +3998,12 @@ def acquire(*, lane_id: str, arc_id: str, pr: int, head_sha: str, base_sha: str,
     now = time.time() if now is None else now
     _rate_check(lane_id, now)
     cur = rs.current(arc_id)
+    # P2 (C-HE-06 §7) is enforced HERE, at acquisition, as its text says ("Acquisition MUST verify the reservation
+    # state"). During the G4 continuation the reservation legitimately reads `merged` (C-HE-03 §4 flips it on
+    # confirmed merge) while the lease is still held through post-merge CI + the refresh -- so the §7 Invariants
+    # bullet "no lease exists whose reservation is not open" cannot be read literally across the continuation
+    # window. That wording mismatch is registered as a v1.1 change-note candidate (plan §6 item 13); it is NOT
+    # silently absorbed. Nothing acquires against a non-open reservation.
     if cur is None or cur[1]["state"] != "open" or cur[1]["lane_id"] != lane_id:
         raise HolderInvariant(f"{arc_id}: reservation must be open and held by {lane_id} (P2); got {cur and cur[1]['state']!r} held by {cur and cur[1]['lane_id']!r}")
     if not (pr and head_sha and base_sha):
@@ -3960,11 +4020,12 @@ def acquire(*, lane_id: str, arc_id: str, pr: int, head_sha: str, base_sha: str,
     return payload
 
 
-def win_marker(token: str, target_action: str) -> Path | None:
-    """One marker per token, ever. The winner alone may move LEASE."""
+def win_marker(token: str, target_action: str, *, extra: dict | None = None) -> Path | None:
+    """One marker per token, ever. The winner alone may move LEASE. `extra` (e.g. the reclaim's fresh lease) rides in
+    the marker so a dead creator's declared action can be COMPLETED, not just archived (C-HE-06 §6 poison-pill)."""
     m = DOOR / f"transition.{token}"
     try:
-        publish_exclusive(m, json.dumps({"pid": os.getpid(), "host": socket.gethostname(), "target_action": target_action, "created_at": _now_iso()}))
+        publish_exclusive(m, json.dumps({"pid": os.getpid(), "host": socket.gethostname(), "target_action": target_action, "created_at": _now_iso(), **(extra or {})}, sort_keys=True))
         return m
     except FileExistsError:
         return None
@@ -4001,24 +4062,36 @@ def release(lease: dict) -> None:
 
 
 def reclaim(lease: dict, *, lane_id: str, ground_state: str) -> dict:
-    """Two-step: (1) pid dead or same-lane self-resume ⇒ reclaimable in principle; (2) caller supplied ground truth
-    (MERGED/OPEN from gh). Wins the OLD token's marker, moves LEASE aside, creates a fresh LEASE with a NEW token.
+    """Two-step: (1) the holder pid is PROVABLY dead on this host -- same-lane self-resume included (a live twin
+    presenting the same lane_id must NOT displace a working holder; Codex round-2 P1); (2) caller-supplied ground truth
+    (MERGED/OPEN from gh). Wins the OLD token's marker -- whose payload carries the FRESH lease so a crashed reclaimer
+    can be completed idempotently by a third party -- moves LEASE aside, publishes the fresh LEASE (new token).
     Transfers merge-driving authority for `pr` -- never reservation ownership."""
-    same_lane = lease["lane_id"] == lane_id
-    if not same_lane and (lease["host"] != socket.gethostname() or _process_is_alive(int(lease["pid"]))):
-        raise LeaseError("holder is live or unverifiable; not reclaimable")
+    if lease["host"] != socket.gethostname() or _process_is_alive(int(lease["pid"])):
+        raise LeaseError("holder is live or unverifiable; not reclaimable (self-resume requires the old pid to be dead)")
     if ground_state not in ("MERGED", "OPEN"):
         raise LeaseError(f"reclaim requires ground truth MERGED|OPEN, got {ground_state!r}")
-    if win_marker(lease["lease_token"], "reclaim") is None:
-        raise MarkerLost("reclaim marker already taken")
-    _move_lease(lease["lease_token"], "reclaimed")
     fresh = {**lease, "lease_token": secrets.token_hex(16), "lane_id": lane_id, "acquired_at": _now_iso(), "pid": os.getpid(),
              "host": socket.gethostname(), "state": "held", "blocked_at_sha": None, "blocked_reason": None}
     fresh.pop("refresh", None)
-    publish_exclusive(LEASE, json.dumps(fresh, sort_keys=True))
-    if lease.get("merge_attempted_at"):
-        publish_exclusive(_sidecar(fresh["lease_token"], "attempted"), json.dumps({"merge_attempted_at": lease["merge_attempted_at"]}))
+    if win_marker(lease["lease_token"], "reclaim", extra={"fresh_lease": fresh}) is None:
+        raise MarkerLost("reclaim marker already taken")
+    _move_lease(lease["lease_token"], "reclaimed")
+    _publish_fresh(fresh)
     return read_lease() or fresh
+
+
+def _publish_fresh(fresh: dict) -> None:
+    """Idempotent: a twin (or a third party completing our marker) may already have published this exact token."""
+    try:
+        publish_exclusive(LEASE, json.dumps(fresh, sort_keys=True))
+    except FileExistsError:
+        pass
+    if fresh.get("merge_attempted_at"):
+        try:
+            publish_exclusive(_sidecar(fresh["lease_token"], "attempted"), json.dumps({"merge_attempted_at": fresh["merge_attempted_at"]}))
+        except FileExistsError:
+            pass
 
 
 def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> None:
@@ -4042,10 +4115,18 @@ def complete_dead_marker(marker: Path) -> bool:
     if m["host"] != socket.gethostname() or _process_is_alive(int(m["pid"])):
         return False
     token = marker.name.removeprefix("transition.")
-    if not LEASE.exists() or (json.loads(LEASE.read_text()).get("lease_token") != token):
-        return False  # already done (or a fresh lease supersedes it)
-    _move_lease(token, "released" if m["target_action"] == "release" else "reclaimed")
-    return True
+    action = m["target_action"]
+    done = False
+    if LEASE.exists() and json.loads(LEASE.read_text()).get("lease_token") == token:
+        _move_lease(token, "released" if action == "release" else "reclaimed"); done = True
+    if action == "reclaim" and "fresh_lease" in m:
+        # The reclaimer may have died AFTER moving the old lease and BEFORE publishing the fresh one: finish it.
+        # `_publish_fresh` is idempotent (FileExistsError = the fresh token, or a later acquirer, already holds the door).
+        before = read_lease()
+        _publish_fresh(m["fresh_lease"])
+        after = read_lease()
+        done = done or (before is None and after is not None and after["lease_token"] == m["fresh_lease"]["lease_token"])
+    return done
 
 
 def gc(*, now: datetime | None = None) -> list[Path]:
@@ -4175,6 +4256,19 @@ def test_timeout_reconcile_open_reissues_exactly_once(door):
         g.state.update(state="MERGED", mergedAt="now", mergeCommit={"oid": "m"*40}); return subprocess.CompletedProcess([], 0, "", "")
     g.gh_merge = merge_first_hangs
     assert _land(door, g) == "released" and len(g.merge_calls) == 2
+
+
+# mutation-probe: decide from the in-memory `lease` dict instead of read_lease() in the DoorFailed handler
+def test_failure_after_attempt_blocks_never_releases(door):
+    """Both merge attempts time out and ground truth stays OPEN → reissue exhausted AFTER the attempted marker:
+    the door must BLOCK (HITL), not release (Codex round-2 P1)."""
+    g = FakeGround()
+    def always_hang(pr, head, timeout):
+        g.merge_calls.append((pr, head)); g.t += timeout + 1; raise subprocess.TimeoutExpired("gh", timeout)
+    g.gh_merge = always_hang
+    with pytest.raises(md.DoorBlocked, match="merge_reissue_exhausted"):
+        _land(door, g)
+    l = md.read_lease(); assert l is not None and l["state"] == "blocked" and len(g.merge_calls) == 2
 
 
 def test_inflight_first_attempt_then_reissue(door):
@@ -4445,10 +4539,17 @@ def land(pr: int, *, lane_id: str, arc_id: str, ground: Ground, refresh: Callabl
             (DOOR / "tier-clean-cycles" / lease["lease_token"]).touch()
         tier and rs.emit_loop_row("NOTIFY", lane_id, "merge-door-lease-release:transient-retry:attestation_tier", f"lease released after pr #{pr}")
         return "released"
-    except DoorFailed:
-        if lease.get("merge_attempted_at") is None:
-            release(lease)                                                       # pre-merge failure: release + re-gate
-        raise
+    except DoorFailed as exc:
+        live = read_lease() or lease                                             # the sidecar is the authority, not the in-memory dict
+        if live.get("merge_attempted_at") is None:
+            release(live)                                                        # pre-attempt failure: release + re-gate
+            raise
+        # A failure AFTER the attempt (reissue exhausted, refresh did not merge, ...) is an ambiguous merge state:
+        # NEVER blind-release (C-HE-06 §5). Block the door and route to HITL reconciliation.
+        mark_blocked(live, sha=live.get("head_sha") or head_sha, reason=f"door_failed_after_attempt:{exc}")
+        _emit_gate(live, gate="merge-door-reconcile", fail_class="HITL-recoverable", cause="merge_reissue_exhausted", evidence=str(exc), arc_id=arc_id, lane_id=lane_id)
+        rs.emit_loop_row("DEFERRED-HIL", lane_id, "merge-door-reconcile:HITL-recoverable:merge_reissue_exhausted", f"{arc_id} — pr #{pr}: {exc}; reconcile by ground truth then `just merge-door-unblock {pr} <sha>`")
+        raise DoorBlocked(str(exc)) from exc
 
 
 def _tiering_active() -> bool:
@@ -4610,27 +4711,52 @@ git commit -m "feat(he-lanes): U-HE-25 safe-merge wrapper + deny raw gh pr merge
 - [ ] **Step 1: Failing tests**
 ```bash
 # C-HE-08 §1: push-to-main denied; topic pushes still allowed
-for c in 'git push origin HEAD:main' 'git push origin main' 'git push origin refs/heads/main' 'git push -u origin feature:main'; do
+for c in 'git push origin HEAD:main' 'git push origin main' 'git push origin refs/heads/main' 'git push -u origin feature:main' 'git push --set-upstream origin main' 'git push origin feature main' 'git push --force-with-lease=x origin +feature:refs/heads/main'; do
   OUT=$(run_on "$(pl Bash "$c" '')"); [ "$(dec "$OUT")" = "deny" ] && ok "'$c' → deny" || bad "push-to-main not denied: $c → $OUT"
 done
 OUT=$(run_on "$(pl Bash 'git push origin feature' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "topic push → allow" || bad "topic push blocked: $OUT"
 # bare `git push` while main is checked out
 ( cd "$REPO" && git init -q . && git checkout -q -b main 2>/dev/null; git commit -q --allow-empty -m i )
 OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push on main checkout → deny" || bad "bare push on main not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git push -u origin' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "option-bearing bare push on main → deny" || bad "-u origin on main not denied: $OUT"
 ( cd "$REPO" && git checkout -q -b topic ); OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic → allow" || bad "bare push on topic blocked: $OUT"
 ```
 - [ ] **Step 2: RED**; **Step 3: Implement** (deny block, after the branch-deletion deny):
 ```bash
   # C-HE-08 §1 (D5): no auto-approved push lands content on main. Explicit denies (audited via loop_log DENY),
-  # NOT a removal from the allow regex (that would be the silent, unaudited "ask" path).
-  printf '%s' "$CMD" | grep -Eq '^[[:space:]]*git[[:space:]]+push([[:space:]]+[^[:space:]]+)?[[:space:]]+([^[:space:]]*:)?(refs/heads/)?main([[:space:]]|$)' \
-    && emit_deny "push targeting main — land through a PR + tools/hooks/safe-merge.sh"
-  if printf '%s' "$CMD" | grep -Eq '^[[:space:]]*git[[:space:]]+push([[:space:]]+[^[:space:]-][^[:space:]]*)?[[:space:]]*$' \
-     && [ "$(git -C "$PROJECT_DIR" symbolic-ref --short -q HEAD 2>/dev/null)" = "main" ]; then
-    emit_deny "bare git push while main is checked out"
+  # NOT a removal from the allow regex (that would be the silent, unaudited "ask" path). The spec's reference
+  # regexes (C10) consumed at most one token between `push` and the refspec and therefore ALLOWED
+  # `git push -u origin feature:main` (Codex round-2 P1); this parses the argument list instead: option tokens
+  # (`-*`) anywhere are skipped, positionals are [remote] [refspec...], and any refspec whose destination is
+  # main -- `main`, `HEAD:main`, `X:main`, `refs/heads/main` -- or a push with NO refspec while main is checked
+  # out, is denied.
+  if printf '%s' "$CMD" | grep -Eq '^[[:space:]]*git[[:space:]]+push([[:space:]]|$)' && _push_targets_main "$CMD"; then
+    emit_deny "push targeting main — land through a PR + tools/hooks/safe-merge.sh"
   fi
 ```
-(`-u origin feature:main` is caught by the first predicate's `([^[:space:]]*:)?` group; the test pins it.)
+with the parser placed beside `_safe_merge_wrapper`:
+```bash
+# 0 iff the push command targets main: any refspec destination == main, or no refspec while main is checked out.
+_push_targets_main() {
+  local cmd="$1" tok positional=() dest branch
+  set -f; set -- $cmd; set +f
+  shift 2                                   # git push
+  for tok in "$@"; do
+    case "$tok" in -*) continue ;; esac     # options anywhere (-u, --set-upstream, --force-with-lease=..., ...)
+    positional+=("$tok")
+  done
+  if [ "${#positional[@]}" -le 1 ]; then    # bare push (optional remote only) -> pushes the current branch
+    branch=$(git -C "$PROJECT_DIR" symbolic-ref --short -q HEAD 2>/dev/null)
+    [ "$branch" = "main" ] && return 0
+    return 1
+  fi
+  for tok in "${positional[@]:1}"; do       # every refspec after the remote
+    dest="${tok##*:}"; dest="${dest#+}"; dest="${dest#refs/heads/}"
+    [ "$dest" = "main" ] && return 0
+  done
+  return 1
+}
+```
 - [ ] **Step 4: GREEN**, probe (`--lines` = the first predicate) → PINNED. Register `Row("C-HE-08", "shell:tools/hooks/test_permission_guard.sh", "phase0", "local + CI", True)`. Commit `feat(he-lanes): U-HE-26 deny push-to-main predicates in the audited deny block (C-HE-08 §1)`.
 
 ---
@@ -4793,10 +4919,26 @@ def main(argv=None) -> int:
     # the load-bearing parameter: a refresh-shaped PR branched from the since-superseded main
     br2 = f"mp-tiebreaker-stale-{ts}"; sh("git", "checkout", "-b", br2, base); sh("git", "commit", "--allow-empty", "-m", "ops: stale refresh-shaped commit"); sh("git", "push", "-u", "origin", br2)
     url2 = sh("gh", "pr", "create", "--title", f"chore: stale-base tiebreaker {ts}", "--body", "C-HE-08 §4 stale-branch check"); pr2 = url2.rsplit("/", 1)[-1]
+    # The load-bearing parameter is the STALE PR alone (Codex round-2 P1): the first scratch merge is a precondition,
+    # never the verdict. PASS iff strict:true CATCHES it pre-merge (definitive stale state, or an attempted merge is
+    # REFUSED) or, if GitHub does let it merge, the landing is a clean fast-forward on the current main.
+    if m.returncode != 0:
+        print(f"precondition failed: scratch merge refused ({m.stderr.strip()})"); return 1
     state = sh("gh", "pr", "view", pr2, "--json", "mergeStateStatus", "--jq", ".mergeStateStatus")
-    verdict = "PASS" if state in ("BEHIND", "BLOCKED", "DIRTY") or m.returncode == 0 else "FAIL"
-    print(f"stale-branch mergeStateStatus={state} -> {verdict} (caught pre-merge or fast-forwards cleanly)")
-    sh("gh", "pr", "close", pr2, "--delete-branch"); return 0 if verdict == "PASS" else 1
+    if state in ("BEHIND", "BLOCKED", "DIRTY"):
+        verdict, why = "PASS", f"stale PR caught pre-merge (mergeStateStatus={state})"
+    else:
+        head2 = sh("git", "rev-parse", "HEAD")
+        m2 = subprocess.run(["gh", "pr", "merge", pr2, "--squash", "--match-head-commit", head2], capture_output=True, text=True, timeout=120)
+        if m2.returncode != 0:
+            verdict, why = "PASS", f"stale merge REFUSED under strict:true ({m2.stderr.strip()[:120]})"
+        else:
+            sh("git", "fetch", "-q", "origin"); new_main = sh("git", "rev-parse", "origin/main"); first_parent = sh("git", "rev-parse", f"{new_main}^1")
+            landed_on_current = first_parent == sh("git", "rev-parse", "origin/main~1")
+            verdict, why = ("PASS", "stale PR fast-forwarded cleanly onto the current main") if landed_on_current else ("FAIL", f"stale PR landed off the current main (first parent {first_parent[:12]})")
+    print(f"tiebreaker: {verdict} — {why}")
+    subprocess.run(["gh", "pr", "close", pr2, "--delete-branch"], capture_output=True, text=True, timeout=60)
+    return 0 if verdict == "PASS" else 1
 
 
 if __name__ == "__main__":
@@ -6339,6 +6481,17 @@ def test_kill_rule_reproducible_from_rows_and_rejected_excluded():
     rows.append(_row(20, "gemini-shadow", location="second", uc=True)); rows.append(_row(20, "gemini-shadow", kind="finding_adjudication", location="second", disp="accepted", actor="operator", uc=True))
     assert st.decide(rows, "gemini-shadow")["decision"] == "keep"
 
+
+# mutation-probe: count unique catches from ALL rows instead of the first-n sample in decide()
+def test_sample_frozen_at_first_n_rounds():
+    """30 scored rounds with 1 unique catch → kill. A round-31 unique catch arriving before adjudication must NOT flip it."""
+    rows = [_row(r, "gemini-shadow", kind="no_finding") for r in range(1, 31)]
+    rows.append(_row(3, "gemini-shadow", location="in-sample", uc=True)); rows.append(_row(3, "gemini-shadow", kind="finding_adjudication", location="in-sample", disp="accepted", actor="operator", uc=True))
+    assert st.decide(rows, "gemini-shadow")["decision"] == "kill"
+    late = _row(31, "gemini-shadow", location="late", uc=True); late["ts"] = "2026-08-18T00:00:31Z"; rows.append(late)
+    adj = _row(31, "gemini-shadow", kind="finding_adjudication", location="late", disp="accepted", actor="operator", uc=True); adj["ts"] = "2026-08-18T00:00:32Z"; rows.append(adj)
+    d = st.decide(rows, "gemini-shadow"); assert d["decision"] == "kill" and d["scored"] == 31 and d["unique"] == 1
+
 def test_pending_before_n_and_config_row_recorded():
     rows = [_row(r, "gemini-shadow", kind="no_finding") for r in range(1, 10)]
     assert st.decide(rows, "gemini-shadow")["decision"] == "pending"
@@ -6406,11 +6559,24 @@ def unique_catches(rows: list[dict], lens: str) -> list[dict]:
     return out
 
 
+def first_n_rounds(rows: list[dict], lens: str, n: int) -> set[tuple[str, int]]:
+    """The PRE-COMMITTED sample: the first n scored rounds by earliest row ts (deterministic). Rounds scored after the
+    n-th never enter the count, so a late catch cannot flip kill→keep (Codex round-2 P2); later ADJUDICATION rows for
+    findings inside the sample still count (the reducer takes the last row per finding_id)."""
+    first_ts: dict[tuple[str, int], str] = {}
+    for r in rows:
+        if r["producer"] == lens and r["record_kind"] in ("finding", "no_finding") and r["round_n"] is not None:
+            key = (r["arc_id"], r["round_n"]); first_ts[key] = min(first_ts.get(key, r["ts"]), r["ts"])
+    return set(sorted(first_ts, key=lambda k: (first_ts[k], k))[:n])
+
+
 def decide(rows: list[dict], lens: str, *, n: int = N_ROUNDS, threshold: int = KILL_IF_FEWER_THAN) -> dict:
-    k = len(scored_rounds(rows, lens)); u = len(unique_catches(rows, lens))
+    k = len(scored_rounds(rows, lens))
     if k < n:
-        return {"scored": k, "unique": u, "decision": "pending", "n": n, "threshold": threshold}
-    return {"scored": k, "unique": u, "decision": "kill" if u < threshold else "keep", "n": n, "threshold": threshold}
+        return {"scored": k, "unique": len(unique_catches(rows, lens)), "decision": "pending", "n": n, "threshold": threshold}
+    sample = first_n_rounds(rows, lens, n)
+    u = len([c for c in unique_catches(rows, lens) if (c["arc_id"], c["round_n"]) in sample])
+    return {"scored": k, "unique": u, "decision": "kill" if u < threshold else "keep", "n": n, "threshold": threshold, "sample": sorted(sample)}
 
 
 def p_kill(p: float, n: int = N_ROUNDS, threshold: int = KILL_IF_FEWER_THAN) -> float:
@@ -6461,7 +6627,7 @@ def main(argv=None) -> int:
 
 ### U-HE-44: Forward-register rows for spec §11 + plan evidence log
 
-**Scope.** Register the six carry-forwards the spec sends to the forward register as `B-*` rows (`.harness/forward-register.yaml` via `tools/forward_register.py`): #3 P9(a) prewritten testable done-condition; #4 K7 stop rule (prereqs C-HE-26 §3); #9 cross-carrier merge-door fencing (joint Claude/Codex arc; incl. `AGENTS.md:56-57` #3 restatement + Docker isolation for Codex legs; **operator may reverse the v1 scoping**); #10 SPRT alternative for the shadow-trial rule; #11 cross-`head_sha` `finding_id` tracking; #12 randomized lane assignment; plus the plan-level rows: the `result_capture` divergence audit-worthiness question (§11 #5, decided "recorded, not audit-worthy in v1"), the reservation bootstrap-at-drain migration path (U-HE-19), the `severity` dual vocabulary note (U-HE-01), and §11 #13 (queue-depth cap once N-lane cadence data exists). Create `.harness/plan/evidence-log-he-loop-lanes.md` with the sections the units above append to (branch-protection show/apply/tiebreaker; reviewer-concurrency probe verdicts; pilot reports; RED-first runs of AC#2; equivalence proofs).
+**Scope.** Register the six carry-forwards the spec sends to the forward register as `B-*` rows (`.harness/forward-register.yaml` via `tools/forward_register.py`): #3 P9(a) prewritten testable done-condition; #4 K7 stop rule (prereqs C-HE-26 §3); #9 cross-carrier merge-door fencing (joint Claude/Codex arc; incl. `AGENTS.md:56-57` #3 restatement + Docker isolation for Codex legs; **operator may reverse the v1 scoping**); #10 SPRT alternative for the shadow-trial rule; #11 cross-`head_sha` `finding_id` tracking; #12 randomized lane assignment; plus the plan-level rows: the `result_capture` divergence audit-worthiness question (§11 #5, decided "recorded, not audit-worthy in v1"), the reservation bootstrap-at-drain migration path (U-HE-19), the `severity` dual vocabulary note (U-HE-01), §11 #13 (queue-depth cap once N-lane cadence data exists), and the C-HE-06 §7 invariant-wording vs G4-continuation tension (plan §6 item 13; v1.1 change-note candidate). Create `.harness/plan/evidence-log-he-loop-lanes.md` with the sections the units above append to (branch-protection show/apply/tiebreaker; reviewer-concurrency probe verdicts; pilot reports; RED-first runs of AC#2; equivalence proofs).
 
 **Spec linkage.** §11 #3, #4, #5, #9, #10, #11, #12, #13; C-HE-30 (evidence log is not a store — a plan artifact).
 
@@ -6617,6 +6783,7 @@ Every row marked **mutation-probe** in §8.1 has a named `--lines` target in its
 | 10 | The single operator gate in this plan is `just main-protection-apply` (outward-facing GitHub settings change) — one AskUserQuestion with the diff shown. Everything else is Claude-driven to its genuine gate (CLAUDE.md §12.4.1). The reviewer-concurrency probe and pilots are live but subscription-auth ($0 metered) and pre-authorized. | U-HE-27 |
 | 11 | §11 #13 (queue-depth cap once N-lane cadence data exists) and #10 (SPRT alternative) are registered, not built. | U-HE-44 |
 | 12 | The reservation `pending`-aged and `open`-stuck HITL rows use `HITL-recoverable` in the cause triple; the spec names the escalation but not a fail-class — this follows C-HE-06 §9's convention for human-actionable waits. | U-HE-18 |
+| 13 | **Spec-internal tension (surfaced by Codex round 2, not absorbed):** C-HE-06 §7's Invariants bullet "no lease exists whose reservation is not `open`" cannot hold literally across the G4 continuation — C-HE-03 §4 flips the reservation to `merged` on confirmed merge while C-HE-06 §4(vii)–(viii) holds the lease through post-merge CI + the refresh. The plan implements §7 as its *text* says (acquisition-time verification; `acquire()` refuses a non-open reservation) and treats the continuation window as the G4-authorized state. Owed: a v1.1 change-note re-wording the invariant to "no lease is *acquired* against a non-open reservation; a held lease outlives its reservation's `merged` transition only inside the §4(vii)–(ix) continuation". Registered as a forward-register row by U-HE-44. | U-HE-22/23; spec §14 |
 
 ## §7 Self-review (writing-plans checklist, run after assembly)
 
@@ -6626,6 +6793,7 @@ Every row marked **mutation-probe** in §8.1 has a named `--lines` target in its
 
 4. **Codex round 1 on PR #1393 (out-of-family, cold) — 7 P1 / 4 P2, all absorbed in this PR.** P1: (a) marker/plan exit-gate mismatch → status block + marker now name this review as the plan's exit gate; (b) `round_outcomes` never written → `reservations.record_round_outcome` + `rw.record_round_outcome_if_reserved` called by both wrappers + folded at drain (U-HE-17/02/04/06/19); (c) `transition(updates)`/`update_payload` could rewrite `lane_id`/`arc_type`/`superseded_by` → `PAYLOAD_MUTABLE`/`TRANSITION_MUTABLE` allowlists + test (U-HE-17; U-HE-18's aging test now uses `now=`); (d) `BASE_TOCTOU` mismatch emitted but did not block → door blocks + HITL + test (U-HE-23); (e) resume re-created the refresh PR → resume from the recorded sidecar + test (U-HE-23); (f) coalescing delivery race / later-generation suppression → exclusive-create claim per exact generation under `QUEUE_DIR/hil-deliveries/` + concurrency test (U-HE-30; store audit lists the family); (g) shadow scored rounds collapsed across arcs → `(arc_id, round_n)` + test (U-HE-43). P2: artifact polling capped by the shared 1260 s deadline + test (U-HE-04); adjudication append enforces the same-core invariant against the ORIGINAL row + test (U-HE-01); reservation GC retention runs from the terminal head's `transitioned_at` + test (U-HE-17); HIL groups sorted by epoch, gawk-free pipeline (U-HE-30). Round 2 result is recorded in the PR.
 
+5. **Codex round 2 on PR #1393 — 8 P1 / 3 P2, all new surfaces (no round-1 item re-flagged), all absorbed.** P1: session-artifact JSONL is decoded before verdict parsing (`artifact_text`, U-HE-04); `review-with-failover` no longer pre-gates on `_require-codex-subscription` (a permanent Codex failure must reach the failover, U-HE-07); same-lane reclaim still requires the old pid dead (U-HE-22); a crashed reclaimer's marker carries the fresh lease and `complete_dead_marker` publishes it (U-HE-22); the C-HE-06 §7 invariant-vs-G4 continuation tension is surfaced as open item 13 (acquisition-time enforcement; v1.1 change-note candidate; U-HE-22/23); the `DoorFailed` handler decides release-vs-block from `read_lease()` and blocks after an attempt (U-HE-23); push-to-main is parsed (options anywhere, every refspec, bare push) instead of the reference regex (U-HE-26); the tiebreaker verdict comes from the stale PR alone (U-HE-27). P2: failover path emits no duplicate gemini rows (U-HE-07); TTL resurface reducer is shape-aware for HIL rows (U-HE-09); the shadow-trial sample is frozen at the first n scored rounds (U-HE-43). Round 3 result recorded in the PR.
 ## Execution handoff
 
 Plan complete and saved to `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. Two execution options:
