@@ -3894,6 +3894,12 @@ def test_lease_holder_invariant(door):
         md.acquire(lane_id="B", arc_id="pr-1", pr=1, head_sha="h" * 40, base_sha="b" * 40)  # open but held by A
 
 
+def test_rate_counter_ignores_tmp_remnants(door):
+    (md.DOOR / "attempts" / "A").mkdir(parents=True)
+    (md.DOOR / "attempts" / "A" / ".1000.000000.4242.tmp").write_text("")     # a crashed publish_exclusive left this
+    _acq(now=1000.0)                                                            # must not raise ValueError
+
+
 def test_rate_limit_sixth_refused(door):
     _acq(now=0.0)                          # attempt 1 succeeds -> lease held
     for i in range(4):                     # attempts 2..5 contend (LeaseHeld, counted)
@@ -4079,7 +4085,15 @@ def _rate_check(lane_id: str, now: float) -> None:
     """K acquire attempts per lane per 60 s. Refusals never touch the caller's §8 budget."""
     d = DOOR / "attempts" / lane_id
     d.mkdir(parents=True, exist_ok=True)
-    recent = [p for p in d.iterdir() if now - float(p.name) <= RATE_WINDOW_S]
+    def _ts(p: Path) -> float | None:
+        try:
+            return float(p.name)
+        except ValueError:
+            return None                          # `.<ts>.<pid>.tmp` remnants of a crashed publish_exclusive: not attempts
+    recent = [p for p in d.iterdir() if (_ts(p) is not None and now - _ts(p) <= RATE_WINDOW_S)]
+    for junk in d.glob(".*.tmp"):
+        if now - junk.stat().st_mtime > 3600:
+            junk.unlink(missing_ok=True)
     if len(recent) >= RATE_K:
         raise RateLimited(f"{lane_id}: > {RATE_K} lease acquire attempts in {RATE_WINDOW_S}s (cause_attribution: lease_acquire_rate_exceeded)")
     for _ in range(8):
@@ -4404,6 +4418,23 @@ def test_base_toctou_blocks_door(door):
     assert rs.current("pr-1")[1]["state"] == "merged"           # the fact is recorded; the DOOR is what blocks
 
 
+def test_refresh_ci_failure_emits_hitl_and_blocks(door, monkeypatch):
+    rows = []; monkeypatch.setattr(rs, "emit_loop_row", lambda k, l, c, d: rows.append((k, c)))
+    g = FakeGround()
+    rs.update_payload("pr-1", {"pr": 1, "head_sha": "h"*40, "base_sha": "b"*40, "attested_merge_tree": "t"*40})
+    calls = {"n": 0}
+    def runs(sha):
+        calls["n"] += 1
+        return [{"status": "completed", "conclusion": "success" if calls["n"] == 1 else "failure", "event": "push"}]   # main run green, refresh run red
+    g.gh_runs_for_sha = runs
+    def refresh():
+        g.state = {"state": "OPEN", "headRefOid": "r"*40, "baseRefOid": "m"*40, "mergedAt": None, "mergeCommit": None}; return 2, "r"*40
+    with pytest.raises(md.DoorBlocked):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh)
+    assert md.read_lease()["blocked_reason"] == "refresh_ci_not_green"
+    assert ("DEFERRED-HIL", "merge-door-post-merge-ci:HITL-recoverable:refresh_ci_not_green") in rows
+
+
 # mutation-probe: force a second acquire() call before the refresh PR merge
 def test_continuation_no_reacquire(door, monkeypatch):
     g = FakeGround()
@@ -4455,12 +4486,68 @@ def test_wait_for_door_backoff_numbers_and_budget(door):
     assert len(sleeps) == 11 + 3   # 3 rate-limited waits happen but don't consume the 12 attempts
 
 
-def test_ac2_c_crash_resume(door, tmp_path, monkeypatch):
-    """Three kill points, real subprocess (MERGE_DOOR_TEST_KILL_AFTER), fake gh with a persistent call log."""
-    for kill, expect_calls in (("attempted", 1), ("confirm", 1), ("release", 1), ("reservation-merged", 1)):
-        ...  # see Step 2 harness helper below
+def _fake_gh(bindir: Path, state: Path, log: Path, tree: str) -> None:
+    """A `gh` + `git` shim on PATH: pr view answers from state.json; pr merge appends to merge-calls.log and flips
+    state.json to MERGED; run list reports success; git merge-tree returns the attested tree; other git calls pass through."""
+    (bindir / "gh").write_text(f"""#!/usr/bin/env bash
+case "$*" in
+  *"pr view"*"headRefOid"*) cat "{state}" ;;
+  *"pr view"*"state,mergedAt"*) cat "{state}" ;;
+  *"pr merge"*) echo "$*" >> "{log}"; python3 - <<'PY2'
+import json; p="{state}"; s=json.load(open(p)); s.update(state="MERGED", mergedAt="now", mergeCommit={{"oid": "m"*40}}); json.dump(s, open(p, "w"))
+PY2
+  ;;
+  *"run list"*"--commit"*) echo '[{{"status":"completed","conclusion":"success","event":"push"}}]' ;;
+  *"run list"*"in_progress"*) echo '[]' ;;
+  *) echo "fake gh: unhandled $*" >&2; exit 1 ;;
+esac
+""")
+    (bindir / "git").write_text(f"""#!/usr/bin/env bash
+if [ "$1" = "-C" ]; then shift 2; fi
+case "$1 $2" in
+  "merge-tree --write-tree") echo "{tree}" ;;
+  "rev-parse "*) echo "{'b'*40}" ;;
+  "worktree list") echo "worktree /x" ;;
+  *) exec /usr/bin/git "$@" ;;
+esac
+""")
+    for f in ("gh", "git"):
+        (bindir / f).chmod(0o755)
+
+
+def _land_cmd(kill: str | None) -> list[str]:
+    return [sys.executable, str(TOOLS / "merge_door.py"), "land", "1", "--lane-id", "A", "--arc-id", "pr-1", "--no-refresh"]
+
+
+@pytest.mark.parametrize("kill,expect_merge_calls,resume_state", [
+    ("attempted", 1, "released"),          # killed after merge_attempted_at, before merge → restart sees OPEN → exactly one merge call
+    ("confirm", 1, "released"),            # killed after merge success, before (vi) → restart sees MERGED → continues; call log 1
+    ("reservation-merged", 1, "released"), # killed after (vi), before (vii) → lease still held; restart resumes the CI wait
+    ("release", 1, "no-lease"),            # killed after release → restart finds no lease: nothing to land (rc 0)
+])
+def test_ac2_c_crash_resume(door, tmp_path, monkeypatch, kill, expect_merge_calls, resume_state):
+    """AC#2(c): real subprocess killed at the named step (os._exit 137), then resumed; the merge is issued at most once."""
+    q = door
+    bindir = tmp_path / "bin"; bindir.mkdir(); state = tmp_path / "state.json"; log = tmp_path / "merge-calls.log"
+    state.write_text(json.dumps({"state": "OPEN", "headRefOid": "h"*40, "baseRefOid": "b"*40, "mergedAt": None, "mergeCommit": None}))
+    _fake_gh(bindir, state, log, "t"*40)
+    rs.update_payload("pr-1", {"pr": 1, "head_sha": "h"*40, "base_sha": "b"*40, "attested_merge_tree": "t"*40})
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "ARC_METRICS_QUEUE_DIR": str(q), "PYTHONPATH": str(TOOLS), "HARNESS_LANE_ID": "A"}
+    p1 = subprocess.run(_land_cmd(kill), env={**env, "MERGE_DOOR_TEST_KILL_AFTER": kill}, capture_output=True, text=True, timeout=120)
+    assert p1.returncode == 137, p1.stderr
+    if kill == "reservation-merged":
+        assert md.read_lease() is not None and rs.current("pr-1")[1]["state"] == "merged"
+    p2 = subprocess.run(_land_cmd(None), env=env, capture_output=True, text=True, timeout=120)
+    assert p2.returncode == 0, p2.stderr
+    calls = log.read_text().splitlines() if log.exists() else []
+    assert len(calls) == expect_merge_calls, calls
+    if resume_state == "released":
+        assert md.read_lease() is None and any(md.DOOR.glob("released.*"))
+    else:
+        assert "nothing to land" in (p2.stdout + p2.stderr)
 ```
-- [ ] **Step 2: Subprocess helper for AC#2(c)** — add to the test file a `_fake_gh(tmp_path)` writing a bash `gh` that: `pr view` → prints `state.json`; `pr merge` → appends to `merge-calls.log`, sets `state.json` MERGED; `run list` → `[{"status":"completed","conclusion":"success","event":"push"}]`; and a `git` shim for `merge-tree` returning the attested tree. Then per kill point: `subprocess.run([sys.executable, "tools/merge_door.py", "land", "1", "--lane-id", "A", "--arc-id", "pr-1", "--no-refresh"], env={..., "MERGE_DOOR_TEST_KILL_AFTER": kill})` → assert rc 137; then rerun without the kill → rc 0; assert `merge-calls.log` line count == 1; for `kill="release"` assert the second run finds no lease and returns 0 with "nothing to land" (refresh proceeds under a fresh cycle); for `kill="reservation-merged"` assert the lease is still held before the rerun and the rerun resumes the CI wait (state MERGED, no merge call).
+(`TOOLS = Path(__file__).resolve().parent`; the CLI's `land` self-resumes when it finds this lane's lease with a dead pid — `reclaim(..., ground_state=reconcile(...))` — and prints `nothing to land` + exits 0 when no lease exists and the reservation is already `merged`.)
+- [ ] **Step 2: AC#2(c) harness** — the `_fake_gh` shim + parametrized crash-resume test above are the complete body (no prose stand-in): four kill points, rc 137 asserted on the killed run, rc 0 on the resume, `merge-calls.log` line count == 1 in every case, lease state asserted per kill point.
 - [ ] **Step 3: RED**; **Step 4: Implement (landing half of `merge_door.py`)**
 ```python
 class BudgetExhausted(LeaseError): ...
@@ -4635,6 +4722,8 @@ def land(pr: int, *, lane_id: str, arc_id: str, ground: Ground, refresh: Callabl
             rstatus = wait_post_merge_ci(rsha, ground, bound_s=REFRESH_BOUND_S, lane_id=lane_id)
             if rstatus != "success":
                 mark_blocked(lease, sha=rsha, reason="refresh_ci_not_green")
+                _emit_gate(lease, gate="merge-door-post-merge-ci", fail_class="HITL-recoverable", cause="refresh_ci_not_green", evidence=rstatus, arc_id=arc_id, lane_id=lane_id)
+                rs.emit_loop_row("DEFERRED-HIL", lane_id, "merge-door-post-merge-ci:HITL-recoverable:refresh_ci_not_green", f"{arc_id} — terminating refresh #{rpr} run for {rsha[:12]} {rstatus}; door blocked; fix, then `just merge-door-unblock {rpr} {rsha}`")
                 raise DoorBlocked(rstatus)
         release(lease)                                                           # (ix)
         if not reconciled:                                                       # a CLEAN cycle (C-HE-06 §10): no reconcile pass, no HITL
@@ -4792,7 +4881,7 @@ cd "$(git rev-parse --show-toplevel)"
 exec uv run python tools/merge_door.py land "$1" --lane-id "$HARNESS_LANE_ID" --arc-id "$HARNESS_ARC_ID" \
   --refresh-cmd "uv run python tools/roadmap_status_refresh.py --emit-refresh-pr-json"
 ```
-(`--emit-refresh-pr-json` is the existing refresh tool's new flag that creates the terminating refresh PR and prints `{"pr": N, "head_sha": "..."}` — add it in U-HE-28.)
+(`--emit-refresh-pr-json` is the existing refresh tool's new flag that creates — idempotently, by branch name — the terminating refresh PR and prints `{"pr": N, "head_sha": "..."}` — add it in U-HE-28.)
 - [ ] **Step 4: GREEN** — `bash tools/hooks/test_permission_guard.sh` all `ok`. Register `Row("C-HE-07", "shell:tools/hooks/test_permission_guard.sh", "phase0", "local + CI", False)`. Commit:
 ```bash
 git add tools/hooks/safe-merge.sh tools/hooks/permission-guard.sh tools/hooks/test_permission_guard.sh tools/lanes_verify.py
@@ -4814,7 +4903,7 @@ git commit -m "feat(he-lanes): U-HE-25 safe-merge wrapper + deny raw gh pr merge
 - [ ] **Step 1: Failing tests**
 ```bash
 # C-HE-08 §1: push-to-main denied; topic pushes still allowed
-for c in 'git push origin HEAD:main' 'git push origin main' 'git push origin refs/heads/main' 'git push -u origin feature:main' 'git push --set-upstream origin main' 'git push origin feature main' 'git push --force-with-lease=x origin +feature:refs/heads/main'; do
+for c in 'git push origin HEAD:main' 'git push origin main' 'git push origin refs/heads/main' 'git push -u origin feature:main' 'git push --set-upstream origin main' 'git push origin feature main' 'git push --force-with-lease=x origin +feature:refs/heads/main' "git push origin 'HEAD:main'" 'git push origin "main"'; do
   OUT=$(run_on "$(pl Bash "$c" '')"); [ "$(dec "$OUT")" = "deny" ] && ok "'$c' → deny" || bad "push-to-main not denied: $c → $OUT"
 done
 OUT=$(run_on "$(pl Bash 'git push origin feature' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "topic push → allow" || bad "topic push blocked: $OUT"
@@ -4845,6 +4934,7 @@ _push_targets_main() {
   set -f; set -- $cmd; set +f
   shift 2                                   # git push
   for tok in "$@"; do
+    tok=${tok//\"/}; tok=${tok//\'/}         # the real shell strips quotes: `'HEAD:main'` IS HEAD:main (Codex round-4 P1)
     case "$tok" in -*) continue ;; esac     # options anywhere (-u, --set-upstream, --force-with-lease=..., ...)
     positional+=("$tok")
   done
@@ -4894,6 +4984,16 @@ def test_desired_payload_shape():
     p = mp.desired_payload(["a — blocking"])
     assert p["required_pull_request_reviews"] is None and p["required_status_checks"] == {"strict": True, "contexts": ["a — blocking"]}
     assert p["enforce_admins"] is True and p["allow_force_pushes"] is False and p["allow_deletions"] is False and p["required_linear_history"] is False
+
+def test_to_put_payload_normalizes_get_shape():
+    got = {"url": "x", "required_status_checks": {"url": "y", "strict": True, "contexts": ["a — blocking"], "checks": [{"context": "a — blocking", "app_id": 1}]},
+           "enforce_admins": {"url": "z", "enabled": True}, "required_pull_request_reviews": None,
+           "allow_force_pushes": {"enabled": False}, "allow_deletions": {"enabled": False}, "required_linear_history": {"enabled": False}}
+    put = mp._to_put_payload(got)
+    assert put == {"required_status_checks": {"strict": True, "contexts": ["a — blocking"]}, "enforce_admins": True, "required_pull_request_reviews": None,
+                   "restrictions": None, "allow_force_pushes": False, "allow_deletions": False, "required_linear_history": False}
+    assert mp.verify(got, put) == []
+
 
 def test_verify_flags_404_and_mismatch():
     d = mp.desired_payload(["a — blocking"])
@@ -4973,6 +5073,22 @@ def verify(current: dict | None, desired: dict) -> list[str]:
     return out
 
 
+def _to_put_payload(got: dict) -> dict:
+    """The GET response is not a valid PUT body (nested response objects, read-only urls); normalize to the fields the
+    PUT accepts so a rollback actually restores (Codex round-4 P1)."""
+    rsc = got.get("required_status_checks") or {}
+    prr = got.get("required_pull_request_reviews")
+    return {
+        "required_status_checks": {"strict": bool(rsc.get("strict")), "contexts": sorted(rsc.get("contexts") or [c["context"] for c in rsc.get("checks", [])])} if rsc else None,
+        "enforce_admins": bool(_flag(got, "enforce_admins")),
+        "required_pull_request_reviews": None if not prr else {"dismiss_stale_reviews": bool(prr.get("dismiss_stale_reviews")), "require_code_owner_reviews": bool(prr.get("require_code_owner_reviews")), "required_approving_review_count": int(prr.get("required_approving_review_count", 0))},
+        "restrictions": None,
+        "allow_force_pushes": bool(_flag(got, "allow_force_pushes")),
+        "allow_deletions": bool(_flag(got, "allow_deletions")),
+        "required_linear_history": bool(_flag(got, "required_linear_history")),
+    }
+
+
 def diff_report(current: dict | None, desired: dict) -> str:
     return "BEFORE:\n" + json.dumps(current, indent=2, sort_keys=True) + "\nAFTER:\n" + json.dumps(desired, indent=2, sort_keys=True)
 
@@ -4995,8 +5111,9 @@ def main(argv=None) -> int:
         print(json.dumps(current_protection(), indent=2, sort_keys=True)); return 0
     if a.cmd == "apply":
         if _loop_mode(): raise SystemExit("apply refuses to run in loop mode (operator-gated; CLAUDE.md §12.4.1)")
-        if not a.confirm: raise SystemExit("pass --confirm after the operator has approved the diff")
         cur = current_protection(); print(diff_report(cur, desired))
+        if not a.confirm:
+            print("\nDRY RUN — nothing changed. After the operator approves THIS diff, run `just main-protection-apply-confirm`."); return 3
         (REPO / ".harness" / "plan" / "evidence-log-he-loop-lanes.md").open("a").write(f"\n## main-protection apply {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n```\n{diff_report(cur, desired)}\n```\n")
         r = subprocess.run(["gh", "api", "-X", "PUT", f"repos/{_repo()}/branches/main/protection", "--input", "-"],
                            input=json.dumps(desired), capture_output=True, text=True, timeout=60)
@@ -5007,8 +5124,10 @@ def main(argv=None) -> int:
         rc = tiebreaker()
         if rc != 0:
             rb = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
-            if cur is not None:   # there was a prior protection: restore it
-                subprocess.run(["gh", "api", "-X", "PUT", f"repos/{_repo()}/branches/main/protection", "--input", "-"], input=json.dumps(cur), capture_output=True, text=True, timeout=60)
+            if cur is not None:   # there was a prior protection: restore it from a NORMALIZED (PUT-shaped) payload
+                restore = subprocess.run(["gh", "api", "-X", "PUT", f"repos/{_repo()}/branches/main/protection", "--input", "-"], input=json.dumps(_to_put_payload(cur)), capture_output=True, text=True, timeout=60)
+                if restore.returncode != 0 or verify(current_protection(), _to_put_payload(cur)):
+                    raise SystemExit(f"tiebreaker FAILED and prior protection could NOT be restored — main is UNPROTECTED; re-run apply-confirm or restore by hand ({restore.stderr.strip()[:200]})")
             raise SystemExit(f"tiebreaker FAILED → protection rolled back (rc={rb.returncode}); settings NOT persisted")
         print("tiebreaker PASS; protection persists. Run `just main-protection-verify`."); return 0
     if a.cmd == "rollback":
@@ -5073,7 +5192,11 @@ if __name__ == "__main__":
 # ─── C-HE-08 branch protection for main (server-side X9 fence; operator-gated apply) ──────
 main-protection-show:
     uv run python tools/main_protection.py show
+# `apply` shows the diff and MUTATES NOTHING; the operator approves the actual payload (AskUserQuestion), then
+# `apply-confirm` performs the provisional apply + tiebreaker (+ automatic rollback on FAIL). Never hard-code --confirm.
 main-protection-apply:
+    uv run python tools/main_protection.py apply
+main-protection-apply-confirm:
     uv run python tools/main_protection.py apply --confirm
 main-protection-rollback:
     uv run python tools/main_protection.py rollback
@@ -5083,7 +5206,7 @@ main-protection-tiebreaker:
     uv run python tools/main_protection.py tiebreaker
 ```
 - [ ] **Step 4: GREEN** unit tests; register `Row("C-HE-08", "just:main-protection-verify", "phase0", "local", False, ("gh-auth-absent",))` and `Row("C-HE-08", "live:main-protection-tiebreaker + apply (operator-gated; evidence log)", "operator-gated", "loop, live", False)`.
-- [ ] **Step 5: The operator gate (the ONE decision this unit surfaces).** Run `just main-protection-show` (expect 404 today) and `just main-protection-apply` **outside loop mode** — it prints the diff and asks one AskUserQuestion: *"Apply branch protection to `main` now? [diff shown]"*; on confirm it applies **provisionally, runs the tiebreaker in a throwaway worktree, and rolls back automatically on FAIL** (C-HE-08 §4: tiebreaker before enforcing). Then `just main-protection-verify` (must be GREEN before `lanes-phase0-check` can pass). Record `show` (pre), `apply` (post), tiebreaker PASS lines in `.harness/plan/evidence-log-he-loop-lanes.md` (created in U-HE-44).
+- [ ] **Step 5: The operator gate (the ONE decision this unit surfaces).** Run `just main-protection-show` (expect 404 today) and `just main-protection-apply` **outside loop mode** — it prints the diff and mutates nothing (exit 3); Claude then asks one AskUserQuestion: *"Apply branch protection to `main` now? [the printed diff]"*; on approval `just main-protection-apply-confirm` applies **provisionally, runs the tiebreaker in a throwaway worktree, and rolls back automatically on FAIL** (C-HE-08 §4: tiebreaker before enforcing). Then `just main-protection-verify` (must be GREEN before `lanes-phase0-check` can pass). Record `show` (pre), `apply` (post), tiebreaker PASS lines in `.harness/plan/evidence-log-he-loop-lanes.md` (created in U-HE-44).
 - [ ] **Step 6: Commit** — `git add tools/main_protection.py tools/test_main_protection.py justfile tools/lanes_verify.py tools/codex-parity-check.sh && git commit -m "feat(he-lanes): U-HE-27 main branch-protection recipes + verify phase0 row (C-HE-08 §2-5)"`.
 
 ---
@@ -5130,6 +5253,16 @@ def emit_refresh_pr(post_pr: int, *, run=subprocess.run) -> dict:
         if p.returncode != 0:
             raise SystemExit(f"emit-refresh-pr: {' '.join(args)} failed: {p.stderr.strip()}")
         return p.stdout.strip()
+    # IDEMPOTENT by branch name (Codex round-4 P1): a crash between `gh pr create` and the door's sidecar publish must
+    # not orphan/duplicate the refresh. If the branch already has an open PR, return it; if the branch was pushed but
+    # no PR exists, create the PR on it; only otherwise create the branch.
+    existing = sh("gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,headRefOid", "--jq", ".[0] | select(.) | \"\\(.number) \\(.headRefOid)\"")
+    if existing:
+        n, head = existing.split(); return {"pr": int(n), "head_sha": head}
+    if run(["git", "ls-remote", "--exit-code", "--heads", "origin", branch], capture_output=True, text=True, timeout=60).returncode == 0:
+        sh("git", "fetch", "-q", "origin", branch); sh("git", "checkout", "-q", "-B", branch, f"origin/{branch}")
+        url = sh("gh", "pr", "create", "--head", branch, "--title", f"ops: roadmap status refresh post-#{post_pr}", "--body", "terminating refresh (CLAUDE.md §12.2.1); landed by the merge door as a continuation (C-HE-06 §4(viii))")
+        return {"pr": int(url.rstrip("/").rsplit("/", 1)[-1]), "head_sha": sh("git", "rev-parse", "HEAD")}
     sh("git", "checkout", "-b", branch)
     sh("git", "add", ".harness/roadmap_status.md")            # the ONLY file (§12.2.1)
     changed = sh("git", "diff", "--cached", "--name-only").splitlines()
@@ -6997,7 +7130,8 @@ Every row marked **mutation-probe** in §8.1 has a named `--lines` target in its
 4. **Codex round 1 on PR #1393 (out-of-family, cold) — 7 P1 / 4 P2, all absorbed in this PR.** P1: (a) marker/plan exit-gate mismatch → status block + marker now name this review as the plan's exit gate; (b) `round_outcomes` never written → `reservations.record_round_outcome` + `rw.record_round_outcome_if_reserved` called by both wrappers + folded at drain (U-HE-17/02/04/06/19); (c) `transition(updates)`/`update_payload` could rewrite `lane_id`/`arc_type`/`superseded_by` → `PAYLOAD_MUTABLE`/`TRANSITION_MUTABLE` allowlists + test (U-HE-17; U-HE-18's aging test now uses `now=`); (d) `BASE_TOCTOU` mismatch emitted but did not block → door blocks + HITL + test (U-HE-23); (e) resume re-created the refresh PR → resume from the recorded sidecar + test (U-HE-23); (f) coalescing delivery race / later-generation suppression → exclusive-create claim per exact generation under `QUEUE_DIR/hil-deliveries/` + concurrency test (U-HE-30; store audit lists the family); (g) shadow scored rounds collapsed across arcs → `(arc_id, round_n)` + test (U-HE-43). P2: artifact polling capped by the shared 1260 s deadline + test (U-HE-04); adjudication append enforces the same-core invariant against the ORIGINAL row + test (U-HE-01); reservation GC retention runs from the terminal head's `transitioned_at` + test (U-HE-17); HIL groups sorted by epoch, gawk-free pipeline (U-HE-30). Round 2 result is recorded in the PR.
 
 5. **Codex round 2 on PR #1393 — 8 P1 / 3 P2, all new surfaces (no round-1 item re-flagged), all absorbed.** P1: session-artifact JSONL is decoded before verdict parsing (`artifact_text`, U-HE-04); `review-with-failover` no longer pre-gates on `_require-codex-subscription` (a permanent Codex failure must reach the failover, U-HE-07); same-lane reclaim still requires the old pid dead (U-HE-22); a crashed reclaimer's marker carries the fresh lease and `complete_dead_marker` publishes it (U-HE-22); the C-HE-06 §7 invariant-vs-G4 continuation tension is surfaced as open item 13 (acquisition-time enforcement; v1.1 change-note candidate; U-HE-22/23); the `DoorFailed` handler decides release-vs-block from `read_lease()` and blocks after an attempt (U-HE-23); push-to-main is parsed (options anywhere, every refspec, bare push) instead of the reference regex (U-HE-26); the tiebreaker verdict comes from the stale PR alone (U-HE-27). P2: failover path emits no duplicate gemini rows (U-HE-07); TTL resurface reducer is shape-aware for HIL rows (U-HE-09); the shadow-trial sample is frozen at the first n scored rounds (U-HE-43). Round 3 result recorded in the PR.
-6. **Codex round 3 on PR #1393 — 11 P1 / 4 P2, all absorbed (three were consequences of round-2 edits — the tiebreaker's tautological first-parent compare, the reclaim publish window, and the status block's "round 2 clean" wording, which was false the moment round 2 returned findings and is now replaced by this record).** P1: holder-only terminal transitions (U-HE-17); reclaim verifies the published lease is its own token, never adopts a foreign lease (U-HE-22); tiebreaker runs in a throwaway worktree, compares the stale landing with the pre-merge main SHA, and `apply` is provisional with automatic rollback on FAIL (U-HE-27); `unique_catch` gets a production writer — `shadow_trial.py adjudicate` (U-HE-43); probe coverage matches every annotation's exact node id (U-HE-05); `unrun_cli` never shells out (U-HE-40); pilot report joins `BASE_TOCTOU` by the landing `merge_sha` now persisted on the reservation, and scopes HIL rows to the pilot's lanes + window with last-write-wins (U-HE-37/23); status block no longer asserts a clean round in advance (§ status). P2: envelope fields immutable on adjudication (U-HE-01); `BASE_TOCTOU` backstop walks first-parent commits (U-HE-33); failover emits when the gemini recipe died at preflight (U-HE-07); `loop_log_structured` returns 1 on write failure and `emit_loop_row` raises `LoopStatusWriteError` (U-HE-29/17). Round 4 result: item 7.
+6. **Codex round 3 on PR #1393 — 11 P1 / 4 P2, all absorbed (three were consequences of round-2 edits — the tiebreaker's tautological first-parent compare, the reclaim publish window, and the status block's "round 2 clean" wording, which was false the moment round 2 returned findings and is now replaced by this record).** P1: holder-only terminal transitions (U-HE-17); reclaim verifies the published lease is its own token, never adopts a foreign lease (U-HE-22); tiebreaker runs in a throwaway worktree, compares the stale landing with the pre-merge main SHA, and `apply` is provisional with automatic rollback on FAIL (U-HE-27); `unique_catch` gets a production writer — `shadow_trial.py adjudicate` (U-HE-43); probe coverage matches every annotation's exact node id (U-HE-05); `unrun_cli` never shells out (U-HE-40); pilot report joins `BASE_TOCTOU` by the landing `merge_sha` now persisted on the reservation, and scopes HIL rows to the pilot's lanes + window with last-write-wins (U-HE-37/23); status block no longer asserts a clean round in advance (§ status). P2: envelope fields immutable on adjudication (U-HE-01); `BASE_TOCTOU` backstop walks first-parent commits (U-HE-33); failover emits when the gemini recipe died at preflight (U-HE-07); `loop_log_structured` returns 1 on write failure and `emit_loop_row` raises `LoopStatusWriteError` (U-HE-29/17).
+7. **Codex round 4 on PR #1393 — 7 P1 / 1 P2, all absorbed.** P1: the AC#2(c) crash-resume test body is real code (a `gh`/`git` shim on PATH, four parametrized kill points, rc 137 → resume rc 0, `merge-calls.log` == 1) instead of a `...` stand-in (U-HE-23); `emit_refresh_pr` is idempotent by branch name so a crash between PR creation and the sidecar publish resumes the existing PR (U-HE-28); refresh-CI failure emits the gate finding + `DEFERRED-HIL` before blocking (U-HE-23); `_push_targets_main` strips quotes so `'HEAD:main'` is fenced (U-HE-26); `main-protection-apply` is a dry run (exit 3) and `apply-confirm` is the mutation, so the operator approves the printed payload (U-HE-27); rollback restores a normalized PUT payload and verifies it, else fails loud "main UNPROTECTED" (U-HE-27); this record itself (the exit gate's terminal item was owed before merge). P2: the lease rate counter ignores `.tmp` remnants and sweeps them (U-HE-22). **Terminal round: item 8.**
 ## Execution handoff
 
 Plan complete and saved to `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. Two execution options:
