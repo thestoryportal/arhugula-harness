@@ -34,7 +34,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 
 | Field | Value |
 |---|---|
-| Status | **Accepted on merge of PR #1393, with the review record in §7 items 4–7** — exit gate = out-of-family `just codex-review` rounds on the PR, each round's findings absorbed in-plan before the next; the terminal round's verdict and any residual classes are recorded in §7 (item 7) BEFORE merge, never claimed in advance. The spec's clearance marker (same PR) admits the plan only under this recorded gate. |
+| Status | **Accepted on merge of PR #1393, with the review record in §7 items 4–8** — exit gate = five out-of-family `just codex-review` rounds on the PR (40 P1 / 22 P2 in total, every finding absorbed in-plan before the next round; one spec-internal tension registered, not absorbed); item 8 is the terminal record and states the residual classes honestly (yield did NOT converge to zero — it is carried by unit execution's RED-first + per-PR codex + merge-gate). The spec's clearance marker (same PR) admits the plan only under this recorded gate. |
 | Version | v1.0 |
 | Date | 2026-08-18 |
 | Repo | `17011f89c` (every `file:line` below is pinned there, matching the spec's `[V]` set; re-verified in this authoring session) |
@@ -42,7 +42,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 | Skill | `writing-plans` (structure) + `implementation-planner` (atomic-decomposition discipline §2–§7) |
 | Source-set | `Spec_HE_Loop_Lanes_v1.md` (35 contracts, §5 files table, §6 build order, §8.1 manifest, §11 open items); `.harness/adr/ADR-HE-1..4` (context only — the spec is the canonical input) |
 | Entry authorization | `/context-restore` → operator: "the specification … is complete. Now we move to the next phase to /writing-plans" |
-| Exit gate | Plan review = lean protocol on the doc-only PR: `just codex-review` rounds, absorbed round by round (§7 items 4–7 are the durable record; item 7 states the terminal verdict + residual classes). No separate marker for the plan (H_E tooling; spec §14's marker is for the spec, and it names this gate) |
+| Exit gate | Plan review = lean protocol on the doc-only PR: `just codex-review` rounds, absorbed round by round (§7 items 4–8 are the durable record; item 8 states the terminal verdict + residual classes). No separate marker for the plan (H_E tooling; spec §14's marker is for the spec, and it names this gate) |
 
 ## Shape decision (front-matter)
 
@@ -112,7 +112,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 - **Files** lists exact paths; `Modify:` carries the pinned line range at `17011f89c`.
 - **Steps** are the TDD cycle: write the failing test → run it RED → implement → run it GREEN → (mutation-probe where the spec marks one) → register in `tools/codex-parity-check.sh` and the §8.1 manifest → commit. Commands are exact; expected output is stated.
 - **Manifest registration** means appending a `Row(...)` to `MANIFEST` in `tools/lanes_verify.py` (`U-HE-05`).
-- **mutation-probe** invocations use the tool that exists at HEAD: `just mutation-probe --file <F> --lines <A-B> --test "<cmd>"` (`justfile:259-260`, `tools/mutation_probe.py`). The `--lines` range is the guard being reverted; the plan names the guard, the executor reads the exact line numbers from the file they just wrote.
+- **mutation-probe** invocations use the tool that exists at HEAD: `just mutation-probe --file <F> --lines <A-B> --test "<cmd>"` (`justfile:259-260`, `tools/mutation_probe.py`). The `--lines` range is the guard being reverted; the plan names the guard, the executor reads the exact line numbers from the file they just wrote. **Order (Codex round-5 P1):** the tool REFUSES an untracked or dirty target, so every unit's cycle is: write tests + code → GREEN → **commit** (`feat:`/`test:`) → run the probes → commit the probe log + manifest registration (`test(he-lanes): U-HE-NN probes pinned + manifest rows`). Where a unit's steps below list "probe" before "commit", read them in this order.
 - Python style: stdlib + `jsonschema`; `from __future__ import annotations`; dataclasses; no third-party retry/lock libraries; `ruff` clean.
 - **Never `git add -A`.** Stage the exact paths each commit step names.
 
@@ -486,8 +486,11 @@ def _check_adjudication_against_original(row: dict, path: Path) -> None:
         raise RecordError(f"disposition_actor {row['disposition_actor']!r} equals the finding's original producer")
 
 
-def append_row(row: dict, path: Path = GATE_LOG_JSONL) -> None:
-    """Validate (incl. the same-core invariant for adjudications), then append one line with a single write."""
+def append_row(row: dict, path: Path | None = None) -> None:
+    """Validate (incl. the same-core invariant for adjudications), then append one line with a single write.
+    `path` defaults to GATE_LOG_JSONL resolved AT CALL TIME (not bound at def time) so tests may monkeypatch it
+    and production writes never leak into a test's tree (Codex round-5 P1)."""
+    path = path or GATE_LOG_JSONL
     validate(row)
     _check_adjudication_against_original(row, path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -496,7 +499,8 @@ def append_row(row: dict, path: Path = GATE_LOG_JSONL) -> None:
         fh.write(line)
 
 
-def read_rows(path: Path = GATE_LOG_JSONL) -> list[dict]:
+def read_rows(path: Path | None = None) -> list[dict]:
+    path = path or GATE_LOG_JSONL                         # call-time resolution (see append_row)
     if not path.exists():
         return []
     rows: list[dict] = []
@@ -556,20 +560,27 @@ if __name__ == "__main__":
 Run: `uv run pytest tools/test_finding_record.py -q`
 Expected: `12 passed`.
 
-- [ ] **Step 6: Mutation probes (spec-marked)**
+- [ ] **Step 6: Commit the code first (the probe tool refuses untracked/dirty targets)**
+
+```bash
+git add tools/finding_record.py tools/review_schemas/finding_record.schema.json tools/test_finding_record.py
+git commit -m "feat(he-lanes): U-HE-01 finding record — 8-field core + envelope + projection (C-HE-24)"
+```
+
+- [ ] **Step 6b: Mutation probes (spec-marked)**
 
 Run each; expected `PROBE PINNED` (exit 0):
 - `just mutation-probe --file tools/finding_record.py --lines <the disposition_actor==producer raise block> --test "uv run pytest tools/test_finding_record.py::test_self_disposition_rejected_at_write -q"`
 - `just mutation-probe --file tools/finding_record.py --lines <the _check_adjudication_against_original call in append_row> --test "uv run pytest tools/test_finding_record.py::test_adjudication_cannot_change_core_or_evade_self_disposition -q"`
 - `just mutation-probe --file tools/finding_record.py --lines <the ':' charset loop> --test "uv run pytest tools/test_finding_record.py::test_colon_in_identifier_rejected -q"`
 
-- [ ] **Step 7: Register + commit**
+- [ ] **Step 7: Register + commit the evidence**
 
 Add `tools/test_finding_record.py \` to the list in `tools/codex-parity-check.sh` (after `tools/test_arc_metrics.py \`). Run `bash tools/codex-parity-check.sh` → all green.
 
 ```bash
-git add tools/finding_record.py tools/review_schemas/finding_record.schema.json tools/test_finding_record.py tools/codex-parity-check.sh
-git commit -m "feat(he-lanes): U-HE-01 finding record — 8-field core + envelope + projection (C-HE-24)"
+git add tools/codex-parity-check.sh .harness/mutation-probe-log.jsonl
+git commit -m "test(he-lanes): U-HE-01 probes pinned + parity registration"
 ```
 
 **Acceptance (functional).** All Step-1 tests green; both mutation probes pinned; `python tools/finding_record.py validate` exits 0 on an empty/absent file. **Manifest rows (added in U-HE-05):** `tools/test_finding_record.py` → tag `phase0`, mutation-probe `yes`.
@@ -1512,6 +1523,20 @@ def test_file_level_row_requires_every_annotation_exactly(tmp_path: Path, monkey
     assert len(lv.coverage_gaps(log)) == 2
 
 
+def test_just_args_tokenized_and_placeholder_is_live():
+    assert lv._command(_row(tag="phase1", art="just:main-protection-verify")) == ["just", "main-protection-verify"]
+    assert lv._command(_row(tag="phase1", art="just:lanes-pilot-report <run-id>")) is None
+    assert lv._command(_row(tag="phase0", art="shell:tools/hooks/test_x.sh")) == ["bash", "tools/hooks/test_x.sh"]
+
+
+def test_shell_probe_rows_can_be_covered(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="shell:tools/hooks/test_loop_lib.sh")])
+    log = tmp_path / "mp.jsonl"
+    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/hooks/test_loop_lib.sh"]
+    log.write_text(json.dumps({"test": "bash tools/hooks/test_loop_lib.sh", "rc": 0}) + "\n")
+    assert lv.coverage_gaps(log) == []
+
+
 def test_unknown_skip_reason_is_fail(monkeypatch):
     def fake_run(cmd, **kw):
         class P: returncode = 0; stdout = "SKIPPED [1] x.py:1: slow\n"; stderr = ""
@@ -1580,12 +1605,14 @@ MANIFEST: list[Row] = [
 
 def _command(row: Row) -> list[str] | None:
     kind, _, target = row.artifact.partition(":")
+    if "<" in target and ">" in target:
+        return None               # a placeholder argument (e.g. `just:lanes-pilot-report <run-id>`) is a LIVE row
     if kind == "pytest":
         return ["uv", "run", "pytest", "-q", "-rs", target]
     if kind == "shell":
-        return ["bash", target]
+        return ["bash", *target.split()]
     if kind == "just":
-        return ["just", target]
+        return ["just", *target.split()]      # recipe + controlled args, tokenized (Codex round-5 P1)
     return None  # live
 
 
@@ -1632,6 +1659,8 @@ def _pinned_nodeids(log_path: Path) -> set[str]:
         toks = e["test"].split()
         if "pytest" in toks:
             out.add(toks[toks.index("pytest") + 1])
+        elif toks[:1] == ["bash"] and len(toks) > 1:
+            out.add(toks[1])                  # shell rows: the probed test script itself is the target (round-5 P1)
     return out
 
 
@@ -1639,6 +1668,8 @@ def required_probes(row: Row) -> list[str]:
     """Every `# mutation-probe:` annotation the row's artifact carries -> its exact node id (Codex round-3 P1:
     substring matching let one pinned test cover a whole file). A node-id artifact requires exactly itself."""
     kind, _, target = row.artifact.partition(":")
+    if kind == "shell":
+        return [target.split()[0]] if row.mutation_probe else []
     if kind != "pytest":
         return [target] if row.mutation_probe else []
     file_part, _, node = target.partition("::")
@@ -4260,7 +4291,11 @@ def gc(*, now: datetime | None = None) -> list[Path]:
     if att.is_dir():
         for lane in att.iterdir():
             for f in lane.iterdir():
-                if now.timestamp() - float(f.name) > 3600:
+                try:
+                    age = now.timestamp() - float(f.name)
+                except ValueError:                # `.tmp` remnant of a crashed publish_exclusive (round-5 P2)
+                    age = now.timestamp() - f.stat().st_mtime
+                if age > 3600:
                     f.unlink(); removed.append(f)
     return removed
 ```
@@ -4983,6 +5018,7 @@ def test_blocking_contexts_derived_from_ci_yml():
 def test_desired_payload_shape():
     p = mp.desired_payload(["a — blocking"])
     assert p["required_pull_request_reviews"] is None and p["required_status_checks"] == {"strict": True, "contexts": ["a — blocking"]}
+    assert "restrictions" in p and p["restrictions"] is None
     assert p["enforce_admins"] is True and p["allow_force_pushes"] is False and p["allow_deletions"] is False and p["required_linear_history"] is False
 
 def test_to_put_payload_normalizes_get_shape():
@@ -4993,6 +5029,8 @@ def test_to_put_payload_normalizes_get_shape():
     assert put == {"required_status_checks": {"strict": True, "contexts": ["a — blocking"]}, "enforce_admins": True, "required_pull_request_reviews": None,
                    "restrictions": None, "allow_force_pushes": False, "allow_deletions": False, "required_linear_history": False}
     assert mp.verify(got, put) == []
+    got["restrictions"] = {"users": [{"login": "alice"}], "teams": [{"slug": "core"}], "apps": []}
+    assert mp._to_put_payload(got)["restrictions"] == {"users": ["alice"], "teams": ["core"], "apps": []}
 
 
 def test_verify_flags_404_and_mismatch():
@@ -5029,7 +5067,7 @@ def blocking_contexts(ci_yml: Path = CI_YML) -> list[str]:
 
 
 def desired_payload(contexts: list[str]) -> dict:
-    return {**REQUIRED, "required_status_checks": {"strict": True, "contexts": list(contexts)}}
+    return {**REQUIRED, "required_status_checks": {"strict": True, "contexts": list(contexts)}, "restrictions": None}   # `restrictions` is a REQUIRED nullable field on the PUT (Codex round-5 P1)
 
 
 def _gh(*args: str, timeout: float = 30) -> subprocess.CompletedProcess:
@@ -5073,6 +5111,12 @@ def verify(current: dict | None, desired: dict) -> list[str]:
     return out
 
 
+def _restrictions_payload(r: dict | None) -> dict | None:
+    if not r:
+        return None
+    return {"users": [u["login"] for u in r.get("users", [])], "teams": [t["slug"] for t in r.get("teams", [])], "apps": [a["slug"] for a in r.get("apps", [])]}
+
+
 def _to_put_payload(got: dict) -> dict:
     """The GET response is not a valid PUT body (nested response objects, read-only urls); normalize to the fields the
     PUT accepts so a rollback actually restores (Codex round-4 P1)."""
@@ -5082,7 +5126,7 @@ def _to_put_payload(got: dict) -> dict:
         "required_status_checks": {"strict": bool(rsc.get("strict")), "contexts": sorted(rsc.get("contexts") or [c["context"] for c in rsc.get("checks", [])])} if rsc else None,
         "enforce_admins": bool(_flag(got, "enforce_admins")),
         "required_pull_request_reviews": None if not prr else {"dismiss_stale_reviews": bool(prr.get("dismiss_stale_reviews")), "require_code_owner_reviews": bool(prr.get("require_code_owner_reviews")), "required_approving_review_count": int(prr.get("required_approving_review_count", 0))},
-        "restrictions": None,
+        "restrictions": _restrictions_payload(got.get("restrictions")),      # preserve user/team/app restrictions on rollback (round-5 P1)
         "allow_force_pushes": bool(_flag(got, "allow_force_pushes")),
         "allow_deletions": bool(_flag(got, "allow_deletions")),
         "required_linear_history": bool(_flag(got, "required_linear_history")),
@@ -5394,7 +5438,9 @@ _LOOP_AWK_ROW='
 # never merged into it, never in the skip-set (C-HE-09 §5). Last 5 rows within 24 h.
 loop_notify_summary() {
   local p; p=$(loop_status_path); [ -f "$p" ] || return 0
-  local rows; rows=$(awk -F'|' "$_LOOP_AWK_ROW"' { rowparse() } k == "NOTIFY" { print "[" lane "] " d }' "$p" 2>/dev/null | tail -5 | sed 's/\\|/|/g')
+  local now; now=$(_loop_epoch "$(loop_now)")
+  local rows; rows=$(awk -F'|' "$_LOOP_AWK_ROW"' { rowparse() } k == "NOTIFY" { ts = $2; gsub(/^[ \t]+|[ \t]+$/, "", ts); print ts "\t[" lane "] " d }' "$p" 2>/dev/null \
+    | while IFS=$'\t' read -r ts line; do [ $(( now - $(_loop_epoch "$ts") )) -le 86400 ] && printf '%s\n' "$line"; done | tail -5 | sed 's/\\|/|/g')   # 24 h horizon (round-5 P2)
   [ -n "$rows" ] && printf '[loop] ℹ notify: %s' "$(printf '%s\n' "$rows" | paste -sd';' - | sed 's/;/; /g')"
 }
 ```
@@ -5464,6 +5510,7 @@ loop_hil_groups() {
     { rowparse() }
     k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
       cause = $4; if (cause ~ /^[ \t]*lane=/) { sub(/^[^;]*;cause=/, "", cause); gsub(/[ \t]/, "", cause) } else cause = "-"
+      if (cause == "-") cause = "-:" tok          # legacy rows reduce as their OWN singleton group (C-HE-10 §1; round-5 P2)
       ts = $2; gsub(/^[ \t]+|[ \t]+$/, "", ts)
       if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; sig[tok] = cause; when[tok] = ts; lanes[tok] = lane; det[tok] = d } else state[tok] = "RESOLVED" }
     END { for (t in state) if (state[t] == "PENDING") printf "%s\t%s\t%s\t%s\t%s\n", when[t], t, sig[t], lanes[t], det[t] }
@@ -5484,7 +5531,8 @@ loop_hil_groups() {
 # earlier one's delivery (the claim is keyed by the EXACT generation, not by ">= first_seen").
 loop_hil_deliver() {
   local p; p=$(loop_status_path); [ -f "$p" ] || return 0
-  local w="${HARNESS_HIL_COALESCE_WINDOW_S:-600}" now; now=$(_loop_epoch "$(loop_now)")
+  local w="${HARNESS_HIL_COALESCE_WINDOW_S:-600}" now; [ "$w" -lt 300 ] && w=300; [ "$w" -gt 900 ] && w=900   # same clamp as the grouper (round-5 P2)
+  now=$(_loop_epoch "$(loop_now)")
   local claims="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}/hil-deliveries"; mkdir -p "$claims"
   loop_hil_groups | while IFS=$'\t' read -r sig n first items; do
     [ $(( now - first )) -ge "$w" ] || continue
@@ -5547,7 +5595,26 @@ def test_compose_uses_port_variables():
 
 @pytest.mark.skipif(shutil.which("docker") is None or subprocess.run(["docker", "info"], capture_output=True).returncode != 0, reason="docker-daemon-absent")
 def test_two_lanes_disjoint_names_and_ports():   # env-tagged
-    ...  # `just r420-self-hosted-stack-up` with HARNESS_LANE_INDEX=1 and =2; `docker compose -p <proj> ps --format json` disjoint; down both
+    import json as _json
+    env = {**os.environ, "HARNESS_RAM_FLOOR_GB": "0"}      # the RAM guard is not under test here
+    def up(k): subprocess.run(["just", "r420-self-hosted-stack-up"], env={**env, "HARNESS_LANE_INDEX": str(k)}, check=True, capture_output=True, text=True, timeout=600)
+    def down(k): subprocess.run(["just", "r420-self-hosted-stack-down"], env={**env, "HARNESS_LANE_INDEX": str(k)}, capture_output=True, text=True, timeout=300)
+    def ps(k):
+        out = subprocess.run(["docker", "compose", "-p", lane_ports.project(k), "-f", "deploy/self-hosted-local/compose.yaml", "ps", "--format", "json"], capture_output=True, text=True, check=True).stdout
+        return [_json.loads(line) for line in out.splitlines() if line.strip()]
+    try:
+        up(1); up(2)
+        c1, c2 = ps(1), ps(2)
+        assert len(c1) == 3 and len(c2) == 3, (c1, c2)                                        # three containers per stack
+        assert {c["Name"] for c in c1}.isdisjoint({c["Name"] for c in c2})                     # disjoint container names
+        assert all(c["State"] == "running" for c in c1 + c2), "no port bind conflict: both stacks running"
+        p1, p2 = lane_ports.ports(1), lane_ports.ports(2)
+        pub1 = " ".join(c.get("Publishers", []) and str(c["Publishers"]) or "" for c in c1); pub2 = " ".join(str(c.get("Publishers", "")) for c in c2)
+        assert str(p1["grafana"]) in pub1 and str(p2["grafana"]) in pub2 and str(p2["grafana"]) not in pub1
+        vols = subprocess.run(["docker", "volume", "ls", "--format", "{{.Name}}"], capture_output=True, text=True).stdout
+        assert f"{lane_ports.project(1)}_grafana-data" in vols and f"{lane_ports.project(2)}_grafana-data" in vols   # disjoint volume namespace
+    finally:
+        down(1); down(2)
 ```
 - [ ] **Step 2: RED**; **Step 3: Implement.** `tools/lane_ports.py`:
 ```python
@@ -5577,7 +5644,7 @@ if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
   mkdir -p "$_LI_Q/lanes"; _k="${HARNESS_LANE_INDEX_FORCE:-0}"
   while :; do
     if ( set -o noclobber; printf '%s\n' "$HARNESS_LANE_ID $PWD" > "$_LI_Q/lanes/$_k" ) 2>/dev/null; then export HARNESS_LANE_INDEX="$_k"; break; fi
-    _k=$((_k + 1)); [ "$_k" -lt 350 ] || { echo "lane-init: no free lane index < 350" >&2; break; }
+    _k=$((_k + 1)); [ "$_k" -lt 350 ] || { echo "lane-init: no free lane index < 350 — refusing to continue (an unset index would collide with lane 0)" >&2; return 1 2>/dev/null || exit 1; }
   done
 fi
 # git gc: repo-wide once (extensions.worktreeConfig is UNSET, so `git config` is repo-wide anyway).
@@ -5600,6 +5667,7 @@ lane_stack_allowed() {
 _lane-env:
     @uv run python -c "import os,lane_ports as l;k=int(os.environ.get('HARNESS_LANE_INDEX','0'));p=l.ports(k);print(f'-p {l.project(k)}');[print(f'export R420_PORT_{n.upper()}={v}') for n,v in p.items()]"
 r420-self-hosted-stack-up:
+    bash -c 'source tools/hooks/lane-init.sh; lane_stack_allowed' || { echo "self-hosted stack skipped: RAM floor (C-HE-11 §5; NOTIFY emitted)"; exit 0; }
     eval "$(just _lane-env | sed -n '2,$p')"; docker compose $(just _lane-env | head -1) -f deploy/self-hosted-local/compose.yaml up -d
 r420-self-hosted-stack-down:
     docker compose $(just _lane-env | head -1) -f deploy/self-hosted-local/compose.yaml down
@@ -6520,14 +6588,16 @@ class Check:
     check_id = "unswept_consumers"; kind = "deterministic"
     def __init__(self, diff: str | None = None): self.diff = diff
     def _diff(self, repo: Path) -> str:
-        return self.diff if self.diff is not None else subprocess.run(["git", "-C", str(repo), "diff", "--unified=0", "origin/main...HEAD"], capture_output=True, text=True).stdout
+        # committed + staged + unstaged (Codex round-5 P2): `git diff origin/main` compares the WORKING TREE against
+        # the base, so a pending removal is visible to a pre-commit mech-check
+        return self.diff if self.diff is not None else subprocess.run(["git", "-C", str(repo), "diff", "--unified=0", "origin/main"], capture_output=True, text=True).stdout
     def run(self, changed_files: list[Path], repo: Path) -> list[MechFinding]:
         out = []
-        changed = {str(f.resolve()) for f in changed_files}
         for name in sorted(set(REMOVED_DEF.findall(self._diff(repo)))):
             hits = subprocess.run(["rg", "-n", "--glob", "!*.md", "-w", name, str(repo)], capture_output=True, text=True).stdout.splitlines()
-            survivors = [h for h in hits if h.split(":", 1)[0] not in changed]
-            for h in survivors:
+            # every remaining reference IS a surviving consumer -- the removed definition itself no longer matches, so
+            # NO whole-file exclusion (Codex round-5 P2: excluding changed files hid consumers outside the hunks)
+            for h in hits:
                 out.append(MechFinding(h.split(":", 1)[0] + ":" + h.split(":", 2)[1], f"consumer of removed/renamed symbol {name!r} still present", "run `graft callers <sym> --depth all` before 'complete'; sweep every consumer"))
         return out
 ```
@@ -6557,11 +6627,21 @@ class Check:
     def _claims(self, repo: Path) -> list[str]:
         if self.claims is not None:
             return self.claims
-        body = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%B"], capture_output=True, text=True).stdout
-        return [c for line in CLAIM_LINE.findall(body) for c in CMD.findall(line)]
+        srcs = []
+        pr = subprocess.run(["gh", "pr", "view", "--json", "body", "--jq", ".body"], cwd=repo, capture_output=True, text=True, timeout=30)
+        if pr.returncode == 0:
+            srcs.append(pr.stdout)
+        else:
+            self.source_warning = "PR body unavailable (gh: %s); only the HEAD commit message was scanned" % (pr.stderr.strip()[:80] or "no PR")
+        srcs.append(subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%B"], capture_output=True, text=True).stdout)
+        return [c for body in srcs for line in CLAIM_LINE.findall(body) for c in CMD.findall(line)]
+    source_warning: str | None = None
     def run(self, changed_files: list[Path], repo: Path) -> list[MechFinding]:
         out = []
-        for cmd in self._claims(repo):
+        claims = self._claims(repo)
+        if self.source_warning:
+            out.append(MechFinding("unrun_cli", self.source_warning, "verification claims are read from the PR body AND the commit message"))
+        for cmd in claims:
             rc, text = self.runner(cmd)
             if rc != 0 or not text.strip():
                 out.append(MechFinding(cmd, f"claimed clean but exit {rc} / {'empty' if not text.strip() else 'non-empty'} output", "assert exit code AND positive content before 'clean'"))
@@ -6905,7 +6985,8 @@ def adjudicate(finding_id: str, *, disposition: str, actor: str, rows: list[dict
     row for a shadow-lens finding with unique_catch = (a): its location+finding_type appears in NO blocking
     reviewer's row for the same head_sha; (b) -- disposition accepted -- is what unique_catches() then requires."""
     validate_adjudicator(actor)
-    rows = fr.read_rows(path) if rows is None and path is not None else (rows if rows is not None else fr.read_rows())
+    supplied = rows is not None
+    rows = rows if supplied else fr.read_rows(path) if path is not None else fr.read_rows()
     orig = next((r for r in rows if r["finding_id"] == finding_id and r["record_kind"] == "finding"), None)
     if orig is None:
         raise ValueError(f"no finding row for {finding_id}")
@@ -6915,8 +6996,8 @@ def adjudicate(finding_id: str, *, disposition: str, actor: str, rows: list[dict
     env = fr.Envelope("finding_adjudication", fr.now_iso(), orig["arc_id"], orig["lane_id"], orig["head_sha"], orig["base_sha"], orig["diff_digest"], orig["round_n"],
                       cause_attribution=orig["cause_attribution"], disposition=disposition, disposition_actor=actor, unique_catch=uc)
     row = fr.make_row(core, env)
-    if path is not None or rows is None:
-        fr.append_row(row, path or fr.GATE_LOG_JSONL)
+    if not supplied or path is not None:                 # production path (no injected rows) ALWAYS persists (round-5 P1)
+        fr.append_row(row, path)
     return row
 
 
@@ -6963,7 +7044,7 @@ def main(argv=None) -> int:
 
 ### U-HE-44: Forward-register rows for spec §11 + plan evidence log
 
-**Scope.** Register the six carry-forwards the spec sends to the forward register as `B-*` rows (`.harness/forward-register.yaml` via `tools/forward_register.py`): #3 P9(a) prewritten testable done-condition; #4 K7 stop rule (prereqs C-HE-26 §3); #9 cross-carrier merge-door fencing (joint Claude/Codex arc; incl. `AGENTS.md:56-57` #3 restatement + Docker isolation for Codex legs; **operator may reverse the v1 scoping**); #10 SPRT alternative for the shadow-trial rule; #11 cross-`head_sha` `finding_id` tracking; #12 randomized lane assignment; plus the plan-level rows: the `result_capture` divergence audit-worthiness question (§11 #5, decided "recorded, not audit-worthy in v1"), the reservation bootstrap-at-drain migration path (U-HE-19), the `severity` dual vocabulary note (U-HE-01), §11 #13 (queue-depth cap once N-lane cadence data exists), and the C-HE-06 §7 invariant-wording vs G4-continuation tension (plan §6 item 13; v1.1 change-note candidate). Create `.harness/plan/evidence-log-he-loop-lanes.md` with the sections the units above append to (branch-protection show/apply/tiebreaker; reviewer-concurrency probe verdicts; pilot reports; RED-first runs of AC#2; equivalence proofs).
+**Scope.** Register the six carry-forwards the spec sends to the forward register as `B-*` rows (`.harness/forward-register.yaml` via `tools/forward_register.py`): #3 P9(a) prewritten testable done-condition; #4 K7 stop rule (prereqs C-HE-26 §3); #9 cross-carrier merge-door fencing (joint Claude/Codex arc; incl. `AGENTS.md:56-57` #3 restatement + Docker isolation for Codex legs; **operator may reverse the v1 scoping**); #10 SPRT alternative for the shadow-trial rule; #11 cross-`head_sha` `finding_id` tracking; #12 randomized lane assignment; plus the plan-level rows: the `result_capture` divergence audit-worthiness question (§11 #5, decided "recorded, not audit-worthy in v1"), the reservation bootstrap-at-drain migration path (U-HE-19), the `severity` dual vocabulary note (U-HE-01), §11 #13 (queue-depth cap once N-lane cadence data exists), the C-HE-06 §7 invariant-wording vs G4-continuation tension (plan §6 item 13; v1.1 change-note candidate), and the six residual defect classes from the plan's codex rounds (§7 item 8) — one row each, tagged as U-HE-40 mechanized-check candidates. Create `.harness/plan/evidence-log-he-loop-lanes.md` with the sections the units above append to (branch-protection show/apply/tiebreaker; reviewer-concurrency probe verdicts; pilot reports; RED-first runs of AC#2; equivalence proofs).
 
 **Spec linkage.** §11 #3, #4, #5, #9, #10, #11, #12, #13; C-HE-30 (evidence log is not a store — a plan artifact).
 
@@ -7132,6 +7213,7 @@ Every row marked **mutation-probe** in §8.1 has a named `--lines` target in its
 5. **Codex round 2 on PR #1393 — 8 P1 / 3 P2, all new surfaces (no round-1 item re-flagged), all absorbed.** P1: session-artifact JSONL is decoded before verdict parsing (`artifact_text`, U-HE-04); `review-with-failover` no longer pre-gates on `_require-codex-subscription` (a permanent Codex failure must reach the failover, U-HE-07); same-lane reclaim still requires the old pid dead (U-HE-22); a crashed reclaimer's marker carries the fresh lease and `complete_dead_marker` publishes it (U-HE-22); the C-HE-06 §7 invariant-vs-G4 continuation tension is surfaced as open item 13 (acquisition-time enforcement; v1.1 change-note candidate; U-HE-22/23); the `DoorFailed` handler decides release-vs-block from `read_lease()` and blocks after an attempt (U-HE-23); push-to-main is parsed (options anywhere, every refspec, bare push) instead of the reference regex (U-HE-26); the tiebreaker verdict comes from the stale PR alone (U-HE-27). P2: failover path emits no duplicate gemini rows (U-HE-07); TTL resurface reducer is shape-aware for HIL rows (U-HE-09); the shadow-trial sample is frozen at the first n scored rounds (U-HE-43). Round 3 result recorded in the PR.
 6. **Codex round 3 on PR #1393 — 11 P1 / 4 P2, all absorbed (three were consequences of round-2 edits — the tiebreaker's tautological first-parent compare, the reclaim publish window, and the status block's "round 2 clean" wording, which was false the moment round 2 returned findings and is now replaced by this record).** P1: holder-only terminal transitions (U-HE-17); reclaim verifies the published lease is its own token, never adopts a foreign lease (U-HE-22); tiebreaker runs in a throwaway worktree, compares the stale landing with the pre-merge main SHA, and `apply` is provisional with automatic rollback on FAIL (U-HE-27); `unique_catch` gets a production writer — `shadow_trial.py adjudicate` (U-HE-43); probe coverage matches every annotation's exact node id (U-HE-05); `unrun_cli` never shells out (U-HE-40); pilot report joins `BASE_TOCTOU` by the landing `merge_sha` now persisted on the reservation, and scopes HIL rows to the pilot's lanes + window with last-write-wins (U-HE-37/23); status block no longer asserts a clean round in advance (§ status). P2: envelope fields immutable on adjudication (U-HE-01); `BASE_TOCTOU` backstop walks first-parent commits (U-HE-33); failover emits when the gemini recipe died at preflight (U-HE-07); `loop_log_structured` returns 1 on write failure and `emit_loop_row` raises `LoopStatusWriteError` (U-HE-29/17).
 7. **Codex round 4 on PR #1393 — 7 P1 / 1 P2, all absorbed.** P1: the AC#2(c) crash-resume test body is real code (a `gh`/`git` shim on PATH, four parametrized kill points, rc 137 → resume rc 0, `merge-calls.log` == 1) instead of a `...` stand-in (U-HE-23); `emit_refresh_pr` is idempotent by branch name so a crash between PR creation and the sidecar publish resumes the existing PR (U-HE-28); refresh-CI failure emits the gate finding + `DEFERRED-HIL` before blocking (U-HE-23); `_push_targets_main` strips quotes so `'HEAD:main'` is fenced (U-HE-26); `main-protection-apply` is a dry run (exit 3) and `apply-confirm` is the mutation, so the operator approves the printed payload (U-HE-27); rollback restores a normalized PUT payload and verifies it, else fails loud "main UNPROTECTED" (U-HE-27); this record itself (the exit gate's terminal item was owed before merge). P2: the lease rate counter ignores `.tmp` remnants and sweeps them (U-HE-22). **Terminal round: item 8.**
+8. **Codex round 5 on PR #1393 (terminal) — 7 P1 / 10 P2, all absorbed; stopping rule applied.** P1: rollback preserves user/team/app `restrictions` and the PUT payload carries the required nullable `restrictions` key (U-HE-27); `shadow_trial.adjudicate` persists on the production path (U-HE-43); commit-before-probe is now a plan-wide convention (the probe tool refuses untracked/dirty targets) and U-HE-01's steps are reordered accordingly; `append_row`/`read_rows` resolve the ledger path at call time so tests never write the real ledger (U-HE-01, every emitter); `lanes_verify` tokenizes `just` args and treats placeholder rows as live, and probe coverage recognises `bash <script>` probes (U-HE-05). P2: door GC skips `.tmp` attempt remnants (U-HE-22); the stack recipe calls `lane_stack_allowed` (U-HE-31); the two-lane compose test is a real body (U-HE-31); `unswept_consumers` diffs the working tree and no longer excludes whole changed files (U-HE-40); `unrun_cli` reads the PR body and warns when it cannot (U-HE-40); the deliverer clamps the window like the grouper, legacy rows are singleton groups, `loop_notify_summary` enforces its 24 h horizon (U-HE-29/30); lane-init fails on index exhaustion (U-HE-31). **Verdict + stopping rule.** P1 yield across rounds was 7 / 8 / 11 / 7 / 7 — flat, not converging: a cold out-of-family reviewer finds real defects in ~7 k lines of *invented, not-yet-executed* code at a steady rate, and each round's fixes open a few new surfaces (rounds 3–5 each contained 2–3 findings against round-(n−1) edits). Continuing to review the plan text is therefore not the cheapest path to correctness; **executing** it is — every unit lands RED-first with its own tests, then `just codex-review` on the PR diff, then the 3-lens `merge-gate` (code PRs). **Residual classes** (what the five rounds kept finding, and what unit-execution review must watch for): (a) crash-window idempotency in multi-step filesystem protocols (marker → move → publish; sidecar → PR create); (b) test bodies that are stand-ins (`...`) or that pass vacuously; (c) payload-shape mismatches against a live API (GET vs PUT shapes; required nullable fields); (d) string-parsing edge cases in the permission guard (quotes, options anywhere); (e) default-argument capture vs call-time resolution; (f) invariant statements that hold at one time (acquisition) but not across a window (continuation). These six are registered by U-HE-44 as forward-register rows *and* as candidate classes for U-HE-40's mechanized checks (each is deterministic or hybrid-checkable). No finding from rounds 1–5 remains unaddressed in the plan text.
 ## Execution handoff
 
 Plan complete and saved to `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. Two execution options:
