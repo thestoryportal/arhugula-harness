@@ -66,7 +66,9 @@ DERIVED = [
 SOLE = "sole carrier (new fact)"
 FAMILY_RELATION: list[tuple[str, str]] = [
     ("reservations/<arc_id>/<gen>.json", "derived"),
+    ("reservations/.seq/<n>", SOLE),
     ("transition.<lease_token>", SOLE),
+    ("LEASE.<token>.<suffix>", "part of store 3"),
     ("released.<token>", "derived"),
     ("attempts/<lane_id>", SOLE),
     ("tier-clean-cycles", SOLE),
@@ -75,8 +77,9 @@ FAMILY_RELATION: list[tuple[str, str]] = [
     (".loop-active", SOLE),
     ("mechanized-checks-state.json", SOLE),
     ("mutation-probe-log.jsonl", "derived"),
-    ("merge-gate-log.jsonl", "authority half of store 5"),
+    ("merge-gate-log.jsonl", "part of store 5"),
 ]
+_PART_OF = re.compile(r"^part of store [1-8]\b")
 #: Transient writer-exclusion / staging artifacts -- MUST be listed as non-stores.
 NON_STORES = [
     ".ledger-claim-",
@@ -205,11 +208,17 @@ def test_family_table_relation_cells_are_classified() -> None:
     rows = _family_rows(AUDIT.read_text())
     for r in rows:
         assert len(r) == 4 and all(r), r
-        assert r[2] == "derived" or r[2] == SOLE or "authority half of store 5" in r[2], r
+        assert r[2] == "derived" or r[2] == SOLE or _PART_OF.match(r[2]), r
+        if r[2] == SOLE:
+            # a sole carrier names its fact as a quoted phrase, not a description of a process
+            assert r[3].startswith('"'), r
     for key, relation in FAMILY_RELATION:
         hits = [r for r in rows if key in r[1]]
         assert len(hits) == 1, (key, [r[1] for r in hits])
         assert relation in hits[0][2], (key, relation, hits[0][2])
+    # no fact is owned twice: the fourth cell (derived-from / fact) is distinct per row
+    facts = [r[3] for r in rows]
+    assert len(set(facts)) == len(facts), facts
 
 
 def test_audit_exists_and_lists_eight_plus_derived() -> None:
@@ -243,7 +252,12 @@ def test_every_path_literal_in_modules_is_listed() -> None:
     spans = audit_spans(AUDIT.read_text())
     for m in LANDED:
         assert (REPO / m).exists(), f"{m}: landed module missing -- update LANDED, not silently"
-    for m in LANDED + [p for p in PENDING if (REPO / p).exists()]:
+    for m in PENDING:
+        # the S4 unit that lands a module MUST promote it to LANDED in the same change -- a
+        # module that exists while still PENDING fails here, so it can never later vanish
+        # from coverage unnoticed
+        assert not (REPO / m).exists(), f"{m}: landed -- move it from PENDING to LANDED"
+    for m in LANDED:
         tokens = store_literals(REPO / m)
         # per module, never vacuous: a coordination module that spells NO store literal the
         # extractor recognises is an extractor gap, not a clean module
