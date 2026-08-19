@@ -107,8 +107,9 @@ def test_md_failure_leaves_the_jsonl_row_and_records_a_warn_finding(tmp_path: Pa
         ro.chmod(0o700)
     log = fr.read_rows(tmp_path / "log.jsonl")
     assert log[0]["finding_id"] == rows[0]["finding_id"]
-    warn = [r for r in log if r["producer"] == mgl.PRODUCER_SELF]
+    warn = [r for r in log if r.get("cause_attribution") == "markdown_write_failed"]
     assert len(warn) == 1 and warn[0]["severity"] == "warn"
+    assert warn[0]["producer"] == LENS and warn[0]["lineage_claim"] == "wrapper"
     assert warn[0]["cause_attribution"] == "markdown_write_failed"
     assert "markdown" in warn[0]["observed_evidence"] and warn[0]["head_sha"] == H
     assert "JSONL row stands" in capsys.readouterr().err
@@ -189,6 +190,35 @@ def test_missing_jsonl_is_the_red_class(tmp_path: Path):
     assert rep["missing_jsonl"] == [(4, "d" * 12, LENS, "APPROVE")] and not rep["orphan_jsonl"]
 
 
+def test_one_lens_md_failure_warn_does_not_suppress_another_lens_orphan(tmp_path: Path):
+    """gemini R1 P2: the warn is keyed (head_sha, lens), not head_sha alone."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    ro.chmod(0o500)
+    try:
+        _emit(tmp_path, pr=5, lens="merge-gate-a", md=ro / "x" / "log.md", jl=jl)  # a: md failed
+    finally:
+        ro.chmod(0o700)
+    _emit(tmp_path, pr=5, lens="merge-gate-b", md=md, jl=jl)
+    md.write_text("")  # b: crashed between the writes
+    rep = mgl.consistency_report(md, jl)
+    assert [r["producer"] for r in rep["orphan_jsonl"]] == ["merge-gate-b"]
+    assert mgl.reconcile_orphans(md, jl) == 1
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+
+
+def test_headless_gate_rows_are_outside_the_comparison_and_never_re_emitted(tmp_path: Path):
+    """gemini R1 P2: a `nohead` md line could never be re-parsed, so reconcile would loop."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    out = rw.ReviewOutcome("APPROVE", mgl.CHANNEL, None, "", [], None)  # unbound outcome
+    mgl.emit_gate_row(pr=6, lens=LENS, outcome=out, lane_id="h", md_path=md, jsonl_path=jl)
+    assert "nohead" in md.read_text()
+    md.write_text("")
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+    assert mgl.reconcile_orphans(md, jl) == 0 and "nohead" not in md.read_text()
+
+
 def test_one_lens_sibling_never_vouches_for_another_lens(tmp_path: Path):
     md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
     _emit(tmp_path, pr=5, lens="merge-gate-a")
@@ -246,13 +276,33 @@ def test_lens_binding_uses_the_orchestrators_values_and_the_lens_identity():
     assert set(b) == set(rw.BINDING_FIELDS)
 
 
-def test_config_hash_is_the_skill_text_digest(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(mgl, "SKILL_PATH", tmp_path / "SKILL.md")
+def test_config_hash_covers_every_carrier_on_both_runners(tmp_path: Path, monkeypatch):
+    """gemini R1 P2: the Claude skill alone is not the configuration -- the Codex projection and
+    the Codex lens prompts are carriers too; a change to ANY of them changes the hash."""
+    monkeypatch.setattr(mgl, "REPO", tmp_path)
+    claude, codex = tmp_path / "c" / "SKILL.md", tmp_path / "a" / "SKILL.md"
+    lenses = tmp_path / "lenses"
+    monkeypatch.setattr(mgl, "CONFIG_CARRIERS", (claude, codex))
+    monkeypatch.setattr(mgl, "CONFIG_CARRIER_GLOB", (lenses, "*.md"))
     assert mgl.config_hash() == "noskill"
-    (tmp_path / "SKILL.md").write_text("lens rules v1")
+    claude.parent.mkdir()
+    claude.write_text("claude rules v1")
     h1 = mgl.config_hash()
-    (tmp_path / "SKILL.md").write_text("lens rules v2")
-    assert h1 != mgl.config_hash() and len(h1) == 16
+    assert len(h1) == 16
+    codex.parent.mkdir()
+    codex.write_text("codex rules v1")
+    h2 = mgl.config_hash()
+    assert h2 != h1  # the Codex projection is part of the configuration
+    lenses.mkdir()
+    (lenses / "lens1.md").write_text("lens prompt v1")
+    h3 = mgl.config_hash()
+    assert h3 != h2  # and so is each Codex lens prompt
+    (lenses / "lens1.md").write_text("lens prompt v2")
+    assert mgl.config_hash() != h3
+    assert [p.name for p in mgl.config_carriers()] == ["SKILL.md", "SKILL.md", "lens1.md"]
+    # the real carriers exist at HEAD: the production hash is never the sentinel
+    monkeypatch.undo()
+    assert mgl.config_hash() != "noskill" and len(mgl.config_carriers()) >= 5
 
 
 def _lens_output(binding: dict, verdict: str, findings: list | None = None) -> str:

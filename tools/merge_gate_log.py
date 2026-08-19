@@ -33,10 +33,17 @@ import review_wrapper_common as rw
 
 REPO = Path(__file__).resolve().parent.parent
 GATE_LOG_MD = REPO / ".harness" / "merge-gate-log.md"
-SKILL_PATH = REPO / ".claude" / "skills" / "merge-gate" / "SKILL.md"
+#: Every carrier of the lens configuration, on BOTH runners: the Claude skill, its Codex
+#: projection, and the Codex lens prompts. `config_hash` fingerprints all of them (sorted,
+#: existing ones), so a gate run on either runner binds to the same configuration identity and
+#: a change to any carrier changes the hash (gemini R1 P2: one carrier alone ignored the other).
+CONFIG_CARRIERS = (
+    REPO / ".claude" / "skills" / "merge-gate" / "SKILL.md",
+    REPO / ".agents" / "skills" / "merge-gate" / "SKILL.md",
+)
+CONFIG_CARRIER_GLOB = (REPO / ".codex" / "notes" / "merge-gate-lenses", "*.md")
 CHANNEL = "merge-gate"
 PROMPT_VERSION = "merge-gate-lens-v1"
-PRODUCER_SELF = "merge_gate_log"
 _LENS_RE = re.compile(r"^merge-gate-[a-z-]+$")
 #: The structured markdown line this module writes (the reducer reads ONLY this shape):
 #: `| <ts> | #<pr> | <head12> | <lens> | <APPROVE|BLOCK|REVIEWER_UNAVAILABLE> | <n> finding(s) |`.
@@ -53,11 +60,24 @@ class GateLogError(RuntimeError):
     """The gate step must fail: the machine record could not be written."""
 
 
+def config_carriers() -> list[Path]:
+    d, pat = CONFIG_CARRIER_GLOB
+    found = [p for p in CONFIG_CARRIERS if p.exists()]
+    if d.is_dir():
+        found.extend(sorted(d.glob(pat)))
+    return found
+
+
 def config_hash() -> str:
-    """The lens configuration IS the skill text: its digest is the config_hash."""
-    if not SKILL_PATH.exists():
+    """The lens configuration IS the carrier text (all runners): one digest over every
+    existing carrier, each prefixed by its REPO-relative path so a rename is a change too."""
+    carriers = config_carriers()
+    if not carriers:
         return "noskill"
-    return hashlib.sha256(SKILL_PATH.read_bytes()).hexdigest()[:16]
+    h = hashlib.sha256()
+    for p in carriers:
+        h.update(str(p.relative_to(REPO)).encode() + b"\0" + p.read_bytes() + b"\0")
+    return h.hexdigest()[:16]
 
 
 def lens_binding(
@@ -134,6 +154,9 @@ def emit_gate_row(
     except OSError as exc:
         # The machine record stands; the failure is itself a recorded `warn` finding so the
         # consistency reducer can tell "md write failed" from "crashed between the writes".
+        # Emitted under the SAME producer (the lens) so the reducer keys it per lens: one
+        # lens's md failure must not suppress another lens's orphan at the same head (gemini
+        # R1 P2). `lineage_claim=wrapper` marks it as this module's, not the lens's, finding.
         fr.append_observation(
             dict(
                 location=str(md_path),
@@ -142,7 +165,7 @@ def emit_gate_row(
                 severity="warn",
                 finding_type="transient-retry",
                 lineage_claim="wrapper",
-                producer=PRODUCER_SELF,
+                producer=lens,
             ),
             fr.Envelope(
                 record_kind="finding",
@@ -191,6 +214,9 @@ def _gate_rows(jsonl_path: Path) -> list[dict]:
         and _LENS_RE.match(r["producer"])
         and _ARC_PR_RE.match(r["arc_id"])
         and verdict_of(r) is not None
+        # the join is ON head_sha (C-HE-23 §2): a row with no head has no sibling to compare
+        # against, and a re-emitted `nohead` md line could never be re-parsed (gemini R1 P2)
+        and r["head_sha"]
     ]
 
 
@@ -217,12 +243,16 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
     for r in jl:
         jl_keys.setdefault(_key(r), r)
     warned = {
-        r["head_sha"]
+        (r["head_sha"], r["producer"])
         for r in fr.read_rows(jsonl_path)
-        if r["producer"] == PRODUCER_SELF and r.get("cause_attribution") == "markdown_write_failed"
+        if r.get("cause_attribution") == "markdown_write_failed"
     }
     missing = sorted(k for k in md_keys if k not in jl_keys)
-    orphan = [r for k, r in jl_keys.items() if k not in md_keys and r["head_sha"] not in warned]
+    orphan = [
+        r
+        for k, r in jl_keys.items()
+        if k not in md_keys and (r["head_sha"], r["producer"]) not in warned
+    ]
     return {"missing_jsonl": missing, "orphan_jsonl": orphan}
 
 
@@ -239,9 +269,7 @@ def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = Non
     with md_path.open("a", encoding="utf-8") as fh:
         for r in rep["orphan_jsonl"]:
             k = _key(r)
-            fh.write(
-                _md_line(r["ts"], k[0], r["head_sha"] or "nohead", k[2], k[3], by_key.get(k, 0))
-            )
+            fh.write(_md_line(r["ts"], k[0], r["head_sha"], k[2], k[3], by_key.get(k, 0)))
             n += 1
     return n
 
