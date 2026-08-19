@@ -139,11 +139,12 @@ def parse_verdict(
     def unavailable(reason: str) -> ReviewOutcome:
         return ReviewOutcome("REVIEWER_UNAVAILABLE", channel, None, reason, [], None, source)
 
-    if not text or not text.strip():
-        return unavailable("empty output")
-    raw = extract_fenced_json(text)
+    # ONE enforcement point for "nothing to parse": empty/whitespace output has no fenced
+    # block, so the fence check is the single guard (a separate empty guard was an
+    # equivalent mutant under probe); the reason still names which shape arrived.
+    raw = extract_fenced_json(text or "")
     if raw is None:
-        return unavailable("no fenced json block")
+        return unavailable("empty output" if not (text or "").strip() else "no fenced json block")
     try:
         body = json.loads(raw)
     except json.JSONDecodeError as exc:
