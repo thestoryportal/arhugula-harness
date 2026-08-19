@@ -224,7 +224,9 @@ def run_codex_review(
                 text = artifact_text(art)
                 if conclusive(text):
                     source = "session-artifact"
-                    return rw.Attempt(text, att.stderr, att.returncode, False)
+                    # rc None: the process was killed by OUR cap; the artifact's verdict is
+                    # complete and is not a failed process's approval (codex round 5).
+                    return rw.Attempt(text, att.stderr, None, False)
             return att
         # `codex review` echoes its transcript (final message included) on stderr: the same
         # positive parse + byte-compare applies there before the session artifact is consulted.

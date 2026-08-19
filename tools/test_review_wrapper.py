@@ -1095,3 +1095,36 @@ def test_agy_review_imports_cleanly_in_a_fresh_interpreter():
         check=True,
         capture_output=True,
     )
+
+
+# ── round-5 absorptions ───────────────────────────────────────────────────────
+def test_missing_binary_wording_from_run_bounded_is_permanent():
+    """run_bounded reports an exec failure as Popen's OSError text, not the shell's."""
+    assert rw.classify("codex", "[Errno 2] No such file or directory: 'codex'") == "permanent"
+    assert rw.classify("gemini", "[Errno 2] No such file or directory: 'agy'") == "permanent"
+    assert rw.classify("gemini", "bash: agy: command not found") == "permanent"
+
+
+def test_timed_out_attempt_artifact_verdict_is_not_a_failed_process_approval(tmp_path, monkeypatch):
+    """The real timeout Attempt carries rc 124 (our kill): an artifact APPROVE must still count."""
+    head = "a" * 40
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path)
+    monkeypatch.setattr(cr, "_binding", lambda repo, base: {**EXPECTED, "head_sha": head})
+
+    def invoke(t):
+        _artifact_tree(tmp_path, head, mtime=time.time())
+        return rw.Attempt("", "command timed out after 1200 seconds", 124, True)
+
+    out = cr.run_codex_review(Path("."), "main", invoke=invoke)
+    assert out.terminal == "APPROVE" and out.source == "session-artifact"
+
+
+def test_review_with_failover_is_auto_allowed_under_loop_mode():
+    guard = (
+        Path(__file__).resolve().parents[1] / "tools" / "hooks" / "permission-guard.sh"
+    ).read_text()
+    assert "review-with-failover" in guard
+    test = (
+        Path(__file__).resolve().parents[1] / "tools" / "hooks" / "test_permission_guard.sh"
+    ).read_text()
+    assert '"just review-with-failover"' in test

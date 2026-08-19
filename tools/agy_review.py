@@ -484,22 +484,39 @@ OUTCOME_SINK: Path | None = None
 
 
 def _sink(outcome: rw.ReviewOutcome) -> None:
+    """Exclusive-create only, and never inside the repo: the recipe is auto-allowed under loop
+    mode with the path as a positional argument, so an existing file (the gate log, a tracked
+    ledger) must be un-overwritable and no stray file may land in the checkout (codex round 5).
+    A refused sink is reported and the run's exit code stands; the failover then sees no
+    envelope and records the reason itself."""
     if OUTCOME_SINK is None:
         return
-    OUTCOME_SINK.write_text(
-        json.dumps(
-            {
-                "terminal": outcome.terminal,
-                "channel": outcome.channel,
-                "failure_class": outcome.failure_class,
-                "reason": outcome.reason,
-                "findings": outcome.findings,
-                "binding": outcome.binding,
-                "source": outcome.source,
-            },
-            sort_keys=True,
-        )
+    target = OUTCOME_SINK.resolve()
+    if target.is_relative_to(rw.REPO.resolve()):
+        print(f"agy-review: --outcome-json refused: {target} is inside the repo", file=sys.stderr)
+        return
+    body = json.dumps(
+        {
+            "terminal": outcome.terminal,
+            "channel": outcome.channel,
+            "failure_class": outcome.failure_class,
+            "reason": outcome.reason,
+            "findings": outcome.findings,
+            "binding": outcome.binding,
+            "source": outcome.source,
+        },
+        sort_keys=True,
     )
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        print(
+            f"agy-review: --outcome-json refused: {target} exists (never overwritten)",
+            file=sys.stderr,
+        )
+        return
+    with os.fdopen(fd, "w") as fh:
+        fh.write(body)
 
 
 def _emit(outcome: rw.ReviewOutcome) -> None:

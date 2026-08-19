@@ -1481,3 +1481,25 @@ def test_unresolvable_base_is_permanent_unavailable_not_a_traceback(
     monkeypatch.setattr(reviewer, "run_bounded", lambda *a, **k: pytest.fail("must not run"))
     assert reviewer.run_review(tmp_path, "nope") == 2
     assert "reviewer unavailable (permanent): binding:" in capsys.readouterr().err
+
+
+def test_outcome_sink_never_overwrites_and_never_lands_in_the_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex round 5: the recipe is auto-allowed with the path as a positional argument."""
+    reviewer = _reviewer_module()
+    monkeypatch.setattr(reviewer.rw, "emit_outcome", lambda *a, **k: [])
+    outcome = reviewer.rw.ReviewOutcome("APPROVE", "gemini", None, "", [], BINDING, "stdout")
+    existing = tmp_path / "gate.jsonl"
+    existing.write_text("precious\n")
+    monkeypatch.setattr(reviewer, "OUTCOME_SINK", existing)
+    reviewer._emit(outcome)
+    assert existing.read_text() == "precious\n" and "never overwritten" in capsys.readouterr().err
+    inside = ROOT / ".harness" / "outcome-probe-never-written.json"
+    monkeypatch.setattr(reviewer, "OUTCOME_SINK", inside)
+    reviewer._emit(outcome)
+    assert not inside.exists() and "inside the repo" in capsys.readouterr().err
+    fresh = tmp_path / "fresh.json"
+    monkeypatch.setattr(reviewer, "OUTCOME_SINK", fresh)
+    reviewer._emit(outcome)
+    assert json.loads(fresh.read_text())["terminal"] == "APPROVE"

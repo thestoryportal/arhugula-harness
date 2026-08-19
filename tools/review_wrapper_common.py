@@ -62,12 +62,15 @@ CLASSIFIER_TAIL = 512
 CLASSIFIER: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("codex", re.compile(r"requires a newer version of Codex"), "permanent"),
     ("codex", re.compile(r"not logged in|login|unauthorized|401|403", re.I), "permanent"),
-    ("codex", re.compile(r"command not found"), "permanent"),
+    # a missing binary: the shell's wording AND run_bounded's Popen OSError wording (codex round 5)
+    ("codex", re.compile(r"command not found|No such file or directory: '?codex'?"), "permanent"),
     ("codex", re.compile(r"rate limit|429|timed out|ETIMEDOUT|ECONNRESET", re.I), "transient"),
     (
         "gemini",
         re.compile(
-            r"antigravity .* not (installed|logged in)|unauthorized|not found on PATH", re.I
+            r"antigravity .* not (installed|logged in)|unauthorized|not found on PATH"
+            r"|No such file or directory: '?agy'?|command not found",
+            re.I,
         ),
         "permanent",
     ),
