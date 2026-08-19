@@ -512,14 +512,31 @@ import codex_review as cr  # noqa: E402
 _REAL_ROUTE_TO_HITL = cr._route_to_hitl  # captured before the autouse fixture stubs it
 
 
-def _artifact_tree(tmp_path: Path, head: str, mtime: float) -> Path:
+NONCE = "n0nce-test"
+
+
+def _artifact_tree(tmp_path: Path, head: str, mtime: float, nonce: str = NONCE) -> Path:
     d = tmp_path / "2026" / "08" / "18"
     d.mkdir(parents=True)
     p = d / "rollout-2026-08-18T00-00-00-abc.jsonl"
-    # real shape: the assistant text (fenced block, newlines ESCAPED inside the string) nested
-    # in a JSONL envelope
+    # real shape: the user message (the brief, carrying the invocation token) then the
+    # assistant text (fenced block, newlines ESCAPED inside the string), each in a JSONL envelope
+    user = {
+        "type": "response_item",
+        "payload": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": f"brief (Invocation token {nonce}; not in the JSON.)",
+                }
+            ],
+        },
+    }
     p.write_text(
-        json.dumps(
+        json.dumps(user)
+        + "\n"
+        + json.dumps(
             {
                 "type": "response_item",
                 "payload": {
@@ -556,6 +573,19 @@ def test_session_artifact_discovery_newest_after_start_containing_head(tmp_path)
     assert (
         cr.find_session_artifact("d" * 40, started_at=150.0, now=210.0, root=tmp_path / "b") is None
     )
+    # a sibling invocation's artifact (same head, other token) is never consumed (codex round 9)
+    assert (
+        cr.find_session_artifact(
+            "a" * 40, started_at=150.0, now=210.0, root=tmp_path / "b", nonce="other"
+        )
+        is None
+    )
+    assert (
+        cr.find_session_artifact(
+            "a" * 40, started_at=150.0, now=210.0, root=tmp_path / "b", nonce=NONCE
+        )
+        == hit
+    )
     assert (
         cr.find_session_artifact("a" * 40, started_at=0.0, now=1.0, root=tmp_path / "missing")
         is None
@@ -572,7 +602,7 @@ def test_log_frozen_but_artifact_has_verdict_parses_from_artifact(tmp_path, monk
     def invoke(timeout):
         return rw.Attempt(stdout="working...\n", stderr="", returncode=0, timed_out=False)
 
-    out = cr.run_codex_review(Path("."), "main", invoke=invoke)
+    out = cr.run_codex_review(Path("."), "main", invoke=invoke, nonce=NONCE)
     assert out.terminal == "APPROVE" and out.source == "session-artifact"
 
 
@@ -825,9 +855,9 @@ def test_codex_review_failover_both_unavailable_exits_2_with_both_reasons(
     assert routed[0][2] == {"blocking": True}
 
 
-def test_primary_outage_with_a_successful_failover_is_a_notify_not_a_deferral(
-    monkeypatch, tmp_path
-):
+def test_primary_outage_with_a_successful_failover_routes_by_failure_class(monkeypatch, tmp_path):
+    """transient primary outage + carried failover -> NOTIFY; a PERMANENT one (stale login) is a
+    human-fixable gate -> DEFERRED-HIL even though this arc was carried (codex rounds 7/9)."""
     monkeypatch.setattr(
         cr,
         "run_codex_review",
@@ -843,6 +873,16 @@ def test_primary_outage_with_a_successful_failover_is_a_notify_not_a_deferral(
     routed = []
     monkeypatch.setattr(
         cr, "_route_to_hitl", lambda arc_id, reason, **kw: routed.append((reason, kw))
+    )
+    assert cr.main(["--base", "main", "--failover"]) == 0
+    assert routed == [("codex: codex-reason; gemini: APPROVE", {"blocking": True})]
+    routed.clear()
+    monkeypatch.setattr(
+        cr,
+        "run_codex_review",
+        lambda repo, base, **kw: rw.ReviewOutcome(
+            "REVIEWER_UNAVAILABLE", "codex", "transient", "codex-reason", [], EXPECTED
+        ),
     )
     assert cr.main(["--base", "main", "--failover"]) == 0
     assert routed == [("codex: codex-reason; gemini: APPROVE", {"blocking": False})]
@@ -1017,7 +1057,7 @@ def test_timed_out_attempt_still_reads_the_session_artifact_once(tmp_path, monke
         _artifact_tree(tmp_path, head, mtime=time.time())  # the CLI persisted its final message
         return rw.Attempt("", "", None, True)  # ...then hung until the cap killed it
 
-    out = cr.run_codex_review(Path("."), "main", invoke=invoke_persisting_then_dying)
+    out = cr.run_codex_review(Path("."), "main", invoke=invoke_persisting_then_dying, nonce=NONCE)
     assert out.terminal == "APPROVE" and out.source == "session-artifact"
     monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path / "empty")
     n = count()
@@ -1151,7 +1191,7 @@ def test_timed_out_attempt_artifact_verdict_is_not_a_failed_process_approval(tmp
         _artifact_tree(tmp_path, head, mtime=time.time())
         return rw.Attempt("", "command timed out after 1200 seconds", 124, True)
 
-    out = cr.run_codex_review(Path("."), "main", invoke=invoke)
+    out = cr.run_codex_review(Path("."), "main", invoke=invoke, nonce=NONCE)
     assert out.terminal == "APPROVE" and out.source == "session-artifact"
 
 
@@ -1295,3 +1335,55 @@ def test_codex_review_recipe_has_no_subscription_preflight():
     assert (
         "codex-review-uncommitted: _require-codex-subscription" in justfile
     )  # the ad-hoc recipe keeps it
+
+
+# ── round-9 absorptions ───────────────────────────────────────────────────────
+def test_classifier_reads_only_error_shaped_lines():
+    prose = "We considered the login flow, a 401 unauthorized path, and truncated output."
+    assert rw.classify("codex", rw.classifier_text("", prose)) == "transient"
+    assert (
+        rw.classify("codex", rw.classifier_text("", prose + "\nError: not logged in"))
+        == "permanent"
+    )
+    assert (
+        rw.classify("codex", rw.classifier_text("", "bash: codex: command not found"))
+        == "permanent"
+    )
+    assert (
+        rw.classify(
+            "gemini", rw.classifier_text("", "ERROR: agy (Antigravity CLI) not found on PATH.")
+        )
+        == "permanent"
+    )
+    assert (
+        rw.classify("codex", rw.classifier_text("", "read ETIMEDOUT while streaming"))
+        == "transient"
+    )
+
+
+def test_codex_home_env_drives_config_hash_and_sessions_dir(tmp_path):
+    import subprocess
+
+    out = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import codex_review as c; print(c.CODEX_HOME); print(c.SESSIONS_DIR)",
+        ],
+        cwd=Path(__file__).resolve().parent,
+        env={**os.environ, "CODEX_HOME": str(tmp_path / "alt")},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert out == [str(tmp_path / "alt"), str(tmp_path / "alt" / "sessions")]
+
+
+def test_route_to_hitl_reports_a_swallowed_append(tmp_path, monkeypatch, capsys):
+    """loop_log turns a failed append into success (`|| true`); the router verifies the row."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    (tmp_path / ".harness").mkdir()
+    (tmp_path / ".harness" / "loop_status.md").write_text("# ledger\n")
+    (tmp_path / ".harness" / "loop_status.md").chmod(0o444)
+    _REAL_ROUTE_TO_HITL("B-779", "codex: x; gemini: y")
+    assert "HITL row NOT written" in capsys.readouterr().err

@@ -24,13 +24,17 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
 import review_wrapper_common as rw
 from agy_review import GEMINI_PROMPT_VERSION, gemini_config_hash, run_bounded
 
-SESSIONS_DIR = Path.home() / ".codex" / "sessions"
+#: Codex's home (`CODEX_HOME` when set -- the child inherits it through reviewer_env, so the
+#: config the binding hashes and the session tree the fallback reads must follow it; codex round 9).
+CODEX_HOME = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+SESSIONS_DIR = CODEX_HOME / "sessions"
 ARTIFACT_LAG_S = 130.0  # measured PR #1386 lag (C-HE-18 §2)
 ARTIFACT_POLL_S = 2.0
 PROMPT_VERSION = "codex-review-v2-exec"
@@ -41,7 +45,7 @@ MAX_FINDINGS = 8
 _RUN_BOUNDED_TIMEOUT_RC = 124
 
 
-def review_instructions(binding: dict[str, str]) -> str:
+def review_instructions(binding: dict[str, str], *, nonce: str = "") -> str:
     """The review brief + output contract, run through `codex exec` (interface probes re-run at
     execution: `codex review --base` rejects a PROMPT; `codex review "<prompt>"` treats it as a
     review target and, on a real PR-sized diff, answers in its own native findings JSON and
@@ -61,6 +65,7 @@ def review_instructions(binding: dict[str, str]) -> str:
         "requires none), and copy these six values VERBATIM: "
         + ", ".join(f"{k}={binding[k]}" for k in rw.BINDING_FIELDS)
         + ". No other keys. A missing or altered value invalidates the review."
+        + (f" (Invocation token {nonce}; do not put it in the JSON.)" if nonce else "")
     )
 
 
@@ -83,7 +88,7 @@ def build_command(repo: Path, instructions: str, *, output_file: Path) -> list[s
 
 
 def _config_hash() -> str:
-    cfg = Path.home() / ".codex" / "config.toml"
+    cfg = CODEX_HOME / "config.toml"
     body = cfg.read_bytes() if cfg.exists() else b""
     return hashlib.sha256(body).hexdigest()[:16]
 
@@ -122,10 +127,12 @@ def artifact_text(path: Path) -> str:
 
 
 def find_session_artifact(
-    head_sha: str, *, started_at: float, now: float, root: Path = SESSIONS_DIR
+    head_sha: str, *, started_at: float, now: float, root: Path = SESSIONS_DIR, nonce: str = ""
 ) -> Path | None:
     """Newest file under root modified after started_at whose content contains head_sha
-    (C-HE-18 §2)."""
+    (C-HE-18 §2) AND this invocation's nonce when one was issued -- two concurrent reviews of
+    one head carry identical bindings, so the nonce is what keeps an invocation from consuming
+    its sibling's artifact (codex round 9)."""
     if not root.is_dir():
         return None
     # Whole-second floor: a filesystem may truncate mtime granularity, so an artifact written
@@ -143,10 +150,11 @@ def find_session_artifact(
             candidates.append((mtime, p))
     for _, p in sorted(candidates, key=lambda t: t[0], reverse=True):
         try:
-            if head_sha in p.read_text(errors="replace"):
-                return p
+            text = p.read_text(errors="replace")
         except OSError:
             continue
+        if head_sha in text and (not nonce or nonce in text):
+            return p
     return None
 
 
@@ -186,7 +194,9 @@ def run_codex_review(
     *,
     invoke: Callable[[float], rw.Attempt] | None = None,
     clock: Callable[[], float] = time.monotonic,
+    nonce: str | None = None,
 ) -> rw.ReviewOutcome:
+    nonce = nonce if nonce is not None else uuid.uuid4().hex
     try:
         binding = _binding(repo, base)
     except subprocess.CalledProcessError as exc:
@@ -200,7 +210,7 @@ def run_codex_review(
             "permanent",
             f"binding: {' '.join(exc.cmd[:4])} failed: {(exc.stderr or '').strip()[:300]}",
         )
-    instructions = review_instructions(binding)
+    instructions = review_instructions(binding, nonce=nonce)
     invoke = invoke or _default_invoke(repo, instructions)
     started_wall = time.time()
     deadline = clock() + rw.TOTAL_BUDGET_S
@@ -225,7 +235,11 @@ def run_codex_review(
             # persists the final message before it finishes streaming). One look, no wait --
             # the same positive parse + byte-compare applies; otherwise the timeout stands.
             art = find_session_artifact(
-                binding["head_sha"], started_at=started_wall, now=time.time(), root=SESSIONS_DIR
+                binding["head_sha"],
+                started_at=started_wall,
+                now=time.time(),
+                root=SESSIONS_DIR,
+                nonce=nonce,
             )
             if art is not None:
                 text = artifact_text(art)
@@ -247,7 +261,11 @@ def run_codex_review(
         end = min(time.time() + ARTIFACT_LAG_S, wall_deadline)
         while True:
             art = find_session_artifact(
-                binding["head_sha"], started_at=started_wall, now=time.time(), root=SESSIONS_DIR
+                binding["head_sha"],
+                started_at=started_wall,
+                now=time.time(),
+                root=SESSIONS_DIR,
+                nonce=nonce,
             )
             if art is not None:
                 text = artifact_text(art)
@@ -405,7 +423,13 @@ def _route_to_hitl(arc_id: str, reason: str, *, blocking: bool = True) -> None:
             'loop_log NOTIFY "review-with-failover: primary REVIEWER_UNAVAILABLE, failover '
             'carried the review — $1: $2"'
         )
-    script = f'. "{lib / "lib.sh"}" && . "{lib / "loop_lib.sh"}" && {call}'
+    # loop_log swallows a failed append by design (`|| true`); verify the EFFECT -- the row we
+    # just wrote is in the ledger -- never the call's status (codex round 9; loop_resolve does
+    # the same).
+    script = (
+        f'. "{lib / "lib.sh"}" && . "{lib / "loop_lib.sh"}" && {call} && '
+        'grep -qF -- "$2" "$(loop_status_path)"'
+    )
     proc = subprocess.run(
         ["bash", "-c", script, "loop_route", arc_id, reason],
         cwd=rw.REPO,
@@ -462,10 +486,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"review-with-failover: BOTH channels unavailable -- {both}", file=sys.stderr)
         _route_to_hitl(rw.env_arc_and_lane()[0], both, blocking=True)
     else:
+        # A PERMANENT primary outage (stale login, missing binary) is human-fixable and would
+        # otherwise silently demote every future review to the failover: DEFERRED-HIL even
+        # though this arc was carried (codex round 9); a transient one is informational.
         _route_to_hitl(
             rw.env_arc_and_lane()[0],
             f"codex: {first.reason}; gemini: {fo.terminal}",
-            blocking=False,
+            blocking=first.failure_class == "permanent",
         )
     return rw.exit_code(fo)
 

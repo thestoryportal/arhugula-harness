@@ -157,17 +157,29 @@ def classify(channel: str, text: str) -> str:
     return "transient"
 
 
+#: Only ERROR-SHAPED lines reach the C-HE-16 §4 table: a line with an error prefix (`Error:`,
+#: `fatal:`, `[Errno`, `HTTP 401`, `bash: x:` ...) or one carrying an unambiguous failure phrase.
+#: Reviewer prose / echoed diff text that merely DISCUSSES logins or 401s is never classified
+#: (codex rounds 3/8/9).
+_ERROR_LINE_RE = re.compile(
+    r"^\s*(?:[\w./ -]+:\s*)?(?:error|fatal|panic|warning|\[errno|http/?\s?\d{3}\b|\d{3} "
+    r"(?:unauthorized|forbidden|too many))"
+    r"|command not found|no such file or directory|etimedout|econnreset|resource_exhausted"
+    r"|rate limit|timed out|requires a newer version|not logged in|not installed|not found on path"
+    r"|deadline exceeded",
+    re.I,
+)
+
+
 def classifier_text(stdout: str, stderr: str) -> str:
-    """The part of a channel's output the C-HE-16 §4 table may read: stderr -- where both CLIs
-    report usage / auth / binary errors -- whole when short, by its tail when it is a transcript
-    (a transcript echoes the reviewed diff, which may contain auth words); stdout only when
-    stderr is silent (a CLI that reports on stdout), and then under the same rule. Reviewer
-    PROSE on stdout that merely discusses logins / 401s must never classify a parse failure as
-    permanent (codex round 8)."""
+    """The part of a channel's output the C-HE-16 §4 table may read: the error-shaped lines of
+    stderr -- where both CLIs report usage / auth / binary errors -- or of stdout when stderr is
+    silent; a long stream contributes only its tail (a transcript echoes the reviewed diff)."""
 
     def part(s: str) -> str:
         s = s or ""
-        return s if len(s) <= CLASSIFIER_STREAM_LIMIT else s[-CLASSIFIER_TAIL:]
+        s = s if len(s) <= CLASSIFIER_STREAM_LIMIT else s[-CLASSIFIER_TAIL:]
+        return "\n".join(ln for ln in s.splitlines() if _ERROR_LINE_RE.search(ln))
 
     if (stderr or "").strip():
         return part(stderr)
