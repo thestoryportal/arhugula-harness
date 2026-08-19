@@ -22,10 +22,14 @@ CLI (what `.claude/skills/merge-gate/SKILL.md` calls):
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
+import os
 import re
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import finding_record as fr
@@ -60,6 +64,53 @@ _ARC_PR_RE = re.compile(r"^pr-(\d+)$")
 
 class GateLogError(RuntimeError):
     """The gate step must fail: the machine record could not be written."""
+
+
+#: Bounded wait for the emission lock (local reads + two appends).
+EMIT_LOCK_TIMEOUT_S = 30.0
+
+
+def _emit_lock_path(jsonl_path: Path) -> Path:
+    return jsonl_path.with_name(jsonl_path.name + ".emit.lock")
+
+
+def _under_emit_lock(jsonl_path: Path, body: Callable[[], object]) -> object:
+    """Serialize every (JSONL-append + md-append) emission and every orphan reconciliation on
+    ONE `flock` over a lock file BESIDE the machine log (codex R4 P2: emitter B reconciling A's
+    not-yet-md'd emission wrote A's line, then A wrote it again -> a duplicate md row with no
+    emission). Beside the JSONL, not the md: the md log may be unwritable (that is the warn
+    path) and the JSONL's own lock is taken inside `finding_record` on a separate descriptor
+    (a second flock on the same file from one process would self-block). Admissible like
+    `finding_record._lock_exclusive`: a REPO-resident record, not QUEUE_DIR coordination
+    state (C-HE-02 §1's flock ban is scoped to those modules). Kernel-released on process
+    death, so a crashed emitter never wedges the next gate run."""
+    lock = _emit_lock_path(jsonl_path)
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT, 0o644)
+    except OSError as exc:
+        # the machine log's directory is unwritable: nothing can be recorded (C-HE-15 §1)
+        raise GateLogError(f"gate verdict could not be recorded: emission lock: {exc}") from exc
+    try:
+        deadline = time.monotonic() + EMIT_LOCK_TIMEOUT_S
+        delay = 0.005
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise GateLogError(
+                        f"could not lock {lock} within {EMIT_LOCK_TIMEOUT_S}s"
+                    ) from None
+                time.sleep(delay)
+                delay = min(delay * 2, 0.1)
+        try:
+            return body()
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def config_carriers() -> list[Path]:
@@ -141,6 +192,24 @@ def emit_gate_row(
     lane_id = lane_id or rw.env_arc_and_lane()[1]
     md_path = md_path or GATE_LOG_MD
     jsonl_path = jsonl_path or fr.GATE_LOG_JSONL
+    return _under_emit_lock(  # type: ignore[return-value]
+        jsonl_path,
+        lambda: _emit_gate_row_locked(
+            pr, lens, outcome, arc_id, lane_id, round_n, md_path, jsonl_path
+        ),
+    )
+
+
+def _emit_gate_row_locked(
+    pr: int,
+    lens: str,
+    outcome: rw.ReviewOutcome,
+    arc_id: str,
+    lane_id: str,
+    round_n: int | None,
+    md_path: Path,
+    jsonl_path: Path,
+) -> list[dict]:
     try:
         rows = rw.emit_outcome(
             outcome, producer=lens, arc_id=arc_id, lane_id=lane_id, round_n=round_n, path=jsonl_path
@@ -269,7 +338,7 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
     # a warn vouches for ONE emission: same head, same lens, same round (codex R2 P2 -- keyed
     # without the round, a round-1 md failure would hide a round-2 crash between the writes)
     warned = {
-        (r["head_sha"], r["producer"], r["round_n"])
+        (r["arc_id"], r["head_sha"], r["producer"], r["round_n"])
         for r in fr.read_rows(jsonl_path)
         if r.get("cause_attribution") == "markdown_write_failed"
     }
@@ -279,7 +348,9 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
     # that lost a finding row stayed green)
     em_by_key: dict[tuple, list[tuple[int, dict]]] = {}
     for k, rows in sorted(emissions.items(), key=lambda kv: kv[0][4]):
-        if (rows[0]["head_sha"], rows[0]["producer"], k[4]) in warned:
+        # the warn vouches for ONE emission: same arc (pr), head, lens AND round (codex R2/R4
+        # P2 -- two PRs at one head+lens both have a round 1)
+        if (rows[0]["arc_id"], rows[0]["head_sha"], rows[0]["producer"], k[4]) in warned:
             continue
         n_findings = sum(1 for x in rows if x["record_kind"] == "finding")
         em_by_key.setdefault(k[:4], []).append((n_findings, rows[0]))
@@ -303,18 +374,24 @@ def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = Non
     Touches the md file only when there is something to write."""
     md_path = md_path or GATE_LOG_MD
     jsonl_path = jsonl_path or fr.GATE_LOG_JSONL
-    orphans = consistency_report(md_path, jsonl_path)["orphan_jsonl"]
-    if not orphans:
-        return 0
-    emissions = _emissions(jsonl_path)
-    with md_path.open("a", encoding="utf-8") as fh:
-        for r in orphans:
-            k = _key(r)
-            n_findings = sum(
-                1 for x in emissions[(*k, r["round_n"])] if x["record_kind"] == "finding"
-            )
-            fh.write(_md_line(r["ts"], k[0], r["head_sha"], k[2], k[3], n_findings))
-    return len(orphans)
+
+    def body() -> int:
+        orphans = consistency_report(md_path, jsonl_path)["orphan_jsonl"]
+        if not orphans:
+            return 0
+        emissions = _emissions(jsonl_path)
+        with md_path.open("a", encoding="utf-8") as fh:
+            for r in orphans:
+                k = _key(r)
+                n_findings = sum(
+                    1 for x in emissions[(*k, r["round_n"])] if x["record_kind"] == "finding"
+                )
+                fh.write(_md_line(r["ts"], k[0], r["head_sha"], k[2], k[3], n_findings))
+        return len(orphans)
+
+    # under the same lock emission holds: an in-flight emitter's JSONL-but-not-yet-md state
+    # is never observable here (codex R4 P2)
+    return int(_under_emit_lock(jsonl_path, body))  # type: ignore[arg-type]
 
 
 def _read_text(arg: str) -> str:

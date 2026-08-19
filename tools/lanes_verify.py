@@ -91,6 +91,27 @@ MANIFEST: list[Row] = [
         "local + CI",
         True,
     ),
+    Row(
+        "C-HE-25/28",
+        "pytest:tools/test_arc_metrics.py::test_cohort_split_null_safe",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-26 §2",
+        "pytest:tools/test_arc_metrics.py::test_relabel_aborts_when_the_ledger_changed_underneath",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-26 §2",
+        "pytest:tools/test_arc_metrics.py::test_append_and_relabel_are_mutually_exclusive_by_claim",
+        "phase0",
+        "local + CI",
+        True,
+    ),
     Row("C-HE-23", "pytest:tools/test_merge_gate_log.py", "phase0", "local + CI", True),
     Row("C-HE-23", "just:merge-gate-log-check", "phase0", "local + CI", False),
     # §8.1 / §0.3 (U-HE-05)
@@ -139,7 +160,16 @@ def phase0_verdict(results: list[Result]) -> int:
     return 0 if all(r.status == "pass" for r in results) else 1
 
 
-_ANNOT = re.compile(r"^# mutation-probe: .*\n(?:@[^\n]*\n)*def (test_\w+)", re.M)
+#: `# mutation-probe: <desc>` binds the annotated test to its default target -- the test's
+#: sibling module (`tools/test_x.py` -> `tools/x.py`; `tools/hooks/test_x.sh` -> `.../x.sh`);
+#: `# mutation-probe(<repo-relative path>): <desc>` names the target explicitly (a test that
+#: probes another module, e.g. `test_review_wrapper.py` -> `review_wrapper_common.py`). A pin
+#: counts only if its logged `file` IS that target (codex R3/R4 P2: a pin credited to the test
+#: node alone could come from probing an unrelated file). The LINES the annotation names stay a
+#: human contract -- the gate proves a live pin of the named file exists for the annotated test.
+_ANNOT = re.compile(
+    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: .*\n(?:@[^\n]*\n)*def (?P<name>test_\w+)", re.M
+)
 
 
 def _relative(token: str) -> str:
@@ -160,33 +190,37 @@ def _sha16(path: Path) -> str | None:
         return None
 
 
-def _pin_is_live(e: dict, target: str) -> bool:
+def default_probe_target(test_artifact: str) -> str:
+    """The module a test artifact probes by default: its sibling without the `test_` prefix."""
+    p = Path(test_artifact.split("::", 1)[0])
+    return str(p.with_name(p.name.removeprefix("test_")))
+
+
+def _pin_is_live(e: dict, target: str, probe_file: str) -> bool:
     """A PINNED entry is evidence only while the bytes it measured are the bytes at HEAD: the
     mutated source file (`file` + `target_sha`) AND the test artifact (`test_sha`) must both
     still digest to the logged values (codex R2 P2). Entries without digests never count. The
-    probed file must be a SOURCE file that exists -- never the test artifact itself (a probe
-    of the witness is not a probe of the load-bearing line; codex R3 P2). WHICH source lines
-    the annotation names is a human contract: the coverage gate proves a live pin exists for
-    the annotated test, not that the pin is the annotated mutation (recorded residual)."""
+    probed file must be THE annotated target (`probe_file`), an existing source file -- never
+    the test artifact itself, never an unrelated module (codex R3/R4 P2)."""
     tsha, fsha = e.get("target_sha"), e.get("test_sha")
     if not tsha or not fsha or not e.get("file"):
         return False
     src = Path(_relative(str(e["file"])))
     test_file = Path(target.split("::", 1)[0])
-    if src == test_file or not (REPO / src).is_file():
+    if src == test_file or str(src) != probe_file or not (REPO / src).is_file():
         return False
     return _sha16(REPO / src) == tsha and _sha16(REPO / test_file) == fsha
 
 
-def _pinned_nodeids(log_path: Path) -> set[str]:
-    """Targets of LIVE PINNED probes (rc 0 + digests still matching HEAD, `_pin_is_live`): for
-    a pytest command the first non-flag token after `pytest` that names a `.py` path (a node id
-    or a file), normalized REPO-relative and compared EXACTLY; for `bash <script>` the probed
-    script itself. The command is split on whitespace as logged -- the log is written by the
-    probe tool, not typed by hand."""
+def _pinned_nodeids(log_path: Path) -> set[tuple[str, str]]:
+    """`(test target, probed file)` pairs of LIVE PINNED probes (rc 0 + digests still matching
+    HEAD, `_pin_is_live`): the test target is, for a pytest command, the first non-flag token
+    after `pytest` that names a `.py` path (a node id or a file), normalized REPO-relative and
+    compared EXACTLY; for `bash <script>` the probed script itself. The command is split on
+    whitespace as logged -- the log is written by the probe tool, not typed by hand."""
     if not log_path.exists():
         return set()
-    out: set[str] = set()
+    out: set[tuple[str, str]] = set()
     for line in log_path.read_text().splitlines():
         if not line.strip():
             continue
@@ -205,46 +239,57 @@ def _pinned_nodeids(log_path: Path) -> set[str]:
             target = _relative(toks[1])
         if target is None:
             continue
-        if not _pin_is_live(e, target):
+        probe_file = str(Path(_relative(str(e.get("file") or ""))))
+        if not _pin_is_live(e, target, probe_file):
             continue
-        out.add(target)
+        out.add((target, probe_file))
     return out
 
 
-def required_probes(row: Row) -> list[str]:
-    """Every `# mutation-probe:` annotation the row's artifact carries -> its exact node id
-    (substring matching would let one pinned test cover a whole file). A node-id artifact
-    requires exactly itself; a shell artifact requires the script itself."""
+def _annotations(path: Path) -> list[tuple[str, str | None]]:
+    """`(test name, explicit target or None)` for every annotation in a test file."""
+    return [(m.group("name"), m.group("target")) for m in _ANNOT.finditer(path.read_text())]
+
+
+def required_probes(row: Row) -> list[tuple[str, str]]:
+    """Every `# mutation-probe:` annotation the row's artifact carries -> `(exact node id,
+    probed file)` (substring matching would let one pinned test cover a whole file). A node-id
+    artifact requires exactly itself (its annotation's target, or the default); a shell
+    artifact requires the script itself against its sibling module."""
     if not row.mutation_probe:
         return []
     kind, _, target = row.artifact.partition(":")
     if kind == "shell":
-        return [target.split()[0]]
+        script = target.split()[0]
+        return [(script, default_probe_target(script))]
     if kind != "pytest":
-        return [target]
+        return [(target, target)]
     file_part, _, node = target.partition("::")
-    if node:
-        return [target]
     path = REPO / file_part
     if not path.exists():
-        return [target]  # not yet landed: a gap until the file exists and its probes are pinned
-    names = _ANNOT.findall(path.read_text())
-    if not names:
+        # not yet landed: a gap until the file exists and its probes are pinned
+        return [(target, default_probe_target(file_part))]
+    annots = _annotations(path)
+    if node:
+        explicit = next((t for n, t in annots if n == node), None)
+        return [(target, explicit or default_probe_target(file_part))]
+    if not annots:
         # a mutation-probe row whose file carries NO annotation is a gap, not a vacuous pass
         # (codex R3 P2: deleting every annotation must not turn the gate green)
-        return [f"{file_part}::<no mutation-probe annotations>"]
-    return [f"{file_part}::{name}" for name in names]
+        return [(f"{file_part}::<no mutation-probe annotations>", default_probe_target(file_part))]
+    return [(f"{file_part}::{n}", t or default_probe_target(file_part)) for n, t in annots]
 
 
 def coverage_gaps(log_path: Path | None = None) -> list[tuple[Row, str]]:
     """`log_path` resolves to PROBE_LOG AT CALL TIME (never bound at def time) so a
-    monkeypatched log is honoured and `main` never silently reads the tracked log in a test."""
+    monkeypatched log is honoured and `main` never silently reads the tracked log in a test.
+    Each gap names the required node id and the file its pin must have probed."""
     pinned = _pinned_nodeids(log_path or PROBE_LOG)
     gaps: list[tuple[Row, str]] = []
     for r in MANIFEST:
-        for node in required_probes(r):
-            if node not in pinned:
-                gaps.append((r, node))
+        for node, probe_file in required_probes(r):
+            if (node, probe_file) not in pinned:
+                gaps.append((r, f"{node} [probe of {probe_file}]"))
     return gaps
 
 

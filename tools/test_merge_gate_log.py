@@ -292,6 +292,60 @@ def test_two_emissions_at_one_key_need_two_md_lines(tmp_path: Path):
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
 
 
+def test_md_failure_warn_vouches_for_its_own_pr_only(tmp_path: Path):
+    """codex R4 P2: two PRs at one head+lens both have a round 1; PR A's warn must not hide
+    PR B's crash between the writes."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    ro.chmod(0o500)
+    try:
+        _emit(tmp_path, pr=11, md=ro / "x" / "log.md", jl=jl, round_n=1)  # PR 11: md failed
+    finally:
+        ro.chmod(0o700)
+    _emit(tmp_path, pr=12, md=md, jl=jl, round_n=1)
+    md.write_text("")  # PR 12: crashed between the writes
+    rep = mgl.consistency_report(md, jl)
+    assert [r["arc_id"] for r in rep["orphan_jsonl"]] == ["pr-12"]
+
+
+def test_reconcile_is_serialized_with_an_in_flight_emission(tmp_path: Path, monkeypatch):
+    """codex R4 P2: a concurrent `reconcile` must not see emitter A's JSONL-but-not-yet-md
+    state (it would write A's line, A writes it again -> a duplicate with no emission). Both
+    take the emission lock: B blocks until A has written its md line, then finds no orphan."""
+    import subprocess
+    import sys
+
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    real = rw.emit_outcome
+    b: dict = {}
+
+    def emit_then_let_b_race(*a, **k):
+        rows = real(*a, **k)  # A's JSONL rows are on disk; its md line is NOT yet
+        code = (
+            f"import sys; sys.path.insert(0, {str(Path(mgl.__file__).parent)!r}); "
+            "from pathlib import Path; import merge_gate_log as m; "
+            f"print('reconciled', m.reconcile_orphans(Path({str(md)!r}), Path({str(jl)!r})))"
+        )
+        b["proc"] = subprocess.Popen(
+            [sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        try:
+            b["proc"].wait(timeout=3)  # without the lock B finishes here (and writes A's line)
+            b["finished_while_a_held_the_lock"] = True
+        except subprocess.TimeoutExpired:
+            b["finished_while_a_held_the_lock"] = False  # blocked on the lock, as it must be
+        return rows
+
+    monkeypatch.setattr(rw, "emit_outcome", emit_then_let_b_race)
+    _emit(tmp_path, pr=5, md=md, jl=jl)
+    out, err = b["proc"].communicate(timeout=60)
+    assert b["finished_while_a_held_the_lock"] is False, (out, err)
+    assert "reconciled 0" in out, (out, err)
+    assert len(mgl.read_md_rows(md)) == 1
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+
+
 def test_one_lens_sibling_never_vouches_for_another_lens(tmp_path: Path):
     md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
     _emit(tmp_path, pr=5, lens="merge-gate-a")

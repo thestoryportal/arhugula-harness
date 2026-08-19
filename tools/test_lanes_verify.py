@@ -107,22 +107,30 @@ def _sha16(p: Path) -> str:
 
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch) -> Path:
-    """A throwaway REPO: a source file, an annotated test file, a shell suite."""
+    """A throwaway REPO: source modules, annotated test files (each probing its sibling
+    `x.py` by default), a shell suite and its sibling script."""
     monkeypatch.setattr(lv, "REPO", tmp_path)
     (tmp_path / "tools" / "hooks").mkdir(parents=True)
-    (tmp_path / "tools" / "src.py").write_text("def f():\n    return 1\n")
+    for mod in ("x", "y", "z", "a", "b", "src"):
+        (tmp_path / "tools" / f"{mod}.py").write_text("def f():\n    return 1\n")
     (tmp_path / "tools" / "test_x.py").write_text("# mutation-probe: a\ndef t(): pass\n")
-    (tmp_path / "tools" / "hooks" / "lib.sh").write_text("x=1\n")
+    (tmp_path / "tools" / "hooks" / "c.sh").write_text("x=1\n")
     (tmp_path / "tools" / "hooks" / "test_c.sh").write_text("true\n")
     return tmp_path
 
 
-def _entry(repo: Path, test: str, file: str = "tools/src.py", rc: int = 0, **over) -> str:
-    """A probe-log line as `mutation_probe.log_result` writes it, digests from the repo."""
+def _nodes(gaps) -> list[str]:
+    return [n.split(" [probe of ")[0] for _, n in gaps]
+
+
+def _entry(repo: Path, test: str, file: str | None = None, rc: int = 0, **over) -> str:
+    """A probe-log line as `mutation_probe.log_result` writes it, digests from the repo. The
+    probed `file` defaults to the test's sibling module (the annotation's default target)."""
     tf = test.split()
     tf = tf[tf.index("pytest") + 1 :] if "pytest" in tf else tf[1:]
     tfile = next(x for x in tf if not x.startswith("-") and (".py" in x or x.endswith(".sh")))
     tfile = tfile.split("::")[0]
+    file = file or lv.default_probe_target(lv._relative(tfile))
     e = {
         "ts": "2026-08-19T00:00:00Z",
         "file": file,
@@ -142,10 +150,10 @@ def test_coverage_gap_when_probe_never_pinned(repo: Path, monkeypatch):
     log = repo / "mp.jsonl"
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_x.py::t")])
     gaps = lv.coverage_gaps(log)
-    assert gaps and gaps[0][1] == "tools/test_x.py::t"
+    assert _nodes(gaps) == ["tools/test_x.py::t"]
     # a PROBE FAILED verdict (rc 1) is not a pin
     log.write_text(_entry(repo, "uv run pytest -q tools/test_x.py::t", rc=1))
-    assert lv.coverage_gaps(log) == [(lv.MANIFEST[0], "tools/test_x.py::t")]
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::t"]
     log.write_text(log.read_text() + _entry(repo, "uv run pytest -q tools/test_x.py::t"))
     assert lv.coverage_gaps(log) == []
 
@@ -159,17 +167,17 @@ def test_pin_is_stale_once_the_source_or_the_test_changes(repo: Path, monkeypatc
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_x.py::t")])
     log.write_text(_entry(repo, "uv run pytest -q tools/test_x.py::t"))
     assert lv.coverage_gaps(log) == []
-    (repo / "tools" / "src.py").write_text("def f():\n    return 2\n")  # the source moved
-    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]
-    (repo / "tools" / "src.py").write_text("def f():\n    return 1\n")
+    (repo / "tools" / "x.py").write_text("def f():\n    return 2\n")  # the source moved
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::t"]
+    (repo / "tools" / "x.py").write_text("def f():\n    return 1\n")
     assert lv.coverage_gaps(log) == []
     (repo / "tools" / "test_x.py").write_text("# mutation-probe: a\ndef t(): assert 1\n")
-    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]  # the test moved
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::t"]  # the test moved
     (repo / "tools" / "test_x.py").write_text("# mutation-probe: a\ndef t(): pass\n")
     log.write_text(json.dumps({"test": "uv run pytest -q tools/test_x.py::t", "rc": 0}) + "\n")
-    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]  # no digests
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::t"]  # no digests
     log.write_text(_entry(repo, "uv run pytest -q tools/test_x.py::t", target_sha="0" * 16))
-    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::t"]
 
 
 def test_pinned_nodeid_parser_skips_flags_and_normalizes_absolute_paths(repo: Path):
@@ -179,13 +187,13 @@ def test_pinned_nodeid_parser_skips_flags_and_normalizes_absolute_paths(repo: Pa
     log.write_text(
         _entry(repo, "uv run pytest -q -p no:cacheprovider tools/test_a.py::t_a -x")
         + _entry(repo, f"python -m pytest {repo}/tools/test_b.py::t_b")
-        + _entry(repo, "bash tools/hooks/test_c.sh", file="tools/hooks/lib.sh")
-        + _entry(repo, "bash tools/hooks/test_c.sh", file="tools/hooks/lib.sh", rc=2)
+        + _entry(repo, "bash tools/hooks/test_c.sh", file="tools/hooks/c.sh")
+        + _entry(repo, "bash tools/hooks/test_c.sh", file="tools/hooks/c.sh", rc=2)
     )
     assert lv._pinned_nodeids(log) == {
-        "tools/test_a.py::t_a",
-        "tools/test_b.py::t_b",
-        "tools/hooks/test_c.sh",
+        ("tools/test_a.py::t_a", "tools/a.py"),
+        ("tools/test_b.py::t_b", "tools/b.py"),
+        ("tools/hooks/test_c.sh", "tools/hooks/c.sh"),
     }
 
 
@@ -199,7 +207,7 @@ def test_file_level_row_requires_every_annotation_exactly(repo: Path, monkeypatc
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_y.py")])
     log = repo / "mp.jsonl"
     log.write_text(_entry(repo, "uv run pytest tools/test_y.py::test_a -q"))
-    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_y.py::test_b"]
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_y.py::test_b"]
     log.write_text(log.read_text() + _entry(repo, "uv run pytest tools/test_y.py::test_b -q"))
     assert lv.coverage_gaps(log) == []
     # a whole-file run is NOT per-probe evidence
@@ -211,14 +219,15 @@ def test_file_level_row_with_no_annotations_is_a_gap_not_a_vacuous_pass(repo: Pa
     """codex R3 P2: delete every `# mutation-probe:` comment and the gate must NOT go green."""
     (repo / "tools" / "test_z.py").write_text("def test_a(): pass\n")
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_z.py")])
-    assert [n for _, n in lv.coverage_gaps(repo / "mp.jsonl")] == [
+    assert _nodes(lv.coverage_gaps(repo / "mp.jsonl")) == [
         "tools/test_z.py::<no mutation-probe annotations>"
     ]
     # the production manifest: every file-level probe row has at least one annotation
     monkeypatch.undo()
     for r in lv.MANIFEST:
         if r.mutation_probe and r.artifact.startswith("pytest:") and "::" not in r.artifact:
-            assert "<no mutation-probe annotations>" not in "".join(lv.required_probes(r)), r
+            nodes = [n for n, _ in lv.required_probes(r)]
+            assert "<no mutation-probe annotations>" not in "".join(nodes), r
 
 
 def test_a_probe_of_the_test_file_itself_or_a_missing_source_is_not_a_pin(repo: Path, monkeypatch):
@@ -226,26 +235,60 @@ def test_a_probe_of_the_test_file_itself_or_a_missing_source_is_not_a_pin(repo: 
     log = repo / "mp.jsonl"
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_x.py::t")])
     log.write_text(_entry(repo, "uv run pytest -q tools/test_x.py::t", file="tools/test_x.py"))
-    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::t"]
     log.write_text(
         _entry(
             repo, "uv run pytest -q tools/test_x.py::t", file="tools/gone.py", target_sha="x" * 16
         )
     )
-    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::t"]
 
 
 def test_file_level_row_for_a_not_yet_landed_file_is_a_gap(repo: Path, monkeypatch):
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_future.py")])
-    assert [n for _, n in lv.coverage_gaps(repo / "mp.jsonl")] == ["tools/test_future.py"]
+    assert _nodes(lv.coverage_gaps(repo / "mp.jsonl")) == ["tools/test_future.py"]
 
 
 def test_shell_probe_rows_can_be_covered(repo: Path, monkeypatch):
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="shell:tools/hooks/test_c.sh")])
     log = repo / "mp.jsonl"
-    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/hooks/test_c.sh"]
-    log.write_text(_entry(repo, "bash tools/hooks/test_c.sh", file="tools/hooks/lib.sh"))
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/hooks/test_c.sh"]
+    log.write_text(_entry(repo, "bash tools/hooks/test_c.sh", file="tools/hooks/c.sh"))
     assert lv.coverage_gaps(log) == []
+
+
+def test_annotation_binds_the_pin_to_the_annotated_file(repo: Path, monkeypatch):
+    """codex R3/R4 P2: a pin is credited to (test node, probed file). The default target is the
+    test's sibling module; `# mutation-probe(<path>):` names another. A pin of an unrelated
+    file under the same test node is NOT coverage."""
+    (repo / "tools" / "test_w.py").write_text(
+        "# mutation-probe: default target\ndef test_d(): pass\n\n"
+        "# mutation-probe(tools/src.py): explicit target\ndef test_e(): pass\n"
+    )
+    (repo / "tools" / "w.py").write_text("def f():\n    return 1\n")
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_w.py")])
+    assert lv.required_probes(lv.MANIFEST[0]) == [
+        ("tools/test_w.py::test_d", "tools/w.py"),
+        ("tools/test_w.py::test_e", "tools/src.py"),
+    ]
+    log = repo / "mp.jsonl"
+    # pins of the WRONG file do not count, even under the right test node
+    log.write_text(
+        _entry(repo, "uv run pytest tools/test_w.py::test_d -q", file="tools/src.py")
+        + _entry(repo, "uv run pytest tools/test_w.py::test_e -q", file="tools/w.py")
+    )
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_w.py::test_d", "tools/test_w.py::test_e"]
+    assert all("[probe of tools/" in n for _, n in lv.coverage_gaps(log))
+    log.write_text(
+        _entry(repo, "uv run pytest tools/test_w.py::test_d -q", file="tools/w.py")
+        + _entry(repo, "uv run pytest tools/test_w.py::test_e -q", file="tools/src.py")
+    )
+    assert lv.coverage_gaps(log) == []
+    # a node-level row honours the node's own explicit target
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_w.py::test_e")])
+    assert lv.required_probes(lv.MANIFEST[0]) == [("tools/test_w.py::test_e", "tools/src.py")]
+    assert lv.coverage_gaps(log) == []
+    assert lv.default_probe_target("tools/hooks/test_loop_lib.sh") == "tools/hooks/loop_lib.sh"
 
 
 def test_rows_not_marked_mutation_probe_require_nothing():

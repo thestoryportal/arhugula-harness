@@ -51,7 +51,7 @@ def _block(verdict="APPROVE", findings=None, **over):
 
 
 # ── C-HE-15 §1/§2: only a positive schema parse counts ──────────────────────
-# mutation-probe: make parse_verdict() return APPROVE when text is empty (exit-code keying)
+# mutation-probe(tools/review_wrapper_common.py): make parse_verdict() approve empty text
 def test_empty_stdout_exit0_is_unavailable():
     out = rw.parse_verdict("codex", "", EXPECTED)
     assert out.terminal == "REVIEWER_UNAVAILABLE"
