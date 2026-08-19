@@ -15,9 +15,12 @@ is never authoritative for disposition" rule -- not prose.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import re
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +37,13 @@ SCHEMA: dict[str, Any] = json.loads(SCHEMA_PATH.read_text())
 RECORD_KINDS = tuple(SCHEMA["properties"]["record_kind"]["enum"])
 DISPOSITIONS = tuple(SCHEMA["properties"]["disposition"]["enum"])
 SEVERITIES = tuple(SCHEMA["properties"]["severity"]["enum"])
+
+#: C-HE-24 §4 ``finding_id`` shape: ``<producer>:<head_sha>:<location-hash>:<n>``.
+_FINDING_ID_RE = re.compile(
+    r"^(?P<producer>[^:]+):(?P<head>[^:]+):(?P<loc>[0-9a-f]{12}):(?P<n>[0-9]+)$"
+)
+#: Bounded wait for the log's exclusive lock (local read + one write; never a network call).
+LOCK_TIMEOUT_S = 30.0
 
 #: C-HE-24 §3 projection: fail-class (carried in ``finding_type``) -> guard severity.
 _HARD_PREFIXES = ("terminal-", "permanent-fail-exit")
@@ -76,10 +86,38 @@ def now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def location_hash(location: str) -> str:
+    return hashlib.sha1(location.encode()).hexdigest()[:12]
+
+
 def make_finding_id(producer: str, head_sha: str, location: str, n: int) -> str:
     """``<producer>:<head_sha>:<location-hash>:<n>`` (C-HE-24 §4). Not stable across head_sha."""
-    loc = hashlib.sha1(location.encode()).hexdigest()[:12]
-    return f"{producer}:{head_sha}:{loc}:{n}"
+    return f"{producer}:{head_sha}:{location_hash(location)}:{n}"
+
+
+def _check_finding_id_components(row: dict) -> None:
+    """The id is the ONLY join key reducers and adjudications use, so its components must agree
+    with the row they key (Codex round-2 P2): shape per C-HE-24 §4, `producer` component ==
+    row producer, location-hash component == sha1(location)[:12], head component == row
+    head_sha when the row carries one (a null head_sha row is not held to that component)."""
+    m = _FINDING_ID_RE.match(row["finding_id"])
+    if m is None:
+        raise RecordError(
+            f"finding_id {row['finding_id']!r} is not <producer>:<head_sha>:<12-hex>:<n> "
+            "(C-HE-24 §4)"
+        )
+    if m["producer"] != row["producer"]:
+        raise RecordError(
+            f"finding_id producer component {m['producer']!r} != row producer {row['producer']!r}"
+        )
+    if m["loc"] != location_hash(row["location"]):
+        raise RecordError(
+            f"finding_id location-hash {m['loc']!r} != sha1({row['location']!r})[:12]"
+        )
+    if row["head_sha"] is not None and m["head"] != row["head_sha"]:
+        raise RecordError(
+            f"finding_id head component {m['head']!r} != row head_sha {row['head_sha']!r}"
+        )
 
 
 def make_row(core: FindingCore, env: Envelope) -> dict:
@@ -91,6 +129,7 @@ def validate(row: dict) -> None:
         jsonschema.validate(row, SCHEMA)
     except jsonschema.ValidationError as exc:
         raise RecordError(f"finding record schema: {exc.message}") from exc
+    _check_finding_id_components(row)
     # `:`-free identifiers (producer / lane_id / disposition_actor, C-HE-24 §2) are enforced by
     # the schema's `pattern` alone -- one enforcement point, no duplicate charset loop here.
     if row["record_kind"] == "finding_adjudication":
@@ -151,18 +190,46 @@ def _check_against_prior_rows(row: dict, path: Path) -> None:
             )
 
 
+def _lock_exclusive(fh, path: Path, timeout_s: float = LOCK_TIMEOUT_S) -> None:
+    """Bounded `flock(LOCK_EX)` on the log's own fd -- the house pattern (`mutation_probe.py`,
+    `tools/hooks/lib.sh`). Admissible here because the log is a REPO-resident record, not
+    QUEUE_DIR coordination state: C-HE-02 §1's CAS-only rule and its `flock|fcntl` invariant are
+    scoped to `arc_metrics.py` / `merge_door.py` / `reservations.py`. Kernel-released on process
+    death, so there is no stale-lock reclaim path; the critical section is a local read + one
+    write (C-HE-02 §3 satisfied). Times out loudly rather than waiting forever."""
+    deadline = time.monotonic() + timeout_s
+    delay = 0.005
+    while True:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise RecordError(f"could not lock {path} within {timeout_s}s") from None
+            time.sleep(delay)
+            delay = min(delay * 2, 0.1)
+
+
 def append_row(row: dict, path: Path | None = None) -> None:
-    """Validate (incl. the same-core invariant for repeated finding_ids), then append one line
-    with a single write. `path` defaults to GATE_LOG_JSONL resolved AT CALL TIME (not bound at
-    def time) so tests may monkeypatch it and production writes never leak into a test's tree
-    (Codex round-5 P1)."""
+    """Validate, then -- under the log's exclusive lock -- run the same-core invariant for
+    repeated finding_ids and append one line with a single write. The check and the append are
+    ONE critical section: two writers minting the same finding_id (C-HE-22's concurrent reviewer
+    invocations) must not both pass the check and then both append conflicting cores (Codex
+    round-2 P1). `path` defaults to GATE_LOG_JSONL resolved AT CALL TIME (not bound at def time)
+    so tests may monkeypatch it and production writes never leak into a test's tree (Codex
+    round-5 P1)."""
     path = path or GATE_LOG_JSONL
     validate(row)
-    _check_against_prior_rows(row, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(row, sort_keys=True) + "\n"
     with path.open("a") as fh:
-        fh.write(line)
+        _lock_exclusive(fh, path)
+        try:
+            _check_against_prior_rows(row, path)
+            fh.write(line)
+            fh.flush()
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 def read_rows(path: Path | None = None) -> list[dict]:

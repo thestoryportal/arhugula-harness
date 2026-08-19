@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -13,11 +15,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import finding_record as fr
 from codex_context_guard import Finding
 
+HEAD = "a" * 40
+LOC = "tools/x.py:12"
+FID = fr.make_finding_id("merge-gate", HEAD, LOC, 1)  # consistent with the _core/_env defaults
+
 
 def _core(**over):
     base = dict(
-        finding_id="merge-gate:abc123:0000deadbeef:1",
-        location="tools/x.py:12",
+        location=LOC,
         observed_evidence="lease acquired without pr",
         expected_contract="C-HE-06 §3",
         severity="P1",
@@ -26,6 +31,9 @@ def _core(**over):
         producer="merge-gate",
     )
     base.update(over)
+    # The id binds producer + head + location (C-HE-24 §4); derive it from the (possibly
+    # overridden) fields unless a test pins one explicitly.
+    base.setdefault("finding_id", fr.make_finding_id(base["producer"], HEAD, base["location"], 1))
     return fr.FindingCore(**base)
 
 
@@ -35,7 +43,7 @@ def _env(**over):
         ts="2026-08-18T00:00:00Z",
         arc_id="pr-1",
         lane_id="host-wt-abcdef01",
-        head_sha="a" * 40,
+        head_sha=HEAD,
         base_sha="b" * 40,
         diff_digest="c" * 64,
         round_n=1,
@@ -102,12 +110,12 @@ def test_colon_in_identifier_rejected(field):
 # mutation-probe: drop the _check_against_prior_rows() call from append_row()
 def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Path):
     p = tmp_path / "g.jsonl"
-    fid = "merge-gate:abc:loc:1"
+    fid = FID
     fr.append_row(fr.make_row(_core(finding_id=fid), _env()), p)
-    with pytest.raises(fr.RecordError, match="core field"):
+    with pytest.raises(fr.RecordError, match="core field 'severity'"):
         fr.append_row(
             fr.make_row(
-                _core(finding_id=fid, location="elsewhere"),
+                _core(finding_id=fid, severity="P3"),
                 _env(
                     record_kind="finding_adjudication",
                     disposition="accepted",
@@ -117,8 +125,8 @@ def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Pat
             p,
         )
     with pytest.raises(
-        fr.RecordError, match="core field 'producer'"
-    ):  # producer swapped to evade the self-disposition ban -> a core-field change
+        fr.RecordError, match="finding_id producer component"
+    ):  # producer swapped to evade the self-disposition ban -> the id no longer names the row
         fr.append_row(
             fr.make_row(
                 _core(finding_id=fid, producer="operator"),
@@ -148,7 +156,7 @@ def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Pat
     with pytest.raises(fr.RecordError, match="unknown finding_id"):
         fr.append_row(
             fr.make_row(
-                _core(finding_id="never-seen"),
+                _core(finding_id=fr.make_finding_id("merge-gate", HEAD, LOC, 99)),
                 _env(
                     record_kind="finding_adjudication",
                     disposition="accepted",
@@ -187,7 +195,7 @@ def test_repeated_finding_row_must_keep_the_same_core(tmp_path: Path):
     disposition / disposition_actor / unique_catch -- for a repeated `finding` row too, not only
     adjudications (Codex round-1 P1)."""
     p = tmp_path / "g.jsonl"
-    fid = "merge-gate:abc:loc:1"
+    fid = FID
     fr.append_row(fr.make_row(_core(finding_id=fid), _env()), p)
     with pytest.raises(fr.RecordError, match="core field 'observed_evidence'"):
         fr.append_row(fr.make_row(_core(finding_id=fid, observed_evidence="rewritten"), _env()), p)
@@ -203,7 +211,7 @@ def test_reducer_uses_file_order_not_ts(tmp_path: Path):
     """The append-only log is the ordering authority: a later physical row with an EARLIER ts
     (clock regression / back-fill) still wins (Codex round-1 P2)."""
     p = tmp_path / "g.jsonl"
-    fid = "merge-gate:abc:loc:1"
+    fid = FID
     fr.append_row(fr.make_row(_core(finding_id=fid), _env(ts="2026-08-18T00:00:05Z")), p)
     fr.append_row(
         fr.make_row(
@@ -223,7 +231,7 @@ def test_reducer_uses_file_order_not_ts(tmp_path: Path):
 
 def test_reducer_last_row_wins(tmp_path: Path):
     p = tmp_path / "g.jsonl"
-    fid = "merge-gate:abc:loc:1"
+    fid = FID
     fr.append_row(fr.make_row(_core(finding_id=fid), _env(ts="2026-08-18T00:00:00Z")), p)
     fr.append_row(
         fr.make_row(
@@ -258,6 +266,87 @@ def test_finding_id_shape():
     parts = fid.split(":")
     assert parts[0] == "codex_review_wrapper" and parts[1] == "a" * 40 and parts[3] == "3"
     assert len(parts[2]) == 12
+
+
+# mutation-probe: drop the `_check_finding_id_components(row)` call in validate()
+def test_finding_id_components_must_agree_with_the_row():
+    """The id is the only join key, so a row whose id names another producer / head / location
+    would collapse unrelated findings or mis-attach a disposition (Codex round-2 P2)."""
+    with pytest.raises(fr.RecordError, match="not <producer>"):
+        fr.validate(fr.make_row(_core(finding_id="merge-gate:abc:loc:1"), _env()))
+    with pytest.raises(fr.RecordError, match="producer component"):
+        fr.validate(
+            fr.make_row(_core(finding_id=fr.make_finding_id("codex", HEAD, LOC, 1)), _env())
+        )
+    with pytest.raises(fr.RecordError, match="location-hash"):
+        fr.validate(
+            fr.make_row(
+                _core(finding_id=fr.make_finding_id("merge-gate", HEAD, "elsewhere", 1)), _env()
+            )
+        )
+    with pytest.raises(fr.RecordError, match="head component"):
+        fr.validate(
+            fr.make_row(
+                _core(finding_id=fr.make_finding_id("merge-gate", "b" * 40, LOC, 1)), _env()
+            )
+        )
+    # a null head_sha row is not held to the head component (the other three still bind)
+    fr.validate(
+        fr.make_row(
+            _core(finding_id=fr.make_finding_id("merge-gate", "b" * 40, LOC, 1)),
+            _env(head_sha=None),
+        )
+    )
+
+
+# mutation-probe: drop the `_lock_exclusive(fh, path)` line in append_row()
+def test_check_and_append_are_one_critical_section(tmp_path: Path, monkeypatch):
+    """Two writers minting the same finding_id with CONFLICTING cores: exactly one row lands and
+    the other writer is rejected -- never two conflicting rows (Codex round-2 P1). The barrier
+    inside the (patched) prior-rows read only rendezvous when both writers are inside the check
+    at once, i.e. only when the check-and-append is NOT serialized."""
+    p = tmp_path / "g.jsonl"
+    gate = threading.Barrier(2, timeout=1.0)
+    real_read = fr.read_rows
+
+    def read_then_rendezvous(path=None):
+        rows = real_read(path)
+        try:
+            gate.wait()  # unserialized: both arrive -> both saw an empty log -> both append
+        except threading.BrokenBarrierError:
+            pass  # serialized: the holder times out here, the waiter finds the barrier broken
+        return rows
+
+    monkeypatch.setattr(fr, "read_rows", read_then_rendezvous)
+    errors: list[BaseException] = []
+
+    def writer(evidence: str) -> None:
+        try:
+            fr.append_row(fr.make_row(_core(observed_evidence=evidence), _env()), p)
+        except fr.RecordError as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(e,)) for e in ("first", "second")]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=30)
+    rows = real_read(p)
+    assert len(rows) == 1, rows
+    assert len(errors) == 1 and "core field 'observed_evidence'" in str(errors[0])
+
+
+def test_lock_wait_is_bounded(tmp_path: Path):
+    """A held lock makes append_row fail LOUDLY after the bounded wait, never hang."""
+    p = tmp_path / "g.jsonl"
+    p.write_text("")
+    with p.open("a") as holder:
+        fr._lock_exclusive(holder, p)
+        try:
+            with pytest.raises(fr.RecordError, match="could not lock"):
+                fr._lock_exclusive(p.open("a"), p, timeout_s=0.2)
+        finally:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
 
 
 # mutation-probe: drop the `code` join line in to_guard_finding()
