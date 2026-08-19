@@ -439,8 +439,12 @@ def extract(args: argparse.Namespace) -> ArcRow:
     return row
 
 
-class _LedgerClaim:
-    """Exclusive ownership of the ledger for one write, by CAS on a claim file.
+def _ledger_claim_path(ledger: Path) -> Path:
+    return ledger.with_name(f".{ledger.name}.claim")
+
+
+def claim_ledger(ledger: Path) -> None:
+    """Take exclusive ownership of the ledger for one write, by CAS on a claim file.
 
     C-HE-02 §1 bans `flock`/`fcntl` in this module, so the mutual exclusion
     between the ledger's two writers -- `append` (drain) and
@@ -450,30 +454,28 @@ class _LedgerClaim:
     a crashed owner on this host. A live or foreign owner means "retry": the
     caller aborts loudly rather than racing (codex R3 P2 -- without this, an
     append landing between the relabel's compare and its replace was lost).
+    Pair with `release_ledger` in a `finally`; release is a no-op when nothing
+    was claimed, so the claim call is a single deletable statement (probeable).
     """
+    claim = _ledger_claim_path(ledger)
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    stamp = json.dumps({"_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
+    for attempt in (1, 2):
+        try:
+            publish_exclusive(claim, stamp)
+            return
+        except FileExistsError:
+            if attempt == 1 and _claim_owner_is_dead(claim):
+                claim.unlink(missing_ok=True)  # dead owner on this host: reclaim once
+                continue
+            raise AbortError(
+                f"ledger {claim.name} is claimed by another writer -- retry "
+                "(a live peer holds it, or the owner cannot be verified)"
+            ) from None
 
-    def __init__(self, ledger: Path) -> None:
-        self.path = ledger.with_name(f".{ledger.name}.claim")
 
-    def __enter__(self) -> _LedgerClaim:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        stamp = json.dumps({"_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
-        for attempt in (1, 2):
-            try:
-                publish_exclusive(self.path, stamp)
-                return self
-            except FileExistsError:
-                if attempt == 1 and _claim_owner_is_dead(self.path):
-                    self.path.unlink(missing_ok=True)  # dead owner on this host: reclaim once
-                    continue
-                raise AbortError(
-                    f"ledger {self.path.name} is claimed by another writer -- retry "
-                    "(a live peer holds it, or the owner cannot be verified)"
-                ) from None
-        raise AssertionError("unreachable")
-
-    def __exit__(self, *_exc: object) -> None:
-        self.path.unlink(missing_ok=True)
+def release_ledger(ledger: Path) -> None:
+    _ledger_claim_path(ledger).unlink(missing_ok=True)
 
 
 def append(row: ArcRow) -> None:
@@ -489,7 +491,8 @@ def append(row: ArcRow) -> None:
             "capture after merge, or use --dry-run to inspect"
         )
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
-    with _LedgerClaim(LEDGER):
+    claim_ledger(LEDGER)
+    try:
         existing = read_ledger()
         if any(r.get("arc_id") == row.arc_id for r in existing):
             raise AbortError(
@@ -498,6 +501,8 @@ def append(row: ArcRow) -> None:
             )
         with LEDGER.open("a") as fh:
             fh.write(json.dumps(asdict(row), sort_keys=True) + "\n")
+    finally:
+        release_ledger(LEDGER)
 
 
 ARC_TYPES = ("inventing", "applying")
@@ -508,14 +513,15 @@ def relabel_arc_type_close(arc_id: str, arc_type_close: str) -> None:
     second row (that would trip SPLIT_BRAIN_LEDGER). The rewrite is whole-file atomic
     (temp + os.replace) and touches only this arc's row.
 
-    Mutual exclusion with `append` is the `_LedgerClaim` CAS claim (C-HE-02 §1 bans
+    Mutual exclusion with `append` is the `claim_ledger` CAS claim (C-HE-02 §1 bans
     `flock`/`fcntl` here). Inside the claim a byte-compare of the ledger against the
     snapshot the rewrite was derived from still guards against a writer that does not
     take the claim (an older tool, a hand edit): the relabel then aborts (retry) rather
     than silently discarding that write under the whole-file rewrite (codex R2/R3 P2)."""
     if arc_type_close not in ARC_TYPES:
         raise AbortError(f"arc_type_close must be inventing|applying, got {arc_type_close!r}")
-    with _LedgerClaim(LEDGER):
+    claim_ledger(LEDGER)
+    try:
         snapshot = LEDGER.read_bytes() if LEDGER.exists() else b""
         rows = read_ledger()
         hits = [r for r in rows if r.get("arc_id") == arc_id]
@@ -531,6 +537,8 @@ def relabel_arc_type_close(arc_id: str, arc_type_close: str) -> None:
                 f"{arc_id}: ledger changed while the relabel was prepared -- nothing written, retry"
             )
         os.replace(tmp, LEDGER)
+    finally:
+        release_ledger(LEDGER)
 
 
 def cmd_relabel(args: argparse.Namespace) -> int:

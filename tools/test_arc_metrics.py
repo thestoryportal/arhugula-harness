@@ -1198,7 +1198,7 @@ def test_relabel_aborts_when_the_ledger_changed_underneath(monkeypatch, tmp_path
     assert am.read_ledger()[0]["arc_type_close"] == "applying"
 
 
-# mutation-probe: drop the `with _LedgerClaim(LEDGER):` guard in append() (dedent its body)
+# mutation-probe: drop the `claim_ledger(LEDGER)` line in append()
 def test_append_and_relabel_are_mutually_exclusive_by_claim(monkeypatch, tmp_path: Path):
     """codex R3 P2: the two ledger writers exclude each other through the CAS claim file (no
     flock here, C-HE-02 §1); a live claim aborts the other writer loudly, a dead owner's claim
