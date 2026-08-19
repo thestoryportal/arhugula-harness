@@ -106,10 +106,29 @@ def store_literals(path: Path) -> set[str]:
     return out
 
 
+def _eight_store_rows(text: str) -> list[list[str]]:
+    """Body rows of the `## The eight stores` table as cell lists (header + rule dropped)."""
+    section = text.split("## The eight stores", 1)[1].split("\n## ", 1)[0]
+    rows = [ln for ln in section.splitlines() if ln.startswith("|")]
+    body = [[c.strip() for c in ln.strip().strip("|").split("|")] for ln in rows[2:]]
+    assert rows[0].split("|")[1:4] == [" Store ", " Venue ", " Authority for "], rows[0]
+    return body
+
+
 def test_audit_exists_and_lists_eight_plus_derived() -> None:
     text = AUDIT.read_text()
     for name in EIGHT + DERIVED + NON_STORES:
         assert name in text, name
+    # the eight-store TABLE itself: exactly eight rows, each naming one spec store in its
+    # first cell, each with a non-empty venue + authority cell (a loose substring elsewhere
+    # in the page -- e.g. `merge-gate-log` in the lock section -- does not count)
+    rows = _eight_store_rows(text)
+    assert len(rows) == 8, [r[0] for r in rows]
+    for name in EIGHT:
+        hits = [r for r in rows if name in r[0]]
+        assert len(hits) == 1, (name, len(hits))
+    for r in rows:
+        assert len(r) == 3 and all(r), r
     # hand-witness (not probe-expressible: the doc is not comment-out mutable): a second
     # `| Authority for |` table anywhere in the page fails this count
     assert text.count("| Authority for |") == 1
@@ -119,17 +138,17 @@ def test_audit_exists_and_lists_eight_plus_derived() -> None:
 
 def test_every_path_literal_in_modules_is_listed() -> None:
     text = AUDIT.read_text()
-    witnessed = 0
     for m in MODULES:
         p = REPO / m
         if not p.exists():
             continue  # merge_door / reservations land in S4; the row re-runs then
-        for token in sorted(store_literals(p)):
+        tokens = store_literals(p)
+        # per module, never vacuous: a coordination module that spells NO store literal the
+        # extractor recognises is an extractor gap, not a clean module
+        assert tokens, f"{m}: extractor saw no store literals"
+        for token in sorted(tokens):
             # hand-witness: removing any listed token from the audit page turns this red
             assert token in text, f"{m}: store literal {token!r} not in audit"
-            witnessed += 1
-    # the extractor must actually see arc_metrics.py's pathlib idioms (never vacuous)
-    assert witnessed >= 10, witnessed
 
 
 def test_extractor_sees_arc_metrics_idioms() -> None:
