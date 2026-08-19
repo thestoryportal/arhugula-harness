@@ -1605,7 +1605,13 @@ def main(argv: list[str] | None = None) -> int:
         help="per-run timeout in seconds for --test (default 600); a timeout is INDETERMINATE",
     )
     args = ap.parse_args(argv)
+    MEASURED["target_sha"] = MEASURED["test_sha"] = None
+    rc = _run(args)
+    log_result(args.file, args.lines, args.test, rc)  # EVERY exit, refusals included (R7 P3)
+    return rc
 
+
+def _run(args: argparse.Namespace) -> int:
     target = Path(args.file).expanduser()
     if not target.is_file():
         print(f"REFUSED: {target} is not an existing file.", file=sys.stderr)
@@ -1621,9 +1627,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     _install_signal_handlers()
-    rc = probe(target, start, end, args.test, args.timeout)
-    log_result(args.file, args.lines, args.test, rc)
-    return rc
+    return probe(target, start, end, args.test, args.timeout)
 
 
 def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = None) -> None:

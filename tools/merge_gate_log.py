@@ -396,8 +396,28 @@ def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = Non
     return int(_under_emit_lock(jsonl_path, body))  # type: ignore[arg-type]
 
 
+#: Where lens responses live for `emit` (the skills write them here; gitignored).
+LENS_SCRATCH = REPO / ".harness" / "tmp"
+
+
 def _read_text(arg: str) -> str:
-    return sys.stdin.read() if arg == "-" else Path(arg).read_text(encoding="utf-8")
+    """`-` (stdin) or a REGULAR file that RESOLVES under `.harness/tmp/` -- the documented
+    scratch dir. A relative path is the only shape the permission guard auto-allows, and a
+    relative symlink could point anywhere (codex R7 P2); resolving first and pinning the
+    destination closes that, and the content is never echoed (see the VERDICT-line check)."""
+    if arg == "-":
+        return sys.stdin.read()
+    path = Path(arg)
+    resolved = path.resolve()
+    if (
+        path.is_symlink()
+        or not resolved.is_file()
+        or LENS_SCRATCH.resolve() not in resolved.parents
+    ):
+        raise GateLogError(
+            f"--verdict-json must be '-' or a regular file under {LENS_SCRATCH} (got {arg!r})"
+        )
+    return resolved.read_text(encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -461,8 +481,7 @@ def main(argv: list[str] | None = None) -> int:
                         "REVIEWER_UNAVAILABLE",
                         CHANNEL,
                         None,
-                        "final VERDICT line absent or disagrees with the schema block"
-                        + (f" ({tail[-1][:60]!r})" if tail else ""),
+                        "final VERDICT line absent or disagrees with the schema block",
                         [],
                         None,
                         outcome.source,

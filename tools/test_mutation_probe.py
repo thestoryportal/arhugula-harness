@@ -1725,6 +1725,20 @@ def test_a_test_artifact_that_changes_during_the_probe_voids_its_digest(repo, _p
     assert entry["target_sha"] == hashlib.sha256((repo / "src.py").read_bytes()).hexdigest()[:16]
 
 
+def test_refusals_before_the_probe_are_logged_too(repo, _probe_log_isolated: Path):
+    """codex R7 P3: the run log is EVERY exit -- a pre-probe refusal (missing file, bad range)
+    lands as rc=2 with null digests, never silently unrecorded."""
+    log = _probe_log_isolated
+    n0 = len(log.read_text().splitlines()) if log.exists() else 0
+    r = run_probe(repo, "nope.py", PINNED, pytest_cmd("test_real.py"))
+    assert r.returncode == 2
+    r = run_probe(repo, "src.py", "9-2", pytest_cmd("test_real.py"))
+    assert r.returncode == 2
+    entries = [json.loads(ln) for ln in log.read_text().splitlines()[n0:]]
+    assert [e["rc"] for e in entries] == [2, 2]
+    assert all(e["target_sha"] is None and e["test_sha"] is None for e in entries)
+
+
 def test_test_file_of_resolves_pytest_nodeids_and_shell_scripts():
     assert mp.test_file_of("uv run pytest -q -p no:cacheprovider tools/test_a.py::t -x") == Path(
         "tools/test_a.py"

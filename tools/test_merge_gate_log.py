@@ -29,6 +29,7 @@ def _isolated(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(mgl, "GATE_LOG_MD", tmp_path / "unused-log.md")
     monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
     monkeypatch.setattr(mgl, "config_hash", lambda: "cfg")  # no CLI override exists (R5 P2)
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", tmp_path)  # `emit` reads verdict files only here
 
 
 def _binding(lens: str = LENS, head: str = H) -> dict[str, str]:
@@ -667,6 +668,33 @@ def test_cli_emit_head_reread_failure_after_recording_is_exit_2(tmp_path, monkey
     assert mgl.main(_cli(f)) == 2
     assert "HEAD could not be re-read" in capsys.readouterr().err
     assert fr.read_rows(jl)[0]["record_kind"] == "no_finding"  # the record stands
+
+
+def test_cli_emit_reads_only_regular_files_under_the_lens_scratch_dir(
+    tmp_path, monkeypatch, capsys
+):
+    """codex R7 P2: the guard auto-allows a RELATIVE `--verdict-json`; a relative symlink could
+    point anywhere. `emit` resolves the path and refuses anything that is a symlink or lands
+    outside `.harness/tmp/` -- exit 2, nothing recorded, content never echoed."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    outside = tmp_path / "secret.txt"
+    outside.write_text("VERDICT: APPROVE\nTOKEN=hunter2\n")
+    link = scratch / "lens.txt"
+    link.symlink_to(outside)
+    assert mgl.main(_cli(link)) == 2
+    err = capsys.readouterr().err
+    assert "must be '-' or a regular file under" in err and "hunter2" not in err
+    assert mgl.main(_cli(outside)) == 2  # a real file outside the scratch dir
+    assert not jl.exists()
+    b = mgl.lens_binding(mgl.REPO, "HEAD", LENS)
+    good = scratch / "ok.txt"
+    good.write_text(_lens_output(b, "APPROVE"))
+    assert mgl.main(_cli(good)) == 0
 
 
 def test_cli_binding_prints_the_six_fields(capsys):
