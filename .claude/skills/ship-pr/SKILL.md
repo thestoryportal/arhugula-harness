@@ -205,8 +205,13 @@ merge_sha=$(jq -r .mergeCommit.oid <<<"$pr_json")
 # 2. Fail closed unless the merge commit's OWN post-merge CI run on main is an exact
 #    "success" (not the PR's pre-merge checks, which this repo has a documented case of
 #    diverging from — and not "pending"/"failure"/empty, which must ALSO abort, not just
-#    print and fall through).
+#    print and fall through). Accepted set is exactly `{success}`; `cancelled` and `failure`
+#    are named INCOMPLETE (C-HE-19; the one predicate is `arc_metrics.ci_is_green`). Do not
+#    infer green from the absence of a failure.
 concl=$(gh run list --commit "$merge_sha" --json conclusion --jq '.[0].conclusion // empty')
+case "$concl" in
+  cancelled|CANCELLED) echo "ABORT: post-merge CI on main was CANCELLED — INCOMPLETE, never green (C-HE-19)"; exit 1 ;;
+esac
 [ "$concl" = success ] || { echo "ABORT: post-merge CI on main is not confirmed green (got '${concl:-empty}')"; exit 1; }
 
 # 3. If gh pr merge --delete-branch already removed the ref, there's nothing left to

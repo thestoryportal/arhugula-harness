@@ -78,6 +78,23 @@ FULL_SHA_LEN = 40
 #: `HEAD`: a topic-branch commit can still be reset or abandoned.
 MERGED_REF = os.environ.get("ARC_METRICS_MERGED_REF", "origin/main")
 
+#: C-HE-19: CI outcomes are exactly these; CANCELLED is INCOMPLETE, never green.
+CI_TERMINAL = ("SUCCESS", "FAILURE", "CANCELLED")
+CI_GREEN = frozenset({"SUCCESS"})
+
+
+def ci_is_green(conclusion: str | None) -> bool:
+    """Only an exact `success` counts. CANCELLED is named explicitly (C-HE-19 §2: not by
+    whitelist omission -- the branch survives a future edit that broadens `CI_GREEN`); empty
+    / pending / None -> False. Consumers: the green-timing exclusion below, ship-pr's
+    post-merge acceptance, the merge door (U-HE-23)."""
+    if not conclusion:
+        return False
+    c = conclusion.upper()
+    if c == "CANCELLED":
+        return False
+    return c in CI_GREEN
+
 
 class AbortError(RuntimeError):
     """A named, fail-closed abort. Never swallowed, never defaulted."""
@@ -268,8 +285,9 @@ def ci_metrics(sha: str) -> tuple[int, list[float]]:
     durations = []
     for r in hit:
         # A cancelled run is NOT a fast green -- exclude it from timing, or the
-        # ~65s cancellation signature poisons the baseline (2026-08-14).
-        if r.get("conclusion") != "success":
+        # ~65s cancellation signature poisons the baseline (2026-08-14). One predicate
+        # (C-HE-19): only an exact `success` is green.
+        if not ci_is_green(r.get("conclusion")):
             continue
         durations.append(
             round((parse_iso(r["updatedAt"]) - parse_iso(r["createdAt"])).total_seconds(), 1)
