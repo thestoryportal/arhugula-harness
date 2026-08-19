@@ -35,6 +35,9 @@ ROADMAP="Project_Roadmap_v1.md"
 # engages next", regardless of which audit branch (match / lag-expected / drift) fires.
 _HIL=""
 if command -v loop_pending_hil_summary >/dev/null 2>&1; then
+  # C-HE-20 (U-HE-09): re-surface deferrals older than the 24 h TTL as NOTIFY rows first --
+  # a notification threshold only; it never resolves, reclaims, or transitions anything.
+  command -v loop_hil_ttl_resurface >/dev/null 2>&1 && loop_hil_ttl_resurface 2>/dev/null
   _h=$(loop_pending_hil_summary 2>/dev/null)
   [ -n "$_h" ] && _HIL=" $_h"
 fi
