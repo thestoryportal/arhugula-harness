@@ -96,6 +96,18 @@ def make_finding_id(producer: str, head_sha: str, location: str, n: int) -> str:
     return f"{producer}:{head_sha}:{location_hash(location)}:{n}"
 
 
+def next_finding_id(producer: str, head: str, location: str, rows: list[dict]) -> str:
+    """Mint the id of a NEW observation: the smallest `n` not yet used for this
+    (producer, head, location-hash) prefix among `rows`. Emitters MUST use this (or
+    `append_observation`, which calls it under the log lock) rather than a per-invocation list
+    ordinal: a rerun on the same head that re-reports a location at the same ordinal would reuse
+    an id and be rejected as a core mutation (Codex round-10 P1). `head` is the id's head
+    component -- the row's `head_sha`, or the emitter's null-head token (e.g. `nohead`)."""
+    prefix = f"{producer}:{head}:{location_hash(location)}:"
+    used = {int(r["finding_id"][len(prefix) :]) for r in rows if r["finding_id"].startswith(prefix)}
+    return f"{prefix}{max(used, default=0) + 1}"
+
+
 def _check_finding_id_components(row: dict) -> None:
     """The id is the ONLY join key reducers and adjudications use, so its components must agree
     with the row they key (Codex round-2 P2): shape per C-HE-24 §4, `producer` component ==
@@ -152,6 +164,15 @@ def validate(row: dict) -> None:
     if row["record_kind"] == "finding_adjudication":
         if row["disposition"] is None or row["disposition_actor"] is None:
             raise RecordError("finding_adjudication rows require disposition and disposition_actor")
+    elif row["record_kind"] == "equivalence_proof":
+        # C-HE-32 §1: the proof is BY a decorrelated party and the row IS the proof, so it carries
+        # `accepted` inline with the prover as disposition_actor (U-HE-41's helper); the
+        # self-disposition ban below still applies (the beneficiary may not prove for itself).
+        if row["disposition"] != "accepted" or row["disposition_actor"] is None:
+            raise RecordError(
+                "equivalence_proof rows carry disposition='accepted' and the decorrelated "
+                "prover as disposition_actor (C-HE-32 §1)"
+            )
     elif row["disposition"] is not None or row["disposition_actor"] is not None:
         # C-HE-24 §2/§5: disposition is set ONLY by an append-only adjudication row. A `finding`
         # row that arrives pre-disposed would let the reviewer dispose its own finding without
@@ -167,11 +188,11 @@ def validate(row: dict) -> None:
         )
 
 
-# Everything but ts / record_kind / disposition / disposition_actor / unique_catch -- and
-# `round_n`: a later review round at the SAME head_sha re-observing the same defect is the same
-# finding (C-HE-24 §4 "within-head_sha disposition lineage"; N6 counts DISTINCT finding_id), so
-# its row carries the same id with the round it was observed in (Codex round-9 P1). Everything
-# in the ratified core plus the head-bound envelope stays immutable.
+# Everything but ts / record_kind / disposition / disposition_actor / unique_catch (C-HE-24
+# Invariants, spec-literal). `round_n` IS immutable: a `finding_id` names ONE observation, and a
+# re-observation in a later round at the same head_sha is a NEW observation minted by
+# `next_finding_id` (Codex rounds 9-10; the round-9 mutable-`round_n` reading contradicted the
+# cleared invariant and was reverted in round 10).
 _CORE_IMMUTABLE = (
     "location",
     "observed_evidence",
@@ -185,15 +206,17 @@ _CORE_IMMUTABLE = (
     "head_sha",
     "base_sha",
     "diff_digest",
+    "round_n",
     "cause_attribution",
 )
 
 
 def _check_against_prior_rows(row: dict, path: Path) -> None:
     """C-HE-24 §5 invariants at WRITE time, for EVERY row kind: two rows with one finding_id
-    differ only by ts / record_kind / disposition / disposition_actor / unique_catch / round_n;
-    the only kind transition is <original kind> -> finding_adjudication; an adjudication's ts is
-    strictly later; nothing but further adjudications follows an adjudication. A repeated
+    differ only by ts / record_kind / disposition / disposition_actor / unique_catch; the only
+    kind transition is `finding` -> finding_adjudication (markers and proofs are never
+    adjudicated); an adjudication's ts is strictly later; nothing but further adjudications
+    follows an adjudication. A repeated
     `finding` row (an emitter retry minting the same id) is held to the same core as the first
     row, not only adjudications (Codex round-1 P1). Because `producer` is core-immutable, an
     adjudication cannot smuggle a new producer in to evade the self-disposition ban: the swap
@@ -215,6 +238,14 @@ def _check_against_prior_rows(row: dict, path: Path) -> None:
             "row may not follow a finding_adjudication row"
         )
     orig = prior[0]
+    if row["record_kind"] == "finding_adjudication" and orig["record_kind"] != "finding":
+        # C-HE-24 §5 adjudicates FINDING rows. An "accepted" marker (`no_finding`,
+        # `reviewer_unavailable`, `gate_demotion`) or proof would otherwise be reduced as a
+        # prevented problem by N6 (Codex round-10 P2).
+        raise RecordError(
+            f"only finding rows may be adjudicated; {row['finding_id']!r} is a "
+            f"{orig['record_kind']!r} row (C-HE-24 §5)"
+        )
     if row["record_kind"] not in ("finding_adjudication", orig["record_kind"]):
         # A retry may repeat the ORIGINAL kind; the only other kind allowed on an existing id is
         # an adjudication. `finding` -> `no_finding` on one id would let the producer erase its
@@ -261,6 +292,24 @@ def _lock_exclusive(fd: int, path: Path, timeout_s: float = LOCK_TIMEOUT_S) -> N
             delay = min(delay * 2, 0.1)
 
 
+def _under_log_lock(path: Path, body) -> None:
+    """Open the log O_APPEND, hold its exclusive lock across `body(fd)`, release, close."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        _lock_exclusive(fd, path)
+        try:
+            body(fd)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _encode(row: dict) -> bytes:
+    return (json.dumps(row, sort_keys=True) + "\n").encode()
+
+
 def append_row(row: dict, path: Path | None = None) -> None:
     """Validate, then -- under the log's exclusive lock -- run the same-core invariant for
     repeated finding_ids and append one line with a single write. The check and the append are
@@ -271,18 +320,37 @@ def append_row(row: dict, path: Path | None = None) -> None:
     round-5 P1)."""
     path = path or GATE_LOG_JSONL
     validate(row)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = (json.dumps(row, sort_keys=True) + "\n").encode()
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-    try:
-        _lock_exclusive(fd, path)
-        try:
-            _check_against_prior_rows(row, path)
-            _append_line(fd, data, path)
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
+    data = _encode(row)
+
+    def body(fd: int) -> None:
+        _check_against_prior_rows(row, path)
+        _append_line(fd, data, path)
+
+    _under_log_lock(path, body)
+
+
+def append_observation(core_fields: dict, env: Envelope, path: Path | None = None) -> dict:
+    """Append a NEW observation, minting its `finding_id` under the same lock the append holds
+    (allocate + validate + append = one critical section, so two concurrent emitters cannot mint
+    one id). `core_fields` = the FindingCore fields except `finding_id`; the id's head component
+    is `env.head_sha`, or the null-head token `nohead` when the row carries no head. Returns the
+    row as written."""
+    path = path or GATE_LOG_JSONL
+    head = env.head_sha if env.head_sha is not None else "nohead"
+    written: dict = {}
+
+    def body(fd: int) -> None:
+        fid = next_finding_id(
+            core_fields["producer"], head, core_fields["location"], read_rows(path)
+        )
+        row = make_row(FindingCore(finding_id=fid, **core_fields), env)
+        validate(row)
+        _check_against_prior_rows(row, path)  # a fresh id has no prior; kept for the invariant
+        _append_line(fd, _encode(row), path)
+        written.update(row)
+
+    _under_log_lock(path, body)
+    return written
 
 
 def _append_line(fd: int, data: bytes, path: Path) -> None:

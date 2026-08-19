@@ -286,30 +286,99 @@ def test_reducer_uses_file_order_not_ts():
     assert fr.reduce_last_by_finding_id(rows)[FID]["disposition"] == "accepted"
 
 
-def test_same_finding_reobserved_in_a_later_round_keeps_its_id(tmp_path: Path):
-    """C-HE-24 §4: within one head_sha the same defect re-reported in round 2 is the SAME finding --
-    same id, new `round_n`; lineage (and N6's DISTINCT count) is preserved (Codex round-9 P1)."""
+def test_next_finding_id_allocates_per_observation():
+    """A finding_id names ONE observation (C-HE-24 §4 + Invariants, spec-literal): the allocator
+    yields the next free `n` for a (producer, head, location) prefix; other prefixes start at 1."""
+    rows = [
+        fr.make_row(_core(finding_id=fr.make_finding_id("merge-gate", HEAD, LOC, 1)), _env()),
+        fr.make_row(_core(finding_id=fr.make_finding_id("merge-gate", HEAD, LOC, 2)), _env()),
+    ]
+    assert fr.next_finding_id("merge-gate", HEAD, LOC, rows) == fr.make_finding_id(
+        "merge-gate", HEAD, LOC, 3
+    )
+    assert fr.next_finding_id("merge-gate", HEAD, "tools/y.py:1", rows).endswith(":1")
+    assert fr.next_finding_id("codex", HEAD, LOC, rows).endswith(":1")
+    assert fr.next_finding_id("merge-gate", "nohead", LOC, []).startswith("merge-gate:nohead:")
+
+
+def test_append_observation_mints_fresh_ids_across_rounds(tmp_path: Path):
+    """A rerun on the same head that re-reports a location -- same or changed evidence -- is a NEW
+    observation with a fresh id; `round_n` stays immutable per id (Codex rounds 9-10)."""
     p = tmp_path / "g.jsonl"
-    fr.append_row(fr.make_row(_core(), _env(round_n=1)), p)
-    fr.append_row(fr.make_row(_core(), _env(round_n=2, ts="2026-08-18T00:00:01Z")), p)  # legal
-    rows = fr.read_rows(p)
-    assert [r["round_n"] for r in rows] == [1, 2]
-    assert fr.reduce_last_by_finding_id(rows)[FID]["round_n"] == 2
-    # the adjudication may cite the round it was made in
-    fr.append_row(
-        fr.make_row(
-            _core(),
-            _env(
-                round_n=3,
-                ts="2026-08-18T00:00:02Z",
-                record_kind="finding_adjudication",
-                disposition="accepted",
-                disposition_actor="operator",
+    fields = dict(
+        location=LOC,
+        observed_evidence="lease acquired without pr",
+        expected_contract="C-HE-06 §3",
+        severity="P1",
+        finding_type="terminal-block",
+        lineage_claim="fresh",
+        producer="merge-gate",
+    )
+    r1 = fr.append_observation(fields, _env(round_n=1), p)
+    r2 = fr.append_observation(fields, _env(round_n=2, ts="2026-08-18T00:00:01Z"), p)
+    r3 = fr.append_observation(
+        {**fields, "observed_evidence": "reworded"}, _env(round_n=2, ts="2026-08-18T00:00:02Z"), p
+    )
+    assert [r["finding_id"].rsplit(":", 1)[1] for r in (r1, r2, r3)] == ["1", "2", "3"]
+    assert len(fr.read_rows(p)) == 3
+    with pytest.raises(fr.RecordError, match="core field 'round_n'"):  # the id still binds round_n
+        fr.append_row(
+            fr.make_row(
+                _core(finding_id=r1["finding_id"]), _env(round_n=2, ts="2026-08-18T00:00:03Z")
             ),
-        ),
+            p,
+        )
+    # a null-head row mints under the `nohead` token and passes the component check
+    r4 = fr.append_observation(
+        {**fields, "location": "codex"},
+        _env(head_sha=None, record_kind="reviewer_unavailable", ts="2026-08-18T00:00:04Z"),
         p,
     )
-    assert fr.reduce_last_by_finding_id(fr.read_rows(p))[FID]["disposition"] == "accepted"
+    assert r4["finding_id"].startswith("merge-gate:nohead:")
+
+
+# mutation-probe: drop the `orig["record_kind"] != "finding"` adjudicable-kind guard
+def test_only_finding_rows_may_be_adjudicated(tmp_path: Path):
+    """An accepted marker would be reduced by N6 as a prevented problem (Codex round-10 P2)."""
+    p = tmp_path / "g.jsonl"
+    fr.append_row(fr.make_row(_core(observed_evidence=""), _env(record_kind="no_finding")), p)
+    with pytest.raises(fr.RecordError, match="only finding rows may be adjudicated"):
+        fr.append_row(
+            fr.make_row(
+                _core(observed_evidence=""),
+                _env(
+                    ts="2026-08-18T00:00:01Z",
+                    record_kind="finding_adjudication",
+                    disposition="accepted",
+                    disposition_actor="operator",
+                ),
+            ),
+            p,
+        )
+
+
+# mutation-probe: drop the `elif row["record_kind"] == "equivalence_proof":` branch in validate()
+def test_equivalence_proof_rows_carry_the_prover_inline():
+    """C-HE-32 §1: the proof row IS the disposition, by a decorrelated party (U-HE-41's helper);
+    a proof without a prover, or by the beneficiary itself, is refused (Codex round-10 P2)."""
+    proof = dict(record_kind="equivalence_proof", disposition="accepted", disposition_actor="codex")
+    fr.validate(
+        fr.make_row(_core(finding_type="equivalence_proof", producer="ship-pr"), _env(**proof))
+    )
+    with pytest.raises(fr.RecordError, match="decorrelated prover"):
+        fr.validate(
+            fr.make_row(
+                _core(finding_type="equivalence_proof", producer="ship-pr"),
+                _env(record_kind="equivalence_proof"),
+            )
+        )
+    with pytest.raises(fr.RecordError, match="equals producer"):
+        fr.validate(
+            fr.make_row(
+                _core(finding_type="equivalence_proof", producer="ship-pr"),
+                _env(**{**proof, "disposition_actor": "ship-pr"}),
+            )
+        )
 
 
 # mutation-probe: drop the record_kind-transition guard in _check_against_prior_rows()
