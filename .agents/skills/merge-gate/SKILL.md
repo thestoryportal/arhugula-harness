@@ -38,7 +38,13 @@ gets only its lens prompt plus this self-contained tail:
 ```text
 PR under review: #<N> on branch <branch>, base main, head <sha>.
 Review the local merge-base diff and enough surrounding source to judge it. Do not edit.
-End with exactly VERDICT: APPROVE or VERDICT: BLOCK as the final non-empty line.
+Immediately before your final line, print ONE fenced ```json block with exactly these keys:
+verdict (APPROVE|BLOCK), findings (array of {severity: P1|P2|P3, location, message}; empty on
+APPROVE, non-empty on BLOCK) and these six values copied VERBATIM: head_sha=<...>,
+base_sha=<...>, diff_digest=<...>, reviewer_identity=<lens id>, prompt_version=<...>,
+config_hash=<...> (the output of `just merge-gate-binding <lens id>`). No other keys.
+End with exactly `VERDICT: APPROVE` or `VERDICT: BLOCK: <one-sentence reason>` as the final
+non-empty line (a bare `VERDICT: BLOCK` without its reason is not a verdict).
 ```
 
 Use the actual arc worktree with `-C`, `--ephemeral`, `--sandbox read-only`, and a distinct
@@ -58,10 +64,22 @@ Validate each invocation separately: exit 0, output file exists and is non-empty
 final non-empty line is exactly one permitted verdict. Missing, malformed, truncated, or
 ambiguous output is `BLOCK`.
 
+Before launching, compute each lens's binding with
+`just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy>`
+and include the six printed values in that lens's prompt; require, immediately before the
+`VERDICT:` line, one fenced ```json block matching `tools/review_schemas/merge-gate.schema.json`
+(`verdict`, `findings`, the six values verbatim). After each run, copy the output file into
+the worktree (`.harness/tmp/merge-gate-lens-<id>.txt`, gitignored) and record it:
+`just merge-gate-emit --pr <N> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
+(JSONL row first, structured markdown line second, C-HE-23 §2; the final `VERDICT:` line must
+agree with the block, exact-line match). Exit 0 = APPROVE recorded, 1 = BLOCK recorded,
+2 = NOT recorded — that lens verdict does not count; treat as `BLOCK` and re-run the lens.
+
 ## Outcome
 
-- All three approve: append the PR/date/branch/head/verdicts/outcome row to
-  `.harness/merge-gate-log.md`.
+- All three approve: the three `emit` calls are the machine record; additionally append the
+  PR/date/branch/head/verdicts/outcome row to `.harness/merge-gate-log.md`
+  (`just merge-gate-log-check` is the consistency reducer).
 - Any block: reconcile it against current HEAD. If real and mechanical, fix it, add the
   appropriate witness, re-run Antigravity and local/CI gates, then re-run the blocking lens
   against the delta. A broad code change invalidates all three approvals.
@@ -71,7 +89,9 @@ ambiguous output is `BLOCK`.
 
 Commit and push the gate-log row before merge, then wait for CI on that final PR HEAD to be
 green. The log-only commit does not require re-running approved lenses, but any code, test,
-contract, or lens-input change does. Merge only after the final-head CI check and only with
+contract, or lens-input change does — prove which with `just merge-gate-landing-delta
+<reviewed-head>` (exit 0: reviewed..final touches only the two gate-log files, approvals
+transfer; non-zero: re-gate). Merge only after the final-head CI check and only with
 current merge authorization. Re-read the final PR head SHA immediately before merging and
 pin the operation with `gh pr merge <PR#> --squash --match-head-commit <final-head-sha>` so
 a concurrent push fails closed. Never bypass branch protection.

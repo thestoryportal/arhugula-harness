@@ -259,6 +259,43 @@ arc-exit-report *ARGS:
 mutation-probe *ARGS:
     uv run python tools/mutation_probe.py "$@"
 
+# ─── §8.1 verification manifest (spec-he-loop-lanes, U-HE-05) ───────────────
+# tools/lanes_verify.py owns the manifest as data; rows are appended by the unit
+# that lands each artifact. `lanes-verify` runs every row.
+lanes-verify:
+    uv run python tools/lanes_verify.py verify
+
+# Phase-0 gate: every phase0 row must PASS at HEAD; a skip counts as NOT passed
+# (C-HE-13 §1). Consumed by the mechanical pilot gate.
+lanes-phase0-check:
+    uv run python tools/lanes_verify.py phase0
+
+# Every manifest row marked mutation-probe must have a PINNED result in
+# .harness/mutation-probe-log.jsonl (spec §0.3; the probe tool appends it).
+mutation-probe-coverage-check:
+    uv run python tools/lanes_verify.py coverage
+
+# C-HE-23 §2 consistency reducer over merge-gate-log.md <-> .jsonl (U-HE-13).
+# Exit 1 on a markdown row with no JSONL sibling; orphans are listed and
+# reconciled by `uv run python tools/merge_gate_log.py reconcile`.
+merge-gate-log-check:
+    uv run python tools/merge_gate_log.py check
+
+# Six binding values for one merge-gate lens (C-HE-15 §4) -- paste into the lens prompt.
+merge-gate-binding lens base='main':
+    uv run python tools/merge_gate_log.py binding --lens {{lens}} --base {{base}}
+
+# Record one lens verdict: JSONL first, markdown second (C-HE-23 §2, U-HE-13). Exit 0 APPROVE
+# recorded / 1 BLOCK recorded / 2 NOT recorded (does not count; re-run the lens).
+#   just merge-gate-emit --pr <N> --lens merge-gate-<id> --verdict-json .harness/tmp/<file>
+merge-gate-emit *ARGS:
+    uv run python tools/merge_gate_log.py emit "$@"
+
+# Landing predicate: the head about to merge may differ from the head the lenses approved
+# ONLY by the two gate-log files. Exit 1 (re-gate) otherwise.
+merge-gate-landing-delta reviewed final='HEAD':
+    uv run python tools/merge_gate_log.py landing-delta --reviewed {{reviewed}} --final {{final}}
+
 # ─── MEMORY.md — byte-cap gate + idempotent index upsert ────────────────────
 # NOT a semantic compactor (that stays the agent's call) — a deterministic
 # byte-exact cap gate + idempotent upsert. See tools/memory_compact.py's header.

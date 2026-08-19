@@ -28,6 +28,7 @@ a measured zero.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 import os
@@ -41,8 +42,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-LEDGER = REPO / ".harness" / "arc-metrics.jsonl"
+#: Per-process overrides (C-HE-05). Mirrors ARC_METRICS_QUEUE_DIR / ARC_METRICS_MERGED_REF so
+#: two subprocess lanes can hold DIFFERENT worktree ledgers over ONE shared queue. Defaults
+#: are the checkout root and its tracked ledger -- production behaviour is unchanged when unset.
+REPO = Path(os.environ.get("ARC_METRICS_REPO", Path(__file__).resolve().parent.parent))
+LEDGER = Path(os.environ.get("ARC_METRICS_LEDGER", REPO / ".harness" / "arc-metrics.jsonl"))
 
 #: Pending captures, deliberately OUTSIDE the repo. A topic worktree is
 #: disposed at loop completion, so anything queued inside one is lost with it --
@@ -146,6 +150,24 @@ class ArcRow:
     provenance: dict[str, str] = field(default_factory=dict)
     captured_at: str = ""
     notes: str = ""
+    # -- C-HE-25 extension (all additive; historical rows read as null) --
+    record_kind: str = "arc"
+    reviewer_identity: str | None = None
+    prompt_version: str | None = None
+    config_hash: str | None = None
+    arc_type_open: str | None = None
+    arc_type_close: str | None = None
+    arc_type_declared_at: str | None = None  # open | close
+    # {round_n: {channel, terminal, finding_count}} -- per-round terminal outcome
+    round_outcomes: dict[str, dict] = field(default_factory=dict)
+    head_sha: str | None = None
+    base_sha: str | None = None
+    lane_id: str | None = None
+    # derived sensor (C-HE-03 §7); the cohort key (C-HE-28 §1)
+    concurrent_lanes_at_open: int | None = None
+    concurrent_lanes_min: int | None = None
+    concurrent_lanes_max: int | None = None
+    phases: dict[str, dict] = field(default_factory=dict)  # {phase: {start, end}} (C-HE-27)
 
 
 def run(cmd: list[str], *, what: str) -> str:
@@ -398,6 +420,14 @@ def extract(args: argparse.Namespace) -> ArcRow:
         prov["ci_fields"] = "unmapped:no-merge-sha"
 
     row.arc_type = args.arc_type
+    # C-HE-26: which side of the arc the label was declared on. `open` = the
+    # C-HE-03 reservation captured it (U-HE-17/21 carry that capture point);
+    # `close` = today's closure-time queue step. Both labels stay visible on the
+    # ONE arc row; a close-time change goes through `relabel_arc_type_close`.
+    declared_at = getattr(args, "arc_type_declared_at", None) or "close"
+    row.arc_type_declared_at = declared_at if args.arc_type else None
+    row.arc_type_open = args.arc_type if declared_at == "open" else None
+    row.arc_type_close = args.arc_type if declared_at == "close" else None
     row.decision_count = args.decisions
     row.levers_active = args.levers or []
     prov["arc_type"] = "declared" if args.arc_type else "unmapped:unclassified"
@@ -408,6 +438,81 @@ def extract(args: argparse.Namespace) -> ArcRow:
     row.captured_at = datetime.now(tz=UTC).isoformat()
     row.notes = args.notes or ""
     return row
+
+
+def _ledger_claim_path(ledger: Path) -> Path:
+    """The ledger's writer claim lives QUEUE_DIR-adjacent, NEVER under REPO (C-HE-02 §2 +
+    Invariant: every coordination path derives from QUEUE_DIR -- a per-worktree placement
+    re-creates the X3 split-brain; merge-gate L2 on #1399). Keyed by the ledger's resolved
+    path so lanes holding DIFFERENT ledgers (ARC_METRICS_REPO) claim different files over
+    the ONE shared queue directory."""
+    key = hashlib.sha1(str(ledger.resolve()).encode()).hexdigest()[:16]
+    return QUEUE_DIR / f".ledger-claim-{key}"
+
+
+def claim_ledger(ledger: Path) -> None:
+    """Take exclusive ownership of the ledger for one write, by CAS on a claim file.
+
+    C-HE-02 §1 bans `flock`/`fcntl` in this module, so the mutual exclusion
+    between the ledger's two writers -- `append` (drain) and
+    `relabel_arc_type_close` (whole-file rewrite) -- is the same primitive the
+    queue uses: `publish_exclusive` (atomic `os.link`, fails when taken) with a
+    pid@host owner stamp, and `_claim_owner_is_dead` to reclaim a claim left by
+    a crashed owner on this host. A live or foreign owner means "retry": the
+    caller aborts loudly rather than racing (codex R3 P2 -- without this, an
+    append landing between the relabel's compare and its replace was lost).
+    Pair with `release_ledger` in a `finally`; release is a no-op when nothing
+    was claimed, so the claim call is a single deletable statement (probeable).
+    """
+    claim = _ledger_claim_path(ledger)
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    stamp = json.dumps({"_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
+    for attempt in (1, 2):
+        try:
+            publish_exclusive(claim, stamp)
+            return
+        except FileExistsError:
+            if attempt == 1 and _reclaim_dead_claim(claim):
+                continue  # the dead claim is gone; publish once more
+            raise AbortError(
+                f"ledger {claim.name} is claimed by another writer -- retry "
+                "(a live peer holds it, or the owner cannot be verified)"
+            ) from None
+
+
+def _reclaim_dead_claim(claim: Path) -> bool:
+    """Remove a claim whose recorded owner is provably dead -- and ONLY that claim.
+
+    Judge, then move the judged file aside by atomic rename and re-read it: if the
+    bytes moved are not the bytes judged, a peer reclaimed first and published its
+    own LIVE claim in between (codex R8 P2 -- an unconditional unlink here would
+    have stolen it); put it straight back and report "not reclaimed". True iff the
+    dead claim was removed by THIS writer.
+    """
+    try:
+        judged = claim.read_bytes()
+    except OSError:
+        return False
+    if not _claim_owner_is_dead(claim):
+        return False
+    aside = claim.with_name(f"{claim.name}.dead.{os.getpid()}")
+    try:
+        os.rename(claim, aside)
+    except FileNotFoundError:
+        return True  # a peer removed it first; the publish retry decides who owns it
+    try:
+        moved = aside.read_bytes()
+    except OSError:
+        moved = b""
+    if moved != judged:
+        os.rename(aside, claim)  # not the claim we judged: a live peer's -- restore it
+        return False
+    aside.unlink(missing_ok=True)
+    return True
+
+
+def release_ledger(ledger: Path) -> None:
+    _ledger_claim_path(ledger).unlink(missing_ok=True)
 
 
 def append(row: ArcRow) -> None:
@@ -423,14 +528,60 @@ def append(row: ArcRow) -> None:
             "capture after merge, or use --dry-run to inspect"
         )
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
-    existing = read_ledger()
-    if any(r.get("arc_id") == row.arc_id for r in existing):
-        raise AbortError(
-            f"arc_id '{row.arc_id}' already in ledger -- refusing to append a "
-            "duplicate (use a distinct --arc-id or remove the prior row)"
-        )
-    with LEDGER.open("a") as fh:
-        fh.write(json.dumps(asdict(row), sort_keys=True) + "\n")
+    claim_ledger(LEDGER)
+    try:
+        existing = read_ledger()
+        if any(r.get("arc_id") == row.arc_id for r in existing):
+            raise AbortError(
+                f"arc_id '{row.arc_id}' already in ledger -- refusing to append a "
+                "duplicate (use a distinct --arc-id or remove the prior row)"
+            )
+        with LEDGER.open("a") as fh:
+            fh.write(json.dumps(asdict(row), sort_keys=True) + "\n")
+    finally:
+        release_ledger(LEDGER)
+
+
+ARC_TYPES = ("inventing", "applying")
+
+
+def relabel_arc_type_close(arc_id: str, arc_type_close: str) -> None:
+    """C-HE-26 §2: a close-time relabel updates the SINGLE arc row in place. Never a
+    second row (that would trip SPLIT_BRAIN_LEDGER). The rewrite is whole-file atomic
+    (temp + os.replace) and touches only this arc's row.
+
+    Mutual exclusion with `append` is the `claim_ledger` CAS claim (C-HE-02 §1 bans
+    `flock`/`fcntl` here). Inside the claim a byte-compare of the ledger against the
+    snapshot the rewrite was derived from still guards against a writer that does not
+    take the claim (an older tool, a hand edit): the relabel then aborts (retry) rather
+    than silently discarding that write under the whole-file rewrite (codex R2/R3 P2)."""
+    if arc_type_close not in ARC_TYPES:
+        raise AbortError(f"arc_type_close must be inventing|applying, got {arc_type_close!r}")
+    claim_ledger(LEDGER)
+    try:
+        snapshot = LEDGER.read_bytes() if LEDGER.exists() else b""
+        rows = read_ledger()
+        hits = [r for r in rows if r.get("arc_id") == arc_id]
+        if len(hits) != 1:
+            raise AbortError(f"{arc_id}: expected exactly one arc row, found {len(hits)}")
+        hits[0]["arc_type_close"] = arc_type_close
+        tmp = LEDGER.with_name(f".{LEDGER.name}.{os.getpid()}.tmp")
+        tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+        current = LEDGER.read_bytes() if LEDGER.exists() else b""
+        if current != snapshot:
+            tmp.unlink(missing_ok=True)
+            raise AbortError(
+                f"{arc_id}: ledger changed while the relabel was prepared -- nothing written, retry"
+            )
+        os.replace(tmp, LEDGER)
+    finally:
+        release_ledger(LEDGER)
+
+
+def cmd_relabel(args: argparse.Namespace) -> int:
+    relabel_arc_type_close(args.arc_id, args.arc_type_close)
+    print(f"relabelled {args.arc_id}: arc_type_close={args.arc_type_close} -> {LEDGER}")
+    return 0
 
 
 def queue_capture(args: argparse.Namespace) -> int:
@@ -497,6 +648,7 @@ def queue_capture(args: argparse.Namespace) -> int:
         "pr": args.pr,
         "arc_id": args.arc_id,
         "arc_type": args.arc_type,
+        "arc_type_declared_at": getattr(args, "arc_type_declared_at", None) or "close",
         "decisions": args.decisions,
         "round_snapshot": snapshot,
         "round_logs_globs": args.round_logs or [],
@@ -750,6 +902,7 @@ def drain(_args: argparse.Namespace) -> int:
             pr=entry["pr"],
             arc_id=entry.get("arc_id"),
             arc_type=entry.get("arc_type"),
+            arc_type_declared_at=entry.get("arc_type_declared_at"),
             decisions=entry.get("decisions"),
             # The metrics were derived at closure; drain never re-reads the logs.
             round_snapshot=entry.get("round_snapshot"),
@@ -917,6 +1070,26 @@ def summary(_args: argparse.Namespace) -> int:
             print(f"  {unmapped}/{len(cohort)} rows have NO round data (unmapped, not zero)")
         print()
 
+    # C-HE-28 §1: lane-count as a lever is judged BY COHORT on the integer
+    # `concurrent_lanes_at_open`. Historical rows carry no such field and group
+    # under `null` -- a key, not an error (C-HE-25: additive-safe reads). The
+    # label renders via json.dumps so None is the literal `null`, never "None".
+    by_lanes: dict[str, list[dict]] = {}
+    for r in rows:
+        key = f"concurrent_lanes_at_open={json.dumps(r.get('concurrent_lanes_at_open'))}"
+        by_lanes.setdefault(key, []).append(r)
+    for label in sorted(by_lanes):
+        cohort = by_lanes[label]
+        rounds = [r["review_rounds"] for r in cohort if r.get("review_rounds") is not None]
+        print(f"-- LANES [{label}] (n={len(cohort)}) " + "-" * 20)
+        print(
+            f"  review rounds    {statistics.median(rounds):g} (n={len(rounds)}, "
+            f"{min(rounds)}-{max(rounds)})"
+            if rounds
+            else "  review rounds    --"
+        )
+        print()
+
     allgaps = [g for r in rows for g in (r.get("round_wall_s") or [])]
     if allgaps:
         lo, hi = min(allgaps) / 60, max(allgaps) / 60
@@ -950,7 +1123,8 @@ def main(argv: list[str] | None = None) -> int:
     ex = sub.add_parser("extract", help="capture one arc row")
     ex.add_argument("--pr", type=int, required=True)
     ex.add_argument("--arc-id")
-    ex.add_argument("--arc-type", choices=["inventing", "applying"])
+    ex.add_argument("--arc-type", choices=list(ARC_TYPES))
+    ex.add_argument("--arc-type-declared-at", choices=["open", "close"], default="close")
     ex.add_argument("--decisions", type=int, help="independent decision count")
     ex.add_argument("--round-logs", nargs="+", help="glob(s) for this arc's round logs")
     ex.add_argument("--levers", nargs="*", help="levers live during this arc")
@@ -965,7 +1139,8 @@ def main(argv: list[str] | None = None) -> int:
     # these, and once a row is drained the duplicate guard blocks a corrected
     # capture. `extract` stays permissive for historical backfills, where the
     # judgement genuinely is unavailable and is recorded as unmapped.
-    q.add_argument("--arc-type", choices=["inventing", "applying"], required=True)
+    q.add_argument("--arc-type", choices=list(ARC_TYPES), required=True)
+    q.add_argument("--arc-type-declared-at", choices=["open", "close"], default="close")
     q.add_argument("--decisions", type=int, required=True, help="independent decision count")
     q.add_argument("--round-logs", nargs="+", help="glob(s) for this arc's round logs")
     q.add_argument("--levers", nargs="*", help="levers live during this arc")
@@ -977,6 +1152,11 @@ def main(argv: list[str] | None = None) -> int:
 
     sm = sub.add_parser("summary", help="per-cohort medians with range")
     sm.set_defaults(func=summary)
+
+    rl = sub.add_parser("relabel", help="close-time arc_type relabel on the single arc row")
+    rl.add_argument("--arc-id", required=True)
+    rl.add_argument("--arc-type-close", choices=list(ARC_TYPES), required=True)
+    rl.set_defaults(func=cmd_relabel)
 
     args = p.parse_args(argv)
     try:

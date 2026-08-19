@@ -281,10 +281,20 @@ for c in \
   "just codex-worktree-gc --reap" \
   "just review-with-failover" \
   "just review-with-failover main" \
+  "just merge-gate-binding merge-gate-concurrency" \
+  "just merge-gate-binding merge-gate-spec-conformance main" \
+  "just merge-gate-emit --pr 1397 --lens merge-gate-concurrency --verdict-json .harness/tmp/merge-gate-lens-concurrency.txt --base main" \
+  "just merge-gate-log-check" \
+  "just merge-gate-landing-delta 0123456789abcdef0123456789abcdef01234567" \
+  "just lanes-verify" \
+  "just lanes-phase0-check" \
+  "just mutation-probe-coverage-check" \
   "just overlay-check"; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" = "allow" ] && ok "'$c' → allow controller lifecycle" || bad "'$c' not allowed: $OUT"
 done
+OUT=$(run_on "$(pl Bash "just merge-gate-emit --pr 1 --lens merge-gate-concurrency --verdict-json /tmp/outside.txt" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "merge-gate-emit reading a verdict file outside the worktree → not auto-allowed" || bad "out-of-worktree merge-gate-emit auto-allowed: $OUT"
 SAFE_CODEX_CMD="env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
 OUT=$(run_on "$(pl Bash "$SAFE_CODEX_CMD" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens" || bad "read-only codex exec not allowed: $OUT"

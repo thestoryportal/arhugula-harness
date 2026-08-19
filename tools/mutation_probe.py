@@ -115,6 +115,7 @@ import argparse
 import contextlib
 import fcntl
 import hashlib
+import json
 import os
 import re
 import signal
@@ -122,11 +123,50 @@ import stat
 import subprocess
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
 from typing import NamedTuple
 
 import yaml
+
+#: Spec §8.1 / §0.3 (spec-he-loop-lanes): every probe verdict is appended here so
+#: `just mutation-probe-coverage-check` (tools/lanes_verify.py) can assert that every
+#: manifest row marked mutation-probe has a PINNED result. A derived run log, tracked.
+#: `HARNESS_PROBE_LOG` redirects it for a whole process tree -- the seam the hermetic
+#: probe suite uses so a fixture run never dirties the tracked log (same pattern as
+#: finding_record's `HARNESS_GATE_LOG`).
+PROBE_LOG = Path(
+    os.environ.get("HARNESS_PROBE_LOG")
+    or Path(__file__).resolve().parent.parent / ".harness" / "mutation-probe-log.jsonl"
+)
+#: Digests of the bytes the LAST probe actually exercised, measured INSIDE `probe()` under the
+#: target lock -- the target from its in-memory original (the restore authority), the test
+#: artifact before the baseline and re-checked after step 3 (a change in between voids it).
+#: `log_result` writes these, never a fresh read after the lock is released (codex R2/R3 P2).
+MEASURED: dict[str, str | None] = {"target_sha": None, "test_sha": None}
+
+
+def _sha16(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def test_file_of(test_cmd: str) -> Path | None:
+    """The test ARTIFACT a probe command exercises: for a pytest command the first non-flag
+    token naming a `.py` path (node id's file part); for `bash <script>` the script."""
+    toks = test_cmd.split()
+    if "pytest" in toks:
+        for tok in toks[toks.index("pytest") + 1 :]:
+            if not tok.startswith("-") and ".py" in tok:
+                return Path(tok.split("::", 1)[0])
+        return None
+    if toks[:1] == ["bash"] and len(toks) > 1:
+        return Path(toks[1])
+    return None
+
 
 # Extension → (mutation-comment prefix, syntax-check kind). Anything else is REFUSED: a
 # comment prefix guessed wrong would corrupt the file, and a language whose syntax this
@@ -1370,6 +1410,13 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
     except ValueError as e:
         return _refuse(str(e))
 
+    # The test artifact's bytes BEFORE the baseline; re-checked after step 3 so the logged
+    # digest names exactly the witness both runs executed (or None if it moved in between).
+    MEASURED["target_sha"] = MEASURED["test_sha"] = None
+    tf = test_file_of(test_cmd)
+    test_path = (repo_root / tf) if tf is not None else None
+    test_sha_before = _sha16(test_path) if test_path is not None else None
+
     # Step 1 — the baseline MUST be green.
     print(f"[1/3] baseline: {test_cmd}")
     base = run_shell(test_cmd, repo_root, timeout)
@@ -1415,6 +1462,7 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
         return _refuse(f"cannot read {target} ({e}).")
     except UnicodeDecodeError:
         return _refuse(f"{target} is not UTF-8 text — refusing to mutate it.")
+    MEASURED["target_sha"] = hashlib.sha256(original).hexdigest()[:16]
 
     try:
         mutated_text = comment_out(text, start, end)
@@ -1479,6 +1527,8 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
             res = run_shell(test_cmd, repo_root, timeout)
             mutation_output = res.combined
             verdict, reason = classify_step3(res.rc, mutation_output, looks_like_pytest(test_cmd))
+            if test_path is not None and _sha16(test_path) == test_sha_before:
+                MEASURED["test_sha"] = test_sha_before
             # SECOND GUARD (merge-gate lens 1). Independent of the lock and deliberately
             # kept alongside it: a verdict is only about the removed lines if the removed
             # lines were still gone when the test finished. Anything else on disk means the
@@ -1555,7 +1605,13 @@ def main(argv: list[str] | None = None) -> int:
         help="per-run timeout in seconds for --test (default 600); a timeout is INDETERMINATE",
     )
     args = ap.parse_args(argv)
+    MEASURED["target_sha"] = MEASURED["test_sha"] = None
+    rc = _run(args)
+    log_result(args.file, args.lines, args.test, rc)  # EVERY exit, refusals included (R7 P3)
+    return rc
 
+
+def _run(args: argparse.Namespace) -> int:
     target = Path(args.file).expanduser()
     if not target.is_file():
         print(f"REFUSED: {target} is not an existing file.", file=sys.stderr)
@@ -1572,6 +1628,55 @@ def main(argv: list[str] | None = None) -> int:
 
     _install_signal_handlers()
     return probe(target, start, end, args.test, args.timeout)
+
+
+def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = None) -> None:
+    """Append one verdict line to PROBE_LOG: `{ts, file, lines, test, rc, head, target_sha,
+    test_sha}`. The digests bind the verdict to the exact source + test bytes it measured, so
+    `lanes_verify` can tell a live pin from a stale one after either file changes (codex R2
+    P2: rc alone let an old success stand after the guarded line was reverted). The verdict
+    was already printed and IS the exit code; a log that cannot be written is reported on
+    stderr and never changes `rc` (the log is derived evidence, not the probe's authority)."""
+    log = log or PROBE_LOG
+    target = Path(file).expanduser()
+    head = run(
+        ["git", "rev-parse", "HEAD"], target.parent if target.parent.is_dir() else Path.cwd()
+    )
+    entry = {
+        "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "file": file,
+        "lines": lines,
+        "test": test,
+        "rc": rc,
+        "head": head.out if head.rc == 0 else None,
+        "target_sha": MEASURED["target_sha"],
+        "test_sha": MEASURED["test_sha"],
+    }
+    data = (json.dumps(entry, sort_keys=True) + "\n").encode()
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        # The target lock is PER TARGET, so two probes on different files may log at once:
+        # one `os.write` on an O_APPEND descriptor (the append offset and the bytes land as one
+        # syscall -- never a buffered TextIO write that may split a line), and a SHORT write
+        # rolled back to the pre-write offset. The flock exists for the ROLLBACK: without it a
+        # peer's line appended between a short write and its `ftruncate(end)` would be cut off
+        # (merge-gate L1/L3 on #1399); the `finding_record._append_line` shape. Admissible
+        # flock: a REPO-resident run log, not QUEUE_DIR coordination state (C-HE-02 §1 scope).
+        fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                end = os.lseek(fd, 0, os.SEEK_END)
+                n = os.write(fd, data)
+                if n != len(data):
+                    os.ftruncate(fd, end)
+                    raise OSError(f"short write ({n} of {len(data)} bytes, rolled back)")
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        print(f"WARNING: probe verdict not logged to {log}: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":

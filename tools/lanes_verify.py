@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""Spec §8.1 verification manifest as data + the umbrella runners (spec-he-loop-lanes).
+
+`just lanes-verify` runs every row. `just lanes-phase0-check` runs rows tagged `phase0`
+and treats a skip as a failure (C-HE-13 §1: an implicit precondition is not a gate).
+`just mutation-probe-coverage-check` asserts every row marked mutation-probe has a PINNED
+probe result in `.harness/mutation-probe-log.jsonl` (the run log `tools/mutation_probe.py`
+appends on every exit). Only the three named environment skip reasons are legal; "slow" is
+never one. Rows are appended by the unit that lands each artifact; keep them in §8.1 order.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+PROBE_LOG = REPO / ".harness" / "mutation-probe-log.jsonl"
+TAGS = ("phase0", "phase1", "measurement", "layer2", "env", "operator-gated")
+ALLOWED_SKIP_REASONS = ("docker-daemon-absent", "provider-login-absent", "gh-auth-absent")
+KINDS = ("pytest", "shell", "just", "live")
+_SKIP_RE = re.compile(r"^SKIPPED \[\d+\] [^:]+:\d+: (.+)$", re.M)
+
+
+@dataclass(frozen=True)
+class Row:
+    contract: str
+    artifact: str  # pytest:<nodeid> | shell:<path> | just:<recipe> | live:<desc>
+    tag: str
+    runs_in: str
+    mutation_probe: bool
+    skip_reasons: tuple[str, ...] = ()
+    depends: str = ""
+
+
+@dataclass
+class Result:
+    row: Row
+    status: str  # pass | fail | skip | live
+    reason: str = ""
+
+
+#: Rows are appended by the unit that lands each artifact. Keep in §8.1 order.
+MANIFEST: list[Row] = [
+    # C-HE-05 (U-HE-10)
+    Row(
+        "C-HE-05",
+        "pytest:tools/test_arc_metrics.py::test_env_overrides",
+        "phase0",
+        "local + CI",
+        False,
+    ),
+    # C-HE-09/10 (U-HE-09)
+    Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", "phase0", "local + CI", True),
+    # C-HE-15/16/18 (U-HE-02/03/04); C-HE-17 (U-HE-06/07)
+    Row("C-HE-15/16/18", "pytest:tools/test_review_wrapper.py", "phase0", "local + CI", True),
+    Row(
+        "C-HE-17",
+        "pytest:tools/test_review_wrapper.py::test_failover_invoked_once_on_primary_unavailable_and_blocks",
+        "phase0",
+        "local + CI",
+        False,
+    ),
+    Row("C-HE-17", "pytest:tools/test_agy_review.py", "phase0", "local + CI", False),
+    # C-HE-19/20 (U-HE-08)
+    Row(
+        "C-HE-19/20",
+        "pytest:tools/test_arc_metrics.py::test_ci_state_cancelled_incomplete",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    # C-HE-23–26 (U-HE-01 / U-HE-11 / U-HE-12 / U-HE-13)
+    Row("C-HE-23–26", "pytest:tools/test_finding_record.py", "phase0", "local + CI", True),
+    Row(
+        "C-HE-23–26",
+        "pytest:tools/test_arc_metrics.py::test_arc_row_schema_has_c_he_25_fields",
+        "phase0",
+        "local + CI",
+        False,
+    ),
+    Row(
+        "C-HE-23–26",
+        "pytest:tools/test_arc_metrics.py::test_arc_type_at_open",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-25/28",
+        "pytest:tools/test_arc_metrics.py::test_cohort_split_null_safe",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-26 §2",
+        "pytest:tools/test_arc_metrics.py::test_relabel_aborts_when_the_ledger_changed_underneath",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-26 §2",
+        "pytest:tools/test_arc_metrics.py::test_append_and_relabel_are_mutually_exclusive_by_claim",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-26 §2",
+        "pytest:tools/test_arc_metrics.py::test_dead_claim_reclaim_never_steals_a_peers_fresh_live_claim",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row("C-HE-23", "pytest:tools/test_merge_gate_log.py", "phase0", "local + CI", True),
+    Row("C-HE-23", "just:merge-gate-log-check", "phase0", "local + CI", False),
+    # §8.1 / §0.3 (U-HE-05)
+    Row("§8.1", "pytest:tools/test_lanes_verify.py", "phase0", "local + CI", True),
+    Row("§0.3", "just:mutation-probe-coverage-check", "phase0", "local + CI", False),
+]
+
+
+def _command(row: Row) -> list[str] | None:
+    kind, _, target = row.artifact.partition(":")
+    if "<" in target and ">" in target:
+        # a placeholder argument (e.g. `just:lanes-pilot-report <run-id>`) is a LIVE row
+        return None
+    if kind == "pytest":
+        return ["uv", "run", "pytest", "-q", "-rs", target]
+    if kind == "shell":
+        return ["bash", *target.split()]
+    if kind == "just":
+        return ["just", *target.split()]  # recipe + controlled args, tokenized
+    return None  # live
+
+
+def run_row(row: Row, *, runner=subprocess.run) -> Result:
+    cmd = _command(row)
+    if cmd is None:
+        return Result(row, "live", "operator-gated live step; recorded in the plan evidence log")
+    proc = runner(cmd, cwd=REPO, capture_output=True, text=True)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    skips = _SKIP_RE.findall(out)
+    if proc.returncode != 0:
+        return Result(row, "fail", out[-2000:])
+    if skips:
+        bad = [s.strip() for s in skips if s.strip() not in row.skip_reasons]
+        if bad:
+            return Result(row, "fail", f"skip with unlisted reason: {bad}")
+        return Result(row, "skip", ";".join(s.strip() for s in skips))
+    return Result(row, "pass")
+
+
+def phase0_rows() -> list[Row]:
+    return [r for r in MANIFEST if r.tag == "phase0"]
+
+
+def phase0_verdict(results: list[Result]) -> int:
+    """0 iff every phase0 row passed. A skip is NOT a pass here (C-HE-13 §1)."""
+    return 0 if all(r.status == "pass" for r in results) else 1
+
+
+#: `# mutation-probe: <desc>` binds the annotated test to its default target -- the test's
+#: sibling module (`tools/test_x.py` -> `tools/x.py`; `tools/hooks/test_x.sh` -> `.../x.sh`);
+#: `# mutation-probe(<repo-relative path>): <desc>` names the target explicitly (a test that
+#: probes another module, e.g. `test_review_wrapper.py` -> `review_wrapper_common.py`). A pin
+#: counts only if its logged `file` IS that target (codex R3/R4 P2: a pin credited to the test
+#: node alone could come from probing an unrelated file). The LINES the annotation names stay a
+#: human contract -- the gate proves a live pin of the named file exists for the annotated test.
+_ANNOT = re.compile(
+    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: (?P<desc>.*)\n(?:@[^\n]*\n)*"
+    r"def (?P<name>test_\w+)",
+    re.M,
+)
+#: The `red-first` skill's form, `# mutation-probe: <path>:<lines> ...` -- a leading path:lines
+#: token in the description names the target too (one grammar for both carriers).
+_DESC_TARGET = re.compile(r"^(?P<path>[\w./-]+\.(?:py|sh|yaml|yml)):\d")
+
+
+def _relative(token: str) -> str:
+    """A logged path as REPO-relative text; a relative token is returned unchanged."""
+    p = Path(token)
+    if p.is_absolute():
+        try:
+            return str(p.relative_to(REPO))
+        except ValueError:
+            return token
+    return token
+
+
+def _sha16(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def default_probe_target(test_artifact: str) -> str:
+    """The module a test artifact probes by default: its sibling without the `test_` prefix."""
+    p = Path(test_artifact.split("::", 1)[0])
+    return str(p.with_name(p.name.removeprefix("test_")))
+
+
+def _pin_is_live(e: dict, target: str, probe_file: str) -> bool:
+    """A PINNED entry is evidence only while the bytes it measured are the bytes at HEAD: the
+    mutated source file (`file` + `target_sha`) AND the test artifact (`test_sha`) must both
+    still digest to the logged values (codex R2 P2). Entries without digests never count. The
+    probed file must be THE annotated target (`probe_file`), an existing source file -- never
+    the test artifact itself, never an unrelated module (codex R3/R4 P2)."""
+    tsha, fsha = e.get("target_sha"), e.get("test_sha")
+    if not tsha or not fsha or not e.get("file"):
+        return False
+    src = Path(_relative(str(e["file"])))
+    test_file = Path(target.split("::", 1)[0])
+    if src == test_file or str(src) != probe_file or not (REPO / src).is_file():
+        return False
+    return _sha16(REPO / src) == tsha and _sha16(REPO / test_file) == fsha
+
+
+def _pinned_nodeids(log_path: Path) -> set[tuple[str, str]]:
+    """`(test target, probed file)` pairs of LIVE PINNED probes (rc 0 + digests still matching
+    HEAD, `_pin_is_live`): the test target is, for a pytest command, the first non-flag token
+    after `pytest` that names a `.py` path (a node id or a file), normalized REPO-relative and
+    compared EXACTLY; for `bash <script>` the probed script itself. The command is split on
+    whitespace as logged -- the log is written by the probe tool, not typed by hand."""
+    if not log_path.exists():
+        return set()
+    out: set[tuple[str, str]] = set()
+    for line in log_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        e = json.loads(line)
+        if e.get("rc") != 0:
+            continue
+        toks = str(e["test"]).split()
+        target = None
+        if "pytest" in toks:
+            rest = toks[toks.index("pytest") + 1 :]
+            for tok in rest:
+                if not tok.startswith("-") and ".py" in tok:
+                    target = _relative(tok)
+                    break
+        elif toks[:1] == ["bash"] and len(toks) > 1:
+            target = _relative(toks[1])
+        if target is None:
+            continue
+        probe_file = str(Path(_relative(str(e.get("file") or ""))))
+        if not _pin_is_live(e, target, probe_file):
+            continue
+        out.add((target, probe_file))
+    return out
+
+
+def _annotations(path: Path) -> list[tuple[str, str | None]]:
+    """`(test name, explicit target or None)` for every annotation in a test file. Explicit =
+    `# mutation-probe(<path>):` or a red-first style `# mutation-probe: <path>:<lines> ...`."""
+    out: list[tuple[str, str | None]] = []
+    for m in _ANNOT.finditer(path.read_text()):
+        target = m.group("target")
+        if target is None:
+            d = _DESC_TARGET.match(m.group("desc").strip())
+            target = d.group("path") if d else None
+        out.append((m.group("name"), target))
+    return out
+
+
+def required_probes(row: Row) -> list[tuple[str, str]]:
+    """Every `# mutation-probe:` annotation the row's artifact carries -> `(exact node id,
+    probed file)` (substring matching would let one pinned test cover a whole file). A node-id
+    artifact requires exactly itself (its annotation's target, or the default); a shell
+    artifact requires the script itself against its sibling module."""
+    if not row.mutation_probe:
+        return []
+    kind, _, target = row.artifact.partition(":")
+    if kind == "shell":
+        script = target.split()[0]
+        return [(script, default_probe_target(script))]
+    if kind != "pytest":
+        return [(target, target)]
+    file_part, _, node = target.partition("::")
+    path = REPO / file_part
+    if not path.exists():
+        # not yet landed: a gap until the file exists and its probes are pinned
+        return [(target, default_probe_target(file_part))]
+    annots = _annotations(path)
+    if node:
+        explicit = next((t for n, t in annots if n == node), None)
+        return [(target, explicit or default_probe_target(file_part))]
+    if not annots:
+        # a mutation-probe row whose file carries NO annotation is a gap, not a vacuous pass
+        # (codex R3 P2: deleting every annotation must not turn the gate green)
+        return [(f"{file_part}::<no mutation-probe annotations>", default_probe_target(file_part))]
+    return [(f"{file_part}::{n}", t or default_probe_target(file_part)) for n, t in annots]
+
+
+def coverage_gaps(log_path: Path | None = None) -> list[tuple[Row, str]]:
+    """`log_path` resolves to PROBE_LOG AT CALL TIME (never bound at def time) so a
+    monkeypatched log is honoured and `main` never silently reads the tracked log in a test.
+    Each gap names the required node id and the file its pin must have probed."""
+    pinned = _pinned_nodeids(log_path or PROBE_LOG)
+    gaps: list[tuple[Row, str]] = []
+    for r in MANIFEST:
+        for node, probe_file in required_probes(r):
+            if (node, probe_file) not in pinned:
+                gaps.append((r, f"{node} [probe of {probe_file}]"))
+    return gaps
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = argv if argv is not None else sys.argv[1:]
+    mode = args[0] if args else "verify"
+    if mode not in ("verify", "phase0", "coverage"):
+        print("usage: lanes_verify.py [verify|phase0|coverage]", file=sys.stderr)
+        return 2
+    if mode == "coverage":
+        gaps = coverage_gaps()
+        for row, node in gaps:
+            print(f"UNPROBED {row.contract} {node}")
+        print(f"mutation-probe coverage: {len(gaps)} unprobed annotation(s)")
+        return 1 if gaps else 0
+    rows = phase0_rows() if mode == "phase0" else MANIFEST
+    results = [run_row(r) for r in rows]
+    for r in results:
+        tail = f" — {r.reason}" if r.reason else ""
+        print(f"{r.status.upper():5} {r.row.contract:14} {r.row.artifact}{tail}")
+    if mode == "phase0":
+        return phase0_verdict(results)
+    return 1 if any(r.status == "fail" for r in results) else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
