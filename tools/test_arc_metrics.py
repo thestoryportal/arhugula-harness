@@ -969,3 +969,213 @@ def test_ci_green_timing_uses_the_one_predicate(monkeypatch):
     n, durations = am.ci_metrics("a" * 40)
     assert n == 2 and durations == [350.0]
     assert seen == ["cancelled", "success"]
+
+
+# ---- U-HE-10 (C-HE-05): per-process REPO / LEDGER overrides -----------------------------
+
+
+def test_env_overrides(tmp_path: Path):
+    """Two subprocesses with different ARC_METRICS_REPO observe different LEDGER paths and
+    one QUEUE_DIR (C-HE-05 Verification)."""
+    import subprocess
+
+    q = tmp_path / "queue"
+    code = (
+        "import arc_metrics as am, json; "
+        "print(json.dumps({'ledger': str(am.LEDGER), 'queue': str(am.QUEUE_DIR)}))"
+    )
+    outs = []
+    for name in ("wt-a", "wt-b"):
+        env = {
+            **os.environ,
+            "ARC_METRICS_REPO": str(tmp_path / name),
+            "ARC_METRICS_QUEUE_DIR": str(q),
+            "PYTHONPATH": str(Path(__file__).resolve().parent),
+        }
+        env.pop("ARC_METRICS_LEDGER", None)
+        proc = subprocess.run(
+            [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True
+        )
+        outs.append(json.loads(proc.stdout))
+    assert outs[0]["ledger"] != outs[1]["ledger"]
+    assert outs[0]["queue"] == outs[1]["queue"] == str(q)
+    assert outs[0]["ledger"].endswith("wt-a/.harness/arc-metrics.jsonl")
+
+
+def test_env_override_ledger_wins_over_repo(tmp_path: Path):
+    """ARC_METRICS_LEDGER names the file directly; ARC_METRICS_REPO only supplies the default."""
+    import subprocess
+
+    code = "import arc_metrics as am; print(am.LEDGER)"
+    env = {
+        **os.environ,
+        "ARC_METRICS_REPO": str(tmp_path / "wt"),
+        "ARC_METRICS_LEDGER": str(tmp_path / "elsewhere.jsonl"),
+        "PYTHONPATH": str(Path(__file__).resolve().parent),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True
+    )
+    assert proc.stdout.strip() == str(tmp_path / "elsewhere.jsonl")
+
+
+def test_env_override_defaults_unchanged(monkeypatch):
+    """C-HE-05 Invariants: unset -> the checkout root and its tracked ledger."""
+    import importlib
+
+    monkeypatch.delenv("ARC_METRICS_REPO", raising=False)
+    monkeypatch.delenv("ARC_METRICS_LEDGER", raising=False)
+    mod = importlib.reload(am)
+    try:
+        assert mod.REPO == Path(am.__file__).resolve().parent.parent
+        assert mod.LEDGER == mod.REPO / ".harness" / "arc-metrics.jsonl"
+    finally:
+        importlib.reload(am)
+
+
+# ---- U-HE-11 (C-HE-25): arc-row field extension + null-safe lane cohort -----------------
+
+NEW_FIELDS = [
+    "record_kind",
+    "reviewer_identity",
+    "prompt_version",
+    "config_hash",
+    "arc_type_open",
+    "arc_type_close",
+    "arc_type_declared_at",
+    "round_outcomes",
+    "head_sha",
+    "base_sha",
+    "lane_id",
+    "concurrent_lanes_at_open",
+    "concurrent_lanes_min",
+    "concurrent_lanes_max",
+    "phases",
+]
+
+
+def test_arc_row_schema_has_c_he_25_fields():
+    from dataclasses import asdict
+
+    d = asdict(am.ArcRow(arc_id="pr-1"))
+    for f in NEW_FIELDS:
+        assert f in d, f
+    assert d["record_kind"] == "arc" and d["phases"] == {} and d["round_outcomes"] == {}
+
+
+def test_ledger_rows_are_all_record_kind_arc():
+    """C-HE-24 §2 / C-HE-25: the tracked ledger carries ONLY arc rows (historical rows read
+    as `arc` via the null default)."""
+    rows = am.read_ledger()
+    assert rows, "tracked ledger is empty -- the test has nothing to witness"
+    for r in rows:
+        assert r.get("record_kind", "arc") == "arc"
+
+
+# mutation-probe: drop the `by_lanes` grouping block in summary()
+def test_cohort_split_null_safe(monkeypatch, tmp_path: Path, capsys):
+    import argparse
+
+    ledger = tmp_path / "l.jsonl"
+    rows = [
+        {
+            "arc_id": "a",
+            "levers_active": [],
+            "arc_span_s": 60.0,
+            "review_rounds": 1,
+            "round_completeness": "complete",
+        },
+        {
+            "arc_id": "b",
+            "levers_active": [],
+            "arc_span_s": 120.0,
+            "review_rounds": 2,
+            "round_completeness": "complete",
+            "concurrent_lanes_at_open": 2,
+        },
+    ]
+    ledger.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    assert am.summary(argparse.Namespace()) == 0
+    out = capsys.readouterr().out
+    assert "LANES [concurrent_lanes_at_open=null] (n=1)" in out
+    assert "LANES [concurrent_lanes_at_open=2] (n=1)" in out
+    assert "concurrent_lanes_at_open=None" not in out
+
+
+# ---- U-HE-12 (C-HE-26 §2): arc_type_open / arc_type_close on the single arc row ---------
+
+
+# mutation-probe: drop the `len(hits) != 1` guard in relabel_arc_type_close()
+def test_arc_type_at_open(monkeypatch, tmp_path: Path):
+    """Close-time relabel: ONE arc row, arc_type_open != arc_type_close, no duplicate arc_id."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    row = am.ArcRow(
+        arc_id="pr-9",
+        merged_at="2026-08-18T00:00:00Z",
+        merge_sha="x",
+        arc_type_open="inventing",
+        arc_type_declared_at="open",
+    )
+    am.append(row)
+    am.relabel_arc_type_close("pr-9", "applying")
+    rows = am.read_ledger()
+    assert len(rows) == 1
+    assert rows[0]["arc_type_open"] == "inventing" and rows[0]["arc_type_close"] == "applying"
+    # an unknown arc or a duplicate is refused, never "fixed" by appending a second row
+    with pytest.raises(am.AbortError, match="expected exactly one arc row"):
+        am.relabel_arc_type_close("pr-404", "applying")
+    with pytest.raises(am.AbortError, match="must be inventing"):
+        am.relabel_arc_type_close("pr-9", "refactoring")
+    assert len(am.read_ledger()) == 1
+
+
+def test_relabel_leaves_every_other_row_byte_identical(monkeypatch, tmp_path: Path):
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    other = {"arc_id": "pr-1", "arc_type": "inventing", "notes": "historical row, no new keys"}
+    ledger.write_text(json.dumps(other, sort_keys=True) + "\n")
+    am.append(am.ArcRow(arc_id="pr-2", merged_at="2026-08-18T00:00:00Z", merge_sha="y"))
+    am.relabel_arc_type_close("pr-2", "applying")
+    lines = ledger.read_text().splitlines()
+    assert lines[0] == json.dumps(other, sort_keys=True)
+    assert json.loads(lines[1])["arc_type_close"] == "applying"
+
+
+def test_extract_records_which_side_declared_the_label(monkeypatch):
+    import argparse
+
+    monkeypatch.setattr(
+        am,
+        "gh_pr",
+        lambda pr: {"additions": 1, "changedFiles": 1, "createdAt": "2026-01-01T00:00:00Z"},
+    )
+    base = dict(pr=1, arc_id=None, round_logs=None, decisions=None, levers=None, notes="")
+    row = am.extract(argparse.Namespace(**base, arc_type="inventing", arc_type_declared_at="open"))
+    assert (row.arc_type_open, row.arc_type_close, row.arc_type_declared_at) == (
+        "inventing",
+        None,
+        "open",
+    )
+    row = am.extract(argparse.Namespace(**base, arc_type="applying", arc_type_declared_at="close"))
+    assert (row.arc_type_open, row.arc_type_close, row.arc_type_declared_at) == (
+        None,
+        "applying",
+        "close",
+    )
+    # a drain-built Namespace from a pre-U-HE-12 queue entry has no declared_at: reads as close
+    row = am.extract(argparse.Namespace(**base, arc_type="applying"))
+    assert (row.arc_type_close, row.arc_type_declared_at) == ("applying", "close")
+    row = am.extract(argparse.Namespace(**base, arc_type=None))
+    assert (row.arc_type_open, row.arc_type_close, row.arc_type_declared_at) == (None, None, None)
+
+
+def test_relabel_cli_is_wired(monkeypatch, tmp_path: Path, capsys):
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    am.append(am.ArcRow(arc_id="pr-3", merged_at="2026-08-18T00:00:00Z", merge_sha="z"))
+    assert am.main(["relabel", "--arc-id", "pr-3", "--arc-type-close", "inventing"]) == 0
+    assert am.read_ledger()[0]["arc_type_close"] == "inventing"
+    assert am.main(["relabel", "--arc-id", "pr-3", "--arc-type-close", "inventing"]) == 0
+    assert len(am.read_ledger()) == 1

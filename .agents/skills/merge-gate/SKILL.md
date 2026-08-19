@@ -58,10 +58,21 @@ Validate each invocation separately: exit 0, output file exists and is non-empty
 final non-empty line is exactly one permitted verdict. Missing, malformed, truncated, or
 ambiguous output is `BLOCK`.
 
+Before launching, compute each lens's binding with
+`uv run python tools/merge_gate_log.py binding --lens merge-gate-<concurrency|spec-conformance|witness-adequacy> --base main`
+and include the six printed values in that lens's prompt; require, immediately before the
+`VERDICT:` line, one fenced ```json block matching `tools/review_schemas/merge-gate.schema.json`
+(`verdict`, `findings`, the six values verbatim). After each run, record it:
+`uv run python tools/merge_gate_log.py emit --pr <N> --lens <id> --verdict-json <output-file> --base main`
+(JSONL row first, structured markdown line second, C-HE-23 §2). Exit 0 = APPROVE recorded,
+1 = BLOCK recorded, 2 = NOT recorded — that lens verdict does not count; treat as `BLOCK`
+and re-run the lens.
+
 ## Outcome
 
-- All three approve: append the PR/date/branch/head/verdicts/outcome row to
-  `.harness/merge-gate-log.md`.
+- All three approve: the three `emit` calls are the machine record; additionally append the
+  PR/date/branch/head/verdicts/outcome row to `.harness/merge-gate-log.md`
+  (`just merge-gate-log-check` is the consistency reducer).
 - Any block: reconcile it against current HEAD. If real and mechanical, fix it, add the
   appropriate witness, re-run Antigravity and local/CI gates, then re-run the blocking lens
   against the delta. A broad code change invalidates all three approvals.

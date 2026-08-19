@@ -115,6 +115,7 @@ import argparse
 import contextlib
 import fcntl
 import hashlib
+import json
 import os
 import re
 import signal
@@ -122,11 +123,23 @@ import stat
 import subprocess
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
 from typing import NamedTuple
 
 import yaml
+
+#: Spec §8.1 / §0.3 (spec-he-loop-lanes): every probe verdict is appended here so
+#: `just mutation-probe-coverage-check` (tools/lanes_verify.py) can assert that every
+#: manifest row marked mutation-probe has a PINNED result. A derived run log, tracked.
+#: `HARNESS_PROBE_LOG` redirects it for a whole process tree -- the seam the hermetic
+#: probe suite uses so a fixture run never dirties the tracked log (same pattern as
+#: finding_record's `HARNESS_GATE_LOG`).
+PROBE_LOG = Path(
+    os.environ.get("HARNESS_PROBE_LOG")
+    or Path(__file__).resolve().parent.parent / ".harness" / "mutation-probe-log.jsonl"
+)
 
 # Extension → (mutation-comment prefix, syntax-check kind). Anything else is REFUSED: a
 # comment prefix guessed wrong would corrupt the file, and a language whose syntax this
@@ -1571,7 +1584,29 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     _install_signal_handlers()
-    return probe(target, start, end, args.test, args.timeout)
+    rc = probe(target, start, end, args.test, args.timeout)
+    log_result(args.file, args.lines, args.test, rc)
+    return rc
+
+
+def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = None) -> None:
+    """Append one verdict line `{ts, file, lines, test, rc}` to PROBE_LOG. The verdict was
+    already printed and IS the exit code; a log that cannot be written is reported on stderr
+    and never changes `rc` (the log is derived evidence, not the probe's authority)."""
+    log = log or PROBE_LOG
+    entry = {
+        "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "file": file,
+        "lines": lines,
+        "test": test,
+        "rc": rc,
+    }
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, sort_keys=True) + "\n")
+    except OSError as exc:
+        print(f"WARNING: probe verdict not logged to {log}: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":

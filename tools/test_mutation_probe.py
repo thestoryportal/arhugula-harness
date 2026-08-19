@@ -17,6 +17,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -252,6 +253,21 @@ def _no_collateral_damage():
     assert git(REAL_REPO, "status", "--porcelain").stdout == status_before, (
         "the probe suite modified the real repository tree"
     )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _probe_log_isolated(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
+    """Every probe subprocess this suite launches inherits `HARNESS_PROBE_LOG`, so the
+    verdict lines land in a throwaway file and the TRACKED
+    `.harness/mutation-probe-log.jsonl` is never dirtied by a fixture run (U-HE-05)."""
+    log = tmp_path_factory.mktemp("probe-log") / "mutation-probe-log.jsonl"
+    previous = os.environ.get("HARNESS_PROBE_LOG")
+    os.environ["HARNESS_PROBE_LOG"] = str(log)
+    yield log
+    if previous is None:
+        os.environ.pop("HARNESS_PROBE_LOG", None)
+    else:
+        os.environ["HARNESS_PROBE_LOG"] = previous
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -1664,3 +1680,36 @@ def test_timeout_is_indeterminate_never_a_kill(repo):
     assert "timed out" in res.stderr
     assert (repo / "src.py").read_bytes() == before
     assert sidecars(repo) == []
+
+
+# ---- U-HE-05: every verdict is appended to the probe log (spec §8.1 coverage input) --------
+
+
+def test_verdict_is_logged_with_the_test_command_and_rc(repo, _probe_log_isolated: Path):
+    log = _probe_log_isolated
+    before = log.read_text().splitlines() if log.exists() else []
+    cmd = pytest_cmd("test_real.py")
+    r = run_probe(repo, "src.py", PINNED, cmd)
+    assert r.returncode == 0, r.stdout + r.stderr
+    after = log.read_text().splitlines()
+    assert len(after) == len(before) + 1
+    entry = json.loads(after[-1])
+    assert entry["rc"] == 0 and entry["test"] == cmd and entry["file"] == "src.py"
+    assert entry["lines"] == PINNED and re.fullmatch(
+        r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", entry["ts"]
+    )
+    # a PROBE FAILED verdict is logged too, with its own rc -- never mistaken for a pin
+    r = run_probe(repo, "src.py", PINNED, pytest_cmd("test_vacuous.py"))
+    assert r.returncode == 1
+    assert json.loads(log.read_text().splitlines()[-1])["rc"] == 1
+
+
+def test_unwritable_log_never_changes_the_verdict(tmp_path: Path, capsys):
+    blocked = tmp_path / "ro"
+    blocked.mkdir()
+    blocked.chmod(0o500)
+    try:
+        mp.log_result("f.py", "1", "true", 0, log=blocked / "sub" / "log.jsonl")
+    finally:
+        blocked.chmod(0o700)
+    assert "probe verdict not logged" in capsys.readouterr().err

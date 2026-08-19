@@ -71,13 +71,29 @@ call edges: they do not model reference-passing (a callback registered rather th
 `getattr`, string-keyed registries, or plugin loaders. The list is a floor on the blast
 radius, never a ceiling. `tools/graft_reachability.py` documents this same limit in detail.
 
+## Binding — compute BEFORE launching (C-HE-15 §4, U-HE-13)
+
+Each lens verdict is bound to the exact tree it reviewed. For each lens id —
+`merge-gate-concurrency`, `merge-gate-spec-conformance`, `merge-gate-witness-adequacy` — run
+`uv run python tools/merge_gate_log.py binding --lens <id> --base main` on the checked-out
+PR head and paste the six printed values (`head_sha`, `base_sha`, `diff_digest`,
+`reviewer_identity`, `prompt_version`, `config_hash`) into that lens's prompt. The lens
+copies them VERBATIM into its fenced JSON block; `emit` (below) recomputes them and refuses
+a verdict whose values differ (a moved head, a swapped lens) — the verdict is then NOT
+recorded and does not count.
+
 ## The three reviewers — launch in ONE message, three parallel Agent calls
 
 Each prompt must be **self-contained** (a subagent sees only what you write — no conversation
 context) and must include the PR's diff or a pointer to fetch it
 (`gh pr diff <PR#>`), the branch name, and the specific lens. Generic "review this PR" prompts
 just triplicate what Codex already does — go deep on the specialty, explicitly forbid a
-generic pass, and demand a machine-parseable verdict line.
+generic pass, and demand a machine-parseable verdict line. **Every prompt also demands, immediately
+before the `VERDICT:` line, ONE fenced ```` ```json ```` block matching
+`tools/review_schemas/merge-gate.schema.json`: keys `verdict` (APPROVE|BLOCK), `findings`
+(array of `{severity: P1|P2|P3, location, message}`, empty on APPROVE, non-empty on BLOCK) and
+the six binding values copied verbatim — no other keys.** Append that sentence, with the six
+values, to each of the three prompts below.
 
 **Reviewer 1 — concurrency / race conditions:**
 > Review this diff for concurrency defects only — do not do a general code review. Diff:
@@ -136,6 +152,15 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   silent/truncated/off-format response as approval — this is the same silent-failure trap
   documented for Codex's non-interactive streaming-capture limitation
   (`[[codex-out-of-family-reviewer]]`); it applies just as much to a raw subagent reply.
+- **Record each lens verdict through the structured sibling (C-HE-23 §2).** Write the lens's
+  full response to a file and run
+  `uv run python tools/merge_gate_log.py emit --pr <PR#> --lens <id> --verdict-json <file> --base main`.
+  It parses the fenced JSON against the schema, holds it to the binding, and writes the
+  `.harness/merge-gate-log.jsonl` rows FIRST and a structured `.harness/merge-gate-log.md`
+  line second. Exit 0 = APPROVE recorded, 1 = BLOCK recorded, **2 = NOT recorded (no schema
+  block / binding mismatch / unwritable JSONL) — the lens verdict does not count; treat as
+  BLOCK-equivalent and re-run that lens** (a bound `reviewer_unavailable` marker is written
+  when the JSONL is writable). A verdict that was never recorded is not a verdict.
 
 ## Gate outcome
 
@@ -152,8 +177,10 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   surface via **one batched `AskUserQuestion`** showing all three verdicts verbatim and which
   ones disagreed. Let the operator decide — this is a real fork per §12.4.1, not routine
   progress to auto-resolve.
-- **Always report the three verdicts**, even on a clean all-approve — append one row to
-  `.harness/merge-gate-log.md` (`PR#`, date, branch, three verdicts, outcome, plus
+- **Always report the three verdicts**, even on a clean all-approve — the three `emit` calls
+  above are the machine record (JSONL first, structured md line second; `just
+  merge-gate-log-check` is the C-HE-23 §2 consistency reducer); additionally append the
+  narrative row to `.harness/merge-gate-log.md` (`PR#`, date, branch, three verdicts, outcome, plus
   `blast-radius: <n consumers>` or `blast-radius: NOT RUN (<reason>)`) so "report where
   they disagreed" is auditable after the fact, not just stated in the turn's response. The
   blast-radius field is logged even when it is `NOT RUN`: a missing field and a field

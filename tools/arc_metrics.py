@@ -41,8 +41,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-LEDGER = REPO / ".harness" / "arc-metrics.jsonl"
+#: Per-process overrides (C-HE-05). Mirrors ARC_METRICS_QUEUE_DIR / ARC_METRICS_MERGED_REF so
+#: two subprocess lanes can hold DIFFERENT worktree ledgers over ONE shared queue. Defaults
+#: are the checkout root and its tracked ledger -- production behaviour is unchanged when unset.
+REPO = Path(os.environ.get("ARC_METRICS_REPO", Path(__file__).resolve().parent.parent))
+LEDGER = Path(os.environ.get("ARC_METRICS_LEDGER", REPO / ".harness" / "arc-metrics.jsonl"))
 
 #: Pending captures, deliberately OUTSIDE the repo. A topic worktree is
 #: disposed at loop completion, so anything queued inside one is lost with it --
@@ -146,6 +149,24 @@ class ArcRow:
     provenance: dict[str, str] = field(default_factory=dict)
     captured_at: str = ""
     notes: str = ""
+    # -- C-HE-25 extension (all additive; historical rows read as null) --
+    record_kind: str = "arc"
+    reviewer_identity: str | None = None
+    prompt_version: str | None = None
+    config_hash: str | None = None
+    arc_type_open: str | None = None
+    arc_type_close: str | None = None
+    arc_type_declared_at: str | None = None  # open | close
+    # {round_n: {channel, terminal, finding_count}} -- per-round terminal outcome
+    round_outcomes: dict[str, dict] = field(default_factory=dict)
+    head_sha: str | None = None
+    base_sha: str | None = None
+    lane_id: str | None = None
+    # derived sensor (C-HE-03 §7); the cohort key (C-HE-28 §1)
+    concurrent_lanes_at_open: int | None = None
+    concurrent_lanes_min: int | None = None
+    concurrent_lanes_max: int | None = None
+    phases: dict[str, dict] = field(default_factory=dict)  # {phase: {start, end}} (C-HE-27)
 
 
 def run(cmd: list[str], *, what: str) -> str:
@@ -398,6 +419,14 @@ def extract(args: argparse.Namespace) -> ArcRow:
         prov["ci_fields"] = "unmapped:no-merge-sha"
 
     row.arc_type = args.arc_type
+    # C-HE-26: which side of the arc the label was declared on. `open` = the
+    # C-HE-03 reservation captured it (U-HE-17/21 carry that capture point);
+    # `close` = today's closure-time queue step. Both labels stay visible on the
+    # ONE arc row; a close-time change goes through `relabel_arc_type_close`.
+    declared_at = getattr(args, "arc_type_declared_at", None) or "close"
+    row.arc_type_declared_at = declared_at if args.arc_type else None
+    row.arc_type_open = args.arc_type if declared_at == "open" else None
+    row.arc_type_close = args.arc_type if declared_at == "close" else None
     row.decision_count = args.decisions
     row.levers_active = args.levers or []
     prov["arc_type"] = "declared" if args.arc_type else "unmapped:unclassified"
@@ -431,6 +460,31 @@ def append(row: ArcRow) -> None:
         )
     with LEDGER.open("a") as fh:
         fh.write(json.dumps(asdict(row), sort_keys=True) + "\n")
+
+
+ARC_TYPES = ("inventing", "applying")
+
+
+def relabel_arc_type_close(arc_id: str, arc_type_close: str) -> None:
+    """C-HE-26 §2: a close-time relabel updates the SINGLE arc row in place. Never a
+    second row (that would trip SPLIT_BRAIN_LEDGER). The rewrite is whole-file atomic
+    (temp + os.replace) and touches only this arc's row."""
+    if arc_type_close not in ARC_TYPES:
+        raise AbortError(f"arc_type_close must be inventing|applying, got {arc_type_close!r}")
+    rows = read_ledger()
+    hits = [r for r in rows if r.get("arc_id") == arc_id]
+    if len(hits) != 1:
+        raise AbortError(f"{arc_id}: expected exactly one arc row, found {len(hits)}")
+    hits[0]["arc_type_close"] = arc_type_close
+    tmp = LEDGER.with_name(f".{LEDGER.name}.{os.getpid()}.tmp")
+    tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+    os.replace(tmp, LEDGER)
+
+
+def cmd_relabel(args: argparse.Namespace) -> int:
+    relabel_arc_type_close(args.arc_id, args.arc_type_close)
+    print(f"relabelled {args.arc_id}: arc_type_close={args.arc_type_close} -> {LEDGER}")
+    return 0
 
 
 def queue_capture(args: argparse.Namespace) -> int:
@@ -497,6 +551,7 @@ def queue_capture(args: argparse.Namespace) -> int:
         "pr": args.pr,
         "arc_id": args.arc_id,
         "arc_type": args.arc_type,
+        "arc_type_declared_at": getattr(args, "arc_type_declared_at", None) or "close",
         "decisions": args.decisions,
         "round_snapshot": snapshot,
         "round_logs_globs": args.round_logs or [],
@@ -750,6 +805,7 @@ def drain(_args: argparse.Namespace) -> int:
             pr=entry["pr"],
             arc_id=entry.get("arc_id"),
             arc_type=entry.get("arc_type"),
+            arc_type_declared_at=entry.get("arc_type_declared_at"),
             decisions=entry.get("decisions"),
             # The metrics were derived at closure; drain never re-reads the logs.
             round_snapshot=entry.get("round_snapshot"),
@@ -917,6 +973,26 @@ def summary(_args: argparse.Namespace) -> int:
             print(f"  {unmapped}/{len(cohort)} rows have NO round data (unmapped, not zero)")
         print()
 
+    # C-HE-28 §1: lane-count as a lever is judged BY COHORT on the integer
+    # `concurrent_lanes_at_open`. Historical rows carry no such field and group
+    # under `null` -- a key, not an error (C-HE-25: additive-safe reads). The
+    # label renders via json.dumps so None is the literal `null`, never "None".
+    by_lanes: dict[str, list[dict]] = {}
+    for r in rows:
+        key = f"concurrent_lanes_at_open={json.dumps(r.get('concurrent_lanes_at_open'))}"
+        by_lanes.setdefault(key, []).append(r)
+    for label in sorted(by_lanes):
+        cohort = by_lanes[label]
+        rounds = [r["review_rounds"] for r in cohort if r.get("review_rounds") is not None]
+        print(f"-- LANES [{label}] (n={len(cohort)}) " + "-" * 20)
+        print(
+            f"  review rounds    {statistics.median(rounds):g} (n={len(rounds)}, "
+            f"{min(rounds)}-{max(rounds)})"
+            if rounds
+            else "  review rounds    --"
+        )
+        print()
+
     allgaps = [g for r in rows for g in (r.get("round_wall_s") or [])]
     if allgaps:
         lo, hi = min(allgaps) / 60, max(allgaps) / 60
@@ -950,7 +1026,8 @@ def main(argv: list[str] | None = None) -> int:
     ex = sub.add_parser("extract", help="capture one arc row")
     ex.add_argument("--pr", type=int, required=True)
     ex.add_argument("--arc-id")
-    ex.add_argument("--arc-type", choices=["inventing", "applying"])
+    ex.add_argument("--arc-type", choices=list(ARC_TYPES))
+    ex.add_argument("--arc-type-declared-at", choices=["open", "close"], default="close")
     ex.add_argument("--decisions", type=int, help="independent decision count")
     ex.add_argument("--round-logs", nargs="+", help="glob(s) for this arc's round logs")
     ex.add_argument("--levers", nargs="*", help="levers live during this arc")
@@ -965,7 +1042,8 @@ def main(argv: list[str] | None = None) -> int:
     # these, and once a row is drained the duplicate guard blocks a corrected
     # capture. `extract` stays permissive for historical backfills, where the
     # judgement genuinely is unavailable and is recorded as unmapped.
-    q.add_argument("--arc-type", choices=["inventing", "applying"], required=True)
+    q.add_argument("--arc-type", choices=list(ARC_TYPES), required=True)
+    q.add_argument("--arc-type-declared-at", choices=["open", "close"], default="close")
     q.add_argument("--decisions", type=int, required=True, help="independent decision count")
     q.add_argument("--round-logs", nargs="+", help="glob(s) for this arc's round logs")
     q.add_argument("--levers", nargs="*", help="levers live during this arc")
@@ -977,6 +1055,11 @@ def main(argv: list[str] | None = None) -> int:
 
     sm = sub.add_parser("summary", help="per-cohort medians with range")
     sm.set_defaults(func=summary)
+
+    rl = sub.add_parser("relabel", help="close-time arc_type relabel on the single arc row")
+    rl.add_argument("--arc-id", required=True)
+    rl.add_argument("--arc-type-close", choices=list(ARC_TYPES), required=True)
+    rl.set_defaults(func=cmd_relabel)
 
     args = p.parse_args(argv)
     try:
