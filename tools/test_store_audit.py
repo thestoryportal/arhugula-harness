@@ -74,14 +74,15 @@ FAMILY_RELATION: list[tuple[str, str]] = [
     ("reservations/.seq/<n>", SOLE),
     ("transition.<lease_token>", SOLE),
     ("LEASE.<token>.<suffix>", "part of store 3"),
-    ("released.<token>", "derived"),
+    ("released.<token>", "part of store 3"),
     ("attempts/<lane_id>", SOLE),
     ("tier-clean-cycles", SOLE),
     ("lanes/<k>", SOLE),
     ("hil-deliveries", SOLE),
     (".loop-active", "part of store 6"),
     ("mechanized-checks-state.json", SOLE),
-    ("mutation-probe-log.jsonl", "derived"),
+    (".ledger-claim-<key>", SOLE),
+    ("mutation-probe-log.jsonl", SOLE),
     ("merge-gate-log.jsonl", "part of store 5"),
 ]
 #: Required fact phrase in each sole carrier's fourth cell -- the fact itself, pinned, so a
@@ -94,6 +95,8 @@ SOLE_FACTS: list[tuple[str, str]] = [
     ("lanes/<k>", "lane indices"),
     ("hil-deliveries", "CLAIMED this"),
     ("mechanized-checks-state.json", "live `kind`"),
+    (".ledger-claim-<key>", "by whom"),
+    ("mutation-probe-log.jsonl", "which probe RAN"),
 ]
 _PART_OF = re.compile(r"^part of store [1-8]\b")
 #: Transient writer-exclusion / staging artifacts -- MUST be listed as non-stores.
@@ -265,7 +268,8 @@ def test_audit_exists_and_lists_eight_plus_derived() -> None:
     # hand-witness (not probe-expressible: the doc is not comment-out mutable): a second
     # `| Authority for |` table anywhere in the page fails this count
     assert text.count("| Authority for |") == 1
-    # the probe log is a run log -- DERIVED, never an authority
+    # the probe log is classified in the family table (sole carrier of probe-run evidence;
+    # the annotations stay the authority for which probes are REQUIRED)
     assert "`.harness/mutation-probe-log.jsonl`" in text.split("## Derived families")[1]
 
 
