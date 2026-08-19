@@ -37,8 +37,14 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 - **The non-mechanical residue is a habit, not a script:** *when you write a sentence about
   what the code does, open the file in the same action.* Both P1s on the `B-71` leg were
   sentences written from a narrative instead of from a call site.
-- **Out-of-family review.** `just codex-review` (branch-vs-`main`) to convergence — fix
-  real findings, hermetically regression-test each (§13.1). Use `--base` here, NOT
+- **Out-of-family review.** `just review-with-failover` (branch-vs-`main`; the C-HE-18
+  fail-closed `codex-review` wrapper with the C-HE-17 `gemini-review` failover) to
+  convergence — fix real findings, hermetically regression-test each (§13.1). Exit 0
+  APPROVE / 1 BLOCK / 2 `REVIEWER_UNAVAILABLE`; the terminal line on stderr is the verdict,
+  never the exit code or the absence of output. *Invariant #3 (restated, C-HE-17 §3):
+  out-of-family review covers Codex-authored work as before, AND serves as the D-C failover
+  for Claude-authored diffs at the identical bar. Exit 2 (`REVIEWER_UNAVAILABLE` on both
+  channels) blocks the arc; record both reasons.* Use `--base` here, NOT
   `-uncommitted`: `-uncommitted` reviews untracked files too, so any untracked WIP in the
   working tree pollutes + dilutes the review of the actual diff (the 2026-06-26 finding at
   `.harness/uncommitted-review-flaw-verification-arc.md`). `-uncommitted` is for genuine

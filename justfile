@@ -620,6 +620,15 @@ _require-antigravity:
         exit 1; \
     fi
 
+# D-C failover chain (C-HE-17): codex-review, then gemini-review ONCE on REVIEWER_UNAVAILABLE,
+# identical bar; the failover verdict blocks. Exit 0/1/2 as codex-review.
+# NO `_require-codex-subscription` prerequisite here: a missing binary / stale login is exactly
+# the permanent failure the wrapper classifies (C-HE-16 §4) and that MUST reach the failover
+# (C-HE-17). The wrapper is the loud-failure surface: exit 2 + a `reviewer_unavailable` row --
+# never a silent metered fallback (the wrapper strips OPENAI_API_KEY and pins chatgpt auth).
+review-with-failover base='main':
+    uv run python tools/codex_review.py --base {{base}} --failover
+
 # Advisory CodeRabbit review. This is optional and complements, not replaces,
 # `just codex-review` and CI. Run after a meaningful diff exists.
 _require-coderabbit:

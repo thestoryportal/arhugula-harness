@@ -19,13 +19,15 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
 
+import finding_record as fr
 import review_wrapper_common as rw
-from agy_review import run_bounded
+from agy_review import GEMINI_PROMPT_VERSION, gemini_config_hash, run_bounded
 
 SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 ARTIFACT_LAG_S = 130.0  # measured PR #1386 lag (C-HE-18 §2)
@@ -202,6 +204,62 @@ def _emit_rows(
     )
 
 
+def _gemini_config_hash() -> str:
+    """The gemini channel's own config-hash rule (agy_review.gemini_config_hash), so the failover
+    computes the identical expected binding the wrapper prompts for."""
+    return gemini_config_hash()
+
+
+#: `just gemini-review` carries its own C-HE-16 §3 budget; this outer cap only fences a wedged
+#: `just`/preflight, never the review itself.
+FAILOVER_SUBPROCESS_CAP_S = rw.TOTAL_BUDGET_S + 60.0
+GEMINI_PRODUCER = "gemini_review_wrapper"
+
+
+def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
+    """C-HE-17 §1: on primary REVIEWER_UNAVAILABLE run `just gemini-review` ONCE under the
+    IDENTICAL bar -- the gemini wrapper's own schema parse (U-HE-06); its stdout is re-parsed
+    here against the same expected binding, exit code never read as a verdict."""
+    binding = rw.compute_binding(
+        repo,
+        base,
+        channel="gemini",
+        prompt_version=GEMINI_PROMPT_VERSION,
+        config_hash=_gemini_config_hash(),
+    )
+    before = sum(1 for r in fr.read_rows() if r["producer"] == GEMINI_PRODUCER)
+    try:
+        proc = subprocess.run(
+            ["just", "gemini-review", base],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=FAILOVER_SUBPROCESS_CAP_S,
+        )
+        stdout, stderr = proc.stdout or "", proc.stderr or ""
+    except subprocess.TimeoutExpired as exc:
+        stdout = (
+            (exc.stdout or b"").decode(errors="replace")
+            if isinstance(exc.stdout, bytes)
+            else (exc.stdout or "")
+        )
+        stderr = f"failover subprocess timed out after {FAILOVER_SUBPROCESS_CAP_S:.0f}s"
+    outcome = rw.parse_verdict("gemini", stdout, binding)
+    if outcome.terminal == "REVIEWER_UNAVAILABLE":
+        outcome.failure_class = rw.classify("gemini", stdout + "\n" + stderr)
+        outcome.binding = binding
+        outcome.reason = (
+            f"{outcome.reason}; {stderr.strip()[-400:]}" if stderr.strip() else outcome.reason
+        )
+    after = sum(1 for r in fr.read_rows() if r["producer"] == GEMINI_PRODUCER)
+    if after == before:
+        # The recipe died at its `_require-antigravity` preflight (or the wrapper never ran):
+        # the subprocess wrote nothing, so BOTH reasons would not be on record (C-HE-17). Emit
+        # here -- and only here (a wrapper that ran already recorded its own rows).
+        _emit_rows(outcome, producer=GEMINI_PRODUCER, channel="gemini")
+    return outcome
+
+
 def _report(outcome: rw.ReviewOutcome, *, label: str) -> None:
     for f in outcome.findings:
         print(f"- [{f['severity']}] {f['location']}: {f['message']}")
@@ -214,14 +272,38 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--base", default="main")
     p.add_argument(
+        "--failover",
+        action="store_true",
+        help="D-C failover (C-HE-17): on REVIEWER_UNAVAILABLE run `just gemini-review` once "
+        "under the identical bar; its verdict blocks",
+    )
+    p.add_argument(
         "--invoke-test-empty", action="store_true", help=argparse.SUPPRESS
     )  # test seam: zero-byte channel
     args = p.parse_args(argv)
     invoke = (lambda timeout: rw.Attempt("", "", 0, False)) if args.invoke_test_empty else None
-    outcome = run_codex_review(Path.cwd(), args.base, invoke=invoke)
-    _emit_rows(outcome)
-    _report(outcome, label="codex-review")
-    return rw.exit_code(outcome)
+
+    def primary() -> rw.ReviewOutcome:
+        outcome = run_codex_review(Path.cwd(), args.base, invoke=invoke)
+        _emit_rows(outcome)  # the primary's row lands before the failover runs
+        _report(outcome, label="codex-review")
+        return outcome
+
+    if not args.failover:
+        return rw.exit_code(primary())
+    first, fo = rw.run_with_failover(primary, lambda: _run_gemini_failover(Path.cwd(), args.base))
+    if fo is None:
+        return rw.exit_code(first)
+    # NO second emission for the failover: `just gemini-review` (agy_review, U-HE-06) already
+    # wrote its rows and round outcome, or `_run_gemini_failover` did when the recipe never ran.
+    _report(fo, label="gemini-review (failover)")
+    if fo.terminal == "REVIEWER_UNAVAILABLE":
+        print(
+            "review-with-failover: BOTH channels unavailable -- "
+            f"codex: {first.reason}; gemini: {fo.reason}",
+            file=sys.stderr,
+        )
+    return rw.exit_code(fo)
 
 
 if __name__ == "__main__":

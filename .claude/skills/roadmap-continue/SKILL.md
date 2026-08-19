@@ -35,7 +35,12 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    branch diff — an uncommitted tree makes HEAD-bound checks stale); **grounding pass** (re-read every
    file:line cite at the now-current HEAD, recompute every count, verify every #NNN,
    confirm `just codex-check` ran at the *current* HEAD, state the pass in the PR body — per
-   ship-pr U-WT-01) then out-of-family `just codex-review` to convergence (§13.1).
+   ship-pr U-WT-01) then out-of-family `just review-with-failover` to convergence (§13.1) —
+   the fail-closed `codex-review` wrapper (C-HE-18) with the `gemini-review` D-C failover
+   (C-HE-17); a verdict counts only on its schema parse (C-HE-15), never on exit code or
+   silence. *Invariant #3 (restated, C-HE-17 §3): out-of-family review covers Codex-authored
+   work as before, AND serves as the D-C failover for Claude-authored diffs at the identical
+   bar. Exit 2 (`REVIEWER_UNAVAILABLE` on both channels) blocks the arc; record both reasons.*
 5. **Surface only the genuine gate.** Per §12.4.1: a real architectural/scoping decision, a
    credential, a paid-call authorization, or an irreversible action → ONE batched
    `AskUserQuestion` (§14.2). Never fire a paid call / relocate a secret unilaterally

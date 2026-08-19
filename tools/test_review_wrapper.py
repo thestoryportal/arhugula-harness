@@ -689,3 +689,159 @@ def test_gate_log_env_override_redirects_the_process_tree(tmp_path: Path):
     ).stdout.strip()
     assert out == str(tmp_path / "g.jsonl")
     assert fr.GATE_LOG_JSONL.name == "merge-gate-log.jsonl"  # this process: the default
+
+
+# ── U-HE-07: D-C failover chain (C-HE-17) ────────────────────────────────────
+def test_codex_review_failover_flag_runs_gemini_once_and_blocks(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        cr,
+        "run_codex_review",
+        lambda repo, base, **kw: rw.ReviewOutcome(
+            "REVIEWER_UNAVAILABLE", "codex", "permanent", "not logged in", [], EXPECTED
+        ),
+    )
+    monkeypatch.setattr(
+        cr,
+        "_run_gemini_failover",
+        lambda repo, base: (
+            calls.append(1)
+            or rw.ReviewOutcome(
+                "BLOCK",
+                "gemini",
+                None,
+                "",
+                [{"severity": "P1", "location": "l", "message": "m"}],
+                EXPECTED,
+                "stdout",
+            )
+        ),
+    )
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
+    assert cr.main(["--base", "main", "--failover"]) == 1
+    assert calls == [1]
+    kinds = [r["record_kind"] for r in fr.read_rows(tmp_path / "g.jsonl")]
+    # primary's row only; the gemini subprocess is the sole emitter of its own rows
+    assert kinds == ["reviewer_unavailable"]
+
+
+def test_codex_review_failover_not_invoked_when_primary_terminal(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        cr,
+        "run_codex_review",
+        lambda repo, base, **kw: rw.ReviewOutcome(
+            "APPROVE", "codex", None, "", [], EXPECTED, "stdout"
+        ),
+    )
+    monkeypatch.setattr(cr, "_run_gemini_failover", lambda repo, base: pytest.fail("must not run"))
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
+    assert cr.main(["--base", "main", "--failover"]) == 0
+
+
+def test_codex_review_failover_both_unavailable_exits_2_with_both_reasons(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setattr(
+        cr,
+        "run_codex_review",
+        lambda repo, base, **kw: rw.ReviewOutcome(
+            "REVIEWER_UNAVAILABLE", "codex", "permanent", "codex-reason", [], EXPECTED
+        ),
+    )
+    monkeypatch.setattr(
+        cr,
+        "_run_gemini_failover",
+        lambda repo, base: rw.ReviewOutcome(
+            "REVIEWER_UNAVAILABLE", "gemini", "transient", "gemini-reason", [], EXPECTED
+        ),
+    )
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
+    assert cr.main(["--base", "main", "--failover"]) == 2
+    err = capsys.readouterr().err
+    assert "codex-reason" in err and "gemini-reason" in err and "BOTH channels unavailable" in err
+
+
+def test_failover_preflight_failure_still_records_both_reasons(monkeypatch, tmp_path):
+    """`just gemini-review` dies at `_require-antigravity` → the subprocess wrote nothing → the
+    failover path emits (permanent: the binary is missing)."""
+    import subprocess
+
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
+    monkeypatch.setattr(
+        cr.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            a[0], 1, "", "ERROR: agy (Antigravity CLI) not found on PATH."
+        ),
+    )
+    monkeypatch.setattr(rw, "compute_binding", lambda *a, **k: dict(EXPECTED))
+    monkeypatch.setattr(cr, "_gemini_config_hash", lambda: "x")
+    out = cr._run_gemini_failover(Path("."), "main")
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and out.failure_class == "permanent"
+    rows = fr.read_rows(tmp_path / "g.jsonl")
+    assert len(rows) == 1 and rows[0]["producer"] == "gemini_review_wrapper"
+    assert rows[0]["record_kind"] == "reviewer_unavailable"
+    assert rows[0]["finding_type"] == "permanent-fail-exit"
+
+
+def test_failover_reads_the_gemini_wrapper_verdict_under_the_identical_bar(monkeypatch, tmp_path):
+    """A wrapper that ran wrote its own rows (count moved) → no second emission; its stdout is
+    re-parsed against the SAME expected binding."""
+    import subprocess
+
+    log = tmp_path / "g.jsonl"
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
+    gem = {**EXPECTED, "reviewer_identity": "gemini-review"}
+    monkeypatch.setattr(
+        rw, "compute_binding", lambda *a, **k: {**gem, "config_hash": k["config_hash"]}
+    )
+    monkeypatch.setattr(cr, "_gemini_config_hash", lambda: EXPECTED["config_hash"])
+    body = {
+        "verdict": "BLOCK",
+        "findings": [{"severity": "P1", "location": "l", "message": "m"}],
+        **gem,
+    }
+    stdout = (
+        "agy-review: effective model: X\n```json\n"
+        + json.dumps(body)
+        + "\n```\nARTIFACT: COMPLETE\nVERDICT: BLOCK\n"
+    )
+
+    def fake_run(*a, **k):
+        # the wrapper subprocess records its own row while running
+        rw.emit_outcome(
+            rw.ReviewOutcome("BLOCK", "gemini", None, "", body["findings"], gem, "stdout"),
+            producer="gemini_review_wrapper",
+            arc_id="a",
+            lane_id="l",
+            round_n=0,
+            path=log,
+        )
+        return subprocess.CompletedProcess(a[0], 1, stdout, "")
+
+    monkeypatch.setattr(cr.subprocess, "run", fake_run)
+    out = cr._run_gemini_failover(Path("."), "main")
+    assert out.terminal == "BLOCK" and len(out.findings) == 1
+    assert len(fr.read_rows(log)) == 1  # the wrapper's own row; no duplicate from the failover
+    # foreign binding on the wrapper's stdout → unavailable even though the exit code was 1
+    monkeypatch.setattr(cr, "_gemini_config_hash", lambda: "other")
+    monkeypatch.setattr(
+        cr.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 1, stdout, "")
+    )
+    assert cr._run_gemini_failover(Path("."), "main").terminal == "REVIEWER_UNAVAILABLE"
+
+
+def test_review_with_failover_recipe_and_carriers_present():
+    justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+    recipe = justfile.split("review-with-failover base='main':", 1)[1].split("\n\n", 1)[0]
+    assert "tools/codex_review.py" in recipe and "--failover" in recipe
+    assert (
+        "_require-codex-subscription"
+        not in "review-with-failover base='main':" + recipe.split("\n")[0]
+    )
+    for skill in ("ship-pr", "roadmap-continue"):
+        body = (
+            Path(__file__).resolve().parents[1] / ".claude" / "skills" / skill / "SKILL.md"
+        ).read_text()
+        assert "just review-with-failover" in body
+        assert "Invariant #3 (restated, C-HE-17 §3)" in body
