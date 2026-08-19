@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "merge-gate lens verdict (C-HE-15 §4)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "findings", "head_sha", "base_sha", "diff_digest", "reviewer_identity", "prompt_version", "config_hash"],
+  "properties": {
+    "verdict": {"enum": ["APPROVE", "BLOCK"]},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "location", "message"],
+        "properties": {
+          "severity": {"enum": ["P1", "P2", "P3"]},
+          "location": {"type": "string", "minLength": 1},
+          "message": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "diff_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "reviewer_identity": {"type": "string", "pattern": "^merge-gate-[a-z-]+$"},
+    "prompt_version": {"type": "string", "minLength": 1},
+    "config_hash": {"type": "string", "minLength": 1}
+  }
+}
