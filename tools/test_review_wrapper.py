@@ -1227,6 +1227,8 @@ def test_reviewer_env_drops_secrets_and_marks_isolation():
         "MY_SERVICE_PASSWORD": "x",
         "SOME_AUTH_HEADER": "x",
         "HARNESS_ROUND_N": "3",
+        "HARNESS_SECRET_TOKEN": "x",  # allowed prefix, secret-shaped name: still dropped
+        "DATABASE_URL": "postgres://u:p@h/db",  # not allowlisted: dropped
     }
     env = rw.reviewer_env(base)
     assert env == {
