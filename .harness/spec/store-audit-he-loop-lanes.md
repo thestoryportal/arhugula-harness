@@ -18,25 +18,24 @@ Witness: `tools/test_store_audit.py` (phase0; `just lanes-verify` row `C-HE-30`)
 | Finding emission (`codex_context_guard.Finding` projection of the C-HE-24 record) | CI/stdout | derived from the 8-field record — never authored independently |
 | Committed history on `MERGED_REF` | git | the only proof that a row is durable |
 
-## Derived families (no new authority)
+## Derived families + new-fact carriers (no second authority for an existing fact)
 
-| Family | Path | Derived from |
-|---|---|---|
-| Reservation generations | `QUEUE_DIR/reservations/<arc_id>/<gen>.json`, `.seq/<n>`, `.<gen>.<pid>.tmp` | the reservation store (history by construction; GC prunes below head) |
-| Lease transition markers + history | `QUEUE_DIR/merge-door/transition.<lease_token>`, `released.<token>`, `reclaimed.<token>`, `LEASE.<token>.<suffix>` for suffix ∈ {`attempted`, `blocked`, `refresh`}, `attempts/<lane_id>/<ts>`, `tier-clean-cycles/<token>` | the lease (fencing + audit + C-HE-06 §10 tiering counter; GC 30 d) |
-| Lane index registry | `QUEUE_DIR/lanes/<k>` | lane-init (exclusive create; released at teardown) |
-| HIL coalescing delivery claims | `QUEUE_DIR/hil-deliveries/<gen-id>` | `loop_hil_deliver` (exclusive create per generation; the `COALESCE-DELIVERED` row is the audit twin) |
-| Loop control markers (per-lane) | `.harness/.loop-active` (loop on), `.harness/.loop-iter` (Stop-continue counter), `.harness/.loop-halt` (stand-down signal) | `loop_activate` / the Stop hook — control state, not HIL state; the `loop_status.md` reduction never reads them |
-| Mutation-probe run log — **DERIVED** | `.harness/mutation-probe-log.jsonl` | `tools/mutation_probe.py` exits (one digest-bound row per run; `just mutation-probe-coverage-check` reads it; the annotations in the test files stay the authority for *which* probes exist) |
-| Structured gate sibling | `.harness/merge-gate-log.jsonl` | listed above with its markdown twin (JSONL-first, same step) |
+The C-HE-30 clearance-fold note adds these families under the invariant "none a new authority for an **existing** fact". Audited row by row, they are of two kinds — a **derived** copy/history of a store above (recomputable from it), or the **sole carrier of a NEW coordination fact** this spec introduces (exclusive-create registries, counters, live mode state — no other store holds the fact, so the file *is* its one authority). Both kinds satisfy the invariant; the second is recorded honestly as an authority rather than mislabelled "derived".
 
-## Runtime state owning a NEW fact (one authority; no existing-fact overlap)
+| Family | Path | Relation | Derived from / sole carrier of |
+|---|---|---|---|
+| Reservation generations | `QUEUE_DIR/reservations/<arc_id>/<gen>.json`, `.seq/<n>`, `.<gen>.<pid>.tmp` | derived | the reservation store (history by construction; head = highest gen; GC prunes below head) |
+| Lease transition markers + history | `QUEUE_DIR/merge-door/transition.<lease_token>`, `released.<token>`, `reclaimed.<token>`, `LEASE.<token>.<suffix>` for suffix ∈ {`attempted`, `blocked`, `refresh`} | derived | the lease (fencing markers + audit history of its transitions; GC 30 d) |
+| Door attempt rate-window | `QUEUE_DIR/merge-door/attempts/<lane_id>/<ts>` | sole carrier (new fact) | "how many landing attempts each lane made in the window" (C-HE-06 rate limit) — exclusive-create per attempt; nothing else records attempts |
+| Attestation-tier counter | `QUEUE_DIR/merge-door/tier-clean-cycles/<token>` | sole carrier (new fact) | "how many consecutive clean cycles since the last miss" (C-HE-06 §10 tiering) — one file per clean cycle, written by `land()` |
+| Lane index registry | `QUEUE_DIR/lanes/<k>` | sole carrier (new fact) | "which lane indices are taken" (C-HE-11) — exclusive create at lane-init, released at teardown |
+| HIL coalescing delivery claims | `QUEUE_DIR/hil-deliveries/<gen-id>` | sole carrier (new fact) | "this HIL generation was delivered once" (`loop_hil_deliver`, exclusive create); the `COALESCE-DELIVERED` row in `loop_status.md` is the audit twin, not the claim |
+| Loop control markers (per-lane) | `.harness/.loop-active` (loop on), `.harness/.loop-iter` (Stop-continue counter), `.harness/.loop-halt` (stand-down signal) | sole carrier (new fact) | per-lane loop control state (`loop_activate` / the Stop hook) — control state, not HIL state; the `loop_status.md` reduction never reads them |
+| Mechanized-check runtime state (C-HE-31 §4d; lands with Arc 4, not yet on main) | `.harness/mechanized-checks-state.json` | sole carrier (new fact) | each mechanized check's live `kind` (advisory/blocking) + rolling demotion window. A **promotion** is recorded ONLY here (no row is emitted), so the file is not reconstructible from C-HE-24 rows; a **demotion** additionally emits a `record_kind=gate_demotion` + `NOTIFY` row — an audit trail, not a second authority. §8.1 carries only the policy + each check's initial `kind` |
+| Mutation-probe run log — **DERIVED** | `.harness/mutation-probe-log.jsonl` | derived | `tools/mutation_probe.py` exits (one digest-bound row per run; `just mutation-probe-coverage-check` reads it; the `# mutation-probe:` annotations in the test files stay the authority for *which* probes exist) |
+| Structured gate sibling | `.harness/merge-gate-log.jsonl` | (the authority half of store 5) | listed above with its markdown twin — JSONL-first, same step; the md line is the projection |
 
-| State | Path | Sole authority for |
-|---|---|---|
-| Mechanized-check runtime state (C-HE-31 §4d; lands with Arc 4, not yet on main) | `.harness/mechanized-checks-state.json` | each mechanized check's live `kind` (advisory/blocking) + its rolling demotion window. A **promotion** is recorded ONLY here (no row is emitted), so the file is not reconstructible from C-HE-24 rows and is the authority for that fact; a **demotion** additionally emits a `record_kind=gate_demotion` + `NOTIFY` row — an audit trail, not a second authority. §8.1 carries only the policy + each check's initial `kind`. |
-
-*Class 3 note (U-HE-14 grounding).* The C-HE-30 clearance-fold note files this path under "all derived from the authorities above, none a new authority for an **existing** fact". Audited here, the second clause holds (no existing fact gains a second carrier) but the first does not for the promotion event, so this page records the file as the one authority for its own NEW fact rather than as a derived copy. Informational; no spec edit owed.
+*Class 3 note (U-HE-14 grounding).* The C-HE-30 note's phrase "all derived from the authorities above" does not hold for the rows marked *sole carrier (new fact)* — each holds a coordination fact with no other carrier (attempt counts, clean-cycle counts, lane indices, delivery claims, control markers, promotion state). Its operative invariant — no **existing** fact gains a second carrier — holds for every row. Informational; no spec edit owed; the S4 units that create these files re-run this row.
 
 ## Transient writer-exclusion + staging artifacts (NOT stores)
 
