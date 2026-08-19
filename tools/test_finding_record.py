@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -407,13 +408,52 @@ def test_lock_wait_is_bounded(tmp_path: Path):
     """A held lock makes append_row fail LOUDLY after the bounded wait, never hang."""
     p = tmp_path / "g.jsonl"
     p.write_text("")
-    with p.open("a") as holder:
-        fr._lock_exclusive(holder, p)
+    with p.open("a") as holder, p.open("a") as waiter:
+        fr._lock_exclusive(holder.fileno(), p)
         try:
             with pytest.raises(fr.RecordError, match="could not lock"):
-                fr._lock_exclusive(p.open("a"), p, timeout_s=0.2)
+                fr._lock_exclusive(waiter.fileno(), p, timeout_s=0.2)
         finally:
             fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+
+
+def test_append_is_one_write_syscall_and_a_short_write_rolls_back(tmp_path: Path, monkeypatch):
+    """The line goes down in ONE os.write; a short write (disk full) is truncated back to the
+    pre-write offset before raising, so a torn tail never poisons the log (Codex round-6 P2)."""
+    p = tmp_path / "g.jsonl"
+    fr.append_row(fr.make_row(_core(), _env()), p)
+    before = p.read_bytes()
+    calls: list[int] = []
+    real_write = os.write
+
+    def half_write(fd: int, data: bytes) -> int:
+        calls.append(len(data))
+        return real_write(fd, data[: len(data) // 2])  # simulate ENOSPC mid-line
+
+    monkeypatch.setattr(os, "write", half_write)
+    with pytest.raises(fr.RecordError, match="short write"):
+        fr.append_row(
+            fr.make_row(_core(finding_id=fr.make_finding_id("merge-gate", HEAD, LOC, 2)), _env()), p
+        )
+    monkeypatch.undo()
+    assert len(calls) == 1  # one syscall carried the whole encoded line
+    assert p.read_bytes() == before  # rolled back byte-exact
+    assert len(fr.read_rows(p)) == 1  # still parseable
+    fr.append_row(
+        fr.make_row(_core(finding_id=fr.make_finding_id("merge-gate", HEAD, LOC, 2)), _env()), p
+    )
+    assert len(fr.read_rows(p)) == 2
+
+
+def test_torn_tail_line_fails_loudly_with_its_line_number(tmp_path: Path):
+    """A torn last line is a hard, named RecordError -- never silently skipped (a legacy or
+    externally-damaged log must surface, not lose rows)."""
+    p = tmp_path / "g.jsonl"
+    fr.append_row(fr.make_row(_core(), _env()), p)
+    with p.open("a") as fh:
+        fh.write('{"finding_id": "torn')  # no newline, not JSON
+    with pytest.raises(fr.RecordError, match=r"g\.jsonl:2 is not valid JSON"):
+        fr.read_rows(p)
 
 
 # mutation-probe: drop the `code` join line in to_guard_finding()

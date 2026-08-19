@@ -18,6 +18,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -221,7 +222,7 @@ def _check_against_prior_rows(row: dict, path: Path) -> None:
             )
 
 
-def _lock_exclusive(fh, path: Path, timeout_s: float = LOCK_TIMEOUT_S) -> None:
+def _lock_exclusive(fd: int, path: Path, timeout_s: float = LOCK_TIMEOUT_S) -> None:
     """Bounded `flock(LOCK_EX)` on the log's own fd -- the house pattern (`mutation_probe.py`,
     `tools/hooks/lib.sh`). Admissible here because the log is a REPO-resident record, not
     QUEUE_DIR coordination state: C-HE-02 §1's CAS-only rule and its `flock|fcntl` invariant are
@@ -232,7 +233,7 @@ def _lock_exclusive(fh, path: Path, timeout_s: float = LOCK_TIMEOUT_S) -> None:
     delay = 0.005
     while True:
         try:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return
         except BlockingIOError:
             if time.monotonic() >= deadline:
@@ -252,15 +253,32 @@ def append_row(row: dict, path: Path | None = None) -> None:
     path = path or GATE_LOG_JSONL
     validate(row)
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(row, sort_keys=True) + "\n"
-    with path.open("a") as fh:
-        _lock_exclusive(fh, path)
+    data = (json.dumps(row, sort_keys=True) + "\n").encode()
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        _lock_exclusive(fd, path)
         try:
             _check_against_prior_rows(row, path)
-            fh.write(line)
-            fh.flush()
+            _append_line(fd, data, path)
         finally:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _append_line(fd: int, data: bytes, path: Path) -> None:
+    """ONE `os.write` syscall on the O_APPEND fd -- not a buffered TextIO write that may split a
+    long line across syscalls. C-HE-23 §2's "single write under PIPE_BUF" is not literally
+    reachable for a C-HE-24 row (SHAs + digest + evidence exceed macOS's 512-byte PIPE_BUF, and
+    PIPE_BUF governs pipes, not regular files); the operative guarantees here are: writers are
+    serialized by the lock, the line goes down in one syscall, and a SHORT write (disk full)
+    is rolled back to the pre-write offset before raising, so a torn tail never poisons the log
+    (Codex round-6 P2). Registered as a v1.1 spec change-note candidate."""
+    end = os.lseek(fd, 0, os.SEEK_END)
+    n = os.write(fd, data)
+    if n != len(data):
+        os.ftruncate(fd, end)  # roll the partial line back; the log stays parseable
+        raise RecordError(f"short write to {path}: {n} of {len(data)} bytes (rolled back)")
 
 
 def read_rows(path: Path | None = None) -> list[dict]:
