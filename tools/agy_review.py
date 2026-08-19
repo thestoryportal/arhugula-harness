@@ -554,7 +554,15 @@ def run_review(repo: Path, base: str) -> int:
         diff = collect_diff(repo, base)
     except RuntimeError as exc:
         return _unavailable(str(exc), failure_class="transient", binding=None)
-    binding = gemini_binding(repo, base)
+    try:
+        binding = gemini_binding(repo, base)
+    except subprocess.CalledProcessError as exc:
+        # An unresolvable base is caller-side and human-fixable: permanent, never a traceback.
+        return _unavailable(
+            f"binding: {' '.join(exc.cmd[:4])} failed: {(exc.stderr or '').strip()[:300]}",
+            failure_class="permanent",
+            binding=None,
+        )
 
     env = os.environ.copy()
     for name in PROVIDER_ENV:

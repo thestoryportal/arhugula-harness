@@ -527,8 +527,9 @@ def test_review_passes_actual_diff_and_accepts_exact_verdict(tmp_path: Path) -> 
     assert "--add-dir" in args
     assert Path(args[args.index("--add-dir") + 1]).name.startswith("arhugula-agy-review-")
     assert args[args.index("--model") + 1] == "Gemini 3.1 Pro (High)"
-    # C-HE-16 §3: one attempt = min(550 s, remaining) -> agy print-timeout 550 - 5 s grace
-    assert args[args.index("--print-timeout") + 1] == "545s"
+    # C-HE-16 §3 (v1.2 X2): one attempt = min(1200 s cap, remaining) -> agy print-timeout
+    # 1200 - 5 s parent grace
+    assert args[args.index("--print-timeout") + 1] == "1195s"
     route_log = Path(args[args.index("--log-file") + 1])
     assert route_log.name == "route.log"
     assert route_log.parent.name.startswith("arhugula-agy-review-")
@@ -620,10 +621,10 @@ def test_large_review_shares_one_deadline_across_segments_and_synthesis(
     monkeypatch.setattr(reviewer, "run_bounded", fake_run)
 
     assert reviewer.run_review(tmp_path, "main") == 0
-    # C-HE-16 §3: each stage is one bounded attempt of min(550, remaining) under the shared
-    # 1260 s deadline (the pre-S1 single-pass decrementer handed each stage the whole remainder).
-    assert observed_timeouts == [550.0, 550.0, 460.0]
-    assert observed_print_timeouts == ["545s", "545s", "455s"]
+    # C-HE-16 §3 (v1.2 X2): each stage is one bounded attempt of min(1200, remaining) under
+    # the shared 1260 s deadline; the 1200 s cap is agy's own per-print bound.
+    assert observed_timeouts == [1200.0, 860.0, 460.0]
+    assert observed_print_timeouts == ["1195s", "855s", "455s"]  # cap - 5 s parent grace
 
 
 def test_large_review_refuses_stage_when_only_cleanup_grace_remains(
@@ -1359,7 +1360,7 @@ def test_transient_segment_failure_gets_one_bounded_retry(
 
     monkeypatch.setattr(reviewer, "run_bounded", fake_run)
     assert reviewer.run_review(tmp_path, "main") == 0
-    assert seen == [550.0, pytest.approx(430.0)]  # min(550, 1360-900-30)
+    assert seen == [1200.0, pytest.approx(430.0)]  # [min(1200, 1250), min(1200, 1360-900-30)]
 
 
 def test_permanent_segment_failure_skips_retry(
@@ -1401,3 +1402,20 @@ def test_gemini_config_hash_is_shared_and_stable() -> None:
         len(reviewer.gemini_config_hash()) == 16
         and reviewer.GEMINI_PROMPT_VERSION == "gemini-review-v2-json"
     )
+
+
+def test_unresolvable_base_is_permanent_unavailable_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reviewer = _reviewer_module()
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
+
+    def boom(_repo, _base):
+        raise subprocess.CalledProcessError(
+            128, ["git", "-C", str(tmp_path), "merge-base"], stderr="fatal: Not a valid object name"
+        )
+
+    monkeypatch.setattr(reviewer, "gemini_binding", boom)
+    monkeypatch.setattr(reviewer, "run_bounded", lambda *a, **k: pytest.fail("must not run"))
+    assert reviewer.run_review(tmp_path, "nope") == 2
+    assert "reviewer unavailable (permanent): binding:" in capsys.readouterr().err

@@ -143,7 +143,19 @@ def run_codex_review(
     invoke: Callable[[float], rw.Attempt] | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> rw.ReviewOutcome:
-    binding = _binding(repo, base)
+    try:
+        binding = _binding(repo, base)
+    except subprocess.CalledProcessError as exc:
+        # An unresolvable base / detached state is a caller-side, human-fixable condition:
+        # REVIEWER_UNAVAILABLE(permanent) with the git error as evidence, never a traceback
+        # (gemini failover round 2 on the S1 branch: "an invalid base reference ... will
+        # crash the process entirely during the binding phase").
+        return rw.ReviewOutcome(
+            "REVIEWER_UNAVAILABLE",
+            CHANNEL,
+            "permanent",
+            f"binding: {' '.join(exc.cmd[:4])} failed: {(exc.stderr or '').strip()[:300]}",
+        )
     instructions = review_instructions(binding)
     invoke = invoke or _default_invoke(repo, instructions)
     started_wall = time.time()
@@ -157,7 +169,20 @@ def run_codex_review(
     def attempt_with_artifact(timeout: float) -> rw.Attempt:
         nonlocal source
         att = invoke(timeout)
-        if att.timed_out or conclusive(att.stdout):
+        if conclusive(att.stdout):
+            return att
+        if att.timed_out:
+            # Killed at the cap: the verdict may already sit in the session artifact (the CLI
+            # persists the final message before it finishes streaming). One look, no wait --
+            # the same positive parse + byte-compare applies; otherwise the timeout stands.
+            art = find_session_artifact(
+                binding["head_sha"], started_at=started_wall, now=time.time(), root=SESSIONS_DIR
+            )
+            if art is not None:
+                text = artifact_text(art)
+                if conclusive(text):
+                    source = "session-artifact"
+                    return rw.Attempt(text, att.stderr, att.returncode, False)
             return att
         # `codex review` echoes its transcript (final message included) on stderr: the same
         # positive parse + byte-compare applies there before the session artifact is consulted.

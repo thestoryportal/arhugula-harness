@@ -201,7 +201,7 @@ def test_retry_constants():
         rw.MAX_ATTEMPTS,
         rw.TOTAL_BUDGET_S,
         rw.SECOND_ATTEMPT_MARGIN_S,
-    ) == (550.0, 2, 1260.0, 30.0)
+    ) == (1200.0, 2, 1260.0, 30.0)  # spec v1.2 X2: the per-attempt figure is a 1200 s cap
     assert rw.TERMINAL_STATES == ("APPROVE", "BLOCK", "REVIEWER_UNAVAILABLE")
 
 
@@ -257,8 +257,8 @@ def test_transient_then_success_uses_two_attempts_and_dynamic_second_timeout():
         clock=lambda: now["t"],
     )
     assert out.terminal == "APPROVE"
-    assert seen[0] == rw.PER_ATTEMPT_TIMEOUT_S
-    # attempt 2 timeout = min(550, remaining - 30) = min(550, 1260-800-30) = 430
+    assert seen[0] == rw.PER_ATTEMPT_TIMEOUT_S == 1200.0  # min(1200, 1260)
+    # attempt 2 timeout = min(1200, remaining - 30) = min(1200, 1260-800-30) = 430
     assert seen[1] == pytest.approx(430.0)
 
 
@@ -564,14 +564,14 @@ def test_artifact_polling_capped_by_shared_deadline(tmp_path, monkeypatch):
     fake_now = {"t": 1000.0}
     monkeypatch.setattr(cr.time, "time", lambda: fake_now["t"])
     monkeypatch.setattr(cr.time, "sleep", lambda s: fake_now.__setitem__("t", fake_now["t"] + s))
-    clock = {"m": 0.0}
 
+    # one fake clock for both axes: the retry loop's monotonic and the wall clock the artifact
+    # poll sleeps on advance together, as they do in production
     def invoke(timeout):
-        clock["m"] += timeout
         fake_now["t"] += timeout
         return rw.Attempt("", "", 0, False)
 
-    out = cr.run_codex_review(Path("."), "main", invoke=invoke, clock=lambda: clock["m"])
+    out = cr.run_codex_review(Path("."), "main", invoke=invoke, clock=lambda: fake_now["t"])
     assert out.terminal == "REVIEWER_UNAVAILABLE"
     assert fake_now["t"] - 1000.0 <= rw.TOTAL_BUDGET_S + 1e-6
 
@@ -845,3 +845,52 @@ def test_review_with_failover_recipe_and_carriers_present():
         ).read_text()
         assert "just review-with-failover" in body
         assert "Invariant #3 (restated, C-HE-17 §3)" in body
+
+
+def test_first_attempt_is_capped_by_the_remaining_budget():
+    seen: list[float] = []
+
+    def invoke(timeout):
+        seen.append(timeout)
+        return rw.Attempt(_block(), "", 0, False)
+
+    rw.run_with_retry(invoke, channel="codex", expected=EXPECTED, deadline=700.0, clock=lambda: 0.0)
+    assert seen == [700.0]  # min(1200, 700)
+
+
+def test_timed_out_attempt_still_reads_the_session_artifact_once(tmp_path, monkeypatch):
+    """Killed at the cap but the CLI had persisted its final message: the artifact counts under
+    the same bar; without it the timeout stands (no 130 s wait after a timeout)."""
+    head = "a" * 40
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path)
+    monkeypatch.setattr(cr, "_binding", lambda repo, base: {**EXPECTED, "head_sha": head})
+
+    def invoke_persisting_then_dying(t):
+        _artifact_tree(tmp_path, head, mtime=time.time())  # the CLI persisted its final message
+        return rw.Attempt("", "", None, True)  # ...then hung until the cap killed it
+
+    out = cr.run_codex_review(Path("."), "main", invoke=invoke_persisting_then_dying)
+    assert out.terminal == "APPROVE" and out.source == "session-artifact"
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path / "empty")
+    n = count()
+
+    def invoke(t):
+        next(n)
+        return rw.Attempt("", "", None, True)
+
+    out = cr.run_codex_review(Path("."), "main", invoke=invoke)
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and "timed out" in out.reason and next(n) == 2
+
+
+def test_unresolvable_base_is_permanent_unavailable_not_a_traceback(monkeypatch, tmp_path):
+    import subprocess
+
+    def boom(*a, **k):
+        raise subprocess.CalledProcessError(
+            128, ["git", "-C", ".", "merge-base"], stderr="fatal: Not a valid object name nope"
+        )
+
+    monkeypatch.setattr(rw, "compute_binding", boom)
+    out = cr.run_codex_review(Path("."), "nope")
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and out.failure_class == "permanent"
+    assert "Not a valid object name" in out.reason

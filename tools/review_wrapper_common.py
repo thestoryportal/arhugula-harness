@@ -23,7 +23,7 @@ from pathlib import Path
 
 import finding_record as fr
 import jsonschema
-from agy_review import TOTAL_REVIEW_TIMEOUT_SECONDS
+from agy_review import MAX_AGY_PRINT_TIMEOUT_SECONDS, TOTAL_REVIEW_TIMEOUT_SECONDS
 
 REPO = Path(__file__).resolve().parent.parent
 SCHEMA_DIR = REPO / "tools" / "review_schemas"
@@ -38,8 +38,13 @@ BINDING_FIELDS = (
     "config_hash",
 )
 
-#: C-HE-16 §3 retry parameters. The total budget reuses agy_review's shared deadline.
-PER_ATTEMPT_TIMEOUT_S = 550.0
+#: C-HE-16 §3 retry parameters (spec v1.2 X2). The per-attempt figure is a CAP: every attempt
+#: runs min(cap, remaining - margin) on the shared 1260 s deadline, so a second attempt exists
+#: only after a FAST transient failure (empty output, rate-limit, auth flake). The cap equals
+#: agy_review.MAX_AGY_PRINT_TIMEOUT_SECONDS -- the bound the gemini channel applied per
+#: invocation before S1; the v1/v1.1 figure of 550 s (budget arithmetic) killed real codex
+#: reviews mid-flight. Single implementation site for both channels.
+PER_ATTEMPT_TIMEOUT_S = float(MAX_AGY_PRINT_TIMEOUT_SECONDS)  # 1200.0
 MAX_ATTEMPTS = 2
 TOTAL_BUDGET_S = TOTAL_REVIEW_TIMEOUT_SECONDS  # 1260.0
 SECOND_ATTEMPT_MARGIN_S = 30.0
@@ -174,10 +179,11 @@ def run_with_retry(
     deadline: float,
     clock: Callable[[], float] = time.monotonic,
 ) -> ReviewOutcome:
-    """C-HE-16 §3: 550 s x 2 under a 1260 s shared deadline; permanent skips retry.
+    """C-HE-16 §3 (v1.2 X2): up to 2 attempts under a 1260 s shared deadline, each capped at
+    PER_ATTEMPT_TIMEOUT_S; permanent skips retry.
 
     ``deadline`` is an absolute value on ``clock``'s axis. Attempt 1's timeout is
-    min(550, remaining); attempt 2's is min(550, remaining - 30) computed at attempt time.
+    min(cap, remaining); attempt 2's is min(cap, remaining - 30) computed at attempt time.
     Exhaustion of the budget is HITL-recoverable (a wedged reviewer login is human-fixable),
     not permanent.
     """
