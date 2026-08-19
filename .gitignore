@@ -36,9 +36,10 @@ audit-entries.jsonl.lock
 # never committed (codex round-2 [P2]).
 .harness/r420-scratch/
 routing_manifest/
-# spec-he-loop-lanes (U-HE-12/13): transient writer-exclusion artifacts beside the two
-# tracked records -- the arc-metrics ledger CAS claim + rewrite temp, the merge-gate
-# emission lock -- and the per-gate lens-response scratch dir. Never committed.
+# spec-he-loop-lanes (U-HE-12/13): transient artifacts beside the two tracked records --
+# the arc-metrics ledger's atomic-rewrite temp (its writer CLAIM is QUEUE_DIR-adjacent,
+# C-HE-02 §2), the merge-gate emission lock -- and the per-gate lens-response scratch
+# dir. Never committed.
 .harness/.arc-metrics.jsonl.*
 .harness/merge-gate-log.jsonl.emit.lock
 .harness/tmp/

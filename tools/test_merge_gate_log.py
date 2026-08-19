@@ -530,7 +530,8 @@ def test_config_hash_covers_every_carrier_on_both_runners(tmp_path: Path, monkey
 
 def _lens_output(binding: dict, verdict: str, findings: list | None = None, line=None) -> str:
     body = {"verdict": verdict, "findings": findings or [], **binding}
-    tail = f"VERDICT: {verdict}" if line is None else line
+    default = "VERDICT: APPROVE" if verdict == "APPROVE" else "VERDICT: BLOCK: the lens reason"
+    tail = default if line is None else line
     return "prose before\n```json\n" + json.dumps(body) + "\n```\nprose after\n" + tail + "\n"
 
 
@@ -710,8 +711,7 @@ def test_cli_emit_requires_the_verdict_line_to_agree_with_the_block(tmp_path, mo
         "VERDICT: APPROVE (tentative)",
         "VERDICT:APPROVE",
         "VERDICT: APPROVE: with a reason",
-        "VERDICT: BLOCK",
-    ):  # BLOCK needs its reason
+    ):  # all disagree with the APPROVE block
         f.write_text(_lens_output(b, "APPROVE", line=bad))
         assert mgl.main(_cli(f)) == 2, bad
     f.write_text(
@@ -723,6 +723,15 @@ def test_cli_emit_requires_the_verdict_line_to_agree_with_the_block(tmp_path, mo
         )
     )
     assert mgl.main(_cli(f)) == 1
+    # merge-gate L3 on #1399: a BLOCK-schema verdict with a BARE `VERDICT: BLOCK` line (no
+    # reason) is NOT a verdict -- the contract's reason suffix is required, not decorative
+    f.write_text(
+        _lens_output(
+            b, "BLOCK", [{"severity": "P1", "location": "x", "message": "m"}], line="VERDICT: BLOCK"
+        )
+    )
+    assert mgl.main(_cli(f)) == 2
+    assert fr.read_rows(jl)[-1]["record_kind"] == "reviewer_unavailable"
     f.write_text(_lens_output(b, "APPROVE", line="VERDICT: APPROVE"))
     assert mgl.main(_cli(f)) == 0
     assert fr.read_rows(jl)[-1]["record_kind"] == "no_finding"

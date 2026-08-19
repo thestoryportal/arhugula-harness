@@ -1205,9 +1205,12 @@ def test_append_and_relabel_are_mutually_exclusive_by_claim(monkeypatch, tmp_pat
     is reclaimed, and the claim never outlives its writer."""
     ledger = tmp_path / "l.jsonl"
     monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "QUEUE_DIR", tmp_path / "queue")
     am.append(am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"))
-    claim = tmp_path / ".l.jsonl.claim"
-    assert not claim.exists()
+    claim = am._ledger_claim_path(ledger)
+    # C-HE-02 §2: the claim is QUEUE_DIR-adjacent, never beside the (REPO-resident) ledger
+    assert claim.parent == tmp_path / "queue" and not claim.exists()
+    assert am._ledger_claim_path(tmp_path / "other.jsonl") != claim  # keyed per ledger path
     # a LIVE claim (this process) blocks both writers
     am.publish_exclusive(
         claim, json.dumps({"_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
@@ -1242,7 +1245,9 @@ def test_dead_claim_reclaim_never_steals_a_peers_fresh_live_claim(monkeypatch, t
     judged -> restored, B aborts, A's claim stands."""
     ledger = tmp_path / "l.jsonl"
     monkeypatch.setattr(am, "LEDGER", ledger)
-    claim = tmp_path / ".l.jsonl.claim"
+    monkeypatch.setattr(am, "QUEUE_DIR", tmp_path / "queue")
+    (tmp_path / "queue").mkdir()
+    claim = am._ledger_claim_path(ledger)
     dead = json.dumps({"_claim": {"pid": 2**22 + 4242, "host": socket.gethostname()}})
     live = json.dumps({"_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
     am.publish_exclusive(claim, dead)
@@ -1257,7 +1262,7 @@ def test_dead_claim_reclaim_never_steals_a_peers_fresh_live_claim(monkeypatch, t
     with pytest.raises(am.AbortError, match="claimed by another writer"):
         am.append(am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"))
     assert claim.read_text() == live  # A's claim survived, byte-identical
-    assert not list(tmp_path.glob(".l.jsonl.claim.dead.*"))
+    assert not list((tmp_path / "queue").glob(".ledger-claim-*.dead.*"))
     assert not ledger.exists()
 
 

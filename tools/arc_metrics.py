@@ -28,6 +28,7 @@ a measured zero.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 import os
@@ -440,7 +441,13 @@ def extract(args: argparse.Namespace) -> ArcRow:
 
 
 def _ledger_claim_path(ledger: Path) -> Path:
-    return ledger.with_name(f".{ledger.name}.claim")
+    """The ledger's writer claim lives QUEUE_DIR-adjacent, NEVER under REPO (C-HE-02 §2 +
+    Invariant: every coordination path derives from QUEUE_DIR -- a per-worktree placement
+    re-creates the X3 split-brain; merge-gate L2 on #1399). Keyed by the ledger's resolved
+    path so lanes holding DIFFERENT ledgers (ARC_METRICS_REPO) claim different files over
+    the ONE shared queue directory."""
+    key = hashlib.sha1(str(ledger.resolve()).encode()).hexdigest()[:16]
+    return QUEUE_DIR / f".ledger-claim-{key}"
 
 
 def claim_ledger(ledger: Path) -> None:

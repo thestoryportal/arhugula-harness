@@ -63,8 +63,9 @@ _MD_ROW = re.compile(
 )
 #: The lens contract's trailing line (merge-gate SKILL.md "Parsing -- fail closed"): EXACTLY
 #: `VERDICT: APPROVE` or `VERDICT: BLOCK: <reason>` -- a FULL-line match, so `VERDICT: APPROVE
-#: or BLOCK` / `VERDICT: APPROVE (tentative)` are ambiguous, not approvals (codex R6 P1).
-_VERDICT_LINE = re.compile(r"^VERDICT: (?:(APPROVE)|(BLOCK)(?:: \S.*)?)$")
+#: or BLOCK` / `VERDICT: APPROVE (tentative)` are ambiguous, not approvals (codex R6 P1), and a
+#: bare `VERDICT: BLOCK` without its reason is not a verdict either (merge-gate L3 on #1399).
+_VERDICT_LINE = re.compile(r"^VERDICT: (?:(APPROVE)|(BLOCK): \S.*)$")
 _ARC_PR_RE = re.compile(r"^pr-(\d+)$")
 
 

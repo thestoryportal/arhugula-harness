@@ -1739,6 +1739,34 @@ def test_refusals_before_the_probe_are_logged_too(repo, _probe_log_isolated: Pat
     assert all(e["target_sha"] is None and e["test_sha"] is None for e in entries)
 
 
+def test_concurrent_log_result_writers_never_tear_a_line(tmp_path: Path):
+    """merge-gate L1 on #1399: the target lock is per target, so two probes on DIFFERENT files
+    may log at once -- each verdict is one `os.write` on an O_APPEND descriptor under the
+    log's flock; 16 concurrent writers of long entries yield 16 intact JSON lines."""
+    import threading
+
+    log = tmp_path / "mp.jsonl"
+    big = "x" * 20_000  # well past any pipe/page boundary a buffered write could split on
+    errs: list[BaseException] = []
+
+    def w(i: int) -> None:
+        try:
+            mp.log_result(f"f{i}.py", "1", f"bash run{i}.sh {big}", i % 4, log=log)
+        except BaseException as e:
+            errs.append(e)
+
+    threads = [threading.Thread(target=w, args=(i,)) for i in range(16)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert not errs
+    lines = log.read_text().splitlines()
+    assert len(lines) == 16
+    seen = sorted(json.loads(ln)["file"] for ln in lines)  # every line parses whole
+    assert seen == sorted(f"f{i}.py" for i in range(16))
+
+
 def test_test_file_of_resolves_pytest_nodeids_and_shell_scripts():
     assert mp.test_file_of("uv run pytest -q -p no:cacheprovider tools/test_a.py::t -x") == Path(
         "tools/test_a.py"

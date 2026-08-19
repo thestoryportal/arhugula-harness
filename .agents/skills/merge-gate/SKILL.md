@@ -38,7 +38,13 @@ gets only its lens prompt plus this self-contained tail:
 ```text
 PR under review: #<N> on branch <branch>, base main, head <sha>.
 Review the local merge-base diff and enough surrounding source to judge it. Do not edit.
-End with exactly VERDICT: APPROVE or VERDICT: BLOCK as the final non-empty line.
+Immediately before your final line, print ONE fenced ```json block with exactly these keys:
+verdict (APPROVE|BLOCK), findings (array of {severity: P1|P2|P3, location, message}; empty on
+APPROVE, non-empty on BLOCK) and these six values copied VERBATIM: head_sha=<...>,
+base_sha=<...>, diff_digest=<...>, reviewer_identity=<lens id>, prompt_version=<...>,
+config_hash=<...> (the output of `just merge-gate-binding <lens id>`). No other keys.
+End with exactly `VERDICT: APPROVE` or `VERDICT: BLOCK: <one-sentence reason>` as the final
+non-empty line (a bare `VERDICT: BLOCK` without its reason is not a verdict).
 ```
 
 Use the actual arc worktree with `-C`, `--ephemeral`, `--sandbox read-only`, and a distinct
