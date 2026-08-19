@@ -232,35 +232,38 @@ def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def collect_diff(repo: Path, base_sha: str, head_sha: str) -> str:
+def collect_diff(repo: Path, base_sha: str, head_sha: str) -> bytes:
     """The reviewer's payload is EXACTLY the bound bytes (`rw.bound_diff`, the same call the
     digest hashes) -- committed base_sha..head_sha, never the working tree or untracked files
     (codex round 3: the wrapper's own gate-log append and any WIP would otherwise be reviewed
-    under a digest that does not describe them; the loop commits before it reviews)."""
+    under a digest that does not describe them; the loop commits before it reviews). Returned
+    as bytes and written to the diff parts as bytes: no decode/re-encode may alter a hunk the
+    digest covers (codex round 4)."""
     try:
         raw = rw.bound_diff(repo, base_sha, head_sha)
     except subprocess.CalledProcessError as exc:
         err = (exc.stderr or b"").decode(errors="replace").strip()
         raise RuntimeError(err or "git diff failed") from exc
-    diff = raw.decode("utf-8", errors="replace").strip()
-    if not diff:
+    if not raw.strip():
         raise RuntimeError("review diff is empty")
-    return diff
+    return raw
 
 
-def write_diff_parts(directory: Path, diff: str) -> list[Path]:
-    """Write ordered UTF-8 chunks small enough for Antigravity's file viewer."""
-    encoded = diff.encode("utf-8")
+def write_diff_parts(directory: Path, diff: bytes | str) -> list[Path]:
+    """Write ordered byte chunks small enough for Antigravity's file viewer. The bytes are the
+    bound diff verbatim; a chunk boundary never splits a UTF-8 multi-byte sequence (backs up
+    over continuation bytes, at most 3), and a non-UTF-8 byte passes through untouched."""
+    encoded = diff.encode("utf-8") if isinstance(diff, str) else diff
     parts: list[Path] = []
     start = 0
     while start < len(encoded):
         end = min(start + MAX_DIFF_PART_BYTES, len(encoded))
-        while True:
-            try:
-                encoded[start:end].decode("utf-8")
-                break
-            except UnicodeDecodeError as exc:
-                end = start + exc.start
+        if end < len(encoded):
+            back = 0
+            while back < 3 and end - back > start and (encoded[end - back] & 0xC0) == 0x80:
+                back += 1
+            if back and end - back > start and (encoded[end - back] & 0xC0) != 0x80:
+                end -= back
         path = directory / f"review-part-{len(parts) + 1:03d}.diff"
         path.write_bytes(encoded[start:end])
         parts.append(path)
@@ -501,8 +504,10 @@ def _sink(outcome: rw.ReviewOutcome) -> None:
 
 def _emit(outcome: rw.ReviewOutcome) -> None:
     """C-HE-24 rows for this invocation's terminal (`producer=gemini_review_wrapper`) + the
-    C-HE-25 per-round outcome on the arc's reservation when one exists + the outcome envelope."""
-    _sink(outcome)
+    C-HE-25 per-round outcome on the arc's reservation when one exists, THEN the outcome
+    envelope. Write-first: a verdict that cannot be recorded does not count (C-HE-15 §1 /
+    C-HE-23 §2), so the envelope the failover reads is written only after the rows landed
+    (codex round 4)."""
     arc_id, lane_id = rw.env_arc_and_lane()
     round_n = int(os.environ.get("HARNESS_ROUND_N", "0"))
     rw.emit_outcome(outcome, producer=PRODUCER, arc_id=arc_id, lane_id=lane_id, round_n=round_n)
@@ -513,6 +518,7 @@ def _emit(outcome: rw.ReviewOutcome) -> None:
         terminal=outcome.terminal,
         finding_count=len(outcome.findings),
     )
+    _sink(outcome)
 
 
 def _unavailable(reason: str, *, failure_class: str, binding: dict[str, str] | None) -> int:
@@ -560,12 +566,12 @@ def _bounded_with_retry(
         proc = run_bounded(cmd_for(timeout), cwd=cwd, timeout=timeout, env=env)
         output = proc.stdout.strip()
         validation_error, _ = validate_review_output(output, marker)
-        parsed = (
-            binding is None
-            or marker != ARTIFACT_COMPLETE_MARKER
-            or rw.parse_verdict(CHANNEL, output, binding).terminal != "REVIEWER_UNAVAILABLE"
-        )
-        if proc.returncode == 0 and validation_error is None and parsed:
+        final = binding is not None and marker == ARTIFACT_COMPLETE_MARKER
+        terminal = rw.parse_verdict(CHANNEL, output, binding).terminal if final else None
+        parsed = not final or terminal != "REVIEWER_UNAVAILABLE"
+        if validation_error is None and parsed and (proc.returncode == 0 or terminal == "BLOCK"):
+            # A non-zero exit with a bound BLOCK is a terminal, not a retry: re-invoking could
+            # replace blocking findings with an APPROVE (codex round 4).
             return proc
         if rw.classify(CHANNEL, rw.classifier_text(proc.stdout, proc.stderr)) == "permanent":
             return proc

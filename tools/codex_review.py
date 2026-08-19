@@ -351,23 +351,17 @@ def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
         return outcome
     with tempfile.TemporaryDirectory(prefix="arhugula-gemini-failover-") as scratch:
         envelope = Path(scratch) / "outcome.json"
-        stderr = ""
-        try:
-            proc = subprocess.run(
-                ["just", "gemini-review", base, str(envelope)],
-                cwd=repo,
-                capture_output=True,
-                text=True,
-                timeout=FAILOVER_SUBPROCESS_CAP_S,
-            )
-            stdout, stderr = proc.stdout or "", proc.stderr or ""
-        except subprocess.TimeoutExpired:
-            stdout, stderr = (
-                "",
-                f"failover subprocess timed out after {FAILOVER_SUBPROCESS_CAP_S:.0f}s",
-            )
-        except OSError as exc:  # `just` missing from PATH (gemini round 3)
-            stdout, stderr = "", f"cannot start `just gemini-review`: {exc}"
+        # run_bounded (agy_review): bounded wait + process-GROUP cleanup on timeout, so a
+        # timed-out `just` cannot leave the wrapper / agy descendants alive to append gate
+        # state after this process recorded the failover unavailable (codex round 4). A missing
+        # `just` surfaces as its rc-127 CompletedProcess (gemini round 3), never an exception.
+        proc = run_bounded(
+            ["just", "gemini-review", base, str(envelope)],
+            cwd=repo,
+            timeout=FAILOVER_SUBPROCESS_CAP_S,
+            env=dict(os.environ),
+        )
+        stdout, stderr = proc.stdout or "", proc.stderr or ""
         outcome = _read_envelope(envelope, binding)
     if outcome is not None:
         return outcome  # the wrapper reached a terminal and recorded its own rows
@@ -382,6 +376,30 @@ def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
     )
     _emit_rows(outcome, producer=GEMINI_PRODUCER, channel="gemini")
     return outcome
+
+
+def _route_to_hitl(arc_id: str, reason: str) -> None:
+    """C-HE-20 §1: a REVIEWER_UNAVAILABLE that blocks the arc routes to the EXISTING durable
+    HITL queue -- a `DEFERRED-HIL` row via `loop_defer` (loop_lib.sh, the C-HE-09 venue); no new
+    escalation store (codex round 4). A failed write is reported loudly; the exit code already
+    blocks."""
+    lib = rw.REPO / "tools" / "hooks"
+    script = (
+        f'. "{lib / "lib.sh"}" && . "{lib / "loop_lib.sh"}" && '
+        'loop_defer "$1" "review-with-failover: REVIEWER_UNAVAILABLE on both channels — $2"'
+    )
+    proc = subprocess.run(
+        ["bash", "-c", script, "loop_defer", arc_id, reason],
+        cwd=rw.REPO,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        print(
+            f"review-with-failover: HITL row NOT written (rc {proc.returncode}): "
+            f"{(proc.stderr or '').strip()[-300:]}",
+            file=sys.stderr,
+        )
 
 
 def _report(outcome: rw.ReviewOutcome, *, label: str) -> None:
@@ -422,11 +440,9 @@ def main(argv: list[str] | None = None) -> int:
     # wrote its rows and round outcome, or `_run_gemini_failover` did when the recipe never ran.
     _report(fo, label="gemini-review (failover)")
     if fo.terminal == "REVIEWER_UNAVAILABLE":
-        print(
-            "review-with-failover: BOTH channels unavailable -- "
-            f"codex: {first.reason}; gemini: {fo.reason}",
-            file=sys.stderr,
-        )
+        both = f"codex: {first.reason}; gemini: {fo.reason}"
+        print(f"review-with-failover: BOTH channels unavailable -- {both}", file=sys.stderr)
+        _route_to_hitl(rw.env_arc_and_lane()[0], both)
     return rw.exit_code(fo)
 
 

@@ -14,6 +14,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import finding_record as fr
 import review_wrapper_common as rw
 
+
+@pytest.fixture(autouse=True)
+def _no_live_reviewers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Nothing in this battery may reach a real reviewer, the tracked gate log, or the live HITL
+    ledger: `run_bounded` fails loudly unless a test installs its own fake, the gate log is a
+    tmp file (module attribute + subprocess env), and HITL routing is a recorder."""
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "gate-log.jsonl")
+    monkeypatch.setenv("HARNESS_GATE_LOG", str(tmp_path / "gate-log.jsonl"))
+    monkeypatch.setattr(
+        cr, "run_bounded", lambda *a, **k: pytest.fail(f"real reviewer subprocess: {a[0][:3]}")
+    )
+    monkeypatch.setattr(cr, "_route_to_hitl", lambda arc_id, reason: None)
+
+
 EXPECTED = {
     "head_sha": "a" * 40,
     "base_sha": "b" * 40,
@@ -95,11 +109,18 @@ def test_well_formed_parses():
     assert out.source == "stdout" and out.failure_class is None
 
 
-def test_last_fenced_block_wins():
+def test_two_distinct_fenced_blocks_are_ambiguous_but_identical_repeats_are_one():
+    """C-HE-15 §2: ambiguous output -> REVIEWER_UNAVAILABLE (a later APPROVE never overrides an
+    earlier BLOCK; codex round 4). The session artifact repeats the final message in several
+    envelopes, so byte-identical blocks collapse to one."""
     text = _block("BLOCK", [{"severity": "P1", "location": "x", "message": "m"}]) + _block(
         "APPROVE"
     )
-    assert rw.parse_verdict("codex", text, EXPECTED).terminal == "APPROVE"
+    out = rw.parse_verdict("codex", text, EXPECTED)
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and "ambiguous" in out.reason
+    assert (
+        rw.parse_verdict("codex", _block() + "\nnoise\n" + _block(), EXPECTED).terminal == "APPROVE"
+    )
 
 
 # ── C-HE-15 §3/§4: binding byte-compare, all six fields ─────────────────────
@@ -276,7 +297,9 @@ def test_empty_on_second_attempt_is_unavailable_transient():
     assert next(n) == 2  # never a third attempt (max_attempts = 2)
 
 
-def test_timeout_is_transient_and_retried_once():
+def test_timeout_is_transient_but_never_re_invoked():
+    """Spec v1.2 X2: the retry exists for FAST failures; after a cap-length attempt only a stub
+    of budget remains (codex round 4)."""
     n = count()
 
     def invoke(timeout):
@@ -287,7 +310,7 @@ def test_timeout_is_transient_and_retried_once():
         invoke, channel="codex", expected=EXPECTED, deadline=10_000.0, clock=lambda: 0.0
     )
     assert out.terminal == "REVIEWER_UNAVAILABLE" and out.failure_class == "transient"
-    assert "timed out" in out.reason and next(n) == 2
+    assert "timed out" in out.reason and out.reason.startswith("HITL-recoverable") and next(n) == 1
 
 
 def test_budget_exhaustion_is_hitl_recoverable():
@@ -485,6 +508,8 @@ import time  # noqa: E402
 import types  # noqa: E402
 
 import codex_review as cr  # noqa: E402
+
+_REAL_ROUTE_TO_HITL = cr._route_to_hitl  # captured before the autouse fixture stubs it
 
 
 def _artifact_tree(tmp_path: Path, head: str, mtime: float) -> Path:
@@ -710,7 +735,17 @@ def test_gate_log_env_override_redirects_the_process_tree(tmp_path: Path):
         check=True,
     ).stdout.strip()
     assert out == str(tmp_path / "g.jsonl")
-    assert fr.GATE_LOG_JSONL.name == "merge-gate-log.jsonl"  # this process: the default
+    # without the env, the default is the repo-resident tracked log
+    env.pop("HARNESS_GATE_LOG")
+    out = subprocess.run(
+        [sys.executable, "-c", "import finding_record as fr; print(fr.GATE_LOG_JSONL.name)"],
+        cwd=Path(__file__).resolve().parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert out == "merge-gate-log.jsonl"
 
 
 # ── U-HE-07: D-C failover chain (C-HE-17) ────────────────────────────────────
@@ -778,23 +813,38 @@ def test_codex_review_failover_both_unavailable_exits_2_with_both_reasons(
         ),
     )
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
+    routed = []
+    monkeypatch.setattr(
+        cr, "_route_to_hitl", lambda arc_id, reason: routed.append((arc_id, reason))
+    )
     assert cr.main(["--base", "main", "--failover"]) == 2
     err = capsys.readouterr().err
     assert "codex-reason" in err and "gemini-reason" in err and "BOTH channels unavailable" in err
+    # C-HE-20 §1: the arc-blocking outage routes to the durable HITL queue, once
+    assert len(routed) == 1 and "codex-reason" in routed[0][1] and "gemini-reason" in routed[0][1]
+
+
+def test_route_to_hitl_writes_a_deferred_hil_row_via_loop_defer(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # lib.sh's project-dir override
+    (tmp_path / ".harness").mkdir()
+    _REAL_ROUTE_TO_HITL("B-777", "codex: x; gemini: y")
+    ledger = (tmp_path / ".harness" / "loop_status.md").read_text()
+    assert (
+        "| DEFERRED-HIL | B-777 — review-with-failover: REVIEWER_UNAVAILABLE on both channels — "
+        "codex: x; gemini: y |"
+    ) in ledger
+    assert ledger.count("| DEFERRED-HIL |") == 1
 
 
 def test_failover_preflight_failure_still_records_both_reasons(monkeypatch, tmp_path):
     """`just gemini-review` dies at `_require-antigravity` → the subprocess wrote nothing → the
     failover path emits (permanent: the binary is missing)."""
-    import subprocess
 
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
     monkeypatch.setattr(
-        cr.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(
-            a[0], 1, "", "ERROR: agy (Antigravity CLI) not found on PATH."
-        ),
+        cr,
+        "run_bounded",
+        _fake_just(None, rc=1, stderr="ERROR: agy (Antigravity CLI) not found on PATH."),
     )
     monkeypatch.setattr(rw, "compute_binding", lambda *a, **k: dict(EXPECTED))
     monkeypatch.setattr(cr, "_gemini_config_hash", lambda: "x")
@@ -806,22 +856,16 @@ def test_failover_preflight_failure_still_records_both_reasons(monkeypatch, tmp_
     assert rows[0]["finding_type"] == "permanent-fail-exit"
 
 
-_REAL_RUN = __import__("subprocess").run
-
-
-def _fake_just(envelope_body, *, raise_exc=None):
-    """A `just gemini-review <base> <envelope>` stand-in that writes the wrapper envelope (or
-    raises); every other command (git for arc/lane ids) runs for real."""
+def _fake_just(envelope_body, *, rc=1, stderr="stderr"):
+    """A `run_bounded`-shaped `just gemini-review <base> <envelope>` stand-in that writes the
+    wrapper envelope (or not) and returns raw vendor stdout that must NEVER be re-parsed."""
     import subprocess
 
-    def run(cmd, **k):
-        if cmd[:1] != ["just"]:
-            return _REAL_RUN(cmd, **k)
-        if raise_exc is not None:
-            raise raise_exc
+    def run(cmd, *, cwd, timeout, env):
+        assert cmd[:2] == ["just", "gemini-review"] and timeout == cr.FAILOVER_SUBPROCESS_CAP_S
         if envelope_body is not None:
             Path(cmd[3]).write_text(json.dumps(envelope_body))
-        return subprocess.CompletedProcess(cmd, 1, "raw vendor stdout " + _block(), "stderr")
+        return subprocess.CompletedProcess(cmd, rc, "raw vendor stdout " + _block(), stderr)
 
     return run
 
@@ -846,7 +890,7 @@ def test_failover_reads_the_gemini_wrapper_envelope_not_raw_stdout(monkeypatch, 
         "binding": gem,
         "source": "stdout",
     }
-    monkeypatch.setattr(cr.subprocess, "run", _fake_just(body))
+    monkeypatch.setattr(cr, "run_bounded", _fake_just(body))
     out = cr._run_gemini_failover(Path("."), "main")
     assert out.terminal == "BLOCK" and len(out.findings) == 1 and out.binding == gem
     assert fr.read_rows(log) == []  # the wrapper's own rows are its business; no duplicate here
@@ -858,12 +902,12 @@ def test_failover_reads_the_gemini_wrapper_envelope_not_raw_stdout(monkeypatch, 
         "reason": "model mismatch",
         "findings": [],
     }
-    monkeypatch.setattr(cr.subprocess, "run", _fake_just(body_u))
+    monkeypatch.setattr(cr, "run_bounded", _fake_just(body_u))
     out = cr._run_gemini_failover(Path("."), "main")
     assert out.terminal == "REVIEWER_UNAVAILABLE" and out.reason == "model mismatch"
     # an envelope bound to a different invocation is refused (identical bar)
     body_f = {**body, "binding": {**gem, "head_sha": "d" * 40}}
-    monkeypatch.setattr(cr.subprocess, "run", _fake_just(body_f))
+    monkeypatch.setattr(cr, "run_bounded", _fake_just(body_f))
     out = cr._run_gemini_failover(Path("."), "main")
     assert out.terminal == "REVIEWER_UNAVAILABLE" and "different invocation" in out.reason
 
@@ -877,18 +921,15 @@ def test_failover_without_envelope_is_recorded_here_once(monkeypatch, tmp_path):
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
     monkeypatch.setattr(rw, "compute_binding", lambda *a, **k: dict(EXPECTED))
     monkeypatch.setattr(cr, "_gemini_config_hash", lambda: "x")
-    monkeypatch.setattr(cr.subprocess, "run", _fake_just(None))
+    monkeypatch.setattr(cr, "run_bounded", _fake_just(None))
     out = cr._run_gemini_failover(Path("."), "main")
     assert out.terminal == "REVIEWER_UNAVAILABLE" and "no outcome envelope" in out.reason
     assert len(fr.read_rows(log)) == 1
 
-    monkeypatch.setattr(
-        cr.subprocess,
-        "run",
-        _fake_just(None, raise_exc=FileNotFoundError(2, "No such file: 'just'")),
-    )
+    # a missing `just` is run_bounded's rc-127 CompletedProcess (never an exception)
+    monkeypatch.setattr(cr, "run_bounded", _fake_just(None, rc=127, stderr="No such file: 'just'"))
     out = cr._run_gemini_failover(Path("."), "main")
-    assert out.terminal == "REVIEWER_UNAVAILABLE" and "cannot start" in out.reason
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and "no outcome envelope" in out.reason
     assert len(fr.read_rows(log)) == 2
 
     def bad_base(*a, **k):
@@ -950,7 +991,7 @@ def test_timed_out_attempt_still_reads_the_session_artifact_once(tmp_path, monke
         return rw.Attempt("", "", None, True)
 
     out = cr.run_codex_review(Path("."), "main", invoke=invoke)
-    assert out.terminal == "REVIEWER_UNAVAILABLE" and "timed out" in out.reason and next(n) == 2
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and "timed out" in out.reason and next(n) == 1
 
 
 def test_unresolvable_base_is_permanent_unavailable_not_a_traceback(monkeypatch, tmp_path):

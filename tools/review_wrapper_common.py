@@ -158,8 +158,14 @@ def load_schema(channel: str) -> dict:
 
 
 def extract_fenced_json(text: str) -> str | None:
-    blocks = _FENCE_RE.findall(text)
-    return blocks[-1] if blocks else None
+    """Exactly ONE distinct fenced block, or None. Two different blocks are AMBIGUOUS output
+    (C-HE-15 §2 -> REVIEWER_UNAVAILABLE; a later APPROVE must never override an earlier BLOCK
+    -- codex round 4). Byte-identical repeats collapse to one: the session artifact carries the
+    final message in several envelopes."""
+    blocks = {b.strip() for b in _FENCE_RE.findall(text)}
+    if len(blocks) != 1:
+        return None
+    return next(iter(blocks))
 
 
 def parse_verdict(
@@ -175,6 +181,9 @@ def parse_verdict(
     # equivalent mutant under probe); the reason still names which shape arrived.
     raw = extract_fenced_json(text or "")
     if raw is None:
+        n = len({b.strip() for b in _FENCE_RE.findall(text or "")})
+        if n > 1:
+            return unavailable(f"ambiguous output: {n} distinct fenced json blocks")
         return unavailable("empty output" if not (text or "").strip() else "no fenced json block")
     try:
         body = json.loads(raw)
@@ -228,8 +237,14 @@ def run_with_retry(
         att = invoke(timeout)
         combined = classifier_text(att.stdout, att.stderr)
         if att.timed_out:
-            last_reason = f"attempt {attempt_n} timed out after {timeout:.0f}s"
-            continue  # transient by definition
+            # A timed-out attempt is transient but NOT re-invoked: the retry exists for FAST
+            # failures (spec v1.2 X2); after a cap-length attempt only a ~30 s stub of budget
+            # remains and a second full review cannot fit (codex round 4).
+            return unavailable(
+                "transient",
+                f"HITL-recoverable: attempt {attempt_n} timed out after {timeout:.0f}s "
+                "(a timed-out attempt is not re-invoked)",
+            )
         outcome = parse_verdict(channel, att.stdout, expected)
         if outcome.terminal == "BLOCK":
             return outcome  # a crash after a parsed BLOCK still blocks: findings are preserved

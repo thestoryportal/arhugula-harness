@@ -273,13 +273,69 @@ def test_collect_diff_rejects_empty_tracked_and_untracked_diff(
         reviewer.collect_diff(tmp_path, "b" * 40, "a" * 40)
 
 
-def test_collect_diff_decodes_non_utf8_bound_bytes(
+def test_collect_diff_passes_non_utf8_bound_bytes_through_verbatim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The digest hashes raw bytes; the reviewer sees a lossless-as-possible text decode."""
+    """The digest hashes the raw bytes and the reviewer's parts ARE those bytes -- no decode /
+    re-encode may alter a hunk (codex round 4)."""
     reviewer = _reviewer_module()
-    monkeypatch.setattr(reviewer.rw, "bound_diff", lambda *_a: b"diff --git a/x b/x\n+\xff\xfe\n")
-    assert reviewer.collect_diff(tmp_path, "b" * 40, "a" * 40).startswith("diff --git a/x b/x")
+    raw = b"diff --git a/x b/x\n+\xff\xfe not utf-8\n" + "+abc\U0001f642\n".encode() * 20_000
+    monkeypatch.setattr(reviewer.rw, "bound_diff", lambda *_a: raw)
+    diff = reviewer.collect_diff(tmp_path, "b" * 40, "a" * 40)
+    assert diff == raw
+    paths = reviewer.write_diff_parts(tmp_path, diff)
+    assert len(paths) > 1
+    assert all(len(p.read_bytes()) <= reviewer.MAX_DIFF_PART_BYTES for p in paths)
+    assert b"".join(p.read_bytes() for p in paths) == raw  # byte-identical reconstruction
+    for p in paths[1:]:  # no part starts inside a multi-byte sequence
+        assert (p.read_bytes()[0] & 0xC0) != 0x80
+
+
+def test_gemini_envelope_is_written_only_after_the_rows_landed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Write-first (codex round 4): if the gate-log append fails, no envelope exists for the
+    failover to count."""
+    reviewer = _reviewer_module()
+    sink = tmp_path / "outcome.json"
+    monkeypatch.setattr(reviewer, "OUTCOME_SINK", sink)
+
+    def boom(*a, **k):
+        raise fr.RecordError("disk full")
+
+    monkeypatch.setattr(reviewer.rw, "emit_outcome", boom)
+    with pytest.raises(fr.RecordError):
+        reviewer._emit(
+            reviewer.rw.ReviewOutcome("APPROVE", "gemini", None, "", [], BINDING, "stdout")
+        )
+    assert not sink.exists()
+    monkeypatch.setattr(reviewer.rw, "emit_outcome", lambda *a, **k: [])
+    reviewer._emit(reviewer.rw.ReviewOutcome("APPROVE", "gemini", None, "", [], BINDING, "stdout"))
+    assert json.loads(sink.read_text())["terminal"] == "APPROVE"
+
+
+def test_nonzero_exit_with_bound_block_is_a_terminal_not_a_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """codex round 4: a re-invocation after a parsed BLOCK could replace it with an APPROVE."""
+    reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: b"+small diff")
+    calls = 0
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        Path(args[args.index("--log-file") + 1]).write_text(
+            'Propagating selected model override to backend: label="Gemini 3.1 Pro (High)"\n',
+            encoding="utf-8",
+        )
+        body = [{"severity": "P1", "location": "a.py:1", "message": "m"}]
+        return subprocess.CompletedProcess(args, 7, _final_output("BLOCK", findings=body), "")
+
+    monkeypatch.setattr(reviewer, "run_bounded", fake_run)
+    assert reviewer.run_review(tmp_path, "main") == 1
+    assert calls == 1
 
 
 def _fake_commands(
