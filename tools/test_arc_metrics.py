@@ -1171,6 +1171,33 @@ def test_extract_records_which_side_declared_the_label(monkeypatch):
     assert (row.arc_type_open, row.arc_type_close, row.arc_type_declared_at) == (None, None, None)
 
 
+# mutation-probe: drop the `if current != snapshot:` abort in relabel_arc_type_close()
+def test_relabel_aborts_when_the_ledger_changed_underneath(monkeypatch, tmp_path: Path):
+    """A concurrent append between the read and the replace is NOT discarded (codex R2 P2):
+    the relabel detects the changed bytes, writes nothing, and the appended row survives."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    am.append(am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"))
+    real_read = am.read_ledger
+
+    def read_then_concurrent_append():
+        rows = real_read()
+        with ledger.open("a") as fh:  # another session's drain lands mid-relabel
+            fh.write(json.dumps({"arc_id": "pr-2", "record_kind": "arc"}, sort_keys=True) + "\n")
+        return rows
+
+    monkeypatch.setattr(am, "read_ledger", read_then_concurrent_append)
+    with pytest.raises(am.AbortError, match="ledger changed"):
+        am.relabel_arc_type_close("pr-1", "applying")
+    monkeypatch.setattr(am, "read_ledger", real_read)
+    rows = am.read_ledger()
+    assert [r["arc_id"] for r in rows] == ["pr-1", "pr-2"]
+    assert rows[0].get("arc_type_close") is None  # nothing written
+    assert not list(tmp_path.glob(".l.jsonl.*.tmp"))
+    am.relabel_arc_type_close("pr-1", "applying")  # the retry succeeds
+    assert am.read_ledger()[0]["arc_type_close"] == "applying"
+
+
 def test_relabel_cli_is_wired(monkeypatch, tmp_path: Path, capsys):
     ledger = tmp_path / "l.jsonl"
     monkeypatch.setattr(am, "LEDGER", ledger)

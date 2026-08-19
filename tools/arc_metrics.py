@@ -468,9 +468,18 @@ ARC_TYPES = ("inventing", "applying")
 def relabel_arc_type_close(arc_id: str, arc_type_close: str) -> None:
     """C-HE-26 §2: a close-time relabel updates the SINGLE arc row in place. Never a
     second row (that would trip SPLIT_BRAIN_LEDGER). The rewrite is whole-file atomic
-    (temp + os.replace) and touches only this arc's row."""
+    (temp + os.replace) and touches only this arc's row.
+
+    Compare-and-swap, not a lock: C-HE-02 §1 bans `flock`/`fcntl` in this module, so the
+    guard is a byte-compare of the ledger against the snapshot the rewrite was derived
+    from, taken immediately before the replace. A concurrent append or relabel that lands
+    in between is detected and the relabel aborts (retry), rather than being silently
+    discarded by the whole-file rewrite (codex R2 P2). The compare-to-replace window is
+    the residual; the ledger's other writer (`append`, via drain) runs in a different
+    arc's session, and both retry paths are idempotent."""
     if arc_type_close not in ARC_TYPES:
         raise AbortError(f"arc_type_close must be inventing|applying, got {arc_type_close!r}")
+    snapshot = LEDGER.read_bytes() if LEDGER.exists() else b""
     rows = read_ledger()
     hits = [r for r in rows if r.get("arc_id") == arc_id]
     if len(hits) != 1:
@@ -478,6 +487,12 @@ def relabel_arc_type_close(arc_id: str, arc_type_close: str) -> None:
     hits[0]["arc_type_close"] = arc_type_close
     tmp = LEDGER.with_name(f".{LEDGER.name}.{os.getpid()}.tmp")
     tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+    current = LEDGER.read_bytes() if LEDGER.exists() else b""
+    if current != snapshot:
+        tmp.unlink(missing_ok=True)
+        raise AbortError(
+            f"{arc_id}: ledger changed while the relabel was prepared -- nothing written, retry"
+        )
     os.replace(tmp, LEDGER)
 
 

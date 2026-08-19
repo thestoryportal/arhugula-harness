@@ -1589,17 +1589,49 @@ def main(argv: list[str] | None = None) -> int:
     return rc
 
 
+def _sha16(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def test_file_of(test_cmd: str) -> Path | None:
+    """The test ARTIFACT a probe command exercises: for a pytest command the first non-flag
+    token naming a `.py` path (node id's file part); for `bash <script>` the script."""
+    toks = test_cmd.split()
+    if "pytest" in toks:
+        for tok in toks[toks.index("pytest") + 1 :]:
+            if not tok.startswith("-") and ".py" in tok:
+                return Path(tok.split("::", 1)[0])
+        return None
+    if toks[:1] == ["bash"] and len(toks) > 1:
+        return Path(toks[1])
+    return None
+
+
 def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = None) -> None:
-    """Append one verdict line `{ts, file, lines, test, rc}` to PROBE_LOG. The verdict was
-    already printed and IS the exit code; a log that cannot be written is reported on stderr
-    and never changes `rc` (the log is derived evidence, not the probe's authority)."""
+    """Append one verdict line to PROBE_LOG: `{ts, file, lines, test, rc, head, target_sha,
+    test_sha}`. The digests bind the verdict to the exact source + test bytes it measured, so
+    `lanes_verify` can tell a live pin from a stale one after either file changes (codex R2
+    P2: rc alone let an old success stand after the guarded line was reverted). The verdict
+    was already printed and IS the exit code; a log that cannot be written is reported on
+    stderr and never changes `rc` (the log is derived evidence, not the probe's authority)."""
     log = log or PROBE_LOG
+    target = Path(file).expanduser()
+    tf = test_file_of(test)
+    head = run(
+        ["git", "rev-parse", "HEAD"], target.parent if target.parent.is_dir() else Path.cwd()
+    )
     entry = {
         "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "file": file,
         "lines": lines,
         "test": test,
         "rc": rc,
+        "head": head.out if head.rc == 0 else None,
+        "target_sha": _sha16(target),
+        "test_sha": _sha16(tf) if tf is not None else None,
     }
     try:
         log.parent.mkdir(parents=True, exist_ok=True)

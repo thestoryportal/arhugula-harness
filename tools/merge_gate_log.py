@@ -157,29 +157,35 @@ def emit_gate_row(
         # Emitted under the SAME producer (the lens) so the reducer keys it per lens: one
         # lens's md failure must not suppress another lens's orphan at the same head (gemini
         # R1 P2). `lineage_claim=wrapper` marks it as this module's, not the lens's, finding.
-        fr.append_observation(
-            dict(
-                location=str(md_path),
-                observed_evidence=f"markdown write failed: {exc}",
-                expected_contract="C-HE-23 §2 markdown sibling",
-                severity="warn",
-                finding_type="transient-retry",
-                lineage_claim="wrapper",
-                producer=lens,
-            ),
-            fr.Envelope(
-                record_kind="finding",
-                ts=fr.now_iso(),
-                arc_id=arc_id,
-                lane_id=lane_id,
-                head_sha=rows[0]["head_sha"],
-                base_sha=rows[0]["base_sha"],
-                diff_digest=rows[0]["diff_digest"],
-                round_n=rows[0]["round_n"],
-                cause_attribution="markdown_write_failed",
-            ),
-            jsonl_path,
-        )
+        try:
+            fr.append_observation(
+                dict(
+                    location=str(md_path),
+                    observed_evidence=f"markdown write failed: {exc}",
+                    expected_contract="C-HE-23 §2 markdown sibling",
+                    severity="warn",
+                    finding_type="transient-retry",
+                    lineage_claim="wrapper",
+                    producer=lens,
+                ),
+                fr.Envelope(
+                    record_kind="finding",
+                    ts=fr.now_iso(),
+                    arc_id=arc_id,
+                    lane_id=lane_id,
+                    head_sha=rows[0]["head_sha"],
+                    base_sha=rows[0]["base_sha"],
+                    diff_digest=rows[0]["diff_digest"],
+                    round_n=rows[0]["round_n"],
+                    cause_attribution="markdown_write_failed",
+                ),
+                jsonl_path,
+            )
+        except (OSError, fr.RecordError) as warn_exc:
+            # The verdict rows ARE recorded; without the warn the reducer will class them as
+            # orphans and the next gate run re-emits the md line (C-HE-23 §2). Reported, not
+            # raised: raising here would turn a recorded verdict into "not recorded".
+            print(f"merge-gate-log: md-failure warn not recorded: {warn_exc}", file=sys.stderr)
         print(f"merge-gate-log: markdown write failed, JSONL row stands: {exc}", file=sys.stderr)
     return rows
 
@@ -221,57 +227,80 @@ def _gate_rows(jsonl_path: Path) -> list[dict]:
 
 
 def _key(row: dict) -> tuple[int, str, str, str]:
+    """The md-joinable key: `(pr, head12, lens, verdict)`."""
     m = _ARC_PR_RE.match(row["arc_id"])
     assert m is not None  # filtered by _gate_rows
     return (int(m.group(1)), (row["head_sha"] or "")[:12], row["producer"], verdict_of(row) or "")
 
 
+def _emissions(jsonl_path: Path) -> dict[tuple, list[dict]]:
+    """Gate rows grouped per EMISSION -- `(pr, head12, lens, verdict, round_n)` -- each worth
+    exactly one md line. A BLOCK emission is several finding rows; an APPROVE one `no_finding`
+    row. Keyed with the round so a second run at the same head is its own emission (codex R2
+    P2: first-row-per-key dedupe lost every later round)."""
+    out: dict[tuple, list[dict]] = {}
+    for r in _gate_rows(jsonl_path):
+        out.setdefault((*_key(r), r["round_n"]), []).append(r)
+    return out
+
+
 def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = None) -> dict:
     """C-HE-23 §2 reducer. `missing_jsonl`: a markdown row with no JSONL sibling on the same
     `(pr, head_sha, lens, verdict)` -- the spec's `(pr, head_sha, verdict)` join, refined by
-    lens so one lens's sibling never vouches for another's. `orphan_jsonl`: a JSONL verdict
-    with NEITHER a markdown sibling NOR a `markdown_write_failed` warn at its head -- the
-    crash-between-the-two-writes class, reconciled by `reconcile_orphans`. Markdown rows that
-    predate the first JSONL verdict are outside the comparison (the sibling did not exist)."""
+    lens so one lens's sibling never vouches for another's. `orphan_jsonl`: an emission with
+    NEITHER a markdown sibling NOR its own `markdown_write_failed` warn (same head, lens AND
+    round) -- the crash-between-the-two-writes class, reconciled by `reconcile_orphans`; one
+    representative row per orphan emission is returned. Md lines are counted per key, so N
+    emissions at one key need N md lines (or warns). Markdown rows that predate the first JSONL
+    verdict are outside the comparison (the sibling did not exist)."""
     md_path = md_path or GATE_LOG_MD
     jsonl_path = jsonl_path or fr.GATE_LOG_JSONL
-    jl = _gate_rows(jsonl_path)
-    first_ts = min((r["ts"] for r in jl), default=None)
+    emissions = _emissions(jsonl_path)
+    first_ts = min((rows[0]["ts"] for rows in emissions.values()), default=None)
     md = [r for r in read_md_rows(md_path) if first_ts is not None and r["ts"] >= first_ts]
-    md_keys = {(r["pr"], r["head_sha"], r["lens"], r["verdict"]) for r in md}
-    jl_keys: dict[tuple, dict] = {}
-    for r in jl:
-        jl_keys.setdefault(_key(r), r)
+    md_count: dict[tuple, int] = {}
+    for r in md:
+        k = (r["pr"], r["head_sha"], r["lens"], r["verdict"])
+        md_count[k] = md_count.get(k, 0) + 1
+    jl_short = {k[:4] for k in emissions}
+    # a warn vouches for ONE emission: same head, same lens, same round (codex R2 P2 -- keyed
+    # without the round, a round-1 md failure would hide a round-2 crash between the writes)
     warned = {
-        (r["head_sha"], r["producer"])
+        (r["head_sha"], r["producer"], r["round_n"])
         for r in fr.read_rows(jsonl_path)
         if r.get("cause_attribution") == "markdown_write_failed"
     }
-    missing = sorted(k for k in md_keys if k not in jl_keys)
-    orphan = [
-        r
-        for k, r in jl_keys.items()
-        if k not in md_keys and (r["head_sha"], r["producer"]) not in warned
-    ]
+    missing = sorted(k for k in md_count if k not in jl_short)
+    orphan: list[dict] = []
+    for short in sorted(jl_short):
+        unwarned = [
+            rows[0]
+            for k, rows in sorted(emissions.items(), key=lambda kv: kv[0][4])
+            if k[:4] == short and (rows[0]["head_sha"], rows[0]["producer"], k[4]) not in warned
+        ]
+        n = len(unwarned) - md_count.get(short, 0)
+        if n > 0:
+            orphan.extend(unwarned[-n:])  # the latest emissions are the ones without a line
     return {"missing_jsonl": missing, "orphan_jsonl": orphan}
 
 
 def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = None) -> int:
-    """Re-emit the markdown line for every orphan JSONL verdict (next gate run, C-HE-23 §2)."""
+    """Re-emit the markdown line for every orphan emission (next gate run, C-HE-23 §2).
+    Touches the md file only when there is something to write."""
     md_path = md_path or GATE_LOG_MD
     jsonl_path = jsonl_path or fr.GATE_LOG_JSONL
-    rep = consistency_report(md_path, jsonl_path)
-    by_key: dict[tuple, int] = {}
-    for r in _gate_rows(jsonl_path):
-        if r["record_kind"] == "finding":
-            by_key[_key(r)] = by_key.get(_key(r), 0) + 1
-    n = 0
+    orphans = consistency_report(md_path, jsonl_path)["orphan_jsonl"]
+    if not orphans:
+        return 0
+    emissions = _emissions(jsonl_path)
     with md_path.open("a", encoding="utf-8") as fh:
-        for r in rep["orphan_jsonl"]:
+        for r in orphans:
             k = _key(r)
-            fh.write(_md_line(r["ts"], k[0], r["head_sha"], k[2], k[3], by_key.get(k, 0)))
-            n += 1
-    return n
+            n_findings = sum(
+                1 for x in emissions[(*k, r["round_n"])] if x["record_kind"] == "finding"
+            )
+            fh.write(_md_line(r["ts"], k[0], r["head_sha"], k[2], k[3], n_findings))
+    return len(orphans)
 
 
 def _read_text(arg: str) -> str:
@@ -324,6 +353,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "emit":
         try:
+            # "the next gate run" (C-HE-23 §2): re-emit the md line of any orphan JSONL
+            # verdict left by an earlier crash between the two writes (codex R2 P3)
+            n = reconcile_orphans()
+            if n:
+                print(f"merge-gate-log: reconciled {n} orphan md row(s) from an earlier run")
             expected = lens_binding(
                 REPO,
                 args.base,
@@ -350,11 +384,32 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        except Exception as exc:  # any other failure is "not recorded", never "BLOCK"
+            # A missing verdict file, a failed git call, a malformed log: exit 2, not the
+            # uncaught-exception exit 1 that the skills read as "BLOCK recorded" (codex R2 P2).
+            print(
+                f"merge-gate-log: NOT RECORDED ({type(exc).__name__}: {exc}) -- "
+                "the lens verdict does not count",
+                file=sys.stderr,
+            )
+            return 2
         print(
             f"merge-gate-log: {args.lens} {outcome.terminal} recorded "
             f"(round {rows[0]['round_n']}, {len(rows)} row(s), head {rows[0]['head_sha']})"
             + (f" -- {outcome.reason}" if outcome.reason else "")
         )
+        # HEAD-moved guard (codex R2 P1): the rows are a true record of `expected["head_sha"]`,
+        # but if the checkout moved while we recorded, this is NOT a verdict for the current
+        # head -- the skill must not read exit 0/1 as one. Same rule as the codex wrapper.
+        head_now = rw._git(REPO, "rev-parse", "HEAD")
+        if head_now != expected["head_sha"]:
+            print(
+                f"merge-gate-log: HEAD moved during emit ({expected['head_sha'][:12]} -> "
+                f"{head_now[:12]}); the recorded verdict is for the former head and does not "
+                "count for the current checkout -- re-run the lens",
+                file=sys.stderr,
+            )
+            return 2
         return rw.exit_code(outcome)
     if args.cmd == "check":
         rep = consistency_report()

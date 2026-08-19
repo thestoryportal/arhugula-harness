@@ -11,6 +11,7 @@ never one. Rows are appended by the unit that lands each artifact; keep them in 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -152,11 +153,31 @@ def _relative(token: str) -> str:
     return token
 
 
+def _sha16(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def _pin_is_live(e: dict, target: str) -> bool:
+    """A PINNED entry is evidence only while the bytes it measured are the bytes at HEAD: the
+    mutated source file (`file` + `target_sha`) AND the test artifact (`test_sha`) must both
+    still digest to the logged values (codex R2 P2). Entries without digests never count."""
+    tsha, fsha = e.get("target_sha"), e.get("test_sha")
+    if not tsha or not fsha or not e.get("file"):
+        return False
+    src = Path(_relative(str(e["file"])))
+    test_file = Path(target.split("::", 1)[0])
+    return _sha16(REPO / src) == tsha and _sha16(REPO / test_file) == fsha
+
+
 def _pinned_nodeids(log_path: Path) -> set[str]:
-    """Targets of PINNED probes (rc 0): for a pytest command the first non-flag token after
-    `pytest` that names a `.py` path (a node id or a file), normalized REPO-relative and
-    compared EXACTLY; for `bash <script>` the probed script itself. The command is split on
-    whitespace as logged -- the log is written by the probe tool, not typed by hand."""
+    """Targets of LIVE PINNED probes (rc 0 + digests still matching HEAD, `_pin_is_live`): for
+    a pytest command the first non-flag token after `pytest` that names a `.py` path (a node id
+    or a file), normalized REPO-relative and compared EXACTLY; for `bash <script>` the probed
+    script itself. The command is split on whitespace as logged -- the log is written by the
+    probe tool, not typed by hand."""
     if not log_path.exists():
         return set()
     out: set[str] = set()
@@ -167,14 +188,17 @@ def _pinned_nodeids(log_path: Path) -> set[str]:
         if e.get("rc") != 0:
             continue
         toks = str(e["test"]).split()
+        target = None
         if "pytest" in toks:
             rest = toks[toks.index("pytest") + 1 :]
             for tok in rest:
                 if not tok.startswith("-") and ".py" in tok:
-                    out.add(_relative(tok))
+                    target = _relative(tok)
                     break
         elif toks[:1] == ["bash"] and len(toks) > 1:
-            out.add(_relative(toks[1]))
+            target = _relative(toks[1])
+        if target is not None and _pin_is_live(e, target):
+            out.add(target)
     return out
 
 

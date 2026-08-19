@@ -1698,10 +1698,25 @@ def test_verdict_is_logged_with_the_test_command_and_rc(repo, _probe_log_isolate
     assert entry["lines"] == PINNED and re.fullmatch(
         r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", entry["ts"]
     )
+    # the verdict is bound to the bytes it measured (codex R2 P2): the restored source, the
+    # test artifact, and the head the probe ran at
+    assert entry["target_sha"] == hashlib.sha256((repo / "src.py").read_bytes()).hexdigest()[:16]
+    assert (
+        entry["test_sha"] == hashlib.sha256((repo / "test_real.py").read_bytes()).hexdigest()[:16]
+    )
+    assert entry["head"] == git(repo, "rev-parse", "HEAD").stdout.strip()
     # a PROBE FAILED verdict is logged too, with its own rc -- never mistaken for a pin
     r = run_probe(repo, "src.py", PINNED, pytest_cmd("test_vacuous.py"))
     assert r.returncode == 1
     assert json.loads(log.read_text().splitlines()[-1])["rc"] == 1
+
+
+def test_test_file_of_resolves_pytest_nodeids_and_shell_scripts():
+    assert mp.test_file_of("uv run pytest -q -p no:cacheprovider tools/test_a.py::t -x") == Path(
+        "tools/test_a.py"
+    )
+    assert mp.test_file_of("bash tools/hooks/test_x.sh") == Path("tools/hooks/test_x.sh")
+    assert mp.test_file_of("./custom-runner --flag") is None
 
 
 def test_unwritable_log_never_changes_the_verdict(tmp_path: Path, capsys):

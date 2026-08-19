@@ -219,6 +219,38 @@ def test_headless_gate_rows_are_outside_the_comparison_and_never_re_emitted(tmp_
     assert mgl.reconcile_orphans(md, jl) == 0 and "nohead" not in md.read_text()
 
 
+def test_md_failure_warn_vouches_for_its_own_round_only(tmp_path: Path):
+    """codex R2 P2: a round-1 md failure must not hide a round-2 crash between the writes."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    ro.chmod(0o500)
+    try:
+        _emit(tmp_path, pr=5, md=ro / "x" / "log.md", jl=jl, round_n=1)  # round 1: md failed
+    finally:
+        ro.chmod(0o700)
+    _emit(tmp_path, pr=5, md=md, jl=jl, round_n=2)
+    md.write_text("")  # round 2: crashed between the writes
+    rep = mgl.consistency_report(md, jl)
+    assert [r["round_n"] for r in rep["orphan_jsonl"]] == [2]
+
+
+def test_two_emissions_at_one_key_need_two_md_lines(tmp_path: Path):
+    """A re-run at the same head with the same verdict is its own emission: one md line does
+    not vouch for both (codex R2 P2 -- first-row-per-key dedupe lost the second round)."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    _emit(tmp_path, pr=4, md=md, jl=jl, round_n=1)
+    _emit(tmp_path, pr=4, md=md, jl=jl, round_n=2)
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+    lines = md.read_text().splitlines(keepends=True)
+    md.write_text(lines[0])  # the round-2 line is lost
+    rep = mgl.consistency_report(md, jl)
+    assert [r["round_n"] for r in rep["orphan_jsonl"]] == [2]
+    assert mgl.reconcile_orphans(md, jl) == 1
+    assert len(mgl.read_md_rows(md)) == 2
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+
+
 def test_one_lens_sibling_never_vouches_for_another_lens(tmp_path: Path):
     md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
     _emit(tmp_path, pr=5, lens="merge-gate-a")
@@ -405,6 +437,74 @@ def test_cli_emit_parses_the_schema_block_and_holds_it_to_the_binding(
         == 2
     )
     assert mgl.main(["check"]) == 0
+
+
+def _cli(f, *extra):
+    return ["emit", "--pr", "9", "--lens", LENS, "--verdict-json", str(f), "--base", "HEAD",
+            "--config-hash", "cfg", "--lane-id", "h", *extra]  # fmt: skip
+
+
+def test_cli_emit_exit_2_on_any_non_recording_failure_never_1(tmp_path, monkeypatch, capsys):
+    """codex R2 P2: a missing verdict file / failed git call must be exit 2 (NOT recorded), never
+    the uncaught exit 1 the skills read as 'BLOCK recorded'."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    rc = mgl.main(_cli(tmp_path / "nope"))
+    assert rc == 2 and "NOT RECORDED" in capsys.readouterr().err
+    assert not jl.exists() and not md.exists()
+
+    def git_down(*a, **k):
+        raise RuntimeError("git down")
+
+    monkeypatch.setattr(mgl, "lens_binding", git_down)
+    f = tmp_path / "v.txt"
+    f.write_text("x")
+    rc = mgl.main(_cli(f))
+    assert rc == 2 and "git down" in capsys.readouterr().err
+
+
+def test_cli_emit_head_moved_during_emit_is_not_a_verdict_for_the_checkout(
+    tmp_path, monkeypatch, capsys
+):
+    """codex R2 P1: the rows are a true record of the head the binding named, but if HEAD moved
+    while recording, exit 2 -- the skill must not read it as a verdict for the current tree."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    b = mgl.lens_binding(mgl.REPO, "HEAD", LENS, cfg_hash="cfg")
+    f = tmp_path / "lens.txt"
+    f.write_text(_lens_output(b, "APPROVE"))
+    real_git = rw._git
+    moved = {"n": 0}
+
+    def git_with_a_moved_head(repo, *args):
+        if args == ("rev-parse", "HEAD") and jl.exists():  # after the rows were written
+            moved["n"] += 1
+            return "f" * 40
+        return real_git(repo, *args)
+
+    monkeypatch.setattr(rw, "_git", git_with_a_moved_head)
+    rc = mgl.main(_cli(f))
+    err = capsys.readouterr().err
+    assert rc == 2 and "HEAD moved during emit" in err and moved["n"] == 1
+    assert fr.read_rows(jl)[0]["head_sha"] == b["head_sha"]  # the record stands, bound to H1
+
+
+def test_cli_emit_reconciles_earlier_orphans_first(tmp_path, monkeypatch, capsys):
+    """codex R2 P3: 'the next gate run' re-emits orphan md rows -- emit is that run."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    _emit(tmp_path, pr=3, md=md, jl=jl)
+    md.write_text("")  # an earlier crash between the writes
+    b = mgl.lens_binding(mgl.REPO, "HEAD", LENS, cfg_hash="cfg")
+    f = tmp_path / "lens.txt"
+    f.write_text(_lens_output(b, "APPROVE"))
+    rc = mgl.main(_cli(f))
+    assert rc == 0 and "reconciled 1 orphan" in capsys.readouterr().out
+    assert [r["pr"] for r in mgl.read_md_rows(md)] == [3, 9]
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
 
 
 def test_cli_binding_prints_the_six_fields(capsys):

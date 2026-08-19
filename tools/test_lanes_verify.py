@@ -3,6 +3,7 @@ reach a real test: `run_row` takes an injected runner, and coverage reads a tmp 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -100,32 +101,87 @@ def test_just_args_tokenized_and_placeholder_is_live():
     assert live.status == "live"
 
 
+def _sha16(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+
+
+@pytest.fixture
+def repo(tmp_path: Path, monkeypatch) -> Path:
+    """A throwaway REPO: a source file, an annotated test file, a shell suite."""
+    monkeypatch.setattr(lv, "REPO", tmp_path)
+    (tmp_path / "tools" / "hooks").mkdir(parents=True)
+    (tmp_path / "tools" / "src.py").write_text("def f():\n    return 1\n")
+    (tmp_path / "tools" / "test_x.py").write_text("# mutation-probe: a\ndef t(): pass\n")
+    (tmp_path / "tools" / "hooks" / "lib.sh").write_text("x=1\n")
+    (tmp_path / "tools" / "hooks" / "test_c.sh").write_text("true\n")
+    return tmp_path
+
+
+def _entry(repo: Path, test: str, file: str = "tools/src.py", rc: int = 0, **over) -> str:
+    """A probe-log line as `mutation_probe.log_result` writes it, digests from the repo."""
+    tf = test.split()
+    tf = tf[tf.index("pytest") + 1 :] if "pytest" in tf else tf[1:]
+    tfile = next(x for x in tf if not x.startswith("-") and (".py" in x or x.endswith(".sh")))
+    tfile = tfile.split("::")[0]
+    e = {
+        "ts": "2026-08-19T00:00:00Z",
+        "file": file,
+        "lines": "1",
+        "test": test,
+        "rc": rc,
+        "head": "h" * 40,
+        "target_sha": _sha16(repo / file),
+        "test_sha": _sha16(repo / lv._relative(tfile)),
+    }
+    e.update(over)
+    return json.dumps(e) + "\n"
+
+
 # mutation-probe: drop the `if e.get("rc") != 0: continue` guard in _pinned_nodeids()
-def test_coverage_gap_when_probe_never_pinned(tmp_path: Path, monkeypatch):
-    log = tmp_path / "mp.jsonl"
+def test_coverage_gap_when_probe_never_pinned(repo: Path, monkeypatch):
+    log = repo / "mp.jsonl"
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_x.py::t")])
     gaps = lv.coverage_gaps(log)
     assert gaps and gaps[0][1] == "tools/test_x.py::t"
     # a PROBE FAILED verdict (rc 1) is not a pin
-    log.write_text(json.dumps({"test": "uv run pytest -q tools/test_x.py::t", "rc": 1}) + "\n")
+    log.write_text(_entry(repo, "uv run pytest -q tools/test_x.py::t", rc=1))
     assert lv.coverage_gaps(log) == [(lv.MANIFEST[0], "tools/test_x.py::t")]
-    log.write_text(
-        log.read_text()
-        + json.dumps({"test": "uv run pytest -q tools/test_x.py::t", "rc": 0})
-        + "\n"
-    )
+    log.write_text(log.read_text() + _entry(repo, "uv run pytest -q tools/test_x.py::t"))
     assert lv.coverage_gaps(log) == []
 
 
-def test_pinned_nodeid_parser_skips_flags_and_normalizes_absolute_paths(tmp_path: Path):
-    log = tmp_path / "mp.jsonl"
-    entries = [
-        {"test": "uv run pytest -q -p no:cacheprovider tools/test_a.py::t_a -x", "rc": 0},
-        {"test": f"python -m pytest {lv.REPO}/tools/test_b.py::t_b", "rc": 0},
-        {"test": "bash tools/hooks/test_c.sh", "rc": 0},
-        {"test": "bash tools/hooks/test_failed.sh", "rc": 2},
-    ]
-    log.write_text("".join(json.dumps(e) + "\n" for e in entries))
+# mutation-probe: drop the `_pin_is_live(e, target)` conjunct in _pinned_nodeids()
+def test_pin_is_stale_once_the_source_or_the_test_changes(repo: Path, monkeypatch):
+    """codex R2 P2: a PINNED verdict is evidence for the bytes it measured. Revert the guarded
+    line (source changes) or weaken the witness (test changes) and the pin no longer counts;
+    an entry without digests (pre-digest format) never counts."""
+    log = repo / "mp.jsonl"
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_x.py::t")])
+    log.write_text(_entry(repo, "uv run pytest -q tools/test_x.py::t"))
+    assert lv.coverage_gaps(log) == []
+    (repo / "tools" / "src.py").write_text("def f():\n    return 2\n")  # the source moved
+    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]
+    (repo / "tools" / "src.py").write_text("def f():\n    return 1\n")
+    assert lv.coverage_gaps(log) == []
+    (repo / "tools" / "test_x.py").write_text("# mutation-probe: a\ndef t(): assert 1\n")
+    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]  # the test moved
+    (repo / "tools" / "test_x.py").write_text("# mutation-probe: a\ndef t(): pass\n")
+    log.write_text(json.dumps({"test": "uv run pytest -q tools/test_x.py::t", "rc": 0}) + "\n")
+    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]  # no digests
+    log.write_text(_entry(repo, "uv run pytest -q tools/test_x.py::t", target_sha="0" * 16))
+    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]
+
+
+def test_pinned_nodeid_parser_skips_flags_and_normalizes_absolute_paths(repo: Path):
+    log = repo / "mp.jsonl"
+    (repo / "tools" / "test_a.py").write_text("def t_a(): pass\n")
+    (repo / "tools" / "test_b.py").write_text("def t_b(): pass\n")
+    log.write_text(
+        _entry(repo, "uv run pytest -q -p no:cacheprovider tools/test_a.py::t_a -x")
+        + _entry(repo, f"python -m pytest {repo}/tools/test_b.py::t_b")
+        + _entry(repo, "bash tools/hooks/test_c.sh", file="tools/hooks/lib.sh")
+        + _entry(repo, "bash tools/hooks/test_c.sh", file="tools/hooks/lib.sh", rc=2)
+    )
     assert lv._pinned_nodeids(log) == {
         "tools/test_a.py::t_a",
         "tools/test_b.py::t_b",
@@ -133,41 +189,34 @@ def test_pinned_nodeid_parser_skips_flags_and_normalizes_absolute_paths(tmp_path
     }
 
 
-def test_file_level_row_requires_every_annotation_exactly(tmp_path: Path, monkeypatch):
+def test_file_level_row_requires_every_annotation_exactly(repo: Path, monkeypatch):
     """One pinned test in a file must NOT count as coverage for the file's other probes."""
-    monkeypatch.setattr(lv, "REPO", tmp_path)
-    (tmp_path / "tools").mkdir()
-    (tmp_path / "tools" / "test_y.py").write_text(
+    (repo / "tools" / "test_y.py").write_text(
         "# mutation-probe: a\ndef test_a(): pass\n\n"
         "# mutation-probe: b\n@pytest.mark.x\ndef test_b(): pass\n\n"
         "def test_unannotated(): pass\n"
     )
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_y.py")])
-    log = tmp_path / "mp.jsonl"
-    log.write_text(json.dumps({"test": "uv run pytest tools/test_y.py::test_a -q", "rc": 0}) + "\n")
+    log = repo / "mp.jsonl"
+    log.write_text(_entry(repo, "uv run pytest tools/test_y.py::test_a -q"))
     assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_y.py::test_b"]
-    log.write_text(
-        log.read_text()
-        + json.dumps({"test": "uv run pytest tools/test_y.py::test_b -q", "rc": 0})
-        + "\n"
-    )
+    log.write_text(log.read_text() + _entry(repo, "uv run pytest tools/test_y.py::test_b -q"))
     assert lv.coverage_gaps(log) == []
     # a whole-file run is NOT per-probe evidence
-    log.write_text(json.dumps({"test": "uv run pytest tools/test_y.py -q", "rc": 0}) + "\n")
+    log.write_text(_entry(repo, "uv run pytest tools/test_y.py -q"))
     assert len(lv.coverage_gaps(log)) == 2
 
 
-def test_file_level_row_for_a_not_yet_landed_file_is_a_gap(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(lv, "REPO", tmp_path)
+def test_file_level_row_for_a_not_yet_landed_file_is_a_gap(repo: Path, monkeypatch):
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_future.py")])
-    assert [n for _, n in lv.coverage_gaps(tmp_path / "mp.jsonl")] == ["tools/test_future.py"]
+    assert [n for _, n in lv.coverage_gaps(repo / "mp.jsonl")] == ["tools/test_future.py"]
 
 
-def test_shell_probe_rows_can_be_covered(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="shell:tools/hooks/test_loop_lib.sh")])
-    log = tmp_path / "mp.jsonl"
-    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/hooks/test_loop_lib.sh"]
-    log.write_text(json.dumps({"test": "bash tools/hooks/test_loop_lib.sh", "rc": 0}) + "\n")
+def test_shell_probe_rows_can_be_covered(repo: Path, monkeypatch):
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="shell:tools/hooks/test_c.sh")])
+    log = repo / "mp.jsonl"
+    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/hooks/test_c.sh"]
+    log.write_text(_entry(repo, "bash tools/hooks/test_c.sh", file="tools/hooks/lib.sh"))
     assert lv.coverage_gaps(log) == []
 
 
@@ -176,7 +225,7 @@ def test_rows_not_marked_mutation_probe_require_nothing():
     assert lv.required_probes(_row(mp=False, art="shell:tools/hooks/test_x.sh")) == []
 
 
-def test_main_modes_and_exit_codes(tmp_path: Path, monkeypatch, capsys):
+def test_main_modes_and_exit_codes(repo: Path, monkeypatch, capsys):
     monkeypatch.setattr(
         lv, "MANIFEST", [_row(tag="phase0", mp=True, art="pytest:tools/test_x.py::t")]
     )
@@ -184,8 +233,8 @@ def test_main_modes_and_exit_codes(tmp_path: Path, monkeypatch, capsys):
     assert lv.main(["coverage"]) == 1
     assert "UNPROBED C-HE-99 tools/test_x.py::t" in capsys.readouterr().out
     # the log path is resolved at CALL time: a pinned row in the (patched) log turns it green
-    pinned = tmp_path / "mp.jsonl"
-    pinned.write_text(json.dumps({"test": "uv run pytest -q tools/test_x.py::t", "rc": 0}) + "\n")
+    pinned = repo / "mp.jsonl"
+    pinned.write_text(_entry(repo, "uv run pytest -q tools/test_x.py::t"))
     monkeypatch.setattr(lv, "PROBE_LOG", pinned)
     assert lv.main(["coverage"]) == 0
     monkeypatch.setattr(lv, "run_row", lambda r, **k: lv.Result(r, "skip", "gh-auth-absent"))
