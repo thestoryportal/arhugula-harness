@@ -131,6 +131,22 @@ def validate(row: dict) -> None:
     except jsonschema.ValidationError as exc:
         raise RecordError(f"finding record schema: {exc.message}") from exc
     _check_finding_id_components(row)
+    try:
+        # A shape-matching but impossible ts (e.g. `9999-99-99T99:99:99Z`) would pass the schema
+        # regex and then, compared lexicographically, out-rank every real adjudication ts
+        # (Codex round-8 P2). Validated as a real UTC calendar value; the canonical fixed-width
+        # form then orders identically as text and as datetime.
+        datetime.strptime(row["ts"], "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as exc:
+        raise RecordError(f"ts {row['ts']!r} is not a real UTC timestamp: {exc}") from exc
+    if row["record_kind"] == "finding":
+        # K5 / C-HE-24 §1: a `finding` must be grounded -- location, observed evidence and
+        # expected contract are REQUIRED content, not merely present keys (Codex round-8 P2). A
+        # wrapper normalizing missing reviewer output to "" must not persist an unactionable
+        # finding. Marker kinds (`no_finding`, `reviewer_unavailable`, ...) may carry blanks.
+        for key in ("location", "observed_evidence", "expected_contract"):
+            if not row[key].strip():
+                raise RecordError(f"finding rows require a non-empty {key!r} (C-HE-24 §1)")
     # `:`-free identifiers (producer / lane_id / disposition_actor, C-HE-24 §2) are enforced by
     # the schema's `pattern` alone -- one enforcement point, no duplicate charset loop here.
     if row["record_kind"] == "finding_adjudication":

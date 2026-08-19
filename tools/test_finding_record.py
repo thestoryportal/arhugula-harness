@@ -181,6 +181,27 @@ def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Pat
     )
 
 
+# mutation-probe: drop the `datetime.strptime(...)` ts check in validate()
+def test_ts_must_be_a_real_utc_timestamp():
+    """A shape-matching but impossible ts would out-rank every real adjudication ts under the
+    strictly-later rule (Codex round-8 P2)."""
+    with pytest.raises(fr.RecordError, match="not a real UTC timestamp"):
+        fr.validate(fr.make_row(_core(), _env(ts="9999-99-99T99:99:99Z")))
+    with pytest.raises(fr.RecordError, match="not a real UTC timestamp"):
+        fr.validate(fr.make_row(_core(), _env(ts="2026-02-30T00:00:00Z")))
+    fr.validate(fr.make_row(_core(), _env(ts=fr.now_iso())))  # the emitter's own clock is legal
+
+
+# mutation-probe: drop the non-empty grounding-fields loop in validate()
+@pytest.mark.parametrize("field", ["location", "observed_evidence", "expected_contract"])
+def test_finding_rows_require_grounding_fields(field):
+    """K5 / C-HE-24 §1: a `finding` with an empty location / evidence / expected contract is
+    unactionable and must not persist; marker kinds may carry blanks (Codex round-8 P2)."""
+    with pytest.raises(fr.RecordError, match=f"non-empty {field!r}"):
+        fr.validate(fr.make_row(_core(**{field: "  "}), _env()))
+    fr.validate(fr.make_row(_core(**{field: ""}), _env(record_kind="no_finding")))  # marker: legal
+
+
 # mutation-probe: drop the `elif` non-adjudication null-disposition branch in validate()
 @pytest.mark.parametrize("kind", ["finding", "no_finding", "gate_demotion"])
 def test_only_adjudication_rows_carry_disposition(kind):
