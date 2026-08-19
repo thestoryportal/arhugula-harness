@@ -167,7 +167,11 @@ def validate(row: dict) -> None:
         )
 
 
-# Everything but ts / record_kind / disposition / disposition_actor / unique_catch.
+# Everything but ts / record_kind / disposition / disposition_actor / unique_catch -- and
+# `round_n`: a later review round at the SAME head_sha re-observing the same defect is the same
+# finding (C-HE-24 §4 "within-head_sha disposition lineage"; N6 counts DISTINCT finding_id), so
+# its row carries the same id with the round it was observed in (Codex round-9 P1). Everything
+# in the ratified core plus the head-bound envelope stays immutable.
 _CORE_IMMUTABLE = (
     "location",
     "observed_evidence",
@@ -181,16 +185,15 @@ _CORE_IMMUTABLE = (
     "head_sha",
     "base_sha",
     "diff_digest",
-    "round_n",
     "cause_attribution",
 )
 
 
 def _check_against_prior_rows(row: dict, path: Path) -> None:
     """C-HE-24 §5 invariants at WRITE time, for EVERY row kind: two rows with one finding_id
-    differ only by ts / record_kind / disposition / disposition_actor / unique_catch; the only
-    kind transition is <original kind> -> finding_adjudication; an adjudication's ts is strictly
-    later; nothing but further adjudications follows an adjudication. A repeated
+    differ only by ts / record_kind / disposition / disposition_actor / unique_catch / round_n;
+    the only kind transition is <original kind> -> finding_adjudication; an adjudication's ts is
+    strictly later; nothing but further adjudications follows an adjudication. A repeated
     `finding` row (an emitter retry minting the same id) is held to the same core as the first
     row, not only adjudications (Codex round-1 P1). Because `producer` is core-immutable, an
     adjudication cannot smuggle a new producer in to evade the self-disposition ban: the swap

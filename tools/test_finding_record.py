@@ -286,6 +286,32 @@ def test_reducer_uses_file_order_not_ts():
     assert fr.reduce_last_by_finding_id(rows)[FID]["disposition"] == "accepted"
 
 
+def test_same_finding_reobserved_in_a_later_round_keeps_its_id(tmp_path: Path):
+    """C-HE-24 §4: within one head_sha the same defect re-reported in round 2 is the SAME finding --
+    same id, new `round_n`; lineage (and N6's DISTINCT count) is preserved (Codex round-9 P1)."""
+    p = tmp_path / "g.jsonl"
+    fr.append_row(fr.make_row(_core(), _env(round_n=1)), p)
+    fr.append_row(fr.make_row(_core(), _env(round_n=2, ts="2026-08-18T00:00:01Z")), p)  # legal
+    rows = fr.read_rows(p)
+    assert [r["round_n"] for r in rows] == [1, 2]
+    assert fr.reduce_last_by_finding_id(rows)[FID]["round_n"] == 2
+    # the adjudication may cite the round it was made in
+    fr.append_row(
+        fr.make_row(
+            _core(),
+            _env(
+                round_n=3,
+                ts="2026-08-18T00:00:02Z",
+                record_kind="finding_adjudication",
+                disposition="accepted",
+                disposition_actor="operator",
+            ),
+        ),
+        p,
+    )
+    assert fr.reduce_last_by_finding_id(fr.read_rows(p))[FID]["disposition"] == "accepted"
+
+
 # mutation-probe: drop the record_kind-transition guard in _check_against_prior_rows()
 def test_only_same_kind_retry_or_adjudication_may_follow_an_existing_id(tmp_path: Path):
     """`finding` -> `no_finding` on one id would let the producer erase its own finding through
