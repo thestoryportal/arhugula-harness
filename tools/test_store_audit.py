@@ -63,15 +63,16 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\.harness/[A-Za-z0-9_.\-]+"), "text"),
     # pathlib chain `".harness" / "<name>"`
     (re.compile(r'"\.harness"\s*/\s*"([^"]+)"'), "harness_seg"),
-    # `QUEUE_DIR / "<name>"` and `QUEUE_DIR / f"<name>"`
-    (re.compile(r'QUEUE_DIR\s*/\s*f?"([^"]+)"'), "queue"),
-    # `QUEUE_DIR.glob("<pat>")`
-    (re.compile(r'QUEUE_DIR\.glob\("([^"]+)"\)'), "queue"),
+    # ANY identifier joined with a literal -- `QUEUE_DIR / "<name>"`, `QUEUE_DIR / f"<name>"`,
+    # and alias roots such as `DOOR / "attempts"`, `RES / f"{gen}.json"` (the S4 modules)
+    (re.compile(r'\b([A-Za-z_]\w*)\s*/\s*f?"([^"]+)"'), "join"),
+    # `<any>.glob("<pat>")`
+    (re.compile(r'\b\w+\.glob\("([^"]+)"\)'), "glob"),
     # `.with_suffix("<ext>")`
     (re.compile(r'\.with_suffix\("([^"]+)"\)'), "suffix"),
     # `.tmp` stagers (`with_name(f".{name}.{pid}.tmp")`)
     (re.compile(r'f?"[^"]*\.tmp"'), "tmp"),
-    # merge-door / reservation literal family (S4 modules)
+    # merge-door / reservation literal family as bare strings
     (
         re.compile(
             r'"(reservations|merge-door|lanes|LEASE|transition\.|released\.|reclaimed\.)[^"]*"'
@@ -79,30 +80,50 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
         "family",
     ),
 ]
+_HAS_WORD = re.compile(r"[A-Za-z0-9]")
 
 
-def _token(kind: str, match: re.Match[str]) -> str:
-    raw = match.group(1) if match.re.groups else match.group(0)
+def _token(kind: str, match: re.Match[str]) -> str | None:
+    """The audit-page token a literal must appear as, or None when the literal carries no
+    store name of its own (a pure-placeholder join such as `f"{prefix}.{token}"`)."""
+    if kind == "join":
+        root, raw = match.group(1), match.group(2)
+    else:
+        root = ""
+        raw = match.group(1) if match.re.groups else match.group(0)
     raw = _PLACEHOLDER.sub("*", raw.strip('"'))
     if kind == "text":
         return raw
     if kind == "harness_seg":
         return f".harness/{raw}"
-    if kind == "queue":
-        return f"QUEUE_DIR/{raw}"
     if kind == "suffix":
         return f"*{raw}"
-    if kind == "tmp":
+    if kind == "tmp" or raw.endswith(".tmp"):
         return ".tmp"
+    if kind == "join":
+        if raw == ".harness":
+            return None  # the `".harness" / "<name>"` chain pattern carries this one
+        if not _HAS_WORD.search(raw):
+            return None
+        return f"QUEUE_DIR/{raw}" if root == "QUEUE_DIR" else raw
     return raw.split("/")[-1]
+
+
+#: Python-only idioms; a shell module spells its paths textually (`"$d/.harness/..."`), and
+#: `case` patterns like `"refs/heads/"*)` would otherwise read as joins.
+_PY_ONLY = frozenset({"join", "glob", "suffix", "tmp", "family"})
 
 
 def store_literals(path: Path) -> set[str]:
     text = path.read_text()
     out: set[str] = set()
     for pat, kind in _PATTERNS:
+        if kind in _PY_ONLY and path.suffix != ".py":
+            continue
         for m in pat.finditer(text):
-            out.add(_token(kind, m))
+            tok = _token(kind, m)
+            if tok is not None:
+                out.add(tok)
     return out
 
 
@@ -136,8 +157,13 @@ def test_audit_exists_and_lists_eight_plus_derived() -> None:
     assert "`.harness/mutation-probe-log.jsonl`" in text.split("## Derived families")[1]
 
 
+_AUDIT_PLACEHOLDER = re.compile(r"<[^>]+>")
+
+
 def test_every_path_literal_in_modules_is_listed() -> None:
-    text = AUDIT.read_text()
+    # the page writes `<token>` / `<gen>` placeholders where a literal carries `{token}` -- both
+    # normalise to `*` so `transition.<lease_token>` lists `DOOR / f"transition.{token}"`
+    text = _AUDIT_PLACEHOLDER.sub("*", AUDIT.read_text())
     for m in MODULES:
         p = REPO / m
         if not p.exists():
@@ -156,7 +182,7 @@ def test_extractor_sees_arc_metrics_idioms() -> None:
     for expected in (
         ".harness/arc-metrics.jsonl",
         "QUEUE_DIR/*.json",
-        "QUEUE_DIR/*.taken",
+        "*.taken",
         "QUEUE_DIR/.ledger-claim-*",
         ".tmp",
     ):
