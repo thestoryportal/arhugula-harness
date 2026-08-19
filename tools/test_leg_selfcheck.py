@@ -1030,3 +1030,17 @@ def test_mutation_probe_recount_is_exact_on_the_real_u_cp_102_block() -> None:
     start = text.find("### §0.2 U-CP-102")
     end = text.find("### ", start + 10)
     assert ls.derive_mutation_probe_count(text[start:end]) == 9
+
+
+def test_cite_check_skips_history_carriers_like_the_gate_log():
+    """A gate-log row records a reviewer finding's location at the head it REVIEWED; that
+    line drifts by design as the arc absorbs it -- evidence of a past head, not a claim."""
+    report = ls.Report()
+    ls.check_cites(
+        {".harness/merge-gate-log.jsonl": ['{"location": "tools/leg_selfcheck.py:999999"}']},
+        report,
+    )
+    assert _hard(report) == []
+    report = ls.Report()
+    ls.check_cites({"spec.md": ["see tools/leg_selfcheck.py:999999"]}, report)
+    assert any("stale cite" in m for m in _hard(report))
